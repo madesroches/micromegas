@@ -285,7 +285,7 @@ pub async fn find_process_with_latest_timing(
     let parent_process_id = if parent_process_id_column.is_null(0) {
         None
     } else {
-        parse_optional_uuid(parent_process_id_column.value(0))?
+        parse_optional_uuid(parent_process_id_column.value(0)?)?
     };
 
     // Handle properties column using PropertiesColumnAccessor
@@ -300,14 +300,14 @@ pub async fn find_process_with_latest_timing(
     );
 
     let process_metadata = ProcessMetadata {
-        process_id: parse_optional_uuid(process_id_column.value(0))?
+        process_id: parse_optional_uuid(process_id_column.value(0)?)?
             .ok_or_else(|| anyhow::anyhow!("process_id cannot be empty"))?,
-        exe: exe_column.value(0).to_string(),
-        username: username_column.value(0).to_string(),
-        realname: realname_column.value(0).to_string(),
-        computer: computer_column.value(0).to_string(),
-        distro: distro_column.value(0).to_string(),
-        cpu_brand: cpu_brand_column.value(0).to_string(),
+        exe: exe_column.value(0)?.to_string(),
+        username: username_column.value(0)?.to_string(),
+        realname: realname_column.value(0)?.to_string(),
+        computer: computer_column.value(0)?.to_string(),
+        distro: distro_column.value(0)?.to_string(),
+        cpu_brand: cpu_brand_column.value(0)?.to_string(),
         tsc_frequency: tsc_frequency_column.value(0),
         start_time: DateTime::from_timestamp_nanos(start_time_column.value(0)),
         start_ticks: start_ticks_column.value(0),
@@ -335,9 +335,9 @@ pub fn block_from_batch_row(rb: &RecordBatch, row: usize) -> Result<BlockMetadat
     let payload_size_column: &Int64Array = typed_column_by_name(rb, "payload_size")?;
     let insert_time_column: &TimestampNanosecondArray = typed_column_by_name(rb, "insert_time")?;
     Ok(BlockMetadata {
-        block_id: Uuid::parse_str(block_id_column.value(row))?,
-        stream_id: Uuid::parse_str(stream_id_column.value(row))?,
-        process_id: Uuid::parse_str(process_id_column.value(row))?,
+        block_id: Uuid::parse_str(block_id_column.value(row)?)?,
+        stream_id: Uuid::parse_str(stream_id_column.value(row)?)?,
+        process_id: Uuid::parse_str(process_id_column.value(row)?)?,
         begin_time: DateTime::from_timestamp_nanos(begin_time_column.value(row)),
         end_time: DateTime::from_timestamp_nanos(end_time_column.value(row)),
         begin_ticks: begin_ticks_column.value(row),

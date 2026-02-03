@@ -24,7 +24,7 @@ use datafusion::{
         stream::RecordBatchStreamAdapter,
     },
 };
-use futures::StreamExt;
+use futures::{StreamExt, TryStreamExt, stream};
 use micromegas_perfetto::{chunk_sender::ChunkSender, streaming_writer::PerfettoWriter};
 use micromegas_tracing::prelude::*;
 use std::{
@@ -272,8 +272,7 @@ async fn generate_streaming_perfetto_trace(
     }
 
     if matches!(span_types, SpanTypes::Thread | SpanTypes::Both) {
-        generate_thread_spans_with_writer(&mut writer, &process_id, &ctx, &time_range, &threads)
-            .await?;
+        generate_thread_spans_with_writer(&mut writer, &ctx, &time_range, &threads).await?;
     }
 
     if matches!(span_types, SpanTypes::Async | SpanTypes::Both) {
@@ -291,7 +290,7 @@ async fn get_process_exe(
 ) -> anyhow::Result<String> {
     let sql = format!(
         r#"
-        SELECT arrow_cast(exe, 'Utf8') as exe
+        SELECT exe
         FROM processes
         WHERE process_id = '{}'
         LIMIT 1
@@ -307,7 +306,7 @@ async fn get_process_exe(
     }
 
     let exes = string_column_by_name(&batches[0], "exe")?;
-    Ok(exes.value(0).to_owned())
+    Ok(exes.value(0)?.to_owned())
 }
 
 /// Get thread information from the streams table
@@ -319,9 +318,9 @@ async fn get_process_thread_list(
     // Query blocks table to get streams, then filter by checking if thread spans exist
     let sql = format!(
         r#"
-        SELECT arrow_cast(b.stream_id, 'Utf8') as stream_id,
-               arrow_cast(property_get("streams.properties", 'thread-name'), 'Utf8') as thread_name,
-               arrow_cast(property_get("streams.properties", 'thread-id'), 'Utf8') as thread_id
+        SELECT b.stream_id,
+               property_get("streams.properties", 'thread-name') as thread_name,
+               property_get("streams.properties", 'thread-id') as thread_id
         FROM blocks b
         WHERE b.process_id = '{}'
         AND array_has(b."streams.tags", 'cpu')
@@ -341,9 +340,9 @@ async fn get_process_thread_list(
         let thread_ids = string_column_by_name(&batch, "thread_id")?;
 
         for i in 0..batch.num_rows() {
-            let stream_id = stream_ids.value(i).to_owned();
-            let thread_name = thread_names.value(i);
-            let thread_id_str = thread_ids.value(i);
+            let stream_id = stream_ids.value(i)?.to_owned();
+            let thread_name = thread_names.value(i)?;
+            let thread_id_str = thread_ids.value(i)?;
 
             // thread_id falls back to stream_id if not available
             let thread_id_for_display = if thread_id_str.is_empty() {
@@ -369,39 +368,73 @@ async fn get_process_thread_list(
     Ok(threads)
 }
 
-/// Generate thread spans using the provided PerfettoWriter
+/// Format the SQL query for thread spans
+fn format_thread_spans_query(stream_id: &str, time_range: &TimeRange) -> String {
+    format!(
+        r#"
+        SELECT "begin", "end", name, filename, target, line
+        FROM view_instance('thread_spans', '{}')
+        WHERE begin <= TIMESTAMP '{}'
+          AND end >= TIMESTAMP '{}'
+        ORDER BY begin
+        "#,
+        stream_id,
+        time_range.end.to_rfc3339(),
+        time_range.begin.to_rfc3339()
+    )
+}
+
+/// Generate thread spans with parallel JIT and sequential writing.
+///
+/// JIT partition locking is per-(view_set_name, view_instance_id), and each thread
+/// has a unique stream_id used as view_instance_id. This means different threads
+/// get different lock keys, making parallel JIT safe.
+///
+/// Strategy:
+/// - Build streams in parallel via buffered() - JIT happens during execute_stream()
+/// - Collect all streams (each buffers ~1 RecordBatch internally)
+/// - Consume streams sequentially to write each thread's spans together
 async fn generate_thread_spans_with_writer(
     writer: &mut PerfettoWriter,
-    _process_id: &str,
     ctx: &datafusion::execution::context::SessionContext,
     time_range: &TimeRange,
-    threads: &Vec<(String, i32, String)>,
+    threads: &[(String, i32, String)],
 ) -> anyhow::Result<()> {
-    for (stream_id, _, _) in threads {
-        // Set the current thread before emitting its spans
-        writer.set_current_thread(stream_id);
-        let sql = format!(
-            r#"
-            SELECT "begin", "end", 
-                   arrow_cast("name", 'Utf8') as name,
-                   arrow_cast("filename", 'Utf8') as filename,
-                   arrow_cast("target", 'Utf8') as target,
-                   line
-            FROM view_instance('thread_spans', '{}')
-            WHERE begin <= TIMESTAMP '{}'
-              AND end >= TIMESTAMP '{}'
-            ORDER BY begin
-            "#,
-            stream_id,
-            time_range.end.to_rfc3339(),
-            time_range.begin.to_rfc3339()
-        );
+    let max_concurrent = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4);
 
-        let df = ctx.sql(&sql).await?;
-        let mut stream = df.execute_stream().await?;
+    // Prepare query inputs upfront to avoid lifetime issues with buffered streams.
+    let queries: Vec<(String, String)> = threads
+        .iter()
+        .map(|(stream_id, _, _)| {
+            (
+                stream_id.clone(),
+                format_thread_spans_query(stream_id, time_range),
+            )
+        })
+        .collect();
+
+    // Build streams in parallel - JIT happens during execute_stream()
+    let streams: Vec<(String, SendableRecordBatchStream)> = stream::iter(queries)
+        .map(|(stream_id, sql)| {
+            let ctx = ctx.clone();
+            async move {
+                let df = ctx.sql(&sql).await?;
+                let stream = df.execute_stream().await?;
+                Ok::<_, anyhow::Error>((stream_id, stream))
+            }
+        })
+        .buffered(max_concurrent)
+        .try_collect()
+        .await?;
+
+    // Consume streams sequentially - each thread's spans written together
+    for (stream_id, mut data_stream) in streams {
+        writer.set_current_thread(&stream_id);
 
         let mut span_count = 0;
-        while let Some(batch_result) = stream.next().await {
+        while let Some(batch_result) = data_stream.next().await {
             let batch = batch_result?;
             let begin_times: &TimestampNanosecondArray = typed_column_by_name(&batch, "begin")?;
             let end_times: &TimestampNanosecondArray = typed_column_by_name(&batch, "end")?;
@@ -413,18 +446,16 @@ async fn generate_thread_spans_with_writer(
             for i in 0..batch.num_rows() {
                 let begin_ns = begin_times.value(i) as u64;
                 let end_ns = end_times.value(i) as u64;
-                let name = names.value(i);
-                let filename = filenames.value(i);
-                let target = targets.value(i);
+                let name = names.value(i)?;
+                let filename = filenames.value(i)?;
+                let target = targets.value(i)?;
                 let line = lines.value(i);
 
-                // Use the single writer instance to maintain string interning
                 writer
                     .emit_span(begin_ns, end_ns, name, target, filename, line)
                     .await?;
 
                 span_count += 1;
-                // Flush every 10 thread spans to create multiple chunks
                 if span_count % 10 == 0 {
                     writer.flush().await?;
                 }
@@ -444,11 +475,7 @@ async fn generate_async_spans_with_writer(
     let sql = format!(
         r#"
         WITH begin_events AS (
-            SELECT span_id, time as begin_time, 
-                   arrow_cast(name, 'Utf8') as name, 
-                   arrow_cast(filename, 'Utf8') as filename, 
-                   arrow_cast(target, 'Utf8') as target, 
-                   line
+            SELECT span_id, time as begin_time, name, filename, target, line
             FROM view_instance('async_events', '{}')
             WHERE time >= TIMESTAMP '{}'
               AND time <= TIMESTAMP '{}'
@@ -499,9 +526,9 @@ async fn generate_async_spans_with_writer(
             let _span_id = span_ids.value(i);
             let begin_ns = begin_times.value(i) as u64;
             let end_ns = end_times.value(i) as u64;
-            let name = names.value(i);
-            let filename = filenames.value(i);
-            let target = targets.value(i);
+            let name = names.value(i)?;
+            let filename = filenames.value(i)?;
+            let target = targets.value(i)?;
             let line = lines.value(i);
 
             if begin_ns < end_ns {
@@ -519,7 +546,7 @@ async fn generate_async_spans_with_writer(
                     writer.flush().await?;
                 }
             } else {
-                warn!("Skipping async span '{}' with invalid duration", name);
+                warn!("Skipping async span with invalid duration");
             }
         }
     }

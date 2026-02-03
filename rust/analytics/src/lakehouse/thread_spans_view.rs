@@ -76,6 +76,7 @@ impl ThreadSpansView {
     }
 }
 
+#[span_fn]
 async fn append_call_tree(
     record_builder: &mut SpanRecordBuilder,
     convert_ticks: &ConvertTicks,
@@ -101,6 +102,7 @@ async fn append_call_tree(
 }
 
 /// Writes a partition from a set of blocks.
+#[span_fn]
 async fn write_partition(
     lake: Arc<DataLakeConnection>,
     view_meta: ViewMetadata,
@@ -177,6 +179,7 @@ async fn write_partition(
     Ok(())
 }
 /// Rebuilds the partition if it's missing or out of date.
+#[span_fn]
 async fn update_partition(
     lake: Arc<DataLakeConnection>,
     view_meta: ViewMetadata,
@@ -221,6 +224,7 @@ impl View for ThreadSpansView {
         Arc::new(get_spans_schema())
     }
 
+    #[span_fn]
     async fn jit_update(
         &self,
         lakehouse: Arc<LakehouseContext>,

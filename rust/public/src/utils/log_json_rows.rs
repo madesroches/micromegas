@@ -39,7 +39,7 @@ pub async fn log_json_rows(
             for prop_index in 0..columns_as_properties.len() {
                 properties.push(Property::new(
                     intern_string(columns_as_properties[prop_index]),
-                    intern_string(prop_columns[prop_index].value(idx)),
+                    intern_string(prop_columns[prop_index].value(idx)?),
                 ));
             }
             let pset = PropertySet::find_or_create(properties);

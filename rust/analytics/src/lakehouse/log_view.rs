@@ -24,6 +24,7 @@ use datafusion::{
     arrow::datatypes::Schema,
     logical_expr::{Between, Expr, col},
 };
+use micromegas_tracing::prelude::*;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -125,6 +126,7 @@ impl View for LogView {
         Arc::new(log_table_schema())
     }
 
+    #[span_fn]
     async fn jit_update(
         &self,
         lakehouse: Arc<LakehouseContext>,

@@ -37,8 +37,8 @@ async fn ingest_streams(
             typed_column_by_name(&b, "insert_time")?;
 
         for row in 0..b.num_rows() {
-            let stream_id = Uuid::parse_str(stream_id_column.value(row))?;
-            let process_id = Uuid::parse_str(process_id_column.value(row))?;
+            let stream_id = Uuid::parse_str(stream_id_column.value(row)?)?;
+            let process_id = Uuid::parse_str(process_id_column.value(row)?)?;
             let tags: Vec<String> = tags_column
                 .value(row)
                 .as_any()
@@ -95,8 +95,8 @@ async fn ingest_processes(
         let parent_process_id_column = string_column_by_name(&b, "parent_process_id")?;
         let properties_accessor = properties_column_by_name(&b, "properties")?;
         for row in 0..b.num_rows() {
-            let process_id = Uuid::parse_str(process_id_column.value(row))?;
-            let parent_process_str = parent_process_id_column.value(row);
+            let process_id = Uuid::parse_str(process_id_column.value(row)?)?;
+            let parent_process_str = parent_process_id_column.value(row)?;
             let parent_process_id = if parent_process_str.is_empty() {
                 None
             } else {
@@ -109,12 +109,12 @@ async fn ingest_processes(
                 "INSERT INTO processes VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13);",
             )
             .bind(process_id)
-            .bind(exe_column.value(row))
-            .bind(username_column.value(row))
-            .bind(realname_column.value(row))
-            .bind(computer_column.value(row))
-            .bind(distro_column.value(row))
-            .bind(cpu_brand_column.value(row))
+            .bind(exe_column.value(row)?)
+            .bind(username_column.value(row)?)
+            .bind(realname_column.value(row)?)
+            .bind(computer_column.value(row)?)
+            .bind(distro_column.value(row)?)
+            .bind(cpu_brand_column.value(row)?)
             .bind(process_tsc_freq_column.value(row))
             .bind(DateTime::from_timestamp_nanos(start_time_column.value(row)))
             .bind(start_ticks_column.value(row))
@@ -146,9 +146,9 @@ async fn ingest_payloads(
         let block_id_column = string_column_by_name(&b, "block_id")?;
         let payload_column: &BinaryArray = typed_column_by_name(&b, "payload")?;
         for row in 0..b.num_rows() {
-            let process_id = process_id_column.value(row);
-            let stream_id = stream_id_column.value(row);
-            let block_id = block_id_column.value(row);
+            let process_id = process_id_column.value(row)?;
+            let stream_id = stream_id_column.value(row)?;
+            let block_id = block_id_column.value(row)?;
             let obj_path = format!("blobs/{process_id}/{stream_id}/{block_id}");
             let payload = bytes::Bytes::copy_from_slice(payload_column.value(row));
             lake.blob_storage
@@ -183,9 +183,9 @@ async fn ingest_blocks(
         let insert_time_column: &TimestampNanosecondArray =
             typed_column_by_name(&b, "insert_time")?;
         for row in 0..b.num_rows() {
-            let block_id = Uuid::parse_str(block_id_column.value(row))?;
-            let stream_id = Uuid::parse_str(stream_id_column.value(row))?;
-            let process_id = Uuid::parse_str(process_id_column.value(row))?;
+            let block_id = Uuid::parse_str(block_id_column.value(row)?)?;
+            let stream_id = Uuid::parse_str(stream_id_column.value(row)?)?;
+            let process_id = Uuid::parse_str(process_id_column.value(row)?)?;
             sqlx::query("INSERT INTO blocks VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11);")
                 .bind(block_id)
                 .bind(stream_id)

@@ -1,10 +1,12 @@
 use anyhow::{Result, anyhow};
-use datafusion::arrow::array::{Array, ArrayRef, DictionaryArray, RecordBatch, StringArray};
-use datafusion::arrow::datatypes::{DataType, Int32Type};
+use datafusion::arrow::array::{
+    Array, ArrayRef, DictionaryArray, RecordBatch, StringArray, types::ArrowDictionaryKeyType,
+};
+use datafusion::arrow::datatypes::{DataType, Int8Type, Int16Type, Int32Type, Int64Type};
 use std::sync::Arc;
 
 pub trait StringColumnAccessor: Send {
-    fn value(&self, index: usize) -> &str;
+    fn value(&self, index: usize) -> Result<&str>;
 
     fn len(&self) -> usize;
 
@@ -26,8 +28,8 @@ impl StringArrayAccessor {
 }
 
 impl StringColumnAccessor for StringArrayAccessor {
-    fn value(&self, index: usize) -> &str {
-        self.array.value(index)
+    fn value(&self, index: usize) -> Result<&str> {
+        Ok(self.array.value(index))
     }
 
     fn len(&self) -> usize {
@@ -39,13 +41,13 @@ impl StringColumnAccessor for StringArrayAccessor {
     }
 }
 
-struct DictionaryStringAccessor {
-    array: Arc<DictionaryArray<Int32Type>>,
+struct DictionaryStringAccessor<K: ArrowDictionaryKeyType> {
+    array: Arc<DictionaryArray<K>>,
     values: Arc<StringArray>,
 }
 
-impl DictionaryStringAccessor {
-    fn new(array: Arc<DictionaryArray<Int32Type>>) -> Result<Self> {
+impl<K: ArrowDictionaryKeyType> DictionaryStringAccessor<K> {
+    fn new(array: Arc<DictionaryArray<K>>) -> Result<Self> {
         let values = array
             .values()
             .as_any()
@@ -60,10 +62,16 @@ impl DictionaryStringAccessor {
     }
 }
 
-impl StringColumnAccessor for DictionaryStringAccessor {
-    fn value(&self, index: usize) -> &str {
+impl<K: ArrowDictionaryKeyType> StringColumnAccessor for DictionaryStringAccessor<K>
+where
+    K::Native: TryInto<usize>,
+{
+    fn value(&self, index: usize) -> Result<&str> {
         let key = self.array.keys().value(index);
-        self.values.value(key as usize)
+        let key_usize = key
+            .try_into()
+            .map_err(|_| anyhow!("Dictionary key out of usize range"))?;
+        Ok(self.values.value(key_usize))
     }
 
     fn len(&self) -> usize {
@@ -91,11 +99,41 @@ pub fn create_string_accessor(array: &ArrayRef) -> Result<Box<dyn StringColumnAc
             }
 
             match key_type.as_ref() {
+                DataType::Int8 => {
+                    let dict_array = array
+                        .as_any()
+                        .downcast_ref::<DictionaryArray<Int8Type>>()
+                        .ok_or_else(|| anyhow!("Failed to downcast to DictionaryArray<Int8>"))?
+                        .clone();
+                    Ok(Box::new(DictionaryStringAccessor::new(Arc::new(
+                        dict_array,
+                    ))?))
+                }
+                DataType::Int16 => {
+                    let dict_array = array
+                        .as_any()
+                        .downcast_ref::<DictionaryArray<Int16Type>>()
+                        .ok_or_else(|| anyhow!("Failed to downcast to DictionaryArray<Int16>"))?
+                        .clone();
+                    Ok(Box::new(DictionaryStringAccessor::new(Arc::new(
+                        dict_array,
+                    ))?))
+                }
                 DataType::Int32 => {
                     let dict_array = array
                         .as_any()
                         .downcast_ref::<DictionaryArray<Int32Type>>()
                         .ok_or_else(|| anyhow!("Failed to downcast to DictionaryArray<Int32>"))?
+                        .clone();
+                    Ok(Box::new(DictionaryStringAccessor::new(Arc::new(
+                        dict_array,
+                    ))?))
+                }
+                DataType::Int64 => {
+                    let dict_array = array
+                        .as_any()
+                        .downcast_ref::<DictionaryArray<Int64Type>>()
+                        .ok_or_else(|| anyhow!("Failed to downcast to DictionaryArray<Int64>"))?
                         .clone();
                     Ok(Box::new(DictionaryStringAccessor::new(Arc::new(
                         dict_array,

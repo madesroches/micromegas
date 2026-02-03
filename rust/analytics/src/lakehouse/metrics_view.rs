@@ -28,6 +28,7 @@ use datafusion::{
     logical_expr::{Between, Expr, col},
 };
 use micromegas_tracing::info;
+use micromegas_tracing::prelude::*;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -126,6 +127,7 @@ impl View for MetricsView {
         Arc::new(metrics_table_schema())
     }
 
+    #[span_fn]
     async fn jit_update(
         &self,
         lakehouse: Arc<LakehouseContext>,

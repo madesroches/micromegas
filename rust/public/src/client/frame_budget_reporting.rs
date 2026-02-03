@@ -174,7 +174,7 @@ pub async fn extract_top_offenders(ctx: &SessionContext) -> Result<Vec<RecordBat
     for budgets_rb in budgets_rbs {
         let budget_column = string_column_by_name(&budgets_rb, "budget")?;
         for budget_row in 0..budgets_rb.num_rows() {
-            let budget = budget_column.value(budget_row);
+            let budget = budget_column.value(budget_row)?;
             let df = top_offenders_df
                 .clone()
                 .with_param_values(vec![("budget", ScalarValue::Utf8(Some(budget.to_owned())))])?;

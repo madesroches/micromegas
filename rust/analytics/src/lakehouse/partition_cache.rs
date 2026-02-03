@@ -298,6 +298,7 @@ impl PartitionCache {
 #[async_trait]
 impl QueryPartitionProvider for PartitionCache {
     /// unlike LivePartitionProvider, the query_range is tested against the insertion time, not the event time
+    #[span_fn]
     async fn fetch(
         &self,
         view_set_name: &str,

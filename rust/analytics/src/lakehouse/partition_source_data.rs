@@ -155,10 +155,10 @@ impl PartitionBlocksSource for SourceDataBlocks {
                 let process_properties_accessor = properties_column_by_name(&b, "processes.properties")?;
                 for ir in 0..b.num_rows() {
                     let block_insert_time = block_insert_time_column.value(ir);
-                    let stream_id = Uuid::parse_str(stream_id_column.value(ir))?;
-                    let process_id = Uuid::parse_str(process_id_column.value(ir))?;
+                    let stream_id = Uuid::parse_str(stream_id_column.value(ir)?)?;
+                    let process_id = Uuid::parse_str(process_id_column.value(ir)?)?;
                     let block = BlockMetadata {
-                        block_id: Uuid::parse_str(block_id_column.value(ir))?,
+                        block_id: Uuid::parse_str(block_id_column.value(ir)?)?,
                         stream_id,
                         process_id,
                         begin_time: DateTime::from_timestamp_nanos(begin_time_column.value(ir)),
@@ -193,7 +193,7 @@ impl PartitionBlocksSource for SourceDataBlocks {
                         properties: Arc::new(stream_properties_jsonb),
                     };
                     let process_properties_jsonb = process_properties_accessor.jsonb_value(ir)?;
-                    let parent_value = process_parent_column.value(ir);
+                    let parent_value = process_parent_column.value(ir)?;
                     let parent_process_id = if parent_value.is_empty() {
                         None
                     } else {
@@ -202,12 +202,12 @@ impl PartitionBlocksSource for SourceDataBlocks {
 
                     let process = ProcessMetadata {
                         process_id,
-                        exe: process_exe_column.value(ir).into(),
-                        username: process_username_column.value(ir).into(),
-                        realname: process_realname_column.value(ir).into(),
-                        computer: process_computer_column.value(ir).into(),
-                        distro: process_distro_column.value(ir).into(),
-                        cpu_brand: process_cpu_column.value(ir).into(),
+                        exe: process_exe_column.value(ir)?.into(),
+                        username: process_username_column.value(ir)?.into(),
+                        realname: process_realname_column.value(ir)?.into(),
+                        computer: process_computer_column.value(ir)?.into(),
+                        distro: process_distro_column.value(ir)?.into(),
+                        cpu_brand: process_cpu_column.value(ir)?.into(),
                         tsc_frequency: process_tsc_freq_column.value(ir),
                         start_time: DateTime::from_timestamp_nanos(process_start_time_column.value(ir)),
                         start_ticks: process_start_ticks_column.value(ir),
