@@ -24,7 +24,7 @@ use datafusion::{
         stream::RecordBatchStreamAdapter,
     },
 };
-use futures::StreamExt;
+use futures::{StreamExt, stream};
 use micromegas_perfetto::{chunk_sender::ChunkSender, streaming_writer::PerfettoWriter};
 use micromegas_tracing::prelude::*;
 use std::{
@@ -291,7 +291,7 @@ async fn get_process_exe(
 ) -> anyhow::Result<String> {
     let sql = format!(
         r#"
-        SELECT arrow_cast(exe, 'Utf8') as exe
+        SELECT exe
         FROM processes
         WHERE process_id = '{}'
         LIMIT 1
@@ -319,9 +319,9 @@ async fn get_process_thread_list(
     // Query blocks table to get streams, then filter by checking if thread spans exist
     let sql = format!(
         r#"
-        SELECT arrow_cast(b.stream_id, 'Utf8') as stream_id,
-               arrow_cast(property_get("streams.properties", 'thread-name'), 'Utf8') as thread_name,
-               arrow_cast(property_get("streams.properties", 'thread-id'), 'Utf8') as thread_id
+        SELECT b.stream_id,
+               property_get("streams.properties", 'thread-name') as thread_name,
+               property_get("streams.properties", 'thread-id') as thread_id
         FROM blocks b
         WHERE b.process_id = '{}'
         AND array_has(b."streams.tags", 'cpu')
@@ -369,39 +369,76 @@ async fn get_process_thread_list(
     Ok(threads)
 }
 
-/// Generate thread spans using the provided PerfettoWriter
+/// Format the SQL query for thread spans
+fn format_thread_spans_query(stream_id: &str, time_range: &TimeRange) -> String {
+    format!(
+        r#"
+        SELECT "begin", "end", name, filename, target, line
+        FROM view_instance('thread_spans', '{}')
+        WHERE begin <= TIMESTAMP '{}'
+          AND end >= TIMESTAMP '{}'
+        ORDER BY begin
+        "#,
+        stream_id,
+        time_range.end.to_rfc3339(),
+        time_range.begin.to_rfc3339()
+    )
+}
+
+/// Generate thread spans using pipelined query planning.
+///
+/// This optimization pipelines SQL parsing with data streaming:
+/// - While streaming thread N's data, plan thread N+1..N+10's queries
+/// - JIT materialization still executes sequentially (required for locking)
+/// - SQL parsing overhead is hidden behind data streaming
+///
+/// The buffered(10) holds only lightweight DataFrame plans, not actual data.
+/// Data streaming happens sequentially in the loop body.
 async fn generate_thread_spans_with_writer(
     writer: &mut PerfettoWriter,
     _process_id: &str,
     ctx: &datafusion::execution::context::SessionContext,
     time_range: &TimeRange,
-    threads: &Vec<(String, i32, String)>,
+    threads: &[(String, i32, String)],
 ) -> anyhow::Result<()> {
-    for (stream_id, _, _) in threads {
-        // Set the current thread before emitting its spans
-        writer.set_current_thread(stream_id);
-        let sql = format!(
-            r#"
-            SELECT "begin", "end", 
-                   arrow_cast("name", 'Utf8') as name,
-                   arrow_cast("filename", 'Utf8') as filename,
-                   arrow_cast("target", 'Utf8') as target,
-                   line
-            FROM view_instance('thread_spans', '{}')
-            WHERE begin <= TIMESTAMP '{}'
-              AND end >= TIMESTAMP '{}'
-            ORDER BY begin
-            "#,
-            stream_id,
-            time_range.end.to_rfc3339(),
-            time_range.begin.to_rfc3339()
-        );
+    use datafusion::dataframe::DataFrame;
 
-        let df = ctx.sql(&sql).await?;
-        let mut stream = df.execute_stream().await?;
+    // Prepare query inputs upfront to avoid lifetime issues with buffered streams.
+    // Each tuple contains (stream_id, pre-formatted SQL query).
+    let queries: Vec<(String, String)> = threads
+        .iter()
+        .map(|(stream_id, _, _)| {
+            (
+                stream_id.clone(),
+                format_thread_spans_query(stream_id, time_range),
+            )
+        })
+        .collect();
+
+    // Pipeline SQL parsing: prepare up to 10 DataFrames ahead while streaming.
+    // This hides SQL parsing overhead behind data streaming.
+    let mut planned = stream::iter(queries)
+        .map(|(stream_id, sql)| {
+            let ctx = ctx.clone();
+            async move {
+                let df = ctx.sql(&sql).await?;
+                Ok::<(String, DataFrame), anyhow::Error>((stream_id, df))
+            }
+        })
+        .buffered(10);
+
+    // Process each planned query sequentially - JIT happens in execute_stream()
+    while let Some(result) = planned.next().await {
+        let (stream_id, df) = result?;
+
+        // Set the current thread before emitting its spans
+        writer.set_current_thread(&stream_id);
+
+        // JIT materialization happens here - sequential as required for locking
+        let mut data_stream = df.execute_stream().await?;
 
         let mut span_count = 0;
-        while let Some(batch_result) = stream.next().await {
+        while let Some(batch_result) = data_stream.next().await {
             let batch = batch_result?;
             let begin_times: &TimestampNanosecondArray = typed_column_by_name(&batch, "begin")?;
             let end_times: &TimestampNanosecondArray = typed_column_by_name(&batch, "end")?;
@@ -444,11 +481,7 @@ async fn generate_async_spans_with_writer(
     let sql = format!(
         r#"
         WITH begin_events AS (
-            SELECT span_id, time as begin_time, 
-                   arrow_cast(name, 'Utf8') as name, 
-                   arrow_cast(filename, 'Utf8') as filename, 
-                   arrow_cast(target, 'Utf8') as target, 
-                   line
+            SELECT span_id, time as begin_time, name, filename, target, line
             FROM view_instance('async_events', '{}')
             WHERE time >= TIMESTAMP '{}'
               AND time <= TIMESTAMP '{}'

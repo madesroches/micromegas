@@ -54,13 +54,13 @@ Streams chunks via mpsc channel (16 chunk capacity, 8KB per chunk)
 
 async fn generate_streaming_perfetto_trace() {
     // 1. Create DataFusion session context
-    let ctx = make_session_context(...).await?;  // ~50-100ms
+    let ctx = make_session_context(...).await?;
 
     // 2. Get process exe name (single query)
-    let process_exe = get_process_exe(&process_id, &ctx).await?;  // ~20ms
+    let process_exe = get_process_exe(&process_id, &ctx).await?;
 
     // 3. Get thread list ← First sequential query
-    let threads = get_process_thread_list(&process_id, &ctx).await?;  // ~50-200ms for 50 threads
+    let threads = get_process_thread_list(&process_id, &ctx).await?;
 
     // 4. Emit thread descriptors (fast, in-memory)
     for (stream_id, thread_id, thread_name) in &threads {
@@ -170,174 +170,159 @@ impl AsyncFileReader for ParquetReader {
 
 ## Identified Bottlenecks (50 Threads)
 
-| Step | Operation | Est. Time per Thread | Total (50 threads) |
-|------|-----------|---------------------|-------------------|
-| 1 | SQL parse + plan | ~5ms | 250ms |
-| 2 | JIT partition check | ~10-50ms | 500ms-2.5s |
-| 3 | Partition materialization (if needed) | ~100-500ms | 5-25s |
-| 4 | Parquet read (cache miss) | ~50-200ms | 2.5-10s |
-| 5 | Parquet read (cache hit) | ~5-20ms | 250ms-1s |
-| 6 | Span emission | ~1-10ms | 50-500ms |
+| Step | Operation | Relative Cost |
+|------|-----------|---------------|
+| 1 | SQL parse + plan | Low |
+| 2 | JIT partition check | Medium |
+| 3 | Partition materialization (if needed) | High |
+| 4 | Parquet read (cache miss) | High |
+| 5 | Parquet read (cache hit) | Low |
+| 6 | Span emission | Low |
 
-**Worst case (cold cache, new partitions)**: 8-38 seconds
-**Best case (warm cache, existing partitions)**: 0.5-2 seconds
+Cold cache with new partitions is significantly slower than warm cache with existing partitions.
 
-## Proposed Optimizations
+## Proposed Optimization: Reduce Per-Query Overhead
 
-### Phase 1: Parallel Thread Span Queries with Buffered Ordered Streams (High Impact)
+### Constraint: Sequential JIT Materialization
 
-**Problem**: Sequential `for` loop over threads in `generate_thread_spans_with_writer()`
+The `view_instance()` table function uses **optimistic locking** for JIT partition materialization. Concurrent calls to `view_instance()` for different threads would cause lock conflicts. This rules out parallel approaches.
 
-**Solution**: Use `futures::stream::StreamExt::buffered()` to execute span queries concurrently while preserving order for sequential emission to the writer.
+### Why Sequential is Required
 
-**Why buffered ordered streams?**
-- `buffered(n)` executes up to `n` futures concurrently but yields results **in original order**
-- This is ideal because we need parallel I/O but must emit spans thread-by-thread to maintain writer state
-- Simpler than manual batching with `join_all` - the stream handles backpressure automatically
-- Memory-efficient: only buffers `n` results at a time, not all threads
+| Approach | JIT Safety | Fragility |
+|----------|------------|-----------|
+| Sequential loop | ✅ Safe | None - explicit control |
+| UNION ALL | ⚠️ Risky | DataFusion could parallelize/reorder branches in future versions |
+| Parallel prefetch | ❌ Lock conflicts | N/A |
+
+**UNION ALL was considered but rejected**: DataFusion's execution order for UNION ALL branches is an implementation detail, not a guarantee. Future versions could parallelize or reorder branches for optimization, breaking the optimistic locking assumption.
+
+### Current Implementation
+
+```rust
+for (stream_id, _, _) in threads {
+    let sql = format!("SELECT ... FROM view_instance('thread_spans', '{stream_id}') ...");
+    let df = ctx.sql(&sql).await?;  // Parse + plan
+    let stream = df.execute_stream().await?;  // JIT + read
+    // ... emit spans
+}
+```
+
+Each iteration incurs:
+- SQL parsing overhead
+- String allocation for query
+- JIT materialization (sequential, required) - **dominant cost**
+
+### Solution: Pipelined Query Planning
+
+JIT materialization happens during `execute_stream()`, not during `ctx.sql()`. This means we can **pipeline** SQL parsing with data streaming:
+
+- While streaming thread N's data → plan thread N+1's query
+- JIT executions remain sequential (required for locking)
+- SQL parsing overhead is hidden behind streaming
 
 ```rust
 // Proposed change to perfetto_trace_execution_plan.rs
 
-use futures::{StreamExt, stream};
+use futures::{stream, StreamExt};
 
-async fn generate_thread_spans_with_writer(...) {
-    const CONCURRENCY: usize = 10;  // Configurable parallelism
-
-    // Create a stream of futures that fetch spans for each thread
-    let span_fetches = stream::iter(threads.iter())
-        .map(|(stream_id, _, _)| {
-            let ctx = ctx.clone();  // SessionContext is Arc-wrapped internally
-            let stream_id = stream_id.clone();
-            let time_range = time_range.clone();
-            async move {
-                let spans = fetch_thread_spans(&ctx, &stream_id, &time_range).await;
-                (stream_id, spans)
-            }
-        })
-        .buffered(CONCURRENCY);  // Execute up to N concurrently, yield in order
-
-    // Pin the stream for iteration
-    tokio::pin!(span_fetches);
-
-    // Process results in order - parallel fetch, sequential emit
-    while let Some((stream_id, spans_result)) = span_fetches.next().await {
-        writer.set_current_thread(&stream_id);
-        let batches = spans_result?;
-
-        for batch in batches {
-            emit_batch_spans(writer, &batch).await?;
-        }
-    }
-}
-
-async fn fetch_thread_spans(
+async fn generate_thread_spans_with_writer(
     ctx: &SessionContext,
-    stream_id: &str,
-    time_range: &TimeRange
-) -> anyhow::Result<Vec<RecordBatch>> {
-    let sql = format!(
-        r#"SELECT "begin", "end", name, filename, target, line
-           FROM view_instance('thread_spans', '{}')
-           WHERE begin <= TIMESTAMP '{}' AND end >= TIMESTAMP '{}'
-           ORDER BY begin"#,
-        stream_id, time_range.end.to_rfc3339(), time_range.begin.to_rfc3339()
-    );
-    let df = ctx.sql(&sql).await?;
-    let batches = df.collect().await?;  // Collect all batches for this thread
-    Ok(batches)
-}
-```
-
-**Comparison: `buffered()` vs `buffer_unordered()`**
-| Approach | Order | Use Case |
-|----------|-------|----------|
-| `buffered(n)` | Preserved | When results must be processed in order (our case) |
-| `buffer_unordered(n)` | Fastest-first | When order doesn't matter |
-
-**Expected improvement**: 5-10x speedup for span queries (limited by object storage concurrency)
-
-### Phase 2: Parallel JIT Partition Materialization (High Impact)
-
-**Problem**: `ThreadSpansView::jit_update()` is called sequentially per thread via `view_instance()`
-
-**Solution**: Pre-materialize all thread partitions in parallel using `buffer_unordered()` before starting span queries.
-
-**Why `buffer_unordered()` instead of `buffered()`?**
-- Order doesn't matter - we just need all partitions ready before proceeding
-- `buffer_unordered()` yields results as they complete (faster overall)
-- Automatic concurrency limiting without manual batching
-- Cleaner than `try_join_all` with `chunks()`
-
-```rust
-// Add new function to perfetto_trace_execution_plan.rs
-
-use futures::{StreamExt, stream};
-
-async fn prefetch_thread_partitions(
-    lakehouse: &Arc<LakehouseContext>,
-    view_factory: &Arc<ViewFactory>,
+    writer: &mut PerfettoTraceWriter,
     threads: &[(String, i32, String)],
-    query_range: Option<TimeRange>,
+    time_range: &TimeRange,
 ) -> anyhow::Result<()> {
-    const CONCURRENCY: usize = 10;
-
-    let materialization_futures = stream::iter(threads.iter())
+    // Create stream of planning futures, buffered 1 ahead
+    let mut planned = stream::iter(threads.iter())
         .map(|(stream_id, _, _)| {
-            let lakehouse = lakehouse.clone();
-            let view_factory = view_factory.clone();
-            let stream_id = stream_id.clone();
+            let ctx = ctx.clone();
+            let sql = format_thread_query(stream_id, time_range);
             async move {
-                let view = view_factory.make_view("thread_spans", &stream_id)?;
-                view.jit_update(lakehouse, query_range).await
+                let df = ctx.sql(&sql).await?;
+                Ok::<_, anyhow::Error>((stream_id.clone(), df))
             }
         })
-        .buffer_unordered(CONCURRENCY);  // Unordered - results yielded as they complete
+        .buffered(10);  // Plan up to 10 ahead while streaming
 
-    tokio::pin!(materialization_futures);
+    // Process each planned query sequentially
+    while let Some(result) = planned.next().await {
+        let (stream_id, df) = result?;
 
-    // Consume all results, propagating any errors
-    while let Some(result) = materialization_futures.next().await {
-        result?;  // Fail fast on first error
+        // JIT happens here in execute_stream - sequential as required
+        writer.set_current_thread(&stream_id);
+        let mut data_stream = df.execute_stream().await?;
+
+        while let Some(batch_result) = data_stream.next().await {
+            emit_batch_spans(writer, &batch_result?).await?;
+        }
     }
 
     Ok(())
 }
-
-// Call before generate_thread_spans_with_writer()
-async fn generate_streaming_perfetto_trace(...) {
-    // ... emit descriptors ...
-
-    // Pre-materialize partitions in parallel
-    prefetch_thread_partitions(&lakehouse, &view_factory, &threads, Some(time_range)).await?;
-
-    // Now span queries will hit existing partitions
-    generate_thread_spans_with_writer(...).await?;
-}
 ```
 
-**Comparison: Phase 1 vs Phase 2 patterns**
-| Phase | Order Matters? | Pattern | Reason |
-|-------|----------------|---------|--------|
-| 1: Span queries | Yes | `buffered()` | Must emit to writer in thread order |
-| 2: JIT materialization | No | `buffer_unordered()` | Just need all partitions ready |
+**How `buffered(10)` pipelines:**
 
-**Expected improvement**: 3-5x speedup for partition materialization
+```
+Thread 1:  [plan]──[JIT+stream data]
+Thread 2:  [plan]─────────────────[JIT+stream data]
+Thread 3:  [plan]────────────────────────────────[JIT+stream]
+...
+Thread 10: [plan]────────────────────────────────...
+           ↑
+           all 10 plans start immediately, execute sequentially
+```
 
-## Implementation Scope
+### Expected Improvement
 
-This iteration focuses on Phases 1 and 2 only:
+SQL parsing overhead per thread is hidden behind the previous thread's data streaming, which typically takes longer than parsing.
 
-| Phase | Effort | Impact |
-|-------|--------|--------|
-| 1: Parallel span queries | Medium | High |
-| 2: Parallel JIT materialization | Medium | High |
+### Remaining Bottleneck
+
+After pipelining, the dominant cost is **JIT materialization** (varies significantly based on partition state):
+
+1. JIT partition checks (DB queries to verify partition state)
+2. Partition materialization (if partitions don't exist)
+3. Parquet file reads (cache misses are much slower than hits)
+
+These costs are sequential due to optimistic locking. Further optimization requires changes to JIT itself (see Future Improvements).
+
+## Implementation Status
+
+### ✅ Completed
+
+#### 1. Pipelined Query Planning
+**File**: `rust/analytics/src/lakehouse/perfetto_trace_execution_plan.rs`
+
+Implemented `buffered(10)` pipelining for SQL parsing:
+- Pre-compute all query strings upfront to avoid lifetime issues
+- Use `stream::iter(queries).map(...).buffered(10)` to plan up to 10 DataFrames ahead
+- JIT materialization remains sequential in `execute_stream()` (required for locking)
+- SQL parsing overhead is hidden behind data streaming
+
+#### 2. Removed Unnecessary `arrow_cast` Calls
+**File**: `rust/analytics/src/lakehouse/perfetto_trace_execution_plan.rs`
+
+Removed `arrow_cast(..., 'Utf8')` from all queries:
+- Thread spans query: `name`, `filename`, `target` columns
+- Async spans query: `name`, `filename`, `target` columns
+- Process exe query: `exe` column
+- Thread list query: `stream_id`, `thread_name`, `thread_id` columns
+
+This preserves dictionary encoding, reducing memory usage and avoiding unnecessary string materialization.
+
+#### 3. Extended Dictionary Key Type Support
+**File**: `rust/analytics/src/dfext/string_column_accessor.rs`
+
+Made `DictionaryStringAccessor` generic over `ArrowDictionaryKeyType`:
+- Now supports `Int8`, `Int16`, `Int32`, `Int64` dictionary keys
+- Previously only supported `Int32`, causing runtime errors with `Int16` keys
 
 ## Metrics to Track
 
 1. **Trace generation time**: End-to-end from request to complete trace
-2. **Per-thread query time**: Time spent in span queries
-3. **JIT materialization time**: Time spent checking/creating partitions
+2. **Per-thread time breakdown**: SQL parsing vs JIT vs data streaming
+3. **JIT materialization time**: Time spent checking/creating partitions (dominant cost)
 4. **File cache hit rate**: `file_cache_hit / (file_cache_hit + file_cache_miss)`
 5. **Object storage read latency**: Time for cache misses
 
@@ -346,25 +331,27 @@ This iteration focuses on Phases 1 and 2 only:
 1. Create test process with 50+ threads and known span counts
 2. Benchmark cold cache (first trace after restart)
 3. Benchmark warm cache (repeated trace generation)
-4. Compare before/after for each optimization phase
-5. Monitor memory usage during parallel operations
+4. Compare before/after for pipelined query planning
+5. Verify JIT executions remain sequential (no lock conflicts)
 
 ## Risks and Mitigations
 
 | Risk | Mitigation |
 |------|------------|
-| Memory pressure from parallel queries | Limit parallelism (CONCURRENCY constant) |
-| Object storage rate limiting | Implement backoff, limit concurrent requests |
-| Database connection exhaustion | Use connection pooling, limit parallel DB ops |
-| Partial failures in parallel ops | Graceful degradation, continue with successful threads |
+| Planning completes before streaming finishes | No harm - just awaits the already-completed future |
+| Error in next query planning | Errors surface when we await the future, after current thread completes |
 
 ## Future Improvements
 
 The following optimizations are deferred for future iterations:
 
-### Pre-registered Views (Medium Impact)
+### JIT Partition Metadata Caching (High Impact)
 
-Pre-register all thread views at session start to avoid repeated SQL parsing and table function resolution. Expected ~20% reduction in query overhead.
+Cache partition state metadata to avoid repeated DB queries during JIT checks. Currently each `view_instance()` call queries the database to verify partition state. Caching this for the duration of a trace request would reduce per-thread overhead significantly.
+
+### Batch Partition State Query (Medium Impact)
+
+Instead of checking partition state per-thread, query all thread partition states in a single DB call at the start of trace generation. This trades one larger query for N smaller ones.
 
 ### File Cache Capacity (Low Effort, Medium Impact)
 

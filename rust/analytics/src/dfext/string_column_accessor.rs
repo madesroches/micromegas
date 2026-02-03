@@ -1,6 +1,8 @@
 use anyhow::{Result, anyhow};
-use datafusion::arrow::array::{Array, ArrayRef, DictionaryArray, RecordBatch, StringArray};
-use datafusion::arrow::datatypes::{DataType, Int32Type};
+use datafusion::arrow::array::{
+    Array, ArrayRef, DictionaryArray, RecordBatch, StringArray, types::ArrowDictionaryKeyType,
+};
+use datafusion::arrow::datatypes::{DataType, Int8Type, Int16Type, Int32Type, Int64Type};
 use std::sync::Arc;
 
 pub trait StringColumnAccessor: Send {
@@ -39,13 +41,13 @@ impl StringColumnAccessor for StringArrayAccessor {
     }
 }
 
-struct DictionaryStringAccessor {
-    array: Arc<DictionaryArray<Int32Type>>,
+struct DictionaryStringAccessor<K: ArrowDictionaryKeyType> {
+    array: Arc<DictionaryArray<K>>,
     values: Arc<StringArray>,
 }
 
-impl DictionaryStringAccessor {
-    fn new(array: Arc<DictionaryArray<Int32Type>>) -> Result<Self> {
+impl<K: ArrowDictionaryKeyType> DictionaryStringAccessor<K> {
+    fn new(array: Arc<DictionaryArray<K>>) -> Result<Self> {
         let values = array
             .values()
             .as_any()
@@ -60,10 +62,17 @@ impl DictionaryStringAccessor {
     }
 }
 
-impl StringColumnAccessor for DictionaryStringAccessor {
+impl<K: ArrowDictionaryKeyType> StringColumnAccessor for DictionaryStringAccessor<K>
+where
+    K::Native: TryInto<usize>,
+{
     fn value(&self, index: usize) -> &str {
         let key = self.array.keys().value(index);
-        self.values.value(key as usize)
+        // Safe conversion: dictionary keys are always valid indices
+        let key_usize = key
+            .try_into()
+            .unwrap_or_else(|_| panic!("Dictionary key out of usize range"));
+        self.values.value(key_usize)
     }
 
     fn len(&self) -> usize {
@@ -91,11 +100,41 @@ pub fn create_string_accessor(array: &ArrayRef) -> Result<Box<dyn StringColumnAc
             }
 
             match key_type.as_ref() {
+                DataType::Int8 => {
+                    let dict_array = array
+                        .as_any()
+                        .downcast_ref::<DictionaryArray<Int8Type>>()
+                        .ok_or_else(|| anyhow!("Failed to downcast to DictionaryArray<Int8>"))?
+                        .clone();
+                    Ok(Box::new(DictionaryStringAccessor::new(Arc::new(
+                        dict_array,
+                    ))?))
+                }
+                DataType::Int16 => {
+                    let dict_array = array
+                        .as_any()
+                        .downcast_ref::<DictionaryArray<Int16Type>>()
+                        .ok_or_else(|| anyhow!("Failed to downcast to DictionaryArray<Int16>"))?
+                        .clone();
+                    Ok(Box::new(DictionaryStringAccessor::new(Arc::new(
+                        dict_array,
+                    ))?))
+                }
                 DataType::Int32 => {
                     let dict_array = array
                         .as_any()
                         .downcast_ref::<DictionaryArray<Int32Type>>()
                         .ok_or_else(|| anyhow!("Failed to downcast to DictionaryArray<Int32>"))?
+                        .clone();
+                    Ok(Box::new(DictionaryStringAccessor::new(Arc::new(
+                        dict_array,
+                    ))?))
+                }
+                DataType::Int64 => {
+                    let dict_array = array
+                        .as_any()
+                        .downcast_ref::<DictionaryArray<Int64Type>>()
+                        .ok_or_else(|| anyhow!("Failed to downcast to DictionaryArray<Int64>"))?
                         .clone();
                     Ok(Box::new(DictionaryStringAccessor::new(Arc::new(
                         dict_array,
