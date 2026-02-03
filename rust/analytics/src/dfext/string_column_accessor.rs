@@ -6,7 +6,7 @@ use datafusion::arrow::datatypes::{DataType, Int8Type, Int16Type, Int32Type, Int
 use std::sync::Arc;
 
 pub trait StringColumnAccessor: Send {
-    fn value(&self, index: usize) -> &str;
+    fn value(&self, index: usize) -> Result<&str>;
 
     fn len(&self) -> usize;
 
@@ -28,8 +28,8 @@ impl StringArrayAccessor {
 }
 
 impl StringColumnAccessor for StringArrayAccessor {
-    fn value(&self, index: usize) -> &str {
-        self.array.value(index)
+    fn value(&self, index: usize) -> Result<&str> {
+        Ok(self.array.value(index))
     }
 
     fn len(&self) -> usize {
@@ -66,13 +66,12 @@ impl<K: ArrowDictionaryKeyType> StringColumnAccessor for DictionaryStringAccesso
 where
     K::Native: TryInto<usize>,
 {
-    fn value(&self, index: usize) -> &str {
+    fn value(&self, index: usize) -> Result<&str> {
         let key = self.array.keys().value(index);
-        // Safe conversion: dictionary keys are always valid indices
         let key_usize = key
             .try_into()
-            .unwrap_or_else(|_| panic!("Dictionary key out of usize range"));
-        self.values.value(key_usize)
+            .map_err(|_| anyhow!("Dictionary key out of usize range"))?;
+        Ok(self.values.value(key_usize))
     }
 
     fn len(&self) -> usize {

@@ -307,7 +307,7 @@ async fn get_process_exe(
     }
 
     let exes = string_column_by_name(&batches[0], "exe")?;
-    Ok(exes.value(0).to_owned())
+    Ok(exes.value(0)?.to_owned())
 }
 
 /// Get thread information from the streams table
@@ -341,9 +341,9 @@ async fn get_process_thread_list(
         let thread_ids = string_column_by_name(&batch, "thread_id")?;
 
         for i in 0..batch.num_rows() {
-            let stream_id = stream_ids.value(i).to_owned();
-            let thread_name = thread_names.value(i);
-            let thread_id_str = thread_ids.value(i);
+            let stream_id = stream_ids.value(i)?.to_owned();
+            let thread_name = thread_names.value(i)?;
+            let thread_id_str = thread_ids.value(i)?;
 
             // thread_id falls back to stream_id if not available
             let thread_id_for_display = if thread_id_str.is_empty() {
@@ -448,9 +448,9 @@ async fn generate_thread_spans_with_writer(
             for i in 0..batch.num_rows() {
                 let begin_ns = begin_times.value(i) as u64;
                 let end_ns = end_times.value(i) as u64;
-                let name = names.value(i);
-                let filename = filenames.value(i);
-                let target = targets.value(i);
+                let name = names.value(i)?;
+                let filename = filenames.value(i)?;
+                let target = targets.value(i)?;
                 let line = lines.value(i);
 
                 writer
@@ -528,9 +528,9 @@ async fn generate_async_spans_with_writer(
             let _span_id = span_ids.value(i);
             let begin_ns = begin_times.value(i) as u64;
             let end_ns = end_times.value(i) as u64;
-            let name = names.value(i);
-            let filename = filenames.value(i);
-            let target = targets.value(i);
+            let name = names.value(i)?;
+            let filename = filenames.value(i)?;
+            let target = targets.value(i)?;
             let line = lines.value(i);
 
             if begin_ns < end_ns {
@@ -548,7 +548,7 @@ async fn generate_async_spans_with_writer(
                     writer.flush().await?;
                 }
             } else {
-                warn!("Skipping async span '{}' with invalid duration", name);
+                warn!("Skipping async span with invalid duration");
             }
         }
     }

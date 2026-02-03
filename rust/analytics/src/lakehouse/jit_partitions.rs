@@ -304,9 +304,9 @@ pub async fn generate_process_jit_partitions_segment(
                 typed_column_by_name(&rb, "streams.tags")?;
             let stream_properties_accessor = properties_column_by_name(&rb, "streams.properties")?;
 
-            let stream_id =
-                Uuid::parse_str(stream_id_column.value(ir)).with_context(|| "parsing stream_id")?;
-            let stream_process_id = Uuid::parse_str(stream_process_id_column.value(ir))
+            let stream_id = Uuid::parse_str(stream_id_column.value(ir)?)
+                .with_context(|| "parsing stream_id")?;
+            let stream_process_id = Uuid::parse_str(stream_process_id_column.value(ir)?)
                 .with_context(|| "parsing stream process_id")?;
 
             let dependencies_metadata = dependencies_metadata_column.value(ir);

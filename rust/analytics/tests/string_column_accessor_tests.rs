@@ -19,9 +19,9 @@ fn test_string_array_accessor() -> Result<()> {
     assert!(!accessor.is_empty());
 
     // Test value access
-    assert_eq!(accessor.value(0), "hello");
-    assert_eq!(accessor.value(2), "world");
-    assert_eq!(accessor.value(3), "test");
+    assert_eq!(accessor.value(0)?, "hello");
+    assert_eq!(accessor.value(2)?, "world");
+    assert_eq!(accessor.value(3)?, "test");
 
     // Test null handling
     assert!(!accessor.is_null(0));
@@ -51,11 +51,11 @@ fn test_dictionary_array_accessor() -> Result<()> {
     assert!(!accessor.is_empty());
 
     // Test value access - should resolve through dictionary
-    assert_eq!(accessor.value(0), "apple");
-    assert_eq!(accessor.value(1), "banana");
-    assert_eq!(accessor.value(3), "cherry");
-    assert_eq!(accessor.value(4), "apple"); // Same as index 0
-    assert_eq!(accessor.value(5), "date");
+    assert_eq!(accessor.value(0)?, "apple");
+    assert_eq!(accessor.value(1)?, "banana");
+    assert_eq!(accessor.value(3)?, "cherry");
+    assert_eq!(accessor.value(4)?, "apple"); // Same as index 0
+    assert_eq!(accessor.value(5)?, "date");
 
     // Test null handling
     assert!(!accessor.is_null(0));
@@ -139,17 +139,17 @@ fn test_string_column_by_name() -> Result<()> {
     // Test accessing string column
     let string_accessor = string_column_by_name(&batch, "string_col")?;
     assert_eq!(string_accessor.len(), 4);
-    assert_eq!(string_accessor.value(0), "a");
-    assert_eq!(string_accessor.value(1), "b");
+    assert_eq!(string_accessor.value(0)?, "a");
+    assert_eq!(string_accessor.value(1)?, "b");
     assert!(string_accessor.is_null(2));
-    assert_eq!(string_accessor.value(3), "c");
+    assert_eq!(string_accessor.value(3)?, "c");
 
     // Test accessing dictionary column
     let dict_accessor = string_column_by_name(&batch, "dict_col")?;
     assert_eq!(dict_accessor.len(), 4);
-    assert_eq!(dict_accessor.value(0), "x");
-    assert_eq!(dict_accessor.value(1), "y");
-    assert_eq!(dict_accessor.value(2), "z");
+    assert_eq!(dict_accessor.value(0)?, "x");
+    assert_eq!(dict_accessor.value(1)?, "y");
+    assert_eq!(dict_accessor.value(2)?, "z");
     assert!(dict_accessor.is_null(3));
 
     // Test missing column
@@ -209,10 +209,10 @@ fn test_large_dictionary() -> Result<()> {
     assert_eq!(accessor.len(), num_entries);
 
     // Spot check some values
-    assert_eq!(accessor.value(0), "value_0");
-    assert_eq!(accessor.value(100), "value_0");
-    assert_eq!(accessor.value(101), "value_1");
-    assert_eq!(accessor.value(199), "value_99");
+    assert_eq!(accessor.value(0)?, "value_0");
+    assert_eq!(accessor.value(100)?, "value_0");
+    assert_eq!(accessor.value(101)?, "value_1");
+    assert_eq!(accessor.value(199)?, "value_99");
 
     // Check that accessor is Send (required for async contexts)
     fn assert_send<T: Send>(_: &T) {}
@@ -234,10 +234,10 @@ fn test_unicode_strings() -> Result<()> {
 
     let accessor = create_string_accessor(&array_ref)?;
 
-    assert_eq!(accessor.value(0), "Hello 世界");
-    assert_eq!(accessor.value(1), "Здравствуй мир");
-    assert_eq!(accessor.value(2), "مرحبا بالعالم");
-    assert_eq!(accessor.value(3), "🌍🌎🌏");
+    assert_eq!(accessor.value(0)?, "Hello 世界");
+    assert_eq!(accessor.value(1)?, "Здравствуй мир");
+    assert_eq!(accessor.value(2)?, "مرحبا بالعالم");
+    assert_eq!(accessor.value(3)?, "🌍🌎🌏");
 
     Ok(())
 }
@@ -254,10 +254,10 @@ fn test_dictionary_with_duplicate_values() -> Result<()> {
     let accessor = create_string_accessor(&array_ref)?;
 
     // Values should be accessed correctly even with duplicates in dictionary
-    assert_eq!(accessor.value(0), "a");
-    assert_eq!(accessor.value(1), "b");
-    assert_eq!(accessor.value(2), "a"); // Same value as index 0
-    assert_eq!(accessor.value(3), "c");
+    assert_eq!(accessor.value(0)?, "a");
+    assert_eq!(accessor.value(1)?, "b");
+    assert_eq!(accessor.value(2)?, "a"); // Same value as index 0
+    assert_eq!(accessor.value(3)?, "c");
 
     Ok(())
 }

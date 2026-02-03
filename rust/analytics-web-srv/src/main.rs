@@ -526,14 +526,14 @@ async fn get_processes_internal(
                 extract_properties_from_properties_column(properties_accessor.as_ref(), row)?;
 
             processes.push(ProcessInfo {
-                process_id: process_ids.value(row).to_string(),
-                exe: exes.value(row).to_string(),
+                process_id: process_ids.value(row)?.to_string(),
+                exe: exes.value(row)?.to_string(),
                 start_time: DateTime::from_timestamp_nanos(start_times.value(row)),
                 last_update_time: DateTime::from_timestamp_nanos(last_update_times.value(row)),
-                computer: computers.value(row).to_string(),
-                username: usernames.value(row).to_string(),
-                cpu_brand: cpu_brands.value(row).to_string(),
-                distro: distros.value(row).to_string(),
+                computer: computers.value(row)?.to_string(),
+                username: usernames.value(row)?.to_string(),
+                cpu_brand: cpu_brands.value(row)?.to_string(),
+                distro: distros.value(row)?.to_string(),
                 properties,
             });
         }
