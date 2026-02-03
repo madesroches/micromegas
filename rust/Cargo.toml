@@ -46,7 +46,7 @@ hmac = "0.12"
 http = "1.1"
 internment = "0.8"
 jsonb = { version = "0.5.3", default-features = false, features = ["databend", "preserve_order"] }
-jsonwebtoken = "9"
+jsonwebtoken = { version = "10.3", features = ["rust_crypto"] }
 lazy_static = "1.4"
 log = { version = "0.4", features = ["std"] }
 lz4 = "1.23"
