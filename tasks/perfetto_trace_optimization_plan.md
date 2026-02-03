@@ -324,109 +324,14 @@ async fn generate_streaming_perfetto_trace(...) {
 
 **Expected improvement**: 3-5x speedup for partition materialization
 
-### Phase 3: Shared Session Context with Pre-registered Views (Medium Impact)
+## Implementation Scope
 
-**Problem**: Each `ctx.sql()` call parses SQL and resolves table functions.
+This iteration focuses on Phases 1 and 2 only:
 
-**Solution**: Pre-register all thread views at session start.
-
-```rust
-// Pre-register thread views as named tables
-async fn generate_streaming_perfetto_trace(...) {
-    let ctx = make_session_context(...).await?;
-
-    // Pre-register all thread views as named tables
-    for (stream_id, _, _) in &threads {
-        let view = view_factory.make_view("thread_spans", stream_id)?;
-        let table_name = format!("thread_spans_{}", stream_id.replace('-', "_"));
-        ctx.register_table(&table_name, Arc::new(MaterializedView::new(...)))?;
-    }
-
-    // Now queries use pre-registered tables (no table function resolution)
-    let sql = format!("SELECT ... FROM {} WHERE ...", table_name);
-}
-```
-
-**Expected improvement**: ~20% reduction in query overhead
-
-### Phase 4: Increase File Cache Capacity (Low Effort, Medium Impact)
-
-**Problem**: Default 200MB cache may not hold all thread partition files.
-
-**Solution**: Make cache size configurable and increase default for trace workloads.
-
-```rust
-// rust/analytics/src/lakehouse/file_cache.rs
-
-// Increase defaults for trace generation workloads
-const DEFAULT_CACHE_SIZE_BYTES: u64 = 500 * 1024 * 1024;  // 500MB (was 200MB)
-const DEFAULT_MAX_FILE_SIZE_BYTES: u64 = 20 * 1024 * 1024;  // 20MB (was 10MB)
-
-// Add configurable constructor
-impl FileCache {
-    pub fn for_trace_generation() -> Self {
-        Self::new(1024 * 1024 * 1024, 50 * 1024 * 1024)  // 1GB cache, 50MB max file
-    }
-}
-```
-
-**Expected improvement**: Better cache hit rates for repeated trace generation
-
-### Phase 5: Async Spans Query Optimization (Medium Impact)
-
-**Problem**: Self-join on `async_events` view can be slow.
-
-**Solution**: Rewrite as window function or materialized join table.
-
-```sql
--- Current: Self-join (slow)
-WITH begin_events AS (SELECT ... WHERE event_type = 'begin'),
-     end_events AS (SELECT ... WHERE event_type = 'end')
-SELECT ... FROM begin_events b INNER JOIN end_events e ON b.span_id = e.span_id
-
--- Proposed: Window function (single scan)
-SELECT
-    span_id,
-    MIN(CASE WHEN event_type = 'begin' THEN time END) as begin_time,
-    MAX(CASE WHEN event_type = 'end' THEN time END) as end_time,
-    FIRST_VALUE(name) FILTER (WHERE event_type = 'begin') as name,
-    ...
-FROM view_instance('async_events', '{process_id}')
-WHERE time >= TIMESTAMP '{begin}' AND time <= TIMESTAMP '{end}'
-GROUP BY span_id
-HAVING MIN(CASE WHEN event_type = 'begin' THEN time END) IS NOT NULL
-   AND MAX(CASE WHEN event_type = 'end' THEN time END) IS NOT NULL
-```
-
-**Expected improvement**: 2x speedup for async span queries
-
-### Phase 6: Progress Reporting (UX Improvement)
-
-**Problem**: No visibility into trace generation progress for large traces.
-
-**Solution**: Report progress through the streaming response.
-
-```typescript
-// analytics-web-app/src/lib/api.ts
-// Already supports progress messages, enhance backend to send them
-
-// Backend sends:
-{ "type": "progress", "message": "Processing thread 15/50: main-thread" }
-{ "type": "progress", "message": "Fetching async spans..." }
-{ "type": "binary_start" }
-// binary data follows
-```
-
-## Implementation Priority
-
-| Phase | Effort | Impact | Priority |
-|-------|--------|--------|----------|
-| 1: Parallel span queries | Medium | High | P0 |
-| 2: Parallel JIT materialization | Medium | High | P0 |
-| 4: Increase cache size | Low | Medium | P1 |
-| 6: Progress reporting | Low | UX | P1 |
-| 3: Pre-registered views | Medium | Medium | P2 |
-| 5: Async spans optimization | Medium | Medium | P2 |
+| Phase | Effort | Impact |
+|-------|--------|--------|
+| 1: Parallel span queries | Medium | High |
+| 2: Parallel JIT materialization | Medium | High |
 
 ## Metrics to Track
 
@@ -448,7 +353,39 @@ HAVING MIN(CASE WHEN event_type = 'begin' THEN time END) IS NOT NULL
 
 | Risk | Mitigation |
 |------|------------|
-| Memory pressure from parallel queries | Limit parallelism (PARALLEL_BATCH_SIZE) |
+| Memory pressure from parallel queries | Limit parallelism (CONCURRENCY constant) |
 | Object storage rate limiting | Implement backoff, limit concurrent requests |
 | Database connection exhaustion | Use connection pooling, limit parallel DB ops |
 | Partial failures in parallel ops | Graceful degradation, continue with successful threads |
+
+## Future Improvements
+
+The following optimizations are deferred for future iterations:
+
+### Pre-registered Views (Medium Impact)
+
+Pre-register all thread views at session start to avoid repeated SQL parsing and table function resolution. Expected ~20% reduction in query overhead.
+
+### File Cache Capacity (Low Effort, Medium Impact)
+
+Increase default cache size from 200MB to 500MB+ for trace workloads. Make cache size configurable.
+
+### Async Spans Query Optimization (Medium Impact)
+
+Rewrite the self-join on `async_events` as a window function or aggregation for ~2x speedup:
+
+```sql
+SELECT span_id,
+       MIN(CASE WHEN event_type = 'begin' THEN time END) as begin_time,
+       MAX(CASE WHEN event_type = 'end' THEN time END) as end_time,
+       ...
+FROM view_instance('async_events', '{process_id}')
+GROUP BY span_id
+```
+
+### Progress Reporting (UX Improvement)
+
+Report progress through the streaming response for visibility into trace generation:
+```json
+{ "type": "progress", "message": "Processing thread 15/50: main-thread" }
+```
