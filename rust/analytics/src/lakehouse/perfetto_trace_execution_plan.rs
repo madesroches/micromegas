@@ -24,7 +24,7 @@ use datafusion::{
         stream::RecordBatchStreamAdapter,
     },
 };
-use futures::{StreamExt, stream};
+use futures::{StreamExt, TryStreamExt, stream};
 use micromegas_perfetto::{chunk_sender::ChunkSender, streaming_writer::PerfettoWriter};
 use micromegas_tracing::prelude::*;
 use std::{
@@ -385,15 +385,16 @@ fn format_thread_spans_query(stream_id: &str, time_range: &TimeRange) -> String 
     )
 }
 
-/// Generate thread spans using pipelined query planning.
+/// Generate thread spans with parallel JIT and sequential writing.
 ///
-/// This optimization pipelines SQL parsing with data streaming:
-/// - While streaming thread N's data, plan thread N+1..N+10's queries
-/// - JIT materialization still executes sequentially (required for locking)
-/// - SQL parsing overhead is hidden behind data streaming
+/// JIT partition locking is per-(view_set_name, view_instance_id), and each thread
+/// has a unique stream_id used as view_instance_id. This means different threads
+/// get different lock keys, making parallel JIT safe.
 ///
-/// The buffered(10) holds only lightweight DataFrame plans, not actual data.
-/// Data streaming happens sequentially in the loop body.
+/// Strategy:
+/// - Build streams in parallel via buffered() - JIT happens during execute_stream()
+/// - Collect all streams (each buffers ~1 RecordBatch internally)
+/// - Consume streams sequentially to write each thread's spans together
 async fn generate_thread_spans_with_writer(
     writer: &mut PerfettoWriter,
     _process_id: &str,
@@ -401,10 +402,11 @@ async fn generate_thread_spans_with_writer(
     time_range: &TimeRange,
     threads: &[(String, i32, String)],
 ) -> anyhow::Result<()> {
-    use datafusion::dataframe::DataFrame;
+    let max_concurrent = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4);
 
     // Prepare query inputs upfront to avoid lifetime issues with buffered streams.
-    // Each tuple contains (stream_id, pre-formatted SQL query).
     let queries: Vec<(String, String)> = threads
         .iter()
         .map(|(stream_id, _, _)| {
@@ -415,27 +417,23 @@ async fn generate_thread_spans_with_writer(
         })
         .collect();
 
-    // Pipeline SQL parsing: prepare up to 10 DataFrames ahead while streaming.
-    // This hides SQL parsing overhead behind data streaming.
-    let mut planned = stream::iter(queries)
+    // Build streams in parallel - JIT happens during execute_stream()
+    let streams: Vec<(String, SendableRecordBatchStream)> = stream::iter(queries)
         .map(|(stream_id, sql)| {
             let ctx = ctx.clone();
             async move {
                 let df = ctx.sql(&sql).await?;
-                Ok::<(String, DataFrame), anyhow::Error>((stream_id, df))
+                let stream = df.execute_stream().await?;
+                Ok::<_, anyhow::Error>((stream_id, stream))
             }
         })
-        .buffered(10);
+        .buffered(max_concurrent)
+        .try_collect()
+        .await?;
 
-    // Process each planned query sequentially - JIT happens in execute_stream()
-    while let Some(result) = planned.next().await {
-        let (stream_id, df) = result?;
-
-        // Set the current thread before emitting its spans
+    // Consume streams sequentially - each thread's spans written together
+    for (stream_id, mut data_stream) in streams {
         writer.set_current_thread(&stream_id);
-
-        // JIT materialization happens here - sequential as required for locking
-        let mut data_stream = df.execute_stream().await?;
 
         let mut span_count = 0;
         while let Some(batch_result) = data_stream.next().await {
@@ -455,13 +453,11 @@ async fn generate_thread_spans_with_writer(
                 let target = targets.value(i);
                 let line = lines.value(i);
 
-                // Use the single writer instance to maintain string interning
                 writer
                     .emit_span(begin_ns, end_ns, name, target, filename, line)
                     .await?;
 
                 span_count += 1;
-                // Flush every 10 thread spans to create multiple chunks
                 if span_count % 10 == 0 {
                     writer.flush().await?;
                 }
