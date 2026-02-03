@@ -16,15 +16,22 @@ The current implementation uses React Three Fiber (R3F) as a React renderer for 
 ```
 MapPage (Route)
 ├── QueryEditor (SQL editing + time range)
-├── UI Controls (toggles, sliders)
+├── UI Controls
+│   ├── Markers toggle
+│   ├── Heatmap toggle + radius/intensity sliders
+│   ├── Fit to Data button
+│   └── Mock Data toggle + count selector
 ├── MapViewer (3D Canvas)
 │   ├── OrthographicCamera (top-down view)
+│   ├── CameraController (initial position)
+│   ├── FitToDataController (auto-fit camera to data bounds)
 │   ├── MapControls (pan/zoom)
 │   ├── MapModel (GLB/GLTF loader)
 │   ├── HeatmapLayer (canvas texture)
-│   ├── DeathMarkers (3D spheres)
+│   ├── InstancedDeathMarkers (instanced rendering)
 │   └── PlaceholderGrid (fallback)
-└── DeathDetailPanel (event details overlay)
+├── DeathDetailPanel (event details overlay)
+└── Mock Data Generator (for testing without backend)
 
 useMapData (Hook)
 ├── SQL query execution
@@ -47,6 +54,7 @@ useMapData (Hook)
 - ✅ **Model Loading**: Built-in support for GLB/GLTF via Drei
 - ✅ **Drei Helpers**: Camera controls, loaders, and utilities out-of-the-box
 - ✅ **WebGL Performance**: Hardware-accelerated 3D rendering
+- ✅ **Instanced Rendering**: Implemented for markers (100K+ points)
 
 #### Flexibility
 - ✅ **Extensible**: Easy to add custom shaders, geometries, materials
@@ -63,7 +71,7 @@ useMapData (Hook)
 - ❌ **Coordinate System Complexity**: Manual mapping between game coordinates and 3D space
 
 #### Performance Concerns
-- ❌ **Marker Scalability**: 10K individual sphere meshes can impact performance
+- ✅ **Marker Scalability**: Solved with instanced rendering (100K+ markers)
 - ❌ **No Built-in Clustering**: Need to implement marker clustering manually
 - ❌ **Heatmap Inefficiency**: Canvas-based heatmap recalculates entire texture on changes
 - ❌ **Memory Management**: Need to manually dispose geometries and textures
@@ -79,27 +87,55 @@ useMapData (Hook)
 - ❌ **Boilerplate Code**: Requires setup of cameras, lights, controls
 - ❌ **Performance Profiling**: Need external tools to profile WebGL performance
 
-### Current Implementation Issues
+### Current Implementation Status
+
+#### ✅ Implemented
+
+1. **Instanced Rendering** (Performance)
+   - Uses `THREE.InstancedMesh` for all markers (single draw call)
+   - Per-instance colors via `InstancedBufferAttribute`
+   - Handles 100K+ markers efficiently
+   - Preserves click/hover interactions via `instanceId`
+
+2. **Fit to Data Camera Control**
+   - "Fit to Data" button centers camera on all data points
+   - Calculates bounding box and adjusts zoom automatically
+   - Works with orthographic camera
+
+3. **Mock Data Generator** (Testing)
+   - Toggle to use mock data without backend
+   - Configurable event count (100 to 100K)
+   - Clustered distribution around hotspots
+   - Random player names and death causes
+
+#### ⚠️ Partially Implemented
 
 1. **Performance at Scale**
-   - Individual meshes for each death event (not instanced)
-   - Heatmap texture regenerates on every parameter change
-   - No LOD (Level of Detail) system
+   - ✅ Instanced mesh rendering for markers
+   - ❌ Heatmap still uses CPU canvas rendering
+   - ❌ No LOD (Level of Detail) system
 
 2. **Camera System**
-   - Rotation locked (orthographic top-down only)
-   - No "fit to bounds" functionality
-   - No camera position persistence
+   - ✅ "Fit to bounds" functionality added
+   - ❌ Rotation locked (orthographic top-down only)
+   - ❌ No camera position persistence
 
-3. **Data Visualization**
+#### ❌ Not Yet Implemented
+
+1. **Data Visualization**
    - Fixed heatmap resolution (1024×1024)
    - No temporal animation/playback
    - No marker clustering for dense areas
 
-4. **Map Loading**
+2. **Map Loading**
    - No error handling for failed GLB loads
    - Object URL cleanup missing
    - No map metadata or preview
+
+3. **Advanced Features**
+   - GPU-based heatmap shader
+   - Spatial indexing/frustum culling
+   - Web Workers for data processing
 
 ### Best Suited For
 
@@ -531,7 +567,7 @@ import * as PIXI from 'pixi.js';
 |---------|---------------|---------|---------|-----------|-----------|---------------|--------|--------|
 | **3D Game Maps (GLB/GLTF)** | ✅ Excellent | ❌ No | ✅ Yes | ❌ No | ✅ Excellent | ✅ Excellent | ❌ No | ❌ No |
 | **React Integration** | ✅ Native | ✅ Good | ⚠️ Community | ✅ Good | ❌ Manual | ⚠️ Manual | ✅ Official | ⚠️ Community |
-| **Performance (10K+ points)** | ⚠️ Manual Optimization | ✅ Excellent | ✅ Good | ✅ Good | ✅ Excellent | ⚠️ Manual | ❌ Limited | ✅ Good |
+| **Performance (10K+ points)** | ✅ Good (instanced) | ✅ Excellent | ✅ Good | ✅ Good | ✅ Excellent | ⚠️ Manual | ❌ Limited | ✅ Good |
 | **Heatmaps** | ⚠️ Manual | ✅ Built-in | ✅ Built-in | ✅ Built-in | ⚠️ Manual | ⚠️ Manual | ✅ Built-in | ⚠️ Manual |
 | **Learning Curve** | Medium | Medium | High | Medium | Medium-High | Medium | Low | Low-Medium |
 | **Bundle Size** | ~500KB | ~800KB | ~10MB | ~400KB | ~1.5MB | ~350KB | ~3MB | ~300KB |
@@ -564,31 +600,37 @@ import * as PIXI from 'pixi.js';
 
 ### Optimization Path for Current Implementation
 
-Instead of switching technologies, consider these improvements:
+Instead of switching technologies, these improvements are being implemented:
 
-1. **Instanced Rendering**
+1. **✅ Instanced Rendering** (DONE)
    ```typescript
-   // Replace individual sphere meshes with InstancedMesh
-   const instancedMarkers = new THREE.InstancedMesh(
-     sphereGeometry,
-     material,
-     deathEvents.length
-   );
+   // InstancedDeathMarkers component uses InstancedMesh
+   <instancedMesh
+     ref={meshRef}
+     args={[geometry, material, events.length]}
+     onClick={handleClick}
+     onPointerOver={handlePointerOver}
+     onPointerOut={handlePointerOut}
+   />
    ```
+   - Single draw call for all markers
+   - Per-instance colors and transforms
+   - Click/hover via instanceId
 
-2. **GPU-Based Heatmap**
+2. **GPU-Based Heatmap** (TODO)
    - Use WebGL fragment shader instead of canvas
    - Real-time updates without CPU processing
 
-3. **Level of Detail (LOD)**
+3. **Marker Clustering** (TODO)
    - Show detailed markers when zoomed in
    - Show aggregated/clustered markers when zoomed out
+   - Use supercluster or similar library
 
-4. **Octree/Spatial Indexing**
+4. **Octree/Spatial Indexing** (TODO)
    - Only render visible markers
    - Frustum culling for better performance
 
-5. **Web Workers**
+5. **Web Workers** (TODO)
    - Offload data processing to workers
    - Keep UI thread responsive
 
@@ -613,23 +655,26 @@ Instead of switching technologies, consider these improvements:
 
 ## Implementation Roadmap
 
-### Phase 1: Optimize Current Stack (Recommended)
-1. Implement instanced mesh rendering for markers
-2. Add GPU-based heatmap shader
-3. Implement camera "fit to data" functionality
-4. Add marker clustering for dense areas
+### Phase 1: Optimize Current Stack (IN PROGRESS)
+1. ✅ Implement instanced mesh rendering for markers
+2. ✅ Implement camera "fit to data" functionality
+3. ✅ Add mock data generator for testing
+4. ⬜ Add GPU-based heatmap shader
+5. ⬜ Add marker clustering for dense areas
 
 ### Phase 2: Enhanced Features
-1. Timeline/playback controls
-2. Temporal heatmap animation
-3. Export capabilities (screenshots, video)
-4. Multiple map layer support
+1. ⬜ Timeline/playback controls
+2. ⬜ Temporal heatmap animation
+3. ⬜ Export capabilities (screenshots, video)
+4. ⬜ Multiple map layer support
+5. ⬜ Error handling for GLB loading
 
 ### Phase 3: Advanced (if needed)
-1. Evaluate performance at production scale
-2. Consider hybrid approach (Deck.gl for heatmaps + R3F for 3D models)
-3. Implement WebGL2 features
-4. Add WebWorker support for data processing
+1. ⬜ Evaluate performance at production scale
+2. ⬜ Consider hybrid approach (Deck.gl for heatmaps + R3F for 3D models)
+3. ⬜ Implement WebGL2 features
+4. ⬜ Add WebWorker support for data processing
+5. ⬜ Spatial indexing with frustum culling
 
 ---
 
