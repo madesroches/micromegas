@@ -3,7 +3,7 @@ use super::{
     block_partition_spec::BlockPartitionSpec,
     blocks_view::BlocksView,
     dataframe_time_bounds::{DataFrameTimeBounds, NamedColumnsTimeBounds},
-    jit_partitions::{write_partition_from_blocks, JitPartitionConfig},
+    jit_partitions::{JitPartitionConfig, write_partition_from_blocks},
     lakehouse_context::LakehouseContext,
     log_block_processor::LogBlockProcessor,
     partition_cache::PartitionCache,
@@ -15,14 +15,14 @@ use crate::{
     lakehouse::jit_partitions::{generate_process_jit_partitions, is_jit_partition_up_to_date},
     log_entries_table::log_table_schema,
     metadata::find_process,
-    time::{datetime_to_scalar, TimeRange},
+    time::{TimeRange, datetime_to_scalar},
 };
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, TimeDelta, Utc};
 use datafusion::{
     arrow::datatypes::Schema,
-    logical_expr::{col, Between, Expr},
+    logical_expr::{Between, Expr, col},
 };
 use micromegas_tracing::prelude::*;
 use std::sync::Arc;
