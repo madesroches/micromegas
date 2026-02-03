@@ -460,6 +460,7 @@ pub async fn generate_process_jit_partitions(
 
 /// is_jit_partition_up_to_date compares a partition spec with the partitions that exist to know if it should be recreated
 /// Checks if a JIT partition is up to date.
+#[span_fn]
 pub async fn is_jit_partition_up_to_date(
     pool: &sqlx::PgPool,
     view_meta: ViewMetadata,
@@ -563,6 +564,7 @@ fn get_part_insert_time_range(
 }
 
 /// Writes a partition from a set of blocks.
+#[span_fn]
 pub async fn write_partition_from_blocks(
     lake: Arc<DataLakeConnection>,
     view_metadata: ViewMetadata,

@@ -2,7 +2,7 @@ use crate::{
     lakehouse::blocks_view::BlocksView,
     metadata::find_process,
     metrics_table::metrics_table_schema,
-    time::{TimeRange, datetime_to_scalar},
+    time::{datetime_to_scalar, TimeRange},
 };
 
 use super::{
@@ -10,8 +10,8 @@ use super::{
     block_partition_spec::BlockPartitionSpec,
     dataframe_time_bounds::{DataFrameTimeBounds, NamedColumnsTimeBounds},
     jit_partitions::{
-        JitPartitionConfig, generate_process_jit_partitions, is_jit_partition_up_to_date,
-        write_partition_from_blocks,
+        generate_process_jit_partitions, is_jit_partition_up_to_date, write_partition_from_blocks,
+        JitPartitionConfig,
     },
     lakehouse_context::LakehouseContext,
     metrics_block_processor::MetricsBlockProcessor,
@@ -25,9 +25,10 @@ use async_trait::async_trait;
 use chrono::{DateTime, TimeDelta, Utc};
 use datafusion::{
     arrow::datatypes::Schema,
-    logical_expr::{Between, Expr, col},
+    logical_expr::{col, Between, Expr},
 };
 use micromegas_tracing::info;
+use micromegas_tracing::prelude::*;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -126,6 +127,7 @@ impl View for MetricsView {
         Arc::new(metrics_table_schema())
     }
 
+    #[span_fn]
     async fn jit_update(
         &self,
         lakehouse: Arc<LakehouseContext>,
