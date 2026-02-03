@@ -1,6 +1,5 @@
 import { useCallback, useMemo } from 'react'
 import { useStreamQuery } from './useStreamQuery'
-import { useTimeRange } from './useTimeRange'
 import { timestampToDate } from '@/lib/arrow-utils'
 import type { DeathEvent } from '@/components/map/MapViewer'
 
@@ -31,8 +30,11 @@ export interface UseMapDataReturn {
   currentSql: string
 }
 
-export function useMapData(): UseMapDataReturn {
-  const { apiTimeRange } = useTimeRange()
+export interface UseMapDataParams {
+  apiTimeRange: { begin: string; end: string }
+}
+
+export function useMapData({ apiTimeRange }: UseMapDataParams): UseMapDataReturn {
   const streamQuery = useStreamQuery()
 
   const execute = useCallback(

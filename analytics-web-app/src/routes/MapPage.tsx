@@ -7,7 +7,8 @@ import { ErrorBanner } from '@/components/ErrorBanner'
 import { MapViewer, DeathEvent } from '@/components/map/MapViewer'
 import { DeathDetailPanel } from '@/components/map/DeathDetailPanel'
 import { useMapData, MAP_VARIABLES } from '@/hooks/useMapData'
-import { useTimeRange } from '@/hooks/useTimeRange'
+import { useScreenConfig } from '@/hooks/useScreenConfig'
+import { parseTimeRange, getTimeRangeForApi } from '@/lib/time-range'
 
 // Mock data generation
 const MOCK_PLAYER_NAMES = [
@@ -95,9 +96,54 @@ WHERE name = 'death_event'
 ORDER BY time DESC
 LIMIT 10000`
 
+// Config interface for MapPage
+interface MapConfig {
+  timeRangeFrom: string
+  timeRangeTo: string
+}
+
+// Default config for MapPage
+const DEFAULT_CONFIG: MapConfig = {
+  timeRangeFrom: 'now-1h',
+  timeRangeTo: 'now',
+}
+
+// URL builder for MapPage - builds query string from config
+const buildUrl = (cfg: MapConfig): string => {
+  const params = new URLSearchParams()
+  if (cfg.timeRangeFrom && cfg.timeRangeFrom !== DEFAULT_CONFIG.timeRangeFrom) {
+    params.set('from', cfg.timeRangeFrom)
+  }
+  if (cfg.timeRangeTo && cfg.timeRangeTo !== DEFAULT_CONFIG.timeRangeTo) {
+    params.set('to', cfg.timeRangeTo)
+  }
+  const qs = params.toString()
+  return qs ? `?${qs}` : ''
+}
+
 function MapPageContent() {
-  const { parsed: timeRange, apiTimeRange } = useTimeRange()
-  const mapData = useMapData()
+  // Use the new config-driven pattern
+  const { config, updateConfig } = useScreenConfig(DEFAULT_CONFIG, buildUrl)
+
+  // Compute API time range from config
+  const apiTimeRange = useMemo(() => {
+    try {
+      return getTimeRangeForApi(config.timeRangeFrom ?? 'now-1h', config.timeRangeTo ?? 'now')
+    } catch {
+      return getTimeRangeForApi('now-1h', 'now')
+    }
+  }, [config.timeRangeFrom, config.timeRangeTo])
+
+  // Compute display label for time range
+  const timeRangeLabel = useMemo(() => {
+    try {
+      return parseTimeRange(config.timeRangeFrom ?? 'now-1h', config.timeRangeTo ?? 'now').label
+    } catch {
+      return 'Last 1 hour'
+    }
+  }, [config.timeRangeFrom, config.timeRangeTo])
+
+  const mapData = useMapData({ apiTimeRange })
 
   const [selectedEvent, setSelectedEvent] = useState<DeathEvent | null>(null)
   const [mapUrl, setMapUrl] = useState<string | undefined>(undefined)
@@ -141,6 +187,14 @@ function MapPageContent() {
     }
   }, [queryKey, loadData])
 
+  // Time range changes create history entries (navigational)
+  const handleTimeRangeChange = useCallback(
+    (from: string, to: string) => {
+      updateConfig({ timeRangeFrom: from, timeRangeTo: to })
+    },
+    [updateConfig]
+  )
+
   const handleRefresh = useCallback(() => {
     loadData(currentSqlRef.current)
   }, [loadData])
@@ -182,7 +236,7 @@ function MapPageContent() {
       defaultSql={DEFAULT_SQL}
       variables={MAP_VARIABLES}
       currentValues={currentValues}
-      timeRangeLabel={timeRange.label}
+      timeRangeLabel={timeRangeLabel}
       onRun={handleRunQuery}
       onReset={handleResetQuery}
       isLoading={mapData.isLoading}
@@ -192,7 +246,15 @@ function MapPageContent() {
 
   return (
     <AuthGuard>
-      <PageLayout onRefresh={handleRefresh} rightPanel={sqlPanel}>
+      <PageLayout
+        onRefresh={handleRefresh}
+        rightPanel={sqlPanel}
+        timeRangeControl={{
+          timeRangeFrom: config.timeRangeFrom ?? 'now-1h',
+          timeRangeTo: config.timeRangeTo ?? 'now',
+          onTimeRangeChange: handleTimeRangeChange,
+        }}
+      >
         <div className="p-6 flex flex-col h-full">
           <div className="mb-4 flex items-center justify-between">
             <div className="flex items-center gap-3">
