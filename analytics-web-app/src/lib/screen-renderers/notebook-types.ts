@@ -95,7 +95,7 @@ export function deserializeVariableValue(str: string): VariableValue {
 
 // Note: CellType is defined here and re-exported from cell-registry.ts
 // This avoids circular dependencies while keeping the types together
-export type CellType = 'table' | 'chart' | 'log' | 'markdown' | 'variable' | 'propertytimeline' | 'swimlane'
+export type CellType = 'table' | 'chart' | 'log' | 'markdown' | 'variable' | 'propertytimeline' | 'swimlane' | 'perfettoexport'
 
 export type CellStatus = 'idle' | 'loading' | 'success' | 'error' | 'blocked'
 
@@ -123,7 +123,13 @@ export interface VariableCellConfig extends CellConfigBase {
   defaultValue?: VariableValue
 }
 
-export type CellConfig = QueryCellConfig | MarkdownCellConfig | VariableCellConfig
+export interface PerfettoExportCellConfig extends CellConfigBase {
+  type: 'perfettoexport'
+  processIdVar?: string    // Variable name holding process_id (default: "$process_id")
+  spanType?: 'thread' | 'async' | 'both'  // Default: 'both'
+}
+
+export type CellConfig = QueryCellConfig | MarkdownCellConfig | VariableCellConfig | PerfettoExportCellConfig
 
 // ============================================================================
 // Cell Execution State

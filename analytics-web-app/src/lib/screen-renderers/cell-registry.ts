@@ -139,6 +139,7 @@ import { markdownMetadata } from './cells/MarkdownCell'
 import { variableMetadata } from './cells/VariableCell'
 import { propertyTimelineMetadata } from './cells/PropertyTimelineCell'
 import { swimlaneMetadata } from './cells/SwimlaneCell'
+import { perfettoExportMetadata } from './cells/PerfettoExportCell'
 
 /**
  * Registry of all cell type metadata.
@@ -152,6 +153,7 @@ export const CELL_TYPE_METADATA: Record<CellType, CellTypeMetadata> = {
   variable: variableMetadata,
   propertytimeline: propertyTimelineMetadata,
   swimlane: swimlaneMetadata,
+  perfettoexport: perfettoExportMetadata,
 }
 
 /**
