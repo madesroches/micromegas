@@ -52,11 +52,19 @@ export function PerfettoExportCell({
   const processId = processIdValue !== undefined ? getVariableString(processIdValue) : ''
   const hasProcessId = processId !== ''
 
-  // Clear cache when processId or spanType changes
+  // Clear cache when inputs change (processId, spanType, or timeRange)
   useEffect(() => {
     setCachedTraceBuffer(null)
     setCachedTraceTimeRange(null)
-  }, [processId, spanType])
+  }, [processId, spanType, timeRange.begin, timeRange.end])
+
+  // Clear cache on unmount to free memory
+  useEffect(() => {
+    return () => {
+      setCachedTraceBuffer(null)
+      setCachedTraceTimeRange(null)
+    }
+  }, [])
 
   // Cache validation
   const canUseCachedBuffer = useCallback(() => {
