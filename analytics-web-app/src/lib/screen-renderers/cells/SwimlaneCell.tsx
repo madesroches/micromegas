@@ -14,6 +14,18 @@ import { substituteMacros, validateMacros, DEFAULT_SQL } from '../notebook-utils
 import { timestampToMs } from '@/lib/arrow-utils'
 
 // =============================================================================
+// Constants
+// =============================================================================
+
+const LABEL_WIDTH = 128 // w-32 in Tailwind
+
+const TIME_AXIS_FORMAT = new Intl.DateTimeFormat(undefined, {
+  hour: '2-digit',
+  minute: '2-digit',
+  hour12: false,
+})
+
+// =============================================================================
 // Types
 // =============================================================================
 
@@ -67,6 +79,35 @@ function extractLanesFromTable(table: Table): Lane[] {
 
   // Return lanes in first-occurrence order
   return laneOrder.map((id) => laneMap.get(id)!)
+}
+
+// =============================================================================
+// Time Axis Component
+// =============================================================================
+
+function TimeAxis({ from, to }: { from: number; to: number }) {
+  const ticks = useMemo(() => {
+    const count = 5
+    const step = (to - from) / (count - 1)
+    return Array.from({ length: count }, (_, i) => from + i * step)
+  }, [from, to])
+
+  return (
+    <div className="relative h-full">
+      {ticks.map((time, i) => {
+        const percent = ((time - from) / (to - from)) * 100
+        return (
+          <span
+            key={i}
+            className="absolute -translate-x-1/2"
+            style={{ left: `${percent}%` }}
+          >
+            {TIME_AXIS_FORMAT.format(time)}
+          </span>
+        )
+      })}
+    </div>
+  )
 }
 
 // =============================================================================
@@ -185,63 +226,75 @@ function Swimlane({ lanes, timeRange, onTimeRangeSelect }: SwimlaneProps) {
   }
 
   return (
-    <div className="h-full overflow-auto">
-      <div className="divide-y divide-theme-border/50">
-        {lanes.map((lane) => (
-          <div key={lane.id} className="flex items-center h-8">
-            {/* Lane name */}
-            <div
-              className="flex-shrink-0 w-32 px-2 text-xs font-medium text-theme-text-secondary truncate"
-              title={lane.name}
-            >
-              {lane.name}
-            </div>
+    <div className="h-full flex flex-col">
+      {/* Scrollable lanes area */}
+      <div className="flex-1 overflow-auto min-h-0">
+        <div className="divide-y divide-theme-border/50">
+          {lanes.map((lane) => (
+            <div key={lane.id} className="flex items-center h-8">
+              {/* Lane name */}
+              <div
+                className="flex-shrink-0 px-2 text-xs font-medium text-theme-text-secondary truncate"
+                style={{ width: LABEL_WIDTH }}
+                title={lane.name}
+              >
+                {lane.name}
+              </div>
 
-            {/* Timeline bar area */}
-            <div
-              className={`flex-1 h-6 relative bg-app-bg rounded ${onTimeRangeSelect ? 'cursor-crosshair' : ''}`}
-              onMouseDown={handleMouseDown}
-              onMouseMove={handleMouseMove}
-              onMouseUp={handleMouseUp}
-              onMouseLeave={handleMouseLeave}
-            >
-              {/* Selection overlay */}
-              {selection && (
-                <div
-                  className="absolute top-0 bottom-0 pointer-events-none z-20"
-                  style={{
-                    ...getSelectionStyle(),
-                    background: 'var(--chart-selection)',
-                    borderLeft: '2px solid var(--chart-selection-border)',
-                    borderRight: '2px solid var(--chart-selection-border)',
-                  }}
-                />
-              )}
-
-              {/* Segments */}
-              {lane.segments.map((segment, idx) => {
-                const startPercent = clamp(toPercent(segment.begin), 0, 100)
-                const endPercent = clamp(toPercent(segment.end), 0, 100)
-                const widthPercent = endPercent - startPercent
-
-                // Skip segments entirely outside the visible range
-                if (widthPercent <= 0) return null
-
-                return (
+              {/* Timeline bar area */}
+              <div
+                className={`flex-1 h-6 relative bg-app-bg rounded ${onTimeRangeSelect ? 'cursor-crosshair' : ''}`}
+                onMouseDown={handleMouseDown}
+                onMouseMove={handleMouseMove}
+                onMouseUp={handleMouseUp}
+                onMouseLeave={handleMouseLeave}
+              >
+                {/* Selection overlay */}
+                {selection && (
                   <div
-                    key={idx}
-                    className="absolute top-1 bottom-1 bg-chart-line rounded-sm opacity-80 hover:opacity-100 transition-opacity pointer-events-none"
+                    className="absolute top-0 bottom-0 pointer-events-none z-20"
                     style={{
-                      left: `${startPercent}%`,
-                      width: `${Math.max(widthPercent, 0.5)}%`, // Min width for visibility
+                      ...getSelectionStyle(),
+                      background: 'var(--chart-selection)',
+                      borderLeft: '2px solid var(--chart-selection-border)',
+                      borderRight: '2px solid var(--chart-selection-border)',
                     }}
-                    title={`${new Date(segment.begin).toLocaleTimeString()} - ${new Date(segment.end).toLocaleTimeString()}`}
                   />
-                )
-              })}
+                )}
+
+                {/* Segments */}
+                {lane.segments.map((segment, idx) => {
+                  const startPercent = clamp(toPercent(segment.begin), 0, 100)
+                  const endPercent = clamp(toPercent(segment.end), 0, 100)
+                  const widthPercent = endPercent - startPercent
+
+                  // Skip segments entirely outside the visible range
+                  if (widthPercent <= 0) return null
+
+                  return (
+                    <div
+                      key={idx}
+                      className="absolute top-1 bottom-1 bg-chart-line rounded-sm opacity-80 hover:opacity-100 transition-opacity pointer-events-none"
+                      style={{
+                        left: `${startPercent}%`,
+                        width: `${Math.max(widthPercent, 0.5)}%`, // Min width for visibility
+                      }}
+                      title={`${new Date(segment.begin).toLocaleTimeString()} - ${new Date(segment.end).toLocaleTimeString()}`}
+                    />
+                  )
+                })}
+              </div>
             </div>
-          </div>
-        ))}
+          ))}
+        </div>
+      </div>
+
+      {/* Time axis - fixed at bottom, outside scrollable area */}
+      <div className="flex-shrink-0 flex items-center h-6 text-[10px] text-theme-text-muted border-t border-theme-border/30 pt-1">
+        <div style={{ width: LABEL_WIDTH }} />
+        <div className="flex-1 relative">
+          <TimeAxis from={timeRange.from} to={timeRange.to} />
+        </div>
       </div>
     </div>
   )

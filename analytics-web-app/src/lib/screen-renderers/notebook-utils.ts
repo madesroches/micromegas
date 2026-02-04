@@ -87,7 +87,7 @@ ORDER BY time`,
 FROM blocks
 WHERE process_id = '$process_id'
   AND array_has("streams.tags", 'cpu')
-ORDER BY id, begin`,
+ORDER BY name, begin`,
 }
 
 // ============================================================================
