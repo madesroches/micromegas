@@ -9,6 +9,7 @@ import { CopyableProcessId } from '@/components/CopyableProcessId'
 import { MEASURES_SCHEMA_URL } from '@/components/DocumentationLink'
 import { QueryEditor } from '@/components/QueryEditor'
 import { ErrorBanner } from '@/components/ErrorBanner'
+import { ParseErrorWarning } from '@/components/ParseErrorWarning'
 import { ChartAxisBounds } from '@/components/XYChart'
 import { MetricsChart, ScaleMode } from '@/components/MetricsChart'
 import { ThreadCoverageTimeline } from '@/components/ThreadCoverageTimeline'
@@ -802,18 +803,7 @@ function PerformanceAnalysisContent() {
           />
         )}
 
-        {propertyParseErrors.length > 0 && (
-          <div className="mb-4 px-3 py-2 bg-amber-500/10 border border-amber-500/30 rounded text-amber-400 text-xs">
-            <span className="font-medium">Warning:</span> {propertyParseErrors.length} row(s) had invalid JSON properties and were skipped.
-            <details className="mt-1">
-              <summary className="cursor-pointer hover:text-amber-300">Show details</summary>
-              <ul className="mt-1 ml-4 list-disc text-amber-400/80">
-                {propertyParseErrors.slice(0, 5).map((err, i) => <li key={i}>{err}</li>)}
-                {propertyParseErrors.length > 5 && <li>...and {propertyParseErrors.length - 5} more</li>}
-              </ul>
-            </details>
-          </div>
-        )}
+        <ParseErrorWarning errors={propertyParseErrors} />
 
         {traceError && (
           <div className="bg-error-subtle border border-error-border rounded-lg p-4 mb-4">

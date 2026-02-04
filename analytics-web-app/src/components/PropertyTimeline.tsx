@@ -3,6 +3,12 @@ import { Plus, X } from 'lucide-react'
 import { PropertyTimelineData } from '@/types'
 import { ChartAxisBounds } from './XYChart'
 
+const TIME_AXIS_FORMAT = new Intl.DateTimeFormat(undefined, {
+  hour: '2-digit',
+  minute: '2-digit',
+  hour12: false,
+})
+
 interface PropertyTimelineProps {
   properties: PropertyTimelineData[]
   availableKeys: string[]
@@ -12,7 +18,6 @@ interface PropertyTimelineProps {
   onTimeRangeSelect?: (from: Date, to: Date) => void
   onAddProperty: (key: string) => void
   onRemoveProperty: (key: string) => void
-  isLoading?: boolean
   showTimeAxis?: boolean
 }
 
@@ -22,11 +27,6 @@ function TimeAxis({ from, to }: { from: number; to: number }) {
     const step = (to - from) / (count - 1)
     return Array.from({ length: count }, (_, i) => from + i * step)
   }, [from, to])
-
-  const formatTick = (time: number): string => {
-    const d = new Date(time)
-    return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false })
-  }
 
   return (
     <div className="relative h-full">
@@ -38,7 +38,7 @@ function TimeAxis({ from, to }: { from: number; to: number }) {
             className="absolute -translate-x-1/2"
             style={{ left: `${percent}%` }}
           >
-            {formatTick(time)}
+            {TIME_AXIS_FORMAT.format(time)}
           </span>
         )
       })}
@@ -55,7 +55,6 @@ export function PropertyTimeline({
   onTimeRangeSelect,
   onAddProperty,
   onRemoveProperty,
-  isLoading,
   showTimeAxis,
 }: PropertyTimelineProps) {
   const duration = timeRange.to - timeRange.from
@@ -196,12 +195,7 @@ export function PropertyTimeline({
     <div className="bg-app-panel border border-theme-border rounded-lg">
       {/* Header */}
       <div className="px-4 py-3 border-b border-theme-border flex justify-between items-center">
-        <div>
-          <div className="text-base font-medium text-theme-text-primary">Properties</div>
-          {isLoading && properties.length === 0 && selectedKeys.length > 0 && (
-            <div className="text-xs text-theme-text-muted mt-1">Loading...</div>
-          )}
-        </div>
+        <div className="text-base font-medium text-theme-text-primary">Properties</div>
 
         {/* Add property dropdown */}
         <div className="relative" ref={dropdownRef}>
