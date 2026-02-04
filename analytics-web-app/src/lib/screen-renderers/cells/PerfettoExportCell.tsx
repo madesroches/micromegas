@@ -39,7 +39,10 @@ export function PerfettoExportCell({
   const [progress, setProgress] = useState<ProgressUpdate | null>(null)
   const [traceError, setTraceError] = useState<string | null>(null)
 
-  // Cache to avoid regenerating on repeated clicks
+  // Cache to avoid regenerating on repeated clicks.
+  // IMPORTANT: Perfetto traces can be 10-100+ MB. This cache is cleared whenever
+  // processId, spanType, or timeRange changes (see useEffect below). React will
+  // also discard this state on unmount, so no explicit cleanup is needed.
   const [cachedTraceBuffer, setCachedTraceBuffer] = useState<ArrayBuffer | null>(null)
   const [cachedTraceTimeRange, setCachedTraceTimeRange] = useState<{ begin: string; end: string } | null>(null)
 
@@ -49,6 +52,7 @@ export function PerfettoExportCell({
   // Strip $ prefix to get variable name for lookup
   const varName = processIdVar.startsWith('$') ? processIdVar.slice(1) : processIdVar
   const processIdValue = variables[varName]
+  const variableExists = varName in variables
   const processId = processIdValue !== undefined ? getVariableString(processIdValue) : ''
   const hasProcessId = processId !== ''
 
@@ -57,14 +61,6 @@ export function PerfettoExportCell({
     setCachedTraceBuffer(null)
     setCachedTraceTimeRange(null)
   }, [processId, spanType, timeRange.begin, timeRange.end])
-
-  // Clear cache on unmount to free memory
-  useEffect(() => {
-    return () => {
-      setCachedTraceBuffer(null)
-      setCachedTraceTimeRange(null)
-    }
-  }, [])
 
   // Cache validation
   const canUseCachedBuffer = useCallback(() => {
@@ -202,12 +198,14 @@ export function PerfettoExportCell({
 
   return (
     <div className="flex flex-col gap-2 py-2">
-      {/* Warning if variable not found */}
+      {/* Warning if variable not found or empty */}
       {!hasProcessId && (
         <div className="flex items-center gap-2 px-3 py-2 bg-amber-500/10 border border-amber-500/30 rounded-md">
           <AlertTriangle className="w-4 h-4 text-amber-500" />
           <span className="text-sm text-amber-500">
-            Variable "{processIdVar}" not found. Add a Variable cell above.
+            {variableExists
+              ? `Variable "${processIdVar}" is empty. Select a value above.`
+              : `Variable "${processIdVar}" not found. Add a Variable cell above.`}
           </span>
         </div>
       )}

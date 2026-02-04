@@ -1,6 +1,8 @@
-import { render, screen } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { PerfettoExportCell, perfettoExportMetadata } from '../PerfettoExportCell'
 import type { CellRendererProps } from '../../cell-registry'
+import { generateTrace } from '@/lib/api'
+import { openInPerfetto } from '@/lib/perfetto'
 
 // Mock the API and Perfetto modules to prevent actual calls
 jest.mock('@/lib/api', () => ({
@@ -10,6 +12,9 @@ jest.mock('@/lib/api', () => ({
 jest.mock('@/lib/perfetto', () => ({
   openInPerfetto: jest.fn(),
 }))
+
+const mockGenerateTrace = generateTrace as jest.MockedFunction<typeof generateTrace>
+const mockOpenInPerfetto = openInPerfetto as jest.MockedFunction<typeof openInPerfetto>
 
 // Create minimal mock props for CellRendererProps
 const createMockProps = (overrides: Partial<CellRendererProps> = {}): CellRendererProps => ({
@@ -70,7 +75,7 @@ describe('PerfettoExportCell', () => {
             })}
           />
         )
-        expect(screen.getByText(/Variable "\$process_id" not found/)).toBeInTheDocument()
+        expect(screen.getByText(/Variable "\$process_id" is empty/)).toBeInTheDocument()
       })
     })
 
@@ -205,6 +210,125 @@ describe('PerfettoExportCell', () => {
       const button = screen.getByRole('button', { name: /Open in Perfetto/i })
       expect(button).not.toBeDisabled()
       expect(screen.queryByText(/Variable .* not found/)).not.toBeInTheDocument()
+    })
+  })
+
+  describe('trace generation and caching', () => {
+    const mockBuffer = new ArrayBuffer(100)
+
+    beforeEach(() => {
+      jest.clearAllMocks()
+      mockGenerateTrace.mockResolvedValue(mockBuffer)
+      mockOpenInPerfetto.mockResolvedValue(undefined)
+    })
+
+    it('should call generateTrace when clicking Open in Perfetto', async () => {
+      render(
+        <PerfettoExportCell
+          {...createMockProps({
+            variables: { process_id: 'abc-123' },
+            timeRange: { begin: '2024-01-01T00:00:00Z', end: '2024-01-02T00:00:00Z' },
+          })}
+        />
+      )
+
+      fireEvent.click(screen.getByRole('button', { name: /Open in Perfetto/i }))
+
+      await waitFor(() => {
+        expect(mockGenerateTrace).toHaveBeenCalledTimes(1)
+        expect(mockGenerateTrace).toHaveBeenCalledWith(
+          'abc-123',
+          expect.objectContaining({
+            include_thread_spans: true,
+            include_async_spans: true,
+          }),
+          expect.any(Function),
+          { returnBuffer: true }
+        )
+      })
+    })
+
+    it('should use cached buffer on second click (no re-fetch)', async () => {
+      render(
+        <PerfettoExportCell
+          {...createMockProps({
+            variables: { process_id: 'abc-123' },
+            timeRange: { begin: '2024-01-01T00:00:00Z', end: '2024-01-02T00:00:00Z' },
+          })}
+        />
+      )
+
+      const button = screen.getByRole('button', { name: /Open in Perfetto/i })
+
+      // First click - should fetch
+      fireEvent.click(button)
+      await waitFor(() => expect(mockGenerateTrace).toHaveBeenCalledTimes(1))
+      await waitFor(() => expect(mockOpenInPerfetto).toHaveBeenCalledTimes(1))
+
+      // Second click - should use cache
+      fireEvent.click(button)
+      await waitFor(() => expect(mockOpenInPerfetto).toHaveBeenCalledTimes(2))
+
+      // generateTrace should still only be called once (cached)
+      expect(mockGenerateTrace).toHaveBeenCalledTimes(1)
+    })
+
+    it('should show error message when generateTrace fails', async () => {
+      mockGenerateTrace.mockRejectedValue(new Error('Network error'))
+
+      render(
+        <PerfettoExportCell
+          {...createMockProps({
+            variables: { process_id: 'abc-123' },
+          })}
+        />
+      )
+
+      fireEvent.click(screen.getByRole('button', { name: /Open in Perfetto/i }))
+
+      await waitFor(() => {
+        expect(screen.getByText('Network error')).toBeInTheDocument()
+      })
+      expect(screen.getByRole('button', { name: /Retry/i })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: /Dismiss/i })).toBeInTheDocument()
+    })
+
+    it('should show "Download Instead" button when openInPerfetto fails but buffer exists', async () => {
+      mockOpenInPerfetto.mockRejectedValue({ type: 'popup_blocked', message: 'Popup blocked' })
+
+      render(
+        <PerfettoExportCell
+          {...createMockProps({
+            variables: { process_id: 'abc-123' },
+          })}
+        />
+      )
+
+      fireEvent.click(screen.getByRole('button', { name: /Open in Perfetto/i }))
+
+      await waitFor(() => {
+        expect(screen.getByText('Popup blocked')).toBeInTheDocument()
+      })
+      expect(screen.getByRole('button', { name: /Download Instead/i })).toBeInTheDocument()
+    })
+
+    it('should dismiss error when clicking Dismiss button', async () => {
+      mockGenerateTrace.mockRejectedValue(new Error('Test error'))
+
+      render(
+        <PerfettoExportCell
+          {...createMockProps({
+            variables: { process_id: 'abc-123' },
+          })}
+        />
+      )
+
+      fireEvent.click(screen.getByRole('button', { name: /Open in Perfetto/i }))
+      await waitFor(() => expect(screen.getByText('Test error')).toBeInTheDocument())
+
+      fireEvent.click(screen.getByRole('button', { name: /Dismiss/i }))
+
+      expect(screen.queryByText('Test error')).not.toBeInTheDocument()
     })
   })
 })
