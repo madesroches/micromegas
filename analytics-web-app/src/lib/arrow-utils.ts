@@ -11,7 +11,7 @@ export type XAxisMode = 'time' | 'numeric' | 'categorical'
  * Uses the field's schema to determine the correct conversion factor.
  */
 export function timestampToMs(value: unknown, dataType?: DataType): number {
-  if (!value) return 0
+  if (value == null) return NaN
   if (value instanceof Date) return value.getTime()
 
   // Arrow JS automatically converts all timestamp types to milliseconds when
@@ -43,7 +43,7 @@ export function timestampToMs(value: unknown, dataType?: DataType): number {
 
   // Try parsing as string
   const date = new Date(String(value))
-  return isNaN(date.getTime()) ? 0 : date.getTime()
+  return date.getTime() // Returns NaN for invalid dates
 }
 
 /**

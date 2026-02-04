@@ -44,19 +44,32 @@ interface Lane {
 // Data Transformation
 // =============================================================================
 
+const REQUIRED_COLUMNS = ['id', 'name', 'begin', 'end'] as const
+
+interface ExtractResult {
+  lanes: Lane[]
+  error?: string
+}
+
 /** Extract lanes and segments from Arrow table */
-function extractLanesFromTable(table: Table): Lane[] {
+function extractLanesFromTable(table: Table): ExtractResult {
   const laneMap = new Map<string, Lane>()
   const laneOrder: string[] = []
 
-  const idCol = table.getChild('id')
-  const nameCol = table.getChild('name')
-  const beginCol = table.getChild('begin')
-  const endCol = table.getChild('end')
-
-  if (!idCol || !nameCol || !beginCol || !endCol) {
-    return []
+  // Check for required columns
+  const missingColumns = REQUIRED_COLUMNS.filter((col) => !table.getChild(col))
+  if (missingColumns.length > 0) {
+    const available = table.schema.fields.map((f) => f.name).join(', ') || 'none'
+    return {
+      lanes: [],
+      error: `Missing required columns: ${missingColumns.join(', ')}. Query must return: id, name, begin, end. Available: ${available}`,
+    }
   }
+
+  const idCol = table.getChild('id')!
+  const nameCol = table.getChild('name')!
+  const beginCol = table.getChild('begin')!
+  const endCol = table.getChild('end')!
 
   const beginField = table.schema.fields.find((f) => f.name === 'begin')
   const endField = table.schema.fields.find((f) => f.name === 'end')
@@ -64,10 +77,14 @@ function extractLanesFromTable(table: Table): Lane[] {
   for (let i = 0; i < table.numRows; i++) {
     const id = String(idCol.get(i) ?? '')
     const name = String(nameCol.get(i) ?? '')
-    const begin = timestampToMs(beginCol.get(i), beginField?.type)
-    const end = timestampToMs(endCol.get(i), endField?.type)
+    const beginRaw = beginCol.get(i)
+    const endRaw = endCol.get(i)
 
-    if (!id || begin === 0 || end === 0) continue
+    // Skip rows with missing id or null timestamps
+    if (!id || beginRaw == null || endRaw == null) continue
+
+    const begin = timestampToMs(beginRaw, beginField?.type)
+    const end = timestampToMs(endRaw, endField?.type)
 
     if (!laneMap.has(id)) {
       laneMap.set(id, { id, name, segments: [] })
@@ -78,7 +95,7 @@ function extractLanesFromTable(table: Table): Lane[] {
   }
 
   // Return lanes in first-occurrence order
-  return laneOrder.map((id) => laneMap.get(id)!)
+  return { lanes: laneOrder.map((id) => laneMap.get(id)!) }
 }
 
 // =============================================================================
@@ -88,14 +105,20 @@ function extractLanesFromTable(table: Table): Lane[] {
 function TimeAxis({ from, to }: { from: number; to: number }) {
   const ticks = useMemo(() => {
     const count = 5
-    const step = (to - from) / (count - 1)
+    const range = to - from
+    if (range === 0) {
+      return [from]
+    }
+    const step = range / (count - 1)
     return Array.from({ length: count }, (_, i) => from + i * step)
   }, [from, to])
+
+  const range = to - from
 
   return (
     <div className="relative h-full">
       {ticks.map((time, i) => {
-        const percent = ((time - from) / (to - from)) * 100
+        const percent = range === 0 ? 50 : ((time - from) / range) * 100
         return (
           <span
             key={i}
@@ -127,6 +150,7 @@ function Swimlane({ lanes, timeRange, onTimeRangeSelect }: SwimlaneProps) {
 
   // Calculate position as percentage
   const toPercent = (time: number) => {
+    if (duration === 0) return 50
     return ((time - timeRange.from) / duration) * 100
   }
 
@@ -138,6 +162,7 @@ function Swimlane({ lanes, timeRange, onTimeRangeSelect }: SwimlaneProps) {
   // Convert pixel position to time
   const pixelToTime = useCallback(
     (pixelX: number, containerWidth: number): number => {
+      if (containerWidth === 0) return timeRange.from
       const ratio = pixelX / containerWidth
       return timeRange.from + ratio * duration
     },
@@ -320,9 +345,9 @@ export function SwimlaneCell({
   )
 
   // Extract lanes from data
-  const lanes = useMemo(() => {
+  const { lanes, error: schemaError } = useMemo(() => {
     if (!data || data.numRows === 0) {
-      return []
+      return { lanes: [] }
     }
     return extractLanesFromTable(data)
   }, [data])
@@ -332,6 +357,14 @@ export function SwimlaneCell({
       <div className="flex items-center justify-center h-[200px]">
         <div className="animate-spin rounded-full h-5 w-5 border-2 border-accent-link border-t-transparent" />
         <span className="ml-2 text-theme-text-secondary text-sm">Loading...</span>
+      </div>
+    )
+  }
+
+  if (schemaError) {
+    return (
+      <div className="flex items-center justify-center h-[200px] text-red-400 text-sm px-4 text-center">
+        {schemaError}
       </div>
     )
   }
