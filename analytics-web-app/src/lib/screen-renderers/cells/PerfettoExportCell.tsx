@@ -168,7 +168,7 @@ export function PerfettoExportCell({
   }
 
   return (
-    <div className="flex flex-col gap-3 py-2">
+    <div className="flex flex-col gap-2 py-2">
       {/* Warning if variable not found */}
       {!hasProcessId && (
         <div className="flex items-center gap-2 px-3 py-2 bg-amber-500/10 border border-amber-500/30 rounded-md">
@@ -212,15 +212,7 @@ export function PerfettoExportCell({
         </div>
       )}
 
-      {/* Progress indicator */}
-      {isGenerating && progress && (
-        <div className="flex items-center gap-2 px-3 py-2 bg-app-panel border border-theme-border rounded-md">
-          <div className="w-4 h-4 border-2 border-theme-border border-t-accent-link rounded-full animate-spin" />
-          <span className="text-sm text-theme-text-secondary">{progress.message}</span>
-        </div>
-      )}
-
-      {/* Action buttons */}
+      {/* Action buttons and status on same line */}
       <div className="flex items-center gap-3">
         <SplitButton
           primaryLabel="Open in Perfetto"
@@ -237,7 +229,16 @@ export function PerfettoExportCell({
           loading={isGenerating}
           loadingLabel={traceMode === 'perfetto' ? 'Opening...' : 'Downloading...'}
         />
-        {hasProcessId && (
+
+        {/* Progress indicator inline */}
+        {isGenerating && progress && (
+          <span className="text-xs text-theme-text-secondary truncate">
+            {progress.message}
+          </span>
+        )}
+
+        {/* Span type info when not generating */}
+        {!isGenerating && hasProcessId && (
           <span className="text-xs text-theme-text-muted">
             {spanType === 'both' ? 'Thread + Async spans' : spanType === 'thread' ? 'Thread spans only' : 'Async spans only'}
           </span>
