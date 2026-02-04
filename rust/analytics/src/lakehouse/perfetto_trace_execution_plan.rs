@@ -131,6 +131,7 @@ impl ExecutionPlan for PerfettoTraceExecutionPlan {
         Ok(self)
     }
 
+	#[span_fn]
     fn execute(
         &self,
         _partition: usize,
@@ -159,6 +160,7 @@ impl ExecutionPlan for PerfettoTraceExecutionPlan {
 }
 
 /// Creates a stream of Perfetto trace chunks using streaming architecture
+#[span_fn]
 fn generate_perfetto_trace_stream(
     process_id: String,
     span_types: SpanTypes,
@@ -391,8 +393,9 @@ fn format_thread_spans_query(stream_id: &str, time_range: &TimeRange) -> String 
 /// get different lock keys, making parallel JIT safe.
 ///
 /// Strategy:
-/// - Build streams in parallel via buffered() - JIT happens during execute_stream()
-/// - Collect all streams (each buffers ~1 RecordBatch internally)
+/// - Spawn tasks with spawn_with_context() for true multi-threaded parallelism
+/// - Use buffered() to limit concurrent spawned tasks
+/// - Collect all streams preserving order
 /// - Consume streams sequentially to write each thread's spans together
 async fn generate_thread_spans_with_writer(
     writer: &mut PerfettoWriter,
@@ -404,7 +407,7 @@ async fn generate_thread_spans_with_writer(
         .map(|n| n.get())
         .unwrap_or(4);
 
-    // Prepare query inputs upfront to avoid lifetime issues with buffered streams.
+    // Prepare query inputs upfront
     let queries: Vec<(String, String)> = threads
         .iter()
         .map(|(stream_id, _, _)| {
@@ -415,14 +418,17 @@ async fn generate_thread_spans_with_writer(
         })
         .collect();
 
-    // Build streams in parallel - JIT happens during execute_stream()
+    // Build streams in parallel using spawn for true multi-threading
     let streams: Vec<(String, SendableRecordBatchStream)> = stream::iter(queries)
         .map(|(stream_id, sql)| {
             let ctx = ctx.clone();
             async move {
-                let df = ctx.sql(&sql).await?;
-                let stream = df.execute_stream().await?;
-                Ok::<_, anyhow::Error>((stream_id, stream))
+                spawn_with_context(async move {
+                    let df = ctx.sql(&sql).await?;
+                    let stream = df.execute_stream().await?;
+                    Ok::<_, anyhow::Error>((stream_id, stream))
+                })
+                .await?
             }
         })
         .buffered(max_concurrent)
