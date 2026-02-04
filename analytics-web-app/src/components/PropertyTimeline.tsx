@@ -30,11 +30,11 @@ function TimeAxis({ from, to }: { from: number; to: number }) {
 
   return (
     <div className="relative h-full">
-      {ticks.map((time) => {
+      {ticks.map((time, i) => {
         const percent = ((time - from) / (to - from)) * 100
         return (
           <span
-            key={time}
+            key={i}
             className="absolute -translate-x-1/2"
             style={{ left: `${percent}%` }}
           >
