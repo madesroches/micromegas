@@ -135,6 +135,7 @@ import { chartMetadata } from './cells/ChartCell'
 import { logMetadata } from './cells/LogCell'
 import { markdownMetadata } from './cells/MarkdownCell'
 import { variableMetadata } from './cells/VariableCell'
+import { propertyTimelineMetadata } from './cells/PropertyTimelineCell'
 
 /**
  * Registry of all cell type metadata.
@@ -146,6 +147,7 @@ export const CELL_TYPE_METADATA: Record<CellType, CellTypeMetadata> = {
   log: logMetadata,
   markdown: markdownMetadata,
   variable: variableMetadata,
+  propertytimeline: propertyTimelineMetadata,
 }
 
 /**

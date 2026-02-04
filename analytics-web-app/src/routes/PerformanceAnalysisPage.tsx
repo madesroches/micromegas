@@ -9,6 +9,7 @@ import { CopyableProcessId } from '@/components/CopyableProcessId'
 import { MEASURES_SCHEMA_URL } from '@/components/DocumentationLink'
 import { QueryEditor } from '@/components/QueryEditor'
 import { ErrorBanner } from '@/components/ErrorBanner'
+import { ParseErrorWarning } from '@/components/ParseErrorWarning'
 import { ChartAxisBounds } from '@/components/XYChart'
 import { MetricsChart, ScaleMode } from '@/components/MetricsChart'
 import { ThreadCoverageTimeline } from '@/components/ThreadCoverageTimeline'
@@ -171,7 +172,7 @@ function PerformanceAnalysisContent() {
   const [cachedTraceTimeRange, setCachedTraceTimeRange] = useState<{ begin: string; end: string } | null>(null)
   const [isCustomQuery, setIsCustomQuery] = useState(false)
   const [customChartData, setCustomChartData] = useState<{ time: number; value: number }[]>([])
-  const [customPropertyData, setCustomPropertyData] = useState<ExtractedPropertyData>({ availableKeys: [], rawData: new Map() })
+  const [customPropertyData, setCustomPropertyData] = useState<ExtractedPropertyData>({ availableKeys: [], rawData: new Map(), errors: [] })
 
   const binInterval = useMemo(() => {
     const fromDate = new Date(apiTimeRange.begin)
@@ -194,14 +195,21 @@ function PerformanceAnalysisContent() {
   const dataLoading = isCustomQuery ? false : metricsData.isLoading
   const hasLoaded = isCustomQuery ? customChartData.length > 0 || queryError !== null : metricsData.isComplete
 
+  // Compute time range in milliseconds for property timeline
+  const timeRangeMs = useMemo(() => ({
+    begin: new Date(apiTimeRange.begin).getTime(),
+    end: new Date(apiTimeRange.end).getTime(),
+  }), [apiTimeRange.begin, apiTimeRange.end])
+
   // Use custom or unified property data based on query mode
   const availablePropertyKeys = isCustomQuery ? customPropertyData.availableKeys : metricsData.availablePropertyKeys
   const getPropertyTimeline = useMemo(
     () => isCustomQuery
-      ? createPropertyTimelineGetter(customPropertyData.rawData, binInterval)
+      ? createPropertyTimelineGetter(customPropertyData.rawData, timeRangeMs)
       : metricsData.getPropertyTimeline,
-    [isCustomQuery, customPropertyData.rawData, binInterval, metricsData.getPropertyTimeline]
+    [isCustomQuery, customPropertyData.rawData, timeRangeMs, metricsData.getPropertyTimeline]
   )
+  const propertyParseErrors = isCustomQuery ? customPropertyData.errors : metricsData.propertyParseErrors
 
   const selectedMeasureInfo = useMemo(() => {
     return measures.find((m) => m.name === selectedMeasure)
@@ -317,7 +325,7 @@ function PerformanceAnalysisContent() {
         setCustomPropertyData(
           hasPropertiesColumn
             ? extractPropertiesFromRows(propsRows)
-            : { availableKeys: [], rawData: new Map() }
+            : { availableKeys: [], rawData: new Map(), errors: [] }
         )
       } catch (err) {
         setQueryError(err instanceof Error ? err.message : 'Unknown error')
@@ -794,6 +802,8 @@ function PerformanceAnalysisContent() {
             onRetry={handleRefresh}
           />
         )}
+
+        <ParseErrorWarning errors={propertyParseErrors} />
 
         {traceError && (
           <div className="bg-error-subtle border border-error-border rounded-lg p-4 mb-4">

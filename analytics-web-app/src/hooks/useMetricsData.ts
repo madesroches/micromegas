@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { useStreamQuery } from './useStreamQuery'
 import { timestampToMs } from '@/lib/arrow-utils'
-import { parseIntervalToMs, aggregateIntoSegments } from '@/lib/property-utils'
+import { aggregateIntoSegments } from '@/lib/property-utils'
 import { PropertyTimelineData } from '@/types'
 
 const METRICS_SQL = `SELECT
@@ -25,6 +25,7 @@ interface UseMetricsDataReturn {
   chartData: { time: number; value: number }[]
   availablePropertyKeys: string[]
   getPropertyTimeline: (key: string) => PropertyTimelineData
+  propertyParseErrors: string[]
   isLoading: boolean
   isComplete: boolean
   error: string | null
@@ -42,6 +43,7 @@ export function useMetricsData({
 
   const [chartData, setChartData] = useState<{ time: number; value: number }[]>([])
   const [rawPropertiesData, setRawPropertiesData] = useState<Map<number, Record<string, unknown>>>(new Map())
+  const [propertyParseErrors, setPropertyParseErrors] = useState<string[]>([])
 
   // Execute the unified query
   const execute = useCallback(() => {
@@ -79,6 +81,7 @@ export function useMetricsData({
       if (table) {
         const points: { time: number; value: number }[] = []
         const propsMap = new Map<number, Record<string, unknown>>()
+        const errors: string[] = []
 
         for (let i = 0; i < table.numRows; i++) {
           const row = table.get(i)
@@ -90,8 +93,8 @@ export function useMetricsData({
             if (propsStr != null) {
               try {
                 propsMap.set(time, JSON.parse(String(propsStr)))
-              } catch {
-                // Ignore parse errors
+              } catch (e) {
+                errors.push(`Invalid JSON at time ${time}: ${e instanceof Error ? e.message : String(e)}`)
               }
             }
           }
@@ -99,6 +102,7 @@ export function useMetricsData({
 
         setChartData(points)
         setRawPropertiesData(propsMap)
+        setPropertyParseErrors(errors)
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- Only react to completion/error, not the full hook object
@@ -113,6 +117,12 @@ export function useMetricsData({
     return Array.from(keysSet).sort()
   }, [rawPropertiesData])
 
+  // Compute time range in milliseconds
+  const timeRangeMs = useMemo(() => ({
+    begin: new Date(apiTimeRange.begin).getTime(),
+    end: new Date(apiTimeRange.end).getTime(),
+  }), [apiTimeRange.begin, apiTimeRange.end])
+
   // Function to get property timeline for a specific key
   const getPropertyTimeline = useCallback((propertyName: string): PropertyTimelineData => {
     const rows: { time: number; value: string }[] = []
@@ -126,17 +136,17 @@ export function useMetricsData({
       }
     }
 
-    const binIntervalMs = parseIntervalToMs(binInterval)
     return {
       propertyName,
-      segments: aggregateIntoSegments(rows, binIntervalMs),
+      segments: aggregateIntoSegments(rows, timeRangeMs),
     }
-  }, [rawPropertiesData, binInterval])
+  }, [rawPropertiesData, timeRangeMs])
 
   return {
     chartData,
     availablePropertyKeys,
     getPropertyTimeline,
+    propertyParseErrors,
     isLoading: query.isStreaming,
     isComplete: query.isComplete,
     error: query.error?.message ?? null,

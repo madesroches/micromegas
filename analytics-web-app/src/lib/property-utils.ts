@@ -6,17 +6,19 @@ import { PropertySegment, PropertyTimelineData } from '@/types'
 export interface ExtractedPropertyData {
   availableKeys: string[]
   rawData: Map<number, Record<string, unknown>>
+  errors: string[]
 }
 
 /**
  * Extract property data from query result rows.
- * Returns available keys and raw property data map.
+ * Returns available keys, raw property data map, and any parse errors.
  */
 export function extractPropertiesFromRows(
   rows: { time: number; properties: string | null }[]
 ): ExtractedPropertyData {
   const rawData = new Map<number, Record<string, unknown>>()
   const keysSet = new Set<string>()
+  const errors: string[] = []
 
   for (const row of rows) {
     if (row.properties != null) {
@@ -24,8 +26,8 @@ export function extractPropertiesFromRows(
         const props = JSON.parse(row.properties)
         rawData.set(row.time, props)
         Object.keys(props).forEach(k => keysSet.add(k))
-      } catch {
-        // Ignore parse errors
+      } catch (e) {
+        errors.push(`Invalid JSON at time ${row.time}: ${e instanceof Error ? e.message : String(e)}`)
       }
     }
   }
@@ -33,6 +35,7 @@ export function extractPropertiesFromRows(
   return {
     availableKeys: Array.from(keysSet).sort(),
     rawData,
+    errors,
   }
 }
 
@@ -41,10 +44,8 @@ export function extractPropertiesFromRows(
  */
 export function createPropertyTimelineGetter(
   rawData: Map<number, Record<string, unknown>>,
-  binInterval: string
+  timeRange?: { begin: number; end: number }
 ): (propertyName: string) => PropertyTimelineData {
-  const binIntervalMs = parseIntervalToMs(binInterval)
-
   return (propertyName: string): PropertyTimelineData => {
     const rows: { time: number; value: string }[] = []
     const sortedEntries = Array.from(rawData.entries()).sort((a, b) => a[0] - b[0])
@@ -58,75 +59,51 @@ export function createPropertyTimelineGetter(
 
     return {
       propertyName,
-      segments: aggregateIntoSegments(rows, binIntervalMs),
+      segments: aggregateIntoSegments(rows, timeRange),
     }
   }
 }
 
 /**
- * Parse interval string (e.g., "50 milliseconds", "1 second") to milliseconds.
- * Fixed to handle millisecond intervals that were previously unsupported.
- */
-export function parseIntervalToMs(interval: string): number {
-  const match = interval.match(/^(\d+)\s*(millisecond|second|minute|hour|day)s?$/i)
-  if (!match) return 60000 // default to 1 minute
-
-  const value = parseInt(match[1], 10)
-  const unit = match[2].toLowerCase()
-
-  switch (unit) {
-    case 'millisecond':
-      return value
-    case 'second':
-      return value * 1000
-    case 'minute':
-      return value * 60 * 1000
-    case 'hour':
-      return value * 60 * 60 * 1000
-    case 'day':
-      return value * 24 * 60 * 60 * 1000
-    default:
-      return 60000
-  }
-}
-
-/**
  * Aggregate time-value rows into contiguous segments where adjacent rows
- * with the same value are merged.
+ * with the same value are merged. Segment boundaries are derived from the data itself.
  */
 export function aggregateIntoSegments(
   rows: { time: number; value: string }[],
-  binIntervalMs: number
+  timeRange?: { begin: number; end: number }
 ): PropertySegment[] {
   if (rows.length === 0) return []
 
   const segments: PropertySegment[] = []
   let currentSegment: PropertySegment | null = null
 
-  for (const row of rows) {
-    const binEnd = row.time + binIntervalMs
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i]
+    const nextTime = rows[i + 1]?.time
 
     if (!currentSegment) {
+      // First segment starts at actual data point (not timeRange.begin)
+      // to align with chart rendering
       currentSegment = {
         value: row.value,
         begin: row.time,
-        end: binEnd,
+        end: nextTime ?? timeRange?.end ?? row.time,
       }
     } else if (currentSegment.value === row.value) {
-      // Extend current segment to cover this bin
-      currentSegment.end = binEnd
+      // Extend current segment
+      currentSegment.end = nextTime ?? timeRange?.end ?? row.time
     } else {
-      // Close current segment and start new one
+      // Close current segment at this row's time, start new one
+      currentSegment.end = row.time
       segments.push(currentSegment)
       currentSegment = {
         value: row.value,
         begin: row.time,
-        end: binEnd,
+        end: nextTime ?? timeRange?.end ?? row.time,
       }
     }
   }
 
-  // Don't forget the last segment
   if (currentSegment) {
     segments.push(currentSegment)
   }

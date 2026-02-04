@@ -1,7 +1,13 @@
-import { useState, useCallback, useRef, useEffect } from 'react'
+import { useState, useCallback, useRef, useEffect, useMemo } from 'react'
 import { Plus, X } from 'lucide-react'
 import { PropertyTimelineData } from '@/types'
 import { ChartAxisBounds } from './XYChart'
+
+const TIME_AXIS_FORMAT = new Intl.DateTimeFormat(undefined, {
+  hour: '2-digit',
+  minute: '2-digit',
+  hour12: false,
+})
 
 interface PropertyTimelineProps {
   properties: PropertyTimelineData[]
@@ -12,7 +18,32 @@ interface PropertyTimelineProps {
   onTimeRangeSelect?: (from: Date, to: Date) => void
   onAddProperty: (key: string) => void
   onRemoveProperty: (key: string) => void
-  isLoading?: boolean
+  showTimeAxis?: boolean
+}
+
+function TimeAxis({ from, to }: { from: number; to: number }) {
+  const ticks = useMemo(() => {
+    const count = 5
+    const step = (to - from) / (count - 1)
+    return Array.from({ length: count }, (_, i) => from + i * step)
+  }, [from, to])
+
+  return (
+    <div className="relative h-full">
+      {ticks.map((time, i) => {
+        const percent = ((time - from) / (to - from)) * 100
+        return (
+          <span
+            key={i}
+            className="absolute -translate-x-1/2"
+            style={{ left: `${percent}%` }}
+          >
+            {TIME_AXIS_FORMAT.format(time)}
+          </span>
+        )
+      })}
+    </div>
+  )
 }
 
 export function PropertyTimeline({
@@ -24,7 +55,7 @@ export function PropertyTimeline({
   onTimeRangeSelect,
   onAddProperty,
   onRemoveProperty,
-  isLoading,
+  showTimeAxis,
 }: PropertyTimelineProps) {
   const duration = timeRange.to - timeRange.from
   const [selection, setSelection] = useState<{ startX: number; currentX: number } | null>(null)
@@ -164,12 +195,7 @@ export function PropertyTimeline({
     <div className="bg-app-panel border border-theme-border rounded-lg">
       {/* Header */}
       <div className="px-4 py-3 border-b border-theme-border flex justify-between items-center">
-        <div>
-          <div className="text-base font-medium text-theme-text-primary">Properties</div>
-          {isLoading && properties.length === 0 && selectedKeys.length > 0 && (
-            <div className="text-xs text-theme-text-muted mt-1">Loading...</div>
-          )}
-        </div>
+        <div className="text-base font-medium text-theme-text-primary">Properties</div>
 
         {/* Add property dropdown */}
         <div className="relative" ref={dropdownRef}>
@@ -301,6 +327,18 @@ export function PropertyTimeline({
                 </div>
               ))}
             </div>
+
+            {/* Time axis */}
+            {showTimeAxis && selectedKeys.length > 0 && (
+              <div className="flex items-center h-6 text-[10px] text-theme-text-muted">
+                {/* Spacer matching label column width */}
+                <div style={{ width: leftOffset }} />
+                {/* Axis area */}
+                <div className="relative" style={{ width: plotWidth ?? '100%' }}>
+                  <TimeAxis from={timeRange.from} to={timeRange.to} />
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>

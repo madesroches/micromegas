@@ -91,7 +91,6 @@ export function MetricsChart({
           onTimeRangeSelect={onTimeRangeSelect}
           onAddProperty={onAddProperty}
           onRemoveProperty={onRemoveProperty}
-          isLoading={false}
         />
       )}
 
