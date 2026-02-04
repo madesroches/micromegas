@@ -17,26 +17,21 @@ The notebook uses a plugin-based cell architecture:
 
 **File:** `analytics-web-app/src/lib/screen-renderers/notebook-types.ts`
 
-Add to the CellType union:
+Add `'propertytimeline'` to the CellType union:
 ```typescript
 export type CellType = 'table' | 'chart' | 'log' | 'markdown' | 'variable' | 'propertytimeline'
 ```
 
-Add config interface:
+Add `'propertytimeline'` to the QueryCellConfig type union:
 ```typescript
-export interface PropertyTimelineCellConfig extends CellConfigBase {
-  type: 'propertytimeline'
+export interface QueryCellConfig extends CellConfigBase {
+  type: 'table' | 'chart' | 'log' | 'propertytimeline'
   sql: string
-  options?: {
-    selectedKeys?: string[]      // Which property keys to display
-  }
+  options?: Record<string, unknown>
 }
 ```
 
-Add to CellConfig union:
-```typescript
-export type CellConfig = TableCellConfig | ChartCellConfig | LogCellConfig | MarkdownCellConfig | VariableCellConfig | PropertyTimelineCellConfig
-```
+The `options` field remains untyped (`Record<string, unknown>`) per the open/closed principle. The PropertyTimeline cell will use `options.selectedKeys` internally, interpreted as `string[]`.
 
 ### 2. Create PropertyTimelineCell Component
 
@@ -62,26 +57,26 @@ The cell parses the JSON properties and aggregates adjacent rows with the same v
 
 #### Renderer Component
 
-```typescript
-interface PropertyTimelineCellRendererProps extends CellRendererProps {
-  options?: {
-    selectedKeys?: string[]
-  }
-}
-```
+The renderer receives standard `CellRendererProps` with `options?: Record<string, unknown>`. It interprets `options.selectedKeys` as `string[]` internally.
 
 The renderer:
 1. Extracts data from Arrow table
 2. Transforms to `PropertyTimelineData[]` format
 3. Derives available keys from data
-4. Manages selected keys state (from options or default to first N keys)
-5. Renders existing `PropertyTimeline` component
+4. Reads selected keys from `options.selectedKeys` (empty by default)
+5. Renders existing `PropertyTimeline` component with add/remove callbacks
+
+Property selection UX (same as PerformanceAnalysisPage):
+- Starts with no properties selected
+- User clicks "Add Property" dropdown to select from available keys
+- User clicks remove button to deselect a property
+- Selection persisted in `options.selectedKeys`
 
 #### Editor Component
 
 The editor provides:
 - SQL query input (reuse existing SQL editor pattern)
-- Property key multi-select (populated after query runs)
+- No property selection in editor - handled by renderer's PropertyTimeline component
 
 #### Metadata Export
 
@@ -98,7 +93,7 @@ export const propertyTimelineMetadata: CellTypeMetadata = {
   createDefaultConfig: () => ({
     type: 'propertytimeline' as const,
     sql: '',
-    options: { selectedKeys: [] }
+    options: {}
   }),
   execute: async (config, context) => {
     const sql = substituteMacros(config.sql, context.variables, context.timeRange)
@@ -130,18 +125,112 @@ export const CELL_TYPE_METADATA: Record<CellType, CellTypeMetadata> = {
 }
 ```
 
-### 4. Data Transformation
+### 4. Refactor property-utils.ts
+
+**File:** `analytics-web-app/src/lib/property-utils.ts`
+
+The current `aggregateIntoSegments()` takes a `binIntervalMs` parameter, but this is redundant - the data is already binned by the SQL query, so segment boundaries should be derived from the data itself.
+
+#### Refactor `aggregateIntoSegments()`
+
+Remove the `binIntervalMs` parameter. Add optional `timeRange` parameter for first/last segment boundaries:
+
+```typescript
+export function aggregateIntoSegments(
+  rows: { time: number; value: string }[],
+  timeRange?: { begin: number; end: number }
+): PropertySegment[] {
+  if (rows.length === 0) return []
+
+  const segments: PropertySegment[] = []
+  let currentSegment: PropertySegment | null = null
+
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i]
+    const nextTime = rows[i + 1]?.time
+
+    if (!currentSegment) {
+      currentSegment = {
+        value: row.value,
+        begin: timeRange?.begin ?? row.time,
+        end: nextTime ?? timeRange?.end ?? row.time,
+      }
+    } else if (currentSegment.value === row.value) {
+      // Extend current segment
+      currentSegment.end = nextTime ?? timeRange?.end ?? row.time
+    } else {
+      // Close current segment at this row's time, start new one
+      currentSegment.end = row.time
+      segments.push(currentSegment)
+      currentSegment = {
+        value: row.value,
+        begin: row.time,
+        end: nextTime ?? timeRange?.end ?? row.time,
+      }
+    }
+  }
+
+  if (currentSegment) {
+    segments.push(currentSegment)
+  }
+
+  return segments
+}
+```
+
+#### Refactor `createPropertyTimelineGetter()`
+
+Remove the `binInterval` parameter, add optional `timeRange`:
+
+```typescript
+export function createPropertyTimelineGetter(
+  rawData: Map<number, Record<string, unknown>>,
+  timeRange?: { begin: number; end: number }
+): (propertyName: string) => PropertyTimelineData {
+  return (propertyName: string): PropertyTimelineData => {
+    const rows: { time: number; value: string }[] = []
+    const sortedEntries = Array.from(rawData.entries()).sort((a, b) => a[0] - b[0])
+
+    for (const [time, props] of sortedEntries) {
+      const value = props[propertyName]
+      if (value !== undefined && value !== null) {
+        rows.push({ time, value: String(value) })
+      }
+    }
+
+    return {
+      propertyName,
+      segments: aggregateIntoSegments(rows, timeRange),
+    }
+  }
+}
+```
+
+#### Remove `parseIntervalToMs()`
+
+This function is no longer needed in property-utils.ts.
+
+#### Update call sites
+
+- `useMetricsData.ts:129-132` - Remove `binIntervalMs`, pass time range: `aggregateIntoSegments(rows, timeRange)`
+- `ProcessMetricsPage.tsx:169` - Replace `binInterval` with time range in `createPropertyTimelineGetter(rawData, timeRange)`
+- `PerformanceAnalysisPage.tsx:201` - Replace `binInterval` with time range in `createPropertyTimelineGetter(rawData, timeRange)`
+
+Note: All these call sites already have access to the query time range (in ms), so passing it is straightforward.
+
+### 5. Data Transformation in Cell
 
 **File:** `analytics-web-app/src/lib/screen-renderers/cells/PropertyTimelineCell.tsx`
 
-Leverage existing utilities from `property-utils.ts`:
+Leverage the refactored utilities from `property-utils.ts`:
 
 ```typescript
-import { extractPropertiesFromRows } from '@/lib/property-utils'
+import { extractPropertiesFromRows, createPropertyTimelineGetter } from '@/lib/property-utils'
 
 function transformToPropertyTimelines(
   table: Table,
-  selectedKeys: string[]
+  selectedKeys: string[],
+  timeRange: { begin: number; end: number }
 ): { timelines: PropertyTimelineData[], availableKeys: string[] } {
   // 1. Extract rows as { time, properties } from Arrow table
   const rows = extractRowsFromTable(table)
@@ -149,29 +238,17 @@ function transformToPropertyTimelines(
   // 2. Parse JSON properties and collect available keys
   const { availableKeys, rawData } = extractPropertiesFromRows(rows)
 
-  // 3. For each selected key, aggregate into segments
-  const timelines = selectedKeys.map(key => ({
-    propertyName: key,
-    segments: aggregateIntoSegmentsInferred(rawData, key)
-  }))
+  // 3. Create getter and build timelines for selected keys
+  const getTimeline = createPropertyTimelineGetter(rawData, timeRange)
+  const timelines = selectedKeys.map(key => getTimeline(key))
 
   return { timelines, availableKeys }
 }
 ```
 
-**New aggregation function** (or modify existing):
-```typescript
-function aggregateIntoSegmentsInferred(
-  rawData: Map<number, Record<string, unknown>>,
-  propertyName: string
-): PropertySegment[] {
-  // Sort timestamps, iterate through
-  // Each segment ends at the next timestamp
-  // Last segment: extend by same delta as previous interval
-}
-```
+The cell receives `timeRange` from props (converted to ms) and passes it through to ensure first/last segments span the full query window.
 
-### 5. Reuse Existing PropertyTimeline Component
+### 6. Reuse Existing PropertyTimeline Component
 
 **File:** `analytics-web-app/src/components/PropertyTimeline.tsx`
 
@@ -183,13 +260,15 @@ The existing component handles:
 
 Props to provide from cell:
 ```typescript
+const selectedKeys = (options?.selectedKeys as string[]) ?? []
+
 <PropertyTimeline
   properties={timelines}
   availableKeys={availableKeys}
   selectedKeys={selectedKeys}
   timeRange={{ from: beginMs, to: endMs }}
-  onAddProperty={(key) => updateOptions({ selectedKeys: [...selectedKeys, key] })}
-  onRemoveProperty={(key) => updateOptions({ selectedKeys: selectedKeys.filter(k => k !== key) })}
+  onAddProperty={(key) => onOptionsChange({ ...options, selectedKeys: [...selectedKeys, key] })}
+  onRemoveProperty={(key) => onOptionsChange({ ...options, selectedKeys: selectedKeys.filter(k => k !== key) })}
   isLoading={status === 'loading'}
 />
 ```
@@ -200,10 +279,13 @@ Note: `axisBounds` and `onTimeRangeSelect` are for chart synchronization - defer
 
 | File | Change |
 |------|--------|
-| `notebook-types.ts` | Add `propertytimeline` to CellType, add PropertyTimelineCellConfig |
+| `notebook-types.ts` | Add `'propertytimeline'` to CellType and QueryCellConfig type unions |
 | `cell-registry.ts` | Import and register propertyTimelineMetadata |
 | `cells/PropertyTimelineCell.tsx` | New file - renderer, editor, metadata |
-| `property-utils.ts` | Add `aggregateIntoSegmentsInferred()` that derives segment boundaries from timestamp deltas |
+| `property-utils.ts` | Refactor `aggregateIntoSegments()` to derive boundaries from data, remove `binInterval` params, remove `parseIntervalToMs()` |
+| `useMetricsData.ts` | Update `aggregateIntoSegments()` call (remove interval arg) |
+| `ProcessMetricsPage.tsx` | Update `createPropertyTimelineGetter()` call (remove interval arg) |
+| `PerformanceAnalysisPage.tsx` | Update `createPropertyTimelineGetter()` call (remove interval arg) |
 
 ## Testing
 
