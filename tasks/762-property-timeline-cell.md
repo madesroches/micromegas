@@ -89,10 +89,10 @@ export const propertyTimelineMetadata: CellTypeMetadata = {
   description: 'Display property values over time as horizontal segments',
   showTypeBadge: true,
   defaultHeight: 200,
-  canBlockDownstream: false,
+  canBlockDownstream: true,
   createDefaultConfig: () => ({
     type: 'propertytimeline' as const,
-    sql: '',
+    sql: DEFAULT_SQL.propertytimeline,
     options: {}
   }),
   execute: async (config, context) => {
@@ -100,15 +100,30 @@ export const propertyTimelineMetadata: CellTypeMetadata = {
     const data = await context.runQuery(sql)
     return { data }
   },
-  getRendererProps: (config, state) => ({
-    sql: config.sql,
-    options: config.options,
-    data: state.data
+  getRendererProps: (config: CellConfig, state: CellState) => ({
+    data: state.data,
+    status: state.status,
+    options: (config as QueryCellConfig).options,
   })
 }
 ```
 
-### 3. Register Cell Type
+### 3. Add Default SQL
+
+**File:** `analytics-web-app/src/lib/screen-renderers/notebook-utils.ts`
+
+Add to `DEFAULT_SQL`:
+```typescript
+export const DEFAULT_SQL: Record<string, string> = {
+  // ... existing entries ...
+  propertytimeline: `SELECT time, jsonb_format_json(properties) as properties
+FROM view_instance('measures', '$process_id')
+WHERE name = '$measure_name'
+ORDER BY time`,
+}
+```
+
+### 4. Register Cell Type
 
 **File:** `analytics-web-app/src/lib/screen-renderers/cell-registry.ts`
 
@@ -125,13 +140,53 @@ export const CELL_TYPE_METADATA: Record<CellType, CellTypeMetadata> = {
 }
 ```
 
-### 4. Refactor property-utils.ts
+### 5. Refactor property-utils.ts
 
 **File:** `analytics-web-app/src/lib/property-utils.ts`
 
-The current `aggregateIntoSegments()` takes a `binIntervalMs` parameter, but this is redundant - the data is already binned by the SQL query, so segment boundaries should be derived from the data itself.
+#### Refactor `extractPropertiesFromRows()` - Add Error Reporting
+
+The current implementation silently ignores JSON parse errors. Change to report errors clearly:
+
+```typescript
+export interface ExtractedPropertyData {
+  availableKeys: string[]
+  rawData: Map<number, Record<string, unknown>>
+  errors: string[]  // Add error reporting
+}
+
+export function extractPropertiesFromRows(
+  rows: { time: number; properties: string | null }[]
+): ExtractedPropertyData {
+  const rawData = new Map<number, Record<string, unknown>>()
+  const keysSet = new Set<string>()
+  const errors: string[] = []
+
+  for (const row of rows) {
+    if (row.properties != null) {
+      try {
+        const props = JSON.parse(row.properties)
+        rawData.set(row.time, props)
+        Object.keys(props).forEach(k => keysSet.add(k))
+      } catch (e) {
+        errors.push(`Invalid JSON at time ${row.time}: ${e instanceof Error ? e.message : String(e)}`)
+      }
+    }
+  }
+
+  return {
+    availableKeys: Array.from(keysSet).sort(),
+    rawData,
+    errors,
+  }
+}
+```
+
+Call sites should check `errors.length > 0` and display warnings to the user.
 
 #### Refactor `aggregateIntoSegments()`
+
+The current implementation takes a `binIntervalMs` parameter, but this is redundant - segment boundaries should be derived from the data itself.
 
 Remove the `binIntervalMs` parameter. Add optional `timeRange` parameter for first/last segment boundaries:
 
@@ -218,7 +273,7 @@ This function is no longer needed in property-utils.ts.
 
 Note: All these call sites already have access to the query time range (in ms), so passing it is straightforward.
 
-### 5. Data Transformation in Cell
+### 6. Data Transformation in Cell
 
 **File:** `analytics-web-app/src/lib/screen-renderers/cells/PropertyTimelineCell.tsx`
 
@@ -226,29 +281,50 @@ Leverage the refactored utilities from `property-utils.ts`:
 
 ```typescript
 import { extractPropertiesFromRows, createPropertyTimelineGetter } from '@/lib/property-utils'
+import { timestampToMs } from '@/lib/arrow-utils'
+
+/** Extract time and properties columns from Arrow table */
+function extractRowsFromTable(table: Table): { time: number; properties: string | null }[] {
+  const rows: { time: number; properties: string | null }[] = []
+  const timeCol = table.getChild('time')
+  const propsCol = table.getChild('properties')
+
+  if (!timeCol) return rows
+
+  for (let i = 0; i < table.numRows; i++) {
+    const time = timestampToMs(timeCol.get(i))
+    const properties = propsCol?.get(i) ?? null
+    rows.push({ time, properties })
+  }
+  return rows
+}
 
 function transformToPropertyTimelines(
   table: Table,
   selectedKeys: string[],
   timeRange: { begin: number; end: number }
-): { timelines: PropertyTimelineData[], availableKeys: string[] } {
+): { timelines: PropertyTimelineData[], availableKeys: string[], errors: string[] } {
   // 1. Extract rows as { time, properties } from Arrow table
   const rows = extractRowsFromTable(table)
 
   // 2. Parse JSON properties and collect available keys
-  const { availableKeys, rawData } = extractPropertiesFromRows(rows)
+  const { availableKeys, rawData, errors } = extractPropertiesFromRows(rows)
 
   // 3. Create getter and build timelines for selected keys
   const getTimeline = createPropertyTimelineGetter(rawData, timeRange)
   const timelines = selectedKeys.map(key => getTimeline(key))
 
-  return { timelines, availableKeys }
+  return { timelines, availableKeys, errors }
 }
 ```
 
-The cell receives `timeRange` from props (converted to ms) and passes it through to ensure first/last segments span the full query window.
+Time range conversion in the renderer (ISO strings to ms):
+```typescript
+const beginMs = new Date(timeRange.begin).getTime()
+const endMs = new Date(timeRange.end).getTime()
+```
 
-### 6. Reuse Existing PropertyTimeline Component
+### 7. Reuse Existing PropertyTimeline Component
 
 **File:** `analytics-web-app/src/components/PropertyTimeline.tsx`
 
@@ -280,9 +356,10 @@ Note: `axisBounds` and `onTimeRangeSelect` are for chart synchronization - defer
 | File | Change |
 |------|--------|
 | `notebook-types.ts` | Add `'propertytimeline'` to CellType and QueryCellConfig type unions |
+| `notebook-utils.ts` | Add `DEFAULT_SQL.propertytimeline` |
 | `cell-registry.ts` | Import and register propertyTimelineMetadata |
 | `cells/PropertyTimelineCell.tsx` | New file - renderer, editor, metadata |
-| `property-utils.ts` | Refactor `aggregateIntoSegments()` to derive boundaries from data, remove `binInterval` params, remove `parseIntervalToMs()` |
+| `property-utils.ts` | Add error reporting to `extractPropertiesFromRows()`, refactor `aggregateIntoSegments()` to derive boundaries from data, remove `binInterval` params, remove `parseIntervalToMs()` |
 | `useMetricsData.ts` | Update `aggregateIntoSegments()` call (remove interval arg) |
 | `ProcessMetricsPage.tsx` | Update `createPropertyTimelineGetter()` call (remove interval arg) |
 | `PerformanceAnalysisPage.tsx` | Update `createPropertyTimelineGetter()` call (remove interval arg) |
