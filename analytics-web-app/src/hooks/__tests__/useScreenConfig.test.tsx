@@ -42,7 +42,14 @@ const buildUrl = (cfg: TestConfig): string => {
 // Helper to create wrapper with initial URL
 function createWrapper(initialEntries: string[] = ['/']) {
   return function Wrapper({ children }: { children: ReactNode }) {
-    return <MemoryRouter initialEntries={initialEntries}>{children}</MemoryRouter>
+    return (
+      <MemoryRouter
+        initialEntries={initialEntries}
+        future={{ v7_startTransition: true, v7_relativeSplatPath: true }}
+      >
+        {children}
+      </MemoryRouter>
+    )
   }
 }
 
