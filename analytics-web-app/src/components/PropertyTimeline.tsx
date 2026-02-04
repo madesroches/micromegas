@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect } from 'react'
+import { useState, useCallback, useRef, useEffect, useMemo } from 'react'
 import { Plus, X } from 'lucide-react'
 import { PropertyTimelineData } from '@/types'
 import { ChartAxisBounds } from './XYChart'
@@ -13,6 +13,37 @@ interface PropertyTimelineProps {
   onAddProperty: (key: string) => void
   onRemoveProperty: (key: string) => void
   isLoading?: boolean
+  showTimeAxis?: boolean
+}
+
+function TimeAxis({ from, to }: { from: number; to: number }) {
+  const ticks = useMemo(() => {
+    const count = 5
+    const step = (to - from) / (count - 1)
+    return Array.from({ length: count }, (_, i) => from + i * step)
+  }, [from, to])
+
+  const formatTick = (time: number): string => {
+    const d = new Date(time)
+    return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false })
+  }
+
+  return (
+    <div className="relative h-full">
+      {ticks.map((time) => {
+        const percent = ((time - from) / (to - from)) * 100
+        return (
+          <span
+            key={time}
+            className="absolute -translate-x-1/2"
+            style={{ left: `${percent}%` }}
+          >
+            {formatTick(time)}
+          </span>
+        )
+      })}
+    </div>
+  )
 }
 
 export function PropertyTimeline({
@@ -25,6 +56,7 @@ export function PropertyTimeline({
   onAddProperty,
   onRemoveProperty,
   isLoading,
+  showTimeAxis,
 }: PropertyTimelineProps) {
   const duration = timeRange.to - timeRange.from
   const [selection, setSelection] = useState<{ startX: number; currentX: number } | null>(null)
@@ -301,6 +333,18 @@ export function PropertyTimeline({
                 </div>
               ))}
             </div>
+
+            {/* Time axis */}
+            {showTimeAxis && selectedKeys.length > 0 && (
+              <div className="flex items-center h-6 text-[10px] text-theme-text-muted">
+                {/* Spacer matching label column width */}
+                <div style={{ width: leftOffset }} />
+                {/* Axis area */}
+                <div className="relative" style={{ width: plotWidth ?? '100%' }}>
+                  <TimeAxis from={timeRange.from} to={timeRange.to} />
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>

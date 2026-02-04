@@ -63,6 +63,10 @@ FROM log_entries
 ORDER BY time DESC
 LIMIT 100`,
   variable: `SELECT DISTINCT name FROM measures`,
+  propertytimeline: `SELECT time, jsonb_format_json(properties) as properties
+FROM view_instance('measures', '$process_id')
+WHERE name = 'cpu_usage'
+ORDER BY time`,
 }
 
 // ============================================================================

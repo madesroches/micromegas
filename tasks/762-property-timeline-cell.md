@@ -1,5 +1,9 @@
 # Implementation Plan: Property Timeline Cell Type (#762)
 
+## Status: ✅ IMPLEMENTED
+
+Implementation completed. All type checks, lint, and tests pass.
+
 ## Overview
 
 Add a new notebook cell type that displays property timeline visualizations - horizontal bars showing how categorical property values change over time.
@@ -503,3 +507,44 @@ Pass `showTimeAxis={true}` from PropertyTimelineCell renderer.
 - Time range selection synchronization (#765)
 - Axis alignment with chart cells
 - Custom color schemes per property value
+
+## Implementation Notes
+
+### Completed Changes
+
+All planned changes were implemented as specified:
+
+1. **Type definitions** (`notebook-types.ts`) - Added `'propertytimeline'` to both `CellType` and `QueryCellConfig` type unions
+
+2. **Default SQL** (`notebook-utils.ts`) - Added `DEFAULT_SQL.propertytimeline` query template
+
+3. **Cell component** (`cells/PropertyTimelineCell.tsx`) - Created with:
+   - Renderer component with loading/empty states and error banner
+   - Editor component with SQL input, macro validation, and variables panel
+   - Metadata export with all required fields
+
+4. **Cell registration** (`cell-registry.ts`) - Imported and registered `propertyTimelineMetadata`
+
+5. **Property utils refactoring** (`property-utils.ts`):
+   - Added `errors` field to `ExtractedPropertyData` interface
+   - Updated `extractPropertiesFromRows()` to report JSON parse errors
+   - Refactored `aggregateIntoSegments()` to use optional `timeRange` instead of `binIntervalMs`
+   - Refactored `createPropertyTimelineGetter()` to use optional `timeRange`
+   - Removed `parseIntervalToMs()` function
+
+6. **Call site updates**:
+   - `useMetricsData.ts` - Computes `timeRangeMs` and passes to `aggregateIntoSegments()`
+   - `ProcessMetricsPage.tsx` - Computes `timeRangeMs` and passes to `createPropertyTimelineGetter()`
+   - `PerformanceAnalysisPage.tsx` - Computes `timeRangeMs` and passes to `createPropertyTimelineGetter()`
+   - Both pages updated to include `errors: []` in initial `ExtractedPropertyData` state
+
+7. **Time axis** (`PropertyTimeline.tsx`):
+   - Added `showTimeAxis` prop (default false for backward compatibility)
+   - Created `TimeAxis` sub-component with 5 evenly spaced time labels
+   - Time axis renders below property rows when `showTimeAxis={true}`
+
+### Verification
+
+- ✅ `yarn type-check` passes
+- ✅ `yarn lint` passes
+- ✅ `yarn test` passes (511 tests)

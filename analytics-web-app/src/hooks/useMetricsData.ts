@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { useStreamQuery } from './useStreamQuery'
 import { timestampToMs } from '@/lib/arrow-utils'
-import { parseIntervalToMs, aggregateIntoSegments } from '@/lib/property-utils'
+import { aggregateIntoSegments } from '@/lib/property-utils'
 import { PropertyTimelineData } from '@/types'
 
 const METRICS_SQL = `SELECT
@@ -113,6 +113,12 @@ export function useMetricsData({
     return Array.from(keysSet).sort()
   }, [rawPropertiesData])
 
+  // Compute time range in milliseconds
+  const timeRangeMs = useMemo(() => ({
+    begin: new Date(apiTimeRange.begin).getTime(),
+    end: new Date(apiTimeRange.end).getTime(),
+  }), [apiTimeRange.begin, apiTimeRange.end])
+
   // Function to get property timeline for a specific key
   const getPropertyTimeline = useCallback((propertyName: string): PropertyTimelineData => {
     const rows: { time: number; value: string }[] = []
@@ -126,12 +132,11 @@ export function useMetricsData({
       }
     }
 
-    const binIntervalMs = parseIntervalToMs(binInterval)
     return {
       propertyName,
-      segments: aggregateIntoSegments(rows, binIntervalMs),
+      segments: aggregateIntoSegments(rows, timeRangeMs),
     }
-  }, [rawPropertiesData, binInterval])
+  }, [rawPropertiesData, timeRangeMs])
 
   return {
     chartData,
