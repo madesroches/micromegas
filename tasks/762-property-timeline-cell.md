@@ -49,7 +49,7 @@ SELECT
   time,
   jsonb_format_json(properties) as properties
 FROM view_instance('measures', '$process_id')
-WHERE name = '$measure_name'
+WHERE name = 'cpu_usage'
 ORDER BY time
 ```
 
@@ -64,7 +64,29 @@ The renderer:
 2. Transforms to `PropertyTimelineData[]` format
 3. Derives available keys from data
 4. Reads selected keys from `options.selectedKeys` (empty by default)
-5. Renders existing `PropertyTimeline` component with add/remove callbacks
+5. Displays parse errors (if any) as a warning banner
+6. Renders existing `PropertyTimeline` component with add/remove callbacks
+
+#### Error Display
+
+When `extractPropertiesFromRows()` returns errors (invalid JSON in properties column), display a warning banner above the PropertyTimeline component:
+
+```tsx
+{errors.length > 0 && (
+  <div className="mb-2 px-3 py-2 bg-amber-500/10 border border-amber-500/30 rounded text-amber-400 text-xs">
+    <span className="font-medium">Warning:</span> {errors.length} row(s) had invalid JSON properties and were skipped.
+    <details className="mt-1">
+      <summary className="cursor-pointer hover:text-amber-300">Show details</summary>
+      <ul className="mt-1 ml-4 list-disc text-amber-400/80">
+        {errors.slice(0, 5).map((err, i) => <li key={i}>{err}</li>)}
+        {errors.length > 5 && <li>...and {errors.length - 5} more</li>}
+      </ul>
+    </details>
+  </div>
+)}
+```
+
+The warning is non-blocking - valid rows still render. The collapsible details show the first 5 errors to help debugging without overwhelming the UI.
 
 Property selection UX (same as PerformanceAnalysisPage):
 - Starts with no properties selected
@@ -76,7 +98,45 @@ Property selection UX (same as PerformanceAnalysisPage):
 
 The editor provides:
 - SQL query input (reuse existing SQL editor pattern)
+- SQL macro validation (same as ChartCellEditor)
+- AvailableVariablesPanel showing variables that can be referenced
 - No property selection in editor - handled by renderer's PropertyTimeline component
+
+```typescript
+function PropertyTimelineCellEditor({ config, onChange, variables, timeRange }: CellEditorProps) {
+  const ptConfig = config as QueryCellConfig
+
+  // Validate macro references in SQL
+  const validationErrors = useMemo(() => {
+    return validateMacros(ptConfig.sql, variables).errors
+  }, [ptConfig.sql, variables])
+
+  return (
+    <>
+      <div>
+        <label className="block text-xs font-medium text-theme-text-secondary uppercase mb-1.5">
+          SQL Query
+        </label>
+        <SyntaxEditor
+          value={ptConfig.sql}
+          onChange={(sql) => onChange({ ...ptConfig, sql })}
+          language="sql"
+          placeholder="SELECT time, properties FROM ..."
+          minHeight="150px"
+        />
+      </div>
+      {validationErrors.length > 0 && (
+        <div className="text-red-400 text-sm space-y-1">
+          {validationErrors.map((err, i) => (
+            <div key={i}>⚠ {err}</div>
+          ))}
+        </div>
+      )}
+      <AvailableVariablesPanel variables={variables} timeRange={timeRange} />
+    </>
+  )
+}
+```
 
 #### Metadata Export
 
@@ -85,7 +145,7 @@ export const propertyTimelineMetadata: CellTypeMetadata = {
   renderer: PropertyTimelineCellRenderer,
   EditorComponent: PropertyTimelineCellEditor,
   label: 'Property Timeline',
-  icon: '▬',
+  icon: 'P',
   description: 'Display property values over time as horizontal segments',
   showTypeBadge: true,
   defaultHeight: 200,
@@ -118,7 +178,7 @@ export const DEFAULT_SQL: Record<string, string> = {
   // ... existing entries ...
   propertytimeline: `SELECT time, jsonb_format_json(properties) as properties
 FROM view_instance('measures', '$process_id')
-WHERE name = '$measure_name'
+WHERE name = 'cpu_usage'
 ORDER BY time`,
 }
 ```
@@ -205,9 +265,11 @@ export function aggregateIntoSegments(
     const nextTime = rows[i + 1]?.time
 
     if (!currentSegment) {
+      // First segment starts at actual data point (not timeRange.begin)
+      // to align with chart rendering
       currentSegment = {
         value: row.value,
-        begin: timeRange?.begin ?? row.time,
+        begin: row.time,
         end: nextTime ?? timeRange?.end ?? row.time,
       }
     } else if (currentSegment.value === row.value) {
@@ -351,6 +413,69 @@ const selectedKeys = (options?.selectedKeys as string[]) ?? []
 
 Note: `axisBounds` and `onTimeRangeSelect` are for chart synchronization - defer to #765.
 
+### 8. Add Time Axis to PropertyTimeline Component
+
+**File:** `analytics-web-app/src/components/PropertyTimeline.tsx`
+
+Add an optional time axis at the bottom of the component showing tick marks and labels.
+
+Add new prop:
+```typescript
+interface PropertyTimelineProps {
+  // ... existing props ...
+  showTimeAxis?: boolean  // Default false for backwards compatibility
+}
+```
+
+Render time axis when `showTimeAxis` is true:
+```tsx
+{showTimeAxis && (
+  <div className="flex items-center h-6 text-[10px] text-theme-text-muted">
+    {/* Spacer matching label column width */}
+    <div style={{ width: leftOffset }} />
+    {/* Axis area */}
+    <div className="relative" style={{ width: plotWidth ?? '100%' }}>
+      <TimeAxis from={timeRange.from} to={timeRange.to} />
+    </div>
+  </div>
+)}
+```
+
+Create a simple `TimeAxis` component that renders 3-5 evenly spaced tick marks with time labels:
+```tsx
+function TimeAxis({ from, to }: { from: number; to: number }) {
+  const ticks = useMemo(() => {
+    const count = 5
+    const step = (to - from) / (count - 1)
+    return Array.from({ length: count }, (_, i) => from + i * step)
+  }, [from, to])
+
+  const formatTick = (time: number) => {
+    const d = new Date(time)
+    return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false })
+  }
+
+  return (
+    <div className="relative h-full">
+      {ticks.map((time, i) => {
+        const percent = ((time - from) / (to - from)) * 100
+        return (
+          <span
+            key={time}
+            className="absolute -translate-x-1/2"
+            style={{ left: `${percent}%` }}
+          >
+            {formatTick(time)}
+          </span>
+        )
+      })}
+    </div>
+  )
+}
+```
+
+Pass `showTimeAxis={true}` from PropertyTimelineCell renderer.
+
 ## File Changes Summary
 
 | File | Change |
@@ -359,6 +484,7 @@ Note: `axisBounds` and `onTimeRangeSelect` are for chart synchronization - defer
 | `notebook-utils.ts` | Add `DEFAULT_SQL.propertytimeline` |
 | `cell-registry.ts` | Import and register propertyTimelineMetadata |
 | `cells/PropertyTimelineCell.tsx` | New file - renderer, editor, metadata |
+| `components/PropertyTimeline.tsx` | Add `showTimeAxis` prop and `TimeAxis` sub-component |
 | `property-utils.ts` | Add error reporting to `extractPropertiesFromRows()`, refactor `aggregateIntoSegments()` to derive boundaries from data, remove `binInterval` params, remove `parseIntervalToMs()` |
 | `useMetricsData.ts` | Update `aggregateIntoSegments()` call (remove interval arg) |
 | `ProcessMetricsPage.tsx` | Update `createPropertyTimelineGetter()` call (remove interval arg) |
