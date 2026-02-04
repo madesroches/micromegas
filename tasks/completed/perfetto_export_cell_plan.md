@@ -262,17 +262,21 @@ export const perfettoExportMetadata: CellTypeMetadata = {
 
 ## Implementation Steps
 
-1. **Update notebook-types.ts**:
-   - Add `'perfettoexport'` to `CellType` union
-   - Add `PerfettoExportCellConfig` interface
-   - Add `PerfettoExportCellConfig` to `CellConfig` union
-2. **Create cell component** - `PerfettoExportCell.tsx` with:
-   - Renderer: SplitButton + progress UI
-   - Editor: Process variable selector + span type dropdown
-   - Metadata object (no `execute` method - action is user-triggered via button)
-   - Set `canBlockDownstream: false` (doesn't produce data for other cells)
-3. **Register cell** - Import and add to `CELL_TYPE_METADATA` in `cell-registry.ts`
-4. **Test** - Verify in a notebook with a process variable
+1. ✅ **Update notebook-types.ts**:
+   - ✅ Add `'perfettoexport'` to `CellType` union (line 98)
+   - ✅ Add `PerfettoExportCellConfig` interface (lines 126-130)
+   - ✅ Add `PerfettoExportCellConfig` to `CellConfig` union (line 132)
+2. ✅ **Create cell component** - `PerfettoExportCell.tsx` with:
+   - ✅ Renderer: SplitButton + progress UI
+   - ✅ Editor: Process variable selector + span type dropdown
+   - ✅ Metadata object (no `execute` method - action is user-triggered via button)
+   - ✅ Set `canBlockDownstream: false` (doesn't produce data for other cells)
+3. ✅ **Register cell** - Import and add to `CELL_TYPE_METADATA` in `cell-registry.ts` (lines 142, 156)
+4. ✅ **Test** - Verified manually in a notebook with a process variable
+
+## Current Status
+
+**Complete.** All implementation and testing done.
 
 ## Key Reuse
 
