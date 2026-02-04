@@ -33,7 +33,7 @@ async-stream = "0.3"
 async-trait = "0.1"
 axum = "0.8"
 base64 = "0.22"
-bytes = "1.1"
+bytes = "1.11.1"
 cfg-if = "1.0"
 chrono = { version = "0.4", features = ["serde"] }
 ciborium = "0.2.2"
