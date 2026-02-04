@@ -25,6 +25,7 @@ interface UseMetricsDataReturn {
   chartData: { time: number; value: number }[]
   availablePropertyKeys: string[]
   getPropertyTimeline: (key: string) => PropertyTimelineData
+  propertyParseErrors: string[]
   isLoading: boolean
   isComplete: boolean
   error: string | null
@@ -42,6 +43,7 @@ export function useMetricsData({
 
   const [chartData, setChartData] = useState<{ time: number; value: number }[]>([])
   const [rawPropertiesData, setRawPropertiesData] = useState<Map<number, Record<string, unknown>>>(new Map())
+  const [propertyParseErrors, setPropertyParseErrors] = useState<string[]>([])
 
   // Execute the unified query
   const execute = useCallback(() => {
@@ -79,6 +81,7 @@ export function useMetricsData({
       if (table) {
         const points: { time: number; value: number }[] = []
         const propsMap = new Map<number, Record<string, unknown>>()
+        const errors: string[] = []
 
         for (let i = 0; i < table.numRows; i++) {
           const row = table.get(i)
@@ -90,8 +93,8 @@ export function useMetricsData({
             if (propsStr != null) {
               try {
                 propsMap.set(time, JSON.parse(String(propsStr)))
-              } catch {
-                // Ignore parse errors
+              } catch (e) {
+                errors.push(`Invalid JSON at time ${time}: ${e instanceof Error ? e.message : String(e)}`)
               }
             }
           }
@@ -99,6 +102,7 @@ export function useMetricsData({
 
         setChartData(points)
         setRawPropertiesData(propsMap)
+        setPropertyParseErrors(errors)
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- Only react to completion/error, not the full hook object
@@ -142,6 +146,7 @@ export function useMetricsData({
     chartData,
     availablePropertyKeys,
     getPropertyTimeline,
+    propertyParseErrors,
     isLoading: query.isStreaming,
     isComplete: query.isComplete,
     error: query.error?.message ?? null,

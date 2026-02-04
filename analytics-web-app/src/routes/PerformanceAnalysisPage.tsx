@@ -208,6 +208,7 @@ function PerformanceAnalysisContent() {
       : metricsData.getPropertyTimeline,
     [isCustomQuery, customPropertyData.rawData, timeRangeMs, metricsData.getPropertyTimeline]
   )
+  const propertyParseErrors = isCustomQuery ? customPropertyData.errors : metricsData.propertyParseErrors
 
   const selectedMeasureInfo = useMemo(() => {
     return measures.find((m) => m.name === selectedMeasure)
@@ -799,6 +800,19 @@ function PerformanceAnalysisContent() {
             onDismiss={() => setQueryError(null)}
             onRetry={handleRefresh}
           />
+        )}
+
+        {propertyParseErrors.length > 0 && (
+          <div className="mb-4 px-3 py-2 bg-amber-500/10 border border-amber-500/30 rounded text-amber-400 text-xs">
+            <span className="font-medium">Warning:</span> {propertyParseErrors.length} row(s) had invalid JSON properties and were skipped.
+            <details className="mt-1">
+              <summary className="cursor-pointer hover:text-amber-300">Show details</summary>
+              <ul className="mt-1 ml-4 list-disc text-amber-400/80">
+                {propertyParseErrors.slice(0, 5).map((err, i) => <li key={i}>{err}</li>)}
+                {propertyParseErrors.length > 5 && <li>...and {propertyParseErrors.length - 5} more</li>}
+              </ul>
+            </details>
+          </div>
         )}
 
         {traceError && (

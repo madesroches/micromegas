@@ -25,7 +25,7 @@ function TimeAxis({ from, to }: { from: number; to: number }) {
 
   const formatTick = (time: number): string => {
     const d = new Date(time)
-    return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false })
+    return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false })
   }
 
   return (
