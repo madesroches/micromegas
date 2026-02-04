@@ -4,6 +4,33 @@ This file documents the historical progress of the Micromegas project. For curre
 
 ## Unreleased
 
+## February 2026 - v0.20.0
+* **Notebook Enhancements:**
+  * Add swimlane notebook cell type for visualizing concurrent events (#769)
+  * Add drag-to-zoom time range selection to notebook charts (#768)
+  * Add property timeline notebook cell type (#766, #762)
+  * Re-execute notebook cells when time range changes (#768)
+  * Add query guide links to SQL editor cells (#751)
+* **Query & Data Features:**
+  * Add multi-column query variables with $variable.column syntax (#753)
+  * Add table URL support with column overrides (#750)
+  * Add unit formatting system for charts (#755)
+* **Performance Optimizations:**
+  * Add parquet file content cache to reduce object storage reads (#757, #758)
+  * Parallelize JIT for Perfetto trace thread span generation (#759)
+  * Implement pipelined query planning for Perfetto trace generation (#759)
+* **Dependencies:**
+  * Update DataFusion to 52.1 and Arrow/Parquet to 57.2 (#756)
+* **Security:**
+  * Update bytes crate to 1.11.1 to fix CVE-2026-25541 (#767)
+  * Upgrade jsonwebtoken to 10.3 to fix type confusion vulnerability (#760)
+* **Documentation:**
+  * Document delete_duplicate SQL functions and reorganize admin docs (#752)
+  * Add notebook queries plan for client-side DataFusion WASM (#761)
+* **Code Quality:**
+  * Remove old perf_report task folder
+  * Remove column name transformation in process list tables (#744)
+
 ## January 2026 - v0.19.0
 * **User-Defined Screens:**
   * Add user-defined screens feature (#707)
