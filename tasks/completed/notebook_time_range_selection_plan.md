@@ -1,5 +1,7 @@
 # Notebook Time Range Selection Plan
 
+**Status: COMPLETED** - Phase 1 implemented in commits 4340a2f22 and ec65f23d4
+
 ## Overview
 
 Add drag-to-zoom time range selection on chart cells in notebooks, enabling users to navigate time by selecting regions on any time-synced cell. This brings the Performance Analysis screen's coordinated time navigation to notebooks.
