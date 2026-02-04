@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import { AlertTriangle, Download, ExternalLink } from 'lucide-react'
 import { SplitButton } from '@/components/ui/SplitButton'
 import { generateTrace } from '@/lib/api'
@@ -35,6 +35,12 @@ export function PerfettoExportCell({
   const processIdValue = variables[varName]
   const processId = processIdValue !== undefined ? getVariableString(processIdValue) : ''
   const hasProcessId = processId !== ''
+
+  // Clear cache when processId or spanType changes
+  useEffect(() => {
+    setCachedTraceBuffer(null)
+    setCachedTraceTimeRange(null)
+  }, [processId, spanType])
 
   // Cache validation
   const canUseCachedBuffer = useCallback(() => {
@@ -152,11 +158,32 @@ export function PerfettoExportCell({
     setTraceMode('download')
     setProgress(null)
     setTraceError(null)
+    setCachedTraceBuffer(null)
+    setCachedTraceTimeRange(null)
 
     try {
-      await generateTrace(processId, buildTraceRequest(), (update) => {
+      const buffer = await generateTrace(processId, buildTraceRequest(), (update) => {
         setProgress(update)
-      })
+      }, { returnBuffer: true })
+
+      if (!buffer) {
+        throw new Error('No trace data received')
+      }
+
+      // Cache for potential subsequent "Open in Perfetto"
+      setCachedTraceBuffer(buffer)
+      setCachedTraceTimeRange(timeRange)
+
+      // Trigger download
+      const blob = new Blob([buffer], { type: 'application/octet-stream' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `trace-${processId}.pb`
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error occurred'
       setTraceError(message)
