@@ -131,7 +131,7 @@ impl ExecutionPlan for PerfettoTraceExecutionPlan {
         Ok(self)
     }
 
-	#[span_fn]
+    #[span_fn]
     fn execute(
         &self,
         _partition: usize,
