@@ -94,7 +94,12 @@ export function PerfettoExportCell({
       })
     } catch (error) {
       const perfettoError = error as PerfettoError
-      setTraceError(perfettoError.message || 'Unknown error occurred')
+      if (perfettoError.type) {
+        setTraceError(perfettoError.message)
+      } else {
+        const message = error instanceof Error ? error.message : 'Unknown error occurred'
+        setTraceError(message)
+      }
     } finally {
       setIsGenerating(false)
       setTraceMode(null)
