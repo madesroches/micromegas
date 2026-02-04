@@ -86,6 +86,9 @@ function extractLanesFromTable(table: Table): ExtractResult {
     const begin = timestampToMs(beginRaw, beginField?.type)
     const end = timestampToMs(endRaw, endField?.type)
 
+    // Skip rows with invalid timestamps
+    if (isNaN(begin) || isNaN(end)) continue
+
     if (!laneMap.has(id)) {
       laneMap.set(id, { id, name, segments: [] })
       laneOrder.push(id)
@@ -299,12 +302,11 @@ function Swimlane({ lanes, timeRange, onTimeRangeSelect }: SwimlaneProps) {
                   return (
                     <div
                       key={idx}
-                      className="absolute top-1 bottom-1 bg-chart-line rounded-sm opacity-80 hover:opacity-100 transition-opacity pointer-events-none"
+                      className="absolute top-1 bottom-1 bg-chart-line rounded-sm pointer-events-none"
                       style={{
                         left: `${startPercent}%`,
                         width: `${Math.max(widthPercent, 0.5)}%`, // Min width for visibility
                       }}
-                      title={`${new Date(segment.begin).toLocaleTimeString()} - ${new Date(segment.end).toLocaleTimeString()}`}
                     />
                   )
                 })}
