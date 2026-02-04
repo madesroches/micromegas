@@ -9,6 +9,22 @@ import { getVariableString } from '../notebook-types'
 import type { GenerateTraceRequest, ProgressUpdate } from '@/types'
 
 // =============================================================================
+// Helpers
+// =============================================================================
+
+function triggerDownload(buffer: ArrayBuffer, processId: string): void {
+  const blob = new Blob([buffer], { type: 'application/octet-stream' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `trace-${processId}.pb`
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(url)
+}
+
+// =============================================================================
 // Renderer Component
 // =============================================================================
 
@@ -84,16 +100,7 @@ export function PerfettoExportCell({
 
   const downloadCachedBuffer = useCallback(() => {
     if (!processId || !cachedTraceBuffer) return
-
-    const blob = new Blob([cachedTraceBuffer], { type: 'application/octet-stream' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `trace-${processId}.pb`
-    document.body.appendChild(a)
-    a.click()
-    document.body.removeChild(a)
-    URL.revokeObjectURL(url)
+    triggerDownload(cachedTraceBuffer, processId)
     setTraceError(null)
   }, [processId, cachedTraceBuffer])
 
@@ -174,16 +181,7 @@ export function PerfettoExportCell({
       setCachedTraceBuffer(buffer)
       setCachedTraceTimeRange(timeRange)
 
-      // Trigger download
-      const blob = new Blob([buffer], { type: 'application/octet-stream' })
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `trace-${processId}.pb`
-      document.body.appendChild(a)
-      a.click()
-      document.body.removeChild(a)
-      URL.revokeObjectURL(url)
+      triggerDownload(buffer, processId)
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error occurred'
       setTraceError(message)
