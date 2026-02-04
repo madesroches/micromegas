@@ -67,6 +67,7 @@ export function PropertyTimelineCell({
   options,
   onOptionsChange,
   timeRange,
+  onTimeRangeSelect,
 }: CellRendererProps) {
   // Convert ISO time range to milliseconds
   const timeRangeMs = useMemo(() => ({
@@ -132,6 +133,7 @@ export function PropertyTimelineCell({
         onAddProperty={handleAddProperty}
         onRemoveProperty={handleRemoveProperty}
         showTimeAxis={true}
+        onTimeRangeSelect={onTimeRangeSelect}
       />
     </div>
   )

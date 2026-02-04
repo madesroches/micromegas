@@ -173,6 +173,7 @@ export function NotebookRenderer({
   setHasUnsavedChanges,
   timeRange,
   rawTimeRange,
+  onTimeRangeChange,
   onSave,
   isSaving,
   hasUnsavedChanges,
@@ -276,6 +277,11 @@ export function NotebookRenderer({
     setVariableValue,
     refreshTrigger,
   })
+
+  // Handle time range selection from charts (drag-to-zoom)
+  const handleTimeRangeSelect = useCallback((from: Date, to: Date) => {
+    onTimeRangeChange(from.toISOString(), to.toISOString())
+  }, [onTimeRangeChange])
 
   // Re-execute table cells when sort options change (config is source of truth)
   const prevCellOptionsRef = useRef<Map<string, Record<string, unknown>>>(new Map())
@@ -514,6 +520,7 @@ export function NotebookRenderer({
               onSqlChange={(sql) => updateCell(index, { sql })}
               onOptionsChange={(options) => updateCell(index, { options })}
               onContentChange={(content) => updateCell(index, { content })}
+              onTimeRangeSelect={handleTimeRangeSelect}
               value={cell.type === 'variable' ? variableValues[cell.name] : undefined}
               onValueChange={cell.type === 'variable' ? (value) => setVariableValue(cell.name, value) : undefined}
               {...rendererProps}

@@ -45,6 +45,8 @@ export interface CellRendererProps {
   variableType?: 'combobox' | 'text' | 'number'
   /** For variable cells (combobox): available options from query */
   variableOptions?: { label: string; value: VariableValue }[]
+  /** Callback for drag-to-zoom time selection (chart and property timeline cells) */
+  onTimeRangeSelect?: (from: Date, to: Date) => void
 }
 
 /**
