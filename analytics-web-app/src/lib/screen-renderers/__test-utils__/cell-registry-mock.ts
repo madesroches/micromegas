@@ -19,8 +19,19 @@ const MockEditorComponent = ({ config }: { config: { type: string } }) =>
 
 /** Mock renderer component factory */
 const createMockRenderer = (type: string) => {
-  const MockRenderer = ({ name }: { name: string }) =>
-    React.createElement('div', { 'data-testid': `cell-renderer-${type}` }, `Cell: ${name}`)
+  const MockRenderer = ({ name, onTimeRangeSelect }: { name: string; onTimeRangeSelect?: (from: Date, to: Date) => void }) =>
+    React.createElement(
+      'div',
+      {
+        'data-testid': `cell-renderer-${type}`,
+        'data-cell-name': name,
+        // Store callback reference for testing
+        onClick: onTimeRangeSelect
+          ? () => onTimeRangeSelect(new Date('2024-01-15T00:00:00Z'), new Date('2024-01-16T00:00:00Z'))
+          : undefined,
+      },
+      `Cell: ${name}`
+    )
   return MockRenderer
 }
 

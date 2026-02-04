@@ -200,6 +200,18 @@ export function useCellExecution({
     }
   }, [refreshTrigger, executeFromCell])
 
+  // Re-execute when time range changes
+  const prevTimeRangeRef = useRef(timeRange)
+  useEffect(() => {
+    if (
+      prevTimeRangeRef.current.begin !== timeRange.begin ||
+      prevTimeRangeRef.current.end !== timeRange.end
+    ) {
+      prevTimeRangeRef.current = timeRange
+      executeFromCell(0)
+    }
+  }, [timeRange, executeFromCell])
+
   // Migrate cell state when a cell is renamed
   const migrateCellState = useCallback((oldName: string, newName: string) => {
     setCellStates((prev) => {

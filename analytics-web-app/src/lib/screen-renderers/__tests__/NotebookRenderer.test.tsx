@@ -140,6 +140,10 @@ function createVariableCell(
   }
 }
 
+function createChartCell(name: string, sql = 'SELECT time, value FROM metrics'): CellConfig {
+  return { type: 'chart', name, sql, layout: { height: 'auto' } }
+}
+
 describe('NotebookRenderer', () => {
   beforeEach(() => {
     jest.clearAllMocks()
@@ -546,6 +550,51 @@ describe('NotebookRenderer', () => {
       await renderNotebook(createDefaultProps({ config: {} }))
 
       expect(screen.getByText('Add Cell')).toBeInTheDocument()
+    })
+  })
+
+  describe('time range selection', () => {
+    it('should call onTimeRangeChange with ISO strings when cell triggers time range select', async () => {
+      const onTimeRangeChange = jest.fn()
+      const cells = [createChartCell('Metrics')]
+
+      await renderNotebook(
+        createDefaultProps({
+          config: { cells },
+          onTimeRangeChange,
+        })
+      )
+
+      // The mock renderer triggers onTimeRangeSelect on click with hardcoded dates
+      const cellRenderer = screen.getByTestId('cell-renderer-chart')
+      fireEvent.click(cellRenderer)
+
+      expect(onTimeRangeChange).toHaveBeenCalledWith(
+        '2024-01-15T00:00:00.000Z',
+        '2024-01-16T00:00:00.000Z'
+      )
+    })
+
+    it('should pass onTimeRangeSelect to all cell types', async () => {
+      const onTimeRangeChange = jest.fn()
+      const cells = [
+        createTableCell('Table'),
+        createChartCell('Chart'),
+        createMarkdownCell('Notes'),
+      ]
+
+      await renderNotebook(
+        createDefaultProps({
+          config: { cells },
+          onTimeRangeChange,
+        })
+      )
+
+      // Chart cell should have the callback wired up
+      const chartRenderer = screen.getByTestId('cell-renderer-chart')
+      fireEvent.click(chartRenderer)
+
+      expect(onTimeRangeChange).toHaveBeenCalled()
     })
   })
 })

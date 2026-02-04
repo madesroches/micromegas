@@ -43,7 +43,7 @@ function substituteOptionsWithMacros(
 // Renderer Component
 // =============================================================================
 
-export function ChartCell({ data, status, options, onOptionsChange, variables, timeRange }: CellRendererProps) {
+export function ChartCell({ data, status, options, onOptionsChange, variables, timeRange, onTimeRangeSelect }: CellRendererProps) {
   const chartResult = useMemo(() => {
     if (!data || data.numRows === 0) return null
     return extractChartData(data)
@@ -109,6 +109,7 @@ export function ChartCell({ data, status, options, onOptionsChange, variables, t
         chartType={(resolvedOptions?.chart_type as ChartType) ?? 'line'}
         onChartTypeChange={handleChartTypeChange}
         unit={(resolvedOptions?.unit as string) ?? undefined}
+        onTimeRangeSelect={onTimeRangeSelect}
       />
     </div>
   )

@@ -749,6 +749,159 @@ describe('useCellExecution', () => {
     })
   })
 
+  describe('time range change', () => {
+    it('should re-execute all cells when timeRange changes', async () => {
+      mockStreamQuery.mockReturnValue(createSuccessResults())
+
+      const cells: CellConfig[] = [
+        { type: 'table', name: 'Query', sql: 'SELECT 1', layout: { height: 'auto' } },
+      ]
+      const variableValuesRef = createVariableValuesRef()
+
+      const { result, rerender } = renderHook(
+        ({ timeRange }) =>
+          useCellExecution({
+            cells,
+            timeRange,
+            variableValuesRef,
+            setVariableValue: jest.fn(),
+            refreshTrigger: 0,
+          }),
+        { initialProps: { timeRange: defaultTimeRange } }
+      )
+
+      // Wait for initial execution
+      await waitFor(() => {
+        expect(result.current.cellStates['Query']?.status).toBe('success')
+      })
+
+      const callCountAfterInitial = mockStreamQuery.mock.calls.length
+
+      // Change time range
+      await act(async () => {
+        rerender({ timeRange: { begin: '2024-02-01T00:00:00Z', end: '2024-02-02T00:00:00Z' } })
+        await new Promise((resolve) => setTimeout(resolve, 10))
+      })
+
+      await waitFor(() => {
+        expect(mockStreamQuery.mock.calls.length).toBeGreaterThan(callCountAfterInitial)
+      })
+    })
+
+    it('should not re-execute when timeRange object changes but values stay the same', async () => {
+      mockStreamQuery.mockReturnValue(createSuccessResults())
+
+      const cells: CellConfig[] = [
+        { type: 'table', name: 'Query', sql: 'SELECT 1', layout: { height: 'auto' } },
+      ]
+      const variableValuesRef = createVariableValuesRef()
+
+      const { result, rerender } = renderHook(
+        ({ timeRange }) =>
+          useCellExecution({
+            cells,
+            timeRange,
+            variableValuesRef,
+            setVariableValue: jest.fn(),
+            refreshTrigger: 0,
+          }),
+        { initialProps: { timeRange: defaultTimeRange } }
+      )
+
+      // Wait for initial execution
+      await waitFor(() => {
+        expect(result.current.cellStates['Query']?.status).toBe('success')
+      })
+
+      const callCountAfterInitial = mockStreamQuery.mock.calls.length
+
+      // Pass new object with same values
+      await act(async () => {
+        rerender({ timeRange: { ...defaultTimeRange } })
+        await new Promise((resolve) => setTimeout(resolve, 10))
+      })
+
+      // Should NOT have additional calls
+      expect(mockStreamQuery.mock.calls.length).toBe(callCountAfterInitial)
+    })
+
+    it('should re-execute when only begin changes', async () => {
+      mockStreamQuery.mockReturnValue(createSuccessResults())
+
+      const cells: CellConfig[] = [
+        { type: 'table', name: 'Query', sql: 'SELECT 1', layout: { height: 'auto' } },
+      ]
+      const variableValuesRef = createVariableValuesRef()
+
+      const { result, rerender } = renderHook(
+        ({ timeRange }) =>
+          useCellExecution({
+            cells,
+            timeRange,
+            variableValuesRef,
+            setVariableValue: jest.fn(),
+            refreshTrigger: 0,
+          }),
+        { initialProps: { timeRange: defaultTimeRange } }
+      )
+
+      // Wait for initial execution
+      await waitFor(() => {
+        expect(result.current.cellStates['Query']?.status).toBe('success')
+      })
+
+      const callCountAfterInitial = mockStreamQuery.mock.calls.length
+
+      // Change only begin
+      await act(async () => {
+        rerender({ timeRange: { begin: '2024-01-01T12:00:00Z', end: defaultTimeRange.end } })
+        await new Promise((resolve) => setTimeout(resolve, 10))
+      })
+
+      await waitFor(() => {
+        expect(mockStreamQuery.mock.calls.length).toBeGreaterThan(callCountAfterInitial)
+      })
+    })
+
+    it('should re-execute when only end changes', async () => {
+      mockStreamQuery.mockReturnValue(createSuccessResults())
+
+      const cells: CellConfig[] = [
+        { type: 'table', name: 'Query', sql: 'SELECT 1', layout: { height: 'auto' } },
+      ]
+      const variableValuesRef = createVariableValuesRef()
+
+      const { result, rerender } = renderHook(
+        ({ timeRange }) =>
+          useCellExecution({
+            cells,
+            timeRange,
+            variableValuesRef,
+            setVariableValue: jest.fn(),
+            refreshTrigger: 0,
+          }),
+        { initialProps: { timeRange: defaultTimeRange } }
+      )
+
+      // Wait for initial execution
+      await waitFor(() => {
+        expect(result.current.cellStates['Query']?.status).toBe('success')
+      })
+
+      const callCountAfterInitial = mockStreamQuery.mock.calls.length
+
+      // Change only end
+      await act(async () => {
+        rerender({ timeRange: { begin: defaultTimeRange.begin, end: '2024-01-02T12:00:00Z' } })
+        await new Promise((resolve) => setTimeout(resolve, 10))
+      })
+
+      await waitFor(() => {
+        expect(mockStreamQuery.mock.calls.length).toBeGreaterThan(callCountAfterInitial)
+      })
+    })
+  })
+
   describe('loading state', () => {
     it('should set loading status before executing', async () => {
       let resolveQuery: () => void
