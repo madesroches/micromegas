@@ -115,17 +115,6 @@ To get started with Micromegas, please refer to the [Getting Started](https://ma
 * **Security Fixes:**
   * CVE-2026-21441 (urllib3), qs/rsa vulnerabilities, esbuild fix
 
-### December 2025 - v0.17.0
-* **Analytics Web App** - Complete UI redesign with dark theme and Micromegas branding:
-  * **SQL Query Editor** with syntax highlighting, query history, and macros that integrate with UI controls
-  * **Performance Analytics** - Visualize thread activity timelines and export traces to [Perfetto](https://ui.perfetto.dev/) for deep performance analysis
-  * Grafana-style time range picker with relative and absolute time support
-  * Process metrics screen with time-series charting
-  * Multi-word search for process list and logs
-* Per-service Docker images and modernized build scripts
-* BASE_PATH and MICROMEGAS_PORT env vars for reverse proxy deployments
-* Unreal Engine: scalability and VSync context in telemetry
-
 For a detailed history of changes, please see the [CHANGELOG.md](./CHANGELOG.md) file.
 
 ## Contributing
