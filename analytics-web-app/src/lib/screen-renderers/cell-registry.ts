@@ -138,6 +138,7 @@ import { logMetadata } from './cells/LogCell'
 import { markdownMetadata } from './cells/MarkdownCell'
 import { variableMetadata } from './cells/VariableCell'
 import { propertyTimelineMetadata } from './cells/PropertyTimelineCell'
+import { swimlaneMetadata } from './cells/SwimlaneCell'
 
 /**
  * Registry of all cell type metadata.
@@ -150,6 +151,7 @@ export const CELL_TYPE_METADATA: Record<CellType, CellTypeMetadata> = {
   markdown: markdownMetadata,
   variable: variableMetadata,
   propertytimeline: propertyTimelineMetadata,
+  swimlane: swimlaneMetadata,
 }
 
 /**

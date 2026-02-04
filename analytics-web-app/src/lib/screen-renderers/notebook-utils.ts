@@ -75,6 +75,19 @@ SELECT time, properties
 FROM changes
 WHERE properties IS DISTINCT FROM prev_properties
 ORDER BY time`,
+  swimlane: `SELECT
+  arrow_cast(stream_id, 'Utf8') as id,
+  concat(
+    arrow_cast(property_get("streams.properties", 'thread-name'), 'Utf8'),
+    '-',
+    arrow_cast(property_get("streams.properties", 'thread-id'), 'Utf8')
+  ) as name,
+  begin_time as begin,
+  end_time as end
+FROM blocks
+WHERE process_id = '$process_id'
+  AND array_has("streams.tags", 'cpu')
+ORDER BY id, begin`,
 }
 
 // ============================================================================
