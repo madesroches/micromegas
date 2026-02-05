@@ -295,6 +295,7 @@ export function ConfigDiffModal({
           </div>
           <button
             onClick={onClose}
+            aria-label="Close"
             className="p-1 text-theme-text-muted hover:text-theme-text-primary rounded transition-colors"
           >
             <X className="w-5 h-5" />
