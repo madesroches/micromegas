@@ -5,7 +5,7 @@ import { DataType, Field } from 'apache-arrow'
 import { registerRenderer, ScreenRendererProps } from './index'
 import { useTimeRangeSync } from './useTimeRangeSync'
 import { useSqlHandlers } from './useSqlHandlers'
-import { LoadingState, EmptyState, SaveFooter, RendererLayout } from './shared'
+import { LoadingState, EmptyState, RendererLayout } from './shared'
 import { QueryEditor } from '@/components/QueryEditor'
 import { AppLink } from '@/components/AppLink'
 import { CopyableProcessId } from '@/components/CopyableProcessId'
@@ -88,10 +88,6 @@ export function ProcessListRenderer({
   timeRangeLabel,
   currentValues,
   onSave,
-  isSaving,
-  hasUnsavedChanges,
-  onSaveAs,
-  saveError,
   refreshTrigger,
   onSaveRef,
 }: ScreenRendererProps) {
@@ -267,15 +263,6 @@ export function ProcessListRenderer({
       onChange={handleSqlChange}
       isLoading={streamQuery.isStreaming}
       error={queryError}
-      footer={
-        <SaveFooter
-          onSave={handleSave}
-          onSaveAs={onSaveAs}
-          isSaving={isSaving}
-          hasUnsavedChanges={hasUnsavedChanges}
-          saveError={saveError}
-        />
-      }
     />
   )
 

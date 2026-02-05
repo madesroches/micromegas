@@ -3,7 +3,7 @@ import { useSearchParams } from 'react-router-dom'
 import { ChevronDown } from 'lucide-react'
 import { LOG_ENTRIES_SCHEMA_URL } from '@/components/DocumentationLink'
 import { registerRenderer, ScreenRendererProps } from './index'
-import { LoadingState, EmptyState, SaveFooter, RendererLayout } from './shared'
+import { LoadingState, EmptyState, RendererLayout } from './shared'
 import { QueryEditor } from '@/components/QueryEditor'
 import { useStreamQuery } from '@/hooks/useStreamQuery'
 import { useDebounce } from '@/hooks/useDebounce'
@@ -217,10 +217,6 @@ export function LogRenderer({
   timeRangeLabel,
   currentValues,
   onSave,
-  isSaving,
-  hasUnsavedChanges,
-  onSaveAs,
-  saveError,
   refreshTrigger,
   onSaveRef,
 }: ScreenRendererProps) {
@@ -586,15 +582,6 @@ export function LogRenderer({
         url: LOG_ENTRIES_SCHEMA_URL,
         label: 'log_entries schema reference',
       }}
-      footer={
-        <SaveFooter
-          onSave={handleSave}
-          onSaveAs={onSaveAs}
-          isSaving={isSaving}
-          hasUnsavedChanges={hasUnsavedChanges}
-          saveError={saveError}
-        />
-      }
     />
   )
 

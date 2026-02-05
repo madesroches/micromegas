@@ -4,7 +4,7 @@ import { ChevronLeft, ChevronRight, ChevronDown, Play } from 'lucide-react'
 import { registerRenderer, ScreenRendererProps } from './index'
 import { useTimeRangeSync } from './useTimeRangeSync'
 import { useSqlHandlers } from './useSqlHandlers'
-import { LoadingState, EmptyState, SaveFooter, RendererLayout } from './shared'
+import { LoadingState, EmptyState, RendererLayout } from './shared'
 import { SyntaxEditor } from '@/components/SyntaxEditor'
 import { OverrideEditor } from '@/components/OverrideEditor'
 import { useStreamQuery } from '@/hooks/useStreamQuery'
@@ -47,10 +47,7 @@ export function TableRenderer({
   timeRangeLabel,
   currentValues,
   onSave,
-  isSaving,
   hasUnsavedChanges,
-  onSaveAs,
-  saveError,
   refreshTrigger,
   onSaveRef,
 }: ScreenRendererProps) {
@@ -350,14 +347,6 @@ export function TableRenderer({
         />
       </div>
 
-      {/* Footer */}
-      <SaveFooter
-        onSave={handleSave}
-        onSaveAs={onSaveAs}
-        isSaving={isSaving}
-        hasUnsavedChanges={hasUnsavedChanges}
-        saveError={saveError}
-      />
     </div>
   )
 

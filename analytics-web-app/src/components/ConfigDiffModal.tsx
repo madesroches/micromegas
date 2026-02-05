@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo } from 'react'
 import { X } from 'lucide-react'
 import type { ScreenConfig } from '@/lib/screens-api'
 
@@ -255,6 +255,15 @@ export function ConfigDiffModal({
     () => computeDiffSections(savedConfig, currentConfig, currentTimeRange),
     [savedConfig, currentConfig, currentTimeRange]
   )
+
+  useEffect(() => {
+    if (!isOpen) return
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    document.addEventListener('keydown', handleKeyDown)
+    return () => document.removeEventListener('keydown', handleKeyDown)
+  }, [isOpen, onClose])
 
   if (!isOpen) return null
 
