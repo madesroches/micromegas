@@ -505,7 +505,11 @@ export function NotebookRenderer({
     // Render title bar content if metadata defines a titleBarRenderer
     const TitleBarRenderer = meta.titleBarRenderer
     const titleBarContent = TitleBarRenderer ? <TitleBarRenderer {...commonRendererProps} /> : undefined
-    const hasTitleBarContent = !!TitleBarRenderer
+    // Cells with title bar content (e.g. variables) auto-collapse: body only
+    // opens to show errors. Other cells use user-controlled collapse toggle.
+    const autoCollapse = !!TitleBarRenderer
+    const collapsed = autoCollapse ? state.status !== 'error' : cell.layout.collapsed
+    const onToggleCollapsed = autoCollapse ? undefined : () => toggleCellCollapsed(index)
 
     return (
       <SortableCell key={cell.name} id={cell.name}>
@@ -519,8 +523,8 @@ export function NotebookRenderer({
             type={cell.type}
             status={state.status}
             error={state.error}
-            collapsed={hasTitleBarContent ? state.status !== 'error' : cell.layout.collapsed}
-            onToggleCollapsed={hasTitleBarContent ? undefined : () => toggleCellCollapsed(index)}
+            collapsed={collapsed}
+            onToggleCollapsed={onToggleCollapsed}
             isSelected={selectedCellIndex === index}
             onSelect={() => setSelectedCellIndex(index)}
             onRun={() => executeCell(index)}

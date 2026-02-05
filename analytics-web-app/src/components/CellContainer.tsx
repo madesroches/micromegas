@@ -124,7 +124,9 @@ export const CellContainer = forwardRef<HTMLDivElement, CellContainerProps>(func
     [onHeightChange]
   )
 
-  const contentStyle = { height: `${normalizedHeight}px`, overflow: 'auto' as const }
+  const contentStyle = normalizedHeight > 0
+    ? { height: `${normalizedHeight}px`, overflow: 'auto' as const }
+    : { overflow: 'auto' as const }
 
   // Determine if this cell can run (has an execute method)
   const canRun = !!meta.execute
