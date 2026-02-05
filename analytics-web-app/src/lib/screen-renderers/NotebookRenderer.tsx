@@ -519,7 +519,7 @@ export function NotebookRenderer({
             type={cell.type}
             status={state.status}
             error={state.error}
-            collapsed={hasTitleBarContent || cell.layout.collapsed}
+            collapsed={hasTitleBarContent ? state.status !== 'error' : cell.layout.collapsed}
             onToggleCollapsed={hasTitleBarContent ? undefined : () => toggleCellCollapsed(index)}
             isSelected={selectedCellIndex === index}
             onSelect={() => setSelectedCellIndex(index)}

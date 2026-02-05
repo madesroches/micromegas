@@ -37,29 +37,25 @@ function parseDefaultValue(str: string): VariableValue {
 }
 
 // =============================================================================
-// Renderer Component
+// Shared hook for variable input state (debounce, combobox resolution)
 // =============================================================================
 
-export function VariableCell({
+function useVariableInput({
   value,
   onValueChange,
   variableType,
   variableOptions,
-  status,
-}: CellRendererProps) {
+}: Pick<CellRendererProps, 'value' | 'onValueChange' | 'variableType' | 'variableOptions'>) {
   const type = variableType || 'text'
   const isTextInput = type === 'text' || type === 'number'
 
-  // Local state for text input - allows immediate UI feedback while debouncing the callback
   const [localValue, setLocalValue] = useState<string | undefined>(undefined)
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  // When value prop changes externally, clear local state so we show the new value
   useEffect(() => {
     setLocalValue(undefined)
   }, [value])
 
-  // Cleanup timeout on unmount
   useEffect(() => {
     return () => {
       if (timeoutRef.current) {
@@ -69,133 +65,71 @@ export function VariableCell({
   }, [])
 
   const handleTextChange = (newValue: string) => {
-    // Update local state immediately for responsive UI
     setLocalValue(newValue)
-
-    // Clear any pending timeout
     if (timeoutRef.current) {
       clearTimeout(timeoutRef.current)
     }
-
-    // Debounce the callback to parent
     timeoutRef.current = setTimeout(() => {
       onValueChange?.(newValue)
     }, 300)
   }
 
-  if (status === 'loading') {
-    return (
-      <div className="flex items-center gap-3 py-1">
-        <div className="animate-spin rounded-full h-4 w-4 border-2 border-accent-link border-t-transparent" />
-        <span className="text-theme-text-muted text-sm">Loading options...</span>
-      </div>
-    )
-  }
-
   const handleComboboxChange = (serializedValue: string) => {
-    // Find the option with this serialized value to get the original VariableValue
     const option = variableOptions?.find(
       (opt) => serializeVariableValue(opt.value) === serializedValue
     )
     if (option) {
       onValueChange?.(option.value)
     } else {
-      // Fallback: use the serialized value as a string
       onValueChange?.(serializedValue)
     }
   }
 
-  // For text inputs, get the string representation of the value
   const stringValue = getVariableString(value ?? '')
-  // Display value: local state (while typing) takes precedence, otherwise use prop
-  const displayValue = isTextInput ? (localValue ?? stringValue) : serializeVariableValue(value ?? '')
+  const displayValue = isTextInput
+    ? (localValue ?? stringValue)
+    : serializeVariableValue(value ?? '')
 
-  return (
-    <div className="flex items-center gap-3 py-1">
-      {type === 'combobox' && (
-        <select
-          value={displayValue}
-          onChange={(e) => handleComboboxChange(e.target.value)}
-          className="flex-1 max-w-[400px] px-3 py-2 bg-app-card border border-theme-border rounded-md text-theme-text-primary text-sm focus:outline-none focus:border-accent-link"
-        >
-          {variableOptions && variableOptions.length > 0 ? (
-            variableOptions.map((opt) => {
-              const serialized = serializeVariableValue(opt.value)
-              return (
-                <option key={serialized} value={serialized}>
-                  {opt.label}
-                </option>
-              )
-            })
-          ) : (
-            <option value="">No options available</option>
-          )}
-        </select>
-      )}
+  return { type, localValue, stringValue, displayValue, handleTextChange, handleComboboxChange }
+}
 
-      {type === 'text' && (
-        <input
-          type="text"
-          value={localValue ?? stringValue}
-          onChange={(e) => handleTextChange(e.target.value)}
-          className="flex-1 max-w-[400px] px-3 py-2 bg-app-card border border-theme-border rounded-md text-theme-text-primary text-sm focus:outline-none focus:border-accent-link"
-          placeholder="Enter value..."
-        />
-      )}
+// =============================================================================
+// Shared options list (used by both renderers)
+// =============================================================================
 
-      {type === 'number' && (
-        <input
-          type="number"
-          value={localValue ?? stringValue}
-          onChange={(e) => handleTextChange(e.target.value)}
-          className="flex-1 max-w-[200px] px-3 py-2 bg-app-card border border-theme-border rounded-md text-theme-text-primary text-sm focus:outline-none focus:border-accent-link"
-          placeholder="0"
-        />
-      )}
-    </div>
-  )
+function VariableOptions({ variableOptions }: Pick<CellRendererProps, 'variableOptions'>) {
+  if (variableOptions && variableOptions.length > 0) {
+    return variableOptions.map((opt) => {
+      const serialized = serializeVariableValue(opt.value)
+      return (
+        <option key={serialized} value={serialized}>
+          {opt.label}
+        </option>
+      )
+    })
+  }
+  return <option value="">No options available</option>
+}
+
+// =============================================================================
+// Body renderer (unused — variable cells render via titleBarRenderer in the
+// cell header; the body is only uncollapsed to show CellContainer error state)
+// =============================================================================
+
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+export function VariableCell(_props: CellRendererProps) {
+  return null
 }
 
 // =============================================================================
 // Title Bar Component (compact input for cell header)
 // =============================================================================
 
-export function VariableTitleBarContent({
-  value,
-  onValueChange,
-  variableType,
-  variableOptions,
-  status,
-}: CellRendererProps) {
-  const type = variableType || 'text'
-  const isTextInput = type === 'text' || type === 'number'
+export function VariableTitleBarContent(props: CellRendererProps) {
+  const { type, localValue, stringValue, displayValue, handleTextChange, handleComboboxChange } =
+    useVariableInput(props)
 
-  const [localValue, setLocalValue] = useState<string | undefined>(undefined)
-  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-
-  useEffect(() => {
-    setLocalValue(undefined)
-  }, [value])
-
-  useEffect(() => {
-    return () => {
-      if (timeoutRef.current) {
-        clearTimeout(timeoutRef.current)
-      }
-    }
-  }, [])
-
-  const handleTextChange = (newValue: string) => {
-    setLocalValue(newValue)
-    if (timeoutRef.current) {
-      clearTimeout(timeoutRef.current)
-    }
-    timeoutRef.current = setTimeout(() => {
-      onValueChange?.(newValue)
-    }, 300)
-  }
-
-  if (status === 'loading') {
+  if (props.status === 'loading') {
     return (
       <div className="flex items-center gap-2">
         <div className="animate-spin rounded-full h-3 w-3 border-2 border-accent-link border-t-transparent" />
@@ -203,20 +137,6 @@ export function VariableTitleBarContent({
       </div>
     )
   }
-
-  const handleComboboxChange = (serializedValue: string) => {
-    const option = variableOptions?.find(
-      (opt) => serializeVariableValue(opt.value) === serializedValue
-    )
-    if (option) {
-      onValueChange?.(option.value)
-    } else {
-      onValueChange?.(serializedValue)
-    }
-  }
-
-  const stringValue = getVariableString(value ?? '')
-  const displayValue = isTextInput ? (localValue ?? stringValue) : serializeVariableValue(value ?? '')
 
   return (
     <div className="flex items-center">
@@ -226,18 +146,7 @@ export function VariableTitleBarContent({
           onChange={(e) => handleComboboxChange(e.target.value)}
           className="w-full max-w-[300px] px-2 py-1 bg-app-card border border-theme-border rounded text-theme-text-primary text-xs focus:outline-none focus:border-accent-link"
         >
-          {variableOptions && variableOptions.length > 0 ? (
-            variableOptions.map((opt) => {
-              const serialized = serializeVariableValue(opt.value)
-              return (
-                <option key={serialized} value={serialized}>
-                  {opt.label}
-                </option>
-              )
-            })
-          ) : (
-            <option value="">No options available</option>
-          )}
+          <VariableOptions variableOptions={props.variableOptions} />
         </select>
       )}
 
