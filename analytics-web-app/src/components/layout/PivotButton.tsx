@@ -1,8 +1,8 @@
 import { useLocation, useNavigate } from 'react-router-dom'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
-import { ChevronDown, FileText, BarChart2, Zap } from 'lucide-react'
+import { ChevronDown, FileText, BarChart2, Zap, Info } from 'lucide-react'
 
-type ViewType = 'log' | 'metrics' | 'performance'
+type ViewType = 'log' | 'metrics' | 'performance' | 'process'
 
 interface ViewConfig {
   path: string
@@ -26,19 +26,27 @@ const VIEW_CONFIGS: Record<ViewType, ViewConfig> = {
     label: 'Performance Analytics',
     icon: <Zap className="w-4 h-4" />,
   },
+  process: {
+    path: '/process',
+    label: 'Process Details',
+    icon: <Info className="w-4 h-4" />,
+  },
 }
 
 // Define primary and secondary actions for each view
-const PIVOT_CONFIG: Record<ViewType, { primary: ViewType; secondary: ViewType }> = {
-  metrics: { primary: 'log', secondary: 'performance' },
-  log: { primary: 'metrics', secondary: 'performance' },
-  performance: { primary: 'log', secondary: 'metrics' },
+const PIVOT_CONFIG: Record<ViewType, { primary: ViewType; secondary: ViewType[] }> = {
+  metrics: { primary: 'log', secondary: ['performance', 'process'] },
+  log: { primary: 'metrics', secondary: ['performance', 'process'] },
+  performance: { primary: 'log', secondary: ['metrics', 'process'] },
+  process: { primary: 'log', secondary: ['metrics', 'performance'] },
 }
 
 function detectCurrentView(pathname: string): ViewType | null {
   if (pathname.includes('process_log')) return 'log'
   if (pathname.includes('process_metrics')) return 'metrics'
   if (pathname.includes('performance_analysis')) return 'performance'
+  // Check for /process but not /processes (list page)
+  if (pathname.match(/\/process(?:\?|$)/)) return 'process'
   return null
 }
 
@@ -64,7 +72,7 @@ export function PivotButton({ processId, timeRangeFrom, timeRangeTo }: PivotButt
 
   const config = PIVOT_CONFIG[currentView]
   const primaryView = VIEW_CONFIGS[config.primary]
-  const secondaryView = VIEW_CONFIGS[config.secondary]
+  const secondaryViews = config.secondary.map((viewType) => VIEW_CONFIGS[viewType])
 
   const buildUrl = (view: ViewConfig): string => {
     const params = new URLSearchParams()
@@ -106,13 +114,16 @@ export function PivotButton({ processId, timeRangeFrom, timeRangeTo }: PivotButt
             sideOffset={4}
             className="min-w-[180px] bg-app-panel border border-theme-border rounded-md shadow-lg py-1 z-50"
           >
-            <DropdownMenu.Item
-              onClick={() => handleNavigate(secondaryView)}
-              className="flex items-center gap-2 px-3 py-2 text-sm text-theme-text-primary hover:bg-theme-border/50 cursor-pointer outline-none"
-            >
-              <span className="text-theme-text-secondary">{secondaryView.icon}</span>
-              {secondaryView.label}
-            </DropdownMenu.Item>
+            {secondaryViews.map((view) => (
+              <DropdownMenu.Item
+                key={view.path}
+                onClick={() => handleNavigate(view)}
+                className="flex items-center gap-2 px-3 py-2 text-sm text-theme-text-primary hover:bg-theme-border/50 cursor-pointer outline-none"
+              >
+                <span className="text-theme-text-secondary">{view.icon}</span>
+                {view.label}
+              </DropdownMenu.Item>
+            ))}
           </DropdownMenu.Content>
         </DropdownMenu.Portal>
       </DropdownMenu.Root>
