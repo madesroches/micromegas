@@ -190,13 +190,10 @@ function computeDiffSections(
     const savedOrder = saved.map((c) => c.name).filter((n) => currentMap.has(n))
     const currentOrder = current.map((c) => c.name).filter((n) => savedMap.has(n))
     if (savedOrder.length > 1 && savedOrder.join('\n') !== currentOrder.join('\n')) {
-      const lines: DiffLine[] = []
-      savedOrder.forEach((n) => lines.push({ type: 'removed', content: n }))
-      currentOrder.forEach((n) => lines.push({ type: 'added', content: n }))
       sections.push({
         title: 'Cell order',
         status: 'reordered',
-        lines,
+        lines: computeLineDiff(savedOrder.join('\n'), currentOrder.join('\n')),
       })
     }
   } else {

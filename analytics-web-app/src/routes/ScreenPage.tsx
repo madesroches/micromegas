@@ -208,7 +208,7 @@ function ScreenPageContent() {
   }, [])
 
   // Save existing screen — API call + state update only; URL cleanup is the renderer's job
-  const handleSave = useCallback(async (): Promise<ScreenConfig> => {
+  const handleSave = useCallback(async (): Promise<ScreenConfig | null> => {
     if (!screen || !screenConfig) throw new Error('No screen to save')
 
     setIsSaving(true)
@@ -234,7 +234,7 @@ function ScreenPageContent() {
       } else {
         setSaveError('Failed to save screen')
       }
-      throw err
+      return null
     } finally {
       setIsSaving(false)
     }
@@ -423,7 +423,6 @@ function ScreenPageContent() {
               timeRangeLabel={parsedTimeRange.label}
               currentValues={currentValues}
               onSave={screen ? handleSave : null}
-              hasUnsavedChanges={hasUnsavedChanges}
               refreshTrigger={refreshTrigger}
               onSaveRef={saveRef}
             />

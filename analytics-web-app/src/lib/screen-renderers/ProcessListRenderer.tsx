@@ -182,7 +182,6 @@ export function ProcessListRenderer({
   // Sync time range changes to config
   useTimeRangeSync({
     rawTimeRange,
-    savedConfig: savedProcessListConfig,
     config: processListConfig,
     onConfigChange,
   })

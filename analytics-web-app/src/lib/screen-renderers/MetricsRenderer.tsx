@@ -82,7 +82,6 @@ export function MetricsRenderer({
   // Sync time range changes to config
   useTimeRangeSync({
     rawTimeRange,
-    savedConfig: savedMetricsConfig,
     config: metricsConfig,
     onConfigChange,
   })

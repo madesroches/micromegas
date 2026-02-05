@@ -11,8 +11,6 @@ interface TimeRangeConfig {
 interface TimeRangeSyncParams {
   /** Current raw time range from URL */
   rawTimeRange: { from: string; to: string }
-  /** Saved config (null for new screens) */
-  savedConfig: TimeRangeConfig | null
   /** Current working config */
   config: TimeRangeConfig
   /** Callback to update config */
@@ -30,7 +28,6 @@ interface TimeRangeSyncParams {
  */
 export function useTimeRangeSync({
   rawTimeRange,
-  savedConfig,
   config,
   onConfigChange,
 }: TimeRangeSyncParams): void {
@@ -58,5 +55,5 @@ export function useTimeRangeSync({
       timeRangeFrom: current.from,
       timeRangeTo: current.to,
     })
-  }, [rawTimeRange, savedConfig, config, onConfigChange])
+  }, [rawTimeRange, config, onConfigChange])
 }

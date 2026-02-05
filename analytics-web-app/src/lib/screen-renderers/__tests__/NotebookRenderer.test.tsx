@@ -96,7 +96,6 @@ function createDefaultProps(overrides: Partial<ScreenRendererProps> = {}): Scree
     timeRangeLabel: 'Last 1 hour',
     currentValues: {},
     onSave: jest.fn(),
-    hasUnsavedChanges: false,
     refreshTrigger: 0,
     ...overrides,
   }
@@ -446,7 +445,6 @@ describe('NotebookRenderer', () => {
       await renderNotebook(
         createDefaultProps({
           config: { cells },
-          hasUnsavedChanges: true,
           onSave,
           onSaveRef: saveRef,
         })
@@ -463,7 +461,6 @@ describe('NotebookRenderer', () => {
       await renderNotebook(
         createDefaultProps({
           config: { cells },
-          hasUnsavedChanges: true,
         })
       )
 

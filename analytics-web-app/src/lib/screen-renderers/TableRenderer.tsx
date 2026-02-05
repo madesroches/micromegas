@@ -140,7 +140,6 @@ export function TableRenderer({
   // Sync time range changes to config
   useTimeRangeSync({
     rawTimeRange,
-    savedConfig: savedTableConfig,
     config: tableConfig,
     onConfigChange,
   })

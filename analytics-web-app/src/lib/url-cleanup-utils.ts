@@ -29,12 +29,13 @@ export function cleanupTimeParams(
  * via a single setSearchParams call. Returns null if onSave is null.
  */
 export function useDefaultSaveCleanup(
-  onSave: (() => Promise<ScreenConfig>) | null,
+  onSave: (() => Promise<ScreenConfig | null>) | null,
   setSearchParams: SetURLSearchParams,
 ): (() => Promise<void>) | null {
   const wrapped = useCallback(async (): Promise<void> => {
     if (!onSave) return
     const savedConfig = await onSave()
+    if (!savedConfig) return
     setSearchParams(prev => {
       const next = new URLSearchParams(prev)
       cleanupTimeParams(next, savedConfig)
