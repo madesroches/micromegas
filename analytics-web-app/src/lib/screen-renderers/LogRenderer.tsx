@@ -3,11 +3,11 @@ import { useSearchParams } from 'react-router-dom'
 import { ChevronDown } from 'lucide-react'
 import { LOG_ENTRIES_SCHEMA_URL } from '@/components/DocumentationLink'
 import { registerRenderer, ScreenRendererProps } from './index'
-import { LoadingState, EmptyState, SaveFooter, RendererLayout } from './shared'
+import { LoadingState, EmptyState, RendererLayout } from './shared'
 import { QueryEditor } from '@/components/QueryEditor'
 import { useStreamQuery } from '@/hooks/useStreamQuery'
 import { useDebounce } from '@/hooks/useDebounce'
-import { useDefaultSaveCleanup } from '@/lib/url-cleanup-utils'
+import { useDefaultSaveCleanup, useExposeSaveRef } from '@/lib/url-cleanup-utils'
 import { timestampToDate } from '@/lib/arrow-utils'
 import {
   DEFAULT_TIME_RANGE,
@@ -211,17 +211,13 @@ export function LogRenderer({
   config,
   onConfigChange,
   savedConfig,
-  setHasUnsavedChanges,
   timeRange,
   rawTimeRange,
   timeRangeLabel,
   currentValues,
   onSave,
-  isSaving,
-  hasUnsavedChanges,
-  onSaveAs,
-  saveError,
   refreshTrigger,
+  onSaveRef,
 }: ScreenRendererProps) {
   const logConfig = config as unknown as LogConfig
   const savedLogConfig = savedConfig as unknown as LogConfig | null
@@ -229,6 +225,7 @@ export function LogRenderer({
   // URL params for filter state sync
   const [searchParams, setSearchParams] = useSearchParams()
   const handleSave = useDefaultSaveCleanup(onSave, setSearchParams)
+  useExposeSaveRef(onSaveRef, handleSave)
 
   // Get saved values from config for detecting unsaved changes
   const savedValues = useMemo(
@@ -354,16 +351,6 @@ export function LogRenderer({
 
     prevConfigRef.current = current
 
-    // Check if any value differs from saved config
-    const isUnsaved =
-      current.logLevel !== savedValues.logLevel ||
-      current.logLimit !== savedValues.logLimit ||
-      current.search !== savedValues.search ||
-      current.timeRangeFrom !== savedValues.timeRangeFrom ||
-      current.timeRangeTo !== savedValues.timeRangeTo
-
-    setHasUnsavedChanges(isUnsaved)
-
     // Update config with all tracked values + preserve sql
     onConfigChange({
       sql: sqlRef.current,
@@ -373,7 +360,7 @@ export function LogRenderer({
       timeRangeFrom: current.timeRangeFrom,
       timeRangeTo: current.timeRangeTo,
     })
-  }, [logLevel, logLimit, search, rawTimeRange, savedValues, setHasUnsavedChanges, onConfigChange])
+  }, [logLevel, logLimit, search, rawTimeRange, savedValues, onConfigChange])
 
   // Query execution - using useStreamQuery directly for filter-based re-execution
   const streamQuery = useStreamQuery()
@@ -517,12 +504,8 @@ export function LogRenderer({
         timeRangeFrom: rawTimeRange.from,
         timeRangeTo: rawTimeRange.to,
       })
-
-      if (savedLogConfig) {
-        setHasUnsavedChanges(sql !== savedLogConfig.sql)
-      }
     },
-    [savedLogConfig, setHasUnsavedChanges, onConfigChange, logLevel, logLimit, search, rawTimeRange]
+    [onConfigChange, logLevel, logLimit, search, rawTimeRange]
   )
 
   // Limit input handlers
@@ -579,15 +562,6 @@ export function LogRenderer({
         url: LOG_ENTRIES_SCHEMA_URL,
         label: 'log_entries schema reference',
       }}
-      footer={
-        <SaveFooter
-          onSave={handleSave}
-          onSaveAs={onSaveAs}
-          isSaving={isSaving}
-          hasUnsavedChanges={hasUnsavedChanges}
-          saveError={saveError}
-        />
-      }
     />
   )
 

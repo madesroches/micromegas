@@ -4,11 +4,11 @@ import { ChevronLeft, ChevronRight, ChevronDown, Play } from 'lucide-react'
 import { registerRenderer, ScreenRendererProps } from './index'
 import { useTimeRangeSync } from './useTimeRangeSync'
 import { useSqlHandlers } from './useSqlHandlers'
-import { LoadingState, EmptyState, SaveFooter, RendererLayout } from './shared'
+import { LoadingState, EmptyState, RendererLayout } from './shared'
 import { SyntaxEditor } from '@/components/SyntaxEditor'
 import { OverrideEditor } from '@/components/OverrideEditor'
 import { useStreamQuery } from '@/hooks/useStreamQuery'
-import { useDefaultSaveCleanup } from '@/lib/url-cleanup-utils'
+import { useDefaultSaveCleanup, useExposeSaveRef } from '@/lib/url-cleanup-utils'
 import {
   SortHeader,
   TableBody,
@@ -41,22 +41,19 @@ export function TableRenderer({
   config,
   onConfigChange,
   savedConfig,
-  setHasUnsavedChanges,
   timeRange,
   rawTimeRange,
   timeRangeLabel,
   currentValues,
   onSave,
-  isSaving,
-  hasUnsavedChanges,
-  onSaveAs,
-  saveError,
   refreshTrigger,
+  onSaveRef,
 }: ScreenRendererProps) {
   const tableConfig = config as unknown as TableConfig
   const savedTableConfig = savedConfig as unknown as TableConfig | null
   const [, setSearchParams] = useSearchParams()
   const handleSave = useDefaultSaveCleanup(onSave, setSearchParams)
+  useExposeSaveRef(onSaveRef, handleSave)
 
   // Sort state from config (persisted)
   const sortColumn = tableConfig.sortColumn
@@ -143,9 +140,7 @@ export function TableRenderer({
   // Sync time range changes to config
   useTimeRangeSync({
     rawTimeRange,
-    savedConfig: savedTableConfig,
     config: tableConfig,
-    setHasUnsavedChanges,
     onConfigChange,
   })
 
@@ -154,7 +149,6 @@ export function TableRenderer({
     config: tableConfig,
     savedConfig: savedTableConfig,
     onConfigChange,
-    setHasUnsavedChanges,
     execute: (sql: string) => executeQuery(sql),
   })
 
@@ -163,30 +157,16 @@ export function TableRenderer({
     (columnName: string) => {
       const nextState = getNextSortState(columnName, sortColumn, sortDirection)
       onConfigChange({ ...tableConfig, ...nextState })
-
-      if (savedTableConfig) {
-        const savedCol = savedTableConfig.sortColumn
-        const savedDir = savedTableConfig.sortDirection
-        setHasUnsavedChanges(nextState.sortColumn !== savedCol || nextState.sortDirection !== savedDir)
-      }
     },
-    [sortColumn, sortDirection, tableConfig, savedTableConfig, onConfigChange, setHasUnsavedChanges]
+    [sortColumn, sortDirection, tableConfig, onConfigChange]
   )
 
   // Handle overrides change
   const handleOverridesChange = useCallback(
     (newOverrides: ColumnOverride[]) => {
       onConfigChange({ ...tableConfig, overrides: newOverrides })
-
-      if (savedTableConfig) {
-        const savedOverrides = savedTableConfig.overrides || []
-        const hasChanged = JSON.stringify(newOverrides) !== JSON.stringify(savedOverrides)
-        setHasUnsavedChanges(hasChanged || hasUnsavedChanges)
-      } else {
-        setHasUnsavedChanges(true)
-      }
     },
-    [tableConfig, savedTableConfig, onConfigChange, setHasUnsavedChanges, hasUnsavedChanges]
+    [tableConfig, onConfigChange]
   )
 
   // Get available columns from query result
@@ -343,14 +323,6 @@ export function TableRenderer({
         />
       </div>
 
-      {/* Footer */}
-      <SaveFooter
-        onSave={handleSave}
-        onSaveAs={onSaveAs}
-        isSaving={isSaving}
-        hasUnsavedChanges={hasUnsavedChanges}
-        saveError={saveError}
-      />
     </div>
   )
 

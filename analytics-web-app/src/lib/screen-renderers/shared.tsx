@@ -1,6 +1,4 @@
 import { ReactNode } from 'react'
-import { Save } from 'lucide-react'
-import { Button } from '@/components/ui/button'
 import { ErrorBanner } from '@/components/ErrorBanner'
 
 /**
@@ -27,59 +25,6 @@ export function EmptyState({ message = 'No data available.' }: { message?: strin
     <div className="flex-1 flex items-center justify-center bg-app-panel border border-theme-border rounded-lg">
       <span className="text-theme-text-muted">{message}</span>
     </div>
-  )
-}
-
-export interface SaveFooterProps {
-  /** Handler for saving existing screen (null if new screen) */
-  onSave: (() => Promise<void>) | null
-  /** Handler for "Save As" dialog */
-  onSaveAs: () => void
-  /** Whether save is in progress */
-  isSaving: boolean
-  /** Whether there are unsaved changes */
-  hasUnsavedChanges: boolean
-  /** Error message from save operation */
-  saveError: string | null
-}
-
-/**
- * Standard save buttons footer for QueryEditor.
- * Optional - renderers can build their own footer.
- */
-export function SaveFooter({
-  onSave,
-  onSaveAs,
-  isSaving,
-  hasUnsavedChanges,
-  saveError,
-}: SaveFooterProps) {
-  return (
-    <>
-      <div className="border-t border-theme-border p-3 flex gap-2">
-        {onSave && (
-          <Button
-            variant="default"
-            size="sm"
-            onClick={onSave}
-            disabled={isSaving || !hasUnsavedChanges}
-            className="gap-1"
-          >
-            <Save className="w-4 h-4" />
-            {isSaving ? 'Saving...' : 'Save'}
-          </Button>
-        )}
-        <Button variant="outline" size="sm" onClick={onSaveAs} className="gap-1">
-          <Save className="w-4 h-4" />
-          Save As
-        </Button>
-      </div>
-      {saveError && (
-        <div className="px-3 pb-3">
-          <p className="text-xs text-accent-error">{saveError}</p>
-        </div>
-      )}
-    </>
   )
 }
 

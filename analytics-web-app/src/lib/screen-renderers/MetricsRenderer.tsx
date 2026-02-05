@@ -4,11 +4,11 @@ import { registerRenderer, ScreenRendererProps } from './index'
 import { useScreenQuery } from './useScreenQuery'
 import { useTimeRangeSync } from './useTimeRangeSync'
 import { useSqlHandlers } from './useSqlHandlers'
-import { LoadingState, EmptyState, SaveFooter, RendererLayout } from './shared'
+import { LoadingState, EmptyState, RendererLayout } from './shared'
 import { QueryEditor } from '@/components/QueryEditor'
 import { XYChart, type ScaleMode, type ChartType } from '@/components/XYChart'
 import { extractChartData } from '@/lib/arrow-utils'
-import { useDefaultSaveCleanup } from '@/lib/url-cleanup-utils'
+import { useDefaultSaveCleanup, useExposeSaveRef } from '@/lib/url-cleanup-utils'
 
 // Variables available for metrics queries
 const VARIABLES = [
@@ -33,23 +33,20 @@ export function MetricsRenderer({
   config,
   onConfigChange,
   savedConfig,
-  setHasUnsavedChanges,
   timeRange,
   rawTimeRange,
   onTimeRangeChange,
   timeRangeLabel,
   currentValues,
   onSave,
-  isSaving,
-  hasUnsavedChanges,
-  onSaveAs,
-  saveError,
   refreshTrigger,
+  onSaveRef,
 }: ScreenRendererProps) {
   const metricsConfig = config as unknown as MetricsConfig
   const savedMetricsConfig = savedConfig as unknown as MetricsConfig | null
   const [, setSearchParams] = useSearchParams()
   const handleSave = useDefaultSaveCleanup(onSave, setSearchParams)
+  useExposeSaveRef(onSaveRef, handleSave)
 
   // Scale mode state - sync from config on load
   const [scaleMode, setScaleMode] = useState<ScaleMode>(
@@ -85,9 +82,7 @@ export function MetricsRenderer({
   // Sync time range changes to config
   useTimeRangeSync({
     rawTimeRange,
-    savedConfig: savedMetricsConfig,
     config: metricsConfig,
-    setHasUnsavedChanges,
     onConfigChange,
   })
 
@@ -96,7 +91,6 @@ export function MetricsRenderer({
     config: metricsConfig,
     savedConfig: savedMetricsConfig,
     onConfigChange,
-    setHasUnsavedChanges,
     execute: query.execute,
   })
 
@@ -109,12 +103,8 @@ export function MetricsRenderer({
         metrics_options: { ...metricsConfig.metrics_options, scale_mode: mode },
       }
       onConfigChange(newConfig)
-
-      if (savedMetricsConfig) {
-        setHasUnsavedChanges(savedMetricsConfig.metrics_options?.scale_mode !== mode)
-      }
     },
-    [metricsConfig, savedMetricsConfig, onConfigChange, setHasUnsavedChanges]
+    [metricsConfig, onConfigChange]
   )
 
   // Handle chart type change - persists to config
@@ -126,12 +116,8 @@ export function MetricsRenderer({
         metrics_options: { ...metricsConfig.metrics_options, chart_type: type },
       }
       onConfigChange(newConfig)
-
-      if (savedMetricsConfig) {
-        setHasUnsavedChanges(savedMetricsConfig.metrics_options?.chart_type !== type)
-      }
     },
-    [metricsConfig, savedMetricsConfig, onConfigChange, setHasUnsavedChanges]
+    [metricsConfig, onConfigChange]
   )
 
   // Handle time range selection from chart drag
@@ -161,15 +147,6 @@ export function MetricsRenderer({
       onChange={handleSqlChange}
       isLoading={query.isLoading}
       error={query.error}
-      footer={
-        <SaveFooter
-          onSave={handleSave}
-          onSaveAs={onSaveAs}
-          isSaving={isSaving}
-          hasUnsavedChanges={hasUnsavedChanges}
-          saveError={saveError}
-        />
-      }
     />
   )
 

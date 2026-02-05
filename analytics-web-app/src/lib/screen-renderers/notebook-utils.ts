@@ -168,19 +168,6 @@ export function validateCellName(
 }
 
 /**
- * Deep comparison of two notebook configs using JSON serialization.
- * Works because configs are JSON-serializable by design.
- */
-export function notebookConfigsEqual(
-  a: import('./notebook-types').NotebookConfig | null,
-  b: import('./notebook-types').NotebookConfig | null
-): boolean {
-  if (a === b) return true
-  if (!a || !b) return false
-  return JSON.stringify(a) === JSON.stringify(b)
-}
-
-/**
  * Mutates params: removes variable URL params that match saved cell defaults.
  * Only touches non-reserved params.
  */

@@ -33,12 +33,10 @@ import { CellContainer } from '@/components/CellContainer'
 import { CellEditor } from '@/components/CellEditor'
 import { ResizeHandle } from '@/components/ResizeHandle'
 import { Button } from '@/components/ui/button'
-import { SaveFooter } from './shared'
 import { useNotebookVariables } from './useNotebookVariables'
 import { useCellExecution } from './useCellExecution'
-import { notebookConfigsEqual, cleanupVariableParams } from './notebook-utils'
-import { cleanupTimeParams } from '@/lib/url-cleanup-utils'
-import { DEFAULT_TIME_RANGE } from '@/lib/screen-defaults'
+import { cleanupVariableParams } from './notebook-utils'
+import { cleanupTimeParams, useExposeSaveRef } from '@/lib/url-cleanup-utils'
 
 // ============================================================================
 // Constants
@@ -170,16 +168,12 @@ export function NotebookRenderer({
   config,
   onConfigChange,
   savedConfig,
-  setHasUnsavedChanges,
   timeRange,
   rawTimeRange,
   onTimeRangeChange,
   onSave,
-  isSaving,
-  hasUnsavedChanges,
-  onSaveAs,
-  saveError,
   refreshTrigger,
+  onSaveRef,
 }: ScreenRendererProps) {
   const [, setSearchParams] = useSearchParams()
 
@@ -198,6 +192,7 @@ export function NotebookRenderer({
       }
     }
   }, [onSave, setSearchParams])
+  useExposeSaveRef(onSaveRef, handleSave)
 
   // Parse config
   const notebookConfig = useMemo(() => {
@@ -212,14 +207,6 @@ export function NotebookRenderer({
   }, [savedConfig])
 
   const cells = notebookConfig.cells
-
-  // Helper to update unsaved state based on config comparison
-  const updateUnsavedState = useCallback(
-    (newConfig: NotebookConfig) => {
-      setHasUnsavedChanges(!notebookConfigsEqual(newConfig, savedNotebookConfig))
-    },
-    [savedNotebookConfig, setHasUnsavedChanges]
-  )
 
   // Sync time range changes to config
   // When time range changes, update config and check unsaved state
@@ -240,27 +227,13 @@ export function NotebookRenderer({
 
     prevTimeRangeRef.current = current
 
-    // Check if time range differs from saved config
-    const savedFrom = savedNotebookConfig?.timeRangeFrom ?? DEFAULT_TIME_RANGE.from
-    const savedTo = savedNotebookConfig?.timeRangeTo ?? DEFAULT_TIME_RANGE.to
-    const timeRangeDiffers = current.from !== savedFrom || current.to !== savedTo
-
-    // Create config with updated time range for unsaved state check
-    const configWithTimeRange: NotebookConfig = {
-      ...notebookConfig,
-      timeRangeFrom: current.from,
-      timeRangeTo: current.to,
-    }
-    const hasCellChanges = !notebookConfigsEqual(configWithTimeRange, savedNotebookConfig)
-    setHasUnsavedChanges(hasCellChanges || timeRangeDiffers)
-
     // Update config with time range
     onConfigChange({
       ...notebookConfig,
       timeRangeFrom: current.from,
       timeRangeTo: current.to,
     })
-  }, [rawTimeRange, savedNotebookConfig, notebookConfig, setHasUnsavedChanges, onConfigChange])
+  }, [rawTimeRange, savedNotebookConfig, notebookConfig, onConfigChange])
 
   // Variable values management - hook owns URL access for variables
   const { variableValues, variableValuesRef, setVariableValue, migrateVariable, removeVariable } =
@@ -359,7 +332,6 @@ export function NotebookRenderer({
       const newCells = arrayMove(cells, oldIndex, newIndex)
       const newConfig = { ...notebookConfig, cells: newCells }
       onConfigChange(newConfig)
-      updateUnsavedState(newConfig)
 
       // Update selected cell index if needed
       if (selectedCellIndex === oldIndex) {
@@ -372,7 +344,7 @@ export function NotebookRenderer({
         }
       }
     },
-    [cells, notebookConfig, onConfigChange, updateUnsavedState, selectedCellIndex]
+    [cells, notebookConfig, onConfigChange, selectedCellIndex]
   )
 
   // Cell management
@@ -382,11 +354,10 @@ export function NotebookRenderer({
       const newCells = [...cells, newCell]
       const newConfig = { ...notebookConfig, cells: newCells }
       onConfigChange(newConfig)
-      updateUnsavedState(newConfig)
       setShowAddCellModal(false)
       setSelectedCellIndex(newCells.length - 1)
     },
-    [notebookConfig, cells, existingNames, onConfigChange, updateUnsavedState]
+    [notebookConfig, cells, existingNames, onConfigChange]
   )
 
   const handleDeleteCell = useCallback(
@@ -395,7 +366,6 @@ export function NotebookRenderer({
       const newCells = cells.filter((_, i) => i !== index)
       const newConfig = { ...notebookConfig, cells: newCells }
       onConfigChange(newConfig)
-      updateUnsavedState(newConfig)
 
       // Clean up state
       removeCellState(cell.name)
@@ -411,7 +381,7 @@ export function NotebookRenderer({
       }
       setDeletingCellIndex(null)
     },
-    [notebookConfig, cells, onConfigChange, updateUnsavedState, selectedCellIndex, removeCellState, removeVariable]
+    [notebookConfig, cells, onConfigChange, selectedCellIndex, removeCellState, removeVariable]
   )
 
   const updateCell = useCallback(
@@ -442,9 +412,8 @@ export function NotebookRenderer({
 
       const newConfig = { ...notebookConfig, cells: newCells }
       onConfigChange(newConfig)
-      updateUnsavedState(newConfig)
     },
-    [cells, notebookConfig, onConfigChange, updateUnsavedState, migrateCellState, migrateVariable, setVariableValue]
+    [cells, notebookConfig, onConfigChange, migrateCellState, migrateVariable, setVariableValue]
   )
 
   const toggleCellCollapsed = useCallback(
@@ -601,15 +570,6 @@ export function NotebookRenderer({
               onRun={() => executeCell(selectedCellIndex!)}
               onDelete={() => setDeletingCellIndex(selectedCellIndex!)}
             />
-            <div className="border-t border-theme-border flex-shrink-0">
-              <SaveFooter
-                onSave={handleSave}
-                onSaveAs={onSaveAs}
-                isSaving={isSaving}
-                hasUnsavedChanges={hasUnsavedChanges}
-                saveError={saveError}
-              />
-            </div>
           </div>
         </>
       )}

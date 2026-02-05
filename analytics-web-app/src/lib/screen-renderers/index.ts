@@ -1,4 +1,4 @@
-import { ComponentType } from 'react'
+import { ComponentType, MutableRefObject } from 'react'
 import { Table } from 'apache-arrow'
 import { ScreenConfig, ScreenTypeName } from '@/lib/screens-api'
 
@@ -22,8 +22,6 @@ export interface ScreenRendererProps {
   ) => void
   /** Saved config from database, null if new screen - for unsaved detection */
   savedConfig: ScreenConfig | null
-  /** Set unsaved changes state (true when config differs from saved) */
-  setHasUnsavedChanges: (value: boolean) => void
   /** Time range for API queries (ISO timestamps) */
   timeRange: { begin: string; end: string }
   /** Raw time range from URL (e.g., 'now-1h', 'now') */
@@ -34,18 +32,12 @@ export interface ScreenRendererProps {
   timeRangeLabel: string
   /** Current values for SQL variables */
   currentValues: Record<string, string>
-  /** Parent's save handler (for existing screens). Returns saved config for post-save cleanup. */
-  onSave: (() => Promise<ScreenConfig>) | null
-  /** Whether save is in progress */
-  isSaving: boolean
-  /** Whether there are unsaved changes */
-  hasUnsavedChanges: boolean
-  /** Open save-as dialog */
-  onSaveAs: () => void
-  /** Save error message */
-  saveError: string | null
+  /** Parent's save handler (for existing screens). Returns saved config for post-save cleanup, or null on failure. */
+  onSave: (() => Promise<ScreenConfig | null>) | null
   /** Increment to trigger a refresh (re-execute query) */
   refreshTrigger: number
+  /** Ref for the renderer's wrapped save handler (includes URL cleanup). Title bar calls this. */
+  onSaveRef?: MutableRefObject<(() => Promise<void>) | null>
 }
 
 /**

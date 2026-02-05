@@ -90,17 +90,12 @@ function createDefaultProps(overrides: Partial<ScreenRendererProps> = {}): Scree
     config: { cells: [] },
     onConfigChange: jest.fn(),
     savedConfig: { cells: [] },
-    setHasUnsavedChanges: jest.fn(),
     timeRange: { begin: '2024-01-01T00:00:00Z', end: '2024-01-02T00:00:00Z' },
     rawTimeRange: { from: 'now-5m', to: 'now' },
     onTimeRangeChange: jest.fn(),
     timeRangeLabel: 'Last 1 hour',
     currentValues: {},
     onSave: jest.fn(),
-    isSaving: false,
-    hasUnsavedChanges: false,
-    onSaveAs: jest.fn(),
-    saveError: null,
     refreshTrigger: 0,
     ...overrides,
   }
@@ -214,12 +209,10 @@ describe('NotebookRenderer', () => {
 
     it('should add a new cell when type is selected', async () => {
       const onConfigChange = jest.fn()
-      const setHasUnsavedChanges = jest.fn()
 
       await renderNotebook(
         createDefaultProps({
           onConfigChange,
-          setHasUnsavedChanges,
         })
       )
 
@@ -231,7 +224,6 @@ describe('NotebookRenderer', () => {
       fireEvent.click(tableButton!)
 
       expect(onConfigChange).toHaveBeenCalled()
-      expect(setHasUnsavedChanges).toHaveBeenCalled()
 
       // Modal should close after adding
       expect(screen.queryByRole('heading', { name: 'Add Cell' })).not.toBeInTheDocument()
@@ -386,13 +378,11 @@ describe('NotebookRenderer', () => {
     it('should update cell name through editor', async () => {
       const cells = [createTableCell('OldName')]
       const onConfigChange = jest.fn()
-      const setHasUnsavedChanges = jest.fn()
 
       await renderNotebook(
         createDefaultProps({
           config: { cells },
           onConfigChange,
-          setHasUnsavedChanges,
         })
       )
 
@@ -447,42 +437,40 @@ describe('NotebookRenderer', () => {
   })
 
   describe('unsaved changes', () => {
-    it('should show save footer when hasUnsavedChanges is true', async () => {
+    it('should expose save handler via onSaveRef', async () => {
       const cells = [createTableCell('Query')]
+      const onSave = jest.fn().mockResolvedValue({ cells })
+      const saveRef = { current: null } as React.MutableRefObject<(() => Promise<void>) | null>
 
       await renderNotebook(
         createDefaultProps({
           config: { cells },
-          hasUnsavedChanges: true,
+          onSave,
+          onSaveRef: saveRef,
         })
       )
 
-      // Select a cell to show the editor panel with save footer
-      const cellContainer = screen.getByText('Query').closest('div[class*="bg-app-panel"]')
-      fireEvent.click(cellContainer!)
-
-      expect(screen.getByText('Save')).toBeInTheDocument()
+      // The renderer should have set the ref to its wrapped save handler
+      expect(saveRef.current).not.toBeNull()
+      expect(typeof saveRef.current).toBe('function')
     })
 
-    it('should call onSave when save button is clicked', async () => {
+    it('should not render save buttons in editor panel', async () => {
       const cells = [createTableCell('Query')]
-      const onSave = jest.fn()
 
       await renderNotebook(
         createDefaultProps({
           config: { cells },
-          hasUnsavedChanges: true,
-          onSave,
         })
       )
 
-      // Select cell to show editor
+      // Select a cell to show the editor panel
       const cellContainer = screen.getByText('Query').closest('div[class*="bg-app-panel"]')
       fireEvent.click(cellContainer!)
 
-      fireEvent.click(screen.getByText('Save'))
-
-      expect(onSave).toHaveBeenCalled()
+      // Save buttons should NOT be in the renderer (they're in the parent title bar now)
+      const editorPanel = screen.getByText('Cell Name').closest('div[class*="border-l"]')
+      expect(within(editorPanel!).queryByText('Save')).not.toBeInTheDocument()
     })
   })
 

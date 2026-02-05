@@ -5,14 +5,14 @@ import { DataType, Field } from 'apache-arrow'
 import { registerRenderer, ScreenRendererProps } from './index'
 import { useTimeRangeSync } from './useTimeRangeSync'
 import { useSqlHandlers } from './useSqlHandlers'
-import { LoadingState, EmptyState, SaveFooter, RendererLayout } from './shared'
+import { LoadingState, EmptyState, RendererLayout } from './shared'
 import { QueryEditor } from '@/components/QueryEditor'
 import { AppLink } from '@/components/AppLink'
 import { CopyableProcessId } from '@/components/CopyableProcessId'
 import { formatTimestamp, formatDurationMs } from '@/lib/time-range'
 import { timestampToDate, isTimeType, isDurationType, durationToMs } from '@/lib/arrow-utils'
 import { useStreamQuery } from '@/hooks/useStreamQuery'
-import { useDefaultSaveCleanup } from '@/lib/url-cleanup-utils'
+import { useDefaultSaveCleanup, useExposeSaveRef } from '@/lib/url-cleanup-utils'
 
 // Variables available for process list queries
 const VARIABLES = [
@@ -82,22 +82,19 @@ export function ProcessListRenderer({
   config,
   onConfigChange,
   savedConfig,
-  setHasUnsavedChanges,
   timeRange,
   rawTimeRange,
   timeRangeLabel,
   currentValues,
   onSave,
-  isSaving,
-  hasUnsavedChanges,
-  onSaveAs,
-  saveError,
   refreshTrigger,
+  onSaveRef,
 }: ScreenRendererProps) {
   const processListConfig = config as unknown as ProcessListConfig
   const savedProcessListConfig = savedConfig as unknown as ProcessListConfig | null
   const [, setSearchParams] = useSearchParams()
   const handleSave = useDefaultSaveCleanup(onSave, setSearchParams)
+  useExposeSaveRef(onSaveRef, handleSave)
 
   // Sort state from config (persisted)
   const sortColumn = processListConfig.sortColumn
@@ -185,9 +182,7 @@ export function ProcessListRenderer({
   // Sync time range changes to config
   useTimeRangeSync({
     rawTimeRange,
-    savedConfig: savedProcessListConfig,
     config: processListConfig,
-    setHasUnsavedChanges,
     onConfigChange,
   })
 
@@ -196,7 +191,6 @@ export function ProcessListRenderer({
     config: processListConfig,
     savedConfig: savedProcessListConfig,
     onConfigChange,
-    setHasUnsavedChanges,
     execute: (sql: string) => executeQuery(sql),
   })
 
@@ -225,21 +219,8 @@ export function ProcessListRenderer({
         sortColumn: newSortColumn,
         sortDirection: newSortDirection,
       })
-
-      if (savedProcessListConfig) {
-        const savedCol = savedProcessListConfig.sortColumn
-        const savedDir = savedProcessListConfig.sortDirection
-        setHasUnsavedChanges(newSortColumn !== savedCol || newSortDirection !== savedDir)
-      }
     },
-    [
-      sortColumn,
-      sortDirection,
-      processListConfig,
-      savedProcessListConfig,
-      onConfigChange,
-      setHasUnsavedChanges,
-    ]
+    [sortColumn, sortDirection, processListConfig, onConfigChange]
   )
 
   // Build currentValues with order_by for QueryEditor display
@@ -260,15 +241,6 @@ export function ProcessListRenderer({
       onChange={handleSqlChange}
       isLoading={streamQuery.isStreaming}
       error={queryError}
-      footer={
-        <SaveFooter
-          onSave={handleSave}
-          onSaveAs={onSaveAs}
-          isSaving={isSaving}
-          hasUnsavedChanges={hasUnsavedChanges}
-          saveError={saveError}
-        />
-      }
     />
   )
 

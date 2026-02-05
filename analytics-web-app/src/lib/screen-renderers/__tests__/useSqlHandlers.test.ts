@@ -7,7 +7,6 @@ import { useSqlHandlers } from '../useSqlHandlers'
 describe('useSqlHandlers', () => {
   const createMocks = () => ({
     onConfigChange: jest.fn(),
-    setHasUnsavedChanges: jest.fn(),
     execute: jest.fn(),
   })
 
@@ -37,28 +36,6 @@ describe('useSqlHandlers', () => {
       expect(mocks.onConfigChange).toHaveBeenCalledWith({
         sql: 'SELECT * FROM new_query',
       })
-      // Should also mark as unsaved
-      expect(mocks.setHasUnsavedChanges).toHaveBeenCalledWith(true)
-    })
-
-    it('should mark as not unsaved when SQL matches saved config', () => {
-      const mocks = createMocks()
-      const config = { sql: 'SELECT * FROM modified' }
-      const savedConfig = { sql: 'SELECT * FROM original' }
-
-      const { result } = renderHook(() =>
-        useSqlHandlers({
-          config,
-          savedConfig,
-          ...mocks,
-        })
-      )
-
-      act(() => {
-        result.current.handleSqlChange('SELECT * FROM original')
-      })
-
-      expect(mocks.setHasUnsavedChanges).toHaveBeenCalledWith(false)
     })
 
     it('should still update config when savedConfig is null (new screen)', () => {
@@ -79,13 +56,11 @@ describe('useSqlHandlers', () => {
 
       // Config should still be updated even without savedConfig
       expect(mocks.onConfigChange).toHaveBeenCalledWith({ sql: 'SELECT 2' })
-      // setHasUnsavedChanges should not be called when savedConfig is null
-      expect(mocks.setHasUnsavedChanges).not.toHaveBeenCalled()
     })
   })
 
   describe('handleRunQuery', () => {
-    it('should update config, mark unsaved, and execute query', () => {
+    it('should update config and execute query', () => {
       const mocks = createMocks()
       const config = { sql: 'SELECT * FROM old' }
       const savedConfig = { sql: 'SELECT * FROM old' }
@@ -103,28 +78,7 @@ describe('useSqlHandlers', () => {
       })
 
       expect(mocks.onConfigChange).toHaveBeenCalledWith({ sql: 'SELECT * FROM new' })
-      expect(mocks.setHasUnsavedChanges).toHaveBeenCalledWith(true)
       expect(mocks.execute).toHaveBeenCalledWith('SELECT * FROM new')
-    })
-
-    it('should not mark unsaved when SQL matches saved config', () => {
-      const mocks = createMocks()
-      const config = { sql: 'SELECT * FROM table' }
-      const savedConfig = { sql: 'SELECT * FROM table' }
-
-      const { result } = renderHook(() =>
-        useSqlHandlers({
-          config,
-          savedConfig,
-          ...mocks,
-        })
-      )
-
-      act(() => {
-        result.current.handleRunQuery('SELECT * FROM table')
-      })
-
-      expect(mocks.setHasUnsavedChanges).toHaveBeenCalledWith(false)
     })
   })
 
