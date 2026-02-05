@@ -289,7 +289,7 @@ export function ConfigDiffModal({
       <div className="absolute inset-0 bg-black/60" onClick={onClose} role="presentation" />
 
       {/* Modal */}
-      <div className="relative w-full max-w-[700px] max-h-[80vh] bg-app-panel border border-theme-border rounded-lg shadow-xl flex flex-col">
+      <div className="relative w-[700px] max-w-[90vw] max-h-[80vh] min-w-[340px] min-h-[200px] resize overflow-hidden bg-app-panel border border-theme-border rounded-lg shadow-xl flex flex-col">
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-theme-border flex-shrink-0">
           <div>
@@ -328,7 +328,7 @@ export function ConfigDiffModal({
 
               {/* Diff block */}
               {section.lines.length > 0 && (
-                <div className="font-mono text-xs leading-relaxed rounded-md border border-theme-border overflow-hidden">
+                <div className="font-mono text-xs leading-relaxed rounded-md border border-theme-border overflow-x-auto">
                   {section.lines.map((line, lineIdx) => (
                     <div
                       key={lineIdx}
