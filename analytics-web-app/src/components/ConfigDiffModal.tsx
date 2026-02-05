@@ -284,9 +284,9 @@ export function ConfigDiffModal({
   if (!isOpen) return null
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
+    <div className="fixed inset-0 z-50 flex items-center justify-center" role="dialog" aria-modal="true" aria-label="Configuration Diff">
       {/* Backdrop */}
-      <div className="absolute inset-0 bg-black/60" onClick={onClose} />
+      <div className="absolute inset-0 bg-black/60" onClick={onClose} role="presentation" />
 
       {/* Modal */}
       <div className="relative w-full max-w-[700px] max-h-[80vh] bg-app-panel border border-theme-border rounded-lg shadow-xl flex flex-col">
