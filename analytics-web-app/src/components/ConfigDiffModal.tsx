@@ -232,9 +232,9 @@ function computeDiffSections(
 
 const statusColors: Record<DiffStatus, string> = {
   unchanged: 'var(--text-muted)',
-  modified: 'var(--accent-warning)',
-  added: '#22c55e',
-  removed: 'var(--accent-error)',
+  modified: 'var(--brand-gold)',
+  added: 'var(--brand-blue)',
+  removed: 'var(--brand-rust)',
 }
 
 const statusLabels: Record<DiffStatus, string> = {
@@ -310,9 +310,9 @@ export function ConfigDiffModal({
                       className="px-3 py-px whitespace-pre"
                       style={
                         line.type === 'added'
-                          ? { background: 'rgba(46, 125, 50, 0.12)', color: '#66bb6a' }
+                          ? { background: 'rgba(21, 101, 192, 0.10)', color: 'var(--accent-link-hover)' }
                           : line.type === 'removed'
-                            ? { background: 'rgba(198, 40, 40, 0.12)', color: 'var(--accent-error)' }
+                            ? { background: 'rgba(191, 54, 12, 0.10)', color: 'var(--brand-rust)' }
                             : { background: 'var(--app-bg)', color: 'var(--text-muted)' }
                       }
                     >
