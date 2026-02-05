@@ -149,7 +149,6 @@ export interface CellState {
 
 export interface NotebookConfig {
   cells: CellConfig[]
-  refreshInterval?: number
   timeRangeFrom?: string
   timeRangeTo?: string
 }
