@@ -33,7 +33,6 @@ import { CellContainer } from '@/components/CellContainer'
 import { CellEditor } from '@/components/CellEditor'
 import { ResizeHandle } from '@/components/ResizeHandle'
 import { Button } from '@/components/ui/button'
-import { SaveFooter } from './shared'
 import { useNotebookVariables } from './useNotebookVariables'
 import { useCellExecution } from './useCellExecution'
 import { notebookConfigsEqual, cleanupVariableParams } from './notebook-utils'
@@ -175,11 +174,8 @@ export function NotebookRenderer({
   rawTimeRange,
   onTimeRangeChange,
   onSave,
-  isSaving,
-  hasUnsavedChanges,
-  onSaveAs,
-  saveError,
   refreshTrigger,
+  onSaveRef,
 }: ScreenRendererProps) {
   const [, setSearchParams] = useSearchParams()
 
@@ -198,6 +194,18 @@ export function NotebookRenderer({
       }
     }
   }, [onSave, setSearchParams])
+
+  // Expose wrapped save handler to parent via ref
+  useEffect(() => {
+    if (onSaveRef) {
+      onSaveRef.current = handleSave
+    }
+    return () => {
+      if (onSaveRef) {
+        onSaveRef.current = null
+      }
+    }
+  }, [onSaveRef, handleSave])
 
   // Parse config
   const notebookConfig = useMemo(() => {
@@ -601,15 +609,6 @@ export function NotebookRenderer({
               onRun={() => executeCell(selectedCellIndex!)}
               onDelete={() => setDeletingCellIndex(selectedCellIndex!)}
             />
-            <div className="border-t border-theme-border flex-shrink-0">
-              <SaveFooter
-                onSave={handleSave}
-                onSaveAs={onSaveAs}
-                isSaving={isSaving}
-                hasUnsavedChanges={hasUnsavedChanges}
-                saveError={saveError}
-              />
-            </div>
           </div>
         </>
       )}

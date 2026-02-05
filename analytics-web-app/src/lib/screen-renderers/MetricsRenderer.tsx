@@ -45,11 +45,18 @@ export function MetricsRenderer({
   onSaveAs,
   saveError,
   refreshTrigger,
+  onSaveRef,
 }: ScreenRendererProps) {
   const metricsConfig = config as unknown as MetricsConfig
   const savedMetricsConfig = savedConfig as unknown as MetricsConfig | null
   const [, setSearchParams] = useSearchParams()
   const handleSave = useDefaultSaveCleanup(onSave, setSearchParams)
+
+  // Expose wrapped save handler to parent via ref
+  useEffect(() => {
+    if (onSaveRef) { onSaveRef.current = handleSave }
+    return () => { if (onSaveRef) { onSaveRef.current = null } }
+  }, [onSaveRef, handleSave])
 
   // Scale mode state - sync from config on load
   const [scaleMode, setScaleMode] = useState<ScaleMode>(

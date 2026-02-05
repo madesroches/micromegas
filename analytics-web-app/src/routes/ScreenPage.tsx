@@ -1,11 +1,13 @@
-import { Suspense, useState, useCallback, useMemo, useEffect } from 'react'
+import { Suspense, useState, useCallback, useMemo, useEffect, useRef } from 'react'
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import { usePageTitle } from '@/hooks/usePageTitle'
-import { AlertCircle } from 'lucide-react'
+import { AlertCircle, Save, GitCompareArrows } from 'lucide-react'
 import { PageLayout } from '@/components/layout'
 import { AuthGuard } from '@/components/AuthGuard'
 import { AppLink } from '@/components/AppLink'
 import { SaveScreenDialog } from '@/components/SaveScreenDialog'
+import { ConfigDiffModal } from '@/components/ConfigDiffModal'
+import { Button } from '@/components/ui/button'
 import { parseTimeRange, getTimeRangeForApi } from '@/lib/time-range'
 import { renderIcon } from '@/lib/screen-type-utils'
 import { getRenderer } from '@/lib/screen-renderers/init'
@@ -75,6 +77,10 @@ function ScreenPageContent() {
 
   // Dialog state
   const [showSaveDialog, setShowSaveDialog] = useState(false)
+  const [showDiffModal, setShowDiffModal] = useState(false)
+
+  // Ref for the renderer's wrapped save handler (includes URL cleanup)
+  const saveRef = useRef<(() => Promise<void>) | null>(null)
 
   // Refresh trigger - increment to tell renderer to re-execute query
   const [refreshTrigger, setRefreshTrigger] = useState(0)
@@ -222,6 +228,15 @@ function ScreenPageContent() {
     }
   }, [screen, screenConfig, rawTimeRange])
 
+  // Title bar save handler - calls renderer's wrapped handler if available, else raw handleSave
+  const handleTitleBarSave = useCallback(async () => {
+    if (saveRef.current) {
+      await saveRef.current()
+    } else {
+      await handleSave()
+    }
+  }, [handleSave])
+
   // Handle "Save As" completion
   const handleSaveAsComplete = useCallback(
     (newName: string) => {
@@ -323,26 +338,63 @@ function ScreenPageContent() {
           {/* Header */}
           <div className="p-6 pb-0">
             <div className="mb-5">
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-3 flex-wrap">
                 <div className="p-2 rounded-md bg-app-card text-accent-link">
                   {renderIcon(screenTypeInfo?.icon ?? 'file-text')}
                 </div>
-                <div>
+                <div className="flex items-center gap-3">
                   <h1 className="text-2xl font-semibold text-theme-text-primary">
                     {isNew ? `New ${screenTypeInfo?.display_name ?? screenType} Screen` : screen?.name}
                   </h1>
-                  {(isNew || hasUnsavedChanges) && (
-                    <p className="text-sm text-theme-text-secondary">
-                      {isNew && (screenTypeInfo?.display_name ?? screenType)}
-                      {hasUnsavedChanges && (
-                        <span className={isNew ? 'ml-2' : ''} style={{ color: 'var(--accent-warning)' }}>
-                          (unsaved changes)
-                        </span>
-                      )}
-                    </p>
+                  {hasUnsavedChanges && (
+                    <span className="text-sm" style={{ color: 'var(--accent-warning)' }}>
+                      (unsaved changes)
+                    </span>
+                  )}
+                </div>
+                {/* Save controls */}
+                <div className="flex items-center gap-2 ml-auto">
+                  {hasUnsavedChanges && !isNew && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setShowDiffModal(true)}
+                      className="gap-1"
+                    >
+                      <GitCompareArrows className="w-4 h-4" />
+                      Diff
+                    </Button>
+                  )}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setShowSaveDialog(true)}
+                    className="gap-1"
+                  >
+                    <Save className="w-4 h-4" />
+                    Save As
+                  </Button>
+                  {screen && (
+                    <Button
+                      size="sm"
+                      onClick={handleTitleBarSave}
+                      disabled={isSaving || !hasUnsavedChanges}
+                      className="gap-1"
+                    >
+                      <Save className="w-4 h-4" />
+                      {isSaving ? 'Saving...' : 'Save'}
+                    </Button>
                   )}
                 </div>
               </div>
+              {isNew && (
+                <p className="text-sm text-theme-text-secondary mt-1 ml-11">
+                  {screenTypeInfo?.display_name ?? screenType}
+                </p>
+              )}
+              {saveError && (
+                <p className="text-xs text-accent-error mt-2 ml-11">{saveError}</p>
+              )}
             </div>
           </div>
 
@@ -365,6 +417,7 @@ function ScreenPageContent() {
               onSaveAs={() => setShowSaveDialog(true)}
               saveError={saveError}
               refreshTrigger={refreshTrigger}
+              onSaveRef={saveRef}
             />
           </div>
         </div>
@@ -379,6 +432,17 @@ function ScreenPageContent() {
           screenType={screenType}
           config={screenConfig}
           suggestedName={screen?.name ? `${screen.name}-copy` : undefined}
+        />
+      )}
+
+      {/* Config Diff Modal */}
+      {screenConfig && (
+        <ConfigDiffModal
+          isOpen={showDiffModal}
+          onClose={() => setShowDiffModal(false)}
+          savedConfig={screen?.config ?? null}
+          currentConfig={screenConfig}
+          currentTimeRange={rawTimeRange}
         />
       )}
     </>

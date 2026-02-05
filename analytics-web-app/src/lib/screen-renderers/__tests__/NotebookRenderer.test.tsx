@@ -447,42 +447,42 @@ describe('NotebookRenderer', () => {
   })
 
   describe('unsaved changes', () => {
-    it('should show save footer when hasUnsavedChanges is true', async () => {
+    it('should expose save handler via onSaveRef', async () => {
       const cells = [createTableCell('Query')]
-
-      await renderNotebook(
-        createDefaultProps({
-          config: { cells },
-          hasUnsavedChanges: true,
-        })
-      )
-
-      // Select a cell to show the editor panel with save footer
-      const cellContainer = screen.getByText('Query').closest('div[class*="bg-app-panel"]')
-      fireEvent.click(cellContainer!)
-
-      expect(screen.getByText('Save')).toBeInTheDocument()
-    })
-
-    it('should call onSave when save button is clicked', async () => {
-      const cells = [createTableCell('Query')]
-      const onSave = jest.fn()
+      const onSave = jest.fn().mockResolvedValue({ cells })
+      const saveRef = { current: null } as React.MutableRefObject<(() => Promise<void>) | null>
 
       await renderNotebook(
         createDefaultProps({
           config: { cells },
           hasUnsavedChanges: true,
           onSave,
+          onSaveRef: saveRef,
         })
       )
 
-      // Select cell to show editor
+      // The renderer should have set the ref to its wrapped save handler
+      expect(saveRef.current).not.toBeNull()
+      expect(typeof saveRef.current).toBe('function')
+    })
+
+    it('should not render save buttons in editor panel', async () => {
+      const cells = [createTableCell('Query')]
+
+      await renderNotebook(
+        createDefaultProps({
+          config: { cells },
+          hasUnsavedChanges: true,
+        })
+      )
+
+      // Select a cell to show the editor panel
       const cellContainer = screen.getByText('Query').closest('div[class*="bg-app-panel"]')
       fireEvent.click(cellContainer!)
 
-      fireEvent.click(screen.getByText('Save'))
-
-      expect(onSave).toHaveBeenCalled()
+      // Save buttons should NOT be in the renderer (they're in the parent title bar now)
+      const editorPanel = screen.getByText('Cell Name').closest('div[class*="border-l"]')
+      expect(within(editorPanel!).queryByText('Save')).not.toBeInTheDocument()
     })
   })
 

@@ -1,4 +1,4 @@
-import { ComponentType } from 'react'
+import { ComponentType, MutableRefObject } from 'react'
 import { Table } from 'apache-arrow'
 import { ScreenConfig, ScreenTypeName } from '@/lib/screens-api'
 
@@ -46,6 +46,8 @@ export interface ScreenRendererProps {
   saveError: string | null
   /** Increment to trigger a refresh (re-execute query) */
   refreshTrigger: number
+  /** Ref for the renderer's wrapped save handler (includes URL cleanup). Title bar calls this. */
+  onSaveRef?: MutableRefObject<(() => Promise<void>) | null>
 }
 
 /**

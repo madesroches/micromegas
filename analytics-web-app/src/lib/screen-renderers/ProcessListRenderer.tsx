@@ -93,11 +93,18 @@ export function ProcessListRenderer({
   onSaveAs,
   saveError,
   refreshTrigger,
+  onSaveRef,
 }: ScreenRendererProps) {
   const processListConfig = config as unknown as ProcessListConfig
   const savedProcessListConfig = savedConfig as unknown as ProcessListConfig | null
   const [, setSearchParams] = useSearchParams()
   const handleSave = useDefaultSaveCleanup(onSave, setSearchParams)
+
+  // Expose wrapped save handler to parent via ref
+  useEffect(() => {
+    if (onSaveRef) { onSaveRef.current = handleSave }
+    return () => { if (onSaveRef) { onSaveRef.current = null } }
+  }, [onSaveRef, handleSave])
 
   // Sort state from config (persisted)
   const sortColumn = processListConfig.sortColumn

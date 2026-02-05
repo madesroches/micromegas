@@ -52,11 +52,18 @@ export function TableRenderer({
   onSaveAs,
   saveError,
   refreshTrigger,
+  onSaveRef,
 }: ScreenRendererProps) {
   const tableConfig = config as unknown as TableConfig
   const savedTableConfig = savedConfig as unknown as TableConfig | null
   const [, setSearchParams] = useSearchParams()
   const handleSave = useDefaultSaveCleanup(onSave, setSearchParams)
+
+  // Expose wrapped save handler to parent via ref
+  useEffect(() => {
+    if (onSaveRef) { onSaveRef.current = handleSave }
+    return () => { if (onSaveRef) { onSaveRef.current = null } }
+  }, [onSaveRef, handleSave])
 
   // Sort state from config (persisted)
   const sortColumn = tableConfig.sortColumn

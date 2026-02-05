@@ -222,6 +222,7 @@ export function LogRenderer({
   onSaveAs,
   saveError,
   refreshTrigger,
+  onSaveRef,
 }: ScreenRendererProps) {
   const logConfig = config as unknown as LogConfig
   const savedLogConfig = savedConfig as unknown as LogConfig | null
@@ -229,6 +230,12 @@ export function LogRenderer({
   // URL params for filter state sync
   const [searchParams, setSearchParams] = useSearchParams()
   const handleSave = useDefaultSaveCleanup(onSave, setSearchParams)
+
+  // Expose wrapped save handler to parent via ref
+  useEffect(() => {
+    if (onSaveRef) { onSaveRef.current = handleSave }
+    return () => { if (onSaveRef) { onSaveRef.current = null } }
+  }, [onSaveRef, handleSave])
 
   // Get saved values from config for detecting unsaved changes
   const savedValues = useMemo(
