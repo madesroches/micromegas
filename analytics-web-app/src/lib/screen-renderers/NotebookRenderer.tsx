@@ -483,6 +483,30 @@ export function NotebookRenderer({
           ? `${state.data.numRows} rows`
           : undefined
 
+    // Build common renderer props
+    const commonRendererProps = {
+      name: cell.name,
+      data: state.data,
+      status: state.status,
+      error: state.error,
+      timeRange,
+      variables: availableVariables,
+      isEditing: selectedCellIndex === index,
+      onRun: () => executeCell(index),
+      onSqlChange: (sql: string) => updateCell(index, { sql }),
+      onOptionsChange: (options: Record<string, unknown>) => updateCell(index, { options }),
+      onContentChange: (content: string) => updateCell(index, { content }),
+      onTimeRangeSelect: handleTimeRangeSelect,
+      value: cell.type === 'variable' ? variableValues[cell.name] : undefined,
+      onValueChange: cell.type === 'variable' ? (value: VariableValue) => setVariableValue(cell.name, value) : undefined,
+      ...rendererProps,
+    }
+
+    // Render title bar content if metadata defines a titleBarRenderer
+    const TitleBarRenderer = meta.titleBarRenderer
+    const titleBarContent = TitleBarRenderer ? <TitleBarRenderer {...commonRendererProps} /> : undefined
+    const hasTitleBarContent = !!TitleBarRenderer
+
     return (
       <SortableCell key={cell.name} id={cell.name}>
         {({ dragHandleProps, isDragging, setNodeRef, style }) => (
@@ -495,8 +519,8 @@ export function NotebookRenderer({
             type={cell.type}
             status={state.status}
             error={state.error}
-            collapsed={cell.layout.collapsed}
-            onToggleCollapsed={() => toggleCellCollapsed(index)}
+            collapsed={hasTitleBarContent || cell.layout.collapsed}
+            onToggleCollapsed={hasTitleBarContent ? undefined : () => toggleCellCollapsed(index)}
             isSelected={selectedCellIndex === index}
             onSelect={() => setSelectedCellIndex(index)}
             onRun={() => executeCell(index)}
@@ -507,24 +531,9 @@ export function NotebookRenderer({
             onHeightChange={(newHeight) =>
               updateCell(index, { layout: { ...cell.layout, height: newHeight } })
             }
+            titleBarContent={titleBarContent}
           >
-            <CellRenderer
-              name={cell.name}
-              data={state.data}
-              status={state.status}
-              error={state.error}
-              timeRange={timeRange}
-              variables={availableVariables}
-              isEditing={selectedCellIndex === index}
-              onRun={() => executeCell(index)}
-              onSqlChange={(sql) => updateCell(index, { sql })}
-              onOptionsChange={(options) => updateCell(index, { options })}
-              onContentChange={(content) => updateCell(index, { content })}
-              onTimeRangeSelect={handleTimeRangeSelect}
-              value={cell.type === 'variable' ? variableValues[cell.name] : undefined}
-              onValueChange={cell.type === 'variable' ? (value) => setVariableValue(cell.name, value) : undefined}
-              {...rendererProps}
-            />
+            <CellRenderer {...commonRendererProps} />
           </CellContainer>
         )}
       </SortableCell>

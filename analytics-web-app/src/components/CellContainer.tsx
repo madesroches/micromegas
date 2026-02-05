@@ -33,6 +33,8 @@ interface CellContainerProps extends Omit<HTMLAttributes<HTMLDivElement>, 'child
   height?: number
   /** Callback when height changes via resize handle */
   onHeightChange?: (height: number) => void
+  /** Optional content to render in the title bar (between name and controls) */
+  titleBarContent?: ReactNode
   /** Cell content */
   children: ReactNode
   /** Props for drag handle (from dnd-kit useSortable) */
@@ -57,6 +59,7 @@ export const CellContainer = forwardRef<HTMLDivElement, CellContainerProps>(func
     statusText,
     height = 300,
     onHeightChange,
+    titleBarContent,
     children,
     dragHandleProps,
     isDragging,
@@ -156,20 +159,22 @@ export const CellContainer = forwardRef<HTMLDivElement, CellContainerProps>(func
             </button>
           )}
 
-          {/* Collapse toggle */}
-          <button
-            onClick={(e) => {
-              e.stopPropagation()
-              onToggleCollapsed?.()
-            }}
-            className="text-theme-text-muted hover:text-theme-text-primary transition-colors"
-          >
-            {collapsed ? (
-              <ChevronRight className="w-4 h-4" />
-            ) : (
-              <ChevronDown className="w-4 h-4" />
-            )}
-          </button>
+          {/* Collapse toggle (hidden when no toggle handler, e.g. variable cells with title bar content) */}
+          {onToggleCollapsed && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation()
+                onToggleCollapsed()
+              }}
+              className="text-theme-text-muted hover:text-theme-text-primary transition-colors"
+            >
+              {collapsed ? (
+                <ChevronRight className="w-4 h-4" />
+              ) : (
+                <ChevronDown className="w-4 h-4" />
+              )}
+            </button>
+          )}
 
           {/* For cells with showTypeBadge=false: show name only. For others: show type badge + name */}
           {!meta.showTypeBadge ? (
@@ -183,6 +188,13 @@ export const CellContainer = forwardRef<HTMLDivElement, CellContainerProps>(func
             </>
           )}
         </div>
+
+        {/* Title bar content (e.g., variable inputs) */}
+        {titleBarContent && (
+          <div className="flex-1 min-w-0 mx-2" onClick={(e) => e.stopPropagation()}>
+            {titleBarContent}
+          </div>
+        )}
 
         <div className="flex items-center gap-2">
           {/* Status text */}

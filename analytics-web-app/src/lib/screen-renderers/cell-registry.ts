@@ -79,6 +79,9 @@ export interface CellTypeMetadata {
   /** Renderer component (displays cell output) */
   readonly renderer: ComponentType<CellRendererProps>
 
+  /** Optional renderer for content in the cell title bar (e.g., variable inputs) */
+  readonly titleBarRenderer?: ComponentType<CellRendererProps>
+
   /** Editor component (type-specific config fields only) */
   readonly EditorComponent: ComponentType<CellEditorProps>
 

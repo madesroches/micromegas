@@ -157,6 +157,114 @@ export function VariableCell({
 }
 
 // =============================================================================
+// Title Bar Component (compact input for cell header)
+// =============================================================================
+
+export function VariableTitleBarContent({
+  value,
+  onValueChange,
+  variableType,
+  variableOptions,
+  status,
+}: CellRendererProps) {
+  const type = variableType || 'text'
+  const isTextInput = type === 'text' || type === 'number'
+
+  const [localValue, setLocalValue] = useState<string | undefined>(undefined)
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => {
+    setLocalValue(undefined)
+  }, [value])
+
+  useEffect(() => {
+    return () => {
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current)
+      }
+    }
+  }, [])
+
+  const handleTextChange = (newValue: string) => {
+    setLocalValue(newValue)
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current)
+    }
+    timeoutRef.current = setTimeout(() => {
+      onValueChange?.(newValue)
+    }, 300)
+  }
+
+  if (status === 'loading') {
+    return (
+      <div className="flex items-center gap-2">
+        <div className="animate-spin rounded-full h-3 w-3 border-2 border-accent-link border-t-transparent" />
+        <span className="text-theme-text-muted text-xs">Loading...</span>
+      </div>
+    )
+  }
+
+  const handleComboboxChange = (serializedValue: string) => {
+    const option = variableOptions?.find(
+      (opt) => serializeVariableValue(opt.value) === serializedValue
+    )
+    if (option) {
+      onValueChange?.(option.value)
+    } else {
+      onValueChange?.(serializedValue)
+    }
+  }
+
+  const stringValue = getVariableString(value ?? '')
+  const displayValue = isTextInput ? (localValue ?? stringValue) : serializeVariableValue(value ?? '')
+
+  return (
+    <div className="flex items-center">
+      {type === 'combobox' && (
+        <select
+          value={displayValue}
+          onChange={(e) => handleComboboxChange(e.target.value)}
+          className="w-full max-w-[300px] px-2 py-1 bg-app-card border border-theme-border rounded text-theme-text-primary text-xs focus:outline-none focus:border-accent-link"
+        >
+          {variableOptions && variableOptions.length > 0 ? (
+            variableOptions.map((opt) => {
+              const serialized = serializeVariableValue(opt.value)
+              return (
+                <option key={serialized} value={serialized}>
+                  {opt.label}
+                </option>
+              )
+            })
+          ) : (
+            <option value="">No options available</option>
+          )}
+        </select>
+      )}
+
+      {type === 'text' && (
+        <input
+          type="text"
+          value={localValue ?? stringValue}
+          onChange={(e) => handleTextChange(e.target.value)}
+          className="w-full max-w-[300px] px-2 py-1 bg-app-card border border-theme-border rounded text-theme-text-primary text-xs focus:outline-none focus:border-accent-link"
+          placeholder="Enter value..."
+        />
+      )}
+
+      {type === 'number' && (
+        <input
+          type="number"
+          value={localValue ?? stringValue}
+          onChange={(e) => handleTextChange(e.target.value)}
+          className="w-full max-w-[200px] px-2 py-1 bg-app-card border border-theme-border rounded text-theme-text-primary text-xs focus:outline-none focus:border-accent-link"
+          placeholder="0"
+        />
+      )}
+    </div>
+  )
+}
+
+// =============================================================================
 // Editor Component
 // =============================================================================
 
@@ -244,13 +352,14 @@ function VariableCellEditor({ config, onChange, variables, timeRange }: CellEdit
 // eslint-disable-next-line react-refresh/only-export-components
 export const variableMetadata: CellTypeMetadata = {
   renderer: VariableCell,
+  titleBarRenderer: VariableTitleBarContent,
   EditorComponent: VariableCellEditor,
 
   label: 'Variable',
   icon: 'V',
   description: 'User input (dropdown, text, number)',
   showTypeBadge: true,
-  defaultHeight: 60,
+  defaultHeight: 0,
 
   canBlockDownstream: true,
 
