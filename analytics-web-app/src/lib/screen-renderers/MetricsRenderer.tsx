@@ -8,7 +8,7 @@ import { LoadingState, EmptyState, RendererLayout } from './shared'
 import { QueryEditor } from '@/components/QueryEditor'
 import { XYChart, type ScaleMode, type ChartType } from '@/components/XYChart'
 import { extractChartData } from '@/lib/arrow-utils'
-import { useDefaultSaveCleanup } from '@/lib/url-cleanup-utils'
+import { useDefaultSaveCleanup, useExposeSaveRef } from '@/lib/url-cleanup-utils'
 
 // Variables available for metrics queries
 const VARIABLES = [
@@ -47,12 +47,7 @@ export function MetricsRenderer({
   const savedMetricsConfig = savedConfig as unknown as MetricsConfig | null
   const [, setSearchParams] = useSearchParams()
   const handleSave = useDefaultSaveCleanup(onSave, setSearchParams)
-
-  // Expose wrapped save handler to parent via ref
-  useEffect(() => {
-    if (onSaveRef) { onSaveRef.current = handleSave }
-    return () => { if (onSaveRef) { onSaveRef.current = null } }
-  }, [onSaveRef, handleSave])
+  useExposeSaveRef(onSaveRef, handleSave)
 
   // Scale mode state - sync from config on load
   const [scaleMode, setScaleMode] = useState<ScaleMode>(

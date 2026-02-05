@@ -8,7 +8,7 @@ import { LoadingState, EmptyState, RendererLayout } from './shared'
 import { SyntaxEditor } from '@/components/SyntaxEditor'
 import { OverrideEditor } from '@/components/OverrideEditor'
 import { useStreamQuery } from '@/hooks/useStreamQuery'
-import { useDefaultSaveCleanup } from '@/lib/url-cleanup-utils'
+import { useDefaultSaveCleanup, useExposeSaveRef } from '@/lib/url-cleanup-utils'
 import {
   SortHeader,
   TableBody,
@@ -55,12 +55,7 @@ export function TableRenderer({
   const savedTableConfig = savedConfig as unknown as TableConfig | null
   const [, setSearchParams] = useSearchParams()
   const handleSave = useDefaultSaveCleanup(onSave, setSearchParams)
-
-  // Expose wrapped save handler to parent via ref
-  useEffect(() => {
-    if (onSaveRef) { onSaveRef.current = handleSave }
-    return () => { if (onSaveRef) { onSaveRef.current = null } }
-  }, [onSaveRef, handleSave])
+  useExposeSaveRef(onSaveRef, handleSave)
 
   // Sort state from config (persisted)
   const sortColumn = tableConfig.sortColumn

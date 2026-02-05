@@ -10,7 +10,7 @@ interface ConfigDiffModalProps {
   currentTimeRange: { from: string; to: string }
 }
 
-type DiffStatus = 'unchanged' | 'modified' | 'added' | 'removed'
+type DiffStatus = 'unchanged' | 'modified' | 'added' | 'removed' | 'reordered'
 
 interface DiffSection {
   title: string
@@ -185,6 +185,20 @@ function computeDiffSections(
         })
       }
     }
+
+    // Detect reordering among cells present in both
+    const savedOrder = saved.map((c) => c.name).filter((n) => currentMap.has(n))
+    const currentOrder = current.map((c) => c.name).filter((n) => savedMap.has(n))
+    if (savedOrder.length > 1 && savedOrder.join('\n') !== currentOrder.join('\n')) {
+      const lines: DiffLine[] = []
+      savedOrder.forEach((n) => lines.push({ type: 'removed', content: n }))
+      currentOrder.forEach((n) => lines.push({ type: 'added', content: n }))
+      sections.push({
+        title: 'Cell order',
+        status: 'reordered',
+        lines,
+      })
+    }
   } else {
     // Non-notebook config: diff the whole config (excluding timeRange which is handled below)
     const { timeRangeFrom: _sf, timeRangeTo: _st, ...savedRest } = savedConfig
@@ -235,6 +249,7 @@ const statusColors: Record<DiffStatus, string> = {
   modified: 'var(--brand-gold)',
   added: 'var(--brand-blue)',
   removed: 'var(--brand-rust)',
+  reordered: 'var(--brand-gold)',
 }
 
 const statusLabels: Record<DiffStatus, string> = {
@@ -242,6 +257,7 @@ const statusLabels: Record<DiffStatus, string> = {
   modified: 'modified',
   added: 'added',
   removed: 'removed',
+  reordered: 'reordered',
 }
 
 export function ConfigDiffModal({

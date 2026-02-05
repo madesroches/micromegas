@@ -7,7 +7,7 @@ import { LoadingState, EmptyState, RendererLayout } from './shared'
 import { QueryEditor } from '@/components/QueryEditor'
 import { useStreamQuery } from '@/hooks/useStreamQuery'
 import { useDebounce } from '@/hooks/useDebounce'
-import { useDefaultSaveCleanup } from '@/lib/url-cleanup-utils'
+import { useDefaultSaveCleanup, useExposeSaveRef } from '@/lib/url-cleanup-utils'
 import { timestampToDate } from '@/lib/arrow-utils'
 import {
   DEFAULT_TIME_RANGE,
@@ -226,12 +226,7 @@ export function LogRenderer({
   // URL params for filter state sync
   const [searchParams, setSearchParams] = useSearchParams()
   const handleSave = useDefaultSaveCleanup(onSave, setSearchParams)
-
-  // Expose wrapped save handler to parent via ref
-  useEffect(() => {
-    if (onSaveRef) { onSaveRef.current = handleSave }
-    return () => { if (onSaveRef) { onSaveRef.current = null } }
-  }, [onSaveRef, handleSave])
+  useExposeSaveRef(onSaveRef, handleSave)
 
   // Get saved values from config for detecting unsaved changes
   const savedValues = useMemo(

@@ -36,14 +36,8 @@ export interface ScreenRendererProps {
   currentValues: Record<string, string>
   /** Parent's save handler (for existing screens). Returns saved config for post-save cleanup. */
   onSave: (() => Promise<ScreenConfig>) | null
-  /** Whether save is in progress */
-  isSaving: boolean
   /** Whether there are unsaved changes */
   hasUnsavedChanges: boolean
-  /** Open save-as dialog */
-  onSaveAs: () => void
-  /** Save error message */
-  saveError: string | null
   /** Increment to trigger a refresh (re-execute query) */
   refreshTrigger: number
   /** Ref for the renderer's wrapped save handler (includes URL cleanup). Title bar calls this. */

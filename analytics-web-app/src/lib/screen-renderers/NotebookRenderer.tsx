@@ -36,7 +36,7 @@ import { Button } from '@/components/ui/button'
 import { useNotebookVariables } from './useNotebookVariables'
 import { useCellExecution } from './useCellExecution'
 import { notebookConfigsEqual, cleanupVariableParams } from './notebook-utils'
-import { cleanupTimeParams } from '@/lib/url-cleanup-utils'
+import { cleanupTimeParams, useExposeSaveRef } from '@/lib/url-cleanup-utils'
 import { DEFAULT_TIME_RANGE } from '@/lib/screen-defaults'
 
 // ============================================================================
@@ -194,18 +194,7 @@ export function NotebookRenderer({
       }
     }
   }, [onSave, setSearchParams])
-
-  // Expose wrapped save handler to parent via ref
-  useEffect(() => {
-    if (onSaveRef) {
-      onSaveRef.current = handleSave
-    }
-    return () => {
-      if (onSaveRef) {
-        onSaveRef.current = null
-      }
-    }
-  }, [onSaveRef, handleSave])
+  useExposeSaveRef(onSaveRef, handleSave)
 
   // Parse config
   const notebookConfig = useMemo(() => {

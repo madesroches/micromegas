@@ -412,10 +412,7 @@ function ScreenPageContent() {
               timeRangeLabel={parsedTimeRange.label}
               currentValues={currentValues}
               onSave={screen ? handleSave : null}
-              isSaving={isSaving}
               hasUnsavedChanges={hasUnsavedChanges}
-              onSaveAs={() => setShowSaveDialog(true)}
-              saveError={saveError}
               refreshTrigger={refreshTrigger}
               onSaveRef={saveRef}
             />

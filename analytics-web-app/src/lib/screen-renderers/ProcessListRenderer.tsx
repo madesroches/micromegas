@@ -12,7 +12,7 @@ import { CopyableProcessId } from '@/components/CopyableProcessId'
 import { formatTimestamp, formatDurationMs } from '@/lib/time-range'
 import { timestampToDate, isTimeType, isDurationType, durationToMs } from '@/lib/arrow-utils'
 import { useStreamQuery } from '@/hooks/useStreamQuery'
-import { useDefaultSaveCleanup } from '@/lib/url-cleanup-utils'
+import { useDefaultSaveCleanup, useExposeSaveRef } from '@/lib/url-cleanup-utils'
 
 // Variables available for process list queries
 const VARIABLES = [
@@ -95,12 +95,7 @@ export function ProcessListRenderer({
   const savedProcessListConfig = savedConfig as unknown as ProcessListConfig | null
   const [, setSearchParams] = useSearchParams()
   const handleSave = useDefaultSaveCleanup(onSave, setSearchParams)
-
-  // Expose wrapped save handler to parent via ref
-  useEffect(() => {
-    if (onSaveRef) { onSaveRef.current = handleSave }
-    return () => { if (onSaveRef) { onSaveRef.current = null } }
-  }, [onSaveRef, handleSave])
+  useExposeSaveRef(onSaveRef, handleSave)
 
   // Sort state from config (persisted)
   const sortColumn = processListConfig.sortColumn

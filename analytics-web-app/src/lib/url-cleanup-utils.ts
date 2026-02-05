@@ -1,4 +1,4 @@
-import { useCallback } from 'react'
+import { type MutableRefObject, useCallback, useEffect } from 'react'
 import type { SetURLSearchParams } from 'react-router-dom'
 import type { ScreenConfig } from './screens-api'
 
@@ -43,4 +43,19 @@ export function useDefaultSaveCleanup(
   }, [onSave, setSearchParams])
 
   return onSave ? wrapped : null
+}
+
+/**
+ * Exposes a renderer's wrapped save handler to the parent via a ref.
+ * The parent (title bar) calls this ref instead of the raw onSave,
+ * so URL cleanup logic in the renderer is always invoked.
+ */
+export function useExposeSaveRef(
+  onSaveRef: MutableRefObject<(() => Promise<void>) | null> | undefined,
+  handleSave: (() => Promise<void>) | null,
+): void {
+  useEffect(() => {
+    if (onSaveRef) { onSaveRef.current = handleSave ?? null }
+    return () => { if (onSaveRef) { onSaveRef.current = null } }
+  }, [onSaveRef, handleSave])
 }
