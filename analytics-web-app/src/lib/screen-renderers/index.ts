@@ -22,8 +22,6 @@ export interface ScreenRendererProps {
   ) => void
   /** Saved config from database, null if new screen - for unsaved detection */
   savedConfig: ScreenConfig | null
-  /** Set unsaved changes state (true when config differs from saved) */
-  setHasUnsavedChanges: (value: boolean) => void
   /** Time range for API queries (ISO timestamps) */
   timeRange: { begin: string; end: string }
   /** Raw time range from URL (e.g., 'now-1h', 'now') */

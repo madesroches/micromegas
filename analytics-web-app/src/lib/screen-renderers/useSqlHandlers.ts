@@ -14,18 +14,16 @@ interface SqlHandlersParams {
   savedConfig: SqlConfig | null
   /** Callback to update config */
   onConfigChange: (config: ScreenConfig) => void
-  /** Set unsaved changes state */
-  setHasUnsavedChanges: (value: boolean) => void
   /** Execute query function from useScreenQuery */
   execute: (sql: string) => void
 }
 
 interface SqlHandlers {
-  /** Run query with new SQL, update config and mark unsaved if changed */
+  /** Run query with new SQL, update config */
   handleRunQuery: (sql: string) => void
   /** Reset to saved SQL (or initial if new screen) and re-run */
   handleResetQuery: () => void
-  /** Mark unsaved when SQL changes in editor */
+  /** Update config when SQL changes in editor */
   handleSqlChange: (sql: string) => void
 }
 
@@ -35,7 +33,7 @@ interface SqlHandlers {
  * Handles:
  * - Running query with new SQL
  * - Resetting to saved SQL
- * - Tracking unsaved changes
+ * - Updating config on SQL change
  *
  * Used by MetricsRenderer and ProcessListRenderer.
  * LogRenderer has custom logic due to filter state integration.
@@ -44,18 +42,14 @@ export function useSqlHandlers({
   config,
   savedConfig,
   onConfigChange,
-  setHasUnsavedChanges,
   execute,
 }: SqlHandlersParams): SqlHandlers {
   const handleRunQuery = useCallback(
     (sql: string) => {
       onConfigChange({ ...config, sql })
-      if (savedConfig) {
-        setHasUnsavedChanges(sql !== savedConfig.sql)
-      }
       execute(sql)
     },
-    [config, savedConfig, onConfigChange, setHasUnsavedChanges, execute]
+    [config, onConfigChange, execute]
   )
 
   const handleResetQuery = useCallback(() => {
@@ -67,11 +61,8 @@ export function useSqlHandlers({
     (sql: string) => {
       // Update config immediately so Save will save the current editor content
       onConfigChange({ ...config, sql })
-      if (savedConfig) {
-        setHasUnsavedChanges(sql !== savedConfig.sql)
-      }
     },
-    [config, savedConfig, onConfigChange, setHasUnsavedChanges]
+    [config, onConfigChange]
   )
 
   return { handleRunQuery, handleResetQuery, handleSqlChange }

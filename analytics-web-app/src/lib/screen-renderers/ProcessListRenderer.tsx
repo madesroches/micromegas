@@ -82,7 +82,6 @@ export function ProcessListRenderer({
   config,
   onConfigChange,
   savedConfig,
-  setHasUnsavedChanges,
   timeRange,
   rawTimeRange,
   timeRangeLabel,
@@ -185,7 +184,6 @@ export function ProcessListRenderer({
     rawTimeRange,
     savedConfig: savedProcessListConfig,
     config: processListConfig,
-    setHasUnsavedChanges,
     onConfigChange,
   })
 
@@ -194,7 +192,6 @@ export function ProcessListRenderer({
     config: processListConfig,
     savedConfig: savedProcessListConfig,
     onConfigChange,
-    setHasUnsavedChanges,
     execute: (sql: string) => executeQuery(sql),
   })
 
@@ -223,21 +220,8 @@ export function ProcessListRenderer({
         sortColumn: newSortColumn,
         sortDirection: newSortDirection,
       })
-
-      if (savedProcessListConfig) {
-        const savedCol = savedProcessListConfig.sortColumn
-        const savedDir = savedProcessListConfig.sortDirection
-        setHasUnsavedChanges(newSortColumn !== savedCol || newSortDirection !== savedDir)
-      }
     },
-    [
-      sortColumn,
-      sortDirection,
-      processListConfig,
-      savedProcessListConfig,
-      onConfigChange,
-      setHasUnsavedChanges,
-    ]
+    [sortColumn, sortDirection, processListConfig, onConfigChange]
   )
 
   // Build currentValues with order_by for QueryEditor display

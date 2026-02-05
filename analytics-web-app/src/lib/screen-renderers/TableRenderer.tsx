@@ -41,13 +41,11 @@ export function TableRenderer({
   config,
   onConfigChange,
   savedConfig,
-  setHasUnsavedChanges,
   timeRange,
   rawTimeRange,
   timeRangeLabel,
   currentValues,
   onSave,
-  hasUnsavedChanges,
   refreshTrigger,
   onSaveRef,
 }: ScreenRendererProps) {
@@ -144,7 +142,6 @@ export function TableRenderer({
     rawTimeRange,
     savedConfig: savedTableConfig,
     config: tableConfig,
-    setHasUnsavedChanges,
     onConfigChange,
   })
 
@@ -153,7 +150,6 @@ export function TableRenderer({
     config: tableConfig,
     savedConfig: savedTableConfig,
     onConfigChange,
-    setHasUnsavedChanges,
     execute: (sql: string) => executeQuery(sql),
   })
 
@@ -162,30 +158,16 @@ export function TableRenderer({
     (columnName: string) => {
       const nextState = getNextSortState(columnName, sortColumn, sortDirection)
       onConfigChange({ ...tableConfig, ...nextState })
-
-      if (savedTableConfig) {
-        const savedCol = savedTableConfig.sortColumn
-        const savedDir = savedTableConfig.sortDirection
-        setHasUnsavedChanges(nextState.sortColumn !== savedCol || nextState.sortDirection !== savedDir)
-      }
     },
-    [sortColumn, sortDirection, tableConfig, savedTableConfig, onConfigChange, setHasUnsavedChanges]
+    [sortColumn, sortDirection, tableConfig, onConfigChange]
   )
 
   // Handle overrides change
   const handleOverridesChange = useCallback(
     (newOverrides: ColumnOverride[]) => {
       onConfigChange({ ...tableConfig, overrides: newOverrides })
-
-      if (savedTableConfig) {
-        const savedOverrides = savedTableConfig.overrides || []
-        const hasChanged = JSON.stringify(newOverrides) !== JSON.stringify(savedOverrides)
-        setHasUnsavedChanges(hasChanged || hasUnsavedChanges)
-      } else {
-        setHasUnsavedChanges(true)
-      }
     },
-    [tableConfig, savedTableConfig, onConfigChange, setHasUnsavedChanges, hasUnsavedChanges]
+    [tableConfig, onConfigChange]
   )
 
   // Get available columns from query result

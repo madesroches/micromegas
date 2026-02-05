@@ -33,7 +33,6 @@ export function MetricsRenderer({
   config,
   onConfigChange,
   savedConfig,
-  setHasUnsavedChanges,
   timeRange,
   rawTimeRange,
   onTimeRangeChange,
@@ -85,7 +84,6 @@ export function MetricsRenderer({
     rawTimeRange,
     savedConfig: savedMetricsConfig,
     config: metricsConfig,
-    setHasUnsavedChanges,
     onConfigChange,
   })
 
@@ -94,7 +92,6 @@ export function MetricsRenderer({
     config: metricsConfig,
     savedConfig: savedMetricsConfig,
     onConfigChange,
-    setHasUnsavedChanges,
     execute: query.execute,
   })
 
@@ -107,12 +104,8 @@ export function MetricsRenderer({
         metrics_options: { ...metricsConfig.metrics_options, scale_mode: mode },
       }
       onConfigChange(newConfig)
-
-      if (savedMetricsConfig) {
-        setHasUnsavedChanges(savedMetricsConfig.metrics_options?.scale_mode !== mode)
-      }
     },
-    [metricsConfig, savedMetricsConfig, onConfigChange, setHasUnsavedChanges]
+    [metricsConfig, onConfigChange]
   )
 
   // Handle chart type change - persists to config
@@ -124,12 +117,8 @@ export function MetricsRenderer({
         metrics_options: { ...metricsConfig.metrics_options, chart_type: type },
       }
       onConfigChange(newConfig)
-
-      if (savedMetricsConfig) {
-        setHasUnsavedChanges(savedMetricsConfig.metrics_options?.chart_type !== type)
-      }
     },
-    [metricsConfig, savedMetricsConfig, onConfigChange, setHasUnsavedChanges]
+    [metricsConfig, onConfigChange]
   )
 
   // Handle time range selection from chart drag

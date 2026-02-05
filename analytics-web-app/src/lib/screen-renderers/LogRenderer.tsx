@@ -211,7 +211,6 @@ export function LogRenderer({
   config,
   onConfigChange,
   savedConfig,
-  setHasUnsavedChanges,
   timeRange,
   rawTimeRange,
   timeRangeLabel,
@@ -352,16 +351,6 @@ export function LogRenderer({
 
     prevConfigRef.current = current
 
-    // Check if any value differs from saved config
-    const isUnsaved =
-      current.logLevel !== savedValues.logLevel ||
-      current.logLimit !== savedValues.logLimit ||
-      current.search !== savedValues.search ||
-      current.timeRangeFrom !== savedValues.timeRangeFrom ||
-      current.timeRangeTo !== savedValues.timeRangeTo
-
-    setHasUnsavedChanges(isUnsaved)
-
     // Update config with all tracked values + preserve sql
     onConfigChange({
       sql: sqlRef.current,
@@ -371,7 +360,7 @@ export function LogRenderer({
       timeRangeFrom: current.timeRangeFrom,
       timeRangeTo: current.timeRangeTo,
     })
-  }, [logLevel, logLimit, search, rawTimeRange, savedValues, setHasUnsavedChanges, onConfigChange])
+  }, [logLevel, logLimit, search, rawTimeRange, savedValues, onConfigChange])
 
   // Query execution - using useStreamQuery directly for filter-based re-execution
   const streamQuery = useStreamQuery()
@@ -515,12 +504,8 @@ export function LogRenderer({
         timeRangeFrom: rawTimeRange.from,
         timeRangeTo: rawTimeRange.to,
       })
-
-      if (savedLogConfig) {
-        setHasUnsavedChanges(sql !== savedLogConfig.sql)
-      }
     },
-    [savedLogConfig, setHasUnsavedChanges, onConfigChange, logLevel, logLimit, search, rawTimeRange]
+    [onConfigChange, logLevel, logLimit, search, rawTimeRange]
   )
 
   // Limit input handlers

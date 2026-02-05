@@ -60,7 +60,7 @@ function ScreenPageContent() {
   const [screenType, setScreenType] = useState<ScreenTypeName | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
-  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
+  const [baselineConfig, setBaselineConfig] = useState<ScreenConfig | null>(null)
   const [isSaving, setIsSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
 
@@ -102,6 +102,17 @@ function ScreenPageContent() {
     [searchParams, savedTimeFrom, savedTimeTo, currentTimeFrom, currentTimeTo]
   )
 
+  // Derive hasUnsavedChanges by comparing current config + time range against baseline
+  const hasUnsavedChanges = useMemo(() => {
+    if (!baselineConfig || !screenConfig) return false
+    const current = {
+      ...screenConfig,
+      timeRangeFrom: rawTimeRange.from,
+      timeRangeTo: rawTimeRange.to,
+    }
+    return JSON.stringify(current) !== JSON.stringify(baselineConfig)
+  }, [screenConfig, rawTimeRange, baselineConfig])
+
   // Compute parsed time range (for label)
   const parsedTimeRange = useMemo(() => {
     try {
@@ -127,7 +138,7 @@ function ScreenPageContent() {
     async function load() {
       setIsLoading(true)
       setLoadError(null)
-      setHasUnsavedChanges(false)
+      setBaselineConfig(null)
       setScreen(null)
 
       try {
@@ -150,6 +161,7 @@ function ScreenPageContent() {
           const loadedScreen = await getScreen(name)
           setScreen(loadedScreen)
           setScreenConfig(loadedScreen.config)
+          setBaselineConfig(loadedScreen.config)
           setScreenType(loadedScreen.screen_type as ScreenTypeName)
           setScreenTypeInfo(typeMap.get(loadedScreen.screen_type as ScreenTypeName) ?? null)
           // Note: We don't push saved time range to URL here.
@@ -214,7 +226,7 @@ function ScreenPageContent() {
       const updated = await updateScreen(screen.name, { config: configToSave })
       setScreen(updated)
       setScreenConfig(configToSave) // Keep local state in sync
-      setHasUnsavedChanges(false)
+      setBaselineConfig(configToSave)
       return configToSave
     } catch (err) {
       if (err instanceof ScreenApiError) {
@@ -405,7 +417,6 @@ function ScreenPageContent() {
               config={screenConfig}
               onConfigChange={handleScreenConfigChange}
               savedConfig={screen?.config ?? null}
-              setHasUnsavedChanges={setHasUnsavedChanges}
               timeRange={apiTimeRange}
               rawTimeRange={rawTimeRange}
               onTimeRangeChange={handleTimeRangeChange}
