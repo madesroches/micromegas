@@ -1,5 +1,5 @@
 import { render, screen, fireEvent, act } from '@testing-library/react'
-import { VariableCell } from '../VariableCell'
+import { VariableTitleBarContent } from '../VariableCell'
 import { CellRendererProps } from '../../cell-registry'
 
 // Use fake timers for debounce testing
@@ -28,15 +28,15 @@ const createMockProps = (overrides: Partial<CellRendererProps> = {}): CellRender
   ...overrides,
 })
 
-describe('VariableCell', () => {
+describe('VariableTitleBarContent', () => {
   describe('loading state', () => {
-    it('should show loading spinner when status is loading', () => {
-      render(<VariableCell {...createMockProps({ status: 'loading' })} />)
-      expect(screen.getByText('Loading options...')).toBeInTheDocument()
+    it('should show compact loading indicator when status is loading', () => {
+      render(<VariableTitleBarContent {...createMockProps({ status: 'loading' })} />)
+      expect(screen.getByText('Loading...')).toBeInTheDocument()
     })
 
     it('should not show inputs when loading', () => {
-      render(<VariableCell {...createMockProps({ status: 'loading' })} />)
+      render(<VariableTitleBarContent {...createMockProps({ status: 'loading' })} />)
       expect(screen.queryByRole('combobox')).not.toBeInTheDocument()
       expect(screen.queryByRole('textbox')).not.toBeInTheDocument()
       expect(screen.queryByRole('spinbutton')).not.toBeInTheDocument()
@@ -46,7 +46,7 @@ describe('VariableCell', () => {
   describe('combobox type', () => {
     it('should render select element for combobox type', () => {
       render(
-        <VariableCell
+        <VariableTitleBarContent
           {...createMockProps({
             variableType: 'combobox',
             variableOptions: [
@@ -61,7 +61,7 @@ describe('VariableCell', () => {
 
     it('should render all options', () => {
       render(
-        <VariableCell
+        <VariableTitleBarContent
           {...createMockProps({
             variableType: 'combobox',
             variableOptions: [
@@ -79,7 +79,7 @@ describe('VariableCell', () => {
 
     it('should show "No options available" when options are empty', () => {
       render(
-        <VariableCell
+        <VariableTitleBarContent
           {...createMockProps({
             variableType: 'combobox',
             variableOptions: [],
@@ -91,7 +91,7 @@ describe('VariableCell', () => {
 
     it('should show "No options available" when options are undefined', () => {
       render(
-        <VariableCell
+        <VariableTitleBarContent
           {...createMockProps({
             variableType: 'combobox',
             variableOptions: undefined,
@@ -103,7 +103,7 @@ describe('VariableCell', () => {
 
     it('should select the current value', () => {
       render(
-        <VariableCell
+        <VariableTitleBarContent
           {...createMockProps({
             variableType: 'combobox',
             value: 'opt2',
@@ -121,7 +121,7 @@ describe('VariableCell', () => {
     it('should call onValueChange when selection changes', () => {
       const onValueChange = jest.fn()
       render(
-        <VariableCell
+        <VariableTitleBarContent
           {...createMockProps({
             variableType: 'combobox',
             value: 'opt1',
@@ -143,18 +143,13 @@ describe('VariableCell', () => {
 
   describe('text type', () => {
     it('should render text input for text type', () => {
-      render(<VariableCell {...createMockProps({ variableType: 'text' })} />)
+      render(<VariableTitleBarContent {...createMockProps({ variableType: 'text' })} />)
       expect(screen.getByRole('textbox')).toBeInTheDocument()
-    })
-
-    it('should show placeholder text', () => {
-      render(<VariableCell {...createMockProps({ variableType: 'text' })} />)
-      expect(screen.getByPlaceholderText('Enter value...')).toBeInTheDocument()
     })
 
     it('should display current value', () => {
       render(
-        <VariableCell
+        <VariableTitleBarContent
           {...createMockProps({
             variableType: 'text',
             value: 'my text value',
@@ -165,10 +160,23 @@ describe('VariableCell', () => {
       expect(input.value).toBe('my text value')
     })
 
+    it('should handle empty value as empty string', () => {
+      render(
+        <VariableTitleBarContent
+          {...createMockProps({
+            variableType: 'text',
+            value: undefined,
+          })}
+        />
+      )
+      const input = screen.getByRole('textbox') as HTMLInputElement
+      expect(input.value).toBe('')
+    })
+
     it('should call onValueChange when text changes (debounced)', () => {
       const onValueChange = jest.fn()
       render(
-        <VariableCell
+        <VariableTitleBarContent
           {...createMockProps({
             variableType: 'text',
             onValueChange,
@@ -179,45 +187,25 @@ describe('VariableCell', () => {
       const input = screen.getByRole('textbox')
       fireEvent.change(input, { target: { value: 'new value' } })
 
-      // Value change is debounced, so it shouldn't be called immediately
       expect(onValueChange).not.toHaveBeenCalled()
 
-      // Advance timers by debounce delay (300ms)
       act(() => {
         jest.advanceTimersByTime(300)
       })
 
       expect(onValueChange).toHaveBeenCalledWith('new value')
     })
-
-    it('should handle empty value as empty string', () => {
-      render(
-        <VariableCell
-          {...createMockProps({
-            variableType: 'text',
-            value: undefined,
-          })}
-        />
-      )
-      const input = screen.getByRole('textbox') as HTMLInputElement
-      expect(input.value).toBe('')
-    })
   })
 
   describe('number type', () => {
     it('should render number input for number type', () => {
-      render(<VariableCell {...createMockProps({ variableType: 'number' })} />)
+      render(<VariableTitleBarContent {...createMockProps({ variableType: 'number' })} />)
       expect(screen.getByRole('spinbutton')).toBeInTheDocument()
-    })
-
-    it('should show placeholder', () => {
-      render(<VariableCell {...createMockProps({ variableType: 'number' })} />)
-      expect(screen.getByPlaceholderText('0')).toBeInTheDocument()
     })
 
     it('should display current numeric value', () => {
       render(
-        <VariableCell
+        <VariableTitleBarContent
           {...createMockProps({
             variableType: 'number',
             value: '42',
@@ -231,7 +219,7 @@ describe('VariableCell', () => {
     it('should call onValueChange when number changes (debounced)', () => {
       const onValueChange = jest.fn()
       render(
-        <VariableCell
+        <VariableTitleBarContent
           {...createMockProps({
             variableType: 'number',
             onValueChange,
@@ -242,10 +230,8 @@ describe('VariableCell', () => {
       const input = screen.getByRole('spinbutton')
       fireEvent.change(input, { target: { value: '100' } })
 
-      // Value change is debounced, so it shouldn't be called immediately
       expect(onValueChange).not.toHaveBeenCalled()
 
-      // Advance timers by debounce delay (300ms)
       act(() => {
         jest.advanceTimersByTime(300)
       })
@@ -256,14 +242,13 @@ describe('VariableCell', () => {
 
   describe('default behavior', () => {
     it('should default to text type when variableType is undefined', () => {
-      render(<VariableCell {...createMockProps({ variableType: undefined })} />)
-      // Should render text input (textbox role)
+      render(<VariableTitleBarContent {...createMockProps({ variableType: undefined })} />)
       expect(screen.getByRole('textbox')).toBeInTheDocument()
     })
 
     it('should handle missing onValueChange gracefully', () => {
       render(
-        <VariableCell
+        <VariableTitleBarContent
           {...createMockProps({
             variableType: 'text',
             onValueChange: undefined,
@@ -272,7 +257,6 @@ describe('VariableCell', () => {
       )
 
       const input = screen.getByRole('textbox')
-      // Should not throw when changing value
       expect(() => {
         fireEvent.change(input, { target: { value: 'test' } })
       }).not.toThrow()
