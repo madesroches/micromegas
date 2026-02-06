@@ -1,27 +1,11 @@
 import { useState, useCallback, useEffect } from 'react'
 import { AlertTriangle, Download, ExternalLink } from 'lucide-react'
 import { SplitButton } from '@/components/ui/SplitButton'
-import { fetchPerfettoTrace } from '@/lib/perfetto-trace'
+import { fetchPerfettoTrace, triggerTraceDownload } from '@/lib/perfetto-trace'
 import { openInPerfetto, PerfettoError } from '@/lib/perfetto'
 import type { CellTypeMetadata, CellRendererProps, CellEditorProps } from '../cell-registry'
 import type { PerfettoExportCellConfig, CellConfig, CellState } from '../notebook-types'
 import { getVariableString } from '../notebook-types'
-
-// =============================================================================
-// Helpers
-// =============================================================================
-
-function triggerDownload(buffer: ArrayBuffer, processId: string): void {
-  const blob = new Blob([buffer], { type: 'application/octet-stream' })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = `trace-${processId}.pb`
-  document.body.appendChild(a)
-  a.click()
-  document.body.removeChild(a)
-  URL.revokeObjectURL(url)
-}
 
 // =============================================================================
 // Renderer Component
@@ -99,7 +83,7 @@ export function PerfettoExportCell({
 
   const downloadCachedBuffer = useCallback(() => {
     if (!processId || !cachedTraceBuffer) return
-    triggerDownload(cachedTraceBuffer, processId)
+    triggerTraceDownload(cachedTraceBuffer, processId)
     setTraceError(null)
   }, [processId, cachedTraceBuffer])
 
@@ -178,7 +162,7 @@ export function PerfettoExportCell({
       setCachedTraceBuffer(buffer)
       setCachedTraceTimeRange(timeRange)
 
-      triggerDownload(buffer, processId)
+      triggerTraceDownload(buffer, processId)
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error occurred'
       setTraceError(message)

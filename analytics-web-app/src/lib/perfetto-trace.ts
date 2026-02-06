@@ -1,5 +1,17 @@
 import { streamQuery } from './arrow-stream'
 
+export function triggerTraceDownload(buffer: ArrayBuffer, processId: string): void {
+  const blob = new Blob([buffer], { type: 'application/octet-stream' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `trace-${processId}.pb`
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(url)
+}
+
 export interface FetchPerfettoTraceOptions {
   processId: string
   spanType: 'thread' | 'async' | 'both'

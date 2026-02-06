@@ -14,7 +14,7 @@ import { ChartAxisBounds } from '@/components/XYChart'
 import { MetricsChart, ScaleMode } from '@/components/MetricsChart'
 import { ThreadCoverageTimeline } from '@/components/ThreadCoverageTimeline'
 import { executeStreamQuery } from '@/lib/arrow-stream'
-import { fetchPerfettoTrace } from '@/lib/perfetto-trace'
+import { fetchPerfettoTrace, triggerTraceDownload } from '@/lib/perfetto-trace'
 import { timestampToMs } from '@/lib/arrow-utils'
 import { openInPerfetto, PerfettoError } from '@/lib/perfetto'
 import { parseTimeRange, getTimeRangeForApi } from '@/lib/time-range'
@@ -577,15 +577,7 @@ function PerformanceAnalysisContent() {
   const downloadCachedBuffer = useCallback(() => {
     if (!processId || !cachedTraceBuffer) return
 
-    const blob = new Blob([cachedTraceBuffer], { type: 'application/octet-stream' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `trace-${processId}.pb`
-    document.body.appendChild(a)
-    a.click()
-    document.body.removeChild(a)
-    URL.revokeObjectURL(url)
+    triggerTraceDownload(cachedTraceBuffer, processId)
     setTraceError(null)
   }, [processId, cachedTraceBuffer])
 
@@ -673,16 +665,7 @@ function PerformanceAnalysisContent() {
       setCachedTraceBuffer(buffer)
       setCachedTraceTimeRange(currentTimeRange)
 
-      // Trigger download
-      const blob = new Blob([buffer], { type: 'application/octet-stream' })
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `trace-${processId}.pb`
-      document.body.appendChild(a)
-      a.click()
-      document.body.removeChild(a)
-      URL.revokeObjectURL(url)
+      triggerTraceDownload(buffer, processId)
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error occurred'
       setTraceError(message)
