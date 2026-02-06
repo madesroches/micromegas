@@ -10,6 +10,8 @@ jsep.plugins.register(jsepNew)
  * Snap levels: human-friendly SQL interval strings ordered by duration.
  */
 const SNAP_LEVELS = [
+  { ms: 1, label: '1ms' },
+  { ms: 10, label: '10ms' },
   { ms: 100, label: '100ms' },
   { ms: 500, label: '500ms' },
   { ms: 1_000, label: '1s' },

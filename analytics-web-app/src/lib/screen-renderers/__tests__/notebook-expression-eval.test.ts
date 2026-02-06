@@ -1,8 +1,18 @@
 import { snapInterval, evaluateVariableExpression, ExpressionContext } from '../notebook-expression-eval'
 
 describe('snapInterval', () => {
-  it('should snap to 100ms for very small durations', () => {
-    expect(snapInterval(50)).toBe('100ms')
+  it('should snap to 1ms for very small durations', () => {
+    expect(snapInterval(0.5)).toBe('1ms')
+    expect(snapInterval(1)).toBe('1ms')
+    expect(snapInterval(5)).toBe('1ms')
+  })
+
+  it('should snap to 10ms', () => {
+    expect(snapInterval(10)).toBe('10ms')
+    expect(snapInterval(50)).toBe('10ms')
+  })
+
+  it('should snap to 100ms', () => {
     expect(snapInterval(100)).toBe('100ms')
   })
 

@@ -196,9 +196,18 @@ function VariableCellEditor({ config, onChange, variables, timeRange }: CellEdit
         </label>
         <select
           value={variableType}
-          onChange={(e) =>
-            onChange({ ...varConfig, variableType: e.target.value as 'combobox' | 'text' | 'expression' })
-          }
+          onChange={(e) => {
+            const newType = e.target.value as 'combobox' | 'text' | 'expression'
+            const updates: Partial<VariableCellConfig> = { variableType: newType }
+            // Seed expression from text default value when switching to expression
+            if (newType === 'expression' && !varConfig.expression && varConfig.defaultValue) {
+              const str = getVariableString(varConfig.defaultValue)
+              if (str) {
+                updates.expression = JSON.stringify(str)
+              }
+            }
+            onChange({ ...varConfig, ...updates })
+          }}
           className="w-full px-3 py-2 bg-app-card border border-theme-border rounded-md text-theme-text-primary text-sm focus:outline-none focus:border-accent-link"
         >
           <option value="combobox">Dropdown (from SQL)</option>
