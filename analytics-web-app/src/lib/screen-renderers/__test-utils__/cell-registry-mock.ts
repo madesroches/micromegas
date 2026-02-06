@@ -72,7 +72,7 @@ const BASE_METADATA = {
   variable: {
     label: 'Variable',
     icon: 'V',
-    description: 'User input (dropdown, text, number)',
+    description: 'User input (dropdown, text, expression)',
     showTypeBadge: true,
     defaultHeight: 60,
     canBlockDownstream: true,

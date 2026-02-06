@@ -6,7 +6,7 @@ import { Table } from 'apache-arrow'
 
 /**
  * A variable value can be:
- * - A simple string (single column variable or text/number input)
+ * - A simple string (single column variable or text input)
  * - An object mapping column names to string values (multi-column variable)
  */
 export type VariableValue = string | Record<string, string>
@@ -118,9 +118,11 @@ export interface MarkdownCellConfig extends CellConfigBase {
 
 export interface VariableCellConfig extends CellConfigBase {
   type: 'variable'
-  variableType: 'combobox' | 'text' | 'number'
+  variableType: 'combobox' | 'text' | 'expression'
   sql?: string
   defaultValue?: VariableValue
+  /** JavaScript expression for expression-type variables */
+  expression?: string
 }
 
 export interface PerfettoExportCellConfig extends CellConfigBase {
@@ -141,6 +143,8 @@ export interface CellState {
   data: Table | null
   /** For variable cells (combobox): options loaded from query */
   variableOptions?: { label: string; value: VariableValue }[]
+  /** For variable cells (expression): computed result string */
+  expressionResult?: string
 }
 
 // ============================================================================

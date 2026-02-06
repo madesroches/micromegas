@@ -193,7 +193,7 @@ export const CellContainer = forwardRef<HTMLDivElement, CellContainerProps>(func
 
         {/* Title bar content (e.g., variable inputs) */}
         {titleBarContent && (
-          <div className="flex-1 min-w-0 mx-2" onClick={(e) => e.stopPropagation()}>
+          <div className="flex-1 min-w-0 mx-2">
             {titleBarContent}
           </div>
         )}

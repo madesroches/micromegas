@@ -189,7 +189,7 @@ describe('useCellExecution', () => {
       })
     })
 
-    describe('text/number variable cells', () => {
+    describe('text variable cells', () => {
       it('should immediately succeed for text variable cells without SQL execution', async () => {
         const cells: CellConfig[] = [
           {
@@ -219,38 +219,6 @@ describe('useCellExecution', () => {
 
         expect(success).toBe(true)
         expect(result.current.cellStates['TextVar']).toEqual({ status: 'success', data: null })
-        expect(mockStreamQuery).not.toHaveBeenCalled()
-      })
-
-      it('should immediately succeed for number variable cells without SQL execution', async () => {
-        const cells: CellConfig[] = [
-          {
-            type: 'variable',
-            name: 'NumVar',
-            variableType: 'number',
-            defaultValue: '42',
-            layout: { height: 'auto' },
-          },
-        ]
-        const variableValuesRef = createVariableValuesRef()
-
-        const { result } = renderHook(() =>
-          useCellExecution({
-            cells,
-            timeRange: defaultTimeRange,
-            variableValuesRef,
-            setVariableValue: jest.fn(),
-            refreshTrigger: 0,
-          })
-        )
-
-        let success: boolean = false
-        await act(async () => {
-          success = await result.current.executeCell(0)
-        })
-
-        expect(success).toBe(true)
-        expect(result.current.cellStates['NumVar']).toEqual({ status: 'success', data: null })
         expect(mockStreamQuery).not.toHaveBeenCalled()
       })
     })

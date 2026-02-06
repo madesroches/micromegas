@@ -14,6 +14,7 @@ import { AvailableVariablesPanel } from '@/components/AvailableVariablesPanel'
 import { DocumentationLink, QUERY_GUIDE_URL } from '@/components/DocumentationLink'
 import { SyntaxEditor } from '@/components/SyntaxEditor'
 import { substituteMacros, validateMacros, DEFAULT_SQL } from '../notebook-utils'
+import { evaluateVariableExpression } from '../notebook-expression-eval'
 
 /**
  * Parse a default value string into a VariableValue.
@@ -47,7 +48,6 @@ function useVariableInput({
   variableOptions,
 }: Pick<CellRendererProps, 'value' | 'onValueChange' | 'variableType' | 'variableOptions'>) {
   const type = variableType || 'text'
-  const isTextInput = type === 'text' || type === 'number'
 
   const [localValue, setLocalValue] = useState<string | undefined>(undefined)
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -86,7 +86,7 @@ function useVariableInput({
   }
 
   const stringValue = getVariableString(value ?? '')
-  const displayValue = isTextInput
+  const displayValue = type === 'text'
     ? (localValue ?? stringValue)
     : serializeVariableValue(value ?? '')
 
@@ -144,6 +144,7 @@ export function VariableTitleBarContent(props: CellRendererProps) {
         <select
           value={displayValue}
           onChange={(e) => handleComboboxChange(e.target.value)}
+          onClick={(e) => e.stopPropagation()}
           className="w-full max-w-[300px] px-2 py-1 bg-app-card border border-theme-border rounded text-theme-text-primary text-xs focus:outline-none focus:border-accent-link"
         >
           <VariableOptions variableOptions={props.variableOptions} />
@@ -155,19 +156,16 @@ export function VariableTitleBarContent(props: CellRendererProps) {
           type="text"
           value={localValue ?? stringValue}
           onChange={(e) => handleTextChange(e.target.value)}
+          onClick={(e) => e.stopPropagation()}
           className="w-full max-w-[300px] px-2 py-1 bg-app-card border border-theme-border rounded text-theme-text-primary text-xs focus:outline-none focus:border-accent-link"
           placeholder="Enter value..."
         />
       )}
 
-      {type === 'number' && (
-        <input
-          type="number"
-          value={localValue ?? stringValue}
-          onChange={(e) => handleTextChange(e.target.value)}
-          className="w-full max-w-[200px] px-2 py-1 bg-app-card border border-theme-border rounded text-theme-text-primary text-xs focus:outline-none focus:border-accent-link"
-          placeholder="0"
-        />
+      {type === 'expression' && (
+        <span className="px-2 py-1 text-theme-text-primary text-xs font-mono">
+          {stringValue || '(not yet computed)'}
+        </span>
       )}
     </div>
   )
@@ -179,7 +177,9 @@ export function VariableTitleBarContent(props: CellRendererProps) {
 
 function VariableCellEditor({ config, onChange, variables, timeRange }: CellEditorProps) {
   const varConfig = config as VariableCellConfig
-  const isCombobox = (varConfig.variableType || 'combobox') === 'combobox'
+  const variableType = varConfig.variableType || 'combobox'
+  const isCombobox = variableType === 'combobox'
+  const isExpression = variableType === 'expression'
 
   // Validate macro references in SQL (only for combobox type)
   const validationErrors = useMemo(() => {
@@ -195,15 +195,24 @@ function VariableCellEditor({ config, onChange, variables, timeRange }: CellEdit
           Variable Type
         </label>
         <select
-          value={varConfig.variableType || 'combobox'}
-          onChange={(e) =>
-            onChange({ ...varConfig, variableType: e.target.value as 'combobox' | 'text' | 'number' })
-          }
+          value={variableType}
+          onChange={(e) => {
+            const newType = e.target.value as 'combobox' | 'text' | 'expression'
+            const updates: Partial<VariableCellConfig> = { variableType: newType }
+            // Seed expression from text default value when switching to expression
+            if (newType === 'expression' && !varConfig.expression && varConfig.defaultValue) {
+              const str = getVariableString(varConfig.defaultValue)
+              if (str) {
+                updates.expression = JSON.stringify(str)
+              }
+            }
+            onChange({ ...varConfig, ...updates })
+          }}
           className="w-full px-3 py-2 bg-app-card border border-theme-border rounded-md text-theme-text-primary text-sm focus:outline-none focus:border-accent-link"
         >
           <option value="combobox">Dropdown (from SQL)</option>
           <option value="text">Text Input</option>
-          <option value="number">Number Input</option>
+          <option value="expression">JavaScript Expression</option>
         </select>
       </div>
 
@@ -233,23 +242,57 @@ function VariableCellEditor({ config, onChange, variables, timeRange }: CellEdit
         </>
       )}
 
-      <div>
-        <label className="block text-xs font-medium text-theme-text-secondary uppercase mb-1.5">
-          Default Value
-        </label>
-        <input
-          type="text"
-          value={varConfig.defaultValue !== undefined ? getVariableString(varConfig.defaultValue) : ''}
-          onChange={(e) => {
-            const newValue = e.target.value
-            // Parse as JSON object if valid, otherwise keep as string
-            const parsed = newValue ? parseDefaultValue(newValue) : undefined
-            onChange({ ...varConfig, defaultValue: parsed })
-          }}
-          className="w-full px-3 py-2 bg-app-card border border-theme-border rounded-md text-theme-text-primary text-sm focus:outline-none focus:border-accent-link"
-          placeholder="Default value (or JSON for multi-column)"
-        />
-      </div>
+      {isExpression && (
+        <>
+          <div>
+            <label className="block text-xs font-medium text-theme-text-secondary uppercase mb-1.5">
+              Expression
+            </label>
+            <input
+              type="text"
+              value={varConfig.expression || ''}
+              onChange={(e) => onChange({ ...varConfig, expression: e.target.value })}
+              className="w-full px-3 py-2 bg-app-card border border-theme-border rounded-md text-theme-text-primary text-sm font-mono focus:outline-none focus:border-accent-link"
+              placeholder="snap_interval($duration_ms / $innerWidth)"
+            />
+          </div>
+          <div className="text-xs text-theme-text-muted space-y-1">
+            <div>
+              Bindings: <code className="text-theme-text-primary">$begin</code>, <code className="text-theme-text-primary">$end</code>,{' '}
+              <code className="text-theme-text-primary">$duration_ms</code>,{' '}
+              <code className="text-theme-text-primary">$innerWidth</code>,{' '}
+              <code className="text-theme-text-primary">$devicePixelRatio</code>,{' '}
+              upstream <code className="text-theme-text-primary">$variables</code>
+            </div>
+            <div>
+              Operations: <code className="text-theme-text-primary">snap_interval()</code>,{' '}
+              <code className="text-theme-text-primary">Math.*</code>,{' '}
+              <code className="text-theme-text-primary">new Date()</code>,{' '}
+              arithmetic (<code className="text-theme-text-primary">+ - * / %</code>)
+            </div>
+          </div>
+        </>
+      )}
+
+      {!isExpression && (
+        <div>
+          <label className="block text-xs font-medium text-theme-text-secondary uppercase mb-1.5">
+            Default Value
+          </label>
+          <input
+            type="text"
+            value={varConfig.defaultValue !== undefined ? getVariableString(varConfig.defaultValue) : ''}
+            onChange={(e) => {
+              const newValue = e.target.value
+              // Parse as JSON object if valid, otherwise keep as string
+              const parsed = newValue ? parseDefaultValue(newValue) : undefined
+              onChange({ ...varConfig, defaultValue: parsed })
+            }}
+            className="w-full px-3 py-2 bg-app-card border border-theme-border rounded-md text-theme-text-primary text-sm focus:outline-none focus:border-accent-link"
+            placeholder="Default value (or JSON for multi-column)"
+          />
+        </div>
+      )}
     </>
   )
 }
@@ -266,7 +309,7 @@ export const variableMetadata: CellTypeMetadata = {
 
   label: 'Variable',
   icon: 'V',
-  description: 'User input (dropdown, text, number)',
+  description: 'User input (dropdown, text, expression)',
   showTypeBadge: true,
   defaultHeight: 0,
 
@@ -281,7 +324,25 @@ export const variableMetadata: CellTypeMetadata = {
   execute: async (config: CellConfig, { variables, timeRange, runQuery }: CellExecutionContext) => {
     const varConfig = config as VariableCellConfig
 
-    // Only combobox variables need execution
+    // Expression variables: evaluate expression and set variable value
+    if (varConfig.variableType === 'expression') {
+      if (!varConfig.expression) {
+        return null
+      }
+      const begin = timeRange.begin
+      const end = timeRange.end
+      const result = evaluateVariableExpression(varConfig.expression, {
+        begin,
+        end,
+        durationMs: new Date(end).getTime() - new Date(begin).getTime(),
+        innerWidth: window.innerWidth,
+        devicePixelRatio: window.devicePixelRatio,
+        variables,
+      })
+      return { data: null, expressionResult: result }
+    }
+
+    // Only combobox variables need SQL execution
     if (varConfig.variableType !== 'combobox' || !varConfig.sql) {
       return null // Nothing to execute
     }
@@ -323,8 +384,18 @@ export const variableMetadata: CellTypeMetadata = {
   },
 
   // Validate current value or auto-select fallback for combobox variables
+  // For expression variables, set the computed value
   onExecutionComplete: (config: CellConfig, state: CellState, { setVariableValue, currentValue }) => {
     const varConfig = config as VariableCellConfig
+
+    // Expression variables: set the computed value
+    if (varConfig.variableType === 'expression') {
+      if (state.expressionResult !== undefined) {
+        setVariableValue(config.name, state.expressionResult)
+      }
+      return
+    }
+
     const options = state.variableOptions
 
     // Only combobox variables need validation

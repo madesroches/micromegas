@@ -37,7 +37,10 @@ export function SplitButton({
     <div className={cn('inline-flex rounded-md', className)}>
       {/* Primary button */}
       <button
-        onClick={onPrimaryClick}
+        onClick={(e) => {
+          e.stopPropagation()
+          onPrimaryClick()
+        }}
         disabled={isDisabled}
         className="flex items-center gap-2 px-4 py-2 bg-accent-link text-white rounded-l-md hover:bg-accent-link-hover disabled:bg-theme-border disabled:text-theme-text-muted disabled:cursor-not-allowed transition-colors text-sm font-medium"
       >
@@ -53,6 +56,7 @@ export function SplitButton({
       <DropdownMenu.Root>
         <DropdownMenu.Trigger asChild>
           <button
+            onClick={(e) => e.stopPropagation()}
             disabled={isDisabled}
             className="flex items-center px-2 py-2 bg-accent-link text-white rounded-r-md border-l border-accent-link-hover hover:bg-accent-link-hover disabled:bg-theme-border disabled:text-theme-text-muted disabled:cursor-not-allowed transition-colors"
             aria-label="More options"
