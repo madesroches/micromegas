@@ -1,19 +1,19 @@
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { PerfettoExportCell, perfettoExportMetadata } from '../PerfettoExportCell'
 import type { CellRendererProps } from '../../cell-registry'
-import { generateTrace } from '@/lib/api'
+import { fetchPerfettoTrace } from '@/lib/perfetto-trace'
 import { openInPerfetto } from '@/lib/perfetto'
 
-// Mock the API and Perfetto modules to prevent actual calls
-jest.mock('@/lib/api', () => ({
-  generateTrace: jest.fn(),
+// Mock the perfetto-trace and perfetto modules to prevent actual calls
+jest.mock('@/lib/perfetto-trace', () => ({
+  fetchPerfettoTrace: jest.fn(),
 }))
 
 jest.mock('@/lib/perfetto', () => ({
   openInPerfetto: jest.fn(),
 }))
 
-const mockGenerateTrace = generateTrace as jest.MockedFunction<typeof generateTrace>
+const mockFetchPerfettoTrace = fetchPerfettoTrace as jest.MockedFunction<typeof fetchPerfettoTrace>
 const mockOpenInPerfetto = openInPerfetto as jest.MockedFunction<typeof openInPerfetto>
 
 // Create minimal mock props for CellRendererProps
@@ -218,11 +218,11 @@ describe('PerfettoExportCell', () => {
 
     beforeEach(() => {
       jest.clearAllMocks()
-      mockGenerateTrace.mockResolvedValue(mockBuffer)
+      mockFetchPerfettoTrace.mockResolvedValue(mockBuffer)
       mockOpenInPerfetto.mockResolvedValue(undefined)
     })
 
-    it('should call generateTrace when clicking Open in Perfetto', async () => {
+    it('should call fetchPerfettoTrace when clicking Open in Perfetto', async () => {
       render(
         <PerfettoExportCell
           {...createMockProps({
@@ -235,15 +235,14 @@ describe('PerfettoExportCell', () => {
       fireEvent.click(screen.getByRole('button', { name: /Open in Perfetto/i }))
 
       await waitFor(() => {
-        expect(mockGenerateTrace).toHaveBeenCalledTimes(1)
-        expect(mockGenerateTrace).toHaveBeenCalledWith(
-          'abc-123',
+        expect(mockFetchPerfettoTrace).toHaveBeenCalledTimes(1)
+        expect(mockFetchPerfettoTrace).toHaveBeenCalledWith(
           expect.objectContaining({
-            include_thread_spans: true,
-            include_async_spans: true,
-          }),
-          expect.any(Function),
-          { returnBuffer: true }
+            processId: 'abc-123',
+            spanType: 'both',
+            timeRange: { begin: '2024-01-01T00:00:00Z', end: '2024-01-02T00:00:00Z' },
+            onProgress: expect.any(Function),
+          })
         )
       })
     })
@@ -262,19 +261,19 @@ describe('PerfettoExportCell', () => {
 
       // First click - should fetch
       fireEvent.click(button)
-      await waitFor(() => expect(mockGenerateTrace).toHaveBeenCalledTimes(1))
+      await waitFor(() => expect(mockFetchPerfettoTrace).toHaveBeenCalledTimes(1))
       await waitFor(() => expect(mockOpenInPerfetto).toHaveBeenCalledTimes(1))
 
       // Second click - should use cache
       fireEvent.click(button)
       await waitFor(() => expect(mockOpenInPerfetto).toHaveBeenCalledTimes(2))
 
-      // generateTrace should still only be called once (cached)
-      expect(mockGenerateTrace).toHaveBeenCalledTimes(1)
+      // fetchPerfettoTrace should still only be called once (cached)
+      expect(mockFetchPerfettoTrace).toHaveBeenCalledTimes(1)
     })
 
-    it('should show error message when generateTrace fails', async () => {
-      mockGenerateTrace.mockRejectedValue(new Error('Network error'))
+    it('should show error message when fetchPerfettoTrace fails', async () => {
+      mockFetchPerfettoTrace.mockRejectedValue(new Error('Network error'))
 
       render(
         <PerfettoExportCell
@@ -313,7 +312,7 @@ describe('PerfettoExportCell', () => {
     })
 
     it('should dismiss error when clicking Dismiss button', async () => {
-      mockGenerateTrace.mockRejectedValue(new Error('Test error'))
+      mockFetchPerfettoTrace.mockRejectedValue(new Error('Test error'))
 
       render(
         <PerfettoExportCell
