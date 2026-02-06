@@ -42,7 +42,7 @@ use micromegas_auth::{axum::auth_middleware, types::AuthProvider};
 use queries::{query_all_processes, query_nb_trace_events};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, pin::Pin, sync::Arc, time::Duration};
-use tower_http::{cors::CorsLayer, services::ServeDir};
+use tower_http::{compression::CompressionLayer, cors::CorsLayer, services::ServeDir};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -440,8 +440,8 @@ async fn main() -> Result<()> {
         ))
     };
 
-    // Add CORS layer to the router
-    let app = app.layer(cors_layer);
+    // Add compression and CORS layers to the router
+    let app = app.layer(CompressionLayer::new().gzip(true)).layer(cors_layer);
 
     let addr = format!("0.0.0.0:{}", args.port);
     println!("Analytics web server starting on {}", addr);
@@ -601,9 +601,12 @@ async fn generate_trace(
     Json(request): Json<GenerateTraceRequest>,
 ) -> ApiResult<Response<axum::body::Body>> {
     let stream = generate_trace_stream(process_id, auth_token.0, request);
+    // Disable automatic gzip compression for this endpoint.
+    // The response uses a mixed protocol (JSON progress lines then binary protobuf)
+    // that is incompatible with HTTP-level compression changing chunk boundaries.
     Response::builder()
         .header(header::CONTENT_TYPE, "application/octet-stream")
-        .header(header::TRANSFER_ENCODING, "chunked")
+        .header(header::CONTENT_ENCODING, "identity")
         .body(axum::body::Body::from_stream(stream))
         .context("failed to build streaming response")
         .map_err(ApiError::from)
@@ -676,7 +679,10 @@ fn generate_trace_stream(
             yield Ok(Bytes::from(json + "\n"));
         }
 
-        // Stream chunks directly as they arrive from FlightSQL
+        // Stream lz4-compressed chunks as they arrive from FlightSQL.
+        // Each chunk is compressed as an independent lz4 frame, prefixed with
+        // its 4-byte big-endian length. The client decompresses each frame on
+        // arrival without buffering the entire compressed payload.
         let chunk_stream = perfetto_trace_client::format_perfetto_trace_stream(
             &mut client,
             &process_id,
@@ -688,14 +694,37 @@ fn generate_trace_stream(
         while let Some(chunk_result) = chunk_stream.next().await {
             match chunk_result {
                 Ok(chunk) => {
-                    yield Ok(Bytes::from(chunk));
+                    let compressed = match lz4_compress_frame(&chunk) {
+                        Ok(c) => c,
+                        Err(e) => {
+                            error!("Failed to compress trace chunk: {e}");
+                            return;
+                        }
+                    };
+                    let mut framed = Vec::with_capacity(4 + compressed.len());
+                    framed.extend_from_slice(&(compressed.len() as u32).to_be_bytes());
+                    framed.extend_from_slice(&compressed);
+                    yield Ok(Bytes::from(framed));
                 }
                 Err(e) => {
-                    error!("Failed to generate trace chunk: {}", e);
-                    // Note: can't send error after binary data started
+                    error!("Failed to generate trace chunk: {e}");
                     return;
                 }
             }
         }
     })
+}
+
+fn lz4_compress_frame(data: &[u8]) -> std::io::Result<Vec<u8>> {
+    use std::io::Write;
+    let mut encoder = lz4::EncoderBuilder::new()
+        // Disable block checksums: lz4js has a bug where it reads block
+        // checksums before block data instead of after, causing a 4-byte
+        // shift in decompressed output.
+        .block_checksum(lz4::liblz4::BlockChecksum::NoBlockChecksum)
+        .build(Vec::new())?;
+    encoder.write_all(data)?;
+    let (compressed, result) = encoder.finish();
+    result?;
+    Ok(compressed)
 }
