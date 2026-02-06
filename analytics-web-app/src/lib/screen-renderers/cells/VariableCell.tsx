@@ -144,6 +144,7 @@ export function VariableTitleBarContent(props: CellRendererProps) {
         <select
           value={displayValue}
           onChange={(e) => handleComboboxChange(e.target.value)}
+          onClick={(e) => e.stopPropagation()}
           className="w-full max-w-[300px] px-2 py-1 bg-app-card border border-theme-border rounded text-theme-text-primary text-xs focus:outline-none focus:border-accent-link"
         >
           <VariableOptions variableOptions={props.variableOptions} />
@@ -155,6 +156,7 @@ export function VariableTitleBarContent(props: CellRendererProps) {
           type="text"
           value={localValue ?? stringValue}
           onChange={(e) => handleTextChange(e.target.value)}
+          onClick={(e) => e.stopPropagation()}
           className="w-full max-w-[300px] px-2 py-1 bg-app-card border border-theme-border rounded text-theme-text-primary text-xs focus:outline-none focus:border-accent-link"
           placeholder="Enter value..."
         />
