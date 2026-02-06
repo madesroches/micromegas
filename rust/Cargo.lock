@@ -70,7 +70,6 @@ dependencies = [
  "futures",
  "http 1.4.0",
  "jsonwebtoken",
- "lz4",
  "micromegas",
  "micromegas-auth",
  "openidconnect",

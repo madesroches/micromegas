@@ -22,7 +22,6 @@ bytes.workspace = true
 chrono.workspace = true
 clap.workspace = true
 datafusion.workspace = true
-lz4.workspace = true
 futures.workspace = true
 http.workspace = true
 micromegas-auth.workspace = true

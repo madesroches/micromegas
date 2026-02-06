@@ -601,12 +601,8 @@ async fn generate_trace(
     Json(request): Json<GenerateTraceRequest>,
 ) -> ApiResult<Response<axum::body::Body>> {
     let stream = generate_trace_stream(process_id, auth_token.0, request);
-    // Disable automatic gzip compression for this endpoint.
-    // The response uses a mixed protocol (JSON progress lines then binary protobuf)
-    // that is incompatible with HTTP-level compression changing chunk boundaries.
     Response::builder()
         .header(header::CONTENT_TYPE, "application/octet-stream")
-        .header(header::CONTENT_ENCODING, "identity")
         .body(axum::body::Body::from_stream(stream))
         .context("failed to build streaming response")
         .map_err(ApiError::from)
@@ -679,10 +675,7 @@ fn generate_trace_stream(
             yield Ok(Bytes::from(json + "\n"));
         }
 
-        // Stream lz4-compressed chunks as they arrive from FlightSQL.
-        // Each chunk is compressed as an independent lz4 frame, prefixed with
-        // its 4-byte big-endian length. The client decompresses each frame on
-        // arrival without buffering the entire compressed payload.
+        // Stream chunks directly as they arrive from FlightSQL
         let chunk_stream = perfetto_trace_client::format_perfetto_trace_stream(
             &mut client,
             &process_id,
@@ -694,17 +687,7 @@ fn generate_trace_stream(
         while let Some(chunk_result) = chunk_stream.next().await {
             match chunk_result {
                 Ok(chunk) => {
-                    let compressed = match lz4_compress_frame(&chunk) {
-                        Ok(c) => c,
-                        Err(e) => {
-                            error!("Failed to compress trace chunk: {e}");
-                            return;
-                        }
-                    };
-                    let mut framed = Vec::with_capacity(4 + compressed.len());
-                    framed.extend_from_slice(&(compressed.len() as u32).to_be_bytes());
-                    framed.extend_from_slice(&compressed);
-                    yield Ok(Bytes::from(framed));
+                    yield Ok(Bytes::from(chunk));
                 }
                 Err(e) => {
                     error!("Failed to generate trace chunk: {e}");
@@ -713,18 +696,4 @@ fn generate_trace_stream(
             }
         }
     })
-}
-
-fn lz4_compress_frame(data: &[u8]) -> std::io::Result<Vec<u8>> {
-    use std::io::Write;
-    let mut encoder = lz4::EncoderBuilder::new()
-        // Disable block checksums: lz4js has a bug where it reads block
-        // checksums before block data instead of after, causing a 4-byte
-        // shift in decompressed output.
-        .block_checksum(lz4::liblz4::BlockChecksum::NoBlockChecksum)
-        .build(Vec::new())?;
-    encoder.write_all(data)?;
-    let (compressed, result) = encoder.finish();
-    result?;
-    Ok(compressed)
 }

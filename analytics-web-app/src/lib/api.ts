@@ -1,5 +1,4 @@
 import { GenerateTraceRequest, ProgressUpdate, BinaryStartMarker } from '@/types'
-import * as lz4 from 'lz4js'
 import { getConfig } from './config'
 
 export function getApiBase(): string {
@@ -150,60 +149,26 @@ export async function generateTrace(
   }
 
   const reader = response.body.getReader()
-  const decompressedChunks: Uint8Array[] = []
+  const chunks: Uint8Array[] = []
   let progressComplete = false
-  let decompressedSize = 0
-  // Small buffer for reassembling length-prefixed lz4 frames across stream chunks
-  let frameBuf = new Uint8Array(0)
+  let bytesReceived = 0
 
-  // Parse complete length-prefixed lz4 frames from frameBuf, decompress each
-  // immediately, and discard the compressed data so only decompressed output
-  // accumulates in memory.
-  function drainFrames() {
-    let pos = 0
-    while (pos + 4 <= frameBuf.length) {
-      const frameLen =
-        (frameBuf[pos] << 24) |
-        (frameBuf[pos + 1] << 16) |
-        (frameBuf[pos + 2] << 8) |
-        frameBuf[pos + 3]
-      if (pos + 4 + frameLen > frameBuf.length) break
-      const frame = frameBuf.subarray(pos + 4, pos + 4 + frameLen)
-      const decompressed = lz4.decompress(frame) as Uint8Array<ArrayBuffer>
-      decompressedChunks.push(decompressed)
-      decompressedSize += decompressed.length
-      pos += 4 + frameLen
-    }
-    frameBuf = pos > 0 ? frameBuf.slice(pos) : frameBuf
-  }
-
-  // Find the byte offset in raw data right after the binary_start line's \n.
-  // All JSON is ASCII so byte positions match character positions for that portion.
+  // Find the byte offset right after the binary_start line's \n in raw bytes.
+  // With gzip compression, the browser may merge the binary_start JSON line
+  // and binary data into a single decompressed chunk, so we need to extract
+  // the trailing binary data rather than discarding the whole chunk.
   function findBinaryDataOffset(data: Uint8Array): number {
-    // Search for ASCII "binary_start" in raw bytes
     const marker = [0x62,0x69,0x6e,0x61,0x72,0x79,0x5f,0x73,0x74,0x61,0x72,0x74] // "binary_start"
     outer: for (let i = 0; i <= data.length - marker.length; i++) {
       for (let j = 0; j < marker.length; j++) {
         if (data[i + j] !== marker[j]) continue outer
       }
-      // Found marker, find next \n (0x0a) after it
       for (let k = i + marker.length; k < data.length; k++) {
         if (data[k] === 0x0a) return k + 1
       }
       return data.length
     }
     return -1
-  }
-
-  function appendToFrameBuf(data: Uint8Array<ArrayBufferLike>) {
-    if (frameBuf.length === 0) {
-      frameBuf = new Uint8Array(data)
-    } else {
-      const newBuf = new Uint8Array(frameBuf.length + data.length)
-      newBuf.set(frameBuf)
-      newBuf.set(data, frameBuf.length)
-      frameBuf = newBuf
-    }
   }
 
   // eslint-disable-next-line no-constant-condition
@@ -229,50 +194,49 @@ export async function generateTrace(
               // Extract any binary data trailing after the marker in this chunk
               const binaryOffset = findBinaryDataOffset(value)
               if (binaryOffset >= 0 && binaryOffset < value.length) {
-                appendToFrameBuf(value.slice(binaryOffset))
-                drainFrames()
+                const trailing = value.slice(binaryOffset)
+                chunks.push(trailing)
+                bytesReceived += trailing.length
               }
               break
             }
           } catch {
             // Not JSON, must be binary data
             progressComplete = true
-            appendToFrameBuf(value)
-            drainFrames()
+            chunks.push(value)
+            bytesReceived += value.length
             break
           }
         }
 
-        // All data from this chunk has been handled above (JSON parsed,
-        // or binary data extracted via findBinaryDataOffset / catch handler).
-        // Always skip the raw append below.
         continue
       } catch {
-        // TextDecoder failed entirely - raw binary data
+        // Not JSON, must be binary data
         progressComplete = true
       }
     }
 
     if (progressComplete) {
-      // Append to frame buffer and decompress any complete frames
-      appendToFrameBuf(value)
-      drainFrames()
+      // Collect binary chunks and track download progress
+      chunks.push(value)
+      bytesReceived += value.length
 
-      // Report download progress based on decompressed size
+      // Report download progress
       if (onProgress) {
-        const mbDecompressed = (decompressedSize / (1024 * 1024)).toFixed(1)
+        const mbReceived = (bytesReceived / (1024 * 1024)).toFixed(1)
         onProgress({
           type: 'progress',
-          message: `Downloading trace data... ${mbDecompressed} MB decompressed`
+          message: `Downloading trace data... ${mbReceived} MB received`
         })
       }
     }
   }
 
-  // Combine decompressed chunks into a single buffer
-  const combined = new Uint8Array(decompressedSize)
+  // Combine chunks into a single buffer
+  const totalLength = chunks.reduce((acc, chunk) => acc + chunk.length, 0)
+  const combined = new Uint8Array(totalLength)
   let offset = 0
-  for (const chunk of decompressedChunks) {
+  for (const chunk of chunks) {
     combined.set(chunk, offset)
     offset += chunk.length
   }
