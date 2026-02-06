@@ -11,7 +11,7 @@ Add an `expression` variable type that evaluates JavaScript in the browser. This
 
 **Example expression variable:**
 ```javascript
-snap_interval((new Date($end) - new Date($begin)) / window.innerWidth)
+snap_interval((new Date($end) - new Date($begin)) / $innerWidth)
 ```
 
 **Example SQL usage (in a query cell below):**
@@ -67,27 +67,35 @@ export function evaluateVariableExpression(
 
 **Implementation details:**
 
-1. **Standard JS library access**: Expressions use plain JavaScript. The standard library (`Date`, `Math`, `JSON`, etc.) is available. No custom wrappers — users write `new Date($end)` not `datetime($end)`. `window.innerWidth` is accessible directly as a JS global.
+1. **Allowlist-based evaluation**: Instead of `new Function()`, expressions are parsed into an AST using a lightweight parser (e.g., [`jsep`](https://github.com/EricSmekworthy/jsep) ~2KB, zero deps) and evaluated by a recursive walker that only permits allowed operations. This prevents arbitrary JS execution in shared notebooks.
 
-2. **`snap_interval()` helper**: The only custom function provided. Snaps a millisecond duration to a human-friendly SQL interval string:
+2. **Allowed operations**:
+   - Binary operators: `+`, `-`, `*`, `/`, `%`
+   - Unary operators: `-`, `+`
+   - `new Date(value)` — Date construction
+   - `Math.*` — all Math static methods and constants (`Math.round`, `Math.max`, `Math.PI`, etc.)
+   - `snap_interval(ms)` — custom helper (see below)
+   - Variable references: `$begin`, `$end`, `$innerWidth`, upstream `$variables`
+   - Numeric and string literals
+
+3. **Blocked operations** (the evaluator throws on these):
+   - Property access on anything other than `Math` (no `window`, `document`, `globalThis`)
+   - Function calls other than `Date`, `Math.*`, and `snap_interval`
+   - Assignment, template literals, arrow functions, `eval`, `Function`
+
+4. **`snap_interval()` helper**: Snaps a millisecond duration to a human-friendly SQL interval string:
    ```typescript
    function snapInterval(ms: number): string
    ```
    Snap levels: `100ms`, `500ms`, `1s`, `5s`, `15s`, `30s`, `1m`, `5m`, `15m`, `30m`, `1h`, `6h`, `1d`, `7d`, `30d`
 
-3. **Evaluation via `new Function()`**: No macro substitution — `$begin`, `$end`, and upstream variables are passed as JS variable bindings. `window.innerWidth` is available as a standard JS global (no need to pass it explicitly):
-   ```typescript
-   const paramNames = ['$begin', '$end', 'snap_interval',
-     ...Object.keys(variables).map(name => `$${name}`)]
-   const paramValues = [begin, end, snapInterval,
-     ...Object.values(variables)]
-   const fn = new Function(...paramNames,
-     `"use strict"; return (${expression})`)
-   return fn(...paramValues)
-   ```
-   `$begin` and `$end` are strings (ISO 8601), upstream variables are their `VariableValue`. Standard JS globals (`Date`, `Math`, `window`, etc.) remain accessible. This is the same trust boundary as the SQL queries the notebook author writes.
+5. **Built-in bindings**: The evaluator provides these as named values (not global object access):
+   - `$begin`, `$end` — ISO 8601 strings from the time range
+   - `$innerWidth` — `window.innerWidth` captured at execution time
+   - `snap_interval` — the snap helper function
+   - `$<name>` — upstream variable values
 
-4. **Error handling**: Let evaluation errors propagate. No fallback — if the expression is broken, the user should see the error.
+6. **Error handling**: Let evaluation errors propagate. No fallback — if the expression is broken, the user should see the error.
 
 ### Step 2: Remove `number` variable type
 
@@ -106,17 +114,16 @@ Remove the `number` variable type — it's redundant with `text`. Text variables
 Add a new variable type: `expression` (replacing `number` in the type union).
 
 - The `VariableCellConfig` type option becomes: `'combobox' | 'text' | 'expression'`
-- Expression variables don't execute SQL — they evaluate a JS expression
-- No macro substitution (`substituteMacros` is not called) — `$begin`, `$end`, and upstream variables are passed as JS bindings via `new Function()`. `window.innerWidth` is available as a standard JS global.
+- Expression variables don't execute SQL — they evaluate an expression via the allowlist-based AST evaluator
+- No macro substitution (`substituteMacros` is not called) — `$begin`, `$end`, `$innerWidth`, and upstream variables are provided as named bindings to the evaluator
 - **Key change to `execute()`:** Currently, text/number variables short-circuit with `return null` (no execution needed). Expression variables must actually run during `execute()`:
   1. Takes the cell's `expression` field (dedicated field, not `sql`)
   2. Calls `evaluateVariableExpression()` with the current context
   3. Sets the variable value to the result (so downstream cells see the computed value)
 - This means expression values are recomputed on every notebook execution, reflecting the current time range and window width
-- The editor must make clear this is **JavaScript, not SQL**, and that it runs in the browser:
-  - Label the input as "JavaScript expression" (not just "expression")
-  - Include a help link to the MDN JavaScript reference (or similar) so users know what's available
-  - Show a brief inline hint listing the available bindings (`$begin`, `$end`, `snap_interval()`, upstream `$variables`, `window.innerWidth`)
+- The editor must make clear this is **an expression, not SQL**:
+  - Label the input as "Expression"
+  - Show a brief inline hint listing the available bindings (`$begin`, `$end`, `$innerWidth`, `snap_interval()`, upstream `$variables`) and allowed operations (`Math.*`, `new Date()`, arithmetic)
 - The title bar renderer shows the computed value (read-only display)
 
 **Config shape:**
@@ -125,14 +132,14 @@ Add a new variable type: `expression` (replacing `number` in the type union).
   type: 'variable',
   name: 'time_bin_duration',
   variableType: 'expression',
-  expression: "snap_interval((new Date($end) - new Date($begin)) / window.innerWidth)",
+  expression: "snap_interval((new Date($end) - new Date($begin)) / $innerWidth)",
 }
 ```
 
 ### Step 4: Handle re-execution on window resize
 
 **Design decision:** Window resize should NOT trigger automatic re-execution. Instead:
-- The `window.innerWidth` value is captured at execution time
+- `$innerWidth` is set to `window.innerWidth` at execution time
 - When the user clicks "Run All" or triggers execution, the current width is used
 - This avoids disruptive re-execution during resize and is consistent with how `$begin`/`$end` work (changing the time range doesn't auto-execute)
 
@@ -141,23 +148,27 @@ Add a new variable type: `expression` (replacing `number` in the type union).
 **File:** `analytics-web-app/src/lib/screen-renderers/__tests__/notebook-expression-eval.test.ts` (new)
 
 Test cases:
-- Standard JS works: `new Date($end) - new Date($begin)` produces correct ms
+- Arithmetic: `$innerWidth * 2` produces correct result
+- Date arithmetic: `new Date($end) - new Date($begin)` produces correct ms
 - `Math.round()`, `Math.max()` etc. accessible in expressions
 - `snap_interval()` snaps to correct human-friendly intervals:
   - 750ms -> '500ms', 1200ms -> '1s', 8000ms -> '5s', 180000ms -> '5m', etc.
-- Full expression evaluation end-to-end
+- Full expression evaluation end-to-end with `$innerWidth`
 - Error handling: malformed expression throws
+- **Security**: property access on `window`, `document`, `globalThis` is rejected
+- **Security**: function calls other than `Date`, `Math.*`, `snap_interval` are rejected
+- **Security**: assignment expressions are rejected
 - Expression variables integrate into execution correctly
 
 ## File Change Summary
 
 | File | Change | Status |
 |------|--------|--------|
-| `notebook-expression-eval.ts` | New file: `snapInterval()` (15 snap levels), `evaluateVariableExpression()` via `new Function()` | Done |
+| `notebook-expression-eval.ts` | New file: `snapInterval()` (15 snap levels), `evaluateVariableExpression()` via allowlist-based AST evaluator (jsep + recursive walker) | **Needs update** |
 | `notebook-types.ts` | `VariableCellConfig.variableType`: `'number'` → `'expression'`, added `expression?: string` field, added `expressionResult?: string` to `CellState` | Done |
 | `cell-registry.ts` | Updated `CellRendererProps.variableType` union to match | Done |
-| `VariableCell.tsx` | Removed `number` type, added `expression` type: read-only title bar display, JS expression editor with MDN link and binding hints, `execute()` calls `evaluateVariableExpression()`, `onExecutionComplete()` sets computed value | Done |
-| `notebook-expression-eval.test.ts` | New file: 19 tests for `snapInterval` and `evaluateVariableExpression` | Done |
+| `VariableCell.tsx` | Removed `number` type, added `expression` type: read-only title bar display, expression editor with binding/operator hints, `execute()` calls `evaluateVariableExpression()`, `onExecutionComplete()` sets computed value | **Needs update** (hint text) |
+| `notebook-expression-eval.test.ts` | New file: tests for `snapInterval`, `evaluateVariableExpression`, and security rejection cases | **Needs update** |
 | `VariableCell.test.tsx` | Replaced `number` type tests with `expression` type tests | Done |
 | `useCellExecution.test.ts` | Removed `number` variable test (text test remains) | Done |
 | `NotebookRenderer.test.tsx` | Updated `createVariableCell` helper type union | Done |
@@ -173,76 +184,44 @@ Test cases:
 
 ### Trust Model
 
-Notebooks are **shared between users on the same team**. This means one user's expression code runs in every other team member's browser when they open the notebook. Unlike SQL cells — which execute on the backend constrained by database permissions — expression variables execute arbitrary JavaScript in the viewer's browser session with full access to the page context.
+Notebooks are **shared between users on the same team**. One user's expression runs in every other team member's browser when they open the notebook. Unlike SQL cells — which execute on the backend constrained by database permissions — expression variables execute client-side.
 
-**This is a stored XSS vector.** A malicious or compromised team member could craft an expression that:
-- Steals session tokens via `document.cookie` or `localStorage`
-- Makes authenticated API requests on behalf of the viewer via `fetch()`
-- Reads sensitive data from the DOM (other notebooks, user info)
-- Redirects the viewer to a phishing page
-- Installs a keylogger on the page
+### Mitigation: Allowlist-based AST evaluation
 
-SQL cells do NOT have this risk because they run server-side within database permission boundaries. Expression variables are a **new and broader trust boundary**.
+**Decision: Option B — allowlist-based evaluation with `$innerWidth` binding.**
 
-### Risks
+The current `new Function()` implementation is replaced with a `jsep` AST parser + recursive evaluator that only permits:
+- Arithmetic operators (`+`, `-`, `*`, `/`, `%`)
+- `new Date()`, `Math.*`, `snap_interval()`
+- Variable references (`$begin`, `$end`, `$innerWidth`, upstream `$variables`)
+- Numeric and string literals
 
-| Risk | Severity | Mitigation |
-|------|----------|------------|
-| **Stored XSS via expressions** | **High** | Expression JS runs in the viewer's browser with full page context. A malicious author can exfiltrate credentials, make API calls as the viewer, or manipulate the DOM. Must be sandboxed. |
-| **Session hijacking** | **High** | Expressions can read `document.cookie`, `localStorage`, and call `fetch()` to exfiltrate auth tokens to an external server. |
-| **Privilege escalation** | **Medium** | If team members have different permission levels, a lower-privileged author could craft expressions that trigger actions using a higher-privileged viewer's session. |
-| **Cross-notebook injection** | Low | Variable values from upstream cells are passed as function parameters, not string-interpolated into the expression source. This prevents upstream values from breaking out of the expression. |
-| **CSP compatibility** | Medium | `new Function()` requires `'unsafe-eval'` in the Content-Security-Policy. Verify the app's CSP allows this, or add it. Document this requirement. |
-| **Denial of service** | Low | An expression like `while(true){}` blocks the viewer's UI thread. Low severity since it only affects the tab. |
+The evaluator **rejects** any AST node that doesn't match the allowlist, including:
+- Property access on anything other than `Math` (blocks `window`, `document`, `globalThis`, `this`)
+- Function calls other than `Date`, `Math.*`, and `snap_interval`
+- Assignment, template literals, arrow functions
 
-### Recommended Mitigations
+`window.innerWidth` is **not** exposed as a global. Instead, `$innerWidth` is passed as a plain numeric binding, just like `$begin` and `$end`. This eliminates the need for any `window` object access.
 
-Choose one of the following sandboxing approaches (ordered by strength):
+### Residual Risks
 
-#### Option A: Sandboxed iframe (Recommended)
+| Risk | Severity | Notes |
+|------|----------|-------|
+| **Allowlist bypass** | Low | If the AST evaluator has a bug that lets an unexpected node type through. Mitigated by defaulting to rejection (throw on unknown node types) and security-focused tests. |
+| **Upstream variable injection** | Low | Variable values are data inputs to the evaluator, not code. A variable value of `"fetch('/steal')"` is just a string, not executed. |
+| **DoS via deep expressions** | Low | Deeply nested arithmetic could cause stack overflow. Acceptable — only affects the author's own tab, and trivially fixed by adding a depth limit if needed. |
+| **CSP** | None | No `'unsafe-eval'` required — `jsep` parses strings without `eval` or `new Function()`. |
 
-Run expressions inside a sandboxed `<iframe>` with a `null` origin:
-```html
-<iframe sandbox="allow-scripts" srcdoc="..."></iframe>
-```
-- The expression runs in an isolated origin with **no access** to the parent page's cookies, localStorage, DOM, or fetch credentials
-- Communication happens via `postMessage()` — the parent sends the variable bindings, the iframe returns the computed string
-- Slight implementation complexity but strong isolation
-- `new Function()` still works inside the iframe (the `allow-scripts` permission enables it)
+### Recommendations
 
-#### Option B: Allowlist-based evaluation
-
-Instead of `new Function()`, parse the expression into an AST and evaluate only allowed operations:
-- Arithmetic operators, `Date` construction, `Math` methods, `snap_interval()`
-- Block property access on `window`, `document`, `fetch`, `localStorage`, etc.
-- Use a lightweight expression parser (e.g., `jsep` + custom evaluator)
-- More restrictive — users can only use pre-approved functions and operators
-- Simpler security model but limits future expressiveness
-
-#### Option C: Accept the risk with auditing
-
-If the team fully trusts all members and accepts the XSS risk:
-- Log which user last modified each expression variable (audit trail)
-- Show a visual indicator that a notebook contains expression cells
-- Display expression source to the viewer before execution (consent prompt on first open)
-- This does NOT eliminate the risk — it only makes it traceable
-
-### Additional Recommendations
-
-1. **Validate CSP early**: Check whether the analytics web app currently sets a Content-Security-Policy header. If it does and `'unsafe-eval'` is absent, the feature will silently fail. Add a startup-time check or document the requirement.
-2. **Keep strict mode**: The `"use strict"` directive in the `new Function()` body is a good baseline — don't remove it.
-3. **No server-side eval**: Expressions must only ever run in the browser. Never send expression source to the backend for evaluation.
-4. **Sanitize saved expressions**: When persisting notebook configs, expression strings are stored as data (JSON string values). Ensure the save/load path does not interpret them as anything other than strings.
-5. **Audit trail**: Regardless of sandboxing approach, record which user last edited each expression variable. This makes malicious edits attributable.
-
-### Conclusion
-
-**The `new Function()` approach as currently designed is a stored XSS vulnerability** in a shared-notebook environment. SQL cells don't have this problem because they run server-side with database-level access control. Expression variables run client-side with full browser privileges of the viewing user.
-
-**Recommendation: Implement Option A (sandboxed iframe)** before shipping this feature. It preserves the full JavaScript expressiveness of the current design while isolating expressions from the viewer's session. The implementation cost is moderate — roughly one additional module to manage iframe lifecycle and `postMessage` communication.
+1. **Default-deny in the evaluator**: Throw on any unrecognized AST node type. Never silently skip.
+2. **No server-side eval**: Expressions must only ever run in the browser.
+3. **Sanitize saved expressions**: Expression strings are stored as JSON string values in the notebook config. Ensure the save/load path does not interpret them as anything other than strings.
+4. **Test the rejection cases**: Include tests that verify `document.cookie`, `fetch()`, `window.location`, assignment, and other dangerous patterns are rejected.
 
 ## Resolved Questions
 
-1. **Resize triggers re-execution?** No — width is captured at execution time via `window.innerWidth`.
+1. **Resize triggers re-execution?** No — `$innerWidth` is captured from `window.innerWidth` at execution time.
 2. **Override computed value?** Expression variables are read-only. Use a text variable for manual control.
 3. **Expression field:** Dedicated `expression` field on `VariableCellConfig`, not reusing `sql`.
+4. **Security approach?** Allowlist-based AST evaluation (Option B) with `$innerWidth` as a named binding instead of `window` object access. No `new Function()`, no `eval`, no `unsafe-eval` CSP requirement.
