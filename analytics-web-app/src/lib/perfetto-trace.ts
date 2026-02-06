@@ -29,13 +29,23 @@ export async function fetchPerfettoTrace(
 
   const chunks: Uint8Array[] = []
   let totalBytes = 0
+  let expectedChunkId = 0
 
   for await (const result of streamQuery({ sql, begin: timeRange.begin, end: timeRange.end }, signal)) {
+    if (signal?.aborted) {
+      throw new Error(signal.reason ?? 'Trace fetch aborted')
+    }
     switch (result.type) {
       case 'batch': {
+        const chunkIdCol = result.batch.getChild('chunk_id')
         const chunkDataCol = result.batch.getChild('chunk_data')
         if (!chunkDataCol) continue
         for (let i = 0; i < result.batch.numRows; i++) {
+          const chunkId = chunkIdCol?.get(i)
+          if (chunkId !== null && chunkId !== undefined && chunkId !== expectedChunkId) {
+            throw new Error(`Chunk ${chunkId} received, expected ${expectedChunkId}. Chunks may be out of order or missing!`)
+          }
+          expectedChunkId++
           const value = chunkDataCol.get(i)
           if (value) {
             const bytes = value instanceof Uint8Array ? value : new Uint8Array(value)

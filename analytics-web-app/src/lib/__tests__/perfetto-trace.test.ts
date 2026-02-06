@@ -9,10 +9,13 @@ jest.mock('../arrow-stream', () => ({
 import { streamQuery } from '../arrow-stream'
 const mockStreamQuery = streamQuery as jest.MockedFunction<typeof streamQuery>
 
-function makeBatch(data: Uint8Array): RecordBatch {
+function makeBatch(data: Uint8Array, chunkId: number = 0): RecordBatch {
   return {
     numRows: 1,
     getChild(name: string) {
+      if (name === 'chunk_id') {
+        return { get: (i: number) => i === 0 ? chunkId : null }
+      }
       if (name === 'chunk_data') {
         return { get: (i: number) => i === 0 ? data : null }
       }
@@ -38,8 +41,8 @@ describe('fetchPerfettoTrace', () => {
 
     mockStreamQuery.mockReturnValue(
       fakeStream([
-        { type: 'batch', batch: makeBatch(chunk1) },
-        { type: 'batch', batch: makeBatch(chunk2) },
+        { type: 'batch', batch: makeBatch(chunk1, 0) },
+        { type: 'batch', batch: makeBatch(chunk2, 1) },
         { type: 'done' },
       ])
     )
@@ -104,6 +107,46 @@ describe('fetchPerfettoTrace', () => {
         timeRange: { begin: '2024-01-01T00:00:00Z', end: '2024-01-02T00:00:00Z' },
       })
     ).rejects.toThrow('No trace data generated')
+  })
+
+  it('should throw on out-of-order chunks', async () => {
+    mockStreamQuery.mockReturnValue(
+      fakeStream([
+        { type: 'batch', batch: makeBatch(new Uint8Array([1]), 0) },
+        { type: 'batch', batch: makeBatch(new Uint8Array([2]), 5) },
+        { type: 'done' },
+      ])
+    )
+
+    await expect(
+      fetchPerfettoTrace({
+        processId: 'proc-1',
+        spanType: 'both',
+        timeRange: { begin: '2024-01-01T00:00:00Z', end: '2024-01-02T00:00:00Z' },
+      })
+    ).rejects.toThrow('Chunk 5 received, expected 1')
+  })
+
+  it('should abort between batches when signal is triggered', async () => {
+    const controller = new AbortController()
+
+    async function* abortingStream(): AsyncGenerator<StreamResult> {
+      yield { type: 'batch', batch: makeBatch(new Uint8Array([1]), 0) }
+      controller.abort('user cancelled')
+      yield { type: 'batch', batch: makeBatch(new Uint8Array([2]), 1) }
+      yield { type: 'done' }
+    }
+
+    mockStreamQuery.mockReturnValue(abortingStream())
+
+    await expect(
+      fetchPerfettoTrace({
+        processId: 'proc-1',
+        spanType: 'both',
+        timeRange: { begin: '2024-01-01T00:00:00Z', end: '2024-01-02T00:00:00Z' },
+        signal: controller.signal,
+      })
+    ).rejects.toThrow('user cancelled')
   })
 
   it('should forward abort signal to streamQuery', async () => {
