@@ -163,6 +163,7 @@ function PerformanceAnalysisContent() {
   const [threadCoverage, setThreadCoverage] = useState<ThreadCoverage[]>([])
   const [traceEventCount, setTraceEventCount] = useState<number | null>(null)
   const [traceEventCountLoading, setTraceEventCountLoading] = useState(false)
+  const traceAbortRef = useRef<AbortController | null>(null)
   const [isGenerating, setIsGenerating] = useState(false)
   const [traceMode, setTraceMode] = useState<'perfetto' | 'download' | null>(null)
   const [progress, setProgress] = useState<{ type: 'progress'; message: string } | null>(null)
@@ -173,6 +174,11 @@ function PerformanceAnalysisContent() {
   const [isCustomQuery, setIsCustomQuery] = useState(false)
   const [customChartData, setCustomChartData] = useState<{ time: number; value: number }[]>([])
   const [customPropertyData, setCustomPropertyData] = useState<ExtractedPropertyData>({ availableKeys: [], rawData: new Map(), errors: [] })
+
+  // Abort in-flight trace fetch on unmount
+  useEffect(() => {
+    return () => traceAbortRef.current?.abort()
+  }, [])
 
   const binInterval = useMemo(() => {
     const fromDate = new Date(apiTimeRange.begin)
@@ -589,6 +595,9 @@ function PerformanceAnalysisContent() {
       return
     }
 
+    traceAbortRef.current?.abort()
+    traceAbortRef.current = new AbortController()
+
     setIsGenerating(true)
     setTraceMode('perfetto')
     setProgress(null)
@@ -607,6 +616,7 @@ function PerformanceAnalysisContent() {
         spanType: 'both',
         timeRange: currentTimeRange,
         onProgress: (message) => setProgress({ type: 'progress', message }),
+        signal: traceAbortRef.current.signal,
       })
 
       setCachedTraceBuffer(buffer)
@@ -642,6 +652,9 @@ function PerformanceAnalysisContent() {
       return
     }
 
+    traceAbortRef.current?.abort()
+    traceAbortRef.current = new AbortController()
+
     setIsGenerating(true)
     setTraceMode('download')
     setProgress(null)
@@ -660,6 +673,7 @@ function PerformanceAnalysisContent() {
         spanType: 'both',
         timeRange: currentTimeRange,
         onProgress: (message) => setProgress({ type: 'progress', message }),
+        signal: traceAbortRef.current.signal,
       })
 
       setCachedTraceBuffer(buffer)

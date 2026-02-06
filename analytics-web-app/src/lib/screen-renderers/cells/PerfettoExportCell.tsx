@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
 import { AlertTriangle, Download, ExternalLink } from 'lucide-react'
 import { SplitButton } from '@/components/ui/SplitButton'
 import { fetchPerfettoTrace, triggerTraceDownload } from '@/lib/perfetto-trace'
@@ -22,6 +22,8 @@ export function PerfettoExportCell({
   const [progress, setProgress] = useState<{ type: 'progress'; message: string } | null>(null)
   const [traceError, setTraceError] = useState<string | null>(null)
 
+  const abortRef = useRef<AbortController | null>(null)
+
   // Cache to avoid regenerating on repeated clicks.
   // IMPORTANT: Perfetto traces can be 10-100+ MB. This cache is cleared whenever
   // processId, spanType, or timeRange changes (see useEffect below). React will
@@ -38,6 +40,11 @@ export function PerfettoExportCell({
   const variableExists = varName in variables
   const processId = processIdValue !== undefined ? getVariableString(processIdValue) : ''
   const hasProcessId = processId !== ''
+
+  // Abort in-flight fetch on unmount
+  useEffect(() => {
+    return () => abortRef.current?.abort()
+  }, [])
 
   // Clear cache when inputs change (processId, spanType, or timeRange)
   useEffect(() => {
@@ -95,6 +102,9 @@ export function PerfettoExportCell({
       return
     }
 
+    abortRef.current?.abort()
+    abortRef.current = new AbortController()
+
     setIsGenerating(true)
     setTraceMode('perfetto')
     setProgress(null)
@@ -108,6 +118,7 @@ export function PerfettoExportCell({
         spanType,
         timeRange,
         onProgress: (message) => setProgress({ type: 'progress', message }),
+        signal: abortRef.current.signal,
       })
 
       setCachedTraceBuffer(buffer)
@@ -143,6 +154,9 @@ export function PerfettoExportCell({
       return
     }
 
+    abortRef.current?.abort()
+    abortRef.current = new AbortController()
+
     setIsGenerating(true)
     setTraceMode('download')
     setProgress(null)
@@ -156,6 +170,7 @@ export function PerfettoExportCell({
         spanType,
         timeRange,
         onProgress: (message) => setProgress({ type: 'progress', message }),
+        signal: abortRef.current.signal,
       })
 
       // Cache for potential subsequent "Open in Perfetto"
