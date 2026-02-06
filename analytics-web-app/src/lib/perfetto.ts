@@ -82,7 +82,11 @@ export async function openInPerfetto(options: OpenPerfettoOptions): Promise<void
     // Ping Perfetto until we get a PONG
     const pingTimer = setInterval(() => {
       try {
-        win.postMessage('PING', PERFETTO_ORIGIN)
+        // Use '*' for PING to avoid console errors while Perfetto is
+        // still loading (origin is about:blank). PING contains no
+        // sensitive data; the PONG response is verified against
+        // PERFETTO_ORIGIN and trace data uses the strict origin.
+        win.postMessage('PING', '*')
         pingCount++
         // Update progress every 2 seconds
         if (pingCount % 40 === 0) {
