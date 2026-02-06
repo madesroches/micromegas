@@ -1,28 +1,11 @@
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
 import { AlertTriangle, Download, ExternalLink } from 'lucide-react'
 import { SplitButton } from '@/components/ui/SplitButton'
-import { generateTrace } from '@/lib/api'
+import { fetchPerfettoTrace, triggerTraceDownload } from '@/lib/perfetto-trace'
 import { openInPerfetto, PerfettoError } from '@/lib/perfetto'
 import type { CellTypeMetadata, CellRendererProps, CellEditorProps } from '../cell-registry'
 import type { PerfettoExportCellConfig, CellConfig, CellState } from '../notebook-types'
 import { getVariableString } from '../notebook-types'
-import type { GenerateTraceRequest, ProgressUpdate } from '@/types'
-
-// =============================================================================
-// Helpers
-// =============================================================================
-
-function triggerDownload(buffer: ArrayBuffer, processId: string): void {
-  const blob = new Blob([buffer], { type: 'application/octet-stream' })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = `trace-${processId}.pb`
-  document.body.appendChild(a)
-  a.click()
-  document.body.removeChild(a)
-  URL.revokeObjectURL(url)
-}
 
 // =============================================================================
 // Renderer Component
@@ -36,8 +19,10 @@ export function PerfettoExportCell({
   // Generation state
   const [isGenerating, setIsGenerating] = useState(false)
   const [traceMode, setTraceMode] = useState<'perfetto' | 'download' | null>(null)
-  const [progress, setProgress] = useState<ProgressUpdate | null>(null)
+  const [progress, setProgress] = useState<{ type: 'progress'; message: string } | null>(null)
   const [traceError, setTraceError] = useState<string | null>(null)
+
+  const abortRef = useRef<AbortController | null>(null)
 
   // Cache to avoid regenerating on repeated clicks.
   // IMPORTANT: Perfetto traces can be 10-100+ MB. This cache is cleared whenever
@@ -56,6 +41,11 @@ export function PerfettoExportCell({
   const processId = processIdValue !== undefined ? getVariableString(processIdValue) : ''
   const hasProcessId = processId !== ''
 
+  // Abort in-flight fetch on unmount
+  useEffect(() => {
+    return () => abortRef.current?.abort()
+  }, [])
+
   // Clear cache when inputs change (processId, spanType, or timeRange)
   useEffect(() => {
     setCachedTraceBuffer(null)
@@ -68,15 +58,6 @@ export function PerfettoExportCell({
     return cachedTraceTimeRange.begin === timeRange.begin &&
            cachedTraceTimeRange.end === timeRange.end
   }, [cachedTraceBuffer, cachedTraceTimeRange, timeRange])
-
-  // Build trace request based on spanType
-  const buildTraceRequest = useCallback((): GenerateTraceRequest => {
-    return {
-      include_thread_spans: spanType !== 'async',
-      include_async_spans: spanType !== 'thread',
-      time_range: timeRange,
-    }
-  }, [spanType, timeRange])
 
   const openCachedInPerfetto = useCallback(async () => {
     if (!processId || !cachedTraceBuffer || !cachedTraceTimeRange) return
@@ -109,7 +90,7 @@ export function PerfettoExportCell({
 
   const downloadCachedBuffer = useCallback(() => {
     if (!processId || !cachedTraceBuffer) return
-    triggerDownload(cachedTraceBuffer, processId)
+    triggerTraceDownload(cachedTraceBuffer, processId)
     setTraceError(null)
   }, [processId, cachedTraceBuffer])
 
@@ -121,6 +102,9 @@ export function PerfettoExportCell({
       return
     }
 
+    abortRef.current?.abort()
+    abortRef.current = new AbortController()
+
     setIsGenerating(true)
     setTraceMode('perfetto')
     setProgress(null)
@@ -129,13 +113,13 @@ export function PerfettoExportCell({
     setCachedTraceTimeRange(null)
 
     try {
-      const buffer = await generateTrace(processId, buildTraceRequest(), (update) => {
-        setProgress(update)
-      }, { returnBuffer: true })
-
-      if (!buffer) {
-        throw new Error('No trace data received')
-      }
+      const buffer = await fetchPerfettoTrace({
+        processId,
+        spanType,
+        timeRange,
+        onProgress: (message) => setProgress({ type: 'progress', message }),
+        signal: abortRef.current.signal,
+      })
 
       setCachedTraceBuffer(buffer)
       setCachedTraceTimeRange(timeRange)
@@ -170,6 +154,9 @@ export function PerfettoExportCell({
       return
     }
 
+    abortRef.current?.abort()
+    abortRef.current = new AbortController()
+
     setIsGenerating(true)
     setTraceMode('download')
     setProgress(null)
@@ -178,19 +165,19 @@ export function PerfettoExportCell({
     setCachedTraceTimeRange(null)
 
     try {
-      const buffer = await generateTrace(processId, buildTraceRequest(), (update) => {
-        setProgress(update)
-      }, { returnBuffer: true })
-
-      if (!buffer) {
-        throw new Error('No trace data received')
-      }
+      const buffer = await fetchPerfettoTrace({
+        processId,
+        spanType,
+        timeRange,
+        onProgress: (message) => setProgress({ type: 'progress', message }),
+        signal: abortRef.current.signal,
+      })
 
       // Cache for potential subsequent "Open in Perfetto"
       setCachedTraceBuffer(buffer)
       setCachedTraceTimeRange(timeRange)
 
-      triggerDownload(buffer, processId)
+      triggerTraceDownload(buffer, processId)
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error occurred'
       setTraceError(message)

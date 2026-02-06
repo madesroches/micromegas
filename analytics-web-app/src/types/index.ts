@@ -1,21 +1,3 @@
-export interface GenerateTraceRequest {
-  time_range?: {
-    begin: string;
-    end: string;
-  };
-  include_async_spans: boolean;
-  include_thread_spans: boolean;
-}
-
-export interface ProgressUpdate {
-  type: 'progress';
-  message: string;
-}
-
-export interface BinaryStartMarker {
-  type: 'binary_start';
-}
-
 export interface ThreadSegment {
   begin: number;
   end: number;

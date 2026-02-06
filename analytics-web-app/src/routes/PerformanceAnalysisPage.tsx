@@ -13,8 +13,8 @@ import { ParseErrorWarning } from '@/components/ParseErrorWarning'
 import { ChartAxisBounds } from '@/components/XYChart'
 import { MetricsChart, ScaleMode } from '@/components/MetricsChart'
 import { ThreadCoverageTimeline } from '@/components/ThreadCoverageTimeline'
-import { generateTrace } from '@/lib/api'
 import { executeStreamQuery } from '@/lib/arrow-stream'
+import { fetchPerfettoTrace, triggerTraceDownload } from '@/lib/perfetto-trace'
 import { timestampToMs } from '@/lib/arrow-utils'
 import { openInPerfetto, PerfettoError } from '@/lib/perfetto'
 import { parseTimeRange, getTimeRangeForApi } from '@/lib/time-range'
@@ -22,7 +22,7 @@ import { extractPropertiesFromRows, createPropertyTimelineGetter, ExtractedPrope
 import { useScreenConfig } from '@/hooks/useScreenConfig'
 import { usePageTitle } from '@/hooks/usePageTitle'
 import { useMetricsData } from '@/hooks/useMetricsData'
-import { GenerateTraceRequest, ProgressUpdate, ThreadCoverage } from '@/types'
+import { ThreadCoverage } from '@/types'
 import type { PerformanceAnalysisConfig } from '@/lib/screen-config'
 
 const DISCOVERY_SQL = `SELECT DISTINCT name, target, unit
@@ -163,9 +163,10 @@ function PerformanceAnalysisContent() {
   const [threadCoverage, setThreadCoverage] = useState<ThreadCoverage[]>([])
   const [traceEventCount, setTraceEventCount] = useState<number | null>(null)
   const [traceEventCountLoading, setTraceEventCountLoading] = useState(false)
+  const traceAbortRef = useRef<AbortController | null>(null)
   const [isGenerating, setIsGenerating] = useState(false)
   const [traceMode, setTraceMode] = useState<'perfetto' | 'download' | null>(null)
-  const [progress, setProgress] = useState<ProgressUpdate | null>(null)
+  const [progress, setProgress] = useState<{ type: 'progress'; message: string } | null>(null)
   const [traceError, setTraceError] = useState<string | null>(null)
   const [chartAxisBounds, setChartAxisBounds] = useState<ChartAxisBounds | null>(null)
   const [cachedTraceBuffer, setCachedTraceBuffer] = useState<ArrayBuffer | null>(null)
@@ -173,6 +174,11 @@ function PerformanceAnalysisContent() {
   const [isCustomQuery, setIsCustomQuery] = useState(false)
   const [customChartData, setCustomChartData] = useState<{ time: number; value: number }[]>([])
   const [customPropertyData, setCustomPropertyData] = useState<ExtractedPropertyData>({ availableKeys: [], rawData: new Map(), errors: [] })
+
+  // Abort in-flight trace fetch on unmount
+  useEffect(() => {
+    return () => traceAbortRef.current?.abort()
+  }, [])
 
   const binInterval = useMemo(() => {
     const fromDate = new Date(apiTimeRange.begin)
@@ -577,15 +583,7 @@ function PerformanceAnalysisContent() {
   const downloadCachedBuffer = useCallback(() => {
     if (!processId || !cachedTraceBuffer) return
 
-    const blob = new Blob([cachedTraceBuffer], { type: 'application/octet-stream' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `trace-${processId}.pb`
-    document.body.appendChild(a)
-    a.click()
-    document.body.removeChild(a)
-    URL.revokeObjectURL(url)
+    triggerTraceDownload(cachedTraceBuffer, processId)
     setTraceError(null)
   }, [processId, cachedTraceBuffer])
 
@@ -596,6 +594,9 @@ function PerformanceAnalysisContent() {
       await openCachedInPerfetto()
       return
     }
+
+    traceAbortRef.current?.abort()
+    traceAbortRef.current = new AbortController()
 
     setIsGenerating(true)
     setTraceMode('perfetto')
@@ -609,20 +610,14 @@ function PerformanceAnalysisContent() {
       end: timeRangeParsed.to.toISOString(),
     }
 
-    const request: GenerateTraceRequest = {
-      include_async_spans: true,
-      include_thread_spans: true,
-      time_range: currentTimeRange,
-    }
-
     try {
-      const buffer = await generateTrace(processId, request, (update) => {
-        setProgress(update)
-      }, { returnBuffer: true })
-
-      if (!buffer) {
-        throw new Error('No trace data received')
-      }
+      const buffer = await fetchPerfettoTrace({
+        processId,
+        spanType: 'both',
+        timeRange: currentTimeRange,
+        onProgress: (message) => setProgress({ type: 'progress', message }),
+        signal: traceAbortRef.current.signal,
+      })
 
       setCachedTraceBuffer(buffer)
       setCachedTraceTimeRange(currentTimeRange)
@@ -651,24 +646,40 @@ function PerformanceAnalysisContent() {
   const handleDownloadTrace = async () => {
     if (!processId) return
 
+    // If we have cached buffer, download it directly
+    if (canUseCachedBuffer()) {
+      downloadCachedBuffer()
+      return
+    }
+
+    traceAbortRef.current?.abort()
+    traceAbortRef.current = new AbortController()
+
     setIsGenerating(true)
     setTraceMode('download')
     setProgress(null)
     setTraceError(null)
+    setCachedTraceBuffer(null)
+    setCachedTraceTimeRange(null)
 
-    const request: GenerateTraceRequest = {
-      include_async_spans: true,
-      include_thread_spans: true,
-      time_range: {
-        begin: timeRangeParsed.from.toISOString(),
-        end: timeRangeParsed.to.toISOString(),
-      },
+    const currentTimeRange = {
+      begin: timeRangeParsed.from.toISOString(),
+      end: timeRangeParsed.to.toISOString(),
     }
 
     try {
-      await generateTrace(processId, request, (update) => {
-        setProgress(update)
+      const buffer = await fetchPerfettoTrace({
+        processId,
+        spanType: 'both',
+        timeRange: currentTimeRange,
+        onProgress: (message) => setProgress({ type: 'progress', message }),
+        signal: traceAbortRef.current.signal,
       })
+
+      setCachedTraceBuffer(buffer)
+      setCachedTraceTimeRange(currentTimeRange)
+
+      triggerTraceDownload(buffer, processId)
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error occurred'
       setTraceError(message)

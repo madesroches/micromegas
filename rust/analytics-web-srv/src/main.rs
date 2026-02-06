@@ -1,5 +1,4 @@
 mod auth;
-mod queries;
 mod screens;
 mod stream_query;
 
@@ -8,41 +7,23 @@ use anyhow::{Context, Result};
 use auth::{AuthState, AuthToken, OidcClientConfig};
 use axum::{
     Extension, Json, Router, ServiceExt,
-    extract::{Path, State},
+    extract::State,
     http::StatusCode,
     middleware,
-    response::{IntoResponse, Redirect, Response},
+    response::{IntoResponse, Redirect},
     routing::{get, post},
 };
-use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use clap::Parser;
-use datafusion::arrow::array::{Int64Array, TimestampNanosecondArray, UInt64Array};
-use futures::{Stream, StreamExt};
 use http::{HeaderValue, Method, header};
-use micromegas::analytics::{
-    dfext::{string_column_accessor::string_column_by_name, typed_column::typed_column_by_name},
-    properties::{
-        properties_column_accessor::properties_column_by_name,
-        utils::extract_properties_from_properties_column,
-    },
-    time::TimeRange,
-};
-use micromegas::client::{
-    SpanTypes,
-    flightsql_client_factory::{BearerFlightSQLClientFactory, FlightSQLClientFactory},
-    perfetto_trace_client,
-};
 use micromegas::micromegas_main;
 use micromegas::servers::axum_utils::observability_middleware;
 use micromegas::tracing::prelude::*;
-// micromegas_auth imports available if needed
 #[allow(unused_imports)]
 use micromegas_auth::{axum::auth_middleware, types::AuthProvider};
-use queries::{query_all_processes, query_nb_trace_events};
-use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, pin::Pin, sync::Arc, time::Duration};
-use tower_http::{cors::CorsLayer, services::ServeDir};
+use serde::Serialize;
+use std::sync::Arc;
+use tower_http::{compression::CompressionLayer, cors::CorsLayer, services::ServeDir};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -60,90 +41,12 @@ struct Args {
     disable_auth: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct ProcessInfo {
-    process_id: String,
-    exe: String,
-    start_time: DateTime<Utc>,
-    last_update_time: DateTime<Utc>,
-    computer: String,
-    username: String,
-    cpu_brand: String,
-    distro: String,
-    properties: HashMap<String, String>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct GenerateTraceRequest {
-    time_range: Option<TimeRangeQuery>,
-    include_async_spans: bool,
-    include_thread_spans: bool,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct TimeRangeQuery {
-    begin: DateTime<Utc>,
-    end: DateTime<Utc>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct ProgressUpdate {
-    #[serde(rename = "type")]
-    update_type: String,
-    message: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct BinaryStartMarker {
-    #[serde(rename = "type")]
-    update_type: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct TraceMetadata {
-    process_id: String,
-    estimated_size_bytes: Option<u64>,
-    span_counts: SpanCounts,
-    generation_time_estimate: Duration,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct SpanCounts {
-    thread_spans: u64,
-    async_spans: u64,
-    total: u64,
-}
-
 #[derive(Debug, Serialize)]
 struct HealthCheck {
     status: String,
     timestamp: DateTime<Utc>,
     flightsql_connected: bool,
 }
-
-type ApiResult<T> = Result<T, ApiError>;
-
-struct ApiError(anyhow::Error);
-
-impl From<anyhow::Error> for ApiError {
-    fn from(err: anyhow::Error) -> Self {
-        ApiError(err)
-    }
-}
-
-impl IntoResponse for ApiError {
-    fn into_response(self) -> Response {
-        error!("API error: {}", self.0);
-        let message = self.0.to_string();
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": message })),
-        )
-            .into_response()
-    }
-}
-
-type ProgressStream = Pin<Box<dyn Stream<Item = Result<Bytes, axum::Error>> + Send>>;
 
 /// State for serving index.html with injected runtime config
 #[derive(Clone)]
@@ -294,14 +197,6 @@ async fn main() -> Result<()> {
             &format!("{base_path}/api/query-stream"),
             post(stream_query::stream_query_handler),
         )
-        .route(
-            &format!("{base_path}/api/perfetto/{{process_id}}/info"),
-            get(get_trace_info),
-        )
-        .route(
-            &format!("{base_path}/api/perfetto/{{process_id}}/generate"),
-            post(generate_trace),
-        )
         .layer(middleware::from_fn(observability_middleware));
 
     // Apply auth middleware if enabled, otherwise inject a dummy token for no-auth mode
@@ -440,8 +335,10 @@ async fn main() -> Result<()> {
         ))
     };
 
-    // Add CORS layer to the router
-    let app = app.layer(cors_layer);
+    // Add compression and CORS layers to the router
+    let app = app
+        .layer(CompressionLayer::new().gzip(true))
+        .layer(cors_layer);
 
     let addr = format!("0.0.0.0:{}", args.port);
     println!("Analytics web server starting on {}", addr);
@@ -497,205 +394,4 @@ async fn auth_me_no_auth() -> impl IntoResponse {
 /// Stub /auth/logout endpoint for no-auth mode
 async fn auth_logout_no_auth() -> impl IntoResponse {
     StatusCode::OK
-}
-
-#[span_fn]
-async fn get_processes_internal(
-    client_factory: &BearerFlightSQLClientFactory,
-) -> Result<Vec<ProcessInfo>> {
-    let mut client = client_factory.make_client().await?;
-
-    let batches = query_all_processes(&mut client).await?;
-
-    let mut processes = Vec::new();
-
-    for batch in batches {
-        let process_ids = string_column_by_name(&batch, "process_id")?;
-        let exes = string_column_by_name(&batch, "exe")?;
-        let start_times: &TimestampNanosecondArray = typed_column_by_name(&batch, "start_time")?;
-        let last_update_times: &TimestampNanosecondArray =
-            typed_column_by_name(&batch, "last_update_time")?;
-        let computers = string_column_by_name(&batch, "computer")?;
-        let usernames = string_column_by_name(&batch, "username")?;
-        let cpu_brands = string_column_by_name(&batch, "cpu_brand")?;
-        let distros = string_column_by_name(&batch, "distro")?;
-        let properties_accessor = properties_column_by_name(&batch, "properties")?;
-
-        for row in 0..batch.num_rows() {
-            let properties =
-                extract_properties_from_properties_column(properties_accessor.as_ref(), row)?;
-
-            processes.push(ProcessInfo {
-                process_id: process_ids.value(row)?.to_string(),
-                exe: exes.value(row)?.to_string(),
-                start_time: DateTime::from_timestamp_nanos(start_times.value(row)),
-                last_update_time: DateTime::from_timestamp_nanos(last_update_times.value(row)),
-                computer: computers.value(row)?.to_string(),
-                username: usernames.value(row)?.to_string(),
-                cpu_brand: cpu_brands.value(row)?.to_string(),
-                distro: distros.value(row)?.to_string(),
-                properties,
-            });
-        }
-    }
-
-    Ok(processes)
-}
-
-async fn get_trace_info(
-    Path(process_id): Path<String>,
-    Extension(auth_token): Extension<AuthToken>,
-) -> ApiResult<Json<TraceMetadata>> {
-    let client_factory =
-        BearerFlightSQLClientFactory::new_with_client_type(auth_token.0, "web".to_string());
-    let mut client = client_factory.make_client().await?;
-
-    // Get actual trace event counts from the database
-    let mut trace_events = 0u64;
-
-    let span_batches = query_nb_trace_events(&mut client, &process_id).await?;
-
-    for batch in span_batches {
-        if batch.num_rows() > 0 {
-            trace_events = typed_column_by_name::<UInt64Array>(&batch, "trace_events")
-                .map(|arr| arr.value(0))
-                .or_else(|_| {
-                    typed_column_by_name::<Int64Array>(&batch, "trace_events")
-                        .map(|arr| arr.value(0) as u64)
-                })?;
-
-            break; // Single row result
-        }
-    }
-
-    // Calculate realistic size estimate based on actual trace event count
-    let estimated_size_bytes = Some(trace_events * 100);
-
-    // Estimate generation time based on actual trace event count
-    let generation_time_estimate = if trace_events < 1000 {
-        Duration::from_secs(2)
-    } else if trace_events < 10000 {
-        Duration::from_secs(5)
-    } else {
-        Duration::from_secs(15)
-    };
-
-    let metadata = TraceMetadata {
-        process_id: process_id.clone(),
-        estimated_size_bytes,
-        span_counts: SpanCounts {
-            thread_spans: trace_events, // All trace events are from CPU (thread) spans for now
-            async_spans: 0,             // No async span distinction yet
-            total: trace_events,
-        },
-        generation_time_estimate,
-    };
-
-    Ok(Json(metadata))
-}
-
-#[span_fn]
-async fn generate_trace(
-    Path(process_id): Path<String>,
-    Extension(auth_token): Extension<AuthToken>,
-    Json(request): Json<GenerateTraceRequest>,
-) -> ApiResult<Response<axum::body::Body>> {
-    let stream = generate_trace_stream(process_id, auth_token.0, request);
-    Response::builder()
-        .header(header::CONTENT_TYPE, "application/octet-stream")
-        .header(header::TRANSFER_ENCODING, "chunked")
-        .body(axum::body::Body::from_stream(stream))
-        .context("failed to build streaming response")
-        .map_err(ApiError::from)
-}
-
-fn generate_trace_stream(
-    process_id: String,
-    auth_token: String,
-    request: GenerateTraceRequest,
-) -> ProgressStream {
-    use async_stream::stream;
-
-    Box::pin(stream! {
-        // Send initial progress
-        let initial_progress = ProgressUpdate {
-            update_type: "progress".to_string(),
-            message: "Connecting to analytics server...".to_string()
-        };
-        if let Ok(json) = serde_json::to_string(&initial_progress) {
-            yield Ok(Bytes::from(json + "\n"));
-        }
-
-        let client_factory = BearerFlightSQLClientFactory::new_with_client_type(
-            auth_token,
-            "web".to_string(),
-        );
-
-        // Create client and compute time range
-        let mut client = match client_factory.make_client().await {
-            Ok(c) => c,
-            Err(e) => {
-                error!("Failed to create client: {}", e);
-                yield Ok(Bytes::from(format!("Error: {}", e)));
-                return;
-            }
-        };
-
-        let time_range = if let Some(range) = &request.time_range {
-            TimeRange::new(range.begin, range.end)
-        } else {
-            match get_processes_internal(&client_factory).await {
-                Ok(processes) => {
-                    match processes.iter().find(|p| p.process_id == process_id) {
-                        Some(process) => TimeRange::new(process.start_time, process.last_update_time),
-                        None => {
-                            yield Ok(Bytes::from("Error: Process not found"));
-                            return;
-                        }
-                    }
-                }
-                Err(e) => {
-                    yield Ok(Bytes::from(format!("Error: {}", e)));
-                    return;
-                }
-            }
-        };
-
-        let span_types = match (request.include_thread_spans, request.include_async_spans) {
-            (true, true) => SpanTypes::Both,
-            (true, false) => SpanTypes::Thread,
-            (false, true) => SpanTypes::Async,
-            (false, false) => SpanTypes::Thread,
-        };
-
-        // Send binary_start - data will stream as it's generated
-        let binary_marker = BinaryStartMarker {
-            update_type: "binary_start".to_string(),
-        };
-        if let Ok(json) = serde_json::to_string(&binary_marker) {
-            yield Ok(Bytes::from(json + "\n"));
-        }
-
-        // Stream chunks directly as they arrive from FlightSQL
-        let chunk_stream = perfetto_trace_client::format_perfetto_trace_stream(
-            &mut client,
-            &process_id,
-            time_range,
-            span_types,
-        );
-        tokio::pin!(chunk_stream);
-
-        while let Some(chunk_result) = chunk_stream.next().await {
-            match chunk_result {
-                Ok(chunk) => {
-                    yield Ok(Bytes::from(chunk));
-                }
-                Err(e) => {
-                    error!("Failed to generate trace chunk: {}", e);
-                    // Note: can't send error after binary data started
-                    return;
-                }
-            }
-        }
-    })
 }
