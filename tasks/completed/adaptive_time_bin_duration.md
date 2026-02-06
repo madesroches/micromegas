@@ -92,7 +92,7 @@ export interface ExpressionContext {
    ```typescript
    function snapInterval(ms: number): string
    ```
-   Snap levels: `100ms`, `500ms`, `1s`, `5s`, `15s`, `30s`, `1m`, `5m`, `15m`, `30m`, `1h`, `6h`, `1d`, `7d`, `30d`
+   Snap levels: `1ms`, `10ms`, `100ms`, `500ms`, `1s`, `5s`, `15s`, `30s`, `1m`, `5m`, `15m`, `30m`, `1h`, `6h`, `1d`, `7d`, `30d`
 
 5. **Built-in bindings**: The evaluator provides these as named values (not global object access):
    - `$begin`, `$end` — ISO 8601 strings from the time range
@@ -202,7 +202,7 @@ Test cases:
 
 - Type-check: clean
 - Lint: clean
-- Tests: 611/611 passing (28 new tests vs. previous 583)
+- Tests: 618/618 passing (35 new tests vs. previous 583)
 
 ## Security Assessment
 
