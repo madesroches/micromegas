@@ -1,4 +1,4 @@
-import { snapInterval, evaluateVariableExpression } from '../notebook-expression-eval'
+import { snapInterval, evaluateVariableExpression, ExpressionContext } from '../notebook-expression-eval'
 
 describe('snapInterval', () => {
   it('should snap to 100ms for very small durations', () => {
@@ -69,73 +69,202 @@ describe('snapInterval', () => {
 })
 
 describe('evaluateVariableExpression', () => {
-  const baseContext = {
+  const baseContext: ExpressionContext = {
     begin: '2024-01-01T00:00:00Z',
     end: '2024-01-02T00:00:00Z',
+    durationMs: 86400000,
+    innerWidth: 1920,
+    devicePixelRatio: 2,
     variables: {},
   }
 
-  it('should evaluate simple arithmetic', () => {
-    expect(evaluateVariableExpression('1 + 2', baseContext)).toBe('3')
-  })
-
-  it('should provide $begin and $end as strings', () => {
-    expect(evaluateVariableExpression('$begin', baseContext)).toBe('2024-01-01T00:00:00Z')
-    expect(evaluateVariableExpression('$end', baseContext)).toBe('2024-01-02T00:00:00Z')
-  })
-
-  it('should allow Date arithmetic with $begin and $end', () => {
-    const result = evaluateVariableExpression(
-      'new Date($end) - new Date($begin)',
-      baseContext
-    )
-    // 24 hours in ms
-    expect(result).toBe('86400000')
-  })
-
-  it('should provide snap_interval function', () => {
-    const result = evaluateVariableExpression(
-      'snap_interval(86400000)',
-      baseContext
-    )
-    expect(result).toBe('1d')
-  })
-
-  it('should evaluate the full time_bin_duration expression', () => {
-    // Mock window.innerWidth
-    Object.defineProperty(window, 'innerWidth', { value: 1920, writable: true })
-
-    const result = evaluateVariableExpression(
-      'snap_interval((new Date($end) - new Date($begin)) / window.innerWidth)',
-      baseContext
-    )
-    // 86400000ms / 1920px = 45000ms per pixel -> snaps to 30s
-    expect(result).toBe('30s')
-  })
-
-  it('should provide access to Math functions', () => {
-    expect(evaluateVariableExpression('Math.max(1, 2, 3)', baseContext)).toBe('3')
-    expect(evaluateVariableExpression('Math.round(3.7)', baseContext)).toBe('4')
-  })
-
-  it('should pass upstream variables as bindings', () => {
-    const result = evaluateVariableExpression('$myVar', {
-      ...baseContext,
-      variables: { myVar: 'hello' },
+  describe('basic expressions', () => {
+    it('should evaluate simple arithmetic', () => {
+      expect(evaluateVariableExpression('1 + 2', baseContext)).toBe('3')
     })
-    expect(result).toBe('hello')
+
+    it('should evaluate multiplication and division', () => {
+      expect(evaluateVariableExpression('10 * 3', baseContext)).toBe('30')
+      expect(evaluateVariableExpression('10 / 4', baseContext)).toBe('2.5')
+    })
+
+    it('should evaluate modulo', () => {
+      expect(evaluateVariableExpression('10 % 3', baseContext)).toBe('1')
+    })
+
+    it('should evaluate unary minus', () => {
+      expect(evaluateVariableExpression('-5', baseContext)).toBe('-5')
+    })
+
+    it('should evaluate nested arithmetic', () => {
+      expect(evaluateVariableExpression('(1 + 2) * 3', baseContext)).toBe('9')
+    })
   })
 
-  it('should convert result to string', () => {
-    expect(evaluateVariableExpression('true', baseContext)).toBe('true')
-    expect(evaluateVariableExpression('null', baseContext)).toBe('null')
+  describe('bindings', () => {
+    it('should provide $begin and $end as strings', () => {
+      expect(evaluateVariableExpression('$begin', baseContext)).toBe('2024-01-01T00:00:00Z')
+      expect(evaluateVariableExpression('$end', baseContext)).toBe('2024-01-02T00:00:00Z')
+    })
+
+    it('should provide $duration_ms', () => {
+      expect(evaluateVariableExpression('$duration_ms', baseContext)).toBe('86400000')
+    })
+
+    it('should provide $innerWidth', () => {
+      expect(evaluateVariableExpression('$innerWidth', baseContext)).toBe('1920')
+    })
+
+    it('should provide $devicePixelRatio', () => {
+      expect(evaluateVariableExpression('$devicePixelRatio', baseContext)).toBe('2')
+    })
+
+    it('should pass upstream variables as bindings', () => {
+      const result = evaluateVariableExpression('$myVar', {
+        ...baseContext,
+        variables: { myVar: 'hello' },
+      })
+      expect(result).toBe('hello')
+    })
   })
 
-  it('should throw on malformed expressions', () => {
-    expect(() => evaluateVariableExpression('if (true) {', baseContext)).toThrow()
+  describe('allowed functions', () => {
+    it('should allow Date arithmetic with $begin and $end', () => {
+      const result = evaluateVariableExpression(
+        'new Date($end) - new Date($begin)',
+        baseContext
+      )
+      expect(result).toBe('86400000')
+    })
+
+    it('should provide snap_interval function', () => {
+      expect(evaluateVariableExpression('snap_interval(86400000)', baseContext)).toBe('1d')
+    })
+
+    it('should provide access to Math methods', () => {
+      expect(evaluateVariableExpression('Math.max(1, 2, 3)', baseContext)).toBe('3')
+      expect(evaluateVariableExpression('Math.round(3.7)', baseContext)).toBe('4')
+      expect(evaluateVariableExpression('Math.floor(3.9)', baseContext)).toBe('3')
+      expect(evaluateVariableExpression('Math.abs(-5)', baseContext)).toBe('5')
+    })
+
+    it('should provide access to Math constants', () => {
+      expect(evaluateVariableExpression('Math.PI', baseContext)).toBe(String(Math.PI))
+    })
   })
 
-  it('should throw on undefined variable references', () => {
-    expect(() => evaluateVariableExpression('nonexistent', baseContext)).toThrow()
+  describe('end-to-end expressions', () => {
+    it('should evaluate the canonical time_bin_duration expression', () => {
+      const result = evaluateVariableExpression(
+        'snap_interval($duration_ms / $innerWidth)',
+        baseContext
+      )
+      // 86400000ms / 1920px = 45000ms per pixel -> snaps to 30s
+      expect(result).toBe('30s')
+    })
+
+    it('should work with devicePixelRatio', () => {
+      const result = evaluateVariableExpression(
+        'snap_interval($duration_ms / ($innerWidth * $devicePixelRatio))',
+        baseContext
+      )
+      // 86400000ms / (1920 * 2) = 22500ms per physical pixel -> snaps to 15s
+      expect(result).toBe('15s')
+    })
+  })
+
+  describe('error handling', () => {
+    it('should throw on malformed expressions', () => {
+      expect(() => evaluateVariableExpression('1 +', baseContext)).toThrow()
+    })
+
+    it('should throw on unknown identifiers', () => {
+      expect(() => evaluateVariableExpression('nonexistent', baseContext)).toThrow(/Unknown identifier/)
+    })
+  })
+
+  describe('security: blocked operations', () => {
+    it('should reject access to document', () => {
+      expect(() => evaluateVariableExpression('document', baseContext)).toThrow(/Unknown identifier/)
+    })
+
+    it('should reject access to window', () => {
+      expect(() => evaluateVariableExpression('window', baseContext)).toThrow(/Unknown identifier/)
+    })
+
+    it('should reject access to globalThis', () => {
+      expect(() => evaluateVariableExpression('globalThis', baseContext)).toThrow(/Unknown identifier/)
+    })
+
+    it('should reject unknown function calls', () => {
+      expect(() => evaluateVariableExpression('fetch("/steal")', baseContext)).toThrow(/not allowed/)
+    })
+
+    it('should reject alert', () => {
+      expect(() => evaluateVariableExpression('alert("xss")', baseContext)).toThrow(/not allowed/)
+    })
+
+    it('should reject eval', () => {
+      expect(() => evaluateVariableExpression('eval("1")', baseContext)).toThrow(/not allowed/)
+    })
+
+    it('should reject property access on non-Math objects', () => {
+      expect(() => evaluateVariableExpression('$begin.length', baseContext)).toThrow(/not allowed/)
+    })
+
+    it('should reject computed member access (bracket notation)', () => {
+      expect(() => evaluateVariableExpression('Math["constructor"]', baseContext)).toThrow(/not allowed/)
+    })
+
+    it('should reject Math.constructor', () => {
+      expect(() => evaluateVariableExpression('Math.constructor', baseContext)).toThrow(/not allowed/)
+    })
+
+    it('should reject Math.__proto__', () => {
+      expect(() => evaluateVariableExpression('Math.__proto__', baseContext)).toThrow(/not allowed/)
+    })
+
+    it('should reject Math.prototype', () => {
+      expect(() => evaluateVariableExpression('Math.prototype', baseContext)).toThrow(/not allowed/)
+    })
+
+    it('should reject new Function()', () => {
+      expect(() => evaluateVariableExpression('new Function("return 1")', baseContext)).toThrow(/Only new Date/)
+    })
+
+    it('should reject conditional expressions', () => {
+      expect(() => evaluateVariableExpression('1 ? 2 : 3', baseContext)).toThrow(/not allowed/)
+    })
+
+    it('should reject array expressions', () => {
+      expect(() => evaluateVariableExpression('[1, 2, 3]', baseContext)).toThrow(/not allowed/)
+    })
+
+    it('should reject this', () => {
+      expect(() => evaluateVariableExpression('this', baseContext)).toThrow(/not allowed/)
+    })
+
+    it('should reject bitwise operators', () => {
+      expect(() => evaluateVariableExpression('1 | 2', baseContext)).toThrow(/not allowed/)
+      expect(() => evaluateVariableExpression('1 & 2', baseContext)).toThrow(/not allowed/)
+    })
+
+    it('should reject logical operators', () => {
+      expect(() => evaluateVariableExpression('1 || 2', baseContext)).toThrow(/not allowed/)
+      expect(() => evaluateVariableExpression('1 && 2', baseContext)).toThrow(/not allowed/)
+    })
+
+    it('should reject comparison operators', () => {
+      expect(() => evaluateVariableExpression('1 > 2', baseContext)).toThrow(/not allowed/)
+      expect(() => evaluateVariableExpression('1 === 2', baseContext)).toThrow(/not allowed/)
+    })
+
+    it('should reject unary not', () => {
+      expect(() => evaluateVariableExpression('!1', baseContext)).toThrow(/not allowed/)
+    })
+
+    it('should reject typeof', () => {
+      expect(() => evaluateVariableExpression('typeof $begin', baseContext)).toThrow(/not allowed/)
+    })
   })
 })

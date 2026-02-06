@@ -235,34 +235,29 @@ function VariableCellEditor({ config, onChange, variables, timeRange }: CellEdit
         <>
           <div>
             <label className="block text-xs font-medium text-theme-text-secondary uppercase mb-1.5">
-              JavaScript Expression
+              Expression
             </label>
             <input
               type="text"
               value={varConfig.expression || ''}
               onChange={(e) => onChange({ ...varConfig, expression: e.target.value })}
               className="w-full px-3 py-2 bg-app-card border border-theme-border rounded-md text-theme-text-primary text-sm font-mono focus:outline-none focus:border-accent-link"
-              placeholder="snap_interval((new Date($end) - new Date($begin)) / window.innerWidth)"
+              placeholder="snap_interval($duration_ms / $innerWidth)"
             />
           </div>
           <div className="text-xs text-theme-text-muted space-y-1">
             <div>
-              Available bindings: <code className="text-theme-text-primary">$begin</code>, <code className="text-theme-text-primary">$end</code>,{' '}
-              <code className="text-theme-text-primary">snap_interval(ms)</code>,{' '}
-              upstream <code className="text-theme-text-primary">$variables</code>,{' '}
-              <code className="text-theme-text-primary">window.innerWidth</code>
+              Bindings: <code className="text-theme-text-primary">$begin</code>, <code className="text-theme-text-primary">$end</code>,{' '}
+              <code className="text-theme-text-primary">$duration_ms</code>,{' '}
+              <code className="text-theme-text-primary">$innerWidth</code>,{' '}
+              <code className="text-theme-text-primary">$devicePixelRatio</code>,{' '}
+              upstream <code className="text-theme-text-primary">$variables</code>
             </div>
             <div>
-              Standard JS globals (<code className="text-theme-text-primary">Date</code>,{' '}
-              <code className="text-theme-text-primary">Math</code>, etc.) are accessible.{' '}
-              <a
-                href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-accent-link hover:underline"
-              >
-                MDN JavaScript Reference
-              </a>
+              Operations: <code className="text-theme-text-primary">snap_interval()</code>,{' '}
+              <code className="text-theme-text-primary">Math.*</code>,{' '}
+              <code className="text-theme-text-primary">new Date()</code>,{' '}
+              arithmetic (<code className="text-theme-text-primary">+ - * / %</code>)
             </div>
           </div>
         </>
@@ -318,14 +313,19 @@ export const variableMetadata: CellTypeMetadata = {
   execute: async (config: CellConfig, { variables, timeRange, runQuery }: CellExecutionContext) => {
     const varConfig = config as VariableCellConfig
 
-    // Expression variables: evaluate JS expression and set variable value
+    // Expression variables: evaluate expression and set variable value
     if (varConfig.variableType === 'expression') {
       if (!varConfig.expression) {
         return null
       }
+      const begin = timeRange.begin
+      const end = timeRange.end
       const result = evaluateVariableExpression(varConfig.expression, {
-        begin: timeRange.begin,
-        end: timeRange.end,
+        begin,
+        end,
+        durationMs: new Date(end).getTime() - new Date(begin).getTime(),
+        innerWidth: window.innerWidth,
+        devicePixelRatio: window.devicePixelRatio,
         variables,
       })
       return { data: null, expressionResult: result }
