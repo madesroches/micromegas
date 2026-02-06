@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Variable Cell Editor Mockup</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #0a0a0f;
+    color: #e0e0e0;
+    padding: 32px;
+  }
+
+  h2 {
+    color: #999;
+    font-size: 13px;
+    font-weight: 400;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 24px;
+  }
+
+  .scenarios {
+    display: flex;
+    flex-direction: column;
+    gap: 48px;
+  }
+
+  /* ---- Cell chrome ---- */
+  .cell {
+    background: #16161e;
+    border: 1px solid #2a2a35;
+    border-radius: 8px;
+    max-width: 720px;
+    overflow: hidden;
+  }
+
+  .cell-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    background: #1a1a24;
+    border-bottom: 1px solid #2a2a35;
+    font-size: 12px;
+  }
+  .cell-header .cell-icon {
+    color: #ffb300;
+    font-size: 11px;
+  }
+  .cell-header .cell-name {
+    color: #e0e0e0;
+    font-weight: 500;
+  }
+  .cell-header .cell-type-badge {
+    color: #888;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-left: 4px;
+  }
+
+  /* Title bar inline control */
+  .title-bar-control {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .title-bar-control select,
+  .title-bar-control input {
+    background: #12121a;
+    border: 1px solid #2a2a35;
+    border-radius: 4px;
+    color: #e0e0e0;
+    font-size: 11px;
+    padding: 3px 8px;
+    outline: none;
+  }
+  .title-bar-control select:focus,
+  .title-bar-control input:focus {
+    border-color: #1565c0;
+  }
+  .title-bar-control input {
+    max-width: 300px;
+    width: 200px;
+  }
+  .title-bar-value {
+    color: #ffb300;
+    font-size: 11px;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    background: #1e1c14;
+    padding: 3px 8px;
+    border-radius: 4px;
+    border: 1px solid #3a3520;
+  }
+
+  /* ---- Editor panel ---- */
+  .editor {
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .field label {
+    display: block;
+    font-size: 10px;
+    font-weight: 500;
+    text-transform: uppercase;
+    color: #888;
+    margin-bottom: 6px;
+    letter-spacing: 0.04em;
+  }
+  .field select,
+  .field input[type="text"] {
+    width: 100%;
+    padding: 8px 12px;
+    background: #12121a;
+    border: 1px solid #2a2a35;
+    border-radius: 6px;
+    color: #e0e0e0;
+    font-size: 13px;
+    outline: none;
+  }
+  .field select:focus,
+  .field input[type="text"]:focus {
+    border-color: #1565c0;
+  }
+
+  /* SQL / Expression editor */
+  .code-editor {
+    width: 100%;
+    min-height: 120px;
+    padding: 10px 12px;
+    background: #12121a;
+    border: 1px solid #2a2a35;
+    border-radius: 6px;
+    color: #c8d0e0;
+    font-size: 13px;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    line-height: 1.5;
+    outline: none;
+    resize: vertical;
+    white-space: pre-wrap;
+  }
+  .code-editor:focus {
+    border-color: #1565c0;
+  }
+  .code-editor .kw { color: #c586c0; }
+  .code-editor .fn { color: #dcdcaa; }
+  .code-editor .var { color: #4ec9b0; }
+  .code-editor .str { color: #ce9178; }
+  .code-editor .num { color: #b5cea8; }
+  .code-editor .op { color: #d4d4d4; }
+  .code-editor .comment { color: #6a9955; }
+
+  /* Available variables panel */
+  .vars-panel {
+    background: #12121a;
+    border: 1px solid #2a2a35;
+    border-radius: 6px;
+    padding: 10px 12px;
+    font-size: 11px;
+  }
+  .vars-panel .vars-title {
+    color: #888;
+    text-transform: uppercase;
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    margin-bottom: 6px;
+  }
+  .vars-panel .var-item {
+    color: #4ec9b0;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    padding: 1px 0;
+  }
+  .vars-panel .var-desc {
+    color: #666;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    margin-left: 4px;
+  }
+  .vars-panel .var-group + .var-group { margin-top: 8px; }
+
+  /* Helper text */
+  .helper-text {
+    font-size: 11px;
+    color: #666;
+    line-height: 1.5;
+  }
+  .helper-text code {
+    background: #1e1e28;
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    color: #aaa;
+    font-size: 11px;
+  }
+
+  .section-divider {
+    border: none;
+    border-top: 1px solid #2a2a35;
+    margin: 8px 0;
+  }
+
+  .scenario-label {
+    font-size: 11px;
+    color: #bf360c;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-weight: 600;
+    margin-bottom: 8px;
+  }
+</style>
+</head>
+<body>
+
+<h2>Variable Cell Editor Mockup &mdash; Updated Design</h2>
+
+<div class="scenarios">
+
+  <!-- ============ COMBOBOX (unchanged) ============ -->
+  <div>
+    <div class="scenario-label">Combobox Variable (unchanged)</div>
+    <div class="cell">
+      <div class="cell-header">
+        <span class="cell-icon">&#x25C9;</span>
+        <span class="cell-name">selected_metric</span>
+        <span class="cell-type-badge">variable</span>
+        <div class="title-bar-control">
+          <select>
+            <option>cpu_usage</option>
+            <option>mem_rss</option>
+            <option>disk_io</option>
+          </select>
+        </div>
+      </div>
+      <div class="editor">
+        <div class="field">
+          <label>Variable Type</label>
+          <select>
+            <option selected>Dropdown (from SQL)</option>
+            <option>Text Input</option>
+            <option>Expression</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>SQL Query</label>
+          <div class="code-editor" contenteditable="false"><span class="kw">SELECT</span> name, unit <span class="kw">FROM</span> available_metrics <span class="kw">WHERE</span> time <span class="kw">BETWEEN</span> <span class="str">'<span class="var">$begin</span>'</span> <span class="kw">AND</span> <span class="str">'<span class="var">$end</span>'</span></div>
+        </div>
+        <div class="field">
+          <label>Default Value</label>
+          <input type="text" placeholder="Default value (or JSON for multi-column)" value='{"name":"cpu_usage","unit":"%"}'>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ TEXT (unchanged) ============ -->
+  <div>
+    <div class="scenario-label">Text Variable (unchanged)</div>
+    <div class="cell">
+      <div class="cell-header">
+        <span class="cell-icon">&#x25C9;</span>
+        <span class="cell-name">filter_pattern</span>
+        <span class="cell-type-badge">variable</span>
+        <div class="title-bar-control">
+          <input type="text" value="error%" placeholder="Enter value...">
+        </div>
+      </div>
+      <div class="editor">
+        <div class="field">
+          <label>Variable Type</label>
+          <select>
+            <option>Dropdown (from SQL)</option>
+            <option selected>Text Input</option>
+            <option>Expression</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Default Value</label>
+          <input type="text" placeholder="Default value" value="error%">
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ EXPRESSION (new) ============ -->
+  <div>
+    <div class="scenario-label">Expression Variable (new)</div>
+    <div class="cell">
+      <div class="cell-header">
+        <span class="cell-icon">&#x25C9;</span>
+        <span class="cell-name">time_bin_duration</span>
+        <span class="cell-type-badge">variable</span>
+        <div class="title-bar-control">
+          <span class="title-bar-value">5m</span>
+        </div>
+      </div>
+      <div class="editor">
+        <div class="field">
+          <label>Variable Type</label>
+          <select>
+            <option>Dropdown (from SQL)</option>
+            <option>Text Input</option>
+            <option selected>Expression</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Expression</label>
+          <div class="code-editor" contenteditable="false"><span class="fn">snap_interval</span>((<span class="kw">new</span> <span class="fn">Date</span>(<span class="var">$end</span>) - <span class="kw">new</span> <span class="fn">Date</span>(<span class="var">$begin</span>)) / <span class="var">$window_width_px</span>)</div>
+        </div>
+        <div class="vars-panel">
+          <div class="var-group">
+            <div class="vars-title">Built-in</div>
+            <div class="var-item">$begin <span class="var-desc">— start of time range</span></div>
+            <div class="var-item">$end <span class="var-desc">— end of time range</span></div>
+            <div class="var-item">$window_width_px <span class="var-desc">— viewport width in pixels</span></div>
+          </div>
+          <div class="var-group">
+            <div class="vars-title">Helpers</div>
+            <div class="var-item">snap_interval(<span class="var-desc">ms</span>) <span class="var-desc">— snap duration to human-friendly interval</span></div>
+            <div style="color:#666; font-family: inherit; padding-top: 4px; font-size: 10px;">Standard JS available: Date, Math, JSON, etc.</div>
+          </div>
+        </div>
+        <div class="field">
+          <label>Fallback Value</label>
+          <input type="text" placeholder="Used if expression fails" value="1m">
+        </div>
+        <div class="helper-text">
+          Expression is evaluated as JavaScript with controlled scope. Result is substituted as <code>$time_bin_duration</code> in downstream cells.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ EXPRESSION: different time range ============ -->
+  <div>
+    <div class="scenario-label">Expression &mdash; 24h range, 1920px wide</div>
+    <div class="cell">
+      <div class="cell-header">
+        <span class="cell-icon">&#x25C9;</span>
+        <span class="cell-name">time_bin_duration</span>
+        <span class="cell-type-badge">variable</span>
+        <div class="title-bar-control">
+          <span class="title-bar-value">1m</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div>
+    <div class="scenario-label">Expression &mdash; 7d range, 1920px wide</div>
+    <div class="cell">
+      <div class="cell-header">
+        <span class="cell-icon">&#x25C9;</span>
+        <span class="cell-name">time_bin_duration</span>
+        <span class="cell-type-badge">variable</span>
+        <div class="title-bar-control">
+          <span class="title-bar-value">5m</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div>
+    <div class="scenario-label">Expression &mdash; 30d range, 1920px wide</div>
+    <div class="cell">
+      <div class="cell-header">
+        <span class="cell-icon">&#x25C9;</span>
+        <span class="cell-name">time_bin_duration</span>
+        <span class="cell-type-badge">variable</span>
+        <div class="title-bar-control">
+          <span class="title-bar-value">30m</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+</body>
+</html>
