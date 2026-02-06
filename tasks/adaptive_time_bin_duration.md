@@ -1,6 +1,6 @@
 # Adaptive time_bin_duration Notebook Variable (was time_bin_interval)
 
-## Status: IMPLEMENTED (pending security review)
+## Status: IN PROGRESS
 
 ## Issue Reference
 - GitHub Issue: [#778](https://github.com/madesroches/micromegas/issues/778)
@@ -11,7 +11,7 @@ Add an `expression` variable type that evaluates JavaScript in the browser. This
 
 **Example expression variable:**
 ```javascript
-snap_interval((new Date($end) - new Date($begin)) / $innerWidth)
+snap_interval($duration_ms / $innerWidth)
 ```
 
 **Example SQL usage (in a query cell below):**
@@ -75,7 +75,7 @@ export function evaluateVariableExpression(
    - `new Date(value)` — Date construction
    - `Math.*` — all Math static methods and constants (`Math.round`, `Math.max`, `Math.PI`, etc.)
    - `snap_interval(ms)` — custom helper (see below)
-   - Variable references: `$begin`, `$end`, `$innerWidth`, upstream `$variables`
+   - Variable references: `$begin`, `$end`, `$duration_ms`, `$innerWidth`, `$devicePixelRatio`, upstream `$variables`
    - Numeric and string literals
 
 3. **Blocked operations** (the evaluator throws on these):
@@ -91,7 +91,9 @@ export function evaluateVariableExpression(
 
 5. **Built-in bindings**: The evaluator provides these as named values (not global object access):
    - `$begin`, `$end` — ISO 8601 strings from the time range
+   - `$duration_ms` — time range duration in milliseconds (`new Date(end) - new Date(begin)`), computed at execution time
    - `$innerWidth` — `window.innerWidth` captured at execution time
+   - `$devicePixelRatio` — `window.devicePixelRatio` captured at execution time
    - `snap_interval` — the snap helper function
    - `$<name>` — upstream variable values
 
@@ -115,7 +117,7 @@ Add a new variable type: `expression` (replacing `number` in the type union).
 
 - The `VariableCellConfig` type option becomes: `'combobox' | 'text' | 'expression'`
 - Expression variables don't execute SQL — they evaluate an expression via the allowlist-based AST evaluator
-- No macro substitution (`substituteMacros` is not called) — `$begin`, `$end`, `$innerWidth`, and upstream variables are provided as named bindings to the evaluator
+- No macro substitution (`substituteMacros` is not called) — `$begin`, `$end`, `$duration_ms`, `$innerWidth`, `$devicePixelRatio`, and upstream variables are provided as named bindings to the evaluator
 - **Key change to `execute()`:** Currently, text/number variables short-circuit with `return null` (no execution needed). Expression variables must actually run during `execute()`:
   1. Takes the cell's `expression` field (dedicated field, not `sql`)
   2. Calls `evaluateVariableExpression()` with the current context
@@ -123,7 +125,7 @@ Add a new variable type: `expression` (replacing `number` in the type union).
 - This means expression values are recomputed on every notebook execution, reflecting the current time range and window width
 - The editor must make clear this is **an expression, not SQL**:
   - Label the input as "Expression"
-  - Show a brief inline hint listing the available bindings (`$begin`, `$end`, `$innerWidth`, `snap_interval()`, upstream `$variables`) and allowed operations (`Math.*`, `new Date()`, arithmetic)
+  - Show a brief inline hint listing the available bindings (`$begin`, `$end`, `$duration_ms`, `$innerWidth`, `$devicePixelRatio`, `snap_interval()`, upstream `$variables`) and allowed operations (`Math.*`, `new Date()`, arithmetic)
 - The title bar renderer shows the computed value (read-only display)
 
 **Config shape:**
@@ -132,7 +134,7 @@ Add a new variable type: `expression` (replacing `number` in the type union).
   type: 'variable',
   name: 'time_bin_duration',
   variableType: 'expression',
-  expression: "snap_interval((new Date($end) - new Date($begin)) / $innerWidth)",
+  expression: "snap_interval($duration_ms / $innerWidth)",
 }
 ```
 
@@ -149,11 +151,13 @@ Add a new variable type: `expression` (replacing `number` in the type union).
 
 Test cases:
 - Arithmetic: `$innerWidth * 2` produces correct result
+- `$duration_ms` is correctly computed from time range
+- `$devicePixelRatio` is available as a binding
 - Date arithmetic: `new Date($end) - new Date($begin)` produces correct ms
 - `Math.round()`, `Math.max()` etc. accessible in expressions
 - `snap_interval()` snaps to correct human-friendly intervals:
   - 750ms -> '500ms', 1200ms -> '1s', 8000ms -> '5s', 180000ms -> '5m', etc.
-- Full expression evaluation end-to-end with `$innerWidth`
+- Full expression evaluation end-to-end: `snap_interval($duration_ms / $innerWidth)`
 - Error handling: malformed expression throws
 - **Security**: property access on `window`, `document`, `globalThis` is rejected
 - **Security**: function calls other than `Date`, `Math.*`, `snap_interval` are rejected
@@ -164,21 +168,79 @@ Test cases:
 
 | File | Change | Status |
 |------|--------|--------|
-| `notebook-expression-eval.ts` | New file: `snapInterval()` (15 snap levels), `evaluateVariableExpression()` via allowlist-based AST evaluator (jsep + recursive walker) | **Needs update** |
+| `notebook-expression-eval.ts` | `snapInterval()` (15 snap levels), `evaluateVariableExpression()` | **Needs rewrite** — currently uses `new Function()`, must switch to jsep AST + allowlist evaluator |
 | `notebook-types.ts` | `VariableCellConfig.variableType`: `'number'` → `'expression'`, added `expression?: string` field, added `expressionResult?: string` to `CellState` | Done |
 | `cell-registry.ts` | Updated `CellRendererProps.variableType` union to match | Done |
-| `VariableCell.tsx` | Removed `number` type, added `expression` type: read-only title bar display, expression editor with binding/operator hints, `execute()` calls `evaluateVariableExpression()`, `onExecutionComplete()` sets computed value | **Needs update** (hint text) |
-| `notebook-expression-eval.test.ts` | New file: tests for `snapInterval`, `evaluateVariableExpression`, and security rejection cases | **Needs update** |
+| `VariableCell.tsx` | Removed `number` type, added `expression` type: read-only title bar display, expression editor, `execute()` calls `evaluateVariableExpression()`, `onExecutionComplete()` sets computed value | **Needs update** — editor hint text, `$innerWidth` binding, placeholder |
+| `notebook-expression-eval.test.ts` | Tests for `snapInterval` and `evaluateVariableExpression` | **Needs update** — add `$innerWidth` tests, security rejection tests, remove tests that assume arbitrary JS access |
 | `VariableCell.test.tsx` | Replaced `number` type tests with `expression` type tests | Done |
 | `useCellExecution.test.ts` | Removed `number` variable test (text test remains) | Done |
 | `NotebookRenderer.test.tsx` | Updated `createVariableCell` helper type union | Done |
 | `cell-registry-mock.ts` | Updated variable description string | Done |
+| `package.json` | **New** — add `jsep` dependency | Todo |
 
-## Verification
+## Remaining Work
+
+### 1. Add jsep dependency
+- `yarn add jsep` in `analytics-web-app/`
+- jsep core handles: `Literal`, `Identifier`, `BinaryExpression`, `UnaryExpression`, `CallExpression`, `MemberExpression`
+- Need `@jsep-plugin/new` for `new Date()` support (`NewExpression` node type)
+
+### 2. Rewrite `evaluateVariableExpression` as AST allowlist evaluator
+Current implementation uses `new Function()` which is a stored XSS vector in shared notebooks. Replace with:
+- Parse expression string with jsep → AST
+- Recursive walker that evaluates only allowed node types
+- **Default-deny**: throw on any unrecognized node type
+
+**Allowed AST nodes:**
+| Node Type | Allowed | Notes |
+|-----------|---------|-------|
+| `Literal` | numbers, strings | No regex literals |
+| `Identifier` | Only known bindings: `$begin`, `$end`, `$duration_ms`, `$innerWidth`, `$devicePixelRatio`, `snap_interval`, upstream `$variables`, `Math` | Throw on unknown identifiers |
+| `BinaryExpression` | `+`, `-`, `*`, `/`, `%` | No bitwise, no logical, no comparison (not needed for numeric expressions) |
+| `UnaryExpression` | `-`, `+` | No `!`, `~`, `typeof`, `void`, `delete` |
+| `CallExpression` | `snap_interval(...)`, `Math.<method>(...)` | Callee must be an allowed identifier or `Math.*` member |
+| `MemberExpression` | `Math.<name>` only | Dot notation only (not computed). Block `constructor`, `__proto__`, `prototype` |
+| `NewExpression` | `new Date(...)` only | Requires `@jsep-plugin/new` |
+| Everything else | **Rejected** | `AssignmentExpression`, `ConditionalExpression`, `SequenceExpression`, `ArrowFunctionExpression`, `TemplateLiteral`, etc. |
+
+**Critical security edge cases to handle:**
+- `Math['constructor']` — computed member access → reject (only dot notation allowed)
+- `Math.constructor` — dot access to `constructor` → reject (block `constructor`, `__proto__`, `prototype` by name)
+- `Date.constructor` — not allowed (only `new Date()` construction, no property access on Date)
+- Sequence expressions `(steal(), 1+1)` — reject `SequenceExpression` node type
+- Conditional expressions `cond ? a : b` — reject (not in the allowed set, adds attack surface for no benefit)
+
+### 3. Add environment bindings
+- `evaluateVariableExpression` context gains: `innerWidth: number`, `devicePixelRatio: number`, `durationMs: number`
+- `VariableCell.tsx` `execute()` captures `window.innerWidth`, `window.devicePixelRatio`, and computes `new Date(end) - new Date(begin)` at call time
+- Available in expressions as `$innerWidth`, `$devicePixelRatio`, `$duration_ms`
+
+### 4. Update VariableCell editor hints
+- Label: "Expression" (not "JavaScript Expression" — the allowlist is a subset of JS)
+- Placeholder: `snap_interval($duration_ms / $innerWidth)`
+- Hint text: list `$begin`, `$end`, `$duration_ms`, `$innerWidth`, `$devicePixelRatio`, `snap_interval()`, `Math.*`, `new Date()`, arithmetic operators, upstream `$variables`
+- Remove MDN link (no longer arbitrary JS)
+
+### 5. Update tests
+- Add `$innerWidth`, `$devicePixelRatio`, `$duration_ms` to `baseContext`, update the full expression test
+- Remove tests that assume arbitrary JS: `'true'`, `'null'`, `nonexistent` identifier
+- Add security rejection tests:
+  - `document.cookie` → rejected (unknown identifier `document`)
+  - `fetch('/steal')` → rejected (unknown function)
+  - `window.location` → rejected (unknown identifier `window`)
+  - `this.constructor` → rejected
+  - `Math['constructor']` → rejected (computed member access)
+  - `Math.constructor` → rejected (blocked property name)
+  - `x = 1` → rejected (assignment)
+  - `(1, 2)` → rejected (sequence expression)
+
+## Verification (last passing)
 
 - Type-check: clean
 - Lint: clean
 - Tests: 583/583 passing
+- **Note**: Tests will need updating as part of remaining work above
 
 ## Security Assessment
 
@@ -193,7 +255,7 @@ Notebooks are **shared between users on the same team**. One user's expression r
 The current `new Function()` implementation is replaced with a `jsep` AST parser + recursive evaluator that only permits:
 - Arithmetic operators (`+`, `-`, `*`, `/`, `%`)
 - `new Date()`, `Math.*`, `snap_interval()`
-- Variable references (`$begin`, `$end`, `$innerWidth`, upstream `$variables`)
+- Variable references (`$begin`, `$end`, `$duration_ms`, `$innerWidth`, `$devicePixelRatio`, upstream `$variables`)
 - Numeric and string literals
 
 The evaluator **rejects** any AST node that doesn't match the allowlist, including:
@@ -224,4 +286,5 @@ The evaluator **rejects** any AST node that doesn't match the allowlist, includi
 1. **Resize triggers re-execution?** No — `$innerWidth` is captured from `window.innerWidth` at execution time.
 2. **Override computed value?** Expression variables are read-only. Use a text variable for manual control.
 3. **Expression field:** Dedicated `expression` field on `VariableCellConfig`, not reusing `sql`.
-4. **Security approach?** Allowlist-based AST evaluation (Option B) with `$innerWidth` as a named binding instead of `window` object access. No `new Function()`, no `eval`, no `unsafe-eval` CSP requirement.
+4. **Security approach?** Allowlist-based AST evaluation (Option B) with named bindings instead of global object access. No `new Function()`, no `eval`, no `unsafe-eval` CSP requirement.
+5. **Environment bindings?** `$innerWidth`, `$devicePixelRatio`, `$duration_ms` — captured at execution time. No direct `window` access.
