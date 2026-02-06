@@ -1,6 +1,7 @@
 import { render, screen, fireEvent, act } from '@testing-library/react'
-import { VariableTitleBarContent } from '../VariableCell'
+import { VariableTitleBarContent, variableMetadata } from '../VariableCell'
 import { CellRendererProps } from '../../cell-registry'
+import type { VariableCellConfig, CellState } from '../../notebook-types'
 
 // Use fake timers for debounce testing
 beforeEach(() => {
@@ -219,6 +220,97 @@ describe('VariableTitleBarContent', () => {
         />
       )
       expect(screen.getByText('(not yet computed)')).toBeInTheDocument()
+    })
+  })
+
+  describe('variableMetadata.execute (expression)', () => {
+    it('should evaluate expression and return result', async () => {
+      Object.defineProperty(window, 'innerWidth', { value: 1920, writable: true })
+      Object.defineProperty(window, 'devicePixelRatio', { value: 2, writable: true })
+
+      const config: VariableCellConfig = {
+        type: 'variable',
+        name: 'bin',
+        variableType: 'expression',
+        expression: 'snap_interval($duration_ms / $innerWidth)',
+        layout: { height: 0 },
+      }
+      const result = await variableMetadata.execute!(config, {
+        variables: {},
+        timeRange: { begin: '2024-01-01T00:00:00Z', end: '2024-01-02T00:00:00Z' },
+        runQuery: jest.fn(),
+      })
+      // 86400000 / 1920 = 45000 -> snaps to 30s
+      expect(result).toEqual({ data: null, expressionResult: '30s' })
+    })
+
+    it('should return null when expression is empty', async () => {
+      const config: VariableCellConfig = {
+        type: 'variable',
+        name: 'bin',
+        variableType: 'expression',
+        expression: '',
+        layout: { height: 0 },
+      }
+      const result = await variableMetadata.execute!(config, {
+        variables: {},
+        timeRange: { begin: '2024-01-01T00:00:00Z', end: '2024-01-02T00:00:00Z' },
+        runQuery: jest.fn(),
+      })
+      expect(result).toBeNull()
+    })
+
+    it('should pass upstream variables to expression context', async () => {
+      Object.defineProperty(window, 'innerWidth', { value: 1920, writable: true })
+      Object.defineProperty(window, 'devicePixelRatio', { value: 1, writable: true })
+
+      const config: VariableCellConfig = {
+        type: 'variable',
+        name: 'result',
+        variableType: 'expression',
+        expression: '$myVar',
+        layout: { height: 0 },
+      }
+      const result = await variableMetadata.execute!(config, {
+        variables: { myVar: 'hello' },
+        timeRange: { begin: '2024-01-01T00:00:00Z', end: '2024-01-02T00:00:00Z' },
+        runQuery: jest.fn(),
+      })
+      expect(result).toEqual({ data: null, expressionResult: 'hello' })
+    })
+  })
+
+  describe('variableMetadata.onExecutionComplete (expression)', () => {
+    it('should set variable value from expression result', () => {
+      const setVariableValue = jest.fn()
+      const config: VariableCellConfig = {
+        type: 'variable',
+        name: 'bin',
+        variableType: 'expression',
+        layout: { height: 0 },
+      }
+      const state: CellState = { status: 'success', data: null, expressionResult: '30s' }
+      variableMetadata.onExecutionComplete!(config, state, {
+        setVariableValue,
+        currentValue: undefined,
+      })
+      expect(setVariableValue).toHaveBeenCalledWith('bin', '30s')
+    })
+
+    it('should not call setVariableValue when expressionResult is undefined', () => {
+      const setVariableValue = jest.fn()
+      const config: VariableCellConfig = {
+        type: 'variable',
+        name: 'bin',
+        variableType: 'expression',
+        layout: { height: 0 },
+      }
+      const state: CellState = { status: 'success', data: null }
+      variableMetadata.onExecutionComplete!(config, state, {
+        setVariableValue,
+        currentValue: undefined,
+      })
+      expect(setVariableValue).not.toHaveBeenCalled()
     })
   })
 
