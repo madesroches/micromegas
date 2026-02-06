@@ -1,6 +1,6 @@
 # Adaptive time_bin_duration Notebook Variable (was time_bin_interval)
 
-## Status: IN PROGRESS
+## Status: IMPLEMENTED
 
 ## Issue Reference
 - GitHub Issue: [#778](https://github.com/madesroches/micromegas/issues/778)
@@ -42,9 +42,9 @@ export interface CellExecutionContext {
 ```
 
 ### Variable Cells (`VariableCell.tsx`)
-- Two types: combobox (SQL-driven dropdown) and text
-- Default values are strings or JSON objects
-- No support for expression-based or computed defaults
+- Three types: combobox (SQL-driven dropdown), text, and expression (allowlist-based AST evaluator)
+- Default values are strings or JSON objects (combobox/text) or computed at execution time (expression)
+- Expression variables use `evaluateVariableExpression()` with named bindings, no arbitrary JS execution
 
 ## Implementation Plan
 
@@ -57,12 +57,17 @@ Create a utility module for evaluating variable expressions:
 ```typescript
 export function evaluateVariableExpression(
   expression: string,
-  context: {
-    begin: string
-    end: string
-    variables: Record<string, VariableValue>
-  }
+  context: ExpressionContext
 ): string
+
+export interface ExpressionContext {
+  begin: string
+  end: string
+  durationMs: number
+  innerWidth: number
+  devicePixelRatio: number
+  variables: Record<string, VariableValue>
+}
 ```
 
 **Implementation details:**
@@ -166,81 +171,38 @@ Test cases:
 
 ## File Change Summary
 
-| File | Change | Status |
-|------|--------|--------|
-| `notebook-expression-eval.ts` | `snapInterval()` (15 snap levels), `evaluateVariableExpression()` | **Needs rewrite** — currently uses `new Function()`, must switch to jsep AST + allowlist evaluator |
-| `notebook-types.ts` | `VariableCellConfig.variableType`: `'number'` → `'expression'`, added `expression?: string` field, added `expressionResult?: string` to `CellState` | Done |
-| `cell-registry.ts` | Updated `CellRendererProps.variableType` union to match | Done |
-| `VariableCell.tsx` | Removed `number` type, added `expression` type: read-only title bar display, expression editor, `execute()` calls `evaluateVariableExpression()`, `onExecutionComplete()` sets computed value | **Needs update** — editor hint text, `$innerWidth` binding, placeholder |
-| `notebook-expression-eval.test.ts` | Tests for `snapInterval` and `evaluateVariableExpression` | **Needs update** — add `$innerWidth` tests, security rejection tests, remove tests that assume arbitrary JS access |
-| `VariableCell.test.tsx` | Replaced `number` type tests with `expression` type tests | Done |
-| `useCellExecution.test.ts` | Removed `number` variable test (text test remains) | Done |
-| `NotebookRenderer.test.tsx` | Updated `createVariableCell` helper type union | Done |
-| `cell-registry-mock.ts` | Updated variable description string | Done |
-| `package.json` | **New** — add `jsep` dependency | Todo |
+| File | Change |
+|------|--------|
+| `notebook-expression-eval.ts` | New file: jsep AST parser + recursive allowlist evaluator, `snapInterval()` (15 snap levels), `ExpressionContext` interface |
+| `notebook-types.ts` | `VariableCellConfig.variableType`: `'number'` → `'expression'`, added `expression?: string` field, added `expressionResult?: string` to `CellState` |
+| `cell-registry.ts` | Updated `CellRendererProps.variableType` union to match |
+| `VariableCell.tsx` | Removed `number` type, added `expression` type: read-only title bar display, expression editor with binding/operator hints, `execute()` passes `ExpressionContext` with `$innerWidth`/`$devicePixelRatio`/`$duration_ms`, `onExecutionComplete()` sets computed value |
+| `notebook-expression-eval.test.ts` | New file: 15 snap tests, 5 basic arithmetic, 5 binding, 4 function, 2 end-to-end, 2 error handling, 20 security rejection tests |
+| `VariableCell.test.tsx` | Replaced `number` type tests with `expression` type tests |
+| `useCellExecution.test.ts` | Removed `number` variable test (text test remains) |
+| `NotebookRenderer.test.tsx` | Updated `createVariableCell` helper type union |
+| `cell-registry-mock.ts` | Updated variable description string |
+| `package.json` | Added `jsep` and `@jsep-plugin/new` dependencies |
 
-## Remaining Work
+## Evaluator Design
 
-### 1. Add jsep dependency
-- `yarn add jsep` in `analytics-web-app/`
-- jsep core handles: `Literal`, `Identifier`, `BinaryExpression`, `UnaryExpression`, `CallExpression`, `MemberExpression`
-- Need `@jsep-plugin/new` for `new Date()` support (`NewExpression` node type)
-
-### 2. Rewrite `evaluateVariableExpression` as AST allowlist evaluator
-Current implementation uses `new Function()` which is a stored XSS vector in shared notebooks. Replace with:
-- Parse expression string with jsep → AST
-- Recursive walker that evaluates only allowed node types
-- **Default-deny**: throw on any unrecognized node type
-
-**Allowed AST nodes:**
+### Allowed AST nodes
 | Node Type | Allowed | Notes |
 |-----------|---------|-------|
 | `Literal` | numbers, strings | No regex literals |
-| `Identifier` | Only known bindings: `$begin`, `$end`, `$duration_ms`, `$innerWidth`, `$devicePixelRatio`, `snap_interval`, upstream `$variables`, `Math` | Throw on unknown identifiers |
-| `BinaryExpression` | `+`, `-`, `*`, `/`, `%` | No bitwise, no logical, no comparison (not needed for numeric expressions) |
+| `Identifier` | Only known bindings: `$begin`, `$end`, `$duration_ms`, `$innerWidth`, `$devicePixelRatio`, `snap_interval`, upstream `$variables`, `Math` | Throws on unknown identifiers |
+| `BinaryExpression` | `+`, `-`, `*`, `/`, `%` | No bitwise, no logical, no comparison |
 | `UnaryExpression` | `-`, `+` | No `!`, `~`, `typeof`, `void`, `delete` |
 | `CallExpression` | `snap_interval(...)`, `Math.<method>(...)` | Callee must be an allowed identifier or `Math.*` member |
-| `MemberExpression` | `Math.<name>` only | Dot notation only (not computed). Block `constructor`, `__proto__`, `prototype` |
-| `NewExpression` | `new Date(...)` only | Requires `@jsep-plugin/new` |
-| Everything else | **Rejected** | `AssignmentExpression`, `ConditionalExpression`, `SequenceExpression`, `ArrowFunctionExpression`, `TemplateLiteral`, etc. |
+| `MemberExpression` | `Math.<name>` only | Dot notation only (not computed). Blocks `constructor`, `__proto__`, `prototype` |
+| `NewExpression` | `new Date(...)` only | Via `@jsep-plugin/new` |
+| Everything else | **Rejected** | `ConditionalExpression`, `ArrayExpression`, `ThisExpression`, `SequenceExpression`, etc. |
 
-**Critical security edge cases to handle:**
-- `Math['constructor']` — computed member access → reject (only dot notation allowed)
-- `Math.constructor` — dot access to `constructor` → reject (block `constructor`, `__proto__`, `prototype` by name)
-- `Date.constructor` — not allowed (only `new Date()` construction, no property access on Date)
-- Sequence expressions `(steal(), 1+1)` — reject `SequenceExpression` node type
-- Conditional expressions `cond ? a : b` — reject (not in the allowed set, adds attack surface for no benefit)
-
-### 3. Add environment bindings
-- `evaluateVariableExpression` context gains: `innerWidth: number`, `devicePixelRatio: number`, `durationMs: number`
-- `VariableCell.tsx` `execute()` captures `window.innerWidth`, `window.devicePixelRatio`, and computes `new Date(end) - new Date(begin)` at call time
-- Available in expressions as `$innerWidth`, `$devicePixelRatio`, `$duration_ms`
-
-### 4. Update VariableCell editor hints
-- Label: "Expression" (not "JavaScript Expression" — the allowlist is a subset of JS)
-- Placeholder: `snap_interval($duration_ms / $innerWidth)`
-- Hint text: list `$begin`, `$end`, `$duration_ms`, `$innerWidth`, `$devicePixelRatio`, `snap_interval()`, `Math.*`, `new Date()`, arithmetic operators, upstream `$variables`
-- Remove MDN link (no longer arbitrary JS)
-
-### 5. Update tests
-- Add `$innerWidth`, `$devicePixelRatio`, `$duration_ms` to `baseContext`, update the full expression test
-- Remove tests that assume arbitrary JS: `'true'`, `'null'`, `nonexistent` identifier
-- Add security rejection tests:
-  - `document.cookie` → rejected (unknown identifier `document`)
-  - `fetch('/steal')` → rejected (unknown function)
-  - `window.location` → rejected (unknown identifier `window`)
-  - `this.constructor` → rejected
-  - `Math['constructor']` → rejected (computed member access)
-  - `Math.constructor` → rejected (blocked property name)
-  - `x = 1` → rejected (assignment)
-  - `(1, 2)` → rejected (sequence expression)
-
-## Verification (last passing)
+## Verification
 
 - Type-check: clean
 - Lint: clean
-- Tests: 583/583 passing
-- **Note**: Tests will need updating as part of remaining work above
+- Tests: 611/611 passing (28 new tests vs. previous 583)
 
 ## Security Assessment
 
