@@ -42,7 +42,7 @@ export interface CellRendererProps {
   /** For variable cells: update value */
   onValueChange?: (value: VariableValue) => void
   /** For variable cells: variable type */
-  variableType?: 'combobox' | 'text' | 'number'
+  variableType?: 'combobox' | 'text' | 'expression'
   /** For variable cells (combobox): available options from query */
   variableOptions?: { label: string; value: VariableValue }[]
   /** Callback for drag-to-zoom time selection (chart and property timeline cells) */
@@ -108,7 +108,7 @@ export interface CellTypeMetadata {
 
   /**
    * Executes the cell and returns state updates.
-   * Returns null if nothing to execute (e.g., text/number variables).
+   * Returns null if nothing to execute (e.g., text variables).
    * Absence of this method means the cell doesn't execute (e.g., markdown).
    */
   readonly execute?: (

@@ -39,7 +39,6 @@ describe('VariableTitleBarContent', () => {
       render(<VariableTitleBarContent {...createMockProps({ status: 'loading' })} />)
       expect(screen.queryByRole('combobox')).not.toBeInTheDocument()
       expect(screen.queryByRole('textbox')).not.toBeInTheDocument()
-      expect(screen.queryByRole('spinbutton')).not.toBeInTheDocument()
     })
   })
 
@@ -197,46 +196,29 @@ describe('VariableTitleBarContent', () => {
     })
   })
 
-  describe('number type', () => {
-    it('should render number input for number type', () => {
-      render(<VariableTitleBarContent {...createMockProps({ variableType: 'number' })} />)
-      expect(screen.getByRole('spinbutton')).toBeInTheDocument()
-    })
-
-    it('should display current numeric value', () => {
+  describe('expression type', () => {
+    it('should render read-only computed value for expression type', () => {
       render(
         <VariableTitleBarContent
           {...createMockProps({
-            variableType: 'number',
-            value: '42',
+            variableType: 'expression',
+            value: '5s',
           })}
         />
       )
-      const input = screen.getByRole('spinbutton') as HTMLInputElement
-      expect(input.value).toBe('42')
+      expect(screen.getByText('5s')).toBeInTheDocument()
     })
 
-    it('should call onValueChange when number changes (debounced)', () => {
-      const onValueChange = jest.fn()
+    it('should show placeholder when expression has not been computed', () => {
       render(
         <VariableTitleBarContent
           {...createMockProps({
-            variableType: 'number',
-            onValueChange,
+            variableType: 'expression',
+            value: undefined,
           })}
         />
       )
-
-      const input = screen.getByRole('spinbutton')
-      fireEvent.change(input, { target: { value: '100' } })
-
-      expect(onValueChange).not.toHaveBeenCalled()
-
-      act(() => {
-        jest.advanceTimersByTime(300)
-      })
-
-      expect(onValueChange).toHaveBeenCalledWith('100')
+      expect(screen.getByText('(not yet computed)')).toBeInTheDocument()
     })
   })
 

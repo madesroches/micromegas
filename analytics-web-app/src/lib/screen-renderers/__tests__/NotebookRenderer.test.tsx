@@ -123,7 +123,7 @@ function createMarkdownCell(name: string, content = '# Notes'): CellConfig {
 
 function createVariableCell(
   name: string,
-  variableType: 'text' | 'number' | 'combobox' = 'text'
+  variableType: 'text' | 'expression' | 'combobox' = 'text'
 ): CellConfig {
   return {
     type: 'variable',

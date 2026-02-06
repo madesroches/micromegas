@@ -127,7 +127,7 @@ export function useCellExecution({
         // Delegate to cell's execute method
         const result = await meta.execute(cell, context)
 
-        // If result is null, nothing was executed (e.g., text/number variables)
+        // If result is null, nothing was executed (e.g., text variables)
         const newState: CellState = result
           ? { status: 'success', data: result.data ?? null, ...result }
           : { status: 'success', data: null }

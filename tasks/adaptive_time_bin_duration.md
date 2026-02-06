@@ -1,6 +1,6 @@
 # Adaptive time_bin_duration Notebook Variable (was time_bin_interval)
 
-## Status: PLANNED
+## Status: IMPLEMENTED (pending security review)
 
 ## Issue Reference
 - GitHub Issue: [#778](https://github.com/madesroches/micromegas/issues/778)
@@ -151,18 +151,95 @@ Test cases:
 
 ## File Change Summary
 
-| File | Change |
-|------|--------|
-| `notebook-expression-eval.ts` | New file: expression evaluation, `snap_interval()` |
-| `VariableCell.tsx` | Remove `number` type, add `expression` type with evaluate-on-execute |
-| `notebook-expression-eval.test.ts` | New file: tests for expression evaluation |
+| File | Change | Status |
+|------|--------|--------|
+| `notebook-expression-eval.ts` | New file: `snapInterval()` (15 snap levels), `evaluateVariableExpression()` via `new Function()` | Done |
+| `notebook-types.ts` | `VariableCellConfig.variableType`: `'number'` → `'expression'`, added `expression?: string` field, added `expressionResult?: string` to `CellState` | Done |
+| `cell-registry.ts` | Updated `CellRendererProps.variableType` union to match | Done |
+| `VariableCell.tsx` | Removed `number` type, added `expression` type: read-only title bar display, JS expression editor with MDN link and binding hints, `execute()` calls `evaluateVariableExpression()`, `onExecutionComplete()` sets computed value | Done |
+| `notebook-expression-eval.test.ts` | New file: 19 tests for `snapInterval` and `evaluateVariableExpression` | Done |
+| `VariableCell.test.tsx` | Replaced `number` type tests with `expression` type tests | Done |
+| `useCellExecution.test.ts` | Removed `number` variable test (text test remains) | Done |
+| `NotebookRenderer.test.tsx` | Updated `createVariableCell` helper type union | Done |
+| `cell-registry-mock.ts` | Updated variable description string | Done |
 
-## Execution Order
+## Verification
 
-1. Step 2 (remove `number` variable type) — do first to simplify VariableCell before adding expression
-2. Step 1 (expression eval utility + Step 5 tests) — standalone, can parallel with Step 2
-3. Step 3 (expression variable type) — depends on Steps 1-2
-4. Step 4 is a design constraint, not a code step
+- Type-check: clean
+- Lint: clean
+- Tests: 583/583 passing
+
+## Security Assessment
+
+### Trust Model
+
+Notebooks are **shared between users on the same team**. This means one user's expression code runs in every other team member's browser when they open the notebook. Unlike SQL cells — which execute on the backend constrained by database permissions — expression variables execute arbitrary JavaScript in the viewer's browser session with full access to the page context.
+
+**This is a stored XSS vector.** A malicious or compromised team member could craft an expression that:
+- Steals session tokens via `document.cookie` or `localStorage`
+- Makes authenticated API requests on behalf of the viewer via `fetch()`
+- Reads sensitive data from the DOM (other notebooks, user info)
+- Redirects the viewer to a phishing page
+- Installs a keylogger on the page
+
+SQL cells do NOT have this risk because they run server-side within database permission boundaries. Expression variables are a **new and broader trust boundary**.
+
+### Risks
+
+| Risk | Severity | Mitigation |
+|------|----------|------------|
+| **Stored XSS via expressions** | **High** | Expression JS runs in the viewer's browser with full page context. A malicious author can exfiltrate credentials, make API calls as the viewer, or manipulate the DOM. Must be sandboxed. |
+| **Session hijacking** | **High** | Expressions can read `document.cookie`, `localStorage`, and call `fetch()` to exfiltrate auth tokens to an external server. |
+| **Privilege escalation** | **Medium** | If team members have different permission levels, a lower-privileged author could craft expressions that trigger actions using a higher-privileged viewer's session. |
+| **Cross-notebook injection** | Low | Variable values from upstream cells are passed as function parameters, not string-interpolated into the expression source. This prevents upstream values from breaking out of the expression. |
+| **CSP compatibility** | Medium | `new Function()` requires `'unsafe-eval'` in the Content-Security-Policy. Verify the app's CSP allows this, or add it. Document this requirement. |
+| **Denial of service** | Low | An expression like `while(true){}` blocks the viewer's UI thread. Low severity since it only affects the tab. |
+
+### Recommended Mitigations
+
+Choose one of the following sandboxing approaches (ordered by strength):
+
+#### Option A: Sandboxed iframe (Recommended)
+
+Run expressions inside a sandboxed `<iframe>` with a `null` origin:
+```html
+<iframe sandbox="allow-scripts" srcdoc="..."></iframe>
+```
+- The expression runs in an isolated origin with **no access** to the parent page's cookies, localStorage, DOM, or fetch credentials
+- Communication happens via `postMessage()` — the parent sends the variable bindings, the iframe returns the computed string
+- Slight implementation complexity but strong isolation
+- `new Function()` still works inside the iframe (the `allow-scripts` permission enables it)
+
+#### Option B: Allowlist-based evaluation
+
+Instead of `new Function()`, parse the expression into an AST and evaluate only allowed operations:
+- Arithmetic operators, `Date` construction, `Math` methods, `snap_interval()`
+- Block property access on `window`, `document`, `fetch`, `localStorage`, etc.
+- Use a lightweight expression parser (e.g., `jsep` + custom evaluator)
+- More restrictive — users can only use pre-approved functions and operators
+- Simpler security model but limits future expressiveness
+
+#### Option C: Accept the risk with auditing
+
+If the team fully trusts all members and accepts the XSS risk:
+- Log which user last modified each expression variable (audit trail)
+- Show a visual indicator that a notebook contains expression cells
+- Display expression source to the viewer before execution (consent prompt on first open)
+- This does NOT eliminate the risk — it only makes it traceable
+
+### Additional Recommendations
+
+1. **Validate CSP early**: Check whether the analytics web app currently sets a Content-Security-Policy header. If it does and `'unsafe-eval'` is absent, the feature will silently fail. Add a startup-time check or document the requirement.
+2. **Keep strict mode**: The `"use strict"` directive in the `new Function()` body is a good baseline — don't remove it.
+3. **No server-side eval**: Expressions must only ever run in the browser. Never send expression source to the backend for evaluation.
+4. **Sanitize saved expressions**: When persisting notebook configs, expression strings are stored as data (JSON string values). Ensure the save/load path does not interpret them as anything other than strings.
+5. **Audit trail**: Regardless of sandboxing approach, record which user last edited each expression variable. This makes malicious edits attributable.
+
+### Conclusion
+
+**The `new Function()` approach as currently designed is a stored XSS vulnerability** in a shared-notebook environment. SQL cells don't have this problem because they run server-side with database-level access control. Expression variables run client-side with full browser privileges of the viewing user.
+
+**Recommendation: Implement Option A (sandboxed iframe)** before shipping this feature. It preserves the full JavaScript expressiveness of the current design while isolating expressions from the viewer's session. The implementation cost is moderate — roughly one additional module to manage iframe lifecycle and `postMessage` communication.
 
 ## Resolved Questions
 
