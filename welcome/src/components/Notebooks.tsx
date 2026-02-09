@@ -11,7 +11,7 @@ export default function Notebooks() {
         </p>
 
         {/* Screenshot showcase */}
-        <div className="mb-12 grid grid-cols-1 gap-6 lg:grid-cols-2">
+        <div className="mb-6 grid grid-cols-1 gap-6 lg:grid-cols-2">
           <div className="overflow-hidden rounded-xl border border-theme-border">
             <img
               src="/micromegas/screenshots/perf-notebook.png"
@@ -26,6 +26,21 @@ export default function Notebooks() {
               className="w-full"
             />
           </div>
+        </div>
+        <div className="mb-12 overflow-hidden rounded-xl border border-theme-border">
+          <div className="border-b border-theme-border bg-app-card/50 px-6 py-3">
+            <h3 className="text-sm font-semibold text-theme-text-primary">
+              Metrics and logs, side by side
+            </h3>
+            <p className="text-xs text-theme-text-muted">
+              Correlate thread coverage swimlanes with log entries in the same notebook — no context switching.
+            </p>
+          </div>
+          <img
+            src="/micromegas/screenshots/metrics-logs.png"
+            alt="Thread coverage swimlanes alongside log entries for easy correlation"
+            className="w-full"
+          />
         </div>
 
         {/* Feature list */}

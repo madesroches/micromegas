@@ -39,25 +39,25 @@ export default function Integrations() {
             icon={<LayoutDashboard size={24} className="text-brand-rust" />}
             title="Analytics Web App"
             description="Interactive notebooks for exploration and investigation. SQL cells, charts, tables, and log viewers in a shareable interface."
-            href="/micromegas/docs/analytics-web-app/"
+            href="/micromegas/docs/admin/web-app/"
           />
           <IntegrationCard
             icon={<BarChart3 size={24} className="text-brand-blue" />}
             title="Grafana Plugin"
             description="Native Grafana data source for building dashboards. Query your telemetry data alongside other Grafana sources."
-            href="/micromegas/docs/grafana-plugin/"
+            href="/micromegas/docs/grafana/"
           />
           <IntegrationCard
             icon={<Code size={24} className="text-brand-gold" />}
             title="Python API"
             description="Programmatic access via Arrow FlightSQL. Build custom analysis pipelines with pandas, polars, or any Arrow-compatible library."
-            href="/micromegas/docs/python-api/"
+            href="/micromegas/docs/query-guide/python-api/"
           />
           <IntegrationCard
             icon={<Plug size={24} className="text-brand-rust" />}
             title="FlightSQL Protocol"
             description="Standard Apache Arrow FlightSQL protocol. Any compatible client can query your data — no vendor lock-in."
-            href="/micromegas/docs/flight-sql/"
+            href="/micromegas/docs/query-guide/"
           />
         </div>
 
@@ -78,9 +78,6 @@ export default function Integrations() {
           />
         </div>
 
-        <p className="mt-10 text-center text-sm text-theme-text-muted">
-          Platform support: Rust, Unreal Engine, HTTP gateway for any language.
-        </p>
       </div>
     </section>
   )
