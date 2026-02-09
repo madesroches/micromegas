@@ -10,9 +10,9 @@ export default function Hero() {
       </div>
 
       <div className="relative z-10 mx-auto max-w-4xl text-center">
-        {/* Inlined logo SVG with prefixed gradient IDs */}
+        {/* Vertical compact logo — rings + wordmark */}
         <div className="mb-8 flex justify-center">
-          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" className="h-28 w-28">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-120 -50 240 160" className="h-64 w-auto sm:h-80">
             <defs>
               <linearGradient id="logo-ring1" x1="0%" y1="0%" x2="100%" y2="100%">
                 <stop offset="0%" style={{ stopColor: '#bf360c' }} />
@@ -26,23 +26,33 @@ export default function Hero() {
                 <stop offset="0%" style={{ stopColor: '#ffb300' }} />
                 <stop offset="100%" style={{ stopColor: '#e6a000' }} />
               </linearGradient>
+              <filter id="logo-glow" x="-50%" y="-50%" width="200%" height="200%">
+                <feGaussianBlur stdDeviation="2" result="coloredBlur" />
+                <feMerge>
+                  <feMergeNode in="coloredBlur" />
+                  <feMergeNode in="SourceGraphic" />
+                </feMerge>
+              </filter>
             </defs>
-            <g transform="translate(100, 100)">
-              <ellipse cx="0" cy="0" rx="85" ry="32" fill="none" stroke="url(#logo-ring1)" strokeWidth="3" transform="rotate(-20)" opacity="0.9" />
-              <ellipse cx="0" cy="0" rx="67" ry="26" fill="none" stroke="url(#logo-ring2)" strokeWidth="3" transform="rotate(25)" opacity="0.9" />
-              <ellipse cx="0" cy="0" rx="50" ry="19" fill="none" stroke="url(#logo-ring3)" strokeWidth="3" transform="rotate(-8)" opacity="0.9" />
-              <polygon points="0,-10 2,-3.5 7.5,-3.5 3,0.5 5,7.5 0,4 -5,7.5 -3,0.5 -7.5,-3.5 -2,-3.5" fill="#ffffff" />
+            <g transform="translate(0, 0)">
+              <ellipse cx="0" cy="0" rx="100" ry="38" fill="none" stroke="url(#logo-ring1)" strokeWidth="2.5" transform="rotate(-20)" opacity="0.9" />
+              <ellipse cx="0" cy="0" rx="79" ry="30" fill="none" stroke="url(#logo-ring2)" strokeWidth="2.5" transform="rotate(25)" opacity="0.9" />
+              <ellipse cx="0" cy="0" rx="58" ry="22" fill="none" stroke="url(#logo-ring3)" strokeWidth="2.5" transform="rotate(-8)" opacity="0.9" />
+              <g filter="url(#logo-glow)">
+                <polygon points="0,-12 2,-4 9,-4 3,1 6,9 0,4 -6,9 -3,1 -9,-4 -2,-4" fill="#ffffff" />
+              </g>
             </g>
+            <text x="0" y="90" textAnchor="middle" fill="#ffffff" fontFamily="system-ui, -apple-system, 'Segoe UI', sans-serif" fontSize="28" fontWeight="300" letterSpacing="4">micromegas</text>
           </svg>
         </div>
 
-        <h1 className="mb-6 text-5xl font-bold tracking-tight text-theme-text-primary sm:text-6xl lg:text-7xl">
-          Unified Observability
-          <br />
+        <h1 className="sr-only">Micromegas</h1>
+        <p className="mb-4 text-2xl font-medium text-theme-text-secondary sm:text-3xl">
+          Unified Observability —{' '}
           <span className="bg-gradient-to-r from-brand-rust via-brand-gold to-brand-blue bg-clip-text text-transparent">
             Logs, Metrics, Traces
           </span>
-        </h1>
+        </p>
 
         <p className="mx-auto mb-10 max-w-2xl text-lg text-theme-text-secondary sm:text-xl">
           Open-source, high-performance observability platform.

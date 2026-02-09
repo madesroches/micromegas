@@ -38,7 +38,7 @@ export default function Footer() {
 
         {/* Minimal footer */}
         <div className="flex flex-wrap items-center justify-center gap-6 text-sm text-theme-text-muted">
-          <span>Micromegas</span>
+
           <a
             href="https://github.com/madesroches/micromegas"
             className="hover:text-theme-text-secondary transition-colors"
