@@ -8,6 +8,7 @@ on:
   pull_request:
     paths:
       - '.github/workflows/publish-docs.yml'
+      - 'welcome/**'
 
 jobs:
   build-and-deploy-docs:
