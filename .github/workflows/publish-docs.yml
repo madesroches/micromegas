@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - main
-      - welcome  # temporary: remove after merge
   # Also run on any branch when the workflow config changes
   pull_request:
     paths:
@@ -114,7 +113,7 @@ jobs:
         touch public_docs/.nojekyll
 
     - name: Deploy to GitHub Pages
-      if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/welcome'  # temporary: remove welcome after merge
+      if: github.ref == 'refs/heads/main'
       uses: peaceiris/actions-gh-pages@v4
       with:
         github_token: ${{ secrets.GITHUB_TOKEN }}
