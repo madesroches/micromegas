@@ -113,10 +113,10 @@ void MetricPublisher::Tick()
 {
 	MICROMEGAS_SPAN_FUNCTION("MicromegasTelemetrySink");
 	
-	const double DeltaTime = FApp::GetCurrentTime() - FApp::GetLastTime();
+	const double DeltaTime = FApp::GetDeltaTime();
 	const double IdleTime = FApp::GetIdleTime();
 	MICROMEGAS_FMETRIC("Frame", MicromegasTracing::Verbosity::Med, TEXT("DeltaTime"), TEXT("seconds"), DeltaTime);
-	MICROMEGAS_FMETRIC("Frame", MicromegasTracing::Verbosity::Med, TEXT("GameThreadTime"), TEXT("seconds"), FPlatformTime::ToSeconds64(GGameThreadTime));
+	MICROMEGAS_FMETRIC("Frame", MicromegasTracing::Verbosity::Med, TEXT("GameThreadTime"), TEXT("seconds"), FPlatformTime::ToSeconds(GGameThreadTime));
 	MICROMEGAS_FMETRIC("Frame", MicromegasTracing::Verbosity::Med, TEXT("InputLatencyTime"), TEXT("seconds"), FPlatformTime::ToSeconds64(GInputLatencyTime));
 	MICROMEGAS_FMETRIC("Frame", MicromegasTracing::Verbosity::Med, TEXT("IdleTime"), TEXT("seconds"), IdleTime);
 	MICROMEGAS_FMETRIC("Frame", MicromegasTracing::Verbosity::Med, TEXT("IdleTimeOvershoot"), TEXT("seconds"), FApp::GetIdleTimeOvershoot());
@@ -124,9 +124,11 @@ void MetricPublisher::Tick()
 	MICROMEGAS_FMETRIC("Frame", MicromegasTracing::Verbosity::Med, TEXT("AsyncLoadingTime"), TEXT("seconds"), GFlushAsyncLoadingTime);
 	if (!IsRunningDedicatedServer())
 	{
-		MICROMEGAS_FMETRIC("Frame", MicromegasTracing::Verbosity::Med, TEXT("RenderThreadTime"), TEXT("seconds"), FPlatformTime::ToSeconds64(GRenderThreadTime));
-		MICROMEGAS_FMETRIC("Frame", MicromegasTracing::Verbosity::Med, TEXT("RHIThreadTime"), TEXT("seconds"), FPlatformTime::ToSeconds64(GRHIThreadTime));
-		MICROMEGAS_FMETRIC("Frame", MicromegasTracing::Verbosity::Med, TEXT("GPUTime"), TEXT("seconds"), FPlatformTime::ToSeconds64(RHIGetGPUFrameCycles(0)));
+		// The 64 bit tick count and the 32 bit tick count have different frequencies
+		// We need to make sure to use the respective functions to have correct metric times
+		MICROMEGAS_FMETRIC("Frame", MicromegasTracing::Verbosity::Med, TEXT("RenderThreadTime"), TEXT("seconds"), FPlatformTime::ToSeconds(GRenderThreadTime));
+		MICROMEGAS_FMETRIC("Frame", MicromegasTracing::Verbosity::Med, TEXT("RHIThreadTime"), TEXT("seconds"), FPlatformTime::ToSeconds(GRHIThreadTime));
+		MICROMEGAS_FMETRIC("Frame", MicromegasTracing::Verbosity::Med, TEXT("GPUTime"), TEXT("seconds"), FPlatformTime::ToSeconds(RHIGetGPUFrameCycles(0)));
 		MICROMEGAS_IMETRIC("Frame", MicromegasTracing::Verbosity::Med, TEXT("DrawCalls"), TEXT("count"), GNumDrawCallsRHI[0]);
 		MICROMEGAS_IMETRIC("Frame", MicromegasTracing::Verbosity::Med, TEXT("PrimitivesDrawn"), TEXT("count"), GNumPrimitivesDrawnRHI[0]);
 	}
