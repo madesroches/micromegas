@@ -4,8 +4,8 @@
 
 /* eslint-disable react-refresh/only-export-components */
 
-import { useCallback, useMemo, useState } from 'react'
-import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
+import { useMemo } from 'react'
+import * as ContextMenu from '@radix-ui/react-context-menu'
 import { ChevronUp, ChevronDown, EyeOff, ArrowUpNarrowWide, ArrowDownNarrowWide, X } from 'lucide-react'
 import { DataType } from 'apache-arrow'
 import Markdown from 'react-markdown'
@@ -253,6 +253,10 @@ export interface SortHeaderProps {
   sortColumn?: string
   sortDirection?: 'asc' | 'desc'
   onSort: (columnName: string) => void
+  /** Set sort to ascending unconditionally */
+  onSortAsc?: (columnName: string) => void
+  /** Set sort to descending unconditionally */
+  onSortDesc?: (columnName: string) => void
   /** Use compact padding for notebook cells */
   compact?: boolean
   /** When provided, right-click opens a context menu with a "Hide column" option */
@@ -265,11 +269,11 @@ export function SortHeader({
   sortColumn,
   sortDirection,
   onSort,
+  onSortAsc,
+  onSortDesc,
   compact = false,
   onHide,
 }: SortHeaderProps) {
-  const [menuOpen, setMenuOpen] = useState(false)
-
   const isActive = sortColumn === columnName
   const showAsc = isActive && sortDirection === 'asc'
   const showDesc = isActive && sortDirection === 'desc'
@@ -307,57 +311,39 @@ export function SortHeader({
   }
 
   return (
-    <DropdownMenu.Root open={menuOpen} onOpenChange={setMenuOpen}>
-      <DropdownMenu.Trigger asChild>
-        <th
-          onClick={() => onSort(columnName)}
-          onContextMenu={(e) => {
-            e.preventDefault()
-            setMenuOpen(true)
-          }}
-          className={thClass}
-        >
+    <ContextMenu.Root>
+      <ContextMenu.Trigger asChild>
+        <th onClick={() => onSort(columnName)} className={thClass}>
           {thContent}
         </th>
-      </DropdownMenu.Trigger>
-      <DropdownMenu.Portal>
-        <DropdownMenu.Content
-          sideOffset={4}
-          className="min-w-[180px] bg-app-panel border border-theme-border rounded-md shadow-lg py-1 z-50"
-        >
-          <DropdownMenu.Item
-            onClick={() => onSort(columnName)}
+      </ContextMenu.Trigger>
+      <ContextMenu.Portal>
+        <ContextMenu.Content className="min-w-[180px] bg-app-panel border border-theme-border rounded-md shadow-lg py-1 z-50">
+          <ContextMenu.Item
+            onSelect={() => (onSortAsc ?? onSort)(columnName)}
             className="flex items-center gap-2 px-3 py-2 text-sm text-theme-text-primary hover:bg-theme-border/50 cursor-pointer outline-none"
           >
             <ArrowUpNarrowWide className="w-4 h-4 text-theme-text-secondary" />
             Sort Ascending
-          </DropdownMenu.Item>
-          <DropdownMenu.Item
-            onClick={() => {
-              // Sort ascending first if not already, then clicking again will go desc
-              if (sortColumn !== columnName) {
-                onSort(columnName) // sets ASC
-              }
-              if (!(isActive && sortDirection === 'desc')) {
-                onSort(columnName) // cycles to DESC
-              }
-            }}
+          </ContextMenu.Item>
+          <ContextMenu.Item
+            onSelect={() => (onSortDesc ?? onSort)(columnName)}
             className="flex items-center gap-2 px-3 py-2 text-sm text-theme-text-primary hover:bg-theme-border/50 cursor-pointer outline-none"
           >
             <ArrowDownNarrowWide className="w-4 h-4 text-theme-text-secondary" />
             Sort Descending
-          </DropdownMenu.Item>
-          <DropdownMenu.Separator className="h-px bg-theme-border my-1" />
-          <DropdownMenu.Item
-            onClick={() => onHide(columnName)}
+          </ContextMenu.Item>
+          <ContextMenu.Separator className="h-px bg-theme-border my-1" />
+          <ContextMenu.Item
+            onSelect={() => onHide(columnName)}
             className="flex items-center gap-2 px-3 py-2 text-sm text-theme-text-secondary hover:bg-theme-border/50 cursor-pointer outline-none"
           >
             <EyeOff className="w-4 h-4" />
             Hide Column
-          </DropdownMenu.Item>
-        </DropdownMenu.Content>
-      </DropdownMenu.Portal>
-    </DropdownMenu.Root>
+          </ContextMenu.Item>
+        </ContextMenu.Content>
+      </ContextMenu.Portal>
+    </ContextMenu.Root>
   )
 }
 
@@ -509,16 +495,13 @@ export function formatCell(value: unknown, dataType: DataType): string {
 export interface HiddenColumnsBarProps {
   hiddenColumns: string[]
   onRestore: (columnName: string) => void
+  /** Restore all hidden columns in a single update */
+  onRestoreAll?: () => void
   /** Use compact styling for notebook cells */
   compact?: boolean
 }
 
-export function HiddenColumnsBar({ hiddenColumns, onRestore, compact = false }: HiddenColumnsBarProps) {
-  const handleRestoreAll = useCallback(() => {
-    for (const col of hiddenColumns) {
-      onRestore(col)
-    }
-  }, [hiddenColumns, onRestore])
+export function HiddenColumnsBar({ hiddenColumns, onRestore, onRestoreAll, compact = false }: HiddenColumnsBarProps) {
 
   if (hiddenColumns.length === 0) return null
 
@@ -544,9 +527,9 @@ export function HiddenColumnsBar({ hiddenColumns, onRestore, compact = false }: 
           <X className="w-3 h-3 opacity-70" />
         </button>
       ))}
-      {hiddenColumns.length > 1 && (
+      {hiddenColumns.length > 1 && onRestoreAll && (
         <button
-          onClick={handleRestoreAll}
+          onClick={onRestoreAll}
           className={`${textSize} text-accent-link hover:text-accent-link-hover underline underline-offset-2 transition-colors`}
         >
           Show all

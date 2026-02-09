@@ -114,4 +114,4 @@ Overrides stay as format-only. Hidden columns are a separate concern. The overri
 - **Column in overrides but hidden**: Column is hidden (not rendered). Override is preserved in config but has no visual effect until the column is restored.
 - **Sort on hidden column**: Clear `sortColumn`/`sortDirection` if the sorted column gets hidden.
 - **All columns hidden**: Show the `HiddenColumnsBar` with all pills + an empty state message in the table area.
-- **Query changes columns**: On re-query, remove any `hiddenColumns` entries that no longer exist in the new schema (stale cleanup).
+- **Query changes columns**: Hidden column entries are intentionally preserved across query changes so users don't lose their config when temporarily switching queries. Stale entries are harmless (they simply don't match any column).

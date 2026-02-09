@@ -163,6 +163,20 @@ export function TableRenderer({
     [sortColumn, sortDirection, tableConfig, onConfigChange]
   )
 
+  const handleSortAsc = useCallback(
+    (columnName: string) => {
+      onConfigChange({ ...tableConfig, sortColumn: columnName, sortDirection: 'asc' as const })
+    },
+    [tableConfig, onConfigChange]
+  )
+
+  const handleSortDesc = useCallback(
+    (columnName: string) => {
+      onConfigChange({ ...tableConfig, sortColumn: columnName, sortDirection: 'desc' as const })
+    },
+    [tableConfig, onConfigChange]
+  )
+
   // Handle overrides change
   const handleOverridesChange = useCallback(
     (newOverrides: ColumnOverride[]) => {
@@ -196,6 +210,10 @@ export function TableRenderer({
     },
     [tableConfig, onConfigChange]
   )
+
+  const handleRestoreAll = useCallback(() => {
+    onConfigChange({ ...tableConfig, hiddenColumns: [] })
+  }, [tableConfig, onConfigChange])
 
   // Get available columns from query result
   const table = streamQuery.getTable()
@@ -380,7 +398,7 @@ export function TableRenderer({
 
     return (
       <div className="flex-1 overflow-auto bg-app-panel border border-theme-border rounded-lg">
-        <HiddenColumnsBar hiddenColumns={hiddenColumns} onRestore={handleRestoreColumn} />
+        <HiddenColumnsBar hiddenColumns={hiddenColumns} onRestore={handleRestoreColumn} onRestoreAll={handleRestoreAll} />
         <table className="w-full">
           <thead className="sticky top-0">
             <tr className="bg-app-card border-b border-theme-border">
@@ -391,6 +409,8 @@ export function TableRenderer({
                   sortColumn={sortColumn}
                   sortDirection={sortDirection}
                   onSort={handleSort}
+                  onSortAsc={handleSortAsc}
+                  onSortDesc={handleSortDesc}
                   onHide={handleHideColumn}
                 >
                   {col.name}

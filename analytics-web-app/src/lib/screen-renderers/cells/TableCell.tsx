@@ -41,6 +41,20 @@ export function TableCell({ data, status, options, onOptionsChange, variables }:
     [sortColumn, sortDirection, options, onOptionsChange]
   )
 
+  const handleSortAsc = useCallback(
+    (columnName: string) => {
+      onOptionsChange({ ...options, sortColumn: columnName, sortDirection: 'asc' as const })
+    },
+    [options, onOptionsChange]
+  )
+
+  const handleSortDesc = useCallback(
+    (columnName: string) => {
+      onOptionsChange({ ...options, sortColumn: columnName, sortDirection: 'desc' as const })
+    },
+    [options, onOptionsChange]
+  )
+
   const handleHideColumn = useCallback(
     (columnName: string) => {
       const hidden = (options?.hiddenColumns as string[] | undefined) || []
@@ -63,6 +77,10 @@ export function TableCell({ data, status, options, onOptionsChange, variables }:
     },
     [options, onOptionsChange]
   )
+
+  const handleRestoreAll = useCallback(() => {
+    onOptionsChange({ ...options, hiddenColumns: [] })
+  }, [options, onOptionsChange])
 
   if (status === 'loading') {
     return (
@@ -88,7 +106,7 @@ export function TableCell({ data, status, options, onOptionsChange, variables }:
 
   return (
     <div className="overflow-auto h-full bg-app-bg border border-theme-border rounded-md">
-      <HiddenColumnsBar hiddenColumns={hiddenColumns} onRestore={handleRestoreColumn} compact />
+      <HiddenColumnsBar hiddenColumns={hiddenColumns} onRestore={handleRestoreColumn} onRestoreAll={handleRestoreAll} compact />
       <table className="w-full text-sm">
         <thead className="sticky top-0">
           <tr className="bg-app-card border-b border-theme-border">
@@ -99,6 +117,8 @@ export function TableCell({ data, status, options, onOptionsChange, variables }:
                 sortColumn={sortColumn}
                 sortDirection={sortDirection}
                 onSort={handleSort}
+                onSortAsc={handleSortAsc}
+                onSortDesc={handleSortDesc}
                 onHide={handleHideColumn}
                 compact
               >
