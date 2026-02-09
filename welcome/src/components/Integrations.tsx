@@ -61,6 +61,23 @@ export default function Integrations() {
           />
         </div>
 
+        {/* Perfetto trace export showcase */}
+        <div className="mt-12 overflow-hidden rounded-xl border border-theme-border">
+          <div className="border-b border-theme-border bg-app-card/50 px-6 py-3">
+            <h3 className="text-sm font-semibold text-theme-text-primary">
+              Export traces to Perfetto
+            </h3>
+            <p className="text-xs text-theme-text-muted">
+              One-click export from notebooks into the Perfetto trace viewer for deep span analysis.
+            </p>
+          </div>
+          <img
+            src="/micromegas/screenshots/perfetto-trace.png"
+            alt="Micromegas trace data visualized in the Perfetto trace viewer"
+            className="w-full"
+          />
+        </div>
+
         <p className="mt-10 text-center text-sm text-theme-text-muted">
           Platform support: Rust, Unreal Engine, HTTP gateway for any language.
         </p>

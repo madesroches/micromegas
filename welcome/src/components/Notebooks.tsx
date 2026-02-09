@@ -10,62 +10,42 @@ export default function Notebooks() {
           that combine SQL, charts, and exploration.
         </p>
 
-        <div className="grid grid-cols-1 gap-8 lg:grid-cols-2">
-          {/* Notebook wireframe placeholder */}
-          <div className="rounded-xl border border-theme-border bg-app-panel overflow-hidden">
-            {/* Title bar */}
-            <div className="flex items-center gap-2 border-b border-theme-border px-4 py-2">
-              <div className="h-3 w-3 rounded-full bg-brand-rust/60" />
-              <div className="h-3 w-3 rounded-full bg-brand-gold/60" />
-              <div className="h-3 w-3 rounded-full bg-green-500/60" />
-              <span className="ml-2 text-xs text-theme-text-muted">notebook.sql</span>
-            </div>
-            {/* SQL cell */}
-            <div className="border-b border-theme-border p-4">
-              <div className="mb-2 text-xs font-medium uppercase tracking-wider text-brand-blue">SQL Cell</div>
-              <pre className="text-sm text-theme-text-secondary">
-                <code>
-                  <span className="text-[#1976d2]">SELECT</span> time, level, msg{'\n'}
-                  <span className="text-[#1976d2]">FROM</span> log_entries{'\n'}
-                  <span className="text-[#1976d2]">WHERE</span> level = <span className="text-[#c3e88d]">'ERROR'</span>{'\n'}
-                  <span className="text-[#1976d2]">ORDER BY</span> time <span className="text-[#1976d2]">DESC</span>
-                </code>
-              </pre>
-            </div>
-            {/* Chart placeholder */}
-            <div className="p-4">
-              <div className="mb-2 text-xs font-medium uppercase tracking-wider text-brand-gold">Chart Output</div>
-              <div className="flex h-32 items-end gap-1">
-                {[40, 65, 35, 80, 55, 70, 45, 90, 60, 50, 75, 85].map((h, i) => (
-                  <div
-                    key={i}
-                    className="flex-1 rounded-t bg-gradient-to-t from-brand-rust to-brand-rust/40"
-                    style={{ height: `${h}%` }}
-                  />
-                ))}
-              </div>
-            </div>
+        {/* Screenshot showcase */}
+        <div className="mb-12 grid grid-cols-1 gap-6 lg:grid-cols-2">
+          <div className="overflow-hidden rounded-xl border border-theme-border">
+            <img
+              src="/micromegas/screenshots/perf-notebook.png"
+              alt="Performance analysis notebook with chart, variables, and thread coverage swimlanes"
+              className="w-full"
+            />
           </div>
+          <div className="overflow-hidden rounded-xl border border-theme-border">
+            <img
+              src="/micromegas/screenshots/process-list.png"
+              alt="Process list notebook with SQL query and table output"
+              className="w-full"
+            />
+          </div>
+        </div>
 
-          {/* Feature list */}
-          <div className="flex flex-col justify-center space-y-6">
-            <Feature
-              title="SQL Cells with Syntax Highlighting"
-              description="Write and run SQL queries directly in the notebook with full syntax coloring."
-            />
-            <Feature
-              title="Multiple Cell Types"
-              description="Charts, tables, log viewers, swimlanes, variables, and markdown — all in one notebook."
-            />
-            <Feature
-              title="Drag-to-Zoom"
-              description="Select a time range on any chart and the entire notebook updates to that window."
-            />
-            <Feature
-              title="Share by URL"
-              description="Notebook state is encoded in the URL. Copy and paste to share any view with your team."
-            />
-          </div>
+        {/* Feature list */}
+        <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
+          <Feature
+            title="SQL Cells with Syntax Highlighting"
+            description="Write and run SQL queries directly in the notebook with full syntax coloring."
+          />
+          <Feature
+            title="Multiple Cell Types"
+            description="Charts, tables, log viewers, swimlanes, variables, and markdown — all in one notebook."
+          />
+          <Feature
+            title="Drag-to-Zoom"
+            description="Select a time range on any chart and the entire notebook updates to that window."
+          />
+          <Feature
+            title="Share by URL"
+            description="Notebook state is encoded in the URL. Copy and paste to share any view with your team."
+          />
         </div>
       </div>
     </section>
