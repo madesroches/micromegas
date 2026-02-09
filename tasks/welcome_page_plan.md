@@ -5,7 +5,7 @@
 
 ## Goal
 
-Replace the current redirect page at `madesroches.github.io/micromegas/` with a proper welcome/landing page that presents Micromegas as a full observability platform. The existing landing page in `../posts/analytics-webapp/landing.html` was scoped to the analytics web app only — this broadens the message to cover instrumentation, ingestion, analytics, and all visualization options.
+Replace the current redirect page at `madesroches.github.io/micromegas/` with a proper welcome/landing page that presents Micromegas as a full observability platform. This broadens the message beyond the analytics web app to cover instrumentation, ingestion, analytics, and all visualization options.
 
 ## Tech Stack
 
@@ -49,7 +49,21 @@ welcome/
 
 ### 1. Scaffold
 
-Create the `welcome/` directory with Vite + React + TS + Tailwind. Reuse brand color CSS variables from `analytics-web-app/src/styles/globals.css` (rust `#bf360c`, blue `#1565c0`, gold `#ffb300`, dark bg `#0a0a0f`, panel `#12121a`, card `#1a1a2e`). Key deps: react, react-dom, vite, @vitejs/plugin-react, tailwindcss, postcss, autoprefixer, typescript, lucide-react.
+Create the `welcome/` directory with Vite + React + TS + Tailwind. Slim copy of brand color CSS variables from `analytics-web-app/src/styles/globals.css` — only the brand palette (`--brand-rust`, `--brand-blue`, `--brand-gold` and dark variants), background/surface colors (`--app-bg`, `--panel-bg`, `--card-bg`), border colors, and text colors. Skip the full shadcn/radix HSL color system (`primary`, `secondary`, `destructive`, etc.) since this is a static landing page, not a component library.
+
+`postcss.config.mjs`: standard `tailwindcss` + `autoprefixer` plugins, nothing else.
+
+`tailwind.config.ts`: `brand.*` and `app.*` color mappings only — no `@tailwindcss/typography` plugin (no prose/markdown content on this page).
+
+Pin dependency versions to match `analytics-web-app/` to avoid drift:
+- react / react-dom `^18.3.0`
+- vite `^6.2.0`
+- @vitejs/plugin-react `^4.5.0`
+- typescript `^5.4.0`
+- tailwindcss `^3.3.0`
+- postcss `^8.4.31`
+- autoprefixer `^10.4.16`
+- lucide-react `^0.292.0`
 
 ### 2. Hero
 
@@ -57,7 +71,7 @@ Broaden the hero from the original ("What if all your telemetry lived in one pla
 
 - Platform-level tagline about unified observability (logs, metrics, traces)
 - Sub-tagline: open source, high-performance, cost-efficient
-- Inline SVG logo from `branding/micromegas-icon-transparent.svg`
+- Logo: inline the SVG markup from `branding/micromegas-icon-transparent.svg` directly into the Hero component (no extra Vite plugin needed)
 - CTA buttons: "Get Started" → `/docs/getting-started/`, "Star on GitHub" → repo
 - Dark background, glassmorphism effects from original landing page
 
@@ -74,7 +88,7 @@ Horizontal flow with icons and cards.
 
 ### 4. Key Differentiators
 
-Expand the original "Built Different" 3-column grid to 4 cards:
+5 cards:
 
 - **20ns overhead** — Instrumentation so fast you never turn it off
 - **Just SQL** — No PromQL, KQL, or NRQL. Full DataFusion SQL.
@@ -120,12 +134,13 @@ Each card links to its docs section. Also mention platform support: Rust, Unreal
 - Fixed navbar with logo + GitHub/Docs links, glassmorphism (backdrop-filter blur)
 - Subtle background effects (gradient mesh or constellation dots)
 - All brand colors via CSS variables
+- OG meta tags in `index.html`: `og:title`, `og:description`, `og:image` (use a rasterized brand logo or `micromegas-social-avatar.svg`) for link previews on GitHub/social
 
 ### 9. GitHub Pages Deployment
 
 Update `.github/workflows/publish-docs.yml`:
 
-1. Add build step: `cd welcome && yarn install && yarn build`
+1. Add build step: `cd welcome && corepack enable && yarn install && yarn build` (ensure yarn is available — Node 20 setup action may not provide it by default)
 2. Copy `welcome/dist/*` into `public_docs/` root (replaces the current redirect `index.html`)
 3. Existing paths stay intact: `/docs/`, `/rustdoc/`, `/doc/`, `/high-frequency-observability/`, `/unified-observability-for-games/`
 
@@ -149,8 +164,10 @@ Sections 2-7 can be built in parallel after the scaffold is in place. Polish dep
 
 ## Reference Material
 
-- Original landing page: `../posts/analytics-webapp/landing.html` (20 KB, pure HTML/CSS/JS)
-- Brand assets: `branding/` (14 SVG logos, extended color palette)
-- Analytics web app styling: `analytics-web-app/src/styles/globals.css` (80+ CSS variables)
+- Branding guide: `branding/extended-palette.md` (full color palette with Van Gogh–inspired naming, CSS variables, TypeScript constants, chart color sequences)
+- Brand sheet: `branding/micromegas-brand-sheet.svg` (visual reference with color swatches)
+- Brand assets: `branding/` (13 SVG logos including `micromegas-icon-transparent.svg` for hero, `micromegas-social-avatar.svg` for OG image)
+- Analytics web app styling: `analytics-web-app/src/styles/globals.css` (80+ CSS variables — use slim subset)
+- Analytics web app tailwind config: `analytics-web-app/tailwind.config.ts` (reference for color mappings)
 - Existing GitHub Pages workflow: `.github/workflows/publish-docs.yml`
 - Current site: `madesroches.github.io/micromegas/` (redirects to `/docs/`)
