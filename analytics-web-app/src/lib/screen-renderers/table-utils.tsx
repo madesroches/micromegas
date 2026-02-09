@@ -4,8 +4,9 @@
 
 /* eslint-disable react-refresh/only-export-components */
 
-import { useMemo } from 'react'
-import { ChevronUp, ChevronDown } from 'lucide-react'
+import { useCallback, useMemo } from 'react'
+import * as ContextMenu from '@radix-ui/react-context-menu'
+import { ChevronUp, ChevronDown, EyeOff, ArrowUpNarrowWide, ArrowDownNarrowWide, X } from 'lucide-react'
 import { DataType } from 'apache-arrow'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -252,8 +253,14 @@ export interface SortHeaderProps {
   sortColumn?: string
   sortDirection?: 'asc' | 'desc'
   onSort: (columnName: string) => void
+  /** Set sort to ascending unconditionally */
+  onSortAsc?: (columnName: string) => void
+  /** Set sort to descending unconditionally */
+  onSortDesc?: (columnName: string) => void
   /** Use compact padding for notebook cells */
   compact?: boolean
+  /** When provided, right-click opens a context menu with a "Hide column" option */
+  onHide?: (columnName: string) => void
 }
 
 export function SortHeader({
@@ -262,7 +269,10 @@ export function SortHeader({
   sortColumn,
   sortDirection,
   onSort,
+  onSortAsc,
+  onSortDesc,
   compact = false,
+  onHide,
 }: SortHeaderProps) {
   const isActive = sortColumn === columnName
   const showAsc = isActive && sortDirection === 'asc'
@@ -271,28 +281,69 @@ export function SortHeader({
   const padding = compact ? 'px-3 py-2' : 'px-4 py-3'
   const hoverBg = compact ? 'hover:bg-app-card/50' : 'hover:bg-app-card'
 
+  const thContent = (
+    <div className="flex items-center gap-1">
+      <span className="truncate">{children}</span>
+      {isActive && (
+        <span className="text-accent-link flex-shrink-0">
+          {showAsc ? (
+            <ChevronUp className="w-3 h-3" />
+          ) : showDesc ? (
+            <ChevronDown className="w-3 h-3" />
+          ) : null}
+        </span>
+      )}
+    </div>
+  )
+
+  const thClass = `${padding} text-left text-xs font-semibold uppercase tracking-wider cursor-pointer select-none transition-colors ${
+    isActive
+      ? 'text-theme-text-primary bg-app-card'
+      : `text-theme-text-muted hover:text-theme-text-secondary ${hoverBg}`
+  }`
+
+  if (!onHide) {
+    return (
+      <th onClick={() => onSort(columnName)} className={thClass}>
+        {thContent}
+      </th>
+    )
+  }
+
   return (
-    <th
-      onClick={() => onSort(columnName)}
-      className={`${padding} text-left text-xs font-semibold uppercase tracking-wider cursor-pointer select-none transition-colors ${
-        isActive
-          ? 'text-theme-text-primary bg-app-card'
-          : `text-theme-text-muted hover:text-theme-text-secondary ${hoverBg}`
-      }`}
-    >
-      <div className="flex items-center gap-1">
-        <span className="truncate">{children}</span>
-        {isActive && (
-          <span className="text-accent-link flex-shrink-0">
-            {showAsc ? (
-              <ChevronUp className="w-3 h-3" />
-            ) : showDesc ? (
-              <ChevronDown className="w-3 h-3" />
-            ) : null}
-          </span>
-        )}
-      </div>
-    </th>
+    <ContextMenu.Root>
+      <ContextMenu.Trigger asChild>
+        <th onClick={() => onSort(columnName)} className={thClass}>
+          {thContent}
+        </th>
+      </ContextMenu.Trigger>
+      <ContextMenu.Portal>
+        <ContextMenu.Content className="min-w-[180px] bg-app-panel border border-theme-border rounded-md shadow-lg py-1 z-50">
+          <ContextMenu.Item
+            onSelect={() => (onSortAsc ?? onSort)(columnName)}
+            className="flex items-center gap-2 px-3 py-2 text-sm text-theme-text-primary hover:bg-theme-border/50 cursor-pointer outline-none"
+          >
+            <ArrowUpNarrowWide className="w-4 h-4 text-theme-text-secondary" />
+            Sort Ascending
+          </ContextMenu.Item>
+          <ContextMenu.Item
+            onSelect={() => (onSortDesc ?? onSort)(columnName)}
+            className="flex items-center gap-2 px-3 py-2 text-sm text-theme-text-primary hover:bg-theme-border/50 cursor-pointer outline-none"
+          >
+            <ArrowDownNarrowWide className="w-4 h-4 text-theme-text-secondary" />
+            Sort Descending
+          </ContextMenu.Item>
+          <ContextMenu.Separator className="h-px bg-theme-border my-1" />
+          <ContextMenu.Item
+            onSelect={() => onHide(columnName)}
+            className="flex items-center gap-2 px-3 py-2 text-sm text-theme-text-secondary hover:bg-theme-border/50 cursor-pointer outline-none"
+          >
+            <EyeOff className="w-4 h-4" />
+            Hide Column
+          </ContextMenu.Item>
+        </ContextMenu.Content>
+      </ContextMenu.Portal>
+    </ContextMenu.Root>
   )
 }
 
@@ -435,6 +486,136 @@ export function formatCell(value: unknown, dataType: DataType): string {
   }
 
   return String(value)
+}
+
+// =============================================================================
+// Hidden Columns Bar
+// =============================================================================
+
+export interface HiddenColumnsBarProps {
+  hiddenColumns: string[]
+  onRestore: (columnName: string) => void
+  /** Restore all hidden columns in a single update */
+  onRestoreAll?: () => void
+  /** Use compact styling for notebook cells */
+  compact?: boolean
+}
+
+export function HiddenColumnsBar({ hiddenColumns, onRestore, onRestoreAll, compact = false }: HiddenColumnsBarProps) {
+  if (hiddenColumns.length === 0) return null
+
+  const iconSize = compact ? 'w-3 h-3' : 'w-3.5 h-3.5'
+  const textSize = compact ? 'text-[10px]' : 'text-xs'
+  const padding = compact ? 'px-3 py-1' : 'px-4 py-1.5'
+  const gap = compact ? 'gap-1.5' : 'gap-2'
+  const pillPadding = compact ? 'px-1.5 py-0' : 'px-2 py-0.5'
+
+  return (
+    <div
+      className={`flex items-center ${gap} ${padding} bg-accent-link/[0.08] border-b border-theme-border flex-wrap`}
+    >
+      <EyeOff className={`${iconSize} text-theme-text-muted flex-shrink-0`} />
+      <span className={`${textSize} text-theme-text-muted`}>Hidden:</span>
+      {hiddenColumns.map((col) => (
+        <button
+          key={col}
+          onClick={() => onRestore(col)}
+          className={`inline-flex items-center gap-1 ${pillPadding} ${textSize} bg-accent-link/15 text-accent-link border border-accent-link/30 rounded-full hover:bg-accent-link/25 hover:border-accent-link/50 transition-colors`}
+        >
+          {col}
+          <X className="w-3 h-3 opacity-70" />
+        </button>
+      ))}
+      {hiddenColumns.length > 1 && onRestoreAll && (
+        <button
+          onClick={onRestoreAll}
+          className={`${textSize} text-accent-link hover:text-accent-link-hover underline underline-offset-2 transition-colors`}
+        >
+          Show all
+        </button>
+      )}
+    </div>
+  )
+}
+
+// =============================================================================
+// Column Management Hook
+// =============================================================================
+
+interface ColumnManagementConfig {
+  sortColumn?: string
+  sortDirection?: 'asc' | 'desc'
+  hiddenColumns?: string[]
+  [key: string]: unknown
+}
+
+export function useColumnManagement(
+  config: ColumnManagementConfig,
+  onChange: (config: ColumnManagementConfig) => void
+) {
+  const sortColumn = config.sortColumn
+  const sortDirection = config.sortDirection
+  const hiddenColumns = config.hiddenColumns || []
+
+  const handleSort = useCallback(
+    (columnName: string) => {
+      const nextState = getNextSortState(columnName, sortColumn, sortDirection)
+      onChange({ ...config, ...nextState })
+    },
+    [sortColumn, sortDirection, config, onChange]
+  )
+
+  const handleSortAsc = useCallback(
+    (columnName: string) => {
+      onChange({ ...config, sortColumn: columnName, sortDirection: 'asc' as const })
+    },
+    [config, onChange]
+  )
+
+  const handleSortDesc = useCallback(
+    (columnName: string) => {
+      onChange({ ...config, sortColumn: columnName, sortDirection: 'desc' as const })
+    },
+    [config, onChange]
+  )
+
+  const handleHideColumn = useCallback(
+    (columnName: string) => {
+      const hidden = config.hiddenColumns || []
+      if (hidden.includes(columnName)) return
+      const updated: ColumnManagementConfig = { ...config, hiddenColumns: [...hidden, columnName] }
+      if (config.sortColumn === columnName) {
+        updated.sortColumn = undefined
+        updated.sortDirection = undefined
+      }
+      onChange(updated)
+    },
+    [config, onChange]
+  )
+
+  const handleRestoreColumn = useCallback(
+    (columnName: string) => {
+      const hidden = config.hiddenColumns || []
+      onChange({ ...config, hiddenColumns: hidden.filter((c) => c !== columnName) })
+    },
+    [config, onChange]
+  )
+
+  const handleRestoreAll = useCallback(() => {
+    onChange({ ...config, hiddenColumns: [] })
+  }, [config, onChange])
+
+  return {
+    sortColumn,
+    sortDirection,
+    hiddenColumns,
+    handleSort,
+    handleSortAsc,
+    handleSortDesc,
+    handleHideColumn,
+    handleRestoreColumn,
+    handleRestoreAll,
+  }
 }
 
 // =============================================================================

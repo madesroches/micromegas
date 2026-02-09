@@ -14,8 +14,9 @@ import { substituteMacros, validateMacros, DEFAULT_SQL } from '../notebook-utils
 import {
   SortHeader,
   TableBody,
+  HiddenColumnsBar,
   buildOrderByClause,
-  getNextSortState,
+  useColumnManagement,
   ColumnOverride,
 } from '../table-utils'
 
@@ -24,20 +25,21 @@ import {
 // =============================================================================
 
 export function TableCell({ data, status, options, onOptionsChange, variables }: CellRendererProps) {
-  // Extract sort state and overrides from options
-  const sortColumn = options?.sortColumn as string | undefined
-  const sortDirection = options?.sortDirection as 'asc' | 'desc' | undefined
+  // Extract overrides from options
   const overrides = (options?.overrides as ColumnOverride[] | undefined) || []
 
-  // Three-state sort cycling: none -> ASC -> DESC -> none
-  // Only update options - execution is triggered by useEffect watching options changes
-  const handleSort = useCallback(
-    (columnName: string) => {
-      const nextState = getNextSortState(columnName, sortColumn, sortDirection)
-      onOptionsChange({ ...options, ...nextState })
-    },
-    [sortColumn, sortDirection, options, onOptionsChange]
-  )
+  // Column management (sort, hide/restore)
+  const {
+    sortColumn,
+    sortDirection,
+    hiddenColumns,
+    handleSort,
+    handleSortAsc,
+    handleSortDesc,
+    handleHideColumn,
+    handleRestoreColumn,
+    handleRestoreAll,
+  } = useColumnManagement(options || {}, onOptionsChange)
 
   if (status === 'loading') {
     return (
@@ -54,23 +56,29 @@ export function TableCell({ data, status, options, onOptionsChange, variables }:
     )
   }
 
-  const columns = data.schema.fields.map((field) => ({
+  const allColumns = data.schema.fields.map((field) => ({
     name: field.name,
     type: field.type,
   }))
+  const hiddenSet = new Set(hiddenColumns)
+  const visibleColumns = allColumns.filter((c) => !hiddenSet.has(c.name))
 
   return (
     <div className="overflow-auto h-full bg-app-bg border border-theme-border rounded-md">
+      <HiddenColumnsBar hiddenColumns={hiddenColumns} onRestore={handleRestoreColumn} onRestoreAll={handleRestoreAll} compact />
       <table className="w-full text-sm">
         <thead className="sticky top-0">
           <tr className="bg-app-card border-b border-theme-border">
-            {columns.map((col) => (
+            {visibleColumns.map((col) => (
               <SortHeader
                 key={col.name}
                 columnName={col.name}
                 sortColumn={sortColumn}
                 sortDirection={sortDirection}
                 onSort={handleSort}
+                onSortAsc={handleSortAsc}
+                onSortDesc={handleSortDesc}
+                onHide={handleHideColumn}
                 compact
               >
                 {col.name}
@@ -78,7 +86,7 @@ export function TableCell({ data, status, options, onOptionsChange, variables }:
             ))}
           </tr>
         </thead>
-        <TableBody data={data} columns={columns} compact overrides={overrides} variables={variables} />
+        <TableBody data={data} columns={visibleColumns} compact overrides={overrides} variables={variables} />
       </table>
     </div>
   )

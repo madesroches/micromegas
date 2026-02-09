@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { render, screen, fireEvent } from '@testing-library/react'
 import { DataType, Timestamp, TimeUnit } from 'apache-arrow'
 import {
   expandRowMacros,
@@ -8,6 +8,9 @@ import {
   validateFormatMacros,
   OverrideCell,
   TableColumn,
+  SortHeader,
+  HiddenColumnsBar,
+  getNextSortState,
 } from '../table-utils'
 
 describe('expandRowMacros', () => {
@@ -451,5 +454,175 @@ describe('expandRowMacros with timestamps', () => {
     // No column types provided - should still work
     const result = expandRowMacros(template, row)
     expect(result).toBe('/process?id=123')
+  })
+})
+
+// =============================================================================
+// getNextSortState
+// =============================================================================
+
+describe('getNextSortState', () => {
+  it('should return ASC when clicking a new column', () => {
+    const result = getNextSortState('name', undefined, undefined)
+    expect(result).toEqual({ sortColumn: 'name', sortDirection: 'asc' })
+  })
+
+  it('should return ASC when clicking a different column', () => {
+    const result = getNextSortState('name', 'id', 'desc')
+    expect(result).toEqual({ sortColumn: 'name', sortDirection: 'asc' })
+  })
+
+  it('should cycle ASC to DESC on same column', () => {
+    const result = getNextSortState('name', 'name', 'asc')
+    expect(result).toEqual({ sortColumn: 'name', sortDirection: 'desc' })
+  })
+
+  it('should cycle DESC to none on same column', () => {
+    const result = getNextSortState('name', 'name', 'desc')
+    expect(result).toEqual({ sortColumn: undefined, sortDirection: undefined })
+  })
+})
+
+// =============================================================================
+// SortHeader
+// =============================================================================
+
+describe('SortHeader', () => {
+  const renderInTable = (ui: React.ReactElement) =>
+    render(
+      <table>
+        <thead>
+          <tr>{ui}</tr>
+        </thead>
+      </table>
+    )
+
+  it('should render column name', () => {
+    renderInTable(
+      <SortHeader columnName="id" onSort={jest.fn()}>
+        id
+      </SortHeader>
+    )
+    expect(screen.getByText('id')).toBeInTheDocument()
+  })
+
+  it('should call onSort on left-click', () => {
+    const onSort = jest.fn()
+    renderInTable(
+      <SortHeader columnName="name" onSort={onSort}>
+        name
+      </SortHeader>
+    )
+    fireEvent.click(screen.getByRole('columnheader'))
+    expect(onSort).toHaveBeenCalledWith('name')
+  })
+
+  it('should call onSort on left-click even when onHide is provided', () => {
+    const onSort = jest.fn()
+    const onHide = jest.fn()
+    renderInTable(
+      <SortHeader columnName="name" onSort={onSort} onHide={onHide}>
+        name
+      </SortHeader>
+    )
+    fireEvent.click(screen.getByRole('columnheader'))
+    expect(onSort).toHaveBeenCalledWith('name')
+    expect(onHide).not.toHaveBeenCalled()
+  })
+
+  it('should not open context menu on left-click when onHide is provided', () => {
+    const onSort = jest.fn()
+    const onHide = jest.fn()
+    renderInTable(
+      <SortHeader columnName="name" onSort={onSort} onHide={onHide}>
+        name
+      </SortHeader>
+    )
+    fireEvent.click(screen.getByRole('columnheader'))
+    // Context menu items should not appear on left-click
+    expect(screen.queryByText('Hide Column')).not.toBeInTheDocument()
+    expect(screen.queryByText('Sort Ascending')).not.toBeInTheDocument()
+  })
+
+  it('should render sort indicator when active ascending', () => {
+    renderInTable(
+      <SortHeader columnName="name" sortColumn="name" sortDirection="asc" onSort={jest.fn()}>
+        name
+      </SortHeader>
+    )
+    const th = screen.getByRole('columnheader')
+    expect(th.className).toContain('text-theme-text-primary')
+  })
+
+  it('should render sort indicator when active descending', () => {
+    renderInTable(
+      <SortHeader columnName="name" sortColumn="name" sortDirection="desc" onSort={jest.fn()}>
+        name
+      </SortHeader>
+    )
+    const th = screen.getByRole('columnheader')
+    expect(th.className).toContain('text-theme-text-primary')
+  })
+
+  it('should render muted style when not active', () => {
+    renderInTable(
+      <SortHeader columnName="name" sortColumn="other" sortDirection="asc" onSort={jest.fn()}>
+        name
+      </SortHeader>
+    )
+    const th = screen.getByRole('columnheader')
+    expect(th.className).toContain('text-theme-text-muted')
+  })
+})
+
+// =============================================================================
+// HiddenColumnsBar
+// =============================================================================
+
+describe('HiddenColumnsBar', () => {
+  it('should render nothing when no columns are hidden', () => {
+    const { container } = render(<HiddenColumnsBar hiddenColumns={[]} onRestore={jest.fn()} />)
+    expect(container.firstChild).toBeNull()
+  })
+
+  it('should render a pill for each hidden column', () => {
+    render(<HiddenColumnsBar hiddenColumns={['col_a', 'col_b']} onRestore={jest.fn()} />)
+    expect(screen.getByText('col_a')).toBeInTheDocument()
+    expect(screen.getByText('col_b')).toBeInTheDocument()
+  })
+
+  it('should call onRestore when clicking a pill', () => {
+    const onRestore = jest.fn()
+    render(<HiddenColumnsBar hiddenColumns={['col_a', 'col_b']} onRestore={onRestore} />)
+    fireEvent.click(screen.getByText('col_a'))
+    expect(onRestore).toHaveBeenCalledWith('col_a')
+  })
+
+  it('should show "Show all" button when more than one column is hidden and onRestoreAll is provided', () => {
+    const onRestoreAll = jest.fn()
+    render(
+      <HiddenColumnsBar hiddenColumns={['col_a', 'col_b']} onRestore={jest.fn()} onRestoreAll={onRestoreAll} />
+    )
+    const showAll = screen.getByText('Show all')
+    expect(showAll).toBeInTheDocument()
+    fireEvent.click(showAll)
+    expect(onRestoreAll).toHaveBeenCalled()
+  })
+
+  it('should not show "Show all" when only one column is hidden', () => {
+    render(
+      <HiddenColumnsBar hiddenColumns={['col_a']} onRestore={jest.fn()} onRestoreAll={jest.fn()} />
+    )
+    expect(screen.queryByText('Show all')).not.toBeInTheDocument()
+  })
+
+  it('should not show "Show all" when onRestoreAll is not provided', () => {
+    render(<HiddenColumnsBar hiddenColumns={['col_a', 'col_b']} onRestore={jest.fn()} />)
+    expect(screen.queryByText('Show all')).not.toBeInTheDocument()
+  })
+
+  it('should render "Hidden:" label', () => {
+    render(<HiddenColumnsBar hiddenColumns={['col_a']} onRestore={jest.fn()} />)
+    expect(screen.getByText('Hidden:')).toBeInTheDocument()
   })
 })
