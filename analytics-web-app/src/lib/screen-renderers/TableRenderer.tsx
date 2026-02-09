@@ -12,6 +12,7 @@ import { useDefaultSaveCleanup, useExposeSaveRef } from '@/lib/url-cleanup-utils
 import {
   SortHeader,
   TableBody,
+  HiddenColumnsBar,
   buildOrderByClause,
   getNextSortState,
   ColumnOverride,
@@ -34,6 +35,7 @@ interface TableConfig {
   sortColumn?: string
   sortDirection?: 'asc' | 'desc'
   overrides?: ColumnOverride[]
+  hiddenColumns?: string[]
   [key: string]: unknown
 }
 
@@ -165,6 +167,32 @@ export function TableRenderer({
   const handleOverridesChange = useCallback(
     (newOverrides: ColumnOverride[]) => {
       onConfigChange({ ...tableConfig, overrides: newOverrides })
+    },
+    [tableConfig, onConfigChange]
+  )
+
+  // Hidden columns
+  const hiddenColumns = tableConfig.hiddenColumns || []
+
+  const handleHideColumn = useCallback(
+    (columnName: string) => {
+      const hidden = tableConfig.hiddenColumns || []
+      if (hidden.includes(columnName)) return
+      const updated = { ...tableConfig, hiddenColumns: [...hidden, columnName] }
+      // Clear sort if the sorted column is being hidden
+      if (tableConfig.sortColumn === columnName) {
+        updated.sortColumn = undefined
+        updated.sortDirection = undefined
+      }
+      onConfigChange(updated)
+    },
+    [tableConfig, onConfigChange]
+  )
+
+  const handleRestoreColumn = useCallback(
+    (columnName: string) => {
+      const hidden = tableConfig.hiddenColumns || []
+      onConfigChange({ ...tableConfig, hiddenColumns: hidden.filter((c) => c !== columnName) })
     },
     [tableConfig, onConfigChange]
   )
@@ -342,31 +370,35 @@ export function TableRenderer({
       return <EmptyState message="No results for the current query." />
     }
 
-    // Get columns from Arrow schema
-    const columns = table.schema.fields.map((field) => ({
+    // Get columns from Arrow schema, filter out hidden
+    const allColumns = table.schema.fields.map((field) => ({
       name: field.name,
       type: field.type,
     }))
+    const hiddenSet = new Set(hiddenColumns)
+    const visibleColumns = allColumns.filter((c) => !hiddenSet.has(c.name))
 
     return (
       <div className="flex-1 overflow-auto bg-app-panel border border-theme-border rounded-lg">
+        <HiddenColumnsBar hiddenColumns={hiddenColumns} onRestore={handleRestoreColumn} />
         <table className="w-full">
           <thead className="sticky top-0">
             <tr className="bg-app-card border-b border-theme-border">
-              {columns.map((col) => (
+              {visibleColumns.map((col) => (
                 <SortHeader
                   key={col.name}
                   columnName={col.name}
                   sortColumn={sortColumn}
                   sortDirection={sortDirection}
                   onSort={handleSort}
+                  onHide={handleHideColumn}
                 >
                   {col.name}
                 </SortHeader>
               ))}
             </tr>
           </thead>
-          <TableBody data={table} columns={columns} overrides={tableConfig.overrides} />
+          <TableBody data={table} columns={visibleColumns} overrides={tableConfig.overrides} />
         </table>
       </div>
     )

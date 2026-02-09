@@ -14,6 +14,7 @@ import { substituteMacros, validateMacros, DEFAULT_SQL } from '../notebook-utils
 import {
   SortHeader,
   TableBody,
+  HiddenColumnsBar,
   buildOrderByClause,
   getNextSortState,
   ColumnOverride,
@@ -24,10 +25,11 @@ import {
 // =============================================================================
 
 export function TableCell({ data, status, options, onOptionsChange, variables }: CellRendererProps) {
-  // Extract sort state and overrides from options
+  // Extract sort state, overrides, and hidden columns from options
   const sortColumn = options?.sortColumn as string | undefined
   const sortDirection = options?.sortDirection as 'asc' | 'desc' | undefined
   const overrides = (options?.overrides as ColumnOverride[] | undefined) || []
+  const hiddenColumns = (options?.hiddenColumns as string[] | undefined) || []
 
   // Three-state sort cycling: none -> ASC -> DESC -> none
   // Only update options - execution is triggered by useEffect watching options changes
@@ -37,6 +39,29 @@ export function TableCell({ data, status, options, onOptionsChange, variables }:
       onOptionsChange({ ...options, ...nextState })
     },
     [sortColumn, sortDirection, options, onOptionsChange]
+  )
+
+  const handleHideColumn = useCallback(
+    (columnName: string) => {
+      const hidden = (options?.hiddenColumns as string[] | undefined) || []
+      if (hidden.includes(columnName)) return
+      const updated: Record<string, unknown> = { ...options, hiddenColumns: [...hidden, columnName] }
+      // Clear sort if the sorted column is being hidden
+      if (sortColumn === columnName) {
+        updated.sortColumn = undefined
+        updated.sortDirection = undefined
+      }
+      onOptionsChange(updated)
+    },
+    [options, sortColumn, onOptionsChange]
+  )
+
+  const handleRestoreColumn = useCallback(
+    (columnName: string) => {
+      const hidden = (options?.hiddenColumns as string[] | undefined) || []
+      onOptionsChange({ ...options, hiddenColumns: hidden.filter((c) => c !== columnName) })
+    },
+    [options, onOptionsChange]
   )
 
   if (status === 'loading') {
@@ -54,23 +79,27 @@ export function TableCell({ data, status, options, onOptionsChange, variables }:
     )
   }
 
-  const columns = data.schema.fields.map((field) => ({
+  const allColumns = data.schema.fields.map((field) => ({
     name: field.name,
     type: field.type,
   }))
+  const hiddenSet = new Set(hiddenColumns)
+  const visibleColumns = allColumns.filter((c) => !hiddenSet.has(c.name))
 
   return (
     <div className="overflow-auto h-full bg-app-bg border border-theme-border rounded-md">
+      <HiddenColumnsBar hiddenColumns={hiddenColumns} onRestore={handleRestoreColumn} compact />
       <table className="w-full text-sm">
         <thead className="sticky top-0">
           <tr className="bg-app-card border-b border-theme-border">
-            {columns.map((col) => (
+            {visibleColumns.map((col) => (
               <SortHeader
                 key={col.name}
                 columnName={col.name}
                 sortColumn={sortColumn}
                 sortDirection={sortDirection}
                 onSort={handleSort}
+                onHide={handleHideColumn}
                 compact
               >
                 {col.name}
@@ -78,7 +107,7 @@ export function TableCell({ data, status, options, onOptionsChange, variables }:
             ))}
           </tr>
         </thead>
-        <TableBody data={data} columns={columns} compact overrides={overrides} variables={variables} />
+        <TableBody data={data} columns={visibleColumns} compact overrides={overrides} variables={variables} />
       </table>
     </div>
   )
