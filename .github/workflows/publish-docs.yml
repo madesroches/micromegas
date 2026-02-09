@@ -47,6 +47,12 @@ jobs:
     - name: Install MkDocs and dependencies
       run: pip install -r mkdocs/docs-requirements.txt
       
+    - name: Build welcome page
+      run: |
+        cd welcome
+        yarn install
+        yarn build
+
     - name: Prepare staging directory
       run: |
         mkdir -p public_docs/rustdoc
@@ -99,63 +105,8 @@ jobs:
         cp doc/unified-observability-for-games/dist/presentation-inline.html public_docs/unified-observability-for-games/index.html
         cp -r doc/unified-observability-for-games/dist/*.{png,svg} public_docs/unified-observability-for-games/ 2>/dev/null || echo "No media files to copy (already inlined)"
         
-        # Create main index that redirects to MkDocs
-        cat > public_docs/index.html << 'EOF'
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <meta charset="UTF-8">
-            <title>Micromegas Documentation</title>
-            <meta http-equiv="refresh" content="0; url=docs/">
-            <style>
-                body { 
-                    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-                    max-width: 800px;
-                    margin: 50px auto;
-                    padding: 20px;
-                    text-align: center;
-                }
-                .docs-link {
-                    display: inline-block;
-                    margin: 20px;
-                    padding: 20px 30px;
-                    background: #f6f8fa;
-                    border-radius: 6px;
-                    text-decoration: none;
-                    color: #24292e;
-                    border: 1px solid #e1e4e8;
-                    transition: background 0.2s;
-                }
-                .docs-link:hover { background: #e1e4e8; }
-            </style>
-        </head>
-        <body>
-            <h1>Micromegas Documentation</h1>
-            <p>Redirecting to documentation...</p>
-            <p>If you're not redirected, choose:</p>
-            <a href="docs/" class="docs-link">
-                <h3>📚 User Documentation</h3>
-                <p>Complete guides and references</p>
-            </a>
-            <a href="rustdoc/" class="docs-link">
-                <h3>🦀 Rust API Documentation</h3>
-                <p>Generated API documentation for Rust crates</p>
-            </a>
-            <a href="doc/" class="docs-link">
-                <h3>📄 Legacy Documentation</h3>
-                <p>Original documentation files</p>
-            </a>
-            <a href="high-frequency-observability/" class="docs-link">
-                <h3>🎤 High-Frequency Observability</h3>
-                <p>Cost-Efficient Telemetry at Scale</p>
-            </a>
-            <a href="unified-observability-for-games/" class="docs-link">
-                <h3>🎮 Unified Observability for Games</h3>
-                <p>Logs, Metrics, and Traces for Game Teams</p>
-            </a>
-        </body>
-        </html>
-        EOF
+        # Copy welcome page build output as the root index
+        cp -r welcome/dist/* public_docs/
         
         # Disable Jekyll
         touch public_docs/.nojekyll

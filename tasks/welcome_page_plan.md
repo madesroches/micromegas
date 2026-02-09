@@ -55,6 +55,10 @@ Create the `welcome/` directory with Vite + React + TS + Tailwind. Slim copy of 
 
 `tailwind.config.ts`: `brand.*` and `app.*` color mappings only — no `@tailwindcss/typography` plugin (no prose/markdown content on this page).
 
+Set `"type": "module"` in `package.json` (matches `analytics-web-app`).
+
+Build script: `"build": "tsc && vite build"` (type-check before building, same as `analytics-web-app`).
+
 Pin dependency versions to match `analytics-web-app/` to avoid drift:
 - react / react-dom `^18.3.0`
 - vite `^6.2.0`
@@ -71,7 +75,7 @@ Broaden the hero from the original ("What if all your telemetry lived in one pla
 
 - Platform-level tagline about unified observability (logs, metrics, traces)
 - Sub-tagline: open source, high-performance, cost-efficient
-- Logo: inline the SVG markup from `branding/micromegas-icon-transparent.svg` directly into the Hero component (no extra Vite plugin needed)
+- Logo: inline the SVG markup from `branding/micromegas-icon-transparent.svg` directly into the Hero component (no extra Vite plugin needed). Prefix gradient IDs with `logo-` (e.g., `logo-ring1`) to avoid collisions when inlined into the page.
 - CTA buttons: "Get Started" → `/docs/getting-started/`, "Star on GitHub" → repo
 - Dark background, glassmorphism effects from original landing page
 
@@ -134,7 +138,7 @@ Each card links to its docs section. Also mention platform support: Rust, Unreal
 - Fixed navbar with logo + GitHub/Docs links, glassmorphism (backdrop-filter blur)
 - Subtle background effects (gradient mesh or constellation dots)
 - All brand colors via CSS variables
-- OG meta tags in `index.html`: `og:title`, `og:description`, `og:image` (use a rasterized brand logo or `micromegas-social-avatar.svg`) for link previews on GitHub/social
+- OG meta tags in `index.html`: `og:title`, `og:description`. Skip `og:image` for now (SVG not supported by most platforms — add a pre-rasterized PNG later).
 
 ### 9. GitHub Pages Deployment
 
