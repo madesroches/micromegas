@@ -12,7 +12,7 @@ impl fmt::Display for ParseScreenTypeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "invalid screen type '{}', expected one of: process_list, metrics, log, table, notebook",
+            "invalid screen type '{}', expected one of: metrics, log, table, notebook",
             self.invalid_value
         )
     }
@@ -24,6 +24,7 @@ impl std::error::Error for ParseScreenTypeError {}
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ScreenType {
+    /// Deprecated: no longer available for creation, kept for backward compatibility with existing screens.
     ProcessList,
     Metrics,
     Log,

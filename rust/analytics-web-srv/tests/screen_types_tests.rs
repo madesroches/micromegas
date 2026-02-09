@@ -154,7 +154,7 @@ fn test_screen_type_default_config() {
 fn test_screen_type_from_str_error() {
     let err = "unknown_type".parse::<ScreenType>().unwrap_err();
     assert!(err.to_string().contains("unknown_type"));
-    assert!(err.to_string().contains("process_list"));
+    assert!(!err.to_string().contains("process_list"));
 }
 
 #[test]
