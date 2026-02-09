@@ -72,8 +72,8 @@ fn test_screen_type_from_str() {
 #[test]
 fn test_all_screen_types() {
     let all = ScreenType::all();
-    assert_eq!(all.len(), 5);
-    assert!(all.contains(&ScreenType::ProcessList));
+    assert_eq!(all.len(), 4);
+    assert!(!all.contains(&ScreenType::ProcessList));
     assert!(all.contains(&ScreenType::Metrics));
     assert!(all.contains(&ScreenType::Log));
     assert!(all.contains(&ScreenType::Table));

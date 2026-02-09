@@ -52,7 +52,6 @@ impl ScreenType {
     /// Returns all available screen types.
     pub fn all() -> Vec<ScreenType> {
         vec![
-            ScreenType::ProcessList,
             ScreenType::Metrics,
             ScreenType::Log,
             ScreenType::Table,
