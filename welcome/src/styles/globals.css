@@ -1,0 +1,38 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /* Micromegas brand palette */
+  --brand-rust: #bf360c;
+  --brand-rust-dark: #8d3a14;
+  --brand-blue: #1565c0;
+  --brand-blue-dark: #0d47a1;
+  --brand-gold: #ffb300;
+  --brand-gold-dark: #e6a000;
+
+  /* Backgrounds */
+  --app-bg: #0a0a0f;
+  --panel-bg: #12121a;
+  --card-bg: #1a1a2e;
+
+  /* Borders */
+  --border-color: #2a2a3e;
+  --border-hover: #3a3a4e;
+
+  /* Text */
+  --text-primary: #e7e9ea;
+  --text-secondary: #9ca3af;
+  --text-muted: #6b7280;
+}
+
+body {
+  margin: 0;
+  background-color: var(--app-bg);
+  color: var(--text-primary);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+    Oxygen, Ubuntu, Cantarell, 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}

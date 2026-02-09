@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="branding/micromegas-primary-light.svg" alt="Micromegas Logo" width="400"/><br/>
+  <a href="https://madesroches.github.io/micromegas/"><img src="branding/micromegas-primary-light.svg" alt="Micromegas Logo" width="400"/></a><br/>
   <strong>A unified observability platform for logs, metrics, and traces, built for high-volume environments.</strong>
 </p>
 
@@ -10,6 +10,7 @@
 </p>
 
 <p align="center">
+  <a href="https://madesroches.github.io/micromegas/">Website</a> •
   <a href="https://madesroches.github.io/micromegas/docs/">Documentation</a> •
   <a href="https://madesroches.github.io/micromegas/rustdoc/micromegas/">Rust API Docs</a> •
   <a href="https://madesroches.github.io/micromegas/docs/grafana/">Grafana Plugin</a> •
