@@ -16,7 +16,7 @@ import {
   TableBody,
   HiddenColumnsBar,
   buildOrderByClause,
-  getNextSortState,
+  useColumnManagement,
   ColumnOverride,
 } from '../table-utils'
 
@@ -25,62 +25,21 @@ import {
 // =============================================================================
 
 export function TableCell({ data, status, options, onOptionsChange, variables }: CellRendererProps) {
-  // Extract sort state, overrides, and hidden columns from options
-  const sortColumn = options?.sortColumn as string | undefined
-  const sortDirection = options?.sortDirection as 'asc' | 'desc' | undefined
+  // Extract overrides from options
   const overrides = (options?.overrides as ColumnOverride[] | undefined) || []
-  const hiddenColumns = (options?.hiddenColumns as string[] | undefined) || []
 
-  // Three-state sort cycling: none -> ASC -> DESC -> none
-  // Only update options - execution is triggered by useEffect watching options changes
-  const handleSort = useCallback(
-    (columnName: string) => {
-      const nextState = getNextSortState(columnName, sortColumn, sortDirection)
-      onOptionsChange({ ...options, ...nextState })
-    },
-    [sortColumn, sortDirection, options, onOptionsChange]
-  )
-
-  const handleSortAsc = useCallback(
-    (columnName: string) => {
-      onOptionsChange({ ...options, sortColumn: columnName, sortDirection: 'asc' as const })
-    },
-    [options, onOptionsChange]
-  )
-
-  const handleSortDesc = useCallback(
-    (columnName: string) => {
-      onOptionsChange({ ...options, sortColumn: columnName, sortDirection: 'desc' as const })
-    },
-    [options, onOptionsChange]
-  )
-
-  const handleHideColumn = useCallback(
-    (columnName: string) => {
-      const hidden = (options?.hiddenColumns as string[] | undefined) || []
-      if (hidden.includes(columnName)) return
-      const updated: Record<string, unknown> = { ...options, hiddenColumns: [...hidden, columnName] }
-      // Clear sort if the sorted column is being hidden
-      if (sortColumn === columnName) {
-        updated.sortColumn = undefined
-        updated.sortDirection = undefined
-      }
-      onOptionsChange(updated)
-    },
-    [options, sortColumn, onOptionsChange]
-  )
-
-  const handleRestoreColumn = useCallback(
-    (columnName: string) => {
-      const hidden = (options?.hiddenColumns as string[] | undefined) || []
-      onOptionsChange({ ...options, hiddenColumns: hidden.filter((c) => c !== columnName) })
-    },
-    [options, onOptionsChange]
-  )
-
-  const handleRestoreAll = useCallback(() => {
-    onOptionsChange({ ...options, hiddenColumns: [] })
-  }, [options, onOptionsChange])
+  // Column management (sort, hide/restore)
+  const {
+    sortColumn,
+    sortDirection,
+    hiddenColumns,
+    handleSort,
+    handleSortAsc,
+    handleSortDesc,
+    handleHideColumn,
+    handleRestoreColumn,
+    handleRestoreAll,
+  } = useColumnManagement(options || {}, onOptionsChange)
 
   if (status === 'loading') {
     return (

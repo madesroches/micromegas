@@ -4,7 +4,7 @@
 
 /* eslint-disable react-refresh/only-export-components */
 
-import { useMemo } from 'react'
+import { useCallback, useMemo } from 'react'
 import * as ContextMenu from '@radix-ui/react-context-menu'
 import { ChevronUp, ChevronDown, EyeOff, ArrowUpNarrowWide, ArrowDownNarrowWide, X } from 'lucide-react'
 import { DataType } from 'apache-arrow'
@@ -537,6 +537,86 @@ export function HiddenColumnsBar({ hiddenColumns, onRestore, onRestoreAll, compa
       )}
     </div>
   )
+}
+
+// =============================================================================
+// Column Management Hook
+// =============================================================================
+
+interface ColumnManagementConfig {
+  sortColumn?: string
+  sortDirection?: 'asc' | 'desc'
+  hiddenColumns?: string[]
+  [key: string]: unknown
+}
+
+export function useColumnManagement(
+  config: ColumnManagementConfig,
+  onChange: (config: ColumnManagementConfig) => void
+) {
+  const sortColumn = config.sortColumn
+  const sortDirection = config.sortDirection
+  const hiddenColumns = config.hiddenColumns || []
+
+  const handleSort = useCallback(
+    (columnName: string) => {
+      const nextState = getNextSortState(columnName, sortColumn, sortDirection)
+      onChange({ ...config, ...nextState })
+    },
+    [sortColumn, sortDirection, config, onChange]
+  )
+
+  const handleSortAsc = useCallback(
+    (columnName: string) => {
+      onChange({ ...config, sortColumn: columnName, sortDirection: 'asc' as const })
+    },
+    [config, onChange]
+  )
+
+  const handleSortDesc = useCallback(
+    (columnName: string) => {
+      onChange({ ...config, sortColumn: columnName, sortDirection: 'desc' as const })
+    },
+    [config, onChange]
+  )
+
+  const handleHideColumn = useCallback(
+    (columnName: string) => {
+      const hidden = config.hiddenColumns || []
+      if (hidden.includes(columnName)) return
+      const updated: ColumnManagementConfig = { ...config, hiddenColumns: [...hidden, columnName] }
+      if (config.sortColumn === columnName) {
+        updated.sortColumn = undefined
+        updated.sortDirection = undefined
+      }
+      onChange(updated)
+    },
+    [config, onChange]
+  )
+
+  const handleRestoreColumn = useCallback(
+    (columnName: string) => {
+      const hidden = config.hiddenColumns || []
+      onChange({ ...config, hiddenColumns: hidden.filter((c) => c !== columnName) })
+    },
+    [config, onChange]
+  )
+
+  const handleRestoreAll = useCallback(() => {
+    onChange({ ...config, hiddenColumns: [] })
+  }, [config, onChange])
+
+  return {
+    sortColumn,
+    sortDirection,
+    hiddenColumns,
+    handleSort,
+    handleSortAsc,
+    handleSortDesc,
+    handleHideColumn,
+    handleRestoreColumn,
+    handleRestoreAll,
+  }
 }
 
 // =============================================================================

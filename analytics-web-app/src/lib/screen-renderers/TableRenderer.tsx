@@ -14,7 +14,7 @@ import {
   TableBody,
   HiddenColumnsBar,
   buildOrderByClause,
-  getNextSortState,
+  useColumnManagement,
   ColumnOverride,
 } from './table-utils'
 
@@ -154,28 +154,16 @@ export function TableRenderer({
     execute: (sql: string) => executeQuery(sql),
   })
 
-  // Three-state sort cycling: none -> ASC -> DESC -> none
-  const handleSort = useCallback(
-    (columnName: string) => {
-      const nextState = getNextSortState(columnName, sortColumn, sortDirection)
-      onConfigChange({ ...tableConfig, ...nextState })
-    },
-    [sortColumn, sortDirection, tableConfig, onConfigChange]
-  )
-
-  const handleSortAsc = useCallback(
-    (columnName: string) => {
-      onConfigChange({ ...tableConfig, sortColumn: columnName, sortDirection: 'asc' as const })
-    },
-    [tableConfig, onConfigChange]
-  )
-
-  const handleSortDesc = useCallback(
-    (columnName: string) => {
-      onConfigChange({ ...tableConfig, sortColumn: columnName, sortDirection: 'desc' as const })
-    },
-    [tableConfig, onConfigChange]
-  )
+  // Column management (sort, hide/restore)
+  const {
+    hiddenColumns,
+    handleSort,
+    handleSortAsc,
+    handleSortDesc,
+    handleHideColumn,
+    handleRestoreColumn,
+    handleRestoreAll,
+  } = useColumnManagement(tableConfig, onConfigChange)
 
   // Handle overrides change
   const handleOverridesChange = useCallback(
@@ -184,36 +172,6 @@ export function TableRenderer({
     },
     [tableConfig, onConfigChange]
   )
-
-  // Hidden columns
-  const hiddenColumns = tableConfig.hiddenColumns || []
-
-  const handleHideColumn = useCallback(
-    (columnName: string) => {
-      const hidden = tableConfig.hiddenColumns || []
-      if (hidden.includes(columnName)) return
-      const updated = { ...tableConfig, hiddenColumns: [...hidden, columnName] }
-      // Clear sort if the sorted column is being hidden
-      if (tableConfig.sortColumn === columnName) {
-        updated.sortColumn = undefined
-        updated.sortDirection = undefined
-      }
-      onConfigChange(updated)
-    },
-    [tableConfig, onConfigChange]
-  )
-
-  const handleRestoreColumn = useCallback(
-    (columnName: string) => {
-      const hidden = tableConfig.hiddenColumns || []
-      onConfigChange({ ...tableConfig, hiddenColumns: hidden.filter((c) => c !== columnName) })
-    },
-    [tableConfig, onConfigChange]
-  )
-
-  const handleRestoreAll = useCallback(() => {
-    onConfigChange({ ...tableConfig, hiddenColumns: [] })
-  }, [tableConfig, onConfigChange])
 
   // Get available columns from query result
   const table = streamQuery.getTable()
