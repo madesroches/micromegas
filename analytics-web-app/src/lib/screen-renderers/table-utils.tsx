@@ -502,7 +502,6 @@ export interface HiddenColumnsBarProps {
 }
 
 export function HiddenColumnsBar({ hiddenColumns, onRestore, onRestoreAll, compact = false }: HiddenColumnsBarProps) {
-
   if (hiddenColumns.length === 0) return null
 
   const iconSize = compact ? 'w-3 h-3' : 'w-3.5 h-3.5'
