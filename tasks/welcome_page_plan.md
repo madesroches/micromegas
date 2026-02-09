@@ -1,11 +1,11 @@
-# Welcome Page for micromegas.dev
+# Welcome Page for madesroches.github.io/micromegas
 
 **Branch**: `welcome`
 **Status**: Planning
 
 ## Goal
 
-Replace the current redirect page at `micromegas.dev/` with a proper welcome/landing page that presents Micromegas as a full observability platform. The existing landing page in `../posts/analytics-webapp/landing.html` was scoped to the analytics web app only — this broadens the message to cover instrumentation, ingestion, analytics, and all visualization options.
+Replace the current redirect page at `madesroches.github.io/micromegas/` with a proper welcome/landing page that presents Micromegas as a full observability platform. The existing landing page in `../posts/analytics-webapp/landing.html` was scoped to the analytics web app only — this broadens the message to cover instrumentation, ingestion, analytics, and all visualization options.
 
 ## Tech Stack
 
@@ -16,6 +16,7 @@ Replace the current redirect page at `micromegas.dev/` with a proper welcome/lan
 - No react-router — single page
 - No web fonts — system font stack
 - Builds to static files for GitHub Pages
+- Vite `base` set to `/micromegas/` for correct asset paths under GitHub Pages subpath
 
 Rationale: aligning with the existing project stack means shared knowledge of tooling, consistent Tailwind theming, and familiar patterns.
 
@@ -128,7 +129,7 @@ Update `.github/workflows/publish-docs.yml`:
 2. Copy `welcome/dist/*` into `public_docs/` root (replaces the current redirect `index.html`)
 3. Existing paths stay intact: `/docs/`, `/rustdoc/`, `/doc/`, `/high-frequency-observability/`, `/unified-observability-for-games/`
 
-The welcome page becomes `micromegas.dev/` while all other content stays at its current URLs.
+The welcome page becomes `madesroches.github.io/micromegas/` while all other content stays at its current URLs.
 
 ## Task Dependencies
 
@@ -152,4 +153,4 @@ Sections 2-7 can be built in parallel after the scaffold is in place. Polish dep
 - Brand assets: `branding/` (14 SVG logos, extended color palette)
 - Analytics web app styling: `analytics-web-app/src/styles/globals.css` (80+ CSS variables)
 - Existing GitHub Pages workflow: `.github/workflows/publish-docs.yml`
-- Current site: `micromegas.dev` (redirects to `/docs/`)
+- Current site: `madesroches.github.io/micromegas/` (redirects to `/docs/`)
