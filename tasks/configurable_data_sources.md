@@ -1,5 +1,7 @@
 # Configurable Data Sources for Analytics Web App
 
+**Status: IMPLEMENTED** — All phases complete. Verified with `cargo test`, `cargo clippy`, `cargo fmt`, `yarn build`, `yarn lint`, `yarn test`.
+
 ## Context
 
 The analytics web app connects to a single FlightSQL server configured via the `MICROMEGAS_FLIGHTSQL_URL` environment variable, read inside `BearerFlightSQLClientFactory::make_client()` on every query. The goal is to make data sources configurable and stored in the database, with admin-only management and per-query selection. The env var is removed from analytics-web-srv entirely; `http_gateway` is a separate binary and keeps its own env var usage unchanged.
@@ -28,7 +30,7 @@ After upgrading, an admin must create at least one data source (typically named 
 
 ---
 
-## Phase 1: Backend — Data Sources CRUD
+## Phase 1: Backend — Data Sources CRUD ✓
 
 ### 1.1 Database migration v1→v2
 
@@ -81,7 +83,7 @@ After upgrading, an admin must create at least one data source (typically named 
 - `POST /api/data-sources` — create (admin only via `ValidatedUser.is_admin`); if this is the first data source, auto-set `is_default: true`; if `is_default: true` is requested, clear default on other rows in a transaction; invalidates cache
 - `GET /api/data-sources/{name}` — get full details including URL (admin only)
 - `PUT /api/data-sources/{name}` — update config and/or transfer default (admin only); if `is_default: true`, clear default on other rows in a transaction; reject if request would remove the default flag from the current default (400: "cannot remove default flag — set another data source as default instead"); invalidates cache
-- `DELETE /api/data-sources/{name}` — delete (admin only); reject if `is_default = true` (400: "cannot delete the default data source — set another data source as default first"); invalidates cache; no cascade check — screens referencing a deleted data source will fail at query time
+- `DELETE /api/data-sources/{name}` — delete (admin only); wrap check + delete in a transaction to prevent TOCTOU race (a concurrent PUT could move the default away between the check and delete); reject if `is_default = true` (400: "cannot delete the default data source — set another data source as default first"); invalidates cache; no cascade check — screens referencing a deleted data source will fail at query time
 
 **Default protection invariant:** once a default data source exists, there is always exactly one. The default flag can only move to another source (via PUT or POST with `is_default: true`), never be removed or left empty.
 
@@ -104,7 +106,7 @@ After upgrading, an admin must create at least one data source (typically named 
 
 ---
 
-## Phase 2: Backend — Per-Query Data Source Lookup
+## Phase 2: Backend — Per-Query Data Source Lookup ✓
 
 ### 2.1 Modify `BearerFlightSQLClientFactory`
 
@@ -128,7 +130,7 @@ Note: `http_gateway.rs` has its own query path and reads the env var directly �
 
 ---
 
-## Phase 3: Frontend — Data Sources API + Admin UI
+## Phase 3: Frontend — Data Sources API + Admin UI ✓
 
 ### 3.1 Update User type
 
@@ -157,7 +159,7 @@ Note: `http_gateway.rs` has its own query path and reads the env var directly �
 
 ---
 
-## Phase 4: Frontend — Per-Query Data Source Selection
+## Phase 4: Frontend — Per-Query Data Source Selection ✓
 
 ### 4.1 Update query params
 
@@ -190,17 +192,17 @@ This handles backward compatibility with existing screens that have no `dataSour
 ### 4.5 Default data source hook
 
 **New file:** `analytics-web-app/src/hooks/useDefaultDataSource.ts`
-- Calls `listDataSources()` (cached/memoized) and returns the name of the entry with `isDefault: true`
+- Returns the name of the entry with `isDefault: true` from the data source list already fetched for macro substitution — no extra API call
 - Used by screen renderers (as fallback when `config.dataSource` is unset) and built-in pages
 - Avoids duplicating default-resolution logic across components
 
 ### 4.6 Built-in pages
 
-Built-in pages (ProcessesPage, ProcessLogPage, PerformanceAnalysisPage) also resolve the default data source name from `listDataSources()` and send the concrete name.
+Built-in pages (ProcessesPage, ProcessLogPage, PerformanceAnalysisPage) use the same cached data source list to resolve the default name and send it with each query.
 
 ---
 
-## Phase 5: Cleanup
+## Phase 5: Cleanup ✓
 
 - Remove `MICROMEGAS_FLIGHTSQL_URL` from analytics-web-srv startup scripts and documentation
 - Keep `MICROMEGAS_FLIGHTSQL_URL` in `http_gateway` documentation (separate binary, unchanged)
@@ -215,9 +217,12 @@ Built-in pages (ProcessesPage, ProcessLogPage, PerformanceAnalysisPage) also res
 - **Config validation**: `config` JSONB is deserialized and validated at the application layer; `url` must be http/https (as required by tonic for gRPC channels).
 - **Auth forwarding**: User's JWT forwarded to configured FlightSQL server. All servers must share OIDC trust.
 
-## Verification
+## Verification ✓
 
-1. `cargo test` from `rust/` — existing + new tests pass
-2. `cargo clippy --workspace -- -D warnings`
-3. `yarn build && yarn lint` from `analytics-web-app/`
-4. Manual: start services, create a data source named "default" via admin UI, verify existing screens and built-in pages work, create a new screen pointing to a different data source, run a query
+1. `cargo test` — all tests pass ✓
+2. `cargo clippy --workspace -- -D warnings` — clean ✓
+3. `cargo fmt` — clean ✓
+4. `yarn build` — clean ✓
+5. `yarn lint` (eslint) — clean ✓
+6. `yarn test` — 644 tests pass ✓
+7. Manual: start services, create a data source named "default" via admin UI, verify existing screens and built-in pages work, create a new screen pointing to a different data source, run a query

@@ -174,6 +174,7 @@ export function NotebookRenderer({
   onSave,
   refreshTrigger,
   onSaveRef,
+  dataSource,
 }: ScreenRendererProps) {
   const [, setSearchParams] = useSearchParams()
 
@@ -249,6 +250,7 @@ export function NotebookRenderer({
     variableValuesRef,
     setVariableValue,
     refreshTrigger,
+    dataSource,
   })
 
   // Handle time range selection from charts (drag-to-zoom)

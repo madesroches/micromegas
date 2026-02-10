@@ -6,6 +6,7 @@ export interface User {
   sub: string
   email?: string
   name?: string
+  is_admin?: boolean
 }
 
 export type AuthStatus = 'loading' | 'authenticated' | 'unauthenticated' | 'error'

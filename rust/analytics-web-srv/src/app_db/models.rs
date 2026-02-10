@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 
-/// Reserved screen names that cannot be used.
+/// Reserved names that cannot be used.
 const RESERVED_NAMES: &[&str] = &["new"];
 
 /// A user-defined screen configuration.
@@ -47,13 +47,76 @@ impl ValidationError {
     }
 }
 
-/// Normalizes a screen name for URL usage.
+/// A data source configuration stored in the database.
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct DataSource {
+    pub name: String,
+    pub config: serde_json::Value,
+    pub is_default: bool,
+    pub created_by: String,
+    pub updated_by: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// The config payload for a data source (deserialized from JSONB).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DataSourceConfig {
+    pub url: String,
+}
+
+/// Summary returned to non-admin users listing data sources.
+#[derive(Debug, Clone, Serialize)]
+pub struct DataSourceSummary {
+    pub name: String,
+    pub is_default: bool,
+}
+
+/// Request to create a new data source.
+#[derive(Debug, Clone, Deserialize)]
+pub struct CreateDataSourceRequest {
+    pub name: String,
+    pub config: serde_json::Value,
+    #[serde(default)]
+    pub is_default: bool,
+}
+
+/// Request to update an existing data source.
+#[derive(Debug, Clone, Deserialize)]
+pub struct UpdateDataSourceRequest {
+    pub config: Option<serde_json::Value>,
+    pub is_default: Option<bool>,
+}
+
+/// Validates a data source config JSONB value.
+pub fn validate_data_source_config(
+    config: &serde_json::Value,
+) -> Result<DataSourceConfig, ValidationError> {
+    let parsed: DataSourceConfig = serde_json::from_value(config.clone())
+        .map_err(|e| ValidationError::new("INVALID_CONFIG", &format!("Invalid config: {e}")))?;
+    if parsed.url.is_empty() {
+        return Err(ValidationError::new(
+            "MISSING_URL",
+            "Config must include a non-empty 'url' field",
+        ));
+    }
+    let url_lower = parsed.url.to_lowercase();
+    if !url_lower.starts_with("http://") && !url_lower.starts_with("https://") {
+        return Err(ValidationError::new(
+            "INVALID_URL",
+            "URL must start with http:// or https://",
+        ));
+    }
+    Ok(parsed)
+}
+
+/// Normalizes a name for URL usage.
 ///
 /// - Converts to lowercase
 /// - Replaces spaces with hyphens
 /// - Removes invalid characters
 /// - Collapses consecutive hyphens
-pub fn normalize_screen_name(name: &str) -> String {
+pub fn normalize_name(name: &str) -> String {
     let normalized: String = name
         .to_lowercase()
         .chars()
@@ -80,14 +143,19 @@ pub fn normalize_screen_name(name: &str) -> String {
     result.trim_matches('-').to_string()
 }
 
-/// Validates a screen name according to the rules:
+/// Kept for backward compatibility.
+pub fn normalize_screen_name(name: &str) -> String {
+    normalize_name(name)
+}
+
+/// Validates a name according to the rules:
 /// - 3-100 characters
 /// - Lowercase letters, numbers, and hyphens only
 /// - Must start with a letter
 /// - Must end with a letter or number
 /// - No consecutive hyphens
 /// - Not a reserved name
-pub fn validate_screen_name(name: &str) -> Result<(), ValidationError> {
+pub fn validate_name(name: &str) -> Result<(), ValidationError> {
     // Check length
     if name.len() < 3 {
         return Err(ValidationError::new(
@@ -155,4 +223,9 @@ pub fn validate_screen_name(name: &str) -> Result<(), ValidationError> {
     }
 
     Ok(())
+}
+
+/// Kept for backward compatibility.
+pub fn validate_screen_name(name: &str) -> Result<(), ValidationError> {
+    validate_name(name)
 }

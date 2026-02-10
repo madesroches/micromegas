@@ -230,6 +230,7 @@ pub struct UserInfo {
     sub: String,
     email: Option<String>,
     name: Option<String>,
+    is_admin: bool,
 }
 
 /// JWT claims for decoding (minimal) - used for auth_me name extraction
@@ -696,6 +697,7 @@ pub async fn auth_me(
         sub: auth_context.subject,
         email: auth_context.email,
         name,
+        is_admin: auth_context.is_admin,
     }))
 }
 

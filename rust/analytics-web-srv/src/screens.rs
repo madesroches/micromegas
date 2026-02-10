@@ -1,10 +1,10 @@
 //! Handlers for user-defined screens CRUD operations.
 
-use crate::auth::ValidatedUser;
 use analytics_web_srv::app_db::{
     CreateScreenRequest, Screen, UpdateScreenRequest, ValidationError, normalize_screen_name,
     validate_screen_name,
 };
+use analytics_web_srv::auth::ValidatedUser;
 use analytics_web_srv::screen_types::ScreenType;
 use axum::{
     Extension, Json,

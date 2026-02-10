@@ -15,6 +15,8 @@ interface UseCellExecutionParams {
   setVariableValue: (cellName: string, value: VariableValue) => void
   /** Refresh trigger from parent (increments to trigger re-execution) */
   refreshTrigger: number
+  /** Data source name for query routing */
+  dataSource?: string
 }
 
 export interface UseCellExecutionResult {
@@ -34,7 +36,8 @@ export interface UseCellExecutionResult {
 async function executeSql(
   sql: string,
   timeRange: { begin: string; end: string },
-  abortSignal: AbortSignal
+  abortSignal: AbortSignal,
+  dataSource?: string
 ): Promise<Table> {
   const batches: import('apache-arrow').RecordBatch[] = []
 
@@ -44,6 +47,7 @@ async function executeSql(
       params: { begin: timeRange.begin, end: timeRange.end },
       begin: timeRange.begin,
       end: timeRange.end,
+      dataSource,
     },
     abortSignal
   )) {
@@ -76,6 +80,7 @@ export function useCellExecution({
   variableValuesRef,
   setVariableValue,
   refreshTrigger,
+  dataSource,
 }: UseCellExecutionParams): UseCellExecutionResult {
   const [cellStates, setCellStates] = useState<Record<string, CellState>>({})
   const abortControllerRef = useRef<AbortController | null>(null)
@@ -121,7 +126,7 @@ export function useCellExecution({
         const context: CellExecutionContext = {
           variables: availableVariables,
           timeRange,
-          runQuery: (sql) => executeSql(sql, timeRange, abortControllerRef.current!.signal),
+          runQuery: (sql) => executeSql(sql, timeRange, abortControllerRef.current!.signal, dataSource),
         }
 
         // Delegate to cell's execute method
@@ -155,7 +160,7 @@ export function useCellExecution({
         return false
       }
     },
-    [cells, timeRange, variableValuesRef, setVariableValue]
+    [cells, timeRange, variableValuesRef, setVariableValue, dataSource]
   )
 
   // Execute from a cell index (that cell and all below)

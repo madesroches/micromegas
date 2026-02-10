@@ -218,6 +218,7 @@ export function LogRenderer({
   onSave,
   refreshTrigger,
   onSaveRef,
+  dataSource,
 }: ScreenRendererProps) {
   const logConfig = config as unknown as LogConfig
   const savedLogConfig = savedConfig as unknown as LogConfig | null
@@ -423,19 +424,20 @@ export function LogRenderer({
         },
         begin: timeRange.begin,
         end: timeRange.end,
+        dataSource,
       })
     },
-    [timeRange, logLevel, logLimit, search]
+    [timeRange, logLevel, logLimit, search, dataSource]
   )
 
   // Initial query execution
   const hasExecutedRef = useRef(false)
   useEffect(() => {
-    if (!hasExecutedRef.current) {
+    if (!hasExecutedRef.current && dataSource) {
       hasExecutedRef.current = true
       loadData(logConfig.sql)
     }
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [dataSource]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Re-execute on time range change
   const prevTimeRangeRef = useRef<{ begin: string; end: string } | null>(null)

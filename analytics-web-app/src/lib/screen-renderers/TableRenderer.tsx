@@ -50,6 +50,7 @@ export function TableRenderer({
   onSave,
   refreshTrigger,
   onSaveRef,
+  dataSource,
 }: ScreenRendererProps) {
   const tableConfig = config as unknown as TableConfig
   const savedTableConfig = savedConfig as unknown as TableConfig | null
@@ -87,19 +88,20 @@ export function TableRenderer({
         },
         begin: timeRange.begin,
         end: timeRange.end,
+        dataSource,
       })
     },
-    [timeRange, orderByValue]
+    [timeRange, orderByValue, dataSource]
   )
 
-  // Initial query execution
+  // Initial query execution (wait for dataSource to resolve)
   const hasExecutedRef = useRef(false)
   useEffect(() => {
-    if (!hasExecutedRef.current) {
+    if (!hasExecutedRef.current && dataSource) {
       hasExecutedRef.current = true
       executeQuery(tableConfig.sql)
     }
-  }, [executeQuery, tableConfig.sql])
+  }, [executeQuery, tableConfig.sql, dataSource])
 
   // Re-execute on time range change
   const prevTimeRangeRef = useRef<{ begin: string; end: string } | null>(null)

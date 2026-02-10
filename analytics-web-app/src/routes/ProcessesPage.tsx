@@ -8,6 +8,7 @@ import { PROCESSES_SCHEMA_URL } from '@/components/DocumentationLink'
 import { QueryEditor } from '@/components/QueryEditor'
 import { ErrorBanner } from '@/components/ErrorBanner'
 import { useStreamQuery } from '@/hooks/useStreamQuery'
+import { useDefaultDataSource } from '@/hooks/useDefaultDataSource'
 import { useScreenConfig } from '@/hooks/useScreenConfig'
 import { useDebounce } from '@/hooks/useDebounce'
 import { usePageTitle } from '@/hooks/usePageTitle'
@@ -118,6 +119,7 @@ function ProcessesPageContent() {
     }
   }, [config.timeRangeFrom, config.timeRangeTo])
 
+  const defaultDataSource = useDefaultDataSource()
   const streamQuery = useStreamQuery()
   const table = streamQuery.getTable()
   const queryError = streamQuery.error?.message ?? null
@@ -148,9 +150,10 @@ function ProcessesPageContent() {
         params,
         begin: apiTimeRange.begin,
         end: apiTimeRange.end,
+        dataSource: defaultDataSource,
       })
     },
-    [sortField, sortDirection, config.search, apiTimeRange]
+    [sortField, sortDirection, config.search, apiTimeRange, defaultDataSource]
   )
 
   // Sync debounced search input to config with replace (editing, not navigational)
@@ -164,15 +167,16 @@ function ProcessesPageContent() {
   }, [debouncedSearchInput, updateConfig])
 
   // Load on mount and when time range, sort, or search changes
-  const queryKey = `${apiTimeRange.begin}-${apiTimeRange.end}-${sortField}-${sortDirection}-${config.search ?? ''}`
+  const queryKey = `${apiTimeRange.begin}-${apiTimeRange.end}-${sortField}-${sortDirection}-${config.search ?? ''}-${defaultDataSource}`
   const prevQueryKeyRef = useRef<string | null>(null)
   useEffect(() => {
+    if (!defaultDataSource) return
     if (prevQueryKeyRef.current !== queryKey) {
       const isInitialLoad = prevQueryKeyRef.current === null
       prevQueryKeyRef.current = queryKey
       loadData(isInitialLoad ? DEFAULT_SQL : currentSqlRef.current)
     }
-  }, [queryKey, loadData])
+  }, [queryKey, loadData, defaultDataSource])
 
   // Time range changes create history entries (navigational)
   const handleTimeRangeChange = useCallback(

@@ -1,8 +1,9 @@
-mod auth;
+mod data_sources;
 mod screens;
-mod stream_query;
 
 use analytics_web_srv::app_db;
+use analytics_web_srv::auth;
+use analytics_web_srv::stream_query;
 use anyhow::{Context, Result};
 use auth::{AuthState, AuthToken, OidcClientConfig};
 use axum::{
@@ -133,6 +134,12 @@ async fn main() -> Result<()> {
 
     info!("Connected to micromegas_app database");
 
+    // Create data source cache with 60-second TTL
+    let data_source_cache = analytics_web_srv::data_source_cache::DataSourceCache::new(
+        app_db_pool.clone(),
+        std::time::Duration::from_secs(60),
+    );
+
     // Build auth state if authentication is enabled
     let auth_state = if !args.disable_auth {
         // Load OIDC client configuration
@@ -197,6 +204,7 @@ async fn main() -> Result<()> {
             &format!("{base_path}/api/query-stream"),
             post(stream_query::stream_query_handler),
         )
+        .layer(Extension(data_source_cache.clone()))
         .layer(middleware::from_fn(observability_middleware));
 
     // Apply auth middleware if enabled, otherwise inject a dummy token for no-auth mode
@@ -210,8 +218,8 @@ async fn main() -> Result<()> {
         api_routes.layer(Extension(AuthToken(String::new())))
     };
 
-    // Build screen routes
-    let screen_routes = Router::new()
+    // Build app API routes (screens + data sources)
+    let app_api_routes = Router::new()
         // Screen types (static)
         .route(
             &format!("{base_path}/api/screen-types"),
@@ -232,18 +240,29 @@ async fn main() -> Result<()> {
                 .put(screens::update_screen)
                 .delete(screens::delete_screen),
         )
+        // Data sources CRUD
+        .route(
+            &format!("{base_path}/api/data-sources"),
+            get(data_sources::list_data_sources).post(data_sources::create_data_source),
+        )
+        .route(
+            &format!("{base_path}/api/data-sources/{{name}}"),
+            get(data_sources::get_data_source)
+                .put(data_sources::update_data_source)
+                .delete(data_sources::delete_data_source),
+        )
         .layer(Extension(app_db_pool))
+        .layer(Extension(data_source_cache.clone()))
         .layer(middleware::from_fn(observability_middleware));
 
-    // Apply auth middleware to screen routes if enabled
-    let screen_routes = if let Some(auth_state) = auth_state.clone() {
-        screen_routes.layer(middleware::from_fn_with_state(
+    // Apply auth middleware if enabled, otherwise inject a no-auth dummy user
+    let app_api_routes = if let Some(auth_state) = auth_state.clone() {
+        app_api_routes.layer(middleware::from_fn_with_state(
             auth_state,
             auth::cookie_auth_middleware,
         ))
     } else {
-        // In no-auth mode, inject a dummy ValidatedUser so handlers don't fail
-        screen_routes.layer(Extension(auth::ValidatedUser {
+        app_api_routes.layer(Extension(auth::ValidatedUser {
             subject: "anonymous".to_string(),
             email: None,
             issuer: "local".to_string(),
@@ -277,7 +296,7 @@ async fn main() -> Result<()> {
     let mut app = Router::new()
         .merge(health_routes)
         .merge(api_routes)
-        .merge(screen_routes);
+        .merge(app_api_routes);
 
     // Add auth routes (always - either real or stub)
     app = app.merge(auth_routes);
@@ -381,6 +400,7 @@ struct NoAuthUserInfo {
     sub: String,
     email: Option<String>,
     name: Option<String>,
+    is_admin: bool,
 }
 
 async fn auth_me_no_auth() -> impl IntoResponse {
@@ -388,6 +408,7 @@ async fn auth_me_no_auth() -> impl IntoResponse {
         sub: "anonymous".to_string(),
         email: Some("anonymous@localhost".to_string()),
         name: Some("Anonymous (No Auth)".to_string()),
+        is_admin: true,
     })
 }
 

@@ -5,6 +5,7 @@ import { PageLayout } from '@/components/layout'
 import { AuthGuard } from '@/components/AuthGuard'
 import { CopyableProcessId } from '@/components/CopyableProcessId'
 import { useStreamQuery } from '@/hooks/useStreamQuery'
+import { useDefaultDataSource } from '@/hooks/useDefaultDataSource'
 import { timestampToDate } from '@/lib/arrow-utils'
 import { useScreenConfig } from '@/hooks/useScreenConfig'
 import { usePageTitle } from '@/hooks/usePageTitle'
@@ -141,6 +142,7 @@ function ProcessPageContent() {
   const [properties, setProperties] = useState<Record<string, string> | null>(null)
   const [propertiesError, setPropertiesError] = useState<string | null>(null)
 
+  const defaultDataSource = useDefaultDataSource()
   const processQuery = useStreamQuery()
   const statsQuery = useStreamQuery()
   const propertiesQuery = useStreamQuery()
@@ -224,29 +226,32 @@ function ProcessPageContent() {
       params: { process_id: processId },
       begin: apiTimeRange.begin,
       end: apiTimeRange.end,
+      dataSource: defaultDataSource,
     })
     statsExecuteRef.current({
       sql: STATISTICS_SQL,
       params: { process_id: processId },
       begin: apiTimeRange.begin,
       end: apiTimeRange.end,
+      dataSource: defaultDataSource,
     })
     propertiesExecuteRef.current({
       sql: PROPERTIES_SQL,
       params: { process_id: processId },
       begin: apiTimeRange.begin,
       end: apiTimeRange.end,
+      dataSource: defaultDataSource,
     })
-  }, [processId, apiTimeRange])
+  }, [processId, apiTimeRange, defaultDataSource])
 
   // Load data once on mount when we have a processId
   const hasLoadedRef = useRef(false)
   useEffect(() => {
-    if (processId && !hasLoadedRef.current) {
+    if (processId && defaultDataSource && !hasLoadedRef.current) {
       hasLoadedRef.current = true
       loadData()
     }
-  }, [processId, loadData])
+  }, [processId, defaultDataSource, loadData])
 
   const isLoading = processQuery.isStreaming || (!processQuery.isComplete && !processQuery.error)
   const statsError = statsQuery.error?.message ?? null

@@ -23,6 +23,7 @@ import { useScreenConfig } from '@/hooks/useScreenConfig'
 import { usePageTitle } from '@/hooks/usePageTitle'
 import { useMetricsData } from '@/hooks/useMetricsData'
 import { ThreadCoverage } from '@/types'
+import { useDefaultDataSource } from '@/hooks/useDefaultDataSource'
 import type { PerformanceAnalysisConfig } from '@/lib/screen-config'
 
 const DISCOVERY_SQL = `SELECT DISTINCT name, target, unit
@@ -131,6 +132,8 @@ function calculateBinInterval(timeSpanMs: number, chartWidthPx: number = 800): s
 function PerformanceAnalysisContent() {
   usePageTitle('Performance Analysis')
 
+  const defaultDataSource = useDefaultDataSource()
+
   // Use the new config-driven pattern
   const { config, updateConfig } = useScreenConfig(DEFAULT_CONFIG, buildUrl)
   const processId = config.processId
@@ -194,6 +197,7 @@ function PerformanceAnalysisContent() {
     binInterval,
     apiTimeRange,
     enabled: !!processId && !!selectedMeasure,
+    dataSource: defaultDataSource,
   })
 
   // Use unified data or custom query data
@@ -242,6 +246,7 @@ function PerformanceAnalysisContent() {
         params: { process_id: processId },
         begin: apiTimeRange.begin,
         end: apiTimeRange.end,
+        dataSource: defaultDataSource,
       })
 
       if (error) {
@@ -282,7 +287,7 @@ function PerformanceAnalysisContent() {
     } finally {
       setDiscoveryLoading(false)
     }
-  }, [processId, apiTimeRange, selectedMeasure, updateConfig])
+  }, [processId, apiTimeRange, selectedMeasure, updateConfig, defaultDataSource])
 
   const loadCustomQuery = useCallback(
     async (sql: string) => {
@@ -301,6 +306,7 @@ function PerformanceAnalysisContent() {
           },
           begin: apiTimeRange.begin,
           end: apiTimeRange.end,
+          dataSource: defaultDataSource,
         })
 
         if (error) {
@@ -339,7 +345,7 @@ function PerformanceAnalysisContent() {
         setCustomQueryLoading(false)
       }
     },
-    [processId, selectedMeasure, binInterval, apiTimeRange]
+    [processId, selectedMeasure, binInterval, apiTimeRange, defaultDataSource]
   )
 
   // Ref to always call the latest loadDiscovery without causing effect re-runs
@@ -356,6 +362,7 @@ function PerformanceAnalysisContent() {
         params: { process_id: processId },
         begin: apiTimeRange.begin,
         end: apiTimeRange.end,
+        dataSource: defaultDataSource,
       })
 
       if (error) {
@@ -406,6 +413,7 @@ function PerformanceAnalysisContent() {
         params: { process_id: processId },
         begin: apiTimeRange.begin,
         end: apiTimeRange.end,
+        dataSource: defaultDataSource,
       })
 
       if (error) {
@@ -429,7 +437,7 @@ function PerformanceAnalysisContent() {
     } finally {
       setTraceEventCountLoading(false)
     }
-  }, [processId, apiTimeRange])
+  }, [processId, apiTimeRange, defaultDataSource])
 
   // Ref to always call the latest loadThreadCoverage without causing effect re-runs
   const loadThreadCoverageRef = useRef<(() => Promise<void>) | null>(null)
@@ -470,13 +478,13 @@ function PerformanceAnalysisContent() {
 
   const hasLoadedDiscoveryRef = useRef(false)
   useEffect(() => {
-    if (processId && !hasLoadedDiscoveryRef.current) {
+    if (processId && defaultDataSource && !hasLoadedDiscoveryRef.current) {
       hasLoadedDiscoveryRef.current = true
       // Use refs to avoid re-running this effect when callback identities change
       loadDiscoveryRef.current?.()
       loadThreadCoverageRef.current?.()
     }
-  }, [processId])
+  }, [processId, defaultDataSource])
 
   // Trigger unified query when discovery is done and measure is selected
   const metricsDataExecuteRef = useRef(metricsData.execute)

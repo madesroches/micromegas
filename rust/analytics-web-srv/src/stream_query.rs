@@ -4,6 +4,7 @@
 //! Uses a JSON-framed protocol for the frontend to parse.
 
 use crate::auth::AuthToken;
+use crate::data_source_cache::DataSourceCache;
 use anyhow::{Context, Result};
 use arrow_ipc::writer::{CompressionContext, IpcDataGenerator, IpcWriteOptions, write_message};
 use async_stream::stream;
@@ -33,6 +34,8 @@ pub struct StreamQueryRequest {
     pub params: HashMap<String, String>,
     pub begin: Option<DateTime<Utc>>,
     pub end: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub data_source: String,
 }
 
 /// Error codes for stream query errors
@@ -43,6 +46,7 @@ pub enum ErrorCode {
     ConnectionFailed,
     Internal,
     Forbidden,
+    DataSourceNotFound,
 }
 
 /// Schema and batch frames use identical structure - size-prefixed binary
@@ -156,35 +160,69 @@ pub fn encode_batch(
 #[span_fn]
 pub async fn stream_query_handler(
     Extension(auth_token): Extension<AuthToken>,
+    Extension(cache): Extension<DataSourceCache>,
     Json(request): Json<StreamQueryRequest>,
 ) -> impl IntoResponse {
     info!(
-        "stream query sql={} params={:?} begin={:?} end={:?}",
-        request.sql, request.params, request.begin, request.end
+        "stream query sql={} params={:?} begin={:?} end={:?} data_source={}",
+        request.sql, request.params, request.begin, request.end, request.data_source
     );
 
     // Check for blocked functions first (before starting the stream)
     if let Some(blocked_func) = contains_blocked_function(&request.sql) {
-        let error_frame = ErrorFrame {
-            frame_type: "error",
-            code: ErrorCode::Forbidden,
-            message: format!(
-                "The function '{}' is not allowed in web queries for security reasons",
-                blocked_func
-            ),
-        };
-        let stream =
-            futures::stream::once(async move { Ok::<_, std::io::Error>(json_line(&error_frame)) });
         return (
             StatusCode::FORBIDDEN,
-            [(
-                header::CONTENT_TYPE,
-                "application/x-micromegas-arrow-stream",
-            )],
-            Body::from_stream(stream),
+            Json(ErrorFrame {
+                frame_type: "error",
+                code: ErrorCode::Forbidden,
+                message: format!(
+                    "The function '{blocked_func}' is not allowed in web queries for security reasons",
+                ),
+            }),
         )
             .into_response();
     }
+
+    // Resolve data source
+    if request.data_source.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorFrame {
+                frame_type: "error",
+                code: ErrorCode::DataSourceNotFound,
+                message: "No data source specified".to_string(),
+            }),
+        )
+            .into_response();
+    }
+
+    let data_source_config = match cache.resolve(&request.data_source).await {
+        Ok(Some(config)) => config,
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(ErrorFrame {
+                    frame_type: "error",
+                    code: ErrorCode::DataSourceNotFound,
+                    message: format!("Data source '{}' not found", request.data_source),
+                }),
+            )
+                .into_response();
+        }
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorFrame {
+                    frame_type: "error",
+                    code: ErrorCode::Internal,
+                    message: format!("Failed to resolve data source: {e}"),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    let flightsql_url = data_source_config.url;
 
     // Substitute macros
     let sql = substitute_macros(&request.sql, &request.params);
@@ -198,6 +236,7 @@ pub async fn stream_query_handler(
     let stream = stream! {
         // Create FlightSQL client
         let client_factory = BearerFlightSQLClientFactory::new_with_client_type(
+            flightsql_url,
             auth_token.0,
             "web".to_string(),
         );
