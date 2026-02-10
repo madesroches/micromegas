@@ -5,10 +5,7 @@ use analytics_web_srv::app_db::{normalize_name, validate_name};
 #[test]
 fn test_normalize_name() {
     assert_eq!(normalize_name("Error Logs"), "error-logs");
-    assert_eq!(
-        normalize_name("My Custom Screen"),
-        "my-custom-screen"
-    );
+    assert_eq!(normalize_name("My Custom Screen"), "my-custom-screen");
     assert_eq!(normalize_name("Test--Name"), "test-name");
     assert_eq!(normalize_name("-leading-"), "leading");
     assert_eq!(normalize_name("UPPERCASE"), "uppercase");
@@ -34,40 +31,22 @@ fn test_validate_name_valid() {
 #[test]
 fn test_validate_name_invalid() {
     // Too short
-    assert_eq!(
-        validate_name("ab").unwrap_err().code,
-        "NAME_TOO_SHORT"
-    );
+    assert_eq!(validate_name("ab").unwrap_err().code, "NAME_TOO_SHORT");
 
     // Reserved name
-    assert_eq!(
-        validate_name("new").unwrap_err().code,
-        "RESERVED_NAME"
-    );
+    assert_eq!(validate_name("new").unwrap_err().code, "RESERVED_NAME");
 
     // Invalid start (number)
-    assert_eq!(
-        validate_name("123test").unwrap_err().code,
-        "INVALID_START"
-    );
+    assert_eq!(validate_name("123test").unwrap_err().code, "INVALID_START");
 
     // Invalid start (hyphen)
-    assert_eq!(
-        validate_name("-test").unwrap_err().code,
-        "INVALID_START"
-    );
+    assert_eq!(validate_name("-test").unwrap_err().code, "INVALID_START");
 
     // Invalid end (hyphen)
-    assert_eq!(
-        validate_name("test-").unwrap_err().code,
-        "INVALID_END"
-    );
+    assert_eq!(validate_name("test-").unwrap_err().code, "INVALID_END");
 
     // Invalid character (uppercase) - starts with uppercase so INVALID_START
-    assert_eq!(
-        validate_name("Test").unwrap_err().code,
-        "INVALID_START"
-    );
+    assert_eq!(validate_name("Test").unwrap_err().code, "INVALID_START");
 
     // Invalid character (uppercase in middle)
     assert_eq!(
@@ -89,10 +68,7 @@ fn test_validate_name_invalid() {
 
     // Too long (101 chars)
     let too_long = "a".repeat(101);
-    assert_eq!(
-        validate_name(&too_long).unwrap_err().code,
-        "NAME_TOO_LONG"
-    );
+    assert_eq!(validate_name(&too_long).unwrap_err().code, "NAME_TOO_LONG");
 
     // Empty string
     assert_eq!(validate_name("").unwrap_err().code, "NAME_TOO_SHORT");
