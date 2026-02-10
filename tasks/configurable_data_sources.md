@@ -6,7 +6,20 @@ The analytics web app connects to a single FlightSQL server configured via the `
 
 ## Approach
 
-Add a `data_sources` table to the app database with CRUD endpoints (admin-only for writes). Modify the query path so each request specifies a data source name, which is looked up in the DB to get the FlightSQL URL. The user's JWT is forwarded to whichever FlightSQL server is configured (all share the same OIDC trust). A "default" data source is used as a fallback when screens or built-in pages don't specify one.
+Add a `data_sources` table to the app database with CRUD endpoints (admin-only for writes, name-only listing for regular users). Modify the query path so each request specifies a data source name, which is resolved via an in-memory cache to get the FlightSQL URL. The user's JWT is forwarded to whichever FlightSQL server is configured (all share the same OIDC trust). A "default" data source is used as a fallback when screens or built-in pages don't specify one.
+
+### Data source cache
+
+Data source URLs must not be sent by the frontend — doing so would allow any authenticated user to target arbitrary gRPC endpoints, and a malicious screen config (e.g., via import) could exfiltrate other users' JWTs to an attacker-controlled server.
+
+Instead, the backend maintains an in-memory cache (`Arc<RwLock<HashMap<String, String>>>`) mapping data source names to URLs:
+
+- **Startup**: load all data sources from PG
+- **CRUD on this process**: update local cache immediately after the DB write
+- **Query cache hit**: no PG round-trip
+- **Query cache miss**: refresh entire cache from PG, retry lookup, return `DataSourceNotFound` if still missing
+
+This avoids a PG query per analytics request. In multi-process deployments, the only staleness case is a deleted data source remaining usable on other processes until their next cache miss triggers a refresh — this is harmless.
 
 ### Deployment note
 
@@ -42,18 +55,28 @@ After upgrading, an admin must create at least one data source (typically named 
 - Add `DataSource` struct (name, url, created_by, updated_by, created_at, updated_at)
 - Add `CreateDataSourceRequest` (name, url) and `UpdateDataSourceRequest` (url)
 - Reuse existing `validate_screen_name` / `normalize_screen_name` for data source name validation
-- Add URL validation: must parse as URI, scheme must be `grpc` or `grpcs`
+- Add URL validation: must parse as URI, scheme must be `http` or `https` (tonic expects these schemes for gRPC channels)
 
-### 1.3 Data sources CRUD endpoints
+### 1.3 Data source cache
+
+**New file:** `rust/analytics-web-srv/src/data_source_cache.rs`
+- `DataSourceCache` wrapping `Arc<RwLock<HashMap<String, String>>>`
+- `load_all(pool: &PgPool) -> Result<DataSourceCache>` — reads all rows, builds map
+- `resolve(&self, name: &str) -> Option<String>` — returns URL for a name
+- `refresh(&self, pool: &PgPool) -> Result<()>` — reloads entire map from PG
+- `insert(&self, name: String, url: String)` — updates cache after create/update
+- `remove(&self, name: &str)` — updates cache after delete
+
+### 1.4 Data sources CRUD endpoints
 
 **New file:** `rust/analytics-web-srv/src/data_sources.rs`
-- `GET /api/data-sources` — list all (any authenticated user)
-- `POST /api/data-sources` — create (admin only via `ValidatedUser.is_admin`)
-- `GET /api/data-sources/{name}` — get one (any authenticated user)
-- `PUT /api/data-sources/{name}` — update URL (admin only)
-- `DELETE /api/data-sources/{name}` — delete (admin only, no cascade check — screens referencing a deleted data source will fail at query time)
+- `GET /api/data-sources` — list names only (any authenticated user); returns `Vec<String>`
+- `POST /api/data-sources` — create (admin only via `ValidatedUser.is_admin`); updates cache
+- `GET /api/data-sources/{name}` — get full details including URL (admin only)
+- `PUT /api/data-sources/{name}` — update URL (admin only); updates cache
+- `DELETE /api/data-sources/{name}` — delete (admin only); updates cache; no cascade check — screens referencing a deleted data source will fail at query time
 
-### 1.4 Expose `is_admin` in `/auth/me`
+### 1.5 Expose `is_admin` in `/auth/me`
 
 **File:** `rust/analytics-web-srv/src/auth.rs`
 - Add `is_admin: bool` to `UserInfo` struct
@@ -62,12 +85,13 @@ After upgrading, an admin must create at least one data source (typically named 
 **File:** `rust/analytics-web-srv/src/main.rs`
 - Update no-auth stub `NoAuthUserInfo` to include `is_admin: true`
 
-### 1.5 Register routes
+### 1.6 Register routes and cache
 
 **File:** `rust/analytics-web-srv/src/main.rs`
-- Add `mod data_sources;`
+- Add `mod data_sources;` and `mod data_source_cache;`
+- Load `DataSourceCache` from PG at startup
+- Pass `Extension(DataSourceCache)` to both data source routes and query routes
 - Register data source routes with auth middleware
-- Add `Extension(app_db_pool)` to `api_routes` (currently missing — needed for the query handler to look up data sources)
 
 ---
 
@@ -88,7 +112,11 @@ Note: `http_gateway.rs` has its own query path and reads the env var directly �
 **File:** `rust/analytics-web-srv/src/stream_query.rs`
 - Add `data_source: String` to `StreamQueryRequest`
 - Add `DataSourceNotFound` variant to `ErrorCode`
-- Handler takes `Extension(PgPool)`, looks up data source by name before entering the stream
+- Handler takes `Extension(DataSourceCache)`, resolves data source name to URL:
+  1. Try `cache.resolve(&name)`
+  2. On miss: `cache.refresh(&pool)` then retry `cache.resolve(&name)`
+  3. If still missing: return `DataSourceNotFound` error
+- Handler also takes `Extension(PgPool)` (needed only for cache refresh on miss)
 - Pass URL to `BearerFlightSQLClientFactory::new_with_client_type(url, token, "web")`
 
 ---
@@ -103,13 +131,14 @@ Note: `http_gateway.rs` has its own query path and reads the env var directly �
 ### 3.2 Data sources API
 
 **New file:** `analytics-web-app/src/lib/data-sources-api.ts`
-- `listDataSources()`, `getDataSource()`, `createDataSource()`, `updateDataSource()`, `deleteDataSource()`
+- `listDataSourceNames()` — returns `string[]` (available to all authenticated users)
+- `getDataSource()`, `createDataSource()`, `updateDataSource()`, `deleteDataSource()` — admin only
 - Follow patterns from `screens-api.ts`
 
 ### 3.3 Data sources admin page
 
 **New file:** `analytics-web-app/src/routes/DataSourcesPage.tsx`
-- Table listing data sources (name, URL, created_by, updated_at)
+- Table listing data sources (name, URL, created_by, updated_at) — fetches full details via admin endpoint
 - Create/edit/delete actions (admin only)
 - Simple form for name + URL
 
@@ -140,7 +169,7 @@ Note: `http_gateway.rs` has its own query path and reads the env var directly �
 ### 4.3 Data source selector component
 
 **New file:** `analytics-web-app/src/components/DataSourceSelector.tsx`
-- Dropdown fetching from `listDataSources()`
+- Dropdown fetching from `listDataSourceNames()`
 - Used in screen config panels and notebook editors
 - Defaults to `"default"` when no data source is specified in config
 
@@ -172,7 +201,9 @@ Built-in pages (ProcessesPage, ProcessLogPage, PerformanceAnalysisPage) pass `"d
 
 ## Security
 
-- **SSRF**: Admin-only writes are the primary defense. URL scheme restricted to grpc/grpcs.
+- **SSRF / credential exfiltration**: URLs are never sent by the frontend. The backend resolves data source names via an in-memory cache backed by PG. Only admins can create or modify data sources. This prevents malicious screen configs from directing other users' JWTs to attacker-controlled servers.
+- **Information disclosure**: Regular users can only list data source names. URLs and other details are only visible to admins.
+- **URL validation**: Scheme restricted to http/https (as required by tonic for gRPC channels).
 - **Auth forwarding**: User's JWT forwarded to configured FlightSQL server. All servers must share OIDC trust.
 
 ## Verification
