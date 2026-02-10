@@ -3,7 +3,6 @@
 Run the analytics-web container locally for testing.
 
 Required environment variables:
-    MICROMEGAS_FLIGHTSQL_URL - FlightSQL server URL
     MICROMEGAS_WEB_CORS_ORIGIN - CORS origin for the frontend
     MICROMEGAS_STATE_SECRET - Secret for OAuth state signing
     MICROMEGAS_OIDC_CONFIG - OIDC provider configuration JSON
@@ -23,7 +22,6 @@ IMAGE_NAME = f"{DOCKERHUB_USER}/micromegas-analytics-web"
 
 # Environment variables to pass through
 ENV_VARS = [
-    "MICROMEGAS_FLIGHTSQL_URL",
     "MICROMEGAS_WEB_CORS_ORIGIN",
     "MICROMEGAS_STATE_SECRET",
     "MICROMEGAS_OIDC_CONFIG",

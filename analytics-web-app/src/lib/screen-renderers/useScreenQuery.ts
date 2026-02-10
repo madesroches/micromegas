@@ -13,6 +13,8 @@ export interface ScreenQueryParams {
   params?: Record<string, string>
   /** Transform SQL before execution (e.g., variable expansion) */
   transformSql?: (sql: string) => string
+  /** Data source name for query routing */
+  dataSource?: string
 }
 
 export interface ScreenQueryResult {
@@ -52,6 +54,7 @@ export function useScreenQuery({
   refreshTrigger,
   params = {},
   transformSql,
+  dataSource,
 }: ScreenQueryParams): ScreenQueryResult {
   const streamQuery = useStreamQuery()
 
@@ -77,19 +80,20 @@ export function useScreenQuery({
         },
         begin: timeRange.begin,
         end: timeRange.end,
+        dataSource,
       })
     },
-    [timeRange, params, transformSql]
+    [timeRange, params, transformSql, dataSource]
   )
 
-  // Initial query execution
+  // Initial query execution (wait for dataSource to resolve)
   const hasExecutedRef = useRef(false)
   useEffect(() => {
-    if (!hasExecutedRef.current) {
+    if (!hasExecutedRef.current && dataSource) {
       hasExecutedRef.current = true
       executeQuery(initialSql)
     }
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [dataSource]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Re-execute on time range change
   const prevTimeRangeRef = useRef<{ begin: string; end: string } | null>(null)

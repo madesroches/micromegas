@@ -156,8 +156,6 @@ def setup_environment():
     # Port configuration
     backend_port = int(os.environ.get("MICROMEGAS_BACKEND_PORT", "8000"))
     frontend_port = int(os.environ.get("MICROMEGAS_FRONTEND_PORT", "3000"))
-    flightsql_port = int(os.environ.get("MICROMEGAS_FLIGHTSQL_PORT", "50051"))
-
     # Set port env vars for Vite to read
     os.environ["MICROMEGAS_BACKEND_PORT"] = str(backend_port)
     os.environ["MICROMEGAS_FRONTEND_PORT"] = str(frontend_port)
@@ -180,7 +178,6 @@ def setup_environment():
     app_db_conn_string = f"postgres://{db_username}:{db_passwd}@127.0.0.1:{db_port}/micromegas_app"
 
     env_vars = {
-        "MICROMEGAS_FLIGHTSQL_URL": f"grpc://127.0.0.1:{flightsql_port}",
         "MICROMEGAS_AUTH_TOKEN": "",  # Empty for no-auth mode
         "MICROMEGAS_WEB_CORS_ORIGIN": f"http://localhost:{frontend_port}",  # Frontend origin for CORS
         # OAuth callback URL must include base_path so browser URL matches cookie path

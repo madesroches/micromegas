@@ -11,6 +11,7 @@ const PerformanceAnalysisPage = lazy(() => import('@/routes/PerformanceAnalysisP
 const ScreensPage = lazy(() => import('@/routes/ScreensPage'))
 const ScreenPage = lazy(() => import('@/routes/ScreenPage'))
 const AdminPage = lazy(() => import('@/routes/AdminPage'))
+const DataSourcesPage = lazy(() => import('@/routes/DataSourcesPage'))
 const ExportScreensPage = lazy(() => import('@/routes/ExportScreensPage'))
 const ImportScreensPage = lazy(() => import('@/routes/ImportScreensPage'))
 const NotFoundPage = lazy(() => import('@/routes/NotFoundPage'))
@@ -41,6 +42,7 @@ export function AppRouter() {
         <Route path="/screen/new" element={<ScreenPage />} />
         <Route path="/screen/:name" element={<ScreenPage />} />
         <Route path="/admin" element={<AdminPage />} />
+        <Route path="/admin/data-sources" element={<DataSourcesPage />} />
         <Route path="/admin/export-screens" element={<ExportScreensPage />} />
         <Route path="/admin/import-screens" element={<ImportScreensPage />} />
         <Route path="*" element={<NotFoundPage />} />

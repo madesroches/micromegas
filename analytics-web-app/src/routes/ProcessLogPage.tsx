@@ -9,6 +9,7 @@ import { LOG_ENTRIES_SCHEMA_URL } from '@/components/DocumentationLink'
 import { QueryEditor } from '@/components/QueryEditor'
 import { ErrorBanner } from '@/components/ErrorBanner'
 import { useStreamQuery } from '@/hooks/useStreamQuery'
+import { useDefaultDataSource } from '@/hooks/useDefaultDataSource'
 import { useScreenConfig } from '@/hooks/useScreenConfig'
 import { timestampToDate } from '@/lib/arrow-utils'
 import { parseTimeRange, getTimeRangeForApi } from '@/lib/time-range'
@@ -241,6 +242,7 @@ function ProcessLogContent() {
     }
   }, [config.timeRangeFrom, config.timeRangeTo])
 
+  const { name: defaultDataSource, error: dataSourceError } = useDefaultDataSource()
   const streamQuery = useStreamQuery()
   const queryError = streamQuery.error?.message ?? null
 
@@ -296,9 +298,10 @@ function ProcessLogContent() {
         params,
         begin: apiTimeRange.begin,
         end: apiTimeRange.end,
+        dataSource: defaultDataSource,
       })
     },
-    [processId, logLevel, logLimit, config.search, apiTimeRange]
+    [processId, logLevel, logLimit, config.search, apiTimeRange, defaultDataSource]
   )
 
   // Update log level with replace (editing, not navigational)
@@ -365,11 +368,11 @@ function ProcessLogContent() {
   // Initial load
   const hasInitialLoadRef = useRef(false)
   useEffect(() => {
-    if (processId && !hasInitialLoadRef.current) {
+    if (processId && defaultDataSource && !hasInitialLoadRef.current) {
       hasInitialLoadRef.current = true
       loadData(DEFAULT_SQL)
     }
-  }, [processId, loadData])
+  }, [processId, defaultDataSource, loadData])
 
   // Re-execute on filter changes
   const prevFiltersRef = useRef<{ logLevel: string; logLimit: number; search: string } | null>(null)
@@ -546,6 +549,13 @@ function ProcessLogContent() {
               : `Showing ${rows.length} entries`}
           </span>
         </div>
+
+        {dataSourceError && (
+          <ErrorBanner
+            title="Data source error"
+            message={dataSourceError}
+          />
+        )}
 
         {queryError && (
           <ErrorBanner

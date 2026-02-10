@@ -5,6 +5,7 @@ import { PageLayout } from '@/components/layout'
 import { AuthGuard } from '@/components/AuthGuard'
 import { CopyableProcessId } from '@/components/CopyableProcessId'
 import { useStreamQuery } from '@/hooks/useStreamQuery'
+import { useDefaultDataSource } from '@/hooks/useDefaultDataSource'
 import { timestampToDate } from '@/lib/arrow-utils'
 import { useScreenConfig } from '@/hooks/useScreenConfig'
 import { usePageTitle } from '@/hooks/usePageTitle'
@@ -141,6 +142,7 @@ function ProcessPageContent() {
   const [properties, setProperties] = useState<Record<string, string> | null>(null)
   const [propertiesError, setPropertiesError] = useState<string | null>(null)
 
+  const { name: defaultDataSource, error: dataSourceError } = useDefaultDataSource()
   const processQuery = useStreamQuery()
   const statsQuery = useStreamQuery()
   const propertiesQuery = useStreamQuery()
@@ -224,29 +226,32 @@ function ProcessPageContent() {
       params: { process_id: processId },
       begin: apiTimeRange.begin,
       end: apiTimeRange.end,
+      dataSource: defaultDataSource,
     })
     statsExecuteRef.current({
       sql: STATISTICS_SQL,
       params: { process_id: processId },
       begin: apiTimeRange.begin,
       end: apiTimeRange.end,
+      dataSource: defaultDataSource,
     })
     propertiesExecuteRef.current({
       sql: PROPERTIES_SQL,
       params: { process_id: processId },
       begin: apiTimeRange.begin,
       end: apiTimeRange.end,
+      dataSource: defaultDataSource,
     })
-  }, [processId, apiTimeRange])
+  }, [processId, apiTimeRange, defaultDataSource])
 
   // Load data once on mount when we have a processId
   const hasLoadedRef = useRef(false)
   useEffect(() => {
-    if (processId && !hasLoadedRef.current) {
+    if (processId && defaultDataSource && !hasLoadedRef.current) {
       hasLoadedRef.current = true
       loadData()
     }
-  }, [processId, loadData])
+  }, [processId, defaultDataSource, loadData])
 
   const isLoading = processQuery.isStreaming || (!processQuery.isComplete && !processQuery.error)
   const statsError = statsQuery.error?.message ?? null
@@ -258,6 +263,22 @@ function ProcessPageContent() {
           <div className="flex flex-col items-center justify-center h-64 bg-app-panel border border-theme-border rounded-lg">
             <AlertCircle className="w-10 h-10 text-accent-error mb-3" />
             <p className="text-theme-text-secondary">No process ID provided</p>
+            <AppLink href="/processes" className="text-accent-link hover:underline mt-2">
+              Back to Processes
+            </AppLink>
+          </div>
+        </div>
+      </PageLayout>
+    )
+  }
+
+  if (dataSourceError) {
+    return (
+      <PageLayout>
+        <div className="p-6">
+          <div className="flex flex-col items-center justify-center h-64 bg-app-panel border border-theme-border rounded-lg">
+            <AlertCircle className="w-10 h-10 text-accent-error mb-3" />
+            <p className="text-theme-text-secondary">{dataSourceError}</p>
             <AppLink href="/processes" className="text-accent-link hover:underline mt-2">
               Back to Processes
             </AppLink>

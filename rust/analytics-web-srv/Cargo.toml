@@ -25,6 +25,7 @@ datafusion.workspace = true
 futures.workspace = true
 http.workspace = true
 micromegas-auth.workspace = true
+moka.workspace = true
 openidconnect.workspace = true
 serde.workspace = true
 serde_json.workspace = true

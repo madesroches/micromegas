@@ -33,6 +33,28 @@ async fn create_screens_table(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) ->
     Ok(())
 }
 
+pub async fn create_data_sources_table(
+    tr: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+) -> Result<()> {
+    let sql = "
+        CREATE TABLE data_sources(
+            name VARCHAR(255) PRIMARY KEY,
+            config JSONB NOT NULL,
+            is_default BOOLEAN NOT NULL DEFAULT FALSE,
+            created_by VARCHAR(255) NOT NULL,
+            updated_by VARCHAR(255) NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        CREATE UNIQUE INDEX data_sources_one_default
+            ON data_sources (is_default) WHERE is_default = TRUE;
+    ";
+    tr.execute(sql)
+        .await
+        .with_context(|| "Creating data_sources table and indices")?;
+    Ok(())
+}
+
 /// Creates the tables for the micromegas_app database.
 pub async fn create_tables(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Result<()> {
     create_screens_table(tr).await?;

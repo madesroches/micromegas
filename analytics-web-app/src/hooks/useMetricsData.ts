@@ -19,6 +19,7 @@ interface UseMetricsDataParams {
   binInterval: string
   apiTimeRange: { begin: string; end: string }
   enabled?: boolean
+  dataSource?: string
 }
 
 interface UseMetricsDataReturn {
@@ -38,6 +39,7 @@ export function useMetricsData({
   binInterval,
   apiTimeRange,
   enabled = true,
+  dataSource,
 }: UseMetricsDataParams): UseMetricsDataReturn {
   const query = useStreamQuery()
 
@@ -62,9 +64,10 @@ export function useMetricsData({
       },
       begin: apiTimeRange.begin,
       end: apiTimeRange.end,
+      dataSource,
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps -- Use stable refs (query.execute) and primitives
-  }, [processId, measureName, binInterval, apiTimeRange.begin, apiTimeRange.end, enabled, query.execute])
+  }, [processId, measureName, binInterval, apiTimeRange.begin, apiTimeRange.end, enabled, dataSource, query.execute])
 
   // Cleanup: cancel query on unmount
   useEffect(() => {

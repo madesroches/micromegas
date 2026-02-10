@@ -121,7 +121,7 @@ function ExportScreensPageContent() {
   }
 
   return (
-    <AuthGuard>
+    <AuthGuard requireAdmin>
       <PageLayout onRefresh={loadData}>
         <div className="p-6 flex flex-col h-full">
           {/* Breadcrumb */}
@@ -284,7 +284,7 @@ export default function ExportScreensPage() {
   return (
     <Suspense
       fallback={
-        <AuthGuard>
+        <AuthGuard requireAdmin>
           <PageLayout>
             <div className="p-6">
               <div className="flex items-center justify-center h-64">

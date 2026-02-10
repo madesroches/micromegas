@@ -41,6 +41,7 @@ export function MetricsRenderer({
   onSave,
   refreshTrigger,
   onSaveRef,
+  dataSource,
 }: ScreenRendererProps) {
   const metricsConfig = config as unknown as MetricsConfig
   const savedMetricsConfig = savedConfig as unknown as MetricsConfig | null
@@ -63,6 +64,7 @@ export function MetricsRenderer({
     initialSql: metricsConfig.sql,
     timeRange,
     refreshTrigger,
+    dataSource,
   })
 
   // Sync scale mode from config when loaded

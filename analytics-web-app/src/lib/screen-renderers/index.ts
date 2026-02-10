@@ -38,6 +38,8 @@ export interface ScreenRendererProps {
   refreshTrigger: number
   /** Ref for the renderer's wrapped save handler (includes URL cleanup). Title bar calls this. */
   onSaveRef?: MutableRefObject<(() => Promise<void>) | null>
+  /** Active data source name for queries */
+  dataSource: string
 }
 
 /**

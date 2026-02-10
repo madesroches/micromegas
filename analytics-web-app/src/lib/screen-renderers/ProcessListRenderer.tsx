@@ -89,6 +89,7 @@ export function ProcessListRenderer({
   onSave,
   refreshTrigger,
   onSaveRef,
+  dataSource,
 }: ScreenRendererProps) {
   const processListConfig = config as unknown as ProcessListConfig
   const savedProcessListConfig = savedConfig as unknown as ProcessListConfig | null
@@ -127,19 +128,20 @@ export function ProcessListRenderer({
         },
         begin: timeRange.begin,
         end: timeRange.end,
+        dataSource,
       })
     },
-    [timeRange, orderByValue]
+    [timeRange, orderByValue, dataSource]
   )
 
   // Initial query execution
   const hasExecutedRef = useRef(false)
   useEffect(() => {
-    if (!hasExecutedRef.current) {
+    if (!hasExecutedRef.current && dataSource) {
       hasExecutedRef.current = true
       executeQuery(processListConfig.sql)
     }
-  }, [executeQuery, processListConfig.sql])
+  }, [executeQuery, processListConfig.sql, dataSource])
 
   // Re-execute on time range change
   const prevTimeRangeRef = useRef<{ begin: string; end: string } | null>(null)

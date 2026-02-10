@@ -217,7 +217,6 @@ def main():
 
     # Environment variables
     env_vars = {
-        "MICROMEGAS_FLIGHTSQL_URL": f"grpc://{args.flightsql_host}:{args.flightsql_port}",
         "MICROMEGAS_AUTH_TOKEN": os.environ.get("MICROMEGAS_AUTH_TOKEN", ""),
         "MICROMEGAS_WEB_CORS_ORIGIN": f"http://localhost:{args.port}",
         "MICROMEGAS_BASE_PATH": base_path,  # Required by image, can be empty

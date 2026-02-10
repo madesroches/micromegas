@@ -137,6 +137,7 @@ export interface StreamQueryParams {
   params?: Record<string, string>;
   begin?: string; // ISO date
   end?: string;   // ISO date
+  dataSource?: string;
 }
 
 /**
@@ -162,6 +163,7 @@ export async function* streamQuery(
       params: params.params || {},
       begin: params.begin,
       end: params.end,
+      data_source: params.dataSource || '',
     }),
     signal,
   });

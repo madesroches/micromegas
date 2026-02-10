@@ -12,6 +12,8 @@ import { parseTimeRange, getTimeRangeForApi } from '@/lib/time-range'
 import { renderIcon } from '@/lib/screen-type-utils'
 import { getRenderer } from '@/lib/screen-renderers/init'
 import { DEFAULT_TIME_RANGE } from '@/lib/screen-defaults'
+import { useDefaultDataSource } from '@/hooks/useDefaultDataSource'
+import { DataSourceSelector } from '@/components/DataSourceSelector'
 import {
   getScreen,
   getScreenTypes,
@@ -33,6 +35,10 @@ function ScreenPageContent() {
   // Screen state
   const [screen, setScreen] = useState<Screen | null>(null)
 
+  // Data source
+  const { name: defaultDataSourceName, error: dataSourceError } = useDefaultDataSource()
+  const [dataSource, setDataSource] = useState('')
+
   // Read type directly from URL (only used for new screens)
   const typeParam = (searchParams.get('type') ?? null) as ScreenTypeName | null
 
@@ -47,6 +53,13 @@ function ScreenPageContent() {
     },
     [searchParams, navigate]
   )
+
+  // Set data source from default when loaded (if not already set)
+  useEffect(() => {
+    if (!dataSource && defaultDataSourceName) {
+      setDataSource(defaultDataSourceName)
+    }
+  }, [defaultDataSourceName, dataSource])
 
   // Screen type info (fetched from API)
   const [screenTypeInfo, setScreenTypeInfo] = useState<ScreenTypeInfo | null>(null)
@@ -364,6 +377,7 @@ function ScreenPageContent() {
                     </span>
                   )}
                 </div>
+                <DataSourceSelector value={dataSource} onChange={setDataSource} />
                 {/* Save controls */}
                 <div className="flex items-center gap-2">
                   {hasUnsavedChanges && !isNew && (
@@ -407,6 +421,9 @@ function ScreenPageContent() {
               {saveError && (
                 <p className="text-xs text-accent-error mt-2 ml-11">{saveError}</p>
               )}
+              {dataSourceError && (
+                <p className="text-xs text-accent-error mt-2 ml-11">{dataSourceError}</p>
+              )}
             </div>
           </div>
 
@@ -425,6 +442,7 @@ function ScreenPageContent() {
               onSave={screen ? handleSave : null}
               refreshTrigger={refreshTrigger}
               onSaveRef={saveRef}
+              dataSource={dataSource}
             />
           </div>
         </div>

@@ -1,10 +1,10 @@
 //! Handlers for user-defined screens CRUD operations.
 
-use crate::auth::ValidatedUser;
 use analytics_web_srv::app_db::{
-    CreateScreenRequest, Screen, UpdateScreenRequest, ValidationError, normalize_screen_name,
-    validate_screen_name,
+    CreateScreenRequest, Screen, UpdateScreenRequest, ValidationError, normalize_name,
+    validate_name,
 };
+use analytics_web_srv::auth::ValidatedUser;
 use analytics_web_srv::screen_types::ScreenType;
 use axum::{
     Extension, Json,
@@ -153,8 +153,8 @@ pub async fn create_screen(
     Json(request): Json<CreateScreenRequest>,
 ) -> ScreenResult<(StatusCode, Json<Screen>)> {
     // Normalize and validate name
-    let name = normalize_screen_name(&request.name);
-    validate_screen_name(&name)?;
+    let name = normalize_name(&request.name);
+    validate_name(&name)?;
 
     // Validate screen type
     let _screen_type: ScreenType = request.screen_type.parse().map_err(|_| {
