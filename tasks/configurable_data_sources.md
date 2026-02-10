@@ -12,14 +12,15 @@ Add a `data_sources` table to the app database with CRUD endpoints (admin-only f
 
 Data source URLs must not be sent by the frontend — doing so would allow any authenticated user to target arbitrary gRPC endpoints, and a malicious screen config (e.g., via import) could exfiltrate other users' JWTs to an attacker-controlled server.
 
-Instead, the backend maintains an in-memory cache (`Arc<RwLock<HashMap<String, String>>>`) mapping data source names to URLs:
+Instead, the backend maintains an in-memory cache (`moka::future::Cache<String, DataSourceConfig>`) mapping data source names to configs:
 
-- **Startup**: load all data sources from PG
-- **CRUD on this process**: update local cache immediately after the DB write
-- **Query cache hit**: no PG round-trip
-- **Query cache miss**: refresh entire cache from PG, retry lookup, return `DataSourceNotFound` if still missing
+- **Lazy loading**: entries are loaded from PG on first access via `try_get_with()`
+- **TTL expiry**: entries expire after a configurable duration (e.g., 60 seconds), ensuring updates from other processes are picked up
+- **CRUD on this process**: invalidate the cache entry so the next resolve fetches fresh from PG
+- **Cache hit**: no PG round-trip
+- **Cache miss / expired**: single-row PG query to load that entry
 
-This avoids a PG query per analytics request. In multi-process deployments, the only staleness case is a deleted data source remaining usable on other processes until their next cache miss triggers a refresh — this is harmless.
+This avoids a PG query per analytics request. In multi-process deployments, URL changes on other processes are picked up within the TTL window.
 
 ### Deployment note
 
@@ -36,13 +37,18 @@ After upgrading, an admin must create at least one data source (typically named 
   ```sql
   CREATE TABLE data_sources(
       name VARCHAR(255) PRIMARY KEY,
-      url VARCHAR(2048) NOT NULL,
+      config JSONB NOT NULL,
+      is_default BOOLEAN NOT NULL DEFAULT FALSE,
       created_by VARCHAR(255),
       updated_by VARCHAR(255),
       created_at TIMESTAMPTZ DEFAULT NOW(),
       updated_at TIMESTAMPTZ DEFAULT NOW()
   );
+  CREATE UNIQUE INDEX data_sources_one_default
+      ON data_sources (is_default) WHERE is_default = TRUE;
   ```
+  Initial `config` schema: `{ "url": "https://..." }`. Validated at the application layer — `url` is required, must be http/https.
+  The partial unique index ensures at most one data source can be marked as default.
 
 **File:** `rust/analytics-web-srv/src/app_db/migration.rs`
 - Bump `LATEST_APP_SCHEMA_VERSION` to 2
@@ -52,29 +58,32 @@ After upgrading, an admin must create at least one data source (typically named 
 ### 1.2 Data source model
 
 **File:** `rust/analytics-web-srv/src/app_db/models.rs`
-- Add `DataSource` struct (name, url, created_by, updated_by, created_at, updated_at)
-- Add `CreateDataSourceRequest` (name, url) and `UpdateDataSourceRequest` (url)
-- Reuse existing `validate_screen_name` / `normalize_screen_name` for data source name validation
-- Add URL validation: must parse as URI, scheme must be `http` or `https` (tonic expects these schemes for gRPC channels)
+- Add `DataSource` struct (name, config: `serde_json::Value`, is_default, created_by, updated_by, created_at, updated_at)
+- Add `DataSourceConfig` struct with `url: String` — deserialized from the JSONB `config` column, extensible for future fields
+- Add `CreateDataSourceRequest` (name, config, is_default) and `UpdateDataSourceRequest` (config, is_default)
+- Rename `validate_screen_name` → `validate_name` and `normalize_screen_name` → `normalize_name`, reuse for data source name validation
+- Validate `config`: deserialize as `DataSourceConfig`, `url` must be present and parse as http/https URI
 
 ### 1.3 Data source cache
 
 **New file:** `rust/analytics-web-srv/src/data_source_cache.rs`
-- `DataSourceCache` wrapping `Arc<RwLock<HashMap<String, String>>>`
-- `load_all(pool: &PgPool) -> Result<DataSourceCache>` — reads all rows, builds map
-- `resolve(&self, name: &str) -> Option<String>` — returns URL for a name
-- `refresh(&self, pool: &PgPool) -> Result<()>` — reloads entire map from PG
-- `insert(&self, name: String, url: String)` — updates cache after create/update
-- `remove(&self, name: &str)` — updates cache after delete
+- `DataSourceCache` wrapping `moka::future::Cache<String, DataSourceConfig>` (name → config)
+- Configure with TTL (e.g., 60 seconds) so updates from other processes are picked up
+- `resolve(&self, name: &str, pool: &PgPool) -> Result<Option<DataSourceConfig>>` — returns cached config or loads from PG on miss/expiry via `try_get_with()`
+- `invalidate(&self, name: &str)` — evicts entry after create/update/delete so next resolve fetches fresh from PG
+- No bulk load at startup — entries are loaded lazily on first access
+- No special default resolution — the frontend resolves the default data source name from `listDataSources()` and always sends a concrete name
 
 ### 1.4 Data sources CRUD endpoints
 
 **New file:** `rust/analytics-web-srv/src/data_sources.rs`
-- `GET /api/data-sources` — list names only (any authenticated user); returns `Vec<String>`
-- `POST /api/data-sources` — create (admin only via `ValidatedUser.is_admin`); updates cache
+- `GET /api/data-sources` — list names and default flag (any authenticated user); returns `Vec<{ name, is_default }>`
+- `POST /api/data-sources` — create (admin only via `ValidatedUser.is_admin`); if this is the first data source, auto-set `is_default: true`; if `is_default: true` is requested, clear default on other rows in a transaction; invalidates cache
 - `GET /api/data-sources/{name}` — get full details including URL (admin only)
-- `PUT /api/data-sources/{name}` — update URL (admin only); updates cache
-- `DELETE /api/data-sources/{name}` — delete (admin only); updates cache; no cascade check — screens referencing a deleted data source will fail at query time
+- `PUT /api/data-sources/{name}` — update config and/or transfer default (admin only); if `is_default: true`, clear default on other rows in a transaction; reject if request would remove the default flag from the current default (400: "cannot remove default flag — set another data source as default instead"); invalidates cache
+- `DELETE /api/data-sources/{name}` — delete (admin only); reject if `is_default = true` (400: "cannot delete the default data source — set another data source as default first"); invalidates cache; no cascade check — screens referencing a deleted data source will fail at query time
+
+**Default protection invariant:** once a default data source exists, there is always exactly one. The default flag can only move to another source (via PUT or POST with `is_default: true`), never be removed or left empty.
 
 ### 1.5 Expose `is_admin` in `/auth/me`
 
@@ -89,7 +98,7 @@ After upgrading, an admin must create at least one data source (typically named 
 
 **File:** `rust/analytics-web-srv/src/main.rs`
 - Add `mod data_sources;` and `mod data_source_cache;`
-- Load `DataSourceCache` from PG at startup
+- Create `DataSourceCache` (moka cache with TTL, takes `PgPool` for lazy loading)
 - Pass `Extension(DataSourceCache)` to both data source routes and query routes
 - Register data source routes with auth middleware
 
@@ -112,12 +121,10 @@ Note: `http_gateway.rs` has its own query path and reads the env var directly �
 **File:** `rust/analytics-web-srv/src/stream_query.rs`
 - Add `data_source: String` to `StreamQueryRequest`
 - Add `DataSourceNotFound` variant to `ErrorCode`
-- Handler takes `Extension(DataSourceCache)`, resolves data source name to URL:
-  1. Try `cache.resolve(&name)`
-  2. On miss: `cache.refresh(&pool)` then retry `cache.resolve(&name)`
-  3. If still missing: return `DataSourceNotFound` error
-- Handler also takes `Extension(PgPool)` (needed only for cache refresh on miss)
-- Pass URL to `BearerFlightSQLClientFactory::new_with_client_type(url, token, "web")`
+- Handler takes `Extension(DataSourceCache)`, resolves data source name to config:
+  1. Call `cache.resolve(&request.data_source, &pool)`
+  2. If `None`: return `DataSourceNotFound` error
+- Pass `config.url` to `BearerFlightSQLClientFactory::new_with_client_type(url, token, "web")`
 
 ---
 
@@ -131,16 +138,16 @@ Note: `http_gateway.rs` has its own query path and reads the env var directly �
 ### 3.2 Data sources API
 
 **New file:** `analytics-web-app/src/lib/data-sources-api.ts`
-- `listDataSourceNames()` — returns `string[]` (available to all authenticated users)
+- `listDataSources()` — returns `{ name: string, isDefault: boolean }[]` (available to all authenticated users)
 - `getDataSource()`, `createDataSource()`, `updateDataSource()`, `deleteDataSource()` — admin only
 - Follow patterns from `screens-api.ts`
 
 ### 3.3 Data sources admin page
 
 **New file:** `analytics-web-app/src/routes/DataSourcesPage.tsx`
-- Table listing data sources (name, URL, created_by, updated_at) — fetches full details via admin endpoint
+- Table listing data sources (name, URL from config, created_by, updated_at) — fetches full details via admin endpoint
 - Create/edit/delete actions (admin only)
-- Simple form for name + URL
+- Form for name + URL (initially; extensible as `DataSourceConfig` grows)
 
 **File:** `analytics-web-app/src/routes/AdminPage.tsx`
 - Add card linking to `/admin/data-sources`
@@ -169,25 +176,27 @@ Note: `http_gateway.rs` has its own query path and reads the env var directly �
 ### 4.3 Data source selector component
 
 **New file:** `analytics-web-app/src/components/DataSourceSelector.tsx`
-- Dropdown fetching from `listDataSourceNames()`
+- Dropdown fetching from `listDataSources()`
+- Shows all named data sources; the one marked `isDefault` is pre-selected when no data source is specified in config
 - Used in screen config panels and notebook editors
-- Defaults to `"default"` when no data source is specified in config
 
 ### 4.4 Update screen renderers
 
-Each renderer reads `config.dataSource` and passes to query calls. When `config.dataSource` is missing or empty, the frontend substitutes `"default"`:
+Each renderer reads `config.dataSource` and passes to query calls. When `config.dataSource` is missing or empty, the frontend resolves the default from `listDataSources()` (the entry with `isDefault: true`) and sends that concrete name:
 - `LogRenderer.tsx`, `TableRenderer.tsx`, `MetricsRenderer.tsx`, `NotebookRenderer.tsx`, `ProcessListRenderer.tsx`
 
 This handles backward compatibility with existing screens that have no `dataSource` in their config.
 
-### 4.5 Update default screen configs
+### 4.5 Default data source hook
 
-**File:** `rust/analytics-web-srv/src/screen_types.rs`
-- Add `"dataSource": "default"` to each screen type's default config
+**New file:** `analytics-web-app/src/hooks/useDefaultDataSource.ts`
+- Calls `listDataSources()` (cached/memoized) and returns the name of the entry with `isDefault: true`
+- Used by screen renderers (as fallback when `config.dataSource` is unset) and built-in pages
+- Avoids duplicating default-resolution logic across components
 
 ### 4.6 Built-in pages
 
-Built-in pages (ProcessesPage, ProcessLogPage, PerformanceAnalysisPage) pass `"default"` as the data source name in their query requests, same as any other caller using the fallback.
+Built-in pages (ProcessesPage, ProcessLogPage, PerformanceAnalysisPage) also resolve the default data source name from `listDataSources()` and send the concrete name.
 
 ---
 
@@ -203,7 +212,7 @@ Built-in pages (ProcessesPage, ProcessLogPage, PerformanceAnalysisPage) pass `"d
 
 - **SSRF / credential exfiltration**: URLs are never sent by the frontend. The backend resolves data source names via an in-memory cache backed by PG. Only admins can create or modify data sources. This prevents malicious screen configs from directing other users' JWTs to attacker-controlled servers.
 - **Information disclosure**: Regular users can only list data source names. URLs and other details are only visible to admins.
-- **URL validation**: Scheme restricted to http/https (as required by tonic for gRPC channels).
+- **Config validation**: `config` JSONB is deserialized and validated at the application layer; `url` must be http/https (as required by tonic for gRPC channels).
 - **Auth forwarding**: User's JWT forwarded to configured FlightSQL server. All servers must share OIDC trust.
 
 ## Verification
