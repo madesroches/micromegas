@@ -5,7 +5,7 @@ import { LOG_ENTRIES_SCHEMA_URL } from '@/components/DocumentationLink'
 import { registerRenderer, ScreenRendererProps } from './index'
 import { LoadingState, EmptyState, RendererLayout } from './shared'
 import { QueryEditor } from '@/components/QueryEditor'
-import { DataSourceSelector } from '@/components/DataSourceSelector'
+import { DataSourceField } from '@/components/DataSourceSelector'
 import { useStreamQuery } from '@/hooks/useStreamQuery'
 import { useChangeEffect } from '@/hooks/useChangeEffect'
 import { useDebounce } from '@/hooks/useDebounce'
@@ -557,16 +557,11 @@ export function LogRenderer({
     search_filter: expandSearchFilter(search) || '(empty)',
   }
 
-  // Data source selector for the query editor panel
   const dataSourceContent = (
-    <div className="mb-4">
-      <h4 className="text-xs font-semibold uppercase tracking-wide text-theme-text-muted mb-2">Data Source</h4>
-      <DataSourceSelector
-        value={effectiveDataSource || ''}
-        onChange={(ds) => onConfigChange({ ...logConfig, dataSource: ds })}
-
-      />
-    </div>
+    <DataSourceField
+      value={effectiveDataSource || ''}
+      onChange={(ds) => onConfigChange({ ...logConfig, dataSource: ds })}
+    />
   )
 
   // Query editor panel

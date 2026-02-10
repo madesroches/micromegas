@@ -7,6 +7,19 @@ interface DataSourceSelectorProps {
   onChange: (name: string) => void
 }
 
+/**
+ * Labeled data source selector with heading. Use this in query panels and editors.
+ * Wraps DataSourceSelector with a standard h4 label.
+ */
+export function DataSourceField({ value, onChange, className = 'mb-4' }: DataSourceSelectorProps & { className?: string }) {
+  return (
+    <div className={className}>
+      <h4 className="text-xs font-semibold uppercase tracking-wide text-theme-text-muted mb-2">Data Source</h4>
+      <DataSourceSelector value={value} onChange={onChange} />
+    </div>
+  )
+}
+
 export function DataSourceSelector({ value, onChange }: DataSourceSelectorProps) {
   const [sources, setSources] = useState<DataSourceSummary[]>([])
   const [error, setError] = useState<string | null>(null)

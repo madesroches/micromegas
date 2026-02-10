@@ -18,7 +18,8 @@ import { parseTimeRange, getTimeRangeForApi } from '@/lib/time-range'
 import { timestampToMs } from '@/lib/arrow-utils'
 import { extractPropertiesFromRows, createPropertyTimelineGetter, ExtractedPropertyData } from '@/lib/property-utils'
 import { useDataSourceState } from '@/hooks/useDataSourceState'
-import { DataSourceSelector } from '@/components/DataSourceSelector'
+import { useChangeEffect } from '@/hooks/useChangeEffect'
+import { DataSourceField } from '@/components/DataSourceSelector'
 import type { ProcessMetricsConfig } from '@/lib/screen-config'
 
 const DISCOVERY_SQL = `SELECT DISTINCT name, target, unit
@@ -310,6 +311,12 @@ function ProcessMetricsContent() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- Use primitive deps to avoid object comparison issues
   }, [discoveryDone, selectedMeasure, processId, isCustomQuery, binInterval, apiTimeRange.begin, apiTimeRange.end])
 
+  // Re-run discovery and metrics when data source changes
+  useChangeEffect(dataSource, () => {
+    hasLoadedDiscoveryRef.current = false
+    loadDiscovery()
+  })
+
   const prevTimeRangeRef = useRef<{ begin: string; end: string } | null>(null)
   useEffect(() => {
     if (!hasLoaded) return
@@ -383,14 +390,7 @@ function ProcessMetricsContent() {
   )
 
   const dataSourceContent = (
-    <div className="mb-4">
-      <h4 className="text-xs font-semibold uppercase tracking-wide text-theme-text-muted mb-2">Data Source</h4>
-      <DataSourceSelector
-        value={dataSource}
-        onChange={setDataSource}
-
-      />
-    </div>
+    <DataSourceField value={dataSource} onChange={setDataSource} />
   )
 
   const sqlPanel =

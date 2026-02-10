@@ -10,7 +10,8 @@ import { QueryEditor } from '@/components/QueryEditor'
 import { ErrorBanner } from '@/components/ErrorBanner'
 import { useStreamQuery } from '@/hooks/useStreamQuery'
 import { useDataSourceState } from '@/hooks/useDataSourceState'
-import { DataSourceSelector } from '@/components/DataSourceSelector'
+import { useChangeEffect } from '@/hooks/useChangeEffect'
+import { DataSourceField } from '@/components/DataSourceSelector'
 import { useScreenConfig } from '@/hooks/useScreenConfig'
 import { timestampToDate } from '@/lib/arrow-utils'
 import { parseTimeRange, getTimeRangeForApi } from '@/lib/time-range'
@@ -376,6 +377,9 @@ function ProcessLogContent() {
     }
   }, [processId, dataSource, loadData])
 
+  // Re-execute when data source changes
+  useChangeEffect(dataSource, () => loadData(currentSqlRef.current))
+
   // Re-execute on filter changes
   const prevFiltersRef = useRef<{ logLevel: string; logLimit: number; search: string } | null>(null)
   useEffect(() => {
@@ -454,14 +458,7 @@ function ProcessLogContent() {
   }
 
   const dataSourceContent = (
-    <div className="mb-4">
-      <h4 className="text-xs font-semibold uppercase tracking-wide text-theme-text-muted mb-2">Data Source</h4>
-      <DataSourceSelector
-        value={dataSource}
-        onChange={setDataSource}
-
-      />
-    </div>
+    <DataSourceField value={dataSource} onChange={setDataSource} />
   )
 
   const sqlPanel = processId ? (

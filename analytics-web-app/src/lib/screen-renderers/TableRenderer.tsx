@@ -7,7 +7,7 @@ import { useSqlHandlers } from './useSqlHandlers'
 import { LoadingState, EmptyState, RendererLayout } from './shared'
 import { SyntaxEditor } from '@/components/SyntaxEditor'
 import { OverrideEditor } from '@/components/OverrideEditor'
-import { DataSourceSelector } from '@/components/DataSourceSelector'
+import { DataSourceField } from '@/components/DataSourceSelector'
 import { useChangeEffect } from '@/hooks/useChangeEffect'
 import { useStreamQuery } from '@/hooks/useStreamQuery'
 import { useDefaultSaveCleanup, useExposeSaveRef } from '@/lib/url-cleanup-utils'
@@ -250,15 +250,11 @@ export function TableRenderer({
 
       {/* Scrollable Content */}
       <div className="flex-1 overflow-auto">
-        {/* Data Source */}
-        <div className="px-4 pt-4 pb-2">
-          <h4 className="text-xs font-semibold uppercase tracking-wide text-theme-text-muted mb-2">Data Source</h4>
-          <DataSourceSelector
-            value={effectiveDataSource || ''}
-            onChange={(ds) => onConfigChange({ ...tableConfig, dataSource: ds })}
-
-          />
-        </div>
+        <DataSourceField
+          value={effectiveDataSource || ''}
+          onChange={(ds) => onConfigChange({ ...tableConfig, dataSource: ds })}
+          className="px-4 pt-4 pb-2"
+        />
 
         {/* Query Section */}
         <div className="border-b border-theme-border">

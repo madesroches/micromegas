@@ -6,7 +6,7 @@ import { AuthGuard } from '@/components/AuthGuard'
 import { CopyableProcessId } from '@/components/CopyableProcessId'
 import { PROCESSES_SCHEMA_URL } from '@/components/DocumentationLink'
 import { QueryEditor } from '@/components/QueryEditor'
-import { DataSourceSelector } from '@/components/DataSourceSelector'
+import { DataSourceField } from '@/components/DataSourceSelector'
 import { ErrorBanner } from '@/components/ErrorBanner'
 import { useStreamQuery } from '@/hooks/useStreamQuery'
 import { useDataSourceState } from '@/hooks/useDataSourceState'
@@ -253,14 +253,7 @@ function ProcessesPageContent() {
   )
 
   const dataSourceContent = (
-    <div className="mb-4">
-      <h4 className="text-xs font-semibold uppercase tracking-wide text-theme-text-muted mb-2">Data Source</h4>
-      <DataSourceSelector
-        value={dataSource}
-        onChange={setDataSource}
-
-      />
-    </div>
+    <DataSourceField value={dataSource} onChange={setDataSource} />
   )
 
   const sqlPanel = (

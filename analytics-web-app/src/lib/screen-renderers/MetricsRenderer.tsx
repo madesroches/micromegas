@@ -6,7 +6,7 @@ import { useTimeRangeSync } from './useTimeRangeSync'
 import { useSqlHandlers } from './useSqlHandlers'
 import { LoadingState, EmptyState, RendererLayout } from './shared'
 import { QueryEditor } from '@/components/QueryEditor'
-import { DataSourceSelector } from '@/components/DataSourceSelector'
+import { DataSourceField } from '@/components/DataSourceSelector'
 import { XYChart, type ScaleMode, type ChartType } from '@/components/XYChart'
 import { extractChartData } from '@/lib/arrow-utils'
 import { useDefaultSaveCleanup, useExposeSaveRef } from '@/lib/url-cleanup-utils'
@@ -142,16 +142,11 @@ export function MetricsRenderer({
     return extractChartData(table)
   }, [query.table])
 
-  // Data source selector for the query editor panel
   const dataSourceContent = (
-    <div className="mb-4">
-      <h4 className="text-xs font-semibold uppercase tracking-wide text-theme-text-muted mb-2">Data Source</h4>
-      <DataSourceSelector
-        value={effectiveDataSource || ''}
-        onChange={(ds) => onConfigChange({ ...metricsConfig, dataSource: ds })}
-
-      />
-    </div>
+    <DataSourceField
+      value={effectiveDataSource || ''}
+      onChange={(ds) => onConfigChange({ ...metricsConfig, dataSource: ds })}
+    />
   )
 
   // Query editor panel

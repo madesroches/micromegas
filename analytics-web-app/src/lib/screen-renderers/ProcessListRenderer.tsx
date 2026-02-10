@@ -7,7 +7,7 @@ import { useTimeRangeSync } from './useTimeRangeSync'
 import { useSqlHandlers } from './useSqlHandlers'
 import { LoadingState, EmptyState, RendererLayout } from './shared'
 import { QueryEditor } from '@/components/QueryEditor'
-import { DataSourceSelector } from '@/components/DataSourceSelector'
+import { DataSourceField } from '@/components/DataSourceSelector'
 import { AppLink } from '@/components/AppLink'
 import { CopyableProcessId } from '@/components/CopyableProcessId'
 import { formatTimestamp, formatDurationMs } from '@/lib/time-range'
@@ -240,16 +240,11 @@ export function ProcessListRenderer({
     order_by: orderByValue || '(none)',
   }
 
-  // Data source selector for the query editor panel
   const dataSourceContent = (
-    <div className="mb-4">
-      <h4 className="text-xs font-semibold uppercase tracking-wide text-theme-text-muted mb-2">Data Source</h4>
-      <DataSourceSelector
-        value={effectiveDataSource || ''}
-        onChange={(ds) => onConfigChange({ ...processListConfig, dataSource: ds })}
-
-      />
-    </div>
+    <DataSourceField
+      value={effectiveDataSource || ''}
+      onChange={(ds) => onConfigChange({ ...processListConfig, dataSource: ds })}
+    />
   )
 
   // Query editor panel
