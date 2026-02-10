@@ -5,9 +5,10 @@ import { getDataSourceList, DataSourceSummary } from '@/lib/data-sources-api'
 interface DataSourceSelectorProps {
   value: string
   onChange: (name: string) => void
+  showWithSingleSource?: boolean
 }
 
-export function DataSourceSelector({ value, onChange }: DataSourceSelectorProps) {
+export function DataSourceSelector({ value, onChange, showWithSingleSource = false }: DataSourceSelectorProps) {
   const [sources, setSources] = useState<DataSourceSummary[]>([])
   const [error, setError] = useState<string | null>(null)
 
@@ -36,8 +37,8 @@ export function DataSourceSelector({ value, onChange }: DataSourceSelectorProps)
     )
   }
 
-  // Don't render if there's only one data source
-  if (sources.length <= 1) return null
+  // Don't render if there's only one data source (unless forced to show)
+  if (sources.length <= 1 && !showWithSingleSource) return null
 
   return (
     <div className="flex items-center gap-1.5">

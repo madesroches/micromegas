@@ -13,7 +13,6 @@ import { renderIcon } from '@/lib/screen-type-utils'
 import { getRenderer } from '@/lib/screen-renderers/init'
 import { DEFAULT_TIME_RANGE } from '@/lib/screen-defaults'
 import { useDefaultDataSource } from '@/hooks/useDefaultDataSource'
-import { DataSourceSelector } from '@/components/DataSourceSelector'
 import {
   getScreen,
   getScreenTypes,
@@ -377,7 +376,6 @@ function ScreenPageContent() {
                     </span>
                   )}
                 </div>
-                <DataSourceSelector value={dataSource} onChange={setDataSource} />
                 {/* Save controls */}
                 <div className="flex items-center gap-2">
                   {hasUnsavedChanges && !isNew && (

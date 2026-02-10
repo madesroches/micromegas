@@ -32,6 +32,8 @@ jest.mock('lucide-react', () => ({
   GripVertical: () => <span data-testid="grip">⠿</span>,
   Settings: () => <span data-testid="settings">⚙</span>,
   Save: () => <span data-testid="save">💾</span>,
+  Database: () => <span data-testid="database">🗄</span>,
+  AlertCircle: () => <span data-testid="alert-circle">⚠</span>,
 }))
 
 // Mock @dnd-kit to simplify testing
@@ -73,6 +75,13 @@ jest.mock('@dnd-kit/utilities', () => ({
       toString: () => '',
     },
   },
+}))
+
+// Mock data sources API (used by DataSourceSelector in CellEditor)
+jest.mock('@/lib/data-sources-api', () => ({
+  getDataSourceList: jest.fn().mockResolvedValue([
+    { name: 'default', is_default: true },
+  ]),
 }))
 
 // Mock the cell registry

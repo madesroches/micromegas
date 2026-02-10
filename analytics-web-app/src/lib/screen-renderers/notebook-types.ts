@@ -109,6 +109,7 @@ export interface QueryCellConfig extends CellConfigBase {
   type: 'table' | 'chart' | 'log' | 'propertytimeline' | 'swimlane'
   sql: string
   options?: Record<string, unknown>
+  dataSource?: string
 }
 
 export interface MarkdownCellConfig extends CellConfigBase {
@@ -123,12 +124,14 @@ export interface VariableCellConfig extends CellConfigBase {
   defaultValue?: VariableValue
   /** JavaScript expression for expression-type variables */
   expression?: string
+  dataSource?: string
 }
 
 export interface PerfettoExportCellConfig extends CellConfigBase {
   type: 'perfettoexport'
   processIdVar?: string    // Variable name holding process_id (default: "$process_id")
   spanType?: 'thread' | 'async' | 'both'  // Default: 'both'
+  dataSource?: string
 }
 
 export type CellConfig = QueryCellConfig | MarkdownCellConfig | VariableCellConfig | PerfettoExportCellConfig

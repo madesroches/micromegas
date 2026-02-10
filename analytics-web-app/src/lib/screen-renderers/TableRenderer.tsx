@@ -7,6 +7,7 @@ import { useSqlHandlers } from './useSqlHandlers'
 import { LoadingState, EmptyState, RendererLayout } from './shared'
 import { SyntaxEditor } from '@/components/SyntaxEditor'
 import { OverrideEditor } from '@/components/OverrideEditor'
+import { DataSourceSelector } from '@/components/DataSourceSelector'
 import { useStreamQuery } from '@/hooks/useStreamQuery'
 import { useDefaultSaveCleanup, useExposeSaveRef } from '@/lib/url-cleanup-utils'
 import {
@@ -36,6 +37,7 @@ interface TableConfig {
   sortDirection?: 'asc' | 'desc'
   overrides?: ColumnOverride[]
   hiddenColumns?: string[]
+  dataSource?: string
   [key: string]: unknown
 }
 
@@ -57,6 +59,9 @@ export function TableRenderer({
   const [, setSearchParams] = useSearchParams()
   const handleSave = useDefaultSaveCleanup(onSave, setSearchParams)
   useExposeSaveRef(onSaveRef, handleSave)
+
+  // Effective data source: config-level overrides page-level
+  const effectiveDataSource = tableConfig.dataSource || dataSource
 
   // Sort state from config (persisted)
   const sortColumn = tableConfig.sortColumn
@@ -88,20 +93,20 @@ export function TableRenderer({
         },
         begin: timeRange.begin,
         end: timeRange.end,
-        dataSource,
+        dataSource: effectiveDataSource,
       })
     },
-    [timeRange, orderByValue, dataSource]
+    [timeRange, orderByValue, effectiveDataSource]
   )
 
   // Initial query execution (wait for dataSource to resolve)
   const hasExecutedRef = useRef(false)
   useEffect(() => {
-    if (!hasExecutedRef.current && dataSource) {
+    if (!hasExecutedRef.current && effectiveDataSource) {
       hasExecutedRef.current = true
       executeQuery(tableConfig.sql)
     }
-  }, [executeQuery, tableConfig.sql, dataSource])
+  }, [executeQuery, tableConfig.sql, effectiveDataSource])
 
   // Re-execute on time range change
   const prevTimeRangeRef = useRef<{ begin: string; end: string } | null>(null)
@@ -140,6 +145,19 @@ export function TableRenderer({
       executeQuery(currentSqlRef.current)
     }
   }, [orderByValue, executeQuery])
+
+  // Re-execute when data source changes
+  const prevDataSourceRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (prevDataSourceRef.current === null) {
+      prevDataSourceRef.current = effectiveDataSource || ''
+      return
+    }
+    if (prevDataSourceRef.current !== (effectiveDataSource || '')) {
+      prevDataSourceRef.current = effectiveDataSource || ''
+      executeQuery(currentSqlRef.current)
+    }
+  }, [effectiveDataSource, executeQuery])
 
   // Sync time range changes to config
   useTimeRangeSync({
@@ -241,6 +259,16 @@ export function TableRenderer({
 
       {/* Scrollable Content */}
       <div className="flex-1 overflow-auto">
+        {/* Data Source */}
+        <div className="px-4 pt-4 pb-2">
+          <h4 className="text-xs font-semibold uppercase tracking-wide text-theme-text-muted mb-2">Data Source</h4>
+          <DataSourceSelector
+            value={effectiveDataSource || ''}
+            onChange={(ds) => onConfigChange({ ...tableConfig, dataSource: ds })}
+            showWithSingleSource
+          />
+        </div>
+
         {/* Query Section */}
         <div className="border-b border-theme-border">
           <button

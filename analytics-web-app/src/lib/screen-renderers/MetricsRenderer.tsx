@@ -6,6 +6,7 @@ import { useTimeRangeSync } from './useTimeRangeSync'
 import { useSqlHandlers } from './useSqlHandlers'
 import { LoadingState, EmptyState, RendererLayout } from './shared'
 import { QueryEditor } from '@/components/QueryEditor'
+import { DataSourceSelector } from '@/components/DataSourceSelector'
 import { XYChart, type ScaleMode, type ChartType } from '@/components/XYChart'
 import { extractChartData } from '@/lib/arrow-utils'
 import { useDefaultSaveCleanup, useExposeSaveRef } from '@/lib/url-cleanup-utils'
@@ -26,6 +27,7 @@ interface MetricsConfig {
   metrics_options?: MetricsOptions
   timeRangeFrom?: string
   timeRangeTo?: string
+  dataSource?: string
   [key: string]: unknown
 }
 
@@ -49,6 +51,9 @@ export function MetricsRenderer({
   const handleSave = useDefaultSaveCleanup(onSave, setSearchParams)
   useExposeSaveRef(onSaveRef, handleSave)
 
+  // Effective data source: config-level overrides page-level
+  const effectiveDataSource = metricsConfig.dataSource || dataSource
+
   // Scale mode state - sync from config on load
   const [scaleMode, setScaleMode] = useState<ScaleMode>(
     metricsConfig.metrics_options?.scale_mode ?? 'p99'
@@ -64,7 +69,7 @@ export function MetricsRenderer({
     initialSql: metricsConfig.sql,
     timeRange,
     refreshTrigger,
-    dataSource,
+    dataSource: effectiveDataSource,
   })
 
   // Sync scale mode from config when loaded
@@ -137,6 +142,18 @@ export function MetricsRenderer({
     return extractChartData(table)
   }, [query.table])
 
+  // Data source selector for the query editor panel
+  const dataSourceContent = (
+    <div className="mb-4">
+      <h4 className="text-xs font-semibold uppercase tracking-wide text-theme-text-muted mb-2">Data Source</h4>
+      <DataSourceSelector
+        value={effectiveDataSource || ''}
+        onChange={(ds) => onConfigChange({ ...metricsConfig, dataSource: ds })}
+        showWithSingleSource
+      />
+    </div>
+  )
+
   // Query editor panel
   const sqlPanel = (
     <QueryEditor
@@ -149,6 +166,7 @@ export function MetricsRenderer({
       onChange={handleSqlChange}
       isLoading={query.isLoading}
       error={query.error}
+      topContent={dataSourceContent}
     />
   )
 

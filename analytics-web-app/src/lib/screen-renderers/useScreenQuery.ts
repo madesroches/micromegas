@@ -111,6 +111,19 @@ export function useScreenQuery({
     }
   }, [timeRange, executeQuery])
 
+  // Re-execute on data source change
+  const prevDataSourceRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (prevDataSourceRef.current === null) {
+      prevDataSourceRef.current = dataSource || ''
+      return
+    }
+    if (prevDataSourceRef.current !== (dataSource || '')) {
+      prevDataSourceRef.current = dataSource || ''
+      executeQuery(currentSqlRef.current)
+    }
+  }, [dataSource, executeQuery])
+
   // Re-execute on refresh trigger
   const prevRefreshTriggerRef = useRef(refreshTrigger)
   useEffect(() => {
