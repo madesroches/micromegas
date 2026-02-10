@@ -10,6 +10,7 @@ import { QueryEditor } from '@/components/QueryEditor'
 import { ErrorBanner } from '@/components/ErrorBanner'
 import { useStreamQuery } from '@/hooks/useStreamQuery'
 import { useDefaultDataSource } from '@/hooks/useDefaultDataSource'
+import { DataSourceSelector } from '@/components/DataSourceSelector'
 import { useScreenConfig } from '@/hooks/useScreenConfig'
 import { timestampToDate } from '@/lib/arrow-utils'
 import { parseTimeRange, getTimeRangeForApi } from '@/lib/time-range'
@@ -243,6 +244,15 @@ function ProcessLogContent() {
   }, [config.timeRangeFrom, config.timeRangeTo])
 
   const { name: defaultDataSource, error: dataSourceError } = useDefaultDataSource()
+  const [dataSource, setDataSource] = useState('')
+
+  // Set data source from default when loaded (if not already set)
+  useEffect(() => {
+    if (!dataSource && defaultDataSource) {
+      setDataSource(defaultDataSource)
+    }
+  }, [defaultDataSource, dataSource])
+
   const streamQuery = useStreamQuery()
   const queryError = streamQuery.error?.message ?? null
 
@@ -298,10 +308,10 @@ function ProcessLogContent() {
         params,
         begin: apiTimeRange.begin,
         end: apiTimeRange.end,
-        dataSource: defaultDataSource,
+        dataSource,
       })
     },
-    [processId, logLevel, logLimit, config.search, apiTimeRange, defaultDataSource]
+    [processId, logLevel, logLimit, config.search, apiTimeRange, dataSource]
   )
 
   // Update log level with replace (editing, not navigational)
@@ -368,11 +378,11 @@ function ProcessLogContent() {
   // Initial load
   const hasInitialLoadRef = useRef(false)
   useEffect(() => {
-    if (processId && defaultDataSource && !hasInitialLoadRef.current) {
+    if (processId && dataSource && !hasInitialLoadRef.current) {
       hasInitialLoadRef.current = true
       loadData(DEFAULT_SQL)
     }
-  }, [processId, defaultDataSource, loadData])
+  }, [processId, dataSource, loadData])
 
   // Re-execute on filter changes
   const prevFiltersRef = useRef<{ logLevel: string; logLimit: number; search: string } | null>(null)
@@ -451,6 +461,17 @@ function ProcessLogContent() {
     }
   }
 
+  const dataSourceContent = (
+    <div className="mb-4">
+      <h4 className="text-xs font-semibold uppercase tracking-wide text-theme-text-muted mb-2">Data Source</h4>
+      <DataSourceSelector
+        value={dataSource}
+        onChange={setDataSource}
+        showWithSingleSource
+      />
+    </div>
+  )
+
   const sqlPanel = processId ? (
     <QueryEditor
       defaultSql={DEFAULT_SQL}
@@ -465,6 +486,7 @@ function ProcessLogContent() {
         url: LOG_ENTRIES_SCHEMA_URL,
         label: 'log_entries schema reference',
       }}
+      topContent={dataSourceContent}
     />
   ) : undefined
 

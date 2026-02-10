@@ -18,6 +18,7 @@ import { parseTimeRange, getTimeRangeForApi } from '@/lib/time-range'
 import { timestampToMs } from '@/lib/arrow-utils'
 import { extractPropertiesFromRows, createPropertyTimelineGetter, ExtractedPropertyData } from '@/lib/property-utils'
 import { useDefaultDataSource } from '@/hooks/useDefaultDataSource'
+import { DataSourceSelector } from '@/components/DataSourceSelector'
 import type { ProcessMetricsConfig } from '@/lib/screen-config'
 
 const DISCOVERY_SQL = `SELECT DISTINCT name, target, unit
@@ -105,6 +106,14 @@ function ProcessMetricsContent() {
   usePageTitle('Process Metrics')
 
   const { name: defaultDataSource, error: dataSourceError } = useDefaultDataSource()
+  const [dataSource, setDataSource] = useState('')
+
+  // Set data source from default when loaded (if not already set)
+  useEffect(() => {
+    if (!dataSource && defaultDataSource) {
+      setDataSource(defaultDataSource)
+    }
+  }, [defaultDataSource, dataSource])
 
   // Use the new config-driven pattern
   const { config, updateConfig } = useScreenConfig(DEFAULT_CONFIG, buildUrl)
@@ -156,7 +165,7 @@ function ProcessMetricsContent() {
     binInterval,
     apiTimeRange,
     enabled: !!processId && !!selectedMeasure,
-    dataSource: defaultDataSource,
+    dataSource,
   })
 
   // Use unified data or custom query data
@@ -260,9 +269,9 @@ function ProcessMetricsContent() {
       params: { process_id: processId },
       begin: apiTimeRange.begin,
       end: apiTimeRange.end,
-      dataSource: defaultDataSource,
+      dataSource,
     })
-  }, [processId, apiTimeRange, defaultDataSource])
+  }, [processId, apiTimeRange, dataSource])
 
   // Update measure in config with replace (editing, not navigational)
   const updateMeasure = useCallback(
@@ -292,11 +301,11 @@ function ProcessMetricsContent() {
 
   const hasLoadedDiscoveryRef = useRef(false)
   useEffect(() => {
-    if (processId && defaultDataSource && !hasLoadedDiscoveryRef.current) {
+    if (processId && dataSource && !hasLoadedDiscoveryRef.current) {
       hasLoadedDiscoveryRef.current = true
       loadDiscovery()
     }
-  }, [processId, defaultDataSource, loadDiscovery])
+  }, [processId, dataSource, loadDiscovery])
 
   // Trigger unified query when discovery is done and measure is selected
   const metricsDataExecuteRef = useRef(metricsData.execute)
@@ -346,10 +355,10 @@ function ProcessMetricsContent() {
         },
         begin: apiTimeRange.begin,
         end: apiTimeRange.end,
-        dataSource: defaultDataSource,
+        dataSource,
       })
     },
-    [processId, selectedMeasure, binInterval, apiTimeRange, defaultDataSource, customQuery]
+    [processId, selectedMeasure, binInterval, apiTimeRange, dataSource, customQuery]
   )
 
   const handleResetQuery = useCallback(() => {
@@ -381,6 +390,17 @@ function ProcessMetricsContent() {
     [processId, selectedMeasure, binInterval]
   )
 
+  const dataSourceContent = (
+    <div className="mb-4">
+      <h4 className="text-xs font-semibold uppercase tracking-wide text-theme-text-muted mb-2">Data Source</h4>
+      <DataSourceSelector
+        value={dataSource}
+        onChange={setDataSource}
+        showWithSingleSource
+      />
+    </div>
+  )
+
   const sqlPanel =
     processId && selectedMeasure ? (
       <QueryEditor
@@ -396,6 +416,7 @@ function ProcessMetricsContent() {
           url: MEASURES_SCHEMA_URL,
           label: 'measures schema reference',
         }}
+        topContent={dataSourceContent}
       />
     ) : undefined
 

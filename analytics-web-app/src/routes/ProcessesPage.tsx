@@ -6,6 +6,7 @@ import { AuthGuard } from '@/components/AuthGuard'
 import { CopyableProcessId } from '@/components/CopyableProcessId'
 import { PROCESSES_SCHEMA_URL } from '@/components/DocumentationLink'
 import { QueryEditor } from '@/components/QueryEditor'
+import { DataSourceSelector } from '@/components/DataSourceSelector'
 import { ErrorBanner } from '@/components/ErrorBanner'
 import { useStreamQuery } from '@/hooks/useStreamQuery'
 import { useDefaultDataSource } from '@/hooks/useDefaultDataSource'
@@ -120,6 +121,15 @@ function ProcessesPageContent() {
   }, [config.timeRangeFrom, config.timeRangeTo])
 
   const { name: defaultDataSource, error: dataSourceError } = useDefaultDataSource()
+  const [dataSource, setDataSource] = useState('')
+
+  // Set data source from default when loaded
+  useEffect(() => {
+    if (!dataSource && defaultDataSource) {
+      setDataSource(defaultDataSource)
+    }
+  }, [defaultDataSource, dataSource])
+
   const streamQuery = useStreamQuery()
   const table = streamQuery.getTable()
   const queryError = streamQuery.error?.message ?? null
@@ -150,10 +160,10 @@ function ProcessesPageContent() {
         params,
         begin: apiTimeRange.begin,
         end: apiTimeRange.end,
-        dataSource: defaultDataSource,
+        dataSource,
       })
     },
-    [sortField, sortDirection, config.search, apiTimeRange, defaultDataSource]
+    [sortField, sortDirection, config.search, apiTimeRange, dataSource]
   )
 
   // Sync debounced search input to config with replace (editing, not navigational)
@@ -166,17 +176,17 @@ function ProcessesPageContent() {
     updateConfig({ search: debouncedSearchInput.trim() || undefined }, { replace: true })
   }, [debouncedSearchInput, updateConfig])
 
-  // Load on mount and when time range, sort, or search changes
-  const queryKey = `${apiTimeRange.begin}-${apiTimeRange.end}-${sortField}-${sortDirection}-${config.search ?? ''}-${defaultDataSource}`
+  // Load on mount and when time range, sort, search, or data source changes
+  const queryKey = `${apiTimeRange.begin}-${apiTimeRange.end}-${sortField}-${sortDirection}-${config.search ?? ''}-${dataSource}`
   const prevQueryKeyRef = useRef<string | null>(null)
   useEffect(() => {
-    if (!defaultDataSource) return
+    if (!dataSource) return
     if (prevQueryKeyRef.current !== queryKey) {
       const isInitialLoad = prevQueryKeyRef.current === null
       prevQueryKeyRef.current = queryKey
       loadData(isInitialLoad ? DEFAULT_SQL : currentSqlRef.current)
     }
-  }, [queryKey, loadData, defaultDataSource])
+  }, [queryKey, loadData, dataSource])
 
   // Time range changes create history entries (navigational)
   const handleTimeRangeChange = useCallback(
@@ -250,6 +260,17 @@ function ProcessesPageContent() {
     </th>
   )
 
+  const dataSourceContent = (
+    <div className="mb-4">
+      <h4 className="text-xs font-semibold uppercase tracking-wide text-theme-text-muted mb-2">Data Source</h4>
+      <DataSourceSelector
+        value={dataSource}
+        onChange={setDataSource}
+        showWithSingleSource
+      />
+    </div>
+  )
+
   const sqlPanel = (
     <QueryEditor
       defaultSql={DEFAULT_SQL}
@@ -264,6 +285,7 @@ function ProcessesPageContent() {
         url: PROCESSES_SCHEMA_URL,
         label: 'processes schema reference',
       }}
+      topContent={dataSourceContent}
     />
   )
 
