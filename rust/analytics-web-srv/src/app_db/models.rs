@@ -155,13 +155,13 @@ pub fn validate_name(name: &str) -> Result<(), ValidationError> {
     if name.len() < 3 {
         return Err(ValidationError::new(
             "NAME_TOO_SHORT",
-            "Screen name must be at least 3 characters",
+            "Name must be at least 3 characters",
         ));
     }
     if name.len() > 100 {
         return Err(ValidationError::new(
             "NAME_TOO_LONG",
-            "Screen name must be at most 100 characters",
+            "Name must be at most 100 characters",
         ));
     }
 
@@ -169,7 +169,7 @@ pub fn validate_name(name: &str) -> Result<(), ValidationError> {
     if RESERVED_NAMES.contains(&name) {
         return Err(ValidationError::new(
             "RESERVED_NAME",
-            "This screen name is reserved",
+            "This name is reserved",
         ));
     }
 
@@ -180,7 +180,7 @@ pub fn validate_name(name: &str) -> Result<(), ValidationError> {
     if !chars.first().is_some_and(|c| c.is_ascii_lowercase()) {
         return Err(ValidationError::new(
             "INVALID_START",
-            "Screen name must start with a lowercase letter",
+            "Name must start with a lowercase letter",
         ));
     }
 
@@ -191,7 +191,7 @@ pub fn validate_name(name: &str) -> Result<(), ValidationError> {
     {
         return Err(ValidationError::new(
             "INVALID_END",
-            "Screen name must end with a letter or number",
+            "Name must end with a letter or number",
         ));
     }
 
@@ -201,14 +201,14 @@ pub fn validate_name(name: &str) -> Result<(), ValidationError> {
         if !c.is_ascii_lowercase() && !c.is_ascii_digit() && *c != '-' {
             return Err(ValidationError::new(
                 "INVALID_CHARACTER",
-                "Screen name can only contain lowercase letters, numbers, and hyphens",
+                "Name can only contain lowercase letters, numbers, and hyphens",
             ));
         }
         if *c == '-' {
             if prev_hyphen {
                 return Err(ValidationError::new(
                     "CONSECUTIVE_HYPHENS",
-                    "Screen name cannot contain consecutive hyphens",
+                    "Name cannot contain consecutive hyphens",
                 ));
             }
             prev_hyphen = true;

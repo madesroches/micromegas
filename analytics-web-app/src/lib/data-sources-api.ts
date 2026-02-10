@@ -67,7 +67,8 @@ async function handleResponse<T>(response: Response): Promise<T> {
 
 // Data Sources API
 
-// Module-level cached promise: one fetch shared by all consumers
+// Module-level cached promise: one fetch shared by all consumers.
+// No TTL — data source changes are infrequent; a page refresh picks up updates.
 let cachedListPromise: Promise<DataSourceSummary[]> | null = null
 
 /** Returns a cached data source list. All callers share the same fetch. */

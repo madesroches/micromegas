@@ -9,7 +9,7 @@ function AdminPageContent() {
   usePageTitle('Admin')
 
   return (
-    <AuthGuard>
+    <AuthGuard requireAdmin>
       <PageLayout>
         <div className="p-6 flex flex-col h-full">
           <div className="mb-6">
@@ -66,7 +66,7 @@ export default function AdminPage() {
   return (
     <Suspense
       fallback={
-        <AuthGuard>
+        <AuthGuard requireAdmin>
           <PageLayout>
             <div className="p-6">
               <div className="flex items-center justify-center h-64">

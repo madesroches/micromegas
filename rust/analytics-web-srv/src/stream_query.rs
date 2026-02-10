@@ -210,12 +210,13 @@ pub async fn stream_query_handler(
                 .into_response();
         }
         Err(e) => {
+            error!("Failed to resolve data source '{}': {e}", request.data_source);
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ErrorFrame {
                     frame_type: "error",
                     code: ErrorCode::Internal,
-                    message: format!("Failed to resolve data source: {e}"),
+                    message: "Failed to resolve data source".to_string(),
                 }),
             )
                 .into_response();
