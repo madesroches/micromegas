@@ -10,8 +10,20 @@ interface DataSourceSelectorProps {
 /**
  * Labeled data source selector with heading. Use this in query panels and editors.
  * Wraps DataSourceSelector with a standard h4 label.
+ * Returns null when DataSourceSelector is hidden (single source or loading).
  */
 export function DataSourceField({ value, onChange, className = 'mb-4' }: DataSourceSelectorProps & { className?: string }) {
+  const [sources, setSources] = useState<DataSourceSummary[]>([])
+
+  useEffect(() => {
+    let cancelled = false
+    getDataSourceList().then((data) => { if (!cancelled) setSources(data) }).catch(() => {})
+    return () => { cancelled = true }
+  }, [])
+
+  // Hide entirely when selector would return null (<=1 sources)
+  if (sources.length <= 1) return null
+
   return (
     <div className={className}>
       <h4 className="text-xs font-semibold uppercase tracking-wide text-theme-text-muted mb-2">Data Source</h4>

@@ -314,6 +314,7 @@ function ProcessMetricsContent() {
   // Re-run discovery and metrics when data source changes
   useChangeEffect(dataSource, () => {
     hasLoadedDiscoveryRef.current = false
+    setDiscoveryDone(false)
     loadDiscovery()
   })
 

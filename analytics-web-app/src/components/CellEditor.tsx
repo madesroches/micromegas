@@ -4,7 +4,7 @@ import { getCellTypeMetadata } from '@/lib/screen-renderers/cell-registry'
 import type { CellConfig, VariableValue, VariableCellConfig } from '@/lib/screen-renderers/notebook-types'
 import { validateCellName, sanitizeCellName } from '@/lib/screen-renderers/notebook-utils'
 import { Button } from '@/components/ui/button'
-import { DataSourceSelector } from '@/components/DataSourceSelector'
+import { DataSourceField } from '@/components/DataSourceSelector'
 
 interface CellEditorProps {
   cell: CellConfig
@@ -122,16 +122,11 @@ export function CellEditor({
 
         {/* Data Source (for SQL-executing cells) */}
         {shouldShowDataSource && (
-          <div>
-            <label className="block text-xs font-medium text-theme-text-secondary uppercase mb-1.5">
-              Data Source
-            </label>
-            <DataSourceSelector
-              value={('dataSource' in cell ? cell.dataSource : undefined) || defaultDataSource || ''}
-              onChange={(ds) => onUpdate({ dataSource: ds } as Partial<CellConfig>)}
-
-            />
-          </div>
+          <DataSourceField
+            value={('dataSource' in cell ? cell.dataSource : undefined) || defaultDataSource || ''}
+            onChange={(ds) => onUpdate({ dataSource: ds } as Partial<CellConfig>)}
+            className=""
+          />
         )}
 
         {/* Type-specific content - each editor decides what to show */}
