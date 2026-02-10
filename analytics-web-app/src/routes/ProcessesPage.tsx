@@ -119,7 +119,7 @@ function ProcessesPageContent() {
     }
   }, [config.timeRangeFrom, config.timeRangeTo])
 
-  const defaultDataSource = useDefaultDataSource()
+  const { name: defaultDataSource, error: dataSourceError } = useDefaultDataSource()
   const streamQuery = useStreamQuery()
   const table = streamQuery.getTable()
   const queryError = streamQuery.error?.message ?? null
@@ -298,6 +298,14 @@ function ProcessesPageContent() {
               className="w-full max-w-md px-4 py-2.5 bg-app-panel border border-theme-border rounded-md text-theme-text-primary text-sm placeholder-theme-text-muted focus:outline-none focus:border-accent-link transition-colors"
             />
           </div>
+
+          {/* Data Source Error Banner */}
+          {dataSourceError && (
+            <ErrorBanner
+              title="Data source error"
+              message={dataSourceError}
+            />
+          )}
 
           {/* Query Error Banner */}
           {queryError && (

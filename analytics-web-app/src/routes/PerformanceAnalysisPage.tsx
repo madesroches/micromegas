@@ -132,7 +132,7 @@ function calculateBinInterval(timeSpanMs: number, chartWidthPx: number = 800): s
 function PerformanceAnalysisContent() {
   usePageTitle('Performance Analysis')
 
-  const defaultDataSource = useDefaultDataSource()
+  const { name: defaultDataSource, error: dataSourceError } = useDefaultDataSource()
 
   // Use the new config-driven pattern
   const { config, updateConfig } = useScreenConfig(DEFAULT_CONFIG, buildUrl)
@@ -812,6 +812,13 @@ function PerformanceAnalysisContent() {
                 : ''}
           </span>
         </div>
+
+        {dataSourceError && (
+          <ErrorBanner
+            title="Data source error"
+            message={dataSourceError}
+          />
+        )}
 
         {queryError && (
           <ErrorBanner

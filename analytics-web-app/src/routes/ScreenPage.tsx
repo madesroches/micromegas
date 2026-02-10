@@ -36,7 +36,7 @@ function ScreenPageContent() {
   const [screen, setScreen] = useState<Screen | null>(null)
 
   // Data source
-  const defaultDataSource = useDefaultDataSource()
+  const { name: defaultDataSourceName, error: dataSourceError } = useDefaultDataSource()
   const [dataSource, setDataSource] = useState('')
 
   // Read type directly from URL (only used for new screens)
@@ -56,10 +56,10 @@ function ScreenPageContent() {
 
   // Set data source from default when loaded (if not already set)
   useEffect(() => {
-    if (!dataSource && defaultDataSource) {
-      setDataSource(defaultDataSource)
+    if (!dataSource && defaultDataSourceName) {
+      setDataSource(defaultDataSourceName)
     }
-  }, [defaultDataSource, dataSource])
+  }, [defaultDataSourceName, dataSource])
 
   // Screen type info (fetched from API)
   const [screenTypeInfo, setScreenTypeInfo] = useState<ScreenTypeInfo | null>(null)
@@ -420,6 +420,9 @@ function ScreenPageContent() {
               )}
               {saveError && (
                 <p className="text-xs text-accent-error mt-2 ml-11">{saveError}</p>
+              )}
+              {dataSourceError && (
+                <p className="text-xs text-accent-error mt-2 ml-11">{dataSourceError}</p>
               )}
             </div>
           </div>

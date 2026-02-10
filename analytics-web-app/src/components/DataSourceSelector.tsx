@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Database } from 'lucide-react'
+import { Database, AlertCircle } from 'lucide-react'
 import { getDataSourceList, DataSourceSummary } from '@/lib/data-sources-api'
 
 interface DataSourceSelectorProps {
@@ -9,6 +9,7 @@ interface DataSourceSelectorProps {
 
 export function DataSourceSelector({ value, onChange }: DataSourceSelectorProps) {
   const [sources, setSources] = useState<DataSourceSummary[]>([])
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -16,13 +17,24 @@ export function DataSourceSelector({ value, onChange }: DataSourceSelectorProps)
       .then((data) => {
         if (!cancelled) setSources(data)
       })
-      .catch(() => {
-        // Silently ignore
+      .catch((err) => {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : 'Failed to load data sources')
+        }
       })
     return () => {
       cancelled = true
     }
   }, [])
+
+  if (error) {
+    return (
+      <div className="flex items-center gap-1.5 text-xs text-accent-error" title={error}>
+        <AlertCircle className="w-3.5 h-3.5" />
+        <span>Data sources unavailable</span>
+      </div>
+    )
+  }
 
   // Don't render if there's only one data source
   if (sources.length <= 1) return null

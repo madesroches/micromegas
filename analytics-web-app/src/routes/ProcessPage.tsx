@@ -142,7 +142,7 @@ function ProcessPageContent() {
   const [properties, setProperties] = useState<Record<string, string> | null>(null)
   const [propertiesError, setPropertiesError] = useState<string | null>(null)
 
-  const defaultDataSource = useDefaultDataSource()
+  const { name: defaultDataSource, error: dataSourceError } = useDefaultDataSource()
   const processQuery = useStreamQuery()
   const statsQuery = useStreamQuery()
   const propertiesQuery = useStreamQuery()
@@ -263,6 +263,22 @@ function ProcessPageContent() {
           <div className="flex flex-col items-center justify-center h-64 bg-app-panel border border-theme-border rounded-lg">
             <AlertCircle className="w-10 h-10 text-accent-error mb-3" />
             <p className="text-theme-text-secondary">No process ID provided</p>
+            <AppLink href="/processes" className="text-accent-link hover:underline mt-2">
+              Back to Processes
+            </AppLink>
+          </div>
+        </div>
+      </PageLayout>
+    )
+  }
+
+  if (dataSourceError) {
+    return (
+      <PageLayout>
+        <div className="p-6">
+          <div className="flex flex-col items-center justify-center h-64 bg-app-panel border border-theme-border rounded-lg">
+            <AlertCircle className="w-10 h-10 text-accent-error mb-3" />
+            <p className="text-theme-text-secondary">{dataSourceError}</p>
             <AppLink href="/processes" className="text-accent-link hover:underline mt-2">
               Back to Processes
             </AppLink>

@@ -207,16 +207,20 @@ function DataSourcesPageContent() {
                       onChange={(e) => setForm((f) => (f ? { ...f, url: e.target.value } : null))}
                     />
                   </div>
-                  <label className="flex items-center gap-2 text-sm text-theme-text-secondary cursor-pointer">
+                  <label className={`flex items-center gap-2 text-sm text-theme-text-secondary ${form.mode === 'edit' && form.isDefault ? 'opacity-50' : 'cursor-pointer'}`}>
                     <input
                       type="checkbox"
                       className="accent-[var(--color-accent-link)]"
                       checked={form.isDefault}
+                      disabled={form.mode === 'edit' && form.isDefault}
                       onChange={(e) =>
                         setForm((f) => (f ? { ...f, isDefault: e.target.checked } : null))
                       }
                     />
                     Set as default data source
+                    {form.mode === 'edit' && form.isDefault && (
+                      <span className="text-xs text-theme-text-muted">(set another as default to change)</span>
+                    )}
                   </label>
                 </div>
                 <div className="flex justify-end gap-2 px-4 py-3 border-t border-theme-border">

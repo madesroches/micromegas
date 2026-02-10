@@ -242,7 +242,7 @@ function ProcessLogContent() {
     }
   }, [config.timeRangeFrom, config.timeRangeTo])
 
-  const defaultDataSource = useDefaultDataSource()
+  const { name: defaultDataSource, error: dataSourceError } = useDefaultDataSource()
   const streamQuery = useStreamQuery()
   const queryError = streamQuery.error?.message ?? null
 
@@ -549,6 +549,13 @@ function ProcessLogContent() {
               : `Showing ${rows.length} entries`}
           </span>
         </div>
+
+        {dataSourceError && (
+          <ErrorBanner
+            title="Data source error"
+            message={dataSourceError}
+          />
+        )}
 
         {queryError && (
           <ErrorBanner

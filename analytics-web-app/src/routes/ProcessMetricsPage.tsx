@@ -104,7 +104,7 @@ function calculateBinInterval(timeSpanMs: number, chartWidthPx: number = 800): s
 function ProcessMetricsContent() {
   usePageTitle('Process Metrics')
 
-  const defaultDataSource = useDefaultDataSource()
+  const { name: defaultDataSource, error: dataSourceError } = useDefaultDataSource()
 
   // Use the new config-driven pattern
   const { config, updateConfig } = useScreenConfig(DEFAULT_CONFIG, buildUrl)
@@ -465,6 +465,13 @@ function ProcessMetricsContent() {
                 : `${chartData.length} data points`}
           </span>
         </div>
+
+        {dataSourceError && (
+          <ErrorBanner
+            title="Data source error"
+            message={dataSourceError}
+          />
+        )}
 
         {queryError && (
           <ErrorBanner
