@@ -1,6 +1,6 @@
 use analytics_web_srv::app_db::{
     CreateDataSourceRequest, DataSource, DataSourceSummary, UpdateDataSourceRequest,
-    ValidationError, validate_data_source_config, validate_name,
+    ValidationError, validate_data_source_config,
 };
 use analytics_web_srv::auth::ValidatedUser;
 use analytics_web_srv::data_source_cache::DataSourceCache;
@@ -133,7 +133,9 @@ pub async fn create_data_source(
     require_admin(&user)?;
 
     let name = &request.name;
-    validate_name(name)?;
+    if name.trim().is_empty() {
+        return Err(ValidationError::new("NAME_EMPTY", "Name must not be empty").into());
+    }
     validate_data_source_config(&request.config)?;
 
     let user_id = user.email.as_deref().unwrap_or(&user.subject);
