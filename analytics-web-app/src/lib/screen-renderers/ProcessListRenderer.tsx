@@ -7,10 +7,12 @@ import { useTimeRangeSync } from './useTimeRangeSync'
 import { useSqlHandlers } from './useSqlHandlers'
 import { LoadingState, EmptyState, RendererLayout } from './shared'
 import { QueryEditor } from '@/components/QueryEditor'
+import { DataSourceField } from '@/components/DataSourceSelector'
 import { AppLink } from '@/components/AppLink'
 import { CopyableProcessId } from '@/components/CopyableProcessId'
 import { formatTimestamp, formatDurationMs } from '@/lib/time-range'
 import { timestampToDate, isTimeType, isDurationType, durationToMs } from '@/lib/arrow-utils'
+import { useChangeEffect } from '@/hooks/useChangeEffect'
 import { useStreamQuery } from '@/hooks/useStreamQuery'
 import { useDefaultSaveCleanup, useExposeSaveRef } from '@/lib/url-cleanup-utils'
 
@@ -31,6 +33,7 @@ interface ProcessListConfig {
   timeRangeTo?: string
   sortColumn?: string
   sortDirection?: 'asc' | 'desc'
+  dataSource?: string
   [key: string]: unknown
 }
 
@@ -97,6 +100,9 @@ export function ProcessListRenderer({
   const handleSave = useDefaultSaveCleanup(onSave, setSearchParams)
   useExposeSaveRef(onSaveRef, handleSave)
 
+  // Effective data source: config-level overrides page-level
+  const effectiveDataSource = processListConfig.dataSource || dataSource
+
   // Sort state from config (persisted)
   const sortColumn = processListConfig.sortColumn
   const sortDirection = processListConfig.sortDirection
@@ -128,20 +134,20 @@ export function ProcessListRenderer({
         },
         begin: timeRange.begin,
         end: timeRange.end,
-        dataSource,
+        dataSource: effectiveDataSource,
       })
     },
-    [timeRange, orderByValue, dataSource]
+    [timeRange, orderByValue, effectiveDataSource]
   )
 
   // Initial query execution
   const hasExecutedRef = useRef(false)
   useEffect(() => {
-    if (!hasExecutedRef.current && dataSource) {
+    if (!hasExecutedRef.current && effectiveDataSource) {
       hasExecutedRef.current = true
       executeQuery(processListConfig.sql)
     }
-  }, [executeQuery, processListConfig.sql, dataSource])
+  }, [executeQuery, processListConfig.sql, effectiveDataSource])
 
   // Re-execute on time range change
   const prevTimeRangeRef = useRef<{ begin: string; end: string } | null>(null)
@@ -180,6 +186,9 @@ export function ProcessListRenderer({
       executeQuery(currentSqlRef.current)
     }
   }, [orderByValue, executeQuery])
+
+  // Re-execute when data source changes
+  useChangeEffect(effectiveDataSource, () => executeQuery(currentSqlRef.current))
 
   // Sync time range changes to config
   useTimeRangeSync({
@@ -231,6 +240,13 @@ export function ProcessListRenderer({
     order_by: orderByValue || '(none)',
   }
 
+  const dataSourceContent = (
+    <DataSourceField
+      value={effectiveDataSource || ''}
+      onChange={(ds) => onConfigChange({ ...processListConfig, dataSource: ds })}
+    />
+  )
+
   // Query editor panel
   const sqlPanel = (
     <QueryEditor
@@ -243,6 +259,7 @@ export function ProcessListRenderer({
       onChange={handleSqlChange}
       isLoading={streamQuery.isStreaming}
       error={queryError}
+      topContent={dataSourceContent}
     />
   )
 

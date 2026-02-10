@@ -454,6 +454,9 @@ export function NotebookRenderer({
           ? `${state.data.numRows} rows`
           : undefined
 
+    // Effective data source: per-cell overrides notebook-level
+    const cellDataSource = ('dataSource' in cell ? cell.dataSource : undefined) || dataSource
+
     // Build common renderer props
     const commonRendererProps = {
       name: cell.name,
@@ -470,6 +473,7 @@ export function NotebookRenderer({
       onTimeRangeSelect: handleTimeRangeSelect,
       value: cell.type === 'variable' ? variableValues[cell.name] : undefined,
       onValueChange: cell.type === 'variable' ? (value: VariableValue) => setVariableValue(cell.name, value) : undefined,
+      dataSource: cellDataSource,
       ...rendererProps,
     }
 
@@ -567,6 +571,7 @@ export function NotebookRenderer({
               timeRange={timeRange}
               existingNames={existingNames}
               availableColumns={cellStates[selectedCell.name]?.data?.schema.fields.map((f) => f.name)}
+              defaultDataSource={dataSource}
               onClose={() => setSelectedCellIndex(null)}
               onUpdate={(updates) => updateCell(selectedCellIndex!, updates)}
               onRun={() => executeCell(selectedCellIndex!)}

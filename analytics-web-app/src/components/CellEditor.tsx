@@ -1,9 +1,10 @@
 import { useState, useCallback, useEffect } from 'react'
 import { X, Play, Trash2 } from 'lucide-react'
 import { getCellTypeMetadata } from '@/lib/screen-renderers/cell-registry'
-import type { CellConfig, VariableValue } from '@/lib/screen-renderers/notebook-types'
+import type { CellConfig, VariableValue, VariableCellConfig } from '@/lib/screen-renderers/notebook-types'
 import { validateCellName, sanitizeCellName } from '@/lib/screen-renderers/notebook-utils'
 import { Button } from '@/components/ui/button'
+import { DataSourceField } from '@/components/DataSourceSelector'
 
 interface CellEditorProps {
   cell: CellConfig
@@ -11,6 +12,7 @@ interface CellEditorProps {
   timeRange: { begin: string; end: string }
   existingNames: Set<string>
   availableColumns?: string[]
+  defaultDataSource?: string
   onClose: () => void
   onUpdate: (updates: Partial<CellConfig>) => void
   onRun: () => void
@@ -23,6 +25,7 @@ export function CellEditor({
   timeRange,
   existingNames,
   availableColumns,
+  defaultDataSource,
   onClose,
   onUpdate,
   onRun,
@@ -69,6 +72,10 @@ export function CellEditor({
     [onUpdate]
   )
 
+  // Determine if this cell should show a data source selector
+  const shouldShowDataSource = cell.type !== 'markdown' &&
+    (cell.type !== 'variable' || (cell as VariableCellConfig).variableType === 'combobox')
+
   // Determine if this cell can run
   const canRun = !!meta.execute
 
@@ -112,6 +119,15 @@ export function CellEditor({
             <p className="mt-1 text-xs text-accent-error">{nameError}</p>
           )}
         </div>
+
+        {/* Data Source (for SQL-executing cells) */}
+        {shouldShowDataSource && (
+          <DataSourceField
+            value={('dataSource' in cell ? cell.dataSource : undefined) || defaultDataSource || ''}
+            onChange={(ds) => onUpdate({ dataSource: ds } as Partial<CellConfig>)}
+            className=""
+          />
+        )}
 
         {/* Type-specific content - each editor decides what to show */}
         <meta.EditorComponent

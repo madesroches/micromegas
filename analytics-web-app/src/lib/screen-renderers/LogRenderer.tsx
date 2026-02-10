@@ -5,7 +5,9 @@ import { LOG_ENTRIES_SCHEMA_URL } from '@/components/DocumentationLink'
 import { registerRenderer, ScreenRendererProps } from './index'
 import { LoadingState, EmptyState, RendererLayout } from './shared'
 import { QueryEditor } from '@/components/QueryEditor'
+import { DataSourceField } from '@/components/DataSourceSelector'
 import { useStreamQuery } from '@/hooks/useStreamQuery'
+import { useChangeEffect } from '@/hooks/useChangeEffect'
 import { useDebounce } from '@/hooks/useDebounce'
 import { useDefaultSaveCleanup, useExposeSaveRef } from '@/lib/url-cleanup-utils'
 import { timestampToDate } from '@/lib/arrow-utils'
@@ -54,6 +56,7 @@ interface LogConfig {
   search?: string
   timeRangeFrom?: string
   timeRangeTo?: string
+  dataSource?: string
 }
 
 interface LogRow {
@@ -222,6 +225,9 @@ export function LogRenderer({
 }: ScreenRendererProps) {
   const logConfig = config as unknown as LogConfig
   const savedLogConfig = savedConfig as unknown as LogConfig | null
+
+  // Effective data source: config-level overrides page-level
+  const effectiveDataSource = logConfig.dataSource || dataSource
 
   // URL params for filter state sync
   const [searchParams, setSearchParams] = useSearchParams()
@@ -424,20 +430,20 @@ export function LogRenderer({
         },
         begin: timeRange.begin,
         end: timeRange.end,
-        dataSource,
+        dataSource: effectiveDataSource,
       })
     },
-    [timeRange, logLevel, logLimit, search, dataSource]
+    [timeRange, logLevel, logLimit, search, effectiveDataSource]
   )
 
   // Initial query execution
   const hasExecutedRef = useRef(false)
   useEffect(() => {
-    if (!hasExecutedRef.current && dataSource) {
+    if (!hasExecutedRef.current && effectiveDataSource) {
       hasExecutedRef.current = true
       loadData(logConfig.sql)
     }
-  }, [dataSource]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [effectiveDataSource]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Re-execute on time range change
   const prevTimeRangeRef = useRef<{ begin: string; end: string } | null>(null)
@@ -463,6 +469,9 @@ export function LogRenderer({
       loadData(currentSqlRef.current)
     }
   }, [refreshTrigger, loadData])
+
+  // Re-execute when data source changes
+  useChangeEffect(effectiveDataSource, () => loadData(currentSqlRef.current))
 
   // Re-execute on filter changes
   useEffect(() => {
@@ -548,6 +557,13 @@ export function LogRenderer({
     search_filter: expandSearchFilter(search) || '(empty)',
   }
 
+  const dataSourceContent = (
+    <DataSourceField
+      value={effectiveDataSource || ''}
+      onChange={(ds) => onConfigChange({ ...logConfig, dataSource: ds })}
+    />
+  )
+
   // Query editor panel
   const sqlPanel = (
     <QueryEditor
@@ -564,6 +580,7 @@ export function LogRenderer({
         url: LOG_ENTRIES_SCHEMA_URL,
         label: 'log_entries schema reference',
       }}
+      topContent={dataSourceContent}
     />
   )
 

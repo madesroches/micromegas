@@ -11,14 +11,16 @@ import { ErrorBanner } from '@/components/ErrorBanner'
 import { ParseErrorWarning } from '@/components/ParseErrorWarning'
 import { MetricsChart } from '@/components/MetricsChart'
 import { useStreamQuery } from '@/hooks/useStreamQuery'
-import { useMetricsData } from '@/hooks/useMetricsData'
 import { useScreenConfig } from '@/hooks/useScreenConfig'
 import { usePageTitle } from '@/hooks/usePageTitle'
 import { parseTimeRange, getTimeRangeForApi } from '@/lib/time-range'
 import { timestampToMs } from '@/lib/arrow-utils'
-import { extractPropertiesFromRows, createPropertyTimelineGetter, ExtractedPropertyData } from '@/lib/property-utils'
-import { useDefaultDataSource } from '@/hooks/useDefaultDataSource'
+import { aggregateIntoSegments } from '@/lib/property-utils'
+import { useDataSourceState } from '@/hooks/useDataSourceState'
+import { useChangeEffect } from '@/hooks/useChangeEffect'
+import { DataSourceField } from '@/components/DataSourceSelector'
 import type { ProcessMetricsConfig } from '@/lib/screen-config'
+import type { PropertyTimelineData } from '@/types'
 
 const DISCOVERY_SQL = `SELECT DISTINCT name, target, unit
 FROM view_instance('measures', '$process_id')
@@ -104,7 +106,7 @@ function calculateBinInterval(timeSpanMs: number, chartWidthPx: number = 800): s
 function ProcessMetricsContent() {
   usePageTitle('Process Metrics')
 
-  const { name: defaultDataSource, error: dataSourceError } = useDefaultDataSource()
+  const { dataSource, setDataSource, error: dataSourceError } = useDataSourceState()
 
   // Use the new config-driven pattern
   const { config, updateConfig } = useScreenConfig(DEFAULT_CONFIG, buildUrl)
@@ -116,13 +118,20 @@ function ProcessMetricsContent() {
   const [selectedMeasure, setSelectedMeasure] = useState<string | null>(config.selectedMeasure ?? null)
   const [discoveryDone, setDiscoveryDone] = useState(false)
   const [chartWidth, setChartWidth] = useState<number>(800)
-  const [isCustomQuery, setIsCustomQuery] = useState(false)
-  const [customChartData, setCustomChartData] = useState<{ time: number; value: number }[]>([])
-  const [customPropertyData, setCustomPropertyData] = useState<ExtractedPropertyData>({ availableKeys: [], rawData: new Map(), errors: [] })
 
-  // Query hooks for discovery and custom queries
+  // Extracted data state (unified for both default and custom queries)
+  const [chartData, setChartData] = useState<{ time: number; value: number }[]>([])
+  const [rawPropertiesData, setRawPropertiesData] = useState<Map<number, Record<string, unknown>>>(new Map())
+  const [propertyParseErrors, setPropertyParseErrors] = useState<string[]>([])
+
+  // Single query instance for metrics (default or custom)
   const discoveryQuery = useStreamQuery()
-  const customQuery = useStreamQuery()
+  const metricsQuery = useStreamQuery()
+
+  // Active SQL tracks whether we're running default or custom SQL
+  const [activeSql, setActiveSql] = useState(DEFAULT_SQL)
+  // refreshCounter forces re-execution when deps haven't changed
+  const [refreshCounter, setRefreshCounter] = useState(0)
 
   // Compute API time range from config
   const apiTimeRange = useMemo(() => {
@@ -149,21 +158,10 @@ function ProcessMetricsContent() {
     return calculateBinInterval(timeSpanMs, chartWidth)
   }, [apiTimeRange, chartWidth])
 
-  // Unified metrics data hook (Model layer)
-  const metricsData = useMetricsData({
-    processId,
-    measureName: selectedMeasure,
-    binInterval,
-    apiTimeRange,
-    enabled: !!processId && !!selectedMeasure,
-    dataSource: defaultDataSource,
-  })
-
-  // Use unified data or custom query data
-  const chartData = isCustomQuery ? customChartData : metricsData.chartData
-  const isLoading = isCustomQuery ? customQuery.isStreaming : metricsData.isLoading
-  const hasLoaded = isCustomQuery ? customQuery.isComplete : metricsData.isComplete
-  const queryError = customQuery.error?.message ?? discoveryQuery.error?.message ?? metricsData.error
+  // Derived loading/error state from the single metricsQuery
+  const isLoading = metricsQuery.isStreaming
+  const hasLoaded = metricsQuery.isComplete
+  const queryError = metricsQuery.error?.message ?? discoveryQuery.error?.message ?? null
   // Show loading when discovery is done, measure selected, but data hasn't loaded yet
   const showDataLoading = isLoading || (discoveryDone && selectedMeasure && !hasLoaded && chartData.length === 0)
 
@@ -173,15 +171,32 @@ function ProcessMetricsContent() {
     end: new Date(apiTimeRange.end).getTime(),
   }), [apiTimeRange.begin, apiTimeRange.end])
 
-  // Use custom or unified property data based on query mode
-  const availablePropertyKeys = isCustomQuery ? customPropertyData.availableKeys : metricsData.availablePropertyKeys
-  const getPropertyTimeline = useMemo(
-    () => isCustomQuery
-      ? createPropertyTimelineGetter(customPropertyData.rawData, timeRangeMs)
-      : metricsData.getPropertyTimeline,
-    [isCustomQuery, customPropertyData.rawData, timeRangeMs, metricsData.getPropertyTimeline]
-  )
-  const propertyParseErrors = isCustomQuery ? customPropertyData.errors : metricsData.propertyParseErrors
+  // Derive available property keys from the data
+  const availablePropertyKeys = useMemo(() => {
+    const keysSet = new Set<string>()
+    for (const props of rawPropertiesData.values()) {
+      Object.keys(props).forEach(k => keysSet.add(k))
+    }
+    return Array.from(keysSet).sort()
+  }, [rawPropertiesData])
+
+  // Function to get property timeline for a specific key
+  const getPropertyTimeline = useCallback((propertyName: string): PropertyTimelineData => {
+    const rows: { time: number; value: string }[] = []
+    const sortedEntries = Array.from(rawPropertiesData.entries()).sort((a, b) => a[0] - b[0])
+
+    for (const [time, props] of sortedEntries) {
+      const value = props[propertyName]
+      if (value !== undefined && value !== null) {
+        rows.push({ time, value: String(value) })
+      }
+    }
+
+    return {
+      propertyName,
+      segments: aggregateIntoSegments(rows, timeRangeMs),
+    }
+  }, [rawPropertiesData, timeRangeMs])
 
   const selectedMeasureInfo = useMemo(() => {
     return measures.find((m) => m.name === selectedMeasure)
@@ -219,36 +234,39 @@ function ProcessMetricsContent() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- Only react to completion/error, not the full hook object
   }, [discoveryQuery.isComplete, discoveryQuery.error, selectedMeasure, updateConfig])
 
-  // Extract custom query data (chart + properties if present)
+  // Unified extraction effect — handles both default and custom query results
   useEffect(() => {
-    if (customQuery.isComplete && !customQuery.error) {
-      const table = customQuery.getTable()
+    if (metricsQuery.isComplete && !metricsQuery.error) {
+      const table = metricsQuery.getTable()
       if (table) {
         const points: { time: number; value: number }[] = []
-        const propsRows: { time: number; properties: string | null }[] = []
-        const hasPropertiesColumn = table.schema.fields.some(f => f.name === 'properties')
+        const propsMap = new Map<number, Record<string, unknown>>()
+        const errors: string[] = []
+        const hasProps = table.schema.fields.some(f => f.name === 'properties')
 
         for (let i = 0; i < table.numRows; i++) {
           const row = table.get(i)
           if (row) {
             const time = timestampToMs(row.time)
             points.push({ time, value: Number(row.value) })
-            if (hasPropertiesColumn) {
-              propsRows.push({ time, properties: row.properties != null ? String(row.properties) : null })
+
+            if (hasProps && row.properties != null) {
+              try {
+                propsMap.set(time, JSON.parse(String(row.properties)))
+              } catch (e) {
+                errors.push(`Invalid JSON at time ${time}: ${e instanceof Error ? e.message : String(e)}`)
+              }
             }
           }
         }
 
-        setCustomChartData(points)
-        setCustomPropertyData(
-          hasPropertiesColumn
-            ? extractPropertiesFromRows(propsRows)
-            : { availableKeys: [], rawData: new Map(), errors: [] }
-        )
+        setChartData(points)
+        setRawPropertiesData(propsMap)
+        setPropertyParseErrors(errors)
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- Only react to completion/error, not the full hook object
-  }, [customQuery.isComplete, customQuery.error])
+  }, [metricsQuery.isComplete, metricsQuery.error])
 
   const discoveryExecuteRef = useRef(discoveryQuery.execute)
   discoveryExecuteRef.current = discoveryQuery.execute
@@ -260,15 +278,38 @@ function ProcessMetricsContent() {
       params: { process_id: processId },
       begin: apiTimeRange.begin,
       end: apiTimeRange.end,
-      dataSource: defaultDataSource,
+      dataSource,
     })
-  }, [processId, apiTimeRange, defaultDataSource])
+  }, [processId, apiTimeRange, dataSource])
+
+  // Stable ref to metricsQuery.execute for the declarative effect
+  const executeRef = useRef(metricsQuery.execute)
+  executeRef.current = metricsQuery.execute
+
+  // Single declarative execution effect — fires when any input changes
+  useEffect(() => {
+    if (discoveryDone && selectedMeasure && processId && dataSource) {
+      executeRef.current({
+        sql: activeSql,
+        params: {
+          process_id: processId,
+          measure_name: selectedMeasure,
+          bin_interval: binInterval,
+        },
+        begin: apiTimeRange.begin,
+        end: apiTimeRange.end,
+        dataSource,
+      })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- refreshCounter forces re-execution; executeRef is stable
+  }, [discoveryDone, selectedMeasure, processId, dataSource, binInterval,
+      apiTimeRange.begin, apiTimeRange.end, activeSql, refreshCounter])
 
   // Update measure in config with replace (editing, not navigational)
   const updateMeasure = useCallback(
     (measure: string) => {
       setSelectedMeasure(measure)
-      setIsCustomQuery(false)
+      setActiveSql(DEFAULT_SQL)
       updateConfig({ selectedMeasure: measure }, { replace: true })
     },
     [updateConfig]
@@ -292,22 +333,17 @@ function ProcessMetricsContent() {
 
   const hasLoadedDiscoveryRef = useRef(false)
   useEffect(() => {
-    if (processId && defaultDataSource && !hasLoadedDiscoveryRef.current) {
+    if (processId && dataSource && !hasLoadedDiscoveryRef.current) {
       hasLoadedDiscoveryRef.current = true
       loadDiscovery()
     }
-  }, [processId, defaultDataSource, loadDiscovery])
+  }, [processId, dataSource, loadDiscovery])
 
-  // Trigger unified query when discovery is done and measure is selected
-  const metricsDataExecuteRef = useRef(metricsData.execute)
-  metricsDataExecuteRef.current = metricsData.execute
-
-  useEffect(() => {
-    if (discoveryDone && selectedMeasure && processId && !isCustomQuery) {
-      metricsDataExecuteRef.current()
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- Use primitive deps to avoid object comparison issues
-  }, [discoveryDone, selectedMeasure, processId, isCustomQuery, binInterval, apiTimeRange.begin, apiTimeRange.end])
+  // Re-run discovery when data source changes (metrics re-execute via declarative effect)
+  useChangeEffect(dataSource, () => {
+    hasLoadedDiscoveryRef.current = false
+    loadDiscovery()
+  })
 
   const prevTimeRangeRef = useRef<{ begin: string; end: string } | null>(null)
   useEffect(() => {
@@ -336,29 +372,21 @@ function ProcessMetricsContent() {
 
   const handleRunQuery = useCallback(
     (sql: string) => {
-      setIsCustomQuery(true)
-      customQuery.execute({
-        sql,
-        params: {
-          process_id: processId || '',
-          measure_name: selectedMeasure || '',
-          bin_interval: binInterval,
-        },
-        begin: apiTimeRange.begin,
-        end: apiTimeRange.end,
-        dataSource: defaultDataSource,
-      })
+      setActiveSql(sql)
+      setRefreshCounter(c => c + 1)
     },
-    [processId, selectedMeasure, binInterval, apiTimeRange, defaultDataSource, customQuery]
+    []
   )
 
   const handleResetQuery = useCallback(() => {
-    setIsCustomQuery(false)
+    setActiveSql(DEFAULT_SQL)
+    setRefreshCounter(c => c + 1)
   }, [])
 
   const handleRefresh = useCallback(() => {
     hasLoadedDiscoveryRef.current = false
     loadDiscovery()
+    setRefreshCounter(c => c + 1)
   }, [loadDiscovery])
 
   const handleTimeRangeSelect = useCallback(
@@ -381,6 +409,10 @@ function ProcessMetricsContent() {
     [processId, selectedMeasure, binInterval]
   )
 
+  const dataSourceContent = (
+    <DataSourceField value={dataSource} onChange={setDataSource} />
+  )
+
   const sqlPanel =
     processId && selectedMeasure ? (
       <QueryEditor
@@ -396,6 +428,7 @@ function ProcessMetricsContent() {
           url: MEASURES_SCHEMA_URL,
           label: 'measures schema reference',
         }}
+        topContent={dataSourceContent}
       />
     ) : undefined
 
@@ -477,7 +510,7 @@ function ProcessMetricsContent() {
           <ErrorBanner
             title="Query execution failed"
             message={queryError}
-            onRetry={(customQuery.error?.retryable || discoveryQuery.error?.retryable) ? handleRefresh : undefined}
+            onRetry={(metricsQuery.error?.retryable || discoveryQuery.error?.retryable) ? handleRefresh : undefined}
           />
         )}
 

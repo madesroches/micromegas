@@ -122,11 +122,12 @@ export function useCellExecution({
       abortControllerRef.current = new AbortController()
 
       try {
-        // Create execution context
+        // Create execution context - use per-cell data source with fallback to global
+        const cellDataSource = ('dataSource' in cell ? cell.dataSource : undefined) || dataSource
         const context: CellExecutionContext = {
           variables: availableVariables,
           timeRange,
-          runQuery: (sql) => executeSql(sql, timeRange, abortControllerRef.current!.signal, dataSource),
+          runQuery: (sql) => executeSql(sql, timeRange, abortControllerRef.current!.signal, cellDataSource),
         }
 
         // Delegate to cell's execute method

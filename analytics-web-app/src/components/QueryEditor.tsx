@@ -14,6 +14,8 @@ interface QueryEditorProps {
   isLoading?: boolean
   error?: string | null
   docLink?: { url: string; label: string }
+  /** Content rendered at top of scrollable area, before the SQL editor (only when expanded) */
+  topContent?: React.ReactNode
   /** Footer content rendered at bottom of panel (only when expanded) */
   footer?: React.ReactNode
 }
@@ -29,6 +31,7 @@ export function QueryEditor({
   isLoading = false,
   error,
   docLink,
+  topContent,
   footer,
 }: QueryEditorProps) {
   const [isCollapsed, setIsCollapsed] = useState(true)
@@ -93,6 +96,9 @@ export function QueryEditor({
 
       {/* Content */}
       <div className="flex-1 overflow-auto p-4">
+        {/* Top content (e.g., data source selector) */}
+        {topContent}
+
         {/* SQL Editor with syntax highlighting */}
         <SyntaxEditor
           value={sql}

@@ -1,0 +1,884 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Per-Screen / Per-Cell Data Source - Mockups</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --app-bg: #0a0a0f;
+    --header-bg: #12121a;
+    --sidebar-bg: #12121a;
+    --panel-bg: #12121a;
+    --card-bg: #1a1a2e;
+    --text-primary: #e7e9ea;
+    --text-secondary: #9ca3af;
+    --text-muted: #6b7280;
+    --border-color: #2a2a3e;
+    --border-hover: #3a3a4e;
+    --accent-link: #1565c0;
+    --accent-link-hover: #1976d2;
+    --accent-success: #22c55e;
+    --accent-error: #f87171;
+    --accent-error-bright: #dc2626;
+    --accent-warning: #ffb300;
+    --accent-highlight: #ffb300;
+    --accent-variable: #bf360c;
+    --brand-rust: #bf360c;
+    --brand-blue: #1565c0;
+    --brand-gold: #ffb300;
+    --selection-bg: rgba(21, 101, 192, 0.15);
+    --selection-border: #1565c0;
+    --error-bg: rgba(248, 113, 113, 0.1);
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'Inter', sans-serif;
+    background: #050508;
+    color: var(--text-primary);
+    line-height: 1.5;
+  }
+
+  /* ---- Navigation ---- */
+  .mockup-nav {
+    position: sticky; top: 0; z-index: 100;
+    background: var(--header-bg);
+    border-bottom: 1px solid var(--border-color);
+    padding: 16px 32px;
+    display: flex; align-items: center; gap: 24px;
+    flex-wrap: wrap;
+  }
+  .mockup-nav h1 {
+    font-size: 16px; font-weight: 700;
+    color: var(--text-primary);
+    white-space: nowrap;
+  }
+  .mockup-nav .tabs { display: flex; gap: 8px; flex-wrap: wrap; }
+  .mockup-nav .tab {
+    padding: 6px 14px; border-radius: 6px;
+    font-size: 13px; font-weight: 500;
+    cursor: pointer; border: 1px solid var(--border-color);
+    background: transparent; color: var(--text-secondary);
+    transition: all 0.15s;
+  }
+  .mockup-nav .tab:hover { border-color: var(--border-hover); color: var(--text-primary); }
+  .mockup-nav .tab.active { background: var(--accent-link); border-color: var(--accent-link); color: #fff; }
+
+  .mockup-section { display: none; padding: 32px; }
+  .mockup-section.active { display: block; }
+
+  .mockup-title {
+    font-size: 20px; font-weight: 600; color: var(--text-primary);
+    margin-bottom: 8px;
+  }
+  .mockup-desc {
+    font-size: 13px; color: var(--text-secondary);
+    margin-bottom: 24px; max-width: 720px;
+  }
+  .mockup-label {
+    display: inline-block; font-size: 11px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.05em;
+    color: var(--text-muted); margin-bottom: 12px;
+    padding: 3px 8px; border-radius: 4px;
+    background: var(--card-bg);
+  }
+
+  /* ---- Shared component styles ---- */
+  .frame {
+    background: var(--app-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    overflow: hidden;
+    margin-bottom: 32px;
+  }
+
+  /* ---- SVG icons (inline) ---- */
+  .icon { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  .icon svg { width: 14px; height: 14px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .icon-lg svg { width: 18px; height: 18px; }
+  .icon-sm svg { width: 12px; height: 12px; }
+
+  /* Database icon */
+  .icon-db::before { content: ''; }
+
+  /* ---- Data Source Selector ---- */
+  .ds-selector {
+    display: flex; align-items: center; gap: 6px;
+  }
+  .ds-selector .ds-icon {
+    color: var(--text-muted); display: flex; align-items: center;
+  }
+  .ds-selector select {
+    background: var(--panel-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    padding: 4px 24px 4px 8px;
+    font-size: 12px;
+    color: var(--text-primary);
+    font-family: inherit;
+    outline: none;
+    cursor: pointer;
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 6px center;
+  }
+  .ds-selector select:focus { border-color: var(--accent-link); }
+
+  /* ---- Before/After badge ---- */
+  .badge-before, .badge-after {
+    display: inline-block; font-size: 10px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.08em;
+    padding: 2px 8px; border-radius: 4px;
+    margin-bottom: 8px;
+  }
+  .badge-before { background: rgba(248, 113, 113, 0.15); color: var(--accent-error); }
+  .badge-after { background: rgba(34, 197, 94, 0.15); color: var(--accent-success); }
+
+  /* Change highlight */
+  .change-highlight {
+    outline: 2px dashed var(--accent-success);
+    outline-offset: 4px;
+    border-radius: 6px;
+    position: relative;
+  }
+  .change-highlight::after {
+    content: 'NEW';
+    position: absolute;
+    top: -10px; right: -4px;
+    font-size: 9px; font-weight: 700;
+    color: var(--accent-success);
+    background: var(--app-bg);
+    padding: 0 4px;
+    letter-spacing: 0.1em;
+  }
+  .removed-highlight {
+    outline: 2px dashed var(--accent-error);
+    outline-offset: 4px;
+    border-radius: 6px;
+    opacity: 0.5;
+    position: relative;
+  }
+  .removed-highlight::after {
+    content: 'REMOVED';
+    position: absolute;
+    top: -10px; right: -4px;
+    font-size: 9px; font-weight: 700;
+    color: var(--accent-error);
+    background: var(--app-bg);
+    padding: 0 4px;
+    letter-spacing: 0.1em;
+  }
+
+  /* ---- Annotation ---- */
+  .annotation {
+    font-size: 11px; color: var(--accent-warning);
+    margin-top: 8px; font-style: italic;
+  }
+
+  /* comparison layout */
+  .comparison { display: flex; gap: 32px; flex-wrap: wrap; }
+  .comparison > div { flex: 1; min-width: 400px; }
+</style>
+</head>
+<body>
+
+<!-- Navigation -->
+<nav class="mockup-nav">
+  <h1>Data Source Mockups</h1>
+  <div class="tabs">
+    <div class="tab active" data-target="sec-header">Screen Header</div>
+    <div class="tab" data-target="sec-custom">Custom Screen Panel</div>
+    <div class="tab" data-target="sec-notebook">Notebook Cells</div>
+    <div class="tab" data-target="sec-cell-editor">Cell Editor</div>
+    <div class="tab" data-target="sec-query-editor">QueryEditor topContent</div>
+  </div>
+</nav>
+
+<!-- ============================================================ -->
+<!-- SECTION 1: Screen Page Header (before/after) -->
+<!-- ============================================================ -->
+<section id="sec-header" class="mockup-section active">
+  <div class="mockup-title">Screen Page Header</div>
+  <div class="mockup-desc">
+    The global DataSourceSelector is removed from the page header. The data source is now configured per-screen in the editor panel, or per-cell in notebooks.
+  </div>
+
+  <div class="comparison">
+    <!-- BEFORE -->
+    <div>
+      <div class="badge-before">Before</div>
+      <div class="frame">
+        <div style="padding: 24px 24px 16px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+          <!-- Screen type icon -->
+          <div style="padding: 8px; border-radius: 6px; background: var(--card-bg); color: var(--accent-link); display: flex;">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>
+          </div>
+          <span style="font-size: 20px; font-weight: 600; color: var(--text-primary);">Server Metrics</span>
+
+          <!-- Data Source Selector (to be removed) -->
+          <div class="removed-highlight" style="margin-left: 8px;">
+            <div class="ds-selector">
+              <span class="ds-icon">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4.03 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5"/></svg>
+              </span>
+              <select>
+                <option>production</option>
+                <option>staging</option>
+              </select>
+            </div>
+          </div>
+
+          <div style="margin-left: auto; display: flex; gap: 8px;">
+            <button style="display: flex; align-items: center; gap: 4px; padding: 4px 12px; border-radius: 6px; border: 1px solid var(--border-color); background: transparent; color: var(--text-secondary); font-size: 13px; font-family: inherit; cursor: pointer;">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 3h5v5M8 3H3v5M3 16v5h5M21 16v5h-5M15 9l-6 6M9 9l6 6"/></svg>
+              Diff
+            </button>
+            <button style="display: flex; align-items: center; gap: 4px; padding: 4px 12px; border-radius: 6px; border: 1px solid var(--border-color); background: transparent; color: var(--text-secondary); font-size: 13px; font-family: inherit; cursor: pointer;">Save As</button>
+            <button style="display: flex; align-items: center; gap: 4px; padding: 4px 12px; border-radius: 6px; border: none; background: var(--accent-link); color: #fff; font-size: 13px; font-family: inherit; font-weight: 500; cursor: pointer;">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+              Save
+            </button>
+          </div>
+        </div>
+        <!-- Content placeholder -->
+        <div style="height: 80px; border-top: 1px solid var(--border-color); display: flex; align-items: center; justify-content: center; color: var(--text-muted); font-size: 12px;">
+          [ renderer content area ]
+        </div>
+      </div>
+    </div>
+
+    <!-- AFTER -->
+    <div>
+      <div class="badge-after">After</div>
+      <div class="frame">
+        <div style="padding: 24px 24px 16px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+          <div style="padding: 8px; border-radius: 6px; background: var(--card-bg); color: var(--accent-link); display: flex;">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>
+          </div>
+          <span style="font-size: 20px; font-weight: 600; color: var(--text-primary);">Server Metrics</span>
+
+          <!-- No data source selector here anymore -->
+
+          <div style="margin-left: auto; display: flex; gap: 8px;">
+            <button style="display: flex; align-items: center; gap: 4px; padding: 4px 12px; border-radius: 6px; border: 1px solid var(--border-color); background: transparent; color: var(--text-secondary); font-size: 13px; font-family: inherit; cursor: pointer;">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 3h5v5M8 3H3v5M3 16v5h5M21 16v5h-5M15 9l-6 6M9 9l6 6"/></svg>
+              Diff
+            </button>
+            <button style="display: flex; align-items: center; gap: 4px; padding: 4px 12px; border-radius: 6px; border: 1px solid var(--border-color); background: transparent; color: var(--text-secondary); font-size: 13px; font-family: inherit; cursor: pointer;">Save As</button>
+            <button style="display: flex; align-items: center; gap: 4px; padding: 4px 12px; border-radius: 6px; border: none; background: var(--accent-link); color: #fff; font-size: 13px; font-weight: 500; font-family: inherit; cursor: pointer;">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+              Save
+            </button>
+          </div>
+        </div>
+        <div style="height: 80px; border-top: 1px solid var(--border-color); display: flex; align-items: center; justify-content: center; color: var(--text-muted); font-size: 12px;">
+          [ renderer content area ]
+        </div>
+      </div>
+      <div class="annotation">Data source selector moved into renderer editor panels (see next tab).</div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<!-- SECTION 2: Custom Screen Editor Panel (Table/Log/Metrics) -->
+<!-- ============================================================ -->
+<section id="sec-custom" class="mockup-section">
+  <div class="mockup-title">Custom Screen Editor Panel</div>
+  <div class="mockup-desc">
+    Table, Log, Metrics, and ProcessList renderers get a DataSourceSelector at the top of their collapsible editor panel. The selector is persisted in the screen config and the query re-executes when the source changes.
+  </div>
+
+  <div class="comparison">
+    <!-- BEFORE -->
+    <div>
+      <div class="badge-before">Before</div>
+      <div class="frame" style="display: flex; height: 460px;">
+        <!-- Main content -->
+        <div style="flex: 1; display: flex; align-items: center; justify-content: center; color: var(--text-muted); font-size: 12px; border-right: 1px solid var(--border-color);">
+          [ table / log content ]
+        </div>
+        <!-- Right panel -->
+        <div style="width: 320px; display: flex; flex-direction: column; background: var(--panel-bg);">
+          <!-- Panel header -->
+          <div style="display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; background: var(--card-bg); border-bottom: 1px solid var(--border-color);">
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <span style="color: var(--text-secondary); cursor: pointer; display: flex;">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg>
+              </span>
+              <span style="font-size: 14px; font-weight: 600; color: var(--text-primary);">Query</span>
+            </div>
+            <div style="display: flex; gap: 8px;">
+              <button style="padding: 4px 10px; font-size: 12px; border: 1px solid var(--border-color); border-radius: 4px; background: transparent; color: var(--text-secondary); font-family: inherit; cursor: pointer;">Reset</button>
+              <button style="display: flex; align-items: center; gap: 4px; padding: 4px 10px; font-size: 12px; border: none; border-radius: 4px; background: var(--accent-success); color: #fff; font-family: inherit; font-weight: 500; cursor: pointer;">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                Run
+              </button>
+            </div>
+          </div>
+          <!-- Panel content - no data source selector -->
+          <div style="flex: 1; overflow: auto; padding: 16px;">
+            <!-- Query section -->
+            <div style="margin-bottom: 16px;">
+              <div style="display: flex; align-items: center; gap: 8px; padding: 8px 0; cursor: pointer;">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
+                <span style="font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted);">Query</span>
+              </div>
+              <div style="background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 6px; padding: 12px; font-family: 'Courier New', monospace; font-size: 12px; color: var(--text-primary); min-height: 80px;">
+                <span style="color: #c792ea;">SELECT</span> time, value<br>
+                <span style="color: #c792ea;">FROM</span> metrics<br>
+                <span style="color: #c792ea;">WHERE</span> name = <span style="color: #c3e88d;">'cpu_usage'</span>
+              </div>
+            </div>
+            <!-- Variables -->
+            <div>
+              <div style="font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); margin-bottom: 8px;">Variables</div>
+              <div style="font-size: 12px; color: var(--text-secondary);">
+                <span style="display: inline-block; padding: 1px 6px; background: var(--border-color); border-radius: 3px; color: var(--accent-variable); font-family: monospace; font-size: 11px;">@begin</span>
+                <span style="margin-left: 4px;">Start time</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- AFTER -->
+    <div>
+      <div class="badge-after">After</div>
+      <div class="frame" style="display: flex; height: 460px;">
+        <!-- Main content -->
+        <div style="flex: 1; display: flex; align-items: center; justify-content: center; color: var(--text-muted); font-size: 12px; border-right: 1px solid var(--border-color);">
+          [ table / log content ]
+        </div>
+        <!-- Right panel -->
+        <div style="width: 320px; display: flex; flex-direction: column; background: var(--panel-bg);">
+          <!-- Panel header -->
+          <div style="display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; background: var(--card-bg); border-bottom: 1px solid var(--border-color);">
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <span style="color: var(--text-secondary); cursor: pointer; display: flex;">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg>
+              </span>
+              <span style="font-size: 14px; font-weight: 600; color: var(--text-primary);">Query</span>
+            </div>
+            <div style="display: flex; gap: 8px;">
+              <button style="padding: 4px 10px; font-size: 12px; border: 1px solid var(--border-color); border-radius: 4px; background: transparent; color: var(--text-secondary); font-family: inherit; cursor: pointer;">Reset</button>
+              <button style="display: flex; align-items: center; gap: 4px; padding: 4px 10px; font-size: 12px; border: none; border-radius: 4px; background: var(--accent-success); color: #fff; font-family: inherit; font-weight: 500; cursor: pointer;">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                Run
+              </button>
+            </div>
+          </div>
+          <!-- Panel content - with data source selector -->
+          <div style="flex: 1; overflow: auto; padding: 16px;">
+            <!-- NEW: Data Source Selector -->
+            <div class="change-highlight" style="margin-bottom: 16px;">
+              <div style="font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); margin-bottom: 6px;">Data Source</div>
+              <div class="ds-selector">
+                <span class="ds-icon">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4.03 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5"/></svg>
+                </span>
+                <select>
+                  <option>production</option>
+                  <option>staging</option>
+                  <option>development</option>
+                </select>
+              </div>
+            </div>
+
+            <!-- Query section -->
+            <div style="margin-bottom: 16px;">
+              <div style="display: flex; align-items: center; gap: 8px; padding: 8px 0; cursor: pointer;">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
+                <span style="font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted);">Query</span>
+              </div>
+              <div style="background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 6px; padding: 12px; font-family: 'Courier New', monospace; font-size: 12px; color: var(--text-primary); min-height: 80px;">
+                <span style="color: #c792ea;">SELECT</span> time, value<br>
+                <span style="color: #c792ea;">FROM</span> metrics<br>
+                <span style="color: #c792ea;">WHERE</span> name = <span style="color: #c3e88d;">'cpu_usage'</span>
+              </div>
+            </div>
+            <!-- Variables -->
+            <div>
+              <div style="font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); margin-bottom: 8px;">Variables</div>
+              <div style="font-size: 12px; color: var(--text-secondary);">
+                <span style="display: inline-block; padding: 1px 6px; background: var(--border-color); border-radius: 3px; color: var(--accent-variable); font-family: monospace; font-size: 11px;">@begin</span>
+                <span style="margin-left: 4px;">Start time</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="annotation">Data source saved in screen config. Changing it re-executes the query automatically.</div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<!-- SECTION 3: Notebook with Per-Cell Data Sources -->
+<!-- ============================================================ -->
+<section id="sec-notebook" class="mockup-section">
+  <div class="mockup-title">Notebook - Per-Cell Data Sources</div>
+  <div class="mockup-desc">
+    Each SQL-executing cell in a notebook can have its own data source. The data source selector appears in the cell editor panel (right side). Different cells can target different data sources simultaneously. Markdown cells don't show a data source selector.
+  </div>
+
+  <div class="frame" style="display: flex; height: 660px;">
+    <!-- Left: Notebook cells -->
+    <div style="flex: 1; overflow: auto; padding: 24px; display: flex; flex-direction: column; gap: 12px;">
+
+      <!-- Cell 1: Query cell (selected) -->
+      <div style="border: 2px solid var(--selection-border); background: var(--selection-bg); border-radius: 8px; overflow: hidden;">
+        <div style="display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; border-bottom: 1px solid var(--border-color); background: var(--selection-bg);">
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <span style="color: var(--text-muted); cursor: grab;">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="5" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="9" cy="19" r="1"/><circle cx="15" cy="5" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="15" cy="19" r="1"/></svg>
+            </span>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
+            <span style="font-size: 11px; padding: 1px 6px; border-radius: 3px; background: var(--panel-bg); color: var(--text-secondary); text-transform: uppercase; font-weight: 500;">table</span>
+            <span style="font-size: 13px; color: var(--text-primary); font-weight: 500;">CPU Metrics</span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 6px;">
+            <span style="font-size: 11px; color: var(--accent-link);">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4.03 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5"/></svg>
+            </span>
+            <span style="font-size: 11px; color: var(--accent-link);">production</span>
+            <span style="margin-left: 8px; font-size: 11px; color: var(--text-muted);">42 rows</span>
+            <button style="width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; border: none; background: transparent; color: var(--text-muted); cursor: pointer; border-radius: 4px;">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+            </button>
+          </div>
+        </div>
+        <div style="padding: 16px;">
+          <!-- Table preview -->
+          <div style="border: 1px solid var(--border-color); border-radius: 6px; overflow: hidden; font-size: 12px;">
+            <div style="display: flex; background: var(--card-bg); border-bottom: 1px solid var(--border-color); font-weight: 600; color: var(--text-secondary);">
+              <div style="padding: 6px 12px; flex: 1;">time</div>
+              <div style="padding: 6px 12px; flex: 1;">value</div>
+              <div style="padding: 6px 12px; flex: 1;">host</div>
+            </div>
+            <div style="display: flex; border-bottom: 1px solid var(--border-color);">
+              <div style="padding: 6px 12px; flex: 1; color: var(--text-muted);">2024-01-15 10:00</div>
+              <div style="padding: 6px 12px; flex: 1;">45.2</div>
+              <div style="padding: 6px 12px; flex: 1;">web-01</div>
+            </div>
+            <div style="display: flex;">
+              <div style="padding: 6px 12px; flex: 1; color: var(--text-muted);">2024-01-15 10:01</div>
+              <div style="padding: 6px 12px; flex: 1;">52.8</div>
+              <div style="padding: 6px 12px; flex: 1;">web-02</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Cell 2: Markdown cell -->
+      <div style="border: 2px solid var(--border-color); border-radius: 8px; overflow: hidden;">
+        <div style="display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; border-bottom: 1px solid var(--border-color); background: var(--card-bg);">
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <span style="color: var(--text-muted); cursor: grab;">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="5" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="9" cy="19" r="1"/><circle cx="15" cy="5" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="15" cy="19" r="1"/></svg>
+            </span>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
+            <span style="font-size: 11px; padding: 1px 6px; border-radius: 3px; background: var(--panel-bg); color: var(--text-secondary); text-transform: uppercase; font-weight: 500;">markdown</span>
+            <span style="font-size: 13px; color: var(--text-primary); font-weight: 500;">Notes</span>
+          </div>
+          <span style="font-size: 11px; color: var(--text-muted);">no data source</span>
+        </div>
+        <div style="padding: 16px; font-size: 13px; color: var(--text-secondary);">
+          <p>Analysis of CPU usage across production servers. Comparing with staging environment below.</p>
+        </div>
+      </div>
+
+      <!-- Cell 3: Another query cell with different data source -->
+      <div style="border: 2px solid var(--border-color); border-radius: 8px; overflow: hidden;">
+        <div style="display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; border-bottom: 1px solid var(--border-color); background: var(--card-bg);">
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <span style="color: var(--text-muted); cursor: grab;">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="5" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="9" cy="19" r="1"/><circle cx="15" cy="5" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="15" cy="19" r="1"/></svg>
+            </span>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
+            <span style="font-size: 11px; padding: 1px 6px; border-radius: 3px; background: var(--panel-bg); color: var(--text-secondary); text-transform: uppercase; font-weight: 500;">table</span>
+            <span style="font-size: 13px; color: var(--text-primary); font-weight: 500;">Staging CPU</span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 6px;">
+            <span style="font-size: 11px; color: var(--accent-warning);">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4.03 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5"/></svg>
+            </span>
+            <span style="font-size: 11px; color: var(--accent-warning);">staging</span>
+            <span style="margin-left: 8px; font-size: 11px; color: var(--text-muted);">38 rows</span>
+            <button style="width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; border: none; background: transparent; color: var(--text-muted); cursor: pointer; border-radius: 4px;">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+            </button>
+          </div>
+        </div>
+        <div style="padding: 16px;">
+          <div style="border: 1px solid var(--border-color); border-radius: 6px; overflow: hidden; font-size: 12px;">
+            <div style="display: flex; background: var(--card-bg); border-bottom: 1px solid var(--border-color); font-weight: 600; color: var(--text-secondary);">
+              <div style="padding: 6px 12px; flex: 1;">time</div>
+              <div style="padding: 6px 12px; flex: 1;">value</div>
+              <div style="padding: 6px 12px; flex: 1;">host</div>
+            </div>
+            <div style="display: flex; border-bottom: 1px solid var(--border-color);">
+              <div style="padding: 6px 12px; flex: 1; color: var(--text-muted);">2024-01-15 10:00</div>
+              <div style="padding: 6px 12px; flex: 1;">31.7</div>
+              <div style="padding: 6px 12px; flex: 1;">stg-01</div>
+            </div>
+            <div style="display: flex;">
+              <div style="padding: 6px 12px; flex: 1; color: var(--text-muted);">2024-01-15 10:01</div>
+              <div style="padding: 6px 12px; flex: 1;">28.4</div>
+              <div style="padding: 6px 12px; flex: 1;">stg-02</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Cell 4: Variable (combobox) cell -->
+      <div style="border: 2px solid var(--border-color); border-radius: 8px; overflow: hidden;">
+        <div style="display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; border-bottom: 1px solid var(--border-color); background: var(--card-bg);">
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <span style="color: var(--text-muted); cursor: grab;">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="5" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="9" cy="19" r="1"/><circle cx="15" cy="5" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="15" cy="19" r="1"/></svg>
+            </span>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
+            <span style="font-size: 11px; padding: 1px 6px; border-radius: 3px; background: var(--panel-bg); color: var(--text-secondary); text-transform: uppercase; font-weight: 500;">variable</span>
+            <span style="font-size: 13px; color: var(--text-primary); font-weight: 500;">host_filter</span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 6px;">
+            <span style="font-size: 11px; color: var(--accent-link);">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4.03 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5"/></svg>
+            </span>
+            <span style="font-size: 11px; color: var(--accent-link);">production</span>
+          </div>
+        </div>
+        <div style="padding: 12px 16px; display: flex; align-items: center; gap: 8px;">
+          <span style="font-size: 12px; color: var(--text-secondary);">
+            <span style="padding: 1px 6px; background: var(--border-color); border-radius: 3px; color: var(--accent-variable); font-family: monospace; font-size: 11px;">@host_filter</span>
+            =
+          </span>
+          <select style="background: var(--panel-bg); border: 1px solid var(--border-color); border-radius: 4px; padding: 4px 8px; font-size: 12px; color: var(--text-primary); font-family: inherit;">
+            <option>web-01</option>
+            <option>web-02</option>
+            <option>web-03</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Add cell button -->
+      <button style="width: 100%; padding: 12px; border: 2px dashed var(--border-color); border-radius: 8px; background: transparent; color: var(--text-muted); font-size: 13px; font-family: inherit; cursor: pointer; transition: all 0.15s;">
+        + Add Cell
+      </button>
+    </div>
+
+    <!-- Right: Cell Editor Panel for selected cell -->
+    <div style="width: 350px; background: var(--panel-bg); border-left: 1px solid var(--border-color); display: flex; flex-direction: column;">
+      <!-- Editor header -->
+      <div style="display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; border-bottom: 1px solid var(--border-color);">
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <span style="font-size: 11px; padding: 2px 6px; border-radius: 3px; background: var(--card-bg); color: var(--text-secondary); text-transform: uppercase; font-weight: 500;">table</span>
+          <span style="font-size: 14px; font-weight: 500; color: var(--text-primary);">CPU Metrics</span>
+        </div>
+        <button style="padding: 4px; border: none; background: transparent; color: var(--text-muted); cursor: pointer; border-radius: 4px;">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+        </button>
+      </div>
+
+      <!-- Editor content -->
+      <div style="flex: 1; overflow: auto; padding: 16px; display: flex; flex-direction: column; gap: 16px;">
+        <!-- Cell Name -->
+        <div>
+          <label style="display: block; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); margin-bottom: 6px;">Cell Name</label>
+          <input type="text" value="CPU Metrics" style="width: 100%; padding: 8px 12px; background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 6px; color: var(--text-primary); font-size: 13px; font-family: inherit; outline: none;">
+        </div>
+
+        <!-- NEW: Data Source -->
+        <div class="change-highlight">
+          <label style="display: block; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); margin-bottom: 6px;">Data Source</label>
+          <div class="ds-selector">
+            <span class="ds-icon">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4.03 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5"/></svg>
+            </span>
+            <select>
+              <option>production</option>
+              <option>staging</option>
+              <option>development</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- SQL Query -->
+        <div>
+          <label style="display: block; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); margin-bottom: 6px;">SQL Query</label>
+          <div style="background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 6px; padding: 12px; font-family: 'Courier New', monospace; font-size: 12px; color: var(--text-primary); min-height: 80px;">
+            <span style="color: #c792ea;">SELECT</span> time, value, host<br>
+            <span style="color: #c792ea;">FROM</span> metrics<br>
+            <span style="color: #c792ea;">WHERE</span> name = <span style="color: #c3e88d;">'cpu_usage'</span><br>
+            <span style="color: #c792ea;">ORDER BY</span> time <span style="color: #c792ea;">DESC</span>
+          </div>
+        </div>
+
+        <!-- Visualization -->
+        <div>
+          <label style="display: block; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); margin-bottom: 6px;">Visualization</label>
+          <select style="width: 100%; padding: 8px 12px; background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 6px; color: var(--text-primary); font-size: 13px; font-family: inherit; outline: none;">
+            <option>Table</option>
+            <option>Chart</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Footer -->
+      <div style="padding: 12px 16px; border-top: 1px solid var(--border-color); display: flex; flex-direction: column; gap: 8px;">
+        <button style="width: 100%; padding: 8px; border: none; border-radius: 6px; background: var(--accent-link); color: #fff; font-size: 13px; font-family: inherit; font-weight: 500; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 6px;">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+          Run Cell
+        </button>
+        <button style="width: 100%; padding: 8px; border: 1px solid var(--accent-error); border-radius: 6px; background: transparent; color: var(--accent-error); font-size: 13px; font-family: inherit; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 6px;">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>
+          Delete Cell
+        </button>
+      </div>
+    </div>
+  </div>
+  <div class="annotation">
+    Cell 1 targets "production", Cell 3 targets "staging", Cell 4 (variable/combobox) targets "production". Markdown cells have no data source.
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<!-- SECTION 4: Cell Editor Detail (which cell types show selector) -->
+<!-- ============================================================ -->
+<section id="sec-cell-editor" class="mockup-section">
+  <div class="mockup-title">Cell Editor - Conditional Data Source</div>
+  <div class="mockup-desc">
+    The data source selector only appears for cells that execute SQL: query (table/chart), variable (combobox type only), and perfetto-export. It does NOT appear for markdown cells or text-type variable cells.
+  </div>
+
+  <div style="display: flex; gap: 24px; flex-wrap: wrap;">
+    <!-- Query cell editor -->
+    <div style="flex: 1; min-width: 280px;">
+      <div class="mockup-label">Query Cell (table/chart)</div>
+      <div class="frame" style="max-width: 320px;">
+        <div style="padding: 12px 16px; border-bottom: 1px solid var(--border-color); display: flex; align-items: center; gap: 8px;">
+          <span style="font-size: 11px; padding: 2px 6px; border-radius: 3px; background: var(--card-bg); color: var(--text-secondary); text-transform: uppercase; font-weight: 500;">table</span>
+          <span style="font-size: 14px; font-weight: 500; color: var(--text-primary);">My Query</span>
+        </div>
+        <div style="padding: 16px; display: flex; flex-direction: column; gap: 14px;">
+          <div>
+            <label style="display: block; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); margin-bottom: 6px;">Cell Name</label>
+            <input type="text" value="My Query" style="width: 100%; padding: 6px 10px; background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 6px; color: var(--text-primary); font-size: 12px; font-family: inherit; outline: none;">
+          </div>
+          <div class="change-highlight">
+            <label style="display: block; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); margin-bottom: 6px;">Data Source</label>
+            <div class="ds-selector">
+              <span class="ds-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4.03 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5"/></svg></span>
+              <select><option>production</option><option>staging</option></select>
+            </div>
+          </div>
+          <div>
+            <label style="display: block; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); margin-bottom: 6px;">SQL Query</label>
+            <div style="background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 6px; padding: 8px; font-family: monospace; font-size: 11px; color: var(--text-secondary); height: 40px;">SELECT ...</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Variable (combobox) cell editor -->
+    <div style="flex: 1; min-width: 280px;">
+      <div class="mockup-label">Variable Cell (combobox)</div>
+      <div class="frame" style="max-width: 320px;">
+        <div style="padding: 12px 16px; border-bottom: 1px solid var(--border-color); display: flex; align-items: center; gap: 8px;">
+          <span style="font-size: 11px; padding: 2px 6px; border-radius: 3px; background: var(--card-bg); color: var(--text-secondary); text-transform: uppercase; font-weight: 500;">variable</span>
+          <span style="font-size: 14px; font-weight: 500; color: var(--text-primary);">host_filter</span>
+        </div>
+        <div style="padding: 16px; display: flex; flex-direction: column; gap: 14px;">
+          <div>
+            <label style="display: block; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); margin-bottom: 6px;">Cell Name</label>
+            <input type="text" value="host_filter" style="width: 100%; padding: 6px 10px; background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 6px; color: var(--text-primary); font-size: 12px; font-family: inherit; outline: none;">
+          </div>
+          <div class="change-highlight">
+            <label style="display: block; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); margin-bottom: 6px;">Data Source</label>
+            <div class="ds-selector">
+              <span class="ds-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4.03 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5"/></svg></span>
+              <select><option>production</option><option>staging</option></select>
+            </div>
+          </div>
+          <div>
+            <label style="display: block; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); margin-bottom: 6px;">Type</label>
+            <div style="padding: 6px 10px; background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 6px; font-size: 12px; color: var(--text-secondary);">combobox</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Variable (text) cell editor - NO data source -->
+    <div style="flex: 1; min-width: 280px;">
+      <div class="mockup-label">Variable Cell (text) - no selector</div>
+      <div class="frame" style="max-width: 320px;">
+        <div style="padding: 12px 16px; border-bottom: 1px solid var(--border-color); display: flex; align-items: center; gap: 8px;">
+          <span style="font-size: 11px; padding: 2px 6px; border-radius: 3px; background: var(--card-bg); color: var(--text-secondary); text-transform: uppercase; font-weight: 500;">variable</span>
+          <span style="font-size: 14px; font-weight: 500; color: var(--text-primary);">threshold</span>
+        </div>
+        <div style="padding: 16px; display: flex; flex-direction: column; gap: 14px;">
+          <div>
+            <label style="display: block; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); margin-bottom: 6px;">Cell Name</label>
+            <input type="text" value="threshold" style="width: 100%; padding: 6px 10px; background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 6px; color: var(--text-primary); font-size: 12px; font-family: inherit; outline: none;">
+          </div>
+          <!-- No data source here -->
+          <div style="padding: 8px 12px; background: rgba(107, 114, 128, 0.1); border-radius: 6px; border: 1px dashed var(--border-color);">
+            <span style="font-size: 11px; color: var(--text-muted); font-style: italic;">No data source (text variable doesn't execute SQL)</span>
+          </div>
+          <div>
+            <label style="display: block; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); margin-bottom: 6px;">Default Value</label>
+            <input type="text" value="80" style="width: 100%; padding: 6px 10px; background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 6px; color: var(--text-primary); font-size: 12px; font-family: inherit; outline: none;">
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Markdown cell editor - NO data source -->
+    <div style="flex: 1; min-width: 280px;">
+      <div class="mockup-label">Markdown Cell - no selector</div>
+      <div class="frame" style="max-width: 320px;">
+        <div style="padding: 12px 16px; border-bottom: 1px solid var(--border-color); display: flex; align-items: center; gap: 8px;">
+          <span style="font-size: 11px; padding: 2px 6px; border-radius: 3px; background: var(--card-bg); color: var(--text-secondary); text-transform: uppercase; font-weight: 500;">markdown</span>
+          <span style="font-size: 14px; font-weight: 500; color: var(--text-primary);">Notes</span>
+        </div>
+        <div style="padding: 16px; display: flex; flex-direction: column; gap: 14px;">
+          <div>
+            <label style="display: block; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); margin-bottom: 6px;">Cell Name</label>
+            <input type="text" value="Notes" style="width: 100%; padding: 6px 10px; background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 6px; color: var(--text-primary); font-size: 12px; font-family: inherit; outline: none;">
+          </div>
+          <!-- No data source here -->
+          <div style="padding: 8px 12px; background: rgba(107, 114, 128, 0.1); border-radius: 6px; border: 1px dashed var(--border-color);">
+            <span style="font-size: 11px; color: var(--text-muted); font-style: italic;">No data source (markdown doesn't execute SQL)</span>
+          </div>
+          <div>
+            <label style="display: block; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); margin-bottom: 6px;">Content</label>
+            <div style="background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 6px; padding: 8px; font-size: 12px; color: var(--text-secondary); height: 40px;">Some markdown...</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<!-- SECTION 5: QueryEditor topContent -->
+<!-- ============================================================ -->
+<section id="sec-query-editor" class="mockup-section">
+  <div class="mockup-title">QueryEditor - topContent Prop</div>
+  <div class="mockup-desc">
+    Log, Metrics, and ProcessList renderers use the shared QueryEditor component. A new <code>topContent</code> prop lets them inject the DataSourceSelector at the top of the scrollable content, before the SQL editor. Only shown when the panel is expanded.
+  </div>
+
+  <div class="comparison">
+    <!-- BEFORE -->
+    <div>
+      <div class="badge-before">Before</div>
+      <div class="frame" style="max-width: 380px; height: 400px; display: flex; flex-direction: column;">
+        <!-- Panel header -->
+        <div style="display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; background: var(--card-bg); border-bottom: 1px solid var(--border-color);">
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <span style="color: var(--text-secondary); cursor: pointer; display: flex;">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg>
+            </span>
+            <span style="font-size: 14px; font-weight: 600; color: var(--text-primary);">Query</span>
+          </div>
+          <div style="display: flex; gap: 8px;">
+            <button style="padding: 4px 10px; font-size: 12px; border: 1px solid var(--border-color); border-radius: 4px; background: transparent; color: var(--text-secondary); font-family: inherit; cursor: pointer;">Reset</button>
+            <button style="display: flex; align-items: center; gap: 4px; padding: 4px 10px; font-size: 12px; border: none; border-radius: 4px; background: var(--accent-success); color: #fff; font-family: inherit; font-weight: 500; cursor: pointer;">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+              Run
+            </button>
+          </div>
+        </div>
+        <!-- Content -->
+        <div style="flex: 1; overflow: auto; padding: 16px;">
+          <!-- SQL editor directly -->
+          <div style="background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 6px; padding: 12px; font-family: monospace; font-size: 12px; color: var(--text-primary); min-height: 100px;">
+            <span style="color: #c792ea;">SELECT</span> time, level, msg<br>
+            <span style="color: #c792ea;">FROM</span> log_entries<br>
+            <span style="color: #c792ea;">WHERE</span> level >= <span style="color: #c3e88d;">'WARN'</span><br>
+            <span style="color: #c792ea;">ORDER BY</span> time <span style="color: #c792ea;">DESC</span>
+          </div>
+          <!-- Variables -->
+          <div style="margin-top: 16px;">
+            <div style="font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); margin-bottom: 8px;">Variables</div>
+            <div style="font-size: 12px; color: var(--text-secondary);">
+              <span style="display: inline-block; padding: 1px 6px; background: var(--border-color); border-radius: 3px; color: var(--accent-variable); font-family: monospace; font-size: 11px;">@begin</span>
+              <span style="margin-left: 4px;">Start time</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- AFTER -->
+    <div>
+      <div class="badge-after">After</div>
+      <div class="frame" style="max-width: 380px; height: 400px; display: flex; flex-direction: column;">
+        <!-- Panel header -->
+        <div style="display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; background: var(--card-bg); border-bottom: 1px solid var(--border-color);">
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <span style="color: var(--text-secondary); cursor: pointer; display: flex;">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg>
+            </span>
+            <span style="font-size: 14px; font-weight: 600; color: var(--text-primary);">Query</span>
+          </div>
+          <div style="display: flex; gap: 8px;">
+            <button style="padding: 4px 10px; font-size: 12px; border: 1px solid var(--border-color); border-radius: 4px; background: transparent; color: var(--text-secondary); font-family: inherit; cursor: pointer;">Reset</button>
+            <button style="display: flex; align-items: center; gap: 4px; padding: 4px 10px; font-size: 12px; border: none; border-radius: 4px; background: var(--accent-success); color: #fff; font-family: inherit; font-weight: 500; cursor: pointer;">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+              Run
+            </button>
+          </div>
+        </div>
+        <!-- Content with topContent -->
+        <div style="flex: 1; overflow: auto; padding: 16px;">
+          <!-- NEW: topContent - Data Source Selector -->
+          <div class="change-highlight" style="margin-bottom: 16px;">
+            <div style="font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); margin-bottom: 6px;">Data Source</div>
+            <div class="ds-selector">
+              <span class="ds-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4.03 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5"/></svg></span>
+              <select><option>production</option><option>staging</option><option>development</option></select>
+            </div>
+          </div>
+
+          <!-- SQL editor -->
+          <div style="background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 6px; padding: 12px; font-family: monospace; font-size: 12px; color: var(--text-primary); min-height: 100px;">
+            <span style="color: #c792ea;">SELECT</span> time, level, msg<br>
+            <span style="color: #c792ea;">FROM</span> log_entries<br>
+            <span style="color: #c792ea;">WHERE</span> level >= <span style="color: #c3e88d;">'WARN'</span><br>
+            <span style="color: #c792ea;">ORDER BY</span> time <span style="color: #c792ea;">DESC</span>
+          </div>
+          <!-- Variables -->
+          <div style="margin-top: 16px;">
+            <div style="font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); margin-bottom: 8px;">Variables</div>
+            <div style="font-size: 12px; color: var(--text-secondary);">
+              <span style="display: inline-block; padding: 1px 6px; background: var(--border-color); border-radius: 3px; color: var(--accent-variable); font-family: monospace; font-size: 11px;">@begin</span>
+              <span style="margin-left: 4px;">Start time</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="annotation">topContent rendered above SQL editor, only when panel is expanded. Used by Log, Metrics, and ProcessList renderers.</div>
+    </div>
+  </div>
+</section>
+
+<!-- Tab switching script -->
+<script>
+  document.querySelectorAll('.tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('.mockup-section').forEach(s => s.classList.remove('active'));
+      tab.classList.add('active');
+      document.getElementById(tab.dataset.target).classList.add('active');
+    });
+  });
+</script>
+</body>
+</html>
