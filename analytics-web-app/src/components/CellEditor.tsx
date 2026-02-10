@@ -129,7 +129,7 @@ export function CellEditor({
             <DataSourceSelector
               value={('dataSource' in cell ? cell.dataSource : undefined) || defaultDataSource || ''}
               onChange={(ds) => onUpdate({ dataSource: ds } as Partial<CellConfig>)}
-              showWithSingleSource
+
             />
           </div>
         )}

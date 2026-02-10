@@ -35,8 +35,7 @@ function ScreenPageContent() {
   const [screen, setScreen] = useState<Screen | null>(null)
 
   // Data source
-  const { name: defaultDataSourceName, error: dataSourceError } = useDefaultDataSource()
-  const [dataSource, setDataSource] = useState('')
+  const { name: dataSource, error: dataSourceError } = useDefaultDataSource()
 
   // Read type directly from URL (only used for new screens)
   const typeParam = (searchParams.get('type') ?? null) as ScreenTypeName | null
@@ -52,13 +51,6 @@ function ScreenPageContent() {
     },
     [searchParams, navigate]
   )
-
-  // Set data source from default when loaded (if not already set)
-  useEffect(() => {
-    if (!dataSource && defaultDataSourceName) {
-      setDataSource(defaultDataSourceName)
-    }
-  }, [defaultDataSourceName, dataSource])
 
   // Screen type info (fetched from API)
   const [screenTypeInfo, setScreenTypeInfo] = useState<ScreenTypeInfo | null>(null)

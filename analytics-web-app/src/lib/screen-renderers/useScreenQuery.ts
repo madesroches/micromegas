@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef } from 'react'
 import { Table } from 'apache-arrow'
+import { useChangeEffect } from '@/hooks/useChangeEffect'
 import { useStreamQuery } from '@/hooks/useStreamQuery'
 
 export interface ScreenQueryParams {
@@ -112,17 +113,7 @@ export function useScreenQuery({
   }, [timeRange, executeQuery])
 
   // Re-execute on data source change
-  const prevDataSourceRef = useRef<string | null>(null)
-  useEffect(() => {
-    if (prevDataSourceRef.current === null) {
-      prevDataSourceRef.current = dataSource || ''
-      return
-    }
-    if (prevDataSourceRef.current !== (dataSource || '')) {
-      prevDataSourceRef.current = dataSource || ''
-      executeQuery(currentSqlRef.current)
-    }
-  }, [dataSource, executeQuery])
+  useChangeEffect(dataSource, () => executeQuery(currentSqlRef.current))
 
   // Re-execute on refresh trigger
   const prevRefreshTriggerRef = useRef(refreshTrigger)

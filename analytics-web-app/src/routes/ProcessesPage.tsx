@@ -9,7 +9,7 @@ import { QueryEditor } from '@/components/QueryEditor'
 import { DataSourceSelector } from '@/components/DataSourceSelector'
 import { ErrorBanner } from '@/components/ErrorBanner'
 import { useStreamQuery } from '@/hooks/useStreamQuery'
-import { useDefaultDataSource } from '@/hooks/useDefaultDataSource'
+import { useDataSourceState } from '@/hooks/useDataSourceState'
 import { useScreenConfig } from '@/hooks/useScreenConfig'
 import { useDebounce } from '@/hooks/useDebounce'
 import { usePageTitle } from '@/hooks/usePageTitle'
@@ -120,15 +120,7 @@ function ProcessesPageContent() {
     }
   }, [config.timeRangeFrom, config.timeRangeTo])
 
-  const { name: defaultDataSource, error: dataSourceError } = useDefaultDataSource()
-  const [dataSource, setDataSource] = useState('')
-
-  // Set data source from default when loaded
-  useEffect(() => {
-    if (!dataSource && defaultDataSource) {
-      setDataSource(defaultDataSource)
-    }
-  }, [defaultDataSource, dataSource])
+  const { dataSource, setDataSource, error: dataSourceError } = useDataSourceState()
 
   const streamQuery = useStreamQuery()
   const table = streamQuery.getTable()
@@ -266,7 +258,7 @@ function ProcessesPageContent() {
       <DataSourceSelector
         value={dataSource}
         onChange={setDataSource}
-        showWithSingleSource
+
       />
     </div>
   )

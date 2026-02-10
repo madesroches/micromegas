@@ -15,6 +15,7 @@ export function PerfettoExportCell({
   options,
   timeRange,
   variables,
+  dataSource,
 }: CellRendererProps) {
   // Generation state
   const [isGenerating, setIsGenerating] = useState(false)
@@ -46,11 +47,11 @@ export function PerfettoExportCell({
     return () => abortRef.current?.abort()
   }, [])
 
-  // Clear cache when inputs change (processId, spanType, or timeRange)
+  // Clear cache when inputs change (processId, spanType, timeRange, or dataSource)
   useEffect(() => {
     setCachedTraceBuffer(null)
     setCachedTraceTimeRange(null)
-  }, [processId, spanType, timeRange.begin, timeRange.end])
+  }, [processId, spanType, timeRange.begin, timeRange.end, dataSource])
 
   // Cache validation
   const canUseCachedBuffer = useCallback(() => {
@@ -119,6 +120,7 @@ export function PerfettoExportCell({
         timeRange,
         onProgress: (message) => setProgress({ type: 'progress', message }),
         signal: abortRef.current.signal,
+        dataSource,
       })
 
       setCachedTraceBuffer(buffer)
@@ -171,6 +173,7 @@ export function PerfettoExportCell({
         timeRange,
         onProgress: (message) => setProgress({ type: 'progress', message }),
         signal: abortRef.current.signal,
+        dataSource,
       })
 
       // Cache for potential subsequent "Open in Perfetto"

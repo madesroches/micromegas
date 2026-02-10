@@ -78,10 +78,10 @@ jest.mock('@dnd-kit/utilities', () => ({
 }))
 
 // Mock data sources API (used by DataSourceSelector in CellEditor)
+// Return a never-settling promise to avoid act() warnings from async state updates.
+// These tests don't exercise data source selection.
 jest.mock('@/lib/data-sources-api', () => ({
-  getDataSourceList: jest.fn().mockResolvedValue([
-    { name: 'default', is_default: true },
-  ]),
+  getDataSourceList: jest.fn().mockReturnValue(new Promise(() => {})),
 }))
 
 // Mock the cell registry

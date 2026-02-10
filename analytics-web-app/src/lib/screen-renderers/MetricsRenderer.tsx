@@ -149,7 +149,7 @@ export function MetricsRenderer({
       <DataSourceSelector
         value={effectiveDataSource || ''}
         onChange={(ds) => onConfigChange({ ...metricsConfig, dataSource: ds })}
-        showWithSingleSource
+
       />
     </div>
   )

@@ -7,6 +7,7 @@ import { LoadingState, EmptyState, RendererLayout } from './shared'
 import { QueryEditor } from '@/components/QueryEditor'
 import { DataSourceSelector } from '@/components/DataSourceSelector'
 import { useStreamQuery } from '@/hooks/useStreamQuery'
+import { useChangeEffect } from '@/hooks/useChangeEffect'
 import { useDebounce } from '@/hooks/useDebounce'
 import { useDefaultSaveCleanup, useExposeSaveRef } from '@/lib/url-cleanup-utils'
 import { timestampToDate } from '@/lib/arrow-utils'
@@ -470,17 +471,7 @@ export function LogRenderer({
   }, [refreshTrigger, loadData])
 
   // Re-execute when data source changes
-  const prevDataSourceRef = useRef<string | null>(null)
-  useEffect(() => {
-    if (prevDataSourceRef.current === null) {
-      prevDataSourceRef.current = effectiveDataSource || ''
-      return
-    }
-    if (prevDataSourceRef.current !== (effectiveDataSource || '')) {
-      prevDataSourceRef.current = effectiveDataSource || ''
-      loadData(currentSqlRef.current)
-    }
-  }, [effectiveDataSource, loadData])
+  useChangeEffect(effectiveDataSource, () => loadData(currentSqlRef.current))
 
   // Re-execute on filter changes
   useEffect(() => {
@@ -573,7 +564,7 @@ export function LogRenderer({
       <DataSourceSelector
         value={effectiveDataSource || ''}
         onChange={(ds) => onConfigChange({ ...logConfig, dataSource: ds })}
-        showWithSingleSource
+
       />
     </div>
   )

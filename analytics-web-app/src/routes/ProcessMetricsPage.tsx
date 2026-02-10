@@ -17,7 +17,7 @@ import { usePageTitle } from '@/hooks/usePageTitle'
 import { parseTimeRange, getTimeRangeForApi } from '@/lib/time-range'
 import { timestampToMs } from '@/lib/arrow-utils'
 import { extractPropertiesFromRows, createPropertyTimelineGetter, ExtractedPropertyData } from '@/lib/property-utils'
-import { useDefaultDataSource } from '@/hooks/useDefaultDataSource'
+import { useDataSourceState } from '@/hooks/useDataSourceState'
 import { DataSourceSelector } from '@/components/DataSourceSelector'
 import type { ProcessMetricsConfig } from '@/lib/screen-config'
 
@@ -105,15 +105,7 @@ function calculateBinInterval(timeSpanMs: number, chartWidthPx: number = 800): s
 function ProcessMetricsContent() {
   usePageTitle('Process Metrics')
 
-  const { name: defaultDataSource, error: dataSourceError } = useDefaultDataSource()
-  const [dataSource, setDataSource] = useState('')
-
-  // Set data source from default when loaded (if not already set)
-  useEffect(() => {
-    if (!dataSource && defaultDataSource) {
-      setDataSource(defaultDataSource)
-    }
-  }, [defaultDataSource, dataSource])
+  const { dataSource, setDataSource, error: dataSourceError } = useDataSourceState()
 
   // Use the new config-driven pattern
   const { config, updateConfig } = useScreenConfig(DEFAULT_CONFIG, buildUrl)
@@ -396,7 +388,7 @@ function ProcessMetricsContent() {
       <DataSourceSelector
         value={dataSource}
         onChange={setDataSource}
-        showWithSingleSource
+
       />
     </div>
   )

@@ -1,6 +1,6 @@
 # Per-Screen and Per-Cell Data Source Selection
 
-**Status**: Implemented in `2ac54bd54` on `source` branch.
+**Status**: Implemented on `source` branch.
 
 ## Context
 
@@ -42,95 +42,129 @@ Passes `cellDataSource` to `executeSql` instead of the global `dataSource`.
 - Value: `cell.dataSource || defaultDataSource || ''`
 - onChange: `onUpdate({ dataSource: ds })`
 
-### 4. Wire NotebookRenderer to pass default data source
+### 4. Wire NotebookRenderer to pass default data source and per-cell effective data source
 
 **File**: `analytics-web-app/src/lib/screen-renderers/NotebookRenderer.tsx`
 
-Passes `defaultDataSource={dataSource}` to `<CellEditor>`.
+- Passes `defaultDataSource={dataSource}` to `<CellEditor>`
+- Computes effective data source per cell (`cell.dataSource || dataSource`) and passes it to all cell renderers via the `dataSource` prop on `CellRendererProps`
 
-### 5. Add `topContent` prop to QueryEditor
+### 5. `dataSource` on `CellRendererProps`
+
+**File**: `analytics-web-app/src/lib/screen-renderers/cell-registry.ts`
+
+Added `dataSource?: string` to `CellRendererProps` so all cell renderers have access to their effective data source.
+
+### 6. Add `topContent` prop to QueryEditor
 
 **File**: `analytics-web-app/src/components/QueryEditor.tsx`
 
 Added optional `topContent?: React.ReactNode` prop. Rendered at the top of the scrollable content area (before the SyntaxEditor), only when the panel is expanded.
 
-### 6. Custom screen renderers - config-based data source
+### 7. Custom screen renderers - config-based data source
 
-For each renderer: added `dataSource?: string` to its config interface, computed `effectiveDataSource = config.dataSource || props.dataSource`, used it for queries, added `DataSourceSelector` in the editor panel, and added a re-execution effect for data source changes.
+For each renderer: added `dataSource?: string` to its config interface, computed `effectiveDataSource = config.dataSource || props.dataSource`, used it for queries, added `DataSourceSelector` in the editor panel, and used `useChangeEffect` for re-execution on data source changes.
 
 **File**: `analytics-web-app/src/lib/screen-renderers/TableRenderer.tsx`
 - Added `dataSource?: string` to `TableConfig`
 - `const effectiveDataSource = tableConfig.dataSource || dataSource`
 - Used `effectiveDataSource` in `executeQuery` callback and initial guard
 - Added `DataSourceSelector` directly inside the expanded panel, above the "Query" section (TableRenderer has its own inline panel, not QueryEditor)
-- Added re-execution effect for `effectiveDataSource` changes
+- Re-execution via `useChangeEffect(effectiveDataSource, ...)`
 
 **File**: `analytics-web-app/src/lib/screen-renderers/LogRenderer.tsx`
 - Added `dataSource?: string` to `LogConfig`
 - `const effectiveDataSource = logConfig.dataSource || dataSource`
 - Used in `loadData` callback
 - Passed as `topContent` to `<QueryEditor>`
-- Added re-execution effect
+- Re-execution via `useChangeEffect(effectiveDataSource, ...)`
 
 **File**: `analytics-web-app/src/lib/screen-renderers/MetricsRenderer.tsx`
 - Added `dataSource?: string` to `MetricsConfig`
 - `const effectiveDataSource = metricsConfig.dataSource || dataSource`
 - Passed to `useScreenQuery({ ..., dataSource: effectiveDataSource })`
 - Passed as `topContent` to `<QueryEditor>`
-- Re-execution handled by `useScreenQuery` (see step 7)
+- Re-execution handled by `useScreenQuery` (see step 8)
 
 **File**: `analytics-web-app/src/lib/screen-renderers/ProcessListRenderer.tsx`
 - Added `dataSource?: string` to `ProcessListConfig`
-- Same pattern as TableRenderer (effectiveDataSource, selector via topContent, re-execution effect)
+- Same pattern as TableRenderer (effectiveDataSource, selector via topContent, re-execution via `useChangeEffect`)
 
-### 7. Add data source change re-execution to `useScreenQuery`
+### 8. `useChangeEffect` hook — deduplicated re-execution pattern
 
-**File**: `analytics-web-app/src/lib/screen-renderers/useScreenQuery.ts`
+**File**: `analytics-web-app/src/hooks/useChangeEffect.ts`
 
-Added an effect (similar to the time range change effect) that re-executes when `dataSource` changes. This covers MetricsRenderer.
+Extracted a reusable hook that runs a callback when a string value changes, skipping the initial render. Uses a ref for the callback so the effect only re-fires on value changes.
 
-### 8. Add data source change re-execution to Table/Log/ProcessList renderers
+Used in `useScreenQuery`, `LogRenderer`, `ProcessListRenderer`, and `TableRenderer` to replace duplicated `prevDataSourceRef` + `useEffect` blocks.
 
-Table, Log, and ProcessList don't use `useScreenQuery` — they call `streamQuery` directly and guard initial execution with `hasExecutedRef`. Each renderer got a separate `prevDataSourceRef` + `useEffect` that re-executes when `effectiveDataSource` changes.
+### 9. `useDataSourceState` hook — deduplicated mutable data source pattern
 
-### 9. Remove page-level DataSourceSelector
+**File**: `analytics-web-app/src/hooks/useDataSourceState.ts`
+
+Extracted a reusable hook that wraps `useDefaultDataSource` with mutable local state. Initializes from the default data source, then allows the user to override via `setDataSource`.
+
+Used in `ProcessesPage`, `ProcessLogPage`, and `ProcessMetricsPage` to replace duplicated `useState('')` + `useEffect` sync blocks.
+
+### 10. Process pages — data source selector
+
+**Files**: `ProcessesPage.tsx`, `ProcessLogPage.tsx`, `ProcessMetricsPage.tsx`
+
+Each page uses `useDataSourceState()` and renders a `DataSourceSelector` as `topContent` in their `QueryEditor`. The mutable state allows users to switch data sources on these non-configurable pages.
+
+### 11. Perfetto export — data source threading
+
+**Files**: `PerfettoExportCell.tsx`, `perfetto-trace.ts`
+
+- `PerfettoExportCell` reads `dataSource` from `CellRendererProps` and passes it to `fetchPerfettoTrace`
+- `fetchPerfettoTrace` accepts `dataSource` in its options and forwards it to `streamQuery`
+- Cache is cleared when `dataSource` changes
+
+### 12. Remove page-level DataSourceSelector
 
 **File**: `analytics-web-app/src/routes/ScreenPage.tsx`
 
-- Removed `<DataSourceSelector value={dataSource} onChange={setDataSource} />` from the header
-- Removed `DataSourceSelector` import
-- Kept `useDefaultDataSource()`, `dataSource` state, and the effect that sets it - these provide the fallback value passed to renderers via `dataSource={dataSource}` prop
+- Removed `<DataSourceSelector>` from the header
+- Uses `useDefaultDataSource()` directly (read-only) to provide the fallback value to renderers
 
-### 10. DataSourceSelector: always show in editor context
+### 13. DataSourceSelector auto-hides with single source
 
 **File**: `analytics-web-app/src/components/DataSourceSelector.tsx`
 
-Added `showWithSingleSource?: boolean` prop - when true, renders even with only 1 data source. Cell editors and renderer panels pass `showWithSingleSource`.
+The selector auto-hides when there is only one data source configured. This avoids showing a useless dropdown in single-source deployments.
 
-### 11. Test updates
+### 14. Test updates
 
 **File**: `analytics-web-app/src/lib/screen-renderers/__tests__/NotebookRenderer.test.tsx`
 
 - Added `Database` and `AlertCircle` to the `lucide-react` icon mock (used by DataSourceSelector)
-- Added mock for `@/lib/data-sources-api` (`getDataSourceList` returns a single default source)
+- Added mock for `@/lib/data-sources-api` with a never-settling promise to avoid act() warnings (these tests don't exercise data source selection)
 
 ## Files modified (summary)
 
 | File | Change |
 |------|--------|
 | `notebook-types.ts` | Added `dataSource?` to `QueryCellConfig`, `VariableCellConfig`, `PerfettoExportCellConfig` |
+| `cell-registry.ts` | Added `dataSource?` to `CellRendererProps` |
 | `useCellExecution.ts` | Read per-cell `dataSource` with fallback |
 | `CellEditor.tsx` | Added `defaultDataSource` prop, conditional selector |
-| `NotebookRenderer.tsx` | Pass `defaultDataSource` to CellEditor |
+| `NotebookRenderer.tsx` | Pass `defaultDataSource` to CellEditor, per-cell `dataSource` to renderers |
 | `QueryEditor.tsx` | Added `topContent` prop |
-| `DataSourceSelector.tsx` | Added `showWithSingleSource` prop |
-| `TableRenderer.tsx` | Config-based data source + selector in panel + re-execution |
-| `LogRenderer.tsx` | Config-based data source + selector via QueryEditor + re-execution |
+| `DataSourceSelector.tsx` | Auto-hides with ≤1 source (removed `showWithSingleSource`) |
+| `TableRenderer.tsx` | Config-based data source + selector in panel + `useChangeEffect` |
+| `LogRenderer.tsx` | Config-based data source + selector via QueryEditor + `useChangeEffect` |
 | `MetricsRenderer.tsx` | Config-based data source + selector via QueryEditor |
-| `ProcessListRenderer.tsx` | Config-based data source + selector via QueryEditor + re-execution |
-| `useScreenQuery.ts` | Data source change re-execution effect |
-| `ScreenPage.tsx` | Removed header-level DataSourceSelector |
-| `NotebookRenderer.test.tsx` | Added icon mocks and data-sources-api mock |
+| `ProcessListRenderer.tsx` | Config-based data source + selector via QueryEditor + `useChangeEffect` |
+| `useScreenQuery.ts` | Data source change re-execution via `useChangeEffect` |
+| `useChangeEffect.ts` | New hook: run callback on string value change, skip initial render |
+| `useDataSourceState.ts` | New hook: mutable data source state initialized from default |
+| `perfetto-trace.ts` | Added `dataSource` to `FetchPerfettoTraceOptions`, forwarded to `streamQuery` |
+| `PerfettoExportCell.tsx` | Reads `dataSource` from props, passes to `fetchPerfettoTrace`, clears cache on change |
+| `ScreenPage.tsx` | Removed header-level DataSourceSelector, uses `useDefaultDataSource` directly |
+| `ProcessesPage.tsx` | Uses `useDataSourceState`, added selector in QueryEditor |
+| `ProcessLogPage.tsx` | Uses `useDataSourceState`, added selector in QueryEditor |
+| `ProcessMetricsPage.tsx` | Uses `useDataSourceState`, added selector in QueryEditor |
+| `NotebookRenderer.test.tsx` | Added icon mocks and data-sources-api mock (never-settling) |
 
 ## What stays the same
 
@@ -154,4 +188,5 @@ Manual testing checklist:
 - [ ] Click a SQL cell (table/chart/log) - data source selector in cell editor
 - [ ] Different cells can have different data sources
 - [ ] Variable (combobox) cell shows data source selector; text/markdown cells do not
-- [ ] With only 1 data source configured, selector still shows in editors (`showWithSingleSource`)
+- [ ] With only 1 data source configured, selector auto-hides
+- [ ] Perfetto export cell uses cell-level data source

@@ -8,6 +8,7 @@ import { LoadingState, EmptyState, RendererLayout } from './shared'
 import { SyntaxEditor } from '@/components/SyntaxEditor'
 import { OverrideEditor } from '@/components/OverrideEditor'
 import { DataSourceSelector } from '@/components/DataSourceSelector'
+import { useChangeEffect } from '@/hooks/useChangeEffect'
 import { useStreamQuery } from '@/hooks/useStreamQuery'
 import { useDefaultSaveCleanup, useExposeSaveRef } from '@/lib/url-cleanup-utils'
 import {
@@ -147,17 +148,7 @@ export function TableRenderer({
   }, [orderByValue, executeQuery])
 
   // Re-execute when data source changes
-  const prevDataSourceRef = useRef<string | null>(null)
-  useEffect(() => {
-    if (prevDataSourceRef.current === null) {
-      prevDataSourceRef.current = effectiveDataSource || ''
-      return
-    }
-    if (prevDataSourceRef.current !== (effectiveDataSource || '')) {
-      prevDataSourceRef.current = effectiveDataSource || ''
-      executeQuery(currentSqlRef.current)
-    }
-  }, [effectiveDataSource, executeQuery])
+  useChangeEffect(effectiveDataSource, () => executeQuery(currentSqlRef.current))
 
   // Sync time range changes to config
   useTimeRangeSync({
@@ -265,7 +256,7 @@ export function TableRenderer({
           <DataSourceSelector
             value={effectiveDataSource || ''}
             onChange={(ds) => onConfigChange({ ...tableConfig, dataSource: ds })}
-            showWithSingleSource
+
           />
         </div>
 

@@ -12,6 +12,7 @@ import { AppLink } from '@/components/AppLink'
 import { CopyableProcessId } from '@/components/CopyableProcessId'
 import { formatTimestamp, formatDurationMs } from '@/lib/time-range'
 import { timestampToDate, isTimeType, isDurationType, durationToMs } from '@/lib/arrow-utils'
+import { useChangeEffect } from '@/hooks/useChangeEffect'
 import { useStreamQuery } from '@/hooks/useStreamQuery'
 import { useDefaultSaveCleanup, useExposeSaveRef } from '@/lib/url-cleanup-utils'
 
@@ -187,17 +188,7 @@ export function ProcessListRenderer({
   }, [orderByValue, executeQuery])
 
   // Re-execute when data source changes
-  const prevDataSourceRef = useRef<string | null>(null)
-  useEffect(() => {
-    if (prevDataSourceRef.current === null) {
-      prevDataSourceRef.current = effectiveDataSource || ''
-      return
-    }
-    if (prevDataSourceRef.current !== (effectiveDataSource || '')) {
-      prevDataSourceRef.current = effectiveDataSource || ''
-      executeQuery(currentSqlRef.current)
-    }
-  }, [effectiveDataSource, executeQuery])
+  useChangeEffect(effectiveDataSource, () => executeQuery(currentSqlRef.current))
 
   // Sync time range changes to config
   useTimeRangeSync({
@@ -256,7 +247,7 @@ export function ProcessListRenderer({
       <DataSourceSelector
         value={effectiveDataSource || ''}
         onChange={(ds) => onConfigChange({ ...processListConfig, dataSource: ds })}
-        showWithSingleSource
+
       />
     </div>
   )
