@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import {
   listDataSources,
+  invalidateDataSourceList,
   getDataSource,
   createDataSource,
   updateDataSource,
@@ -49,6 +50,7 @@ function DataSourcesPageContent() {
   const loadData = useCallback(async () => {
     setIsLoading(true)
     setError(null)
+    invalidateDataSourceList()
     try {
       const data = await listDataSources()
       setDataSources(data)
@@ -135,7 +137,7 @@ function DataSourcesPageContent() {
   }
 
   return (
-    <AuthGuard>
+    <AuthGuard requireAdmin>
       <PageLayout onRefresh={loadData}>
         <div className="p-6 flex flex-col h-full">
           {/* Breadcrumb */}
@@ -346,7 +348,7 @@ export default function DataSourcesPage() {
   return (
     <Suspense
       fallback={
-        <AuthGuard>
+        <AuthGuard requireAdmin>
           <PageLayout>
             <div className="p-6">
               <div className="flex items-center justify-center h-64">

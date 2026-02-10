@@ -67,6 +67,22 @@ async function handleResponse<T>(response: Response): Promise<T> {
 
 // Data Sources API
 
+// Module-level cached promise: one fetch shared by all consumers
+let cachedListPromise: Promise<DataSourceSummary[]> | null = null
+
+/** Returns a cached data source list. All callers share the same fetch. */
+export function getDataSourceList(): Promise<DataSourceSummary[]> {
+  if (!cachedListPromise) {
+    cachedListPromise = listDataSources()
+  }
+  return cachedListPromise
+}
+
+/** Invalidates the cached list so the next getDataSourceList() re-fetches. */
+export function invalidateDataSourceList(): void {
+  cachedListPromise = null
+}
+
 export async function listDataSources(): Promise<DataSourceSummary[]> {
   const response = await authenticatedFetch(`${getApiBase()}/data-sources`)
   return handleResponse<DataSourceSummary[]>(response)

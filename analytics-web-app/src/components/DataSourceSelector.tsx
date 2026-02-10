@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { Database } from 'lucide-react'
-import { listDataSources, DataSourceSummary } from '@/lib/data-sources-api'
+import { getDataSourceList, DataSourceSummary } from '@/lib/data-sources-api'
 
 interface DataSourceSelectorProps {
   value: string
@@ -12,7 +12,7 @@ export function DataSourceSelector({ value, onChange }: DataSourceSelectorProps)
 
   useEffect(() => {
     let cancelled = false
-    listDataSources()
+    getDataSourceList()
       .then((data) => {
         if (!cancelled) setSources(data)
       })

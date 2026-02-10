@@ -7,10 +7,11 @@ import { AlertCircle } from 'lucide-react'
 
 interface AuthGuardProps {
   children: React.ReactNode
+  requireAdmin?: boolean
 }
 
-export function AuthGuard({ children }: AuthGuardProps) {
-  const { status, error } = useAuth()
+export function AuthGuard({ children, requireAdmin }: AuthGuardProps) {
+  const { status, error, user } = useAuth()
   const location = useLocation()
   const pathname = location.pathname
 
@@ -76,6 +77,24 @@ export function AuthGuard({ children }: AuthGuardProps) {
             <div className="flex flex-col items-center space-y-4">
               <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900"></div>
               <p className="text-sm text-gray-600">Redirecting to login...</p>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    )
+  }
+
+  if (requireAdmin && !user?.is_admin) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <Card className="w-full max-w-md">
+          <CardContent className="pt-6">
+            <div className="flex flex-col items-center space-y-4">
+              <AlertCircle className="h-12 w-12 text-red-500" />
+              <h2 className="text-lg font-semibold">Access Denied</h2>
+              <p className="text-sm text-gray-600 text-center">
+                This page requires admin access.
+              </p>
             </div>
           </CardContent>
         </Card>

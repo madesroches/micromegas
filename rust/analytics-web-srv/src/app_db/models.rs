@@ -143,11 +143,6 @@ pub fn normalize_name(name: &str) -> String {
     result.trim_matches('-').to_string()
 }
 
-/// Kept for backward compatibility.
-pub fn normalize_screen_name(name: &str) -> String {
-    normalize_name(name)
-}
-
 /// Validates a name according to the rules:
 /// - 3-100 characters
 /// - Lowercase letters, numbers, and hyphens only
@@ -223,9 +218,4 @@ pub fn validate_name(name: &str) -> Result<(), ValidationError> {
     }
 
     Ok(())
-}
-
-/// Kept for backward compatibility.
-pub fn validate_screen_name(name: &str) -> Result<(), ValidationError> {
-    validate_name(name)
 }

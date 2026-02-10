@@ -5,6 +5,9 @@ use sqlx::PgPool;
 use std::sync::Arc;
 use std::time::Duration;
 
+/// Cached value: `Some` for an existing data source, `None` for a confirmed miss.
+type CachedEntry = Option<Arc<DataSourceConfig>>;
+
 /// In-memory cache mapping data source names to their configs.
 ///
 /// - Lazy loading: entries are loaded from PG on first access
@@ -14,7 +17,7 @@ use std::time::Duration;
 ///   fetches fresh from PG
 #[derive(Clone)]
 pub struct DataSourceCache {
-    cache: Cache<String, Arc<DataSourceConfig>>,
+    cache: Cache<String, CachedEntry>,
     pool: PgPool,
 }
 
@@ -33,9 +36,9 @@ impl DataSourceCache {
         let pool = self.pool.clone();
         let name_owned = name.to_string();
 
-        let result: Result<Arc<DataSourceConfig>, Arc<anyhow::Error>> = self
+        let result = self
             .cache
-            .try_get_with(name_owned.clone(), async {
+            .try_get_with::<_, anyhow::Error>(name_owned.clone(), async {
                 let row = sqlx::query_scalar::<_, serde_json::Value>(
                     "SELECT config FROM data_sources WHERE name = $1",
                 )
@@ -48,23 +51,17 @@ impl DataSourceCache {
                     Some(config_json) => {
                         let config: DataSourceConfig = serde_json::from_value(config_json)
                             .map_err(|e| anyhow::anyhow!("invalid config: {e}"))?;
-                        Ok(Arc::new(config))
+                        Ok(Some(Arc::new(config)))
                     }
-                    None => Err(anyhow::anyhow!("not found")),
+                    None => Ok(None),
                 }
             })
             .await;
 
         match result {
-            Ok(config) => Ok(Some((*config).clone())),
-            Err(e) => {
-                let msg = e.to_string();
-                if msg.contains("not found") {
-                    Ok(None)
-                } else {
-                    Err(anyhow::anyhow!("{msg}"))
-                }
-            }
+            Ok(Some(config)) => Ok(Some((*config).clone())),
+            Ok(None) => Ok(None),
+            Err(e) => Err(anyhow::anyhow!("{e}")),
         }
     }
 
