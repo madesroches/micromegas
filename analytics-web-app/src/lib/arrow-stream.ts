@@ -360,11 +360,6 @@ export async function fetchQueryIPC(
     const ipcChunks: Uint8Array[] = [];
     let totalSize = 0;
 
-    // Add Arrow IPC stream magic: "ARROW1" + padding to 8 bytes
-    const magic = new Uint8Array([0x41, 0x52, 0x52, 0x4f, 0x57, 0x31, 0x00, 0x00]);
-    ipcChunks.push(magic);
-    totalSize += magic.length;
-
     // eslint-disable-next-line no-constant-condition
     while (true) {
       const line = await bufferedReader.readLine();

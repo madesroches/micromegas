@@ -34,8 +34,8 @@ def test() -> None:
         print("ERROR: wasm-pack not found. Install with: cargo install wasm-pack")
         sys.exit(1)
 
-    print("Running wasm-pack test --headless --chrome...")
-    run(["wasm-pack", "test", "--headless", "--chrome"], cwd=CRATE_DIR)
+    print("Running wasm-pack test --headless --firefox...")
+    run(["wasm-pack", "test", "--headless", "--firefox"], cwd=CRATE_DIR)
     print("Tests passed!")
 
 

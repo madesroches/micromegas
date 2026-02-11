@@ -123,6 +123,32 @@ fn test_invalid_ipc_bytes() {
     assert!(result.is_err(), "garbage bytes should fail to register");
 }
 
+/// Validates that IPC streaming format (no magic prefix) works, and that
+/// prepending the IPC file format magic ("ARROW1") breaks it.
+/// This is a regression test: fetchQueryIPC was incorrectly prepending
+/// file-format magic bytes to a streaming-format buffer.
+#[wasm_bindgen_test]
+fn test_ipc_stream_rejects_file_format_magic() {
+    let engine = WasmQueryEngine::new();
+    let ipc = create_test_ipc(&[1, 2], &["alice", "bob"]);
+
+    // Streaming format bytes (no magic) must work
+    let row_count = engine
+        .register_table("good", &ipc)
+        .expect("streaming format IPC should work");
+    assert_eq!(row_count, 2);
+
+    // Prepending the IPC file format magic ("ARROW1\0\0") must fail —
+    // StreamReader expects streaming format, not file format.
+    let mut bad = vec![0x41, 0x52, 0x52, 0x4f, 0x57, 0x31, 0x00, 0x00];
+    bad.extend_from_slice(&ipc);
+    let result = engine.register_table("bad", &bad);
+    assert!(
+        result.is_err(),
+        "IPC bytes with file-format magic prefix should be rejected by StreamReader"
+    );
+}
+
 #[wasm_bindgen_test]
 async fn test_reset() {
     let engine = WasmQueryEngine::new();
