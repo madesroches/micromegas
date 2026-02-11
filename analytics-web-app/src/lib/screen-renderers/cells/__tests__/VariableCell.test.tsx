@@ -3,6 +3,14 @@ import { VariableTitleBarContent, variableMetadata } from '../VariableCell'
 import { CellRendererProps } from '../../cell-registry'
 import type { VariableCellConfig, CellState } from '../../notebook-types'
 
+// Mock the data-sources-api module
+jest.mock('@/lib/data-sources-api', () => ({
+  getDataSourceList: jest.fn(),
+}))
+
+import { getDataSourceList } from '@/lib/data-sources-api'
+const mockGetDataSourceList = getDataSourceList as jest.MockedFunction<typeof getDataSourceList>
+
 // Use fake timers for debounce testing
 beforeEach(() => {
   jest.useFakeTimers()
@@ -334,6 +342,213 @@ describe('VariableTitleBarContent', () => {
       expect(() => {
         fireEvent.change(input, { target: { value: 'test' } })
       }).not.toThrow()
+    })
+  })
+
+  describe('datasource type', () => {
+    it('should render select element for datasource type', () => {
+      render(
+        <VariableTitleBarContent
+          {...createMockProps({
+            variableType: 'datasource',
+            variableOptions: [
+              { label: 'production', value: 'production' },
+              { label: 'staging (default)', value: 'staging' },
+            ],
+          })}
+        />
+      )
+      expect(screen.getByRole('combobox')).toBeInTheDocument()
+    })
+
+    it('should render all data source options', () => {
+      render(
+        <VariableTitleBarContent
+          {...createMockProps({
+            variableType: 'datasource',
+            variableOptions: [
+              { label: 'production', value: 'production' },
+              { label: 'staging (default)', value: 'staging' },
+            ],
+          })}
+        />
+      )
+      expect(screen.getByText('production')).toBeInTheDocument()
+      expect(screen.getByText('staging (default)')).toBeInTheDocument()
+    })
+
+    it('should show "No options available" when options are empty', () => {
+      render(
+        <VariableTitleBarContent
+          {...createMockProps({
+            variableType: 'datasource',
+            variableOptions: [],
+          })}
+        />
+      )
+      expect(screen.getByText('No options available')).toBeInTheDocument()
+    })
+
+    it('should call onValueChange when selection changes', () => {
+      const onValueChange = jest.fn()
+      render(
+        <VariableTitleBarContent
+          {...createMockProps({
+            variableType: 'datasource',
+            value: 'production',
+            onValueChange,
+            variableOptions: [
+              { label: 'production', value: 'production' },
+              { label: 'staging', value: 'staging' },
+            ],
+          })}
+        />
+      )
+
+      const select = screen.getByRole('combobox')
+      fireEvent.change(select, { target: { value: 'staging' } })
+
+      expect(onValueChange).toHaveBeenCalledWith('staging')
+    })
+  })
+
+  describe('variableMetadata.execute (datasource)', () => {
+    it('should fetch data sources and return options', async () => {
+      mockGetDataSourceList.mockResolvedValue([
+        { name: 'production', is_default: false },
+        { name: 'staging', is_default: true },
+      ])
+
+      const config: VariableCellConfig = {
+        type: 'variable',
+        name: 'env',
+        variableType: 'datasource',
+        layout: { height: 0 },
+      }
+      const result = await variableMetadata.execute!(config, {
+        variables: {},
+        timeRange: { begin: '2024-01-01T00:00:00Z', end: '2024-01-02T00:00:00Z' },
+        runQuery: jest.fn(),
+      })
+
+      expect(result).toEqual({
+        data: null,
+        variableOptions: [
+          { label: 'production', value: 'production' },
+          { label: 'staging (default)', value: 'staging' },
+        ],
+      })
+    })
+
+    it('should return empty options on API error', async () => {
+      mockGetDataSourceList.mockRejectedValue(new Error('Network error'))
+
+      const config: VariableCellConfig = {
+        type: 'variable',
+        name: 'env',
+        variableType: 'datasource',
+        layout: { height: 0 },
+      }
+      const result = await variableMetadata.execute!(config, {
+        variables: {},
+        timeRange: { begin: '2024-01-01T00:00:00Z', end: '2024-01-02T00:00:00Z' },
+        runQuery: jest.fn(),
+      })
+
+      expect(result).toEqual({ data: null, variableOptions: [] })
+    })
+
+    it('should mark default data source in label', async () => {
+      mockGetDataSourceList.mockResolvedValue([
+        { name: 'main', is_default: true },
+      ])
+
+      const config: VariableCellConfig = {
+        type: 'variable',
+        name: 'env',
+        variableType: 'datasource',
+        layout: { height: 0 },
+      }
+      const result = await variableMetadata.execute!(config, {
+        variables: {},
+        timeRange: { begin: '2024-01-01T00:00:00Z', end: '2024-01-02T00:00:00Z' },
+        runQuery: jest.fn(),
+      })
+
+      expect(result!.variableOptions![0].label).toBe('main (default)')
+      expect(result!.variableOptions![0].value).toBe('main')
+    })
+  })
+
+  describe('variableMetadata.onExecutionComplete (datasource)', () => {
+    it('should auto-select default value when current value is not set', () => {
+      const setVariableValue = jest.fn()
+      const config: VariableCellConfig = {
+        type: 'variable',
+        name: 'env',
+        variableType: 'datasource',
+        defaultValue: 'staging',
+        layout: { height: 0 },
+      }
+      const state: CellState = {
+        status: 'success',
+        data: null,
+        variableOptions: [
+          { label: 'production', value: 'production' },
+          { label: 'staging', value: 'staging' },
+        ],
+      }
+      variableMetadata.onExecutionComplete!(config, state, {
+        setVariableValue,
+        currentValue: undefined,
+      })
+      expect(setVariableValue).toHaveBeenCalledWith('env', 'staging')
+    })
+
+    it('should not change value when current value is valid', () => {
+      const setVariableValue = jest.fn()
+      const config: VariableCellConfig = {
+        type: 'variable',
+        name: 'env',
+        variableType: 'datasource',
+        layout: { height: 0 },
+      }
+      const state: CellState = {
+        status: 'success',
+        data: null,
+        variableOptions: [
+          { label: 'production', value: 'production' },
+          { label: 'staging', value: 'staging' },
+        ],
+      }
+      variableMetadata.onExecutionComplete!(config, state, {
+        setVariableValue,
+        currentValue: 'production',
+      })
+      expect(setVariableValue).not.toHaveBeenCalled()
+    })
+
+    it('should fall back to first option when current value is invalid', () => {
+      const setVariableValue = jest.fn()
+      const config: VariableCellConfig = {
+        type: 'variable',
+        name: 'env',
+        variableType: 'datasource',
+        layout: { height: 0 },
+      }
+      const state: CellState = {
+        status: 'success',
+        data: null,
+        variableOptions: [
+          { label: 'production', value: 'production' },
+          { label: 'staging', value: 'staging' },
+        ],
+      }
+      variableMetadata.onExecutionComplete!(config, state, {
+        setVariableValue,
+        currentValue: 'deleted-source',
+      })
+      expect(setVariableValue).toHaveBeenCalledWith('env', 'production')
     })
   })
 })
