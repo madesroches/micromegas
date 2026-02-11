@@ -114,6 +114,48 @@ function VariableOptions({ variableOptions }: Pick<CellRendererProps, 'variableO
 }
 
 // =============================================================================
+// Datasource default value dropdown
+// =============================================================================
+
+function DatasourceDefaultValue({ value, onChange }: { value: string; onChange: (val: string) => void }) {
+  const [sources, setSources] = useState<{ name: string; is_default: boolean }[]>([])
+
+  useEffect(() => {
+    let cancelled = false
+    getDataSourceList()
+      .then((data) => {
+        if (cancelled) return
+        setSources(data)
+        // Auto-set to default source if no value is set
+        if (!value) {
+          onChange(data.find((s) => s.is_default)!.name)
+        }
+      })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  return (
+    <div>
+      <label className="block text-xs font-medium text-theme-text-secondary uppercase mb-1.5">
+        Default Value
+      </label>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-full px-3 py-2 bg-app-card border border-theme-border rounded-md text-theme-text-primary text-sm focus:outline-none focus:border-accent-link"
+      >
+        {sources.map((s) => (
+          <option key={s.name} value={s.name}>
+            {s.name}{s.is_default ? ' (default)' : ''}
+          </option>
+        ))}
+      </select>
+    </div>
+  )
+}
+
+// =============================================================================
 // Body renderer (unused — variable cells render via titleBarRenderer in the
 // cell header; the body is only uncollapsed to show CellContainer error state)
 // =============================================================================
@@ -291,6 +333,13 @@ function VariableCellEditor({ config, onChange, variables, timeRange }: CellEdit
             in a query cell&apos;s data source field to route queries to the selected source.
           </div>
         </div>
+      )}
+
+      {isDatasource && (
+        <DatasourceDefaultValue
+          value={varConfig.defaultValue !== undefined ? getVariableString(varConfig.defaultValue) : ''}
+          onChange={(val) => onChange({ ...varConfig, defaultValue: val || undefined })}
+        />
       )}
 
       {!isExpression && !isDatasource && (
