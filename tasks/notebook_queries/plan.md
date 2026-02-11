@@ -614,6 +614,35 @@ cells:
     layout: { height: 300 }
 ```
 
+## Appendix: Future Optimizations
+
+### WASM-Side HTTP Fetch
+
+The WASM engine could fetch remote query results directly from the server, eliminating the JS intermediary and the wasm-bindgen JS→WASM copy for `register_table`.
+
+**Current flow (Phase 1):**
+```
+JS fetchQueryIPC() → HTTP response → Uint8Array in JS heap
+  → wasm-bindgen copies to WASM memory → register_table parses IPC
+```
+
+**Optimized flow:**
+```
+WASM engine calls fetch() via web-sys → HTTP response body read into WASM memory
+  → parse JSON frames + IPC in Rust → register as MemTable
+```
+
+The response bytes land directly in WASM linear memory — no JS→WASM copy.
+
+**How:** `reqwest` with `features = ["wasm"]` uses the browser's `fetch()` under the hood. Same-origin requests share the browser's cookie jar, so session cookies work. The JSON-framed protocol parsing (strip `{"type":"schema","size":N}\n` headers, extract raw IPC bytes) is straightforward in Rust.
+
+**Complications:**
+- **Auth token refresh:** The JS `authenticatedFetch` wrapper handles 401→refresh→retry. This logic would need to be reimplemented in Rust or delegated to JS via a wasm-bindgen callback.
+- **Bundle size:** Adding `reqwest` + `web-sys` HTTP types to the WASM binary increases its size.
+- **Streaming:** `web-sys` exposes `ReadableStream` but the Rust ergonomics are rough. `reqwest` on WASM supports `.bytes()` for the full response body but chunk-by-chunk streaming requires more glue code.
+
+**When to consider:** When profiling shows the `register_table` wasm-bindgen copy is a bottleneck (unlikely for notebook-scale data, but relevant for very large remote query results). The WASM engine already knows the SQL — it could own the full fetch→parse→register cycle, making `runQuery` for remote cells a single WASM call with no JS-side data handling.
+
 ## References
 
 - [engine_analysis.md](engine_analysis.md) — Engine comparison, WASM research, DuckDB analysis
