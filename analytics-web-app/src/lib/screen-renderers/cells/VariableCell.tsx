@@ -219,7 +219,7 @@ export function VariableTitleBarContent(props: CellRendererProps) {
 // Editor Component
 // =============================================================================
 
-function VariableCellEditor({ config, onChange, variables, timeRange }: CellEditorProps) {
+function VariableCellEditor({ config, onChange, variables, timeRange, datasourceVariables }: CellEditorProps) {
   const varConfig = config as VariableCellConfig
   const variableType = varConfig.variableType || 'combobox'
   const isCombobox = variableType === 'combobox'
@@ -267,6 +267,7 @@ function VariableCellEditor({ config, onChange, variables, timeRange }: CellEdit
           <DataSourceField
             value={varConfig.dataSource || ''}
             onChange={(ds) => onChange({ ...varConfig, dataSource: ds })}
+            datasourceVariables={datasourceVariables}
             className=""
           />
           <div>

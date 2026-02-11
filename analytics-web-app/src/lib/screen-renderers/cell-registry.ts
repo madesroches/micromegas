@@ -71,6 +71,8 @@ export interface CellEditorProps {
   timeRange: { begin: string; end: string }
   /** Available column names from query results (for table/chart cells) */
   availableColumns?: string[]
+  /** Names of datasource-type variables available above this cell */
+  datasourceVariables?: string[]
 }
 
 /**
