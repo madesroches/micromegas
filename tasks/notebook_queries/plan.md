@@ -4,7 +4,7 @@
 
 Add support for SQL queries that reference other cells' results in notebooks. This enables iterative data exploration where Cell B can query Cell A's output by name.
 
-**Approach: hybrid.** Start with server-side session queries (simplest path, full UDF support, zero bundle size). Optionally add client-side WASM execution later for offline/low-latency use cases.
+**Approach:** Each notebook owns a client-side DataFusion WASM context. Remote queries fetch data from the server and register the result locally. Local queries execute entirely in the browser against accumulated cell results.
 
 See [engine_analysis.md](engine_analysis.md) for the engine comparison and research that informed this plan.
 
@@ -17,11 +17,11 @@ Cell A: SELECT * FROM log_entries WHERE level='ERROR'  → server round-trip
 Cell B: SELECT host, count(*) FROM ??? GROUP BY host  → needs Cell A's result, can't reference it
 ```
 
-With session queries, Cell B references Cell A's result by name:
+With a local DataFusion context, Cell B references Cell A's result by name:
 
 ```
-Cell A: source=server  → fetches from data lake
-Cell B: source=session, SQL: SELECT host, count(*) FROM errors GROUP BY host → server queries cached result
+Cell A: source=remote  → fetches from data lake, result registered as "errors" in local context
+Cell B: source=local   → executes in local context: SELECT host, count(*) FROM errors GROUP BY host
 ```
 
 ## Design Principles
@@ -35,31 +35,26 @@ Cell types (`table`, `chart`, `log`, `propertytimeline`, `swimlane`) define how 
 Queries are separate from cells and can come from different sources:
 
 ```typescript
-interface ServerQuery {
-  source: 'server'
+interface RemoteQuery {
+  source: 'remote'
   sql: string
 }
 
-interface SessionQuery {
-  source: 'session'
+interface LocalQuery {
+  source: 'local'
   sql: string
 }
 
-type Query = ServerQuery | SessionQuery
+type Query = RemoteQuery | LocalQuery
 ```
 
 This design allows future data sources without changing the cell model:
 
 ```typescript
 // Future possibilities
-interface NotebookQuery {
-  source: 'notebook'  // client-side WASM execution (Phase 4)
-  sql: string
-}
-
 interface CellRefQuery {
   source: 'cell'
-  cell: string  // reference another cell's data directly
+  cell: string  // reference another cell's data directly, no SQL
 }
 
 interface HttpQuery {
@@ -69,7 +64,29 @@ interface HttpQuery {
 }
 ```
 
+### Every Cell Registers Its Result
+
+Every cell that produces data — regardless of query source — registers its result as a named table in the notebook's local DataFusion context. This builds up a queryable namespace as cells execute top-to-bottom.
+
 ## Technical Design
+
+### Notebook DataFusion Context
+
+Each notebook owns a `WasmQueryEngine` instance (DataFusion `SessionContext` compiled to WASM). The context lives for the lifetime of the notebook component. Cell results accumulate in it as named tables.
+
+```typescript
+// Notebook-level context, created once per notebook mount
+const engine = new WasmQueryEngine()
+
+// After any cell executes and produces data:
+engine.register_table("cell_name", tableToIPC(result, 'stream'))
+
+// Local queries execute directly:
+const ipcBytes = await engine.execute_sql("SELECT * FROM errors GROUP BY host")
+const result = tableFromIPC(ipcBytes)
+```
+
+On re-execution (e.g., time range change), the context is reset and cells re-execute top-to-bottom, re-registering their results.
 
 ### Cell Configuration Changes
 
@@ -84,19 +101,42 @@ export interface QueryCellConfig extends CellConfigBase {
 }
 ```
 
-Proposed change — add an optional `query` field (backward compatible, no migration needed):
+New versioned structure:
 
 ```typescript
-export interface QueryCellConfig extends CellConfigBase {
+// v1: legacy format (existing notebooks)
+interface QueryCellConfigV1 extends CellConfigBase {
   type: 'table' | 'chart' | 'log' | 'propertytimeline' | 'swimlane'
-  sql: string               // kept for backward compat, used when query is absent
-  query?: Query             // new: polymorphic query, takes precedence over sql
+  sql: string
   options?: Record<string, unknown>
   dataSource?: string
 }
+
+// v2: polymorphic query
+interface QueryCellConfigV2 extends CellConfigBase {
+  version: 2
+  type: 'table' | 'chart' | 'log' | 'propertytimeline' | 'swimlane'
+  query: Query
+  options?: Record<string, unknown>
+  dataSource?: string
+}
+
+export type QueryCellConfig = QueryCellConfigV2
 ```
 
-When `query` is present, it takes precedence. When absent, the cell behaves as today (implicit `{ source: 'server', sql }`). No migration required for existing notebooks.
+Notebooks are migrated on load. V1 cells (no `version` field) are upgraded to V2:
+
+```typescript
+function migrateCellConfig(cell: QueryCellConfigV1): QueryCellConfigV2 {
+  return {
+    ...cell,
+    version: 2,
+    query: { source: 'remote', sql: cell.sql },
+  }
+}
+```
+
+After migration, all runtime code works exclusively with the V2 format. The migration runs once per load and the upgraded config is saved back on the next notebook save.
 
 ### Execution Context Changes
 
@@ -119,181 +159,221 @@ export interface CellExecutionContext {
   variables: Record<string, VariableValue>
   timeRange: { begin: string; end: string }
   runQuery: (query: Query) => Promise<Table>  // dispatch by source
-  cellResults: Record<string, Table>          // results from cells above
 }
 ```
 
-### Cell Result Propagation
-
-The `executeFromCell` function in `useCellExecution.ts` must accumulate cell results:
-
-```typescript
-// In useCellExecution.ts executeFromCell
-const cellResults: Record<string, Table> = {}
-
-for (let i = 0; i < cells.length; i++) {
-  const cell = cells[i]
-  const state = await executeCell(i, cellResults)
-
-  if (state.data) {
-    cellResults[cell.name] = state.data  // available to subsequent cells
-  }
-}
-```
+Note: `cellResults` is not in the context — the DataFusion WASM engine IS the context. Cells don't need explicit access to previous results; they reference them via SQL table names in local queries.
 
 ### Query Execution Flow
 
 The `runQuery` function dispatches based on source:
 
 ```typescript
-async function runQuery(query: Query, cellResults: Record<string, Table>): Promise<Table> {
-  if (query.source === 'server') {
-    return executeSql(query.sql, timeRange, abortSignal)
-  } else if (query.source === 'session') {
-    return executeSessionQuery(query.sql, cellResults)
-  }
-}
-```
+async function runQuery(query: Query): Promise<Table> {
+  let result: Table
 
-### Server-Side Session Query Design
-
-Session queries send the SQL plus referenced cell result tables to the server, which registers them as temp tables in a DataFusion session context and executes the query.
-
-**Client side** (`lib/session-query.ts`):
-
-```typescript
-import { Table, tableToIPC } from 'apache-arrow'
-
-export async function executeSessionQuery(
-  sql: string,
-  cellResults: Record<string, Table>
-): Promise<Table> {
-  // Serialize referenced cell results as Arrow IPC
-  const tables: Record<string, Uint8Array> = {}
-  for (const [name, table] of Object.entries(cellResults)) {
-    tables[name] = tableToIPC(table, 'stream')
+  if (query.source === 'remote') {
+    result = await executeSql(query.sql, timeRange, abortSignal)
+  } else if (query.source === 'local') {
+    const ipcBytes = await engine.execute_sql(query.sql)
+    result = tableFromIPC(ipcBytes)
   }
 
-  // POST to server endpoint
-  const response = await fetch('/api/v1/session-query', {
-    method: 'POST',
-    body: encodeSessionQueryRequest(sql, tables),
-  })
+  // Every cell's result is registered in the local context
+  engine.register_table(cellName, tableToIPC(result, 'stream'))
 
-  // Response is Arrow IPC stream (same as existing FlightSQL path)
-  return decodeArrowResponse(response)
+  return result
 }
 ```
-
-**Server side** (new endpoint in `analytics-web-srv`):
-
-1. Receive SQL + named Arrow IPC byte arrays
-2. Create an ephemeral `SessionContext`
-3. For each named table: deserialize IPC → `RecordBatch` → `MemTable` → register
-4. Execute SQL, stream results back as Arrow IPC
-5. Drop the context (no server-side state between requests)
-
-This is stateless — each request is self-contained. No session management, no cleanup, no memory leaks. The tradeoff is re-sending cell data on each query, but for notebook-scale data (thousands to low millions of rows) the serialization cost is negligible.
-
-**Full UDF support:** Since the query runs in the server's DataFusion, all 26 UDFs (jsonb, histogram, properties, lakehouse) are available. No porting needed.
 
 ### Cell Result Registration
 
-Session queries can reference any cell above them by name:
+Both remote and local query results are registered:
 
 ```sql
--- Cell named "errors" executed first with source=server
--- This cell uses source=session
-SELECT host, count(*) as error_count
-FROM errors  -- references the "errors" cell result
-GROUP BY host
-ORDER BY error_count DESC
+-- Cell "errors": source=remote
+-- Fetches from data lake via FlightSQL, result registered as table "errors"
+SELECT time, host, level, msg FROM log_entries WHERE level IN ('ERROR', 'FATAL')
+
+-- Cell "by_host": source=local
+-- Executes in local DataFusion context, references "errors" table
+-- Result registered as table "by_host"
+SELECT host, count(*) as error_count FROM errors GROUP BY host ORDER BY error_count DESC
+
+-- Cell "error_chart": source=local
+-- References "by_host" table, also in local context
+SELECT * FROM by_host LIMIT 10
 ```
+
+### DataFusion WASM Engine
+
+Custom wasm-bindgen wrapper around DataFusion's `SessionContext` + `MemTable`:
+
+```rust
+#[wasm_bindgen]
+pub struct WasmQueryEngine {
+    ctx: SessionContext,
+}
+
+#[wasm_bindgen]
+impl WasmQueryEngine {
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> Self {
+        let config = SessionConfig::new()
+            .with_target_partitions(1);
+        let ctx = SessionContext::new_with_config(config);
+        Self { ctx }
+    }
+
+    pub fn register_table(&self, name: &str, ipc_bytes: &[u8]) -> Result<(), JsValue> {
+        // Deserialize Arrow IPC → Vec<RecordBatch> → MemTable → register
+        let reader = StreamReader::try_new(Cursor::new(ipc_bytes), None)
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        let batches: Vec<RecordBatch> = reader.collect::<Result<_, _>>()
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        let schema = batches[0].schema();
+        let table = MemTable::try_new(schema, vec![batches])
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        self.ctx.register_table(name, Arc::new(table))
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        Ok(())
+    }
+
+    pub async fn execute_sql(&self, sql: &str) -> Result<Vec<u8>, JsValue> {
+        let df = self.ctx.sql(sql).await
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        let batches = df.collect().await
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        // Serialize to Arrow IPC
+        let mut buf = Vec::new();
+        let mut writer = StreamWriter::try_new(&mut buf, &batches[0].schema())
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        for batch in &batches {
+            writer.write(batch).map_err(|e| JsValue::from_str(&e.to_string()))?;
+        }
+        writer.finish().map_err(|e| JsValue::from_str(&e.to_string()))?;
+        Ok(buf)
+    }
+
+    pub fn deregister_table(&self, name: &str) -> Result<(), JsValue> {
+        self.ctx.deregister_table(name)
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        Ok(())
+    }
+
+    pub fn reset(&self) {
+        // Deregister all tables for re-execution
+    }
+}
+```
+
+### Arrow IPC Boundary
+
+Data crosses the JS↔WASM boundary via Arrow IPC serialization:
+
+- **JS → WASM** (register_table): `tableToIPC(table, 'stream')` → `Uint8Array` → Rust `StreamReader`
+- **WASM → JS** (execute_sql): Rust `StreamWriter` → `Vec<u8>` → `tableFromIPC(bytes)`
+
+For notebook-scale data (thousands to low millions of rows), IPC serialization is ~10ms for a million-row table. The app already uses IPC throughout (`arrow-stream.ts`).
+
+### Variable Substitution
+
+Macro substitution (`$begin`, `$end`, `$variable`) happens client-side before the query reaches either path. For remote queries this is the existing behavior. For local queries, `substituteMacros()` runs on the SQL string before passing it to `engine.execute_sql()`. The WASM engine sees fully resolved SQL only.
 
 ## Implementation Phases
 
-### Phase 1: Cell Result Propagation (frontend only)
+### Phase 1: DataFusion WASM Engine
 
-Add `cellResults: Record<string, Table>` to `CellExecutionContext`. Modify `useCellExecution.ts` to accumulate results from each cell and pass them to subsequent cells' execution contexts.
+Build the WASM engine — this is the foundation everything else depends on.
 
-This is the foundation — no new query sources yet, but it unblocks everything else.
+1. **Spike (1-2 days):** Validate DataFusion compiles to `wasm32-unknown-unknown` with `default-features = false, features = ["sql"]`. Build a minimal test crate, attempt compilation, assess dependency wrangling.
+2. **If spike succeeds:** Build the `WasmQueryEngine` wasm-bindgen wrapper (~200-400 lines of Rust). Set up build pipeline (`cargo build --target wasm32-unknown-unknown`, `wasm-bindgen`, `wasm-opt`).
+3. **If spike fails:** Fall back to DuckDB WASM (`npm install @duckdb/duckdb-wasm`). Different SQL dialect but battle-tested. Arrow version mismatch (`apache-arrow@17` vs app's `@21`) handled via IPC serialization. The rest of the plan still works — only the engine implementation changes.
+4. Integrate into analytics-web-app (Vite config, lazy-load WASM module).
 
-Files: `cell-registry.ts`, `useCellExecution.ts`
+**Expected bundle size:** 4-6 MB gzipped (custom DataFusion) or 5-10 MB (DuckDB). Lazy-loaded only when a notebook is open.
 
-### Phase 2: Server-Side Session Queries
+Files: new `rust/datafusion-wasm/` crate, Vite config, new `lib/wasm-engine.ts`
 
-1. Add `Query` type union to `notebook-types.ts`
-2. Add `query?: Query` to `QueryCellConfig` (backward compatible)
-3. New server endpoint `POST /api/v1/session-query` accepting SQL + named Arrow IPC tables
-4. `executeSessionQuery()` client function in `lib/session-query.ts`
-5. Update `runQuery` dispatch in `useCellExecution.ts`
+### Phase 2: Notebook Context + Local Queries
 
-Files: `notebook-types.ts`, `useCellExecution.ts`, new `lib/session-query.ts`, new server endpoint in `analytics-web-srv`
+Wire the WASM engine into the notebook execution loop.
+
+1. Add `Query` type union (`RemoteQuery | LocalQuery`) to `notebook-types.ts`
+2. Add versioned `QueryCellConfigV2` with `query: Query` field
+3. Add V1→V2 migration (runs on notebook load, saved back on next save)
+4. Create `WasmQueryEngine` instance per notebook in `useCellExecution.ts`
+5. Update `runQuery` to dispatch by source and register every cell's result
+6. Reset the engine context on full re-execution (time range change, refresh)
+7. Update all cell type execute functions to use `Query` objects
+
+Files: `notebook-types.ts`, `cell-registry.ts`, `useCellExecution.ts`, all cell type files, new `lib/wasm-engine.ts`
 
 ### Phase 3: UI for Source Selection
 
-1. Source toggle in cell editor (server/session dropdown)
-2. Cell name autocomplete for session queries (list cells above current)
-3. Visual indicator for session vs server queries
-4. Error handling for invalid cell references, empty results
+1. Source toggle in cell editor (remote/local dropdown)
+2. Cell name display showing available tables from cells above
+3. Visual indicator for local vs remote queries
+4. Error handling: invalid table references, empty results, WASM engine errors
 
 Files: cell editor components
 
-### Phase 4: Client-Side WASM (optional — spike first)
+### Phase 4: UDFs in WASM
 
-This phase is deferred and contingent on a spike. See [engine_analysis.md](engine_analysis.md) for full details.
+Register the WASM-suitable Rust UDFs in the client-side DataFusion context. Same functions, same behavior, client and server.
 
-**Spike (1-2 days):** Validate that DataFusion compiles to `wasm32-unknown-unknown` with `default-features = false, features = ["sql"]`. Build a minimal test crate, attempt compilation, assess dependency wrangling effort.
+**14 of 26 UDFs are WASM-suitable:**
+- JSONB functions (7): `jsonb_get`, `jsonb_get_str`, etc.
+- Properties functions (4): `property_get`, `property_get_str`, etc.
+- Histogram functions (3): `histogram_bucket_count`, etc.
 
-**If spike succeeds (~3-4 days total):**
-- Build custom wasm-bindgen wrapper (~200-400 lines of Rust) around `SessionContext` + `MemTable`
-- Arrow IPC for data transfer across JS-WASM boundary
-- Add `source: 'notebook'` to the `Query` union
-- Lazy-load WASM module only when notebook query cells exist
-- Path to compiling the 14 WASM-suitable Rust UDFs directly into the browser
+The remaining 12 require PostgreSQL, object storage, or lakehouse context and cannot run in the browser.
 
-**If spike fails:** DuckDB WASM as fallback (npm install, 1 day integration). Different SQL dialect but battle-tested. Arrow version mismatch (`apache-arrow@17` vs app's `@21`) handled via IPC serialization.
-
-**UDF availability in WASM (14 of 26):** JSONB functions (7), properties functions (4), histogram functions (3). The remaining 12 require PostgreSQL, object storage, or lakehouse context and cannot run in the browser. Full details in the analysis doc.
-
-**Expected bundle size:** 4-6 MB gzipped for custom DataFusion WASM, 5-10 MB for DuckDB WASM. Lazy-loaded only when needed.
+Files: `rust/datafusion-wasm/` crate, UDF registration
 
 ### Phase 5: Polish
 
-1. Performance optimization (avoid re-sending unchanged cell results)
-2. Memory management warnings for large cell results
-3. Error messages for common issues (circular references, missing cells)
-4. Documentation
+1. Memory management warnings for large cell results
+2. Enforce cell name uniqueness in the notebook model
+3. Error messages for common issues (missing tables, type mismatches)
+4. Graceful handling when referenced cell has error/blocked status
+5. Documentation
 
 ## Considerations
 
 ### Bundle Size
 
-Phase 2 (server-side session queries) adds zero bundle size — it's just a fetch call. Phase 4 (WASM) would add 4-6 MB gzipped, lazy-loaded only when a notebook query cell exists.
-
-### Session Lifecycle
-
-Session queries are stateless: cell data is sent with each request, the server creates an ephemeral context, executes, and discards. No server-side session management. This trades bandwidth for simplicity — acceptable for notebook-scale data.
+The WASM engine adds 4-6 MB gzipped, lazy-loaded only when a notebook is open. No impact on other screen types.
 
 ### Memory Limits
 
-Browser memory is limited. Large datasets should remain server-side. Consider:
-- Warning when cell results exceed threshold (e.g., 100MB)
-- Option to not register large results as tables
+Browser memory is limited. Large datasets from remote queries accumulate in both the JS Arrow Table and the WASM engine's MemTable. Consider:
+- Warning when total registered table size exceeds threshold (e.g., 100MB)
+- Row count limits on remote query results that get registered
+
+### Context Lifecycle
+
+The WASM context is created when the notebook mounts and destroyed on unmount. On full re-execution (time range change, refresh), the context is reset (all tables deregistered) and cells re-execute top-to-bottom. Individual cell re-execution deregisters the cell's old table and registers the new result.
 
 ### Hydration on Page Reload
 
-Cell results are lost on page reload. Options:
-- Re-execute cells on load (current behavior)
-- Cache results in IndexedDB (future enhancement)
+Cell results and the WASM context are lost on page reload. Cells re-execute on load (current behavior). Future enhancement: cache results in IndexedDB.
 
 ### Circular References
 
 Cells execute top-to-bottom. A cell can only reference cells above it. This prevents circular references by design.
 
+### Cell Name Uniqueness
+
+Cell names must be unique within a notebook — they map to table names in the DataFusion context. The UI should enforce this (validation on rename, auto-generated unique names for new cells).
+
 ### Time Range Variables
 
-Session queries don't have implicit time range filtering like server queries. The `$begin` and `$end` macros can still be substituted, but filtering must be explicit in the SQL.
+Local queries don't have implicit time range filtering. `$begin` and `$end` macros are substituted client-side before execution, but filtering must be explicit in the SQL.
+
+### SQL Dialect
+
+If the spike succeeds and we use DataFusion WASM, local and remote queries share the same SQL dialect. If we fall back to DuckDB WASM, local queries use DuckDB's dialect (PostgreSQL-compatible, but not identical to DataFusion). This is the main cost of the fallback path.
 
 ## Example Notebook
 
@@ -302,7 +382,7 @@ cells:
   - name: errors
     type: table
     query:
-      source: server
+      source: remote
       sql: |
         SELECT time, host, level, msg
         FROM log_entries
@@ -313,7 +393,7 @@ cells:
   - name: by_host
     type: table
     query:
-      source: session
+      source: local
       sql: |
         SELECT host, count(*) as error_count
         FROM errors
@@ -324,7 +404,7 @@ cells:
   - name: error_chart
     type: chart
     query:
-      source: session
+      source: local
       sql: SELECT * FROM by_host LIMIT 10
     options:
       xColumn: host
