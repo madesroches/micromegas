@@ -9,6 +9,8 @@ on:
     paths:
       - '.github/workflows/publish-docs.yml'
       - 'welcome/**'
+      - 'mkdocs/**'
+      - 'doc/**'
 
 jobs:
   build-and-deploy-docs:
