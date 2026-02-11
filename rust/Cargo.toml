@@ -9,6 +9,7 @@ version = "0.20.0"
 edition = "2024"
 license = "Apache-2.0"
 homepage = "https://github.com/madesroches/micromegas/"
+documentation = "https://madesroches.github.io/micromegas/"
 authors = ["Marc-Antoine Desroches <madesroches@gmail.com>"]
 repository = "https://github.com/madesroches/micromegas/"
 keywords = ["observability", "telemetry", "analytics"]
