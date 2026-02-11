@@ -98,7 +98,7 @@ export function LocalQueryRenderer({
         setSourceStatus('error')
       }
     }
-  }, [engine, localConfig.sourceSql, localConfig.sourceTableName, timeRange, effectiveDataSource])
+  }, [engine, localConfig.sourceSql, localConfig.sourceTableName, timeRange.begin, timeRange.end, effectiveDataSource])
 
   // Execute local query against WASM
   const executeLocal = useCallback(async () => {

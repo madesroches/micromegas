@@ -17,6 +17,9 @@ wasm-bindgen-futures = "0.4"
 [dev-dependencies]
 wasm-bindgen-test = "0.3"
 
+[package.metadata.cargo-machete]
+ignored = ["chrono", "getrandom", "wasm-bindgen-futures"]
+
 [profile.release]
 lto = true
 opt-level = "s"
