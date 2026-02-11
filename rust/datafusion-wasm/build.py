@@ -2,6 +2,7 @@
 """Build datafusion-wasm and copy artifacts to analytics-web-app."""
 
 import argparse
+import re
 import shutil
 import subprocess
 import sys
@@ -21,11 +22,37 @@ def run(cmd: list[str], **kwargs) -> None:
     subprocess.run(cmd, check=True, **kwargs)
 
 
+def get_lockfile_wasm_bindgen_version() -> str:
+    """Parse the resolved wasm-bindgen version from Cargo.lock."""
+    lock_path = CRATE_DIR / "Cargo.lock"
+    text = lock_path.read_text()
+    match = re.search(
+        r'\[\[package\]\]\s*name\s*=\s*"wasm-bindgen"\s*version\s*=\s*"([^"]+)"',
+        text,
+    )
+    if not match:
+        print("ERROR: Could not find wasm-bindgen version in Cargo.lock")
+        sys.exit(1)
+    return match.group(1)
+
+
 def check_tools() -> None:
     for tool in ["wasm-bindgen", "wasm-opt"]:
         if shutil.which(tool) is None:
             print(f"ERROR: {tool} not found. See README.md for install instructions.")
             sys.exit(1)
+
+    expected = get_lockfile_wasm_bindgen_version()
+    result = subprocess.run(
+        ["wasm-bindgen", "--version"], capture_output=True, text=True
+    )
+    installed = result.stdout.strip().removeprefix("wasm-bindgen ").strip()
+    if installed != expected:
+        print(f"ERROR: wasm-bindgen version mismatch")
+        print(f"  Cargo.lock requires: {expected}")
+        print(f"  Installed CLI:       {installed}")
+        print(f"  Fix: cargo install wasm-bindgen-cli --version {expected}")
+        sys.exit(1)
 
 
 def test() -> None:

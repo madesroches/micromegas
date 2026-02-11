@@ -25,19 +25,19 @@ impl WasmQueryEngine {
 
     /// Register Arrow IPC stream bytes as a named table.
     /// Returns the number of rows registered.
-    pub fn register_table(&self, name: &str, ipc_bytes: &[u8]) -> Result<u32, JsValue> {
+    pub fn register_table(&self, name: &str, ipc_bytes: &[u8]) -> Result<usize, JsValue> {
         let cursor = std::io::Cursor::new(ipc_bytes);
         let reader = StreamReader::try_new(cursor, None)
             .map_err(|e| JsValue::from_str(&format!("Failed to read IPC stream: {e}")))?;
 
         let schema = reader.schema();
         let mut batches = Vec::new();
-        let mut row_count: u32 = 0;
+        let mut row_count: usize = 0;
 
         for batch_result in reader {
             let batch = batch_result
                 .map_err(|e| JsValue::from_str(&format!("Failed to read batch: {e}")))?;
-            row_count += batch.num_rows() as u32;
+            row_count += batch.num_rows();
             batches.push(batch);
         }
 
