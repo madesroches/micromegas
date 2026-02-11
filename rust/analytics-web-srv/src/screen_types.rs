@@ -12,7 +12,7 @@ impl fmt::Display for ParseScreenTypeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "invalid screen type '{}', expected one of: metrics, log, table, notebook",
+            "invalid screen type '{}', expected one of: metrics, log, table, notebook, local_query",
             self.invalid_value
         )
     }
@@ -30,6 +30,7 @@ pub enum ScreenType {
     Log,
     Table,
     Notebook,
+    LocalQuery,
 }
 
 impl FromStr for ScreenType {
@@ -42,6 +43,7 @@ impl FromStr for ScreenType {
             "log" => Ok(ScreenType::Log),
             "table" => Ok(ScreenType::Table),
             "notebook" => Ok(ScreenType::Notebook),
+            "local_query" => Ok(ScreenType::LocalQuery),
             _ => Err(ParseScreenTypeError {
                 invalid_value: s.to_string(),
             }),
@@ -57,6 +59,7 @@ impl ScreenType {
             ScreenType::Log,
             ScreenType::Table,
             ScreenType::Notebook,
+            ScreenType::LocalQuery,
         ]
     }
 
@@ -68,6 +71,7 @@ impl ScreenType {
             ScreenType::Log => "log",
             ScreenType::Table => "table",
             ScreenType::Notebook => "notebook",
+            ScreenType::LocalQuery => "local_query",
         }
     }
 
@@ -105,6 +109,12 @@ impl ScreenType {
                 description: "Multi-cell notebook with tables, charts, logs, and variables"
                     .to_string(),
             },
+            ScreenType::LocalQuery => ScreenTypeInfo {
+                name: "local_query".to_string(),
+                display_name: "Local Query".to_string(),
+                icon: "database".to_string(),
+                description: "In-browser SQL queries using WASM DataFusion".to_string(),
+            },
         }
     }
 
@@ -139,6 +149,13 @@ impl ScreenType {
                 "timeRangeFrom": "now-5m",
                 "timeRangeTo": "now",
                 "cells": []
+            }),
+            ScreenType::LocalQuery => serde_json::json!({
+                "timeRangeFrom": "now-5m",
+                "timeRangeTo": "now",
+                "sourceSql": "SELECT process_id, exe, start_time, username, computer\nFROM processes\nLIMIT 100",
+                "sourceTableName": "data",
+                "localSql": "SELECT * FROM data LIMIT 10"
             }),
         }
     }

@@ -307,6 +307,114 @@ export async function* streamQuery(
 }
 
 /**
+ * Fetches query results as raw Arrow IPC stream bytes.
+ * Returns a complete IPC stream (schema + batches + EOS) suitable for
+ * passing directly to WASM DataFusion's register_table.
+ */
+export async function fetchQueryIPC(
+  params: StreamQueryParams,
+  signal?: AbortSignal,
+): Promise<Uint8Array> {
+  const response = await authenticatedFetch(`${getApiBase()}/query-stream`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      sql: params.sql,
+      params: params.params || {},
+      begin: params.begin,
+      end: params.end,
+      data_source: params.dataSource || '',
+    }),
+    signal,
+  });
+
+  if (!response.ok) {
+    if (response.status === 401) {
+      throw new AuthenticationError();
+    }
+    const text = await response.text();
+    if (response.status === 403) {
+      try {
+        const frame = JSON.parse(text.trim()) as ErrorFrame;
+        throw new Error(frame.message);
+      } catch (e) {
+        if (e instanceof SyntaxError) {
+          throw new Error(`HTTP 403: ${text}`);
+        }
+        throw e;
+      }
+    }
+    throw new Error(`HTTP ${response.status}: ${text}`);
+  }
+
+  if (!response.body) {
+    throw new Error('No response body');
+  }
+
+  const bufferedReader = new BufferedReader(response.body.getReader());
+
+  try {
+    // Collect all IPC message bytes from the framed protocol
+    const ipcChunks: Uint8Array[] = [];
+    let totalSize = 0;
+
+    // Add Arrow IPC stream magic: "ARROW1" + padding to 8 bytes
+    const magic = new Uint8Array([0x41, 0x52, 0x52, 0x4f, 0x57, 0x31, 0x00, 0x00]);
+    ipcChunks.push(magic);
+    totalSize += magic.length;
+
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      const line = await bufferedReader.readLine();
+      if (line === null) break;
+
+      let frame: Frame;
+      try {
+        frame = JSON.parse(line);
+      } catch {
+        throw new Error(`Invalid frame: ${line.slice(0, 100)}`);
+      }
+
+      switch (frame.type) {
+        case 'schema':
+        case 'batch': {
+          const bytes = await bufferedReader.readBytes(frame.size);
+          ipcChunks.push(bytes);
+          totalSize += bytes.length;
+          break;
+        }
+        case 'done': {
+          // Append EOS: continuation marker (0xFFFFFFFF) + 0 metadata length
+          const eos = new Uint8Array(8);
+          const view = new DataView(eos.buffer);
+          view.setInt32(0, -1, true);  // 0xFFFFFFFF continuation
+          view.setInt32(4, 0, true);   // 0 metadata length = EOS
+          ipcChunks.push(eos);
+          totalSize += eos.length;
+
+          // Assemble into single Uint8Array
+          const result = new Uint8Array(totalSize);
+          let offset = 0;
+          for (const chunk of ipcChunks) {
+            result.set(chunk, offset);
+            offset += chunk.length;
+          }
+          return result;
+        }
+        case 'error':
+          throw new Error(frame.message);
+      }
+    }
+
+    throw new Error('Stream ended without done frame');
+  } finally {
+    bufferedReader.release();
+  }
+}
+
+/**
  * Simple helper to execute a streaming query and collect all results
  * Returns a Table for easier consumption
  */

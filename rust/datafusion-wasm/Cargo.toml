@@ -1,0 +1,17 @@
+[package]
+name = "datafusion-wasm"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+arrow = { version = "57.2", default-features = false, features = ["ipc"] }
+datafusion = { version = "52.1", default-features = false, features = ["nested_expressions", "sql"] }
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+
+[profile.release]
+lto = true
+opt-level = "s"

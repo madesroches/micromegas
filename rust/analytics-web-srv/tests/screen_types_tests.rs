@@ -24,6 +24,10 @@ fn test_screen_type_serialization() {
         serde_json::to_string(&ScreenType::Notebook).expect("serialize"),
         "\"notebook\""
     );
+    assert_eq!(
+        serde_json::to_string(&ScreenType::LocalQuery).expect("serialize"),
+        "\"local_query\""
+    );
 }
 
 #[test]
@@ -48,6 +52,10 @@ fn test_screen_type_deserialization() {
         serde_json::from_str::<ScreenType>("\"notebook\"").expect("deserialize"),
         ScreenType::Notebook
     );
+    assert_eq!(
+        serde_json::from_str::<ScreenType>("\"local_query\"").expect("deserialize"),
+        ScreenType::LocalQuery
+    );
 }
 
 #[test]
@@ -66,18 +74,23 @@ fn test_screen_type_from_str() {
         "notebook".parse::<ScreenType>().unwrap(),
         ScreenType::Notebook
     );
+    assert_eq!(
+        "local_query".parse::<ScreenType>().unwrap(),
+        ScreenType::LocalQuery
+    );
     assert!("invalid".parse::<ScreenType>().is_err());
 }
 
 #[test]
 fn test_all_screen_types() {
     let all = ScreenType::all();
-    assert_eq!(all.len(), 4);
+    assert_eq!(all.len(), 5);
     assert!(!all.contains(&ScreenType::ProcessList));
     assert!(all.contains(&ScreenType::Metrics));
     assert!(all.contains(&ScreenType::Log));
     assert!(all.contains(&ScreenType::Table));
     assert!(all.contains(&ScreenType::Notebook));
+    assert!(all.contains(&ScreenType::LocalQuery));
 }
 
 #[test]
@@ -87,6 +100,7 @@ fn test_screen_type_as_str() {
     assert_eq!(ScreenType::Log.as_str(), "log");
     assert_eq!(ScreenType::Table.as_str(), "table");
     assert_eq!(ScreenType::Notebook.as_str(), "notebook");
+    assert_eq!(ScreenType::LocalQuery.as_str(), "local_query");
 }
 
 #[test]
@@ -115,6 +129,11 @@ fn test_screen_type_info() {
     assert_eq!(notebook_info.name, "notebook");
     assert!(!notebook_info.icon.is_empty());
     assert!(!notebook_info.description.is_empty());
+
+    let local_query_info = ScreenType::LocalQuery.info();
+    assert_eq!(local_query_info.name, "local_query");
+    assert!(!local_query_info.icon.is_empty());
+    assert!(!local_query_info.description.is_empty());
 }
 
 #[test]
@@ -148,6 +167,12 @@ fn test_screen_type_default_config() {
     let notebook_config = ScreenType::Notebook.default_config();
     assert!(notebook_config.get("cells").is_some());
     assert!(notebook_config["cells"].is_array());
+
+    // LocalQuery config should have sourceSql and localSql fields
+    let local_query_config = ScreenType::LocalQuery.default_config();
+    assert!(local_query_config.get("sourceSql").is_some());
+    assert!(local_query_config.get("localSql").is_some());
+    assert!(local_query_config.get("sourceTableName").is_some());
 }
 
 #[test]
