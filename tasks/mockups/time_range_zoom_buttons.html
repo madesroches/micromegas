@@ -1,0 +1,695 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Time Range Zoom Buttons - Mockup</title>
+<style>
+  :root {
+    --app-bg: #0a0a0f;
+    --header-bg: #12121a;
+    --sidebar-bg: #12121a;
+    --panel-bg: #12121a;
+    --card-bg: #1a1a2e;
+    --text-primary: #e7e9ea;
+    --text-secondary: #9ca3af;
+    --text-muted: #6b7280;
+    --border-color: #2a2a3e;
+    --border-hover: #3a3a4e;
+    --accent-link: #1565c0;
+    --brand-rust: #bf360c;
+    --brand-blue: #1565c0;
+    --brand-gold: #ffb300;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #050508;
+    color: var(--text-primary);
+    line-height: 1.5;
+  }
+
+  /* Navigation between mockups */
+  .mockup-nav {
+    position: sticky; top: 0; z-index: 100;
+    background: var(--header-bg);
+    border-bottom: 1px solid var(--border-color);
+    padding: 16px 32px;
+    display: flex; align-items: center; gap: 24px;
+    flex-wrap: wrap;
+  }
+  .mockup-nav h1 {
+    font-size: 16px; font-weight: 700;
+    color: var(--text-primary);
+    white-space: nowrap;
+  }
+  .mockup-nav .tabs { display: flex; gap: 8px; flex-wrap: wrap; }
+  .mockup-nav .tab {
+    padding: 6px 14px; border-radius: 6px;
+    font-size: 13px; font-weight: 500;
+    cursor: pointer; border: 1px solid var(--border-color);
+    background: transparent; color: var(--text-secondary);
+    transition: all 0.15s;
+  }
+  .mockup-nav .tab:hover { border-color: var(--border-hover); color: var(--text-primary); }
+  .mockup-nav .tab.active { background: var(--accent-link); border-color: var(--accent-link); color: #fff; }
+
+  .mockup-section { display: none; padding: 32px; }
+  .mockup-section.active { display: block; }
+
+  .mockup-title {
+    font-size: 20px; font-weight: 600; color: var(--text-primary);
+    margin-bottom: 8px;
+  }
+  .mockup-desc {
+    font-size: 13px; color: var(--text-secondary);
+    margin-bottom: 24px; max-width: 720px;
+  }
+  .mockup-label {
+    font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em;
+    color: var(--text-muted); margin-bottom: 12px; margin-top: 32px;
+  }
+  .mockup-label:first-of-type { margin-top: 0; }
+
+  /* ---- App chrome ---- */
+  .app-shell {
+    background: var(--app-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    overflow: hidden;
+    margin-bottom: 24px;
+  }
+
+  .header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 12px 0 16px;
+    height: 57px;
+    background: var(--header-bg);
+    border-bottom: 1px solid var(--border-color);
+  }
+
+  .header-left {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+
+  .header-right {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .logo {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .logo-text {
+    font-weight: 300;
+    font-size: 14px;
+    letter-spacing: 0.1em;
+    color: white;
+  }
+
+  /* Pivot button */
+  .pivot-group {
+    display: inline-flex;
+  }
+  .pivot-primary {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    background: var(--border-color);
+    border: 1px solid var(--border-hover);
+    border-right: none;
+    border-radius: 4px 0 0 4px;
+    color: var(--text-primary);
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .pivot-primary svg { color: var(--accent-link); }
+  .pivot-dropdown {
+    display: flex;
+    align-items: center;
+    padding: 4px 6px;
+    background: var(--border-color);
+    border: 1px solid var(--border-hover);
+    border-radius: 0 4px 4px 0;
+    color: var(--text-secondary);
+    cursor: pointer;
+  }
+
+  /* Time range button group */
+  .time-group {
+    display: inline-flex;
+    align-items: stretch;
+  }
+
+  .time-picker-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    background: var(--border-color);
+    border: none;
+    border-radius: 4px 0 0 4px;
+    color: var(--text-primary);
+    font-size: 13px;
+    cursor: pointer;
+    transition: background 0.15s;
+    height: 32px;
+  }
+  .time-picker-btn:hover { background: var(--border-hover); }
+  .time-picker-btn svg { color: var(--text-secondary); width: 16px; height: 16px; }
+
+  .time-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 4px 8px;
+    background: var(--border-color);
+    border: none;
+    border-left: 1px solid var(--border-hover);
+    color: var(--text-primary);
+    cursor: pointer;
+    transition: background 0.15s;
+    height: 32px;
+  }
+  .time-btn:hover { background: var(--border-hover); }
+  .time-btn svg { width: 16px; height: 16px; }
+  .time-btn:last-child { border-radius: 0 4px 4px 0; }
+  .time-btn.zoom-btn svg { width: 14px; height: 14px; }
+
+  /* User avatar */
+  .avatar {
+    width: 28px; height: 28px;
+    border-radius: 50%;
+    background: var(--accent-link);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    font-weight: 600;
+    color: white;
+    cursor: pointer;
+  }
+
+  /* Body area */
+  .app-body {
+    display: flex;
+    height: 320px;
+  }
+
+  .sidebar {
+    width: 48px;
+    background: var(--sidebar-bg);
+    border-right: 1px solid var(--border-color);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding-top: 12px;
+    gap: 4px;
+  }
+  .sidebar-icon {
+    width: 36px; height: 36px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 6px;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .sidebar-icon:hover { background: var(--border-color); color: var(--text-secondary); }
+  .sidebar-icon.active { background: var(--border-color); color: var(--accent-link); }
+  .sidebar-icon svg { width: 20px; height: 20px; }
+
+  .main-content {
+    flex: 1;
+    background: var(--app-bg);
+    padding: 16px;
+    overflow: auto;
+  }
+
+  /* Content placeholder */
+  .content-placeholder {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .content-bar {
+    height: 12px;
+    background: var(--border-color);
+    border-radius: 4px;
+    opacity: 0.4;
+  }
+  .content-bar.short { width: 60%; }
+  .content-bar.medium { width: 80%; }
+
+  /* Zoom animation */
+  .time-label {
+    transition: all 0.2s ease;
+  }
+
+  /* Tooltip */
+  .time-btn { position: relative; }
+  .time-btn .tooltip {
+    display: none;
+    position: absolute;
+    bottom: -30px;
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 4px 8px;
+    background: var(--card-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    font-size: 11px;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    z-index: 10;
+  }
+  .time-btn:hover .tooltip { display: block; }
+
+  /* Annotation callout */
+  .annotation {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    margin-top: 16px;
+    padding: 12px 16px;
+    background: var(--card-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    font-size: 13px;
+    color: var(--text-secondary);
+    max-width: 720px;
+  }
+  .annotation svg {
+    flex-shrink: 0;
+    width: 16px; height: 16px;
+    color: var(--accent-link);
+    margin-top: 2px;
+  }
+
+  /* Highlight new elements */
+  .highlight-ring {
+    outline: 2px solid var(--accent-link);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+
+  .badge-new {
+    position: absolute;
+    top: -8px;
+    right: -8px;
+    padding: 1px 5px;
+    background: var(--accent-link);
+    border-radius: 8px;
+    font-size: 9px;
+    font-weight: 600;
+    color: white;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+</style>
+</head>
+<body>
+
+<!-- Mockup navigation -->
+<div class="mockup-nav">
+  <h1>Issue #773: Time Range Zoom Buttons</h1>
+  <div class="tabs">
+    <div class="tab active" onclick="showSection('overview')">Overview</div>
+    <div class="tab" onclick="showSection('before-after')">Before / After</div>
+    <div class="tab" onclick="showSection('interactive')">Interactive</div>
+  </div>
+</div>
+
+<!-- Section 1: Overview -->
+<div id="overview" class="mockup-section active">
+  <div class="mockup-title">Zoom Buttons in Header Button Group</div>
+  <div class="mockup-desc">
+    Add zoom out and zoom in buttons between the time range picker and the refresh button.
+    Zoom out doubles the time range (centered), zoom in halves it (centered).
+    The buttons use the same styling as the existing button group.
+  </div>
+
+  <div class="mockup-label">Header with zoom buttons (highlighted)</div>
+
+  <div class="app-shell">
+    <div class="header">
+      <div class="header-left">
+        <div class="logo">
+          <!-- Simplified logo -->
+          <svg width="24" height="24" viewBox="0 0 100 100">
+            <g transform="translate(50,50)">
+              <ellipse rx="42" ry="16" fill="none" stroke="#bf360c" stroke-width="3" transform="rotate(-20)" opacity="0.9"/>
+              <ellipse rx="33" ry="13" fill="none" stroke="#1565c0" stroke-width="3" transform="rotate(25)" opacity="0.9"/>
+              <ellipse rx="24" ry="9" fill="none" stroke="#ffb300" stroke-width="3" transform="rotate(-8)" opacity="0.9"/>
+              <polygon points="0,-6 1.2,-2 4.5,-2 2,0.5 3,4.5 0,2 -3,4.5 -2,0.5 -4.5,-2 -1.2,-2" fill="white"/>
+            </g>
+          </svg>
+          <span class="logo-text">micromegas</span>
+        </div>
+      </div>
+      <div class="header-right">
+        <!-- Pivot button -->
+        <div class="pivot-group">
+          <button class="pivot-primary">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+            Log
+          </button>
+          <button class="pivot-dropdown">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+          </button>
+        </div>
+
+        <!-- Time range controls -->
+        <div class="time-group">
+          <button class="time-picker-btn">
+            <!-- Clock icon -->
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+            <span>Last 1 hour</span>
+            <!-- Chevron -->
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+          </button>
+
+          <!-- NEW: Zoom out button -->
+          <button class="time-btn zoom-btn highlight-ring" title="Zoom out - double time range" style="position:relative;">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+            <span class="badge-new">new</span>
+            <span class="tooltip">Zoom out (2x)</span>
+          </button>
+
+          <!-- NEW: Zoom in button -->
+          <button class="time-btn zoom-btn highlight-ring" title="Zoom in - halve time range" style="position:relative;">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+            <span class="badge-new">new</span>
+            <span class="tooltip">Zoom in (0.5x)</span>
+          </button>
+
+          <!-- Refresh button -->
+          <button class="time-btn" title="Refresh">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+          </button>
+        </div>
+
+        <!-- User avatar -->
+        <div class="avatar">MD</div>
+      </div>
+    </div>
+    <div class="app-body">
+      <div class="sidebar">
+        <div class="sidebar-icon active">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+        </div>
+        <div class="sidebar-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>
+        </div>
+      </div>
+      <div class="main-content">
+        <div class="content-placeholder">
+          <div class="content-bar"></div>
+          <div class="content-bar medium"></div>
+          <div class="content-bar short"></div>
+          <div class="content-bar"></div>
+          <div class="content-bar medium"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="annotation">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+    <div>
+      The two new buttons (zoom out, zoom in) sit between the time picker and refresh button,
+      forming a continuous button group. They use the same <code>bg-theme-border</code> / <code>hover:bg-theme-border-hover</code>
+      styling with <code>border-l</code> separators. Icons are <code>ZoomOut</code> and <code>ZoomIn</code> from lucide-react.
+    </div>
+  </div>
+</div>
+
+<!-- Section 2: Before / After -->
+<div id="before-after" class="mockup-section">
+  <div class="mockup-title">Before / After Comparison</div>
+  <div class="mockup-desc">
+    Comparing the current header controls with the proposed zoom buttons added.
+  </div>
+
+  <div class="mockup-label">Before (current)</div>
+  <div style="display: inline-flex; align-items: stretch; margin-bottom: 24px;">
+    <button class="time-picker-btn">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+      <span>Last 1 hour</span>
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+    </button>
+    <button class="time-btn" style="border-radius: 0 4px 4px 0;">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+    </button>
+  </div>
+  <div style="font-size: 12px; color: var(--text-muted); margin-bottom: 8px; margin-top: -16px;">
+    [ Time Picker ] [ Refresh ]
+  </div>
+
+  <div class="mockup-label">After (proposed)</div>
+  <div style="display: inline-flex; align-items: stretch; margin-bottom: 24px;">
+    <button class="time-picker-btn">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+      <span>Last 1 hour</span>
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+    </button>
+    <button class="time-btn zoom-btn">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+      <span class="tooltip">Zoom out</span>
+    </button>
+    <button class="time-btn zoom-btn">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+      <span class="tooltip">Zoom in</span>
+    </button>
+    <button class="time-btn">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+    </button>
+  </div>
+  <div style="font-size: 12px; color: var(--text-muted); margin-bottom: 8px; margin-top: -16px;">
+    [ Time Picker ] [ Zoom Out ] [ Zoom In ] [ Refresh ]
+  </div>
+
+  <div class="annotation">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+    <div>
+      The button group grows by two compact icon buttons. The zoom buttons are narrower than the
+      time picker (~32px vs ~160px) so the visual footprint increase is minimal.
+    </div>
+  </div>
+</div>
+
+<!-- Section 3: Interactive demo -->
+<div id="interactive" class="mockup-section">
+  <div class="mockup-title">Interactive Zoom Demo</div>
+  <div class="mockup-desc">
+    Click the zoom buttons to see the time range update. The zoom is centered on the current range midpoint.
+    Zoom out doubles the range, zoom in halves it.
+  </div>
+
+  <div class="mockup-label">Click the buttons to zoom</div>
+
+  <div style="display: inline-flex; align-items: stretch; margin-bottom: 16px;">
+    <button class="time-picker-btn" id="demo-picker">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+      <span id="demo-label" class="time-label">Last 1 hour</span>
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+    </button>
+    <button class="time-btn zoom-btn" id="demo-zoom-out" title="Zoom out">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+      <span class="tooltip">Zoom out (2x)</span>
+    </button>
+    <button class="time-btn zoom-btn" id="demo-zoom-in" title="Zoom in">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+      <span class="tooltip">Zoom in (0.5x)</span>
+    </button>
+    <button class="time-btn" title="Refresh">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+    </button>
+  </div>
+
+  <!-- Timeline visualization -->
+  <div style="background: var(--panel-bg); border: 1px solid var(--border-color); border-radius: 8px; padding: 16px; max-width: 720px;">
+    <div style="font-size: 12px; color: var(--text-muted); margin-bottom: 8px;">Timeline visualization</div>
+
+    <!-- Full range bar -->
+    <div style="position: relative; height: 40px; background: var(--card-bg); border-radius: 4px; overflow: hidden; margin-bottom: 8px;">
+      <div id="demo-range-bar" style="position: absolute; top: 0; bottom: 0; background: rgba(21,101,192,0.25); border-left: 2px solid var(--accent-link); border-right: 2px solid var(--accent-link); transition: all 0.3s ease;"></div>
+      <div id="demo-center-line" style="position: absolute; top: 0; bottom: 0; width: 2px; background: var(--brand-gold); opacity: 0.6; transition: left 0.3s ease;"></div>
+    </div>
+
+    <!-- Time axis -->
+    <div style="display: flex; justify-content: space-between; font-size: 11px; color: var(--text-muted); font-family: monospace; margin-bottom: 12px;">
+      <span id="demo-axis-start"></span>
+      <span id="demo-axis-mid"></span>
+      <span id="demo-axis-end"></span>
+    </div>
+
+    <!-- Details -->
+    <div style="display: flex; gap: 24px; font-size: 12px;">
+      <div>
+        <span style="color: var(--text-muted);">from:</span>
+        <span id="demo-from" style="color: var(--text-secondary); font-family: monospace;"></span>
+      </div>
+      <div>
+        <span style="color: var(--text-muted);">to:</span>
+        <span id="demo-to" style="color: var(--text-secondary); font-family: monospace;"></span>
+      </div>
+      <div>
+        <span style="color: var(--text-muted);">duration:</span>
+        <span id="demo-duration" style="color: var(--text-primary); font-weight: 500;"></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Zoom history log -->
+  <div style="margin-top: 16px; max-width: 720px;">
+    <div style="font-size: 12px; color: var(--text-muted); margin-bottom: 8px;">Zoom history</div>
+    <div id="demo-log" style="font-size: 12px; font-family: monospace; color: var(--text-secondary); background: var(--panel-bg); border: 1px solid var(--border-color); border-radius: 6px; padding: 12px; max-height: 160px; overflow-y: auto;">
+    </div>
+  </div>
+
+  <div class="annotation" style="margin-top: 24px;">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+    <div>
+      <strong>Behavior notes:</strong><br>
+      Zoom converts relative ranges (like "Last 1 hour") to absolute ISO timestamps.
+      The center point (gold line) stays fixed while the range expands/contracts around it.
+      Min duration: 10s. Max duration: 365 days. The "to" boundary is clamped to "now".
+    </div>
+  </div>
+</div>
+
+<script>
+  // Tab navigation
+  function showSection(id) {
+    document.querySelectorAll('.mockup-section').forEach(s => s.classList.remove('active'));
+    document.querySelectorAll('.mockup-nav .tab').forEach(t => t.classList.remove('active'));
+    document.getElementById(id).classList.add('active');
+    event.target.classList.add('active');
+  }
+
+  // Interactive demo
+  const MIN_DURATION_MS = 10 * 1000;           // 10 seconds
+  const MAX_DURATION_MS = 365 * 24 * 3600000;  // 365 days
+  const FULL_RANGE_MS = 24 * 3600000;           // 24h visualization window
+
+  // Start with "last 1 hour" centered
+  const now = new Date();
+  let rangeFrom = new Date(now.getTime() - 3600000);
+  let rangeTo = new Date(now.getTime());
+  const visualOrigin = new Date(now.getTime() - FULL_RANGE_MS / 2);
+
+  function formatTime(d) {
+    return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+  }
+
+  function formatDateTime(d) {
+    return d.toLocaleString('en-US', {
+      month: 'short', day: 'numeric',
+      hour: '2-digit', minute: '2-digit', second: '2-digit',
+      hour12: false
+    });
+  }
+
+  function formatDuration(ms) {
+    if (ms < 60000) return `${Math.round(ms / 1000)}s`;
+    if (ms < 3600000) return `${Math.round(ms / 60000)}m`;
+    if (ms < 86400000) {
+      const h = Math.floor(ms / 3600000);
+      const m = Math.round((ms % 3600000) / 60000);
+      return m > 0 ? `${h}h ${m}m` : `${h}h`;
+    }
+    const d = Math.round(ms / 86400000 * 10) / 10;
+    return `${d}d`;
+  }
+
+  function updateDisplay() {
+    const duration = rangeTo.getTime() - rangeFrom.getTime();
+    const label = document.getElementById('demo-label');
+
+    // Label
+    if (duration <= 5 * 60000) label.textContent = formatTime(rangeFrom) + ' - ' + formatTime(rangeTo);
+    else if (duration <= 86400000) label.textContent = formatDateTime(rangeFrom).split(',')[1].trim() + ' - ' + formatDateTime(rangeTo).split(',')[1].trim();
+    else label.textContent = formatDateTime(rangeFrom) + ' - ' + formatDateTime(rangeTo);
+
+    // Range bar position
+    const bar = document.getElementById('demo-range-bar');
+    const centerLine = document.getElementById('demo-center-line');
+    const leftPct = Math.max(0, Math.min(100, ((rangeFrom.getTime() - visualOrigin.getTime()) / FULL_RANGE_MS) * 100));
+    const rightPct = Math.max(0, Math.min(100, ((rangeTo.getTime() - visualOrigin.getTime()) / FULL_RANGE_MS) * 100));
+    bar.style.left = leftPct + '%';
+    bar.style.width = (rightPct - leftPct) + '%';
+
+    const centerPct = (leftPct + rightPct) / 2;
+    centerLine.style.left = centerPct + '%';
+
+    // Axis labels
+    document.getElementById('demo-axis-start').textContent = formatTime(visualOrigin);
+    document.getElementById('demo-axis-mid').textContent = formatTime(new Date(visualOrigin.getTime() + FULL_RANGE_MS / 2));
+    document.getElementById('demo-axis-end').textContent = formatTime(new Date(visualOrigin.getTime() + FULL_RANGE_MS));
+
+    // Details
+    document.getElementById('demo-from').textContent = rangeFrom.toISOString();
+    document.getElementById('demo-to').textContent = rangeTo.toISOString();
+    document.getElementById('demo-duration').textContent = formatDuration(duration);
+  }
+
+  function addLog(action, oldDuration, newDuration) {
+    const log = document.getElementById('demo-log');
+    const entry = document.createElement('div');
+    entry.style.marginBottom = '4px';
+    entry.style.paddingBottom = '4px';
+    entry.style.borderBottom = '1px solid var(--border-color)';
+    entry.innerHTML = `<span style="color: var(--accent-link);">${action}</span> ${formatDuration(oldDuration)} &rarr; ${formatDuration(newDuration)} &nbsp; <span style="color: var(--text-muted);">${formatTime(rangeFrom)} - ${formatTime(rangeTo)}</span>`;
+    log.prepend(entry);
+  }
+
+  function zoom(direction) {
+    const duration = rangeTo.getTime() - rangeFrom.getTime();
+    const center = rangeFrom.getTime() + duration / 2;
+
+    let newDuration;
+    if (direction === 'out') {
+      newDuration = Math.min(duration * 2, MAX_DURATION_MS);
+    } else {
+      newDuration = Math.max(duration / 2, MIN_DURATION_MS);
+    }
+
+    let newFrom = center - newDuration / 2;
+    let newTo = center + newDuration / 2;
+
+    // Clamp to now
+    if (newTo > now.getTime()) {
+      newTo = now.getTime();
+      newFrom = newTo - newDuration;
+    }
+
+    const oldDuration = duration;
+    rangeFrom = new Date(newFrom);
+    rangeTo = new Date(newTo);
+
+    addLog(direction === 'out' ? 'zoom-out' : 'zoom-in', oldDuration, newDuration);
+    updateDisplay();
+  }
+
+  document.getElementById('demo-zoom-out').addEventListener('click', () => zoom('out'));
+  document.getElementById('demo-zoom-in').addEventListener('click', () => zoom('in'));
+
+  // Initial render
+  updateDisplay();
+  addLog('initial', 3600000, 3600000);
+</script>
+
+</body>
+</html>

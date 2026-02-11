@@ -180,6 +180,49 @@ export function getTimeRangeForApi(from: string, to: string): { begin: string; e
   }
 }
 
+const MIN_ZOOM_DURATION_MS = 1 // 1 millisecond
+const MAX_ZOOM_DURATION_MS = 365 * 24 * 60 * 60 * 1000 // 365 days
+
+// Zoom the time range in or out, centered on the current view.
+// Zoom out doubles the duration, zoom in halves it.
+// Always returns absolute ISO strings.
+export function zoomTimeRange(
+  from: string,
+  to: string,
+  direction: 'in' | 'out'
+): { from: string; to: string } {
+  const parsed = parseTimeRange(from, to)
+  const fromMs = parsed.from.getTime()
+  const toMs = parsed.to.getTime()
+  let duration = toMs - fromMs
+
+  // Handle zero-duration edge case
+  if (duration === 0) {
+    duration = 30 * 1000
+  }
+
+  const center = fromMs + duration / 2
+  const newDuration =
+    direction === 'out'
+      ? Math.min(duration * 2, MAX_ZOOM_DURATION_MS)
+      : Math.max(duration / 2, MIN_ZOOM_DURATION_MS)
+
+  let newFrom = center - newDuration / 2
+  let newTo = center + newDuration / 2
+
+  // Clamp: don't go into the future
+  const now = Date.now()
+  if (newTo > now) {
+    newTo = now
+    newFrom = newTo - newDuration
+  }
+
+  return {
+    from: new Date(newFrom).toISOString(),
+    to: new Date(newTo).toISOString(),
+  }
+}
+
 // Format duration between two timestamps
 export function formatDuration(
   startTime: string | Date | unknown,
