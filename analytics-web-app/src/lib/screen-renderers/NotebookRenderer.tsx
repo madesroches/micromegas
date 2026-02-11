@@ -35,7 +35,7 @@ import { ResizeHandle } from '@/components/ResizeHandle'
 import { Button } from '@/components/ui/button'
 import { useNotebookVariables } from './useNotebookVariables'
 import { useCellExecution } from './useCellExecution'
-import { cleanupVariableParams } from './notebook-utils'
+import { cleanupVariableParams, resolveCellDataSource } from './notebook-utils'
 import { cleanupTimeParams, useExposeSaveRef } from '@/lib/url-cleanup-utils'
 
 // ============================================================================
@@ -455,12 +455,7 @@ export function NotebookRenderer({
           : undefined
 
     // Effective data source: per-cell overrides notebook-level, resolve $varname references
-    let cellDataSource = ('dataSource' in cell ? cell.dataSource : undefined) || dataSource
-    if (cellDataSource?.startsWith('$')) {
-      const varName = cellDataSource.slice(1)
-      const varValue = availableVariables[varName]
-      cellDataSource = (typeof varValue === 'string' && varValue) ? varValue : dataSource
-    }
+    const cellDataSource = resolveCellDataSource(cell, availableVariables, dataSource)
 
     // Build common renderer props
     const commonRendererProps = {

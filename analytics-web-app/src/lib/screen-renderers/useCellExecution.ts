@@ -3,6 +3,7 @@ import { Table } from 'apache-arrow'
 import type { CellConfig, CellState, VariableValue } from './notebook-types'
 import { getCellTypeMetadata, CellExecutionContext } from './cell-registry'
 import { streamQuery } from '@/lib/arrow-stream'
+import { resolveCellDataSource } from './notebook-utils'
 
 interface UseCellExecutionParams {
   /** Cell configurations from notebook config */
@@ -123,12 +124,7 @@ export function useCellExecution({
 
       try {
         // Create execution context - use per-cell data source with fallback to global
-        let cellDataSource = ('dataSource' in cell ? cell.dataSource : undefined) || dataSource
-        if (cellDataSource?.startsWith('$')) {
-          const varName = cellDataSource.slice(1)
-          const varValue = availableVariables[varName]
-          cellDataSource = (typeof varValue === 'string' && varValue) ? varValue : dataSource
-        }
+        const cellDataSource = resolveCellDataSource(cell, availableVariables, dataSource)
         const context: CellExecutionContext = {
           variables: availableVariables,
           timeRange,

@@ -128,7 +128,10 @@ function DatasourceDefaultValue({ value, onChange }: { value: string; onChange: 
         setSources(data)
         // Auto-set to default source if no value is set
         if (!value) {
-          onChange(data.find((s) => s.is_default)!.name)
+          const defaultSource = data.find((s) => s.is_default) ?? data[0]
+          if (defaultSource) {
+            onChange(defaultSource.name)
+          }
         }
       })
       .catch(() => {})

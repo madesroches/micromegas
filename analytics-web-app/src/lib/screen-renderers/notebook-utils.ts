@@ -20,7 +20,7 @@ export {
   variableValuesEqual,
 } from './notebook-types'
 
-import type { VariableValue } from './notebook-types'
+import type { CellConfig, VariableValue } from './notebook-types'
 import { getVariableString } from './notebook-types'
 
 import type { ScreenConfig } from '@/lib/screens-api'
@@ -309,4 +309,22 @@ export function validateMacros(
   }
 
   return { valid: errors.length === 0, errors }
+}
+
+/**
+ * Resolve a cell's data source, substituting $varname references
+ * with the corresponding variable value. Falls back to the notebook-level
+ * data source when the variable is missing or empty.
+ */
+export function resolveCellDataSource(
+  cell: CellConfig,
+  variables: Record<string, VariableValue>,
+  notebookDataSource: string | undefined,
+): string | undefined {
+  let ds = ('dataSource' in cell ? cell.dataSource : undefined) || notebookDataSource
+  if (ds?.startsWith('$')) {
+    const varValue = variables[ds.slice(1)]
+    ds = (typeof varValue === 'string' && varValue) ? varValue : notebookDataSource
+  }
+  return ds
 }
