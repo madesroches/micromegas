@@ -58,3 +58,8 @@ typescript/*/dist/
 # Grafana plugin
 grafana/dist/
 grafana/coverage/
+
+# datafusion-wasm build artifacts
+rust/datafusion-wasm/pkg/
+analytics-web-app/src/lib/datafusion-wasm/datafusion_wasm_bg.wasm
+analytics-web-app/src/lib/datafusion-wasm/datafusion_wasm_bg.wasm.d.ts
