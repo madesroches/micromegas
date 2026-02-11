@@ -1,8 +1,17 @@
 # WASM Query POC Plan
 
-## Status: Spike Complete
+## Status: Runtime Bug Found — `std::time` Panic
 
-The DataFusion WASM compilation spike is **successful**. All code is implemented and the WASM binary builds end-to-end. Remaining work is runtime validation (IPC ingestion, SQL execution, result rendering in the browser).
+The DataFusion WASM compilation spike is **successful** — all code compiles and the WASM binary builds end-to-end. However, `wasm-bindgen-test` integration tests revealed a **runtime panic**: DataFusion internally calls `std::time::Instant::now()`, which is not implemented on `wasm32-unknown-unknown`.
+
+In release mode (`panic=abort` + LTO), this panic is stripped to just "unreachable executed". The debug-mode tests give the real message:
+
+```
+panicked at library/std/src/sys/pal/wasm/../unsupported/time.rs:31:9:
+time not implemented on this platform
+```
+
+**Root cause:** DataFusion uses `std::time::Instant` for query execution metrics. The `wasm32-unknown-unknown` target has no time implementation — it's a bare WASM platform with no OS. Fix: add the `web-time` crate which provides `Instant`/`SystemTime` backed by `performance.now()` / `Date.now()`, and patch DataFusion's dependency on `std::time` via Cargo.
 
 ### Spike Results
 
@@ -16,9 +25,12 @@ The DataFusion WASM compilation spike is **successful**. All code is implemented
 | Build pipeline (build.py)? | End-to-end: cargo build → wasm-bindgen → wasm-opt → copy to web app |
 | TypeScript integration? | Clean — `tsc --noEmit` passes, all 664 frontend tests pass |
 | Backend integration? | Clean — `cargo build` + all 20 backend tests pass |
+| Runtime (WASM in browser)? | **Panics** — `std::time::Instant::now()` not available on `wasm32-unknown-unknown` |
+| WASM integration tests? | 7 tests via `wasm-bindgen-test`, all reproduce the time panic |
 
 ### What's Left to Validate (runtime)
 
+- [ ] Fix `std::time` panic (patch with `web-time` crate)
 - [ ] IPC bytes from server → `register_table` in browser
 - [ ] `execute_sql` against registered table in browser
 - [ ] IPC output from WASM → `tableFromIPC` → rendered table
@@ -346,14 +358,15 @@ Reuse the existing table rendering components from the Table screen. The local q
 | Does DataFusion compile to WASM? | Step 1 — the spike | **Yes** |
 | What's the WASM binary size? | Step 1 — measure gzipped output | **24 MB raw, 5.9 MB gzipped** |
 | What DataFusion feature flags are needed? | Step 1 — iterative feature flag discovery | **Resolved** (see Cargo.toml above) |
-| Does IPC ingestion work? | Step 4+6 — `fetchQueryIPC` → `register_table` | Pending runtime test |
-| Does local SQL execution work? | Step 6 — `execute_sql` against registered table | Pending runtime test |
-| Does IPC output deserialize correctly? | Step 6 — `tableFromIPC` on WASM output | Pending runtime test |
-| What's the latency? | Step 6 — measure register + execute + deserialize | Pending runtime test |
+| Does DataFusion run in WASM? | `wasm-bindgen-test` integration tests | **No** — `std::time` panic (fix: `web-time` crate) |
+| Does IPC ingestion work? | Step 4+6 — `fetchQueryIPC` → `register_table` | Blocked on time fix |
+| Does local SQL execution work? | Step 6 — `execute_sql` against registered table | Blocked on time fix |
+| Does IPC output deserialize correctly? | Step 6 — `tableFromIPC` on WASM output | Blocked on time fix |
+| What's the latency? | Step 6 — measure register + execute + deserialize | Blocked on time fix |
 | Does Vite lazy-loading work? | Step 3 — WASM module loads on demand | Pending runtime test |
 | Does the build pipeline work? | Step 2 — WASM artifact flows into web app | **Yes** |
-| What DataFusion features work in WASM? | Manual testing — try aggregates, joins, window functions | Pending runtime test |
-| Single-threaded perf acceptable? | Step 6 — measure query times for typical workloads | Pending runtime test |
+| What DataFusion features work in WASM? | Manual testing — try aggregates, joins, window functions | Blocked on time fix |
+| Single-threaded perf acceptable? | Step 6 — measure query times for typical workloads | Blocked on time fix |
 
 ## Scope Boundaries
 

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Build datafusion-wasm and copy artifacts to analytics-web-app."""
 
+import argparse
 import shutil
 import subprocess
 import sys
@@ -27,7 +28,19 @@ def check_tools() -> None:
             sys.exit(1)
 
 
-def main() -> None:
+def test() -> None:
+    """Run wasm-pack test in headless Chrome."""
+    if shutil.which("wasm-pack") is None:
+        print("ERROR: wasm-pack not found. Install with: cargo install wasm-pack")
+        sys.exit(1)
+
+    print("Running wasm-pack test --headless --chrome...")
+    run(["wasm-pack", "test", "--headless", "--chrome"], cwd=CRATE_DIR)
+    print("Tests passed!")
+
+
+def build() -> None:
+    """Build and package the WASM artifacts."""
     check_tools()
 
     print("Building datafusion-wasm...")
@@ -70,6 +83,19 @@ def main() -> None:
     print("  package.json")
 
     print("Done!")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Build or test datafusion-wasm")
+    parser.add_argument(
+        "--test", action="store_true", help="Run WASM integration tests in headless Chrome"
+    )
+    args = parser.parse_args()
+
+    if args.test:
+        test()
+    else:
+        build()
 
 
 if __name__ == "__main__":
