@@ -1,8 +1,11 @@
 [tool.poetry]
 name = "micromegas"
 version = "0.20.0"
-description = "Python analytics client for https://github.com/madesroches/micromegas/"
+description = "Python analytics client for the Micromegas observability platform"
 authors = ["Marc-Antoine Desroches <madesroches@gmail.com>"]
+homepage = "https://github.com/madesroches/micromegas/"
+documentation = "https://madesroches.github.io/micromegas/"
+repository = "https://github.com/madesroches/micromegas/"
 readme = "README.md"
 
 [tool.poetry.dependencies]
