@@ -346,6 +346,21 @@ def main():
             print_status("The backend process is running but not responding to health checks", "error")
             return 1
 
+        # Build WASM engine if not already built
+        wasm_binary = Path("analytics-web-app/src/lib/datafusion-wasm/datafusion_wasm_bg.wasm")
+        if not wasm_binary.exists():
+            print_status("Building datafusion-wasm...", "info")
+            try:
+                subprocess.run(
+                    [sys.executable, "rust/datafusion-wasm/build.py"],
+                    check=True,
+                )
+                print_status("WASM engine built successfully", "success")
+            except (subprocess.CalledProcessError, FileNotFoundError) as e:
+                print_status(f"WASM build failed: {e}", "warning")
+                print_status("Local Query screens will not work. Install wasm-bindgen and wasm-opt, then run: python3 rust/datafusion-wasm/build.py", "info")
+                print()
+
         # Start frontend dev server
         print_status("Starting Vite development server...", "info")
 

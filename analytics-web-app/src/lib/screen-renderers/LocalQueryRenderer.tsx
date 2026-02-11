@@ -25,6 +25,7 @@ type WasmQueryEngine = {
   register_table(name: string, ipc_bytes: Uint8Array): number
   execute_sql(sql: string): Promise<Uint8Array>
   reset(): void
+  free(): void
 }
 
 export function LocalQueryRenderer({
@@ -48,10 +49,27 @@ export function LocalQueryRenderer({
   // WASM engine
   const [engine, setEngine] = useState<WasmQueryEngine | null>(null)
   const [wasmError, setWasmError] = useState<string | null>(null)
+  const engineRef = useRef<WasmQueryEngine | null>(null)
   useEffect(() => {
+    let cancelled = false
     loadWasmEngine()
-      .then((mod) => setEngine(new mod.WasmQueryEngine()))
-      .catch((e) => setWasmError(`Failed to load WASM engine: ${e.message}`))
+      .then((mod) => {
+        const e = new mod.WasmQueryEngine()
+        if (cancelled) {
+          e.free()
+        } else {
+          engineRef.current = e
+          setEngine(e)
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) setWasmError(`Failed to load WASM engine: ${err.message}`)
+      })
+    return () => {
+      cancelled = true
+      engineRef.current?.free()
+      engineRef.current = null
+    }
   }, [])
 
   // Source query state
@@ -77,6 +95,9 @@ export function LocalQueryRenderer({
     abortRef.current = controller
     setSourceStatus('loading')
     setSourceError(null)
+    setLocalResult(null)
+    setLocalStatus('idle')
+    setLocalError(null)
     try {
       const ipcBytes = await fetchQueryIPC(
         {
