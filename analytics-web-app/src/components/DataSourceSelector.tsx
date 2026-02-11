@@ -5,6 +5,7 @@ import { getDataSourceList, DataSourceSummary } from '@/lib/data-sources-api'
 interface DataSourceSelectorProps {
   value: string
   onChange: (name: string) => void
+  datasourceVariables?: string[]
 }
 
 /**
@@ -12,7 +13,7 @@ interface DataSourceSelectorProps {
  * Wraps DataSourceSelector with a standard h4 label.
  * Returns null when DataSourceSelector is hidden (single source or loading).
  */
-export function DataSourceField({ value, onChange, className = 'mb-4' }: DataSourceSelectorProps & { className?: string }) {
+export function DataSourceField({ value, onChange, datasourceVariables, className = 'mb-4' }: DataSourceSelectorProps & { className?: string }) {
   const [sources, setSources] = useState<DataSourceSummary[]>([])
 
   useEffect(() => {
@@ -21,18 +22,20 @@ export function DataSourceField({ value, onChange, className = 'mb-4' }: DataSou
     return () => { cancelled = true }
   }, [])
 
-  // Hide entirely when selector would return null (<=1 sources)
-  if (sources.length <= 1) return null
+  const hasVariables = datasourceVariables && datasourceVariables.length > 0
+
+  // Hide entirely when selector would return null (<=1 sources and no variables)
+  if (sources.length <= 1 && !hasVariables) return null
 
   return (
     <div className={className}>
       <h4 className="text-xs font-semibold uppercase tracking-wide text-theme-text-muted mb-2">Data Source</h4>
-      <DataSourceSelector value={value} onChange={onChange} />
+      <DataSourceSelector value={value} onChange={onChange} datasourceVariables={datasourceVariables} />
     </div>
   )
 }
 
-export function DataSourceSelector({ value, onChange }: DataSourceSelectorProps) {
+export function DataSourceSelector({ value, onChange, datasourceVariables }: DataSourceSelectorProps) {
   const [sources, setSources] = useState<DataSourceSummary[]>([])
   const [error, setError] = useState<string | null>(null)
 
@@ -52,6 +55,8 @@ export function DataSourceSelector({ value, onChange }: DataSourceSelectorProps)
     }
   }, [])
 
+  const hasVariables = datasourceVariables && datasourceVariables.length > 0
+
   if (error) {
     return (
       <div className="flex items-center gap-1.5 text-xs text-accent-error" title={error}>
@@ -61,8 +66,8 @@ export function DataSourceSelector({ value, onChange }: DataSourceSelectorProps)
     )
   }
 
-  // Don't render if there's only one data source
-  if (sources.length <= 1) return null
+  // Don't render if there's only one data source and no variables
+  if (sources.length <= 1 && !hasVariables) return null
 
   return (
     <div className="flex items-center gap-1.5">
@@ -72,12 +77,32 @@ export function DataSourceSelector({ value, onChange }: DataSourceSelectorProps)
         value={value}
         onChange={(e) => onChange(e.target.value)}
       >
-        {sources.map((s) => (
-          <option key={s.name} value={s.name}>
-            {s.name}
-            {s.is_default ? ' (default)' : ''}
-          </option>
-        ))}
+        {hasVariables ? (
+          <>
+            <optgroup label="Variables">
+              {datasourceVariables.map((name) => (
+                <option key={`$${name}`} value={`$${name}`}>
+                  ${name}
+                </option>
+              ))}
+            </optgroup>
+            <optgroup label="Data Sources">
+              {sources.map((s) => (
+                <option key={s.name} value={s.name}>
+                  {s.name}
+                  {s.is_default ? ' (default)' : ''}
+                </option>
+              ))}
+            </optgroup>
+          </>
+        ) : (
+          sources.map((s) => (
+            <option key={s.name} value={s.name}>
+              {s.name}
+              {s.is_default ? ' (default)' : ''}
+            </option>
+          ))
+        )}
       </select>
     </div>
   )

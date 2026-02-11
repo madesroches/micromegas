@@ -119,7 +119,7 @@ export interface MarkdownCellConfig extends CellConfigBase {
 
 export interface VariableCellConfig extends CellConfigBase {
   type: 'variable'
-  variableType: 'combobox' | 'text' | 'expression'
+  variableType: 'combobox' | 'text' | 'expression' | 'datasource'
   sql?: string
   defaultValue?: VariableValue
   /** JavaScript expression for expression-type variables */

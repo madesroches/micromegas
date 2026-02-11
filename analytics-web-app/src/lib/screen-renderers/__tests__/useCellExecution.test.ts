@@ -870,6 +870,115 @@ describe('useCellExecution', () => {
     })
   })
 
+  describe('datasource variable resolution', () => {
+    it('should resolve $varname in cell dataSource to variable value', async () => {
+      mockStreamQuery.mockReturnValue(createSuccessResults())
+
+      const cells: CellConfig[] = [
+        {
+          type: 'variable',
+          name: 'Env',
+          variableType: 'datasource',
+          layout: { height: 'auto' },
+        },
+        {
+          type: 'table',
+          name: 'Results',
+          sql: 'SELECT * FROM logs',
+          dataSource: '$Env',
+          layout: { height: 'auto' },
+        },
+      ]
+      const variableValuesRef = createVariableValuesRef({ Env: 'production' })
+
+      const { result } = renderHook(() =>
+        useCellExecution({
+          cells,
+          timeRange: defaultTimeRange,
+          variableValuesRef,
+          setVariableValue: jest.fn(),
+          refreshTrigger: 0,
+        })
+      )
+
+      await act(async () => {
+        await result.current.executeCell(1)
+      })
+
+      expect(mockStreamQuery).toHaveBeenCalled()
+      const callArgs = mockStreamQuery.mock.calls[0][0]
+      expect(callArgs.dataSource).toBe('production')
+    })
+
+    it('should fall back to notebook dataSource when referenced variable is missing', async () => {
+      mockStreamQuery.mockReturnValue(createSuccessResults())
+
+      const cells: CellConfig[] = [
+        {
+          type: 'table',
+          name: 'Results',
+          sql: 'SELECT * FROM logs',
+          dataSource: '$Missing',
+          layout: { height: 'auto' },
+        },
+      ]
+      const variableValuesRef = createVariableValuesRef()
+
+      const { result } = renderHook(() =>
+        useCellExecution({
+          cells,
+          timeRange: defaultTimeRange,
+          variableValuesRef,
+          setVariableValue: jest.fn(),
+          refreshTrigger: 0,
+          dataSource: 'fallback-source',
+        })
+      )
+
+      await act(async () => {
+        await result.current.executeCell(0)
+      })
+
+      expect(mockStreamQuery).toHaveBeenCalled()
+      const callArgs = mockStreamQuery.mock.calls[0][0]
+      expect(callArgs.dataSource).toBe('fallback-source')
+    })
+
+    it('should use literal dataSource when it does not start with $', async () => {
+      mockStreamQuery.mockReturnValue(createSuccessResults())
+
+      const cells: CellConfig[] = [
+        {
+          type: 'table',
+          name: 'Results',
+          sql: 'SELECT * FROM logs',
+          dataSource: 'my-source',
+          layout: { height: 'auto' },
+        },
+      ]
+      const variableValuesRef = createVariableValuesRef()
+
+      const { result } = renderHook(() =>
+        useCellExecution({
+          cells,
+          timeRange: defaultTimeRange,
+          variableValuesRef,
+          setVariableValue: jest.fn(),
+          refreshTrigger: 0,
+          dataSource: 'default-source',
+        })
+      )
+
+      await act(async () => {
+        await result.current.executeCell(0)
+      })
+
+      expect(mockStreamQuery).toHaveBeenCalled()
+      const callArgs = mockStreamQuery.mock.calls[0][0]
+      expect(callArgs.dataSource).toBe('my-source')
+    })
+  })
+
   describe('loading state', () => {
     it('should set loading status before executing', async () => {
       let resolveQuery: () => void
