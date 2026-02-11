@@ -454,8 +454,13 @@ export function NotebookRenderer({
           ? `${state.data.numRows} rows`
           : undefined
 
-    // Effective data source: per-cell overrides notebook-level
-    const cellDataSource = ('dataSource' in cell ? cell.dataSource : undefined) || dataSource
+    // Effective data source: per-cell overrides notebook-level, resolve $varname references
+    let cellDataSource = ('dataSource' in cell ? cell.dataSource : undefined) || dataSource
+    if (cellDataSource?.startsWith('$')) {
+      const varName = cellDataSource.slice(1)
+      const varValue = availableVariables[varName]
+      cellDataSource = (typeof varValue === 'string' && varValue) ? varValue : dataSource
+    }
 
     // Build common renderer props
     const commonRendererProps = {
@@ -572,6 +577,16 @@ export function NotebookRenderer({
               existingNames={existingNames}
               availableColumns={cellStates[selectedCell.name]?.data?.schema.fields.map((f) => f.name)}
               defaultDataSource={dataSource}
+              datasourceVariables={
+                selectedCellIndex !== null
+                  ? cells
+                      .slice(0, selectedCellIndex)
+                      .filter((c) =>
+                        c.type === 'variable' && (c as VariableCellConfig).variableType === 'datasource'
+                      )
+                      .map((c) => c.name)
+                  : undefined
+              }
               onClose={() => setSelectedCellIndex(null)}
               onUpdate={(updates) => updateCell(selectedCellIndex!, updates)}
               onRun={() => executeCell(selectedCellIndex!)}

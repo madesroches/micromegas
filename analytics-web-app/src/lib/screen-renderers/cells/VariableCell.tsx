@@ -15,6 +15,8 @@ import { DocumentationLink, QUERY_GUIDE_URL } from '@/components/DocumentationLi
 import { SyntaxEditor } from '@/components/SyntaxEditor'
 import { substituteMacros, validateMacros, DEFAULT_SQL } from '../notebook-utils'
 import { evaluateVariableExpression } from '../notebook-expression-eval'
+import { getDataSourceList } from '@/lib/data-sources-api'
+import { DataSourceField } from '@/components/DataSourceSelector'
 
 /**
  * Parse a default value string into a VariableValue.
@@ -140,7 +142,7 @@ export function VariableTitleBarContent(props: CellRendererProps) {
 
   return (
     <div className="flex items-center">
-      {type === 'combobox' && (
+      {(type === 'combobox' || type === 'datasource') && (
         <select
           value={displayValue}
           onChange={(e) => handleComboboxChange(e.target.value)}
@@ -180,6 +182,7 @@ function VariableCellEditor({ config, onChange, variables, timeRange }: CellEdit
   const variableType = varConfig.variableType || 'combobox'
   const isCombobox = variableType === 'combobox'
   const isExpression = variableType === 'expression'
+  const isDatasource = variableType === 'datasource'
 
   // Validate macro references in SQL (only for combobox type)
   const validationErrors = useMemo(() => {
@@ -197,7 +200,7 @@ function VariableCellEditor({ config, onChange, variables, timeRange }: CellEdit
         <select
           value={variableType}
           onChange={(e) => {
-            const newType = e.target.value as 'combobox' | 'text' | 'expression'
+            const newType = e.target.value as VariableCellConfig['variableType']
             const updates: Partial<VariableCellConfig> = { variableType: newType }
             // Seed expression from text default value when switching to expression
             if (newType === 'expression' && !varConfig.expression && varConfig.defaultValue) {
@@ -213,11 +216,17 @@ function VariableCellEditor({ config, onChange, variables, timeRange }: CellEdit
           <option value="combobox">Dropdown (from SQL)</option>
           <option value="text">Text Input</option>
           <option value="expression">JavaScript Expression</option>
+          <option value="datasource">Data Source</option>
         </select>
       </div>
 
       {isCombobox && (
         <>
+          <DataSourceField
+            value={varConfig.dataSource || ''}
+            onChange={(ds) => onChange({ ...varConfig, dataSource: ds })}
+            className=""
+          />
           <div>
             <label className="block text-xs font-medium text-theme-text-secondary uppercase mb-1.5">
               SQL Query
@@ -274,7 +283,17 @@ function VariableCellEditor({ config, onChange, variables, timeRange }: CellEdit
         </>
       )}
 
-      {!isExpression && (
+      {isDatasource && (
+        <div className="text-xs text-theme-text-muted space-y-1">
+          <div>
+            Populates the dropdown with available data sources. Use{' '}
+            <code className="text-theme-text-primary">${varConfig.name || 'varname'}</code>{' '}
+            in a query cell&apos;s data source field to route queries to the selected source.
+          </div>
+        </div>
+      )}
+
+      {!isExpression && !isDatasource && (
         <div>
           <label className="block text-xs font-medium text-theme-text-secondary uppercase mb-1.5">
             Default Value
@@ -340,6 +359,20 @@ export const variableMetadata: CellTypeMetadata = {
         variables,
       })
       return { data: null, expressionResult: result }
+    }
+
+    // Datasource variables: fetch available data sources from API
+    if (varConfig.variableType === 'datasource') {
+      try {
+        const sources = await getDataSourceList()
+        const options = sources.map((s) => ({
+          label: s.is_default ? `${s.name} (default)` : s.name,
+          value: s.name,
+        }))
+        return { data: null, variableOptions: options }
+      } catch {
+        return { data: null, variableOptions: [] }
+      }
     }
 
     // Only combobox variables need SQL execution

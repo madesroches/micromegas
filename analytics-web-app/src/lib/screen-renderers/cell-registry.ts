@@ -42,7 +42,7 @@ export interface CellRendererProps {
   /** For variable cells: update value */
   onValueChange?: (value: VariableValue) => void
   /** For variable cells: variable type */
-  variableType?: 'combobox' | 'text' | 'expression'
+  variableType?: 'combobox' | 'text' | 'expression' | 'datasource'
   /** For variable cells (combobox): available options from query */
   variableOptions?: { label: string; value: VariableValue }[]
   /** Callback for drag-to-zoom time selection (chart and property timeline cells) */

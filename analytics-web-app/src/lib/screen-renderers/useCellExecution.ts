@@ -123,7 +123,12 @@ export function useCellExecution({
 
       try {
         // Create execution context - use per-cell data source with fallback to global
-        const cellDataSource = ('dataSource' in cell ? cell.dataSource : undefined) || dataSource
+        let cellDataSource = ('dataSource' in cell ? cell.dataSource : undefined) || dataSource
+        if (cellDataSource?.startsWith('$')) {
+          const varName = cellDataSource.slice(1)
+          const varValue = availableVariables[varName]
+          cellDataSource = (typeof varValue === 'string' && varValue) ? varValue : dataSource
+        }
         const context: CellExecutionContext = {
           variables: availableVariables,
           timeRange,
