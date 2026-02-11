@@ -4,7 +4,7 @@
 
 Add support for SQL queries that reference other cells' results in notebooks. This enables iterative data exploration where Cell B can query Cell A's output by name.
 
-**Approach:** Each notebook owns a client-side DataFusion WASM context. Remote queries fetch data from the server and register the result locally. Local queries execute entirely in the browser against accumulated cell results.
+**Approach:** Each notebook owns a client-side DataFusion WASM context that serves as the **single source of truth** for all cell data. Remote queries fetch raw IPC bytes from the server and register them directly in the WASM engine — no JS-side Arrow decoding. Local queries execute entirely in WASM against accumulated cell results. Renderers read data back from WASM via Arrow IPC initially, with a path to Arrow C Data Interface (FFI) zero-copy views implemented in our own code.
 
 See [engine_analysis.md](engine_analysis.md) for the engine comparison and research that informed this plan. The analysis recommends a hybrid approach starting with server-side session caching, but that underestimates the complexity of managing stateful sessions across multiple server processes (sticky routing or shared session state). Client-side execution avoids this entirely — the state lives in the browser, dies with the tab.
 
@@ -66,11 +66,55 @@ interface HttpQuery {
 }
 ```
 
-### Every Cell Registers Its Result
+### WASM Engine as Single Source of Truth
 
-Every cell that produces data — regardless of query source — registers its result as a named table in the notebook's local DataFusion context. This builds up a queryable namespace as cells execute top-to-bottom.
+Every cell that produces data — regardless of query source — stores its result in the notebook's DataFusion WASM context. The WASM engine is the single location where cell data lives. Renderers don't receive a separate copy of the data; they get Arrow FFI views directly into WASM memory. This eliminates duplicate storage and unnecessary serialization round-trips.
 
 ## Technical Design
+
+### Arrow Data Flow
+
+The architecture routes all data through the WASM engine. Data enters as IPC bytes (from the server or from local query execution) and exits as Arrow FFI views that JS renderers consume directly.
+
+**Remote query flow (Phase 1 — IPC output):**
+```
+Server (FlightSQL)
+  → HTTP response (custom JSON-framed Arrow IPC)
+  → fetchQueryIPC() strips JSON frames, collects raw IPC bytes
+  → engine.register_table(name, ipcBytes)  [1 copy: wasm-bindgen JS→WASM]
+  → Rust StreamReader parses IPC into RecordBatches  [near-zero-copy: slices into buffer]
+  → Data lives in WASM memory as MemTable
+  → Renderer reads: engine.read_table_ipc(name)  [IPC serialize + wasm-bindgen copy out]
+  → tableFromIPC(ipcBytes) → JS Arrow Table
+```
+
+**Local query flow (Phase 1 — IPC output):**
+```
+engine.execute_sql(sql, registerAs)
+  → DataFusion executes query in WASM  [data stays in WASM]
+  → Result registered as named MemTable  [no boundary crossing]
+  → Returns IPC bytes  [IPC serialize + wasm-bindgen copy out]
+  → tableFromIPC(ipcBytes) → JS Arrow Table
+```
+
+**Future: FFI output (our own implementation):**
+```
+  → engine.get_table_ffi(name)  [0 copies: FFI struct pointers]
+  → Our FFI reader creates JS Arrow Table from WASM memory views  [1 copy or zero-copy]
+```
+
+**Copy count comparison:**
+
+| Path | Without WASM (today) | Phase 1 (WASM + IPC output) | Future (WASM + FFI output) |
+|---|---|---|---|
+| Server → WASM | N/A (no WASM) | 1-2 (wasm-bindgen + StreamReader) | 1-2 |
+| WASM → renderer | N/A | 2-3 (StreamWriter + wasm-bindgen + tableFromIPC) | 0-1 (FFI) |
+| Server → renderer (total) | 1 (streamQuery decodes directly) | 3-5 | 2-3 |
+| Local query → renderer | N/A | 2-3 | 0-1 |
+
+Phase 1 adds copies on the output path compared to today's direct decode, but enables the core capability (cross-cell references via WASM context). The input path saves the JS decode + re-encode that the original plan required. The FFI output path (implemented as our own ~200 lines of TypeScript, not an external dependency) recovers the output path cost later.
+
+The key architectural win is that data lives in one place (WASM) and all query execution flows through the engine. The output serialization format (IPC vs FFI) is an internal detail that can change without affecting the rest of the system.
 
 ### Notebook DataFusion Context
 
@@ -80,12 +124,19 @@ Each notebook owns a `WasmQueryEngine` instance (DataFusion `SessionContext` com
 // Notebook-level context, created once per notebook mount
 const engine = new WasmQueryEngine()
 
-// After any cell executes and produces data:
-engine.register_table("cell_name", tableToIPC(result, 'stream'))
+// Remote query: IPC bytes from server go straight to WASM
+const ipcBytes = await fetchQueryIPC(params, signal)
+engine.register_table("errors", ipcBytes)
 
-// Local queries execute directly:
-const ipcBytes = await engine.execute_sql("SELECT * FROM errors GROUP BY host")
-const result = tableFromIPC(ipcBytes)
+// Local query: executes in WASM, result registered automatically
+const resultIPC = await engine.execute_sql(
+  "SELECT host, count(*) FROM errors GROUP BY host", "by_host"
+)
+const table = tableFromIPC(resultIPC)
+
+// Read a registered table back for rendering
+const errorsIPC = engine.read_table_ipc("errors")
+const errorsTable = tableFromIPC(errorsIPC)
 ```
 
 On re-execution (e.g., time range change), the context is reset and cells re-execute top-to-bottom, re-registering their results.
@@ -140,6 +191,191 @@ function migrateCellConfig(cell: QueryCellConfigV1): QueryCellConfigV2 {
 
 After migration, all runtime code works exclusively with the V2 format. The migration runs once per load and the upgraded config is saved back on the next notebook save.
 
+### DataFusion WASM Engine
+
+Custom wasm-bindgen wrapper around DataFusion's `SessionContext` + `MemTable`. Phase 1 uses IPC for data output (proven, simple). The API is designed so FFI output can be added alongside without changing callers.
+
+```rust
+#[wasm_bindgen]
+pub struct WasmQueryEngine {
+    ctx: SessionContext,
+}
+
+#[wasm_bindgen]
+impl WasmQueryEngine {
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> Self {
+        let config = SessionConfig::new()
+            .with_target_partitions(1);
+        let ctx = SessionContext::new_with_config(config);
+        Self { ctx }
+    }
+
+    /// Register Arrow IPC bytes as a named table.
+    /// IPC bytes come directly from the server — no JS-side decoding needed.
+    pub fn register_table(&self, name: &str, ipc_bytes: &[u8]) -> Result<(), JsValue> {
+        let _ = self.ctx.deregister_table(name);
+
+        let reader = StreamReader::try_new(Cursor::new(ipc_bytes), None)
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        let schema = reader.schema();
+        let batches: Vec<RecordBatch> = reader.collect::<Result<_, _>>()
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        let table = MemTable::try_new(schema, vec![batches])
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        self.ctx.register_table(name, Arc::new(table))
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        Ok(())
+    }
+
+    /// Execute SQL, register result as named table, return IPC bytes.
+    pub async fn execute_sql(
+        &self,
+        sql: &str,
+        register_as: &str,
+    ) -> Result<Vec<u8>, JsValue> {
+        let df = self.ctx.sql(sql).await
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        let schema: Schema = df.schema().into();
+        let batches = df.collect().await
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+
+        // Register result as named table
+        let _ = self.ctx.deregister_table(register_as);
+        let mem_table = MemTable::try_new(Arc::new(schema.clone()), vec![batches.clone()])
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        self.ctx.register_table(register_as, Arc::new(mem_table))
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+
+        // Serialize result to IPC for JS consumption
+        serialize_to_ipc(&schema, &batches)
+    }
+
+    /// Read a registered table's data as IPC bytes.
+    pub fn read_table_ipc(&self, name: &str) -> Result<Vec<u8>, JsValue> {
+        // Read batches and schema from registered MemTable
+        // Serialize to IPC stream bytes
+        // ...
+    }
+
+    pub fn deregister_table(&self, name: &str) -> Result<(), JsValue> {
+        self.ctx.deregister_table(name)
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        Ok(())
+    }
+
+    pub fn reset(&self) {
+        for name in self.ctx.table_names() {
+            let _ = self.ctx.deregister_table(&name);
+        }
+    }
+}
+
+fn serialize_to_ipc(schema: &Schema, batches: &[RecordBatch]) -> Result<Vec<u8>, JsValue> {
+    let mut buf = Vec::new();
+    let mut writer = StreamWriter::try_new(&mut buf, schema)
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+    for batch in batches {
+        writer.write(batch).map_err(|e| JsValue::from_str(&e.to_string()))?;
+    }
+    writer.finish().map_err(|e| JsValue::from_str(&e.to_string()))?;
+    Ok(buf)
+}
+```
+
+**Future: Arrow FFI output** — When profiling shows the IPC serialize/copy overhead matters, add FFI-based output methods alongside the IPC ones. The FFI reader on the JS side is ~200 lines of TypeScript implementing the [Arrow C Data Interface](https://arrow.apache.org/docs/format/CDataInterface.html) spec — reading `FFI_ArrowArray`/`FFI_ArrowSchema` structs from WASM memory via `DataView` and building `arrow-js` arrays from buffer pointers. No external dependency needed. See [Arrow FFI Output Path](#arrow-ffi-output-path-future) in Considerations.
+
+### Data Boundary
+
+**JS → WASM (register_table):** Arrow IPC bytes via `&[u8]`. wasm-bindgen copies the bytes into WASM linear memory. This is unavoidable — WASM cannot read JS heap memory. IPC is the right format here because the server already produces it, and we skip JS-side decoding entirely.
+
+**WASM → JS (execute_sql / read_table_ipc):** Arrow IPC bytes via `Vec<u8>`. Rust serializes RecordBatches to IPC, wasm-bindgen copies the bytes out, JS decodes via `tableFromIPC()`. This is the proven path (same approach as DuckDB-WASM).
+
+**Future: WASM → JS via FFI** — see [Arrow FFI Output Path](#arrow-ffi-output-path-future) in Considerations for the zero-copy upgrade path.
+
+### Fetch Pipeline Changes
+
+The current fetch pipeline (`arrow-stream.ts`) decodes Arrow IPC into JS Arrow objects. For the WASM-first architecture, remote queries need the raw IPC bytes instead.
+
+Current `streamQuery()` → `executeSql()` flow:
+```
+HTTP response → BufferedReader → strip JSON frames → push IPC bytes to queue
+  → RecordBatchReader decodes into JS RecordBatch objects → collect into Table
+```
+
+New `fetchQueryIPC()` flow:
+```
+HTTP response → BufferedReader → strip JSON frames → collect raw IPC bytes
+  → return Uint8Array (no JS-side Arrow decoding)
+```
+
+```typescript
+/**
+ * Fetches query results as raw Arrow IPC bytes, without JS-side decoding.
+ * The bytes go directly to the WASM engine for registration.
+ */
+export async function fetchQueryIPC(
+  params: StreamQueryParams,
+  signal?: AbortSignal,
+): Promise<Uint8Array> {
+  const response = await authenticatedFetch(`${getApiBase()}/query-stream`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      sql: params.sql,
+      params: params.params || {},
+      begin: params.begin,
+      end: params.end,
+      data_source: params.dataSource || '',
+    }),
+    signal,
+  })
+
+  // ... HTTP error handling (same as streamQuery) ...
+
+  const bufferedReader = new BufferedReader(response.body!.getReader())
+  const ipcChunks: Uint8Array[] = []
+  let totalSize = 0
+
+  try {
+    while (true) {
+      const line = await bufferedReader.readLine()
+      if (line === null) break
+
+      const frame: Frame = JSON.parse(line)
+
+      switch (frame.type) {
+        case 'schema':
+        case 'batch': {
+          const bytes = await bufferedReader.readBytes(frame.size)
+          ipcChunks.push(bytes)
+          totalSize += bytes.length
+          break
+        }
+        case 'done': {
+          // Concatenate IPC chunks into single buffer
+          const result = new Uint8Array(totalSize)
+          let offset = 0
+          for (const chunk of ipcChunks) {
+            result.set(chunk, offset)
+            offset += chunk.length
+          }
+          return result
+        }
+        case 'error':
+          throw new Error(frame.message)
+      }
+    }
+  } finally {
+    bufferedReader.release()
+  }
+
+  throw new Error('Unexpected end of stream')
+}
+```
+
+The existing `streamQuery()` and `executeStreamQuery()` remain for non-notebook callers (other screen types that don't use the WASM engine).
+
 ### Execution Context Changes
 
 Current (`cell-registry.ts`):
@@ -181,23 +417,28 @@ const context: CellExecutionContext = {
   variables: availableVariables,
   timeRange,
   runQuery: async (sql: string) => {
-    let result: Table
-
     if (isLocal) {
-      const ipcBytes = await engine.execute_sql(sql)
-      result = tableFromIPC(ipcBytes)
+      // Execute in WASM, register result, return IPC bytes
+      const ipcBytes = await engine.execute_sql(sql, cellName)
+      return tableFromIPC(ipcBytes)
     } else {
-      result = await executeSql(sql, timeRange, abortSignal, cellDataSource)
+      // Fetch raw IPC bytes from server, register in WASM
+      const ipcBytes = await fetchQueryIPC(
+        { sql, params: { begin: timeRange.begin, end: timeRange.end },
+          begin: timeRange.begin, end: timeRange.end, dataSource: cellDataSource },
+        abortSignal
+      )
+      engine.register_table(cellName, ipcBytes)
+
+      // Read back via IPC for the renderer
+      const resultIPC = engine.read_table_ipc(cellName)
+      return tableFromIPC(resultIPC)
     }
-
-    // Every cell's result is registered in the local context
-    // (even empty results — downstream cells can still reference the schema)
-    engine.register_table(cellName, tableToIPC(result, 'stream'))
-
-    return result
   },
 }
 ```
+
+Both paths end the same way: data lives in WASM, renderer gets a JS Table from IPC deserialization. The output path (IPC vs FFI) is an internal detail that can be swapped later without changing the `runQuery` signature or any cell execute functions.
 
 ### Cell Result Registration
 
@@ -205,7 +446,7 @@ Both remote and local query results are registered:
 
 ```sql
 -- Cell "errors": source=remote
--- Fetches from data lake via FlightSQL, result registered as table "errors"
+-- Fetches from data lake via FlightSQL, IPC bytes registered directly in WASM
 SELECT time, host, level, msg FROM log_entries WHERE level IN ('ERROR', 'FATAL')
 
 -- Cell "by_host": source=local
@@ -218,85 +459,6 @@ SELECT host, count(*) as error_count FROM errors GROUP BY host ORDER BY error_co
 SELECT * FROM by_host LIMIT 10
 ```
 
-### DataFusion WASM Engine
-
-Custom wasm-bindgen wrapper around DataFusion's `SessionContext` + `MemTable`:
-
-```rust
-#[wasm_bindgen]
-pub struct WasmQueryEngine {
-    ctx: SessionContext,
-}
-
-#[wasm_bindgen]
-impl WasmQueryEngine {
-    #[wasm_bindgen(constructor)]
-    pub fn new() -> Self {
-        let config = SessionConfig::new()
-            .with_target_partitions(1);
-        let ctx = SessionContext::new_with_config(config);
-        Self { ctx }
-    }
-
-    pub fn register_table(&self, name: &str, ipc_bytes: &[u8]) -> Result<(), JsValue> {
-        // Deregister first in case the table already exists (cell re-execution)
-        let _ = self.ctx.deregister_table(name);
-
-        // Deserialize Arrow IPC → Vec<RecordBatch> → MemTable → register
-        // StreamReader schema is available even when there are zero batches
-        let reader = StreamReader::try_new(Cursor::new(ipc_bytes), None)
-            .map_err(|e| JsValue::from_str(&e.to_string()))?;
-        let schema = reader.schema();
-        let batches: Vec<RecordBatch> = reader.collect::<Result<_, _>>()
-            .map_err(|e| JsValue::from_str(&e.to_string()))?;
-        let table = MemTable::try_new(schema, vec![batches])
-            .map_err(|e| JsValue::from_str(&e.to_string()))?;
-        self.ctx.register_table(name, Arc::new(table))
-            .map_err(|e| JsValue::from_str(&e.to_string()))?;
-        Ok(())
-    }
-
-    pub async fn execute_sql(&self, sql: &str) -> Result<Vec<u8>, JsValue> {
-        let df = self.ctx.sql(sql).await
-            .map_err(|e| JsValue::from_str(&e.to_string()))?;
-        // Get schema before collect() consumes the DataFrame
-        let schema: Schema = df.schema().into();
-        let batches = df.collect().await
-            .map_err(|e| JsValue::from_str(&e.to_string()))?;
-        // Serialize to Arrow IPC — works even with zero batches
-        let mut buf = Vec::new();
-        let mut writer = StreamWriter::try_new(&mut buf, &schema)
-            .map_err(|e| JsValue::from_str(&e.to_string()))?;
-        for batch in &batches {
-            writer.write(batch).map_err(|e| JsValue::from_str(&e.to_string()))?;
-        }
-        writer.finish().map_err(|e| JsValue::from_str(&e.to_string()))?;
-        Ok(buf)
-    }
-
-    pub fn deregister_table(&self, name: &str) -> Result<(), JsValue> {
-        self.ctx.deregister_table(name)
-            .map_err(|e| JsValue::from_str(&e.to_string()))?;
-        Ok(())
-    }
-
-    pub fn reset(&self) {
-        for name in self.ctx.table_names() {
-            let _ = self.ctx.deregister_table(&name);
-        }
-    }
-}
-```
-
-### Arrow IPC Boundary
-
-Data crosses the JS↔WASM boundary via Arrow IPC serialization:
-
-- **JS → WASM** (register_table): `tableToIPC(table, 'stream')` → `Uint8Array` → Rust `StreamReader`
-- **WASM → JS** (execute_sql): Rust `StreamWriter` → `Vec<u8>` → `tableFromIPC(bytes)`
-
-For notebook-scale data (thousands to low millions of rows), IPC serialization is ~10ms for a million-row table. The app already uses IPC throughout (`arrow-stream.ts`).
-
 ### Variable Substitution
 
 Macro substitution (`$begin`, `$end`, `$variable`) happens client-side before the query reaches either path. For remote queries this is the existing behavior. For local queries, `substituteMacros()` runs on the SQL string before passing it to `engine.execute_sql()`. The WASM engine sees fully resolved SQL only.
@@ -307,29 +469,30 @@ Macro substitution (`$begin`, `$end`, `$variable`) happens client-side before th
 
 Build the WASM engine — this is the foundation everything else depends on.
 
-1. **Spike (1-2 days):** Validate DataFusion compiles to `wasm32-unknown-unknown` with `default-features = false, features = ["sql"]`. Build a minimal test crate, attempt compilation, assess dependency wrangling.
-2. **If spike succeeds:** Build the `WasmQueryEngine` wasm-bindgen wrapper (~200-400 lines of Rust). Set up build pipeline (`cargo build --target wasm32-unknown-unknown`, `wasm-bindgen`, `wasm-opt`).
+1. **Spike:** Validate DataFusion compiles to `wasm32-unknown-unknown` with `default-features = false, features = ["sql"]`. Build a minimal test crate, attempt compilation, assess dependency wrangling.
+2. **If spike succeeds:** Build the `WasmQueryEngine` wasm-bindgen wrapper with IPC-based input/output. Set up build pipeline (`cargo build --target wasm32-unknown-unknown`, `wasm-bindgen`, `wasm-opt`).
 3. **If spike fails:** Fall back to DuckDB WASM (`npm install @duckdb/duckdb-wasm`). Different SQL dialect but battle-tested. Arrow version mismatch (`apache-arrow@17` vs app's `@21`) handled via IPC serialization. The rest of the plan still works — only the engine implementation changes.
 4. Integrate into analytics-web-app (Vite config, lazy-load WASM module).
 
-**Expected bundle size:** 4-6 MB gzipped (custom DataFusion) or 5-10 MB (DuckDB). Lazy-loaded only when a notebook is open.
+**Expected bundle size:** 4-6 MB gzipped (custom DataFusion) or 5-10 MB (DuckDB). Lazy-loaded only when a notebook is open. No additional JS dependencies beyond what the app already has.
 
 Files: new `rust/datafusion-wasm/` crate, Vite config, new `lib/wasm-engine.ts`
 
-### Phase 2: Notebook Context + Local Queries
+### Phase 2: Fetch Pipeline + Notebook Context
 
-Wire the WASM engine into the notebook execution loop.
+Wire the WASM engine into the notebook execution loop with the WASM-first data flow.
 
-1. Add `Query` type union (`RemoteQuery | LocalQuery`) to `notebook-types.ts`
-2. Add versioned `QueryCellConfigV2` with `query: Query` field
-3. Add V1→V2 migration (runs on notebook load, saved back on next save). Migration only applies to `QueryCellConfig` cells — `MarkdownCellConfig`, `VariableCellConfig`, and `PerfettoExportCellConfig` are unchanged.
-4. Create `WasmQueryEngine` instance per notebook in `useCellExecution.ts`
-5. Update `useCellExecution.ts` to dispatch by source and register every cell's result. The `CellExecutionContext.runQuery` signature stays as `(sql: string) => Promise<Table>` — individual cell execute functions require no changes.
-6. Reset the engine context on full re-execution (time range change, refresh)
-7. Deregister tables on cell deletion
-8. Update `CellRendererProps.sql` to derive from `query.sql` (the prop stays as `string` for backward compatibility with renderers — the V2→prop mapping extracts `config.query.sql`)
+1. Add `fetchQueryIPC()` to `arrow-stream.ts` — strips JSON frames, returns raw IPC bytes without JS-side Arrow decoding. Existing `streamQuery()` / `executeStreamQuery()` stay for non-notebook callers.
+2. Add `Query` type union (`RemoteQuery | LocalQuery`) to `notebook-types.ts`
+3. Add versioned `QueryCellConfigV2` with `query: Query` field
+4. Add V1→V2 migration (runs on notebook load, saved back on next save). Migration only applies to `QueryCellConfig` cells — `MarkdownCellConfig`, `VariableCellConfig`, and `PerfettoExportCellConfig` are unchanged.
+5. Create `WasmQueryEngine` instance per notebook in `useCellExecution.ts`
+6. Update `useCellExecution.ts` to dispatch by source: remote queries use `fetchQueryIPC()` + `register_table()`, local queries use `execute_sql()`. Both paths return Tables via FFI. The `CellExecutionContext.runQuery` signature stays as `(sql: string) => Promise<Table>` — individual cell execute functions require no changes.
+7. Reset the engine context on full re-execution (time range change, refresh)
+8. Deregister tables on cell deletion
+9. Update `CellRendererProps.sql` to derive from `query.sql` (the prop stays as `string` for backward compatibility with renderers — the V2→prop mapping extracts `config.query.sql`)
 
-Files: `notebook-types.ts`, `cell-registry.ts`, `useCellExecution.ts`, `NotebookRenderer.tsx`, new `lib/wasm-engine.ts`
+Files: `arrow-stream.ts`, `notebook-types.ts`, `cell-registry.ts`, `useCellExecution.ts`, `NotebookRenderer.tsx`, `lib/wasm-engine.ts`
 
 ### Phase 3: UI for Source Selection
 
@@ -366,11 +529,27 @@ Files: `rust/datafusion-wasm/` crate, UDF registration
 
 The WASM engine adds 4-6 MB gzipped, lazy-loaded only when a notebook is open. No impact on other screen types.
 
-### Memory Limits
+### Memory
 
-Browser memory is limited. Large datasets from remote queries accumulate in both the JS Arrow Table and the WASM engine's MemTable. Consider:
-- Warning when total registered table size exceeds threshold (e.g., 100MB)
-- Row count limits on remote query results that get registered
+The WASM engine is the single source of truth for cell data. With IPC output, renderers also hold a decoded JS Table copy, so peak memory per cell is ~2x the data size (WASM MemTable + JS Table). The JS Table can be garbage-collected when the component unmounts.
+
+Consider warning when total registered table size exceeds a threshold (e.g., 100MB).
+
+### Arrow FFI Output Path (Future)
+
+When profiling shows the IPC output overhead matters, add FFI-based output methods to the WASM engine. This eliminates IPC serialization/deserialization on the output path, reducing copies from 2-3 to 0-1.
+
+The Arrow C Data Interface is a stable, simple spec: two C structs (`ArrowArray`, `ArrowSchema`) containing buffer pointers and metadata. Implementing a JS reader is ~200 lines of TypeScript:
+
+1. Rust side: `arrow::ffi::to_ffi()` converts RecordBatch to FFI structs pointing at existing WASM memory (0 copies)
+2. `FFITable` wrapper exposes pointer addresses via wasm-bindgen
+3. JS side: read FFI structs from WASM memory via `DataView`, follow buffer pointers, build `arrow-js` `Data` objects from `TypedArray` views
+
+With `copy=true` (recommended): create JS-owned copies of each buffer — immune to `memory.grow()` invalidation. With `copy=false` (zero-copy): create `TypedArray` views directly into WASM memory — invalidated if WASM allocates and triggers `memory.grow()`.
+
+**memory.grow() risk with copy=false:** WASM linear memory is an `ArrayBuffer` exposed to JS. When `memory.grow()` is called, the old buffer is detached and all views become invalid. The safe window for zero-copy is within a single synchronous microtask (no intervening WASM calls). React rendering is synchronous within a frame, so render-only access is viable, but any concurrent cell execution could invalidate views.
+
+**No external dependency needed.** The FFI spec is stable and small. Existing references for implementation: [arrow-js-ffi](https://github.com/kylebarron/arrow-js-ffi) (Kyle Barron, ~200 lines core), [Arrow C Data Interface spec](https://arrow.apache.org/docs/format/CDataInterface.html).
 
 ### Context Lifecycle
 
@@ -438,6 +617,9 @@ cells:
 ## References
 
 - [engine_analysis.md](engine_analysis.md) — Engine comparison, WASM research, DuckDB analysis
+- [Arrow C Data Interface spec](https://arrow.apache.org/docs/format/CDataInterface.html) — The FFI struct format (for future zero-copy output path)
+- [arrow-js-ffi](https://github.com/kylebarron/arrow-js-ffi) — Reference implementation of JS-side FFI reader (~200 lines core)
+- [Zero-copy Apache Arrow with WebAssembly](https://observablehq.com/@kylebarron/zero-copy-apache-arrow-with-webassembly) — Kyle Barron's detailed walkthrough of the approach
 - [datafusion-wasm-bindings](https://github.com/datafusion-contrib/datafusion-wasm-bindings) — Existing WASM bindings (not usable as-is, see analysis doc)
 - [datafusion-wasm-playground](https://github.com/datafusion-contrib/datafusion-wasm-playground) — Live demo
 - [DataFusion Discussion #9834](https://github.com/apache/datafusion/discussions/9834) — Web playground discussion
