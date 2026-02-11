@@ -1,8 +1,8 @@
 # WASM Query POC Plan
 
-## Status: Runtime Validated — All WASM Integration Tests Pass
+## Status: POC Complete — End-to-End Validated in Browser
 
-The DataFusion WASM stack is **fully working**: compilation, IPC ingestion, SQL execution (including aggregates), and IPC output all pass in a real browser (headless Firefox via `wasm-bindgen-test`).
+The DataFusion WASM stack is **fully working end-to-end**: server IPC bytes flow through `fetchQueryIPC`, into WASM `register_table`, local SQL executes against registered data, IPC output deserializes via `tableFromIPC`, and results render in the browser. All 8 WASM integration tests pass (headless Firefox via `wasm-bindgen-test`), and the Local Query screen works manually against real data.
 
 ### Runtime Bug Found and Fixed
 
@@ -33,21 +33,23 @@ Cargo feature unification propagates this to all transitive chrono users.
 | Build pipeline (build.py)? | End-to-end: cargo build → wasm-bindgen → wasm-opt → copy to web app |
 | TypeScript integration? | Clean — `tsc --noEmit` passes, all 664 frontend tests pass |
 | Backend integration? | Clean — `cargo build` + all 20 backend tests pass |
-| Runtime (WASM in browser)? | **Yes** — all 7 integration tests pass (engine creation, IPC register, SQL, aggregates, error paths, reset) |
-| WASM integration tests? | 7 tests via `wasm-bindgen-test` in headless Firefox, all pass |
+| Runtime (WASM in browser)? | **Yes** — all 8 integration tests pass (engine creation, IPC register, SQL, aggregates, error paths, IPC format validation, reset) |
+| WASM integration tests? | 8 tests via `wasm-bindgen-test` in headless Firefox, all pass |
+| End-to-end (server → WASM → render)? | **Yes** — Local Query screen works with real data |
 
-### What's Left to Validate (runtime)
+### Validation Checklist
 
 - [x] Fix `std::time` panic → chrono `wasmbind` feature
 - [x] `register_table` with Arrow IPC bytes in WASM → works (test_register_table)
 - [x] `execute_sql` against registered table in WASM → works (test_execute_sql)
 - [x] IPC round-trip: register → query → parse results → verify → works (test_execute_sql, test_aggregate_query)
 - [x] Aggregates (GROUP BY, COUNT, ORDER BY) in WASM → works (test_aggregate_query)
-- [ ] IPC bytes from server → `register_table` in browser (end-to-end with real data)
-- [ ] IPC output from WASM → `tableFromIPC` → rendered table
-- [ ] Lazy-loading latency in browser
-- [ ] Joins, window functions in WASM DataFusion
-- [ ] Single-threaded query performance for typical workloads
+- [x] IPC bytes from server → `register_table` in browser (end-to-end with real data)
+- [x] IPC output from WASM → `tableFromIPC` → rendered table
+- [x] Lazy-loading WASM module via Vite → works
+- [x] IPC streaming format validated — regression test confirms file-format magic prefix is rejected
+- [ ] Joins, window functions in WASM DataFusion (not needed for POC, can test incrementally)
+- [ ] Single-threaded query performance benchmarks (acceptable for POC workloads, formal benchmarks deferred)
 
 ## Goal
 
@@ -183,7 +185,7 @@ impl WasmQueryEngine {
     pub fn new() -> Self { ... }
 
     /// Register Arrow IPC stream bytes as a named table.
-    /// `ipc_bytes` must be a complete Arrow IPC stream (magic + schema + batches + EOS).
+    /// `ipc_bytes` must be a complete Arrow IPC streaming-format buffer (schema + batches + EOS).
     /// Returns the number of rows registered.
     pub fn register_table(&self, name: &str, ipc_bytes: &[u8]) -> Result<u32, JsValue> { ... }
 
@@ -260,13 +262,13 @@ export async function fetchQueryIPC(
 ): Promise<Uint8Array> {
   // Same HTTP setup as streamQuery (POST /api/query-stream)
   // Parse JSON frames, collect raw IPC message bytes (schema + batches)
-  // Assemble into a valid Arrow IPC stream format:
-  //   magic ("ARROW1") + schema message + batch messages + EOS continuation (0xFFFFFFFF + 0x00000000)
+  // Assemble into Arrow IPC streaming format:
+  //   schema message + batch messages + EOS continuation (0xFFFFFFFF + 0x00000000)
   // Return complete IPC stream as Uint8Array
 }
 ```
 
-**IPC format contract:** `fetchQueryIPC` returns a complete Arrow IPC stream — not individual messages or raw concatenated bytes. This matches what `arrow::ipc::reader::StreamReader` expects on the Rust/WASM side for `register_table`. The server's JSON-framed protocol sends individual IPC messages (one schema frame + N batch frames); `fetchQueryIPC` assembles them into a valid stream by adding the IPC magic prefix and EOS footer.
+**IPC format contract:** `fetchQueryIPC` returns a complete Arrow IPC **streaming-format** buffer — not individual messages or raw concatenated bytes. This matches what `arrow::ipc::reader::StreamReader` expects on the Rust/WASM side for `register_table`. The server's JSON-framed protocol sends individual IPC messages (one schema frame + N batch frames); `fetchQueryIPC` assembles them into a valid stream by appending the EOS footer. Note: the streaming format does **not** include the "ARROW1" magic prefix — that's the IPC file format (used by `FileReader`).
 
 This is a standalone addition — no changes to existing `streamQuery()` or `executeStreamQuery()`.
 
@@ -378,11 +380,12 @@ Reuse the existing table rendering components from the Table screen. The local q
 | Does IPC ingestion work? | `wasm-bindgen-test` — `test_register_table` | **Yes** — Arrow IPC → MemTable works |
 | Does local SQL execution work? | `wasm-bindgen-test` — `test_execute_sql` | **Yes** — SELECT, aggregates, GROUP BY |
 | Does IPC output deserialize correctly? | `wasm-bindgen-test` — round-trip verify | **Yes** — schema + data preserved |
-| What's the latency? | Step 6 — measure register + execute + deserialize | Pending (end-to-end with real data) |
-| Does Vite lazy-loading work? | Step 3 — WASM module loads on demand | Pending runtime test |
+| What's the latency? | Step 6 — measure register + execute + deserialize | **Acceptable** — responsive for POC workloads |
+| Does Vite lazy-loading work? | Step 3 — WASM module loads on demand | **Yes** — loads on first Local Query screen open |
 | Does the build pipeline work? | Step 2 — WASM artifact flows into web app | **Yes** |
-| What DataFusion features work in WASM? | `wasm-bindgen-test` — aggregates confirmed; joins/windows pending | **Partial** — aggregates work, more testing needed |
-| Single-threaded perf acceptable? | Step 6 — measure query times for typical workloads | Pending (end-to-end with real data) |
+| Does `fetchQueryIPC` work end-to-end? | Step 4 — server IPC → WASM register → local query → render | **Yes** — after fixing IPC streaming format (no file-format magic) |
+| What DataFusion features work in WASM? | `wasm-bindgen-test` + manual testing — SELECT, aggregates, GROUP BY, ORDER BY | **Yes** — core SQL works; joins/windows untested but not needed for POC |
+| Single-threaded perf acceptable? | Step 6 — manual testing with real data | **Yes** — acceptable for POC workloads |
 
 ## Scope Boundaries
 
@@ -407,7 +410,7 @@ Reuse the existing table rendering components from the Table screen. The local q
 
 **New:**
 - `rust/datafusion-wasm/Cargo.toml` + `src/lib.rs` + `README.md` (toolchain prereqs)
-- `rust/datafusion-wasm/tests/wasm_integration.rs` — 7 integration tests via `wasm-bindgen-test`
+- `rust/datafusion-wasm/tests/wasm_integration.rs` — 8 integration tests via `wasm-bindgen-test`
 - `rust/datafusion-wasm/build.py` — WASM build script (`--test` flag runs `wasm-pack test`)
 - `analytics-web-app/src/lib/datafusion-wasm/` — built WASM artifact + JS glue (output of build.py, checked in)
 - `analytics-web-app/src/lib/wasm-engine.ts`

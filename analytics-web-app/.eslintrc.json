@@ -6,7 +6,7 @@
     "plugin:@typescript-eslint/recommended",
     "plugin:react-hooks/recommended"
   ],
-  "ignorePatterns": ["dist", "jest.config.js"],
+  "ignorePatterns": ["dist", "jest.config.js", "src/lib/datafusion-wasm"],
   "parser": "@typescript-eslint/parser",
   "plugins": ["react-refresh"],
   "rules": {
