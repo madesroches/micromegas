@@ -19,6 +19,9 @@
     "paths": {
       "@/*": [
         "./src/*"
+      ],
+      "datafusion-wasm": [
+        "./src/lib/datafusion-wasm/datafusion_wasm"
       ]
     },
     "target": "ES2020"

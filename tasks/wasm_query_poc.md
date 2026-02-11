@@ -1,5 +1,56 @@
 # WASM Query POC Plan
 
+## Status: POC Complete — End-to-End Validated in Browser
+
+The DataFusion WASM stack is **fully working end-to-end**: server IPC bytes flow through `fetchQueryIPC`, into WASM `register_table`, local SQL executes against registered data, IPC output deserializes via `tableFromIPC`, and results render in the browser. All 8 WASM integration tests pass (headless Firefox via `wasm-bindgen-test`), and the Local Query screen works manually against real data.
+
+### Runtime Bug Found and Fixed
+
+`wasm-bindgen-test` integration tests initially revealed a **runtime panic** — the "unreachable executed" seen in the browser. In release mode (`panic=abort` + LTO), the panic message is stripped; debug-mode tests gave the real message:
+
+```
+panicked at library/std/src/sys/pal/wasm/../unsupported/time.rs:31:9:
+time not implemented on this platform
+```
+
+**Root cause:** `chrono::Utc::now()` calls `std::time::SystemTime::now()`, which panics on `wasm32-unknown-unknown`. DataFusion calls `Utc::now()` inside `SessionContext::new_with_state` to record the session start time. DataFusion already patched `std::time::Instant` with `web-time`, but `SystemTime` comes from chrono.
+
+**Fix:** Enable chrono's `wasmbind` feature, which routes `Utc::now()` through `js_sys::Date` instead of `std::time::SystemTime`. One line in `Cargo.toml`:
+```toml
+chrono = { version = "0.4", default-features = false, features = ["wasmbind"] }
+```
+Cargo feature unification propagates this to all transitive chrono users.
+
+### Spike Results
+
+| Question | Result |
+|----------|--------|
+| DataFusion compiles to WASM? | **Yes** |
+| Feature flags needed? | `default-features = false`, `sql`, `nested_expressions` + `getrandom/wasm_js` + `chrono/wasmbind` |
+| WASM binary size (raw, after wasm-opt -Os)? | **24 MB** |
+| Gzipped size? | **5.9 MB** |
+| wasm-bindgen JS glue? | Works, auto-generated types match our API |
+| Build pipeline (build.py)? | End-to-end: cargo build → wasm-bindgen → wasm-opt → copy to web app |
+| TypeScript integration? | Clean — `tsc --noEmit` passes, all 664 frontend tests pass |
+| Backend integration? | Clean — `cargo build` + all 20 backend tests pass |
+| Runtime (WASM in browser)? | **Yes** — all 8 integration tests pass (engine creation, IPC register, SQL, aggregates, error paths, IPC format validation, reset) |
+| WASM integration tests? | 8 tests via `wasm-bindgen-test` in headless Firefox, all pass |
+| End-to-end (server → WASM → render)? | **Yes** — Local Query screen works with real data |
+
+### Validation Checklist
+
+- [x] Fix `std::time` panic → chrono `wasmbind` feature
+- [x] `register_table` with Arrow IPC bytes in WASM → works (test_register_table)
+- [x] `execute_sql` against registered table in WASM → works (test_execute_sql)
+- [x] IPC round-trip: register → query → parse results → verify → works (test_execute_sql, test_aggregate_query)
+- [x] Aggregates (GROUP BY, COUNT, ORDER BY) in WASM → works (test_aggregate_query)
+- [x] IPC bytes from server → `register_table` in browser (end-to-end with real data)
+- [x] IPC output from WASM → `tableFromIPC` → rendered table
+- [x] Lazy-loading WASM module via Vite → works
+- [x] IPC streaming format validated — regression test confirms file-format magic prefix is rejected
+- [ ] Joins, window functions in WASM DataFusion (not needed for POC, can test incrementally)
+- [ ] Single-threaded query performance benchmarks (acceptable for POC workloads, formal benchmarks deferred)
+
 ## Goal
 
 De-risk the notebook queries feature by building a standalone "Local Query" screen type that validates the full DataFusion WASM stack — compilation, IPC ingestion, local SQL execution, IPC output — without touching any existing notebook code.
@@ -85,7 +136,7 @@ Default config:
 
 ### Step 1: DataFusion WASM Crate
 
-New crate at `rust/datafusion-wasm/`.
+New crate at `rust/datafusion-wasm/`. This crate **must not** be a member of the main `rust/Cargo.toml` workspace — it targets `wasm32-unknown-unknown` and would break normal `cargo build`/`cargo test`. It has its own `Cargo.toml` with independent dependency versions.
 
 ```toml
 [package]
@@ -94,18 +145,31 @@ version = "0.1.0"
 edition = "2021"
 
 [lib]
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-arrow = { version = "...", default-features = false, features = ["ipc", "ffi"] }
-datafusion = { version = "...", default-features = false, features = ["sql"] }
+arrow = { version = "57.2", default-features = false, features = ["ipc"] }
+chrono = { version = "0.4", default-features = false, features = ["wasmbind"] }
+datafusion = { version = "52.1", default-features = false, features = ["nested_expressions", "sql"] }
+getrandom = { version = "0.3", features = ["wasm_js"] }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 
+[dev-dependencies]
+wasm-bindgen-test = "0.3"
+
 [profile.release]
-opt-level = "s"
 lto = true
+opt-level = "s"
 ```
+
+**Feature flags resolved:** DataFusion's `default-features = false` disables parquet, compression codecs, and other features that depend on C libraries and won't compile on WASM. The minimal set discovered during the spike:
+- `sql` + `nested_expressions` on DataFusion
+- `ipc` on Arrow (default-features off to avoid parquet/compression)
+- `getrandom` with `wasm_js` feature — required because DataFusion transitively pulls in `getrandom` (via `uuid` → `rand`), and `wasm32-unknown-unknown` has no OS-level entropy source. The `wasm_js` feature routes to `crypto.getRandomValues()`.
+- `chrono` with `wasmbind` feature — required because DataFusion uses `chrono::Utc::now()` for session timestamps, and on `wasm32-unknown-unknown` the default `std::time::SystemTime::now()` panics. The `wasmbind` feature routes through `js_sys::Date` instead.
+
+**Single-threaded execution constraint:** DataFusion internally uses `tokio::spawn` for parallel partition execution. On `wasm32-unknown-unknown` there is no multi-threaded tokio runtime — `wasm-bindgen-futures` provides `spawn_local` for single-threaded async. DataFusion falls back to single-partition execution, so queries will work but won't match native performance. This is acceptable for the POC.
 
 Minimal API — only what the POC needs:
 
@@ -120,13 +184,16 @@ impl WasmQueryEngine {
     #[wasm_bindgen(constructor)]
     pub fn new() -> Self { ... }
 
-    /// Register Arrow IPC bytes as a named table.
-    pub fn register_table(&self, name: &str, ipc_bytes: &[u8]) -> Result<(), JsValue> { ... }
+    /// Register Arrow IPC stream bytes as a named table.
+    /// `ipc_bytes` must be a complete Arrow IPC streaming-format buffer (schema + batches + EOS).
+    /// Returns the number of rows registered.
+    pub fn register_table(&self, name: &str, ipc_bytes: &[u8]) -> Result<u32, JsValue> { ... }
 
-    /// Execute SQL, return IPC bytes.
+    /// Execute SQL, return Arrow IPC stream bytes.
     pub async fn execute_sql(&self, sql: &str) -> Result<Vec<u8>, JsValue> { ... }
 
     /// Reset (deregister all tables).
+    /// Uses interior mutability via SessionContext's Arc<RwLock>.
     pub fn reset(&self) { ... }
 }
 ```
@@ -136,6 +203,7 @@ No `register_as` parameter on `execute_sql`, no `read_table_ipc` — those are n
 Build:
 
 ```bash
+cd rust/datafusion-wasm
 cargo build --target wasm32-unknown-unknown --release
 wasm-bindgen target/wasm32-unknown-unknown/release/datafusion_wasm.wasm --out-dir pkg --target web
 wasm-opt pkg/datafusion_wasm_bg.wasm -Os -o pkg/datafusion_wasm_bg.wasm
@@ -143,9 +211,28 @@ wasm-opt pkg/datafusion_wasm_bg.wasm -Os -o pkg/datafusion_wasm_bg.wasm
 
 **This is the spike.** If DataFusion doesn't compile to WASM, we stop here and evaluate DuckDB-WASM as the fallback (see notebook queries plan).
 
-### Step 2: Vite Integration
+### Step 2: WASM Build Integration
 
-Add the WASM module to the analytics-web-app build.
+Wire the WASM artifact from Step 1 into the analytics-web-app build pipeline.
+
+**Build script** (`rust/datafusion-wasm/build.py`): automates the `cargo build` → `wasm-bindgen` → `wasm-opt` pipeline from Step 1 and copies the output to a known location. This script is run manually (not on every `yarn dev`) — the `.wasm` + JS glue are checked into `analytics-web-app/src/lib/datafusion-wasm/` so that frontend devs don't need the WASM toolchain installed.
+
+**Package resolution**: add a path dependency in the web app so that `import('datafusion-wasm')` resolves locally:
+
+```json
+// analytics-web-app/package.json
+"dependencies": {
+  "datafusion-wasm": "file:src/lib/datafusion-wasm"
+}
+```
+
+Alternatively, use a Vite alias to point `datafusion-wasm` at the built `pkg/` directory. Either way, `optimizeDeps.exclude` must list `datafusion-wasm` so Vite doesn't try to bundle the `.wasm` binary.
+
+**Prerequisites**: developers modifying the WASM crate need `wasm-bindgen-cli`, `wasm-opt`, and the `wasm32-unknown-unknown` rustup target. Document these in the crate's README.
+
+### Step 3: Vite Lazy Loading
+
+Add the WASM module to the analytics-web-app.
 
 ```typescript
 // lib/wasm-engine.ts — lazy-loads the WASM module
@@ -164,7 +251,7 @@ export async function loadWasmEngine() {
 
 Vite config: add `wasm()` plugin or configure `optimizeDeps.exclude` for the WASM package. The WASM binary is lazy-loaded only when the local query screen is opened.
 
-### Step 3: fetchQueryIPC
+### Step 4: fetchQueryIPC
 
 Add to `arrow-stream.ts`:
 
@@ -173,15 +260,19 @@ export async function fetchQueryIPC(
   params: StreamQueryParams,
   signal?: AbortSignal,
 ): Promise<Uint8Array> {
-  // Same HTTP setup as streamQuery
-  // Parse JSON frames, collect raw IPC bytes (skip JS Arrow decoding)
-  // Return concatenated Uint8Array
+  // Same HTTP setup as streamQuery (POST /api/query-stream)
+  // Parse JSON frames, collect raw IPC message bytes (schema + batches)
+  // Assemble into Arrow IPC streaming format:
+  //   schema message + batch messages + EOS continuation (0xFFFFFFFF + 0x00000000)
+  // Return complete IPC stream as Uint8Array
 }
 ```
 
+**IPC format contract:** `fetchQueryIPC` returns a complete Arrow IPC **streaming-format** buffer — not individual messages or raw concatenated bytes. This matches what `arrow::ipc::reader::StreamReader` expects on the Rust/WASM side for `register_table`. The server's JSON-framed protocol sends individual IPC messages (one schema frame + N batch frames); `fetchQueryIPC` assembles them into a valid stream by appending the EOS footer. Note: the streaming format does **not** include the "ARROW1" magic prefix — that's the IPC file format (used by `FileReader`).
+
 This is a standalone addition — no changes to existing `streamQuery()` or `executeStreamQuery()`.
 
-### Step 4: Screen Type Registration
+### Step 5: Screen Type Registration
 
 **Backend** (`screen_types.rs`):
 
@@ -191,7 +282,7 @@ Add `LocalQuery` variant to `ScreenType` enum, `FromStr`, `all()`, `as_str()`, `
 
 Add `'local_query'` to `ScreenTypeName` union.
 
-### Step 5: LocalQueryRenderer
+### Step 6: LocalQueryRenderer
 
 New file: `screen-renderers/LocalQueryRenderer.tsx`
 
@@ -219,24 +310,32 @@ export function LocalQueryRenderer({
   const [localStatus, setLocalStatus] = useState<'idle'|'loading'|'done'|'error'>('idle')
   const [localError, setLocalError] = useState<string>()
 
+  // AbortController for cancelling in-flight source fetches
+  const abortRef = useRef<AbortController | null>(null)
+  useEffect(() => () => abortRef.current?.abort(), [])
+
   // Fetch source data → register in WASM
   const fetchAndRegister = useCallback(async () => {
     if (!engine) return
+    abortRef.current?.abort()
+    const controller = new AbortController()
+    abortRef.current = controller
     setSourceStatus('loading')
     try {
       const sql = substituteTimeRange(localConfig.sourceSql, timeRange)
       const ipcBytes = await fetchQueryIPC(
         { sql, begin: timeRange.begin, end: timeRange.end, dataSource },
-        abortController.signal
+        controller.signal
       )
-      engine.register_table(localConfig.sourceTableName, ipcBytes)
-      // Decode IPC to count rows (or get count from engine)
-      const table = tableFromIPC(ipcBytes)
-      setSourceRowCount(table.numRows)
+      // register_table returns row count — no need to decode IPC on JS side
+      const rowCount = engine.register_table(localConfig.sourceTableName, ipcBytes)
+      setSourceRowCount(rowCount)
       setSourceStatus('ready')
     } catch (e) {
-      setSourceError(e.message)
-      setSourceStatus('error')
+      if (!controller.signal.aborted) {
+        setSourceError(e.message)
+        setSourceStatus('error')
+      }
     }
   }, [engine, localConfig.sourceSql, localConfig.sourceTableName, timeRange, dataSource])
 
@@ -255,7 +354,7 @@ export function LocalQueryRenderer({
     }
   }, [engine, localConfig.localSql])
 
-  // ... SQL editors, result table, save handling ...
+  // ... SQL editors, error display (inline below each editor), result table, save handling ...
 }
 
 registerRenderer('local_query', LocalQueryRenderer)
@@ -266,22 +365,27 @@ Register in `init.ts`:
 import './LocalQueryRenderer'
 ```
 
-### Step 6: Result Display
+### Step 7: Result Display
 
 Reuse the existing table rendering components from the Table screen. The local query result is a standard arrow-js `Table` — same as what every other renderer displays.
 
 ## What We Learn
 
-| Question | How the POC answers it |
-|---|---|
-| Does DataFusion compile to WASM? | Step 1 — the spike |
-| What's the WASM binary size? | Step 1 — measure gzipped output |
-| Does IPC ingestion work? | Step 3+5 — `fetchQueryIPC` → `register_table` |
-| Does local SQL execution work? | Step 5 — `execute_sql` against registered table |
-| Does IPC output deserialize correctly? | Step 5 — `tableFromIPC` on WASM output |
-| What's the latency? | Step 5 — measure register + execute + deserialize |
-| Does Vite lazy-loading work? | Step 2 — WASM module loads on demand |
-| What DataFusion features work in WASM? | Manual testing — try aggregates, joins, window functions |
+| Question | How the POC answers it | Status |
+|---|---|---|
+| Does DataFusion compile to WASM? | Step 1 — the spike | **Yes** |
+| What's the WASM binary size? | Step 1 — measure gzipped output | **24 MB raw, 5.9 MB gzipped** |
+| What DataFusion feature flags are needed? | Step 1 — iterative feature flag discovery | **Resolved** (`sql`, `nested_expressions`, `getrandom/wasm_js`, `chrono/wasmbind`) |
+| Does DataFusion run in WASM? | `wasm-bindgen-test` integration tests | **Yes** — after chrono `wasmbind` fix |
+| Does IPC ingestion work? | `wasm-bindgen-test` — `test_register_table` | **Yes** — Arrow IPC → MemTable works |
+| Does local SQL execution work? | `wasm-bindgen-test` — `test_execute_sql` | **Yes** — SELECT, aggregates, GROUP BY |
+| Does IPC output deserialize correctly? | `wasm-bindgen-test` — round-trip verify | **Yes** — schema + data preserved |
+| What's the latency? | Step 6 — measure register + execute + deserialize | **Acceptable** — responsive for POC workloads |
+| Does Vite lazy-loading work? | Step 3 — WASM module loads on demand | **Yes** — loads on first Local Query screen open |
+| Does the build pipeline work? | Step 2 — WASM artifact flows into web app | **Yes** |
+| Does `fetchQueryIPC` work end-to-end? | Step 4 — server IPC → WASM register → local query → render | **Yes** — after fixing IPC streaming format (no file-format magic) |
+| What DataFusion features work in WASM? | `wasm-bindgen-test` + manual testing — SELECT, aggregates, GROUP BY, ORDER BY | **Yes** — core SQL works; joins/windows untested but not needed for POC |
+| Single-threaded perf acceptable? | Step 6 — manual testing with real data | **Yes** — acceptable for POC workloads |
 
 ## Scope Boundaries
 
@@ -305,13 +409,20 @@ Reuse the existing table rendering components from the Table screen. The local q
 ## Files
 
 **New:**
-- `rust/datafusion-wasm/Cargo.toml` + `src/lib.rs`
+- `rust/datafusion-wasm/Cargo.toml` + `src/lib.rs` + `README.md` (toolchain prereqs)
+- `rust/datafusion-wasm/tests/wasm_integration.rs` — 8 integration tests via `wasm-bindgen-test`
+- `rust/datafusion-wasm/build.py` — WASM build script (`--test` flag runs `wasm-pack test`)
+- `analytics-web-app/src/lib/datafusion-wasm/` — built WASM artifact + JS glue (output of build.py, checked in)
 - `analytics-web-app/src/lib/wasm-engine.ts`
 - `analytics-web-app/src/lib/screen-renderers/LocalQueryRenderer.tsx`
 
 **Modified:**
+- `rust/Cargo.toml` — add `rust/datafusion-wasm` to `workspace.exclude`
+- `rust/analytics-web-srv/src/screen_types.rs` — add LocalQuery variant
+- `rust/analytics-web-srv/tests/screen_types_tests.rs` — add LocalQuery test coverage
+- `analytics-web-app/package.json` — add `datafusion-wasm` path dependency
+- `analytics-web-app/tsconfig.json` — add `datafusion-wasm` path alias
+- `analytics-web-app/vite.config.ts` — WASM content-type middleware, Vite alias, `optimizeDeps.exclude`
 - `analytics-web-app/src/lib/arrow-stream.ts` — add `fetchQueryIPC()`
 - `analytics-web-app/src/lib/screen-renderers/init.ts` — import LocalQueryRenderer
 - `analytics-web-app/src/lib/screens-api.ts` — add `'local_query'` to ScreenTypeName
-- `rust/analytics-web-srv/src/screen_types.rs` — add LocalQuery variant
-- `analytics-web-app/vite.config.ts` — WASM plugin config (if needed)

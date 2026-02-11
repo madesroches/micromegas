@@ -1,0 +1,7 @@
+{
+  "name": "datafusion-wasm",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "datafusion_wasm.js",
+  "types": "datafusion_wasm.d.ts"
+}

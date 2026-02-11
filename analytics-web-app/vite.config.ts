@@ -13,6 +13,17 @@ export default defineConfig(({ mode }) => {
     plugins: [
       react(),
       {
+        name: 'wasm-content-type',
+        configureServer(server) {
+          server.middlewares.use((req, res, next) => {
+            if (req.url?.endsWith('.wasm')) {
+              res.setHeader('Content-Type', 'application/wasm')
+            }
+            next()
+          })
+        },
+      },
+      {
         name: 'log-base-path',
         configureServer(server) {
           server.httpServer?.once('listening', () => {
@@ -32,7 +43,11 @@ export default defineConfig(({ mode }) => {
     resolve: {
       alias: {
         '@': path.resolve(__dirname, './src'),
+        'datafusion-wasm': path.resolve(__dirname, './src/lib/datafusion-wasm'),
       },
+    },
+    optimizeDeps: {
+      exclude: ['datafusion-wasm'],
     },
     build: {
       outDir: 'dist',

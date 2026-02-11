@@ -1,6 +1,6 @@
 [workspace]
 members = ["*", "examples/write-perfetto"]
-exclude = ["target", ".claude", ".*", "examples"]
+exclude = ["target", ".claude", ".*", "datafusion-wasm", "examples"]
 resolver = "2"
 
 

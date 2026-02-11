@@ -32,7 +32,7 @@ export interface Screen {
   updated_at: string
 }
 
-export type ScreenTypeName = 'process_list' | 'metrics' | 'log' | 'table' | 'notebook'
+export type ScreenTypeName = 'process_list' | 'metrics' | 'log' | 'table' | 'notebook' | 'local_query'
 
 export interface ScreenTypeInfo {
   name: ScreenTypeName

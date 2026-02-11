@@ -1,0 +1,25 @@
+[package]
+name = "datafusion-wasm"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+arrow = { version = "57.2", default-features = false, features = ["ipc"] }
+chrono = { version = "0.4", default-features = false, features = ["wasmbind"] }
+datafusion = { version = "52.1", default-features = false, features = ["nested_expressions", "sql"] }
+getrandom = { version = "0.3", features = ["wasm_js"] }
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+
+[dev-dependencies]
+wasm-bindgen-test = "0.3"
+
+[package.metadata.cargo-machete]
+ignored = ["chrono", "getrandom", "wasm-bindgen-futures"]
+
+[profile.release]
+lto = true
+opt-level = "s"
