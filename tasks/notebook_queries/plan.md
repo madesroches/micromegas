@@ -326,7 +326,7 @@ Wire the WASM engine into the notebook execution loop.
 4. Create `WasmQueryEngine` instance per notebook in `useCellExecution.ts`
 5. Update `useCellExecution.ts` to dispatch by source and register every cell's result. The `CellExecutionContext.runQuery` signature stays as `(sql: string) => Promise<Table>` — individual cell execute functions require no changes.
 6. Reset the engine context on full re-execution (time range change, refresh)
-7. Deregister tables on cell deletion; reset + re-execute on cell reorder
+7. Deregister tables on cell deletion
 8. Update `CellRendererProps.sql` to derive from `query.sql` (the prop stays as `string` for backward compatibility with renderers — the V2→prop mapping extracts `config.query.sql`)
 
 Files: `notebook-types.ts`, `cell-registry.ts`, `useCellExecution.ts`, `NotebookRenderer.tsx`, new `lib/wasm-engine.ts`
@@ -378,11 +378,9 @@ The WASM context is created when the notebook mounts and destroyed on unmount. O
 
 **Cell deletion:** When a cell is deleted, its table is deregistered from the WASM context. Downstream cells that reference the deleted table will error on their next execution — this is the correct behavior (the dependency is gone).
 
-**Cell reorder (drag-and-drop):** Reordering cells resets the context and triggers a full re-execution from the top. This is necessary because the dependency order may have changed — a cell that was above a dependent may now be below it. The existing `executeFromCell(0)` path handles this.
-
 ### Hydration on Page Reload
 
-Cell results and the WASM context are lost on page reload. Cells re-execute on load (current behavior). Future enhancement: cache results in IndexedDB.
+Cell results and the WASM context are lost on page reload. Cells re-execute on load (current behavior).
 
 ### Circular References
 
