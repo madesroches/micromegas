@@ -6,7 +6,7 @@ Add support for SQL queries that reference other cells' results in notebooks. Th
 
 **Approach:** Each notebook owns a client-side DataFusion WASM context. Remote queries fetch data from the server and register the result locally. Local queries execute entirely in the browser against accumulated cell results.
 
-See [engine_analysis.md](engine_analysis.md) for the engine comparison and research that informed this plan.
+See [engine_analysis.md](engine_analysis.md) for the engine comparison and research that informed this plan. The analysis recommends a hybrid approach starting with server-side session caching, but that underestimates the complexity of managing stateful sessions across multiple server processes (sticky routing or shared session state). Client-side execution avoids this entirely — the state lives in the browser, dies with the tab.
 
 ## Motivation
 
@@ -47,6 +47,8 @@ interface LocalQuery {
 
 type Query = RemoteQuery | LocalQuery
 ```
+
+**Data source routing:** The existing `dataSource` field stays on the cell config (not in the `Query` type). For remote queries, `resolveCellDataSource()` resolves the data source as it does today. For local queries, the `dataSource` field is set to `'notebook'` — a reserved value that `resolveCellDataSource()` recognizes to route execution to the WASM engine instead of the server.
 
 This design allows future data sources without changing the cell model:
 
@@ -152,37 +154,48 @@ export interface CellExecutionContext {
 
 **Critical gap:** Cell results do NOT propagate today. Only variable values propagate between cells (via `variableValuesRef`). The `executeFromCell` loop in `useCellExecution.ts` runs cells sequentially but discards each cell's result data — downstream cells cannot access upstream results.
 
-Proposed:
+Proposed — the interface stays the same:
 
 ```typescript
 export interface CellExecutionContext {
   variables: Record<string, VariableValue>
   timeRange: { begin: string; end: string }
-  runQuery: (query: Query) => Promise<Table>  // dispatch by source
+  runQuery: (sql: string) => Promise<Table>  // unchanged signature
 }
 ```
+
+The `runQuery` signature does not change. Individual cell execute functions (table, chart, log, variable, etc.) continue to call `runQuery(sql)` exactly as they do today. The query source dispatch and result registration happen in `useCellExecution.ts` when constructing the context — the cell's `runQuery` is bound to either the remote or local path based on the cell's config. This means **variable cells and perfetto export cells require zero changes**.
 
 Note: `cellResults` is not in the context — the DataFusion WASM engine IS the context. Cells don't need explicit access to previous results; they reference them via SQL table names in local queries.
 
 ### Query Execution Flow
 
-The `runQuery` function dispatches based on source:
+The dispatch happens in `useCellExecution.ts` when building the `CellExecutionContext` for each cell. The cell's `execute()` function just calls `runQuery(sql)` — it doesn't know or care about the source:
 
 ```typescript
-async function runQuery(query: Query): Promise<Table> {
-  let result: Table
+// In useCellExecution.ts, per-cell context construction:
+const query = (config as QueryCellConfigV2).query
+const isLocal = query?.source === 'local'
 
-  if (query.source === 'remote') {
-    result = await executeSql(query.sql, timeRange, abortSignal)
-  } else if (query.source === 'local') {
-    const ipcBytes = await engine.execute_sql(query.sql)
-    result = tableFromIPC(ipcBytes)
-  }
+const context: CellExecutionContext = {
+  variables: availableVariables,
+  timeRange,
+  runQuery: async (sql: string) => {
+    let result: Table
 
-  // Every cell's result is registered in the local context
-  engine.register_table(cellName, tableToIPC(result, 'stream'))
+    if (isLocal) {
+      const ipcBytes = await engine.execute_sql(sql)
+      result = tableFromIPC(ipcBytes)
+    } else {
+      result = await executeSql(sql, timeRange, abortSignal, cellDataSource)
+    }
 
-  return result
+    // Every cell's result is registered in the local context
+    // (even empty results — downstream cells can still reference the schema)
+    engine.register_table(cellName, tableToIPC(result, 'stream'))
+
+    return result
+  },
 }
 ```
 
@@ -226,12 +239,16 @@ impl WasmQueryEngine {
     }
 
     pub fn register_table(&self, name: &str, ipc_bytes: &[u8]) -> Result<(), JsValue> {
+        // Deregister first in case the table already exists (cell re-execution)
+        let _ = self.ctx.deregister_table(name);
+
         // Deserialize Arrow IPC → Vec<RecordBatch> → MemTable → register
+        // StreamReader schema is available even when there are zero batches
         let reader = StreamReader::try_new(Cursor::new(ipc_bytes), None)
             .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        let schema = reader.schema();
         let batches: Vec<RecordBatch> = reader.collect::<Result<_, _>>()
             .map_err(|e| JsValue::from_str(&e.to_string()))?;
-        let schema = batches[0].schema();
         let table = MemTable::try_new(schema, vec![batches])
             .map_err(|e| JsValue::from_str(&e.to_string()))?;
         self.ctx.register_table(name, Arc::new(table))
@@ -242,11 +259,13 @@ impl WasmQueryEngine {
     pub async fn execute_sql(&self, sql: &str) -> Result<Vec<u8>, JsValue> {
         let df = self.ctx.sql(sql).await
             .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        // Get schema before collect() consumes the DataFrame
+        let schema: Schema = df.schema().into();
         let batches = df.collect().await
             .map_err(|e| JsValue::from_str(&e.to_string()))?;
-        // Serialize to Arrow IPC
+        // Serialize to Arrow IPC — works even with zero batches
         let mut buf = Vec::new();
-        let mut writer = StreamWriter::try_new(&mut buf, &batches[0].schema())
+        let mut writer = StreamWriter::try_new(&mut buf, &schema)
             .map_err(|e| JsValue::from_str(&e.to_string()))?;
         for batch in &batches {
             writer.write(batch).map_err(|e| JsValue::from_str(&e.to_string()))?;
@@ -262,7 +281,9 @@ impl WasmQueryEngine {
     }
 
     pub fn reset(&self) {
-        // Deregister all tables for re-execution
+        for name in self.ctx.table_names() {
+            let _ = self.ctx.deregister_table(&name);
+        }
     }
 }
 ```
@@ -301,13 +322,14 @@ Wire the WASM engine into the notebook execution loop.
 
 1. Add `Query` type union (`RemoteQuery | LocalQuery`) to `notebook-types.ts`
 2. Add versioned `QueryCellConfigV2` with `query: Query` field
-3. Add V1→V2 migration (runs on notebook load, saved back on next save)
+3. Add V1→V2 migration (runs on notebook load, saved back on next save). Migration only applies to `QueryCellConfig` cells — `MarkdownCellConfig`, `VariableCellConfig`, and `PerfettoExportCellConfig` are unchanged.
 4. Create `WasmQueryEngine` instance per notebook in `useCellExecution.ts`
-5. Update `runQuery` to dispatch by source and register every cell's result
+5. Update `useCellExecution.ts` to dispatch by source and register every cell's result. The `CellExecutionContext.runQuery` signature stays as `(sql: string) => Promise<Table>` — individual cell execute functions require no changes.
 6. Reset the engine context on full re-execution (time range change, refresh)
-7. Update all cell type execute functions to use `Query` objects
+7. Deregister tables on cell deletion; reset + re-execute on cell reorder
+8. Update `CellRendererProps.sql` to derive from `query.sql` (the prop stays as `string` for backward compatibility with renderers — the V2→prop mapping extracts `config.query.sql`)
 
-Files: `notebook-types.ts`, `cell-registry.ts`, `useCellExecution.ts`, all cell type files, new `lib/wasm-engine.ts`
+Files: `notebook-types.ts`, `cell-registry.ts`, `useCellExecution.ts`, `NotebookRenderer.tsx`, new `lib/wasm-engine.ts`
 
 ### Phase 3: UI for Source Selection
 
@@ -334,10 +356,9 @@ Files: `rust/datafusion-wasm/` crate, UDF registration
 ### Phase 5: Polish
 
 1. Memory management warnings for large cell results
-2. Enforce cell name uniqueness in the notebook model
-3. Error messages for common issues (missing tables, type mismatches)
-4. Graceful handling when referenced cell has error/blocked status
-5. Documentation
+2. Error messages for common issues (missing tables, type mismatches)
+3. Graceful handling when referenced cell has error/blocked status
+4. Documentation
 
 ## Considerations
 
@@ -355,6 +376,10 @@ Browser memory is limited. Large datasets from remote queries accumulate in both
 
 The WASM context is created when the notebook mounts and destroyed on unmount. On full re-execution (time range change, refresh), the context is reset (all tables deregistered) and cells re-execute top-to-bottom. Individual cell re-execution deregisters the cell's old table and registers the new result.
 
+**Cell deletion:** When a cell is deleted, its table is deregistered from the WASM context. Downstream cells that reference the deleted table will error on their next execution — this is the correct behavior (the dependency is gone).
+
+**Cell reorder (drag-and-drop):** Reordering cells resets the context and triggers a full re-execution from the top. This is necessary because the dependency order may have changed — a cell that was above a dependent may now be below it. The existing `executeFromCell(0)` path handles this.
+
 ### Hydration on Page Reload
 
 Cell results and the WASM context are lost on page reload. Cells re-execute on load (current behavior). Future enhancement: cache results in IndexedDB.
@@ -365,7 +390,7 @@ Cells execute top-to-bottom. A cell can only reference cells above it. This prev
 
 ### Cell Name Uniqueness
 
-Cell names must be unique within a notebook — they map to table names in the DataFusion context. The UI should enforce this (validation on rename, auto-generated unique names for new cells).
+Cell names must be unique within a notebook — they map to table names in the DataFusion context. This is already enforced by `createDefaultCell()` in `cell-registry.ts` which generates unique names, and by the rename validation in the UI.
 
 ### Time Range Variables
 
