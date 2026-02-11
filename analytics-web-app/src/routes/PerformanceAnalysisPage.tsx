@@ -625,6 +625,7 @@ function PerformanceAnalysisContent() {
         timeRange: currentTimeRange,
         onProgress: (message) => setProgress({ type: 'progress', message }),
         signal: traceAbortRef.current.signal,
+        dataSource: defaultDataSource,
       })
 
       setCachedTraceBuffer(buffer)
@@ -682,6 +683,7 @@ function PerformanceAnalysisContent() {
         timeRange: currentTimeRange,
         onProgress: (message) => setProgress({ type: 'progress', message }),
         signal: traceAbortRef.current.signal,
+        dataSource: defaultDataSource,
       })
 
       setCachedTraceBuffer(buffer)
