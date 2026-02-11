@@ -1,34 +1,58 @@
 # Analytics Web App
 
-Modern web application for exploring and analyzing micromegas telemetry data with advanced querying and export capabilities.
+Web application for exploring and analyzing micromegas telemetry data.
 
-## Features
+## Prerequisites
 
-- 🔍 Process discovery and filtering
-- 📊 Interactive telemetry data exploration
-- 📥 Multiple export formats (Perfetto traces, CSV, JSON, Parquet)
-- 📈 Real-time data visualization and analytics
-- 🔄 HTTP streaming for efficient large data transfers
-- 🎨 Modern React UI with Tailwind CSS
-- 🔄 Real-time health monitoring
-- 📱 Responsive design
-
-## Architecture
-
-- **Backend**: Rust + Axum web server (`analytics-web-srv`)
-- **Frontend**: Vite + React 18 + React Router + TypeScript
-- **UI**: Tailwind CSS + Radix UI components
-- **API**: REST endpoints with HTTP streaming support
-
-## Development
-
-### Prerequisites
-
-- Node.js 18+ 
+- Node.js 18+
 - Rust 1.70+
-- FlightSQL server running on port 50051
+- Yarn (`npm install -g yarn`)
+- Running micromegas services (PostgreSQL, ingestion, flight-sql)
 
-### Frontend Development
+For Local Query screens (optional):
+- `wasm32-unknown-unknown` target: `rustup target add wasm32-unknown-unknown`
+- `wasm-bindgen-cli`: `cargo install wasm-bindgen-cli`
+- `wasm-opt` (from binaryen): install via your package manager
+
+## Quick Start
+
+The start script handles everything: builds the backend, builds the WASM engine (if needed), installs JS dependencies, and starts both servers with hot reloading.
+
+```bash
+# Start micromegas services first
+python3 local_test_env/ai_scripts/start_services.py
+
+# Set required environment variables
+export MICROMEGAS_DB_USERNAME=telemetry
+export MICROMEGAS_DB_PASSWD=<your-password>
+export MICROMEGAS_DB_PORT=6432
+
+# Start the web app (from repo root)
+python3 analytics-web-app/start_analytics_web.py
+```
+
+The frontend runs at http://localhost:3000/mmlocal/ and the backend at http://localhost:8000/mmlocal/.
+
+Use `--disable-auth` to skip OIDC authentication during development.
+
+## Manual Setup
+
+### Backend
+
+```bash
+cd rust
+cargo run --bin analytics-web-srv -- --port 8000 --disable-auth
+```
+
+### WASM Engine (optional, for Local Query screens)
+
+```bash
+python3 rust/datafusion-wasm/build.py
+```
+
+This compiles DataFusion to WebAssembly and copies the artifacts to `src/lib/datafusion-wasm/`. The `.wasm` binary is not checked into git and must be rebuilt after a fresh clone or whenever the Rust source in `rust/datafusion-wasm/` changes. The quick start script builds it automatically on first run.
+
+### Frontend
 
 ```bash
 cd analytics-web-app
@@ -36,84 +60,48 @@ yarn install
 yarn dev
 ```
 
-The frontend will run on http://localhost:3000 with hot reloading.
-
-### Backend Development
-
-```bash
-cd rust
-cargo run --bin analytics-web-srv
-```
-
-The backend will run on http://localhost:3000.
-
-### Full Stack Development
-
-1. Start the backend server:
-   ```bash
-   cd rust && cargo run --bin analytics-web-srv
-   ```
-
-2. In another terminal, start the frontend:
-   ```bash
-   cd analytics-web-app && yarn dev
-   ```
-
-The Vite dev server will proxy API requests to the Rust backend.
+The Vite dev server runs on http://localhost:3000 and proxies API requests to the backend.
 
 ## Production Build
 
-1. Build the frontend:
-   ```bash
-   cd analytics-web-app
-   yarn build
-   ```
-
-2. Run the backend with static file serving:
-   ```bash
-   cd rust
-   cargo run --bin analytics-web-srv -- --frontend-dir ../analytics-web-app/dist
-   ```
-
-The entire application will be served from http://localhost:3000.
-
-### Quick Start
-
-To start both frontend and backend in development mode:
-
 ```bash
 cd analytics-web-app
-./start_analytics_web.py
+yarn build
+
+cd ../rust
+cargo run --bin analytics-web-srv -- --frontend-dir ../analytics-web-app/dist
 ```
 
-This will automatically start both the Rust backend and Vite frontend with hot reloading.
+The entire application is served from a single port.
 
-## API Endpoints
+## Commands
 
-- `GET /api/health` - Health check and system status
-- `GET /api/processes` - List available processes  
-- `GET /api/perfetto/{process_id}/info` - Get Perfetto trace metadata
-- `POST /api/perfetto/{process_id}/generate` - Generate Perfetto trace with streaming progress
-- `GET /api/data/{process_id}/query` - Query telemetry data with SQL
-- `POST /api/data/{process_id}/export` - Export data in various formats (CSV, JSON, Parquet)
+| Command | Description |
+|---------|-------------|
+| `yarn dev` | Start Vite dev server with hot reloading |
+| `yarn build` | Production build to `dist/` |
+| `yarn lint` | Run ESLint |
+| `yarn type-check` | Run TypeScript type checking |
+| `yarn test` | Run Jest tests |
 
 ## Environment Variables
 
-### Required
-- `MICROMEGAS_FLIGHTSQL_URL` - FlightSQL server address (default: grpc://127.0.0.1:50051)
-- `MICROMEGAS_OIDC_CONFIG` - OIDC configuration JSON (same format as FlightSQL server)
-- `MICROMEGAS_AUTH_REDIRECT_URI` - OAuth callback URL (e.g., http://localhost:3000/auth/callback)
-
-### Optional
-- `PORT` - Server port (default: 3000)
-- `FRONTEND_DIR` - Frontend build directory (default: ../analytics-web-app/dist)
-- `MICROMEGAS_WEB_CORS_ORIGIN` - CORS origin for API requests (default: http://localhost:3000)
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `MICROMEGAS_DB_USERNAME` | Yes | - | PostgreSQL username |
+| `MICROMEGAS_DB_PASSWD` | Yes | - | PostgreSQL password |
+| `MICROMEGAS_DB_PORT` | Yes | - | PostgreSQL port |
+| `MICROMEGAS_FLIGHTSQL_URL` | No | `grpc://127.0.0.1:50051` | FlightSQL server address |
+| `MICROMEGAS_OIDC_CONFIG` | No | - | OIDC configuration JSON (see below) |
+| `MICROMEGAS_BASE_PATH` | No | `/mmlocal` | URL base path |
+| `MICROMEGAS_BACKEND_PORT` | No | `8000` | Backend server port |
+| `MICROMEGAS_FRONTEND_PORT` | No | `3000` | Frontend dev server port |
+| `MICROMEGAS_WEB_CORS_ORIGIN` | No | `http://localhost:3000` | CORS origin |
 
 ### OIDC Configuration
 
-The `MICROMEGAS_OIDC_CONFIG` environment variable must contain a JSON object with an `issuers` array (same format as the FlightSQL server). The web app only supports a single issuer - if multiple issuers are configured, the server will fail to start.
+Set `MICROMEGAS_OIDC_CONFIG` to enable authentication:
 
-Example:
 ```json
 {
   "issuers": [
@@ -125,4 +113,4 @@ Example:
 }
 ```
 
-The `audience` field serves as the OAuth client_id for the web app's authorization code flow.
+The `audience` field serves as the OAuth client_id for the authorization code flow. Only a single issuer is supported.
