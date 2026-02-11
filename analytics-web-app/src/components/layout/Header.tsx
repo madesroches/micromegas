@@ -1,8 +1,9 @@
 import { useState } from 'react'
 import { useAuth } from '@/lib/auth'
-import { RefreshCw, ChevronDown, LogOut } from 'lucide-react'
+import { RefreshCw, ChevronDown, LogOut, ZoomIn, ZoomOut } from 'lucide-react'
 import { AppLink } from '@/components/AppLink'
 import { getConfig } from '@/lib/config'
+import { zoomTimeRange } from '@/lib/time-range'
 import { TimeRangePicker } from './TimeRangePicker'
 import { PivotButton } from './PivotButton'
 import { MicromegasLogo } from '@/components/MicromegasLogo'
@@ -67,6 +68,26 @@ export function Header({ onRefresh, timeRangeControl, processId }: HeaderProps) 
               to={timeRangeControl.timeRangeTo}
               onChange={timeRangeControl.onTimeRangeChange}
             />
+            <button
+              onClick={() => {
+                const zoomed = zoomTimeRange(timeRangeControl.timeRangeFrom, timeRangeControl.timeRangeTo, 'out')
+                timeRangeControl.onTimeRangeChange(zoomed.from, zoomed.to)
+              }}
+              className="px-2 py-1.5 bg-theme-border border-l border-theme-border-hover text-theme-text-primary hover:bg-theme-border-hover transition-colors"
+              title="Zoom out"
+            >
+              <ZoomOut className="w-4 h-4" />
+            </button>
+            <button
+              onClick={() => {
+                const zoomed = zoomTimeRange(timeRangeControl.timeRangeFrom, timeRangeControl.timeRangeTo, 'in')
+                timeRangeControl.onTimeRangeChange(zoomed.from, zoomed.to)
+              }}
+              className="px-2 py-1.5 bg-theme-border border-l border-theme-border-hover text-theme-text-primary hover:bg-theme-border-hover transition-colors"
+              title="Zoom in"
+            >
+              <ZoomIn className="w-4 h-4" />
+            </button>
             <button
               onClick={onRefresh}
               className="px-2 sm:px-2.5 py-1.5 bg-theme-border border-l border-theme-border-hover rounded-r-md text-theme-text-primary hover:bg-theme-border-hover transition-colors"
