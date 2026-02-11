@@ -1,41 +1,52 @@
 # WASM Query POC Plan
 
-## Status: Runtime Bug Found — `std::time` Panic
+## Status: Runtime Validated — All WASM Integration Tests Pass
 
-The DataFusion WASM compilation spike is **successful** — all code compiles and the WASM binary builds end-to-end. However, `wasm-bindgen-test` integration tests revealed a **runtime panic**: DataFusion internally calls `std::time::Instant::now()`, which is not implemented on `wasm32-unknown-unknown`.
+The DataFusion WASM stack is **fully working**: compilation, IPC ingestion, SQL execution (including aggregates), and IPC output all pass in a real browser (headless Firefox via `wasm-bindgen-test`).
 
-In release mode (`panic=abort` + LTO), this panic is stripped to just "unreachable executed". The debug-mode tests give the real message:
+### Runtime Bug Found and Fixed
+
+`wasm-bindgen-test` integration tests initially revealed a **runtime panic** — the "unreachable executed" seen in the browser. In release mode (`panic=abort` + LTO), the panic message is stripped; debug-mode tests gave the real message:
 
 ```
 panicked at library/std/src/sys/pal/wasm/../unsupported/time.rs:31:9:
 time not implemented on this platform
 ```
 
-**Root cause:** DataFusion uses `std::time::Instant` for query execution metrics. The `wasm32-unknown-unknown` target has no time implementation — it's a bare WASM platform with no OS. Fix: add the `web-time` crate which provides `Instant`/`SystemTime` backed by `performance.now()` / `Date.now()`, and patch DataFusion's dependency on `std::time` via Cargo.
+**Root cause:** `chrono::Utc::now()` calls `std::time::SystemTime::now()`, which panics on `wasm32-unknown-unknown`. DataFusion calls `Utc::now()` inside `SessionContext::new_with_state` to record the session start time. DataFusion already patched `std::time::Instant` with `web-time`, but `SystemTime` comes from chrono.
+
+**Fix:** Enable chrono's `wasmbind` feature, which routes `Utc::now()` through `js_sys::Date` instead of `std::time::SystemTime`. One line in `Cargo.toml`:
+```toml
+chrono = { version = "0.4", default-features = false, features = ["wasmbind"] }
+```
+Cargo feature unification propagates this to all transitive chrono users.
 
 ### Spike Results
 
 | Question | Result |
 |----------|--------|
 | DataFusion compiles to WASM? | **Yes** |
-| Feature flags needed? | `default-features = false`, `sql`, `nested_expressions` + `getrandom/wasm_js` |
+| Feature flags needed? | `default-features = false`, `sql`, `nested_expressions` + `getrandom/wasm_js` + `chrono/wasmbind` |
 | WASM binary size (raw, after wasm-opt -Os)? | **24 MB** |
 | Gzipped size? | **5.9 MB** |
 | wasm-bindgen JS glue? | Works, auto-generated types match our API |
 | Build pipeline (build.py)? | End-to-end: cargo build → wasm-bindgen → wasm-opt → copy to web app |
 | TypeScript integration? | Clean — `tsc --noEmit` passes, all 664 frontend tests pass |
 | Backend integration? | Clean — `cargo build` + all 20 backend tests pass |
-| Runtime (WASM in browser)? | **Panics** — `std::time::Instant::now()` not available on `wasm32-unknown-unknown` |
-| WASM integration tests? | 7 tests via `wasm-bindgen-test`, all reproduce the time panic |
+| Runtime (WASM in browser)? | **Yes** — all 7 integration tests pass (engine creation, IPC register, SQL, aggregates, error paths, reset) |
+| WASM integration tests? | 7 tests via `wasm-bindgen-test` in headless Firefox, all pass |
 
 ### What's Left to Validate (runtime)
 
-- [ ] Fix `std::time` panic (patch with `web-time` crate)
-- [ ] IPC bytes from server → `register_table` in browser
-- [ ] `execute_sql` against registered table in browser
+- [x] Fix `std::time` panic → chrono `wasmbind` feature
+- [x] `register_table` with Arrow IPC bytes in WASM → works (test_register_table)
+- [x] `execute_sql` against registered table in WASM → works (test_execute_sql)
+- [x] IPC round-trip: register → query → parse results → verify → works (test_execute_sql, test_aggregate_query)
+- [x] Aggregates (GROUP BY, COUNT, ORDER BY) in WASM → works (test_aggregate_query)
+- [ ] IPC bytes from server → `register_table` in browser (end-to-end with real data)
 - [ ] IPC output from WASM → `tableFromIPC` → rendered table
 - [ ] Lazy-loading latency in browser
-- [ ] Aggregates, joins, window functions in WASM DataFusion
+- [ ] Joins, window functions in WASM DataFusion
 - [ ] Single-threaded query performance for typical workloads
 
 ## Goal
@@ -132,14 +143,18 @@ version = "0.1.0"
 edition = "2021"
 
 [lib]
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 arrow = { version = "57.2", default-features = false, features = ["ipc"] }
+chrono = { version = "0.4", default-features = false, features = ["wasmbind"] }
 datafusion = { version = "52.1", default-features = false, features = ["nested_expressions", "sql"] }
 getrandom = { version = "0.3", features = ["wasm_js"] }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
+
+[dev-dependencies]
+wasm-bindgen-test = "0.3"
 
 [profile.release]
 lto = true
@@ -150,6 +165,7 @@ opt-level = "s"
 - `sql` + `nested_expressions` on DataFusion
 - `ipc` on Arrow (default-features off to avoid parquet/compression)
 - `getrandom` with `wasm_js` feature — required because DataFusion transitively pulls in `getrandom` (via `uuid` → `rand`), and `wasm32-unknown-unknown` has no OS-level entropy source. The `wasm_js` feature routes to `crypto.getRandomValues()`.
+- `chrono` with `wasmbind` feature — required because DataFusion uses `chrono::Utc::now()` for session timestamps, and on `wasm32-unknown-unknown` the default `std::time::SystemTime::now()` panics. The `wasmbind` feature routes through `js_sys::Date` instead.
 
 **Single-threaded execution constraint:** DataFusion internally uses `tokio::spawn` for parallel partition execution. On `wasm32-unknown-unknown` there is no multi-threaded tokio runtime — `wasm-bindgen-futures` provides `spawn_local` for single-threaded async. DataFusion falls back to single-partition execution, so queries will work but won't match native performance. This is acceptable for the POC.
 
@@ -357,16 +373,16 @@ Reuse the existing table rendering components from the Table screen. The local q
 |---|---|---|
 | Does DataFusion compile to WASM? | Step 1 — the spike | **Yes** |
 | What's the WASM binary size? | Step 1 — measure gzipped output | **24 MB raw, 5.9 MB gzipped** |
-| What DataFusion feature flags are needed? | Step 1 — iterative feature flag discovery | **Resolved** (see Cargo.toml above) |
-| Does DataFusion run in WASM? | `wasm-bindgen-test` integration tests | **No** — `std::time` panic (fix: `web-time` crate) |
-| Does IPC ingestion work? | Step 4+6 — `fetchQueryIPC` → `register_table` | Blocked on time fix |
-| Does local SQL execution work? | Step 6 — `execute_sql` against registered table | Blocked on time fix |
-| Does IPC output deserialize correctly? | Step 6 — `tableFromIPC` on WASM output | Blocked on time fix |
-| What's the latency? | Step 6 — measure register + execute + deserialize | Blocked on time fix |
+| What DataFusion feature flags are needed? | Step 1 — iterative feature flag discovery | **Resolved** (`sql`, `nested_expressions`, `getrandom/wasm_js`, `chrono/wasmbind`) |
+| Does DataFusion run in WASM? | `wasm-bindgen-test` integration tests | **Yes** — after chrono `wasmbind` fix |
+| Does IPC ingestion work? | `wasm-bindgen-test` — `test_register_table` | **Yes** — Arrow IPC → MemTable works |
+| Does local SQL execution work? | `wasm-bindgen-test` — `test_execute_sql` | **Yes** — SELECT, aggregates, GROUP BY |
+| Does IPC output deserialize correctly? | `wasm-bindgen-test` — round-trip verify | **Yes** — schema + data preserved |
+| What's the latency? | Step 6 — measure register + execute + deserialize | Pending (end-to-end with real data) |
 | Does Vite lazy-loading work? | Step 3 — WASM module loads on demand | Pending runtime test |
 | Does the build pipeline work? | Step 2 — WASM artifact flows into web app | **Yes** |
-| What DataFusion features work in WASM? | Manual testing — try aggregates, joins, window functions | Blocked on time fix |
-| Single-threaded perf acceptable? | Step 6 — measure query times for typical workloads | Blocked on time fix |
+| What DataFusion features work in WASM? | `wasm-bindgen-test` — aggregates confirmed; joins/windows pending | **Partial** — aggregates work, more testing needed |
+| Single-threaded perf acceptable? | Step 6 — measure query times for typical workloads | Pending (end-to-end with real data) |
 
 ## Scope Boundaries
 
@@ -391,7 +407,8 @@ Reuse the existing table rendering components from the Table screen. The local q
 
 **New:**
 - `rust/datafusion-wasm/Cargo.toml` + `src/lib.rs` + `README.md` (toolchain prereqs)
-- `rust/datafusion-wasm/build.py` — WASM build script
+- `rust/datafusion-wasm/tests/wasm_integration.rs` — 7 integration tests via `wasm-bindgen-test`
+- `rust/datafusion-wasm/build.py` — WASM build script (`--test` flag runs `wasm-pack test`)
 - `analytics-web-app/src/lib/datafusion-wasm/` — built WASM artifact + JS glue (output of build.py, checked in)
 - `analytics-web-app/src/lib/wasm-engine.ts`
 - `analytics-web-app/src/lib/screen-renderers/LocalQueryRenderer.tsx`
