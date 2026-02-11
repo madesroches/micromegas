@@ -71,6 +71,8 @@ ${presentationMd}
 console.log('Presentation built at: ${buildTime}');
 ${mainJs}
     </script>
+    <script data-goatcounter="https://madesroches.goatcounter.com/count"
+        async src="//gc.zgo.at/count.js"></script>
 </body>
 </html>`;
 
