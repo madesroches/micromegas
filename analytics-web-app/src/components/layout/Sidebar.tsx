@@ -1,5 +1,6 @@
 import { useLocation } from 'react-router-dom'
 import { AppLink } from '@/components/AppLink'
+import { useAuth } from '@/lib/auth'
 import { LayoutGrid, Layers, Wrench } from 'lucide-react'
 
 interface NavItem {
@@ -26,6 +27,7 @@ const navItems: NavItem[] = [
 
 export function Sidebar() {
   const location = useLocation()
+  const { user } = useAuth()
   const pathname = location.pathname
 
   const isActive = (item: NavItem) => {
@@ -63,25 +65,27 @@ export function Sidebar() {
           </AppLink>
         ))}
       </nav>
-      <div className="mt-auto">
-        <div className="h-px bg-theme-border mx-2 mb-1" />
-        <nav className="flex flex-col gap-1">
-          <AppLink
-            href={adminItem.href}
-            className={`group relative flex items-center justify-center w-10 h-10 mx-2 rounded-md transition-colors ${
-              isActive(adminItem)
-                ? 'bg-app-card text-accent-link'
-                : 'text-theme-text-secondary hover:bg-theme-border hover:text-theme-text-primary'
-            }`}
-            title={adminItem.label}
-          >
-            {adminItem.icon}
-            <span className="absolute left-16 px-2 py-1 bg-theme-border text-theme-text-primary text-sm rounded whitespace-nowrap opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-opacity z-50">
-              {adminItem.label}
-            </span>
-          </AppLink>
-        </nav>
-      </div>
+      {user?.is_admin && (
+        <div className="mt-auto">
+          <div className="h-px bg-theme-border mx-2 mb-1" />
+          <nav className="flex flex-col gap-1">
+            <AppLink
+              href={adminItem.href}
+              className={`group relative flex items-center justify-center w-10 h-10 mx-2 rounded-md transition-colors ${
+                isActive(adminItem)
+                  ? 'bg-app-card text-accent-link'
+                  : 'text-theme-text-secondary hover:bg-theme-border hover:text-theme-text-primary'
+              }`}
+              title={adminItem.label}
+            >
+              {adminItem.icon}
+              <span className="absolute left-16 px-2 py-1 bg-theme-border text-theme-text-primary text-sm rounded whitespace-nowrap opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-opacity z-50">
+                {adminItem.label}
+              </span>
+            </AppLink>
+          </nav>
+        </div>
+      )}
     </aside>
   )
 }
