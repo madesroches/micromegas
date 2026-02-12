@@ -2,6 +2,7 @@
 """Build micromegas-datafusion-wasm and copy artifacts to analytics-web-app."""
 
 import argparse
+import json
 import re
 import shutil
 import subprocess
@@ -15,6 +16,13 @@ OUTPUT_DIR = (
     CRATE_DIR.parent.parent / "analytics-web-app" / "src" / "lib" / "datafusion-wasm"
 )
 WASM_FILE = "micromegas_datafusion_wasm.wasm"
+WASM_PACKAGE_JSON = {
+    "name": "micromegas-datafusion-wasm",
+    "version": "0.1.0",
+    "type": "module",
+    "main": "micromegas_datafusion_wasm.js",
+    "types": "micromegas_datafusion_wasm.d.ts",
+}
 
 
 def run(cmd: list[str], **kwargs) -> None:
@@ -107,11 +115,7 @@ def build() -> None:
 
     # Write a package.json so this can be used as a local dependency
     package_json = OUTPUT_DIR / "package.json"
-    package_json.write_text(
-        '{\n  "name": "micromegas-datafusion-wasm",\n  "version": "0.1.0",\n'
-        '  "type": "module",\n  "main": "micromegas_datafusion_wasm.js",\n'
-        '  "types": "micromegas_datafusion_wasm.d.ts"\n}\n'
-    )
+    package_json.write_text(json.dumps(WASM_PACKAGE_JSON, indent=2) + "\n")
     print("  package.json")
 
     print("Done!")

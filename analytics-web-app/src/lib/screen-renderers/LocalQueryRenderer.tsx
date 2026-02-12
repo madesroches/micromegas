@@ -135,8 +135,8 @@ export function LocalQueryRenderer({
       engine.reset()
       const rowCount = engine.register_table(localConfig.sourceTableName, ipcBytes)
       setSourceElapsedMs(performance.now() - sourceStartRef.current)
+      // Authoritative row count from registration (progressive estimate may undercount)
       setSourceRowCount(rowCount)
-      setSourceByteSize(ipcBytes.byteLength)
       setSourceStatus('ready')
     } catch (e: unknown) {
       if (!controller.signal.aborted) {
@@ -152,9 +152,10 @@ export function LocalQueryRenderer({
   const localBusyRef = useRef(false)
   const localPendingRef = useRef(false)
   const localCancelledRef = useRef(false)
-
-  // Clear pending flag on unmount to prevent recursive executeLocal on freed engine
-  useEffect(() => () => { localCancelledRef.current = true }, [])
+  useEffect(() => {
+    localCancelledRef.current = false
+    return () => { localCancelledRef.current = true }
+  }, [])
 
   const executeLocal = useCallback(async () => {
     if (!engine || localCancelledRef.current) return
