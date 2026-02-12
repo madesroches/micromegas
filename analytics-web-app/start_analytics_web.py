@@ -214,6 +214,7 @@ def setup_environment():
 def main():
     parser = argparse.ArgumentParser(description="Start Analytics Web App Development Environment")
     parser.add_argument("--disable-auth", action="store_true", help="Disable authentication even if OIDC config is present")
+    parser.add_argument("--build-wasm", action="store_true", help="Force rebuild of the datafusion-wasm engine")
     args = parser.parse_args()
 
     print_status("Starting Analytics Web App Development Environment", "info")
@@ -346,9 +347,9 @@ def main():
             print_status("The backend process is running but not responding to health checks", "error")
             return 1
 
-        # Build WASM engine if not already built
+        # Build WASM engine if not already built or if --build-wasm is passed
         wasm_binary = Path("analytics-web-app/src/lib/datafusion-wasm/datafusion_wasm_bg.wasm")
-        if not wasm_binary.exists():
+        if args.build_wasm or not wasm_binary.exists():
             print_status("Building datafusion-wasm...", "info")
             try:
                 subprocess.run(
