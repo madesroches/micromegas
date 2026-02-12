@@ -1064,6 +1064,7 @@ name = "datafusion-wasm"
 version = "0.1.0"
 dependencies = [
  "arrow",
+ "arrow-cast",
  "chrono",
  "datafusion",
  "getrandom 0.3.4",

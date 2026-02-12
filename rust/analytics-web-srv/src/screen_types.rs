@@ -151,11 +151,11 @@ impl ScreenType {
                 "cells": []
             }),
             ScreenType::LocalQuery => serde_json::json!({
-                "timeRangeFrom": "now-5m",
+                "timeRangeFrom": "now-1h",
                 "timeRangeTo": "now",
-                "sourceSql": "SELECT process_id, exe, start_time, username, computer\nFROM processes\nLIMIT 100",
+                "sourceSql": "SELECT *\nFROM log_entries\nLIMIT 100",
                 "sourceTableName": "data",
-                "localSql": "SELECT * FROM data LIMIT 10"
+                "localSql": "SELECT msg, exe\nFROM data LIMIT 10"
             }),
         }
     }

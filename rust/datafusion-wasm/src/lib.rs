@@ -1,10 +1,51 @@
 use std::sync::Arc;
 
+use arrow::array::RecordBatch;
+use arrow_cast::cast;
+use arrow::datatypes::{DataType, Field, Schema};
 use arrow::ipc::reader::StreamReader;
 use arrow::ipc::writer::StreamWriter;
 use datafusion::execution::SessionStateBuilder;
+use datafusion::physical_optimizer::optimizer::PhysicalOptimizer;
+use datafusion::physical_optimizer::PhysicalOptimizerRule;
 use datafusion::prelude::*;
 use wasm_bindgen::prelude::*;
+
+/// Convert dictionary-encoded columns to their value types.
+fn unpack_dictionaries(batch: &RecordBatch) -> Result<RecordBatch, arrow::error::ArrowError> {
+    let schema = batch.schema();
+    let mut new_fields = Vec::new();
+    let mut new_columns = Vec::new();
+    let mut needs_unpack = false;
+
+    for (i, field) in schema.fields().iter().enumerate() {
+        match field.data_type() {
+            DataType::Dictionary(_, value_type) => {
+                needs_unpack = true;
+                new_fields.push(Arc::new(Field::new(
+                    field.name(),
+                    value_type.as_ref().clone(),
+                    field.is_nullable(),
+                )));
+                new_columns.push(cast(batch.column(i), value_type)?);
+            }
+            _ => {
+                new_fields.push(Arc::new(field.as_ref().clone()));
+                new_columns.push(batch.column(i).clone());
+            }
+        }
+    }
+
+    if !needs_unpack {
+        return Ok(batch.clone());
+    }
+
+    let new_schema = Arc::new(Schema::new_with_metadata(
+        new_fields,
+        schema.metadata().clone(),
+    ));
+    RecordBatch::try_new(new_schema, new_columns)
+}
 
 #[wasm_bindgen]
 pub struct WasmQueryEngine {
@@ -15,8 +56,20 @@ pub struct WasmQueryEngine {
 impl WasmQueryEngine {
     #[wasm_bindgen(constructor)]
     pub fn new() -> Self {
+        // Work around a DataFusion 52.1 bug where the LimitPushdown physical
+        // optimizer rule removes GlobalLimitExec without actually pushing the
+        // fetch into DataSourceExec, causing LIMIT to be silently ignored.
+        // Fixed upstream in https://github.com/apache/datafusion/pull/20048
+        // but not yet released.
+        let filtered_rules = PhysicalOptimizer::default()
+            .rules
+            .into_iter()
+            .filter(|rule: &Arc<dyn PhysicalOptimizerRule + Send + Sync>| rule.name() != "LimitPushdown")
+            .collect::<Vec<_>>();
+
         let state = SessionStateBuilder::new()
             .with_default_features()
+            .with_physical_optimizer_rules(filtered_rules)
             .build();
         Self {
             ctx: SessionContext::new_with_state(state),
@@ -30,16 +83,23 @@ impl WasmQueryEngine {
         let reader = StreamReader::try_new(cursor, None)
             .map_err(|e| JsValue::from_str(&format!("Failed to read IPC stream: {e}")))?;
 
-        let schema = reader.schema();
         let mut batches = Vec::new();
         let mut row_count: usize = 0;
 
         for batch_result in reader {
             let batch = batch_result
                 .map_err(|e| JsValue::from_str(&format!("Failed to read batch: {e}")))?;
+            let batch = unpack_dictionaries(&batch)
+                .map_err(|e| JsValue::from_str(&format!("Failed to unpack dictionaries: {e}")))?;
             row_count += batch.num_rows();
             batches.push(batch);
         }
+
+        let schema = if batches.is_empty() {
+            Arc::new(Schema::empty())
+        } else {
+            batches[0].schema()
+        };
 
         let table = datafusion::datasource::MemTable::try_new(schema, vec![batches])
             .map_err(|e| JsValue::from_str(&format!("Failed to create MemTable: {e}")))?;

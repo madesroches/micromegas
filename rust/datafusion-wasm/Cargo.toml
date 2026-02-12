@@ -8,6 +8,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 arrow = { version = "57.2", default-features = false, features = ["ipc"] }
+arrow-cast = { version = "57.2", default-features = false }
 chrono = { version = "0.4", default-features = false, features = ["wasmbind"] }
 datafusion = { version = "52.1", default-features = false, features = ["nested_expressions", "sql"] }
 getrandom = { version = "0.3", features = ["wasm_js"] }

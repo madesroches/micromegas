@@ -77,12 +77,24 @@ export function LocalQueryRenderer({
   const [sourceRowCount, setSourceRowCount] = useState(0)
   const [sourceByteSize, setSourceByteSize] = useState(0)
   const [sourceError, setSourceError] = useState<string | null>(null)
+  const [sourceElapsedMs, setSourceElapsedMs] = useState<number | null>(null)
+  const sourceStartRef = useRef<number>(0)
 
   // Local query state
   const [localResult, setLocalResult] = useState<Table | null>(null)
   const [localStatus, setLocalStatus] = useState<'idle' | 'loading' | 'done' | 'error'>('idle')
   const [localError, setLocalError] = useState<string | null>(null)
+  const [localElapsedMs, setLocalElapsedMs] = useState<number | null>(null)
   const [autoRun, setAutoRun] = useState(true)
+
+  // Live elapsed timer for source query (long-running network fetch)
+  useEffect(() => {
+    if (sourceStatus !== 'loading') return
+    const id = setInterval(() => {
+      setSourceElapsedMs(performance.now() - sourceStartRef.current)
+    }, 100)
+    return () => clearInterval(id)
+  }, [sourceStatus])
 
   // Abort controller for source fetches
   const abortRef = useRef<AbortController | null>(null)
@@ -103,9 +115,12 @@ export function LocalQueryRenderer({
     setSourceError(null)
     setSourceRowCount(0)
     setSourceByteSize(0)
+    sourceStartRef.current = performance.now()
+    setSourceElapsedMs(0)
     setLocalResult(null)
     setLocalStatus('idle')
     setLocalError(null)
+    setLocalElapsedMs(null)
     try {
       const ipcBytes = await fetchQueryIPC(
         {
@@ -119,6 +134,7 @@ export function LocalQueryRenderer({
       )
       engine.reset()
       const rowCount = engine.register_table(localConfig.sourceTableName, ipcBytes)
+      setSourceElapsedMs(performance.now() - sourceStartRef.current)
       setSourceRowCount(rowCount)
       setSourceByteSize(ipcBytes.byteLength)
       setSourceStatus('ready')
@@ -130,30 +146,54 @@ export function LocalQueryRenderer({
     }
   }, [engine, localConfig.sourceSql, localConfig.sourceTableName, timeRange.begin, timeRange.end, effectiveDataSource, handleProgress])
 
-  // Execute local query against WASM
+  // Execute local query against WASM (serialized — one at a time)
+  const localSqlRef = useRef(localConfig.localSql)
+  localSqlRef.current = localConfig.localSql
+  const localBusyRef = useRef(false)
+  const localPendingRef = useRef(false)
+
   const executeLocal = useCallback(async () => {
     if (!engine) return
+    if (localBusyRef.current) {
+      console.log('[local-query] busy, marking pending')
+      localPendingRef.current = true
+      return
+    }
+    localBusyRef.current = true
     setLocalStatus('loading')
     setLocalError(null)
+    setLocalElapsedMs(null)
+    setLocalResult(null)
+    const sql = localSqlRef.current
+    console.log('[local-query] executing:', sql)
+    const t0 = performance.now()
     try {
-      const ipcBytes = await engine.execute_sql(localConfig.localSql)
+      const ipcBytes = await engine.execute_sql(sql)
       const table = tableFromIPC(ipcBytes)
+      console.log(`[local-query] result: ${table.numRows} rows, ${ipcBytes.byteLength} bytes`)
+      setLocalElapsedMs(performance.now() - t0)
       setLocalResult(table)
       setLocalStatus('done')
     } catch (e: unknown) {
+      console.log('[local-query] error:', e instanceof Error ? e.message : String(e))
       setLocalError(e instanceof Error ? e.message : String(e))
       setLocalStatus('error')
+    } finally {
+      localBusyRef.current = false
+      if (localPendingRef.current) {
+        console.log('[local-query] executing pending')
+        localPendingRef.current = false
+        executeLocal()
+      }
     }
-  }, [engine, localConfig.localSql])
+  }, [engine])
 
-  // Auto-execute local query on text changes
+  // Debounced auto-execute local query on text changes
   useEffect(() => {
     if (!autoRun || !engine || sourceStatus !== 'ready') return
-    const timer = setTimeout(() => {
-      executeLocal()
-    }, 300)
+    const timer = setTimeout(executeLocal, 300)
     return () => clearTimeout(timer)
-  }, [autoRun, engine, sourceStatus, executeLocal])
+  }, [autoRun, engine, sourceStatus, localConfig.localSql, executeLocal])
 
   // Config change handlers
   const handleSourceSqlChange = useCallback((sql: string) => {
@@ -172,14 +212,21 @@ export function LocalQueryRenderer({
     onConfigChange((prev) => ({ ...prev, dataSource: ds }))
   }, [onConfigChange])
 
-  // Format byte size
+  // Format helpers
   const formatBytes = (bytes: number): string => {
     if (bytes < 1024) return `${bytes} B`
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
   }
 
+  const formatDuration = (ms: number): string => {
+    if (ms < 1000) return `${Math.round(ms)}ms`
+    return `${(ms / 1000).toFixed(2)}s`
+  }
+
   // Render results table
+  const MAX_DISPLAY_ROWS = 10_000
+
   const renderResultTable = () => {
     if (localStatus === 'loading' && !localResult) {
       return <LoadingState message="Executing local query..." />
@@ -190,9 +237,18 @@ export function LocalQueryRenderer({
         name: field.name,
         type: field.type,
       }))
+      const truncated = localResult.numRows > MAX_DISPLAY_ROWS
+      const displayData = truncated
+        ? { numRows: MAX_DISPLAY_ROWS, get: (i: number) => localResult.get(i) }
+        : localResult
 
       return (
         <div className="flex-1 overflow-auto bg-app-panel border border-theme-border rounded-lg">
+          {truncated && (
+            <div className="px-3 py-1.5 text-xs text-theme-text-muted bg-app-card border-b border-theme-border">
+              Showing {MAX_DISPLAY_ROWS.toLocaleString()} of {localResult.numRows.toLocaleString()} rows
+            </div>
+          )}
           <table className="w-full">
             <thead className="sticky top-0">
               <tr className="bg-app-card border-b border-theme-border">
@@ -206,7 +262,7 @@ export function LocalQueryRenderer({
                 ))}
               </tr>
             </thead>
-            <TableBody data={localResult} columns={columns} />
+            <TableBody data={displayData} columns={columns} />
           </table>
         </div>
       )
@@ -237,9 +293,10 @@ export function LocalQueryRenderer({
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-sm font-semibold text-theme-text-primary">Source Query</h3>
             <div className="flex items-center gap-3 text-xs text-theme-text-muted">
-              {(sourceStatus === 'ready' || sourceStatus === 'loading') && (sourceRowCount > 0 || sourceByteSize > 0) && (
+              {(sourceStatus === 'ready' || sourceStatus === 'loading') && (sourceRowCount > 0 || sourceByteSize > 0 || sourceElapsedMs != null) && (
                 <span>
                   {sourceRowCount.toLocaleString()} rows ({formatBytes(sourceByteSize)})
+                  {sourceElapsedMs != null && ` in ${formatDuration(sourceElapsedMs)}`}
                 </span>
               )}
               {sourceStatus === 'loading' && (
@@ -302,7 +359,10 @@ export function LocalQueryRenderer({
             <h3 className="text-sm font-semibold text-theme-text-primary">Local Query</h3>
             <div className="flex items-center gap-3 text-xs text-theme-text-muted">
               {(localStatus === 'done' || localStatus === 'error') && localResult && (
-                <span>{localResult.numRows.toLocaleString()} rows</span>
+                <span>
+                  {localResult.numRows.toLocaleString()} rows
+                  {localElapsedMs != null && ` in ${formatDuration(localElapsedMs)}`}
+                </span>
               )}
             </div>
           </div>
