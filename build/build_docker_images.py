@@ -24,6 +24,10 @@ DOCKER_DIR = REPO_ROOT / "docker"
 DOCKERHUB_USER = "marcantoinedesroches"
 DOCKERHUB_REPO = "micromegas"
 
+# Shared WASM builder image (dependency for analytics-web and all-in-one)
+WASM_IMAGE = "micromegas-wasm-builder:latest"
+WASM_SERVICES = {"analytics-web", "all"}
+
 # Service definitions: name -> (dockerfile, description)
 SERVICES = {
     "ingestion": ("ingestion.Dockerfile", "Telemetry ingestion server"),
@@ -60,6 +64,29 @@ def run_command(cmd: list[str], cwd: Path = REPO_ROOT) -> bool:
     return result.returncode == 0
 
 
+def ensure_wasm_builder() -> bool:
+    """Build the shared WASM builder image if not already built this session."""
+    if getattr(ensure_wasm_builder, "_built", False):
+        return True
+
+    print(f"\n{'='*60}")
+    print("Building WASM builder (shared dependency)")
+    print(f"{'='*60}\n")
+
+    cmd = [
+        "docker", "build",
+        "-f", str(DOCKER_DIR / "wasm-builder.Dockerfile"),
+        "-t", WASM_IMAGE,
+        "."
+    ]
+    if not run_command(cmd):
+        print("Failed to build WASM builder image")
+        return False
+
+    ensure_wasm_builder._built = True
+    return True
+
+
 def build_image(service: str, version: str, push: bool = False) -> dict:
     """Build a Docker image for a service.
 
@@ -81,6 +108,11 @@ def build_image(service: str, version: str, push: bool = False) -> dict:
     if service not in SERVICES:
         print(f"Unknown service: {service}")
         return result
+
+    # Build WASM dependency first if needed
+    if service in WASM_SERVICES:
+        if not ensure_wasm_builder():
+            return result
 
     dockerfile, description = SERVICES[service]
     image_name = f"{DOCKERHUB_USER}/{DOCKERHUB_REPO}-{service}"

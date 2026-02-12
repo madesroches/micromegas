@@ -1,17 +1,24 @@
 # All-in-one image containing all micromegas services
 # Useful for dev/test deployments on a single machine
 
-# Stage 1: Build frontend
+# Stage 1: WASM query engine (pre-built via wasm-builder.Dockerfile)
+ARG WASM_IMAGE=micromegas-wasm-builder:latest
+FROM ${WASM_IMAGE} AS wasm-builder
+
+# Stage 2: Build frontend
 FROM node:20-alpine AS frontend-builder
 
 WORKDIR /app
 COPY analytics-web-app/package.json analytics-web-app/yarn.lock ./
+# Local file: dependency must exist for yarn to resolve it
+COPY analytics-web-app/src/lib/datafusion-wasm/ ./src/lib/datafusion-wasm/
 RUN yarn install --frozen-lockfile
 
 COPY analytics-web-app/ ./
+COPY --from=wasm-builder /build/rust/datafusion-wasm/pkg/ ./src/lib/datafusion-wasm/
 RUN yarn build
 
-# Stage 2: Build all Rust binaries
+# Stage 3: Build all Rust binaries
 FROM rust:1-bookworm AS rust-builder
 
 WORKDIR /build
@@ -25,7 +32,7 @@ RUN cargo build --release \
     --bin http-gateway-srv \
     --bin analytics-web-srv
 
-# Stage 3: Runtime with all services
+# Stage 4: Runtime with all services
 FROM debian:bookworm-slim
 
 RUN apt-get update && \

@@ -79,10 +79,14 @@ impl FlightSQLClientFactory for BearerFlightSQLClientFactory {
             .url
             .parse::<Uri>()
             .with_context(|| "parsing flightsql url")?;
-        let tls_config = ClientTlsConfig::new().with_native_roots();
-        let channel = Channel::builder(flight_url)
-            .tls_config(tls_config)
-            .with_context(|| "tls_config")?
+        let mut endpoint = Channel::builder(flight_url.clone());
+        if flight_url.scheme_str() == Some("https") {
+            let tls_config = ClientTlsConfig::new().with_native_roots();
+            endpoint = endpoint
+                .tls_config(tls_config)
+                .with_context(|| "tls_config")?;
+        }
+        let channel = endpoint
             .connect()
             .await
             .with_context(|| "connecting grpc channel")?;

@@ -37,10 +37,14 @@ def get_lockfile_wasm_bindgen_version() -> str:
 
 
 def check_tools() -> None:
-    for tool in ["wasm-bindgen", "wasm-opt"]:
-        if shutil.which(tool) is None:
-            print(f"ERROR: {tool} not found. See README.md for install instructions.")
-            sys.exit(1)
+    if shutil.which("wasm-bindgen") is None:
+        print("ERROR: wasm-bindgen not found. See README.md for install instructions.")
+        sys.exit(1)
+
+    if shutil.which("wasm-opt") is None:
+        print("WARNING: wasm-opt not found, skipping WASM optimization.")
+        print("  Rust release profile (lto + opt-level=s) already optimizes the binary.")
+        print("  Install binaryen for additional size reduction.")
 
     expected = get_lockfile_wasm_bindgen_version()
     result = subprocess.run(
@@ -89,9 +93,10 @@ def build() -> None:
         ]
     )
 
-    print("Optimizing with wasm-opt...")
-    wasm_bg = PKG_DIR / "datafusion_wasm_bg.wasm"
-    run(["wasm-opt", str(wasm_bg), "-Os", "-o", str(wasm_bg)])
+    if shutil.which("wasm-opt"):
+        print("Optimizing with wasm-opt...")
+        wasm_bg = PKG_DIR / "datafusion_wasm_bg.wasm"
+        run(["wasm-opt", str(wasm_bg), "-Os", "-o", str(wasm_bg)])
 
     print(f"Copying artifacts to {OUTPUT_DIR}...")
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
