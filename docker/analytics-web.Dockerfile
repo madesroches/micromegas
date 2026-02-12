@@ -3,9 +3,7 @@
 # Stage 1: Build WASM query engine
 FROM rust:1-bookworm AS wasm-builder
 
-RUN rustup target add wasm32-unknown-unknown && \
-    apt-get update && apt-get install -y --no-install-recommends binaryen && \
-    rm -rf /var/lib/apt/lists/*
+RUN rustup target add wasm32-unknown-unknown
 
 WORKDIR /build/rust/datafusion-wasm
 
@@ -18,11 +16,10 @@ RUN WASM_BINDGEN_VERSION=$(grep -A1 'name = "wasm-bindgen"' Cargo.lock | grep ve
 COPY rust/datafusion-wasm/ ./
 RUN cargo build --target wasm32-unknown-unknown --release
 
-# Generate JS bindings and optimize
+# Generate JS bindings (Rust release profile already optimizes with lto + opt-level=s)
 RUN mkdir -p pkg && \
     wasm-bindgen target/wasm32-unknown-unknown/release/datafusion_wasm.wasm \
-        --out-dir pkg --target web && \
-    wasm-opt pkg/datafusion_wasm_bg.wasm -Os -o pkg/datafusion_wasm_bg.wasm
+        --out-dir pkg --target web
 
 # Write package.json for the WASM package
 RUN printf '{\n  "name": "datafusion-wasm",\n  "version": "0.1.0",\n  "type": "module",\n  "main": "datafusion_wasm.js",\n  "types": "datafusion_wasm.d.ts"\n}\n' > pkg/package.json
