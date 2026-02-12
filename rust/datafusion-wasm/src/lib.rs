@@ -22,6 +22,8 @@ impl WasmQueryEngine {
         // fetch into DataSourceExec, causing LIMIT to be silently ignored.
         // Fixed upstream in https://github.com/apache/datafusion/pull/20048
         // but not yet released.
+        // TODO: remove after upgrading DataFusion past 52.1
+        // https://github.com/madesroches/micromegas/issues/809
         let filtered_rules = PhysicalOptimizer::default()
             .rules
             .into_iter()
