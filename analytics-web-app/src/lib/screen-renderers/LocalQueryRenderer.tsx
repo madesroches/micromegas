@@ -8,7 +8,7 @@ import { LoadingState, EmptyState } from './shared'
 import { SyntaxEditor } from '@/components/SyntaxEditor'
 import { DataSourceField } from '@/components/DataSourceSelector'
 import { TableBody, type TableColumn } from './table-utils'
-import { fetchQueryIPC } from '../arrow-stream'
+import { fetchQueryIPC, type FetchProgress } from '../arrow-stream'
 import { loadWasmEngine } from '../wasm-engine'
 
 interface LocalQueryConfig {
@@ -88,6 +88,11 @@ export function LocalQueryRenderer({
   useEffect(() => () => abortRef.current?.abort(), [])
 
   // Fetch source data → register in WASM
+  const handleProgress = useCallback((progress: FetchProgress) => {
+    setSourceRowCount(progress.rows)
+    setSourceByteSize(progress.bytes)
+  }, [])
+
   const fetchAndRegister = useCallback(async () => {
     if (!engine) return
     abortRef.current?.abort()
@@ -95,6 +100,8 @@ export function LocalQueryRenderer({
     abortRef.current = controller
     setSourceStatus('loading')
     setSourceError(null)
+    setSourceRowCount(0)
+    setSourceByteSize(0)
     setLocalResult(null)
     setLocalStatus('idle')
     setLocalError(null)
@@ -107,6 +114,7 @@ export function LocalQueryRenderer({
           dataSource: effectiveDataSource,
         },
         controller.signal,
+        handleProgress,
       )
       engine.reset()
       const rowCount = engine.register_table(localConfig.sourceTableName, ipcBytes)
@@ -119,7 +127,7 @@ export function LocalQueryRenderer({
         setSourceStatus('error')
       }
     }
-  }, [engine, localConfig.sourceSql, localConfig.sourceTableName, timeRange.begin, timeRange.end, effectiveDataSource])
+  }, [engine, localConfig.sourceSql, localConfig.sourceTableName, timeRange.begin, timeRange.end, effectiveDataSource, handleProgress])
 
   // Execute local query against WASM
   const executeLocal = useCallback(async () => {
@@ -219,7 +227,7 @@ export function LocalQueryRenderer({
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-sm font-semibold text-theme-text-primary">Source Query</h3>
             <div className="flex items-center gap-3 text-xs text-theme-text-muted">
-              {sourceStatus === 'ready' && (
+              {(sourceStatus === 'ready' || sourceStatus === 'loading') && (sourceRowCount > 0 || sourceByteSize > 0) && (
                 <span>
                   {sourceRowCount.toLocaleString()} rows ({formatBytes(sourceByteSize)})
                 </span>
@@ -227,7 +235,7 @@ export function LocalQueryRenderer({
               {sourceStatus === 'loading' && (
                 <span className="flex items-center gap-1.5">
                   <span className="animate-spin rounded-full h-3 w-3 border border-accent-link border-t-transparent" />
-                  Fetching...
+                  Fetching…
                 </span>
               )}
             </div>

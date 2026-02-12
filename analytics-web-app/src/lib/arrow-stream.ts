@@ -8,7 +8,7 @@
  * - {"type":"error","code":"..","message":".."}\n on error
  */
 
-import { RecordBatch, RecordBatchReader, Schema } from 'apache-arrow';
+import { RecordBatch, RecordBatchReader, Schema, Message } from 'apache-arrow';
 import { authenticatedFetch, AuthenticationError, getApiBase } from './api';
 
 export type ErrorCode = 'INVALID_SQL' | 'CONNECTION_FAILED' | 'INTERNAL' | 'FORBIDDEN';
@@ -306,6 +306,32 @@ export async function* streamQuery(
   }
 }
 
+export interface FetchProgress {
+  bytes: number;
+  rows: number;
+}
+
+/**
+ * Extract row count from an Arrow IPC message's metadata.
+ * IPC message layout: 4-byte continuation (0xFFFFFFFF) + 4-byte metadata_size + metadata flatbuffer + body
+ */
+function extractRowCount(ipcBytes: Uint8Array): number {
+  if (ipcBytes.length < 8) return 0;
+  const view = new DataView(ipcBytes.buffer, ipcBytes.byteOffset, ipcBytes.byteLength);
+  const metadataSize = view.getInt32(4, true);
+  if (metadataSize <= 0) return 0;
+  try {
+    const metadata = ipcBytes.subarray(8, 8 + metadataSize);
+    const msg = Message.decode(metadata);
+    if (msg.isRecordBatch()) {
+      return msg.header().length;
+    }
+  } catch {
+    // ignore parse errors
+  }
+  return 0;
+}
+
 /**
  * Fetches query results as raw Arrow IPC stream bytes.
  * Returns a complete IPC stream (schema + batches + EOS) suitable for
@@ -314,6 +340,7 @@ export async function* streamQuery(
 export async function fetchQueryIPC(
   params: StreamQueryParams,
   signal?: AbortSignal,
+  onProgress?: (progress: FetchProgress) => void,
 ): Promise<Uint8Array> {
   const response = await authenticatedFetch(`${getApiBase()}/query-stream`, {
     method: 'POST',
@@ -359,6 +386,7 @@ export async function fetchQueryIPC(
     // Collect all IPC message bytes from the framed protocol
     const ipcChunks: Uint8Array[] = [];
     let totalSize = 0;
+    let totalRows = 0;
 
     // eslint-disable-next-line no-constant-condition
     while (true) {
@@ -378,6 +406,10 @@ export async function fetchQueryIPC(
           const bytes = await bufferedReader.readBytes(frame.size);
           ipcChunks.push(bytes);
           totalSize += bytes.length;
+          if (onProgress && frame.type === 'batch') {
+            totalRows += extractRowCount(bytes);
+            onProgress({ bytes: totalSize, rows: totalRows });
+          }
           break;
         }
         case 'done': {
