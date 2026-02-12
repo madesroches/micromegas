@@ -116,7 +116,7 @@ export function LocalQueryRenderer({
     setSourceRowCount(0)
     setSourceByteSize(0)
     sourceStartRef.current = performance.now()
-    setSourceElapsedMs(0)
+    setSourceElapsedMs(null)
     setLocalResult(null)
     setLocalStatus('idle')
     setLocalError(null)
@@ -151,9 +151,13 @@ export function LocalQueryRenderer({
   localSqlRef.current = localConfig.localSql
   const localBusyRef = useRef(false)
   const localPendingRef = useRef(false)
+  const localCancelledRef = useRef(false)
+
+  // Clear pending flag on unmount to prevent recursive executeLocal on freed engine
+  useEffect(() => () => { localCancelledRef.current = true }, [])
 
   const executeLocal = useCallback(async () => {
-    if (!engine) return
+    if (!engine || localCancelledRef.current) return
     if (localBusyRef.current) {
       localPendingRef.current = true
       return
@@ -167,16 +171,18 @@ export function LocalQueryRenderer({
     const t0 = performance.now()
     try {
       const ipcBytes = await engine.execute_sql(sql)
+      if (localCancelledRef.current) return
       const table = tableFromIPC(ipcBytes)
       setLocalElapsedMs(performance.now() - t0)
       setLocalResult(table)
       setLocalStatus('done')
     } catch (e: unknown) {
+      if (localCancelledRef.current) return
       setLocalError(e instanceof Error ? e.message : String(e))
       setLocalStatus('error')
     } finally {
       localBusyRef.current = false
-      if (localPendingRef.current) {
+      if (localPendingRef.current && !localCancelledRef.current) {
         localPendingRef.current = false
         executeLocal()
       }
