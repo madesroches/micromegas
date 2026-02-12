@@ -59,7 +59,7 @@ typescript/*/dist/
 grafana/dist/
 grafana/coverage/
 
-# datafusion-wasm build artifacts
+# micromegas-datafusion-wasm build artifacts
 rust/datafusion-wasm/pkg/
-analytics-web-app/src/lib/datafusion-wasm/datafusion_wasm_bg.wasm
-analytics-web-app/src/lib/datafusion-wasm/datafusion_wasm_bg.wasm.d.ts
+analytics-web-app/src/lib/datafusion-wasm/micromegas_datafusion_wasm_bg.wasm
+analytics-web-app/src/lib/datafusion-wasm/micromegas_datafusion_wasm_bg.wasm.d.ts

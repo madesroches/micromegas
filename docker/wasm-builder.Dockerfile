@@ -21,8 +21,8 @@ RUN cargo build --target wasm32-unknown-unknown --release
 
 # Generate JS bindings (Rust release profile already optimizes with lto + opt-level=s)
 RUN mkdir -p pkg && \
-    wasm-bindgen target/wasm32-unknown-unknown/release/datafusion_wasm.wasm \
+    wasm-bindgen target/wasm32-unknown-unknown/release/micromegas_datafusion_wasm.wasm \
         --out-dir pkg --target web
 
-# Write package.json for the WASM package
-RUN printf '{\n  "name": "datafusion-wasm",\n  "version": "0.1.0",\n  "type": "module",\n  "main": "datafusion_wasm.js",\n  "types": "datafusion_wasm.d.ts"\n}\n' > pkg/package.json
+# Write package.json for the WASM package (keep in sync with WASM_PACKAGE_JSON in build.py)
+RUN printf '{\n  "name": "micromegas-datafusion-wasm",\n  "version": "0.1.0",\n  "type": "module",\n  "main": "micromegas_datafusion_wasm.js",\n  "types": "micromegas_datafusion_wasm.d.ts"\n}\n' > pkg/package.json

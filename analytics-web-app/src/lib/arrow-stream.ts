@@ -3,7 +3,7 @@
  *
  * Implements a JSON-framed protocol parser that streams Arrow IPC data:
  * - {"type":"schema","size":N}\n followed by N bytes of schema IPC
- * - {"type":"batch","size":N}\n followed by N bytes of batch IPC
+ * - {"type":"batch","size":N,"rows":M}\n followed by N bytes of batch IPC
  * - {"type":"done"}\n on success
  * - {"type":"error","code":"..","message":".."}\n on error
  */
@@ -16,6 +16,7 @@ export type ErrorCode = 'INVALID_SQL' | 'CONNECTION_FAILED' | 'INTERNAL' | 'FORB
 interface DataHeader {
   type: 'schema' | 'batch';
   size: number;
+  rows?: number;
 }
 
 interface DoneFrame {
@@ -306,6 +307,11 @@ export async function* streamQuery(
   }
 }
 
+export interface FetchProgress {
+  bytes: number;
+  rows: number;
+}
+
 /**
  * Fetches query results as raw Arrow IPC stream bytes.
  * Returns a complete IPC stream (schema + batches + EOS) suitable for
@@ -314,6 +320,7 @@ export async function* streamQuery(
 export async function fetchQueryIPC(
   params: StreamQueryParams,
   signal?: AbortSignal,
+  onProgress?: (progress: FetchProgress) => void,
 ): Promise<Uint8Array> {
   const response = await authenticatedFetch(`${getApiBase()}/query-stream`, {
     method: 'POST',
@@ -359,6 +366,7 @@ export async function fetchQueryIPC(
     // Collect all IPC message bytes from the framed protocol
     const ipcChunks: Uint8Array[] = [];
     let totalSize = 0;
+    let totalRows = 0;
 
     // eslint-disable-next-line no-constant-condition
     while (true) {
@@ -378,6 +386,10 @@ export async function fetchQueryIPC(
           const bytes = await bufferedReader.readBytes(frame.size);
           ipcChunks.push(bytes);
           totalSize += bytes.length;
+          if (onProgress && frame.type === 'batch') {
+            totalRows += frame.rows ?? 0;
+            onProgress({ bytes: totalSize, rows: totalRows });
+          }
           break;
         }
         case 'done': {

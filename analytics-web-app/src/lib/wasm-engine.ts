@@ -3,11 +3,11 @@
  * The WASM binary is only fetched when this function is first called.
  */
 
-let enginePromise: Promise<typeof import('datafusion-wasm')> | null = null
+let enginePromise: Promise<typeof import('micromegas-datafusion-wasm')> | null = null
 
 export async function loadWasmEngine() {
   if (!enginePromise) {
-    enginePromise = import('datafusion-wasm')
+    enginePromise = import('micromegas-datafusion-wasm')
       .then(async (mod) => {
         await mod.default() // initialize WASM
         return mod

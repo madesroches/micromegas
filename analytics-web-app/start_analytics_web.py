@@ -214,6 +214,7 @@ def setup_environment():
 def main():
     parser = argparse.ArgumentParser(description="Start Analytics Web App Development Environment")
     parser.add_argument("--disable-auth", action="store_true", help="Disable authentication even if OIDC config is present")
+    parser.add_argument("--build-wasm", action="store_true", help="Force rebuild of the micromegas-datafusion-wasm engine")
     args = parser.parse_args()
 
     print_status("Starting Analytics Web App Development Environment", "info")
@@ -346,10 +347,10 @@ def main():
             print_status("The backend process is running but not responding to health checks", "error")
             return 1
 
-        # Build WASM engine if not already built
-        wasm_binary = Path("analytics-web-app/src/lib/datafusion-wasm/datafusion_wasm_bg.wasm")
-        if not wasm_binary.exists():
-            print_status("Building datafusion-wasm...", "info")
+        # Build WASM engine if not already built or if --build-wasm is passed
+        wasm_binary = Path("analytics-web-app/src/lib/datafusion-wasm/micromegas_datafusion_wasm_bg.wasm")
+        if args.build_wasm or not wasm_binary.exists():
+            print_status("Building micromegas-datafusion-wasm...", "info")
             try:
                 subprocess.run(
                     [sys.executable, "rust/datafusion-wasm/build.py"],

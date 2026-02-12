@@ -20,8 +20,8 @@
       "@/*": [
         "./src/*"
       ],
-      "datafusion-wasm": [
-        "./src/lib/datafusion-wasm/datafusion_wasm"
+      "micromegas-datafusion-wasm": [
+        "./src/lib/datafusion-wasm/micromegas_datafusion_wasm"
       ]
     },
     "target": "ES2020"

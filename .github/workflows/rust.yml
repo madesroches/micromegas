@@ -6,12 +6,14 @@ on:
     paths:
       - 'rust/**'
       - 'build/rust_ci.py'
+      - 'build/rust_command.py'
       - '.github/workflows/rust.yml'
   pull_request:
     branches: [ "main" ]
     paths:
       - 'rust/**'
       - 'build/rust_ci.py'
+      - 'build/rust_command.py'
       - '.github/workflows/rust.yml'
 
 env:
@@ -49,7 +51,7 @@ jobs:
         sudo rm -rf /usr/local/share/powershell
         sudo rm -rf /usr/share/kotlinc
         # Remove large packages (but keep clang for mold linker)
-        sudo apt-get remove -y '^aspnetcore-.*' '^dotnet-.*' '^mongodb-.*' '^mysql-.*' '^php.*' azure-cli google-chrome-stable firefox powershell mono-devel 2>/dev/null || true
+        sudo apt-get remove -y '^aspnetcore-.*' '^dotnet-.*' '^mongodb-.*' '^mysql-.*' '^php.*' azure-cli google-chrome-stable powershell mono-devel 2>/dev/null || true
         sudo apt-get autoremove -y
         sudo apt-get clean
         # Clean Docker
@@ -68,6 +70,12 @@ jobs:
       run: |
         cargo install cargo-machete
         echo "💾 After cargo-machete: $(df / --output=used,size,avail,pcent | tail -1 | awk '{print $1" used / "$2" total ("$3" free, "$4" used)"}')"
+
+    - name: Install wasm tooling
+      run: |
+        rustup target add wasm32-unknown-unknown
+        cargo install wasm-pack
+        echo "💾 After wasm tooling: $(df / --output=used,size,avail,pcent | tail -1 | awk '{print $1" used / "$2" total ("$3" free, "$4" used)"}')"
 
     - name: rust-ci
       run: ./build/rust_ci.py

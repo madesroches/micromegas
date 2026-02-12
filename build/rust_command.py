@@ -13,7 +13,7 @@ def show_disk_space():
     except Exception as e:
         print(f"⚠️  Could not get disk space: {e}")
 
-def run_command(cmd):
-    print("cmd=", cmd, "cwd=", rust_root)
-    subprocess.run(cmd, shell=True, cwd=rust_root, check=True)
+def run_command(cmd, cwd=rust_root):
+    print("cmd=", cmd, "cwd=", cwd)
+    subprocess.run(cmd, shell=True, cwd=cwd, check=True)
     show_disk_space()

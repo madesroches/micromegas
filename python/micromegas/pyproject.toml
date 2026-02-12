@@ -4,7 +4,7 @@ version = "0.20.0"
 description = "Python analytics client for the Micromegas observability platform"
 authors = ["Marc-Antoine Desroches <madesroches@gmail.com>"]
 homepage = "https://github.com/madesroches/micromegas/"
-documentation = "https://madesroches.github.io/micromegas/"
+documentation = "https://madesroches.github.io/micromegas/docs/"
 repository = "https://github.com/madesroches/micromegas/"
 readme = "README.md"
 

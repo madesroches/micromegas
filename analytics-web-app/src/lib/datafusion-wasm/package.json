@@ -1,7 +1,7 @@
 {
-  "name": "datafusion-wasm",
+  "name": "micromegas-datafusion-wasm",
   "version": "0.1.0",
   "type": "module",
-  "main": "datafusion_wasm.js",
-  "types": "datafusion_wasm.d.ts"
+  "main": "micromegas_datafusion_wasm.js",
+  "types": "micromegas_datafusion_wasm.d.ts"
 }

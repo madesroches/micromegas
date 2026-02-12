@@ -3,6 +3,8 @@ use std::sync::Arc;
 use arrow::ipc::reader::StreamReader;
 use arrow::ipc::writer::StreamWriter;
 use datafusion::execution::SessionStateBuilder;
+use datafusion::physical_optimizer::PhysicalOptimizerRule;
+use datafusion::physical_optimizer::optimizer::PhysicalOptimizer;
 use datafusion::prelude::*;
 use wasm_bindgen::prelude::*;
 
@@ -11,12 +13,34 @@ pub struct WasmQueryEngine {
     ctx: SessionContext,
 }
 
+impl Default for WasmQueryEngine {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[wasm_bindgen]
 impl WasmQueryEngine {
     #[wasm_bindgen(constructor)]
     pub fn new() -> Self {
+        // Work around a DataFusion 52.1 bug where the LimitPushdown physical
+        // optimizer rule removes GlobalLimitExec without actually pushing the
+        // fetch into DataSourceExec, causing LIMIT to be silently ignored.
+        // Fixed upstream in https://github.com/apache/datafusion/pull/20048
+        // but not yet released.
+        // TODO: remove after upgrading DataFusion past 52.1
+        // https://github.com/madesroches/micromegas/issues/809
+        let filtered_rules = PhysicalOptimizer::default()
+            .rules
+            .into_iter()
+            .filter(|rule: &Arc<dyn PhysicalOptimizerRule + Send + Sync>| {
+                rule.name() != "LimitPushdown"
+            })
+            .collect::<Vec<_>>();
+
         let state = SessionStateBuilder::new()
             .with_default_features()
+            .with_physical_optimizer_rules(filtered_rules)
             .build();
         Self {
             ctx: SessionContext::new_with_state(state),
@@ -96,18 +120,21 @@ impl WasmQueryEngine {
                     .catalog(&catalog_name)
                     .into_iter()
                     .flat_map(move |catalog| {
-                        catalog.schema_names().into_iter().flat_map(move |schema_name| {
-                            catalog
-                                .schema(&schema_name)
-                                .map(|schema| {
-                                    schema
-                                        .table_names()
-                                        .into_iter()
-                                        .map(move |t| t.to_string())
-                                        .collect::<Vec<_>>()
-                                })
-                                .unwrap_or_default()
-                        })
+                        catalog
+                            .schema_names()
+                            .into_iter()
+                            .flat_map(move |schema_name| {
+                                catalog
+                                    .schema(&schema_name)
+                                    .map(|schema| {
+                                        schema
+                                            .table_names()
+                                            .into_iter()
+                                            .map(move |t| t.to_string())
+                                            .collect::<Vec<_>>()
+                                    })
+                                    .unwrap_or_default()
+                            })
                     })
             })
             .collect();

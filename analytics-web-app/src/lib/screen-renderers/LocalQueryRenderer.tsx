@@ -8,7 +8,7 @@ import { LoadingState, EmptyState } from './shared'
 import { SyntaxEditor } from '@/components/SyntaxEditor'
 import { DataSourceField } from '@/components/DataSourceSelector'
 import { TableBody, type TableColumn } from './table-utils'
-import { fetchQueryIPC } from '../arrow-stream'
+import { fetchQueryIPC, type FetchProgress } from '../arrow-stream'
 import { loadWasmEngine } from '../wasm-engine'
 
 interface LocalQueryConfig {
@@ -77,17 +77,35 @@ export function LocalQueryRenderer({
   const [sourceRowCount, setSourceRowCount] = useState(0)
   const [sourceByteSize, setSourceByteSize] = useState(0)
   const [sourceError, setSourceError] = useState<string | null>(null)
+  const [sourceElapsedMs, setSourceElapsedMs] = useState<number | null>(null)
+  const sourceStartRef = useRef<number>(0)
 
   // Local query state
   const [localResult, setLocalResult] = useState<Table | null>(null)
   const [localStatus, setLocalStatus] = useState<'idle' | 'loading' | 'done' | 'error'>('idle')
   const [localError, setLocalError] = useState<string | null>(null)
+  const [localElapsedMs, setLocalElapsedMs] = useState<number | null>(null)
+  const [autoRun, setAutoRun] = useState(true)
+
+  // Live elapsed timer for source query (long-running network fetch)
+  useEffect(() => {
+    if (sourceStatus !== 'loading') return
+    const id = setInterval(() => {
+      setSourceElapsedMs(performance.now() - sourceStartRef.current)
+    }, 100)
+    return () => clearInterval(id)
+  }, [sourceStatus])
 
   // Abort controller for source fetches
   const abortRef = useRef<AbortController | null>(null)
   useEffect(() => () => abortRef.current?.abort(), [])
 
   // Fetch source data → register in WASM
+  const handleProgress = useCallback((progress: FetchProgress) => {
+    setSourceRowCount(progress.rows)
+    setSourceByteSize(progress.bytes)
+  }, [])
+
   const fetchAndRegister = useCallback(async () => {
     if (!engine) return
     abortRef.current?.abort()
@@ -95,9 +113,14 @@ export function LocalQueryRenderer({
     abortRef.current = controller
     setSourceStatus('loading')
     setSourceError(null)
+    setSourceRowCount(0)
+    setSourceByteSize(0)
+    sourceStartRef.current = performance.now()
+    setSourceElapsedMs(null)
     setLocalResult(null)
     setLocalStatus('idle')
     setLocalError(null)
+    setLocalElapsedMs(null)
     try {
       const ipcBytes = await fetchQueryIPC(
         {
@@ -107,11 +130,13 @@ export function LocalQueryRenderer({
           dataSource: effectiveDataSource,
         },
         controller.signal,
+        handleProgress,
       )
       engine.reset()
       const rowCount = engine.register_table(localConfig.sourceTableName, ipcBytes)
+      setSourceElapsedMs(performance.now() - sourceStartRef.current)
+      // Authoritative row count from registration (progressive estimate may undercount)
       setSourceRowCount(rowCount)
-      setSourceByteSize(ipcBytes.byteLength)
       setSourceStatus('ready')
     } catch (e: unknown) {
       if (!controller.signal.aborted) {
@@ -119,23 +144,58 @@ export function LocalQueryRenderer({
         setSourceStatus('error')
       }
     }
-  }, [engine, localConfig.sourceSql, localConfig.sourceTableName, timeRange.begin, timeRange.end, effectiveDataSource])
+  }, [engine, localConfig.sourceSql, localConfig.sourceTableName, timeRange.begin, timeRange.end, effectiveDataSource, handleProgress])
 
-  // Execute local query against WASM
+  // Execute local query against WASM (serialized — one at a time)
+  const localSqlRef = useRef(localConfig.localSql)
+  localSqlRef.current = localConfig.localSql
+  const localBusyRef = useRef(false)
+  const localPendingRef = useRef(false)
+  const localCancelledRef = useRef(false)
+  useEffect(() => {
+    localCancelledRef.current = false
+    return () => { localCancelledRef.current = true }
+  }, [])
+
   const executeLocal = useCallback(async () => {
-    if (!engine) return
+    if (!engine || localCancelledRef.current) return
+    if (localBusyRef.current) {
+      localPendingRef.current = true
+      return
+    }
+    localBusyRef.current = true
     setLocalStatus('loading')
     setLocalError(null)
+    setLocalElapsedMs(null)
+    setLocalResult(null)
+    const sql = localSqlRef.current
+    const t0 = performance.now()
     try {
-      const ipcBytes = await engine.execute_sql(localConfig.localSql)
+      const ipcBytes = await engine.execute_sql(sql)
+      if (localCancelledRef.current) return
       const table = tableFromIPC(ipcBytes)
+      setLocalElapsedMs(performance.now() - t0)
       setLocalResult(table)
       setLocalStatus('done')
     } catch (e: unknown) {
+      if (localCancelledRef.current) return
       setLocalError(e instanceof Error ? e.message : String(e))
       setLocalStatus('error')
+    } finally {
+      localBusyRef.current = false
+      if (localPendingRef.current && !localCancelledRef.current) {
+        localPendingRef.current = false
+        executeLocal()
+      }
     }
-  }, [engine, localConfig.localSql])
+  }, [engine])
+
+  // Debounced auto-execute local query on text changes
+  useEffect(() => {
+    if (!autoRun || !engine || sourceStatus !== 'ready') return
+    const timer = setTimeout(executeLocal, 300)
+    return () => clearTimeout(timer)
+  }, [autoRun, engine, sourceStatus, localConfig.localSql, executeLocal])
 
   // Config change handlers
   const handleSourceSqlChange = useCallback((sql: string) => {
@@ -154,16 +214,23 @@ export function LocalQueryRenderer({
     onConfigChange((prev) => ({ ...prev, dataSource: ds }))
   }, [onConfigChange])
 
-  // Format byte size
+  // Format helpers
   const formatBytes = (bytes: number): string => {
     if (bytes < 1024) return `${bytes} B`
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
   }
 
+  const formatDuration = (ms: number): string => {
+    if (ms < 1000) return `${Math.round(ms)}ms`
+    return `${(ms / 1000).toFixed(2)}s`
+  }
+
   // Render results table
+  const MAX_DISPLAY_ROWS = 10_000
+
   const renderResultTable = () => {
-    if (localStatus === 'loading') {
+    if (localStatus === 'loading' && !localResult) {
       return <LoadingState message="Executing local query..." />
     }
 
@@ -172,9 +239,18 @@ export function LocalQueryRenderer({
         name: field.name,
         type: field.type,
       }))
+      const truncated = localResult.numRows > MAX_DISPLAY_ROWS
+      const displayData = truncated
+        ? { numRows: MAX_DISPLAY_ROWS, get: (i: number) => localResult.get(i) }
+        : localResult
 
       return (
         <div className="flex-1 overflow-auto bg-app-panel border border-theme-border rounded-lg">
+          {truncated && (
+            <div className="px-3 py-1.5 text-xs text-theme-text-muted bg-app-card border-b border-theme-border">
+              Showing {MAX_DISPLAY_ROWS.toLocaleString()} of {localResult.numRows.toLocaleString()} rows
+            </div>
+          )}
           <table className="w-full">
             <thead className="sticky top-0">
               <tr className="bg-app-card border-b border-theme-border">
@@ -188,7 +264,7 @@ export function LocalQueryRenderer({
                 ))}
               </tr>
             </thead>
-            <TableBody data={localResult} columns={columns} />
+            <TableBody data={displayData} columns={columns} />
           </table>
         </div>
       )
@@ -219,15 +295,16 @@ export function LocalQueryRenderer({
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-sm font-semibold text-theme-text-primary">Source Query</h3>
             <div className="flex items-center gap-3 text-xs text-theme-text-muted">
-              {sourceStatus === 'ready' && (
+              {(sourceStatus === 'ready' || sourceStatus === 'loading') && (sourceRowCount > 0 || sourceByteSize > 0 || sourceElapsedMs != null) && (
                 <span>
                   {sourceRowCount.toLocaleString()} rows ({formatBytes(sourceByteSize)})
+                  {sourceElapsedMs != null && ` in ${formatDuration(sourceElapsedMs)}`}
                 </span>
               )}
               {sourceStatus === 'loading' && (
                 <span className="flex items-center gap-1.5">
                   <span className="animate-spin rounded-full h-3 w-3 border border-accent-link border-t-transparent" />
-                  Fetching...
+                  Fetching…
                 </span>
               )}
             </div>
@@ -283,8 +360,11 @@ export function LocalQueryRenderer({
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-sm font-semibold text-theme-text-primary">Local Query</h3>
             <div className="flex items-center gap-3 text-xs text-theme-text-muted">
-              {localStatus === 'done' && localResult && (
-                <span>{localResult.numRows.toLocaleString()} rows</span>
+              {(localStatus === 'done' || localStatus === 'error') && localResult && (
+                <span>
+                  {localResult.numRows.toLocaleString()} rows
+                  {localElapsedMs != null && ` in ${formatDuration(localElapsedMs)}`}
+                </span>
               )}
             </div>
           </div>
@@ -302,7 +382,7 @@ export function LocalQueryRenderer({
             </div>
           )}
 
-          <div className="mt-3">
+          <div className="mt-3 flex items-center gap-3">
             <button
               onClick={executeLocal}
               disabled={!engine || sourceStatus !== 'ready' || localStatus === 'loading'}
@@ -310,8 +390,17 @@ export function LocalQueryRenderer({
             >
               Run
             </button>
+            <label className="flex items-center gap-1.5 text-xs text-theme-text-muted cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={autoRun}
+                onChange={(e) => setAutoRun(e.target.checked)}
+                className="rounded border-theme-border"
+              />
+              Auto-run
+            </label>
             {sourceStatus !== 'ready' && sourceStatus !== 'loading' && (
-              <span className="ml-3 text-xs text-theme-text-muted">
+              <span className="text-xs text-theme-text-muted">
                 Fetch source data first
               </span>
             )}

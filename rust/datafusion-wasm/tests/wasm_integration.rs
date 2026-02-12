@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
-use arrow::array::{Int32Array, StringArray};
-use arrow::datatypes::{DataType, Field, Schema};
+use arrow::array::{Int32Array, StringArray, StringDictionaryBuilder};
+use arrow::datatypes::{DataType, Field, Int32Type, Schema};
 use arrow::ipc::reader::StreamReader;
 use arrow::ipc::writer::StreamWriter;
 use arrow::record_batch::RecordBatch;
-use datafusion_wasm::WasmQueryEngine;
+use micromegas_datafusion_wasm::WasmQueryEngine;
 use wasm_bindgen_test::*;
 
 wasm_bindgen_test_configure!(run_in_browser);
@@ -79,10 +79,7 @@ async fn test_execute_sql() {
 #[wasm_bindgen_test]
 async fn test_aggregate_query() {
     let engine = WasmQueryEngine::new();
-    let ipc = create_test_ipc(
-        &[1, 2, 3, 4],
-        &["alice", "bob", "alice", "bob"],
-    );
+    let ipc = create_test_ipc(&[1, 2, 3, 4], &["alice", "bob", "alice", "bob"]);
     engine
         .register_table("data", &ipc)
         .expect("register_table should succeed");
@@ -163,5 +160,111 @@ async fn test_reset() {
     assert!(
         result.is_err(),
         "query should fail after reset clears tables"
+    );
+}
+
+/// Build IPC stream bytes with dictionary-encoded string columns.
+/// This reproduces the bug where DataFusion WASM ignores LIMIT when
+/// projecting specific columns from a MemTable with dictionary arrays.
+fn create_dict_ipc(n_rows: usize) -> Vec<u8> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int32, false),
+        Field::new(
+            "msg",
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            false,
+        ),
+        Field::new(
+            "exe",
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            false,
+        ),
+    ]));
+
+    let ids: Vec<i32> = (0..n_rows as i32).collect();
+    let id_array = Int32Array::from(ids);
+
+    let mut msg_builder = StringDictionaryBuilder::<Int32Type>::new();
+    for i in 0..n_rows {
+        msg_builder.append_value(format!("message_{i}"));
+    }
+
+    let mut exe_builder = StringDictionaryBuilder::<Int32Type>::new();
+    for i in 0..n_rows {
+        exe_builder.append_value(format!("exe_{}", i % 5));
+    }
+
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(id_array),
+            Arc::new(msg_builder.finish()),
+            Arc::new(exe_builder.finish()),
+        ],
+    )
+    .expect("failed to create RecordBatch");
+
+    let mut buf = Vec::new();
+    {
+        let mut writer =
+            StreamWriter::try_new(&mut buf, &schema).expect("failed to create StreamWriter");
+        writer.write(&batch).expect("failed to write batch");
+        writer.finish().expect("failed to finish stream");
+    }
+    buf
+}
+
+fn count_result_rows(ipc_bytes: &[u8]) -> usize {
+    let cursor = std::io::Cursor::new(ipc_bytes);
+    let reader = StreamReader::try_new(cursor, None).expect("failed to read IPC result");
+    let batches: Vec<_> = reader
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()
+        .expect("failed to collect batches");
+    batches.iter().map(|b| b.num_rows()).sum()
+}
+
+/// Regression test: LIMIT must be respected when projecting specific columns
+/// from a MemTable that was populated with dictionary-encoded Arrow data.
+#[wasm_bindgen_test]
+async fn test_dictionary_projection_limit() {
+    let engine = WasmQueryEngine::new();
+    let ipc = create_dict_ipc(100);
+    let row_count = engine
+        .register_table("data", &ipc)
+        .expect("register_table should succeed");
+    assert_eq!(row_count, 100);
+
+    // SELECT * with LIMIT should work
+    let result = engine
+        .execute_sql("SELECT * FROM data LIMIT 10")
+        .await
+        .expect("SELECT * LIMIT should succeed");
+    assert_eq!(
+        count_result_rows(&result),
+        10,
+        "SELECT * LIMIT 10 should return 10 rows"
+    );
+
+    // Single column projection with LIMIT should work
+    let result = engine
+        .execute_sql("SELECT exe FROM data LIMIT 10")
+        .await
+        .expect("single column LIMIT should succeed");
+    assert_eq!(
+        count_result_rows(&result),
+        10,
+        "SELECT exe LIMIT 10 should return 10 rows"
+    );
+
+    // Multi-column projection with LIMIT — this was the bug
+    let result = engine
+        .execute_sql("SELECT msg, exe FROM data LIMIT 10")
+        .await
+        .expect("multi-column LIMIT should succeed");
+    assert_eq!(
+        count_result_rows(&result),
+        10,
+        "SELECT msg, exe LIMIT 10 should return 10 rows, not all 100"
     );
 }
