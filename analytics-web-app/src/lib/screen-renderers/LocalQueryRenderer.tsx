@@ -155,7 +155,6 @@ export function LocalQueryRenderer({
   const executeLocal = useCallback(async () => {
     if (!engine) return
     if (localBusyRef.current) {
-      console.log('[local-query] busy, marking pending')
       localPendingRef.current = true
       return
     }
@@ -165,23 +164,19 @@ export function LocalQueryRenderer({
     setLocalElapsedMs(null)
     setLocalResult(null)
     const sql = localSqlRef.current
-    console.log('[local-query] executing:', sql)
     const t0 = performance.now()
     try {
       const ipcBytes = await engine.execute_sql(sql)
       const table = tableFromIPC(ipcBytes)
-      console.log(`[local-query] result: ${table.numRows} rows, ${ipcBytes.byteLength} bytes`)
       setLocalElapsedMs(performance.now() - t0)
       setLocalResult(table)
       setLocalStatus('done')
     } catch (e: unknown) {
-      console.log('[local-query] error:', e instanceof Error ? e.message : String(e))
       setLocalError(e instanceof Error ? e.message : String(e))
       setLocalStatus('error')
     } finally {
       localBusyRef.current = false
       if (localPendingRef.current) {
-        console.log('[local-query] executing pending')
         localPendingRef.current = false
         executeLocal()
       }
