@@ -49,12 +49,14 @@ pub enum ErrorCode {
     DataSourceNotFound,
 }
 
-/// Schema and batch frames use identical structure - size-prefixed binary
+/// Schema and batch frames: size-prefixed binary with optional row count
 #[derive(Serialize)]
 struct DataHeader {
     #[serde(rename = "type")]
     frame_type: &'static str,
     size: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    rows: Option<usize>,
 }
 
 /// Done frame to indicate successful completion
@@ -309,13 +311,16 @@ pub async fn stream_query_handler(
         yield Ok(json_line(&DataHeader {
             frame_type: "schema",
             size: schema_bytes.len(),
+            rows: None,
         }));
         yield Ok(Bytes::from(schema_bytes));
 
         // Helper to encode and yield a batch
         macro_rules! yield_batch {
             ($batch:expr) => {
-                let batch_bytes = match encode_batch(&$batch, &mut dict_tracker, &mut compression) {
+                let batch = &$batch;
+                let num_rows = batch.num_rows();
+                let batch_bytes = match encode_batch(batch, &mut dict_tracker, &mut compression) {
                     Ok(bytes) => bytes,
                     Err(e) => {
                         yield Ok(json_line(&ErrorFrame {
@@ -329,6 +334,7 @@ pub async fn stream_query_handler(
                 yield Ok(json_line(&DataHeader {
                     frame_type: "batch",
                     size: batch_bytes.len(),
+                    rows: Some(num_rows),
                 }));
                 yield Ok(Bytes::from(batch_bytes));
             };

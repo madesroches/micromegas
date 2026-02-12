@@ -3,12 +3,12 @@
  *
  * Implements a JSON-framed protocol parser that streams Arrow IPC data:
  * - {"type":"schema","size":N}\n followed by N bytes of schema IPC
- * - {"type":"batch","size":N}\n followed by N bytes of batch IPC
+ * - {"type":"batch","size":N,"rows":M}\n followed by N bytes of batch IPC
  * - {"type":"done"}\n on success
  * - {"type":"error","code":"..","message":".."}\n on error
  */
 
-import { RecordBatch, RecordBatchReader, Schema, Message } from 'apache-arrow';
+import { RecordBatch, RecordBatchReader, Schema } from 'apache-arrow';
 import { authenticatedFetch, AuthenticationError, getApiBase } from './api';
 
 export type ErrorCode = 'INVALID_SQL' | 'CONNECTION_FAILED' | 'INTERNAL' | 'FORBIDDEN';
@@ -16,6 +16,7 @@ export type ErrorCode = 'INVALID_SQL' | 'CONNECTION_FAILED' | 'INTERNAL' | 'FORB
 interface DataHeader {
   type: 'schema' | 'batch';
   size: number;
+  rows?: number;
 }
 
 interface DoneFrame {
@@ -312,27 +313,6 @@ export interface FetchProgress {
 }
 
 /**
- * Extract row count from an Arrow IPC message's metadata.
- * IPC message layout: 4-byte continuation (0xFFFFFFFF) + 4-byte metadata_size + metadata flatbuffer + body
- */
-function extractRowCount(ipcBytes: Uint8Array): number {
-  if (ipcBytes.length < 8) return 0;
-  const view = new DataView(ipcBytes.buffer, ipcBytes.byteOffset, ipcBytes.byteLength);
-  const metadataSize = view.getInt32(4, true);
-  if (metadataSize <= 0) return 0;
-  try {
-    const metadata = ipcBytes.subarray(8, 8 + metadataSize);
-    const msg = Message.decode(metadata);
-    if (msg.isRecordBatch()) {
-      return msg.header().length;
-    }
-  } catch {
-    // ignore parse errors
-  }
-  return 0;
-}
-
-/**
  * Fetches query results as raw Arrow IPC stream bytes.
  * Returns a complete IPC stream (schema + batches + EOS) suitable for
  * passing directly to WASM DataFusion's register_table.
@@ -407,7 +387,7 @@ export async function fetchQueryIPC(
           ipcChunks.push(bytes);
           totalSize += bytes.length;
           if (onProgress && frame.type === 'batch') {
-            totalRows += extractRowCount(bytes);
+            totalRows += frame.rows ?? 0;
             onProgress({ bytes: totalSize, rows: totalRows });
           }
           break;
