@@ -82,6 +82,7 @@ export function LocalQueryRenderer({
   const [localResult, setLocalResult] = useState<Table | null>(null)
   const [localStatus, setLocalStatus] = useState<'idle' | 'loading' | 'done' | 'error'>('idle')
   const [localError, setLocalError] = useState<string | null>(null)
+  const [autoRun, setAutoRun] = useState(true)
 
   // Abort controller for source fetches
   const abortRef = useRef<AbortController | null>(null)
@@ -145,6 +146,15 @@ export function LocalQueryRenderer({
     }
   }, [engine, localConfig.localSql])
 
+  // Auto-execute local query on text changes
+  useEffect(() => {
+    if (!autoRun || !engine || sourceStatus !== 'ready') return
+    const timer = setTimeout(() => {
+      executeLocal()
+    }, 300)
+    return () => clearTimeout(timer)
+  }, [autoRun, engine, sourceStatus, executeLocal])
+
   // Config change handlers
   const handleSourceSqlChange = useCallback((sql: string) => {
     onConfigChange((prev) => ({ ...prev, sourceSql: sql }))
@@ -171,7 +181,7 @@ export function LocalQueryRenderer({
 
   // Render results table
   const renderResultTable = () => {
-    if (localStatus === 'loading') {
+    if (localStatus === 'loading' && !localResult) {
       return <LoadingState message="Executing local query..." />
     }
 
@@ -291,7 +301,7 @@ export function LocalQueryRenderer({
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-sm font-semibold text-theme-text-primary">Local Query</h3>
             <div className="flex items-center gap-3 text-xs text-theme-text-muted">
-              {localStatus === 'done' && localResult && (
+              {(localStatus === 'done' || localStatus === 'error') && localResult && (
                 <span>{localResult.numRows.toLocaleString()} rows</span>
               )}
             </div>
@@ -310,7 +320,7 @@ export function LocalQueryRenderer({
             </div>
           )}
 
-          <div className="mt-3">
+          <div className="mt-3 flex items-center gap-3">
             <button
               onClick={executeLocal}
               disabled={!engine || sourceStatus !== 'ready' || localStatus === 'loading'}
@@ -318,8 +328,17 @@ export function LocalQueryRenderer({
             >
               Run
             </button>
+            <label className="flex items-center gap-1.5 text-xs text-theme-text-muted cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={autoRun}
+                onChange={(e) => setAutoRun(e.target.checked)}
+                className="rounded border-theme-border"
+              />
+              Auto-run
+            </label>
             {sourceStatus !== 'ready' && sourceStatus !== 'loading' && (
-              <span className="ml-3 text-xs text-theme-text-muted">
+              <span className="text-xs text-theme-text-muted">
                 Fetch source data first
               </span>
             )}
