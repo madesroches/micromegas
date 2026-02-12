@@ -1,5 +1,7 @@
 # Rust build artifacts
 rust/target/
+rust/datafusion-wasm/target/
+rust/datafusion-wasm/pkg/
 
 # Node modules
 node_modules/

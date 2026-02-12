@@ -150,8 +150,8 @@ def main():
     )
     parser.add_argument(
         "--base-path",
-        default=os.environ.get("MICROMEGAS_BASE_PATH", ""),
-        help="Base path for sub-path deployment (e.g., /micromegas). Required by Docker image."
+        default=os.environ.get("MICROMEGAS_BASE_PATH", "/mmlocal"),
+        help="Base path for sub-path deployment (default: /mmlocal)"
     )
     parser.add_argument(
         "--detach", "-d",
@@ -178,12 +178,10 @@ def main():
 
     print_status(f"Using image: {args.image}", "info")
 
-    # Normalize and validate base path (required for Docker image)
+    # Normalize base path
     base_path = normalize_base_path(args.base_path)
-    if not base_path:
-        print_status("--base-path is required for Docker deployment (e.g., --base-path /micromegas)", "error")
-        return 1
-    print_status(f"Using base path: {base_path}", "info")
+    if base_path:
+        print_status(f"Using base path: {base_path}", "info")
 
     # Check FlightSQL server (on host machine)
     # For Docker, we need to check if it's accessible from host first
@@ -215,12 +213,38 @@ def main():
         "--add-host", "host.docker.internal:host-gateway",  # Allow container to reach host services
     ]
 
+    # Build app database connection string (same as non-docker script but using Docker host)
+    db_username = os.environ.get("MICROMEGAS_DB_USERNAME")
+    if not db_username:
+        print_status("MICROMEGAS_DB_USERNAME environment variable not set", "error")
+        print_status("Run: export MICROMEGAS_DB_USERNAME=telemetry", "info")
+        return 1
+    db_passwd = os.environ.get("MICROMEGAS_DB_PASSWD")
+    if not db_passwd:
+        print_status("MICROMEGAS_DB_PASSWD environment variable not set", "error")
+        return 1
+    db_port = os.environ.get("MICROMEGAS_DB_PORT")
+    if not db_port:
+        print_status("MICROMEGAS_DB_PORT environment variable not set", "error")
+        print_status("Run: export MICROMEGAS_DB_PORT=6432", "info")
+        return 1
+    # Use host.docker.internal so the container can reach the host DB
+    app_db_conn_string = os.environ.get(
+        "MICROMEGAS_APP_SQL_CONNECTION_STRING",
+        f"postgres://{db_username}:{db_passwd}@host.docker.internal:{db_port}/micromegas_app"
+    )
+
     # Environment variables
     env_vars = {
         "MICROMEGAS_AUTH_TOKEN": os.environ.get("MICROMEGAS_AUTH_TOKEN", ""),
         "MICROMEGAS_WEB_CORS_ORIGIN": f"http://localhost:{args.port}",
-        "MICROMEGAS_BASE_PATH": base_path,  # Required by image, can be empty
+        "MICROMEGAS_BASE_PATH": base_path,
+        "MICROMEGAS_APP_SQL_CONNECTION_STRING": app_db_conn_string,
     }
+
+    # Pass admin list if set
+    if "MICROMEGAS_ADMINS" in os.environ:
+        env_vars["MICROMEGAS_ADMINS"] = os.environ["MICROMEGAS_ADMINS"]
 
     # Add OIDC config if available
     if "MICROMEGAS_OIDC_CONFIG" in os.environ:
