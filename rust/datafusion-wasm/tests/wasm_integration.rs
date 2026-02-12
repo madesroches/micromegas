@@ -5,7 +5,7 @@ use arrow::datatypes::{DataType, Field, Int32Type, Schema};
 use arrow::ipc::reader::StreamReader;
 use arrow::ipc::writer::StreamWriter;
 use arrow::record_batch::RecordBatch;
-use datafusion_wasm::WasmQueryEngine;
+use micromegas_datafusion_wasm::WasmQueryEngine;
 use wasm_bindgen_test::*;
 
 wasm_bindgen_test_configure!(run_in_browser);
@@ -79,10 +79,7 @@ async fn test_execute_sql() {
 #[wasm_bindgen_test]
 async fn test_aggregate_query() {
     let engine = WasmQueryEngine::new();
-    let ipc = create_test_ipc(
-        &[1, 2, 3, 4],
-        &["alice", "bob", "alice", "bob"],
-    );
+    let ipc = create_test_ipc(&[1, 2, 3, 4], &["alice", "bob", "alice", "bob"]);
     engine
         .register_table("data", &ipc)
         .expect("register_table should succeed");
@@ -243,7 +240,11 @@ async fn test_dictionary_projection_limit() {
         .execute_sql("SELECT * FROM data LIMIT 10")
         .await
         .expect("SELECT * LIMIT should succeed");
-    assert_eq!(count_result_rows(&result), 10, "SELECT * LIMIT 10 should return 10 rows");
+    assert_eq!(
+        count_result_rows(&result),
+        10,
+        "SELECT * LIMIT 10 should return 10 rows"
+    );
 
     // Single column projection with LIMIT should work
     let result = engine

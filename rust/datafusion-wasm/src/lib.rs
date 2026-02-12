@@ -3,14 +3,20 @@ use std::sync::Arc;
 use arrow::ipc::reader::StreamReader;
 use arrow::ipc::writer::StreamWriter;
 use datafusion::execution::SessionStateBuilder;
-use datafusion::physical_optimizer::optimizer::PhysicalOptimizer;
 use datafusion::physical_optimizer::PhysicalOptimizerRule;
+use datafusion::physical_optimizer::optimizer::PhysicalOptimizer;
 use datafusion::prelude::*;
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
 pub struct WasmQueryEngine {
     ctx: SessionContext,
+}
+
+impl Default for WasmQueryEngine {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 #[wasm_bindgen]
@@ -27,7 +33,9 @@ impl WasmQueryEngine {
         let filtered_rules = PhysicalOptimizer::default()
             .rules
             .into_iter()
-            .filter(|rule: &Arc<dyn PhysicalOptimizerRule + Send + Sync>| rule.name() != "LimitPushdown")
+            .filter(|rule: &Arc<dyn PhysicalOptimizerRule + Send + Sync>| {
+                rule.name() != "LimitPushdown"
+            })
             .collect::<Vec<_>>();
 
         let state = SessionStateBuilder::new()
@@ -112,18 +120,21 @@ impl WasmQueryEngine {
                     .catalog(&catalog_name)
                     .into_iter()
                     .flat_map(move |catalog| {
-                        catalog.schema_names().into_iter().flat_map(move |schema_name| {
-                            catalog
-                                .schema(&schema_name)
-                                .map(|schema| {
-                                    schema
-                                        .table_names()
-                                        .into_iter()
-                                        .map(move |t| t.to_string())
-                                        .collect::<Vec<_>>()
-                                })
-                                .unwrap_or_default()
-                        })
+                        catalog
+                            .schema_names()
+                            .into_iter()
+                            .flat_map(move |schema_name| {
+                                catalog
+                                    .schema(&schema_name)
+                                    .map(|schema| {
+                                        schema
+                                            .table_names()
+                                            .into_iter()
+                                            .map(move |t| t.to_string())
+                                            .collect::<Vec<_>>()
+                                    })
+                                    .unwrap_or_default()
+                            })
                     })
             })
             .collect();

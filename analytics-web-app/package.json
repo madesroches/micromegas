@@ -26,7 +26,7 @@
     "apache-arrow": "^21.1.0",
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.0.0",
-    "datafusion-wasm": "file:src/lib/datafusion-wasm",
+    "micromegas-datafusion-wasm": "file:src/lib/datafusion-wasm",
     "date-fns": "^2.30.0",
     "jsep": "^1.4.0",
     "lucide-react": "^0.292.0",

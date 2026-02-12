@@ -1,7 +1,15 @@
 [package]
-name = "datafusion-wasm"
+name = "micromegas-datafusion-wasm"
 version = "0.1.0"
 edition = "2024"
+license = "Apache-2.0"
+homepage = "https://github.com/madesroches/micromegas/"
+repository = "https://github.com/madesroches/micromegas/"
+documentation = "https://madesroches.github.io/micromegas/docs/"
+authors = ["Marc-Antoine Desroches <madesroches@gmail.com>"]
+keywords = ["observability", "telemetry", "analytics"]
+description = "DataFusion compiled to WebAssembly for in-browser SQL query execution, part of micromegas"
+readme = "README.md"
 
 [lib]
 crate-type = ["cdylib", "rlib"]

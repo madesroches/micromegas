@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build datafusion-wasm and copy artifacts to analytics-web-app."""
+"""Build micromegas-datafusion-wasm and copy artifacts to analytics-web-app."""
 
 import argparse
 import re
@@ -14,7 +14,7 @@ PKG_DIR = CRATE_DIR / "pkg"
 OUTPUT_DIR = (
     CRATE_DIR.parent.parent / "analytics-web-app" / "src" / "lib" / "datafusion-wasm"
 )
-WASM_FILE = "datafusion_wasm.wasm"
+WASM_FILE = "micromegas_datafusion_wasm.wasm"
 
 
 def run(cmd: list[str], **kwargs) -> None:
@@ -60,7 +60,7 @@ def check_tools() -> None:
 
 
 def test() -> None:
-    """Run wasm-pack test in headless Chrome."""
+    """Run wasm-pack test in headless Firefox."""
     if shutil.which("wasm-pack") is None:
         print("ERROR: wasm-pack not found. Install with: cargo install wasm-pack")
         sys.exit(1)
@@ -74,7 +74,7 @@ def build() -> None:
     """Build and package the WASM artifacts."""
     check_tools()
 
-    print("Building datafusion-wasm...")
+    print("Building micromegas-datafusion-wasm...")
     run(
         ["cargo", "build", "--target", "wasm32-unknown-unknown", "--release"],
         cwd=CRATE_DIR,
@@ -95,7 +95,7 @@ def build() -> None:
 
     if shutil.which("wasm-opt"):
         print("Optimizing with wasm-opt...")
-        wasm_bg = PKG_DIR / "datafusion_wasm_bg.wasm"
+        wasm_bg = PKG_DIR / "micromegas_datafusion_wasm_bg.wasm"
         run(["wasm-opt", str(wasm_bg), "-Os", "-o", str(wasm_bg)])
 
     print(f"Copying artifacts to {OUTPUT_DIR}...")
@@ -108,9 +108,9 @@ def build() -> None:
     # Write a package.json so this can be used as a local dependency
     package_json = OUTPUT_DIR / "package.json"
     package_json.write_text(
-        '{\n  "name": "datafusion-wasm",\n  "version": "0.1.0",\n'
-        '  "type": "module",\n  "main": "datafusion_wasm.js",\n'
-        '  "types": "datafusion_wasm.d.ts"\n}\n'
+        '{\n  "name": "micromegas-datafusion-wasm",\n  "version": "0.1.0",\n'
+        '  "type": "module",\n  "main": "micromegas_datafusion_wasm.js",\n'
+        '  "types": "micromegas_datafusion_wasm.d.ts"\n}\n'
     )
     print("  package.json")
 
@@ -118,9 +118,9 @@ def build() -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Build or test datafusion-wasm")
+    parser = argparse.ArgumentParser(description="Build or test micromegas-datafusion-wasm")
     parser.add_argument(
-        "--test", action="store_true", help="Run WASM integration tests in headless Chrome"
+        "--test", action="store_true", help="Run WASM integration tests in headless Firefox"
     )
     args = parser.parse_args()
 

@@ -43,11 +43,11 @@ export default defineConfig(({ mode }) => {
     resolve: {
       alias: {
         '@': path.resolve(__dirname, './src'),
-        'datafusion-wasm': path.resolve(__dirname, './src/lib/datafusion-wasm'),
+        'micromegas-datafusion-wasm': path.resolve(__dirname, './src/lib/datafusion-wasm'),
       },
     },
     optimizeDeps: {
-      exclude: ['datafusion-wasm'],
+      exclude: ['micromegas-datafusion-wasm'],
     },
     build: {
       outDir: 'dist',
