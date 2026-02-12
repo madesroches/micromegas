@@ -1,4 +1,4 @@
-/* @ts-self-types="./datafusion_wasm.d.ts" */
+/* @ts-self-types="./micromegas_datafusion_wasm.d.ts" */
 
 export class WasmQueryEngine {
     __destroy_into_raw() {
@@ -101,7 +101,7 @@ function __wbg_get_imports() {
                     const a = state0.a;
                     state0.a = 0;
                     try {
-                        return wasm_bindgen__convert__closures_____invoke__h194ff6420c43e087(a, state0.b, arg0, arg1);
+                        return wasm_bindgen__convert__closures_____invoke__h406f660de0276fde(a, state0.b, arg0, arg1);
                     } finally {
                         state0.a = a;
                     }
@@ -157,7 +157,7 @@ function __wbg_get_imports() {
         },
         __wbindgen_cast_0000000000000001: function(arg0, arg1) {
             // Cast intrinsic for `Closure(Closure { dtor_idx: 79, function: Function { arguments: [Externref], shim_idx: 80, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
-            const ret = makeMutClosure(arg0, arg1, wasm.wasm_bindgen__closure__destroy__h7d339f878c1ea067, wasm_bindgen__convert__closures_____invoke__h08a78d150b2a5000);
+            const ret = makeMutClosure(arg0, arg1, wasm.wasm_bindgen__closure__destroy__h19140d71437f7a8e, wasm_bindgen__convert__closures_____invoke__hced1ae37e1679d1b);
             return ret;
         },
         __wbindgen_cast_0000000000000002: function(arg0, arg1) {
@@ -184,16 +184,16 @@ function __wbg_get_imports() {
     };
     return {
         __proto__: null,
-        "./datafusion_wasm_bg.js": import0,
+        "./micromegas_datafusion_wasm_bg.js": import0,
     };
 }
 
-function wasm_bindgen__convert__closures_____invoke__h08a78d150b2a5000(arg0, arg1, arg2) {
-    wasm.wasm_bindgen__convert__closures_____invoke__h08a78d150b2a5000(arg0, arg1, arg2);
+function wasm_bindgen__convert__closures_____invoke__hced1ae37e1679d1b(arg0, arg1, arg2) {
+    wasm.wasm_bindgen__convert__closures_____invoke__hced1ae37e1679d1b(arg0, arg1, arg2);
 }
 
-function wasm_bindgen__convert__closures_____invoke__h194ff6420c43e087(arg0, arg1, arg2, arg3) {
-    wasm.wasm_bindgen__convert__closures_____invoke__h194ff6420c43e087(arg0, arg1, arg2, arg3);
+function wasm_bindgen__convert__closures_____invoke__h406f660de0276fde(arg0, arg1, arg2, arg3) {
+    wasm.wasm_bindgen__convert__closures_____invoke__h406f660de0276fde(arg0, arg1, arg2, arg3);
 }
 
 const WasmQueryEngineFinalization = (typeof FinalizationRegistry === 'undefined')
@@ -425,7 +425,7 @@ async function __wbg_init(module_or_path) {
     }
 
     if (module_or_path === undefined) {
-        module_or_path = new URL('datafusion_wasm_bg.wasm', import.meta.url);
+        module_or_path = new URL('micromegas_datafusion_wasm_bg.wasm', import.meta.url);
     }
     const imports = __wbg_get_imports();
 

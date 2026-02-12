@@ -29,9 +29,9 @@ export interface InitOutput {
     readonly wasmqueryengine_new: () => number;
     readonly wasmqueryengine_register_table: (a: number, b: number, c: number, d: number, e: number) => [number, number, number];
     readonly wasmqueryengine_reset: (a: number) => void;
-    readonly wasm_bindgen__closure__destroy__h7d339f878c1ea067: (a: number, b: number) => void;
-    readonly wasm_bindgen__convert__closures_____invoke__h194ff6420c43e087: (a: number, b: number, c: any, d: any) => void;
-    readonly wasm_bindgen__convert__closures_____invoke__h08a78d150b2a5000: (a: number, b: number, c: any) => void;
+    readonly wasm_bindgen__closure__destroy__h19140d71437f7a8e: (a: number, b: number) => void;
+    readonly wasm_bindgen__convert__closures_____invoke__h406f660de0276fde: (a: number, b: number, c: any, d: any) => void;
+    readonly wasm_bindgen__convert__closures_____invoke__hced1ae37e1679d1b: (a: number, b: number, c: any) => void;
     readonly __wbindgen_exn_store: (a: number) => void;
     readonly __externref_table_alloc: () => number;
     readonly __wbindgen_externrefs: WebAssembly.Table;
