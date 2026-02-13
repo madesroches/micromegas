@@ -6,6 +6,8 @@ interface DataSourceSelectorProps {
   value: string
   onChange: (name: string) => void
   datasourceVariables?: string[]
+  /** Show 'notebook' as a data source option (for cells inside notebooks) */
+  showNotebookOption?: boolean
 }
 
 /**
@@ -13,7 +15,7 @@ interface DataSourceSelectorProps {
  * Wraps DataSourceSelector with a standard h4 label.
  * Returns null when DataSourceSelector is hidden (single source or loading).
  */
-export function DataSourceField({ value, onChange, datasourceVariables, className = 'mb-4' }: DataSourceSelectorProps & { className?: string }) {
+export function DataSourceField({ value, onChange, datasourceVariables, showNotebookOption, className = 'mb-4' }: DataSourceSelectorProps & { className?: string }) {
   const [sources, setSources] = useState<DataSourceSummary[]>([])
 
   useEffect(() => {
@@ -24,18 +26,18 @@ export function DataSourceField({ value, onChange, datasourceVariables, classNam
 
   const hasVariables = datasourceVariables && datasourceVariables.length > 0
 
-  // Hide entirely when selector would return null (<=1 sources and no variables)
-  if (sources.length <= 1 && !hasVariables) return null
+  // Hide entirely when selector would return null (<=1 sources, no variables, no notebook option)
+  if (sources.length <= 1 && !hasVariables && !showNotebookOption) return null
 
   return (
     <div className={className}>
       <h4 className="text-xs font-semibold uppercase tracking-wide text-theme-text-muted mb-2">Data Source</h4>
-      <DataSourceSelector value={value} onChange={onChange} datasourceVariables={datasourceVariables} />
+      <DataSourceSelector value={value} onChange={onChange} datasourceVariables={datasourceVariables} showNotebookOption={showNotebookOption} />
     </div>
   )
 }
 
-export function DataSourceSelector({ value, onChange, datasourceVariables }: DataSourceSelectorProps) {
+export function DataSourceSelector({ value, onChange, datasourceVariables, showNotebookOption }: DataSourceSelectorProps) {
   const [sources, setSources] = useState<DataSourceSummary[]>([])
   const [error, setError] = useState<string | null>(null)
 
@@ -66,8 +68,14 @@ export function DataSourceSelector({ value, onChange, datasourceVariables }: Dat
     )
   }
 
-  // Don't render if there's only one data source and no variables
-  if (sources.length <= 1 && !hasVariables) return null
+  // Don't render if there's only one data source, no variables, and no notebook option
+  if (sources.length <= 1 && !hasVariables && !showNotebookOption) return null
+
+  const notebookOption = showNotebookOption ? (
+    <option key="notebook" value="notebook">
+      Notebook (local)
+    </option>
+  ) : null
 
   return (
     <div className="flex items-center gap-1.5">
@@ -79,6 +87,7 @@ export function DataSourceSelector({ value, onChange, datasourceVariables }: Dat
       >
         {hasVariables ? (
           <>
+            {notebookOption}
             <optgroup label="Variables">
               {datasourceVariables.map((name) => (
                 <option key={`$${name}`} value={`$${name}`}>
@@ -96,12 +105,15 @@ export function DataSourceSelector({ value, onChange, datasourceVariables }: Dat
             </optgroup>
           </>
         ) : (
-          sources.map((s) => (
-            <option key={s.name} value={s.name}>
-              {s.name}
-              {s.is_default ? ' (default)' : ''}
-            </option>
-          ))
+          <>
+            {notebookOption}
+            {sources.map((s) => (
+              <option key={s.name} value={s.name}>
+                {s.name}
+                {s.is_default ? ' (default)' : ''}
+              </option>
+            ))}
+          </>
         )}
       </select>
     </div>

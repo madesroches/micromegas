@@ -34,9 +34,21 @@ import { CellEditor } from '@/components/CellEditor'
 import { ResizeHandle } from '@/components/ResizeHandle'
 import { Button } from '@/components/ui/button'
 import { useNotebookVariables } from './useNotebookVariables'
-import { useCellExecution } from './useCellExecution'
+import { useCellExecution, NotebookQueryEngine } from './useCellExecution'
 import { cleanupVariableParams, resolveCellDataSource } from './notebook-utils'
 import { cleanupTimeParams, useExposeSaveRef } from '@/lib/url-cleanup-utils'
+import { loadWasmEngine } from '@/lib/wasm-engine'
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+function formatElapsedMs(ms: number): string {
+  if (ms < 1000) return `${Math.round(ms)}ms`
+  return `${(ms / 1000).toFixed(2)}s`
+}
 
 // ============================================================================
 // Constants
@@ -243,6 +255,28 @@ export function NotebookRenderer({
       savedNotebookConfig?.cells ?? null,
     )
 
+  // WASM engine for notebook-local queries
+  // Loaded eagerly so remote cell results are always registered for cross-cell references
+  const [engine, setEngine] = useState<NotebookQueryEngine | null>(null)
+  const [engineError, setEngineError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (engine) return
+    let cancelled = false
+    loadWasmEngine()
+      .then((mod) => {
+        if (!cancelled) {
+          setEngine(new mod.WasmQueryEngine() as unknown as NotebookQueryEngine)
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setEngineError(err instanceof Error ? err.message : 'Failed to load WASM engine')
+        }
+      })
+    return () => { cancelled = true }
+  }, [engine])
+
   // Cell execution state management
   const { cellStates, executeCell, executeFromCell, migrateCellState, removeCellState } = useCellExecution({
     cells,
@@ -251,6 +285,7 @@ export function NotebookRenderer({
     setVariableValue,
     refreshTrigger,
     dataSource,
+    engine,
   })
 
   // Handle time range selection from charts (drag-to-zoom)
@@ -374,6 +409,9 @@ export function NotebookRenderer({
       if (cell.type === 'variable') {
         removeVariable(cell.name)
       }
+      if (engine) {
+        try { engine.deregister_table(cell.name) } catch { /* ignore */ }
+      }
 
       // Update selection
       if (selectedCellIndex === index) {
@@ -383,7 +421,7 @@ export function NotebookRenderer({
       }
       setDeletingCellIndex(null)
     },
-    [notebookConfig, cells, onConfigChange, selectedCellIndex, removeCellState, removeVariable]
+    [notebookConfig, cells, onConfigChange, selectedCellIndex, removeCellState, removeVariable, engine]
   )
 
   const updateCell = useCallback(
@@ -447,12 +485,16 @@ export function NotebookRenderer({
     const rendererProps = meta.getRendererProps(cell, state)
 
     // Determine status text
-    const statusText =
-      cell.type === 'variable' && (cell as VariableCellConfig).variableType !== 'combobox'
-        ? undefined
-        : state.data
-          ? `${state.data.numRows} rows`
-          : undefined
+    const isNonComboVariable = cell.type === 'variable' && (cell as VariableCellConfig).variableType !== 'combobox'
+    let statusText: string | undefined
+    if (isNonComboVariable) {
+      statusText = undefined
+    } else if (state.status === 'loading' && state.fetchProgress) {
+      statusText = `${state.fetchProgress.rows.toLocaleString()} rows (${formatBytes(state.fetchProgress.bytes)})`
+    } else if (state.data) {
+      const rowText = `${state.data.numRows.toLocaleString()} rows`
+      statusText = state.elapsedMs != null ? `${rowText} in ${formatElapsedMs(state.elapsedMs)}` : rowText
+    }
 
     // Effective data source: per-cell overrides notebook-level, resolve $varname references
     const cellDataSource = resolveCellDataSource(cell, availableVariables, dataSource)
@@ -523,6 +565,11 @@ export function NotebookRenderer({
     <div className="flex h-full">
       {/* Main content area */}
       <div className="flex-1 flex flex-col p-6 min-w-0 overflow-auto">
+        {engineError && (
+          <div className="mb-3 px-4 py-2 bg-accent-error/10 border border-accent-error/30 rounded text-xs text-accent-error">
+            WASM engine failed to load: {engineError}
+          </div>
+        )}
         <DndContext
           sensors={sensors}
           collisionDetection={closestCenter}
@@ -572,6 +619,7 @@ export function NotebookRenderer({
               existingNames={existingNames}
               availableColumns={cellStates[selectedCell.name]?.data?.schema.fields.map((f) => f.name)}
               defaultDataSource={dataSource}
+              showNotebookOption
               datasourceVariables={
                 selectedCellIndex !== null
                   ? cells

@@ -148,6 +148,10 @@ export interface CellState {
   variableOptions?: { label: string; value: VariableValue }[]
   /** For variable cells (expression): computed result string */
   expressionResult?: string
+  /** Total execution time in milliseconds */
+  elapsedMs?: number
+  /** Live download progress during fetch */
+  fetchProgress?: { bytes: number; rows: number }
 }
 
 // ============================================================================

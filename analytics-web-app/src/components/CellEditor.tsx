@@ -14,6 +14,7 @@ interface CellEditorProps {
   availableColumns?: string[]
   defaultDataSource?: string
   datasourceVariables?: string[]
+  showNotebookOption?: boolean
   onClose: () => void
   onUpdate: (updates: Partial<CellConfig>) => void
   onRun: () => void
@@ -28,6 +29,7 @@ export function CellEditor({
   availableColumns,
   defaultDataSource,
   datasourceVariables,
+  showNotebookOption,
   onClose,
   onUpdate,
   onRun,
@@ -128,6 +130,7 @@ export function CellEditor({
             value={('dataSource' in cell ? cell.dataSource : undefined) || defaultDataSource || ''}
             onChange={(ds) => onUpdate({ dataSource: ds } as Partial<CellConfig>)}
             datasourceVariables={datasourceVariables}
+            showNotebookOption={showNotebookOption}
             className=""
           />
         )}

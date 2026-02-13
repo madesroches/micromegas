@@ -12,6 +12,34 @@ export class WasmQueryEngine {
         wasm.__wbg_wasmqueryengine_free(ptr, 0);
     }
     /**
+     * Deregister a single named table. Returns true if the table existed.
+     * @param {string} name
+     * @returns {boolean}
+     */
+    deregister_table(name) {
+        const ptr0 = passStringToWasm0(name, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.wasmqueryengine_deregister_table(this.__wbg_ptr, ptr0, len0);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return ret[0] !== 0;
+    }
+    /**
+     * Execute SQL, register result as a named table, return Arrow IPC stream bytes.
+     * @param {string} sql
+     * @param {string} register_as
+     * @returns {Promise<Uint8Array>}
+     */
+    execute_and_register(sql, register_as) {
+        const ptr0 = passStringToWasm0(sql, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(register_as, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.wasmqueryengine_execute_and_register(this.__wbg_ptr, ptr0, len0, ptr1, len1);
+        return ret;
+    }
+    /**
      * Execute SQL, return Arrow IPC stream bytes.
      * @param {string} sql
      * @returns {Promise<Uint8Array>}
@@ -30,6 +58,7 @@ export class WasmQueryEngine {
     }
     /**
      * Register Arrow IPC stream bytes as a named table.
+     * Replaces any existing table with the same name.
      * Returns the number of rows registered.
      * @param {string} name
      * @param {Uint8Array} ipc_bytes
@@ -156,7 +185,7 @@ function __wbg_get_imports() {
             return ret;
         },
         __wbindgen_cast_0000000000000001: function(arg0, arg1) {
-            // Cast intrinsic for `Closure(Closure { dtor_idx: 79, function: Function { arguments: [Externref], shim_idx: 80, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
+            // Cast intrinsic for `Closure(Closure { dtor_idx: 97, function: Function { arguments: [Externref], shim_idx: 98, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
             const ret = makeMutClosure(arg0, arg1, wasm.wasm_bindgen__closure__destroy__h19140d71437f7a8e, wasm_bindgen__convert__closures_____invoke__hced1ae37e1679d1b);
             return ret;
         },
