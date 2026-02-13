@@ -377,7 +377,7 @@ describe('useCellExecution', () => {
         })
 
         expect(mockStreamQuery).not.toHaveBeenCalled()
-        expect(result.current.cellStates['Empty']).toEqual({ status: 'success', data: null })
+        expect(result.current.cellStates['Empty']).toMatchObject({ status: 'success', data: null })
       })
 
       it('should substitute variables from cells above', async () => {

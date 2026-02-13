@@ -103,7 +103,7 @@ export const CellContainer = forwardRef<HTMLDivElement, CellContainerProps>(func
 
   const statusLabel =
     status === 'loading'
-      ? 'Running...'
+      ? (statusText || 'Running...')
       : status === 'error'
         ? 'Error'
         : status === 'blocked'

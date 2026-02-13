@@ -117,8 +117,10 @@ export function useCellExecution({
       // Mark cell as loading
       setCellStates((prev) => ({
         ...prev,
-        [cell.name]: { ...prev[cell.name], status: 'loading', error: undefined, data: null },
+        [cell.name]: { ...prev[cell.name], status: 'loading', error: undefined, data: null, fetchProgress: undefined },
       }))
+
+      const startTime = performance.now()
 
       // Gather variables from cells above (use ref for synchronous access during execution)
       const availableVariables: Record<string, VariableValue> = {}
@@ -157,6 +159,12 @@ export function useCellExecution({
                   dataSource: cellDataSource,
                 },
                 abortControllerRef.current!.signal,
+                (progress) => {
+                  setCellStates((prev) => ({
+                    ...prev,
+                    [cell.name]: { ...prev[cell.name], fetchProgress: progress },
+                  }))
+                },
               )
               engine.register_table(cell.name, ipcBytes)
               return tableFromIPC(ipcBytes)
@@ -171,8 +179,9 @@ export function useCellExecution({
         const result = await meta.execute(cell, context)
 
         // If result is null, nothing was executed (e.g., text variables)
+        const elapsedMs = performance.now() - startTime
         const newState: CellState = result
-          ? { status: 'success', data: result.data ?? null, ...result }
+          ? { status: 'success', data: result.data ?? null, ...result, elapsedMs }
           : { status: 'success', data: null }
 
         setCellStates((prev) => ({ ...prev, [cell.name]: newState }))
