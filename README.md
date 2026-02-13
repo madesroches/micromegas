@@ -69,7 +69,7 @@ To get started with Micromegas, please refer to the [Getting Started](https://ma
 ## Current Status & Roadmap
 
 ### Unreleased
-* Improving the notebook experience in the analytics web app
+* Notebook cross-cell queries: cells can reference each other's results via SQL, powered by DataFusion WASM running in the browser
 
 ### February 2026 - v0.20.0
 * **Client-Side WASM Query Execution:**

@@ -3,6 +3,14 @@
 This file documents the historical progress of the Micromegas project. For current focus, please see the main [README.md](./README.md).
 
 ## Unreleased
+* **Notebook Cross-Cell Queries:**
+  * Add notebook-local query support via WASM DataFusion engine (#815)
+  * Cells with `dataSource: 'notebook'` execute SQL in-browser against other cells' results
+  * Remote cell results automatically registered in WASM context for cross-cell references
+  * Add `execute_and_register` and `deregister_table` methods to WASM engine
+  * Add "Notebook (local)" option to data source dropdown in cell editor
+  * Live download progress (rows/bytes) and execution time in cell title bars
+  * Extract shared `serialize_to_ipc` helper in datafusion-wasm crate
 
 ## February 2026 - v0.20.0
 * **Client-Side WASM Query Execution:**
