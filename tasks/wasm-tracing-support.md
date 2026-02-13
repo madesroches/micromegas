@@ -172,7 +172,7 @@ pub use log_events::*;
 
 **`logs/events.rs`** — only metadata, transit-free:
 ```rust
-use crate::prelude::*;
+use crate::levels::{Level, LevelFilter};
 use std::sync::atomic::{AtomicU32, Ordering};
 
 pub struct LogMetadata<'a> { ... }  // Level, AtomicU32, &str
@@ -183,7 +183,7 @@ impl LogMetadata<'_> { ... }       // level_filter, set_level_filter
 
 **`logs/log_events.rs`** (**new**, native-only) — all event types, moved from events.rs:
 ```rust
-use crate::{prelude::*, property_set::PropertySet, static_string_ref::StaticStringRef, string_id::StringId};
+use crate::{property_set::PropertySet, static_string_ref::StaticStringRef, string_id::StringId};
 use micromegas_transit::{DynString, UserDefinedType, prelude::*, read_advance_string, read_consume_pod};
 use super::LogMetadata;
 
@@ -313,7 +313,7 @@ use crate::time::{frequency, now};
 ```
 
 **Architecture:**
-- Global `OnceLock<Arc<dyn EventSink>>` holds the sink (same trait as native)
+- Global `OnceLock<WasmDispatch>` holds a struct with `process_id: Uuid` and `sink: Arc<dyn EventSink>` (same trait as native)
 
 **Complete function list** (every pub fn must exist for callers to compile):
 
@@ -500,10 +500,10 @@ The native and wasm sides share almost nothing today (the native side is HTTP tr
 ```toml
 [dependencies]
 # Shared (transit-free)
-micromegas-tracing = { workspace = true, default-features = false }
 anyhow.workspace = true
 chrono.workspace = true
 lazy_static.workspace = true
+micromegas-tracing.workspace = true
 serde.workspace = true
 uuid.workspace = true
 
@@ -662,7 +662,7 @@ fn ensure_tracing() {
 
 | File | Action |
 |------|--------|
-| `rust/telemetry-sink/Cargo.toml` | Gate native deps (`reqwest`, `tokio`, `sysinfo`, `micromegas-telemetry`, `micromegas-transit`, etc.) behind `cfg(not(wasm32))`; add `web-sys` for wasm32; keep shared deps (`micromegas-tracing`, `anyhow`, etc.) |
+| `rust/telemetry-sink/Cargo.toml` | Gate native deps (`reqwest`, `tokio`, `sysinfo`, `micromegas-telemetry`, `micromegas-transit`, etc.) behind `cfg(not(wasm32))`; add `web-sys` for wasm32; keep shared deps (`micromegas-tracing.workspace = true`, `anyhow`, etc.) — note: uses workspace inheritance without `default-features = false` due to Cargo limitation |
 | `rust/telemetry-sink/src/lib.rs` | Gate all native modules (`http_event_sink`, `composite_event_sink`, etc.); expose wasm `init_telemetry()` + `ConsoleEventSink` |
 | `rust/telemetry-sink/src/console_event_sink.rs` | **New** — `ConsoleEventSink` impl (wasm32-only) |
 
@@ -670,7 +670,7 @@ fn ensure_tracing() {
 
 | File | Action |
 |------|--------|
-| `rust/datafusion-wasm/Cargo.toml` | Add `micromegas-tracing` + `micromegas-telemetry-sink` deps |
+| `rust/datafusion-wasm/Cargo.toml` | Add `micromegas-tracing` + `micromegas-telemetry-sink` deps (both `default-features = false`); add `micromegas-tracing` to cargo-machete ignored list |
 | `rust/datafusion-wasm/src/lib.rs` | Call `micromegas_telemetry_sink::init_telemetry()` at startup |
 
 ## What Does NOT Change
