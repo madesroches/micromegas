@@ -19,6 +19,8 @@ arrow = { version = "57.3", default-features = false, features = ["ipc"] }
 chrono = { version = "0.4", default-features = false, features = ["wasmbind"] }
 datafusion = { version = "52.1", default-features = false, features = ["nested_expressions", "sql"] }
 getrandom = { version = "0.3", features = ["wasm_js"] }
+micromegas-telemetry-sink = { path = "../telemetry-sink", default-features = false }
+micromegas-tracing = { path = "../tracing", default-features = false }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 
@@ -26,7 +28,7 @@ wasm-bindgen-futures = "0.4"
 wasm-bindgen-test = "0.3"
 
 [package.metadata.cargo-machete]
-ignored = ["chrono", "getrandom", "wasm-bindgen-futures"]
+ignored = ["chrono", "getrandom", "micromegas-tracing", "wasm-bindgen-futures"]
 
 [profile.release]
 lto = true

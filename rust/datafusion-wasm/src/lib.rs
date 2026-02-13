@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, Once};
 
 use arrow::array::RecordBatch;
 use arrow::datatypes::Schema;
@@ -9,6 +9,16 @@ use datafusion::physical_optimizer::PhysicalOptimizerRule;
 use datafusion::physical_optimizer::optimizer::PhysicalOptimizer;
 use datafusion::prelude::*;
 use wasm_bindgen::prelude::*;
+
+static INIT: Once = Once::new();
+
+fn ensure_tracing() {
+    INIT.call_once(|| {
+        let guard = micromegas_telemetry_sink::init_telemetry()
+            .expect("failed to init telemetry");
+        std::mem::forget(guard); // leak — WASM module lives for page lifetime
+    });
+}
 
 #[wasm_bindgen]
 pub struct WasmQueryEngine {
@@ -25,6 +35,8 @@ impl Default for WasmQueryEngine {
 impl WasmQueryEngine {
     #[wasm_bindgen(constructor)]
     pub fn new() -> Self {
+        ensure_tracing();
+
         // Work around a DataFusion 52.1 bug where the LimitPushdown physical
         // optimizer rule removes GlobalLimitExec without actually pushing the
         // fetch into DataSourceExec, causing LIMIT to be silently ignored.

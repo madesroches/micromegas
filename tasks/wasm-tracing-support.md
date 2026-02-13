@@ -685,13 +685,31 @@ fn ensure_tracing() {
 - `levels.rs` — unchanged (transit-free)
 - `errors.rs` — unchanged (transit-free)
 
-## Verification
+## Implementation Status
 
-1. Native build still works: `cd rust && cargo build -p micromegas-tracing`
-2. Native tests pass: `cd rust && cargo test -p micromegas-tracing`
-3. WASM build: `cargo build --target wasm32-unknown-unknown -p micromegas-tracing --no-default-features`
-4. datafusion-wasm builds: `cd rust/datafusion-wasm && wasm-pack build --target web`
-5. Manual test: log output appears in browser console when using datafusion-wasm
+All phases implemented. Native verification complete:
+- `cargo build --workspace` — passes
+- `cargo test --workspace` — all tests pass, zero failures
+- `cargo clippy -p micromegas-tracing -p micromegas-telemetry-sink -- -D warnings` — clean
+- `cargo fmt --check` — clean
+
+### Phases completed:
+1. **Phase 1**: Gated native-only deps in `tracing/Cargo.toml`, added wasm32 deps
+2. **Phase 2**: Added wasm32 `now()` and `frequency()` in `time.rs`
+3. **Phase 3**: Split event files — metadata types in `events.rs`, transit-heavy types in `*_events.rs` (native-only)
+4. **Phase 4-5**: Added property_set stubs, gated event submodules
+5. **Phase 6**: Created `dispatch_wasm.rs` with OnceLock-based dispatch
+6. **Phase 7-9**: Gated `panic_hook.rs` flush, made `process_info.rs` transit-free, cfg-gated `lib.rs` modules
+7. **Phase 10**: Gated telemetry-sink native modules, created `ConsoleEventSink`, added wasm `init_telemetry()`
+8. **Phase 11**: Wired up `datafusion-wasm` with `ensure_tracing()` init
+
+### Implementation note:
+- `telemetry-sink/Cargo.toml` uses `micromegas-tracing.workspace = true` (not `default-features = false`) because workspace dependency inheritance doesn't allow overriding default-features. This is fine — the `tokio` feature being enabled doesn't affect wasm builds since `datafusion-wasm` is excluded from the workspace and resolves its own dependency tree.
+
+### Remaining verification:
+- WASM build: `cargo build --target wasm32-unknown-unknown -p micromegas-tracing --no-default-features`
+- datafusion-wasm builds: `cd rust/datafusion-wasm && wasm-pack build --target web`
+- Manual test: log output appears in browser console when using datafusion-wasm
 
 ## Risks & Notes
 

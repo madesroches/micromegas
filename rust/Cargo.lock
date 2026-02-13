@@ -3499,6 +3499,7 @@ dependencies = [
  "tracing-core",
  "tracing-subscriber",
  "uuid",
+ "web-sys",
 ]
 
 [[package]]
@@ -3508,7 +3509,9 @@ dependencies = [
  "anyhow",
  "chrono",
  "futures",
+ "getrandom 0.3.4",
  "internment",
+ "js-sys",
  "lazy_static",
  "log",
  "memoffset",

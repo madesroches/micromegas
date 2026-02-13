@@ -1,4 +1,5 @@
 //! Reports panics as fatal log entries and shuts down the telemetry system
+#[cfg(not(target_arch = "wasm32"))]
 use std::io::Write;
 use std::panic::{PanicHookInfo, take_hook};
 use std::sync::Mutex;
@@ -22,6 +23,7 @@ pub fn init_panic_hook() {
         if let Ok(guard) = PREVIOUS_HOOK.lock()
             && let Some(hook) = guard.as_ref()
         {
+            #[cfg(not(target_arch = "wasm32"))]
             std::io::stdout().flush().unwrap();
             hook(panic_info);
         }

@@ -62,7 +62,13 @@ pub fn now() -> i64 {
     tick_counter
 }
 
+#[cfg(target_arch = "wasm32")]
+pub fn now() -> i64 {
+    (js_sys::Date::now() * 1000.0) as i64 // ms → µs
+}
+
 #[allow(unreachable_code)]
+#[cfg(not(target_arch = "wasm32"))]
 pub fn frequency() -> i64 {
     #[cfg(windows)]
     return freq_windows();
@@ -87,6 +93,11 @@ pub fn frequency() -> i64 {
         return counter_frequency;
     }
     0
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn frequency() -> i64 {
+    1_000_000 // µs per second (matches now() which returns µs)
 }
 
 #[allow(unused_imports)]
