@@ -48,6 +48,7 @@ jobs:
         with:
           version: latest
           args: coverage
+          workdir: ./grafana
 
       - name: Build backend
         if: steps.check-for-backend.outputs.has-backend == 'true'
@@ -55,6 +56,7 @@ jobs:
         with:
           version: latest
           args: build
+          workdir: ./grafana
 
       - name: Warn missing Grafana API key
         run: |
