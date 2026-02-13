@@ -21,69 +21,68 @@ env:
   CARGO_BUILD_JOBS: 2  # Reduce parallel jobs to avoid OOM during linking
 
 jobs:
-  build:
-
+  native:
     runs-on: ubuntu-latest
-
     steps:
     - uses: actions/checkout@v3
 
     - name: Show initial disk space
       run: |
-        echo "📊 Initial disk space:"
+        echo "Initial disk space:"
         df -h / | awk 'NR==1 || /\/$/'
-        echo "💾 $(df / --output=used,size,avail,pcent | tail -1 | awk '{print $1" used / "$2" total ("$3" free, "$4" used)"}')"
 
-    - name: Free up disk space (aggressive)
+    - name: Free up disk space
       run: |
-        echo "🧹 Cleaning up unnecessary files (aggressive mode)..."
-        # Remove large pre-installed software
-        sudo rm -rf /usr/share/dotnet
-        sudo rm -rf /opt/ghc
-        sudo rm -rf /usr/local/share/boost
-        sudo rm -rf "$AGENT_TOOLSDIRECTORY"
-        sudo rm -rf /usr/local/lib/android
-        sudo rm -rf /usr/local/.ghcup
-        sudo rm -rf /usr/share/swift
-        sudo rm -rf /opt/hostedtoolcache
-        sudo rm -rf /usr/share/az_*
-        sudo rm -rf /opt/az
-        sudo rm -rf /usr/local/share/powershell
-        sudo rm -rf /usr/share/kotlinc
-        # Remove large packages (but keep clang for mold linker)
+        sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost "$AGENT_TOOLSDIRECTORY" /usr/local/lib/android /usr/local/.ghcup /usr/share/swift /opt/hostedtoolcache /usr/share/az_* /opt/az /usr/local/share/powershell /usr/share/kotlinc
         sudo apt-get remove -y '^aspnetcore-.*' '^dotnet-.*' '^mongodb-.*' '^mysql-.*' '^php.*' azure-cli google-chrome-stable powershell mono-devel 2>/dev/null || true
         sudo apt-get autoremove -y
         sudo apt-get clean
-        # Clean Docker
         docker rmi $(docker images -q) 2>/dev/null || true
-        # Show what we freed
-        echo "✅ Cleanup complete"
-        echo "💾 $(df / --output=used,size,avail,pcent | tail -1 | awk '{print $1" used / "$2" total ("$3" free, "$4" used)"}')"
 
     - name: Install mold linker
       run: |
         sudo apt-get update -qq
         sudo apt-get install -y mold
-        echo "💾 After mold: $(df / --output=used,size,avail,pcent | tail -1 | awk '{print $1" used / "$2" total ("$3" free, "$4" used)"}')"
 
     - name: Install cargo-machete
+      run: cargo install cargo-machete
+
+    - name: Run native CI
+      run: ./build/rust_ci.py native
+
+    - name: Cleanup build artifacts
+      if: always()
       run: |
-        cargo install cargo-machete
-        echo "💾 After cargo-machete: $(df / --output=used,size,avail,pcent | tail -1 | awk '{print $1" used / "$2" total ("$3" free, "$4" used)"}')"
+        rm -rf rust/target/debug/deps/*
+        rm -rf rust/target/debug/incremental/*
+
+  wasm:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Show initial disk space
+      run: |
+        echo "Initial disk space:"
+        df -h / | awk 'NR==1 || /\/$/'
+
+    - name: Free up disk space
+      run: |
+        sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost "$AGENT_TOOLSDIRECTORY" /usr/local/lib/android /usr/local/.ghcup /usr/share/swift /opt/hostedtoolcache /usr/share/az_* /opt/az /usr/local/share/powershell /usr/share/kotlinc
+        sudo apt-get remove -y '^aspnetcore-.*' '^dotnet-.*' '^mongodb-.*' '^mysql-.*' '^php.*' azure-cli google-chrome-stable powershell mono-devel 2>/dev/null || true
+        sudo apt-get autoremove -y
+        sudo apt-get clean
+        docker rmi $(docker images -q) 2>/dev/null || true
 
     - name: Install wasm tooling
       run: |
         rustup target add wasm32-unknown-unknown
         cargo install wasm-pack
-        echo "💾 After wasm tooling: $(df / --output=used,size,avail,pcent | tail -1 | awk '{print $1" used / "$2" total ("$3" free, "$4" used)"}')"
 
-    - name: rust-ci
-      run: ./build/rust_ci.py
+    - name: Run WASM CI
+      run: ./build/rust_ci.py wasm
 
     - name: Cleanup build artifacts
       if: always()
       run: |
-        echo "🧹 Cleaning up Rust build artifacts..."
-        rm -rf rust/target/debug/deps/*
-        rm -rf rust/target/debug/incremental/*
-        echo "💾 After cleanup: $(df / --output=used,size,avail,pcent | tail -1 | awk '{print $1" used / "$2" total ("$3" free, "$4" used)"}')"
+        rm -rf rust/datafusion-wasm/target/*
