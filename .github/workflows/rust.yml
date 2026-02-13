@@ -85,5 +85,4 @@ jobs:
     - name: Cleanup build artifacts
       if: always()
       run: |
-        rm -rf rust/target/debug/deps/*
-        rm -rf rust/target/debug/incremental/*
+        rm -rf rust/datafusion-wasm/target/*
