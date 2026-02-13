@@ -95,15 +95,49 @@ tokio = ["dep:tokio"]
 
 ### Phase 2: `time.rs` — add wasm32 implementation
 
+Add wasm32 `now()` alongside the existing arch-specific definitions:
+
 ```rust
 #[cfg(target_arch = "wasm32")]
 pub fn now() -> i64 {
     (js_sys::Date::now() * 1000.0) as i64  // ms → µs
 }
+```
+
+Gate the existing `frequency()` as native-only and add a wasm32 version. The existing function has no outer `#[cfg]` — its inner `#[cfg]` blocks are eliminated on wasm32 and it falls through to `return 0`, which would conflict with a separate wasm32 definition. Fix by gating:
+
+```rust
+#[allow(unreachable_code)]
+#[cfg(not(target_arch = "wasm32"))]
+pub fn frequency() -> i64 {
+    #[cfg(windows)]
+    return freq_windows();
+
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    {
+        let cpuid = raw_cpuid::CpuId::new();
+        return cpuid
+            .get_tsc_info()
+            .map(|tsc_info| tsc_info.tsc_frequency().unwrap_or(0))
+            .unwrap_or(0) as i64;
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        let counter_frequency: i64;
+        unsafe {
+            core::arch::asm!(
+                "mrs x0, cntfrq_el0",
+                out("x0") counter_frequency
+            );
+        }
+        return counter_frequency;
+    }
+    0
+}
 
 #[cfg(target_arch = "wasm32")]
 pub fn frequency() -> i64 {
-    1_000_000  // µs per second
+    1_000_000  // µs per second (matches now() which returns µs)
 }
 ```
 
@@ -608,7 +642,7 @@ fn ensure_tracing() {
 | `rust/tracing/Cargo.toml` | Gate `micromegas-transit`, `internment`, `memoffset`, `raw-cpuid`, `thread-id`, `whoami` as native-only; add `getrandom`+`js-sys` for wasm32; add `wasmbind` to chrono |
 | `rust/tracing/src/lib.rs` | cfg-gate dispatch path swap + native-only modules |
 | `rust/tracing/src/dispatch_wasm.rs` | **New** — minimal dispatch using `EventSink`, no transit |
-| `rust/tracing/src/time.rs` | Add `#[cfg(target_arch = "wasm32")]` `now()` and `frequency()` |
+| `rust/tracing/src/time.rs` | Add `#[cfg(target_arch = "wasm32")]` `now()` and `frequency()`; gate existing `frequency()` with `#[cfg(not(target_arch = "wasm32"))]` to avoid duplicate definition |
 | `rust/tracing/src/event/mod.rs` | Gate `block`, `stream`, `in_memory_sink` native-only; keep `sink` on all platforms |
 | `rust/tracing/src/logs/mod.rs` | Gate `block`, add `LogBlock`/`LogStream` stubs on wasm32 |
 | `rust/tracing/src/logs/events.rs` | Keep only metadata: `LogMetadata`, `FilterState`, `FILTER_LEVEL_UNSET_VALUE` (remove transit imports + event types) |
