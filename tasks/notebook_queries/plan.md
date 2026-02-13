@@ -213,10 +213,11 @@ Wired the WASM engine into the notebook execution loop. `'notebook'` is a reserv
 3. Updated `useCellExecution.ts`: accepts optional WASM engine, dispatches by data source, registers all results in WASM when engine exists, re-executes all cells when engine becomes available
 4. Updated `NotebookRenderer.tsx`: eagerly loads WASM engine on notebook mount, passes engine to `useCellExecution`, resets on full re-execution, deregisters on cell deletion
 5. WASM engine load error banner in notebook UI
+6. Download progress and execution time in cell title bars: live row/byte progress during remote fetch (via `fetchQueryIPC` onProgress callback), total elapsed time shown on completion. `CellState` extended with `elapsedMs` and `fetchProgress` fields.
 
 **Not yet tested end-to-end** against a real notebook with notebook cells. All unit tests and type-check pass, but the actual user-facing flow hasn't been verified.
 
-Files: `rust/datafusion-wasm/src/lib.rs`, `DataSourceSelector.tsx`, `CellEditor.tsx`, `useCellExecution.ts`, `NotebookRenderer.tsx`
+Files: `rust/datafusion-wasm/src/lib.rs`, `DataSourceSelector.tsx`, `CellEditor.tsx`, `useCellExecution.ts`, `NotebookRenderer.tsx`, `notebook-types.ts`, `CellContainer.tsx`
 
 ### Phase 3: UDFs in WASM
 
@@ -237,10 +238,11 @@ Add `SHOW TABLES` support to the WASM engine so users can inspect which cell res
 
 ### Phase 5: Polish
 
-1. Memory management warnings for large cell results
-2. Error messages for common issues (missing tables, type mismatches)
-3. Graceful handling when referenced cell has error/blocked status
-4. Documentation
+1. ~~Download progress and execution time feedback in cell title bars~~ — DONE (Phase 2)
+2. Memory management warnings for large cell results
+3. Error messages for common issues (missing tables, type mismatches)
+4. Graceful handling when referenced cell has error/blocked status
+5. Documentation
 
 ## Considerations
 
