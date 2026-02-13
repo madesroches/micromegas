@@ -34,9 +34,10 @@ import { CellEditor } from '@/components/CellEditor'
 import { ResizeHandle } from '@/components/ResizeHandle'
 import { Button } from '@/components/ui/button'
 import { useNotebookVariables } from './useNotebookVariables'
-import { useCellExecution } from './useCellExecution'
+import { useCellExecution, NotebookQueryEngine } from './useCellExecution'
 import { cleanupVariableParams, resolveCellDataSource } from './notebook-utils'
 import { cleanupTimeParams, useExposeSaveRef } from '@/lib/url-cleanup-utils'
+import { loadWasmEngine } from '@/lib/wasm-engine'
 
 // ============================================================================
 // Constants
@@ -243,6 +244,32 @@ export function NotebookRenderer({
       savedNotebookConfig?.cells ?? null,
     )
 
+  // WASM engine for notebook-local queries
+  // Lazily loaded when any cell has dataSource: 'notebook'
+  const [engine, setEngine] = useState<NotebookQueryEngine | null>(null)
+  const [engineError, setEngineError] = useState<string | null>(null)
+  const hasNotebookCells = useMemo(
+    () => cells.some((c) => 'dataSource' in c && c.dataSource === 'notebook'),
+    [cells],
+  )
+
+  useEffect(() => {
+    if (!hasNotebookCells || engine) return
+    let cancelled = false
+    loadWasmEngine()
+      .then((mod) => {
+        if (!cancelled) {
+          setEngine(new mod.WasmQueryEngine() as unknown as NotebookQueryEngine)
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setEngineError(err instanceof Error ? err.message : 'Failed to load WASM engine')
+        }
+      })
+    return () => { cancelled = true }
+  }, [hasNotebookCells, engine])
+
   // Cell execution state management
   const { cellStates, executeCell, executeFromCell, migrateCellState, removeCellState } = useCellExecution({
     cells,
@@ -251,6 +278,7 @@ export function NotebookRenderer({
     setVariableValue,
     refreshTrigger,
     dataSource,
+    engine,
   })
 
   // Handle time range selection from charts (drag-to-zoom)
@@ -374,6 +402,9 @@ export function NotebookRenderer({
       if (cell.type === 'variable') {
         removeVariable(cell.name)
       }
+      if (engine) {
+        try { engine.deregister_table(cell.name) } catch { /* ignore */ }
+      }
 
       // Update selection
       if (selectedCellIndex === index) {
@@ -383,7 +414,7 @@ export function NotebookRenderer({
       }
       setDeletingCellIndex(null)
     },
-    [notebookConfig, cells, onConfigChange, selectedCellIndex, removeCellState, removeVariable]
+    [notebookConfig, cells, onConfigChange, selectedCellIndex, removeCellState, removeVariable, engine]
   )
 
   const updateCell = useCallback(
@@ -523,6 +554,11 @@ export function NotebookRenderer({
     <div className="flex h-full">
       {/* Main content area */}
       <div className="flex-1 flex flex-col p-6 min-w-0 overflow-auto">
+        {engineError && (
+          <div className="mb-3 px-4 py-2 bg-accent-error/10 border border-accent-error/30 rounded text-xs text-accent-error">
+            WASM engine failed to load: {engineError}
+          </div>
+        )}
         <DndContext
           sensors={sensors}
           collisionDetection={closestCenter}
@@ -572,6 +608,7 @@ export function NotebookRenderer({
               existingNames={existingNames}
               availableColumns={cellStates[selectedCell.name]?.data?.schema.fields.map((f) => f.name)}
               defaultDataSource={dataSource}
+              showNotebookOption
               datasourceVariables={
                 selectedCellIndex !== null
                   ? cells

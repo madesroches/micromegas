@@ -1,9 +1,17 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
-import { Table } from 'apache-arrow'
+import { Table, tableFromIPC } from 'apache-arrow'
 import type { CellConfig, CellState, VariableValue } from './notebook-types'
 import { getCellTypeMetadata, CellExecutionContext } from './cell-registry'
-import { streamQuery } from '@/lib/arrow-stream'
+import { streamQuery, fetchQueryIPC } from '@/lib/arrow-stream'
 import { resolveCellDataSource } from './notebook-utils'
+
+/** Minimal interface for the WASM query engine (decoupled from WASM module type) */
+export interface NotebookQueryEngine {
+  register_table(name: string, ipc_bytes: Uint8Array): number
+  execute_and_register(sql: string, register_as: string): Promise<Uint8Array>
+  deregister_table(name: string): boolean
+  reset(): void
+}
 
 interface UseCellExecutionParams {
   /** Cell configurations from notebook config */
@@ -18,6 +26,8 @@ interface UseCellExecutionParams {
   refreshTrigger: number
   /** Data source name for query routing */
   dataSource?: string
+  /** WASM query engine for notebook-local queries (null when not loaded yet) */
+  engine: NotebookQueryEngine | null
 }
 
 export interface UseCellExecutionResult {
@@ -82,6 +92,7 @@ export function useCellExecution({
   setVariableValue,
   refreshTrigger,
   dataSource,
+  engine,
 }: UseCellExecutionParams): UseCellExecutionResult {
   const [cellStates, setCellStates] = useState<Record<string, CellState>>({})
   const abortControllerRef = useRef<AbortController | null>(null)
@@ -125,10 +136,36 @@ export function useCellExecution({
       try {
         // Create execution context - use per-cell data source with fallback to global
         const cellDataSource = resolveCellDataSource(cell, availableVariables, dataSource)
+        const isNotebookSource = cellDataSource === 'notebook'
+
         const context: CellExecutionContext = {
           variables: availableVariables,
           timeRange,
-          runQuery: (sql) => executeSql(sql, timeRange, abortControllerRef.current!.signal, cellDataSource),
+          runQuery: async (sql) => {
+            if (isNotebookSource) {
+              // Execute locally in WASM engine
+              if (!engine) throw new Error('WASM engine not loaded')
+              const ipcBytes = await engine.execute_and_register(sql, cell.name)
+              return tableFromIPC(ipcBytes)
+            } else if (engine) {
+              // Remote execution, but register result in WASM for downstream notebook cells
+              const ipcBytes = await fetchQueryIPC(
+                {
+                  sql,
+                  params: { begin: timeRange.begin, end: timeRange.end },
+                  begin: timeRange.begin,
+                  end: timeRange.end,
+                  dataSource: cellDataSource,
+                },
+                abortControllerRef.current!.signal,
+              )
+              engine.register_table(cell.name, ipcBytes)
+              return tableFromIPC(ipcBytes)
+            } else {
+              // Remote execution without WASM (no notebook cells in this notebook)
+              return executeSql(sql, timeRange, abortControllerRef.current!.signal, cellDataSource)
+            }
+          },
         }
 
         // Delegate to cell's execute method
@@ -162,12 +199,16 @@ export function useCellExecution({
         return false
       }
     },
-    [cells, timeRange, variableValuesRef, setVariableValue, dataSource]
+    [cells, timeRange, variableValuesRef, setVariableValue, dataSource, engine]
   )
 
   // Execute from a cell index (that cell and all below)
   const executeFromCell = useCallback(
     async (startIndex: number) => {
+      // Reset WASM engine when re-executing from the top
+      if (startIndex === 0 && engine) {
+        engine.reset()
+      }
       for (let i = startIndex; i < cells.length; i++) {
         const success = await executeCell(i)
         if (!success) {
@@ -186,7 +227,7 @@ export function useCellExecution({
         }
       }
     },
-    [cells, executeCell]
+    [cells, executeCell, engine]
   )
 
   // Execute all cells on initial load

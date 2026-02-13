@@ -30,41 +30,11 @@ Cell B: source=local   → executes in local context: SELECT host, count(*) FROM
 
 Cell types (`table`, `chart`, `log`, `propertytimeline`, `swimlane`) define how data is visualized, not where data comes from. This follows the Grafana panel model where a panel's data source is orthogonal to its visualization.
 
-### Polymorphic Query Configuration
+### Data Source Routing
 
-Queries are separate from cells and can come from different sources:
+The existing `dataSource?: string` field on cell configs already supports arbitrary values. We add `'notebook'` as a reserved value. When `resolveCellDataSource()` returns `'notebook'`, execution routes to the WASM engine instead of the server. No new `Query` type union needed — the data source dropdown in the cell editor is the only UI change.
 
-```typescript
-interface RemoteQuery {
-  source: 'remote'
-  sql: string
-}
-
-interface LocalQuery {
-  source: 'local'
-  sql: string
-}
-
-type Query = RemoteQuery | LocalQuery
-```
-
-**Data source routing:** The existing `dataSource` field stays on the cell config (not in the `Query` type). For remote queries, `resolveCellDataSource()` resolves the data source as it does today. For local queries, the `dataSource` field is set to `'notebook'` — a reserved value that `resolveCellDataSource()` recognizes to route execution to the WASM engine instead of the server.
-
-This design allows future data sources without changing the cell model:
-
-```typescript
-// Future possibilities
-interface CellRefQuery {
-  source: 'cell'
-  cell: string  // reference another cell's data directly, no SQL
-}
-
-interface HttpQuery {
-  source: 'http'
-  url: string
-  format: 'json' | 'csv' | 'parquet'
-}
-```
+The existing `DataSourceSelector` dropdown already shows server data sources and `$variable` references. We add `'notebook'` as an option (shown only in notebook context). This fits naturally into the existing pattern — no separate "source toggle" UI.
 
 ### WASM Engine as Single Source of Truth
 
@@ -478,30 +448,36 @@ Build the WASM engine — this is the foundation everything else depends on.
 
 Files: new `rust/datafusion-wasm/` crate, Vite config, new `lib/wasm-engine.ts`
 
-### Phase 2: Fetch Pipeline + Notebook Context
+### Phase 2: Notebook Integration
 
-Wire the WASM engine into the notebook execution loop with the WASM-first data flow.
+Wire the WASM engine into the notebook execution loop. The existing `DataSourceSelector` dropdown already shows server data sources and `$variable` references — we add `'notebook'` as a reserved data source option. When a cell's data source resolves to `'notebook'`, its SQL executes in the WASM engine against tables registered from other cells' results.
 
-1. Add `fetchQueryIPC()` to `arrow-stream.ts` — strips JSON frames, returns raw IPC bytes without JS-side Arrow decoding. Existing `streamQuery()` / `executeStreamQuery()` stay for non-notebook callers.
-2. Add `Query` type union (`RemoteQuery | LocalQuery`) to `notebook-types.ts`
-3. Add versioned `QueryCellConfigV2` with `query: Query` field
-4. Add V1→V2 migration (runs on notebook load, saved back on next save). Migration only applies to `QueryCellConfig` cells — `MarkdownCellConfig`, `VariableCellConfig`, and `PerfettoExportCellConfig` are unchanged.
-5. Create `WasmQueryEngine` instance per notebook in `useCellExecution.ts`
-6. Update `useCellExecution.ts` to dispatch by source: remote queries use `fetchQueryIPC()` + `register_table()`, local queries use `execute_sql()`. Both paths return Tables via FFI. The `CellExecutionContext.runQuery` signature stays as `(sql: string) => Promise<Table>` — individual cell execute functions require no changes.
-7. Reset the engine context on full re-execution (time range change, refresh)
-8. Deregister tables on cell deletion
-9. Update `CellRendererProps.sql` to derive from `query.sql` (the prop stays as `string` for backward compatibility with renderers — the V2→prop mapping extracts `config.query.sql`)
+**No cell config migration needed.** The existing `dataSource?: string` field on `QueryCellConfig` already supports arbitrary string values. Setting `dataSource: 'notebook'` is a normal config change — no V2 schema, no migration.
 
-Files: `arrow-stream.ts`, `notebook-types.ts`, `cell-registry.ts`, `useCellExecution.ts`, `NotebookRenderer.tsx`, `lib/wasm-engine.ts`
+#### WASM Engine API additions
 
-### Phase 3: UI for Source Selection
+Add `execute_and_register(sql, register_as)` and `deregister_table(name)` to the Rust WASM engine. `execute_and_register` executes SQL, registers the result as a named MemTable, and returns IPC bytes — avoiding a separate register call and extra IPC round-trip for local queries.
 
-1. Source toggle in cell editor (remote/local dropdown)
-2. Cell name display showing available tables from cells above
-3. Visual indicator for local vs remote queries
-4. Error handling: invalid table references, empty results, WASM engine errors
+#### Execution flow
 
-Files: cell editor components
+When any cell has `dataSource: 'notebook'`, the notebook lazily creates a WASM engine. All cell results (remote and local) are registered in it so downstream notebook cells can reference them by name.
+
+- **Remote cells** (any dataSource except `'notebook'`): use `fetchQueryIPC()` to get raw IPC bytes → `engine.register_table(cellName, ipcBytes)` → `tableFromIPC(ipcBytes)` for the renderer.
+- **Notebook cells** (`dataSource: 'notebook'`): use `engine.execute_and_register(sql, cellName)` → `tableFromIPC(ipcBytes)` for the renderer. The SQL references tables registered by cells above.
+- **When no WASM engine** (no notebook cells): remote cells use `streamQuery()` as today — zero overhead.
+
+The `CellExecutionContext.runQuery` signature stays as `(sql: string) => Promise<Table>` — individual cell execute functions require no changes.
+
+#### Steps
+
+1. Add `execute_and_register` and `deregister_table` to WASM engine (`rust/datafusion-wasm/src/lib.rs`)
+2. Rebuild WASM (`python3 build.py`)
+3. Add `'notebook'` as a reserved data source option in `DataSourceSelector` — shown when `showNotebookOption` prop is true
+4. Update `useCellExecution.ts`: accept optional WASM engine, dispatch by data source, register all results in WASM when engine exists
+5. Update `NotebookRenderer.tsx`: lazily create WASM engine when any cell has `dataSource: 'notebook'`, pass engine to `useCellExecution`, reset engine on full re-execution, deregister on cell deletion
+6. Error handling: WASM engine load failures, missing table references, engine execution errors
+
+Files: `rust/datafusion-wasm/src/lib.rs`, `DataSourceSelector.tsx`, `useCellExecution.ts`, `NotebookRenderer.tsx`
 
 ### Phase 4: UDFs in WASM
 

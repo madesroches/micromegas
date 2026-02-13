@@ -5,6 +5,14 @@ export class WasmQueryEngine {
     free(): void;
     [Symbol.dispose](): void;
     /**
+     * Deregister a single named table. Returns true if the table existed.
+     */
+    deregister_table(name: string): boolean;
+    /**
+     * Execute SQL, register result as a named table, return Arrow IPC stream bytes.
+     */
+    execute_and_register(sql: string, register_as: string): Promise<Uint8Array>;
+    /**
      * Execute SQL, return Arrow IPC stream bytes.
      */
     execute_sql(sql: string): Promise<Uint8Array>;
@@ -25,6 +33,8 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly __wbg_wasmqueryengine_free: (a: number, b: number) => void;
+    readonly wasmqueryengine_deregister_table: (a: number, b: number, c: number) => [number, number, number];
+    readonly wasmqueryengine_execute_and_register: (a: number, b: number, c: number, d: number, e: number) => any;
     readonly wasmqueryengine_execute_sql: (a: number, b: number, c: number) => any;
     readonly wasmqueryengine_new: () => number;
     readonly wasmqueryengine_register_table: (a: number, b: number, c: number, d: number, e: number) => [number, number, number];

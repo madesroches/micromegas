@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use arrow::array::RecordBatch;
+use arrow::datatypes::Schema;
 use arrow::ipc::reader::StreamReader;
 use arrow::ipc::writer::StreamWriter;
 use datafusion::execution::SessionStateBuilder;
@@ -90,23 +92,47 @@ impl WasmQueryEngine {
             .await
             .map_err(|e| JsValue::from_str(&format!("Execution error: {e}")))?;
 
-        let mut buf = Vec::new();
-        {
-            let mut writer = StreamWriter::try_new(&mut buf, &schema)
-                .map_err(|e| JsValue::from_str(&format!("IPC writer error: {e}")))?;
+        serialize_to_ipc(&schema, &batches)
+    }
 
-            for batch in &batches {
-                writer
-                    .write(batch)
-                    .map_err(|e| JsValue::from_str(&format!("IPC write error: {e}")))?;
-            }
+    /// Execute SQL, register result as a named table, return Arrow IPC stream bytes.
+    pub async fn execute_and_register(
+        &self,
+        sql: &str,
+        register_as: &str,
+    ) -> Result<Vec<u8>, JsValue> {
+        let df = self
+            .ctx
+            .sql(sql)
+            .await
+            .map_err(|e| JsValue::from_str(&format!("SQL error: {e}")))?;
 
-            writer
-                .finish()
-                .map_err(|e| JsValue::from_str(&format!("IPC finish error: {e}")))?;
-        }
+        let schema = Arc::new(df.schema().as_arrow().clone());
 
-        Ok(buf)
+        let batches = df
+            .collect()
+            .await
+            .map_err(|e| JsValue::from_str(&format!("Execution error: {e}")))?;
+
+        // Register result as named table
+        let _ = self.ctx.deregister_table(register_as);
+        let mem_table =
+            datafusion::datasource::MemTable::try_new(schema.clone(), vec![batches.clone()])
+                .map_err(|e| JsValue::from_str(&format!("Failed to create MemTable: {e}")))?;
+        self.ctx
+            .register_table(register_as, Arc::new(mem_table))
+            .map_err(|e| JsValue::from_str(&format!("Failed to register table: {e}")))?;
+
+        serialize_to_ipc(&schema, &batches)
+    }
+
+    /// Deregister a single named table. Returns true if the table existed.
+    pub fn deregister_table(&self, name: &str) -> Result<bool, JsValue> {
+        let existed = self
+            .ctx
+            .deregister_table(name)
+            .map_err(|e| JsValue::from_str(&format!("Failed to deregister table: {e}")))?;
+        Ok(existed.is_some())
     }
 
     /// Deregister all tables.
@@ -143,4 +169,22 @@ impl WasmQueryEngine {
             let _ = self.ctx.deregister_table(&table_name);
         }
     }
+}
+
+fn serialize_to_ipc(schema: &Arc<Schema>, batches: &[RecordBatch]) -> Result<Vec<u8>, JsValue> {
+    let mut buf = Vec::new();
+    let mut writer = StreamWriter::try_new(&mut buf, schema)
+        .map_err(|e| JsValue::from_str(&format!("IPC writer error: {e}")))?;
+
+    for batch in batches {
+        writer
+            .write(batch)
+            .map_err(|e| JsValue::from_str(&format!("IPC write error: {e}")))?;
+    }
+
+    writer
+        .finish()
+        .map_err(|e| JsValue::from_str(&format!("IPC finish error: {e}")))?;
+
+    Ok(buf)
 }
