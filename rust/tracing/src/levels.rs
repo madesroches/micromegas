@@ -741,71 +741,7 @@ pub fn max_lod() -> LodFilter {
 }
 
 /// The statically resolved maximum log level.
-///
-/// See the crate level documentation for information on how to configure this.
-///
-/// This value is checked by the log macros, but not by the `Log`ger returned by
-/// the [`logger`] function. Code that manually calls functions on that value
-/// should compare the level against this value.
-///
-/// [`logger`]: fn.logger.html
-pub const STATIC_MAX_LEVEL: LevelFilter = MAX_LEVEL_INNER;
-
-cfg_if::cfg_if! {
-    if #[cfg(all(not(debug_assertions), feature = "release_max_level_off"))] {
-        const MAX_LEVEL_INNER: LevelFilter = LevelFilter::Off;
-    } else if #[cfg(all(not(debug_assertions), feature = "release_max_level_error"))] {
-        const MAX_LEVEL_INNER: LevelFilter = LevelFilter::Error;
-    } else if #[cfg(all(not(debug_assertions), feature = "release_max_level_warn"))] {
-        const MAX_LEVEL_INNER: LevelFilter = LevelFilter::Warn;
-    } else if #[cfg(all(not(debug_assertions), feature = "release_max_level_info"))] {
-        const MAX_LEVEL_INNER: LevelFilter = LevelFilter::Info;
-    } else if #[cfg(all(not(debug_assertions), feature = "release_max_level_debug"))] {
-        const MAX_LEVEL_INNER: LevelFilter = LevelFilter::Debug;
-    } else if #[cfg(all(not(debug_assertions), feature = "release_max_level_trace"))] {
-        const MAX_LEVEL_INNER: LevelFilter = LevelFilter::Trace;
-    } else if #[cfg(feature = "max_level_off")] {
-        const MAX_LEVEL_INNER: LevelFilter = LevelFilter::Off;
-    } else if #[cfg(feature = "max_level_error")] {
-        const MAX_LEVEL_INNER: LevelFilter = LevelFilter::Error;
-    } else if #[cfg(feature = "max_level_warn")] {
-        const MAX_LEVEL_INNER: LevelFilter = LevelFilter::Warn;
-    } else if #[cfg(feature = "max_level_info")] {
-        const MAX_LEVEL_INNER: LevelFilter = LevelFilter::Info;
-    } else if #[cfg(feature = "max_level_debug")] {
-        const MAX_LEVEL_INNER: LevelFilter = LevelFilter::Debug;
-    } else {
-        const MAX_LEVEL_INNER: LevelFilter = LevelFilter::Trace;
-    }
-}
+pub const STATIC_MAX_LEVEL: LevelFilter = LevelFilter::Trace;
 
 /// The statically resolved maximum metrics/spans lod.
-///
-/// See the crate level documentation for information on how to configure this.
-///
-/// This value is checked by the log macros, but not by the `Log`ger returned by
-/// the [`logger`] function. Code that manually calls functions on that value
-/// should compare the level against this value.
-///
-/// [`logger`]: fn.logger.html
-pub const STATIC_MAX_LOD: LodFilter = MAX_LOD_INNER;
-
-cfg_if::cfg_if! {
-    if #[cfg(all(not(debug_assertions), feature = "release_max_lod_off"))] {
-        const MAX_LOD_INNER: LodFilter = LodFilter::Off;
-    } else if #[cfg(all(not(debug_assertions), feature = "release_max_lod_min"))] {
-        const MAX_LOD_INNER: LodFilter = LodFilter::Min;
-    } else if #[cfg(all(not(debug_assertions), feature = "release_max_lod_med"))] {
-        const MAX_LOD_INNER: LodFilter = LodFilter::Med;
-    } else if #[cfg(all(not(debug_assertions), feature = "release_max_lod_max"))] {
-        const MAX_LOD_INNER: LodFilter = LodFilter::Max;
-    } else if #[cfg(feature = "max_lod_off")] {
-        const MAX_LOD_INNER: LodFilter = LodFilter::Off;
-    } else if #[cfg(feature = "max_lod_min")] {
-        const MAX_LOD_INNER: LodFilter = LodFilter::Min;
-    } else if #[cfg(feature = "max_lod_med")] {
-        const MAX_LOD_INNER: LodFilter = LodFilter::Med;
-    } else {
-        const MAX_LOD_INNER: LodFilter = LodFilter::Max;
-    }
-}
+pub const STATIC_MAX_LOD: LodFilter = LodFilter::Max;

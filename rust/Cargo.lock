@@ -3499,6 +3499,7 @@ dependencies = [
  "tracing-core",
  "tracing-subscriber",
  "uuid",
+ "web-sys",
 ]
 
 [[package]]
@@ -3506,10 +3507,11 @@ name = "micromegas-tracing"
 version = "0.21.0"
 dependencies = [
  "anyhow",
- "cfg-if",
  "chrono",
  "futures",
+ "getrandom 0.3.4",
  "internment",
+ "js-sys",
  "lazy_static",
  "log",
  "memoffset",

@@ -17,7 +17,7 @@ micromegas-ingestion.workspace = true
 micromegas-proc-macros.workspace = true
 micromegas-telemetry-sink.workspace = true
 micromegas-telemetry.workspace = true
-micromegas-tracing.workspace = true
+micromegas-tracing = { workspace = true, features = ["tokio"] }
 micromegas-perfetto.workspace = true
 
 anyhow.workspace = true

@@ -10,25 +10,31 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
-micromegas-transit.workspace = true
-micromegas-tracing-proc-macros = { path = "./proc-macros", version = "^0.21" }
-
+# Shared deps (transit-free)
 anyhow.workspace = true
-cfg-if.workspace = true
-chrono.workspace = true
-internment.workspace = true
+chrono = { workspace = true, features = ["wasmbind"] }
 lazy_static.workspace = true
-memoffset.workspace = true
+micromegas-tracing-proc-macros = { path = "./proc-macros", version = "^0.21" }
 pin-project.workspace = true
-raw-cpuid.workspace = true
 serde.workspace = true
 thiserror.workspace = true
-thread-id.workspace = true
 uuid.workspace = true
+
+# Optional runtime integration
+tokio = { workspace = true, optional = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# Native-only: transit + platform deps
+internment.workspace = true
+memoffset.workspace = true
+micromegas-transit.workspace = true
+raw-cpuid.workspace = true
+thread-id.workspace = true
 whoami.workspace = true
 
-# Optional dependencies for runtime integration
-tokio = { workspace = true, optional = true }
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.3", features = ["wasm_js"] }
+js-sys = "0.3"
 
 [target.'cfg(windows)'.dependencies]
 winapi.workspace = true
@@ -42,34 +48,8 @@ futures = "0.3"
 serial_test = "3.2"
 
 [features]
-# Runtime integration features
 default = ["tokio"]
 tokio = ["dep:tokio"]
-
-# Logging level features
-max_level_off = []
-max_level_error = []
-max_level_warn = []
-max_level_info = []
-max_level_debug = []
-max_level_trace = []
-
-release_max_level_off = []
-release_max_level_error = []
-release_max_level_warn = []
-release_max_level_info = []
-release_max_level_debug = []
-release_max_level_trace = []
-
-max_lod_off = []
-max_lod_min = []
-max_lod_med = []
-max_lod_max = []
-
-release_max_lod_off = []
-release_max_lod_min = []
-release_max_lod_med = []
-release_max_lod_max = []
 
 [[bench]]
 name = "with_no_dispatch"

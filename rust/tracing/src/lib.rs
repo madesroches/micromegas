@@ -101,32 +101,59 @@
     clippy::inline_always
 )]
 
+// dispatch: use wasm version on wasm32
+#[cfg(not(target_arch = "wasm32"))]
 pub mod dispatch;
+#[cfg(target_arch = "wasm32")]
+#[path = "dispatch_wasm.rs"]
+pub mod dispatch;
+
 pub mod errors;
 pub mod event;
-pub mod flush_monitor;
 pub mod guards;
 pub mod levels;
 pub mod logs;
 pub mod metrics;
 pub mod panic_hook;
-pub mod parsing;
 pub mod process_info;
-pub mod property_set;
-#[cfg(feature = "tokio")]
-pub mod runtime;
 pub mod spans;
-pub mod static_string_ref;
-pub mod string_id;
-pub mod test_utils;
 pub mod time;
 
+// Native-only: full on native, stubs in lib.rs for wasm32
+#[cfg(not(target_arch = "wasm32"))]
+pub mod property_set;
+
+#[cfg(target_arch = "wasm32")]
+pub mod property_set {
+    /// Stub for EventSink trait compatibility — never constructed on wasm32
+    pub struct Property;
+    /// Stub for dispatch function signatures — never constructed on wasm32
+    pub struct PropertySet;
+}
+
+// Native-only modules (entirely transit-dependent)
+#[cfg(not(target_arch = "wasm32"))]
+pub mod flush_monitor;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod intern_string;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod parsing;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod static_string_ref;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod string_id;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod test_utils;
+
+#[cfg(feature = "tokio")]
+pub mod runtime;
+
+#[cfg_attr(target_arch = "wasm32", allow(unused_imports))]
 #[macro_use]
 extern crate lazy_static;
 
 #[macro_use]
 mod macros;
-pub mod intern_string;
 
 /// Commonly used items for convenient importing - includes macros, types, and traits
 pub mod prelude {
