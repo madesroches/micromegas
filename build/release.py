@@ -8,8 +8,11 @@ os.environ["PUBLISH_GRACE_SLEEP"] = "60"
 # Format check before starting
 run_command("cargo fmt --check")
 
+wasm_crate = os.path.join(os.path.dirname(__file__), "..", "rust", "datafusion-wasm")
+
 # Release crates in dependency order
 # Layer 1: Foundation crates (no internal dependencies)
+run_command("cargo release -p micromegas-datafusion-wasm -x --no-confirm", cwd=wasm_crate)
 run_command("cargo release -p micromegas-derive-transit -x --no-confirm")
 run_command("cargo release -p micromegas-tracing-proc-macros -x --no-confirm")
 

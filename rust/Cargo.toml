@@ -5,7 +5,7 @@ resolver = "2"
 
 
 [workspace.package]
-version = "0.20.0"
+version = "0.21.0"
 edition = "2024"
 license = "Apache-2.0"
 homepage = "https://github.com/madesroches/micromegas/"
@@ -16,15 +16,15 @@ keywords = ["observability", "telemetry", "analytics"]
 
 
 [workspace.dependencies]
-micromegas-analytics = { path = "analytics", version = "0.20.0" }
-micromegas-auth = { path = "auth", version = "0.20.0" }
-micromegas-ingestion = { path = "ingestion", version = "0.20.0" }
-micromegas-proc-macros = { path = "micromegas-proc-macros", version = "0.20.0" }
-micromegas-telemetry = { path = "telemetry", version = "0.20.0" }
-micromegas-telemetry-sink = { path = "telemetry-sink", version = "0.20.0" }
-micromegas-tracing = { path = "tracing", version = "0.20.0" }
-micromegas-transit = { path = "transit", version = "0.20.0" }
-micromegas-perfetto = { path = "perfetto", version = "0.20.0" }
+micromegas-analytics = { path = "analytics", version = "0.21.0" }
+micromegas-auth = { path = "auth", version = "0.21.0" }
+micromegas-ingestion = { path = "ingestion", version = "0.21.0" }
+micromegas-proc-macros = { path = "micromegas-proc-macros", version = "0.21.0" }
+micromegas-telemetry = { path = "telemetry", version = "0.21.0" }
+micromegas-telemetry-sink = { path = "telemetry-sink", version = "0.21.0" }
+micromegas-tracing = { path = "tracing", version = "0.21.0" }
+micromegas-transit = { path = "transit", version = "0.21.0" }
+micromegas-perfetto = { path = "perfetto", version = "0.21.0" }
 micromegas = { path = "public" }
 
 anyhow = "1.0"
