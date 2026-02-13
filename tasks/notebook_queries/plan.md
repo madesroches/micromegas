@@ -218,18 +218,111 @@ Wired the WASM engine into the notebook execution loop. `'notebook'` is a reserv
 
 Files: `rust/datafusion-wasm/src/lib.rs`, `DataSourceSelector.tsx`, `CellEditor.tsx`, `useCellExecution.ts`, `NotebookRenderer.tsx`, `notebook-types.ts`, `CellContainer.tsx`
 
-### Phase 3: UDFs in WASM — DEFERRED (separate PR)
+### Phase 3: DataFusion Extensions Crate + UDFs in WASM — DEFERRED (separate PR)
 
-Register the WASM-suitable Rust UDFs in the client-side DataFusion context. Same functions, same behavior, client and server.
+Extract all WASM-compatible UDFs into a shared `micromegas-datafusion-ext` crate. Both the server (`analytics`) and the browser (`datafusion-wasm`) depend on it — same functions, same behavior, single source of truth.
 
-**14 of 26 UDFs are WASM-suitable:**
-- JSONB functions (7): `jsonb_get`, `jsonb_get_str`, etc.
-- Properties functions (4): `property_get`, `property_get_str`, etc.
-- Histogram functions (3): `histogram_bucket_count`, etc.
+**Prerequisite:** Make `micromegas-tracing` compile to `wasm32-unknown-unknown`. Currently it depends on `raw-cpuid`, `thread-id`, `memoffset`, and `winapi`, which don't target WASM. This is a separate task — the extensions crate will depend on `micromegas-tracing` for `warn!` logging once that's resolved.
 
-The remaining 12 require PostgreSQL, object storage, or lakehouse context and cannot run in the browser.
+#### New crate: `rust/datafusion-ext/`
 
-Files: `rust/datafusion-wasm/` crate, UDF registration
+**Dependencies (no heavy micromegas crates):**
+```toml
+[dependencies]
+anyhow.workspace = true
+arrow = { workspace = true, default-features = false, features = ["ipc"] }
+datafusion = { workspace = true, default-features = false, features = ["nested_expressions", "sql"] }
+jsonb.workspace = true
+micromegas-tracing.workspace = true  # prerequisite: WASM-compatible
+```
+
+**Module structure:**
+```
+rust/datafusion-ext/
+  Cargo.toml
+  src/
+    lib.rs                      # pub fn register(ctx: &SessionContext)
+    binary_column_accessor.rs   # Binary/Dict<Binary> column access utility
+    jsonb/
+      mod.rs
+      parse.rs                  # jsonb_parse
+      get.rs                    # jsonb_get
+      format_json.rs            # jsonb_format_json
+      cast.rs                   # jsonb_as_string, jsonb_as_f64, jsonb_as_i64
+      keys.rs                   # jsonb_object_keys
+    properties/
+      mod.rs
+      property_get.rs           # property_get
+      properties_to_dict.rs     # properties_to_dict, properties_to_array, properties_length
+      properties_to_jsonb.rs    # properties_to_jsonb
+    histogram/
+      mod.rs
+      accumulator.rs            # HistogramAccumulator
+      histogram_udaf.rs         # make_histogram aggregate
+      sum_histograms_udaf.rs    # sum_histograms aggregate
+      quantile.rs               # quantile_from_histogram
+      variance.rs               # variance_from_histogram
+      accessors.rs              # count_from_histogram, sum_from_histogram
+      expand.rs                 # expand_histogram table function
+```
+
+**Public API — `lib.rs`:**
+```rust
+pub mod binary_column_accessor;
+pub mod histogram;
+pub mod jsonb;
+pub mod properties;
+
+/// Register all extension UDFs, UDAFs, and UDTFs on a SessionContext.
+pub fn register(ctx: &SessionContext) {
+    // Properties (5 scalar)
+    ctx.register_udf(ScalarUDF::from(properties::PropertyGet::new()));
+    ctx.register_udf(ScalarUDF::from(properties::PropertiesToDict::new()));
+    ctx.register_udf(ScalarUDF::from(properties::PropertiesToArray::new()));
+    ctx.register_udf(ScalarUDF::from(properties::PropertiesLength::new()));
+    ctx.register_udf(ScalarUDF::from(properties::PropertiesToJsonb::new()));
+
+    // Histogram (2 aggregate + 4 scalar + 1 table)
+    ctx.register_udaf(histogram::make_histo_udaf());
+    ctx.register_udaf(histogram::sum_histograms_udaf());
+    ctx.register_udf(histogram::make_quantile_from_histogram_udf());
+    ctx.register_udf(histogram::make_variance_from_histogram_udf());
+    ctx.register_udf(histogram::make_count_from_histogram_udf());
+    ctx.register_udf(histogram::make_sum_from_histogram_udf());
+    ctx.register_udtf("expand_histogram",
+        Arc::new(histogram::ExpandHistogramTableFunction::new()));
+
+    // JSONB (7 scalar)
+    ctx.register_udf(jsonb::make_jsonb_parse_udf());
+    ctx.register_udf(jsonb::make_jsonb_format_json_udf());
+    ctx.register_udf(jsonb::make_jsonb_get_udf());
+    ctx.register_udf(jsonb::make_jsonb_as_string_udf());
+    ctx.register_udf(jsonb::make_jsonb_as_f64_udf());
+    ctx.register_udf(jsonb::make_jsonb_as_i64_udf());
+    ctx.register_udf(jsonb::make_jsonb_object_keys_udf());
+}
+```
+
+**19 functions total:** 16 scalar UDFs + 2 aggregate UDAFs + 1 table UDTF.
+
+The remaining server-only functions (12, requiring PostgreSQL/object storage/LakehouseContext) stay in `analytics` and are registered separately by `register_lakehouse_functions()`.
+
+#### Changes to existing crates
+
+**`analytics`:**
+- Remove UDF source files (16 files from `dfext/jsonb/`, `dfext/histogram/`, `properties/property_get.rs`, `properties/properties_to_dict_udf.rs`, `properties/properties_to_jsonb_udf.rs`) and `dfext/binary_column_accessor.rs`
+- Add `micromegas-datafusion-ext` dependency
+- `register_extension_functions()` becomes: `micromegas_datafusion_ext::register(ctx)`
+- ETL utilities stay in `analytics`: `property_set.rs`, `property_set_jsonb_dictionary_builder.rs`, `properties_column_accessor.rs`, `utils.rs`, `arrow_properties.rs` — these depend on `micromegas-transit`/`micromegas-telemetry` types
+- Other `dfext/` modules stay: `expressions`, `log_stream_table_provider`, `predicate`, `string_column_accessor`, `typed_column`, `async_log_stream`, `json_table_provider`, `task_log_exec_plan`
+
+**`datafusion-wasm`:**
+- Add `micromegas-datafusion-ext` dependency
+- Call `micromegas_datafusion_ext::register(&ctx)` in `WasmQueryEngine::new()`
+
+#### Why a single crate, not one per extension family
+
+Separate WASM binaries per UDF family would require cross-module IPC serialization on every UDF invocation (WASM modules have isolated linear memory). UDFs must live in the same WASM linear memory as the DataFusion engine for performance. The open/closed principle is achieved at the Rust crate level: adding a new UDF family means adding files to `datafusion-ext` — the engine code in `datafusion-wasm` and `analytics` doesn't change, they just call `register()`.
 
 ### Phase 4: SHOW TABLES Support — DEFERRED (separate PR)
 
