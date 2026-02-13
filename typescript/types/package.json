@@ -5,7 +5,9 @@
   "types": "dist/index.d.ts",
   "scripts": {
     "build": "tsc",
-    "clean": "rm -rf dist"
+    "clean": "rm -rf dist",
+    "lint": "tsc --noEmit",
+    "test": "echo 'no tests'"
   },
   "devDependencies": {
     "typescript": "5.4.5"
