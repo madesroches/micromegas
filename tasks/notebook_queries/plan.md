@@ -203,9 +203,9 @@ See [wasm_query_poc.md](wasm_query_poc.md) for full details and validation resul
 - Standalone `local_query` screen type validates end-to-end flow
 - Bundle size: 24 MB raw, 5.9 MB gzipped (lazy-loaded only when needed)
 
-### Phase 2: Notebook Integration — IMPLEMENTED, NEEDS TESTING
+### Phase 2: Notebook Integration — COMPLETE
 
-Wired the WASM engine into the notebook execution loop. `'notebook'` is a reserved data source option in the existing `DataSourceSelector` dropdown.
+Wired the WASM engine into the notebook execution loop. `'notebook'` is a reserved data source option in the existing `DataSourceSelector` dropdown. Manually tested end-to-end and covered by automated tests.
 
 **What's done:**
 1. Added `execute_and_register` and `deregister_table` to WASM engine
@@ -214,12 +214,11 @@ Wired the WASM engine into the notebook execution loop. `'notebook'` is a reserv
 4. Updated `NotebookRenderer.tsx`: eagerly loads WASM engine on notebook mount, passes engine to `useCellExecution`, resets on full re-execution, deregisters on cell deletion
 5. WASM engine load error banner in notebook UI
 6. Download progress and execution time in cell title bars: live row/byte progress during remote fetch (via `fetchQueryIPC` onProgress callback), total elapsed time shown on completion. `CellState` extended with `elapsedMs` and `fetchProgress` fields.
-
-**Not yet tested end-to-end** against a real notebook with notebook cells. All unit tests and type-check pass, but the actual user-facing flow hasn't been verified.
+7. Automated tests for WASM engine routing (notebook vs remote vs no-engine paths, reset behavior, error on missing engine)
 
 Files: `rust/datafusion-wasm/src/lib.rs`, `DataSourceSelector.tsx`, `CellEditor.tsx`, `useCellExecution.ts`, `NotebookRenderer.tsx`, `notebook-types.ts`, `CellContainer.tsx`
 
-### Phase 3: UDFs in WASM
+### Phase 3: UDFs in WASM — DEFERRED (separate PR)
 
 Register the WASM-suitable Rust UDFs in the client-side DataFusion context. Same functions, same behavior, client and server.
 
@@ -232,11 +231,11 @@ The remaining 12 require PostgreSQL, object storage, or lakehouse context and ca
 
 Files: `rust/datafusion-wasm/` crate, UDF registration
 
-### Phase 4: SHOW TABLES Support
+### Phase 4: SHOW TABLES Support — DEFERRED (separate PR)
 
 Add `SHOW TABLES` support to the WASM engine so users can inspect which cell results are available for cross-cell references. When executed in a notebook-local cell, `SHOW TABLES` returns the list of registered table names (i.e., cell names whose results are in the WASM context).
 
-### Phase 5: Polish
+### Phase 5: Polish — DEFERRED (separate PR)
 
 1. ~~Download progress and execution time feedback in cell title bars~~ — DONE (Phase 2)
 2. Memory management warnings for large cell results
