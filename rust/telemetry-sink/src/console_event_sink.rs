@@ -20,10 +20,13 @@ impl EventSink for ConsoleEventSink {
         &self,
         desc: &LogMetadata,
         _properties: &[Property],
-        _time: i64,
+        time: i64,
         args: fmt::Arguments<'_>,
     ) {
-        let msg = format!("[{}] {args}", desc.level);
+        let ts = chrono::DateTime::from_timestamp_micros(time)
+            .map(|dt| dt.to_rfc3339())
+            .unwrap_or_default();
+        let msg = format!("{ts} [{}] {args}", desc.level);
         web_sys::console::log_1(&msg.into());
     }
 

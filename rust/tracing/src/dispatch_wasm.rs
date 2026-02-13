@@ -36,6 +36,7 @@ pub fn init_event_dispatch(
     G_DISPATCH
         .set(dispatch)
         .map_err(|_| Error::AlreadyInitialized())?;
+    crate::levels::set_max_level(crate::levels::LevelFilter::Trace);
     sink.on_startup(process_info);
     Ok(())
 }

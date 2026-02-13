@@ -8,6 +8,7 @@ use datafusion::execution::SessionStateBuilder;
 use datafusion::physical_optimizer::PhysicalOptimizerRule;
 use datafusion::physical_optimizer::optimizer::PhysicalOptimizer;
 use datafusion::prelude::*;
+use micromegas_tracing::prelude::*;
 use wasm_bindgen::prelude::*;
 
 static INIT: Once = Once::new();
@@ -35,6 +36,7 @@ impl WasmQueryEngine {
     #[wasm_bindgen(constructor)]
     pub fn new() -> Self {
         ensure_tracing();
+        info!("WasmQueryEngine created");
 
         // Work around a DataFusion 52.1 bug where the LimitPushdown physical
         // optimizer rule removes GlobalLimitExec without actually pushing the
@@ -64,6 +66,7 @@ impl WasmQueryEngine {
     /// Replaces any existing table with the same name.
     /// Returns the number of rows registered.
     pub fn register_table(&self, name: &str, ipc_bytes: &[u8]) -> Result<usize, JsValue> {
+        info!("registering table '{name}' ({} bytes)", ipc_bytes.len());
         let cursor = std::io::Cursor::new(ipc_bytes);
         let reader = StreamReader::try_new(cursor, None)
             .map_err(|e| JsValue::from_str(&format!("Failed to read IPC stream: {e}")))?;
@@ -87,11 +90,13 @@ impl WasmQueryEngine {
             .register_table(name, Arc::new(table))
             .map_err(|e| JsValue::from_str(&format!("Failed to register table: {e}")))?;
 
+        info!("registered table '{name}': {row_count} rows");
         Ok(row_count)
     }
 
     /// Execute SQL, return Arrow IPC stream bytes.
     pub async fn execute_sql(&self, sql: &str) -> Result<Vec<u8>, JsValue> {
+        info!("execute_sql: {sql}");
         let df = self
             .ctx
             .sql(sql)
@@ -105,6 +110,8 @@ impl WasmQueryEngine {
             .await
             .map_err(|e| JsValue::from_str(&format!("Execution error: {e}")))?;
 
+        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        info!("execute_sql completed: {total_rows} rows");
         serialize_to_ipc(&schema, &batches)
     }
 
@@ -114,6 +121,7 @@ impl WasmQueryEngine {
         sql: &str,
         register_as: &str,
     ) -> Result<Vec<u8>, JsValue> {
+        info!("execute_and_register: {sql} -> '{register_as}'");
         let df = self
             .ctx
             .sql(sql)
@@ -126,6 +134,8 @@ impl WasmQueryEngine {
             .collect()
             .await
             .map_err(|e| JsValue::from_str(&format!("Execution error: {e}")))?;
+
+        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
 
         // Register result as named table
         let _ = self.ctx.deregister_table(register_as);
@@ -136,6 +146,7 @@ impl WasmQueryEngine {
             .register_table(register_as, Arc::new(mem_table))
             .map_err(|e| JsValue::from_str(&format!("Failed to register table: {e}")))?;
 
+        info!("execute_and_register completed: {total_rows} rows registered as '{register_as}'");
         serialize_to_ipc(&schema, &batches)
     }
 
