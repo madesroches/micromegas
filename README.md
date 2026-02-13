@@ -69,7 +69,37 @@ To get started with Micromegas, please refer to the [Getting Started](https://ma
 ## Current Status & Roadmap
 
 ### Unreleased
-* Working on improvements to the analytics web app
+* Improving the notebook experience in the analytics web app
+
+### February 2026 - v0.20.0
+* **Client-Side WASM Query Execution:**
+  * `local_query` screen type running DataFusion SQL in the browser via WebAssembly
+  * Progressive row count and byte size display during source query fetch
+  * Auto-run checkbox for local query execution on text changes
+* **Configurable Data Sources:**
+  * Per-screen and per-cell data source selection
+  * Datasource variable type for notebook data source selection
+* **Notebook Enhancements:**
+  * Perfetto export cell type
+  * Expression variable type for adaptive `time_bin_duration`
+  * Swimlane cell type for visualizing concurrent events
+  * Drag-to-zoom time range selection on charts
+  * Property timeline cell type
+  * Re-execute cells when time range changes
+  * Query guide links in SQL editor cells
+  * Move variable cell input and save buttons to title bar
+  * Config diff modal for reviewing changes before save
+* **Query & Data Features:**
+  * Multi-column query variables with `$variable.column` syntax
+  * Table URL support with column overrides
+  * Unit formatting system for charts
+  * Hide columns via right-click context menu
+* **Client-Side Perfetto Trace Generation:**
+  * Replace server-side trace generation with client-side fetching
+  * Gzip compression and abort signal support
+* **Performance Optimizations:**
+  * Parquet file content cache to reduce object storage reads
+  * Parallelized JIT and pipelined query planning for Perfetto traces
 
 ### January 2026 - v0.19.0
 * **User-Defined Screens:**
@@ -90,31 +120,6 @@ To get started with Micromegas, please refer to the [Getting Started](https://ma
   * `delete_duplicate_streams` and `delete_duplicate_processes` UDFs
 * **Infrastructure:**
   * Automatic `micromegas_app` database creation on service startup
-* **Security:** CVE-2025-13465 (lodash), diff, grafana plugin dependencies
-
-### January 2026 - v0.18.0
-* **Reliability & Data Integrity:**
-  * Periodic duplicate block cleanup in maintenance daemon
-  * Prevention of duplicate insertions for blocks, streams, and processes
-  * New `delete_duplicate_blocks` UDF for manual cleanup
-* **Ingestion Improvements:**
-  * Proper HTTP error codes with client retry logic
-* **Analytics & Performance:**
-  * Arrow IPC streaming for query API
-  * SHOW TABLES and information_schema support
-  * Global LRU metadata cache for faster partition queries
-  * New `jsonb_object_keys` UDF for JSON exploration
-* **Analytics Web App:**
-  * Migrated from Next.js to Vite for dynamic base path support
-  * Property timeline for metrics visualization
-  * Improved navigation and UI cleanup
-* **Tracing & Instrumentation:**
-  * `spawn_with_context` helper for proper async span parenting
-  * Improved `#[span_fn]` rustdoc documentation
-* **Unreal Engine:**
-  * Additional metrics and process info in telemetry
-* **Security Fixes:**
-  * CVE-2026-21441 (urllib3), qs/rsa vulnerabilities, esbuild fix
 
 For a detailed history of changes, please see the [CHANGELOG.md](./CHANGELOG.md) file.
 
