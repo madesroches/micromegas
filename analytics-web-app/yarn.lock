@@ -3183,9 +3183,6 @@ data-urls@^3.0.2:
     whatwg-mimetype "^3.0.0"
     whatwg-url "^11.0.0"
 
-"datafusion-wasm@file:src/lib/datafusion-wasm":
-  version "0.1.0"
-
 date-fns-jalali@^4.1.0-0:
   version "4.1.0-0"
   resolved "https://registry.yarnpkg.com/date-fns-jalali/-/date-fns-jalali-4.1.0-0.tgz#9c7fb286004fab267a300d3e9f1ada9f10b4b6b0"
@@ -5512,6 +5509,9 @@ micromatch@^4.0.4, micromatch@^4.0.8:
   dependencies:
     braces "^3.0.3"
     picomatch "^2.3.1"
+
+"micromegas-datafusion-wasm@file:src/lib/datafusion-wasm":
+  version "0.1.0"
 
 mime-db@1.52.0:
   version "1.52.0"
