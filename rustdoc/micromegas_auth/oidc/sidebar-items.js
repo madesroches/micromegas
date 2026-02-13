@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["create_http_client"],"struct":["OidcAuthProvider","OidcConfig","OidcIssuer"]};

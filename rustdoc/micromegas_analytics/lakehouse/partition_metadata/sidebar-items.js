@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["delete_partition_metadata_batch","load_partition_metadata"]};

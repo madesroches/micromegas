@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["ErrorCode"],"fn":["contains_blocked_function","encode_batch","encode_schema","stream_query_handler","substitute_macros"],"struct":["StreamQueryRequest"]};

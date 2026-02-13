@@ -1,0 +1,65 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Authentication providers for Micromegas"><title>micromegas_auth - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../static.files/rustdoc-ca0dd0c4.css"><meta name="rustdoc-vars" data-root-path="../" data-static-root-path="../static.files/" data-current-crate="micromegas_auth" data-themes="" data-resource-suffix="" data-rustdoc-version="1.93.1 (01f6ddf75 2026-02-11)" data-channel="1.93.1" data-search-js="search-9e2438ea.js" data-stringdex-js="stringdex-a3946164.js" data-settings-js="settings-c38705f0.js" ><script src="../static.files/storage-e2aeef58.js"></script><script defer src="../crates.js"></script><script defer src="../static.files/main-a410ff4d.js"></script><noscript><link rel="stylesheet" href="../static.files/noscript-263c88ec.css"></noscript><link rel="alternate icon" type="image/png" href="../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../static.files/favicon-044be391.svg"></head><body class="rustdoc mod crate"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">Crate micromegas_auth</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../micromegas_auth/index.html">micromegas_<wbr>auth</a><span class="version">0.21.0</span></h2></div><div class="sidebar-elems"><ul class="block"><li><a id="all-types" href="all.html">All Items</a></li></ul><section id="rustdoc-toc"><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#example-api-key-authentication" title="Example: API Key Authentication">Example: API Key Authentication</a></li><li><a href="#example-oidc-authentication" title="Example: OIDC Authentication">Example: OIDC Authentication</a></li></ul><h3><a href="#modules">Crate Items</a></h3><ul class="block"><li><a href="#modules" title="Modules">Modules</a></li></ul></section><div id="rustdoc-modnav"></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content"><div class="main-heading"><h1>Crate <span>micromegas_<wbr>auth</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../src/micromegas_auth/lib.rs.html#1-103">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Authentication providers for Micromegas</p>
+<p>This crate provides authentication and authorization for Micromegas services.
+It supports multiple authentication methods:</p>
+<ul>
+<li><strong>API Keys</strong>: Simple bearer token authentication</li>
+<li><strong>OIDC</strong>: OpenID Connect authentication with automatic JWKS caching</li>
+</ul>
+<h2 id="example-api-key-authentication"><a class="doc-anchor" href="#example-api-key-authentication">§</a>Example: API Key Authentication</h2>
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>micromegas_auth::api_key::{ApiKeyAuthProvider, parse_key_ring};
+<span class="kw">use </span>micromegas_auth::types::{AuthProvider, HttpRequestParts, RequestParts};
+
+<span class="kw">let </span>json = <span class="string">r#"[{"name": "user1", "key": "secret-key-123"}]"#</span>;
+<span class="kw">let </span>keyring = parse_key_ring(json)<span class="question-mark">?</span>;
+<span class="kw">let </span>provider = ApiKeyAuthProvider::new(keyring);
+
+<span class="comment">// Create request parts with Bearer token
+</span><span class="kw">let </span><span class="kw-2">mut </span>headers = http::HeaderMap::new();
+headers.insert(
+    http::header::AUTHORIZATION,
+    <span class="string">"Bearer secret-key-123"</span>.parse().unwrap(),
+);
+<span class="kw">let </span>parts = HttpRequestParts {
+    headers,
+    method: http::Method::GET,
+    uri: <span class="string">"/api/endpoint"</span>.parse().unwrap(),
+};
+
+<span class="kw">let </span>auth_ctx = provider.validate_request(<span class="kw-2">&amp;</span>parts <span class="kw">as </span><span class="kw-2">&amp;</span><span class="kw">dyn </span>RequestParts).<span class="kw">await</span><span class="question-mark">?</span>;
+<span class="macro">println!</span>(<span class="string">"Authenticated: {}"</span>, auth_ctx.subject);</code></pre></div><h2 id="example-oidc-authentication"><a class="doc-anchor" href="#example-oidc-authentication">§</a>Example: OIDC Authentication</h2>
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>micromegas_auth::oidc::{OidcAuthProvider, OidcConfig, OidcIssuer};
+<span class="kw">use </span>micromegas_auth::types::{AuthProvider, HttpRequestParts, RequestParts};
+
+<span class="kw">let </span>config = OidcConfig {
+    issuers: <span class="macro">vec!</span>[OidcIssuer {
+        issuer: <span class="string">"https://accounts.google.com"</span>.to_string(),
+        audience: <span class="string">"your-client-id.apps.googleusercontent.com"</span>.to_string(),
+    }],
+    jwks_refresh_interval_secs: <span class="number">3600</span>,
+    token_cache_size: <span class="number">1000</span>,
+    token_cache_ttl_secs: <span class="number">300</span>,
+};
+
+<span class="kw">let </span>provider = OidcAuthProvider::new(config).<span class="kw">await</span><span class="question-mark">?</span>;
+
+<span class="comment">// Create request parts with ID token
+</span><span class="kw">let </span><span class="kw-2">mut </span>headers = http::HeaderMap::new();
+headers.insert(
+    http::header::AUTHORIZATION,
+    <span class="string">"Bearer id_token_here"</span>.parse().unwrap(),
+);
+<span class="kw">let </span>parts = HttpRequestParts {
+    headers,
+    method: http::Method::GET,
+    uri: <span class="string">"/api/endpoint"</span>.parse().unwrap(),
+};
+
+<span class="kw">let </span>auth_ctx = provider.validate_request(<span class="kw-2">&amp;</span>parts <span class="kw">as </span><span class="kw-2">&amp;</span><span class="kw">dyn </span>RequestParts).<span class="kw">await</span><span class="question-mark">?</span>;
+<span class="macro">println!</span>(<span class="string">"Authenticated: {}"</span>, auth_ctx.subject);</code></pre></div></div></details><h2 id="modules" class="section-header">Modules<a href="#modules" class="anchor">§</a></h2><dl class="item-table"><dt><a class="mod" href="api_key/index.html" title="mod micromegas_auth::api_key">api_key</a></dt><dd>API key authentication</dd><dt><a class="mod" href="axum/index.html" title="mod micromegas_auth::axum">axum</a></dt><dd>Axum middleware for HTTP authentication
+Axum middleware for HTTP authentication</dd><dt><a class="mod" href="default_provider/index.html" title="mod micromegas_auth::default_provider">default_<wbr>provider</a></dt><dd>Default authentication provider initialization
+Default authentication provider initialization for Micromegas services.</dd><dt><a class="mod" href="multi/index.html" title="mod micromegas_auth::multi">multi</a></dt><dd>Multi-provider authentication (API key + OIDC)
+Multi-provider authentication that tries multiple auth methods in sequence.</dd><dt><a class="mod" href="oauth_state/index.html" title="mod micromegas_auth::oauth_state">oauth_<wbr>state</a></dt><dd>OAuth state parameter signing and verification
+OAuth state parameter signing and verification</dd><dt><a class="mod" href="oidc/index.html" title="mod micromegas_auth::oidc">oidc</a></dt><dd>OIDC authentication with JWKS caching</dd><dt><a class="mod" href="tower/index.html" title="mod micromegas_auth::tower">tower</a></dt><dd>Tower service layer for tonic/gRPC authentication
+Tower service layer for async authentication with tonic/gRPC.</dd><dt><a class="mod" href="types/index.html" title="mod micromegas_auth::types">types</a></dt><dd>Core authentication types and traits</dd><dt><a class="mod" href="url_validation/index.html" title="mod micromegas_auth::url_validation">url_<wbr>validation</a></dt><dd>URL validation utilities for authentication flows
+URL validation utilities for authentication flows</dd><dt><a class="mod" href="user_attribution/index.html" title="mod micromegas_auth::user_attribution">user_<wbr>attribution</a></dt><dd>User attribution validation (prevents impersonation attacks)
+User attribution validation for preventing impersonation attacks</dd></dl></section></div></main></body></html>

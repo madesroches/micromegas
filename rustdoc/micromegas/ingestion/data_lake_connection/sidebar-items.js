@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["connect_to_data_lake"],"struct":["DataLakeConnection"]};

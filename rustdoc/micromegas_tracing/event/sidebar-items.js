@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"mod":["in_memory_sink"],"struct":["EventBlock","EventStream","NullEventSink","StreamDesc"],"trait":["EventSink","ExtractDeps","TracingBlock"],"type":["BoxedEventSink"]};

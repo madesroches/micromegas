@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["build_dictionary_from_properties"],"struct":["PropertiesLength","PropertiesToArray","PropertiesToDict"]};

@@ -1,0 +1,3974 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Unified observability platform with high-performance telemetry collection and analytics">
+      
+      
+      
+        <link rel="canonical" href="https://micromegas.dev/admin/authentication/">
+      
+      
+        <link rel="prev" href="../../architecture/">
+      
+      
+        <link rel="next" href="../web-app/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/micromegas-icon-transparent.svg">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.1">
+    
+    
+      
+        <title>Authentication - Micromegas Documentation</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/_mkdocstrings.css">
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  
+  <script data-goatcounter="https://madesroches.goatcounter.com/count"
+      async src="//gc.zgo.at/count.js"></script>
+
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="custom" data-md-color-accent="custom">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#authentication" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="Micromegas Documentation" class="md-header__button md-logo" aria-label="Micromegas Documentation" data-md-component="logo">
+      
+  <img src="../../assets/images/micromegas-icon-transparent.svg" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Micromegas Documentation
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Authentication
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="custom" data-md-color-accent="custom"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="custom" data-md-color-accent="custom"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/madesroches/micromegas" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    madesroches/micromegas
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../getting-started/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Getting Started
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../query-guide/" class="md-tabs__link">
+          
+  
+  
+  Query Guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../unreal/" class="md-tabs__link">
+          
+  
+  
+  Unreal Engine
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../architecture/" class="md-tabs__link">
+          
+  
+  
+  Architecture
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="./" class="md-tabs__link">
+          
+  
+  
+  Administration
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../grafana/" class="md-tabs__link">
+          
+  
+  
+  Grafana Plugin
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../gateway/" class="md-tabs__link">
+          
+  
+  
+  HTTP Gateway
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../contributing/" class="md-tabs__link">
+          
+  
+  
+  Development
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../cost-effectiveness/" class="md-tabs__link">
+          
+  
+  
+  Cost Effectiveness
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="Micromegas Documentation" class="md-nav__button md-logo" aria-label="Micromegas Documentation" data-md-component="logo">
+      
+  <img src="../../assets/images/micromegas-icon-transparent.svg" alt="logo">
+
+    </a>
+    Micromegas Documentation
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/madesroches/micromegas" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    madesroches/micromegas
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Query Guide
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Query Guide
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../query-guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../query-guide/quick-start/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quick Start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../query-guide/python-api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Python API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../query-guide/python-api-advanced/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Python API Advanced
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../query-guide/schema-reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Schema Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../query-guide/functions-reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Functions Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../query-guide/query-patterns/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Query Patterns
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../query-guide/async-performance-analysis/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Async Performance Analysis
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../query-guide/performance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Performance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../query-guide/advanced-features/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Advanced Features
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Unreal Engine
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Unreal Engine
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../unreal/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../unreal/installation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Installation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../unreal/instrumentation-api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Instrumentation API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../unreal/examples/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Examples
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Architecture
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Administration
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Administration
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Authentication
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Authentication
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#overview" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Overview
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#authentication-methods" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Authentication Methods
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Authentication Methods">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#oidc-authentication-recommended" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OIDC Authentication (Recommended)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#api-keys-legacy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        API Keys (Legacy)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#server-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Server Configuration
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Server Configuration">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#oidc-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OIDC Configuration
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#api-key-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        API Key Configuration
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#disable-authentication-development-only" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Disable Authentication (Development Only)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#client-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Client Configuration
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Client Configuration">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#python-client-with-oidc" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Python Client with OIDC
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Python Client with OIDC">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#interactive-use-jupyter-scripts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Interactive Use (Jupyter, Scripts)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#subsequent-use-token-reuse" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Subsequent Use (Token Reuse)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#token-management" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Token Management
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cli-tools-with-oidc" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CLI Tools with OIDC
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#python-client-with-api-keys-legacy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Python Client with API Keys (Legacy)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#ingestion-service-authentication" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Ingestion Service Authentication
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Ingestion Service Authentication">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#server-configuration_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Server Configuration
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#rust-client-authentication" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rust Client Authentication
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Rust Client Authentication">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#automatic-configuration-recommended" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Automatic Configuration (Recommended)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#manual-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Manual Configuration
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Manual Configuration">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#api-key-authentication-simple" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        API Key Authentication (Simple)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#oidc-client-credentials-production" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OIDC Client Credentials (Production)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#health-endpoint" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Health Endpoint
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#setting-up-oidc-providers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Setting Up OIDC Providers
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Setting Up OIDC Providers">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#google-oauth-setup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Google OAuth Setup
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#azure-ad-setup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Azure AD Setup
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#auth0-setup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Auth0 Setup
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#security-considerations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Security Considerations
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Security Considerations">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#token-storage" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Token Storage
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#token-refresh" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Token Refresh
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#token-revocation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Token Revocation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#admin-privileges" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Admin Privileges
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#httpstls" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        HTTPS/TLS
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pkce-proof-key-for-code-exchange" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        PKCE (Proof Key for Code Exchange)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#troubleshooting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Troubleshooting
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Troubleshooting">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#authentication-failures" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Authentication Failures
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#token-refresh-failures" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Token Refresh Failures
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#server-configuration-issues" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Server Configuration Issues
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#multi-provider-issues" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Multi-Provider Issues
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#migration-from-api-keys-to-oidc" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Migration from API Keys to OIDC
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#best-practices" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Best Practices
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#reference" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reference
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../web-app/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Web App Deployment
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../functions-reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Admin SQL Functions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Grafana Plugin
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Grafana Plugin
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../grafana/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../grafana/installation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Installation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../grafana/configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../grafana/authentication/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Authentication
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../grafana/usage/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Usage
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_8" >
+        
+          
+          <label class="md-nav__link" for="__nav_8" id="__nav_8_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    HTTP Gateway
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_8">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    HTTP Gateway
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../gateway/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../gateway/configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../gateway/examples/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Examples
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_9" >
+        
+          
+          <label class="md-nav__link" for="__nav_9" id="__nav_9_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Development
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_9_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_9">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Development
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../contributing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contributing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../development/build/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Build Guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_10" >
+        
+          
+          <label class="md-nav__link" for="__nav_10" id="__nav_10_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cost Effectiveness
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_10_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_10">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Cost Effectiveness
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cost-effectiveness/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cost-comparisons/cost-modeling/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cost Modeling
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cost-comparisons/datadog/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    vs. Datadog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cost-comparisons/dynatrace/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    vs. Dynatrace
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cost-comparisons/elastic/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    vs. Elastic
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cost-comparisons/grafana/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    vs. Grafana Cloud
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cost-comparisons/newrelic/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    vs. New Relic
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cost-comparisons/splunk/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    vs. Splunk
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#overview" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Overview
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#authentication-methods" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Authentication Methods
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Authentication Methods">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#oidc-authentication-recommended" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OIDC Authentication (Recommended)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#api-keys-legacy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        API Keys (Legacy)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#server-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Server Configuration
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Server Configuration">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#oidc-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OIDC Configuration
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#api-key-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        API Key Configuration
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#disable-authentication-development-only" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Disable Authentication (Development Only)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#client-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Client Configuration
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Client Configuration">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#python-client-with-oidc" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Python Client with OIDC
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Python Client with OIDC">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#interactive-use-jupyter-scripts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Interactive Use (Jupyter, Scripts)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#subsequent-use-token-reuse" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Subsequent Use (Token Reuse)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#token-management" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Token Management
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cli-tools-with-oidc" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CLI Tools with OIDC
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#python-client-with-api-keys-legacy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Python Client with API Keys (Legacy)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#ingestion-service-authentication" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Ingestion Service Authentication
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Ingestion Service Authentication">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#server-configuration_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Server Configuration
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#rust-client-authentication" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rust Client Authentication
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Rust Client Authentication">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#automatic-configuration-recommended" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Automatic Configuration (Recommended)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#manual-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Manual Configuration
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Manual Configuration">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#api-key-authentication-simple" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        API Key Authentication (Simple)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#oidc-client-credentials-production" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OIDC Client Credentials (Production)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#health-endpoint" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Health Endpoint
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#setting-up-oidc-providers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Setting Up OIDC Providers
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Setting Up OIDC Providers">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#google-oauth-setup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Google OAuth Setup
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#azure-ad-setup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Azure AD Setup
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#auth0-setup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Auth0 Setup
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#security-considerations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Security Considerations
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Security Considerations">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#token-storage" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Token Storage
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#token-refresh" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Token Refresh
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#token-revocation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Token Revocation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#admin-privileges" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Admin Privileges
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#httpstls" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        HTTPS/TLS
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pkce-proof-key-for-code-exchange" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        PKCE (Proof Key for Code Exchange)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#troubleshooting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Troubleshooting
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Troubleshooting">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#authentication-failures" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Authentication Failures
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#token-refresh-failures" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Token Refresh Failures
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#server-configuration-issues" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Server Configuration Issues
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#multi-provider-issues" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Multi-Provider Issues
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#migration-from-api-keys-to-oidc" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Migration from API Keys to OIDC
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#best-practices" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Best Practices
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#reference" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reference
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+                
+
+
+
+  
+
+
+  <nav class="md-path" aria-label="Navigation" >
+    <ol class="md-path__list">
+      
+        
+  
+  
+    <li class="md-path__item">
+      <a href="../.." class="md-path__link">
+        
+  <span class="md-ellipsis">
+    Home
+  </span>
+
+      </a>
+    </li>
+  
+
+      
+      
+        
+  
+  
+    
+    
+      <li class="md-path__item">
+        <a href="./" class="md-path__link">
+          
+  <span class="md-ellipsis">
+    Administration
+  </span>
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ol>
+  </nav>
+
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="authentication">Authentication<a class="headerlink" href="#authentication" title="Permanent link">&para;</a></h1>
+<p>Micromegas supports unified authentication across all services using both API keys and OpenID Connect (OIDC).</p>
+<h2 id="overview">Overview<a class="headerlink" href="#overview" title="Permanent link">&para;</a></h2>
+<p>Both the analytics server (flight-sql-srv) and ingestion server (telemetry-ingestion-srv) support two authentication methods:</p>
+<ul>
+<li><strong>OIDC (OpenID Connect)</strong> - For human users and service accounts via federated identity providers (Google, Azure AD, Okta, Auth0, etc.)</li>
+<li><strong>API Keys</strong> - Legacy support for simple bearer token authentication</li>
+</ul>
+<p>Both methods can be enabled simultaneously. When multiple providers are configured, they are tried in order until one succeeds (API key first for performance, then OIDC).</p>
+<h2 id="authentication-methods">Authentication Methods<a class="headerlink" href="#authentication-methods" title="Permanent link">&para;</a></h2>
+<h3 id="oidc-authentication-recommended">OIDC Authentication (Recommended)<a class="headerlink" href="#oidc-authentication-recommended" title="Permanent link">&para;</a></h3>
+<p>OIDC provides secure federated authentication with automatic token refresh and support for multiple identity providers.</p>
+<p><strong>Benefits:</strong></p>
+<ul>
+<li>Standards-based authentication (OAuth 2.0 / OpenID Connect)</li>
+<li>Centralized user management via identity provider</li>
+<li>Automatic token refresh with no manual intervention</li>
+<li>Support for multiple identity providers simultaneously</li>
+<li>Full audit trail with user identity (email, subject)</li>
+<li>Token revocation support via identity provider</li>
+</ul>
+<p><strong>Supported Identity Providers:</strong></p>
+<ul>
+<li>Google OAuth</li>
+<li>Microsoft Azure AD</li>
+<li>Okta</li>
+<li>Auth0</li>
+<li>Any standards-compliant OIDC provider</li>
+</ul>
+<h3 id="api-keys-legacy">API Keys (Legacy)<a class="headerlink" href="#api-keys-legacy" title="Permanent link">&para;</a></h3>
+<p>Simple bearer token authentication using pre-shared keys.</p>
+<p><strong>Benefits:</strong></p>
+<ul>
+<li>Simple to configure</li>
+<li>Fast validation (HashMap lookup)</li>
+<li>No external dependencies</li>
+</ul>
+<p><strong>Limitations:</strong></p>
+<ul>
+<li>Manual key distribution and rotation</li>
+<li>No automatic expiration</li>
+<li>No user identity for audit logging</li>
+</ul>
+<h2 id="server-configuration">Server Configuration<a class="headerlink" href="#server-configuration" title="Permanent link">&para;</a></h2>
+<h3 id="oidc-configuration">OIDC Configuration<a class="headerlink" href="#oidc-configuration" title="Permanent link">&para;</a></h3>
+<p>Configure OIDC authentication using environment variables:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="c1"># OIDC Configuration</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="nb">export</span><span class="w"> </span><span class="nv">MICROMEGAS_OIDC_CONFIG</span><span class="o">=</span><span class="s1">&#39;{</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="s1">  &quot;issuers&quot;: [</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="s1">    {</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="s1">      &quot;issuer&quot;: &quot;https://accounts.google.com&quot;,</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="s1">      &quot;audience&quot;: &quot;your-app-id.apps.googleusercontent.com&quot;</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="s1">    },</span>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="s1">    {</span>
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="s1">      &quot;issuer&quot;: &quot;https://login.microsoftonline.com/{tenant}/v2.0&quot;,</span>
+</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="s1">      &quot;audience&quot;: &quot;api://your-api-id&quot;</span>
+</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="s1">    }</span>
+</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="s1">  ],</span>
+</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="s1">  &quot;jwks_refresh_interval_secs&quot;: 3600,</span>
+</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="s1">  &quot;token_cache_size&quot;: 1000,</span>
+</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a><span class="s1">  &quot;token_cache_ttl_secs&quot;: 300</span>
+</span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a><span class="s1">}&#39;</span>
+</span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a>
+</span><span id="__span-0-18"><a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a><span class="c1"># Optional: Configure admin users</span>
+</span><span id="__span-0-19"><a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a><span class="nb">export</span><span class="w"> </span><span class="nv">MICROMEGAS_ADMINS</span><span class="o">=</span><span class="s1">&#39;[&quot;alice@example.com&quot;, &quot;bob@example.com&quot;]&#39;</span>
+</span></code></pre></div>
+<p><strong>Configuration Fields:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Description</th>
+<th>Default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>issuers</code></td>
+<td>Array of OIDC issuer configurations</td>
+<td>Required</td>
+</tr>
+<tr>
+<td><code>issuers[].issuer</code></td>
+<td>OIDC issuer URL</td>
+<td>Required</td>
+</tr>
+<tr>
+<td><code>issuers[].audience</code></td>
+<td>Expected audience claim (client_id)</td>
+<td>Required</td>
+</tr>
+<tr>
+<td><code>jwks_refresh_interval_secs</code></td>
+<td>JWKS cache TTL in seconds</td>
+<td>3600</td>
+</tr>
+<tr>
+<td><code>token_cache_size</code></td>
+<td>Maximum validated tokens to cache</td>
+<td>1000</td>
+</tr>
+<tr>
+<td><code>token_cache_ttl_secs</code></td>
+<td>Token cache TTL in seconds</td>
+<td>300</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Admin Configuration:</strong></p>
+<p>The <code>MICROMEGAS_ADMINS</code> environment variable is a JSON array of user identifiers (email or subject) that have administrative privileges. Admin users can perform operations like partition management.</p>
+<h3 id="api-key-configuration">API Key Configuration<a class="headerlink" href="#api-key-configuration" title="Permanent link">&para;</a></h3>
+<p>Configure API keys using the <code>MICROMEGAS_API_KEYS</code> environment variable with a JSON array:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nb">export</span><span class="w"> </span><span class="nv">MICROMEGAS_API_KEYS</span><span class="o">=</span><span class="s1">&#39;[</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="s1">  {&quot;name&quot;: &quot;service1&quot;, &quot;key&quot;: &quot;secret-key-123&quot;},</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="s1">  {&quot;name&quot;: &quot;service2&quot;, &quot;key&quot;: &quot;secret-key-456&quot;}</span>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="s1">]&#39;</span>
+</span></code></pre></div>
+<p><strong>Format:</strong>
+- JSON array of objects
+- Each object has <code>name</code> (identifier for logging) and <code>key</code> (the actual API key)
+- The <code>key</code> value is sent as the Bearer token by clients
+- Generate keys with: <code>openssl rand -base64 512</code></p>
+<h3 id="disable-authentication-development-only">Disable Authentication (Development Only)<a class="headerlink" href="#disable-authentication-development-only" title="Permanent link">&para;</a></h3>
+<p>For local development and testing, authentication can be disabled:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1"># Analytics server</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>flight-sql-srv<span class="w"> </span>--disable-auth
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="c1"># Ingestion server</span>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>telemetry-ingestion-srv<span class="w"> </span>--disable-auth
+</span></code></pre></div>
+<div class="admonition danger">
+<p class="admonition-title">Security Warning</p>
+<p>Never disable authentication in production environments. This flag is intended only for local development and testing.</p>
+</div>
+<h2 id="client-configuration">Client Configuration<a class="headerlink" href="#client-configuration" title="Permanent link">&para;</a></h2>
+<h3 id="python-client-with-oidc">Python Client with OIDC<a class="headerlink" href="#python-client-with-oidc" title="Permanent link">&para;</a></h3>
+<p>The Python client supports automatic browser-based login with token persistence and refresh.</p>
+<h4 id="interactive-use-jupyter-scripts">Interactive Use (Jupyter, Scripts)<a class="headerlink" href="#interactive-use-jupyter-scripts" title="Permanent link">&para;</a></h4>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="kn">from</span> <span class="nn">micromegas.auth</span> <span class="kn">import</span> <span class="n">OidcAuthProvider</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="kn">from</span> <span class="nn">micromegas.flightsql.client</span> <span class="kn">import</span> <span class="n">FlightSQLClient</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="c1"># First use: Opens browser for authentication</span>
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="n">auth</span> <span class="o">=</span> <span class="n">OidcAuthProvider</span><span class="o">.</span><span class="n">login</span><span class="p">(</span>
+</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>    <span class="n">issuer</span><span class="o">=</span><span class="s2">&quot;https://accounts.google.com&quot;</span><span class="p">,</span>
+</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>    <span class="n">client_id</span><span class="o">=</span><span class="s2">&quot;your-app-id.apps.googleusercontent.com&quot;</span><span class="p">,</span>
+</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a>    <span class="n">client_secret</span><span class="o">=</span><span class="s2">&quot;your-client-secret&quot;</span><span class="p">,</span>  <span class="c1"># Optional for some providers</span>
+</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a>    <span class="n">token_file</span><span class="o">=</span><span class="s2">&quot;~/.micromegas/tokens.json&quot;</span>  <span class="c1"># Persists tokens</span>
+</span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a><span class="p">)</span>
+</span><span id="__span-3-11"><a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a>
+</span><span id="__span-3-12"><a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a><span class="c1"># Create authenticated client</span>
+</span><span id="__span-3-13"><a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a><span class="n">client</span> <span class="o">=</span> <span class="n">FlightSQLClient</span><span class="p">(</span>
+</span><span id="__span-3-14"><a id="__codelineno-3-14" name="__codelineno-3-14" href="#__codelineno-3-14"></a>    <span class="s2">&quot;grpc+tls://analytics.example.com:50051&quot;</span><span class="p">,</span>
+</span><span id="__span-3-15"><a id="__codelineno-3-15" name="__codelineno-3-15" href="#__codelineno-3-15"></a>    <span class="n">auth_provider</span><span class="o">=</span><span class="n">auth</span>
+</span><span id="__span-3-16"><a id="__codelineno-3-16" name="__codelineno-3-16" href="#__codelineno-3-16"></a><span class="p">)</span>
+</span><span id="__span-3-17"><a id="__codelineno-3-17" name="__codelineno-3-17" href="#__codelineno-3-17"></a>
+</span><span id="__span-3-18"><a id="__codelineno-3-18" name="__codelineno-3-18" href="#__codelineno-3-18"></a><span class="c1"># Run queries - tokens auto-refresh before expiration</span>
+</span><span id="__span-3-19"><a id="__codelineno-3-19" name="__codelineno-3-19" href="#__codelineno-3-19"></a><span class="n">df</span> <span class="o">=</span> <span class="n">client</span><span class="o">.</span><span class="n">query</span><span class="p">(</span><span class="s2">&quot;SELECT * FROM processes LIMIT 10&quot;</span><span class="p">)</span>
+</span></code></pre></div>
+<p><strong>Parameters:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Description</th>
+<th>Default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>issuer</code></td>
+<td>OIDC issuer URL</td>
+<td>Required</td>
+</tr>
+<tr>
+<td><code>client_id</code></td>
+<td>OAuth client ID</td>
+<td>Required</td>
+</tr>
+<tr>
+<td><code>client_secret</code></td>
+<td>OAuth client secret</td>
+<td>Optional (for public clients)</td>
+</tr>
+<tr>
+<td><code>token_file</code></td>
+<td>Path to save tokens</td>
+<td><code>~/.micromegas/tokens.json</code></td>
+</tr>
+<tr>
+<td><code>audience</code></td>
+<td>API audience/identifier</td>
+<td>Optional (required by Auth0)</td>
+</tr>
+<tr>
+<td><code>scope</code></td>
+<td>OAuth scopes to request</td>
+<td><code>openid email profile offline_access</code></td>
+</tr>
+</tbody>
+</table>
+<h4 id="subsequent-use-token-reuse">Subsequent Use (Token Reuse)<a class="headerlink" href="#subsequent-use-token-reuse" title="Permanent link">&para;</a></h4>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="kn">from</span> <span class="nn">micromegas.auth</span> <span class="kn">import</span> <span class="n">OidcAuthProvider</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="kn">from</span> <span class="nn">micromegas.flightsql.client</span> <span class="kn">import</span> <span class="n">FlightSQLClient</span>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="c1"># Load existing tokens - no browser interaction needed</span>
+</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="n">auth</span> <span class="o">=</span> <span class="n">OidcAuthProvider</span><span class="o">.</span><span class="n">from_file</span><span class="p">(</span>
+</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a>    <span class="s2">&quot;~/.micromegas/tokens.json&quot;</span><span class="p">,</span>
+</span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a>    <span class="n">client_secret</span><span class="o">=</span><span class="s2">&quot;your-client-secret&quot;</span>  <span class="c1"># Optional</span>
+</span><span id="__span-4-8"><a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="p">)</span>
+</span><span id="__span-4-9"><a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a>
+</span><span id="__span-4-10"><a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a><span class="n">client</span> <span class="o">=</span> <span class="n">FlightSQLClient</span><span class="p">(</span>
+</span><span id="__span-4-11"><a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a>    <span class="s2">&quot;grpc+tls://analytics.example.com:50051&quot;</span><span class="p">,</span>
+</span><span id="__span-4-12"><a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a>    <span class="n">auth_provider</span><span class="o">=</span><span class="n">auth</span>
+</span><span id="__span-4-13"><a id="__codelineno-4-13" name="__codelineno-4-13" href="#__codelineno-4-13"></a><span class="p">)</span>
+</span><span id="__span-4-14"><a id="__codelineno-4-14" name="__codelineno-4-14" href="#__codelineno-4-14"></a>
+</span><span id="__span-4-15"><a id="__codelineno-4-15" name="__codelineno-4-15" href="#__codelineno-4-15"></a><span class="c1"># Tokens automatically refresh when needed</span>
+</span><span id="__span-4-16"><a id="__codelineno-4-16" name="__codelineno-4-16" href="#__codelineno-4-16"></a><span class="kn">import</span> <span class="nn">datetime</span>
+</span><span id="__span-4-17"><a id="__codelineno-4-17" name="__codelineno-4-17" href="#__codelineno-4-17"></a><span class="n">now</span> <span class="o">=</span> <span class="n">datetime</span><span class="o">.</span><span class="n">datetime</span><span class="o">.</span><span class="n">now</span><span class="p">(</span><span class="n">datetime</span><span class="o">.</span><span class="n">timezone</span><span class="o">.</span><span class="n">utc</span><span class="p">)</span>
+</span><span id="__span-4-18"><a id="__codelineno-4-18" name="__codelineno-4-18" href="#__codelineno-4-18"></a><span class="n">begin</span> <span class="o">=</span> <span class="n">now</span> <span class="o">-</span> <span class="n">datetime</span><span class="o">.</span><span class="n">timedelta</span><span class="p">(</span><span class="n">hours</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+</span><span id="__span-4-19"><a id="__codelineno-4-19" name="__codelineno-4-19" href="#__codelineno-4-19"></a><span class="n">df</span> <span class="o">=</span> <span class="n">client</span><span class="o">.</span><span class="n">query</span><span class="p">(</span><span class="s2">&quot;SELECT * FROM log_entries LIMIT 1000&quot;</span><span class="p">,</span> <span class="n">begin</span><span class="p">,</span> <span class="n">now</span><span class="p">)</span>
+</span></code></pre></div>
+<h4 id="token-management">Token Management<a class="headerlink" href="#token-management" title="Permanent link">&para;</a></h4>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="c1"># Clear saved tokens (logout)</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="kn">import</span> <span class="nn">os</span>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="kn">from</span> <span class="nn">pathlib</span> <span class="kn">import</span> <span class="n">Path</span>
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="n">token_file</span> <span class="o">=</span> <span class="n">Path</span><span class="o">.</span><span class="n">home</span><span class="p">()</span> <span class="o">/</span> <span class="s2">&quot;.micromegas&quot;</span> <span class="o">/</span> <span class="s2">&quot;tokens.json&quot;</span>
+</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="k">if</span> <span class="n">token_file</span><span class="o">.</span><span class="n">exists</span><span class="p">():</span>
+</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a>    <span class="n">token_file</span><span class="o">.</span><span class="n">unlink</span><span class="p">()</span>
+</span><span id="__span-5-8"><a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a>    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Logged out - tokens cleared&quot;</span><span class="p">)</span>
+</span></code></pre></div>
+<h3 id="cli-tools-with-oidc">CLI Tools with OIDC<a class="headerlink" href="#cli-tools-with-oidc" title="Permanent link">&para;</a></h3>
+<p>CLI tools automatically support OIDC when environment variables are set:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="c1"># Configure OIDC</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="nb">export</span><span class="w"> </span><span class="nv">MICROMEGAS_OIDC_ISSUER</span><span class="o">=</span><span class="s2">&quot;https://accounts.google.com&quot;</span>
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="nb">export</span><span class="w"> </span><span class="nv">MICROMEGAS_OIDC_CLIENT_ID</span><span class="o">=</span><span class="s2">&quot;your-app-id.apps.googleusercontent.com&quot;</span>
+</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="nb">export</span><span class="w"> </span><span class="nv">MICROMEGAS_OIDC_CLIENT_SECRET</span><span class="o">=</span><span class="s2">&quot;your-client-secret&quot;</span><span class="w">  </span><span class="c1"># Optional</span>
+</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="nb">export</span><span class="w"> </span><span class="nv">MICROMEGAS_ANALYTICS_URI</span><span class="o">=</span><span class="s2">&quot;grpc+tls://analytics.example.com:50051&quot;</span>
+</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a>
+</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="c1"># First use: Opens browser for authentication</span>
+</span><span id="__span-6-8"><a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a>python3<span class="w"> </span>-m<span class="w"> </span>micromegas.cli.query_processes<span class="w"> </span>--since<span class="w"> </span>1h
+</span><span id="__span-6-9"><a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a>
+</span><span id="__span-6-10"><a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a><span class="c1"># Subsequent uses: No browser interaction, uses cached tokens</span>
+</span><span id="__span-6-11"><a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a>python3<span class="w"> </span>-m<span class="w"> </span>micromegas.cli.query_process_log<span class="w"> </span>&lt;process_id&gt;
+</span><span id="__span-6-12"><a id="__codelineno-6-12" name="__codelineno-6-12" href="#__codelineno-6-12"></a>
+</span><span id="__span-6-13"><a id="__codelineno-6-13" name="__codelineno-6-13" href="#__codelineno-6-13"></a><span class="c1"># Logout (clear saved tokens)</span>
+</span><span id="__span-6-14"><a id="__codelineno-6-14" name="__codelineno-6-14" href="#__codelineno-6-14"></a>micromegas_logout
+</span></code></pre></div>
+<p><strong>Environment Variables:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Description</th>
+<th>Required</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>MICROMEGAS_OIDC_ISSUER</code></td>
+<td>OIDC issuer URL</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td><code>MICROMEGAS_OIDC_CLIENT_ID</code></td>
+<td>OAuth client ID</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td><code>MICROMEGAS_OIDC_CLIENT_SECRET</code></td>
+<td>OAuth client secret</td>
+<td>No*</td>
+</tr>
+<tr>
+<td><code>MICROMEGAS_OIDC_AUDIENCE</code></td>
+<td>API audience/identifier</td>
+<td>No (for Auth0, Azure API)</td>
+</tr>
+<tr>
+<td><code>MICROMEGAS_OIDC_SCOPE</code></td>
+<td>OAuth scopes to request</td>
+<td>No (default: openid email profile offline_access)</td>
+</tr>
+<tr>
+<td><code>MICROMEGAS_TOKEN_FILE</code></td>
+<td>Token storage path</td>
+<td>No (default: ~/.micromegas/tokens.json)</td>
+</tr>
+<tr>
+<td><code>MICROMEGAS_ANALYTICS_URI</code></td>
+<td>Analytics server URI</td>
+<td>No (default: grpc://localhost:50051)</td>
+</tr>
+</tbody>
+</table>
+<p>*Required for some providers (e.g., Google) even with PKCE</p>
+<h3 id="python-client-with-api-keys-legacy">Python Client with API Keys (Legacy)<a class="headerlink" href="#python-client-with-api-keys-legacy" title="Permanent link">&para;</a></h3>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="kn">from</span> <span class="nn">micromegas.flightsql.client</span> <span class="kn">import</span> <span class="n">FlightSQLClient</span>
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>
+</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="n">client</span> <span class="o">=</span> <span class="n">FlightSQLClient</span><span class="p">(</span>
+</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>    <span class="s2">&quot;grpc://localhost:50051&quot;</span><span class="p">,</span>
+</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a>    <span class="n">headers</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;authorization&quot;</span><span class="p">:</span> <span class="s2">&quot;Bearer your-api-key&quot;</span><span class="p">}</span>
+</span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="p">)</span>
+</span><span id="__span-7-7"><a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a>
+</span><span id="__span-7-8"><a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a><span class="n">df</span> <span class="o">=</span> <span class="n">client</span><span class="o">.</span><span class="n">query</span><span class="p">(</span><span class="s2">&quot;SELECT * FROM processes LIMIT 10&quot;</span><span class="p">)</span>
+</span></code></pre></div>
+<div class="admonition warning">
+<p class="admonition-title">Deprecated API</p>
+<p>The <code>headers</code> parameter is deprecated. Use <code>auth_provider</code> with <code>OidcAuthProvider</code> instead.</p>
+</div>
+<h2 id="ingestion-service-authentication">Ingestion Service Authentication<a class="headerlink" href="#ingestion-service-authentication" title="Permanent link">&para;</a></h2>
+<p>The telemetry ingestion service (telemetry-ingestion-srv) uses the same authentication infrastructure as the analytics service.</p>
+<h3 id="server-configuration_1">Server Configuration<a class="headerlink" href="#server-configuration_1" title="Permanent link">&para;</a></h3>
+<p>The ingestion server uses the same environment variables as the analytics server:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="c1"># Start ingestion server with authentication</span>
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="nb">export</span><span class="w"> </span><span class="nv">MICROMEGAS_API_KEYS</span><span class="o">=</span><span class="s1">&#39;[{&quot;name&quot;: &quot;service1&quot;, &quot;key&quot;: &quot;secret-key-123&quot;}]&#39;</span>
+</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="nb">export</span><span class="w"> </span><span class="nv">MICROMEGAS_OIDC_CONFIG</span><span class="o">=</span><span class="s1">&#39;{&quot;issuers&quot;: [...]}&#39;</span>
+</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>telemetry-ingestion-srv
+</span><span id="__span-8-5"><a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>
+</span><span id="__span-8-6"><a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a><span class="c1"># Or disable auth for development</span>
+</span><span id="__span-8-7"><a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a>telemetry-ingestion-srv<span class="w"> </span>--disable-auth
+</span></code></pre></div>
+<h3 id="rust-client-authentication">Rust Client Authentication<a class="headerlink" href="#rust-client-authentication" title="Permanent link">&para;</a></h3>
+<p>Rust applications sending telemetry can use either API keys or OIDC client credentials.</p>
+<h4 id="automatic-configuration-recommended">Automatic Configuration (Recommended)<a class="headerlink" href="#automatic-configuration-recommended" title="Permanent link">&para;</a></h4>
+<p>Applications using <code>#[micromegas_main]</code> automatically configure authentication from environment variables:</p>
+<div class="language-rust highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="k">use</span><span class="w"> </span><span class="n">micromegas</span>::<span class="n">micromegas_main</span><span class="p">;</span>
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="k">use</span><span class="w"> </span><span class="n">micromegas</span>::<span class="n">tracing</span>::<span class="n">prelude</span>::<span class="o">*</span><span class="p">;</span>
+</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>
+</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="cp">#[micromegas_main(interop_max_level = </span><span class="s">&quot;info&quot;</span><span class="cp">)]</span>
+</span><span id="__span-9-5"><a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="k">async</span><span class="w"> </span><span class="k">fn</span> <span class="nf">main</span><span class="p">()</span><span class="w"> </span>-&gt; <span class="nb">Result</span><span class="o">&lt;</span><span class="p">(),</span><span class="w"> </span><span class="nb">Box</span><span class="o">&lt;</span><span class="k">dyn</span><span class="w"> </span><span class="n">std</span>::<span class="n">error</span>::<span class="n">Error</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-9-6"><a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="w">    </span><span class="n">info</span><span class="o">!</span><span class="p">(</span><span class="s">&quot;Application starting&quot;</span><span class="p">);</span>
+</span><span id="__span-9-7"><a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a><span class="w">    </span><span class="c1">// Telemetry automatically authenticated based on environment variables</span>
+</span><span id="__span-9-8"><a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a><span class="w">    </span><span class="nb">Ok</span><span class="p">(())</span>
+</span><span id="__span-9-9"><a id="__codelineno-9-9" name="__codelineno-9-9" href="#__codelineno-9-9"></a><span class="p">}</span>
+</span></code></pre></div>
+<p><strong>Environment Variables:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Authentication Method</th>
+<th>Required</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>MICROMEGAS_INGESTION_API_KEY</code></td>
+<td>API key (simple)</td>
+<td>For API key auth</td>
+</tr>
+<tr>
+<td><code>MICROMEGAS_OIDC_TOKEN_ENDPOINT</code></td>
+<td>OIDC client credentials</td>
+<td>For OIDC auth</td>
+</tr>
+<tr>
+<td><code>MICROMEGAS_OIDC_CLIENT_ID</code></td>
+<td>OIDC client credentials</td>
+<td>For OIDC auth</td>
+</tr>
+<tr>
+<td><code>MICROMEGAS_OIDC_CLIENT_SECRET</code></td>
+<td>OIDC client credentials</td>
+<td>For OIDC auth</td>
+</tr>
+<tr>
+<td><code>MICROMEGAS_TELEMETRY_URL</code></td>
+<td>Ingestion server URL</td>
+<td>Yes (e.g., http://localhost:9000)</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Example (API Key):</strong>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="nb">export</span><span class="w"> </span><span class="nv">MICROMEGAS_INGESTION_API_KEY</span><span class="o">=</span>secret-key-123
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="nb">export</span><span class="w"> </span><span class="nv">MICROMEGAS_TELEMETRY_URL</span><span class="o">=</span>http://localhost:9000
+</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>cargo<span class="w"> </span>run
+</span></code></pre></div></p>
+<p><strong>Example (OIDC Client Credentials):</strong>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="nb">export</span><span class="w"> </span><span class="nv">MICROMEGAS_OIDC_TOKEN_ENDPOINT</span><span class="o">=</span>https://accounts.google.com/o/oauth2/token
+</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="nb">export</span><span class="w"> </span><span class="nv">MICROMEGAS_OIDC_CLIENT_ID</span><span class="o">=</span>my-service@project.iam.gserviceaccount.com
+</span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="nb">export</span><span class="w"> </span><span class="nv">MICROMEGAS_OIDC_CLIENT_SECRET</span><span class="o">=</span>secret-from-secret-manager
+</span><span id="__span-11-4"><a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="nb">export</span><span class="w"> </span><span class="nv">MICROMEGAS_TELEMETRY_URL</span><span class="o">=</span>http://localhost:9000
+</span><span id="__span-11-5"><a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a>cargo<span class="w"> </span>run
+</span></code></pre></div></p>
+<h4 id="manual-configuration">Manual Configuration<a class="headerlink" href="#manual-configuration" title="Permanent link">&para;</a></h4>
+<p>For applications not using <code>#[micromegas_main]</code>, configure authentication manually:</p>
+<h5 id="api-key-authentication-simple">API Key Authentication (Simple)<a class="headerlink" href="#api-key-authentication-simple" title="Permanent link">&para;</a></h5>
+<div class="language-rust highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="k">use</span><span class="w"> </span><span class="n">micromegas_telemetry_sink</span>::<span class="n">http_event_sink</span>::<span class="n">HttpEventSink</span><span class="p">;</span>
+</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="k">use</span><span class="w"> </span><span class="n">micromegas_telemetry_sink</span>::<span class="n">api_key_decorator</span>::<span class="n">ApiKeyRequestDecorator</span><span class="p">;</span>
+</span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a><span class="k">use</span><span class="w"> </span><span class="n">std</span>::<span class="n">sync</span>::<span class="n">Arc</span><span class="p">;</span>
+</span><span id="__span-12-4"><a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a>
+</span><span id="__span-12-5"><a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a><span class="c1">// From environment variable</span>
+</span><span id="__span-12-6"><a id="__codelineno-12-6" name="__codelineno-12-6" href="#__codelineno-12-6"></a><span class="n">std</span>::<span class="n">env</span>::<span class="n">set_var</span><span class="p">(</span><span class="s">&quot;MICROMEGAS_INGESTION_API_KEY&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;secret-key-123&quot;</span><span class="p">);</span>
+</span><span id="__span-12-7"><a id="__codelineno-12-7" name="__codelineno-12-7" href="#__codelineno-12-7"></a><span class="kd">let</span><span class="w"> </span><span class="n">decorator</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ApiKeyRequestDecorator</span>::<span class="n">from_env</span><span class="p">().</span><span class="n">unwrap</span><span class="p">();</span>
+</span><span id="__span-12-8"><a id="__codelineno-12-8" name="__codelineno-12-8" href="#__codelineno-12-8"></a>
+</span><span id="__span-12-9"><a id="__codelineno-12-9" name="__codelineno-12-9" href="#__codelineno-12-9"></a><span class="c1">// Configure HttpEventSink with authentication</span>
+</span><span id="__span-12-10"><a id="__codelineno-12-10" name="__codelineno-12-10" href="#__codelineno-12-10"></a><span class="kd">let</span><span class="w"> </span><span class="n">sink</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">HttpEventSink</span>::<span class="n">new</span><span class="p">(</span>
+</span><span id="__span-12-11"><a id="__codelineno-12-11" name="__codelineno-12-11" href="#__codelineno-12-11"></a><span class="w">    </span><span class="s">&quot;http://localhost:9000&quot;</span><span class="p">,</span>
+</span><span id="__span-12-12"><a id="__codelineno-12-12" name="__codelineno-12-12" href="#__codelineno-12-12"></a><span class="w">    </span><span class="n">max_queue_size</span><span class="p">,</span>
+</span><span id="__span-12-13"><a id="__codelineno-12-13" name="__codelineno-12-13" href="#__codelineno-12-13"></a><span class="w">    </span><span class="n">metadata_retry</span><span class="p">,</span>
+</span><span id="__span-12-14"><a id="__codelineno-12-14" name="__codelineno-12-14" href="#__codelineno-12-14"></a><span class="w">    </span><span class="n">blocks_retry</span><span class="p">,</span>
+</span><span id="__span-12-15"><a id="__codelineno-12-15" name="__codelineno-12-15" href="#__codelineno-12-15"></a><span class="w">    </span><span class="nb">Box</span>::<span class="n">new</span><span class="p">(</span><span class="k">move</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="n">Arc</span>::<span class="n">new</span><span class="p">(</span><span class="n">decorator</span><span class="p">.</span><span class="n">clone</span><span class="p">())),</span>
+</span><span id="__span-12-16"><a id="__codelineno-12-16" name="__codelineno-12-16" href="#__codelineno-12-16"></a><span class="p">);</span>
+</span></code></pre></div>
+<h5 id="oidc-client-credentials-production">OIDC Client Credentials (Production)<a class="headerlink" href="#oidc-client-credentials-production" title="Permanent link">&para;</a></h5>
+<div class="language-rust highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="k">use</span><span class="w"> </span><span class="n">micromegas_telemetry_sink</span>::<span class="n">http_event_sink</span>::<span class="n">HttpEventSink</span><span class="p">;</span>
+</span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="k">use</span><span class="w"> </span><span class="n">micromegas_telemetry_sink</span>::<span class="n">oidc_client_credentials_decorator</span>::<span class="n">OidcClientCredentialsDecorator</span><span class="p">;</span>
+</span><span id="__span-13-3"><a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a><span class="k">use</span><span class="w"> </span><span class="n">std</span>::<span class="n">sync</span>::<span class="n">Arc</span><span class="p">;</span>
+</span><span id="__span-13-4"><a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a>
+</span><span id="__span-13-5"><a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a><span class="c1">// Configure OIDC client credentials</span>
+</span><span id="__span-13-6"><a id="__codelineno-13-6" name="__codelineno-13-6" href="#__codelineno-13-6"></a><span class="n">std</span>::<span class="n">env</span>::<span class="n">set_var</span><span class="p">(</span><span class="s">&quot;MICROMEGAS_OIDC_TOKEN_ENDPOINT&quot;</span><span class="p">,</span>
+</span><span id="__span-13-7"><a id="__codelineno-13-7" name="__codelineno-13-7" href="#__codelineno-13-7"></a><span class="w">    </span><span class="s">&quot;https://accounts.google.com/o/oauth2/token&quot;</span><span class="p">);</span>
+</span><span id="__span-13-8"><a id="__codelineno-13-8" name="__codelineno-13-8" href="#__codelineno-13-8"></a><span class="n">std</span>::<span class="n">env</span>::<span class="n">set_var</span><span class="p">(</span><span class="s">&quot;MICROMEGAS_OIDC_CLIENT_ID&quot;</span><span class="p">,</span>
+</span><span id="__span-13-9"><a id="__codelineno-13-9" name="__codelineno-13-9" href="#__codelineno-13-9"></a><span class="w">    </span><span class="s">&quot;my-service@project.iam.gserviceaccount.com&quot;</span><span class="p">);</span>
+</span><span id="__span-13-10"><a id="__codelineno-13-10" name="__codelineno-13-10" href="#__codelineno-13-10"></a><span class="n">std</span>::<span class="n">env</span>::<span class="n">set_var</span><span class="p">(</span><span class="s">&quot;MICROMEGAS_OIDC_CLIENT_SECRET&quot;</span><span class="p">,</span>
+</span><span id="__span-13-11"><a id="__codelineno-13-11" name="__codelineno-13-11" href="#__codelineno-13-11"></a><span class="w">    </span><span class="s">&quot;secret-from-secret-manager&quot;</span><span class="p">);</span>
+</span><span id="__span-13-12"><a id="__codelineno-13-12" name="__codelineno-13-12" href="#__codelineno-13-12"></a>
+</span><span id="__span-13-13"><a id="__codelineno-13-13" name="__codelineno-13-13" href="#__codelineno-13-13"></a><span class="kd">let</span><span class="w"> </span><span class="n">decorator</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">OidcClientCredentialsDecorator</span>::<span class="n">from_env</span><span class="p">().</span><span class="n">unwrap</span><span class="p">();</span>
+</span><span id="__span-13-14"><a id="__codelineno-13-14" name="__codelineno-13-14" href="#__codelineno-13-14"></a>
+</span><span id="__span-13-15"><a id="__codelineno-13-15" name="__codelineno-13-15" href="#__codelineno-13-15"></a><span class="kd">let</span><span class="w"> </span><span class="n">sink</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">HttpEventSink</span>::<span class="n">new</span><span class="p">(</span>
+</span><span id="__span-13-16"><a id="__codelineno-13-16" name="__codelineno-13-16" href="#__codelineno-13-16"></a><span class="w">    </span><span class="s">&quot;http://localhost:9000&quot;</span><span class="p">,</span>
+</span><span id="__span-13-17"><a id="__codelineno-13-17" name="__codelineno-13-17" href="#__codelineno-13-17"></a><span class="w">    </span><span class="n">max_queue_size</span><span class="p">,</span>
+</span><span id="__span-13-18"><a id="__codelineno-13-18" name="__codelineno-13-18" href="#__codelineno-13-18"></a><span class="w">    </span><span class="n">metadata_retry</span><span class="p">,</span>
+</span><span id="__span-13-19"><a id="__codelineno-13-19" name="__codelineno-13-19" href="#__codelineno-13-19"></a><span class="w">    </span><span class="n">blocks_retry</span><span class="p">,</span>
+</span><span id="__span-13-20"><a id="__codelineno-13-20" name="__codelineno-13-20" href="#__codelineno-13-20"></a><span class="w">    </span><span class="nb">Box</span>::<span class="n">new</span><span class="p">(</span><span class="k">move</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="n">Arc</span>::<span class="n">new</span><span class="p">(</span><span class="n">decorator</span><span class="p">.</span><span class="n">clone</span><span class="p">())),</span>
+</span><span id="__span-13-21"><a id="__codelineno-13-21" name="__codelineno-13-21" href="#__codelineno-13-21"></a><span class="p">);</span>
+</span></code></pre></div>
+<p><strong>Authentication Methods Comparison:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Method</th>
+<th>Use Case</th>
+<th>Token Lifetime</th>
+<th>Complexity</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>API Key</td>
+<td>Development, testing</td>
+<td>No expiration</td>
+<td>Low</td>
+</tr>
+<tr>
+<td>Client Credentials</td>
+<td>Production services</td>
+<td>~1 hour (auto-refresh)</td>
+<td>Medium</td>
+</tr>
+</tbody>
+</table>
+<h3 id="health-endpoint">Health Endpoint<a class="headerlink" href="#health-endpoint" title="Permanent link">&para;</a></h3>
+<p>The <code>/health</code> endpoint remains public for monitoring and liveness checks, even when authentication is enabled.</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="c1"># Health check always works without authentication</span>
+</span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>curl<span class="w"> </span>http://localhost:9000/health
+</span></code></pre></div>
+<h2 id="setting-up-oidc-providers">Setting Up OIDC Providers<a class="headerlink" href="#setting-up-oidc-providers" title="Permanent link">&para;</a></h2>
+<h3 id="google-oauth-setup">Google OAuth Setup<a class="headerlink" href="#google-oauth-setup" title="Permanent link">&para;</a></h3>
+<ol>
+<li>Go to <a href="https://console.cloud.google.com/">Google Cloud Console</a></li>
+<li>Create a new project or select existing</li>
+<li>Navigate to <strong>APIs &amp; Services → OAuth consent screen</strong></li>
+<li>Select "External" user type</li>
+<li>Fill in app name and contact emails</li>
+<li>Add test users (yourself and team members)</li>
+<li>Navigate to <strong>APIs &amp; Services → Credentials</strong></li>
+<li>Click "+ CREATE CREDENTIALS" → "OAuth client ID"</li>
+<li>Application type: <strong>"Desktop app"</strong> (for CLI/local use)</li>
+<li>Click "Create"</li>
+<li>Copy both credentials:</li>
+<li><strong>Client ID</strong> (ends with <code>.apps.googleusercontent.com</code>)</li>
+<li><strong>Client Secret</strong></li>
+<li>Add authorized redirect URIs:</li>
+<li><code>http://localhost:48080/callback</code></li>
+</ol>
+<p><strong>Server Configuration:</strong></p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="nb">export</span><span class="w"> </span><span class="nv">MICROMEGAS_OIDC_CONFIG</span><span class="o">=</span><span class="s1">&#39;{</span>
+</span><span id="__span-15-2"><a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a><span class="s1">  &quot;issuers&quot;: [</span>
+</span><span id="__span-15-3"><a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a><span class="s1">    {</span>
+</span><span id="__span-15-4"><a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a><span class="s1">      &quot;issuer&quot;: &quot;https://accounts.google.com&quot;,</span>
+</span><span id="__span-15-5"><a id="__codelineno-15-5" name="__codelineno-15-5" href="#__codelineno-15-5"></a><span class="s1">      &quot;audience&quot;: &quot;123-abc.apps.googleusercontent.com&quot;</span>
+</span><span id="__span-15-6"><a id="__codelineno-15-6" name="__codelineno-15-6" href="#__codelineno-15-6"></a><span class="s1">    }</span>
+</span><span id="__span-15-7"><a id="__codelineno-15-7" name="__codelineno-15-7" href="#__codelineno-15-7"></a><span class="s1">  ]</span>
+</span><span id="__span-15-8"><a id="__codelineno-15-8" name="__codelineno-15-8" href="#__codelineno-15-8"></a><span class="s1">}&#39;</span>
+</span></code></pre></div>
+<p><strong>Client Configuration:</strong></p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="nb">export</span><span class="w"> </span><span class="nv">MICROMEGAS_OIDC_ISSUER</span><span class="o">=</span><span class="s2">&quot;https://accounts.google.com&quot;</span>
+</span><span id="__span-16-2"><a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a><span class="nb">export</span><span class="w"> </span><span class="nv">MICROMEGAS_OIDC_CLIENT_ID</span><span class="o">=</span><span class="s2">&quot;123-abc.apps.googleusercontent.com&quot;</span>
+</span><span id="__span-16-3"><a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a><span class="nb">export</span><span class="w"> </span><span class="nv">MICROMEGAS_OIDC_CLIENT_SECRET</span><span class="o">=</span><span class="s2">&quot;GOCSPX-...&quot;</span>
+</span></code></pre></div>
+<h3 id="azure-ad-setup">Azure AD Setup<a class="headerlink" href="#azure-ad-setup" title="Permanent link">&para;</a></h3>
+<ol>
+<li>Go to <a href="https://portal.azure.com/">Azure Portal</a></li>
+<li>Navigate to <strong>Azure Active Directory → App registrations</strong></li>
+<li>Click <strong>"New registration"</strong></li>
+<li>Name: "Micromegas Analytics"</li>
+<li>Supported account types: Choose based on your needs</li>
+<li>Redirect URI: "Public client/native" - <code>http://localhost:48080/callback</code></li>
+<li>Note the <strong>Application (client) ID</strong></li>
+<li>Navigate to <strong>Authentication</strong></li>
+<li>Under "Advanced settings", set "Allow public client flows" to <strong>Yes</strong></li>
+<li>This enables PKCE without requiring a client secret</li>
+<li>Navigate to <strong>API permissions</strong> (optional)</li>
+<li>Add permissions if needed for your organization</li>
+</ol>
+<p><strong>Server Configuration:</strong></p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="nb">export</span><span class="w"> </span><span class="nv">MICROMEGAS_OIDC_CONFIG</span><span class="o">=</span><span class="s1">&#39;{</span>
+</span><span id="__span-17-2"><a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a><span class="s1">  &quot;issuers&quot;: [</span>
+</span><span id="__span-17-3"><a id="__codelineno-17-3" name="__codelineno-17-3" href="#__codelineno-17-3"></a><span class="s1">    {</span>
+</span><span id="__span-17-4"><a id="__codelineno-17-4" name="__codelineno-17-4" href="#__codelineno-17-4"></a><span class="s1">      &quot;issuer&quot;: &quot;https://login.microsoftonline.com/{tenant-id}/v2.0&quot;,</span>
+</span><span id="__span-17-5"><a id="__codelineno-17-5" name="__codelineno-17-5" href="#__codelineno-17-5"></a><span class="s1">      &quot;audience&quot;: &quot;{application-id}&quot;</span>
+</span><span id="__span-17-6"><a id="__codelineno-17-6" name="__codelineno-17-6" href="#__codelineno-17-6"></a><span class="s1">    }</span>
+</span><span id="__span-17-7"><a id="__codelineno-17-7" name="__codelineno-17-7" href="#__codelineno-17-7"></a><span class="s1">  ]</span>
+</span><span id="__span-17-8"><a id="__codelineno-17-8" name="__codelineno-17-8" href="#__codelineno-17-8"></a><span class="s1">}&#39;</span>
+</span></code></pre></div>
+<p><strong>Client Configuration:</strong></p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-18-1"><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a><span class="nb">export</span><span class="w"> </span><span class="nv">MICROMEGAS_OIDC_ISSUER</span><span class="o">=</span><span class="s2">&quot;https://login.microsoftonline.com/{tenant-id}/v2.0&quot;</span>
+</span><span id="__span-18-2"><a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a><span class="nb">export</span><span class="w"> </span><span class="nv">MICROMEGAS_OIDC_CLIENT_ID</span><span class="o">=</span><span class="s2">&quot;{application-id}&quot;</span>
+</span><span id="__span-18-3"><a id="__codelineno-18-3" name="__codelineno-18-3" href="#__codelineno-18-3"></a><span class="c1"># No MICROMEGAS_OIDC_CLIENT_SECRET needed - Azure AD supports public clients with PKCE</span>
+</span></code></pre></div>
+<h3 id="auth0-setup">Auth0 Setup<a class="headerlink" href="#auth0-setup" title="Permanent link">&para;</a></h3>
+<ol>
+<li>Go to <a href="https://manage.auth0.com/">Auth0 Dashboard</a></li>
+<li>Create application:</li>
+<li>Applications → Create Application</li>
+<li>Name: "Micromegas Analytics"</li>
+<li>Application type: <strong>"Native"</strong> (for CLI/desktop)</li>
+<li>Configure application:</li>
+<li>Allowed Callback URLs: <code>http://localhost:48080/callback</code></li>
+<li>Allowed Web Origins: <code>http://localhost:48080</code></li>
+<li>Note the <strong>Domain</strong> and <strong>Client ID</strong></li>
+<li>For Native apps, client secret is optional (true public client)</li>
+</ol>
+<p><strong>Server Configuration:</strong></p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-19-1"><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a><span class="nb">export</span><span class="w"> </span><span class="nv">MICROMEGAS_OIDC_CONFIG</span><span class="o">=</span><span class="s1">&#39;{</span>
+</span><span id="__span-19-2"><a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a><span class="s1">  &quot;issuers&quot;: [</span>
+</span><span id="__span-19-3"><a id="__codelineno-19-3" name="__codelineno-19-3" href="#__codelineno-19-3"></a><span class="s1">    {</span>
+</span><span id="__span-19-4"><a id="__codelineno-19-4" name="__codelineno-19-4" href="#__codelineno-19-4"></a><span class="s1">      &quot;issuer&quot;: &quot;https://your-tenant.auth0.com/&quot;,</span>
+</span><span id="__span-19-5"><a id="__codelineno-19-5" name="__codelineno-19-5" href="#__codelineno-19-5"></a><span class="s1">      &quot;audience&quot;: &quot;your-client-id&quot;</span>
+</span><span id="__span-19-6"><a id="__codelineno-19-6" name="__codelineno-19-6" href="#__codelineno-19-6"></a><span class="s1">    }</span>
+</span><span id="__span-19-7"><a id="__codelineno-19-7" name="__codelineno-19-7" href="#__codelineno-19-7"></a><span class="s1">  ]</span>
+</span><span id="__span-19-8"><a id="__codelineno-19-8" name="__codelineno-19-8" href="#__codelineno-19-8"></a><span class="s1">}&#39;</span>
+</span></code></pre></div>
+<p><strong>Client Configuration:</strong></p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-20-1"><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a><span class="nb">export</span><span class="w"> </span><span class="nv">MICROMEGAS_OIDC_ISSUER</span><span class="o">=</span><span class="s2">&quot;https://your-tenant.auth0.com/&quot;</span>
+</span><span id="__span-20-2"><a id="__codelineno-20-2" name="__codelineno-20-2" href="#__codelineno-20-2"></a><span class="nb">export</span><span class="w"> </span><span class="nv">MICROMEGAS_OIDC_CLIENT_ID</span><span class="o">=</span><span class="s2">&quot;your-client-id&quot;</span>
+</span><span id="__span-20-3"><a id="__codelineno-20-3" name="__codelineno-20-3" href="#__codelineno-20-3"></a><span class="c1"># No client_secret needed for Native apps</span>
+</span></code></pre></div>
+<h2 id="security-considerations">Security Considerations<a class="headerlink" href="#security-considerations" title="Permanent link">&para;</a></h2>
+<h3 id="token-storage">Token Storage<a class="headerlink" href="#token-storage" title="Permanent link">&para;</a></h3>
+<p>Tokens are stored at <code>~/.micromegas/tokens.json</code> with secure file permissions (0600 - owner read/write only).</p>
+<p><strong>Token File Contents:</strong></p>
+<ul>
+<li>Access token (JWT)</li>
+<li>Refresh token</li>
+<li>ID token</li>
+<li>Expiration time</li>
+<li>Issuer and client ID</li>
+</ul>
+<div class="admonition warning">
+<p class="admonition-title">Token File Security</p>
+<p>Never commit token files to version control or share them. Tokens provide full access to your analytics data.</p>
+</div>
+<h3 id="token-refresh">Token Refresh<a class="headerlink" href="#token-refresh" title="Permanent link">&para;</a></h3>
+<p>The Python client automatically refreshes tokens when they approach expiration (5-minute buffer). This ensures:
+- No mid-query authentication failures
+- Transparent token management
+- Thread-safe concurrent query support</p>
+<h3 id="token-revocation">Token Revocation<a class="headerlink" href="#token-revocation" title="Permanent link">&para;</a></h3>
+<p>To revoke access:</p>
+<ol>
+<li><strong>User accounts:</strong> Disable the user in your identity provider (Google, Azure AD, etc.)</li>
+<li><strong>Service accounts:</strong> Disable or delete the service account in your identity provider</li>
+<li><strong>Immediate revocation:</strong> Restart the analytics server to clear the token validation cache</li>
+</ol>
+<p><strong>Revocation Timing:</strong></p>
+<ul>
+<li>New tokens will be rejected immediately after disabling the account</li>
+<li>Existing cached tokens remain valid for up to 5 minutes (configurable via <code>token_cache_ttl_secs</code>)</li>
+<li>Total revocation time: Cache TTL (5 min) + Token lifetime (typically 60 min) = ~65 minutes worst case</li>
+</ul>
+<p>For faster revocation, use shorter token cache TTL or restart the analytics server.</p>
+<h3 id="admin-privileges">Admin Privileges<a class="headerlink" href="#admin-privileges" title="Permanent link">&para;</a></h3>
+<p>Admin users (configured via <code>MICROMEGAS_ADMINS</code>) have elevated privileges for administrative operations. Only grant admin access to trusted users.</p>
+<p><strong>Admin Capabilities:</strong></p>
+<ul>
+<li>Partition management functions</li>
+<li>Schema migration operations</li>
+<li>Administrative SQL functions</li>
+</ul>
+<h3 id="httpstls">HTTPS/TLS<a class="headerlink" href="#httpstls" title="Permanent link">&para;</a></h3>
+<p>Always use TLS for production deployments:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-21-1"><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a><span class="c1"># Production: Use grpc+tls</span>
+</span><span id="__span-21-2"><a id="__codelineno-21-2" name="__codelineno-21-2" href="#__codelineno-21-2"></a><span class="n">client</span> <span class="o">=</span> <span class="n">FlightSQLClient</span><span class="p">(</span>
+</span><span id="__span-21-3"><a id="__codelineno-21-3" name="__codelineno-21-3" href="#__codelineno-21-3"></a>    <span class="s2">&quot;grpc+tls://analytics.example.com:50051&quot;</span><span class="p">,</span>
+</span><span id="__span-21-4"><a id="__codelineno-21-4" name="__codelineno-21-4" href="#__codelineno-21-4"></a>    <span class="n">auth_provider</span><span class="o">=</span><span class="n">auth</span>
+</span><span id="__span-21-5"><a id="__codelineno-21-5" name="__codelineno-21-5" href="#__codelineno-21-5"></a><span class="p">)</span>
+</span><span id="__span-21-6"><a id="__codelineno-21-6" name="__codelineno-21-6" href="#__codelineno-21-6"></a>
+</span><span id="__span-21-7"><a id="__codelineno-21-7" name="__codelineno-21-7" href="#__codelineno-21-7"></a><span class="c1"># Development only: Plain grpc</span>
+</span><span id="__span-21-8"><a id="__codelineno-21-8" name="__codelineno-21-8" href="#__codelineno-21-8"></a><span class="n">client</span> <span class="o">=</span> <span class="n">FlightSQLClient</span><span class="p">(</span>
+</span><span id="__span-21-9"><a id="__codelineno-21-9" name="__codelineno-21-9" href="#__codelineno-21-9"></a>    <span class="s2">&quot;grpc://localhost:50051&quot;</span><span class="p">,</span>
+</span><span id="__span-21-10"><a id="__codelineno-21-10" name="__codelineno-21-10" href="#__codelineno-21-10"></a>    <span class="n">auth_provider</span><span class="o">=</span><span class="n">auth</span>
+</span><span id="__span-21-11"><a id="__codelineno-21-11" name="__codelineno-21-11" href="#__codelineno-21-11"></a><span class="p">)</span>
+</span></code></pre></div>
+<p>Configure your load balancer or reverse proxy to handle TLS termination.</p>
+<h3 id="pkce-proof-key-for-code-exchange">PKCE (Proof Key for Code Exchange)<a class="headerlink" href="#pkce-proof-key-for-code-exchange" title="Permanent link">&para;</a></h3>
+<p>The Python client uses PKCE for all OIDC flows, providing security for public clients (desktop apps, CLIs) that cannot securely store client secrets.</p>
+<p><strong>How PKCE Works:</strong></p>
+<ol>
+<li>Client generates random <code>code_verifier</code></li>
+<li>Client creates <code>code_challenge</code> (SHA256 hash of verifier)</li>
+<li>Authorization request includes <code>code_challenge</code></li>
+<li>Token exchange includes original <code>code_verifier</code></li>
+<li>Identity provider validates the verifier matches the challenge</li>
+</ol>
+<p>This prevents authorization code interception attacks even if the client secret is compromised or unavailable.</p>
+<h2 id="troubleshooting">Troubleshooting<a class="headerlink" href="#troubleshooting" title="Permanent link">&para;</a></h2>
+<h3 id="authentication-failures">Authentication Failures<a class="headerlink" href="#authentication-failures" title="Permanent link">&para;</a></h3>
+<p><strong>Symptom:</strong> "Invalid token" or "Authentication failed" errors</p>
+<p><strong>Solutions:</strong></p>
+<ol>
+<li>Check server logs: <code>tail -f /tmp/analytics.log | grep -i auth</code></li>
+<li>Verify OIDC configuration matches between server and client</li>
+<li>Ensure Client ID and Issuer URL are correct</li>
+<li>Check token expiration: <code>cat ~/.micromegas/tokens.json | jq .expires_at</code></li>
+<li>Clear tokens and re-authenticate: <code>micromegas_logout</code></li>
+</ol>
+<h3 id="token-refresh-failures">Token Refresh Failures<a class="headerlink" href="#token-refresh-failures" title="Permanent link">&para;</a></h3>
+<p><strong>Symptom:</strong> Browser opens on every CLI invocation</p>
+<p><strong>Solutions:</strong></p>
+<ol>
+<li>Check if refresh token is present: <code>cat ~/.micromegas/tokens.json | jq .refresh_token</code></li>
+<li>Verify client secret matches (if required by provider)</li>
+<li>Check token file permissions: <code>ls -la ~/.micromegas/tokens.json</code> (should be 600)</li>
+<li>Re-authenticate: <code>micromegas_logout</code> then retry</li>
+</ol>
+<h3 id="server-configuration-issues">Server Configuration Issues<a class="headerlink" href="#server-configuration-issues" title="Permanent link">&para;</a></h3>
+<p><strong>Symptom:</strong> Server fails to start or rejects all authentication</p>
+<p><strong>Solutions:</strong></p>
+<ol>
+<li>Validate OIDC config JSON syntax: <code>echo $MICROMEGAS_OIDC_CONFIG | jq .</code></li>
+<li>Check server can reach identity provider: <code>curl https://accounts.google.com/.well-known/openid-configuration</code></li>
+<li>Verify audience matches client ID exactly</li>
+<li>Check server logs for OIDC discovery errors</li>
+</ol>
+<h3 id="multi-provider-issues">Multi-Provider Issues<a class="headerlink" href="#multi-provider-issues" title="Permanent link">&para;</a></h3>
+<p><strong>Symptom:</strong> Only one identity provider works</p>
+<p><strong>Solutions:</strong></p>
+<ol>
+<li>Verify all issuers are in the configuration array</li>
+<li>Check each issuer URL is correct and accessible</li>
+<li>Ensure audience (client_id) matches for each provider</li>
+<li>Review server logs for OIDC discovery failures per issuer</li>
+</ol>
+<h2 id="migration-from-api-keys-to-oidc">Migration from API Keys to OIDC<a class="headerlink" href="#migration-from-api-keys-to-oidc" title="Permanent link">&para;</a></h2>
+<p>To migrate from API keys to OIDC authentication:</p>
+<ol>
+<li><strong>Set up OIDC provider</strong> (Google, Azure AD, etc.)</li>
+<li><strong>Configure server</strong> with both API keys and OIDC</li>
+<li><strong>Update clients</strong> to use OIDC authentication</li>
+<li><strong>Test</strong> with OIDC while API keys still work (parallel operation)</li>
+<li><strong>Remove API keys</strong> from configuration when migration complete</li>
+</ol>
+<p><strong>Example Migration:</strong></p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-22-1"><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a><span class="c1"># Step 1: Add OIDC configuration (API keys still work)</span>
+</span><span id="__span-22-2"><a id="__codelineno-22-2" name="__codelineno-22-2" href="#__codelineno-22-2"></a><span class="nb">export</span><span class="w"> </span><span class="nv">MICROMEGAS_API_KEYS</span><span class="o">=</span><span class="s1">&#39;[{&quot;name&quot;: &quot;service1&quot;, &quot;key&quot;: &quot;old-key&quot;}]&#39;</span>
+</span><span id="__span-22-3"><a id="__codelineno-22-3" name="__codelineno-22-3" href="#__codelineno-22-3"></a><span class="nb">export</span><span class="w"> </span><span class="nv">MICROMEGAS_OIDC_CONFIG</span><span class="o">=</span><span class="s1">&#39;{</span>
+</span><span id="__span-22-4"><a id="__codelineno-22-4" name="__codelineno-22-4" href="#__codelineno-22-4"></a><span class="s1">  &quot;issuers&quot;: [{</span>
+</span><span id="__span-22-5"><a id="__codelineno-22-5" name="__codelineno-22-5" href="#__codelineno-22-5"></a><span class="s1">    &quot;issuer&quot;: &quot;https://accounts.google.com&quot;,</span>
+</span><span id="__span-22-6"><a id="__codelineno-22-6" name="__codelineno-22-6" href="#__codelineno-22-6"></a><span class="s1">    &quot;audience&quot;: &quot;new-client-id.apps.googleusercontent.com&quot;</span>
+</span><span id="__span-22-7"><a id="__codelineno-22-7" name="__codelineno-22-7" href="#__codelineno-22-7"></a><span class="s1">  }]</span>
+</span><span id="__span-22-8"><a id="__codelineno-22-8" name="__codelineno-22-8" href="#__codelineno-22-8"></a><span class="s1">}&#39;</span>
+</span><span id="__span-22-9"><a id="__codelineno-22-9" name="__codelineno-22-9" href="#__codelineno-22-9"></a>
+</span><span id="__span-22-10"><a id="__codelineno-22-10" name="__codelineno-22-10" href="#__codelineno-22-10"></a><span class="c1"># Step 2: Update clients to use OIDC</span>
+</span><span id="__span-22-11"><a id="__codelineno-22-11" name="__codelineno-22-11" href="#__codelineno-22-11"></a><span class="c1"># Test both authentication methods work</span>
+</span><span id="__span-22-12"><a id="__codelineno-22-12" name="__codelineno-22-12" href="#__codelineno-22-12"></a>
+</span><span id="__span-22-13"><a id="__codelineno-22-13" name="__codelineno-22-13" href="#__codelineno-22-13"></a><span class="c1"># Step 3: Remove API keys when all clients migrated</span>
+</span><span id="__span-22-14"><a id="__codelineno-22-14" name="__codelineno-22-14" href="#__codelineno-22-14"></a><span class="nb">unset</span><span class="w"> </span>MICROMEGAS_API_KEYS
+</span><span id="__span-22-15"><a id="__codelineno-22-15" name="__codelineno-22-15" href="#__codelineno-22-15"></a><span class="c1"># Only OIDC remains</span>
+</span></code></pre></div>
+<h2 id="best-practices">Best Practices<a class="headerlink" href="#best-practices" title="Permanent link">&para;</a></h2>
+<ol>
+<li><strong>Use OIDC for all new deployments</strong> - Better security and user management</li>
+<li><strong>Enable admin privileges sparingly</strong> - Only for users who need administrative access</li>
+<li><strong>Use short token cache TTL</strong> in high-security environments (60-300 seconds)</li>
+<li><strong>Monitor authentication logs</strong> - Track failed auth attempts and unusual patterns</li>
+<li><strong>Rotate client secrets regularly</strong> - Update in identity provider and redistribute</li>
+<li><strong>Use separate OAuth clients</strong> for different environments (dev, staging, prod)</li>
+<li><strong>Document your identity provider setup</strong> - Makes onboarding new team members easier</li>
+</ol>
+<h2 id="reference">Reference<a class="headerlink" href="#reference" title="Permanent link">&para;</a></h2>
+<ul>
+<li><a href="https://openid.net/specs/openid-connect-core-1_0.html">OpenID Connect Core Specification</a></li>
+<li><a href="https://datatracker.ietf.org/doc/html/rfc6749">OAuth 2.0 RFC 6749</a></li>
+<li><a href="https://datatracker.ietf.org/doc/html/rfc7636">PKCE RFC 7636</a></li>
+<li><a href="https://datatracker.ietf.org/doc/html/draft-ietf-oauth-security-topics">OAuth 2.0 Security Best Practices</a></li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.path", "navigation.top", "search.highlight", "search.suggest", "toc.follow", "content.code.copy", "content.code.annotate"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+        <script src="https://unpkg.com/mermaid@10.6.1/dist/mermaid.min.js"></script>
+      
+    
+  </body>
+</html>

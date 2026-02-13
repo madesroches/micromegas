@@ -1,0 +1,127 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="`default_view_factory` makes the default `ViewFactory`, giving users access to view instances, grouped in sets."><title>micromegas::analytics::lakehouse::view_factory - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../../static.files/rustdoc-ca0dd0c4.css"><meta name="rustdoc-vars" data-root-path="../../../../" data-static-root-path="../../../../static.files/" data-current-crate="micromegas" data-themes="" data-resource-suffix="" data-rustdoc-version="1.93.1 (01f6ddf75 2026-02-11)" data-channel="1.93.1" data-search-js="search-9e2438ea.js" data-stringdex-js="stringdex-a3946164.js" data-settings-js="settings-c38705f0.js" ><script src="../../../../static.files/storage-e2aeef58.js"></script><script defer src="../sidebar-items.js"></script><script defer src="../../../../static.files/main-a410ff4d.js"></script><noscript><link rel="stylesheet" href="../../../../static.files/noscript-263c88ec.css"></noscript><link rel="alternate icon" type="image/png" href="../../../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../../../static.files/favicon-044be391.svg"></head><body class="rustdoc mod"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">Module view_factory</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../../../../micromegas/index.html">micromegas</a><span class="version">0.21.0</span></h2></div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">Module view_<wbr>factory</a></h2><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#view-sets" title="View sets">View sets</a><ul><li><a href="#log_entries" title="log_entries">log_entries</a></li><li><a href="#measures" title="measures">measures</a></li><li><a href="#thread_spans" title="thread_spans">thread_spans</a></li><li><a href="#async_events" title="async_events">async_events</a></li><li><a href="#processes" title="processes">processes</a></li><li><a href="#streams" title="streams">streams</a></li><li><a href="#blocks" title="blocks">blocks</a></li></ul></li></ul><h3><a href="#structs">Module Items</a></h3><ul class="block"><li><a href="#structs" title="Structs">Structs</a></li><li><a href="#traits" title="Traits">Traits</a></li><li><a href="#functions" title="Functions">Functions</a></li></ul></section><div id="rustdoc-modnav"><h2><a href="../index.html">In micromegas::<wbr>analytics::<wbr>lakehouse</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../../../index.html">micromegas</a>::<wbr><a href="../../index.html">analytics</a>::<wbr><a href="../index.html">lakehouse</a></div><h1>Module <span>view_<wbr>factory</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../../../../src/micromegas_analytics/lakehouse/mod.rs.html#114">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p><a href="fn.default_view_factory.html" title="fn micromegas::analytics::lakehouse::view_factory::default_view_factory"><code>default_view_factory</code></a> makes the default <a href="struct.ViewFactory.html" title="struct micromegas::analytics::lakehouse::view_factory::ViewFactory"><code>ViewFactory</code></a>, giving users access to view instances, grouped in sets.</p>
+<h2 id="view-sets"><a class="doc-anchor" href="#view-sets">§</a>View sets</h2>
+<p>A ViewFactory defines the available view sets and can instanciate view instances.
+All view instances in a set have the same schema.
+Some view instances are global (their view_instance_id is ‘global’).
+Global view instances are implicitly accessible to SQL queries.
+Non-global view instances are accessible using the table function <code>view_instance</code>. See <a href="../view_instance_table_function/struct.ViewInstanceTableFunction.html" title="struct micromegas::analytics::lakehouse::view_instance_table_function::ViewInstanceTableFunction">ViewInstanceTableFunction</a>.</p>
+<h3 id="log_entries"><a class="doc-anchor" href="#log_entries">§</a>log_entries</h3><div><table><thead><tr><th>field</th><th>type</th><th>description</th></tr></thead><tbody>
+<tr><td>process_id</td><td>Utf8</td><td>unique id of the process, references the processes table</td></tr>
+<tr><td>exe</td><td>Utf8</td><td>filename of the process</td></tr>
+<tr><td>username</td><td>Utf8</td><td>username of the process</td></tr>
+<tr><td>computer</td><td>Utf8</td><td>computer name of the process</td></tr>
+<tr><td>time</td><td>UTC Timestamp (nanoseconds)</td><td>time of the log entry event</td></tr>
+<tr><td>target</td><td>Utf8</td><td>category or module name of the log entry</td></tr>
+<tr><td>level</td><td>int32</td><td>verbosity level (Fatal=1, Error=2, Warning=3, Info=4, Debug=5, Trace=6)</td></tr>
+<tr><td>msg</td><td>Utf8</td><td>message</td></tr>
+</tbody></table>
+</div><h4 id="log_entries-view-instances"><a class="doc-anchor" href="#log_entries-view-instances">§</a>log_entries view instances</h4>
+<p>The implicit use of the <code>log_entries</code> table corresponds to the ‘global’ instance, which contains the log entries of all the processes.</p>
+<p>Except the ‘global’ instance, the instance_id refers to any process_id. <code>view_instance('log_entries', process_id)</code> contains that process’s log. Process-specific views are materialized just-in-time and can provide much better query performance compared to the ‘global’ instance.</p>
+<h3 id="measures"><a class="doc-anchor" href="#measures">§</a>measures</h3><div><table><thead><tr><th>field</th><th>type</th><th>description</th></tr></thead><tbody>
+<tr><td>process_id</td><td>Utf8</td><td>unique id of the process, references the processes table</td></tr>
+<tr><td>exe</td><td>Utf8</td><td>filename of the process</td></tr>
+<tr><td>username</td><td>Utf8</td><td>username of the process</td></tr>
+<tr><td>computer</td><td>Utf8</td><td>computer name of the process</td></tr>
+<tr><td>time</td><td>UTC Timestamp (nanoseconds)</td><td>time of the measure event</td></tr>
+<tr><td>target</td><td>Utf8</td><td>category or module name of the measure</td></tr>
+<tr><td>name</td><td>Utf8</td><td>name of the measure</td></tr>
+<tr><td>unit</td><td>Utf8</td><td>unit of measure</td></tr>
+<tr><td>value</td><td>Float64</td><td>value measured</td></tr>
+</tbody></table>
+</div><h4 id="measures-view-instances"><a class="doc-anchor" href="#measures-view-instances">§</a>measures view instances</h4>
+<p>The implicit use of the <code>measures</code> table corresponds to the ‘global’ instance, which contains the metrics of all the processes.</p>
+<p>Except the ‘global’ instance, the instance_id refers to any process_id. <code>view_instance('measures', process_id)</code> contains that process’s metrics. Process-specific views are materialized just-in-time and can provide much better query performance compared to the ‘global’ instance.</p>
+<h3 id="thread_spans"><a class="doc-anchor" href="#thread_spans">§</a>thread_spans</h3><div><table><thead><tr><th>field</th><th>type</th><th>description</th></tr></thead><tbody>
+<tr><td>id</td><td>Int64</td><td>span id, unique within this thread</td></tr>
+<tr><td>parent</td><td>Int64</td><td>span id of the calling span</td></tr>
+<tr><td>depth</td><td>UInt32</td><td>call stack depth</td></tr>
+<tr><td>hash</td><td>UInt32</td><td>identifies a call site (name, filename, line)</td></tr>
+<tr><td>begin</td><td>UTC Timestamp (nanoseconds)</td><td>when the span started its execution</td></tr>
+<tr><td>end</td><td>UTC Timestamp (nanoseconds)</td><td>when the span finished its execution</td></tr>
+<tr><td>duration</td><td>Int64 (nanoseconds)</td><td>end-begin</td></tr>
+<tr><td>name</td><td>Utf8</td><td>name of the span, usually a function name</td></tr>
+<tr><td>target</td><td>Utf8</td><td>category or module name</td></tr>
+<tr><td>filename</td><td>Utf8</td><td>name or path of the source file where the span is coded</td></tr>
+<tr><td>line</td><td>UInt32</td><td>line number in the file where the span can be found</td></tr>
+</tbody></table>
+</div><h4 id="thread_spans-view-instances"><a class="doc-anchor" href="#thread_spans-view-instances">§</a>thread_spans view instances</h4>
+<p>There is no ‘global’ instance in the ‘thread_spans’ view set, there is therefore no implicit thread_spans table availble.
+Users can call the table function <code>view_instance('thread_spans', stream_id)</code> to query the spans in the thread associated with the specified stream_id.</p>
+<h3 id="async_events"><a class="doc-anchor" href="#async_events">§</a>async_events</h3><div><table><thead><tr><th>field</th><th>type</th><th>description</th></tr></thead><tbody>
+<tr><td>stream_id</td><td>Dictionary(Int16, Utf8)</td><td>identifier of the thread stream that emitted the event</td></tr>
+<tr><td>block_id</td><td>Dictionary(Int16, Utf8)</td><td>unique identifier of the event block</td></tr>
+<tr><td>time</td><td>UTC Timestamp (nanoseconds)</td><td>time when the async event occurred</td></tr>
+<tr><td>event_type</td><td>Dictionary(Int16, Utf8)</td><td>type of event: “begin” or “end”</td></tr>
+<tr><td>span_id</td><td>Int64</td><td>unique async span identifier</td></tr>
+<tr><td>parent_span_id</td><td>Int64</td><td>span id of the parent async span</td></tr>
+<tr><td>name</td><td>Dictionary(Int16, Utf8)</td><td>name of the async span, usually a function name</td></tr>
+<tr><td>filename</td><td>Dictionary(Int16, Utf8)</td><td>name or path of the source file where the span is coded</td></tr>
+<tr><td>target</td><td>Dictionary(Int16, Utf8)</td><td>category or module name</td></tr>
+<tr><td>line</td><td>UInt32</td><td>line number in the file where the span can be found</td></tr>
+</tbody></table>
+</div><h4 id="async_events-view-instances"><a class="doc-anchor" href="#async_events-view-instances">§</a>async_events view instances</h4>
+<p>There is no ‘global’ instance in the ‘async_events’ view set, there is therefore no implicit async_events table available.
+Users can call the table function <code>view_instance('async_events', process_id)</code> to query the async events in all thread streams associated with the specified process_id.
+Process-specific views are materialized just-in-time and can provide good query performance.</p>
+<p>The schema is optimized for high-frequency data. Process information (exe, username, computer, etc.) can be joined when needed:</p>
+<div class="example-wrap"><pre class="language-sql"><code>SELECT ae.*, p.exe, p.username, p.computer
+FROM view_instance(&#39;async_events&#39;, process_id) ae
+JOIN streams s ON ae.stream_id = s.stream_id  
+JOIN processes p ON s.process_id = p.process_id</code></pre></div><h3 id="processes"><a class="doc-anchor" href="#processes">§</a>processes</h3><div><table><thead><tr><th>field</th><th>type</th><th>description</th></tr></thead><tbody>
+<tr><td>process_id</td><td>Utf8</td><td>process unique id</td></tr>
+<tr><td>exe</td><td>Utf8</td><td>filename of the process</td></tr>
+<tr><td>username</td><td>Utf8</td><td>username of the process</td></tr>
+<tr><td>realname</td><td>Utf8</td><td>real name of the user launching the process</td></tr>
+<tr><td>computer</td><td>Utf8</td><td>name of the computer or vm</td></tr>
+<tr><td>distro</td><td>Utf8</td><td>name of operating system</td></tr>
+<tr><td>cpu_brand</td><td>Utf8</td><td>identifies the cpu</td></tr>
+<tr><td>tsc frequency</td><td>Int64</td><td>number of ticks per second</td></tr>
+<tr><td>start_time</td><td>UTC Timestamp (nanoseconds)</td><td>when the process started (as reported by the instrumented process)</td></tr>
+<tr><td>start_ticks</td><td>Int64</td><td>tick count associated with start_time</td></tr>
+<tr><td>insert_time</td><td>UTC Timestamp (nanoseconds)</td><td>server-side timestamp when the process metedata was received</td></tr>
+<tr><td>parent_process_id</td><td>Utf8</td><td>unique id of the parent process</td></tr>
+<tr><td>properties</td><td>Array of {key: utf8, value: utf8}</td><td>self-reported metadata by the process</td></tr>
+</tbody></table>
+</div>
+<p>There is only one instance in this view set and it is implicitly available.</p>
+<h3 id="streams"><a class="doc-anchor" href="#streams">§</a>streams</h3><div><table><thead><tr><th>field</th><th>type</th><th>description</th></tr></thead><tbody>
+<tr><td>stream_id</td><td>Utf8</td><td>stream unique id</td></tr>
+<tr><td>process_id</td><td>Utf8</td><td>process unique id</td></tr>
+<tr><td>dependencies_metadata</td><td>Binary</td><td>memory layout of the event dependencies</td></tr>
+<tr><td>objects_metadata</td><td>Binary</td><td>memory layout of the events</td></tr>
+<tr><td>tags</td><td>Array of utf8</td><td>Purpose of the stream, can contain “log”, “metrics” or “cpu”</td></tr>
+<tr><td>properties</td><td>Array of {key: utf8, value: utf8}</td><td>self-reported stream metadata by the process</td></tr>
+<tr><td>insert_time</td><td>UTC Timestamp (nanoseconds)</td><td>server-side timestamp when the stream metedata was received</td></tr>
+</tbody></table>
+</div>
+<p>There is only one instance in this view set and it is implicitly available.</p>
+<h3 id="blocks"><a class="doc-anchor" href="#blocks">§</a>blocks</h3><div><table><thead><tr><th>field</th><th>type</th><th>description</th></tr></thead><tbody>
+<tr><td>block_id</td><td>Utf8</td><td>block unique id</td></tr>
+<tr><td>stream_id</td><td>Utf8</td><td>stream unique id</td></tr>
+<tr><td>process_id</td><td>Utf8</td><td>process unique id</td></tr>
+<tr><td>begin_time</td><td>UTC Timestamp (nanoseconds)</td><td>system time marking the beginning of this event batch</td></tr>
+<tr><td>begin_ticks</td><td>Int64</td><td>tick count associated with begin_time</td></tr>
+<tr><td>end_time</td><td>UTC Timestamp (nanoseconds)</td><td>system time marking the ending of this event batch</td></tr>
+<tr><td>end_ticks</td><td>Int64</td><td>tick count associated with end_time</td></tr>
+<tr><td>nb_objects</td><td>Int32</td><td>number of events in this batch</td></tr>
+<tr><td>object_offset</td><td>Int64</td><td>number of events preceding this batch</td></tr>
+<tr><td>payload_size</td><td>Int64</td><td>number of bytes of the binary payload</td></tr>
+<tr><td>insert_time</td><td>UTC Timestamp (nanoseconds)</td><td>server-side timestamp when the block was received</td></tr>
+<tr><td>streams.dependencies_metadata</td><td>Binary</td><td>memory layout of the event dependencies</td></tr>
+<tr><td>streams.objects_metadata</td><td>Binary</td><td>memory layout of the events</td></tr>
+<tr><td>streams.tags</td><td>Array of utf8</td><td>Purpose of the stream, can contain “log”, “metrics” or “cpu”</td></tr>
+<tr><td>streams.properties</td><td>Array of {key: utf8, value: utf8}</td><td>self-reported stream metadata by the process</td></tr>
+<tr><td>processes.start_time</td><td>UTC Timestamp (nanoseconds)</td><td>when the process started (as reported by the instrumented process)</td></tr>
+<tr><td>processes.start_ticks</td><td>Int64</td><td>tick count associated with start_time</td></tr>
+<tr><td>processes.tsc frequency</td><td>Int64</td><td>number of ticks per second</td></tr>
+<tr><td>processes.exe</td><td>Utf8</td><td>filename of the process</td></tr>
+<tr><td>processes.username</td><td>Utf8</td><td>username of the process</td></tr>
+<tr><td>processes.realname</td><td>Utf8</td><td>real name of the user launching the process</td></tr>
+<tr><td>processes.computer</td><td>Utf8</td><td>name of the computer or vm</td></tr>
+<tr><td>processes.distro</td><td>Utf8</td><td>name of operating system</td></tr>
+<tr><td>processes.cpu_brand</td><td>Utf8</td><td>identifies the cpu</td></tr>
+</tbody></table>
+</div>
+<p>There is only one instance in this view set and it is implicitly available.</p>
+</div></details><h2 id="structs" class="section-header">Structs<a href="#structs" class="anchor">§</a></h2><dl class="item-table"><dt><a class="struct" href="struct.ViewFactory.html" title="struct micromegas::analytics::lakehouse::view_factory::ViewFactory">View<wbr>Factory</a></dt><dd>A factory for creating and managing views.</dd></dl><h2 id="traits" class="section-header">Traits<a href="#traits" class="anchor">§</a></h2><dl class="item-table"><dt><a class="trait" href="trait.ViewMaker.html" title="trait micromegas::analytics::lakehouse::view_factory::ViewMaker">View<wbr>Maker</a></dt><dd>A trait for creating views.</dd></dl><h2 id="functions" class="section-header">Functions<a href="#functions" class="anchor">§</a></h2><dl class="item-table"><dt><a class="fn" href="fn.default_view_factory.html" title="fn micromegas::analytics::lakehouse::view_factory::default_view_factory">default_<wbr>view_<wbr>factory</a></dt><dd>Creates the default <code>ViewFactory</code> with all built-in views.</dd></dl></section></div></main></body></html>

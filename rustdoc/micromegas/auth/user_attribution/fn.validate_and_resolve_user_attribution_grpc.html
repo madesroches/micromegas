@@ -1,0 +1,39 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Validate and resolve user attribution from gRPC metadata"><title>validate_and_resolve_user_attribution_grpc in micromegas::auth::user_attribution - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../static.files/rustdoc-ca0dd0c4.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="micromegas" data-themes="" data-resource-suffix="" data-rustdoc-version="1.93.1 (01f6ddf75 2026-02-11)" data-channel="1.93.1" data-search-js="search-9e2438ea.js" data-stringdex-js="stringdex-a3946164.js" data-settings-js="settings-c38705f0.js" ><script src="../../../static.files/storage-e2aeef58.js"></script><script defer src="sidebar-items.js"></script><script defer src="../../../static.files/main-a410ff4d.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-263c88ec.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-044be391.svg"></head><body class="rustdoc fn"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">validate_and_resolve_user_attribution_grpc</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../../../micromegas/index.html">micromegas</a><span class="version">0.21.0</span></h2></div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">validate_<wbr>and_<wbr>resolve_<wbr>user_<wbr>attribution_<wbr>grpc</a></h2><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#arguments" title="Arguments">Arguments</a></li><li><a href="#returns" title="Returns">Returns</a></li><li><a href="#errors" title="Errors">Errors</a></li><li><a href="#example" title="Example">Example</a></li></ul></section><div id="rustdoc-modnav"><h2><a href="index.html">In micromegas::<wbr>auth::<wbr>user_<wbr>attribution</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../../index.html">micromegas</a>::<wbr><a href="../index.html">auth</a>::<wbr><a href="index.html">user_attribution</a></div><h1>Function <span class="fn">validate_<wbr>and_<wbr>resolve_<wbr>user_<wbr>attribution_<wbr>grpc</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../../../src/micromegas_auth/user_attribution.rs.html#108-110">Source</a> </span></div><pre class="rust item-decl"><code>pub fn validate_and_resolve_user_attribution_grpc(
+    metadata: &amp;MetadataMap,
+) -&gt; <a class="enum" href="https://doc.rust-lang.org/1.93.1/core/result/enum.Result.html" title="enum core::result::Result">Result</a>&lt;<a class="struct" href="struct.UserAttribution.html" title="struct micromegas::auth::user_attribution::UserAttribution">UserAttribution</a>, <a class="struct" href="https://doc.rust-lang.org/1.93.1/alloc/boxed/struct.Box.html" title="struct alloc::boxed::Box">Box</a>&lt;Status&gt;&gt;</code></pre><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Validate and resolve user attribution from gRPC metadata</p>
+<p>This function prevents user impersonation by validating x-user-id and x-user-email
+headers against the authenticated user’s identity:</p>
+<ul>
+<li><strong>OIDC user tokens</strong>: User identity MUST match token claims (no impersonation allowed)</li>
+<li><strong>API keys/service accounts</strong>: Can act on behalf of users (delegation allowed)</li>
+<li><strong>Unauthenticated requests</strong>: Pass through client-provided attribution</li>
+</ul>
+<p>Header values support percent-encoded UTF-8 for international characters.
+Invalid headers are handled gracefully with logging.</p>
+<h2 id="arguments"><a class="doc-anchor" href="#arguments">§</a>Arguments</h2>
+<ul>
+<li><code>metadata</code> - gRPC metadata map (tonic::metadata::MetadataMap) containing authentication
+and attribution headers</li>
+</ul>
+<h2 id="returns"><a class="doc-anchor" href="#returns">§</a>Returns</h2>
+<p>Returns <code>Ok(UserAttribution)</code> containing:</p>
+<ul>
+<li><code>user_id</code>: The resolved user identifier</li>
+<li><code>user_email</code>: The resolved user email</li>
+<li><code>user_name</code>: The display name from x-user-name header (if provided)</li>
+<li><code>service_account</code>: <code>Some(name)</code> when delegation is being used, <code>None</code> otherwise</li>
+</ul>
+<h2 id="errors"><a class="doc-anchor" href="#errors">§</a>Errors</h2>
+<p>Returns <code>Err(Box&lt;Status::PermissionDenied&gt;)</code> if an OIDC user attempts to impersonate another user.</p>
+<h2 id="example"><a class="doc-anchor" href="#example">§</a>Example</h2>
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>micromegas_auth::user_attribution::validate_and_resolve_user_attribution_grpc;
+<span class="kw">use </span>tonic::metadata::MetadataMap;
+
+<span class="kw">let </span><span class="kw-2">mut </span>metadata = MetadataMap::new();
+metadata.insert(<span class="string">"x-auth-subject"</span>, <span class="string">"alice@example.com"</span>.parse().unwrap());
+metadata.insert(<span class="string">"x-auth-email"</span>, <span class="string">"alice@example.com"</span>.parse().unwrap());
+metadata.insert(<span class="string">"x-allow-delegation"</span>, <span class="string">"false"</span>.parse().unwrap());
+metadata.insert(<span class="string">"x-user-id"</span>, <span class="string">"alice@example.com"</span>.parse().unwrap());
+
+<span class="kw">let </span>result = validate_and_resolve_user_attribution_grpc(<span class="kw-2">&amp;</span>metadata);
+<span class="macro">assert!</span>(result.is_ok());</code></pre></div></div></details></section></div></main></body></html>

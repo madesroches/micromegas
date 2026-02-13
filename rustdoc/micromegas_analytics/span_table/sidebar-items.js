@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["get_spans_schema"],"struct":["SpanRecordBuilder","SpanRow"]};
