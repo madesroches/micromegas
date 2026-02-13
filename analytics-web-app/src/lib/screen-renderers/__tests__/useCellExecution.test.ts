@@ -19,11 +19,13 @@ Object.defineProperty(window, 'matchMedia', {
 
 import { renderHook, act, waitFor } from '@testing-library/react'
 
-// Mock streamQuery function
+// Mock streamQuery and fetchQueryIPC functions
 const mockStreamQuery = jest.fn()
+const mockFetchQueryIPC = jest.fn()
 
 jest.mock('@/lib/arrow-stream', () => ({
   streamQuery: (...args: unknown[]) => mockStreamQuery(...args),
+  fetchQueryIPC: (...args: unknown[]) => mockFetchQueryIPC(...args),
 }))
 
 // Mock Apache Arrow
@@ -49,6 +51,7 @@ jest.mock('apache-arrow', () => {
 
   return {
     Table: MockTable,
+    tableFromIPC: () => new MockTable([{}]),
     Schema: class MockSchema {
       constructor(public fields: unknown[] = []) {}
     },
@@ -62,8 +65,19 @@ jest.mock('apache-arrow', () => {
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 jest.mock('../cell-registry', () => require('../__test-utils__/cell-registry-mock').createCellRegistryMock({ withSqlExecution: true }))
 
-import { useCellExecution } from '../useCellExecution'
+import { useCellExecution, NotebookQueryEngine } from '../useCellExecution'
 import { CellConfig } from '../notebook-utils'
+
+// Helper to create a mock WASM engine
+function createMockEngine(overrides?: Partial<NotebookQueryEngine>): NotebookQueryEngine {
+  return {
+    register_table: jest.fn().mockReturnValue(5),
+    execute_and_register: jest.fn().mockResolvedValue(new Uint8Array([1, 2, 3])),
+    deregister_table: jest.fn().mockReturnValue(true),
+    reset: jest.fn(),
+    ...overrides,
+  }
+}
 
 // Helper to create mock async generator
 function createMockGenerator<T>(results: T[]): AsyncGenerator<T> {
@@ -1024,6 +1038,194 @@ describe('useCellExecution', () => {
       })
 
       expect(result.current.cellStates['Slow'].status).toBe('success')
+    })
+  })
+
+  describe('WASM engine integration', () => {
+    it('should route notebook data source to engine.execute_and_register', async () => {
+      const engine = createMockEngine()
+
+      const cells: CellConfig[] = [
+        { type: 'table', name: 'Local', sql: 'SELECT * FROM other_cell', dataSource: 'notebook', layout: { height: 'auto' } },
+      ]
+      const variableValuesRef = createVariableValuesRef()
+
+      const { result } = renderHook(() =>
+        useCellExecution({
+          cells,
+          timeRange: defaultTimeRange,
+          variableValuesRef,
+          setVariableValue: jest.fn(),
+          refreshTrigger: 0,
+          engine,
+        })
+      )
+
+      await act(async () => {
+        await result.current.executeCell(0)
+      })
+
+      expect(engine.execute_and_register).toHaveBeenCalledWith(
+        expect.stringContaining('SELECT'),
+        'Local'
+      )
+      expect(mockStreamQuery).not.toHaveBeenCalled()
+      expect(mockFetchQueryIPC).not.toHaveBeenCalled()
+      expect(result.current.cellStates['Local'].status).toBe('success')
+      expect(result.current.cellStates['Local'].data).not.toBeNull()
+    })
+
+    it('should use fetchQueryIPC and register result in engine for remote cells', async () => {
+      const mockIpcBytes = new Uint8Array([10, 20, 30])
+      mockFetchQueryIPC.mockResolvedValue(mockIpcBytes)
+      const engine = createMockEngine()
+
+      const cells: CellConfig[] = [
+        { type: 'table', name: 'Remote', sql: 'SELECT * FROM logs', layout: { height: 'auto' } },
+      ]
+      const variableValuesRef = createVariableValuesRef()
+
+      const { result } = renderHook(() =>
+        useCellExecution({
+          cells,
+          timeRange: defaultTimeRange,
+          variableValuesRef,
+          setVariableValue: jest.fn(),
+          refreshTrigger: 0,
+          engine,
+        })
+      )
+
+      await act(async () => {
+        await result.current.executeCell(0)
+      })
+
+      expect(mockFetchQueryIPC).toHaveBeenCalled()
+      expect(engine.register_table).toHaveBeenCalledWith('Remote', mockIpcBytes)
+      expect(mockStreamQuery).not.toHaveBeenCalled()
+      expect(result.current.cellStates['Remote'].status).toBe('success')
+      expect(result.current.cellStates['Remote'].data).not.toBeNull()
+    })
+
+    it('should fall back to streamQuery when no engine is present', async () => {
+      mockStreamQuery.mockReturnValue(createSuccessResults())
+
+      const cells: CellConfig[] = [
+        { type: 'table', name: 'NoEngine', sql: 'SELECT 1', layout: { height: 'auto' } },
+      ]
+      const variableValuesRef = createVariableValuesRef()
+
+      const { result } = renderHook(() =>
+        useCellExecution({
+          cells,
+          timeRange: defaultTimeRange,
+          variableValuesRef,
+          setVariableValue: jest.fn(),
+          refreshTrigger: 0,
+          engine: null,
+        })
+      )
+
+      await act(async () => {
+        await result.current.executeCell(0)
+      })
+
+      expect(mockStreamQuery).toHaveBeenCalled()
+      expect(mockFetchQueryIPC).not.toHaveBeenCalled()
+      expect(result.current.cellStates['NoEngine'].status).toBe('success')
+    })
+
+    it('should call engine.reset() on full re-execution from cell 0', async () => {
+      mockFetchQueryIPC.mockResolvedValue(new Uint8Array([1]))
+      const engine = createMockEngine()
+
+      const cells: CellConfig[] = [
+        { type: 'table', name: 'First', sql: 'SELECT 1', layout: { height: 'auto' } },
+      ]
+      const variableValuesRef = createVariableValuesRef()
+
+      const { result } = renderHook(() =>
+        useCellExecution({
+          cells,
+          timeRange: defaultTimeRange,
+          variableValuesRef,
+          setVariableValue: jest.fn(),
+          refreshTrigger: 0,
+          engine,
+        })
+      )
+
+      // Wait for initial auto-execution
+      await waitFor(() => {
+        expect(result.current.cellStates['First']?.status).toBe('success')
+      })
+
+      ;(engine.reset as jest.Mock).mockClear()
+
+      await act(async () => {
+        await result.current.executeFromCell(0)
+      })
+
+      expect(engine.reset).toHaveBeenCalledTimes(1)
+    })
+
+    it('should not call engine.reset() when executing from a non-zero index', async () => {
+      mockFetchQueryIPC.mockResolvedValue(new Uint8Array([1]))
+      const engine = createMockEngine()
+
+      const cells: CellConfig[] = [
+        { type: 'table', name: 'First', sql: 'SELECT 1', layout: { height: 'auto' } },
+        { type: 'table', name: 'Second', sql: 'SELECT 2', layout: { height: 'auto' } },
+      ]
+      const variableValuesRef = createVariableValuesRef()
+
+      const { result } = renderHook(() =>
+        useCellExecution({
+          cells,
+          timeRange: defaultTimeRange,
+          variableValuesRef,
+          setVariableValue: jest.fn(),
+          refreshTrigger: 0,
+          engine,
+        })
+      )
+
+      await waitFor(() => {
+        expect(result.current.cellStates['Second']?.status).toBe('success')
+      })
+
+      ;(engine.reset as jest.Mock).mockClear()
+
+      await act(async () => {
+        await result.current.executeFromCell(1)
+      })
+
+      expect(engine.reset).not.toHaveBeenCalled()
+    })
+
+    it('should error when notebook data source is used without engine', async () => {
+      const cells: CellConfig[] = [
+        { type: 'table', name: 'NoEngine', sql: 'SELECT * FROM other', dataSource: 'notebook', layout: { height: 'auto' } },
+      ]
+      const variableValuesRef = createVariableValuesRef()
+
+      const { result } = renderHook(() =>
+        useCellExecution({
+          cells,
+          timeRange: defaultTimeRange,
+          variableValuesRef,
+          setVariableValue: jest.fn(),
+          refreshTrigger: 0,
+          engine: null,
+        })
+      )
+
+      await act(async () => {
+        await result.current.executeCell(0)
+      })
+
+      expect(result.current.cellStates['NoEngine'].status).toBe('error')
+      expect(result.current.cellStates['NoEngine'].error).toContain('WASM engine not loaded')
     })
   })
 })
