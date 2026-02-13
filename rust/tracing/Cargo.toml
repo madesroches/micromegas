@@ -14,7 +14,6 @@ micromegas-transit.workspace = true
 micromegas-tracing-proc-macros = { path = "./proc-macros", version = "^0.21" }
 
 anyhow.workspace = true
-cfg-if.workspace = true
 chrono.workspace = true
 internment.workspace = true
 lazy_static.workspace = true
@@ -42,34 +41,8 @@ futures = "0.3"
 serial_test = "3.2"
 
 [features]
-# Runtime integration features
 default = ["tokio"]
 tokio = ["dep:tokio"]
-
-# Logging level features
-max_level_off = []
-max_level_error = []
-max_level_warn = []
-max_level_info = []
-max_level_debug = []
-max_level_trace = []
-
-release_max_level_off = []
-release_max_level_error = []
-release_max_level_warn = []
-release_max_level_info = []
-release_max_level_debug = []
-release_max_level_trace = []
-
-max_lod_off = []
-max_lod_min = []
-max_lod_med = []
-max_lod_max = []
-
-release_max_lod_off = []
-release_max_lod_min = []
-release_max_lod_med = []
-release_max_lod_max = []
 
 [[bench]]
 name = "with_no_dispatch"

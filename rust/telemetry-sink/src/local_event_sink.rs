@@ -8,36 +8,14 @@ use micromegas_tracing::{
 };
 use std::{fmt, sync::Arc};
 
-// Based on simple logger
-#[cfg(feature = "colored")]
 use colored::Colorize;
 
 /// Prints log entries to the console
-pub struct LocalEventSink {
-    /// Control how timestamps are displayed.
-    ///
-    /// This field is only available if the `timestamps` feature is enabled.
-    #[cfg(feature = "timestamps")]
-    timestamps: bool,
-
-    /// Whether to use color output or not.
-    ///
-    /// This field is only available if the `color` feature is enabled.
-    #[cfg(feature = "colored")]
-    colors: bool,
-}
+pub struct LocalEventSink {}
 
 impl LocalEventSink {
-    /// Creates a new `LocalEventSink`.
-    ///
-    /// Initializes the sink with default settings for timestamps and colors.
     pub fn new() -> Self {
-        Self {
-            #[cfg(feature = "timestamps")]
-            timestamps: true,
-            #[cfg(feature = "colored")]
-            colors: true,
-        }
+        Self {}
     }
 }
 
@@ -57,26 +35,13 @@ impl EventSink for LocalEventSink {
         _time: i64,
         args: fmt::Arguments<'_>,
     ) {
-        let level_string = {
-            #[cfg(feature = "colored")]
-            {
-                if self.colors {
-                    match metadata.level {
-                        Level::Fatal => metadata.level.to_string().red().to_string(),
-                        Level::Error => metadata.level.to_string().red().to_string(),
-                        Level::Warn => metadata.level.to_string().yellow().to_string(),
-                        Level::Info => metadata.level.to_string().cyan().to_string(),
-                        Level::Debug => metadata.level.to_string().purple().to_string(),
-                        Level::Trace => metadata.level.to_string().normal().to_string(),
-                    }
-                } else {
-                    metadata.level.to_string()
-                }
-            }
-            #[cfg(not(feature = "colored"))]
-            {
-                record.level().to_string()
-            }
+        let level_string = match metadata.level {
+            Level::Fatal => metadata.level.to_string().red().to_string(),
+            Level::Error => metadata.level.to_string().red().to_string(),
+            Level::Warn => metadata.level.to_string().yellow().to_string(),
+            Level::Info => metadata.level.to_string().cyan().to_string(),
+            Level::Debug => metadata.level.to_string().purple().to_string(),
+            Level::Trace => metadata.level.to_string().normal().to_string(),
         };
 
         let mut target = if !metadata.target.is_empty() {
@@ -89,25 +54,11 @@ impl EventSink for LocalEventSink {
             target = t;
         }
 
-        let timestamp = {
-            #[cfg(feature = "timestamps")]
-            if self.timestamps {
-                format!("{} ", chrono::Utc::now().to_rfc3339())
-            } else {
-                "".to_string()
-            }
-
-            #[cfg(not(feature = "timestamps"))]
-            ""
-        };
+        let timestamp = format!("{} ", chrono::Utc::now().to_rfc3339());
 
         let message = format!("{timestamp}{level_string:<5} [{target}] {args}");
 
-        #[cfg(not(feature = "stderr"))]
         println!("{message}");
-
-        #[cfg(feature = "stderr")]
-        eprintln!("{message}");
     }
 
     fn on_init_log_stream(&self, _: &LogStream) {}

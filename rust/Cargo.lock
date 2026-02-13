@@ -3506,7 +3506,6 @@ name = "micromegas-tracing"
 version = "0.21.0"
 dependencies = [
  "anyhow",
- "cfg-if",
  "chrono",
  "futures",
  "internment",
