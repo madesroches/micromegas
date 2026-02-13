@@ -47,8 +47,9 @@ pub trait EventSink {
 | `ThreadBlock` | `EventBlock<ThreadEventQueue>` | `pub struct ThreadBlock;` |
 | `ThreadStream` | `EventStream<ThreadBlock>` | `pub struct ThreadStream;` |
 | `Property` | struct with `StaticStringRef` fields, derives `TransitReflect` | `pub struct Property;` |
+| `PropertySet` | vec of `Property`, used by tagged dispatch functions | `pub struct PropertySet;` |
 
-On wasm32, none of these are ever constructed. They exist purely to make `EventSink` compile.
+On wasm32, none of these are ever constructed. They exist purely to make `EventSink` and `dispatch` compile.
 
 ## Plan
 
@@ -82,7 +83,7 @@ whoami.workspace = true
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.3", features = ["wasm_js"] }
-web-sys = { version = "0.3", features = ["console"] }
+js-sys = "0.3"
 
 [target.'cfg(windows)'.dependencies]
 winapi.workspace = true
@@ -106,13 +107,13 @@ pub fn frequency() -> i64 {
 }
 ```
 
-`js_sys::Date::now()` is ms-precision — good enough for log timestamps. Works in both browser and web worker contexts. `js-sys` is a transitive dependency of `web-sys`.
+`js_sys::Date::now()` is ms-precision — good enough for log timestamps. Works in both browser and web worker contexts. `js-sys` is an explicit dependency of the tracing crate on wasm32.
 
 `DualTime::now()` uses `chrono::Utc::now()` which works on wasm32 with the `wasmbind` feature.
 
 ### Phase 3: Stub types in sub-modules
 
-Each of `logs/`, `metrics/`, `spans/` has a `block.rs` (transit-heavy) and `events.rs` (mixed). On wasm32, provide stub types in the mod.rs files.
+Each of `logs/`, `metrics/`, `spans/` has a `block.rs` (transit-heavy) and `events.rs` (mixed). Each `events.rs` mixes transit-free metadata types with transit-heavy event types. Rather than littering each file with `#[cfg]` on every type, split into separate files: metadata stays in `events.rs`, event types move to a native-only file. The `mod.rs` handles gating and stub types.
 
 **`logs/mod.rs`:**
 ```rust
@@ -121,14 +122,42 @@ mod block;
 #[cfg(not(target_arch = "wasm32"))]
 pub use block::*;
 
-// Stubs for EventSink trait signature
 #[cfg(target_arch = "wasm32")]
 pub struct LogBlock;
 #[cfg(target_arch = "wasm32")]
 pub struct LogStream;
 
-mod events;
+mod events;       // LogMetadata, FilterState, FILTER_LEVEL_UNSET_VALUE (transit-free, all platforms)
 pub use events::*;
+
+#[cfg(not(target_arch = "wasm32"))]
+mod log_events;   // LogStaticStrEvent, LogStringEvent, etc. (transit-heavy, native only)
+#[cfg(not(target_arch = "wasm32"))]
+pub use log_events::*;
+```
+
+**`logs/events.rs`** — only metadata, transit-free:
+```rust
+use crate::prelude::*;
+use std::sync::atomic::{AtomicU32, Ordering};
+
+pub struct LogMetadata<'a> { ... }  // Level, AtomicU32, &str
+pub enum FilterState { ... }
+pub const FILTER_LEVEL_UNSET_VALUE: u32 = 0xF;
+impl LogMetadata<'_> { ... }       // level_filter, set_level_filter
+```
+
+**`logs/log_events.rs`** (**new**, native-only) — all event types, moved from events.rs:
+```rust
+use crate::{prelude::*, property_set::PropertySet, static_string_ref::StaticStringRef, string_id::StringId};
+use micromegas_transit::{DynString, UserDefinedType, prelude::*, read_advance_string, read_consume_pod};
+use super::LogMetadata;
+
+const _: () = assert!(std::mem::size_of::<usize>() == 8);
+
+pub struct LogStaticStrEvent { ... }
+pub struct LogStringEvent { ... }
+// ... etc
 ```
 
 **`metrics/mod.rs`:**
@@ -143,8 +172,13 @@ pub struct MetricsBlock;
 #[cfg(target_arch = "wasm32")]
 pub struct MetricsStream;
 
-mod events;
+mod events;       // StaticMetricMetadata (transit-free, all platforms)
 pub use events::*;
+
+#[cfg(not(target_arch = "wasm32"))]
+mod metric_events;  // IntegerMetricEvent, FloatMetricEvent, etc. (native only)
+#[cfg(not(target_arch = "wasm32"))]
+pub use metric_events::*;
 ```
 
 **`spans/mod.rs`:**
@@ -159,30 +193,27 @@ pub struct ThreadBlock;
 #[cfg(target_arch = "wasm32")]
 pub struct ThreadStream;
 
-mod events;
+mod events;       // SpanLocation, SpanMetadata (transit-free, all platforms)
 pub use events::*;
+
+#[cfg(not(target_arch = "wasm32"))]
+mod span_events;  // BeginThreadSpanEvent, SpanRecord, etc. (native only)
+#[cfg(not(target_arch = "wasm32"))]
+pub use span_events::*;
 
 mod instrumented_future;  // transit-free, always needed
 pub use instrumented_future::*;
 ```
 
-**`logs/events.rs`**, **`metrics/events.rs`**, **`spans/events.rs`** — gate transit imports and event types, keep metadata:
-```rust
-// Always available (used by macros):
-//   LogMetadata, FilterState, FILTER_LEVEL_UNSET_VALUE  (logs)
-//   StaticMetricMetadata                                (metrics)
-//   SpanLocation, SpanMetadata                          (spans)
+Each file is clean — either fully platform-independent or fully native-only. The `mod.rs` handles the gating.
 
-// Native only (behind #[cfg(not(target_arch = "wasm32"))]):
-//   All event types (LogStaticStrEvent, BeginThreadSpanEvent, etc.)
-//   All transit imports (DynString, InProcSerialize, TransitReflect, etc.)
-```
+Note: On wasm32, the module only re-exports the metadata types. Event types are absent from the wasm public API — this is correct since `dispatch_wasm.rs` never constructs them.
 
 ### Phase 4: `property_set` stub for wasm32
 
-`property_set.rs` is transit-heavy (derives `TransitReflect`, `InProcSerialize`, uses `internment`). The `Property` type is referenced by `EventSink::on_log`. On wasm32, dispatch passes `&[]` — the type just needs to exist.
+`property_set.rs` is transit-heavy (derives `TransitReflect`, `InProcSerialize`, uses `internment`). The `Property` type is referenced by `EventSink::on_log`, and `PropertySet` is referenced by dispatch functions `log_tagged`, `tagged_float_metric`, and `tagged_integer_metric` (called from `log!`, `imetric!`, `fmetric!` macros with `properties:` variants). On wasm32, dispatch passes `&[]` for properties — these types just need to exist.
 
-**Option A**: Gate entire `property_set.rs` native-only, provide stub in `lib.rs`:
+Gate entire `property_set.rs` native-only, provide stubs in `lib.rs`:
 ```rust
 #[cfg(not(target_arch = "wasm32"))]
 pub mod property_set;
@@ -191,10 +222,10 @@ pub mod property_set;
 pub mod property_set {
     /// Stub for EventSink trait compatibility — never constructed on wasm32
     pub struct Property;
+    /// Stub for dispatch function signatures — never constructed on wasm32
+    pub struct PropertySet;
 }
 ```
-
-**Option B**: cfg-gate within `property_set.rs` keeping only the `Property` struct definition on wasm. Option A is simpler.
 
 ### Phase 5: `event` module — make sink available on all platforms
 
@@ -229,30 +260,79 @@ pub use stream::*;
 
 ### Phase 6: `dispatch_wasm.rs` — minimal wasm dispatch
 
-New file `rust/tracing/src/dispatch_wasm.rs`. Same public function signatures as `dispatch.rs`, uses `EventSink` trait.
+New file `rust/tracing/src/dispatch_wasm.rs`. Must export every public symbol that `dispatch.rs` exports, since `guards.rs`, macros, and `instrumented_future.rs` all import from `crate::dispatch::*`.
+
+**Required re-export** (must match `dispatch.rs` line 2):
+```rust
+pub use crate::errors::{Error, Result};
+```
+
+**Required imports:**
+```rust
+use crate::event::{EventSink, NullEventSink};
+use crate::logs::LogMetadata;
+use crate::metrics::StaticMetricMetadata;
+use crate::process_info::ProcessInfo;
+use crate::property_set::PropertySet;  // wasm stub
+use crate::spans::{SpanLocation, SpanMetadata, ThreadStream};
+use crate::time::{frequency, now};
+```
 
 **Architecture:**
 - Global `OnceLock<Arc<dyn EventSink>>` holds the sink (same trait as native)
-- `init_event_dispatch()` stores the sink, calls `sink.on_startup()`
-- `log()`, `log_tagged()`, `log_interop()` → forward to `sink.on_log(desc, &[], time, args)`
-- `log_enabled()` → forward to `sink.on_log_enabled()`
-- `int_metric()`, `float_metric()`, `tagged_*_metric()` → no-op
-- `on_begin_scope()`, `on_end_scope()`, `on_begin_named_scope()`, `on_end_named_scope()` → no-op
-- `on_begin_async_scope()` → returns incrementing span ID (needed by `InstrumentedFuture`)
-- `on_end_async_scope()`, `on_begin_async_named_scope()`, `on_end_async_named_scope()` → no-op
-- `shutdown_dispatch()` → calls `sink.on_shutdown()`
-- `flush_*()`, `init_thread_stream()` → no-op
-- `process_id()`, `cpu_tracing_enabled()`, `get_sink()` → work normally (sink stored in OnceLock)
-- `force_uninit()`, `for_each_thread_stream()`, `unregister_thread_stream()` → no-op
+
+**Complete function list** (every pub fn must exist for callers to compile):
+
+| Function | Behavior on wasm | Called by |
+|----------|-----------------|-----------|
+| `init_event_dispatch(logs_buffer_size, metrics_buffer_size, threads_buffer_size, sink, process_properties, cpu_tracing_enabled)` | Store sink in OnceLock, call `sink.on_startup()` | `guards.rs` |
+| `log(desc: &'static LogMetadata, args: fmt::Arguments)` | Forward to `sink.on_log(desc, &[], time, args)` | `log!` macro |
+| `log_tagged(desc: &'static LogMetadata, properties: &'static PropertySet, args: fmt::Arguments)` | Forward to `sink.on_log(desc, &[], time, args)` | `log!(properties:)` macro |
+| `log_interop(metadata: &LogMetadata, args: fmt::Arguments)` | Forward to `sink.on_log(desc, &[], time, args)` | `log_interop` module |
+| `log_enabled(metadata: &LogMetadata) -> bool` | Forward to `sink.on_log_enabled()` | `log_enabled!` macro |
+| `int_metric(desc: &'static StaticMetricMetadata, value: u64)` | no-op | `imetric!` macro |
+| `float_metric(desc: &'static StaticMetricMetadata, value: f64)` | no-op | `fmetric!` macro |
+| `tagged_float_metric(desc, properties: &'static PropertySet, value: f64)` | no-op | `fmetric!(properties)` macro |
+| `tagged_integer_metric(desc, properties: &'static PropertySet, value: u64)` | no-op | `imetric!(properties)` macro |
+| `on_begin_scope(scope: &'static SpanMetadata)` | no-op | `guards::ThreadSpanGuard` |
+| `on_end_scope(scope: &'static SpanMetadata)` | no-op | `guards::ThreadSpanGuard` |
+| `on_begin_named_scope(location: &'static SpanLocation, name: &'static str)` | no-op | `guards::ThreadNamedSpanGuard` |
+| `on_end_named_scope(location: &'static SpanLocation, name: &'static str)` | no-op | `guards::ThreadNamedSpanGuard` |
+| `on_begin_async_scope(scope, parent_span_id, depth) -> u64` | Return incrementing span ID | `InstrumentedFuture` |
+| `on_end_async_scope(span_id, parent_span_id, scope, depth)` | no-op | `InstrumentedFuture` |
+| `on_begin_async_named_scope(location, name, parent_span_id, depth) -> u64` | Return incrementing span ID | `InstrumentedNamedFuture` |
+| `on_end_async_named_scope(span_id, parent_span_id, location, name, depth)` | no-op | `InstrumentedNamedFuture` |
+| `shutdown_dispatch()` | Call `sink.on_shutdown()` | `guards::shutdown_telemetry` |
+| `flush_log_buffer()` | no-op | `guards::shutdown_telemetry` |
+| `flush_metrics_buffer()` | no-op | `guards::shutdown_telemetry` |
+| `flush_thread_buffer()` | no-op | `guards::TracingThreadGuard::drop` |
+| `init_thread_stream()` | no-op | `guards::TracingThreadGuard::new` |
+| `process_id() -> Option<uuid::Uuid>` | Return stored process ID | various |
+| `cpu_tracing_enabled() -> Option<bool>` | Return `Some(false)` | various |
+| `get_sink() -> Option<Arc<dyn EventSink>>` | Return stored sink | various |
+| `force_uninit()` | no-op | test code |
+| `for_each_thread_stream(fun: &mut dyn FnMut(*mut ThreadStream))` | no-op | native-only callers |
+| `unregister_thread_stream()` | no-op | native-only callers |
+| `make_process_info(process_id, parent_process_id, properties) -> ProcessInfo` | Stub values (see Phase 7) | `init_event_dispatch` |
 
 No `DispatchCell`, no `Mutex<LogStream>`, no transit types. Same `EventSink` interface as native.
 
-Since the init signature is the same (`Arc<dyn EventSink>`), **`guards.rs` needs no cfg-gating for the sink type** — only for the `make_process_info` call path.
+Since the init signature is the same (`Arc<dyn EventSink>`), **`guards.rs` needs no cfg-gating for the sink type** — only `panic_hook` needs a wasm fix (see Phase 7).
 
-### Phase 7: `guards.rs` adjustments
+### Phase 7: `guards.rs` and `panic_hook.rs` adjustments
 
-`init_telemetry()` and `TracingSystemGuard::new()` keep the same signature. Only the `make_process_info` function (currently in `dispatch.rs`) needs to exist in `dispatch_wasm.rs` too — with stub values for `whoami` fields.
+`guards.rs`: `init_telemetry()` and `TracingSystemGuard::new()` keep the same signature. All dispatch functions they call (`init_event_dispatch`, `flush_log_buffer`, `flush_metrics_buffer`, `shutdown_dispatch`, `init_thread_stream`, `flush_thread_buffer`, `on_begin_scope`, `on_end_scope`, etc.) exist in `dispatch_wasm.rs` as no-ops. No changes needed to `guards.rs` itself.
 
+`panic_hook.rs`: `std::io::stdout().flush()` will panic on wasm32 (no stdout). Gate the stdout flush:
+```rust
+// in panic_hook.rs, inside the panic hook closure:
+#[cfg(not(target_arch = "wasm32"))]
+std::io::stdout().flush().unwrap();
+```
+
+The rest of `panic_hook.rs` works on wasm32: `fatal!` expands to `dispatch::log()` (routed to `dispatch_wasm`), `shutdown_telemetry()` calls dispatch no-ops, and `std::panic::set_hook` is supported on wasm.
+
+`make_process_info` in `dispatch_wasm.rs` — stub values for `whoami` fields:
 ```rust
 // in dispatch_wasm.rs
 pub fn make_process_info(
@@ -277,24 +357,62 @@ pub fn make_process_info(
 }
 ```
 
-### Phase 8: `process_info.rs` — gate transit uuid_utils
+### Phase 8: `process_info.rs` — remove transit uuid_utils dependency
+
+Copy the 4 trivial uuid serde helpers (~15 lines) from `micromegas_transit::uuid_utils` into `process_info.rs` locally. This avoids conditional `#[cfg_attr]` on serde derives and keeps `ProcessInfo` identical on both platforms:
 
 ```rust
-#[cfg(not(target_arch = "wasm32"))]
-use micromegas_transit::uuid_utils;
+// Local uuid serde helpers (copied from micromegas_transit::uuid_utils)
+mod uuid_serde {
+    use serde::{self, Deserialize, Deserializer, Serializer};
+
+    pub fn uuid_to_string<S>(id: &uuid::Uuid, serializer: S) -> Result<S::Ok, S::Error>
+    where S: Serializer {
+        serializer.serialize_str(&id.to_string())
+    }
+
+    pub fn uuid_from_string<'de, D>(deserializer: D) -> Result<uuid::Uuid, D::Error>
+    where D: Deserializer<'de> {
+        let s = String::deserialize(deserializer)?;
+        uuid::Uuid::try_parse(&s).map_err(serde::de::Error::custom)
+    }
+
+    pub fn opt_uuid_to_string<S>(id: &Option<uuid::Uuid>, serializer: S) -> Result<S::Ok, S::Error>
+    where S: Serializer {
+        match id {
+            Some(id) => serializer.serialize_some(&id.to_string()),
+            None => serializer.serialize_none(),
+        }
+    }
+
+    pub fn opt_uuid_from_string<'de, D>(deserializer: D) -> Result<Option<uuid::Uuid>, D::Error>
+    where D: Deserializer<'de> {
+        let s: Option<String> = Option::deserialize(deserializer)?;
+        match s {
+            Some(s) => uuid::Uuid::try_parse(&s).map(Some).map_err(serde::de::Error::custom),
+            None => Ok(None),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProcessInfo {
-    #[cfg_attr(not(target_arch = "wasm32"), serde(
-        deserialize_with = "uuid_utils::uuid_from_string",
-        serialize_with = "uuid_utils::uuid_to_string"
-    ))]
+    #[serde(
+        deserialize_with = "uuid_serde::uuid_from_string",
+        serialize_with = "uuid_serde::uuid_to_string"
+    )]
     pub process_id: uuid::Uuid,
-    // ... same for parent_process_id ...
+    // ... all other fields unchanged ...
+    #[serde(
+        deserialize_with = "uuid_serde::opt_uuid_from_string",
+        serialize_with = "uuid_serde::opt_uuid_to_string"
+    )]
+    pub parent_process_id: Option<uuid::Uuid>,
+    // ...
 }
 ```
 
-Alternatively, copy the 2 trivial uuid serde helpers locally to avoid the conditional attrs.
+No `#[cfg]` needed — `ProcessInfo` compiles identically on all platforms.
 
 ### Phase 9: cfg-gate remaining native-only modules in `lib.rs`
 
@@ -346,18 +464,34 @@ The native and wasm sides share almost nothing today (the native side is HTTP tr
 **`rust/telemetry-sink/Cargo.toml`** — add wasm deps, gate native deps:
 
 ```toml
+[dependencies]
+# Shared (transit-free)
+micromegas-tracing = { workspace = true, default-features = false }
+anyhow.workspace = true
+chrono.workspace = true
+lazy_static.workspace = true
+serde.workspace = true
+uuid.workspace = true
+
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-# existing native deps: reqwest, tokio, sysinfo, colored, ctrlc,
-# tokio-retry2, tracing, tracing-core, tracing-subscriber, log,
-# micromegas-transit, micromegas-telemetry, bytes, async-trait
-...
+# Native-only: transport, runtime, system info, interop
+micromegas-telemetry.workspace = true
+micromegas-transit.workspace = true
+async-trait.workspace = true
+bytes.workspace = true
+colored.workspace = true
+ctrlc.workspace = true
+log.workspace = true
+reqwest.workspace = true
+sysinfo.workspace = true
+tokio.workspace = true
+tokio-retry2.workspace = true
+tracing.workspace = true
+tracing-core.workspace = true
+tracing-subscriber.workspace = true
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 web-sys = { version = "0.3", features = ["console"] }
-
-[dependencies]
-# shared: micromegas-tracing, anyhow, chrono, lazy_static, serde, uuid
-...
 ```
 
 **New file `rust/telemetry-sink/src/console_event_sink.rs`** (wasm32-only):
@@ -471,26 +605,30 @@ fn ensure_tracing() {
 
 | File | Action |
 |------|--------|
-| `rust/tracing/Cargo.toml` | Gate `micromegas-transit`, `internment`, `memoffset`, `raw-cpuid`, `thread-id`, `whoami` as native-only; add `getrandom`+`web-sys` for wasm32; add `wasmbind` to chrono |
+| `rust/tracing/Cargo.toml` | Gate `micromegas-transit`, `internment`, `memoffset`, `raw-cpuid`, `thread-id`, `whoami` as native-only; add `getrandom`+`js-sys` for wasm32; add `wasmbind` to chrono |
 | `rust/tracing/src/lib.rs` | cfg-gate dispatch path swap + native-only modules |
 | `rust/tracing/src/dispatch_wasm.rs` | **New** — minimal dispatch using `EventSink`, no transit |
 | `rust/tracing/src/time.rs` | Add `#[cfg(target_arch = "wasm32")]` `now()` and `frequency()` |
 | `rust/tracing/src/event/mod.rs` | Gate `block`, `stream`, `in_memory_sink` native-only; keep `sink` on all platforms |
 | `rust/tracing/src/logs/mod.rs` | Gate `block`, add `LogBlock`/`LogStream` stubs on wasm32 |
-| `rust/tracing/src/logs/events.rs` | Gate transit imports and event types, keep `LogMetadata` |
+| `rust/tracing/src/logs/events.rs` | Keep only metadata: `LogMetadata`, `FilterState`, `FILTER_LEVEL_UNSET_VALUE` (remove transit imports + event types) |
+| `rust/tracing/src/logs/log_events.rs` | **New** — native-only event types moved from events.rs: `LogStaticStrEvent`, `LogStringEvent`, etc. (includes 64-bit assert) |
 | `rust/tracing/src/metrics/mod.rs` | Gate `block`, add `MetricsBlock`/`MetricsStream` stubs on wasm32 |
-| `rust/tracing/src/metrics/events.rs` | Gate transit imports and event types, keep `StaticMetricMetadata` |
+| `rust/tracing/src/metrics/events.rs` | Keep only metadata: `StaticMetricMetadata` (remove transit imports + event types) |
+| `rust/tracing/src/metrics/metric_events.rs` | **New** — native-only event types moved from events.rs: `IntegerMetricEvent`, `FloatMetricEvent`, etc. |
 | `rust/tracing/src/spans/mod.rs` | Gate `block`, add `ThreadBlock`/`ThreadStream` stubs on wasm32 |
-| `rust/tracing/src/spans/events.rs` | Gate transit imports and event types, keep `SpanMetadata`/`SpanLocation` |
-| `rust/tracing/src/property_set.rs` | Full on native; on wasm32, just `pub struct Property;` |
-| `rust/tracing/src/process_info.rs` | Gate `uuid_utils` import, handle serde attrs |
-| `rust/tracing/src/guards.rs` | Unchanged — same `TracingSystemGuard::new()` signature works on both platforms |
+| `rust/tracing/src/spans/events.rs` | Keep only metadata: `SpanLocation`, `SpanMetadata` (remove transit imports + event/record types) |
+| `rust/tracing/src/spans/span_events.rs` | **New** — native-only event types moved from events.rs: `BeginThreadSpanEvent`, `SpanRecord`, etc. |
+| `rust/tracing/src/property_set.rs` | Full on native; on wasm32, stubs: `pub struct Property;` + `pub struct PropertySet;` |
+| `rust/tracing/src/process_info.rs` | Copy uuid serde helpers locally, remove `micromegas_transit::uuid_utils` import |
+| `rust/tracing/src/panic_hook.rs` | Gate `stdout().flush()` behind `cfg(not(wasm32))` |
+| `rust/tracing/src/guards.rs` | Unchanged — same signatures, all dispatch imports resolve on both platforms |
 
 ### `micromegas-telemetry-sink` crate
 
 | File | Action |
 |------|--------|
-| `rust/telemetry-sink/Cargo.toml` | Gate native deps (`reqwest`, `tokio`, `sysinfo`, etc.) behind `cfg(not(wasm32))`; add `web-sys` for wasm32; keep shared deps (`micromegas-tracing`, `anyhow`, etc.) |
+| `rust/telemetry-sink/Cargo.toml` | Gate native deps (`reqwest`, `tokio`, `sysinfo`, `micromegas-telemetry`, `micromegas-transit`, etc.) behind `cfg(not(wasm32))`; add `web-sys` for wasm32; keep shared deps (`micromegas-tracing`, `anyhow`, etc.) |
 | `rust/telemetry-sink/src/lib.rs` | Gate all native modules (`http_event_sink`, `composite_event_sink`, etc.); expose wasm `init_telemetry()` + `ConsoleEventSink` |
 | `rust/telemetry-sink/src/console_event_sink.rs` | **New** — `ConsoleEventSink` impl (wasm32-only) |
 
@@ -508,9 +646,10 @@ fn ensure_tracing() {
 - `telemetry-sink` native code — all existing modules untouched, just cfg-gated
 - Proc macros (`span_fn`, `log_fn`) — generate code that calls `dispatch::*`, works with either dispatch module
 - All macros (`info!`, `imetric!`, `span_scope!`, etc.) — unchanged
-- `guards.rs` — same signature, same dispatch function calls
-- `spans/instrumented_future.rs` — unchanged (transit-free, calls dispatch functions)
+- `guards.rs` — same signatures, all dispatch imports resolve on both platforms
+- `spans/instrumented_future.rs` — unchanged (transit-free, `thread_local!` works on wasm32 as single-threaded global)
 - `levels.rs` — unchanged (transit-free)
+- `errors.rs` — unchanged (transit-free)
 
 ## Verification
 
