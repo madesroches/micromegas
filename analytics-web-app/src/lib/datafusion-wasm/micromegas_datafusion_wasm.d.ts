@@ -19,6 +19,7 @@ export class WasmQueryEngine {
     constructor();
     /**
      * Register Arrow IPC stream bytes as a named table.
+     * Replaces any existing table with the same name.
      * Returns the number of rows registered.
      */
     register_table(name: string, ipc_bytes: Uint8Array): number;

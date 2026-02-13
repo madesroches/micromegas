@@ -63,7 +63,7 @@ The IPC output path adds copies vs today's direct `streamQuery` decode, but enab
 
 ### Notebook DataFusion Context
 
-Each notebook lazily owns a `WasmQueryEngine` instance — created only when any cell has `dataSource: 'notebook'`. The context lives for the lifetime of the notebook component. Cell results accumulate in it as named tables.
+Each notebook eagerly owns a `WasmQueryEngine` instance — created when the notebook mounts so that remote cell results are always registered for cross-cell references. The context lives for the lifetime of the notebook component. Cell results accumulate in it as named tables.
 
 ```typescript
 // Remote cell: IPC bytes from server → register in WASM → decode for renderer
@@ -210,8 +210,8 @@ Wired the WASM engine into the notebook execution loop. `'notebook'` is a reserv
 **What's done:**
 1. Added `execute_and_register` and `deregister_table` to WASM engine
 2. Added `'notebook'` option to `DataSourceSelector` (shown via `showNotebookOption` prop)
-3. Updated `useCellExecution.ts`: accepts optional WASM engine, dispatches by data source, registers all results in WASM when engine exists
-4. Updated `NotebookRenderer.tsx`: lazily creates WASM engine when any cell has `dataSource: 'notebook'`, passes engine to `useCellExecution`, resets on full re-execution, deregisters on cell deletion
+3. Updated `useCellExecution.ts`: accepts optional WASM engine, dispatches by data source, registers all results in WASM when engine exists, re-executes all cells when engine becomes available
+4. Updated `NotebookRenderer.tsx`: eagerly loads WASM engine on notebook mount, passes engine to `useCellExecution`, resets on full re-execution, deregisters on cell deletion
 5. WASM engine load error banner in notebook UI
 
 **Not yet tested end-to-end** against a real notebook with notebook cells. All unit tests and type-check pass, but the actual user-facing flow hasn't been verified.
@@ -231,7 +231,11 @@ The remaining 12 require PostgreSQL, object storage, or lakehouse context and ca
 
 Files: `rust/datafusion-wasm/` crate, UDF registration
 
-### Phase 4: Polish
+### Phase 4: SHOW TABLES Support
+
+Add `SHOW TABLES` support to the WASM engine so users can inspect which cell results are available for cross-cell references. When executed in a notebook-local cell, `SHOW TABLES` returns the list of registered table names (i.e., cell names whose results are in the WASM context).
+
+### Phase 5: Polish
 
 1. Memory management warnings for large cell results
 2. Error messages for common issues (missing tables, type mismatches)

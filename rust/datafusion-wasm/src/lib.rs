@@ -50,6 +50,7 @@ impl WasmQueryEngine {
     }
 
     /// Register Arrow IPC stream bytes as a named table.
+    /// Replaces any existing table with the same name.
     /// Returns the number of rows registered.
     pub fn register_table(&self, name: &str, ipc_bytes: &[u8]) -> Result<usize, JsValue> {
         let cursor = std::io::Cursor::new(ipc_bytes);
@@ -70,6 +71,7 @@ impl WasmQueryEngine {
         let table = datafusion::datasource::MemTable::try_new(schema, vec![batches])
             .map_err(|e| JsValue::from_str(&format!("Failed to create MemTable: {e}")))?;
 
+        let _ = self.ctx.deregister_table(name);
         self.ctx
             .register_table(name, Arc::new(table))
             .map_err(|e| JsValue::from_str(&format!("Failed to register table: {e}")))?;

@@ -245,16 +245,12 @@ export function NotebookRenderer({
     )
 
   // WASM engine for notebook-local queries
-  // Lazily loaded when any cell has dataSource: 'notebook'
+  // Loaded eagerly so remote cell results are always registered for cross-cell references
   const [engine, setEngine] = useState<NotebookQueryEngine | null>(null)
   const [engineError, setEngineError] = useState<string | null>(null)
-  const hasNotebookCells = useMemo(
-    () => cells.some((c) => 'dataSource' in c && c.dataSource === 'notebook'),
-    [cells],
-  )
 
   useEffect(() => {
-    if (!hasNotebookCells || engine) return
+    if (engine) return
     let cancelled = false
     loadWasmEngine()
       .then((mod) => {
@@ -268,7 +264,7 @@ export function NotebookRenderer({
         }
       })
     return () => { cancelled = true }
-  }, [hasNotebookCells, engine])
+  }, [engine])
 
   // Cell execution state management
   const { cellStates, executeCell, executeFromCell, migrateCellState, removeCellState } = useCellExecution({

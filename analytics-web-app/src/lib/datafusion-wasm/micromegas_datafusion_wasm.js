@@ -58,6 +58,7 @@ export class WasmQueryEngine {
     }
     /**
      * Register Arrow IPC stream bytes as a named table.
+     * Replaces any existing table with the same name.
      * Returns the number of rows registered.
      * @param {string} name
      * @param {Uint8Array} ipc_bytes

@@ -137,7 +137,6 @@ export function useCellExecution({
         // Create execution context - use per-cell data source with fallback to global
         const cellDataSource = resolveCellDataSource(cell, availableVariables, dataSource)
         const isNotebookSource = cellDataSource === 'notebook'
-
         const context: CellExecutionContext = {
           variables: availableVariables,
           timeRange,
@@ -162,7 +161,7 @@ export function useCellExecution({
               engine.register_table(cell.name, ipcBytes)
               return tableFromIPC(ipcBytes)
             } else {
-              // Remote execution without WASM (no notebook cells in this notebook)
+              // Remote execution without WASM engine
               return executeSql(sql, timeRange, abortControllerRef.current!.signal, cellDataSource)
             }
           },
@@ -259,6 +258,17 @@ export function useCellExecution({
       executeFromCell(0)
     }
   }, [timeRange, executeFromCell])
+
+  // Re-execute all cells when WASM engine becomes available
+  // (initial execution may have run before the engine loaded,
+  // so remote cell results weren't registered in WASM)
+  const prevEngineRef = useRef(engine)
+  useEffect(() => {
+    if (prevEngineRef.current === null && engine !== null) {
+      executeFromCell(0)
+    }
+    prevEngineRef.current = engine
+  }, [engine, executeFromCell])
 
   // Migrate cell state when a cell is renamed
   const migrateCellState = useCallback((oldName: string, newName: string) => {
