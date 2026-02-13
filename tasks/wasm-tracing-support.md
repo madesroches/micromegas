@@ -21,7 +21,7 @@ Keep the `EventSink` trait as the single sink interface on both native and wasm.
 ### What the EventSink trait needs (from `event/sink.rs`)
 
 ```rust
-pub trait EventSink {
+pub trait EventSink: Send + Sync {
     fn on_startup(&self, process_info: Arc<ProcessInfo>);       // transit-free
     fn on_shutdown(&self);
     fn on_log_enabled(&self, metadata: &LogMetadata) -> bool;   // transit-free
@@ -35,6 +35,8 @@ pub trait EventSink {
     fn is_busy(&self) -> bool;
 }
 ```
+
+`Send + Sync` bounds are required because `dispatch_wasm.rs` stores the sink in `OnceLock<WasmDispatch>` (which requires its contents to be `Sync`), and `Arc<dyn EventSink>` needs `Send + Sync` on the trait. All existing implementations already satisfy these bounds.
 
 ### Stub types needed on wasm32
 
@@ -319,7 +321,7 @@ use crate::time::{frequency, now};
 
 | Function | Behavior on wasm | Called by |
 |----------|-----------------|-----------|
-| `init_event_dispatch(logs_buffer_size, metrics_buffer_size, threads_buffer_size, sink, process_properties, cpu_tracing_enabled)` | Store sink in OnceLock, call `sink.on_startup()` | `guards.rs` |
+| `init_event_dispatch(logs_buffer_size, metrics_buffer_size, threads_buffer_size, sink, process_properties, cpu_tracing_enabled)` | Store sink in OnceLock, call `set_max_level(Trace)`, call `sink.on_startup()` | `guards.rs` |
 | `log(desc: &'static LogMetadata, args: fmt::Arguments)` | Forward to `sink.on_log(desc, &[], time, args)` | `log!` macro |
 | `log_tagged(desc: &'static LogMetadata, properties: &'static PropertySet, args: fmt::Arguments)` | Forward to `sink.on_log(desc, &[], time, args)` | `log!(properties:)` macro |
 | `log_interop(metadata: &LogMetadata, args: fmt::Arguments)` | Forward to `sink.on_log(desc, &[], time, args)` | `log_interop` module |
@@ -350,6 +352,8 @@ use crate::time::{frequency, now};
 | `make_process_info(process_id, parent_process_id, properties) -> ProcessInfo` | Stub values (see Phase 7) | `init_event_dispatch` |
 
 No `DispatchCell`, no `Mutex<LogStream>`, no transit types. Same `EventSink` interface as native.
+
+**Important**: `init_event_dispatch` must call `set_max_level(LevelFilter::Trace)`. On native, the `CompositeSink::new()` handles this, but on wasm there is no composite sink. Without this call, `MAX_LEVEL_FILTER` stays at its default value of `0` (`LevelFilter::Off`) and the `log!` macro's runtime check `$lvl <= max_level()` silently drops all log messages.
 
 Since the init signature is the same (`Arc<dyn EventSink>`), **`guards.rs` needs no cfg-gating for the sink type** — only `panic_hook` needs a wasm fix (see Phase 7).
 
@@ -546,8 +550,11 @@ impl EventSink for ConsoleEventSink {
     fn on_shutdown(&self) {}
     fn on_log_enabled(&self, _: &LogMetadata) -> bool { true }
 
-    fn on_log(&self, desc: &LogMetadata, _properties: &[Property], _time: i64, args: fmt::Arguments<'_>) {
-        let msg = format!("[{}] {args}", desc.level);
+    fn on_log(&self, desc: &LogMetadata, _properties: &[Property], time: i64, args: fmt::Arguments<'_>) {
+        let ts = chrono::DateTime::from_timestamp_micros(time)
+            .map(|dt| dt.to_rfc3339())
+            .unwrap_or_default();
+        let msg = format!("{ts} [{}] {args}", desc.level);
         web_sys::console::log_1(&msg.into());
     }
 
@@ -560,6 +567,8 @@ impl EventSink for ConsoleEventSink {
     fn is_busy(&self) -> bool { false }
 }
 ```
+
+The `time` parameter is microseconds since epoch on wasm (from `js_sys::Date::now() * 1000.0`), which `chrono::DateTime::from_timestamp_micros` converts directly to a wall-clock timestamp.
 
 **Wasm guard builder** (in `lib.rs` or a new `wasm.rs`, behind `#[cfg(target_arch = "wasm32")]`):
 
@@ -619,6 +628,7 @@ micromegas-telemetry-sink = { path = "../telemetry-sink", default-features = fal
 **`rust/datafusion-wasm/src/lib.rs`**:
 ```rust
 use std::sync::Once;
+use micromegas_tracing::prelude::*;
 
 static INIT: Once = Once::new();
 
@@ -631,6 +641,8 @@ fn ensure_tracing() {
 }
 ```
 
+All public methods (`new`, `register_table`, `execute_sql`, `execute_and_register`) emit `info!` traces with relevant context (SQL queries, table names, row counts, byte sizes).
+
 `dispatch_wasm.rs` forwards `on_log` directly to the sink — no buffering, no copying into streams.
 
 ## Files Summary
@@ -641,7 +653,7 @@ fn ensure_tracing() {
 |------|--------|
 | `rust/tracing/Cargo.toml` | Gate `micromegas-transit`, `internment`, `memoffset`, `raw-cpuid`, `thread-id`, `whoami` as native-only; add `getrandom`+`js-sys` for wasm32; add `wasmbind` to chrono |
 | `rust/tracing/src/lib.rs` | cfg-gate dispatch path swap + native-only modules |
-| `rust/tracing/src/dispatch_wasm.rs` | **New** — minimal dispatch using `EventSink`, no transit |
+| `rust/tracing/src/dispatch_wasm.rs` | **New** — minimal dispatch using `EventSink`, no transit; calls `set_max_level(Trace)` on init |
 | `rust/tracing/src/time.rs` | Add `#[cfg(target_arch = "wasm32")]` `now()` and `frequency()`; gate existing `frequency()` with `#[cfg(not(target_arch = "wasm32"))]` to avoid duplicate definition |
 | `rust/tracing/src/event/mod.rs` | Gate `block`, `stream`, `in_memory_sink` native-only; keep `sink` on all platforms |
 | `rust/tracing/src/logs/mod.rs` | Gate `block`, add `LogBlock`/`LogStream` stubs on wasm32 |
@@ -656,6 +668,8 @@ fn ensure_tracing() {
 | `rust/tracing/src/property_set.rs` | Full on native; on wasm32, stubs: `pub struct Property;` + `pub struct PropertySet;` |
 | `rust/tracing/src/process_info.rs` | Copy uuid serde helpers locally, remove `micromegas_transit::uuid_utils` import |
 | `rust/tracing/src/panic_hook.rs` | Gate `stdout().flush()` behind `cfg(not(wasm32))` |
+| `rust/tracing/src/event/sink.rs` | Added `Send + Sync` bounds to `EventSink` trait |
+| `rust/tracing/src/levels.rs` | Simplified `STATIC_MAX_LEVEL`/`STATIC_MAX_LOD` to hardcoded `Trace`/`Max`; removed `cfg_if` usage and all compile-time level feature flags |
 | `rust/tracing/src/guards.rs` | Unchanged — same signatures, all dispatch imports resolve on both platforms |
 
 ### `micromegas-telemetry-sink` crate
@@ -664,34 +678,37 @@ fn ensure_tracing() {
 |------|--------|
 | `rust/telemetry-sink/Cargo.toml` | Gate native deps (`reqwest`, `tokio`, `sysinfo`, `micromegas-telemetry`, `micromegas-transit`, etc.) behind `cfg(not(wasm32))`; add `web-sys` for wasm32; keep shared deps (`micromegas-tracing.workspace = true`, `anyhow`, etc.) — note: uses workspace inheritance without `default-features = false` due to Cargo limitation |
 | `rust/telemetry-sink/src/lib.rs` | Gate all native modules (`http_event_sink`, `composite_event_sink`, etc.); expose wasm `init_telemetry()` + `ConsoleEventSink` |
-| `rust/telemetry-sink/src/console_event_sink.rs` | **New** — `ConsoleEventSink` impl (wasm32-only) |
+| `rust/telemetry-sink/src/console_event_sink.rs` | **New** — `ConsoleEventSink` impl (wasm32-only), logs with RFC 3339 timestamps |
 
 ### `datafusion-wasm` crate
 
 | File | Action |
 |------|--------|
 | `rust/datafusion-wasm/Cargo.toml` | Add `micromegas-tracing` + `micromegas-telemetry-sink` deps (both `default-features = false`); add `micromegas-tracing` to cargo-machete ignored list |
-| `rust/datafusion-wasm/src/lib.rs` | Call `micromegas_telemetry_sink::init_telemetry()` at startup |
+| `rust/datafusion-wasm/src/lib.rs` | Call `micromegas_telemetry_sink::init_telemetry()` at startup; add `info!` traces to all public methods |
 
 ## What Does NOT Change
 
 - `dispatch.rs` — untouched, native path unchanged
-- `event/sink.rs` — `EventSink` trait unchanged, compiles on both platforms
 - `telemetry-sink` native code — all existing modules untouched, just cfg-gated
 - Proc macros (`span_fn`, `log_fn`) — generate code that calls `dispatch::*`, works with either dispatch module
 - All macros (`info!`, `imetric!`, `span_scope!`, etc.) — unchanged
 - `guards.rs` — same signatures, all dispatch imports resolve on both platforms
 - `spans/instrumented_future.rs` — unchanged (transit-free, `thread_local!` works on wasm32 as single-threaded global)
-- `levels.rs` — unchanged (transit-free)
 - `errors.rs` — unchanged (transit-free)
+
+## What Changed (non-wasm-gated)
+
+- `event/sink.rs` — `EventSink` trait gained `Send + Sync` bounds (required by `OnceLock` in wasm dispatch; all existing impls already satisfied these bounds)
+- `levels.rs` — `STATIC_MAX_LEVEL` and `STATIC_MAX_LOD` simplified from `cfg_if!`-based compile-time selection to hardcoded `Trace`/`Max` (no workspace crate used the removed feature flags); `cfg-if` dependency removed
 
 ## Implementation Status
 
-All phases implemented. Native verification complete:
+All phases implemented. Verification complete:
 - `cargo build --workspace` — passes
 - `cargo test --workspace` — all tests pass, zero failures
-- `cargo clippy -p micromegas-tracing -p micromegas-telemetry-sink -- -D warnings` — clean
-- `cargo fmt --check` — clean
+- `cargo check --target wasm32-unknown-unknown` (datafusion-wasm) — passes
+- Manually verified: log output with timestamps appears in browser JS console
 
 ### Phases completed:
 1. **Phase 1**: Gated native-only deps in `tracing/Cargo.toml`, added wasm32 deps
@@ -700,16 +717,14 @@ All phases implemented. Native verification complete:
 4. **Phase 4-5**: Added property_set stubs, gated event submodules
 5. **Phase 6**: Created `dispatch_wasm.rs` with OnceLock-based dispatch
 6. **Phase 7-9**: Gated `panic_hook.rs` flush, made `process_info.rs` transit-free, cfg-gated `lib.rs` modules
-7. **Phase 10**: Gated telemetry-sink native modules, created `ConsoleEventSink`, added wasm `init_telemetry()`
-8. **Phase 11**: Wired up `datafusion-wasm` with `ensure_tracing()` init
+7. **Phase 10**: Gated telemetry-sink native modules, created `ConsoleEventSink` with timestamps, added wasm `init_telemetry()`
+8. **Phase 11**: Wired up `datafusion-wasm` with `ensure_tracing()` init and `info!` traces on all public methods
+
+### Bug fix: `set_max_level` in wasm dispatch init
+The `MAX_LEVEL_FILTER` atomic defaults to `0` (`LevelFilter::Off`). On native, `CompositeSink::new()` calls `set_max_level()` to open it up. On wasm, this was initially missing — the `log!` macro's runtime check `$lvl <= max_level()` silently dropped all messages. Fixed by calling `set_max_level(LevelFilter::Trace)` in `dispatch_wasm::init_event_dispatch()`.
 
 ### Implementation note:
 - Workspace root declares `micromegas-tracing` with `default-features = false` so the `tokio` feature is not enabled by default. Crates that need it (`analytics`, `public`) explicitly add `features = ["tokio"]`. Crates that don't (`auth`, `ingestion`, `telemetry-sink`) use plain `workspace = true`. This ensures wasm builds don't pull in tokio (which doesn't support full features on wasm32).
-
-### Remaining verification:
-- WASM build: `cargo build --target wasm32-unknown-unknown -p micromegas-tracing --no-default-features`
-- datafusion-wasm builds: `cd rust/datafusion-wasm && wasm-pack build --target web`
-- Manual test: log output appears in browser console when using datafusion-wasm
 
 ## Risks & Notes
 
