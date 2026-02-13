@@ -1,50 +1,56 @@
 #!/bin/python3
-from rust_command import run_command, show_disk_space
+import sys
 import pathlib
+from rust_command import run_command, show_disk_space
 
 wasm_crate = pathlib.Path(__file__).parent.parent.absolute() / "rust" / "datafusion-wasm"
 
-print("=" * 60)
-print("Starting Rust CI Pipeline")
-print("=" * 60)
-show_disk_space()
 
-print("\n" + "=" * 60)
-print("Step 1/7: Formatting Check")
-print("=" * 60)
-run_command("cargo fmt --check")
+def run_native():
+    steps = [
+        ("Formatting Check", "cargo fmt --check", None),
+        ("Clippy Linting", "cargo clippy --workspace -- -D warnings", None),
+        ("Unused Dependencies Check", "cargo machete", None),
+        ("Running Tests", "cargo test", None),
+    ]
+    _run_steps("Native", steps)
 
-print("\n" + "=" * 60)
-print("Step 2/7: Clippy Linting")
-print("=" * 60)
-run_command("cargo clippy --workspace -- -D warnings")
 
-print("\n" + "=" * 60)
-print("Step 3/7: Unused Dependencies Check")
-print("=" * 60)
-run_command("cargo machete")
+def run_wasm():
+    steps = [
+        ("WASM Formatting Check", "cargo fmt --check", wasm_crate),
+        ("WASM Clippy", "cargo clippy --target wasm32-unknown-unknown -- -D warnings", wasm_crate),
+        ("WASM Tests", "python3 build.py --test", wasm_crate),
+    ]
+    _run_steps("WASM", steps)
 
-print("\n" + "=" * 60)
-print("Step 4/7: Running Tests")
-print("=" * 60)
-run_command("cargo test")
 
-print("\n" + "=" * 60)
-print("Step 5/7: WASM Formatting Check")
-print("=" * 60)
-run_command("cargo fmt --check", cwd=wasm_crate)
+def _run_steps(label, steps):
+    total = len(steps)
+    print("=" * 60)
+    print(f"Starting {label} CI Pipeline")
+    print("=" * 60)
+    show_disk_space()
+    for i, (name, cmd, cwd) in enumerate(steps, 1):
+        print(f"\n{'=' * 60}")
+        print(f"Step {i}/{total}: {name}")
+        print("=" * 60)
+        kwargs = {"cwd": cwd} if cwd else {}
+        run_command(cmd, **kwargs)
+    print(f"\n{'=' * 60}")
+    print(f"{label} CI steps completed successfully!")
+    print("=" * 60)
+    show_disk_space()
 
-print("\n" + "=" * 60)
-print("Step 6/7: WASM Clippy")
-print("=" * 60)
-run_command("cargo clippy --target wasm32-unknown-unknown -- -D warnings", cwd=wasm_crate)
 
-print("\n" + "=" * 60)
-print("Step 7/7: WASM Tests")
-print("=" * 60)
-run_command("python3 build.py --test", cwd=wasm_crate)
-
-print("\n" + "=" * 60)
-print("All CI steps completed successfully!")
-print("=" * 60)
-show_disk_space()
+if __name__ == "__main__":
+    targets = sys.argv[1:] if len(sys.argv) > 1 else ["native", "wasm"]
+    for target in targets:
+        if target == "native":
+            run_native()
+        elif target == "wasm":
+            run_wasm()
+        else:
+            print(f"Unknown target: {target}")
+            print("Usage: rust_ci.py [native] [wasm]")
+            sys.exit(1)
