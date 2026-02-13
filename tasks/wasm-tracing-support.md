@@ -704,7 +704,7 @@ All phases implemented. Native verification complete:
 8. **Phase 11**: Wired up `datafusion-wasm` with `ensure_tracing()` init
 
 ### Implementation note:
-- `telemetry-sink/Cargo.toml` uses `micromegas-tracing.workspace = true` (not `default-features = false`) because workspace dependency inheritance doesn't allow overriding default-features. This is fine — the `tokio` feature being enabled doesn't affect wasm builds since `datafusion-wasm` is excluded from the workspace and resolves its own dependency tree.
+- Workspace root declares `micromegas-tracing` with `default-features = false` so the `tokio` feature is not enabled by default. Crates that need it (`analytics`, `public`) explicitly add `features = ["tokio"]`. Crates that don't (`auth`, `ingestion`, `telemetry-sink`) use plain `workspace = true`. This ensures wasm builds don't pull in tokio (which doesn't support full features on wasm32).
 
 ### Remaining verification:
 - WASM build: `cargo build --target wasm32-unknown-unknown -p micromegas-tracing --no-default-features`
