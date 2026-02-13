@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use arrow::array::{Int32Array, StringArray, StringDictionaryBuilder};
+use arrow::array::{Array, Int32Array, StringArray, StringDictionaryBuilder};
 use arrow::datatypes::{DataType, Field, Int32Type, Schema};
 use arrow::ipc::reader::StreamReader;
 use arrow::ipc::writer::StreamWriter;
@@ -222,6 +222,47 @@ fn count_result_rows(ipc_bytes: &[u8]) -> usize {
         .collect::<Result<Vec<_>, _>>()
         .expect("failed to collect batches");
     batches.iter().map(|b| b.num_rows()).sum()
+}
+
+/// SHOW TABLES should list registered tables via the information_schema.
+#[wasm_bindgen_test]
+async fn test_show_tables() {
+    let engine = WasmQueryEngine::new();
+    let ipc = create_test_ipc(&[1, 2], &["alice", "bob"]);
+    engine
+        .register_table("my_data", &ipc)
+        .expect("register_table should succeed");
+
+    let result_bytes = engine
+        .execute_sql("SHOW TABLES")
+        .await
+        .expect("SHOW TABLES should succeed");
+
+    let cursor = std::io::Cursor::new(&result_bytes);
+    let reader = StreamReader::try_new(cursor, None).expect("failed to read IPC result");
+    let batches: Vec<_> = reader
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()
+        .expect("failed to collect batches");
+
+    let table_names: Vec<String> = batches
+        .iter()
+        .flat_map(|batch| {
+            let col = batch
+                .column_by_name("table_name")
+                .expect("SHOW TABLES should have table_name column");
+            let arr = col
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .expect("table_name should be Utf8");
+            (0..arr.len()).map(move |i| arr.value(i).to_string())
+        })
+        .collect();
+
+    assert!(
+        table_names.contains(&"my_data".to_string()),
+        "SHOW TABLES should include 'my_data', got: {table_names:?}"
+    );
 }
 
 /// Regression test: LIMIT must be respected when projecting specific columns

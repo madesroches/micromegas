@@ -53,7 +53,9 @@ impl WasmQueryEngine {
             })
             .collect::<Vec<_>>();
 
+        let config = SessionConfig::default().with_information_schema(true);
         let state = SessionStateBuilder::new()
+            .with_config(config)
             .with_default_features()
             .with_physical_optimizer_rules(filtered_rules)
             .build();
