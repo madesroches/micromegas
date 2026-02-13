@@ -2248,7 +2248,6 @@ dependencies = [
  "serde",
  "thiserror",
  "thread-id",
- "tokio",
  "uuid",
  "whoami",
  "winapi",

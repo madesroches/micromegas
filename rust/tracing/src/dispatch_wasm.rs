@@ -1,6 +1,6 @@
 //! Minimal wasm32 dispatch — forwards logs to EventSink, no-ops everything else
 pub use crate::errors::{Error, Result};
-use crate::event::{EventSink, NullEventSink};
+use crate::event::EventSink;
 use crate::logs::LogMetadata;
 use crate::metrics::StaticMetricMetadata;
 use crate::process_info::ProcessInfo;

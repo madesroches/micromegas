@@ -11,7 +11,7 @@ use crate::{
 pub type BoxedEventSink = Box<dyn EventSink>;
 
 /// interface needed by the dispatch module to send out telemetry
-pub trait EventSink {
+pub trait EventSink: Send + Sync {
     fn on_startup(&self, process_info: Arc<ProcessInfo>);
     fn on_shutdown(&self);
 

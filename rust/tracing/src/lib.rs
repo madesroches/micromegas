@@ -148,6 +148,7 @@ pub mod test_utils;
 #[cfg(feature = "tokio")]
 pub mod runtime;
 
+#[cfg_attr(target_arch = "wasm32", allow(unused_imports))]
 #[macro_use]
 extern crate lazy_static;
 
