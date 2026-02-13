@@ -5,31 +5,67 @@ This file documents the historical progress of the Micromegas project. For curre
 ## Unreleased
 
 ## February 2026 - v0.20.0
+* **Client-Side WASM Query Execution:**
+  * Add `local_query` screen type running DataFusion SQL in the browser via WebAssembly (#806, #807, #808, #810)
+  * Progressive row count and byte size display during source query fetch
+  * Auto-run checkbox for local query execution on text changes
+  * Rename datafusion-wasm to micromegas-datafusion-wasm with CI integration
+  * Shared WASM builder Dockerfile stage for Docker builds
+* **Configurable Data Sources:**
+  * Add configurable data sources for analytics web app (#793)
+  * Per-screen and per-cell data source selection (#794)
+  * Datasource variable type for notebook data source selection (#800)
+  * Data source selector on Processes, ProcessMetrics, and ProcessLog pages
+  * Protected default data source from deletion and flag removal
 * **Notebook Enhancements:**
+  * Add Perfetto export cell type for notebooks (#771)
+  * Add expression variable type for adaptive time_bin_duration (#782)
   * Add swimlane notebook cell type for visualizing concurrent events (#769)
   * Add drag-to-zoom time range selection to notebook charts (#768)
   * Add property timeline notebook cell type (#766, #762)
   * Re-execute notebook cells when time range changes (#768)
   * Add query guide links to SQL editor cells (#751)
+  * Move variable cell input to title bar to reduce vertical space (#779)
+  * Move save buttons to title bar, add config diff modal (#780)
+  * Extract useExposeSaveRef hook, remove duplicate SaveFooter from renderers (#780)
+  * Add zoom in/out buttons to time range control (#804)
 * **Query & Data Features:**
   * Add multi-column query variables with $variable.column syntax (#753)
   * Add table URL support with column overrides (#750)
   * Add unit formatting system for charts (#755)
+  * Allow hiding columns via right-click context menu (#790)
+* **Client-Side Perfetto Trace Generation:**
+  * Replace generate_trace endpoint with client-side trace fetching (#784)
+  * Add gzip compression to analytics-web-srv endpoints (#784)
+  * Add abort signal support for trace downloads
 * **Performance Optimizations:**
   * Add parquet file content cache to reduce object storage reads (#757, #758)
-  * Parallelize JIT for Perfetto trace thread span generation (#759)
+  * Parallelize JIT for Perfetto trace thread span generation (#759, #772)
   * Implement pipelined query planning for Perfetto trace generation (#759)
+* **Unreal Engine:**
+  * Support 32-bit and 64-bit metrics (#786)
 * **Dependencies:**
-  * Update DataFusion to 52.1 and Arrow/Parquet to 57.2 (#756)
+  * Update DataFusion to 52.1 and Arrow/Parquet to 57.2 (#756), Arrow to 57.3
 * **Security:**
   * Update bytes crate to 1.11.1 to fix CVE-2026-25541 (#767)
   * Upgrade jsonwebtoken to 10.3 to fix type confusion vulnerability (#760)
+  * Fix dependabot security alerts: protobuf and time (#787)
+  * Bump cryptography from 46.0.3 to 46.0.5 (#801)
+* **Analytics Web App:**
+  * Add welcome landing page for madesroches.github.io/micromegas (#785)
+  * Hide admin icon in sidebar for non-admin users (#802)
+  * Add Process Details link to PivotButton navigation (#777)
+  * Remove process list from available screen types (#791)
+  * Fix Perfetto trace generation missing data source parameter (#805)
 * **Documentation:**
   * Document delete_duplicate SQL functions and reorganize admin docs (#752)
-  * Add notebook queries plan for client-side DataFusion WASM (#761)
+  * Link documentation site in crate READMEs and PyPI metadata (#798)
+  * Add GoatCounter analytics to all public pages (#796)
 * **Code Quality:**
   * Remove old perf_report task folder
   * Remove column name transformation in process list tables (#744)
+  * Refactor analytics-web-srv main.rs into focused functions
+  * Delete orphaned queries.rs
 
 ## January 2026 - v0.19.0
 * **User-Defined Screens:**
