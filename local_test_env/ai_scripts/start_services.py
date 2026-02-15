@@ -2,9 +2,10 @@
 
 """
 Simple script to start micromegas services for testing
-Usage: python3 start_services.py
+Usage: python3 start_services.py [--release] [--help]
 """
 
+import argparse
 import os
 import sys
 import subprocess
@@ -70,17 +71,28 @@ def wait_for_service(url, max_attempts=30, service_name="Service"):
 
 
 def main():
+    parser = argparse.ArgumentParser(
+        description="Start micromegas services for testing"
+    )
+    parser.add_argument(
+        "--release", action="store_true", help="Build and run in release mode"
+    )
+    args = parser.parse_args()
+
     script_dir = Path(__file__).parent.absolute()
     rust_dir = script_dir.parent.parent / "rust"
+
+    release_flag = " --release" if args.release else ""
+    mode = "release" if args.release else "debug"
 
     # Set environment variable for CPU tracing in development
     os.environ["MICROMEGAS_ENABLE_CPU_TRACING"] = "true"
     print("🔧 CPU tracing enabled for development")
 
-    print("🔧 Building all services...")
+    print(f"🔧 Building all services ({mode})...")
     os.chdir(rust_dir)
     run_command(
-        "cargo build --bin telemetry-ingestion-srv --bin flight-sql-srv --bin telemetry-admin"
+        f"cargo build --bin telemetry-ingestion-srv --bin flight-sql-srv --bin telemetry-admin{release_flag}"
     )
 
     print("🚀 Starting services...")
@@ -107,16 +119,15 @@ def main():
 
     os.chdir(rust_dir)
 
+    # Run binaries directly from target/ to avoid cargo run recompilation
+    target_dir = rust_dir / "target" / mode
+
     # Start Ingestion Server
     print("📥 Starting Ingestion Server...")
     with open("/tmp/ingestion.log", "w") as log_file:
         ingestion_process = subprocess.Popen(
             [
-                "cargo",
-                "run",
-                "-p",
-                "telemetry-ingestion-srv",
-                "--",
+                str(target_dir / "telemetry-ingestion-srv"),
                 "--listen-endpoint-http",
                 "127.0.0.1:9000",
                 "--disable-auth",
@@ -138,7 +149,10 @@ def main():
     print("📊 Starting Analytics Server...")
     with open("/tmp/analytics.log", "w") as log_file:
         analytics_process = subprocess.Popen(
-            ["cargo", "run", "-p", "flight-sql-srv", "--", "--disable-auth"],
+            [
+                str(target_dir / "flight-sql-srv"),
+                "--disable-auth",
+            ],
             stdout=log_file,
             stderr=subprocess.STDOUT,
             env=os.environ.copy(),
@@ -150,7 +164,10 @@ def main():
     print("⚙️ Starting Admin Daemon...")
     with open("/tmp/admin.log", "w") as log_file:
         admin_process = subprocess.Popen(
-            ["cargo", "run", "-p", "telemetry-admin", "--", "crond"],
+            [
+                str(target_dir / "telemetry-admin"),
+                "crond",
+            ],
             stdout=log_file,
             stderr=subprocess.STDOUT,
             env=os.environ.copy(),

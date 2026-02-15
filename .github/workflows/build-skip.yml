@@ -6,10 +6,16 @@ on:
     paths-ignore:
       - 'rust/**'
       - 'build/rust_ci.py'
+      - 'build/rust_command.py'
       - '.github/workflows/rust.yml'
 
 jobs:
-  build:
+  native:
     runs-on: ubuntu-latest
     steps:
-      - run: echo "No Rust changes, skipping build"
+      - run: echo "No Rust changes, skipping native build"
+
+  wasm:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "No Rust changes, skipping WASM build"
