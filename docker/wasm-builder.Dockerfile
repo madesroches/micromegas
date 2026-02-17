@@ -15,8 +15,8 @@ COPY rust/datafusion-wasm/Cargo.lock ./
 RUN WASM_BINDGEN_VERSION=$(grep -A1 'name = "wasm-bindgen"' Cargo.lock | grep version | head -1 | sed 's/.*"\(.*\)".*/\1/') && \
     cargo install wasm-bindgen-cli --version "$WASM_BINDGEN_VERSION"
 
-# Copy source and build
-COPY rust/datafusion-wasm/ ./
+# Copy full Rust source (datafusion-wasm has path deps on workspace crates)
+COPY rust/ /build/rust/
 RUN cargo build --target wasm32-unknown-unknown --release
 
 # Generate JS bindings (Rust release profile already optimizes with lto + opt-level=s)
