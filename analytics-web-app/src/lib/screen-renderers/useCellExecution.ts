@@ -142,6 +142,9 @@ export function useCellExecution({
         const context: CellExecutionContext = {
           variables: availableVariables,
           timeRange,
+          registerTable: engine
+            ? (ipcBytes: Uint8Array) => { engine.register_table(cell.name, ipcBytes) }
+            : undefined,
           runQuery: async (sql) => {
             if (isNotebookSource) {
               // Execute locally in WASM engine
@@ -281,6 +284,7 @@ export function useCellExecution({
 
   // Migrate cell state when a cell is renamed
   const migrateCellState = useCallback((oldName: string, newName: string) => {
+    engine?.deregister_table(oldName)
     setCellStates((prev) => {
       const next = { ...prev }
       if (oldName in next) {
@@ -289,16 +293,17 @@ export function useCellExecution({
       }
       return next
     })
-  }, [])
+  }, [engine])
 
   // Remove cell state when a cell is deleted
   const removeCellState = useCallback((cellName: string) => {
+    engine?.deregister_table(cellName)
     setCellStates((prev) => {
       const next = { ...prev }
       delete next[cellName]
       return next
     })
-  }, [])
+  }, [engine])
 
   return {
     cellStates,

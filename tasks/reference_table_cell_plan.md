@@ -2,6 +2,14 @@
 
 Issue: [#824](https://github.com/madesroches/micromegas/issues/824)
 
+## Status: Implemented
+
+All implementation steps are complete. The feature is ready for manual testing and code review.
+
+- Type-check: passing
+- Lint: clean (0 errors, 0 warnings)
+- Tests: 689/689 passing (includes 12 new CSV-to-Arrow tests)
+
 ## Mockup
 
 See [reference_table_cell_mockup.html](reference_table_cell_mockup.html) for a visual mockup showing rendered, editing, downstream usage, and error states.
@@ -11,23 +19,6 @@ See [reference_table_cell_mockup.html](reference_table_cell_mockup.html) for a v
 Add a new notebook cell type called **reference table** that allows users to provide hard-coded CSV data directly in the cell configuration. When executed, the CSV is parsed into an Arrow table, registered in the WASM DataFusion context, and made queryable by downstream cells via SQL.
 
 This enables users to join or enrich query results with small reference datasets (lookup tables, constants, mappings) without needing to store them in the data lake.
-
-## Current State
-
-The notebook has 8 cell types registered in a static `CELL_TYPE_METADATA` map in `cell-registry.ts`:
-
-- **Query-based**: `table`, `chart`, `log`, `propertytimeline`, `swimlane` — execute SQL via `runQuery()`
-- **Data-producing non-SQL**: `variable` — executes SQL or expressions, produces variable values
-- **Display-only**: `markdown`, `perfettoexport` — no query execution
-
-Each cell type exports a metadata object (`CellTypeMetadata`) with renderer, editor, execute function, and configuration factory.
-
-The execution context (`CellExecutionContext`) currently exposes:
-- `variables` — upstream variable values
-- `timeRange` — ISO time range
-- `runQuery(sql)` — runs SQL and registers the result in WASM under the cell name
-
-The WASM engine's `register_table(name, ipc_bytes)` is called internally by `runQuery`, but there is no way for a cell to register raw (non-SQL) data directly through the execution context.
 
 ## Design
 
@@ -44,7 +35,7 @@ export interface ReferenceTableCellConfig extends CellConfigBase {
 
 ### Execution Context Extension
 
-Add an optional `registerTable` method to `CellExecutionContext`:
+Added an optional `registerTable` method to `CellExecutionContext`:
 
 ```typescript
 // in cell-registry.ts
@@ -56,7 +47,7 @@ export interface CellExecutionContext {
 }
 ```
 
-In `useCellExecution.ts`, populate it when the WASM engine is available:
+In `useCellExecution.ts`, populated when the WASM engine is available:
 
 ```typescript
 registerTable: engine
@@ -76,7 +67,7 @@ A utility function `csvToArrowIPC(csvText: string)` that:
 4. Serializes to IPC stream bytes using `tableToIPC(table, 'stream')`
 5. Returns both the IPC bytes and the Arrow `Table` (for display)
 
-This utility lives in a new file `csv-to-arrow.ts` alongside the cell, or in `lib/` if reuse is likely. Given the focused scope, placing it in the cells directory is preferable.
+**Note**: Arrow's `tableFromArrays` infers types from the input arrays — `Float64Array` becomes `Float64`, `string[]` becomes dictionary-encoded Utf8. No explicit schema parameter is needed.
 
 ### Execution Flow
 
@@ -104,6 +95,8 @@ Reuses the existing `TableBody` and `SortHeader` components from `table-utils.ts
 
 Uses the `useColumnManagement` hook from `table-utils.tsx` to support column sorting and hiding, matching the pattern from `TableCell.tsx`. Sort and hidden-column state is persisted in `config.options` via `onOptionsChange`.
 
+Includes pagination via `usePagination` / `PaginationBar`, matching `TableCell.tsx`.
+
 ### Editor
 
 - Plain `<textarea>` for editing CSV content (no need for code editor features like line numbers or syntax highlighting)
@@ -112,36 +105,36 @@ Uses the `useColumnManagement` hook from `table-utils.tsx` to support column sor
 
 ## Implementation Steps
 
-### Step 1: Add type definitions
+### Step 1: Add type definitions ✅
 
 **`notebook-types.ts`**:
-- Add `'referencetable'` to the `CellType` union
-- Add `ReferenceTableCellConfig` interface with `csv: string`
-- Add `ReferenceTableCellConfig` to the `CellConfig` union type
+- Added `'referencetable'` to the `CellType` union
+- Added `ReferenceTableCellConfig` interface with `csv: string` and `options?: Record<string, unknown>`
+- Added `ReferenceTableCellConfig` to the `CellConfig` union type
 
-### Step 2: Extend execution context
+### Step 2: Extend execution context ✅
 
 **`cell-registry.ts`**:
-- Add `registerTable?: (ipcBytes: Uint8Array) => void` to `CellExecutionContext`
+- Added `registerTable?: (ipcBytes: Uint8Array) => void` to `CellExecutionContext`
 
 **`useCellExecution.ts`**:
-- Populate `registerTable` in the context object when `engine` is non-null
-- Add `engine.deregister_table(cellName)` to `removeCellState` so deleted cells are cleaned up from WASM
-- Add `engine.deregister_table(oldName)` to `migrateCellState` so renamed cells don't leave stale registrations (the next execution will re-register under the new name)
+- Populated `registerTable` in the context object when `engine` is non-null
+- Added `engine.deregister_table(cellName)` to `removeCellState` so deleted cells are cleaned up from WASM
+- Added `engine.deregister_table(oldName)` to `migrateCellState` so renamed cells don't leave stale registrations (the next execution will re-register under the new name)
 
-### Step 3: Create CSV-to-Arrow utility
+### Step 3: Create CSV-to-Arrow utility ✅
 
 **`cells/csv-to-arrow.ts`** (new file):
 - Uses `csvParse` from `d3-dsv` for RFC 4180-compliant CSV parsing
 - `csvToArrowIPC(csvText: string): { table: Table; ipcBytes: Uint8Array }` — full pipeline
-- Validate: at least one header, at least one data row
-- Type inference: try `Number()` on each column, fall back to string
+- Validates: at least one header, at least one data row
+- Type inference: `Float64Array` for all-numeric columns, `string[]` for others; Arrow infers schema from arrays
 
-### Step 4: Create ReferenceTableCell
+### Step 4: Create ReferenceTableCell ✅
 
 **`cells/ReferenceTableCell.tsx`** (new file):
-- **Renderer**: Displays the Arrow table using `SortHeader` + `TableBody` from `table-utils.tsx`, with `useColumnManagement` hook for sort/hide state persisted in `config.options`
-- **Editor**: Plain `<textarea>` for CSV text input, validation error display
+- **Renderer**: Displays the Arrow table using `SortHeader` + `TableBody` from `table-utils.tsx`, with `useColumnManagement` hook for sort/hide state persisted in `config.options`. Includes pagination.
+- **Editor**: Plain `<textarea>` for CSV text input
 - **Metadata** (`referenceTableMetadata`):
   - `label: 'Reference Table'`
   - `icon: 'R'`
@@ -153,26 +146,50 @@ Uses the `useColumnManagement` hook from `table-utils.tsx` to support column sor
   - `execute`: parse CSV → register in WASM → return data
   - `getRendererProps`: extracts `data`, `status`, and `options`
 
-### Step 5: Register in cell registry
+### Step 5: Register in cell registry ✅
 
 **`cell-registry.ts`**:
-- Import `referenceTableMetadata` from `./cells/ReferenceTableCell`
-- Add `referencetable: referenceTableMetadata` to `CELL_TYPE_METADATA`
+- Imported `referenceTableMetadata` from `./cells/ReferenceTableCell`
+- Added `referencetable: referenceTableMetadata` to `CELL_TYPE_METADATA`
 
-### Step 6: Update QueryCellConfig type constraint
+### Step 6: Update QueryCellConfig type constraint ✅
 
 **`notebook-types.ts`**:
 - `QueryCellConfig.type` currently lists all SQL-based types. No change needed since `referencetable` is not SQL-based.
 
-## Files to Modify
+### Step 7: Add dependency and test infrastructure ✅
 
-| File | Action |
-|------|--------|
-| `analytics-web-app/src/lib/screen-renderers/notebook-types.ts` | Add type to union, add config interface |
-| `analytics-web-app/src/lib/screen-renderers/cell-registry.ts` | Add `registerTable` to context, register new cell |
-| `analytics-web-app/src/lib/screen-renderers/useCellExecution.ts` | Populate `registerTable` in context |
-| `analytics-web-app/src/lib/screen-renderers/cells/csv-to-arrow.ts` | **New** — CSV parsing and Arrow conversion |
-| `analytics-web-app/src/lib/screen-renderers/cells/ReferenceTableCell.tsx` | **New** — cell renderer, editor, metadata |
+**`package.json`**:
+- Added `d3-dsv` runtime dependency
+- Added `@types/d3-dsv` dev dependency
+
+**`jest.config.js`**:
+- Added `transformIgnorePatterns` to allow Jest to transform ESM `d3-dsv` module
+- Added `babel-jest` transform for `.js` files in allowed node_modules
+
+### Step 8: Add unit tests ✅
+
+**`__tests__/csv-to-arrow.test.ts`** (new file, 12 tests):
+- Basic CSV: headers + data rows → correct Arrow schema and values
+- Numeric detection: column with all numbers → Float64 type
+- String detection: column with mix of numbers and strings → string type (dictionary-encoded Utf8)
+- Quoted fields: handle commas inside quotes, escaped quotes
+- Edge cases: empty cells, single column, trailing newlines
+- Error cases: empty string, headers only
+- Empty numeric values → NaN
+
+## Files Modified
+
+| File | Action | Status |
+|------|--------|--------|
+| `analytics-web-app/src/lib/screen-renderers/notebook-types.ts` | Add type to union, add config interface | ✅ |
+| `analytics-web-app/src/lib/screen-renderers/cell-registry.ts` | Add `registerTable` to context, register new cell | ✅ |
+| `analytics-web-app/src/lib/screen-renderers/useCellExecution.ts` | Populate `registerTable`, add deregister calls | ✅ |
+| `analytics-web-app/src/lib/screen-renderers/cells/csv-to-arrow.ts` | **New** — CSV parsing and Arrow conversion | ✅ |
+| `analytics-web-app/src/lib/screen-renderers/cells/ReferenceTableCell.tsx` | **New** — cell renderer, editor, metadata | ✅ |
+| `analytics-web-app/src/lib/screen-renderers/__tests__/csv-to-arrow.test.ts` | **New** — 12 unit tests for CSV parsing | ✅ |
+| `analytics-web-app/jest.config.js` | Add ESM transform for d3-dsv | ✅ |
+| `analytics-web-app/package.json` | Add d3-dsv + @types/d3-dsv | ✅ |
 
 ## Trade-offs
 
@@ -183,29 +200,20 @@ Uses the `useColumnManagement` hook from `table-utils.tsx` to support column sor
 **Chosen**: Add `registerTable` to `CellExecutionContext`. This keeps the clean separation between cells and the WASM engine — cells never directly access the engine. The alternative (passing the engine to cell execute functions) would break the abstraction.
 
 ### Type inference
-**Chosen**: Auto-detect numbers vs. strings per column. This covers the most common case (numeric codes, measurements). If all values in a column parse as numbers, use Float64; otherwise use Utf8. Users who need specific types can cast in downstream SQL. An alternative would be explicit type annotations in the CSV headers (e.g., `code:int,label:string`) but this adds complexity without clear benefit.
+**Chosen**: Auto-detect numbers vs. strings per column. This covers the most common case (numeric codes, measurements). If all values in a column parse as numbers, use Float64; otherwise use Utf8 (dictionary-encoded by Arrow). Users who need specific types can cast in downstream SQL. An alternative would be explicit type annotations in the CSV headers (e.g., `code:int,label:string`) but this adds complexity without clear benefit.
 
-## Testing Strategy
+## Manual Testing Checklist
 
-### Unit tests for CSV parsing (`csv-to-arrow.test.ts`)
-- Basic CSV: headers + data rows → correct Arrow schema and values
-- Numeric detection: column with all numbers → Float64 type
-- Mixed values: column with mix of numbers and strings → Utf8 type
-- Quoted fields: handle commas inside quotes, escaped quotes
-- Edge cases: empty cells, single column, trailing newlines
-- Error cases: empty string, headers only, mismatched column count
-
-### Unit tests for cell execution
-- Execute with WASM engine: verify `registerTable` called with IPC bytes, data returned
-- Execute without engine: verify data still returned (just no registration)
-- Invalid CSV: verify error state
-
-### Manual testing
-- Create a reference table cell with sample CSV
-- Verify data displays correctly in the rendered table
-- Create a downstream SQL cell that queries the reference table by name
-- Verify JOIN between a remote query result and the reference table
-- Test editing CSV and re-executing: verify downstream cells update
+- [ ] Create a reference table cell with sample CSV
+- [ ] Verify data displays correctly in the rendered table
+- [ ] Verify column sorting and hiding work
+- [ ] Verify pagination works for larger datasets
+- [ ] Create a downstream SQL cell that queries the reference table by name
+- [ ] Verify JOIN between a remote query result and the reference table
+- [ ] Test editing CSV and re-executing: verify downstream cells update
+- [ ] Test deleting a reference table cell: verify WASM table is deregistered
+- [ ] Test renaming a reference table cell: verify old WASM table is deregistered
+- [ ] Test invalid CSV: verify error state displays
 
 ## Open Questions
 

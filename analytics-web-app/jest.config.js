@@ -12,7 +12,13 @@ export default {
     '^.+\\.tsx?$': ['ts-jest', {
       useESM: true,
     }],
+    '^.+\\.jsx?$': ['babel-jest', {
+      presets: [['@babel/preset-env', { targets: { node: 'current' } }]],
+    }],
   },
+  transformIgnorePatterns: [
+    'node_modules/(?!(d3-dsv)/)',
+  ],
   extensionsToTreatAsEsm: ['.ts', '.tsx'],
   testMatch: [
     '<rootDir>/tests/**/*.ts?(x)',
