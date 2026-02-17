@@ -120,7 +120,11 @@ def main():
     os.chdir(rust_dir)
 
     # Run binaries directly from target/ to avoid cargo run recompilation
-    target_dir = rust_dir / "target" / mode
+    cargo_target_dir = os.environ.get("CARGO_TARGET_DIR")
+    if cargo_target_dir:
+        target_dir = Path(cargo_target_dir) / mode
+    else:
+        target_dir = rust_dir / "target" / mode
 
     # Start Ingestion Server
     print("📥 Starting Ingestion Server...")

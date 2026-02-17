@@ -30,11 +30,14 @@ jest.mock('lucide-react', () => ({
   MoreVertical: () => <span data-testid="more">⋮</span>,
   Trash2: () => <span data-testid="trash">🗑</span>,
   GripVertical: () => <span data-testid="grip">⠿</span>,
+  Zap: () => <span data-testid="zap">⚡</span>,
   Settings: () => <span data-testid="settings">⚙</span>,
   Save: () => <span data-testid="save">💾</span>,
   Database: () => <span data-testid="database">🗄</span>,
   AlertCircle: () => <span data-testid="alert-circle">⚠</span>,
 }))
+
+// @radix-ui/react-dropdown-menu is mocked via moduleNameMapper in jest.config.js
 
 // Mock @dnd-kit to simplify testing
 jest.mock('@dnd-kit/core', () => ({
@@ -502,17 +505,15 @@ describe('NotebookRenderer', () => {
   })
 
   describe('cell menu', () => {
-    it('should show menu with options when menu button is clicked', async () => {
+    it('should show menu with options', async () => {
       const cells = [createTableCell('Query')]
 
       await renderNotebook(createDefaultProps({ config: { cells } }))
 
-      // Click menu button
-      const menuButton = screen.getByTestId('more').closest('button')
-      fireEvent.click(menuButton!)
-
+      // Radix menu items render inline via the mock portal
       expect(screen.getByText('Run from here')).toBeInTheDocument()
       expect(screen.getByText('Delete cell')).toBeInTheDocument()
+      expect(screen.getByText('Auto-run from here')).toBeInTheDocument()
     })
   })
 

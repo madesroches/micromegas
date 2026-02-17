@@ -103,6 +103,7 @@ export interface CellConfigBase {
   name: string
   type: CellType
   layout: { height: number; collapsed?: boolean }
+  autoRunFromHere?: boolean
 }
 
 export interface QueryCellConfig extends CellConfigBase {

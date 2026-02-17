@@ -1,5 +1,6 @@
-import { ReactNode, useState, useRef, useEffect, forwardRef, HTMLAttributes, useCallback } from 'react'
-import { ChevronDown, ChevronRight, Play, RotateCcw, MoreVertical, Trash2, GripVertical } from 'lucide-react'
+import { ReactNode, useRef, useEffect, forwardRef, HTMLAttributes, useCallback } from 'react'
+import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
+import { ChevronDown, ChevronRight, Play, RotateCcw, MoreVertical, Trash2, GripVertical, Zap } from 'lucide-react'
 import { CellType, CellStatus, getCellTypeMetadata } from '@/lib/screen-renderers/cell-registry'
 import { Button } from '@/components/ui/button'
 import { ResizeHandle } from '@/components/ResizeHandle'
@@ -25,6 +26,10 @@ interface CellContainerProps extends Omit<HTMLAttributes<HTMLDivElement>, 'child
   onRun?: () => void
   /** Run from this cell (and all below) */
   onRunFromHere?: () => void
+  /** Whether this cell auto-runs from here when upstream variables change */
+  autoRunFromHere?: boolean
+  /** Toggle auto-run from here */
+  onToggleAutoRunFromHere?: () => void
   /** Delete this cell */
   onDelete?: () => void
   /** Row count or other status text */
@@ -55,6 +60,8 @@ export const CellContainer = forwardRef<HTMLDivElement, CellContainerProps>(func
     onSelect,
     onRun,
     onRunFromHere,
+    autoRunFromHere,
+    onToggleAutoRunFromHere,
     onDelete,
     statusText,
     height = 300,
@@ -68,29 +75,12 @@ export const CellContainer = forwardRef<HTMLDivElement, CellContainerProps>(func
   },
   ref
 ) {
-  const [showMenu, setShowMenu] = useState(false)
-  const menuRef = useRef<HTMLDivElement>(null)
-
   // Get metadata for this cell type
   const meta = getCellTypeMetadata(type)
 
   // Normalize height - handle legacy 'auto' values from old configs
   const normalizedHeight = typeof height === 'number' ? height : 300
   const currentHeight = useRef(normalizedHeight)
-
-  // Close menu when clicking outside
-  useEffect(() => {
-    if (!showMenu) return
-
-    const handleClickOutside = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        setShowMenu(false)
-      }
-    }
-
-    document.addEventListener('mousedown', handleClickOutside)
-    return () => document.removeEventListener('mousedown', handleClickOutside)
-  }, [showMenu])
 
   const statusColor =
     status === 'loading'
@@ -189,6 +179,11 @@ export const CellContainer = forwardRef<HTMLDivElement, CellContainerProps>(func
               <span className="font-medium text-theme-text-primary">{name}</span>
             </>
           )}
+          {autoRunFromHere && (
+            <span className="text-accent-link" title="Auto-run from here">
+              <Zap className="w-3.5 h-3.5" />
+            </span>
+          )}
         </div>
 
         {/* Title bar content (e.g., variable inputs) */}
@@ -223,51 +218,56 @@ export const CellContainer = forwardRef<HTMLDivElement, CellContainerProps>(func
             </Button>
           )}
 
-          {/* Menu button */}
-          <div className="relative" ref={menuRef}>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-7 w-7 p-0"
-              onClick={(e) => {
-                e.stopPropagation()
-                setShowMenu(!showMenu)
-              }}
-            >
-              <MoreVertical className="w-3.5 h-3.5" />
-            </Button>
+          {/* Menu button — uses Radix DropdownMenu with portal to escape overflow-hidden */}
+          <DropdownMenu.Root>
+            <DropdownMenu.Trigger asChild>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 w-7 p-0"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <MoreVertical className="w-3.5 h-3.5" />
+              </Button>
+            </DropdownMenu.Trigger>
 
-            {showMenu && (
-              <div className="absolute right-0 top-full mt-1 w-40 bg-app-panel border border-theme-border rounded-md shadow-lg z-50">
+            <DropdownMenu.Portal>
+              <DropdownMenu.Content
+                align="end"
+                sideOffset={4}
+                className="w-48 bg-app-panel border border-theme-border rounded-md shadow-lg z-50"
+                onClick={(e) => e.stopPropagation()}
+              >
                 {onRunFromHere && canRun && (
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      onRunFromHere()
-                      setShowMenu(false)
-                    }}
-                    className="w-full flex items-center gap-2 px-3 py-2 text-sm text-theme-text-primary hover:bg-theme-border/50 first:rounded-t-md"
+                  <DropdownMenu.Item
+                    className="flex items-center gap-2 px-3 py-2 text-sm text-theme-text-primary hover:bg-theme-border/50 cursor-pointer outline-none first:rounded-t-md"
+                    onSelect={() => onRunFromHere()}
                   >
                     <Play className="w-4 h-4" />
                     Run from here
-                  </button>
+                  </DropdownMenu.Item>
+                )}
+                {onToggleAutoRunFromHere && canRun && (
+                  <DropdownMenu.Item
+                    className="flex items-center gap-2 px-3 py-2 text-sm text-theme-text-primary hover:bg-theme-border/50 cursor-pointer outline-none"
+                    onSelect={() => onToggleAutoRunFromHere()}
+                  >
+                    <Zap className={`w-4 h-4 ${autoRunFromHere ? 'text-accent-link' : ''}`} />
+                    {autoRunFromHere ? 'Disable auto-run' : 'Auto-run from here'}
+                  </DropdownMenu.Item>
                 )}
                 {onDelete && (
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      onDelete()
-                      setShowMenu(false)
-                    }}
-                    className="w-full flex items-center gap-2 px-3 py-2 text-sm text-accent-error hover:bg-theme-border/50 last:rounded-b-md"
+                  <DropdownMenu.Item
+                    className="flex items-center gap-2 px-3 py-2 text-sm text-accent-error hover:bg-theme-border/50 cursor-pointer outline-none last:rounded-b-md"
+                    onSelect={() => onDelete()}
                   >
                     <Trash2 className="w-4 h-4" />
                     Delete cell
-                  </button>
+                  </DropdownMenu.Item>
                 )}
-              </div>
-            )}
-          </div>
+              </DropdownMenu.Content>
+            </DropdownMenu.Portal>
+          </DropdownMenu.Root>
         </div>
       </div>
 

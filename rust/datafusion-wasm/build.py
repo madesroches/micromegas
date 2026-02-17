@@ -3,6 +3,7 @@
 
 import argparse
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -10,7 +11,8 @@ import sys
 from pathlib import Path
 
 CRATE_DIR = Path(__file__).parent.resolve()
-TARGET_DIR = CRATE_DIR / "target" / "wasm32-unknown-unknown" / "release"
+_TARGET_BASE = Path(os.environ["CARGO_TARGET_DIR"]) if "CARGO_TARGET_DIR" in os.environ else CRATE_DIR / "target"
+TARGET_DIR = _TARGET_BASE / "wasm32-unknown-unknown" / "release"
 PKG_DIR = CRATE_DIR / "pkg"
 OUTPUT_DIR = (
     CRATE_DIR.parent.parent / "analytics-web-app" / "src" / "lib" / "datafusion-wasm"
@@ -78,7 +80,7 @@ def test() -> None:
     print("Tests passed!")
 
 
-def build() -> None:
+def build(skip_opt: bool = False) -> None:
     """Build and package the WASM artifacts."""
     check_tools()
 
@@ -101,7 +103,9 @@ def build() -> None:
         ]
     )
 
-    if shutil.which("wasm-opt"):
+    if skip_opt:
+        print("Skipping wasm-opt (--debug)")
+    elif shutil.which("wasm-opt"):
         print("Optimizing with wasm-opt...")
         wasm_bg = PKG_DIR / "micromegas_datafusion_wasm_bg.wasm"
         run(["wasm-opt", str(wasm_bg), "-Os", "-o", str(wasm_bg)])
@@ -126,12 +130,15 @@ def main() -> None:
     parser.add_argument(
         "--test", action="store_true", help="Run WASM integration tests in headless Firefox"
     )
+    parser.add_argument(
+        "--debug", action="store_true", help="Skip wasm-opt optimization (faster builds)"
+    )
     args = parser.parse_args()
 
     if args.test:
         test()
     else:
-        build()
+        build(skip_opt=args.debug)
 
 
 if __name__ == "__main__":
