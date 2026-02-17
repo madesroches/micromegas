@@ -258,6 +258,16 @@ export function NotebookRenderer({
   // Auto-run: guard ref prevents re-entrance when auto-run itself sets variables
   const autoRunningRef = useRef(false)
 
+  // Debounced auto-run timers (per cell index) for config changes like SQL editing
+  const autoRunTimersRef = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map())
+  useEffect(() => {
+    const timers = autoRunTimersRef.current
+    return () => {
+      for (const timer of timers.values()) clearTimeout(timer)
+      timers.clear()
+    }
+  }, [])
+
   // WASM engine for notebook-local queries
   // Loaded eagerly so remote cell results are always registered for cross-cell references
   const [engine, setEngine] = useState<NotebookQueryEngine | null>(null)
@@ -290,6 +300,26 @@ export function NotebookRenderer({
     dataSource,
     engine,
   })
+
+  // Ref to always access the latest executeFromCell inside debounced timers
+  // (avoids stale closure: timer set during render N would otherwise capture
+  //  the executeFromCell from render N, missing config updates from render N+1)
+  const executeFromCellRef = useRef(executeFromCell)
+  executeFromCellRef.current = executeFromCell
+
+  // Schedule a debounced auto-run for a cell (used for SQL editing, content changes)
+  const scheduleAutoRun = useCallback(
+    (cellIndex: number) => {
+      const timers = autoRunTimersRef.current
+      const existing = timers.get(cellIndex)
+      if (existing) clearTimeout(existing)
+      timers.set(cellIndex, setTimeout(() => {
+        timers.delete(cellIndex)
+        executeFromCellRef.current(cellIndex)
+      }, 300))
+    },
+    [],
+  )
 
   // Handle time range selection from charts (drag-to-zoom)
   const handleTimeRangeSelect = useCallback((from: Date, to: Date) => {
@@ -455,8 +485,20 @@ export function NotebookRenderer({
 
       const newConfig = { ...notebookConfig, cells: newCells }
       onConfigChange(newConfig)
+
+      // Auto-run: schedule debounced execution when a config value actually changed
+      // (skip layout/name/autoRunFromHere — not execution-relevant)
+      if (cell.autoRunFromHere) {
+        const prev = cell as Record<string, unknown>
+        const next = updates as Record<string, unknown>
+        const skipKeys = new Set(['layout', 'name', 'autoRunFromHere'])
+        const hasChange = Object.keys(next).some(k => !skipKeys.has(k) && next[k] !== prev[k])
+        if (hasChange) {
+          scheduleAutoRun(index)
+        }
+      }
     },
-    [cells, notebookConfig, onConfigChange, migrateCellState, migrateVariable, setVariableValue]
+    [cells, notebookConfig, onConfigChange, migrateCellState, migrateVariable, setVariableValue, scheduleAutoRun]
   )
 
   const toggleCellCollapsed = useCallback(
