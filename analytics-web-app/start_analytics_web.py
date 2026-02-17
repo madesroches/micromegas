@@ -358,6 +358,11 @@ def main():
                 )
                 print_status("WASM engine built successfully", "success")
             except (subprocess.CalledProcessError, FileNotFoundError) as e:
+                if args.build_wasm:
+                    print_status(f"WASM build failed: {e}", "error")
+                    print_status("Install wasm-bindgen and wasm-opt, then retry.", "info")
+                    cleanup()
+                    return 1
                 print_status(f"WASM build failed: {e}", "warning")
                 print_status("Local Query screens will not work. Install wasm-bindgen and wasm-opt, then run: python3 rust/datafusion-wasm/build.py", "info")
                 print()
