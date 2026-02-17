@@ -11,8 +11,13 @@ Web application for exploring and analyzing micromegas telemetry data.
 
 For Local Query screens (optional):
 - `wasm32-unknown-unknown` target: `rustup target add wasm32-unknown-unknown`
-- `wasm-bindgen-cli`: `cargo install wasm-bindgen-cli`
-- `wasm-opt` (from binaryen): install via your package manager
+- `wasm-bindgen-cli`: version must match `Cargo.lock` (check `rust/datafusion-wasm/Cargo.lock` for the pinned version)
+  ```bash
+  # Install the exact version required by the project
+  cargo install wasm-bindgen-cli --version 0.2.108
+  ```
+- `wasm-opt` (from [binaryen](https://github.com/WebAssembly/binaryen)): `npm install -g binaryen`
+  - Optional — only used to shrink the `.wasm` binary. Use `--debug` to skip optimization during development.
 
 ## Quick Start
 
@@ -47,7 +52,11 @@ cargo run --bin analytics-web-srv -- --port 8000 --disable-auth
 ### WASM Engine (optional, for Local Query screens)
 
 ```bash
+# Full build with wasm-opt optimization
 python3 rust/datafusion-wasm/build.py
+
+# Fast build without wasm-opt (recommended during development)
+python3 rust/datafusion-wasm/build.py --debug
 ```
 
 This compiles DataFusion to WebAssembly and copies the artifacts to `src/lib/datafusion-wasm/`. The `.wasm` binary is not checked into git and must be rebuilt after a fresh clone or whenever the Rust source in `rust/datafusion-wasm/` changes. The quick start script builds it automatically on first run.

@@ -215,6 +215,7 @@ def main():
     parser = argparse.ArgumentParser(description="Start Analytics Web App Development Environment")
     parser.add_argument("--disable-auth", action="store_true", help="Disable authentication even if OIDC config is present")
     parser.add_argument("--build-wasm", action="store_true", help="Force rebuild of the micromegas-datafusion-wasm engine")
+    parser.add_argument("--debug", action="store_true", help="Skip wasm-opt optimization (faster WASM builds)")
     args = parser.parse_args()
 
     print_status("Starting Analytics Web App Development Environment", "info")
@@ -352,10 +353,10 @@ def main():
         if args.build_wasm or not wasm_binary.exists():
             print_status("Building micromegas-datafusion-wasm...", "info")
             try:
-                subprocess.run(
-                    [sys.executable, "rust/datafusion-wasm/build.py"],
-                    check=True,
-                )
+                build_cmd = [sys.executable, "rust/datafusion-wasm/build.py"]
+                if args.debug:
+                    build_cmd.append("--debug")
+                subprocess.run(build_cmd, check=True)
                 print_status("WASM engine built successfully", "success")
             except (subprocess.CalledProcessError, FileNotFoundError) as e:
                 if args.build_wasm:
