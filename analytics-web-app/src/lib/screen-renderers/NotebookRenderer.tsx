@@ -489,8 +489,8 @@ export function NotebookRenderer({
       // Auto-run: schedule debounced execution when a config value actually changed
       // (skip view-only keys that aren't execution-relevant)
       if (cell.autoRunFromHere) {
-        const prev = cell as Record<string, unknown>
-        const next = updates as Record<string, unknown>
+        const prev = cell as unknown as Record<string, unknown>
+        const next = updates as unknown as Record<string, unknown>
         // Keys that affect presentation only, not query results
         const nonExecKeys = new Set(['layout', 'name', 'autoRunFromHere', 'options'])
         const hasChange = Object.keys(next).some(k => !nonExecKeys.has(k) && next[k] !== prev[k])
