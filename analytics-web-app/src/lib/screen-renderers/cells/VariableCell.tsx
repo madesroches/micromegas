@@ -53,9 +53,14 @@ function useVariableInput({
 
   const [localValue, setLocalValue] = useState<string | undefined>(undefined)
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const pendingRef = useRef(false)
 
   useEffect(() => {
-    setLocalValue(undefined)
+    // Only reset local value if the user isn't actively typing (no pending debounce).
+    // Otherwise the auto-run cascade can clobber the last keystroke.
+    if (!pendingRef.current) {
+      setLocalValue(undefined)
+    }
   }, [value])
 
   useEffect(() => {
@@ -68,10 +73,12 @@ function useVariableInput({
 
   const handleTextChange = (newValue: string) => {
     setLocalValue(newValue)
+    pendingRef.current = true
     if (timeoutRef.current) {
       clearTimeout(timeoutRef.current)
     }
     timeoutRef.current = setTimeout(() => {
+      pendingRef.current = false
       onValueChange?.(newValue)
     }, 300)
   }
