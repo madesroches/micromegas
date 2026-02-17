@@ -38,6 +38,7 @@ The WASM engine's `register_table(name, ipc_bytes)` is called internally by `run
 export interface ReferenceTableCellConfig extends CellConfigBase {
   type: 'referencetable'
   csv: string  // CSV text with headers
+  options?: Record<string, unknown>  // Sort/hidden-column state (same pattern as QueryCellConfig)
 }
 ```
 
@@ -69,12 +70,11 @@ This is a minimal, backward-compatible change — existing cells ignore the new 
 
 A utility function `csvToArrowIPC(csvText: string)` that:
 
-1. Splits CSV text into lines, extracts headers from the first row
-2. Parses data rows with basic CSV handling (quoted fields, escaped quotes)
-3. Infers column types: if all non-empty values in a column parse as numbers, use `Float64`; otherwise use `Utf8`
-4. Builds an Arrow table using `tableFromArrays()` from `apache-arrow`
-5. Serializes to IPC stream bytes using `tableToIPC(table, 'stream')`
-6. Returns both the IPC bytes and the Arrow `Table` (for display)
+1. Parses CSV text using `csvParse` from `d3-dsv` (RFC 4180-compliant, handles quoting, escapes, CRLF)
+2. Infers column types: if all non-empty values in a column parse as numbers, use `Float64`; otherwise use `Utf8`
+3. Builds an Arrow table using `tableFromArrays()` from `apache-arrow`
+4. Serializes to IPC stream bytes using `tableToIPC(table, 'stream')`
+5. Returns both the IPC bytes and the Arrow `Table` (for display)
 
 This utility lives in a new file `csv-to-arrow.ts` alongside the cell, or in `lib/` if reuse is likely. Given the focused scope, placing it in the cells directory is preferable.
 
@@ -102,9 +102,11 @@ User writes CSV in editor
 
 Reuses the existing `TableBody` and `SortHeader` components from `table-utils.tsx` to display the parsed data in the notebook body — this serves as both the cell output and the live preview of the CSV. When the user edits CSV in the editor panel and re-executes, the table in the notebook body updates immediately.
 
+Uses the `useColumnManagement` hook from `table-utils.tsx` to support column sorting and hiding, matching the pattern from `TableCell.tsx`. Sort and hidden-column state is persisted in `config.options` via `onOptionsChange`.
+
 ### Editor
 
-- `SyntaxEditor` (no language highlighting) for editing CSV content
+- Plain `<textarea>` for editing CSV content (no need for code editor features like line numbers or syntax highlighting)
 - Displays validation errors (e.g., "CSV must have at least a header row")
 - No inline preview needed — the cell's rendered table in the notebook body serves as the preview
 
@@ -124,11 +126,13 @@ Reuses the existing `TableBody` and `SortHeader` components from `table-utils.ts
 
 **`useCellExecution.ts`**:
 - Populate `registerTable` in the context object when `engine` is non-null
+- Add `engine.deregister_table(cellName)` to `removeCellState` so deleted cells are cleaned up from WASM
+- Add `engine.deregister_table(oldName)` to `migrateCellState` so renamed cells don't leave stale registrations (the next execution will re-register under the new name)
 
 ### Step 3: Create CSV-to-Arrow utility
 
 **`cells/csv-to-arrow.ts`** (new file):
-- `parseCsvLine(line: string): string[]` — handles quoted fields, comma in quotes
+- Uses `csvParse` from `d3-dsv` for RFC 4180-compliant CSV parsing
 - `csvToArrowIPC(csvText: string): { table: Table; ipcBytes: Uint8Array }` — full pipeline
 - Validate: at least one header, at least one data row
 - Type inference: try `Number()` on each column, fall back to string
@@ -136,8 +140,8 @@ Reuses the existing `TableBody` and `SortHeader` components from `table-utils.ts
 ### Step 4: Create ReferenceTableCell
 
 **`cells/ReferenceTableCell.tsx`** (new file):
-- **Renderer**: Displays the Arrow table using `SortHeader` + `TableBody` from `table-utils.tsx`
-- **Editor**: `SyntaxEditor` (language=undefined) for CSV text input, validation error display
+- **Renderer**: Displays the Arrow table using `SortHeader` + `TableBody` from `table-utils.tsx`, with `useColumnManagement` hook for sort/hide state persisted in `config.options`
+- **Editor**: Plain `<textarea>` for CSV text input, validation error display
 - **Metadata** (`referenceTableMetadata`):
   - `label: 'Reference Table'`
   - `icon: 'R'`
@@ -147,7 +151,7 @@ Reuses the existing `TableBody` and `SortHeader` components from `table-utils.ts
   - `canBlockDownstream: true`
   - `createDefaultConfig`: returns `{ type: 'referencetable', csv: 'column1,column2\nvalue1,value2' }`
   - `execute`: parse CSV → register in WASM → return data
-  - `getRendererProps`: extracts `data` and `status`
+  - `getRendererProps`: extracts `data`, `status`, and `options`
 
 ### Step 5: Register in cell registry
 
@@ -172,8 +176,8 @@ Reuses the existing `TableBody` and `SortHeader` components from `table-utils.ts
 
 ## Trade-offs
 
-### CSV parsing: custom vs. library
-**Chosen**: Simple custom parser. Reference tables are small (tens to hundreds of rows) and the CSV format is straightforward. A full CSV library (e.g., PapaParse) adds ~20kB for capabilities we don't need.
+### CSV parsing: d3-dsv vs. custom
+**Chosen**: `d3-dsv` library (~2kB min+gz). Provides a battle-tested RFC 4180 parser that correctly handles quoting, escaped quotes, CRLF line endings, and fields containing newlines — edge cases that are deceptively tricky to get right in a hand-rolled parser. The size cost is negligible.
 
 ### Execution context vs. direct engine access
 **Chosen**: Add `registerTable` to `CellExecutionContext`. This keeps the clean separation between cells and the WASM engine — cells never directly access the engine. The alternative (passing the engine to cell execute functions) would break the abstraction.
