@@ -6,6 +6,7 @@ export default {
     '^@/(.*)$': '<rootDir>/src/$1',
     '^react-markdown$': '<rootDir>/src/__mocks__/react-markdown.tsx',
     '^remark-gfm$': '<rootDir>/src/__mocks__/remark-gfm.ts',
+    '^@radix-ui/react-dropdown-menu$': '<rootDir>/src/__mocks__/@radix-ui/react-dropdown-menu.tsx',
   },
   transform: {
     '^.+\\.tsx?$': ['ts-jest', {

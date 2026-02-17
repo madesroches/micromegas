@@ -37,16 +37,7 @@ jest.mock('lucide-react', () => ({
   AlertCircle: () => <span data-testid="alert-circle">⚠</span>,
 }))
 
-// Mock Radix dropdown menu — renders trigger and content inline (no portal)
-jest.mock('@radix-ui/react-dropdown-menu', () => ({
-  Root: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  Trigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  Portal: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  Content: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  Item: ({ children, onSelect, ...props }: { children: React.ReactNode; onSelect?: () => void } & Record<string, unknown>) => (
-    <button {...props} onClick={onSelect}>{children}</button>
-  ),
-}))
+// @radix-ui/react-dropdown-menu is mocked via moduleNameMapper in jest.config.js
 
 // Mock @dnd-kit to simplify testing
 jest.mock('@dnd-kit/core', () => ({
