@@ -86,6 +86,10 @@ export function useNotebookVariables(
         const baseline = savedDefault ?? varCell.defaultValue
         if (baseline !== undefined) {
           values[cell.name] = baseline
+        } else if (varCell.variableType === 'text') {
+          // Text variables with no default value default to empty string
+          // so that $variable macros in downstream cells substitute correctly
+          values[cell.name] = ''
         }
       }
     }
