@@ -495,7 +495,8 @@ export function NotebookRenderer({
     } else if (state.status === 'loading' && state.fetchProgress) {
       statusText = `${state.fetchProgress.rows.toLocaleString()} rows (${formatBytes(state.fetchProgress.bytes)})`
     } else if (state.data) {
-      const rowText = `${state.data.numRows.toLocaleString()} rows`
+      const byteSize = state.data.batches.reduce((sum: number, b) => sum + b.data.byteLength, 0)
+      const rowText = `${state.data.numRows.toLocaleString()} rows (${formatBytes(byteSize)})`
       statusText = state.elapsedMs != null ? `${rowText} in ${formatElapsedMs(state.elapsedMs)}` : rowText
     }
 
