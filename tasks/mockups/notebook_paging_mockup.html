@@ -1,0 +1,873 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Notebook Cell Paging — Mockups</title>
+<style>
+  /* ── Theme tokens ── */
+  :root {
+    --app-bg: #0a0a0f;
+    --header-bg: #12121a;
+    --panel-bg: #12121a;
+    --card-bg: #1a1a2e;
+    --border-color: #2a2a3e;
+    --border-hover: #3a3a4e;
+    --text-primary: #e7e9ea;
+    --text-secondary: #9ca3af;
+    --text-muted: #6b7280;
+    --accent-link: #1565c0;
+    --accent-link-hover: #1976d2;
+    --accent-error: #f87171;
+    --accent-warning: #ffb300;
+    --accent-highlight: #ffb300;
+    --accent-success: #22c55e;
+    --selection-bg: rgba(21, 101, 192, 0.15);
+    --selection-border: #1565c0;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--app-bg);
+    color: var(--text-primary);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+    padding: 32px;
+  }
+
+  h1 {
+    font-size: 22px;
+    font-weight: 600;
+    margin-bottom: 8px;
+  }
+  .subtitle {
+    color: var(--text-muted);
+    font-size: 13px;
+    margin-bottom: 40px;
+  }
+
+  h2 {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 16px;
+    margin-top: 48px;
+  }
+
+  /* ── Cell container (mimics CellContainer.tsx) ── */
+  .cell {
+    background: var(--panel-bg);
+    border: 2px solid var(--border-color);
+    border-radius: 8px;
+    overflow: hidden;
+    margin-bottom: 24px;
+    max-width: 960px;
+  }
+  .cell.selected {
+    border-color: var(--selection-border);
+    background: var(--selection-bg);
+  }
+
+  .cell-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border-color);
+    background: var(--card-bg);
+  }
+  .cell.selected .cell-header {
+    background: var(--selection-bg);
+  }
+
+  .cell-header-left {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .cell-type-badge {
+    font-size: 11px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: var(--panel-bg);
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    font-weight: 500;
+  }
+
+  .cell-name {
+    font-weight: 500;
+    color: var(--text-primary);
+    font-size: 14px;
+  }
+
+  .cell-header-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .status-text {
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+
+  .icon-btn {
+    width: 28px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 14px;
+  }
+  .icon-btn:hover {
+    background: var(--card-bg);
+    color: var(--text-primary);
+  }
+
+  .cell-body {
+    padding: 16px;
+    height: 340px;
+    overflow: auto;
+  }
+
+  /* ── Table styles ── */
+  .data-table-wrap {
+    background: var(--app-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+  }
+
+  .data-table-scroll {
+    flex: 1;
+    overflow: auto;
+  }
+
+  table {
+    width: 100%;
+    font-size: 13px;
+    border-collapse: collapse;
+  }
+
+  thead {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+  }
+
+  thead tr {
+    background: var(--card-bg);
+    border-bottom: 1px solid var(--border-color);
+  }
+
+  th {
+    padding: 8px 12px;
+    text-align: left;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+  }
+  th:hover {
+    color: var(--text-secondary);
+    background: rgba(26, 26, 46, 0.5);
+  }
+  th.sorted {
+    color: var(--text-primary);
+    background: var(--card-bg);
+  }
+  .sort-icon {
+    color: var(--accent-link);
+    font-size: 10px;
+    margin-left: 4px;
+  }
+
+  td {
+    padding: 8px 12px;
+    color: var(--text-primary);
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 12px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 240px;
+  }
+
+  tbody tr {
+    border-bottom: 1px solid var(--border-color);
+    transition: background 0.1s;
+  }
+  tbody tr:hover {
+    background: rgba(26, 26, 46, 0.5);
+  }
+
+  /* ── Pagination bar ── */
+  .pagination-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 12px;
+    background: var(--card-bg);
+    border-top: 1px solid var(--border-color);
+    flex-shrink: 0;
+  }
+
+  .pagination-nav {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+  }
+
+  .page-btn {
+    width: 28px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--border-color);
+    background: transparent;
+    color: var(--text-secondary);
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 12px;
+    transition: all 0.15s;
+  }
+  .page-btn:hover:not(:disabled) {
+    background: var(--border-color);
+    color: var(--text-primary);
+    border-color: var(--border-hover);
+  }
+  .page-btn:disabled {
+    opacity: 0.3;
+    cursor: default;
+  }
+
+  .page-info {
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin: 0 10px;
+    white-space: nowrap;
+  }
+  .page-info strong {
+    color: var(--text-primary);
+    font-weight: 600;
+  }
+
+  .pagination-meta {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .row-range {
+    font-size: 11px;
+    color: var(--text-muted);
+    white-space: nowrap;
+  }
+
+  .page-size-select {
+    font-size: 11px;
+    padding: 4px 6px;
+    background: var(--app-bg);
+    color: var(--text-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    cursor: pointer;
+    outline: none;
+  }
+  .page-size-select:hover {
+    border-color: var(--border-hover);
+  }
+  .page-size-select:focus {
+    border-color: var(--accent-link);
+  }
+
+  .page-size-label {
+    font-size: 11px;
+    color: var(--text-muted);
+  }
+
+  /* ── Log styles ── */
+  .log-wrap {
+    background: var(--app-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    overflow: hidden;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 12px;
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+  }
+
+  .log-scroll {
+    flex: 1;
+    overflow: auto;
+  }
+
+  .log-row {
+    display: flex;
+    padding: 4px 12px;
+    border-bottom: 1px solid rgba(18, 18, 26, 0.8);
+    transition: background 0.1s;
+  }
+  .log-row:hover {
+    background: rgba(18, 18, 26, 0.5);
+  }
+
+  .log-time {
+    color: var(--text-muted);
+    margin-right: 12px;
+    min-width: 188px;
+    white-space: nowrap;
+  }
+  .log-level {
+    min-width: 38px;
+    margin-right: 12px;
+    font-weight: 600;
+  }
+  .log-level.info { color: var(--accent-link); }
+  .log-level.debug { color: var(--text-secondary); }
+  .log-level.warn { color: var(--accent-warning); }
+  .log-level.error { color: var(--accent-error); }
+  .log-level.trace { color: var(--text-muted); }
+
+  .log-target {
+    color: var(--accent-highlight);
+    margin-right: 12px;
+    min-width: 200px;
+    max-width: 200px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .log-msg {
+    color: var(--text-primary);
+    flex: 1;
+    word-break: break-word;
+  }
+
+  /* ── Section dividers ── */
+  .divider {
+    height: 1px;
+    background: var(--border-color);
+    margin: 40px 0;
+    max-width: 960px;
+  }
+
+  /* ── Annotations ── */
+  .annotation {
+    display: inline-block;
+    background: rgba(21, 101, 192, 0.15);
+    border: 1px dashed var(--accent-link);
+    color: var(--accent-link);
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    margin-bottom: 8px;
+  }
+
+  /* ── Few rows state ── */
+  .cell-body.short {
+    height: 200px;
+  }
+</style>
+</head>
+<body>
+
+<h1>Notebook Cell Paging — Mockups</h1>
+<p class="subtitle">Issue #820: Implement paging for table and log cells in notebooks</p>
+
+<!-- ================================================================== -->
+<h2>1. Table Cell — Middle of Results (Page 3 of 42)</h2>
+<!-- ================================================================== -->
+
+<div class="cell selected">
+  <div class="cell-header">
+    <div class="cell-header-left">
+      <span style="color:var(--text-muted);font-size:16px">⋮⋮</span>
+      <span style="color:var(--text-muted);font-size:14px">▾</span>
+      <span class="cell-type-badge">Table</span>
+      <span class="cell-name">process_list</span>
+    </div>
+    <div class="cell-header-right">
+      <span class="status-text">4,200 rows in 1.23s</span>
+      <button class="icon-btn">▶</button>
+      <button class="icon-btn">⋮</button>
+    </div>
+  </div>
+  <div class="cell-body">
+    <div class="data-table-wrap">
+      <div class="data-table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th class="sorted">process_id <span class="sort-icon">▲</span></th>
+              <th>exe</th>
+              <th>username</th>
+              <th>computer</th>
+              <th>start_time</th>
+              <th>nb_log_entries</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>a3f8c291-4e7b-...</td>
+              <td>telemetry-ingestion-srv</td>
+              <td>svc-telemetry</td>
+              <td>prod-ingest-03</td>
+              <td>2026-02-17 08:12:34</td>
+              <td>12,847</td>
+            </tr>
+            <tr>
+              <td>b7d2e104-9a3c-...</td>
+              <td>flight-sql-srv</td>
+              <td>svc-analytics</td>
+              <td>prod-query-01</td>
+              <td>2026-02-17 08:12:41</td>
+              <td>8,234</td>
+            </tr>
+            <tr>
+              <td>c1e9f387-2b6d-...</td>
+              <td>telemetry-admin</td>
+              <td>admin</td>
+              <td>prod-admin-01</td>
+              <td>2026-02-17 08:15:02</td>
+              <td>1,092</td>
+            </tr>
+            <tr>
+              <td>d4a6b052-7f1e-...</td>
+              <td>game-server</td>
+              <td>svc-game</td>
+              <td>prod-game-12</td>
+              <td>2026-02-17 08:15:18</td>
+              <td>45,612</td>
+            </tr>
+            <tr>
+              <td>e8c3d719-0b4a-...</td>
+              <td>matchmaker</td>
+              <td>svc-match</td>
+              <td>prod-match-02</td>
+              <td>2026-02-17 08:16:03</td>
+              <td>3,271</td>
+            </tr>
+            <tr>
+              <td>f2b7a493-5d8e-...</td>
+              <td>telemetry-ingestion-srv</td>
+              <td>svc-telemetry</td>
+              <td>prod-ingest-01</td>
+              <td>2026-02-17 08:16:22</td>
+              <td>11,503</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- ★ PAGINATION BAR ★ -->
+      <div class="pagination-bar">
+        <div class="pagination-nav">
+          <button class="page-btn" title="First page">⟨⟨</button>
+          <button class="page-btn" title="Previous page">⟨</button>
+          <span class="page-info">Page <strong>3</strong> of <strong>42</strong></span>
+          <button class="page-btn" title="Next page">⟩</button>
+          <button class="page-btn" title="Last page">⟩⟩</button>
+        </div>
+        <div class="pagination-meta">
+          <span class="row-range">Rows 201–300 of 4,200</span>
+          <select class="page-size-select">
+            <option>50</option>
+            <option selected>100</option>
+            <option>250</option>
+            <option>500</option>
+            <option>1000</option>
+          </select>
+          <span class="page-size-label">rows/page</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+
+<!-- ================================================================== -->
+<h2>2. Table Cell — First Page (buttons disabled at boundary)</h2>
+<!-- ================================================================== -->
+
+<div class="cell">
+  <div class="cell-header">
+    <div class="cell-header-left">
+      <span style="color:var(--text-muted);font-size:16px">⋮⋮</span>
+      <span style="color:var(--text-muted);font-size:14px">▾</span>
+      <span class="cell-type-badge">Table</span>
+      <span class="cell-name">recent_errors</span>
+    </div>
+    <div class="cell-header-right">
+      <span class="status-text">523 rows in 0.87s</span>
+      <button class="icon-btn">▶</button>
+      <button class="icon-btn">⋮</button>
+    </div>
+  </div>
+  <div class="cell-body">
+    <div class="data-table-wrap">
+      <div class="data-table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>time</th>
+              <th>level</th>
+              <th>target</th>
+              <th>msg</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>2026-02-17 14:23:01</td>
+              <td>ERROR</td>
+              <td>ingestion::handler</td>
+              <td>Failed to parse payload: invalid schema version</td>
+            </tr>
+            <tr>
+              <td>2026-02-17 14:22:58</td>
+              <td>ERROR</td>
+              <td>analytics::query</td>
+              <td>Query timeout after 30s: SELECT * FROM large_table</td>
+            </tr>
+            <tr>
+              <td>2026-02-17 14:22:45</td>
+              <td>WARN</td>
+              <td>ingestion::storage</td>
+              <td>Object store write retry (attempt 2/3)</td>
+            </tr>
+            <tr>
+              <td>2026-02-17 14:22:31</td>
+              <td>ERROR</td>
+              <td>flight_sql::session</td>
+              <td>Client disconnected mid-stream</td>
+            </tr>
+            <tr>
+              <td>2026-02-17 14:22:12</td>
+              <td>ERROR</td>
+              <td>ingestion::handler</td>
+              <td>Connection pool exhausted, rejecting request</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- ★ PAGINATION — First page: first/prev disabled ★ -->
+      <div class="pagination-bar">
+        <div class="pagination-nav">
+          <button class="page-btn" disabled title="First page">⟨⟨</button>
+          <button class="page-btn" disabled title="Previous page">⟨</button>
+          <span class="page-info">Page <strong>1</strong> of <strong>6</strong></span>
+          <button class="page-btn" title="Next page">⟩</button>
+          <button class="page-btn" title="Last page">⟩⟩</button>
+        </div>
+        <div class="pagination-meta">
+          <span class="row-range">Rows 1–100 of 523</span>
+          <select class="page-size-select">
+            <option>50</option>
+            <option selected>100</option>
+            <option>250</option>
+            <option>500</option>
+            <option>1000</option>
+          </select>
+          <span class="page-size-label">rows/page</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+
+<div class="divider"></div>
+
+
+<!-- ================================================================== -->
+<h2>3. Log Cell — With Pagination</h2>
+<!-- ================================================================== -->
+
+<div class="cell selected">
+  <div class="cell-header">
+    <div class="cell-header-left">
+      <span style="color:var(--text-muted);font-size:16px">⋮⋮</span>
+      <span style="color:var(--text-muted);font-size:14px">▾</span>
+      <span class="cell-type-badge">Log</span>
+      <span class="cell-name">service_logs</span>
+    </div>
+    <div class="cell-header-right">
+      <span class="status-text">8,412 rows in 2.05s</span>
+      <button class="icon-btn">▶</button>
+      <button class="icon-btn">⋮</button>
+    </div>
+  </div>
+  <div class="cell-body">
+    <div class="log-wrap">
+      <div class="log-scroll">
+        <div class="log-row">
+          <span class="log-time">2026-02-17 14:23:01.482719000</span>
+          <span class="log-level info">INFO</span>
+          <span class="log-target">ingestion::handler</span>
+          <span class="log-msg">Processing batch: 1,247 events from process a3f8c291</span>
+        </div>
+        <div class="log-row">
+          <span class="log-time">2026-02-17 14:23:01.483102000</span>
+          <span class="log-level debug">DEBUG</span>
+          <span class="log-target">ingestion::storage</span>
+          <span class="log-msg">Writing block to object store: s3://telemetry/blocks/2026/02/17/b7d2e104.parquet</span>
+        </div>
+        <div class="log-row">
+          <span class="log-time">2026-02-17 14:23:01.491847000</span>
+          <span class="log-level warn">WARN</span>
+          <span class="log-target">analytics::cache</span>
+          <span class="log-msg">Partition cache miss for view materialized_metrics_5m, rebuilding</span>
+        </div>
+        <div class="log-row">
+          <span class="log-time">2026-02-17 14:23:01.502331000</span>
+          <span class="log-level error">ERROR</span>
+          <span class="log-target">flight_sql::session</span>
+          <span class="log-msg">Query execution failed: table "missing_view" not found in catalog</span>
+        </div>
+        <div class="log-row">
+          <span class="log-time">2026-02-17 14:23:01.518204000</span>
+          <span class="log-level info">INFO</span>
+          <span class="log-target">ingestion::handler</span>
+          <span class="log-msg">Batch committed: 1,247 events, 3 blocks, 482KB total</span>
+        </div>
+        <div class="log-row">
+          <span class="log-time">2026-02-17 14:23:01.523891000</span>
+          <span class="log-level trace">TRACE</span>
+          <span class="log-target">ingestion::metrics</span>
+          <span class="log-msg">Recording counter ingestion_events_total delta=1247</span>
+        </div>
+        <div class="log-row">
+          <span class="log-time">2026-02-17 14:23:01.531472000</span>
+          <span class="log-level info">INFO</span>
+          <span class="log-target">analytics::query</span>
+          <span class="log-msg">Executing query for client session c1e9f387: SELECT time, level, msg FROM log_entries WHERE...</span>
+        </div>
+        <div class="log-row">
+          <span class="log-time">2026-02-17 14:23:01.548019000</span>
+          <span class="log-level debug">DEBUG</span>
+          <span class="log-target">analytics::lakehouse</span>
+          <span class="log-msg">Scanning 14 partitions across 3 blocks for time range [2026-02-17T14:00:00, 2026-02-17T14:23:00]</span>
+        </div>
+      </div>
+
+      <!-- ★ PAGINATION BAR ★ -->
+      <div class="pagination-bar">
+        <div class="pagination-nav">
+          <button class="page-btn" disabled title="First page">⟨⟨</button>
+          <button class="page-btn" disabled title="Previous page">⟨</button>
+          <span class="page-info">Page <strong>1</strong> of <strong>85</strong></span>
+          <button class="page-btn" title="Next page">⟩</button>
+          <button class="page-btn" title="Last page">⟩⟩</button>
+        </div>
+        <div class="pagination-meta">
+          <span class="row-range">Rows 1–100 of 8,412</span>
+          <select class="page-size-select">
+            <option>50</option>
+            <option selected>100</option>
+            <option>250</option>
+            <option>500</option>
+            <option>1000</option>
+          </select>
+          <span class="page-size-label">rows/page</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+
+<div class="divider"></div>
+
+
+<!-- ================================================================== -->
+<h2>4. Table Cell — Few Rows (single page, all buttons disabled)</h2>
+<!-- ================================================================== -->
+
+<div class="cell">
+  <div class="cell-header">
+    <div class="cell-header-left">
+      <span style="color:var(--text-muted);font-size:16px">⋮⋮</span>
+      <span style="color:var(--text-muted);font-size:14px">▾</span>
+      <span class="cell-type-badge">Table</span>
+      <span class="cell-name">summary_stats</span>
+    </div>
+    <div class="cell-header-right">
+      <span class="status-text">3 rows in 0.04s</span>
+      <button class="icon-btn">▶</button>
+      <button class="icon-btn">⋮</button>
+    </div>
+  </div>
+  <div class="cell-body short">
+    <div class="data-table-wrap">
+      <div class="data-table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>metric</th>
+              <th>value</th>
+              <th>unit</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>total_events</td>
+              <td>1,247,832</td>
+              <td>count</td>
+            </tr>
+            <tr>
+              <td>avg_latency</td>
+              <td>12.4</td>
+              <td>ms</td>
+            </tr>
+            <tr>
+              <td>error_rate</td>
+              <td>0.023</td>
+              <td>%</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- ★ PAGINATION — single page: all nav disabled ★ -->
+      <div class="pagination-bar">
+        <div class="pagination-nav">
+          <button class="page-btn" disabled>⟨⟨</button>
+          <button class="page-btn" disabled>⟨</button>
+          <span class="page-info">Page <strong>1</strong> of <strong>1</strong></span>
+          <button class="page-btn" disabled>⟩</button>
+          <button class="page-btn" disabled>⟩⟩</button>
+        </div>
+        <div class="pagination-meta">
+          <span class="row-range">Rows 1–3 of 3</span>
+          <select class="page-size-select">
+            <option>50</option>
+            <option selected>100</option>
+            <option>250</option>
+            <option>500</option>
+            <option>1000</option>
+          </select>
+          <span class="page-size-label">rows/page</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+
+<!-- ================================================================== -->
+<h2>5. Log Cell — Last Page (partial rows, next/last disabled)</h2>
+<!-- ================================================================== -->
+
+<div class="cell">
+  <div class="cell-header">
+    <div class="cell-header-left">
+      <span style="color:var(--text-muted);font-size:16px">⋮⋮</span>
+      <span style="color:var(--text-muted);font-size:14px">▾</span>
+      <span class="cell-type-badge">Log</span>
+      <span class="cell-name">error_trace</span>
+    </div>
+    <div class="cell-header-right">
+      <span class="status-text">312 rows in 0.41s</span>
+      <button class="icon-btn">▶</button>
+      <button class="icon-btn">⋮</button>
+    </div>
+  </div>
+  <div class="cell-body short">
+    <div class="log-wrap">
+      <div class="log-scroll">
+        <div class="log-row">
+          <span class="log-time">2026-02-17 13:58:22.101482000</span>
+          <span class="log-level error">ERROR</span>
+          <span class="log-target">ingestion::handler</span>
+          <span class="log-msg">Connection reset by peer during payload upload</span>
+        </div>
+        <div class="log-row">
+          <span class="log-time">2026-02-17 13:51:07.892104000</span>
+          <span class="log-level error">ERROR</span>
+          <span class="log-target">analytics::query</span>
+          <span class="log-msg">DataFusion planning error: ambiguous column reference "time"</span>
+        </div>
+      </div>
+
+      <!-- ★ PAGINATION — Last page: next/last disabled ★ -->
+      <div class="pagination-bar">
+        <div class="pagination-nav">
+          <button class="page-btn" title="First page">⟨⟨</button>
+          <button class="page-btn" title="Previous page">⟨</button>
+          <span class="page-info">Page <strong>4</strong> of <strong>4</strong></span>
+          <button class="page-btn" disabled title="Next page">⟩</button>
+          <button class="page-btn" disabled title="Last page">⟩⟩</button>
+        </div>
+        <div class="pagination-meta">
+          <span class="row-range">Rows 301–312 of 312</span>
+          <select class="page-size-select">
+            <option>50</option>
+            <option selected>100</option>
+            <option>250</option>
+            <option>500</option>
+            <option>1000</option>
+          </select>
+          <span class="page-size-label">rows/page</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+
+<div class="divider"></div>
+
+
+<!-- ================================================================== -->
+<h2>6. Pagination Bar — Isolated Close-up</h2>
+<p class="subtitle" style="margin-bottom:16px">Showing the component at larger scale for detail review</p>
+<!-- ================================================================== -->
+
+<div style="max-width:960px; background:var(--app-bg); border:1px solid var(--border-color); border-radius:6px; overflow:hidden;">
+  <div class="pagination-bar" style="padding: 10px 16px;">
+    <div class="pagination-nav">
+      <button class="page-btn" disabled>⟨⟨</button>
+      <button class="page-btn" disabled>⟨</button>
+      <span class="page-info" style="font-size:13px">Page <strong>1</strong> of <strong>42</strong></span>
+      <button class="page-btn">⟩</button>
+      <button class="page-btn">⟩⟩</button>
+    </div>
+    <div class="pagination-meta" style="gap:16px">
+      <span class="row-range" style="font-size:12px">Rows 1–100 of 4,200</span>
+      <div style="display:flex;align-items:center;gap:6px">
+        <select class="page-size-select" style="font-size:12px;padding:5px 8px">
+          <option>50</option>
+          <option selected>100</option>
+          <option>250</option>
+          <option>500</option>
+          <option>1000</option>
+        </select>
+        <span class="page-size-label" style="font-size:12px">rows/page</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+
+</body>
+</html>

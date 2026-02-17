@@ -19,6 +19,7 @@ import {
   useColumnManagement,
   ColumnOverride,
 } from '../table-utils'
+import { usePagination, PaginationBar, DEFAULT_PAGE_SIZE } from '../pagination'
 
 // =============================================================================
 // Renderer Component
@@ -40,6 +41,14 @@ export function TableCell({ data, status, options, onOptionsChange, variables }:
     handleRestoreColumn,
     handleRestoreAll,
   } = useColumnManagement(options || {}, onOptionsChange)
+
+  // Pagination
+  const pageSize = (options?.pageSize as number | undefined) ?? DEFAULT_PAGE_SIZE
+  const handlePageSizeChange = useCallback(
+    (size: number) => onOptionsChange({ ...options, pageSize: size }),
+    [options, onOptionsChange],
+  )
+  const pagination = usePagination(data?.numRows ?? 0, pageSize, handlePageSizeChange)
 
   if (status === 'loading') {
     return (
@@ -63,31 +72,40 @@ export function TableCell({ data, status, options, onOptionsChange, variables }:
   const hiddenSet = new Set(hiddenColumns)
   const visibleColumns = allColumns.filter((c) => !hiddenSet.has(c.name))
 
+  // Slice data for current page
+  const slicedData = {
+    numRows: pagination.endRow - pagination.startRow,
+    get: (index: number) => data.get(pagination.startRow + index),
+  }
+
   return (
-    <div className="overflow-auto h-full bg-app-bg border border-theme-border rounded-md">
+    <div className="flex flex-col h-full bg-app-bg border border-theme-border rounded-md">
       <HiddenColumnsBar hiddenColumns={hiddenColumns} onRestore={handleRestoreColumn} onRestoreAll={handleRestoreAll} compact />
-      <table className="w-full text-sm">
-        <thead className="sticky top-0">
-          <tr className="bg-app-card border-b border-theme-border">
-            {visibleColumns.map((col) => (
-              <SortHeader
-                key={col.name}
-                columnName={col.name}
-                sortColumn={sortColumn}
-                sortDirection={sortDirection}
-                onSort={handleSort}
-                onSortAsc={handleSortAsc}
-                onSortDesc={handleSortDesc}
-                onHide={handleHideColumn}
-                compact
-              >
-                {col.name}
-              </SortHeader>
-            ))}
-          </tr>
-        </thead>
-        <TableBody data={data} columns={visibleColumns} compact overrides={overrides} variables={variables} />
-      </table>
+      <div className="flex-1 overflow-auto min-h-0">
+        <table className="w-full text-sm">
+          <thead className="sticky top-0">
+            <tr className="bg-app-card border-b border-theme-border">
+              {visibleColumns.map((col) => (
+                <SortHeader
+                  key={col.name}
+                  columnName={col.name}
+                  sortColumn={sortColumn}
+                  sortDirection={sortDirection}
+                  onSort={handleSort}
+                  onSortAsc={handleSortAsc}
+                  onSortDesc={handleSortDesc}
+                  onHide={handleHideColumn}
+                  compact
+                >
+                  {col.name}
+                </SortHeader>
+              ))}
+            </tr>
+          </thead>
+          <TableBody data={slicedData} columns={visibleColumns} compact overrides={overrides} variables={variables} />
+        </table>
+      </div>
+      <PaginationBar pagination={pagination} />
     </div>
   )
 }

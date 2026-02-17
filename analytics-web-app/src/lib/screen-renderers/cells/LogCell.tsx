@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useMemo, useCallback } from 'react'
 import type {
   CellTypeMetadata,
   CellRendererProps,
@@ -11,6 +11,7 @@ import { AvailableVariablesPanel } from '@/components/AvailableVariablesPanel'
 import { DocumentationLink, QUERY_GUIDE_URL } from '@/components/DocumentationLink'
 import { SyntaxEditor } from '@/components/SyntaxEditor'
 import { substituteMacros, DEFAULT_SQL } from '../notebook-utils'
+import { usePagination, PaginationBar, DEFAULT_PAGE_SIZE } from '../pagination'
 
 // =============================================================================
 // Renderer Component
@@ -74,7 +75,7 @@ interface LogRow {
   msg: string
 }
 
-export function LogCell({ data, status }: CellRendererProps) {
+export function LogCell({ data, status, options, onOptionsChange }: CellRendererProps) {
   const rows = useMemo<LogRow[]>(() => {
     if (!data || data.numRows === 0) return []
 
@@ -96,6 +97,14 @@ export function LogCell({ data, status }: CellRendererProps) {
     return result
   }, [data])
 
+  // Pagination
+  const pageSize = (options?.pageSize as number | undefined) ?? DEFAULT_PAGE_SIZE
+  const handlePageSizeChange = useCallback(
+    (size: number) => onOptionsChange({ ...options, pageSize: size }),
+    [options, onOptionsChange],
+  )
+  const pagination = usePagination(rows.length, pageSize, handlePageSizeChange)
+
   if (status === 'loading') {
     return (
       <div className="flex items-center justify-center py-8">
@@ -111,25 +120,30 @@ export function LogCell({ data, status }: CellRendererProps) {
     )
   }
 
+  const pageRows = rows.slice(pagination.startRow, pagination.endRow)
+
   return (
-    <div className="overflow-auto h-full bg-app-bg border border-theme-border rounded-md font-mono text-xs">
-      {rows.map((row, index) => (
-        <div
-          key={index}
-          className="flex px-3 py-1 border-b border-app-panel hover:bg-app-panel/50 transition-colors"
-        >
-          <span className="text-theme-text-muted mr-3 w-[188px] min-w-[188px] whitespace-nowrap">
-            {formatLocalTime(row.time)}
-          </span>
-          <span className={`w-[38px] min-w-[38px] mr-3 font-semibold ${getLevelColor(row.level)}`}>
-            {row.level}
-          </span>
-          <span className="text-accent-highlight mr-3 w-[200px] min-w-[200px] truncate" title={row.target}>
-            {row.target}
-          </span>
-          <span className="text-theme-text-primary flex-1 break-words">{row.msg}</span>
-        </div>
-      ))}
+    <div className="flex flex-col h-full bg-app-bg border border-theme-border rounded-md font-mono text-xs">
+      <div className="flex-1 overflow-auto min-h-0">
+        {pageRows.map((row, index) => (
+          <div
+            key={pagination.startRow + index}
+            className="flex px-3 py-1 border-b border-app-panel hover:bg-app-panel/50 transition-colors"
+          >
+            <span className="text-theme-text-muted mr-3 w-[188px] min-w-[188px] whitespace-nowrap">
+              {formatLocalTime(row.time)}
+            </span>
+            <span className={`w-[38px] min-w-[38px] mr-3 font-semibold ${getLevelColor(row.level)}`}>
+              {row.level}
+            </span>
+            <span className="text-accent-highlight mr-3 w-[200px] min-w-[200px] truncate" title={row.target}>
+              {row.target}
+            </span>
+            <span className="text-theme-text-primary flex-1 break-words">{row.msg}</span>
+          </div>
+        ))}
+      </div>
+      <PaginationBar pagination={pagination} />
     </div>
   )
 }
@@ -189,8 +203,9 @@ export const logMetadata: CellTypeMetadata = {
     return { data }
   },
 
-  getRendererProps: (_config: CellConfig, state: CellState) => ({
+  getRendererProps: (config: CellConfig, state: CellState) => ({
     data: state.data,
     status: state.status,
+    options: (config as QueryCellConfig).options,
   }),
 }
