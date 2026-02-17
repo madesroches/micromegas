@@ -255,6 +255,9 @@ export function NotebookRenderer({
       savedNotebookConfig?.cells ?? null,
     )
 
+  // Auto-run: guard ref prevents re-entrance when auto-run itself sets variables
+  const autoRunningRef = useRef(false)
+
   // WASM engine for notebook-local queries
   // Loaded eagerly so remote cell results are always registered for cross-cell references
   const [engine, setEngine] = useState<NotebookQueryEngine | null>(null)
@@ -514,7 +517,16 @@ export function NotebookRenderer({
       onContentChange: (content: string) => updateCell(index, { content }),
       onTimeRangeSelect: handleTimeRangeSelect,
       value: cell.type === 'variable' ? variableValues[cell.name] : undefined,
-      onValueChange: cell.type === 'variable' ? (value: VariableValue) => setVariableValue(cell.name, value) : undefined,
+      onValueChange: cell.type === 'variable' ? (value: VariableValue) => {
+        setVariableValue(cell.name, value)
+
+        // Auto-run: if this cell has autoRunFromHere, execute from here onward.
+        if (autoRunningRef.current || !cell.autoRunFromHere) return
+        autoRunningRef.current = true
+        executeFromCell(index).finally(() => {
+          autoRunningRef.current = false
+        })
+      } : undefined,
       dataSource: cellDataSource,
       ...rendererProps,
     }
@@ -546,6 +558,10 @@ export function NotebookRenderer({
             onSelect={() => setSelectedCellIndex(index)}
             onRun={() => executeCell(index)}
             onRunFromHere={() => executeFromCell(index)}
+            autoRunFromHere={cell.autoRunFromHere}
+            onToggleAutoRunFromHere={() =>
+              updateCell(index, { autoRunFromHere: !cell.autoRunFromHere })
+            }
             onDelete={() => setDeletingCellIndex(index)}
             statusText={statusText}
             height={cell.layout.height}

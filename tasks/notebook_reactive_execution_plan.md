@@ -5,7 +5,7 @@
 There are two problems to solve:
 
 1. **Bug**: Changing a variable value re-executes the entire notebook due to a spurious time range recomputation. This must be fixed first.
-2. **Feature**: After the bug is fixed, variable changes will do nothing (no re-execution). We want to let users opt individual cells into automatic re-execution when upstream variables change, without altering the default manual behavior.
+2. **Feature**: After the bug is fixed, variable changes will do nothing (no re-execution). We want to let users opt individual variable cells into automatic re-execution when their value changes, without altering the default manual behavior.
 
 ## Problem Statement
 
@@ -20,7 +20,7 @@ Given a notebook like:
 
 **Today**: typing in `search` re-executes the *entire* notebook (including the expensive remote `processes` query) due to a bug.
 
-**Goal**: typing in `search` should re-execute only `search_results` (and cells below it), only when the user has opted in via an "Auto-run from here" flag on that cell.
+**Goal**: typing in `search` should re-execute from the `search` cell onward (including `search_results` and any cells below), only when the user has enabled "Auto-run from here" on the `search` variable cell.
 
 ## Current State
 
@@ -38,13 +38,6 @@ The root cause is a chain reaction through the time range computation:
 
 **Summary**: variable URL param change → spurious `rawTimeRange` recomputation → `new Date()` produces new timestamps → time range detector fires → full re-execution.
 
-### Execution triggers (all in `useCellExecution.ts`)
-- Initial load (line 242-248)
-- Refresh button via `refreshTrigger` prop (line 251-257)
-- Time range change (line 260-269) ← **this is the one that fires spuriously**
-- WASM engine ready (line 274-280)
-- Manual "Run" / "Run from here" buttons (via `executeCell` / `executeFromCell`)
-
 ### Key files
 | File | Role |
 |------|------|
@@ -54,7 +47,7 @@ The root cause is a chain reaction through the time range computation:
 | `useNotebookVariables.ts:125-138` | `setVariableValue` calls `setSearchParams` |
 | `NotebookRenderer.tsx:517` | Wires variable changes to `setVariableValue` |
 | `VariableCell.tsx:69-77` | 300ms debounce on text input |
-| `CellContainer.tsx:240-268` | Cell context menu with "Run from here" |
+| `CellContainer.tsx` | Cell context menu and header |
 | `notebook-types.ts:102-137` | Cell config types |
 
 ## Design
@@ -91,12 +84,14 @@ This breaks the chain: variable param changes no longer trigger `rawTimeRange` r
 
 After the bug fix, variable changes will correctly do nothing. Now we add the opt-in reactive behavior.
 
-Add an `autoRunFromHere` boolean to the cell config. When enabled on a cell, any upstream variable change triggers `executeFromCell(cellIndex)` automatically — the same action as clicking "Run from here" manually.
+Add an `autoRunFromHere` boolean to the cell config. When enabled on a variable cell, changing that variable's value triggers `executeFromCell(cellIndex)` — executing from the variable cell onward. This is the same action as clicking "Run from here" manually.
+
+**Semantics**: `autoRunFromHere` is a property of the cell being modified. When the user changes a variable that has this flag, the notebook executes from that cell through all cells below, stopping on error. No searching for downstream cells — the flag means "when I change, run from here."
 
 **Why this approach:**
-- **Simple mental model**: "this cell and everything below it re-runs when variables change"
+- **Simple mental model**: "enable auto-run on a variable and it re-runs everything below when changed"
 - **Reuses existing execution machinery**: just calls `executeFromCell`
-- **Granular control**: each cell decides independently
+- **Granular control**: each variable cell decides independently
 - **Cheap by default**: only cells the user explicitly marks will auto-run
 - **Works with debounce**: text variables already debounce at 300ms, so auto-run won't fire on every keystroke
 
@@ -108,52 +103,51 @@ export interface CellConfigBase {
   name: string
   type: CellType
   layout: { height: number; collapsed?: boolean }
-  autoRunFromHere?: boolean  // NEW: auto-execute from this cell when upstream variables change
+  autoRunFromHere?: boolean  // NEW: auto-execute from this cell when its value changes
 }
 ```
 
 #### Execution trigger
 
-Since `variableValuesRef` is a mutable ref (not React state), the trigger must come from the call site:
+The auto-run logic lives directly in the `onValueChange` callback in `NotebookRenderer.renderCell`. This is the handler called when a user changes a variable's value. It has direct access to `executeFromCell` (no ref indirection needed) and only fires for user-initiated changes (not execution-triggered `setVariableValue` calls from `onExecutionComplete`).
 
-1. `setVariableValue` already updates the ref and URL params. Add a callback parameter (`onVariableChange`) to `useNotebookVariables` that fires after the value is set.
-2. `NotebookRenderer` passes a handler that finds the first `autoRunFromHere` cell downstream of the changed variable and calls `executeFromCell(index)`.
+A re-entrance guard (`autoRunningRef`) prevents recursive auto-run when execution itself sets variable values (e.g., auto-selecting the first combobox option).
 
-```
-Variable changes → setVariableValue → onVariableChange(cellName)
-  → find first autoRunFromHere cell after changed variable
-  → executeFromCell(thatIndex)
-```
+```typescript
+onValueChange: cell.type === 'variable' ? (value: VariableValue) => {
+  setVariableValue(cell.name, value)
 
-The auto-run trigger finds the **first `autoRunFromHere` cell whose index is greater than the changed variable's index** and calls `executeFromCell` from there:
-- Cells above the variable: untouched (they don't depend on it)
-- Cells between variable and first autoRunFromHere: untouched (they didn't opt in)
-- First autoRunFromHere cell and all below: re-executed ("from here")
-
-#### UI: checkbox in the cell context menu
-
-Add an "Auto-run from here" toggle in the cell's `⋮` dropdown, right below "Run from here":
-
-```
-┌──────────────────┐
-│ ▶ Run from here  │
-│ ☐ Auto-run from here │  ← NEW: checkbox toggle
-│───────────────────│
-│ 🗑 Delete cell    │
-└──────────────────┘
+  // Auto-run: if this cell has autoRunFromHere, execute from here onward.
+  if (autoRunningRef.current || !cell.autoRunFromHere) return
+  autoRunningRef.current = true
+  executeFromCell(index).finally(() => {
+    autoRunningRef.current = false
+  })
+} : undefined,
 ```
 
-When `autoRunFromHere` is enabled, show a small indicator in the cell header so the user can see at a glance which cells are reactive.
+#### UI: toggle in the cell context menu
+
+The cell's `⋮` dropdown menu (powered by `@radix-ui/react-dropdown-menu` with Portal to escape overflow-hidden ancestors) includes an "Auto-run from here" toggle:
+
+```
+┌──────────────────────┐
+│ ▶ Run from here      │
+│ ⚡ Auto-run from here │  ← toggle
+│──────────────────────│
+│ 🗑 Delete cell        │
+└──────────────────────┘
+```
+
+When `autoRunFromHere` is enabled, a Zap (⚡) icon appears in the cell header so the user can see at a glance which cells are reactive. The menu item text changes to "Disable auto-run" when active.
 
 #### Debounce considerations
 
-The existing 300ms debounce in `VariableCell.handleTextChange` (line 69-77) provides adequate protection. No additional debounce is needed because:
+The existing 300ms debounce in `VariableCell.handleTextChange` provides adequate protection. No additional debounce is needed because:
 - Text variables: already debounced at 300ms before `onValueChange` fires
 - Combobox variables: discrete selection, no debounce needed
 - Expression variables: set once after execution, no rapid changes
 - Datasource variables: discrete selection
-
-If a new variable change arrives while auto-run is still executing, the in-flight execution is aborted and restarted (handled by existing `abortControllerRef` in `executeCell`, line 135-136).
 
 ### Alternative approaches considered
 
@@ -169,23 +163,23 @@ A notebook-level "auto-run" / "lazy" toggle for all cells.
 
 **Rejected**: Too coarse. The user's example has both expensive remote queries (should NOT auto-run) and cheap WASM queries (should auto-run). Per-cell granularity is strictly more flexible.
 
-#### C. Smart cost detection (auto-detect cheap vs expensive)
+#### C. Callback in useNotebookVariables
 
-Auto-detect "cheap" (WASM) vs "expensive" (remote) cells and only auto-run cheap ones.
+Add an `onVariableChange` callback parameter to `useNotebookVariables` that fires after `setVariableValue`.
 
-**Rejected**: Heuristic would be wrong sometimes. Implicit behavior is harder to understand than explicit opt-in.
+**Rejected during implementation**: This required ref-based indirection to access `executeFromCell`, introducing timing bugs (ref null on first render, permanent lock-up on error). Placing the auto-run logic directly in `onValueChange` in `renderCell` is simpler and avoids these issues — `executeFromCell` is directly in scope.
 
-#### D. Streamlit-style full re-run with caching
+#### D. Searching downstream for autoRunFromHere cells
 
-Re-run everything on every change, relying on caching.
+When a variable changes, scan all cells below it to find the first one with `autoRunFromHere` and execute from there.
 
-**Rejected**: Fundamentally wrong for notebooks with expensive remote queries. The default should be no automatic execution.
+**Rejected**: Over-complicated. The simpler model is: `autoRunFromHere` is a property of the cell being modified. The user enables it on the variable they want to be reactive.
 
 ## Implementation Steps
 
 ### Phase 1: Fix the bug
 
-1. **Stabilize `rawTimeRange` memo** (`ScreenPage.tsx:101-107`)
+1. **Stabilize `rawTimeRange` memo** (`ScreenPage.tsx`)
    - Extract `searchParams.get('from')` and `searchParams.get('to')` into local variables
    - Use those as `useMemo` dependencies instead of the whole `searchParams` object
 
@@ -194,76 +188,63 @@ Re-run everything on every change, relying on caching.
 2. **Add `autoRunFromHere` to cell config** (`notebook-types.ts`)
    - Add `autoRunFromHere?: boolean` to `CellConfigBase`
 
-3. **Add `onVariableChange` callback to `useNotebookVariables`** (`useNotebookVariables.ts`)
-   - Accept an optional `onVariableChange?: (cellName: string) => void` parameter
-   - Call it in `setVariableValue` after updating the ref and URL
-
-4. **Add auto-run trigger in `NotebookRenderer`** (`NotebookRenderer.tsx`)
-   - Pass `onVariableChange` to `useNotebookVariables`
-   - In the callback: find changed variable's index, find first `autoRunFromHere` cell after it, call `executeFromCell(thatIndex)`
-   - Guard against re-entrance (don't auto-run while already auto-running)
+3. **Add auto-run trigger in `NotebookRenderer`** (`NotebookRenderer.tsx`)
+   - Add `autoRunningRef` re-entrance guard
+   - In the `onValueChange` callback in `renderCell`: if `cell.autoRunFromHere`, call `executeFromCell(index)`
 
 ### Phase 3: UI
 
+4. **Replace hand-rolled dropdown with Radix DropdownMenu** (`CellContainer.tsx`)
+   - Use `@radix-ui/react-dropdown-menu` with `DropdownMenu.Portal` to escape `overflow-hidden` ancestors (variable cells are auto-collapsed, so the old absolutely-positioned menu was clipped)
+
 5. **Add "Auto-run from here" toggle to cell context menu** (`CellContainer.tsx`)
    - Add `autoRunFromHere?: boolean` and `onToggleAutoRunFromHere?: () => void` props
-   - Render checkbox item in dropdown menu below "Run from here"
+   - Render toggle item in Radix dropdown menu below "Run from here"
    - Only show for cells that `canRun`
 
 6. **Add auto-run indicator to cell header** (`CellContainer.tsx`)
-   - When `autoRunFromHere` is true, show a small indicator in the header
+   - When `autoRunFromHere` is true, show a Zap icon in the header
 
 7. **Wire toggle through `NotebookRenderer`** (`NotebookRenderer.tsx`)
    - Pass `autoRunFromHere` and `onToggleAutoRunFromHere` props to `CellContainer`
    - `onToggleAutoRunFromHere` calls `updateCell(index, { autoRunFromHere: !cell.autoRunFromHere })`
 
-## Files to Modify
+## Files Modified
 
 | File | Changes |
 |------|---------|
-| `ScreenPage.tsx` | Fix `rawTimeRange` useMemo dependencies |
+| `ScreenPage.tsx` | Extract `urlFrom`/`urlTo` to fix `rawTimeRange` useMemo dependencies |
 | `notebook-types.ts` | Add `autoRunFromHere?: boolean` to `CellConfigBase` |
-| `useNotebookVariables.ts` | Add `onVariableChange` callback parameter |
-| `useCellExecution.ts` | No changes needed — reuses `executeFromCell` |
-| `NotebookRenderer.tsx` | Wire `onVariableChange` → find autoRunFromHere cell → `executeFromCell` |
-| `CellContainer.tsx` | Add "Auto-run" menu item and header indicator |
+| `NotebookRenderer.tsx` | Auto-run logic in `onValueChange`, `autoRunningRef` guard, wire props to `CellContainer` |
+| `CellContainer.tsx` | Replace dropdown with Radix DropdownMenu + Portal, add Zap indicator and auto-run toggle |
+| `ScreenPage.urlState.test.tsx` | Regression tests for time range stability |
+| `CellContainer.test.tsx` | Radix mock, auto-run toggle tests |
+| `NotebookRenderer.test.tsx` | Radix mock, Zap icon mock, menu test updates |
+
+**Not modified**: `useNotebookVariables.ts` (auto-run logic lives in `NotebookRenderer` instead), `useCellExecution.ts` (reuses existing `executeFromCell` as-is).
 
 ## Testing Strategy
 
 ### Regression tests for the bug fix (Phase 1)
 
-Add tests in `ScreenPage.urlState.test.tsx` to ensure variable param changes never cause time range recomputation:
+Added `describe('rawTimeRange stability')` block in `ScreenPage.urlState.test.tsx` with a `useTimeRangeComputation` hook that mirrors the fixed `rawTimeRange` → `apiTimeRange` chain.
 
-1. **`rawTimeRange` stability test**: Create a hook that mirrors `ScreenPageContent`'s time range computation. Set initial URL to `?from=now-1h&to=now`. Change a variable param via `setSearchParams`. Assert that `rawTimeRange.from` and `rawTimeRange.to` are identical before and after (same string references or equal values). This catches the root cause: `rawTimeRange` recomputing when only variable params change.
+**Tests:**
 
-2. **`apiTimeRange` stability test**: Same setup, but also compute `apiTimeRange` via `getTimeRangeForApi(rawTimeRange.from, rawTimeRange.to)`. After changing a variable param, assert that `apiTimeRange.begin` and `apiTimeRange.end` are identical. This catches the symptom: different ISO timestamps from `new Date()`.
-
-3. **Positive control**: Verify that changing the `from` or `to` URL param DOES produce new `rawTimeRange` / `apiTimeRange` values (ensure the test isn't vacuous).
-
-Note: the existing `useCellExecution.test.ts` already has "should not re-execute when timeRange object changes but values stay the same" (line 773-808), which validates the downstream behavior. The new tests target the upstream `ScreenPage` layer where the bug originates.
+1. **`rawTimeRange` reference stable on variable change**: Assert same object reference (`toBe`) after adding a variable URL param.
+2. **`apiTimeRange` strings stable on variable change**: Assert `begin`/`end` strings identical after variable change.
+3. **Positive control — `rawTimeRange` recomputes on `from` change**: Assert different reference when `from` param changes.
+4. **Positive control — `apiTimeRange` changes on `to` change**: Assert different `end` string when `to` param changes.
 
 ### Auto-run feature tests (Phase 2-3)
 
-4. **Manual testing with the provided notebook:**
-   - Import the processes-notebook with relative time range (`now-1h` to `now`)
-   - Enable "Auto-run from here" on the `search_results` cell
-   - Type in the `search` variable
-   - Verify `search_results` updates after the 300ms debounce
-   - Verify `processes` and `source` cells are NOT re-executed
+- CellContainer tests: Zap indicator visibility, auto-run toggle menu item text ("Auto-run from here" / "Disable auto-run"), toggle callback.
+- NotebookRenderer tests: "Auto-run from here" menu item presence in cell context menu.
+- Manual testing with processes-notebook: enable auto-run on `search` variable, type in text, verify `search_results` updates while `processes` is NOT re-executed.
 
-5. **Unit tests:**
-   - Test that `onVariableChange` callback fires when `setVariableValue` is called
-   - Test auto-run index calculation (finding first `autoRunFromHere` cell after variable)
+### Edge cases
 
-6. **Edge cases:**
-   - Changing a variable with no downstream `autoRunFromHere` cells → nothing happens
-   - Multiple `autoRunFromHere` cells → only the first one triggers (it runs "from here" covering the rest)
-   - Auto-run while previous auto-run is still executing → previous execution aborted
-   - Saving notebook persists `autoRunFromHere` flag
-   - Loading notebook with `autoRunFromHere` flags does NOT cause double execution on initial load
-
-## Open Questions
-
-1. **Visual indicator style**: Should the auto-run indicator be a small icon, a text badge ("auto"), or a colored border/accent? This is a visual design decision that can be iterated on.
-
-2. **Should expression variables trigger auto-run?** Expression variables compute a new value during execution. The current design handles this naturally: `executeFromCell` runs cells sequentially, so any expression variables between the start index and the autoRunFromHere cell would be re-evaluated.
+- Changing a variable without `autoRunFromHere` → nothing auto-executes
+- Auto-run while previous auto-run is still executing → `autoRunningRef` guard prevents re-entrance
+- Saving notebook persists `autoRunFromHere` flag (standard config persistence)
+- Loading notebook with `autoRunFromHere` flags does NOT cause double execution on initial load (auto-run only fires from `onValueChange`)

@@ -14,6 +14,18 @@ jest.mock('lucide-react', () => ({
   MoreVertical: () => <span data-testid="more">⋮</span>,
   Trash2: () => <span data-testid="trash">🗑</span>,
   GripVertical: () => <span data-testid="grip">⠿</span>,
+  Zap: () => <span data-testid="zap">⚡</span>,
+}))
+
+// Mock Radix dropdown menu — renders trigger and content inline (no portal)
+jest.mock('@radix-ui/react-dropdown-menu', () => ({
+  Root: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  Trigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  Portal: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  Content: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  Item: ({ children, onSelect, ...props }: { children: React.ReactNode; onSelect?: () => void } & Record<string, unknown>) => (
+    <button {...props} onClick={onSelect}>{children}</button>
+  ),
 }))
 
 describe('CellContainer', () => {
@@ -163,7 +175,7 @@ describe('CellContainer', () => {
   })
 
   describe('menu', () => {
-    it('should show menu when menu button is clicked', () => {
+    it('should render menu items for runnable cells', () => {
       render(
         <CellContainer
           {...defaultProps}
@@ -172,14 +184,7 @@ describe('CellContainer', () => {
         />
       )
 
-      // Menu should not be visible initially
-      expect(screen.queryByText('Run from here')).not.toBeInTheDocument()
-
-      // Click menu button
-      const menuButton = screen.getByTestId('more').closest('button')
-      fireEvent.click(menuButton!)
-
-      // Menu should now be visible
+      // Radix menu items are rendered (portal is mocked to inline)
       expect(screen.getByText('Run from here')).toBeInTheDocument()
       expect(screen.getByText('Delete cell')).toBeInTheDocument()
     })
@@ -194,11 +199,6 @@ describe('CellContainer', () => {
         />
       )
 
-      // Open menu
-      const menuButton = screen.getByTestId('more').closest('button')
-      fireEvent.click(menuButton!)
-
-      // Click "Run from here"
       fireEvent.click(screen.getByText('Run from here'))
 
       expect(onRunFromHere).toHaveBeenCalledTimes(1)
@@ -214,11 +214,6 @@ describe('CellContainer', () => {
         />
       )
 
-      // Open menu
-      const menuButton = screen.getByTestId('more').closest('button')
-      fireEvent.click(menuButton!)
-
-      // Click "Delete cell"
       fireEvent.click(screen.getByText('Delete cell'))
 
       expect(onDelete).toHaveBeenCalledTimes(1)
@@ -234,33 +229,60 @@ describe('CellContainer', () => {
         />
       )
 
-      // Open menu
-      const menuButton = screen.getByTestId('more').closest('button')
-      fireEvent.click(menuButton!)
-
       expect(screen.queryByText('Run from here')).not.toBeInTheDocument()
       expect(screen.getByText('Delete cell')).toBeInTheDocument()
     })
 
-    it('should close menu when clicking outside', () => {
+    it('should show auto-run toggle for runnable cells', () => {
       render(
         <CellContainer
           {...defaultProps}
-          onRunFromHere={jest.fn()}
+          onToggleAutoRunFromHere={jest.fn()}
           onDelete={jest.fn()}
         />
       )
 
-      // Open menu
-      const menuButton = screen.getByTestId('more').closest('button')
-      fireEvent.click(menuButton!)
-      expect(screen.getByText('Run from here')).toBeInTheDocument()
+      expect(screen.getByText('Auto-run from here')).toBeInTheDocument()
+    })
 
-      // Click outside (on document body)
-      fireEvent.mouseDown(document.body)
+    it('should call onToggleAutoRunFromHere when auto-run item is clicked', () => {
+      const onToggle = jest.fn()
+      render(
+        <CellContainer
+          {...defaultProps}
+          onToggleAutoRunFromHere={onToggle}
+          onDelete={jest.fn()}
+        />
+      )
 
-      // Menu should close
-      expect(screen.queryByText('Run from here')).not.toBeInTheDocument()
+      fireEvent.click(screen.getByText('Auto-run from here'))
+
+      expect(onToggle).toHaveBeenCalledTimes(1)
+    })
+
+    it('should show "Disable auto-run" when autoRunFromHere is true', () => {
+      render(
+        <CellContainer
+          {...defaultProps}
+          autoRunFromHere={true}
+          onToggleAutoRunFromHere={jest.fn()}
+          onDelete={jest.fn()}
+        />
+      )
+
+      expect(screen.getByText('Disable auto-run')).toBeInTheDocument()
+    })
+
+    it('should show Zap indicator in header when autoRunFromHere is true', () => {
+      render(
+        <CellContainer
+          {...defaultProps}
+          autoRunFromHere={true}
+          onToggleAutoRunFromHere={jest.fn()}
+        />
+      )
+
+      expect(screen.getByTitle('Auto-run from here')).toBeInTheDocument()
     })
   })
 

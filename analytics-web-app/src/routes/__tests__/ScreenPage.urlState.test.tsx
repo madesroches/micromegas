@@ -12,6 +12,7 @@ import { ReactNode, useCallback, useMemo } from 'react'
 import { MemoryRouter, useSearchParams, useNavigate } from 'react-router-dom'
 import { RESERVED_URL_PARAMS, cleanupTimeParams } from '@/lib/url-cleanup-utils'
 import { cleanupVariableParams } from '@/lib/screen-renderers/notebook-utils'
+import { getTimeRangeForApi } from '@/lib/time-range'
 import type { ScreenConfig } from '@/lib/screens-api'
 
 // Mock navigate
@@ -339,5 +340,112 @@ describe('cleanupVariableParams', () => {
     expect(params.has('region')).toBe(false)
     expect(params.get('env')).toBe('prod')
     expect(params.toString()).toBe('env=prod')
+  })
+})
+
+/**
+ * Hook that mirrors the fixed rawTimeRange → apiTimeRange chain from
+ * ScreenPageContent. Uses extracted param values (not the whole searchParams
+ * object) so that unrelated URL changes don't trigger recomputation.
+ */
+function useTimeRangeComputation() {
+  const [searchParams, setSearchParams] = useSearchParams()
+
+  // Mirror ScreenPage — AFTER the fix: extracted param values as deps
+  const urlFrom = searchParams.get('from')
+  const urlTo = searchParams.get('to')
+  const rawTimeRange = useMemo(
+    () => ({ from: urlFrom ?? 'now-1h', to: urlTo ?? 'now' }),
+    [urlFrom, urlTo]
+  )
+
+  // Mirror ScreenPage apiTimeRange
+  const apiTimeRange = useMemo(
+    () => getTimeRangeForApi(rawTimeRange.from, rawTimeRange.to),
+    [rawTimeRange]
+  )
+
+  return { rawTimeRange, apiTimeRange, setSearchParams }
+}
+
+describe('rawTimeRange stability', () => {
+  it('rawTimeRange is stable when a variable param changes', () => {
+    const { result } = renderHook(() => useTimeRangeComputation(), {
+      wrapper: createWrapper(['/screen/test?from=now-1h&to=now']),
+    })
+
+    const before = result.current.rawTimeRange
+
+    // Add a variable param (simulates typing in a text variable)
+    act(() => {
+      result.current.setSearchParams(prev => {
+        const next = new URLSearchParams(prev)
+        next.set('search', 'client')
+        return next
+      })
+    })
+
+    // Same reference means useMemo did not recompute
+    expect(result.current.rawTimeRange).toBe(before)
+  })
+
+  it('apiTimeRange is stable when a variable param changes', () => {
+    const { result } = renderHook(() => useTimeRangeComputation(), {
+      wrapper: createWrapper(['/screen/test?from=now-1h&to=now']),
+    })
+
+    const beginBefore = result.current.apiTimeRange.begin
+    const endBefore = result.current.apiTimeRange.end
+
+    act(() => {
+      result.current.setSearchParams(prev => {
+        const next = new URLSearchParams(prev)
+        next.set('search', 'client')
+        return next
+      })
+    })
+
+    // Identical strings — no new Date() call occurred
+    expect(result.current.apiTimeRange.begin).toBe(beginBefore)
+    expect(result.current.apiTimeRange.end).toBe(endBefore)
+  })
+
+  it('rawTimeRange recomputes when from param changes', () => {
+    const { result } = renderHook(() => useTimeRangeComputation(), {
+      wrapper: createWrapper(['/screen/test?from=now-1h&to=now']),
+    })
+
+    const before = result.current.rawTimeRange
+
+    act(() => {
+      result.current.setSearchParams(prev => {
+        const next = new URLSearchParams(prev)
+        next.set('from', 'now-24h')
+        return next
+      })
+    })
+
+    // Different reference — useMemo recomputed
+    expect(result.current.rawTimeRange).not.toBe(before)
+    expect(result.current.rawTimeRange.from).toBe('now-24h')
+  })
+
+  it('apiTimeRange changes when to param changes', () => {
+    const { result } = renderHook(() => useTimeRangeComputation(), {
+      wrapper: createWrapper(['/screen/test?from=now-1h&to=now']),
+    })
+
+    const endBefore = result.current.apiTimeRange.end
+
+    act(() => {
+      result.current.setSearchParams(prev => {
+        const next = new URLSearchParams(prev)
+        next.set('to', 'now-30m')
+        return next
+      })
+    })
+
+    // The end timestamp should have changed
+    expect(result.current.apiTimeRange.end).not.toBe(endBefore)
   })
 })

@@ -97,13 +97,18 @@ function ScreenPageContent() {
   const currentTimeTo = screenConfig?.timeRangeTo
   // Compute raw time range - source of truth for displayed time
   // Priority: URL params → saved config → current config (from API)
-  // Check each param individually since URL might only have one of from/to
+  // Extract individual param values so the memo doesn't depend on the whole
+  // searchParams object — otherwise any URL change (e.g. variable params)
+  // triggers a recomputation, which cascades into apiTimeRange calling
+  // new Date() and spuriously re-executing the entire notebook.
+  const urlFrom = searchParams.get('from')
+  const urlTo = searchParams.get('to')
   const rawTimeRange = useMemo(
     () => ({
-      from: searchParams.get('from') ?? savedTimeFrom ?? currentTimeFrom!,
-      to: searchParams.get('to') ?? savedTimeTo ?? currentTimeTo!,
+      from: urlFrom ?? savedTimeFrom ?? currentTimeFrom!,
+      to: urlTo ?? savedTimeTo ?? currentTimeTo!,
     }),
-    [searchParams, savedTimeFrom, savedTimeTo, currentTimeFrom, currentTimeTo]
+    [urlFrom, urlTo, savedTimeFrom, savedTimeTo, currentTimeFrom, currentTimeTo]
   )
 
   // Derive hasUnsavedChanges by comparing current config + time range against baseline
