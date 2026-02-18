@@ -69,17 +69,18 @@ function migrateChartConfig(config: CellConfig): ChartCellConfigV2 {
     return config as ChartCellConfigV2  // Already v2
   }
   const v1 = config as ChartCellConfigV1
+  const { sql, dataSource, options: v1Options, ...rest } = v1
   return {
-    ...v1,
+    ...rest,
     version: 2,
     queries: [{
-      sql: v1.sql,
-      unit: v1.options?.unit as string | undefined,
-      dataSource: v1.dataSource,
+      sql,
+      unit: v1Options?.unit as string | undefined,
+      dataSource,
     }],
     options: {
-      scale_mode: v1.options?.scale_mode,
-      chart_type: v1.options?.chart_type,
+      scale_mode: v1Options?.scale_mode,
+      chart_type: v1Options?.chart_type,
     },
   }
 }
@@ -164,6 +165,14 @@ export function extractMultiSeriesChartData(
 ```
 
 Each table must have 2 columns (X, Y). All tables must agree on X-axis mode (all time, or all categorical with same labels, or all numeric). The function validates this and returns an error if modes conflict.
+
+**X-axis alignment**: Queries may return different X values as long as the mode agrees. The function computes the union of all X values across series, sorts them, and projects each series onto the union array with `null` for missing points. uPlot handles `null` natively (gaps in lines, missing bars). Specifically:
+
+- **Time mode**: Union of all timestamps, sorted ascending.
+- **Numeric mode**: Union of all numeric X values, sorted ascending.
+- **Categorical mode**: Union of all label sets, sorted alphabetically. Each series maps onto this sorted union with `null` for categories it doesn't have.
+
+Stats (min/p99/max/avg) filter out `null` values before computing. The tooltip shows "—" for series with no value at the cursor position.
 
 ### Multi-Axis Rendering
 
@@ -314,7 +323,7 @@ All queries are listed uniformly. The editor always works with v2 format (migrat
 ```
 
 Each query has:
-- Data source selector (dropdown, required — initialized to default data source on creation)
+- Data source selector — reuses the existing `DataSourceField` component from `@/components/DataSourceSelector`. The `datasourceVariables` prop is already computed by `NotebookRenderer` and passed to `CellEditorProps`, so variable references (`$Env`) work automatically. Initialized to default data source on creation.
 - SQL editor (SyntaxEditor)
 - Unit field (text input, supports `$variable.unit` macros)
 - Label field (optional, defaults to Y column name)
