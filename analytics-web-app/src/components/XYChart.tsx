@@ -560,6 +560,19 @@ export function XYChart({
       const axes: uPlot.Axis[] = [xAxisConfig]
       const uPlotSeries: uPlot.Series[] = [{}]
 
+      // Compute adaptive unit info per scale for auto-scaling axis labels
+      const unitAdaptiveMap = new Map<string, { conversionFactor: number; abbrev: string }>()
+      for (const scaleInfo of unitScaleInfo) {
+        const normalizedUnit = normalizeUnit(scaleInfo.unitName)
+        if (isTimeUnit(normalizedUnit) && scaleInfo.p99 > 0) {
+          const adaptive = getAdaptiveTimeUnit(scaleInfo.p99, normalizedUnit)
+          unitAdaptiveMap.set(scaleInfo.unitName, { conversionFactor: adaptive.conversionFactor, abbrev: adaptive.abbrev })
+        } else if (isSizeUnit(normalizedUnit) && scaleInfo.p99 > 0) {
+          const adaptive = getAdaptiveSizeUnit(scaleInfo.p99, normalizedUnit)
+          unitAdaptiveMap.set(scaleInfo.unitName, { conversionFactor: adaptive.conversionFactor, abbrev: adaptive.abbrev })
+        }
+      }
+
       // Build per-unit axes
       for (const scaleInfo of unitScaleInfo) {
         const scaleName = scaleInfo.scaleName
@@ -575,7 +588,9 @@ export function XYChart({
           },
         }
 
-        const yAxisUnit = scaleInfo.unitName === 'percent' ? '%' : scaleInfo.unitName
+        const adaptiveInfo = unitAdaptiveMap.get(scaleInfo.unitName)
+        const yAxisUnit = adaptiveInfo?.abbrev ?? (scaleInfo.unitName === 'percent' ? '%' : scaleInfo.unitName)
+        const axisCf = adaptiveInfo?.conversionFactor ?? 1
         axes.push({
           scale: scaleName,
           side: scaleInfo.side as 1 | 3,
@@ -586,12 +601,13 @@ export function XYChart({
           size: 90,
           values: (_u: uPlot, vals: number[]) => {
             return vals.map((v) => {
+              const dv = v * axisCf
               if (v === 0) return '0 ' + yAxisUnit
-              const absV = Math.abs(v)
-              if (absV >= 100) return Math.round(v) + ' ' + yAxisUnit
-              if (absV >= 10) return v.toFixed(1) + ' ' + yAxisUnit
-              if (absV >= 1) return v.toFixed(2) + ' ' + yAxisUnit
-              return v.toPrecision(2) + ' ' + yAxisUnit
+              const absV = Math.abs(dv)
+              if (absV >= 100) return Math.round(dv) + ' ' + yAxisUnit
+              if (absV >= 10) return dv.toFixed(1) + ' ' + yAxisUnit
+              if (absV >= 1) return dv.toFixed(2) + ' ' + yAxisUnit
+              return dv.toPrecision(2) + ' ' + yAxisUnit
             })
           },
         })
