@@ -78,7 +78,7 @@ export function CellEditor({
 
   // Determine if this cell should show a data source selector
   // Variable cells handle their own data source selector internally
-  const shouldShowDataSource = cell.type !== 'markdown' && cell.type !== 'variable'
+  const shouldShowDataSource = cell.type !== 'markdown' && cell.type !== 'variable' && cell.type !== 'referencetable'
 
   // Determine if this cell can run
   const canRun = !!meta.execute
