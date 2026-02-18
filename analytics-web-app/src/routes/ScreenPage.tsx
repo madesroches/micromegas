@@ -123,7 +123,6 @@ function ScreenPageContent() {
   }, [screenConfig, rawTimeRange, baselineConfig])
 
   // Compute parsed time range (for label)
-  // Depends on refreshTrigger so relative times (e.g. "now-1h") are re-resolved on refresh
   const parsedTimeRange = useMemo(() => {
     try {
       return parseTimeRange(rawTimeRange.from, rawTimeRange.to)
@@ -131,11 +130,9 @@ function ScreenPageContent() {
       // Fallback for invalid time range - use standard defaults
       return parseTimeRange(DEFAULT_TIME_RANGE.from, DEFAULT_TIME_RANGE.to)
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rawTimeRange, refreshTrigger])
+  }, [rawTimeRange])
 
   // Compute API time range
-  // Depends on refreshTrigger so relative times (e.g. "now-1h") are re-resolved on refresh
   const apiTimeRange = useMemo(() => {
     try {
       return getTimeRangeForApi(rawTimeRange.from, rawTimeRange.to)
@@ -143,8 +140,7 @@ function ScreenPageContent() {
       // Fallback for invalid time range - use standard defaults
       return getTimeRangeForApi(DEFAULT_TIME_RANGE.from, DEFAULT_TIME_RANGE.to)
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rawTimeRange, refreshTrigger])
+  }, [rawTimeRange])
 
   // Load screen or default config
   useEffect(() => {

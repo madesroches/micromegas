@@ -128,7 +128,7 @@ function createThrowingGenerator(message: string): AsyncGenerator<unknown> {
 }
 
 describe('useCellExecution', () => {
-  const defaultTimeRange = { begin: '2024-01-01T00:00:00Z', end: '2024-01-02T00:00:00Z' }
+  const defaultRawTimeRange = { from: '2024-01-01T00:00:00Z', to: '2024-01-02T00:00:00Z' }
 
   // Create a ref that can be mutated
   function createVariableValuesRef(initialValues: Record<string, string> = {}) {
@@ -145,7 +145,7 @@ describe('useCellExecution', () => {
       const { result } = renderHook(() =>
         useCellExecution({
           cells: [],
-          timeRange: defaultTimeRange,
+          rawTimeRange: defaultRawTimeRange,
           variableValuesRef,
           setVariableValue: jest.fn(),
           refreshTrigger: 0,
@@ -160,7 +160,7 @@ describe('useCellExecution', () => {
       const { result } = renderHook(() =>
         useCellExecution({
           cells: [],
-          timeRange: defaultTimeRange,
+          rawTimeRange: defaultRawTimeRange,
           variableValuesRef,
           setVariableValue: jest.fn(),
           refreshTrigger: 0,
@@ -185,7 +185,7 @@ describe('useCellExecution', () => {
         const { result } = renderHook(() =>
           useCellExecution({
             cells,
-            timeRange: defaultTimeRange,
+            rawTimeRange: defaultRawTimeRange,
             variableValuesRef,
             setVariableValue: jest.fn(),
             refreshTrigger: 0,
@@ -219,7 +219,7 @@ describe('useCellExecution', () => {
         const { result } = renderHook(() =>
           useCellExecution({
             cells,
-            timeRange: defaultTimeRange,
+            rawTimeRange: defaultRawTimeRange,
             variableValuesRef,
             setVariableValue: jest.fn(),
             refreshTrigger: 0,
@@ -256,7 +256,7 @@ describe('useCellExecution', () => {
         const { result } = renderHook(() =>
           useCellExecution({
             cells,
-            timeRange: defaultTimeRange,
+            rawTimeRange: defaultRawTimeRange,
             variableValuesRef,
             setVariableValue,
             refreshTrigger: 0,
@@ -293,7 +293,7 @@ describe('useCellExecution', () => {
         const { result } = renderHook(() =>
           useCellExecution({
             cells,
-            timeRange: defaultTimeRange,
+            rawTimeRange: defaultRawTimeRange,
             variableValuesRef,
             setVariableValue,
             refreshTrigger: 0,
@@ -326,7 +326,7 @@ describe('useCellExecution', () => {
         const { result } = renderHook(() =>
           useCellExecution({
             cells,
-            timeRange: defaultTimeRange,
+            rawTimeRange: defaultRawTimeRange,
             variableValuesRef,
             setVariableValue,
             refreshTrigger: 0,
@@ -354,7 +354,7 @@ describe('useCellExecution', () => {
         const { result } = renderHook(() =>
           useCellExecution({
             cells,
-            timeRange: defaultTimeRange,
+            rawTimeRange: defaultRawTimeRange,
             variableValuesRef,
             setVariableValue: jest.fn(),
             refreshTrigger: 0,
@@ -379,7 +379,7 @@ describe('useCellExecution', () => {
         const { result } = renderHook(() =>
           useCellExecution({
             cells,
-            timeRange: defaultTimeRange,
+            rawTimeRange: defaultRawTimeRange,
             variableValuesRef,
             setVariableValue: jest.fn(),
             refreshTrigger: 0,
@@ -417,7 +417,7 @@ describe('useCellExecution', () => {
         const { result } = renderHook(() =>
           useCellExecution({
             cells,
-            timeRange: defaultTimeRange,
+            rawTimeRange: defaultRawTimeRange,
             variableValuesRef,
             setVariableValue: jest.fn(),
             refreshTrigger: 0,
@@ -446,7 +446,7 @@ describe('useCellExecution', () => {
         const { result } = renderHook(() =>
           useCellExecution({
             cells,
-            timeRange: defaultTimeRange,
+            rawTimeRange: defaultRawTimeRange,
             variableValuesRef,
             setVariableValue: jest.fn(),
             refreshTrigger: 0,
@@ -470,7 +470,7 @@ describe('useCellExecution', () => {
         const { result } = renderHook(() =>
           useCellExecution({
             cells,
-            timeRange: defaultTimeRange,
+            rawTimeRange: defaultRawTimeRange,
             variableValuesRef,
             setVariableValue: jest.fn(),
             refreshTrigger: 0,
@@ -501,7 +501,7 @@ describe('useCellExecution', () => {
       const { result } = renderHook(() =>
         useCellExecution({
           cells,
-          timeRange: defaultTimeRange,
+          rawTimeRange: defaultRawTimeRange,
           variableValuesRef,
           setVariableValue: jest.fn(),
           refreshTrigger: 0,
@@ -544,7 +544,7 @@ describe('useCellExecution', () => {
       const { result } = renderHook(() =>
         useCellExecution({
           cells,
-          timeRange: defaultTimeRange,
+          rawTimeRange: defaultRawTimeRange,
           variableValuesRef,
           setVariableValue: jest.fn(),
           refreshTrigger: 0,
@@ -582,7 +582,7 @@ describe('useCellExecution', () => {
       const { result } = renderHook(() =>
         useCellExecution({
           cells,
-          timeRange: defaultTimeRange,
+          rawTimeRange: defaultRawTimeRange,
           variableValuesRef,
           setVariableValue: jest.fn(),
           refreshTrigger: 0,
@@ -614,7 +614,7 @@ describe('useCellExecution', () => {
       const { result } = renderHook(() =>
         useCellExecution({
           cells,
-          timeRange: defaultTimeRange,
+          rawTimeRange: defaultRawTimeRange,
           variableValuesRef,
           setVariableValue: jest.fn(),
           refreshTrigger: 0,
@@ -642,7 +642,7 @@ describe('useCellExecution', () => {
       const { result } = renderHook(() =>
         useCellExecution({
           cells,
-          timeRange: defaultTimeRange,
+          rawTimeRange: defaultRawTimeRange,
           variableValuesRef,
           setVariableValue: jest.fn(),
           refreshTrigger: 0,
@@ -670,7 +670,7 @@ describe('useCellExecution', () => {
       const { result } = renderHook(() =>
         useCellExecution({
           cells,
-          timeRange: defaultTimeRange,
+          rawTimeRange: defaultRawTimeRange,
           variableValuesRef,
           setVariableValue: jest.fn(),
           refreshTrigger: 0,
@@ -704,7 +704,7 @@ describe('useCellExecution', () => {
         ({ refreshTrigger }) =>
           useCellExecution({
             cells,
-            timeRange: defaultTimeRange,
+            rawTimeRange: defaultRawTimeRange,
             variableValuesRef,
             setVariableValue: jest.fn(),
             refreshTrigger,
@@ -732,7 +732,7 @@ describe('useCellExecution', () => {
   })
 
   describe('time range change', () => {
-    it('should re-execute all cells when timeRange changes', async () => {
+    it('should re-execute all cells when rawTimeRange changes', async () => {
       mockStreamQuery.mockReturnValue(createSuccessResults())
 
       const cells: CellConfig[] = [
@@ -741,15 +741,15 @@ describe('useCellExecution', () => {
       const variableValuesRef = createVariableValuesRef()
 
       const { result, rerender } = renderHook(
-        ({ timeRange }) =>
+        ({ rawTimeRange }) =>
           useCellExecution({
             cells,
-            timeRange,
+            rawTimeRange,
             variableValuesRef,
             setVariableValue: jest.fn(),
             refreshTrigger: 0,
           }),
-        { initialProps: { timeRange: defaultTimeRange } }
+        { initialProps: { rawTimeRange: defaultRawTimeRange } }
       )
 
       // Wait for initial execution
@@ -761,7 +761,7 @@ describe('useCellExecution', () => {
 
       // Change time range
       await act(async () => {
-        rerender({ timeRange: { begin: '2024-02-01T00:00:00Z', end: '2024-02-02T00:00:00Z' } })
+        rerender({ rawTimeRange: { from: '2024-02-01T00:00:00Z', to: '2024-02-02T00:00:00Z' } })
         await new Promise((resolve) => setTimeout(resolve, 10))
       })
 
@@ -770,7 +770,7 @@ describe('useCellExecution', () => {
       })
     })
 
-    it('should not re-execute when timeRange object changes but values stay the same', async () => {
+    it('should not re-execute when rawTimeRange object changes but values stay the same', async () => {
       mockStreamQuery.mockReturnValue(createSuccessResults())
 
       const cells: CellConfig[] = [
@@ -779,15 +779,15 @@ describe('useCellExecution', () => {
       const variableValuesRef = createVariableValuesRef()
 
       const { result, rerender } = renderHook(
-        ({ timeRange }) =>
+        ({ rawTimeRange }) =>
           useCellExecution({
             cells,
-            timeRange,
+            rawTimeRange,
             variableValuesRef,
             setVariableValue: jest.fn(),
             refreshTrigger: 0,
           }),
-        { initialProps: { timeRange: defaultTimeRange } }
+        { initialProps: { rawTimeRange: defaultRawTimeRange } }
       )
 
       // Wait for initial execution
@@ -799,7 +799,7 @@ describe('useCellExecution', () => {
 
       // Pass new object with same values
       await act(async () => {
-        rerender({ timeRange: { ...defaultTimeRange } })
+        rerender({ rawTimeRange: { ...defaultRawTimeRange } })
         await new Promise((resolve) => setTimeout(resolve, 10))
       })
 
@@ -807,7 +807,7 @@ describe('useCellExecution', () => {
       expect(mockStreamQuery.mock.calls.length).toBe(callCountAfterInitial)
     })
 
-    it('should re-execute when only begin changes', async () => {
+    it('should re-execute when only from changes', async () => {
       mockStreamQuery.mockReturnValue(createSuccessResults())
 
       const cells: CellConfig[] = [
@@ -816,15 +816,15 @@ describe('useCellExecution', () => {
       const variableValuesRef = createVariableValuesRef()
 
       const { result, rerender } = renderHook(
-        ({ timeRange }) =>
+        ({ rawTimeRange }) =>
           useCellExecution({
             cells,
-            timeRange,
+            rawTimeRange,
             variableValuesRef,
             setVariableValue: jest.fn(),
             refreshTrigger: 0,
           }),
-        { initialProps: { timeRange: defaultTimeRange } }
+        { initialProps: { rawTimeRange: defaultRawTimeRange } }
       )
 
       // Wait for initial execution
@@ -834,9 +834,9 @@ describe('useCellExecution', () => {
 
       const callCountAfterInitial = mockStreamQuery.mock.calls.length
 
-      // Change only begin
+      // Change only from
       await act(async () => {
-        rerender({ timeRange: { begin: '2024-01-01T12:00:00Z', end: defaultTimeRange.end } })
+        rerender({ rawTimeRange: { from: '2024-01-01T12:00:00Z', to: defaultRawTimeRange.to } })
         await new Promise((resolve) => setTimeout(resolve, 10))
       })
 
@@ -845,7 +845,7 @@ describe('useCellExecution', () => {
       })
     })
 
-    it('should re-execute when only end changes', async () => {
+    it('should re-execute when only to changes', async () => {
       mockStreamQuery.mockReturnValue(createSuccessResults())
 
       const cells: CellConfig[] = [
@@ -854,15 +854,15 @@ describe('useCellExecution', () => {
       const variableValuesRef = createVariableValuesRef()
 
       const { result, rerender } = renderHook(
-        ({ timeRange }) =>
+        ({ rawTimeRange }) =>
           useCellExecution({
             cells,
-            timeRange,
+            rawTimeRange,
             variableValuesRef,
             setVariableValue: jest.fn(),
             refreshTrigger: 0,
           }),
-        { initialProps: { timeRange: defaultTimeRange } }
+        { initialProps: { rawTimeRange: defaultRawTimeRange } }
       )
 
       // Wait for initial execution
@@ -872,9 +872,9 @@ describe('useCellExecution', () => {
 
       const callCountAfterInitial = mockStreamQuery.mock.calls.length
 
-      // Change only end
+      // Change only to
       await act(async () => {
-        rerender({ timeRange: { begin: defaultTimeRange.begin, end: '2024-01-02T12:00:00Z' } })
+        rerender({ rawTimeRange: { from: defaultRawTimeRange.from, to: '2024-01-02T12:00:00Z' } })
         await new Promise((resolve) => setTimeout(resolve, 10))
       })
 
@@ -908,7 +908,7 @@ describe('useCellExecution', () => {
       const { result } = renderHook(() =>
         useCellExecution({
           cells,
-          timeRange: defaultTimeRange,
+          rawTimeRange: defaultRawTimeRange,
           variableValuesRef,
           setVariableValue: jest.fn(),
           refreshTrigger: 0,
@@ -941,7 +941,7 @@ describe('useCellExecution', () => {
       const { result } = renderHook(() =>
         useCellExecution({
           cells,
-          timeRange: defaultTimeRange,
+          rawTimeRange: defaultRawTimeRange,
           variableValuesRef,
           setVariableValue: jest.fn(),
           refreshTrigger: 0,
@@ -975,7 +975,7 @@ describe('useCellExecution', () => {
       const { result } = renderHook(() =>
         useCellExecution({
           cells,
-          timeRange: defaultTimeRange,
+          rawTimeRange: defaultRawTimeRange,
           variableValuesRef,
           setVariableValue: jest.fn(),
           refreshTrigger: 0,
@@ -1013,7 +1013,7 @@ describe('useCellExecution', () => {
       const { result } = renderHook(() =>
         useCellExecution({
           cells,
-          timeRange: defaultTimeRange,
+          rawTimeRange: defaultRawTimeRange,
           variableValuesRef,
           setVariableValue: jest.fn(),
           refreshTrigger: 0,
@@ -1053,7 +1053,7 @@ describe('useCellExecution', () => {
       const { result } = renderHook(() =>
         useCellExecution({
           cells,
-          timeRange: defaultTimeRange,
+          rawTimeRange: defaultRawTimeRange,
           variableValuesRef,
           setVariableValue: jest.fn(),
           refreshTrigger: 0,
@@ -1088,7 +1088,7 @@ describe('useCellExecution', () => {
       const { result } = renderHook(() =>
         useCellExecution({
           cells,
-          timeRange: defaultTimeRange,
+          rawTimeRange: defaultRawTimeRange,
           variableValuesRef,
           setVariableValue: jest.fn(),
           refreshTrigger: 0,
@@ -1118,7 +1118,7 @@ describe('useCellExecution', () => {
       const { result } = renderHook(() =>
         useCellExecution({
           cells,
-          timeRange: defaultTimeRange,
+          rawTimeRange: defaultRawTimeRange,
           variableValuesRef,
           setVariableValue: jest.fn(),
           refreshTrigger: 0,
@@ -1147,7 +1147,7 @@ describe('useCellExecution', () => {
       const { result } = renderHook(() =>
         useCellExecution({
           cells,
-          timeRange: defaultTimeRange,
+          rawTimeRange: defaultRawTimeRange,
           variableValuesRef,
           setVariableValue: jest.fn(),
           refreshTrigger: 0,
@@ -1182,7 +1182,7 @@ describe('useCellExecution', () => {
       const { result } = renderHook(() =>
         useCellExecution({
           cells,
-          timeRange: defaultTimeRange,
+          rawTimeRange: defaultRawTimeRange,
           variableValuesRef,
           setVariableValue: jest.fn(),
           refreshTrigger: 0,
@@ -1212,7 +1212,7 @@ describe('useCellExecution', () => {
       const { result } = renderHook(() =>
         useCellExecution({
           cells,
-          timeRange: defaultTimeRange,
+          rawTimeRange: defaultRawTimeRange,
           variableValuesRef,
           setVariableValue: jest.fn(),
           refreshTrigger: 0,

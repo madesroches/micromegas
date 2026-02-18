@@ -293,7 +293,7 @@ export function NotebookRenderer({
   // Cell execution state management
   const { cellStates, executeCell, executeFromCell, migrateCellState, removeCellState } = useCellExecution({
     cells,
-    timeRange,
+    rawTimeRange,
     variableValuesRef,
     setVariableValue,
     refreshTrigger,
