@@ -1,0 +1,647 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Multi-Query Chart Editor — Mockup</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0a0a0f;
+    color: #e0e0e8;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    padding: 40px;
+  }
+  h2 { color: #90a4ae; font-size: 13px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 16px; }
+
+  /* Editor panel (mimics the CellEditor slide-out) */
+  .editor-panel {
+    background: #12121e;
+    border: 1px solid #2a2a35;
+    border-radius: 8px;
+    width: 560px;
+    overflow: hidden;
+    margin-bottom: 48px;
+  }
+
+  .editor-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 16px;
+    border-bottom: 1px solid #2a2a35;
+    background: #16162a;
+  }
+  .editor-header-left {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .type-badge {
+    background: #bf360c;
+    color: white;
+    font-size: 10px;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 3px;
+    text-transform: uppercase;
+  }
+  .cell-name {
+    font-size: 14px;
+    font-weight: 500;
+    color: #e0e0e8;
+  }
+  .close-btn {
+    background: none;
+    border: none;
+    color: #6a6a7a;
+    font-size: 18px;
+    cursor: pointer;
+    padding: 4px 8px;
+    border-radius: 4px;
+  }
+  .close-btn:hover { color: #b0b0c0; background: rgba(255,255,255,0.05); }
+
+  .editor-body {
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  /* Form elements */
+  .field-label {
+    display: block;
+    font-size: 11px;
+    font-weight: 600;
+    color: #6a6a7a;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    margin-bottom: 6px;
+  }
+
+  .text-input {
+    width: 100%;
+    padding: 8px 12px;
+    background: #0a0a14;
+    border: 1px solid #2a2a35;
+    border-radius: 6px;
+    color: #e0e0e8;
+    font-size: 13px;
+    font-family: inherit;
+    outline: none;
+    transition: border-color 0.15s;
+  }
+  .text-input:focus { border-color: #1565c0; }
+  .text-input::placeholder { color: #3a3a4a; }
+
+  .sql-editor {
+    width: 100%;
+    padding: 10px 12px;
+    background: #0a0a14;
+    border: 1px solid #2a2a35;
+    border-radius: 6px;
+    color: #e0e0e8;
+    font-size: 13px;
+    font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+    line-height: 1.5;
+    outline: none;
+    resize: vertical;
+    min-height: 80px;
+    transition: border-color 0.15s;
+  }
+  .sql-editor:focus { border-color: #1565c0; }
+  .sql-editor::placeholder { color: #3a3a4a; }
+
+  /* Query block */
+  .query-block {
+    background: #0e0e1a;
+    border: 1px solid #2a2a35;
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  .query-block-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 12px;
+    background: #16162a;
+    border-bottom: 1px solid #2a2a35;
+  }
+  .query-block-title {
+    font-size: 12px;
+    font-weight: 500;
+    color: #b0b0c0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .query-color-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+  }
+  .remove-btn {
+    background: none;
+    border: none;
+    color: #546e7a;
+    font-size: 16px;
+    cursor: pointer;
+    padding: 2px 6px;
+    border-radius: 3px;
+    line-height: 1;
+  }
+  .remove-btn:hover { color: #c62828; background: rgba(198,40,40,0.1); }
+
+  .query-block-body {
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .inline-fields {
+    display: flex;
+    gap: 12px;
+  }
+  .inline-field {
+    flex: 1;
+  }
+  .inline-field .text-input {
+    font-size: 12px;
+    padding: 6px 10px;
+  }
+
+  /* Data source select — compact version inside query block */
+  .datasource-select {
+    width: 100%;
+    padding: 6px 10px;
+    background: #0a0a14;
+    border: 1px solid #2a2a35;
+    border-radius: 6px;
+    color: #e0e0e8;
+    font-size: 12px;
+    outline: none;
+    appearance: none;
+    cursor: pointer;
+  }
+  .datasource-select option { background: #12121e; }
+
+  /* Add query button */
+  .add-query-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    width: 100%;
+    padding: 10px;
+    background: none;
+    border: 1px dashed #2a2a35;
+    border-radius: 8px;
+    color: #6a6a7a;
+    font-size: 13px;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .add-query-btn:hover {
+    border-color: #1565c0;
+    color: #1565c0;
+    background: rgba(21, 101, 192, 0.05);
+  }
+
+  /* Footer */
+  .editor-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 16px;
+    border-top: 1px solid #2a2a35;
+    background: #16162a;
+  }
+  .run-btn {
+    padding: 6px 16px;
+    background: #bf360c;
+    color: white;
+    border: none;
+    border-radius: 5px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+  .run-btn:hover { background: #d84315; }
+  .delete-btn {
+    padding: 6px 16px;
+    background: none;
+    color: #c62828;
+    border: 1px solid #c6282844;
+    border-radius: 5px;
+    font-size: 13px;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .delete-btn:hover { background: rgba(198,40,40,0.1); border-color: #c62828; }
+
+  /* Section divider */
+  .section-divider {
+    border: none;
+    border-top: 1px solid #2a2a35;
+    margin: 4px 0;
+  }
+
+  .section { margin-bottom: 48px; }
+  .section-label {
+    color: #546e7a;
+    font-size: 12px;
+    margin-bottom: 12px;
+    font-style: italic;
+  }
+
+  /* Variables panel */
+  .variables-panel {
+    background: #0e0e1a;
+    border: 1px solid #2a2a35;
+    border-radius: 6px;
+    padding: 10px 12px;
+  }
+  .variables-title {
+    font-size: 11px;
+    color: #546e7a;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    margin-bottom: 6px;
+  }
+  .variable-tag {
+    display: inline-block;
+    padding: 2px 8px;
+    background: #1a1a2e;
+    border: 1px solid #2a2a35;
+    border-radius: 3px;
+    font-size: 11px;
+    font-family: monospace;
+    color: #42a5f5;
+    margin: 2px 4px 2px 0;
+  }
+
+  .doc-link {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: #1565c0;
+    text-decoration: none;
+  }
+  .doc-link:hover { text-decoration: underline; }
+
+  /* Default indicator badge */
+  .default-badge {
+    font-size: 10px;
+    color: #546e7a;
+    font-style: italic;
+  }
+</style>
+</head>
+<body>
+
+<!-- ===== Editor: Two queries, different data sources ===== -->
+<div class="section">
+  <h2>Chart cell editor — two queries, different data sources</h2>
+  <div class="section-label">Each query has its own data source selector. Query 2 targets staging.</div>
+
+  <div class="editor-panel">
+    <div class="editor-header">
+      <div class="editor-header-left">
+        <span class="type-badge">Chart</span>
+        <span class="cell-name">api_performance</span>
+      </div>
+      <button class="close-btn">&times;</button>
+    </div>
+
+    <div class="editor-body">
+
+      <!-- Query 1 -->
+      <div class="query-block">
+        <div class="query-block-header">
+          <div class="query-block-title">
+            <div class="query-color-dot" style="background: #bf360c;"></div>
+            Query 1
+          </div>
+          <!-- No remove button — can't remove the last query -->
+        </div>
+        <div class="query-block-body">
+          <div>
+            <label class="field-label">Data Source</label>
+            <select class="datasource-select">
+              <option selected>production (default)</option>
+              <option>staging</option>
+              <option>$env_source</option>
+            </select>
+          </div>
+          <div>
+            <label class="field-label">SQL Query</label>
+            <textarea class="sql-editor" rows="3">SELECT time, avg_latency
+FROM request_metrics
+WHERE service = '$service'
+ORDER BY time</textarea>
+          </div>
+          <div class="inline-fields">
+            <div class="inline-field">
+              <label class="field-label">Unit</label>
+              <input class="text-input" type="text" value="ms" placeholder="e.g., percent, bytes, ms" />
+            </div>
+            <div class="inline-field">
+              <label class="field-label">Label</label>
+              <input class="text-input" type="text" value="latency" placeholder="defaults to column name" />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Query 2 — different data source -->
+      <div class="query-block">
+        <div class="query-block-header">
+          <div class="query-block-title">
+            <div class="query-color-dot" style="background: #1565c0;"></div>
+            Query 2
+          </div>
+          <button class="remove-btn" title="Remove query">&times;</button>
+        </div>
+        <div class="query-block-body">
+          <div>
+            <label class="field-label">Data Source</label>
+            <select class="datasource-select">
+              <option>production (default)</option>
+              <option selected>staging</option>
+              <option>$env_source</option>
+            </select>
+          </div>
+          <div>
+            <label class="field-label">SQL Query</label>
+            <textarea class="sql-editor" rows="3">SELECT time, avg_response_bytes
+FROM request_metrics
+WHERE service = '$service'
+ORDER BY time</textarea>
+          </div>
+          <div class="inline-fields">
+            <div class="inline-field">
+              <label class="field-label">Unit</label>
+              <input class="text-input" type="text" value="bytes" placeholder="e.g., percent, bytes, ms" />
+            </div>
+            <div class="inline-field">
+              <label class="field-label">Label</label>
+              <input class="text-input" type="text" value="response_size" placeholder="defaults to column name" />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Add query button -->
+      <button class="add-query-btn">+ Add Query</button>
+
+      <hr class="section-divider" />
+
+      <!-- Available variables -->
+      <div class="variables-panel">
+        <div class="variables-title">Available Variables</div>
+        <span class="variable-tag">$begin</span>
+        <span class="variable-tag">$end</span>
+        <span class="variable-tag">$service</span>
+        <span class="variable-tag">$service.name</span>
+        <span class="variable-tag">$service.env</span>
+        <span class="variable-tag">$env_source</span>
+      </div>
+
+      <a href="#" class="doc-link">
+        <span>&#x2197;</span> Query Guide
+      </a>
+    </div>
+
+    <div class="editor-footer">
+      <button class="delete-btn">Delete</button>
+      <button class="run-btn">&#9654; Run</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== Editor: Single query (migrated from v1) ===== -->
+<div class="section">
+  <h2>Chart cell editor — single query (migrated from v1)</h2>
+  <div class="section-label">Legacy config auto-migrated to v2 with one query. Remove button hidden.</div>
+
+  <div class="editor-panel">
+    <div class="editor-header">
+      <div class="editor-header-left">
+        <span class="type-badge">Chart</span>
+        <span class="cell-name">cpu_chart</span>
+      </div>
+      <button class="close-btn">&times;</button>
+    </div>
+
+    <div class="editor-body">
+
+      <!-- Single query — no remove button -->
+      <div class="query-block">
+        <div class="query-block-header">
+          <div class="query-block-title">
+            <div class="query-color-dot" style="background: #bf360c;"></div>
+            Query 1
+          </div>
+        </div>
+        <div class="query-block-body">
+          <div>
+            <label class="field-label">Data Source</label>
+            <select class="datasource-select">
+              <option selected>production (default)</option>
+            </select>
+          </div>
+          <div>
+            <label class="field-label">SQL Query</label>
+            <textarea class="sql-editor" rows="3">SELECT time, value
+FROM measures
+WHERE name = 'cpu_usage'
+ORDER BY time LIMIT 100</textarea>
+          </div>
+          <div class="inline-fields">
+            <div class="inline-field">
+              <label class="field-label">Unit</label>
+              <input class="text-input" type="text" value="percent" placeholder="e.g., percent, bytes, ms" />
+            </div>
+            <div class="inline-field">
+              <label class="field-label">Label</label>
+              <input class="text-input" type="text" value="" placeholder="defaults to column name" />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <button class="add-query-btn">+ Add Query</button>
+
+      <hr class="section-divider" />
+
+      <div class="variables-panel">
+        <div class="variables-title">Available Variables</div>
+        <span class="variable-tag">$begin</span>
+        <span class="variable-tag">$end</span>
+      </div>
+
+      <a href="#" class="doc-link">
+        <span>&#x2197;</span> Query Guide
+      </a>
+    </div>
+
+    <div class="editor-footer">
+      <button class="delete-btn">Delete</button>
+      <button class="run-btn">&#9654; Run</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== Editor: Three queries with variable macros ===== -->
+<div class="section">
+  <h2>Chart cell editor — three queries with dynamic units</h2>
+  <div class="section-label">Unit fields using $variable.column macros for dynamic labels. All queries share the same data source.</div>
+
+  <div class="editor-panel">
+    <div class="editor-header">
+      <div class="editor-header-left">
+        <span class="type-badge">Chart</span>
+        <span class="cell-name">metric_comparison</span>
+      </div>
+      <button class="close-btn">&times;</button>
+    </div>
+
+    <div class="editor-body">
+
+      <!-- Query 1 -->
+      <div class="query-block">
+        <div class="query-block-header">
+          <div class="query-block-title">
+            <div class="query-color-dot" style="background: #bf360c;"></div>
+            Query 1
+          </div>
+          <button class="remove-btn" title="Remove query">&times;</button>
+        </div>
+        <div class="query-block-body">
+          <div>
+            <label class="field-label">Data Source</label>
+            <select class="datasource-select">
+              <option selected>production (default)</option>
+              <option>staging</option>
+            </select>
+          </div>
+          <div>
+            <label class="field-label">SQL Query</label>
+            <textarea class="sql-editor" rows="2">SELECT time, quantile_from_histogram(value, 0.5) as p50
+FROM measures WHERE name = '$metric' ORDER BY time</textarea>
+          </div>
+          <div class="inline-fields">
+            <div class="inline-field">
+              <label class="field-label">Unit</label>
+              <input class="text-input" type="text" value="$metric.unit" placeholder="e.g., percent, bytes, ms" style="color: #42a5f5;" />
+            </div>
+            <div class="inline-field">
+              <label class="field-label">Label</label>
+              <input class="text-input" type="text" value="p50" />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Query 2 -->
+      <div class="query-block">
+        <div class="query-block-header">
+          <div class="query-block-title">
+            <div class="query-color-dot" style="background: #1565c0;"></div>
+            Query 2
+          </div>
+          <button class="remove-btn" title="Remove query">&times;</button>
+        </div>
+        <div class="query-block-body">
+          <div>
+            <label class="field-label">Data Source</label>
+            <select class="datasource-select">
+              <option selected>production (default)</option>
+              <option>staging</option>
+            </select>
+          </div>
+          <div>
+            <label class="field-label">SQL Query</label>
+            <textarea class="sql-editor" rows="2">SELECT time, quantile_from_histogram(value, 0.99) as p99
+FROM measures WHERE name = '$metric' ORDER BY time</textarea>
+          </div>
+          <div class="inline-fields">
+            <div class="inline-field">
+              <label class="field-label">Unit</label>
+              <input class="text-input" type="text" value="$metric.unit" placeholder="e.g., percent, bytes, ms" style="color: #42a5f5;" />
+            </div>
+            <div class="inline-field">
+              <label class="field-label">Label</label>
+              <input class="text-input" type="text" value="p99" />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Query 3 -->
+      <div class="query-block">
+        <div class="query-block-header">
+          <div class="query-block-title">
+            <div class="query-color-dot" style="background: #ffb300;"></div>
+            Query 3
+          </div>
+          <button class="remove-btn" title="Remove query">&times;</button>
+        </div>
+        <div class="query-block-body">
+          <div>
+            <label class="field-label">Data Source</label>
+            <select class="datasource-select">
+              <option selected>production (default)</option>
+              <option>staging</option>
+            </select>
+          </div>
+          <div>
+            <label class="field-label">SQL Query</label>
+            <textarea class="sql-editor" rows="2">SELECT time, error_count
+FROM service_health WHERE service = '$service' ORDER BY time</textarea>
+          </div>
+          <div class="inline-fields">
+            <div class="inline-field">
+              <label class="field-label">Unit</label>
+              <input class="text-input" type="text" value="" placeholder="e.g., percent, bytes, ms" />
+            </div>
+            <div class="inline-field">
+              <label class="field-label">Label</label>
+              <input class="text-input" type="text" value="errors" />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <button class="add-query-btn">+ Add Query</button>
+
+      <hr class="section-divider" />
+
+      <div class="variables-panel">
+        <div class="variables-title">Available Variables</div>
+        <span class="variable-tag">$begin</span>
+        <span class="variable-tag">$end</span>
+        <span class="variable-tag">$metric</span>
+        <span class="variable-tag">$metric.name</span>
+        <span class="variable-tag">$metric.unit</span>
+        <span class="variable-tag">$service</span>
+      </div>
+
+      <a href="#" class="doc-link">
+        <span>&#x2197;</span> Query Guide
+      </a>
+    </div>
+
+    <div class="editor-footer">
+      <button class="delete-btn">Delete</button>
+      <button class="run-btn">&#9654; Run</button>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

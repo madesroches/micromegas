@@ -1,0 +1,670 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Multi-Query Chart — Mockup</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0a0a0f;
+    color: #e0e0e8;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    padding: 40px;
+  }
+  h2 { color: #90a4ae; font-size: 13px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 16px; }
+
+  .chart-container {
+    background: #12121e;
+    border: 1px solid #2a2a35;
+    border-radius: 8px;
+    overflow: hidden;
+    margin-bottom: 40px;
+  }
+
+  /* Chart header */
+  .chart-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 16px;
+    border-bottom: 1px solid #2a2a35;
+  }
+  .chart-title {
+    font-size: 15px;
+    font-weight: 500;
+    color: #e0e0e8;
+  }
+  .chart-title .unit { color: #6a6a7a; font-weight: 400; }
+  .chart-title .vs { color: #6a6a7a; font-weight: 400; font-size: 13px; margin-left: 8px; }
+
+  .header-right {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    font-size: 12px;
+    color: #6a6a7a;
+  }
+
+  /* Legend items */
+  .legend {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    cursor: pointer;
+    padding: 2px 6px;
+    border-radius: 3px;
+    transition: background 0.15s;
+  }
+  .legend-item:hover { background: rgba(255,255,255,0.05); }
+  .legend-item.dimmed { opacity: 0.35; }
+  .legend-swatch {
+    width: 10px;
+    height: 3px;
+    border-radius: 1px;
+  }
+  .legend-label { color: #b0b0c0; font-size: 12px; }
+
+  /* Stats */
+  .stats {
+    display: flex;
+    gap: 12px;
+    font-size: 11px;
+  }
+  .stats span { color: #b0b0c0; }
+
+  /* Toggle buttons */
+  .toggle-group {
+    display: flex;
+    border: 1px solid #2a2a35;
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  .toggle-btn {
+    padding: 2px 8px;
+    font-size: 11px;
+    color: #6a6a7a;
+    background: none;
+    border: none;
+    border-left: 1px solid #2a2a35;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .toggle-btn:first-child { border-left: none; }
+  .toggle-btn.active { background: #bf360c; color: white; }
+  .toggle-btn:hover:not(.active) { color: #b0b0c0; background: rgba(255,255,255,0.03); }
+
+  /* Chart area */
+  .chart-body {
+    position: relative;
+    height: 300px;
+    padding: 16px;
+  }
+  .chart-plot {
+    position: relative;
+    height: 100%;
+    display: flex;
+  }
+
+  /* Y axes */
+  .y-axis {
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    font-size: 11px;
+    font-family: monospace;
+    padding: 0 8px;
+    width: 80px;
+    text-align: right;
+  }
+  .y-axis.right { text-align: left; }
+  .y-axis-label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    margin-bottom: 4px;
+  }
+
+  /* Plot area */
+  .plot-area {
+    flex: 1;
+    position: relative;
+    border-left: 1px solid #2a2a35;
+    border-right: 1px solid #2a2a35;
+    border-bottom: 1px solid #2a2a35;
+  }
+
+  /* Grid lines */
+  .grid-line {
+    position: absolute;
+    left: 0;
+    right: 0;
+    height: 1px;
+    background: #2a2a35;
+  }
+
+  /* SVG chart lines */
+  .plot-svg {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+  }
+
+  /* X axis */
+  .x-axis {
+    display: flex;
+    justify-content: space-between;
+    padding: 8px 80px 0 80px;
+    font-size: 11px;
+    font-family: monospace;
+    color: #6a6a7a;
+  }
+
+  /* Tooltip */
+  .tooltip {
+    position: absolute;
+    background: #0a0a0f;
+    border: 1px solid #2a2a35;
+    border-radius: 6px;
+    padding: 10px 14px;
+    font-size: 12px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+    pointer-events: none;
+    z-index: 10;
+  }
+  .tooltip-time {
+    color: #6a6a7a;
+    font-family: monospace;
+    margin-bottom: 6px;
+    font-size: 11px;
+  }
+  .tooltip-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 2px 0;
+  }
+  .tooltip-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+  }
+  .tooltip-name { color: #b0b0c0; min-width: 90px; }
+  .tooltip-value { color: #e0e0e8; font-weight: 600; font-size: 13px; }
+
+  /* Cursor line */
+  .cursor-line {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 1px;
+    background: rgba(255,255,255,0.2);
+    pointer-events: none;
+  }
+
+  /* Section separator */
+  .section { margin-bottom: 48px; }
+  .section-label {
+    color: #546e7a;
+    font-size: 12px;
+    margin-bottom: 8px;
+    font-style: italic;
+  }
+</style>
+</head>
+<body>
+
+<!-- ===== Scenario 1: Two queries, different units (dual Y-axis) ===== -->
+<div class="section">
+  <h2>Two queries, different units — dual Y-axis</h2>
+  <div class="section-label">Left axis: latency (ms) &middot; Right axis: response size (bytes)</div>
+
+  <div class="chart-container">
+    <div class="chart-header">
+      <div style="display: flex; align-items: center; gap: 20px;">
+        <div class="legend">
+          <div class="legend-item">
+            <div class="legend-swatch" style="background: #bf360c;"></div>
+            <span class="legend-label">latency</span>
+          </div>
+          <div class="legend-item">
+            <div class="legend-swatch" style="background: #1565c0;"></div>
+            <span class="legend-label">response_size</span>
+          </div>
+        </div>
+      </div>
+      <div class="header-right">
+        <div class="toggle-group">
+          <button class="toggle-btn active">Line</button>
+          <button class="toggle-btn">Bar</button>
+        </div>
+        <div class="toggle-group">
+          <button class="toggle-btn active">P99</button>
+          <button class="toggle-btn">Max</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="chart-body">
+      <div class="chart-plot">
+        <!-- Left Y-axis (ms) -->
+        <div class="y-axis" style="color: #bf360c;">
+          <div>
+            <div class="y-axis-label" style="color: #bf360c99;">latency</div>
+            <div>250 ms</div>
+          </div>
+          <div>200 ms</div>
+          <div>150 ms</div>
+          <div>100 ms</div>
+          <div>50 ms</div>
+          <div>0 ms</div>
+        </div>
+
+        <!-- Plot area with SVG -->
+        <div class="plot-area">
+          <div class="grid-line" style="top: 0%;"></div>
+          <div class="grid-line" style="top: 20%;"></div>
+          <div class="grid-line" style="top: 40%;"></div>
+          <div class="grid-line" style="top: 60%;"></div>
+          <div class="grid-line" style="top: 80%;"></div>
+          <div class="grid-line" style="top: 100%;"></div>
+
+          <svg class="plot-svg" viewBox="0 0 800 260" preserveAspectRatio="none">
+            <!-- Latency line (rust orange) -->
+            <polyline
+              fill="none"
+              stroke="#bf360c"
+              stroke-width="2"
+              points="0,180 40,175 80,160 120,140 160,155 200,120 240,100 280,110 320,90 360,85 400,95 440,80 480,70 520,85 560,75 600,90 640,100 680,80 720,60 760,70 800,65"
+            />
+            <polyline
+              fill="url(#rust-fill)"
+              stroke="none"
+              points="0,260 0,180 40,175 80,160 120,140 160,155 200,120 240,100 280,110 320,90 360,85 400,95 440,80 480,70 520,85 560,75 600,90 640,100 680,80 720,60 760,70 800,65 800,260"
+              opacity="0.1"
+            />
+
+            <!-- Response size line (blue) -->
+            <polyline
+              fill="none"
+              stroke="#1565c0"
+              stroke-width="2"
+              points="0,200 40,190 80,195 120,170 160,160 200,165 240,150 280,140 320,145 360,130 400,135 440,120 480,115 520,125 560,110 600,120 640,105 680,100 720,95 760,105 800,90"
+            />
+            <polyline
+              fill="url(#blue-fill)"
+              stroke="none"
+              points="0,260 0,200 40,190 80,195 120,170 160,160 200,165 240,150 280,140 320,145 360,130 400,135 440,120 480,115 520,125 560,110 600,120 640,105 680,100 720,95 760,105 800,90 800,260"
+              opacity="0.1"
+            />
+
+            <defs>
+              <linearGradient id="rust-fill" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stop-color="#bf360c" />
+                <stop offset="100%" stop-color="#bf360c" stop-opacity="0" />
+              </linearGradient>
+              <linearGradient id="blue-fill" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stop-color="#1565c0" />
+                <stop offset="100%" stop-color="#1565c0" stop-opacity="0" />
+              </linearGradient>
+            </defs>
+          </svg>
+
+          <!-- Cursor line -->
+          <div class="cursor-line" style="left: 60%;"></div>
+
+          <!-- Tooltip -->
+          <div class="tooltip" style="left: calc(60% + 12px); top: 40px;">
+            <div class="tooltip-time">14:32:18.440</div>
+            <div class="tooltip-row">
+              <div class="tooltip-dot" style="background: #bf360c;"></div>
+              <span class="tooltip-name">latency</span>
+              <span class="tooltip-value">87.3 ms</span>
+            </div>
+            <div class="tooltip-row">
+              <div class="tooltip-dot" style="background: #1565c0;"></div>
+              <span class="tooltip-name">response_size</span>
+              <span class="tooltip-value">12.4 KB</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Right Y-axis (bytes) -->
+        <div class="y-axis right" style="color: #1565c0;">
+          <div>
+            <div class="y-axis-label" style="color: #1565c099;">response_size</div>
+            <div>50 KB</div>
+          </div>
+          <div>40 KB</div>
+          <div>30 KB</div>
+          <div>20 KB</div>
+          <div>10 KB</div>
+          <div>0 KB</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="x-axis">
+      <span>14:30:00</span>
+      <span>14:31:00</span>
+      <span>14:32:00</span>
+      <span>14:33:00</span>
+      <span>14:34:00</span>
+      <span>14:35:00</span>
+    </div>
+  </div>
+</div>
+
+<!-- ===== Scenario 2: Three queries, two share a unit ===== -->
+<div class="section">
+  <h2>Three queries — two share a unit, one different</h2>
+  <div class="section-label">Left axis: shared by p50 &amp; p99 latency (ms) &middot; Right axis: error_rate (percent)</div>
+
+  <div class="chart-container">
+    <div class="chart-header">
+      <div style="display: flex; align-items: center; gap: 20px;">
+        <div class="legend">
+          <div class="legend-item">
+            <div class="legend-swatch" style="background: #bf360c;"></div>
+            <span class="legend-label">p50_latency</span>
+          </div>
+          <div class="legend-item">
+            <div class="legend-swatch" style="background: #1565c0;"></div>
+            <span class="legend-label">p99_latency</span>
+          </div>
+          <div class="legend-item">
+            <div class="legend-swatch" style="background: #ffb300;"></div>
+            <span class="legend-label">error_rate</span>
+          </div>
+        </div>
+      </div>
+      <div class="header-right">
+        <div class="toggle-group">
+          <button class="toggle-btn active">Line</button>
+          <button class="toggle-btn">Bar</button>
+        </div>
+        <div class="toggle-group">
+          <button class="toggle-btn active">P99</button>
+          <button class="toggle-btn">Max</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="chart-body">
+      <div class="chart-plot">
+        <!-- Left Y-axis (ms) — shared by two series -->
+        <div class="y-axis" style="color: #8a8a9a;">
+          <div>
+            <div class="y-axis-label" style="color: #6a6a7a;">ms</div>
+            <div>500 ms</div>
+          </div>
+          <div>400 ms</div>
+          <div>300 ms</div>
+          <div>200 ms</div>
+          <div>100 ms</div>
+          <div>0 ms</div>
+        </div>
+
+        <div class="plot-area">
+          <div class="grid-line" style="top: 0%;"></div>
+          <div class="grid-line" style="top: 20%;"></div>
+          <div class="grid-line" style="top: 40%;"></div>
+          <div class="grid-line" style="top: 60%;"></div>
+          <div class="grid-line" style="top: 80%;"></div>
+          <div class="grid-line" style="top: 100%;"></div>
+
+          <svg class="plot-svg" viewBox="0 0 800 260" preserveAspectRatio="none">
+            <!-- p50 latency (rust orange) — lower values -->
+            <polyline
+              fill="none" stroke="#bf360c" stroke-width="2"
+              points="0,200 50,195 100,190 150,185 200,188 250,180 300,175 350,178 400,170 450,172 500,165 550,168 600,160 650,158 700,162 750,155 800,150"
+            />
+            <polyline fill="url(#rust-fill2)" stroke="none" opacity="0.08"
+              points="0,260 0,200 50,195 100,190 150,185 200,188 250,180 300,175 350,178 400,170 450,172 500,165 550,168 600,160 650,158 700,162 750,155 800,150 800,260"
+            />
+
+            <!-- p99 latency (blue) — higher values, same scale -->
+            <polyline
+              fill="none" stroke="#1565c0" stroke-width="2"
+              points="0,140 50,130 100,125 150,135 200,110 250,100 300,115 350,95 400,105 450,90 500,85 550,95 600,80 650,75 700,90 750,70 800,65"
+            />
+            <polyline fill="url(#blue-fill2)" stroke="none" opacity="0.08"
+              points="0,260 0,140 50,130 100,125 150,135 200,110 250,100 300,115 350,95 400,105 450,90 500,85 550,95 600,80 650,75 700,90 750,70 800,65 800,260"
+            />
+
+            <!-- error_rate (gold) — different scale, maps to right axis -->
+            <polyline
+              fill="none" stroke="#ffb300" stroke-width="2"
+              points="0,240 50,238 100,235 150,240 200,230 250,235 300,225 350,220 400,228 450,215 500,210 550,220 600,205 650,200 700,210 750,195 800,190"
+            />
+
+            <defs>
+              <linearGradient id="rust-fill2" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stop-color="#bf360c" /><stop offset="100%" stop-color="#bf360c" stop-opacity="0" />
+              </linearGradient>
+              <linearGradient id="blue-fill2" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stop-color="#1565c0" /><stop offset="100%" stop-color="#1565c0" stop-opacity="0" />
+              </linearGradient>
+            </defs>
+          </svg>
+        </div>
+
+        <!-- Right Y-axis (percent) -->
+        <div class="y-axis right" style="color: #ffb300;">
+          <div>
+            <div class="y-axis-label" style="color: #ffb30099;">percent</div>
+            <div>5.0%</div>
+          </div>
+          <div>4.0%</div>
+          <div>3.0%</div>
+          <div>2.0%</div>
+          <div>1.0%</div>
+          <div>0.0%</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="x-axis">
+      <span>14:30:00</span>
+      <span>14:31:00</span>
+      <span>14:32:00</span>
+      <span>14:33:00</span>
+      <span>14:34:00</span>
+      <span>14:35:00</span>
+    </div>
+  </div>
+</div>
+
+<!-- ===== Scenario 3: Legend interaction — series isolated ===== -->
+<div class="section">
+  <h2>Legend interaction — click to isolate a series (Grafana-style)</h2>
+  <div class="section-label">User clicked "p99_latency" — other series dimmed</div>
+
+  <div class="chart-container">
+    <div class="chart-header">
+      <div style="display: flex; align-items: center; gap: 20px;">
+        <div class="legend">
+          <div class="legend-item dimmed">
+            <div class="legend-swatch" style="background: #bf360c;"></div>
+            <span class="legend-label">p50_latency</span>
+          </div>
+          <div class="legend-item" style="background: rgba(255,255,255,0.05);">
+            <div class="legend-swatch" style="background: #1565c0;"></div>
+            <span class="legend-label" style="color: #e0e0e8;">p99_latency</span>
+          </div>
+          <div class="legend-item dimmed">
+            <div class="legend-swatch" style="background: #ffb300;"></div>
+            <span class="legend-label">error_rate</span>
+          </div>
+        </div>
+      </div>
+      <div class="header-right">
+        <div class="stats">
+          <div>min: <span>65.2 ms</span></div>
+          <div>p99: <span>312 ms</span></div>
+          <div>max: <span>487 ms</span></div>
+          <div>avg: <span>142 ms</span></div>
+        </div>
+        <div class="toggle-group">
+          <button class="toggle-btn active">Line</button>
+          <button class="toggle-btn">Bar</button>
+        </div>
+        <div class="toggle-group">
+          <button class="toggle-btn active">P99</button>
+          <button class="toggle-btn">Max</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="chart-body">
+      <div class="chart-plot">
+        <div class="y-axis" style="color: #8a8a9a;">
+          <div>
+            <div class="y-axis-label" style="color: #6a6a7a;">ms</div>
+            <div>500 ms</div>
+          </div>
+          <div>400 ms</div>
+          <div>300 ms</div>
+          <div>200 ms</div>
+          <div>100 ms</div>
+          <div>0 ms</div>
+        </div>
+
+        <div class="plot-area">
+          <div class="grid-line" style="top: 0%;"></div>
+          <div class="grid-line" style="top: 20%;"></div>
+          <div class="grid-line" style="top: 40%;"></div>
+          <div class="grid-line" style="top: 60%;"></div>
+          <div class="grid-line" style="top: 80%;"></div>
+          <div class="grid-line" style="top: 100%;"></div>
+
+          <svg class="plot-svg" viewBox="0 0 800 260" preserveAspectRatio="none">
+            <!-- Only p99 visible, others hidden -->
+            <polyline
+              fill="none" stroke="#1565c0" stroke-width="2.5"
+              points="0,140 50,130 100,125 150,135 200,110 250,100 300,115 350,95 400,105 450,90 500,85 550,95 600,80 650,75 700,90 750,70 800,65"
+            />
+            <polyline fill="url(#blue-fill3)" stroke="none" opacity="0.12"
+              points="0,260 0,140 50,130 100,125 150,135 200,110 250,100 300,115 350,95 400,105 450,90 500,85 550,95 600,80 650,75 700,90 750,70 800,65 800,260"
+            />
+            <defs>
+              <linearGradient id="blue-fill3" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stop-color="#1565c0" /><stop offset="100%" stop-color="#1565c0" stop-opacity="0" />
+              </linearGradient>
+            </defs>
+          </svg>
+        </div>
+
+        <div class="y-axis right" style="color: #6a6a7a; opacity: 0.3;">
+          <div>
+            <div class="y-axis-label">percent</div>
+            <div>5.0%</div>
+          </div>
+          <div>4.0%</div>
+          <div>3.0%</div>
+          <div>2.0%</div>
+          <div>1.0%</div>
+          <div>0.0%</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="x-axis">
+      <span>14:30:00</span>
+      <span>14:31:00</span>
+      <span>14:32:00</span>
+      <span>14:33:00</span>
+      <span>14:34:00</span>
+      <span>14:35:00</span>
+    </div>
+  </div>
+</div>
+
+<!-- ===== Scenario 4: Single query (no regression) ===== -->
+<div class="section">
+  <h2>Single query — unchanged from current behavior</h2>
+  <div class="section-label">No legend needed when only one series</div>
+
+  <div class="chart-container">
+    <div class="chart-header">
+      <div class="chart-title">
+        cpu_usage <span class="unit">(percent)</span>
+        <span class="vs">vs Time</span>
+      </div>
+      <div class="header-right">
+        <div class="stats">
+          <div>min: <span>12.3%</span></div>
+          <div>p99: <span>78.4%</span></div>
+          <div>max: <span>92.1%</span></div>
+          <div>avg: <span>45.2%</span></div>
+          <div>count: <span>1,024</span></div>
+        </div>
+        <div class="toggle-group">
+          <button class="toggle-btn active">Line</button>
+          <button class="toggle-btn">Bar</button>
+        </div>
+        <div class="toggle-group">
+          <button class="toggle-btn active">P99</button>
+          <button class="toggle-btn">Max</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="chart-body">
+      <div class="chart-plot">
+        <div class="y-axis" style="color: #6a6a7a;">
+          <div>80%</div>
+          <div>60%</div>
+          <div>40%</div>
+          <div>20%</div>
+          <div>0%</div>
+        </div>
+
+        <div class="plot-area">
+          <div class="grid-line" style="top: 0%;"></div>
+          <div class="grid-line" style="top: 25%;"></div>
+          <div class="grid-line" style="top: 50%;"></div>
+          <div class="grid-line" style="top: 75%;"></div>
+          <div class="grid-line" style="top: 100%;"></div>
+
+          <svg class="plot-svg" viewBox="0 0 800 260" preserveAspectRatio="none">
+            <polyline
+              fill="none" stroke="#bf360c" stroke-width="2"
+              points="0,180 30,170 60,160 90,150 120,155 150,140 180,130 210,135 240,120 270,125 300,110 330,115 360,100 390,105 420,95 450,100 480,90 510,85 540,95 570,80 600,75 630,85 660,70 690,65 720,75 750,60 780,55 800,50"
+            />
+            <polyline fill="url(#rust-fill-single)" stroke="none" opacity="0.1"
+              points="0,260 0,180 30,170 60,160 90,150 120,155 150,140 180,130 210,135 240,120 270,125 300,110 330,115 360,100 390,105 420,95 450,100 480,90 510,85 540,95 570,80 600,75 630,85 660,70 690,65 720,75 750,60 780,55 800,50 800,260"
+            />
+            <defs>
+              <linearGradient id="rust-fill-single" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stop-color="#bf360c" /><stop offset="100%" stop-color="#bf360c" stop-opacity="0" />
+              </linearGradient>
+            </defs>
+          </svg>
+        </div>
+
+        <!-- No right axis for single query -->
+        <div style="width: 16px;"></div>
+      </div>
+    </div>
+
+    <div class="x-axis" style="padding-right: 16px;">
+      <span>14:30:00</span>
+      <span>14:31:00</span>
+      <span>14:32:00</span>
+      <span>14:33:00</span>
+      <span>14:34:00</span>
+      <span>14:35:00</span>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>
