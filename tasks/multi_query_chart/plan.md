@@ -54,6 +54,7 @@ interface ChartCellConfigV2 extends CellConfigBase {
 }
 
 interface ChartQueryDef {
+  name?: string                       // WASM table name suffix (e.g., "latency" → registered as "cell.latency")
   sql: string
   unit?: string                       // Y-axis unit (e.g., "bytes", "ms", "percent")
   label?: string                      // Legend label (defaults to Y column name)
@@ -86,7 +87,7 @@ function migrateChartConfig(config: CellConfig): ChartCellConfigV2 {
 }
 ```
 
-Since `QueryCellConfig` has `options?: Record<string, unknown>`, the `version` and `queries` fields can coexist on the config object without changing the shared type. The chart cell's execute/render methods handle the v2 shape internally.
+The `version` and `queries` fields coexist on the config object at runtime because configs are JSON-serialized — TypeScript won't strip unknown properties, and the chart cell accesses them via type assertion (`config as ChartCellConfigV2`). The shared `QueryCellConfig` type doesn't need to change. The chart cell's execute/render methods handle the v2 shape internally.
 
 ### Execution
 
@@ -97,39 +98,40 @@ export interface CellExecutionContext {
   variables: Record<string, VariableValue>
   timeRange: { begin: string; end: string }
   runQuery: (sql: string) => Promise<Table>
-  runQueryWithDataSource?: (sql: string, dataSource?: string) => Promise<Table>
+  runQueryAs?: (sql: string, tableName: string, dataSource?: string) => Promise<Table>
   registerTable?: (ipcBytes: Uint8Array) => void
 }
 ```
 
-`runQueryWithDataSource` resolves data source variables and routes accordingly. The existing `runQuery` is unchanged (backward compat for all other cell types). `useCellExecution.ts` builds the new function using the same fetch/WASM logic but with a per-call data source override.
+`runQueryAs` executes a query, registers the result in the WASM engine under the given `tableName`, and optionally overrides the data source. The existing `runQuery` is unchanged (backward compat for all other cell types). `useCellExecution.ts` builds the new function using the same fetch/WASM logic but with per-call table name and data source override.
+
+**WASM registration**: Every query registers its result in the WASM engine. Table naming follows the pattern `cellName.queryName`. If the query has no name (default for the first/only query), it registers as just `cellName` — preserving backward compatibility for single-query cells and cross-cell references.
 
 ```typescript
-execute: async (config, { variables, timeRange, runQuery, runQueryWithDataSource }) => {
+function queryTableName(cellName: string, queryName?: string): string {
+  return queryName ? `${cellName}.${queryName}` : cellName
+}
+
+execute: async (config, { variables, timeRange, runQuery, runQueryAs }) => {
   const v2 = migrateChartConfig(config)
-  const run = runQueryWithDataSource ?? runQuery
 
-  // First query — registered in WASM as cell name
-  const firstSql = substituteMacros(v2.queries[0].sql, variables, timeRange)
-  const data = await run(firstSql, v2.queries[0].dataSource)
-
-  if (v2.queries.length === 1) {
-    return { data }
+  // Run all queries sequentially, each registered in WASM
+  const tables: Table[] = []
+  for (const query of v2.queries) {
+    const sql = substituteMacros(query.sql, variables, timeRange)
+    let table: Table
+    if (runQueryAs) {
+      const tableName = queryTableName(config.name, query.name)
+      table = await runQueryAs(sql, tableName, query.dataSource)
+    } else {
+      table = await runQuery(sql)
+    }
+    tables.push(table)
   }
 
-  // Additional queries — run sequentially
-  const additionalData: Table[] = []
-  for (let i = 1; i < v2.queries.length; i++) {
-    const sql = substituteMacros(v2.queries[i].sql, variables, timeRange)
-    const table = await run(sql, v2.queries[i].dataSource)
-    additionalData.push(table)
-  }
-
-  return { data, additionalData }
+  return { data: tables[0], additionalData: tables.length > 1 ? tables.slice(1) : undefined }
 }
 ```
-
-**WASM registration**: Only the first query registers as the cell name (for cross-cell references). Additional queries exist only for visualization overlay.
 
 ### CellState Extension
 
@@ -172,7 +174,7 @@ Each table must have 2 columns (X, Y). All tables must agree on X-axis mode (all
 - **Numeric mode**: Union of all numeric X values, sorted ascending.
 - **Categorical mode**: Union of all label sets, sorted alphabetically. Each series maps onto this sorted union with `null` for categories it doesn't have.
 
-Stats (min/p99/max/avg) filter out `null` values before computing. The tooltip shows "—" for series with no value at the cursor position.
+Stats (min/p99/max/avg) are computed per-axis (per-unit group), filtering out `null` values. Scale mode (P99/Max) applies independently to each Y-axis — each axis computes its own range from the series that share its unit. The UI toggle sets the mode for all axes at once, but the actual scale factor is per-axis. The tooltip shows "—" for series with no value at the cursor position.
 
 ### Multi-Axis Rendering
 
@@ -270,6 +272,8 @@ interface XYChartProps {
 
 When `series` is provided, use multi-series rendering. When `data` is provided (legacy), wrap as single series internally. The two are mutually exclusive.
 
+**Bar charts**: Multi-series bar charts use grouped (side-by-side) bars. uPlot's `bars()` path builder supports this via its `size` array parameter — each series gets a narrower bar width and an offset so bars sit next to each other within each X bucket rather than overlapping.
+
 ### Tooltip
 
 The existing tooltip plugin shows one value. For multi-series, show all series values at the cursor's X position:
@@ -309,14 +313,16 @@ All queries are listed uniformly. The editor always works with v2 format (migrat
 │ Data Source: [production (default)       ▾]  │
 │ SELECT time, latency FROM measures ...       │
 ├──────────────────────────────────────────────┤
-│ Unit: [ms       ]  Label: [latency         ] │
+│ Name: [           ]  Unit: [ms            ]  │
+│ Label: [latency                           ]  │
 └──────────────────────────────────────────────┘
 
 ┌─ Query 2 ────────────────────────────── [✕] ─┐
 │ Data Source: [staging                   ▾]   │
 │ SELECT time, resp_bytes FROM measures ...    │
 ├──────────────────────────────────────────────┤
-│ Unit: [bytes    ]  Label: [response_size   ] │
+│ Name: [resp      ]  Unit: [bytes          ]  │
+│ Label: [response_size                     ]  │
 └──────────────────────────────────────────────┘
 
 [+ Add Query]
@@ -325,9 +331,17 @@ All queries are listed uniformly. The editor always works with v2 format (migrat
 Each query has:
 - Data source selector — reuses the existing `DataSourceField` component from `@/components/DataSourceSelector`. The `datasourceVariables` prop is already computed by `NotebookRenderer` and passed to `CellEditorProps`, so variable references (`$Env`) work automatically. Initialized to default data source on creation.
 - SQL editor (SyntaxEditor)
+- Name field (optional, used for WASM table registration as `cellName.queryName` — enables cross-cell references to individual query results)
 - Unit field (text input, supports `$variable.unit` macros)
 - Label field (optional, defaults to Y column name)
 - Remove button (✕) — hidden when only one query remains
+
+**Parent CellEditor change**: The parent `CellEditor` component (`CellEditor.tsx`) renders a cell-level `DataSourceField` for all query-executing cells. Since chart cells now own data source at the query level, exclude `chart` from the parent's `shouldShowDataSource` check:
+
+```typescript
+const shouldShowDataSource = cell.type !== 'markdown' && cell.type !== 'variable'
+  && cell.type !== 'referencetable' && cell.type !== 'chart'
+```
 
 ## Implementation Steps
 
@@ -337,8 +351,8 @@ Each query has:
 
 ### Step 2: CellState + Execution Context Extension
 - Add `additionalData?: Table[]` to `CellState` in `notebook-types.ts`
-- Add `runQueryWithDataSource?: (sql: string, dataSource?: string) => Promise<Table>` to `CellExecutionContext` in `cell-registry.ts`
-- Update `useCellExecution.ts` to build `runQueryWithDataSource` (same fetch/WASM logic with per-call data source override) and propagate `additionalData` from execute result to cell state
+- Add `runQueryAs?: (sql: string, tableName: string, dataSource?: string) => Promise<Table>` to `CellExecutionContext` in `cell-registry.ts`
+- Update `useCellExecution.ts` to build `runQueryAs` (same fetch/WASM logic with caller-specified table name and per-call data source override) and propagate `additionalData` from execute result to cell state
 - Add `additionalData?: Table[]` to `CellRendererProps` in `cell-registry.ts`
 
 ### Step 3: Multi-Series Data Extraction
@@ -368,11 +382,12 @@ Each query has:
 
 ### Step 7: ChartCell Editor — Query Management
 - Editor always works with v2 format (migrate on open)
-- Uniform list of queries, each with data source selector, SQL editor, unit field, label field
+- Uniform list of queries, each with data source selector, SQL editor, name field, unit field, label field
 - Data source selector per query (reuse `DataSourceSelector`, falls back to default data source)
 - Remove button hidden when only one query remains
 - "Add Query" button appends to `queries` array
 - On save, write v2 format (version: 2, queries array)
+- Exclude `chart` from parent `CellEditor`'s `shouldShowDataSource` — data source is per-query, not per-cell
 
 ## Files to Modify
 
@@ -381,12 +396,13 @@ Each query has:
 - `analytics-web-app/src/lib/screen-renderers/useCellExecution.ts` — propagate `additionalData`
 - `analytics-web-app/src/lib/arrow-utils.ts` — `extractMultiSeriesChartData()`, types
 - `analytics-web-app/src/components/XYChart.tsx` — multi-series rendering, tooltip, legend, colors
+- `analytics-web-app/src/components/CellEditor.tsx` — exclude `chart` from parent `shouldShowDataSource`
 - `analytics-web-app/src/lib/screen-renderers/cells/ChartCell.tsx` — execute, renderer, editor
 
 ## Trade-offs
 
 ### Versioned config with queries array
-**Chosen**: Use a `version` field to transition from v1 (single `sql` field) to v2 (uniform `queries` array). All queries are peers at the same level. Migration happens in-memory on load; saving always writes v2. The `QueryCellConfig` shared type isn't changed — `version` and `queries` are extra fields on the config object (compatible with `Record<string, unknown>` indexing on `options`). Chart-specific code handles the v2 shape internally.
+**Chosen**: Use a `version` field to transition from v1 (single `sql` field) to v2 (uniform `queries` array). All queries are peers at the same level. Migration happens in-memory on load; saving always writes v2. The shared `QueryCellConfig` type isn't changed — `version` and `queries` are extra fields that exist on the runtime JSON object and are accessed via type assertion (`config as ChartCellConfigV2`). Chart-specific code handles the v2 shape internally.
 
 **Alternative**: Store additional queries in `options.queries` while keeping the primary in `sql`. Simpler migration but creates a two-tier query structure where the first query is special. The uniform array is easier to reason about in the editor and renderer.
 
@@ -401,7 +417,7 @@ Each query has:
 **Alternative**: Cap at 2 (left + right). Simpler but artificially limits power users.
 
 ### Sequential query execution
-**Chosen**: Run queries sequentially. This respects WASM engine state ordering and keeps abort logic simple.
+**Chosen**: Run queries sequentially. This respects WASM engine state ordering and keeps abort logic simple. On abort, the `AbortError` propagates out of the `execute()` loop — no partial state update occurs because `useCellExecution` already catches `AbortError` and discards the entire result.
 
 **Alternative**: Parallel execution. Faster but complicates abort handling and WASM registration.
 
@@ -418,7 +434,7 @@ Each query has:
   - Editor: add/remove queries, edit SQL/unit/label/dataSource
   - Two queries targeting different data sources route correctly
   - Time range drag-to-zoom works with multi-series
-  - Scale mode (P99/Max) applies to all series
+  - Scale mode (P99/Max) applies per-axis: each unit's axis scales independently
   - Chart type (Line/Bar) applies to all series
 
 ## Open Questions
