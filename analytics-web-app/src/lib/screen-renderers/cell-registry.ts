@@ -77,6 +77,8 @@ export interface CellEditorProps {
   availableColumns?: string[]
   /** Names of datasource-type variables available above this cell */
   datasourceVariables?: string[]
+  /** The global default data source name (fallback when cell has none) */
+  defaultDataSource?: string
 }
 
 /**

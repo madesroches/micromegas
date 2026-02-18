@@ -265,7 +265,7 @@ export function ChartCell({ data, additionalData, status, options, onOptionsChan
 // Editor Component
 // =============================================================================
 
-function ChartCellEditor({ config, onChange, variables, timeRange, datasourceVariables }: CellEditorProps) {
+function ChartCellEditor({ config, onChange, variables, timeRange, datasourceVariables, defaultDataSource }: CellEditorProps) {
   // Always work with v2 format
   const v2 = useMemo(() => migrateChartConfig(config), [config])
 
@@ -340,7 +340,7 @@ function ChartCellEditor({ config, onChange, variables, timeRange, datasourceVar
                 Data Source
               </label>
               <DataSourceSelector
-                value={query.dataSource ?? ''}
+                value={query.dataSource || defaultDataSource || ''}
                 onChange={(ds) => updateQuery(i, { dataSource: ds })}
                 datasourceVariables={datasourceVariables}
                 showNotebookOption={true}

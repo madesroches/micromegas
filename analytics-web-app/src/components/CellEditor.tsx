@@ -144,6 +144,7 @@ export function CellEditor({
           timeRange={timeRange}
           availableColumns={availableColumns}
           datasourceVariables={datasourceVariables}
+          defaultDataSource={defaultDataSource}
         />
       </div>
 
