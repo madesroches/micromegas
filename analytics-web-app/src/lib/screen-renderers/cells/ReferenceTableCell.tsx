@@ -1,5 +1,5 @@
 /* eslint-disable react-refresh/only-export-components */
-import { useCallback } from 'react'
+import { useCallback, useMemo } from 'react'
 import type {
   CellTypeMetadata,
   CellRendererProps,
@@ -15,6 +15,36 @@ import {
 } from '../table-utils'
 import { usePagination, PaginationBar, DEFAULT_PAGE_SIZE } from '../pagination'
 import { csvToArrowIPC } from './csv-to-arrow'
+import type { Table } from 'apache-arrow'
+
+// =============================================================================
+// Sorting Utility
+// =============================================================================
+
+export function buildSortedIndices(
+  data: Table,
+  sortColumn: string | undefined,
+  sortDirection: string | undefined,
+): number[] {
+  const indices = Array.from({ length: data.numRows }, (_, i) => i)
+  if (!sortColumn) return indices
+  const col = data.getChild(sortColumn)
+  if (!col) return indices
+  const dir = sortDirection === 'desc' ? -1 : 1
+  indices.sort((a, b) => {
+    const va = col.get(a)
+    const vb = col.get(b)
+    const aNull = va == null || (typeof va === 'number' && isNaN(va))
+    const bNull = vb == null || (typeof vb === 'number' && isNaN(vb))
+    if (aNull && bNull) return 0
+    if (aNull) return 1
+    if (bNull) return -1
+    if (va < vb) return -dir
+    if (va > vb) return dir
+    return 0
+  })
+  return indices
+}
 
 // =============================================================================
 // Renderer Component
@@ -40,6 +70,11 @@ function ReferenceTableCell({ data, status, options, onOptionsChange, variables 
   )
   const pagination = usePagination(data?.numRows ?? 0, pageSize, handlePageSizeChange)
 
+  const sortedIndices = useMemo(() => {
+    if (!data || data.numRows === 0) return []
+    return buildSortedIndices(data, sortColumn, sortDirection)
+  }, [data, sortColumn, sortDirection])
+
   if (status === 'loading') {
     return (
       <div className="flex items-center justify-center py-8">
@@ -64,7 +99,7 @@ function ReferenceTableCell({ data, status, options, onOptionsChange, variables 
 
   const slicedData = {
     numRows: pagination.endRow - pagination.startRow,
-    get: (index: number) => data.get(pagination.startRow + index),
+    get: (index: number) => data.get(sortedIndices[pagination.startRow + index]),
   }
 
   return (
