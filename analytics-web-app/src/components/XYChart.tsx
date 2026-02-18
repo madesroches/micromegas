@@ -11,18 +11,7 @@ import {
 import { normalizeUnit, isSizeUnit, getAdaptiveSizeUnit } from '@/lib/units'
 import type { ChartSeriesData } from '@/lib/arrow-utils'
 
-export interface ChartAxisBounds {
-  left: number // Left padding (Y-axis width)
-  width: number // Plot area width
-}
-
-export type ScaleMode = 'p99' | 'max'
-
-export type ChartType = 'line' | 'bar'
-
-export type XAxisMode = 'time' | 'numeric' | 'categorical'
-
-const SERIES_COLORS = [
+export const SERIES_COLORS = [
   '#bf360c', // Rust Orange
   '#1565c0', // Cobalt Blue
   '#ffb300', // Wheat
@@ -36,6 +25,21 @@ const SERIES_COLORS = [
   '#00acc1', // Cyan
   '#ad1457', // Pink Dusk
 ]
+
+export interface ChartAxisBounds {
+  left: number // Left padding (Y-axis width)
+  width: number // Plot area width
+}
+
+export type ScaleMode = 'p99' | 'max'
+
+export type ChartType = 'line' | 'bar'
+
+export type XAxisMode = 'time' | 'numeric' | 'categorical'
+
+function escapeHtml(str: string): string {
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+}
 
 function hexToRgba(hex: string, alpha: number): string {
   const r = parseInt(hex.slice(1, 3), 16)
@@ -344,16 +348,17 @@ export function XYChart({
               return
             }
 
-            let html = `<div style="color: var(--text-muted); margin-bottom: 6px; font-family: monospace; font-size: 11px;">${formatXValue(xVal, mode, labels)}</div>`
+            let html = `<div style="color: var(--text-muted); margin-bottom: 6px; font-family: monospace; font-size: 11px;">${escapeHtml(formatXValue(xVal, mode, labels))}</div>`
 
             let hasValues = false
             for (let i = 0; i < seriesInfo.length; i++) {
               const value = u.data[i + 1]?.[idx]
               const info = seriesInfo[i]
+              const safeLabel = escapeHtml(info.label)
               if (value == null) {
                 html += `<div style="display: flex; align-items: center; gap: 8px; padding: 2px 0;">
                   <div style="width: 8px; height: 8px; border-radius: 50%; background: ${info.color};"></div>
-                  <span style="color: #6a6a7a; min-width: 90px;">${info.label}</span>
+                  <span style="color: #6a6a7a; min-width: 90px;">${safeLabel}</span>
                   <span style="color: #6a6a7a;">&mdash;</span>
                 </div>`
               } else {
@@ -363,8 +368,8 @@ export function XYChart({
                   : formatStatValue(value, info.unit)
                 html += `<div style="display: flex; align-items: center; gap: 8px; padding: 2px 0;">
                   <div style="width: 8px; height: 8px; border-radius: 50%; background: ${info.color};"></div>
-                  <span style="color: #b0b0c0; min-width: 90px;">${info.label}</span>
-                  <span style="color: #e0e0e8; font-weight: 600; font-size: 13px;">${formatted}</span>
+                  <span style="color: #b0b0c0; min-width: 90px;">${safeLabel}</span>
+                  <span style="color: #e0e0e8; font-weight: 600; font-size: 13px;">${escapeHtml(formatted)}</span>
                 </div>`
               }
             }

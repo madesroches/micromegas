@@ -6,7 +6,7 @@ import type {
   CellExecutionContext,
 } from '../cell-registry'
 import type { CellConfigBase, CellConfig, CellState, VariableValue } from '../notebook-types'
-import { XYChart, ScaleMode, ChartType } from '@/components/XYChart'
+import { XYChart, SERIES_COLORS, ScaleMode, ChartType } from '@/components/XYChart'
 import { extractChartData, extractMultiSeriesChartData } from '@/lib/arrow-utils'
 import type { ChartSeriesData } from '@/lib/arrow-utils'
 import { AvailableVariablesPanel } from '@/components/AvailableVariablesPanel'
@@ -49,21 +49,6 @@ export interface ChartCellConfigV2 extends CellConfigBase {
     [key: string]: unknown
   }
 }
-
-const SERIES_COLORS = [
-  '#bf360c', // Rust Orange
-  '#1565c0', // Cobalt Blue
-  '#ffb300', // Wheat
-  '#2e7d32', // Field Green
-  '#5e35b1', // Violet Dusk
-  '#ff8f00', // Harvest Gold
-  '#00897b', // Teal
-  '#c62828', // Crimson
-  '#7e57c2', // Lavender Storm
-  '#827717', // Olive Path
-  '#00acc1', // Cyan
-  '#ad1457', // Pink Dusk
-]
 
 // eslint-disable-next-line react-refresh/only-export-components
 export function migrateChartConfig(config: CellConfig): ChartCellConfigV2 {

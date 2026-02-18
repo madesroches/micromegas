@@ -66,6 +66,7 @@ export function DataSourceSelector({ value, onChange, datasourceVariables, showN
     for (const name of datasourceVariables) optionValues.push(`$${name}`)
   }
   for (const s of sources) optionValues.push(s.name)
+  const optionValuesKey = optionValues.join('\0')
 
   // If the current value doesn't match any option, the <select> silently shows
   // the first option without firing onChange. Sync the config to match.
@@ -73,7 +74,7 @@ export function DataSourceSelector({ value, onChange, datasourceVariables, showN
     if (optionValues.length > 0 && !optionValues.includes(value)) {
       onChange(optionValues[0])
     }
-  }, [value, optionValues.length]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [value, optionValuesKey]) // eslint-disable-line react-hooks/exhaustive-deps
 
   if (error) {
     return (
