@@ -340,7 +340,7 @@ function ChartCellEditor({ config, onChange, variables, timeRange, datasourceVar
                 Data Source
               </label>
               <DataSourceSelector
-                value={query.dataSource || ''}
+                value={query.dataSource ?? ''}
                 onChange={(ds) => updateQuery(i, { dataSource: ds })}
                 datasourceVariables={datasourceVariables}
                 showNotebookOption={true}
@@ -439,11 +439,12 @@ export const chartMetadata: CellTypeMetadata = {
     const v2 = migrateChartConfig(config)
 
     if (v2.queries.length <= 1) {
-      // Single query — backward-compatible path
+      // Single query path — always use runQueryAs when available so per-query
+      // dataSource is respected (v2 configs have no top-level dataSource)
       const sql = substituteMacros(v2.queries[0]?.sql ?? '', variables, timeRange)
-      if (runQueryAs && v2.queries[0]?.dataSource) {
-        const tableName = queryTableName(config.name, v2.queries[0].name)
-        const data = await runQueryAs(sql, tableName, v2.queries[0].dataSource)
+      if (runQueryAs) {
+        const tableName = queryTableName(config.name, v2.queries[0]?.name)
+        const data = await runQueryAs(sql, tableName, v2.queries[0]?.dataSource)
         return { data }
       }
       const data = await runQuery(sql)

@@ -359,6 +359,16 @@ export function NotebookRenderer({
   const [showAddCellModal, setShowAddCellModal] = useState(false)
   const [deletingCellIndex, setDeletingCellIndex] = useState<number | null>(null)
   const [activeDragId, setActiveDragId] = useState<string | null>(null)
+  const [showSource, setShowSource] = useState(false)
+
+  useEffect(() => {
+    if (!showSource) return
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setShowSource(false)
+    }
+    document.addEventListener('keydown', handleKeyDown)
+    return () => document.removeEventListener('keydown', handleKeyDown)
+  }, [showSource])
 
   // Editor panel width (persisted to localStorage)
   const [editorPanelWidth, setEditorPanelWidth] = useState(() => {
@@ -630,42 +640,72 @@ export function NotebookRenderer({
             WASM engine failed to load: {engineError}
           </div>
         )}
-        <DndContext
-          sensors={sensors}
-          collisionDetection={closestCenter}
-          onDragStart={handleDragStart}
-          onDragEnd={handleDragEnd}
-        >
-          <SortableContext items={cells.map((c) => c.name)} strategy={verticalListSortingStrategy}>
-            <div className="flex flex-col gap-3">
-              {cells.map((cell, index) => renderCell(cell, index))}
-
+        {showSource ? (
+          <div className="flex flex-col gap-4">
+            <div className="flex items-center gap-3">
               <button
-                onClick={() => setShowAddCellModal(true)}
-                className="w-full py-3 border-2 border-dashed border-theme-border rounded-lg bg-transparent text-theme-text-muted hover:border-accent-link hover:text-accent-link hover:bg-accent-link/10 transition-colors"
+                onClick={() => setShowSource(false)}
+                className="text-sm text-accent-link hover:underline"
               >
-                <Plus className="w-4 h-4 inline-block mr-2" />
-                Add Cell
+                &larr; Back to notebook
               </button>
+              <span className="text-[11px] px-1.5 py-0.5 rounded bg-app-card text-theme-text-secondary font-mono font-medium">
+                JSON
+              </span>
+              <span className="text-sm text-theme-text-primary font-medium">Notebook Configuration</span>
+              <span className="text-xs text-theme-text-muted">read-only</span>
             </div>
-          </SortableContext>
-          <DragOverlay>
-            {activeDragId ? (
-              <div className="bg-app-panel border-2 border-accent-link rounded-lg shadow-xl opacity-90">
-                <div className="flex items-center gap-2 px-3 py-2 bg-app-card rounded-t-lg">
-                  <span className="text-[11px] px-1.5 py-0.5 rounded bg-app-panel text-theme-text-secondary uppercase font-medium">
-                    {cells.find((c) => c.name === activeDragId)?.type}
-                  </span>
-                  <span className="font-medium text-theme-text-primary">{activeDragId}</span>
+            <pre className="bg-app-card border border-theme-border rounded-lg p-4 overflow-auto text-xs font-mono text-theme-text-secondary whitespace-pre">
+              {JSON.stringify(notebookConfig, null, 2)}
+            </pre>
+          </div>
+        ) : (
+          <>
+            <DndContext
+              sensors={sensors}
+              collisionDetection={closestCenter}
+              onDragStart={handleDragStart}
+              onDragEnd={handleDragEnd}
+            >
+              <SortableContext items={cells.map((c) => c.name)} strategy={verticalListSortingStrategy}>
+                <div className="flex flex-col gap-3">
+                  {cells.map((cell, index) => renderCell(cell, index))}
+
+                  <button
+                    onClick={() => setShowAddCellModal(true)}
+                    className="w-full py-3 border-2 border-dashed border-theme-border rounded-lg bg-transparent text-theme-text-muted hover:border-accent-link hover:text-accent-link hover:bg-accent-link/10 transition-colors"
+                  >
+                    <Plus className="w-4 h-4 inline-block mr-2" />
+                    Add Cell
+                  </button>
+
+                  <button
+                    onClick={() => setShowSource(true)}
+                    className="text-xs text-theme-text-muted hover:text-theme-text-secondary transition-colors py-2 self-center"
+                  >
+                    {'{ }'} View source
+                  </button>
                 </div>
-              </div>
-            ) : null}
-          </DragOverlay>
-        </DndContext>
+              </SortableContext>
+              <DragOverlay>
+                {activeDragId ? (
+                  <div className="bg-app-panel border-2 border-accent-link rounded-lg shadow-xl opacity-90">
+                    <div className="flex items-center gap-2 px-3 py-2 bg-app-card rounded-t-lg">
+                      <span className="text-[11px] px-1.5 py-0.5 rounded bg-app-panel text-theme-text-secondary uppercase font-medium">
+                        {cells.find((c) => c.name === activeDragId)?.type}
+                      </span>
+                      <span className="font-medium text-theme-text-primary">{activeDragId}</span>
+                    </div>
+                  </div>
+                ) : null}
+              </DragOverlay>
+            </DndContext>
+          </>
+        )}
       </div>
 
       {/* Right panel - Cell Editor */}
-      {selectedCell && (
+      {!showSource && selectedCell && (
         <>
           <ResizeHandle orientation="horizontal" onResize={handleEditorPanelResize} />
           <div

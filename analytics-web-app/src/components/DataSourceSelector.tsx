@@ -59,6 +59,22 @@ export function DataSourceSelector({ value, onChange, datasourceVariables, showN
 
   const hasVariables = datasourceVariables && datasourceVariables.length > 0
 
+  // Build the flat list of option values so we can detect mismatches
+  const optionValues: string[] = []
+  if (showNotebookOption) optionValues.push('notebook')
+  if (hasVariables) {
+    for (const name of datasourceVariables) optionValues.push(`$${name}`)
+  }
+  for (const s of sources) optionValues.push(s.name)
+
+  // If the current value doesn't match any option, the <select> silently shows
+  // the first option without firing onChange. Sync the config to match.
+  useEffect(() => {
+    if (optionValues.length > 0 && !optionValues.includes(value)) {
+      onChange(optionValues[0])
+    }
+  }, [value, optionValues.length]) // eslint-disable-line react-hooks/exhaustive-deps
+
   if (error) {
     return (
       <div className="flex items-center gap-1.5 text-xs text-accent-error" title={error}>

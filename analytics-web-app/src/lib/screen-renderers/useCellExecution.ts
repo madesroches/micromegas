@@ -177,7 +177,13 @@ export function useCellExecution({
             }
           },
           runQueryAs: async (sql, tableName, queryDataSource) => {
-            const resolvedDs = queryDataSource || cellDataSource
+            // Resolve per-query data source independently (not from cellDataSource).
+            // Variable references ($varname) are substituted, fallback is notebook-level default.
+            let resolvedDs = queryDataSource || dataSource
+            if (resolvedDs?.startsWith('$')) {
+              const varValue = availableVariables[resolvedDs.slice(1)]
+              resolvedDs = (typeof varValue === 'string' && varValue) ? varValue : dataSource
+            }
             const isLocal = resolvedDs === 'notebook'
             if (isLocal) {
               if (!engine) throw new Error('WASM engine not loaded')
