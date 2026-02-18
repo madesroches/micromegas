@@ -5,13 +5,91 @@ import type {
   CellEditorProps,
   CellExecutionContext,
 } from '../cell-registry'
-import type { QueryCellConfig, CellConfig, CellState, VariableValue } from '../notebook-types'
+import type { CellConfigBase, CellConfig, CellState, VariableValue } from '../notebook-types'
 import { XYChart, ScaleMode, ChartType } from '@/components/XYChart'
-import { extractChartData } from '@/lib/arrow-utils'
+import { extractChartData, extractMultiSeriesChartData } from '@/lib/arrow-utils'
+import type { ChartSeriesData } from '@/lib/arrow-utils'
 import { AvailableVariablesPanel } from '@/components/AvailableVariablesPanel'
 import { DocumentationLink, QUERY_GUIDE_URL } from '@/components/DocumentationLink'
 import { SyntaxEditor } from '@/components/SyntaxEditor'
+import { DataSourceSelector } from '@/components/DataSourceSelector'
 import { substituteMacros, validateMacros, DEFAULT_SQL } from '../notebook-utils'
+
+// =============================================================================
+// Multi-Query Chart Types
+// =============================================================================
+
+export interface ChartQueryDef {
+  name?: string
+  sql: string
+  unit?: string
+  label?: string
+  dataSource?: string
+}
+
+interface ChartCellConfigV1 extends CellConfigBase {
+  type: 'chart'
+  sql: string
+  options?: {
+    unit?: string
+    scale_mode?: ScaleMode
+    chart_type?: ChartType
+    [key: string]: unknown
+  }
+  dataSource?: string
+}
+
+export interface ChartCellConfigV2 extends CellConfigBase {
+  type: 'chart'
+  version: 2
+  queries: ChartQueryDef[]
+  options?: {
+    scale_mode?: ScaleMode
+    chart_type?: ChartType
+    [key: string]: unknown
+  }
+}
+
+const SERIES_COLORS = [
+  '#bf360c', // Rust Orange
+  '#1565c0', // Cobalt Blue
+  '#ffb300', // Wheat
+  '#2e7d32', // Field Green
+  '#5e35b1', // Violet Dusk
+  '#ff8f00', // Harvest Gold
+  '#00897b', // Teal
+  '#c62828', // Crimson
+  '#7e57c2', // Lavender Storm
+  '#827717', // Olive Path
+  '#00acc1', // Cyan
+  '#ad1457', // Pink Dusk
+]
+
+// eslint-disable-next-line react-refresh/only-export-components
+export function migrateChartConfig(config: CellConfig): ChartCellConfigV2 {
+  if ('version' in config && (config as { version: number }).version === 2) {
+    return config as unknown as ChartCellConfigV2
+  }
+  const v1 = config as ChartCellConfigV1
+  const { sql, dataSource, options: v1Options, ...rest } = v1
+  return {
+    ...rest,
+    version: 2,
+    queries: [{
+      sql: sql ?? '',
+      unit: v1Options?.unit as string | undefined,
+      dataSource: dataSource,
+    }],
+    options: {
+      scale_mode: v1Options?.scale_mode as ScaleMode | undefined,
+      chart_type: v1Options?.chart_type as ChartType | undefined,
+    },
+  }
+}
+
+function queryTableName(cellName: string, queryName?: string): string {
+  return queryName ? `${cellName}.${queryName}` : cellName
+}
 
 /**
  * Substitutes macros in string values within chart options.
@@ -43,13 +121,40 @@ function substituteOptionsWithMacros(
 // Renderer Component
 // =============================================================================
 
-export function ChartCell({ data, status, options, onOptionsChange, variables, timeRange, onTimeRangeSelect }: CellRendererProps) {
-  const chartResult = useMemo(() => {
-    if (!data || data.numRows === 0) return null
-    return extractChartData(data)
-  }, [data])
+export function ChartCell({ data, additionalData, status, options, onOptionsChange, variables, timeRange, onTimeRangeSelect }: CellRendererProps) {
+  // Detect multi-series: we have additional data from extra queries
+  const isMultiSeries = additionalData && additionalData.length > 0
 
-  // Substitute macros in options (e.g., $variable.unit in the unit field)
+  // Parse the config to get per-query metadata (units, labels)
+  // We get the raw config through the sql prop (it's the original config)
+  // But the renderer doesn't receive the full config — it gets options and additionalData.
+  // The query metadata (units/labels) is passed through options by getRendererProps.
+
+  // Single-series result
+  const chartResult = useMemo(() => {
+    if (isMultiSeries || !data || data.numRows === 0) return null
+    return extractChartData(data)
+  }, [data, isMultiSeries])
+
+  // Multi-series result: build from data + additionalData + options
+  const multiResult = useMemo(() => {
+    if (!isMultiSeries || !data) return null
+
+    // Get query metadata from options (set by getRendererProps)
+    const queryMeta = (options as Record<string, unknown>)?._queryMeta as
+      { unit?: string; label?: string }[] | undefined
+
+    const allTables = [data, ...additionalData!]
+    const tableInputs = allTables.map((table, i) => ({
+      table,
+      unit: queryMeta?.[i]?.unit,
+      label: queryMeta?.[i]?.label,
+    }))
+
+    return extractMultiSeriesChartData(tableInputs)
+  }, [data, additionalData, isMultiSeries, options])
+
+  // Substitute macros in options
   const resolvedOptions = useMemo(
     () => substituteOptionsWithMacros(options, variables, timeRange),
     [options, variables, timeRange]
@@ -78,6 +183,47 @@ export function ChartCell({ data, status, options, onOptionsChange, variables, t
     )
   }
 
+  // Multi-series path
+  if (isMultiSeries) {
+    if (!multiResult) {
+      return (
+        <div className="flex items-center justify-center h-[200px] text-theme-text-muted text-sm">
+          No data available
+        </div>
+      )
+    }
+    if (!multiResult.ok) {
+      return (
+        <div className="flex items-center justify-center h-[200px] text-accent-error text-sm">
+          {multiResult.error}
+        </div>
+      )
+    }
+
+    // Resolve macros in per-series units
+    const resolvedSeries: ChartSeriesData[] = multiResult.series.map(s => ({
+      ...s,
+      unit: s.unit ? substituteMacros(s.unit, variables, timeRange) : '',
+    }))
+
+    return (
+      <div className="h-full">
+        <XYChart
+          series={resolvedSeries}
+          xAxisMode={multiResult.xAxisMode}
+          xLabels={multiResult.xLabels}
+          xColumnName={multiResult.xColumnName}
+          scaleMode={(resolvedOptions?.scale_mode as ScaleMode) ?? 'p99'}
+          onScaleModeChange={handleScaleModeChange}
+          chartType={(resolvedOptions?.chart_type as ChartType) ?? 'line'}
+          onChartTypeChange={handleChartTypeChange}
+          onTimeRangeSelect={onTimeRangeSelect}
+        />
+      </div>
+    )
+  }
+
+  // Single-series path
   if (!data || data.numRows === 0 || !chartResult) {
     return (
       <div className="flex items-center justify-center h-[200px] text-theme-text-muted text-sm">
@@ -119,56 +265,141 @@ export function ChartCell({ data, status, options, onOptionsChange, variables, t
 // Editor Component
 // =============================================================================
 
-function ChartCellEditor({ config, onChange, variables, timeRange }: CellEditorProps) {
-  const chartConfig = config as QueryCellConfig
+function ChartCellEditor({ config, onChange, variables, timeRange, datasourceVariables }: CellEditorProps) {
+  // Always work with v2 format
+  const v2 = useMemo(() => migrateChartConfig(config), [config])
 
-  const handleOptionChange = (key: string, value: string) => {
-    const newOptions = { ...chartConfig.options, [key]: value }
-    onChange({ ...chartConfig, options: newOptions })
-  }
+  const updateConfig = useCallback((updates: Partial<ChartCellConfigV2>) => {
+    onChange({ ...v2, ...updates } as unknown as CellConfig)
+  }, [v2, onChange])
 
-  // Validate macro references in SQL and options
+  const updateQuery = useCallback((index: number, updates: Partial<ChartQueryDef>) => {
+    const newQueries = [...v2.queries]
+    newQueries[index] = { ...newQueries[index], ...updates }
+    updateConfig({ queries: newQueries })
+  }, [v2.queries, updateConfig])
+
+  const addQuery = useCallback(() => {
+    const newQuery: ChartQueryDef = {
+      sql: DEFAULT_SQL.chart,
+      dataSource: v2.queries[0]?.dataSource,
+    }
+    updateConfig({ queries: [...v2.queries, newQuery] })
+  }, [v2.queries, updateConfig])
+
+  const removeQuery = useCallback((index: number) => {
+    if (v2.queries.length <= 1) return
+    const newQueries = v2.queries.filter((_, i) => i !== index)
+    updateConfig({ queries: newQueries })
+  }, [v2.queries, updateConfig])
+
+  // Validate macro references across all queries
   const validationErrors = useMemo(() => {
     const errors: string[] = []
-    const sqlValidation = validateMacros(chartConfig.sql, variables)
-    errors.push(...sqlValidation.errors)
-    const unit = (chartConfig.options?.unit as string) ?? ''
-    if (unit) {
-      const unitValidation = validateMacros(unit, variables)
-      errors.push(...unitValidation.errors)
+    for (let i = 0; i < v2.queries.length; i++) {
+      const q = v2.queries[i]
+      const sqlValidation = validateMacros(q.sql, variables)
+      sqlValidation.errors.forEach(e => errors.push(`Query ${i + 1}: ${e}`))
+      if (q.unit) {
+        const unitValidation = validateMacros(q.unit, variables)
+        unitValidation.errors.forEach(e => errors.push(`Query ${i + 1} unit: ${e}`))
+      }
     }
     return errors
-  }, [chartConfig.sql, chartConfig.options, variables])
+  }, [v2.queries, variables])
 
   return (
     <>
-      <div>
-        <label className="block text-xs font-medium text-theme-text-secondary uppercase mb-1.5">
-          SQL Query
-        </label>
-        <SyntaxEditor
-          value={chartConfig.sql}
-          onChange={(sql) => onChange({ ...chartConfig, sql })}
-          language="sql"
-          placeholder="SELECT time, value FROM ..."
-          minHeight="150px"
-        />
-      </div>
-      <div>
-        <label className="block text-xs font-medium text-theme-text-secondary uppercase mb-1.5">
-          Y-Axis Unit
-        </label>
-        <input
-          type="text"
-          value={(chartConfig.options?.unit as string) ?? ''}
-          onChange={(e) => handleOptionChange('unit', e.target.value)}
-          className="w-full px-3 py-2 bg-app-card border border-theme-border rounded-md text-theme-text-primary text-sm focus:outline-none focus:border-accent-link"
-          placeholder="e.g., percent, bytes, ms, or $variable.unit"
-        />
-        <p className="mt-1 text-xs text-theme-text-muted">
-          Use $variable.column for dynamic values (e.g., $selected_metric.unit)
-        </p>
-      </div>
+      {v2.queries.map((query, i) => (
+        <div key={i} className="bg-app-card border border-theme-border rounded-lg overflow-hidden">
+          {/* Query block header */}
+          <div className="flex justify-between items-center px-3 py-2 bg-app-panel border-b border-theme-border">
+            <div className="flex items-center gap-2 text-xs font-medium text-theme-text-secondary">
+              <div
+                className="w-2 h-2 rounded-full"
+                style={{ background: SERIES_COLORS[i % SERIES_COLORS.length] }}
+              />
+              Query {i + 1}
+            </div>
+            {v2.queries.length > 1 && (
+              <button
+                onClick={() => removeQuery(i)}
+                className="text-theme-text-muted hover:text-accent-error text-base px-1.5 rounded transition-colors"
+                title="Remove query"
+              >
+                &times;
+              </button>
+            )}
+          </div>
+
+          {/* Query block body */}
+          <div className="p-3 space-y-3">
+            {/* Data source per query */}
+            <div>
+              <label className="block text-xs font-medium text-theme-text-secondary uppercase mb-1.5">
+                Data Source
+              </label>
+              <DataSourceSelector
+                value={query.dataSource || ''}
+                onChange={(ds) => updateQuery(i, { dataSource: ds })}
+                datasourceVariables={datasourceVariables}
+                showNotebookOption={true}
+              />
+            </div>
+
+            {/* SQL editor */}
+            <div>
+              <label className="block text-xs font-medium text-theme-text-secondary uppercase mb-1.5">
+                SQL Query
+              </label>
+              <SyntaxEditor
+                value={query.sql}
+                onChange={(sql) => updateQuery(i, { sql })}
+                language="sql"
+                placeholder="SELECT time, value FROM ..."
+                minHeight="80px"
+              />
+            </div>
+
+            {/* Inline fields: Unit and Label */}
+            <div className="flex gap-3">
+              <div className="flex-1">
+                <label className="block text-xs font-medium text-theme-text-secondary uppercase mb-1.5">
+                  Unit
+                </label>
+                <input
+                  type="text"
+                  value={query.unit ?? ''}
+                  onChange={(e) => updateQuery(i, { unit: e.target.value })}
+                  className="w-full px-3 py-1.5 bg-app-panel border border-theme-border rounded-md text-theme-text-primary text-xs focus:outline-none focus:border-accent-link"
+                  placeholder="e.g., percent, bytes, ms"
+                />
+              </div>
+              <div className="flex-1">
+                <label className="block text-xs font-medium text-theme-text-secondary uppercase mb-1.5">
+                  Label
+                </label>
+                <input
+                  type="text"
+                  value={query.label ?? ''}
+                  onChange={(e) => updateQuery(i, { label: e.target.value })}
+                  className="w-full px-3 py-1.5 bg-app-panel border border-theme-border rounded-md text-theme-text-primary text-xs focus:outline-none focus:border-accent-link"
+                  placeholder="defaults to column name"
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+      ))}
+
+      {/* Add query button */}
+      <button
+        onClick={addQuery}
+        className="w-full py-2.5 border border-dashed border-theme-border rounded-lg text-theme-text-muted text-sm hover:border-accent-link hover:text-accent-link transition-colors"
+      >
+        + Add Query
+      </button>
+
       {validationErrors.length > 0 && (
         <div className="text-red-400 text-sm space-y-1">
           {validationErrors.map((err, i) => (
@@ -204,15 +435,50 @@ export const chartMetadata: CellTypeMetadata = {
     sql: DEFAULT_SQL.chart,
   }),
 
-  execute: async (config: CellConfig, { variables, timeRange, runQuery }: CellExecutionContext) => {
-    const sql = substituteMacros((config as QueryCellConfig).sql, variables, timeRange)
-    const data = await runQuery(sql)
-    return { data }
+  execute: async (config: CellConfig, { variables, timeRange, runQuery, runQueryAs }: CellExecutionContext) => {
+    const v2 = migrateChartConfig(config)
+
+    if (v2.queries.length <= 1) {
+      // Single query — backward-compatible path
+      const sql = substituteMacros(v2.queries[0]?.sql ?? '', variables, timeRange)
+      if (runQueryAs && v2.queries[0]?.dataSource) {
+        const tableName = queryTableName(config.name, v2.queries[0].name)
+        const data = await runQueryAs(sql, tableName, v2.queries[0].dataSource)
+        return { data }
+      }
+      const data = await runQuery(sql)
+      return { data }
+    }
+
+    // Multi-query execution
+    const tables: import('apache-arrow').Table[] = []
+    for (const query of v2.queries) {
+      const sql = substituteMacros(query.sql, variables, timeRange)
+      let table: import('apache-arrow').Table
+      if (runQueryAs) {
+        const tableName = queryTableName(config.name, query.name)
+        table = await runQueryAs(sql, tableName, query.dataSource)
+      } else {
+        table = await runQuery(sql)
+      }
+      tables.push(table)
+    }
+
+    return {
+      data: tables[0],
+      additionalData: tables.length > 1 ? tables.slice(1) : undefined,
+    }
   },
 
-  getRendererProps: (config: CellConfig, state: CellState) => ({
-    data: state.data,
-    status: state.status,
-    options: (config as QueryCellConfig).options,
-  }),
+  getRendererProps: (config: CellConfig, state: CellState) => {
+    const v2 = migrateChartConfig(config)
+    // Pass query metadata (units/labels) through options so the renderer can build series
+    const queryMeta = v2.queries.map(q => ({ unit: q.unit, label: q.label }))
+    return {
+      data: state.data,
+      additionalData: state.additionalData,
+      status: state.status,
+      options: { ...v2.options, _queryMeta: queryMeta },
+    }
+  },
 }

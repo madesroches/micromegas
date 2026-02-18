@@ -201,6 +201,193 @@ export function validateChartColumns(table: Table):
   return { valid: true, xType, yType }
 }
 
+// =============================================================================
+// Multi-Series Chart Types
+// =============================================================================
+
+export interface ChartSeriesData {
+  label: string
+  unit: string
+  data: { x: number; y: number }[]
+}
+
+export interface MultiSeriesChartData {
+  xAxisMode: XAxisMode
+  xLabels?: string[]
+  xColumnName: string
+  series: ChartSeriesData[]
+}
+
+/**
+ * Extract multi-series chart data from multiple Arrow tables.
+ * Each table must have exactly 2 columns (X, Y).
+ * All tables must agree on X-axis mode.
+ */
+export function extractMultiSeriesChartData(
+  tables: { table: Table; unit?: string; label?: string }[]
+): ({ ok: true } & MultiSeriesChartData) | { ok: false; error: string } {
+  if (tables.length === 0) {
+    return { ok: false, error: 'No query results' }
+  }
+
+  // Validate each table and detect modes
+  const validations: {
+    xType: DataType
+    yType: DataType
+    xColumnName: string
+    yColumnName: string
+    xAxisMode: XAxisMode
+  }[] = []
+
+  for (let i = 0; i < tables.length; i++) {
+    const { table } = tables[i]
+    if (table.numRows === 0) {
+      // Allow empty tables — they produce an empty series
+      const fields = table.schema.fields
+      if (fields.length !== 2) {
+        return { ok: false, error: `Query ${i + 1}: must return exactly 2 columns, got ${fields.length}` }
+      }
+      validations.push({
+        xType: fields[0].type,
+        yType: fields[1].type,
+        xColumnName: fields[0].name,
+        yColumnName: fields[1].name,
+        xAxisMode: detectXAxisMode(fields[0].type),
+      })
+      continue
+    }
+    const v = validateChartColumns(table)
+    if (!v.valid) {
+      return { ok: false, error: `Query ${i + 1}: ${v.error}` }
+    }
+    const fields = table.schema.fields
+    validations.push({
+      xType: v.xType,
+      yType: v.yType,
+      xColumnName: fields[0].name,
+      yColumnName: fields[1].name,
+      xAxisMode: detectXAxisMode(v.xType),
+    })
+  }
+
+  // All tables must agree on X-axis mode
+  const xAxisMode = validations[0].xAxisMode
+  for (let i = 1; i < validations.length; i++) {
+    if (validations[i].xAxisMode !== xAxisMode) {
+      return {
+        ok: false,
+        error: `X-axis mode mismatch: query 1 is ${xAxisMode}, query ${i + 1} is ${validations[i].xAxisMode}`,
+      }
+    }
+  }
+
+  const xColumnName = validations[0].xColumnName
+
+  // Extract each series
+  const series: ChartSeriesData[] = []
+  for (let i = 0; i < tables.length; i++) {
+    const { table, unit, label } = tables[i]
+    const v = validations[i]
+    const seriesLabel = label || v.yColumnName
+    const seriesUnit = unit || ''
+
+    const data: { x: number; y: number }[] = []
+
+    if (xAxisMode === 'categorical') {
+      // For categorical, we'll handle label mapping after collecting all data
+      // For now, just collect string-indexed data
+      for (let r = 0; r < table.numRows; r++) {
+        const row = table.get(r)
+        if (!row) continue
+        const xVal = row[v.xColumnName]
+        const yVal = row[v.yColumnName]
+        if (xVal == null || yVal == null) continue
+        const yNum = Number(yVal)
+        if (isNaN(yNum)) continue
+        // Temporarily store the string hash — will be remapped below
+        data.push({ x: 0, y: yNum }) // placeholder x
+      }
+    } else {
+      for (let r = 0; r < table.numRows; r++) {
+        const row = table.get(r)
+        if (!row) continue
+        const xVal = row[v.xColumnName]
+        const yVal = row[v.yColumnName]
+        if (xVal == null || yVal == null) continue
+        let xNum: number
+        if (xAxisMode === 'time') {
+          xNum = timestampToMs(xVal, v.xType)
+        } else {
+          xNum = Number(xVal)
+        }
+        const yNum = Number(yVal)
+        if (isNaN(xNum) || isNaN(yNum)) continue
+        data.push({ x: xNum, y: yNum })
+      }
+      // Sort by X ascending (uPlot requirement)
+      data.sort((a, b) => a.x - b.x)
+    }
+
+    series.push({ label: seriesLabel, unit: seriesUnit, data })
+  }
+
+  // Handle categorical x-axis: build union label map
+  if (xAxisMode === 'categorical') {
+    const labelMap = new Map<string, number>()
+    const xLabels: string[] = []
+
+    // First pass: collect all unique labels from all tables
+    for (let i = 0; i < tables.length; i++) {
+      const { table } = tables[i]
+      const v = validations[i]
+      for (let r = 0; r < table.numRows; r++) {
+        const row = table.get(r)
+        if (!row) continue
+        const xVal = row[v.xColumnName]
+        if (xVal == null) continue
+        const str = String(xVal)
+        if (!labelMap.has(str)) {
+          labelMap.set(str, xLabels.length)
+          xLabels.push(str)
+        }
+      }
+    }
+
+    // Sort labels alphabetically for cross-series union
+    xLabels.sort()
+    // Rebuild map after sort
+    labelMap.clear()
+    xLabels.forEach((lbl, idx) => labelMap.set(lbl, idx))
+
+    // Second pass: remap x values to indices
+    for (let i = 0; i < tables.length; i++) {
+      const { table } = tables[i]
+      const v = validations[i]
+      const seriesData: { x: number; y: number }[] = []
+
+      for (let r = 0; r < table.numRows; r++) {
+        const row = table.get(r)
+        if (!row) continue
+        const xVal = row[v.xColumnName]
+        const yVal = row[v.yColumnName]
+        if (xVal == null || yVal == null) continue
+        const yNum = Number(yVal)
+        if (isNaN(yNum)) continue
+        const str = String(xVal)
+        const idx = labelMap.get(str)
+        if (idx == null) continue
+        seriesData.push({ x: idx, y: yNum })
+      }
+
+      series[i] = { ...series[i], data: seriesData }
+    }
+
+    return { ok: true, xAxisMode, xLabels, xColumnName, series }
+  }
+
+  return { ok: true, xAxisMode, xColumnName, series }
+}
+
 /**
  * Extract chart data from Arrow table (first 2 columns)
  */

@@ -176,6 +176,36 @@ export function useCellExecution({
               return executeSql(sql, timeRange, abortControllerRef.current!.signal, cellDataSource)
             }
           },
+          runQueryAs: async (sql, tableName, queryDataSource) => {
+            const resolvedDs = queryDataSource || cellDataSource
+            const isLocal = resolvedDs === 'notebook'
+            if (isLocal) {
+              if (!engine) throw new Error('WASM engine not loaded')
+              const ipcBytes = await engine.execute_and_register(sql, tableName)
+              return tableFromIPC(ipcBytes)
+            } else if (engine) {
+              const ipcBytes = await fetchQueryIPC(
+                {
+                  sql,
+                  params: { begin: timeRange.begin, end: timeRange.end },
+                  begin: timeRange.begin,
+                  end: timeRange.end,
+                  dataSource: resolvedDs,
+                },
+                abortControllerRef.current!.signal,
+                (progress) => {
+                  setCellStates((prev) => ({
+                    ...prev,
+                    [cell.name]: { ...prev[cell.name], fetchProgress: progress },
+                  }))
+                },
+              )
+              engine.register_table(tableName, ipcBytes)
+              return tableFromIPC(ipcBytes)
+            } else {
+              return executeSql(sql, timeRange, abortControllerRef.current!.signal, resolvedDs)
+            }
+          },
         }
 
         // Delegate to cell's execute method

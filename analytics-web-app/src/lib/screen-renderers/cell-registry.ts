@@ -17,6 +17,8 @@ export interface CellRendererProps {
   options?: Record<string, unknown>
   /** Query result data */
   data: Table | null
+  /** Additional query results for multi-query cells */
+  additionalData?: Table[]
   /** Current execution status */
   status: CellStatus
   /** Error message if status is 'error' */
@@ -58,6 +60,7 @@ export interface CellExecutionContext {
   variables: Record<string, VariableValue>
   timeRange: { begin: string; end: string }
   runQuery: (sql: string) => Promise<Table>
+  runQueryAs?: (sql: string, tableName: string, dataSource?: string) => Promise<Table>
   registerTable?: (ipcBytes: Uint8Array) => void
 }
 
