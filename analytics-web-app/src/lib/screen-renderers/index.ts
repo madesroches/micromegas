@@ -22,9 +22,7 @@ export interface ScreenRendererProps {
   ) => void
   /** Saved config from database, null if new screen - for unsaved detection */
   savedConfig: ScreenConfig | null
-  /** Time range for API queries (ISO timestamps) */
-  timeRange: { begin: string; end: string }
-  /** Raw time range from URL (e.g., 'now-1h', 'now') */
+  /** Raw time range from URL (e.g., 'now-1h', 'now') — resolve via getTimeRangeForApi at execution time */
   rawTimeRange: { from: string; to: string }
   /** Update URL time range (e.g., from chart drag-to-zoom) */
   onTimeRangeChange: (from: string, to: string) => void

@@ -11,6 +11,7 @@ import { DataSourceField } from '@/components/DataSourceSelector'
 import { useChangeEffect } from '@/hooks/useChangeEffect'
 import { useStreamQuery } from '@/hooks/useStreamQuery'
 import { useDefaultSaveCleanup, useExposeSaveRef } from '@/lib/url-cleanup-utils'
+import { getTimeRangeForApi } from '@/lib/time-range'
 import {
   SortHeader,
   TableBody,
@@ -46,7 +47,6 @@ export function TableRenderer({
   config,
   onConfigChange,
   savedConfig,
-  timeRange,
   rawTimeRange,
   timeRangeLabel,
   currentValues,
@@ -85,6 +85,7 @@ export function TableRenderer({
     (sql: string) => {
       currentSqlRef.current = sql
 
+      const timeRange = getTimeRangeForApi(rawTimeRange.from, rawTimeRange.to)
       executeRef.current({
         sql,
         params: {
@@ -97,7 +98,7 @@ export function TableRenderer({
         dataSource: effectiveDataSource,
       })
     },
-    [timeRange, orderByValue, effectiveDataSource]
+    [rawTimeRange, orderByValue, effectiveDataSource]
   )
 
   // Initial query execution (wait for dataSource to resolve)
@@ -110,20 +111,16 @@ export function TableRenderer({
   }, [executeQuery, tableConfig.sql, effectiveDataSource])
 
   // Re-execute on time range change
-  const prevTimeRangeRef = useRef<{ begin: string; end: string } | null>(null)
+  const prevTimeRangeRef = useRef(rawTimeRange)
   useEffect(() => {
-    if (prevTimeRangeRef.current === null) {
-      prevTimeRangeRef.current = { begin: timeRange.begin, end: timeRange.end }
-      return
-    }
     if (
-      prevTimeRangeRef.current.begin !== timeRange.begin ||
-      prevTimeRangeRef.current.end !== timeRange.end
+      prevTimeRangeRef.current.from !== rawTimeRange.from ||
+      prevTimeRangeRef.current.to !== rawTimeRange.to
     ) {
-      prevTimeRangeRef.current = { begin: timeRange.begin, end: timeRange.end }
+      prevTimeRangeRef.current = rawTimeRange
       executeQuery(currentSqlRef.current)
     }
-  }, [timeRange, executeQuery])
+  }, [rawTimeRange, executeQuery])
 
   // Re-execute on refresh trigger
   const prevRefreshTriggerRef = useRef(refreshTrigger)

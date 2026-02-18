@@ -105,8 +105,8 @@ function ScreenPageContent() {
   const urlTo = searchParams.get('to')
   const rawTimeRange = useMemo(
     () => ({
-      from: urlFrom ?? savedTimeFrom ?? currentTimeFrom!,
-      to: urlTo ?? savedTimeTo ?? currentTimeTo!,
+      from: urlFrom ?? savedTimeFrom ?? currentTimeFrom ?? DEFAULT_TIME_RANGE.from,
+      to: urlTo ?? savedTimeTo ?? currentTimeTo ?? DEFAULT_TIME_RANGE.to,
     }),
     [urlFrom, urlTo, savedTimeFrom, savedTimeTo, currentTimeFrom, currentTimeTo]
   )
@@ -123,24 +123,10 @@ function ScreenPageContent() {
   }, [screenConfig, rawTimeRange, baselineConfig])
 
   // Compute parsed time range (for label)
-  const parsedTimeRange = useMemo(() => {
-    try {
-      return parseTimeRange(rawTimeRange.from, rawTimeRange.to)
-    } catch {
-      // Fallback for invalid time range - use standard defaults
-      return parseTimeRange(DEFAULT_TIME_RANGE.from, DEFAULT_TIME_RANGE.to)
-    }
-  }, [rawTimeRange])
-
-  // Compute API time range
-  const apiTimeRange = useMemo(() => {
-    try {
-      return getTimeRangeForApi(rawTimeRange.from, rawTimeRange.to)
-    } catch {
-      // Fallback for invalid time range - use standard defaults
-      return getTimeRangeForApi(DEFAULT_TIME_RANGE.from, DEFAULT_TIME_RANGE.to)
-    }
-  }, [rawTimeRange])
+  const parsedTimeRange = useMemo(
+    () => parseTimeRange(rawTimeRange.from, rawTimeRange.to),
+    [rawTimeRange]
+  )
 
   // Load screen or default config
   useEffect(() => {
@@ -268,11 +254,8 @@ function ScreenPageContent() {
   )
 
   const currentValues = useMemo(
-    () => ({
-      begin: apiTimeRange.begin,
-      end: apiTimeRange.end,
-    }),
-    [apiTimeRange]
+    () => getTimeRangeForApi(rawTimeRange.from, rawTimeRange.to),
+    [rawTimeRange]
   )
 
   // Loading state - also check if loaded screen matches URL
@@ -429,7 +412,6 @@ function ScreenPageContent() {
               config={screenConfig}
               onConfigChange={handleScreenConfigChange}
               savedConfig={screen?.config ?? null}
-              timeRange={apiTimeRange}
               rawTimeRange={rawTimeRange}
               onTimeRangeChange={handleTimeRangeChange}
               timeRangeLabel={parsedTimeRange.label}

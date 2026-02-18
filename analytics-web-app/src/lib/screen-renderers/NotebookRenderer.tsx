@@ -38,6 +38,7 @@ import { useCellExecution, NotebookQueryEngine } from './useCellExecution'
 import { cleanupVariableParams, resolveCellDataSource } from './notebook-utils'
 import { cleanupTimeParams, useExposeSaveRef } from '@/lib/url-cleanup-utils'
 import { loadWasmEngine } from '@/lib/wasm-engine'
+import { getTimeRangeForApi } from '@/lib/time-range'
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
@@ -180,7 +181,6 @@ export function NotebookRenderer({
   config,
   onConfigChange,
   savedConfig,
-  timeRange,
   rawTimeRange,
   onTimeRangeChange,
   onSave,
@@ -562,7 +562,7 @@ export function NotebookRenderer({
       data: state.data,
       status: state.status,
       error: state.error,
-      timeRange,
+      timeRange: getTimeRangeForApi(rawTimeRange.from, rawTimeRange.to),
       variables: availableVariables,
       isEditing: selectedCellIndex === index,
       onRun: () => executeCell(index),
@@ -715,7 +715,7 @@ export function NotebookRenderer({
             <CellEditor
               cell={selectedCell}
               variables={variableValues}
-              timeRange={timeRange}
+              timeRange={getTimeRangeForApi(rawTimeRange.from, rawTimeRange.to)}
               existingNames={existingNames}
               availableColumns={cellStates[selectedCell.name]?.data?.schema.fields.map((f) => f.name)}
               defaultDataSource={dataSource}

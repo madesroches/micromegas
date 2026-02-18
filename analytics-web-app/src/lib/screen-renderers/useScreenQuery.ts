@@ -2,12 +2,13 @@ import { useCallback, useEffect, useRef } from 'react'
 import { Table } from 'apache-arrow'
 import { useChangeEffect } from '@/hooks/useChangeEffect'
 import { useStreamQuery } from '@/hooks/useStreamQuery'
+import { getTimeRangeForApi } from '@/lib/time-range'
 
 export interface ScreenQueryParams {
   /** Initial SQL from config */
   initialSql: string
-  /** Time range for query */
-  timeRange: { begin: string; end: string }
+  /** Raw time range (relative strings like "now-1h") resolved fresh at execution time */
+  rawTimeRange: { from: string; to: string }
   /** Increment to trigger refresh */
   refreshTrigger: number
   /** Additional query params (type-specific) */
@@ -51,7 +52,7 @@ export interface ScreenQueryResult {
  */
 export function useScreenQuery({
   initialSql,
-  timeRange,
+  rawTimeRange,
   refreshTrigger,
   params = {},
   transformSql,
@@ -72,6 +73,7 @@ export function useScreenQuery({
       currentSqlRef.current = sql
       const finalSql = transformSql ? transformSql(sql) : sql
 
+      const timeRange = getTimeRangeForApi(rawTimeRange.from, rawTimeRange.to)
       executeRef.current({
         sql: finalSql,
         params: {
@@ -84,7 +86,7 @@ export function useScreenQuery({
         dataSource,
       })
     },
-    [timeRange, params, transformSql, dataSource]
+    [rawTimeRange, params, transformSql, dataSource]
   )
 
   // Initial query execution (wait for dataSource to resolve)
@@ -97,20 +99,16 @@ export function useScreenQuery({
   }, [dataSource]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Re-execute on time range change
-  const prevTimeRangeRef = useRef<{ begin: string; end: string } | null>(null)
+  const prevTimeRangeRef = useRef(rawTimeRange)
   useEffect(() => {
-    if (prevTimeRangeRef.current === null) {
-      prevTimeRangeRef.current = { begin: timeRange.begin, end: timeRange.end }
-      return
-    }
     if (
-      prevTimeRangeRef.current.begin !== timeRange.begin ||
-      prevTimeRangeRef.current.end !== timeRange.end
+      prevTimeRangeRef.current.from !== rawTimeRange.from ||
+      prevTimeRangeRef.current.to !== rawTimeRange.to
     ) {
-      prevTimeRangeRef.current = { begin: timeRange.begin, end: timeRange.end }
+      prevTimeRangeRef.current = rawTimeRange
       executeQuery(currentSqlRef.current)
     }
-  }, [timeRange, executeQuery])
+  }, [rawTimeRange, executeQuery])
 
   // Re-execute on data source change
   useChangeEffect(dataSource, () => executeQuery(currentSqlRef.current))
