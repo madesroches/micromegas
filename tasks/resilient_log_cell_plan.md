@@ -58,7 +58,7 @@ Keep the log-specific visual style (dense monospace rows, level colors, nanoseco
 | `msg` | Special: flex-1, word-wrapped (always last among known columns) |
 | anything else | Generic: `formatCell(value, dataType)` from table-utils, auto-width |
 
-**Column ordering:** known columns appear first in their canonical order (time, level, target, msg), followed by extra columns in schema order. Columns not present in the schema are simply skipped.
+**Column ordering:** columns appear in the order returned by the SQL query (Arrow schema order). Known columns get their special rendering regardless of position; unknown columns render generically. Columns not present in the schema are simply skipped.
 
 **No new configuration surface** — this is purely about resilience. The log renderer doesn't need column management (hide/sort/override) that the table renderer has.
 
@@ -87,7 +87,7 @@ Contents:
 - `formatLocalTime()` (moved from both files)
 - `getLevelColor()` (moved from both files)
 - `formatLevelValue()` — normalizes numeric or string level values
-- `classifyLogColumns(fields: Field[]): LogColumn[]` — returns flat ordered list (known columns in canonical order, then extras in schema order)
+- `classifyLogColumns(fields: Field[]): LogColumn[]` — preserves schema order, tags each column with its `kind`
 - `LogColumn` type: `{ name: string, kind: KnownColumnName | 'generic', type: Field['type'] }`
 - `KnownColumnName` type: `'time' | 'level' | 'target' | 'msg'`
 
@@ -100,7 +100,7 @@ Created `analytics-web-app/src/lib/screen-renderers/log-utils.ts`:
 - `formatLocalTime()` — nanosecond-precision timestamp formatting
 - `getLevelColor()` — level name → CSS class
 - `formatLevelValue()` — normalizes numeric or string level values
-- `classifyLogColumns(fields: Field[]): LogColumn[]` — returns flat ordered list with `kind` discriminant
+- `classifyLogColumns(fields: Field[]): LogColumn[]` — preserves schema order, tags each column with `kind`
 - Types: `LogColumn` with `kind: 'time' | 'level' | 'target' | 'msg' | 'generic'`, `KnownColumnName`
 
 Unit tests (19 passing) in `analytics-web-app/src/lib/screen-renderers/__tests__/log-utils.test.ts`:
@@ -166,7 +166,7 @@ Out of scope for this issue. The goal is resilience, not a full column managemen
 - `getLevelColor`: all 6 standard levels return distinct classes + unknown fallback
 - `formatLevelValue`: numeric→name, out-of-range→UNKNOWN, string passthrough, null/undefined→empty
 - `formatLocalTime`: falsy→29-char padded empty, nanosecond extraction, short fractional padding, no-fractional zeros, unparseable→padded empty
-- `classifyLogColumns`: canonical ordering regardless of schema order, extras appended in schema order, no-known-columns case, subset of known columns, empty schema, type preservation
+- `classifyLogColumns`: preserves schema order with correct kind classification, mixed known/extra columns, no-known-columns case, subset of known columns, empty schema, type preservation
 
 ### Automated checks — DONE
 

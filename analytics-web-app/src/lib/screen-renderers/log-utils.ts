@@ -87,29 +87,15 @@ export interface LogColumn {
 }
 
 /**
- * Classify Arrow schema fields into ordered log columns.
- * Known columns (time, level, target, msg) appear first in canonical order,
- * followed by extra columns in their original schema order.
+ * Classify Arrow schema fields into log columns, preserving schema order.
+ * Known columns (time, level, target, msg) get special rendering via their
+ * `kind` discriminant; all other columns are tagged as 'generic'.
  */
 export function classifyLogColumns(fields: Field[]): LogColumn[] {
-  const fieldMap = new Map(fields.map((f) => [f.name, f]))
-  const columns: LogColumn[] = []
-
-  // Known columns in canonical order (only if present)
-  for (const name of KNOWN_COLUMN_ORDER) {
-    const field = fieldMap.get(name)
-    if (field) {
-      columns.push({ name, kind: name, type: field.type })
-    }
-  }
-
-  // Extra columns in schema order
   const knownSet = new Set<string>(KNOWN_COLUMN_ORDER)
-  for (const field of fields) {
-    if (!knownSet.has(field.name)) {
-      columns.push({ name: field.name, kind: 'generic', type: field.type })
-    }
-  }
-
-  return columns
+  return fields.map((field) => ({
+    name: field.name,
+    kind: knownSet.has(field.name) ? (field.name as KnownColumnName) : 'generic',
+    type: field.type,
+  }))
 }

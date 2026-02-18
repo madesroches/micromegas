@@ -126,17 +126,16 @@ function mockField(name: string, typeId = 'utf8'): { name: string; type: { typeI
 }
 
 describe('classifyLogColumns', () => {
-  it('classifies all four known columns in canonical order', () => {
-    // Schema has them in non-canonical order
+  it('preserves schema order and classifies known columns', () => {
     const fields = [mockField('msg'), mockField('time', 'timestamp'), mockField('level'), mockField('target')]
 
     const columns = classifyLogColumns(fields as never)
 
-    expect(columns.map((c) => c.name)).toEqual(['time', 'level', 'target', 'msg'])
-    expect(columns.map((c) => c.kind)).toEqual(['time', 'level', 'target', 'msg'])
+    expect(columns.map((c) => c.name)).toEqual(['msg', 'time', 'level', 'target'])
+    expect(columns.map((c) => c.kind)).toEqual(['msg', 'time', 'level', 'target'])
   })
 
-  it('appends extra columns after known columns in schema order', () => {
+  it('preserves schema order with mixed known and extra columns', () => {
     const fields = [
       mockField('time', 'timestamp'),
       mockField('process_id'),
@@ -147,9 +146,8 @@ describe('classifyLogColumns', () => {
 
     const columns = classifyLogColumns(fields as never)
 
-    expect(columns.map((c) => c.name)).toEqual(['time', 'level', 'msg', 'process_id', 'thread_id'])
-    expect(columns[3].kind).toBe('generic')
-    expect(columns[4].kind).toBe('generic')
+    expect(columns.map((c) => c.name)).toEqual(['time', 'process_id', 'level', 'thread_id', 'msg'])
+    expect(columns.map((c) => c.kind)).toEqual(['time', 'generic', 'level', 'generic', 'msg'])
   })
 
   it('handles schema with only extra columns (no known columns)', () => {
