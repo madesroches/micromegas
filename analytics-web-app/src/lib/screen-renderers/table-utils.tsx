@@ -304,7 +304,7 @@ export function SortHeader({
 
   if (!onHide) {
     return (
-      <th onClick={() => onSort(columnName)} className={thClass}>
+      <th onClick={(e) => { e.stopPropagation(); onSort(columnName); }} className={thClass}>
         {thContent}
       </th>
     )
@@ -313,7 +313,7 @@ export function SortHeader({
   return (
     <ContextMenu.Root>
       <ContextMenu.Trigger asChild>
-        <th onClick={() => onSort(columnName)} className={thClass}>
+        <th onClick={(e) => { e.stopPropagation(); onSort(columnName); }} className={thClass}>
           {thContent}
         </th>
       </ContextMenu.Trigger>
