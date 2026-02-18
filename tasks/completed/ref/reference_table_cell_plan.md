@@ -2,13 +2,13 @@
 
 Issue: [#824](https://github.com/madesroches/micromegas/issues/824)
 
-## Status: Implemented
+## Status: Complete
 
-All implementation steps are complete. The feature is ready for manual testing and code review.
+All implementation steps are complete. PR: https://github.com/madesroches/micromegas/pull/827
 
 - Type-check: passing
 - Lint: clean (0 errors, 0 warnings)
-- Tests: 689/689 passing (includes 12 new CSV-to-Arrow tests)
+- Tests: 20 new tests (12 CSV-to-Arrow + 8 sorting)
 
 ## Mockup
 
@@ -178,6 +178,13 @@ Includes pagination via `usePagination` / `PaginationBar`, matching `TableCell.t
 - Error cases: empty string, headers only
 - Empty numeric values → NaN
 
+**`__tests__/reference-table-sorting.test.ts`** (new file, 8 tests):
+- Identity indices when no sort column or nonexistent column
+- Numeric column ascending and descending
+- String column ascending and descending
+- NaN values pushed to end regardless of sort direction
+- Stable sort: equal values preserve original order
+
 ## Files Modified
 
 | File | Action | Status |
@@ -188,6 +195,8 @@ Includes pagination via `usePagination` / `PaginationBar`, matching `TableCell.t
 | `analytics-web-app/src/lib/screen-renderers/cells/csv-to-arrow.ts` | **New** — CSV parsing and Arrow conversion | ✅ |
 | `analytics-web-app/src/lib/screen-renderers/cells/ReferenceTableCell.tsx` | **New** — cell renderer, editor, metadata | ✅ |
 | `analytics-web-app/src/lib/screen-renderers/__tests__/csv-to-arrow.test.ts` | **New** — 12 unit tests for CSV parsing | ✅ |
+| `analytics-web-app/src/lib/screen-renderers/__tests__/reference-table-sorting.test.ts` | **New** — 8 unit tests for sorting | ✅ |
+| `analytics-web-app/src/lib/screen-renderers/pagination.tsx` | Hide pagination bar when data fits on one page | ✅ |
 | `analytics-web-app/jest.config.js` | Add ESM transform for d3-dsv | ✅ |
 | `analytics-web-app/package.json` | Add d3-dsv + @types/d3-dsv | ✅ |
 
