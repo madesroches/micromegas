@@ -1,4 +1,4 @@
-import { useMemo, useCallback } from 'react'
+import React, { useMemo, useCallback } from 'react'
 import type {
   CellTypeMetadata,
   CellRendererProps,
@@ -6,96 +6,66 @@ import type {
   CellExecutionContext,
 } from '../cell-registry'
 import type { QueryCellConfig, CellConfig, CellState } from '../notebook-types'
-import { timestampToDate } from '@/lib/arrow-utils'
 import { AvailableVariablesPanel } from '@/components/AvailableVariablesPanel'
 import { DocumentationLink, QUERY_GUIDE_URL } from '@/components/DocumentationLink'
 import { SyntaxEditor } from '@/components/SyntaxEditor'
 import { substituteMacros, DEFAULT_SQL } from '../notebook-utils'
 import { usePagination, PaginationBar, DEFAULT_PAGE_SIZE } from '../pagination'
+import { formatCell } from '../table-utils'
+import { classifyLogColumns, formatLocalTime, formatLevelValue, getLevelColor } from '../log-utils'
+import type { LogColumn } from '../log-utils'
 
 // =============================================================================
 // Renderer Component
 // =============================================================================
 
-const LEVEL_NAMES: Record<number, string> = {
-  1: 'FATAL',
-  2: 'ERROR',
-  3: 'WARN',
-  4: 'INFO',
-  5: 'DEBUG',
-  6: 'TRACE',
-}
-
-function formatLocalTime(utcTime: unknown): string {
-  if (!utcTime) return ''.padEnd(29)
-
-  const date = timestampToDate(utcTime)
-  if (!date) return ''.padEnd(29)
-
-  let nanoseconds = '000000000'
-  const str = String(utcTime)
-  const nanoMatch = str.match(/\.(\d+)/)
-  if (nanoMatch) {
-    nanoseconds = nanoMatch[1].padEnd(9, '0').slice(0, 9)
+function renderLogColumn(col: LogColumn, row: Record<string, unknown>): React.ReactNode {
+  const value = row[col.name]
+  switch (col.kind) {
+    case 'time':
+      return (
+        <span className="text-theme-text-muted mr-3 w-[188px] min-w-[188px] whitespace-nowrap">
+          {formatLocalTime(value)}
+        </span>
+      )
+    case 'level': {
+      const levelStr = formatLevelValue(value)
+      return (
+        <span className={`w-[38px] min-w-[38px] mr-3 font-semibold ${getLevelColor(levelStr)}`}>
+          {levelStr}
+        </span>
+      )
+    }
+    case 'target': {
+      const targetStr = String(value ?? '')
+      return (
+        <span className="text-accent-highlight mr-3 w-[200px] min-w-[200px] truncate" title={targetStr}>
+          {targetStr}
+        </span>
+      )
+    }
+    case 'msg':
+      return (
+        <span className="text-theme-text-primary flex-1 break-words">{String(value ?? '')}</span>
+      )
+    default: {
+      const formatted = formatCell(value, col.type)
+      return (
+        <span className="text-theme-text-secondary mr-3 truncate max-w-[200px]" title={formatted}>
+          {formatted}
+        </span>
+      )
+    }
   }
-
-  const year = date.getFullYear()
-  const month = String(date.getMonth() + 1).padStart(2, '0')
-  const day = String(date.getDate()).padStart(2, '0')
-  const hours = String(date.getHours()).padStart(2, '0')
-  const minutes = String(date.getMinutes()).padStart(2, '0')
-  const seconds = String(date.getSeconds()).padStart(2, '0')
-
-  return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}.${nanoseconds}`
-}
-
-function getLevelColor(level: string): string {
-  switch (level) {
-    case 'FATAL':
-      return 'text-accent-error-bright'
-    case 'ERROR':
-      return 'text-accent-error'
-    case 'WARN':
-      return 'text-accent-warning'
-    case 'INFO':
-      return 'text-accent-link'
-    case 'DEBUG':
-      return 'text-theme-text-secondary'
-    case 'TRACE':
-      return 'text-theme-text-muted'
-    default:
-      return 'text-theme-text-primary'
-  }
-}
-
-interface LogRow {
-  time: unknown
-  level: string
-  target: string
-  msg: string
 }
 
 export function LogCell({ data, status, options, onOptionsChange }: CellRendererProps) {
-  const rows = useMemo<LogRow[]>(() => {
-    if (!data || data.numRows === 0) return []
-
-    const result: LogRow[] = []
-    for (let i = 0; i < data.numRows; i++) {
-      const row = data.get(i)
-      if (row) {
-        const levelValue = row.level
-        const levelStr =
-          typeof levelValue === 'number' ? LEVEL_NAMES[levelValue] || 'UNKNOWN' : String(levelValue ?? '')
-        result.push({
-          time: row.time,
-          level: levelStr,
-          target: String(row.target ?? ''),
-          msg: String(row.msg ?? ''),
-        })
-      }
-    }
-    return result
+  const columns = useMemo(() => {
+    if (!data) return []
+    return classifyLogColumns(data.schema.fields)
   }, [data])
+
+  const numRows = data?.numRows ?? 0
 
   // Pagination
   const pageSize = (options?.pageSize as number | undefined) ?? DEFAULT_PAGE_SIZE
@@ -103,7 +73,7 @@ export function LogCell({ data, status, options, onOptionsChange }: CellRenderer
     (size: number) => onOptionsChange({ ...options, pageSize: size }),
     [options, onOptionsChange],
   )
-  const pagination = usePagination(rows.length, pageSize, handlePageSizeChange)
+  const pagination = usePagination(numRows, pageSize, handlePageSizeChange)
 
   if (status === 'loading') {
     return (
@@ -114,34 +84,30 @@ export function LogCell({ data, status, options, onOptionsChange }: CellRenderer
     )
   }
 
-  if (rows.length === 0) {
+  if (numRows === 0) {
     return (
       <div className="text-center py-8 text-theme-text-muted text-sm">No log entries found</div>
     )
   }
 
-  const pageRows = rows.slice(pagination.startRow, pagination.endRow)
-
   return (
     <div className="flex flex-col h-full bg-app-bg border border-theme-border rounded-md font-mono text-xs">
       <div className="flex-1 overflow-auto min-h-0">
-        {pageRows.map((row, index) => (
-          <div
-            key={pagination.startRow + index}
-            className="flex px-3 py-1 border-b border-app-panel hover:bg-app-panel/50 transition-colors"
-          >
-            <span className="text-theme-text-muted mr-3 w-[188px] min-w-[188px] whitespace-nowrap">
-              {formatLocalTime(row.time)}
-            </span>
-            <span className={`w-[38px] min-w-[38px] mr-3 font-semibold ${getLevelColor(row.level)}`}>
-              {row.level}
-            </span>
-            <span className="text-accent-highlight mr-3 w-[200px] min-w-[200px] truncate" title={row.target}>
-              {row.target}
-            </span>
-            <span className="text-theme-text-primary flex-1 break-words">{row.msg}</span>
-          </div>
-        ))}
+        {Array.from({ length: pagination.endRow - pagination.startRow }, (_, i) => {
+          const rowIdx = pagination.startRow + i
+          const row = data!.get(rowIdx)
+          if (!row) return null
+          return (
+            <div
+              key={rowIdx}
+              className="flex px-3 py-1 border-b border-app-panel hover:bg-app-panel/50 transition-colors"
+            >
+              {columns.map((col) => (
+                <React.Fragment key={col.name}>{renderLogColumn(col, row)}</React.Fragment>
+              ))}
+            </div>
+          )
+        })}
       </div>
       <PaginationBar pagination={pagination} />
     </div>

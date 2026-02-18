@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { ChevronDown } from 'lucide-react'
+import type { Table } from 'apache-arrow'
 import { LOG_ENTRIES_SCHEMA_URL } from '@/components/DocumentationLink'
 import { registerRenderer, ScreenRendererProps } from './index'
 import { LoadingState, EmptyState, RendererLayout } from './shared'
@@ -10,12 +11,14 @@ import { useStreamQuery } from '@/hooks/useStreamQuery'
 import { useChangeEffect } from '@/hooks/useChangeEffect'
 import { useDebounce } from '@/hooks/useDebounce'
 import { useDefaultSaveCleanup, useExposeSaveRef } from '@/lib/url-cleanup-utils'
-import { timestampToDate } from '@/lib/arrow-utils'
 import {
   DEFAULT_TIME_RANGE,
   DEFAULT_LOG_LEVEL,
   DEFAULT_LOG_LIMIT,
 } from '@/lib/screen-defaults'
+import { formatCell } from './table-utils'
+import { classifyLogColumns, formatLocalTime, formatLevelValue, getLevelColor } from './log-utils'
+import type { LogColumn } from './log-utils'
 
 // Variables available for log queries
 const VARIABLES = [
@@ -36,15 +39,6 @@ const LOG_LEVELS: Record<string, number> = {
   fatal: 1,
 }
 
-const LEVEL_NAMES: Record<number, string> = {
-  1: 'FATAL',
-  2: 'ERROR',
-  3: 'WARN',
-  4: 'INFO',
-  5: 'DEBUG',
-  6: 'TRACE',
-}
-
 const PRESET_LIMITS = [50, 100, 200, 500, 1000]
 const MIN_LIMIT = 1
 const MAX_LIMIT = 10000
@@ -57,13 +51,6 @@ interface LogConfig {
   timeRangeFrom?: string
   timeRangeTo?: string
   dataSource?: string
-}
-
-interface LogRow {
-  time: unknown
-  level: string
-  target: string
-  msg: string
 }
 
 function expandSearchFilter(search: string): string {
@@ -87,47 +74,46 @@ function expandSearchFilter(search: string): string {
   return `AND ${clauses.join(' AND ')}`
 }
 
-function formatLocalTime(utcTime: unknown): string {
-  if (!utcTime) return ''.padEnd(29)
-
-  const date = timestampToDate(utcTime)
-  if (!date) return ''.padEnd(29)
-
-  // Try to extract nanoseconds from string representation
-  let nanoseconds = '000000000'
-  const str = String(utcTime)
-  const nanoMatch = str.match(/\.(\d+)/)
-  if (nanoMatch) {
-    nanoseconds = nanoMatch[1].padEnd(9, '0').slice(0, 9)
-  }
-
-  const year = date.getFullYear()
-  const month = String(date.getMonth() + 1).padStart(2, '0')
-  const day = String(date.getDate()).padStart(2, '0')
-  const hours = String(date.getHours()).padStart(2, '0')
-  const minutes = String(date.getMinutes()).padStart(2, '0')
-  const seconds = String(date.getSeconds()).padStart(2, '0')
-
-  return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}.${nanoseconds}`
-}
-
-function getLevelColor(level: unknown): string {
-  const levelStr = String(level)
-  switch (levelStr) {
-    case 'FATAL':
-      return 'text-accent-error-bright'
-    case 'ERROR':
-      return 'text-accent-error'
-    case 'WARN':
-      return 'text-accent-warning'
-    case 'INFO':
-      return 'text-accent-link'
-    case 'DEBUG':
-      return 'text-theme-text-secondary'
-    case 'TRACE':
-      return 'text-theme-text-muted'
-    default:
-      return 'text-theme-text-primary'
+function renderLogColumn(col: LogColumn, row: Record<string, unknown>): React.ReactNode {
+  const value = row[col.name]
+  switch (col.kind) {
+    case 'time':
+      return (
+        <span className="text-theme-text-muted mr-3 w-[188px] min-w-[188px] whitespace-nowrap">
+          {formatLocalTime(value)}
+        </span>
+      )
+    case 'level': {
+      const levelStr = formatLevelValue(value)
+      return (
+        <span className={`w-[38px] min-w-[38px] mr-3 font-semibold ${getLevelColor(levelStr)}`}>
+          {levelStr}
+        </span>
+      )
+    }
+    case 'target': {
+      const targetStr = String(value ?? '')
+      return (
+        <span
+          className="text-accent-highlight mr-3 w-[200px] min-w-[200px] truncate"
+          title={targetStr}
+        >
+          {targetStr}
+        </span>
+      )
+    }
+    case 'msg':
+      return (
+        <span className="text-theme-text-primary flex-1 break-words">{String(value ?? '')}</span>
+      )
+    default: {
+      const formatted = formatCell(value, col.type)
+      return (
+        <span className="text-theme-text-secondary mr-3 truncate max-w-[200px]" title={formatted}>
+          {formatted}
+        </span>
+      )
+    }
   }
 }
 
@@ -273,7 +259,7 @@ export function LogRenderer({
   const [search, setSearch] = useState<string>(getInitialSearch)
   const [searchInputValue, setSearchInputValue] = useState<string>(getInitialSearch)
   const debouncedSearchInput = useDebounce(searchInputValue, 300)
-  const [rows, setRows] = useState<LogRow[]>([])
+  const [resultTable, setResultTable] = useState<Table | null>(null)
   const [hasLoaded, setHasLoaded] = useState(false)
 
   // Track if this is the initial mount to avoid URL updates on first render
@@ -373,34 +359,21 @@ export function LogRenderer({
   const streamQuery = useStreamQuery()
   const queryError = streamQuery.error?.message ?? null
 
-  // Extract rows when query completes
+  // Store result table when query completes
   useEffect(() => {
     if (streamQuery.isComplete && !streamQuery.error) {
-      const table = streamQuery.getTable()
-      if (table) {
-        const resultRows: LogRow[] = []
-        for (let i = 0; i < table.numRows; i++) {
-          const row = table.get(i)
-          if (row) {
-            const levelValue = row.level
-            const levelStr =
-              typeof levelValue === 'number' ? LEVEL_NAMES[levelValue] || 'UNKNOWN' : String(levelValue ?? '')
-            resultRows.push({
-              time: row.time,
-              level: levelStr,
-              target: String(row.target ?? ''),
-              msg: String(row.msg ?? ''),
-            })
-          }
-        }
-        setRows(resultRows)
-      } else {
-        setRows([])
-      }
+      setResultTable(streamQuery.getTable() ?? null)
       setHasLoaded(true)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [streamQuery.isComplete, streamQuery.error])
+
+  const columns = useMemo(() => {
+    if (!resultTable) return []
+    return classifyLogColumns(resultTable.schema.fields)
+  }, [resultTable])
+
+  const numRows = resultTable?.numRows ?? 0
 
   // Refs for query execution
   const currentSqlRef = useRef<string>(logConfig.sql)
@@ -626,7 +599,7 @@ export function LogRenderer({
       </div>
 
       <span className="ml-auto text-xs text-theme-text-muted self-center">
-        {streamQuery.isStreaming && rows.length === 0 ? 'Loading...' : `Showing ${rows.length} entries`}
+        {streamQuery.isStreaming && numRows === 0 ? 'Loading...' : `Showing ${numRows} entries`}
       </span>
     </div>
   )
@@ -637,32 +610,26 @@ export function LogRenderer({
       return <LoadingState message="Loading logs..." />
     }
 
-    if (rows.length === 0) {
+    if (numRows === 0) {
       return <EmptyState message="No log entries found" />
     }
 
     return (
       <div className="flex-1 overflow-auto bg-app-bg border border-theme-border rounded-lg font-mono text-xs">
-        {rows.map((row, index) => (
-          <div
-            key={index}
-            className="flex px-3 py-1 border-b border-app-panel hover:bg-app-panel/50 transition-colors"
-          >
-            <span className="text-theme-text-muted mr-3 w-[188px] min-w-[188px] whitespace-nowrap">
-              {formatLocalTime(row.time)}
-            </span>
-            <span className={`w-[38px] min-w-[38px] mr-3 font-semibold ${getLevelColor(row.level)}`}>
-              {String(row.level ?? '')}
-            </span>
-            <span
-              className="text-accent-highlight mr-3 w-[200px] min-w-[200px] truncate"
-              title={String(row.target ?? '')}
+        {Array.from({ length: numRows }, (_, rowIdx) => {
+          const row = resultTable!.get(rowIdx)
+          if (!row) return null
+          return (
+            <div
+              key={rowIdx}
+              className="flex px-3 py-1 border-b border-app-panel hover:bg-app-panel/50 transition-colors"
             >
-              {String(row.target ?? '')}
-            </span>
-            <span className="text-theme-text-primary flex-1 break-words">{String(row.msg ?? '')}</span>
-          </div>
-        ))}
+              {columns.map((col) => (
+                <React.Fragment key={col.name}>{renderLogColumn(col, row)}</React.Fragment>
+              ))}
+            </div>
+          )
+        })}
       </div>
     )
   }
