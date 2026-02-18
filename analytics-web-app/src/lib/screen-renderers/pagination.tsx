@@ -99,7 +99,7 @@ export function PaginationBar({ pagination }: PaginationBarProps) {
   const { currentPage, totalPages, totalRows, startRow, endRow, setPage, setPageSize, pageSize } =
     pagination
 
-  if (totalRows === 0) return null
+  if (totalRows === 0 || totalPages <= 1) return null
 
   const isFirst = currentPage === 0
   const isLast = currentPage >= totalPages - 1

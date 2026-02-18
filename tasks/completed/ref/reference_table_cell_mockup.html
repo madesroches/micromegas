@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Reference Table Cell — Mockup</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --app-bg: #0a0a0f;
+    --header-bg: #12121a;
+    --panel-bg: #12121a;
+    --card-bg: #1a1a2e;
+    --text-primary: #e7e9ea;
+    --text-secondary: #9ca3af;
+    --text-muted: #6b7280;
+    --border-color: #2a2a3e;
+    --border-hover: #3a3a4e;
+    --accent-link: #1565c0;
+    --accent-success: #22c55e;
+    --accent-highlight: #ffb300;
+    --accent-error: #f87171;
+    --selection-bg: rgba(21, 101, 192, 0.15);
+    --selection-border: #1565c0;
+    --error-bg: rgba(248, 113, 113, 0.1);
+  }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: var(--app-bg);
+    color: var(--text-primary);
+    padding: 32px;
+  }
+
+  h1 {
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    margin-bottom: 8px;
+  }
+  .subtitle {
+    font-size: 13px;
+    color: var(--text-muted);
+    margin-bottom: 32px;
+  }
+
+  .section-label {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+    margin-bottom: 12px;
+    margin-top: 40px;
+  }
+
+  /* ---- Cell Container ---- */
+  .cell {
+    background: var(--panel-bg);
+    border: 2px solid var(--border-color);
+    border-radius: 8px;
+    overflow: hidden;
+    margin-bottom: 16px;
+    max-width: 900px;
+  }
+  .cell.selected {
+    border-color: var(--selection-border);
+    background: var(--selection-bg);
+  }
+
+  /* ---- Cell Header ---- */
+  .cell-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border-color);
+    background: var(--card-bg);
+  }
+  .selected .cell-header {
+    background: var(--selection-bg);
+  }
+  .cell-header-left {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .cell-header-right {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .drag-handle {
+    color: var(--text-muted);
+    cursor: grab;
+    font-size: 14px;
+    line-height: 1;
+  }
+  .type-badge {
+    font-size: 11px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: var(--panel-bg);
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    font-weight: 500;
+  }
+  .cell-name {
+    font-weight: 500;
+    color: var(--text-primary);
+    font-size: 14px;
+  }
+  .status-text {
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+  .status-text.success {
+    color: var(--text-secondary);
+  }
+  .icon-btn {
+    width: 28px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 4px;
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 14px;
+  }
+  .icon-btn:hover {
+    background: var(--border-color);
+    color: var(--text-primary);
+  }
+
+  /* ---- Cell Body ---- */
+  .cell-body {
+    overflow: auto;
+  }
+
+  /* ---- Table ---- */
+  .data-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+  .data-table th {
+    padding: 8px 12px;
+    text-align: left;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+    cursor: pointer;
+    user-select: none;
+    transition: background 0.15s, color 0.15s;
+    border-bottom: 1px solid var(--border-color);
+  }
+  .data-table th:hover {
+    color: var(--text-secondary);
+    background: rgba(26, 26, 46, 0.5);
+  }
+  .data-table th.sorted {
+    color: var(--text-primary);
+    background: var(--card-bg);
+  }
+  .data-table td {
+    padding: 8px 12px;
+    color: var(--text-primary);
+    font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+    font-size: 13px;
+    border-bottom: 1px solid var(--border-color);
+    max-width: 300px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .data-table tr:hover {
+    background: rgba(26, 26, 46, 0.5);
+  }
+  .data-table tr:last-child td {
+    border-bottom: none;
+  }
+
+  /* ---- Editor Panel ---- */
+  .editor-panel {
+    background: var(--panel-bg);
+    border: 2px solid var(--selection-border);
+    border-radius: 8px;
+    overflow: hidden;
+    max-width: 900px;
+    margin-bottom: 16px;
+  }
+  .editor-panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border-color);
+    background: var(--card-bg);
+  }
+  .editor-body {
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .editor-label {
+    font-size: 11px;
+    font-weight: 500;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+    margin-bottom: 6px;
+  }
+  .csv-editor {
+    width: 100%;
+    min-height: 120px;
+    background: var(--card-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    color: var(--text-primary);
+    font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+    font-size: 13px;
+    line-height: 1.6;
+    padding: 12px;
+    resize: vertical;
+    outline: none;
+    transition: border-color 0.15s;
+  }
+  .csv-editor:focus {
+    border-color: var(--accent-link);
+  }
+
+  /* ---- Downstream SQL cell ---- */
+  .sql-display {
+    background: var(--card-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    padding: 12px;
+    font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+    font-size: 13px;
+    color: var(--text-primary);
+    line-height: 1.6;
+  }
+  .sql-keyword { color: #c792ea; }
+  .sql-string { color: #c3e88d; }
+  .sql-table { color: var(--accent-highlight); }
+  .sql-comment { color: var(--text-muted); font-style: italic; }
+
+  /* ---- Arrow connector ---- */
+  .connector {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 4px 0;
+    color: var(--text-muted);
+    font-size: 18px;
+  }
+
+  /* ---- Error state ---- */
+  .error-body {
+    padding: 12px 16px;
+    background: var(--error-bg);
+    border: 1px solid var(--accent-error);
+    border-radius: 6px;
+    margin: 12px;
+    color: var(--accent-error);
+    font-size: 13px;
+  }
+
+  /* SVG icons inline */
+  .icon { display: inline-block; vertical-align: middle; }
+</style>
+</head>
+<body>
+
+<h1>Reference Table Cell — Mockup</h1>
+<p class="subtitle">New notebook cell type for inline CSV data (issue #824)</p>
+
+<!-- ============================================================ -->
+<div class="section-label">Rendered State — cell displays parsed CSV as a table</div>
+<!-- ============================================================ -->
+
+<div class="cell">
+  <div class="cell-header">
+    <div class="cell-header-left">
+      <span class="drag-handle" title="Drag to reorder">⠿</span>
+      <span class="type-badge">R</span>
+      <span class="cell-name">status_codes</span>
+    </div>
+    <div class="cell-header-right">
+      <span class="status-text success">3 rows &middot; 1ms</span>
+      <button class="icon-btn" title="Run cell">&#9654;</button>
+      <button class="icon-btn" title="More options">&#8942;</button>
+    </div>
+  </div>
+  <div class="cell-body">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>code</th>
+          <th>label</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td>200</td><td>OK</td></tr>
+        <tr><td>404</td><td>Not Found</td></tr>
+        <tr><td>500</td><td>Internal Server Error</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<div class="section-label">Editing State — CSV editor panel open</div>
+<!-- ============================================================ -->
+
+<div class="cell selected">
+  <div class="cell-header">
+    <div class="cell-header-left">
+      <span class="drag-handle">⠿</span>
+      <span class="type-badge">R</span>
+      <span class="cell-name">status_codes</span>
+    </div>
+    <div class="cell-header-right">
+      <span class="status-text success">3 rows &middot; 1ms</span>
+      <button class="icon-btn" title="Run cell">&#9654;</button>
+      <button class="icon-btn" title="More options">&#8942;</button>
+    </div>
+  </div>
+  <div class="cell-body">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>code</th>
+          <th>label</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td>200</td><td>OK</td></tr>
+        <tr><td>404</td><td>Not Found</td></tr>
+        <tr><td>500</td><td>Internal Server Error</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="editor-panel">
+  <div class="editor-body">
+    <div>
+      <div class="editor-label">CSV Data</div>
+      <textarea class="csv-editor" spellcheck="false">code,label
+200,OK
+404,Not Found
+500,Internal Server Error</textarea>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<div class="section-label">Downstream usage — SQL cell joins with reference table</div>
+<!-- ============================================================ -->
+
+<div class="connector">&#8595;</div>
+
+<div class="cell">
+  <div class="cell-header">
+    <div class="cell-header-left">
+      <span class="drag-handle">⠿</span>
+      <span class="type-badge">T</span>
+      <span class="cell-name">enriched_logs</span>
+    </div>
+    <div class="cell-header-right">
+      <span class="status-text success">42 rows &middot; 238ms</span>
+      <button class="icon-btn" title="Run cell">&#9654;</button>
+      <button class="icon-btn" title="More options">&#8942;</button>
+    </div>
+  </div>
+  <div class="cell-body" style="padding: 12px;">
+    <div class="sql-display"><span class="sql-keyword">SELECT</span> l.time, l.url, s.label <span class="sql-keyword">AS</span> status
+<span class="sql-keyword">FROM</span> log_entries l
+<span class="sql-keyword">JOIN</span> <span class="sql-table">status_codes</span> s <span class="sql-keyword">ON</span> l.status_code = s.code  <span class="sql-comment">-- joins with reference table</span>
+<span class="sql-keyword">ORDER BY</span> l.time <span class="sql-keyword">DESC</span>
+<span class="sql-keyword">LIMIT</span> 100</div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<div class="section-label">Error State — invalid CSV</div>
+<!-- ============================================================ -->
+
+<div class="cell">
+  <div class="cell-header">
+    <div class="cell-header-left">
+      <span class="drag-handle">⠿</span>
+      <span class="type-badge">R</span>
+      <span class="cell-name">bad_data</span>
+    </div>
+    <div class="cell-header-right">
+      <span class="status-text" style="color: var(--accent-error);">error</span>
+      <button class="icon-btn" title="Run cell">&#9654;</button>
+      <button class="icon-btn" title="More options">&#8942;</button>
+    </div>
+  </div>
+  <div class="cell-body">
+    <div class="error-body">CSV must have at least a header row and one data row</div>
+  </div>
+</div>
+
+</body>
+</html>

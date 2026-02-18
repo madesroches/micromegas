@@ -58,6 +58,7 @@ export interface CellExecutionContext {
   variables: Record<string, VariableValue>
   timeRange: { begin: string; end: string }
   runQuery: (sql: string) => Promise<Table>
+  registerTable?: (ipcBytes: Uint8Array) => void
 }
 
 /**
@@ -147,6 +148,7 @@ import { variableMetadata } from './cells/VariableCell'
 import { propertyTimelineMetadata } from './cells/PropertyTimelineCell'
 import { swimlaneMetadata } from './cells/SwimlaneCell'
 import { perfettoExportMetadata } from './cells/PerfettoExportCell'
+import { referenceTableMetadata } from './cells/ReferenceTableCell'
 
 /**
  * Registry of all cell type metadata.
@@ -161,6 +163,7 @@ export const CELL_TYPE_METADATA: Record<CellType, CellTypeMetadata> = {
   propertytimeline: propertyTimelineMetadata,
   swimlane: swimlaneMetadata,
   perfettoexport: perfettoExportMetadata,
+  referencetable: referenceTableMetadata,
 }
 
 /**
