@@ -11,53 +11,11 @@ import { DocumentationLink, QUERY_GUIDE_URL } from '@/components/DocumentationLi
 import { SyntaxEditor } from '@/components/SyntaxEditor'
 import { substituteMacros, DEFAULT_SQL } from '../notebook-utils'
 import { usePagination, PaginationBar, DEFAULT_PAGE_SIZE } from '../pagination'
-import { formatCell } from '../table-utils'
-import { classifyLogColumns, formatLocalTime, formatLevelValue, getLevelColor } from '../log-utils'
-import type { LogColumn } from '../log-utils'
+import { classifyLogColumns, renderLogColumn } from '../log-utils'
 
 // =============================================================================
 // Renderer Component
 // =============================================================================
-
-function renderLogColumn(col: LogColumn, row: Record<string, unknown>): React.ReactNode {
-  const value = row[col.name]
-  switch (col.kind) {
-    case 'time':
-      return (
-        <span className="text-theme-text-muted mr-3 w-[188px] min-w-[188px] whitespace-nowrap">
-          {formatLocalTime(value)}
-        </span>
-      )
-    case 'level': {
-      const levelStr = formatLevelValue(value)
-      return (
-        <span className={`w-[38px] min-w-[38px] mr-3 font-semibold ${getLevelColor(levelStr)}`}>
-          {levelStr}
-        </span>
-      )
-    }
-    case 'target': {
-      const targetStr = String(value ?? '')
-      return (
-        <span className="text-accent-highlight mr-3 w-[200px] min-w-[200px] truncate" title={targetStr}>
-          {targetStr}
-        </span>
-      )
-    }
-    case 'msg':
-      return (
-        <span className="text-theme-text-primary flex-1 break-words">{String(value ?? '')}</span>
-      )
-    default: {
-      const formatted = formatCell(value, col.type)
-      return (
-        <span className="text-theme-text-secondary mr-3 truncate max-w-[200px]" title={formatted}>
-          {formatted}
-        </span>
-      )
-    }
-  }
-}
 
 export function LogCell({ data, status, options, onOptionsChange }: CellRendererProps) {
   const columns = useMemo(() => {

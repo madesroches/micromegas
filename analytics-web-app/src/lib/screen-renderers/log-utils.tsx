@@ -2,8 +2,10 @@
  * Shared utilities for log rendering (LogRenderer and LogCell)
  */
 
+import React from 'react'
 import type { Field } from 'apache-arrow'
 import { timestampToDate } from '@/lib/arrow-utils'
+import { formatCell } from './table-utils'
 
 // =============================================================================
 // Constants
@@ -98,4 +100,51 @@ export function classifyLogColumns(fields: Field[]): LogColumn[] {
     kind: knownSet.has(field.name) ? (field.name as KnownColumnName) : 'generic',
     type: field.type,
   }))
+}
+
+// =============================================================================
+// Rendering
+// =============================================================================
+
+export function renderLogColumn(col: LogColumn, row: Record<string, unknown>): React.ReactNode {
+  const value = row[col.name]
+  switch (col.kind) {
+    case 'time':
+      return (
+        <span className="text-theme-text-muted mr-3 w-[188px] min-w-[188px] whitespace-nowrap">
+          {formatLocalTime(value)}
+        </span>
+      )
+    case 'level': {
+      const levelStr = formatLevelValue(value)
+      return (
+        <span className={`w-[38px] min-w-[38px] mr-3 font-semibold ${getLevelColor(levelStr)}`}>
+          {levelStr}
+        </span>
+      )
+    }
+    case 'target': {
+      const targetStr = String(value ?? '')
+      return (
+        <span
+          className="text-accent-highlight mr-3 w-[200px] min-w-[200px] truncate"
+          title={targetStr}
+        >
+          {targetStr}
+        </span>
+      )
+    }
+    case 'msg':
+      return (
+        <span className="text-theme-text-primary flex-1 break-words">{String(value ?? '')}</span>
+      )
+    default: {
+      const formatted = formatCell(value, col.type)
+      return (
+        <span className="text-theme-text-secondary mr-3 truncate max-w-[200px]" title={formatted}>
+          {formatted}
+        </span>
+      )
+    }
+  }
 }
