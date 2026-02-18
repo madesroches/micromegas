@@ -35,7 +35,6 @@ export function MetricsRenderer({
   config,
   onConfigChange,
   savedConfig,
-  timeRange,
   rawTimeRange,
   onTimeRangeChange,
   timeRangeLabel,
@@ -67,7 +66,7 @@ export function MetricsRenderer({
   // Query execution
   const query = useScreenQuery({
     initialSql: metricsConfig.sql,
-    timeRange,
+    rawTimeRange,
     refreshTrigger,
     dataSource: effectiveDataSource,
   })

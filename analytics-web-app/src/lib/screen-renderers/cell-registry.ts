@@ -15,8 +15,8 @@ export interface CellRendererProps {
   sql?: string
   /** Cell-specific options (e.g., chart options) */
   options?: Record<string, unknown>
-  /** Query result data */
-  data: Table | null
+  /** Query result data (one table per query; empty array = no data) */
+  data: Table[]
   /** Current execution status */
   status: CellStatus
   /** Error message if status is 'error' */
@@ -58,6 +58,7 @@ export interface CellExecutionContext {
   variables: Record<string, VariableValue>
   timeRange: { begin: string; end: string }
   runQuery: (sql: string) => Promise<Table>
+  runQueryAs?: (sql: string, tableName: string, dataSource?: string) => Promise<Table>
   registerTable?: (ipcBytes: Uint8Array) => void
 }
 
@@ -74,6 +75,8 @@ export interface CellEditorProps {
   availableColumns?: string[]
   /** Names of datasource-type variables available above this cell */
   datasourceVariables?: string[]
+  /** The global default data source name (fallback when cell has none) */
+  defaultDataSource?: string
 }
 
 /**

@@ -10,7 +10,7 @@ import { QueryEditor } from '@/components/QueryEditor'
 import { DataSourceField } from '@/components/DataSourceSelector'
 import { AppLink } from '@/components/AppLink'
 import { CopyableProcessId } from '@/components/CopyableProcessId'
-import { formatTimestamp, formatDurationMs } from '@/lib/time-range'
+import { formatTimestamp, formatDurationMs, getTimeRangeForApi } from '@/lib/time-range'
 import { timestampToDate, isTimeType, isDurationType, durationToMs } from '@/lib/arrow-utils'
 import { useChangeEffect } from '@/hooks/useChangeEffect'
 import { useStreamQuery } from '@/hooks/useStreamQuery'
@@ -85,7 +85,6 @@ export function ProcessListRenderer({
   config,
   onConfigChange,
   savedConfig,
-  timeRange,
   rawTimeRange,
   timeRangeLabel,
   currentValues,
@@ -125,6 +124,7 @@ export function ProcessListRenderer({
     (sql: string) => {
       currentSqlRef.current = sql
 
+      const timeRange = getTimeRangeForApi(rawTimeRange.from, rawTimeRange.to)
       executeRef.current({
         sql,
         params: {
@@ -137,7 +137,7 @@ export function ProcessListRenderer({
         dataSource: effectiveDataSource,
       })
     },
-    [timeRange, orderByValue, effectiveDataSource]
+    [rawTimeRange, orderByValue, effectiveDataSource]
   )
 
   // Initial query execution
@@ -150,20 +150,16 @@ export function ProcessListRenderer({
   }, [executeQuery, processListConfig.sql, effectiveDataSource])
 
   // Re-execute on time range change
-  const prevTimeRangeRef = useRef<{ begin: string; end: string } | null>(null)
+  const prevTimeRangeRef = useRef(rawTimeRange)
   useEffect(() => {
-    if (prevTimeRangeRef.current === null) {
-      prevTimeRangeRef.current = { begin: timeRange.begin, end: timeRange.end }
-      return
-    }
     if (
-      prevTimeRangeRef.current.begin !== timeRange.begin ||
-      prevTimeRangeRef.current.end !== timeRange.end
+      prevTimeRangeRef.current.from !== rawTimeRange.from ||
+      prevTimeRangeRef.current.to !== rawTimeRange.to
     ) {
-      prevTimeRangeRef.current = { begin: timeRange.begin, end: timeRange.end }
+      prevTimeRangeRef.current = rawTimeRange
       executeQuery(currentSqlRef.current)
     }
-  }, [timeRange, executeQuery])
+  }, [rawTimeRange, executeQuery])
 
   // Re-execute on refresh trigger
   const prevRefreshTriggerRef = useRef(refreshTrigger)
@@ -286,8 +282,8 @@ export function ProcessListRenderer({
           return <span className="text-theme-text-primary">{String(value ?? '')}</span>
         }
         // Use process times if available, otherwise fall back to screen's time range
-        const linkFrom = fromParam || timeRange.begin
-        const linkTo = toParam || timeRange.end
+        const linkFrom = fromParam || rawTimeRange.from
+        const linkTo = toParam || rawTimeRange.to
         return (
           <AppLink
             href={`/process?process_id=${processId}&from=${encodeURIComponent(linkFrom)}&to=${encodeURIComponent(linkTo)}`}
@@ -332,7 +328,7 @@ export function ProcessListRenderer({
       // Default rendering
       return <span className="text-theme-text-primary">{String(value ?? '')}</span>
     },
-    [timeRange.begin, timeRange.end]
+    [rawTimeRange.from, rawTimeRange.to]
   )
 
   // Render content

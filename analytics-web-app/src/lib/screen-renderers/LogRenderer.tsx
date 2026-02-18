@@ -16,6 +16,7 @@ import {
   DEFAULT_LOG_LEVEL,
   DEFAULT_LOG_LIMIT,
 } from '@/lib/screen-defaults'
+import { getTimeRangeForApi } from '@/lib/time-range'
 import { classifyLogColumns, renderLogColumn } from './log-utils'
 
 // Variables available for log queries
@@ -155,7 +156,6 @@ export function LogRenderer({
   config,
   onConfigChange,
   savedConfig,
-  timeRange,
   rawTimeRange,
   timeRangeLabel,
   currentValues,
@@ -348,6 +348,7 @@ export function LogRenderer({
       lastQueryFiltersRef.current = { logLevel, logLimit, search }
       const sqlWithSearch = sql.replace('$search_filter', expandSearchFilter(search))
 
+      const timeRange = getTimeRangeForApi(rawTimeRange.from, rawTimeRange.to)
       executeRef.current({
         sql: sqlWithSearch,
         params: {
@@ -361,7 +362,7 @@ export function LogRenderer({
         dataSource: effectiveDataSource,
       })
     },
-    [timeRange, logLevel, logLimit, search, effectiveDataSource]
+    [rawTimeRange, logLevel, logLimit, search, effectiveDataSource]
   )
 
   // Initial query execution
@@ -374,20 +375,16 @@ export function LogRenderer({
   }, [effectiveDataSource]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Re-execute on time range change
-  const prevTimeRangeRef = useRef<{ begin: string; end: string } | null>(null)
+  const prevTimeRangeRef = useRef(rawTimeRange)
   useEffect(() => {
-    if (prevTimeRangeRef.current === null) {
-      prevTimeRangeRef.current = { begin: timeRange.begin, end: timeRange.end }
-      return
-    }
     if (
-      prevTimeRangeRef.current.begin !== timeRange.begin ||
-      prevTimeRangeRef.current.end !== timeRange.end
+      prevTimeRangeRef.current.from !== rawTimeRange.from ||
+      prevTimeRangeRef.current.to !== rawTimeRange.to
     ) {
-      prevTimeRangeRef.current = { begin: timeRange.begin, end: timeRange.end }
+      prevTimeRangeRef.current = rawTimeRange
       loadData(currentSqlRef.current)
     }
-  }, [timeRange, loadData])
+  }, [rawTimeRange, loadData])
 
   // Re-execute on refresh trigger
   const prevRefreshTriggerRef = useRef(refreshTrigger)

@@ -69,6 +69,7 @@ export function PropertyTimelineCell({
   timeRange,
   onTimeRangeSelect,
 }: CellRendererProps) {
+  const table = data[0]
   // Convert ISO time range to milliseconds
   const timeRangeMs = useMemo(() => ({
     begin: new Date(timeRange.begin).getTime(),
@@ -83,11 +84,11 @@ export function PropertyTimelineCell({
 
   // Transform data to property timelines
   const { timelines, availableKeys, errors } = useMemo(() => {
-    if (!data || data.numRows === 0) {
+    if (!table || table.numRows === 0) {
       return { timelines: [], availableKeys: [], errors: [] }
     }
-    return transformToPropertyTimelines(data, selectedKeys, timeRangeMs)
-  }, [data, selectedKeys, timeRangeMs])
+    return transformToPropertyTimelines(table, selectedKeys, timeRangeMs)
+  }, [table, selectedKeys, timeRangeMs])
 
   const handleAddProperty = useCallback(
     (key: string) => {
@@ -112,7 +113,7 @@ export function PropertyTimelineCell({
     )
   }
 
-  if (!data || data.numRows === 0) {
+  if (!table || table.numRows === 0) {
     return (
       <div className="flex items-center justify-center h-[200px] text-theme-text-muted text-sm">
         No data available
@@ -204,7 +205,7 @@ export const propertyTimelineMetadata: CellTypeMetadata = {
   execute: async (config: CellConfig, { variables, timeRange, runQuery }: CellExecutionContext) => {
     const sql = substituteMacros((config as QueryCellConfig).sql, variables, timeRange)
     const data = await runQuery(sql)
-    return { data }
+    return { data: [data] }
   },
 
   getRendererProps: (config: CellConfig, state: CellState) => ({

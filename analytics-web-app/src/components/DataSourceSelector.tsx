@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Database, AlertCircle } from 'lucide-react'
 import { getDataSourceList, DataSourceSummary } from '@/lib/data-sources-api'
 
@@ -58,6 +58,27 @@ export function DataSourceSelector({ value, onChange, datasourceVariables, showN
   }, [])
 
   const hasVariables = datasourceVariables && datasourceVariables.length > 0
+
+  // Keep a ref to onChange so the sync effect always calls the latest callback
+  const onChangeRef = useRef(onChange)
+  onChangeRef.current = onChange
+
+  // Build the flat list of option values so we can detect mismatches
+  const optionValues: string[] = []
+  if (showNotebookOption) optionValues.push('notebook')
+  if (hasVariables) {
+    for (const name of datasourceVariables) optionValues.push(`$${name}`)
+  }
+  for (const s of sources) optionValues.push(s.name)
+  const optionValuesKey = optionValues.join('\0')
+
+  // If the current value doesn't match any option, the <select> silently shows
+  // the first option without firing onChange. Sync the config to match.
+  useEffect(() => {
+    if (optionValues.length > 0 && !optionValues.includes(value)) {
+      onChangeRef.current(optionValues[0])
+    }
+  }, [value, optionValuesKey]) // eslint-disable-line react-hooks/exhaustive-deps
 
   if (error) {
     return (

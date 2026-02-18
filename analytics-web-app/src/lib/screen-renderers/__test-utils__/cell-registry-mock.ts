@@ -82,7 +82,7 @@ const BASE_METADATA = {
 type CellType = keyof typeof BASE_METADATA
 
 /** Simple execute stub that just returns success */
-const simpleExecuteStub = () => Promise.resolve({ data: null })
+const simpleExecuteStub = () => Promise.resolve({ data: [] })
 
 /** Execute implementation that performs SQL substitution (for useCellExecution tests) */
 const createSqlExecute = () => {
@@ -99,11 +99,11 @@ const createSqlExecute = () => {
     }
   ) => {
     if (!config.sql) {
-      return { data: null }
+      return { data: [] }
     }
     const sql = substituteMacros(config.sql, variables, timeRange)
     const data = await runQuery(sql)
-    return { data }
+    return { data: [data] }
   }
 }
 
@@ -126,7 +126,7 @@ const createVariableExecute = () => {
     }
     const sql = substituteMacros(config.sql, variables, timeRange)
     const data = await runQuery(sql)
-    return { data, variableOptions: [{ label: 'Option 1', value: 'val0' }] }
+    return { data: [data], variableOptions: [{ label: 'Option 1', value: 'val0' }] }
   }
 }
 

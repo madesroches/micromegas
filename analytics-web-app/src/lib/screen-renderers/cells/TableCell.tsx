@@ -26,6 +26,8 @@ import { usePagination, PaginationBar, DEFAULT_PAGE_SIZE } from '../pagination'
 // =============================================================================
 
 export function TableCell({ data, status, options, onOptionsChange, variables }: CellRendererProps) {
+  const table = data[0]
+
   // Extract overrides from options
   const overrides = (options?.overrides as ColumnOverride[] | undefined) || []
 
@@ -48,7 +50,7 @@ export function TableCell({ data, status, options, onOptionsChange, variables }:
     (size: number) => onOptionsChange({ ...options, pageSize: size }),
     [options, onOptionsChange],
   )
-  const pagination = usePagination(data?.numRows ?? 0, pageSize, handlePageSizeChange)
+  const pagination = usePagination(table?.numRows ?? 0, pageSize, handlePageSizeChange)
 
   if (status === 'loading') {
     return (
@@ -59,13 +61,13 @@ export function TableCell({ data, status, options, onOptionsChange, variables }:
     )
   }
 
-  if (!data || data.numRows === 0) {
+  if (!table || table.numRows === 0) {
     return (
       <div className="text-center py-8 text-theme-text-muted text-sm">No data available</div>
     )
   }
 
-  const allColumns = data.schema.fields.map((field) => ({
+  const allColumns = table.schema.fields.map((field) => ({
     name: field.name,
     type: field.type,
   }))
@@ -75,7 +77,7 @@ export function TableCell({ data, status, options, onOptionsChange, variables }:
   // Slice data for current page
   const slicedData = {
     numRows: pagination.endRow - pagination.startRow,
-    get: (index: number) => data.get(pagination.startRow + index),
+    get: (index: number) => table.get(pagination.startRow + index),
   }
 
   return (
@@ -219,7 +221,7 @@ export const tableMetadata: CellTypeMetadata = {
     sql = sql.replace(/\$order_by/g, orderByValue)
 
     const data = await runQuery(sql)
-    return { data }
+    return { data: [data] }
   },
 
   getRendererProps: (config: CellConfig, state: CellState) => ({

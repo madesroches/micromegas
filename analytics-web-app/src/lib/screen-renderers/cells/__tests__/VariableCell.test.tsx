@@ -25,7 +25,7 @@ const createMockProps = (overrides: Partial<CellRendererProps> = {}): CellRender
   name: 'test-variable',
   sql: undefined,
   options: undefined,
-  data: null,
+  data: [],
   status: 'success',
   error: undefined,
   timeRange: { begin: '2024-01-01', end: '2024-01-02' },
@@ -249,7 +249,7 @@ describe('VariableTitleBarContent', () => {
         runQuery: jest.fn(),
       })
       // 86400000 / 1920 = 45000 -> snaps to 30s
-      expect(result).toEqual({ data: null, expressionResult: '30s' })
+      expect(result).toEqual({ data: [], expressionResult: '30s' })
     })
 
     it('should return null when expression is empty', async () => {
@@ -284,7 +284,7 @@ describe('VariableTitleBarContent', () => {
         timeRange: { begin: '2024-01-01T00:00:00Z', end: '2024-01-02T00:00:00Z' },
         runQuery: jest.fn(),
       })
-      expect(result).toEqual({ data: null, expressionResult: 'hello' })
+      expect(result).toEqual({ data: [], expressionResult: 'hello' })
     })
   })
 
@@ -297,7 +297,7 @@ describe('VariableTitleBarContent', () => {
         variableType: 'expression',
         layout: { height: 0 },
       }
-      const state: CellState = { status: 'success', data: null, expressionResult: '30s' }
+      const state: CellState = { status: 'success', data: [], expressionResult: '30s' }
       variableMetadata.onExecutionComplete!(config, state, {
         setVariableValue,
         currentValue: undefined,
@@ -313,7 +313,7 @@ describe('VariableTitleBarContent', () => {
         variableType: 'expression',
         layout: { height: 0 },
       }
-      const state: CellState = { status: 'success', data: null }
+      const state: CellState = { status: 'success', data: [] }
       variableMetadata.onExecutionComplete!(config, state, {
         setVariableValue,
         currentValue: undefined,
@@ -432,7 +432,7 @@ describe('VariableTitleBarContent', () => {
       })
 
       expect(result).toEqual({
-        data: null,
+        data: [],
         variableOptions: [
           { label: 'production', value: 'production' },
           { label: 'staging (default)', value: 'staging' },
@@ -455,7 +455,7 @@ describe('VariableTitleBarContent', () => {
         runQuery: jest.fn(),
       })
 
-      expect(result).toEqual({ data: null, variableOptions: [] })
+      expect(result).toEqual({ data: [], variableOptions: [] })
     })
 
     it('should mark default data source in label', async () => {
@@ -492,7 +492,7 @@ describe('VariableTitleBarContent', () => {
       }
       const state: CellState = {
         status: 'success',
-        data: null,
+        data: [],
         variableOptions: [
           { label: 'production', value: 'production' },
           { label: 'staging', value: 'staging' },
@@ -515,7 +515,7 @@ describe('VariableTitleBarContent', () => {
       }
       const state: CellState = {
         status: 'success',
-        data: null,
+        data: [],
         variableOptions: [
           { label: 'production', value: 'production' },
           { label: 'staging', value: 'staging' },
@@ -538,7 +538,7 @@ describe('VariableTitleBarContent', () => {
       }
       const state: CellState = {
         status: 'success',
-        data: null,
+        data: [],
         variableOptions: [
           { label: 'production', value: 'production' },
           { label: 'staging', value: 'staging' },

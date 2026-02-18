@@ -24,7 +24,7 @@ const createMockProps = (overrides: Partial<CellRendererProps> = {}): CellRender
     processIdVar: '$process_id',
     spanType: 'both',
   },
-  data: null,
+  data: [],
   status: 'success',
   error: undefined,
   timeRange: { begin: '2024-01-01T00:00:00Z', end: '2024-01-02T00:00:00Z' },
@@ -383,7 +383,7 @@ describe('perfettoExportMetadata', () => {
         processIdVar: '$my_var',
         spanType: 'thread' as const,
       }
-      const state = { status: 'success' as const, data: null }
+      const state = { status: 'success' as const, data: [] as import('apache-arrow').Table[] }
 
       const props = perfettoExportMetadata.getRendererProps(config, state)
 
@@ -402,7 +402,7 @@ describe('perfettoExportMetadata', () => {
         type: 'perfettoexport' as const,
         layout: { height: 80 },
       }
-      const state = { status: 'idle' as const, data: null }
+      const state = { status: 'idle' as const, data: [] as import('apache-arrow').Table[] }
 
       const props = perfettoExportMetadata.getRendererProps(config, state)
 

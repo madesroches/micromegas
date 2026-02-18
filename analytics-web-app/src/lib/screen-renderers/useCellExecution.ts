@@ -3,6 +3,7 @@ import { Table, tableFromIPC } from 'apache-arrow'
 import type { CellConfig, CellState, VariableValue } from './notebook-types'
 import { getCellTypeMetadata, CellExecutionContext } from './cell-registry'
 import { streamQuery, fetchQueryIPC } from '@/lib/arrow-stream'
+import { getTimeRangeForApi } from '@/lib/time-range'
 import { resolveCellDataSource } from './notebook-utils'
 
 /** Minimal interface for the WASM query engine (decoupled from WASM module type) */
@@ -16,8 +17,8 @@ export interface NotebookQueryEngine {
 interface UseCellExecutionParams {
   /** Cell configurations from notebook config */
   cells: CellConfig[]
-  /** Time range for SQL queries */
-  timeRange: { begin: string; end: string }
+  /** Raw time range (relative strings like "now-1h") resolved fresh at execution time */
+  rawTimeRange: { from: string; to: string }
   /** Ref for synchronous access to variable values during execution */
   variableValuesRef: React.MutableRefObject<Record<string, VariableValue>>
   /** Callback to set a variable value (for auto-selecting first option) */
@@ -87,7 +88,7 @@ async function executeSql(
  */
 export function useCellExecution({
   cells,
-  timeRange,
+  rawTimeRange,
   variableValuesRef,
   setVariableValue,
   refreshTrigger,
@@ -109,7 +110,7 @@ export function useCellExecution({
       if (!meta.execute) {
         setCellStates((prev) => ({
           ...prev,
-          [cell.name]: { status: 'success', data: null },
+          [cell.name]: { status: 'success', data: [] },
         }))
         return true
       }
@@ -117,10 +118,13 @@ export function useCellExecution({
       // Mark cell as loading
       setCellStates((prev) => ({
         ...prev,
-        [cell.name]: { ...prev[cell.name], status: 'loading', error: undefined, data: null, fetchProgress: undefined },
+        [cell.name]: { ...prev[cell.name], status: 'loading', error: undefined, data: [], fetchProgress: undefined },
       }))
 
       const startTime = performance.now()
+
+      // Resolve relative time range to absolute times fresh at execution time
+      const timeRange = getTimeRangeForApi(rawTimeRange.from, rawTimeRange.to)
 
       // Gather variables from cells above (use ref for synchronous access during execution)
       const availableVariables: Record<string, VariableValue> = {}
@@ -176,6 +180,42 @@ export function useCellExecution({
               return executeSql(sql, timeRange, abortControllerRef.current!.signal, cellDataSource)
             }
           },
+          runQueryAs: async (sql, tableName, queryDataSource) => {
+            // Resolve per-query data source independently (not from cellDataSource).
+            // Variable references ($varname) are substituted, fallback is notebook-level default.
+            let resolvedDs = queryDataSource || dataSource
+            if (resolvedDs?.startsWith('$')) {
+              const varValue = availableVariables[resolvedDs.slice(1)]
+              resolvedDs = (typeof varValue === 'string' && varValue) ? varValue : dataSource
+            }
+            const isLocal = resolvedDs === 'notebook'
+            if (isLocal) {
+              if (!engine) throw new Error('WASM engine not loaded')
+              const ipcBytes = await engine.execute_and_register(sql, tableName)
+              return tableFromIPC(ipcBytes)
+            } else if (engine) {
+              const ipcBytes = await fetchQueryIPC(
+                {
+                  sql,
+                  params: { begin: timeRange.begin, end: timeRange.end },
+                  begin: timeRange.begin,
+                  end: timeRange.end,
+                  dataSource: resolvedDs,
+                },
+                abortControllerRef.current!.signal,
+                (progress) => {
+                  setCellStates((prev) => ({
+                    ...prev,
+                    [cell.name]: { ...prev[cell.name], fetchProgress: progress },
+                  }))
+                },
+              )
+              engine.register_table(tableName, ipcBytes)
+              return tableFromIPC(ipcBytes)
+            } else {
+              return executeSql(sql, timeRange, abortControllerRef.current!.signal, resolvedDs)
+            }
+          },
         }
 
         // Delegate to cell's execute method
@@ -184,8 +224,8 @@ export function useCellExecution({
         // If result is null, nothing was executed (e.g., text variables)
         const elapsedMs = performance.now() - startTime
         const newState: CellState = result
-          ? { status: 'success', data: result.data ?? null, ...result, elapsedMs }
-          : { status: 'success', data: null }
+          ? { status: 'success', data: result.data ?? [], ...result, elapsedMs }
+          : { status: 'success', data: [] }
 
         setCellStates((prev) => ({ ...prev, [cell.name]: newState }))
 
@@ -205,12 +245,12 @@ export function useCellExecution({
         const errorMessage = err instanceof Error ? err.message : String(err)
         setCellStates((prev) => ({
           ...prev,
-          [cell.name]: { status: 'error', error: errorMessage, data: null },
+          [cell.name]: { status: 'error', error: errorMessage, data: [] },
         }))
         return false
       }
     },
-    [cells, timeRange, variableValuesRef, setVariableValue, dataSource, engine]
+    [cells, rawTimeRange, variableValuesRef, setVariableValue, dataSource, engine]
   )
 
   // Execute from a cell index (that cell and all below)
@@ -230,7 +270,7 @@ export function useCellExecution({
             if (blockedMeta.canBlockDownstream) {
               setCellStates((prev) => ({
                 ...prev,
-                [blockedCell.name]: { status: 'blocked', data: null },
+                [blockedCell.name]: { status: 'blocked', data: [] },
               }))
             }
           }
@@ -260,16 +300,16 @@ export function useCellExecution({
   }, [refreshTrigger, executeFromCell])
 
   // Re-execute when time range changes
-  const prevTimeRangeRef = useRef(timeRange)
+  const prevTimeRangeRef = useRef(rawTimeRange)
   useEffect(() => {
     if (
-      prevTimeRangeRef.current.begin !== timeRange.begin ||
-      prevTimeRangeRef.current.end !== timeRange.end
+      prevTimeRangeRef.current.from !== rawTimeRange.from ||
+      prevTimeRangeRef.current.to !== rawTimeRange.to
     ) {
-      prevTimeRangeRef.current = timeRange
+      prevTimeRangeRef.current = rawTimeRange
       executeFromCell(0)
     }
-  }, [timeRange, executeFromCell])
+  }, [rawTimeRange, executeFromCell])
 
   // Re-execute all cells when WASM engine becomes available
   // (initial execution may have run before the engine loaded,

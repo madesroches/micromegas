@@ -18,12 +18,14 @@ import { classifyLogColumns, renderLogColumn } from '../log-utils'
 // =============================================================================
 
 export function LogCell({ data, status, options, onOptionsChange }: CellRendererProps) {
-  const columns = useMemo(() => {
-    if (!data) return []
-    return classifyLogColumns(data.schema.fields)
-  }, [data])
+  const table = data[0]
 
-  const numRows = data?.numRows ?? 0
+  const columns = useMemo(() => {
+    if (!table) return []
+    return classifyLogColumns(table.schema.fields)
+  }, [table])
+
+  const numRows = table?.numRows ?? 0
 
   // Pagination
   const pageSize = (options?.pageSize as number | undefined) ?? DEFAULT_PAGE_SIZE
@@ -53,7 +55,7 @@ export function LogCell({ data, status, options, onOptionsChange }: CellRenderer
       <div className="flex-1 overflow-auto min-h-0">
         {Array.from({ length: pagination.endRow - pagination.startRow }, (_, i) => {
           const rowIdx = pagination.startRow + i
-          const row = data!.get(rowIdx)
+          const row = table!.get(rowIdx)
           if (!row) return null
           return (
             <div
@@ -124,7 +126,7 @@ export const logMetadata: CellTypeMetadata = {
   execute: async (config: CellConfig, { variables, timeRange, runQuery }: CellExecutionContext) => {
     const sql = substituteMacros((config as QueryCellConfig).sql, variables, timeRange)
     const data = await runQuery(sql)
-    return { data }
+    return { data: [data] }
   },
 
   getRendererProps: (config: CellConfig, state: CellState) => ({

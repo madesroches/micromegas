@@ -10,6 +10,7 @@ import { DataSourceField } from '@/components/DataSourceSelector'
 import { TableBody, type TableColumn } from './table-utils'
 import { fetchQueryIPC, type FetchProgress } from '../arrow-stream'
 import { loadWasmEngine } from '../wasm-engine'
+import { getTimeRangeForApi } from '@/lib/time-range'
 
 interface LocalQueryConfig {
   timeRangeFrom?: string
@@ -31,7 +32,6 @@ type WasmQueryEngine = {
 export function LocalQueryRenderer({
   config,
   onConfigChange,
-  timeRange,
   rawTimeRange,
   timeRangeLabel,
   onSave,
@@ -122,6 +122,7 @@ export function LocalQueryRenderer({
     setLocalError(null)
     setLocalElapsedMs(null)
     try {
+      const timeRange = getTimeRangeForApi(rawTimeRange.from, rawTimeRange.to)
       const ipcBytes = await fetchQueryIPC(
         {
           sql: localConfig.sourceSql,
@@ -144,7 +145,7 @@ export function LocalQueryRenderer({
         setSourceStatus('error')
       }
     }
-  }, [engine, localConfig.sourceSql, localConfig.sourceTableName, timeRange.begin, timeRange.end, effectiveDataSource, handleProgress])
+  }, [engine, localConfig.sourceSql, localConfig.sourceTableName, rawTimeRange.from, rawTimeRange.to, effectiveDataSource, handleProgress])
 
   // Execute local query against WASM (serialized — one at a time)
   const localSqlRef = useRef(localConfig.localSql)
