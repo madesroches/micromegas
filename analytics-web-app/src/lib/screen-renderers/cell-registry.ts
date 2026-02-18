@@ -15,10 +15,8 @@ export interface CellRendererProps {
   sql?: string
   /** Cell-specific options (e.g., chart options) */
   options?: Record<string, unknown>
-  /** Query result data */
-  data: Table | null
-  /** Additional query results for multi-query cells */
-  additionalData?: Table[]
+  /** Query result data (one table per query; empty array = no data) */
+  data: Table[]
   /** Current execution status */
   status: CellStatus
   /** Error message if status is 'error' */

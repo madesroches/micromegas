@@ -110,7 +110,7 @@ export function useCellExecution({
       if (!meta.execute) {
         setCellStates((prev) => ({
           ...prev,
-          [cell.name]: { status: 'success', data: null },
+          [cell.name]: { status: 'success', data: [] },
         }))
         return true
       }
@@ -118,7 +118,7 @@ export function useCellExecution({
       // Mark cell as loading
       setCellStates((prev) => ({
         ...prev,
-        [cell.name]: { ...prev[cell.name], status: 'loading', error: undefined, data: null, fetchProgress: undefined },
+        [cell.name]: { ...prev[cell.name], status: 'loading', error: undefined, data: [], fetchProgress: undefined },
       }))
 
       const startTime = performance.now()
@@ -224,8 +224,8 @@ export function useCellExecution({
         // If result is null, nothing was executed (e.g., text variables)
         const elapsedMs = performance.now() - startTime
         const newState: CellState = result
-          ? { status: 'success', data: result.data ?? null, ...result, elapsedMs }
-          : { status: 'success', data: null }
+          ? { status: 'success', data: result.data ?? [], ...result, elapsedMs }
+          : { status: 'success', data: [] }
 
         setCellStates((prev) => ({ ...prev, [cell.name]: newState }))
 
@@ -245,7 +245,7 @@ export function useCellExecution({
         const errorMessage = err instanceof Error ? err.message : String(err)
         setCellStates((prev) => ({
           ...prev,
-          [cell.name]: { status: 'error', error: errorMessage, data: null },
+          [cell.name]: { status: 'error', error: errorMessage, data: [] },
         }))
         return false
       }
@@ -270,7 +270,7 @@ export function useCellExecution({
             if (blockedMeta.canBlockDownstream) {
               setCellStates((prev) => ({
                 ...prev,
-                [blockedCell.name]: { status: 'blocked', data: null },
+                [blockedCell.name]: { status: 'blocked', data: [] },
               }))
             }
           }

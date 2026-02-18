@@ -198,7 +198,7 @@ describe('useCellExecution', () => {
         })
 
         expect(success).toBe(true)
-        expect(result.current.cellStates['Notes']).toEqual({ status: 'success', data: null })
+        expect(result.current.cellStates['Notes']).toEqual({ status: 'success', data: [] })
         expect(mockStreamQuery).not.toHaveBeenCalled()
       })
     })
@@ -232,7 +232,7 @@ describe('useCellExecution', () => {
         })
 
         expect(success).toBe(true)
-        expect(result.current.cellStates['TextVar']).toEqual({ status: 'success', data: null })
+        expect(result.current.cellStates['TextVar']).toEqual({ status: 'success', data: [] })
         expect(mockStreamQuery).not.toHaveBeenCalled()
       })
     })
@@ -367,7 +367,7 @@ describe('useCellExecution', () => {
 
         expect(mockStreamQuery).toHaveBeenCalled()
         expect(result.current.cellStates['Results'].status).toBe('success')
-        expect(result.current.cellStates['Results'].data).not.toBeNull()
+        expect(result.current.cellStates['Results'].data.length).toBeGreaterThan(0)
       })
 
       it('should succeed with null data when SQL is empty', async () => {
@@ -391,7 +391,7 @@ describe('useCellExecution', () => {
         })
 
         expect(mockStreamQuery).not.toHaveBeenCalled()
-        expect(result.current.cellStates['Empty']).toMatchObject({ status: 'success', data: null })
+        expect(result.current.cellStates['Empty']).toMatchObject({ status: 'success', data: [] })
       })
 
       it('should substitute variables from cells above', async () => {
@@ -1072,7 +1072,7 @@ describe('useCellExecution', () => {
       expect(mockStreamQuery).not.toHaveBeenCalled()
       expect(mockFetchQueryIPC).not.toHaveBeenCalled()
       expect(result.current.cellStates['Local'].status).toBe('success')
-      expect(result.current.cellStates['Local'].data).not.toBeNull()
+      expect(result.current.cellStates['Local'].data.length).toBeGreaterThan(0)
     })
 
     it('should use fetchQueryIPC and register result in engine for remote cells', async () => {
@@ -1104,7 +1104,7 @@ describe('useCellExecution', () => {
       expect(engine.register_table).toHaveBeenCalledWith('Remote', mockIpcBytes)
       expect(mockStreamQuery).not.toHaveBeenCalled()
       expect(result.current.cellStates['Remote'].status).toBe('success')
-      expect(result.current.cellStates['Remote'].data).not.toBeNull()
+      expect(result.current.cellStates['Remote'].data.length).toBeGreaterThan(0)
     })
 
     it('should fall back to streamQuery when no engine is present', async () => {

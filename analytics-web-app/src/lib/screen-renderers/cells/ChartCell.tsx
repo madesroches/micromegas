@@ -106,38 +106,33 @@ function substituteOptionsWithMacros(
 // Renderer Component
 // =============================================================================
 
-export function ChartCell({ data, additionalData, status, options, onOptionsChange, variables, timeRange, onTimeRangeSelect }: CellRendererProps) {
-  // Detect multi-series: we have additional data from extra queries
-  const isMultiSeries = additionalData && additionalData.length > 0
-
-  // Parse the config to get per-query metadata (units, labels)
-  // We get the raw config through the sql prop (it's the original config)
-  // But the renderer doesn't receive the full config — it gets options and additionalData.
-  // The query metadata (units/labels) is passed through options by getRendererProps.
+export function ChartCell({ data, status, options, onOptionsChange, variables, timeRange, onTimeRangeSelect }: CellRendererProps) {
+  // Detect multi-series: more than one table in the data array
+  const isMultiSeries = data.length > 1
 
   // Single-series result
   const chartResult = useMemo(() => {
-    if (isMultiSeries || !data || data.numRows === 0) return null
-    return extractChartData(data)
+    const table = data[0]
+    if (isMultiSeries || !table || table.numRows === 0) return null
+    return extractChartData(table)
   }, [data, isMultiSeries])
 
-  // Multi-series result: build from data + additionalData + options
+  // Multi-series result: build from data tables + options
   const multiResult = useMemo(() => {
-    if (!isMultiSeries || !data) return null
+    if (!isMultiSeries || data.length === 0) return null
 
     // Get query metadata from options (set by getRendererProps)
     const queryMeta = (options as Record<string, unknown>)?._queryMeta as
       { unit?: string; label?: string }[] | undefined
 
-    const allTables = [data, ...additionalData!]
-    const tableInputs = allTables.map((table, i) => ({
+    const tableInputs = data.map((table, i) => ({
       table,
       unit: queryMeta?.[i]?.unit,
       label: queryMeta?.[i]?.label,
     }))
 
     return extractMultiSeriesChartData(tableInputs)
-  }, [data, additionalData, isMultiSeries, options])
+  }, [data, isMultiSeries, options])
 
   // Substitute macros in options
   const resolvedOptions = useMemo(
@@ -209,7 +204,7 @@ export function ChartCell({ data, additionalData, status, options, onOptionsChan
   }
 
   // Single-series path
-  if (!data || data.numRows === 0 || !chartResult) {
+  if (!data[0] || data[0].numRows === 0 || !chartResult) {
     return (
       <div className="flex items-center justify-center h-[200px] text-theme-text-muted text-sm">
         No data available
@@ -429,31 +424,26 @@ export const chartMetadata: CellTypeMetadata = {
       const sql = substituteMacros(v2.queries[0]?.sql ?? '', variables, timeRange)
       if (runQueryAs) {
         const tableName = queryTableName(config.name, v2.queries[0]?.name)
-        const data = await runQueryAs(sql, tableName, v2.queries[0]?.dataSource)
-        return { data }
+        const table = await runQueryAs(sql, tableName, v2.queries[0]?.dataSource)
+        return { data: [table] }
       }
-      const data = await runQuery(sql)
-      return { data }
+      const table = await runQuery(sql)
+      return { data: [table] }
     }
 
-    // Multi-query execution
+    // Multi-query execution — return flat array of tables
     const tables: import('apache-arrow').Table[] = []
     for (const query of v2.queries) {
       const sql = substituteMacros(query.sql, variables, timeRange)
-      let table: import('apache-arrow').Table
       if (runQueryAs) {
         const tableName = queryTableName(config.name, query.name)
-        table = await runQueryAs(sql, tableName, query.dataSource)
+        tables.push(await runQueryAs(sql, tableName, query.dataSource))
       } else {
-        table = await runQuery(sql)
+        tables.push(await runQuery(sql))
       }
-      tables.push(table)
     }
 
-    return {
-      data: tables[0],
-      additionalData: tables.length > 1 ? tables.slice(1) : undefined,
-    }
+    return { data: tables }
   },
 
   getRendererProps: (config: CellConfig, state: CellState) => {
@@ -462,7 +452,6 @@ export const chartMetadata: CellTypeMetadata = {
     const queryMeta = v2.queries.map(q => ({ unit: q.unit, label: q.label }))
     return {
       data: state.data,
-      additionalData: state.additionalData,
       status: state.status,
       options: { ...v2.options, _queryMeta: queryMeta },
     }

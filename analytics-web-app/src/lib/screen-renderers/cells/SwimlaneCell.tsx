@@ -337,6 +337,7 @@ export function SwimlaneCell({
   timeRange,
   onTimeRangeSelect,
 }: CellRendererProps) {
+  const table = data[0]
   // Convert ISO time range to milliseconds
   const timeRangeMs = useMemo(
     () => ({
@@ -348,11 +349,11 @@ export function SwimlaneCell({
 
   // Extract lanes from data
   const { lanes, error: schemaError } = useMemo(() => {
-    if (!data || data.numRows === 0) {
+    if (!table || table.numRows === 0) {
       return { lanes: [] }
     }
-    return extractLanesFromTable(data)
-  }, [data])
+    return extractLanesFromTable(table)
+  }, [table])
 
   if (status === 'loading') {
     return (
@@ -371,7 +372,7 @@ export function SwimlaneCell({
     )
   }
 
-  if (!data || data.numRows === 0) {
+  if (!table || table.numRows === 0) {
     return (
       <div className="flex items-center justify-center h-[200px] text-theme-text-muted text-sm">
         No data available
@@ -455,7 +456,7 @@ export const swimlaneMetadata: CellTypeMetadata = {
   execute: async (config: CellConfig, { variables, timeRange, runQuery }: CellExecutionContext) => {
     const sql = substituteMacros((config as QueryCellConfig).sql, variables, timeRange)
     const data = await runQuery(sql)
-    return { data }
+    return { data: [data] }
   },
 
   getRendererProps: (config: CellConfig, state: CellState) => ({

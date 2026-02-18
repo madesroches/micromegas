@@ -418,7 +418,7 @@ export const variableMetadata: CellTypeMetadata = {
         devicePixelRatio: window.devicePixelRatio,
         variables,
       })
-      return { data: null, expressionResult: result }
+      return { data: [], expressionResult: result }
     }
 
     // Datasource variables: fetch available data sources from API
@@ -429,9 +429,9 @@ export const variableMetadata: CellTypeMetadata = {
           label: s.is_default ? `${s.name} (default)` : s.name,
           value: s.name,
         }))
-        return { data: null, variableOptions: options }
+        return { data: [], variableOptions: options }
       } catch {
-        return { data: null, variableOptions: [] }
+        return { data: [], variableOptions: [] }
       }
     }
 
@@ -473,7 +473,7 @@ export const variableMetadata: CellTypeMetadata = {
       }
     }
 
-    return { data: result, variableOptions: options }
+    return { data: [result], variableOptions: options }
   },
 
   // Validate current value or auto-select fallback for combobox variables

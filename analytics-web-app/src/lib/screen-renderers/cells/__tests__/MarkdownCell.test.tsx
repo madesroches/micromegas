@@ -6,7 +6,7 @@ import { CellRendererProps } from '../../cell-registry'
 function createMockProps(overrides: Partial<CellRendererProps> = {}): CellRendererProps {
   return {
     name: 'test-cell',
-    data: null,
+    data: [],
     status: 'success',
     timeRange: { begin: '2024-01-01', end: '2024-01-02' },
     variables: {},

@@ -51,6 +51,8 @@ export function buildSortedIndices(
 // =============================================================================
 
 function ReferenceTableCell({ data, status, options, onOptionsChange, variables }: CellRendererProps) {
+  const table = data[0]
+
   const {
     sortColumn,
     sortDirection,
@@ -68,12 +70,12 @@ function ReferenceTableCell({ data, status, options, onOptionsChange, variables 
     (size: number) => onOptionsChange({ ...options, pageSize: size }),
     [options, onOptionsChange],
   )
-  const pagination = usePagination(data?.numRows ?? 0, pageSize, handlePageSizeChange)
+  const pagination = usePagination(table?.numRows ?? 0, pageSize, handlePageSizeChange)
 
   const sortedIndices = useMemo(() => {
-    if (!data || data.numRows === 0) return []
-    return buildSortedIndices(data, sortColumn, sortDirection)
-  }, [data, sortColumn, sortDirection])
+    if (!table || table.numRows === 0) return []
+    return buildSortedIndices(table, sortColumn, sortDirection)
+  }, [table, sortColumn, sortDirection])
 
   if (status === 'loading') {
     return (
@@ -84,13 +86,13 @@ function ReferenceTableCell({ data, status, options, onOptionsChange, variables 
     )
   }
 
-  if (!data || data.numRows === 0) {
+  if (!table || table.numRows === 0) {
     return (
       <div className="text-center py-8 text-theme-text-muted text-sm">No data available</div>
     )
   }
 
-  const allColumns = data.schema.fields.map((field) => ({
+  const allColumns = table.schema.fields.map((field) => ({
     name: field.name,
     type: field.type,
   }))
@@ -99,7 +101,7 @@ function ReferenceTableCell({ data, status, options, onOptionsChange, variables 
 
   const slicedData = {
     numRows: pagination.endRow - pagination.startRow,
-    get: (index: number) => data.get(sortedIndices[pagination.startRow + index]),
+    get: (index: number) => table.get(sortedIndices[pagination.startRow + index]),
   }
 
   return (
@@ -182,7 +184,7 @@ export const referenceTableMetadata: CellTypeMetadata = {
     const refConfig = config as ReferenceTableCellConfig
     const { table, ipcBytes } = csvToArrowIPC(refConfig.csv)
     context.registerTable?.(ipcBytes)
-    return { data: table }
+    return { data: [table] }
   },
 
   getRendererProps: (config: CellConfig, state: CellState) => ({

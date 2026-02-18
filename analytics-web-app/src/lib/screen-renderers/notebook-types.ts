@@ -150,9 +150,7 @@ export type CellConfig = QueryCellConfig | MarkdownCellConfig | VariableCellConf
 export interface CellState {
   status: CellStatus
   error?: string
-  data: Table | null
-  /** Additional query results for multi-query cells (e.g., chart overlays) */
-  additionalData?: Table[]
+  data: Table[]
   /** For variable cells (combobox): options loaded from query */
   variableOptions?: { label: string; value: VariableValue }[]
   /** For variable cells (expression): computed result string */

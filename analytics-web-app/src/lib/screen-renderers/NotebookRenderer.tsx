@@ -524,7 +524,7 @@ export function NotebookRenderer({
   const selectedCell = selectedCellIndex !== null ? cells[selectedCellIndex] : null
 
   const renderCell = (cell: CellConfig, index: number) => {
-    const state = cellStates[cell.name] || { status: 'idle', data: null }
+    const state = cellStates[cell.name] || { status: 'idle', data: [] }
     const meta = getCellTypeMetadata(cell.type)
     const CellRenderer = getCellRenderer(cell.type)
 
@@ -547,9 +547,12 @@ export function NotebookRenderer({
       statusText = undefined
     } else if (state.status === 'loading' && state.fetchProgress) {
       statusText = `${state.fetchProgress.rows.toLocaleString()} rows (${formatBytes(state.fetchProgress.bytes)})`
-    } else if (state.data) {
-      const byteSize = state.data.batches.reduce((sum: number, b) => sum + b.data.byteLength, 0)
-      const rowText = `${state.data.numRows.toLocaleString()} rows (${formatBytes(byteSize)})`
+    } else if (state.data.length > 0) {
+      const totalRows = state.data.reduce((sum, t) => sum + t.numRows, 0)
+      const totalBytes = state.data.reduce(
+        (sum, t) => sum + t.batches.reduce((s: number, b) => s + b.data.byteLength, 0), 0
+      )
+      const rowText = `${totalRows.toLocaleString()} rows (${formatBytes(totalBytes)})`
       statusText = state.elapsedMs != null ? `${rowText} in ${formatElapsedMs(state.elapsedMs)}` : rowText
     }
 
@@ -717,7 +720,7 @@ export function NotebookRenderer({
               variables={variableValues}
               timeRange={getTimeRangeForApi(rawTimeRange.from, rawTimeRange.to)}
               existingNames={existingNames}
-              availableColumns={cellStates[selectedCell.name]?.data?.schema.fields.map((f) => f.name)}
+              availableColumns={cellStates[selectedCell.name]?.data[0]?.schema.fields.map((f) => f.name)}
               defaultDataSource={dataSource}
               showNotebookOption
               datasourceVariables={
