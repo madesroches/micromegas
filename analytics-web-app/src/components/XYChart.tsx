@@ -874,7 +874,7 @@ export function XYChart({
   return (
     <div className="flex flex-col h-full bg-app-panel border border-theme-border rounded-lg">
       {/* Chart header */}
-      <div className="relative z-10 flex justify-between items-center px-4 py-3 border-b border-theme-border">
+      <div className="relative z-10 flex justify-between items-center px-4 py-3 border-b border-theme-border" onClick={(e) => e.stopPropagation()}>
         {showMultiSeriesHeader ? (
           <div className="flex items-center gap-3">
             {normalizedSeries.map((s, i) => {
@@ -933,60 +933,49 @@ export function XYChart({
               </div>
             </>
           )}
-          <div className="relative group">
-            <div className="flex border border-theme-border rounded overflow-hidden">
-              <button
-                onClick={() => setChartType('line')}
-                className={`px-2 py-0.5 text-[11px] transition-colors ${
-                  chartType === 'line'
-                    ? 'bg-accent text-white'
-                    : 'text-theme-text-muted hover:text-theme-text-secondary hover:bg-white/5'
-                }`}
-              >
-                Line
-              </button>
-              <button
-                onClick={() => setChartType('bar')}
-                className={`px-2 py-0.5 text-[11px] border-l border-theme-border transition-colors ${
-                  chartType === 'bar'
-                    ? 'bg-accent text-white'
-                    : 'text-theme-text-muted hover:text-theme-text-secondary hover:bg-white/5'
-                }`}
-              >
-                Bar
-              </button>
-            </div>
-            <div className="absolute bottom-full right-0 mb-2 px-2 py-1.5 bg-app-panel border border-theme-border rounded text-[11px] text-theme-text-secondary opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-10 shadow-lg whitespace-nowrap">
-              <div>Chart display style</div>
-            </div>
+          <div className="flex border border-theme-border rounded overflow-hidden" title="Chart display style">
+            <button
+              onClick={() => setChartType('line')}
+              className={`px-2 py-0.5 text-[11px] transition-colors ${
+                chartType === 'line'
+                  ? 'bg-accent text-white'
+                  : 'text-theme-text-muted hover:text-theme-text-secondary hover:bg-white/5'
+              }`}
+            >
+              Line
+            </button>
+            <button
+              onClick={() => setChartType('bar')}
+              className={`px-2 py-0.5 text-[11px] border-l border-theme-border transition-colors ${
+                chartType === 'bar'
+                  ? 'bg-accent text-white'
+                  : 'text-theme-text-muted hover:text-theme-text-secondary hover:bg-white/5'
+              }`}
+            >
+              Bar
+            </button>
           </div>
-          <div className="relative group">
-            <div className="flex border border-theme-border rounded overflow-hidden">
-              <button
-                onClick={() => setScaleMode('p99')}
-                className={`px-2 py-0.5 text-[11px] transition-colors ${
-                  scaleMode === 'p99'
-                    ? 'bg-accent text-white'
-                    : 'text-theme-text-muted hover:text-theme-text-secondary hover:bg-white/5'
-                }`}
-              >
-                P99
-              </button>
-              <button
-                onClick={() => setScaleMode('max')}
-                className={`px-2 py-0.5 text-[11px] border-l border-theme-border transition-colors ${
-                  scaleMode === 'max'
-                    ? 'bg-accent text-white'
-                    : 'text-theme-text-muted hover:text-theme-text-secondary hover:bg-white/5'
-                }`}
-              >
-                Max
-              </button>
-            </div>
-            <div className="absolute bottom-full right-0 mb-2 px-2 py-1.5 bg-app-panel border border-theme-border rounded text-[11px] text-theme-text-secondary opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-10 shadow-lg">
-              <div>P99: hides outliers</div>
-              <div>Max: shows all data</div>
-            </div>
+          <div className="flex border border-theme-border rounded overflow-hidden" title="P99: hides outliers &#10;Max: shows all data">
+            <button
+              onClick={() => setScaleMode('p99')}
+              className={`px-2 py-0.5 text-[11px] transition-colors ${
+                scaleMode === 'p99'
+                  ? 'bg-accent text-white'
+                  : 'text-theme-text-muted hover:text-theme-text-secondary hover:bg-white/5'
+              }`}
+            >
+              P99
+            </button>
+            <button
+              onClick={() => setScaleMode('max')}
+              className={`px-2 py-0.5 text-[11px] border-l border-theme-border transition-colors ${
+                scaleMode === 'max'
+                  ? 'bg-accent text-white'
+                  : 'text-theme-text-muted hover:text-theme-text-secondary hover:bg-white/5'
+              }`}
+            >
+              Max
+            </button>
           </div>
         </div>
       </div>
