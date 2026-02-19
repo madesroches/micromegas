@@ -787,6 +787,41 @@ export function NotebookRenderer({
         }
       }
 
+      // Handle hg child changes: clean up removed children, migrate renamed children
+      if (cell.type === 'hg' && 'children' in updates) {
+        const oldChildren = (cell as HorizontalGroupCellConfig).children
+        const newChildren = (updates as Partial<HorizontalGroupCellConfig>).children || []
+        const newNames = new Set(newChildren.map(c => c.name))
+
+        for (const oldChild of oldChildren) {
+          if (newNames.has(oldChild.name)) continue
+
+          // Old child name not in new list — check if renamed (same index, same type)
+          const oldIdx = oldChildren.indexOf(oldChild)
+          const newChild = newChildren[oldIdx]
+          if (
+            newChild &&
+            newChild.type === oldChild.type &&
+            !oldChildren.some(c => c.name === newChild.name)
+          ) {
+            // Rename: migrate state to new name
+            migrateCellState(oldChild.name, newChild.name)
+            if (oldChild.type === 'variable') {
+              migrateVariable(oldChild.name, newChild.name)
+            }
+          } else {
+            // Deletion: clean up state
+            removeCellState(oldChild.name)
+            if (oldChild.type === 'variable') {
+              removeVariable(oldChild.name)
+            }
+            if (engine) {
+              try { engine.deregister_table(oldChild.name) } catch { /* ignore */ }
+            }
+          }
+        }
+      }
+
       // Handle defaultValue change for variable cells:
       // When user edits the default value, update current value to match
       // This uses delta logic - if new default matches baseline, URL param is removed
@@ -813,7 +848,7 @@ export function NotebookRenderer({
         }
       }
     },
-    [cells, notebookConfig, onConfigChange, migrateCellState, migrateVariable, setVariableValue, scheduleAutoRun]
+    [cells, notebookConfig, onConfigChange, migrateCellState, migrateVariable, setVariableValue, removeCellState, removeVariable, engine, scheduleAutoRun]
   )
 
   const toggleCellCollapsed = useCallback(
