@@ -1,6 +1,6 @@
 import { ReactNode, useRef, useEffect, forwardRef, HTMLAttributes, useCallback } from 'react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
-import { ChevronDown, ChevronRight, Play, RotateCcw, MoreVertical, Trash2, GripVertical, Zap } from 'lucide-react'
+import { ChevronDown, ChevronRight, Copy, Play, RotateCcw, MoreVertical, Trash2, GripVertical, Zap } from 'lucide-react'
 import { CellType, CellStatus, getCellTypeMetadata } from '@/lib/screen-renderers/cell-registry'
 import { Button } from '@/components/ui/button'
 import { ResizeHandle } from '@/components/ResizeHandle'
@@ -30,6 +30,8 @@ interface CellContainerProps extends Omit<HTMLAttributes<HTMLDivElement>, 'child
   autoRunFromHere?: boolean
   /** Toggle auto-run from here */
   onToggleAutoRunFromHere?: () => void
+  /** Duplicate this cell */
+  onDuplicate?: () => void
   /** Delete this cell */
   onDelete?: () => void
   /** Row count or other status text */
@@ -62,6 +64,7 @@ export const CellContainer = forwardRef<HTMLDivElement, CellContainerProps>(func
     onRunFromHere,
     autoRunFromHere,
     onToggleAutoRunFromHere,
+    onDuplicate,
     onDelete,
     statusText,
     height = 300,
@@ -254,6 +257,15 @@ export const CellContainer = forwardRef<HTMLDivElement, CellContainerProps>(func
                   >
                     <Zap className={`w-4 h-4 ${autoRunFromHere ? 'text-accent-link' : ''}`} />
                     {autoRunFromHere ? 'Disable auto-run' : 'Auto-run from here'}
+                  </DropdownMenu.Item>
+                )}
+                {onDuplicate && (
+                  <DropdownMenu.Item
+                    className="flex items-center gap-2 px-3 py-2 text-sm text-theme-text-primary hover:bg-theme-border/50 cursor-pointer outline-none"
+                    onSelect={() => onDuplicate()}
+                  >
+                    <Copy className="w-4 h-4" />
+                    Duplicate cell
                   </DropdownMenu.Item>
                 )}
                 {onDelete && (

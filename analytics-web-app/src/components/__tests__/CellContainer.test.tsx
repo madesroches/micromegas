@@ -15,6 +15,7 @@ jest.mock('lucide-react', () => ({
   Trash2: () => <span data-testid="trash">🗑</span>,
   GripVertical: () => <span data-testid="grip">⠿</span>,
   Zap: () => <span data-testid="zap">⚡</span>,
+  Copy: () => <span data-testid="copy">📋</span>,
 }))
 
 // @radix-ui/react-dropdown-menu is mocked via moduleNameMapper in jest.config.js
