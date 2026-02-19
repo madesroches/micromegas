@@ -69,15 +69,17 @@ Currently `selectedCellIndex: number | null` identifies the selected cell. With 
 
 ```ts
 const [selectedCellIndex, setSelectedCellIndex] = useState<number | null>(null)
-const [selectedChildIndex, setSelectedChildIndex] = useState<number | null>(null)
+const [selectedChildName, setSelectedChildName] = useState<string | null>(null)
 ```
 
-- `selectedCellIndex` points to a top-level cell (could be an hg group)
-- `selectedChildIndex` is set when a child within an hg is clicked
-- When `selectedCellIndex` points to hg and `selectedChildIndex` is null → show group editor
-- When `selectedChildIndex` is set → show child's editor
+- `selectedCellIndex` points to a top-level cell (could be an hg group) — stays index-based to preserve existing reorder/delete adjustment logic (lines 417-463)
+- `selectedChildName` identifies a child within an hg by name — stable across child reorder operations
+- When `selectedCellIndex` points to hg and `selectedChildName` is null → show group editor
+- When `selectedChildName` is set → show child's editor, resolved via `hgCell.children.find(c => c.name === selectedChildName)`
+- On child rename: update `selectedChildName` to the new name
+- On child delete: clear `selectedChildName` if the deleted child was selected
 
-Clicking a top-level cell clears `selectedChildIndex`. Clicking a child sets both indices.
+Clicking a top-level cell clears `selectedChildName`. Clicking a child sets both `selectedCellIndex` (to the hg's index) and `selectedChildName`.
 
 ### Rendering
 
@@ -117,7 +119,7 @@ Each child row in the editor list shows: type badge, name, move-left arrow (disa
 - Back button → returns to group editor
 - Standard cell editor for the child type (name, data source, type-specific fields)
 
-The `HorizontalGroupCellEditor` component manages both views. When `selectedChildIndex` is set, it delegates to the child's own `EditorComponent`.
+The `HorizontalGroupCellEditor` component manages both views. When `selectedChildName` is set, it finds the child by name and delegates to the child's own `EditorComponent`.
 
 ### Drag & Drop
 
@@ -185,14 +187,14 @@ Adding an hg cell creates it with an empty `children: []`. The user then adds ch
 5. **`NotebookRenderer.tsx`**
    - Compute `executionCells = flattenCellsForExecution(cells)` and pass to `useCellExecution`
    - Build execution index lookup map for `executeCell` / `executeFromCell` calls
-   - Add `selectedChildIndex` state
+   - Add `selectedChildName` state (name-based, stable across child reorder)
    - Update `renderCell` to render hg cells with horizontal child layout
    - Wire child click → `setSelectedChildIndex`
    - Wire child run/runFromHere through execution index lookup
    - Update `handleDeleteCell` to loop through hg children calling `removeCellState`, `removeVariable`, `engine.deregister_table` for each child
    - Update `handleDuplicateCell` to deep-clone hg children and generate unique names for each child
    - Update `existingNames` set to include child names (currently `cells.map(c => c.name)` misses children)
-   - Update sort-option monitoring (`cells.forEach` loop) to recurse into hg children for table/log cells
+   - Update sort-option monitoring (`cells.forEach` loop) to recurse into hg children for table/log cells, and use execution index map (`executionIndexMap.get(cell.name)`) instead of the top-level loop index when calling `executeCell`
 
 6. **`useNotebookVariables.ts`**
    - Update cell iteration for variable defaults (currently flat `cells` scan) to also check inside hg `children`
@@ -205,7 +207,7 @@ Adding an hg cell creates it with an empty `children: []`. The user then adds ch
 
 8. **`CellEditor.tsx`**
    - Handle hg cells: when `cell.type === 'hg'`, pass through to `HorizontalGroupCellEditor`
-   - Add `selectedChildIndex` and `onChildSelect` props for navigating between group and child editors
+   - Add `selectedChildName` and `onChildSelect` props for navigating between group and child editors
 
 ### Phase 4: Child Management (within hg)
 
@@ -251,8 +253,8 @@ Flattening in NotebookRenderer before passing to `useCellExecution` keeps the ho
 **Shared height vs. per-child height:**
 The issue specifies children share the parent hg cell's height. This is simpler (one resize handle for the group) and produces more uniform rows. Per-child height would allow mixed sizes but complicates the layout.
 
-**Selection model (two indices vs. cell name):**
-Using `selectedCellIndex + selectedChildIndex` is minimal change over the current model. An alternative is switching to `selectedCellName: string | null` which would be cleaner but requires changing more call sites. The two-index approach was chosen for smaller diff.
+**Selection model (index + name hybrid):**
+`selectedCellIndex` stays index-based for the top-level cell (preserving existing reorder/delete adjustment logic at lines 417-463). `selectedChildName` is name-based — stable across child reorder and drag operations, avoiding the bug where an index silently points to the wrong child after mutation.
 
 **Three-zone drop targeting vs. useDroppable:**
 Using `useDroppable` on the hg body would conflict with the `SortableContext` — both register overlapping rects for the same element, causing `closestCenter` to oscillate between the sortable slot and the droppable zone. The three-zone approach avoids this entirely: the sortable context handles collision detection as usual, and the zone is determined by pointer Y position relative to the hg cell's rect in `onDragOver`. Top/bottom zones reorder normally; middle zone triggers drop-into. This keeps the existing collision detection unchanged and makes intent unambiguous through spatial position.
@@ -291,8 +293,8 @@ The type system allows it but the UI prevents it (add-child modal excludes 'hg')
 
 ## Open Questions
 
-1. **Child variable cells:** Should variable cells be allowed as hg children? The issue says "Each child is a full CellConfig" which implies yes. Variables in a horizontal group would be unusual but not harmful. If we allow them, their values would be scoped like any other cell in the flat execution order.
+1. ~~**Child variable cells:**~~ **Resolved: allowed.** Flattening handles scoping correctly — no restrictions needed.
 
-2. **Empty group behavior:** When an hg has no children, should it show a helpful empty state ("Add cells to this group") or should it be invisible? Recommend an empty state prompt.
+2. ~~**Empty group behavior:**~~ **Resolved: show empty state prompt** ("Add cells to this group").
 
-3. **Max children:** Should there be a limit on children per group? With equal-width flex, more than 4-5 children would be very cramped. Consider a soft limit or scroll.
+3. ~~**Max children:**~~ **Resolved: no hard limit.** Let `flex: 1` naturally degrade; address later if needed.
