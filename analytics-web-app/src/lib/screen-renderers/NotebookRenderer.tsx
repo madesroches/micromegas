@@ -543,11 +543,13 @@ export function NotebookRenderer({
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
   )
 
-  // Custom sorting strategy: suppress item transforms when dragging into the
-  // "into" zone of an hg cell, so items don't shift as if reordering.
+  // Custom sorting strategy: suppress item transforms when dragging over any
+  // hg cell. Without this, the sortable list shifts items when the pointer
+  // enters the before/after edge zones, which moves the hg cell and causes
+  // the pointer to oscillate between edges — never reaching the "into" zone.
   const hgAwareSortingStrategy = useMemo<typeof verticalListSortingStrategy>(
     () => (args) => {
-      if (dragOverZoneRef.current === 'into') {
+      if (dragOverHgNameRef.current !== null) {
         return null
       }
       return verticalListSortingStrategy(args)
