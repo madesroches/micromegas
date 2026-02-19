@@ -31,6 +31,7 @@ jest.mock('lucide-react', () => ({
   Trash2: () => <span data-testid="trash">🗑</span>,
   GripVertical: () => <span data-testid="grip">⠿</span>,
   Zap: () => <span data-testid="zap">⚡</span>,
+  Copy: () => <span data-testid="copy">📋</span>,
   Settings: () => <span data-testid="settings">⚙</span>,
   Save: () => <span data-testid="save">💾</span>,
   Database: () => <span data-testid="database">🗄</span>,

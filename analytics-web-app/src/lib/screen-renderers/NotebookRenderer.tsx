@@ -467,6 +467,32 @@ export function NotebookRenderer({
     [notebookConfig, cells, onConfigChange, selectedCellIndex, removeCellState, removeVariable, engine]
   )
 
+  const handleDuplicateCell = useCallback(
+    (index: number) => {
+      const cell = cells[index]
+      if (!cell) return
+
+      const clone = structuredClone(cell)
+
+      // Generate a unique name
+      const baseName = cell.name + '_copy'
+      let name = baseName
+      let counter = 1
+      while (existingNames.has(name)) {
+        counter++
+        name = `${baseName}_${counter}`
+      }
+      clone.name = name
+
+      // Insert after the source cell
+      const newCells = [...cells.slice(0, index + 1), clone, ...cells.slice(index + 1)]
+      const newConfig = { ...notebookConfig, cells: newCells }
+      onConfigChange(newConfig)
+      setSelectedCellIndex(index + 1)
+    },
+    [cells, existingNames, notebookConfig, onConfigChange]
+  )
+
   const updateCell = useCallback(
     (index: number, updates: Partial<CellConfig>) => {
       const cell = cells[index]
@@ -619,6 +645,7 @@ export function NotebookRenderer({
             onToggleAutoRunFromHere={() =>
               updateCell(index, { autoRunFromHere: !cell.autoRunFromHere })
             }
+            onDuplicate={() => handleDuplicateCell(index)}
             onDelete={() => setDeletingCellIndex(index)}
             statusText={statusText}
             height={cell.layout.height}
