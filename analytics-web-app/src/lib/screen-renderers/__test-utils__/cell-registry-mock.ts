@@ -77,9 +77,17 @@ const BASE_METADATA = {
     defaultHeight: 60,
     canBlockDownstream: true,
   },
+  hg: {
+    label: 'Group',
+    icon: 'H',
+    description: 'Arrange cells side by side in a row',
+    showTypeBadge: true,
+    defaultHeight: 300,
+    canBlockDownstream: false,
+  },
 } as const
 
-type CellType = keyof typeof BASE_METADATA
+type CellType = keyof typeof BASE_METADATA & string
 
 /** Simple execute stub that just returns success */
 const simpleExecuteStub = () => Promise.resolve({ data: [] })
@@ -200,10 +208,13 @@ export function createCellRegistryMock(options: MockOptions = {}) {
       case 'variable':
         meta.createDefaultConfig = () => ({ type: 'variable', variableType: 'combobox', sql: DEFAULT_SQL.variable })
         break
+      case 'hg':
+        meta.createDefaultConfig = () => ({ type: 'hg', children: [] })
+        break
     }
 
-    // Add execute method (except markdown which doesn't execute)
-    if (type !== 'markdown') {
+    // Add execute method (except markdown and hg which don't execute)
+    if (type !== 'markdown' && type !== 'hg') {
       if (withSqlExecution) {
         if (type === 'variable') {
           meta.execute = createVariableExecute()
@@ -225,6 +236,7 @@ export function createCellRegistryMock(options: MockOptions = {}) {
     log: buildMetadata('log'),
     markdown: buildMetadata('markdown'),
     variable: buildMetadata('variable'),
+    hg: buildMetadata('hg'),
   }
 
   const mock: Record<string, unknown> = {
