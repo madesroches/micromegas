@@ -38,6 +38,8 @@ import type {
   HorizontalGroupCellConfig,
   VariableValue,
 } from '../notebook-types'
+import { resolveCellDataSource } from '../notebook-utils'
+import { buildCellRendererProps, buildStatusText } from '../notebook-cell-view'
 import { Button } from '@/components/ui/button'
 
 // =============================================================================
@@ -56,6 +58,8 @@ export interface HorizontalGroupCellProps {
   onVariableValueChange: (cellName: string, value: VariableValue) => void
   onConfigChange: (config: HorizontalGroupCellConfig) => void
   onChildDragOut: (childName: string, position: 'before' | 'after') => void
+  onTimeRangeSelect?: (from: Date, to: Date) => void
+  defaultDataSource?: string
   /** All cell names in notebook (for uniqueness checks) */
   allCellNames: Set<string>
 }
@@ -221,12 +225,6 @@ function ChildCellHeader({
 // Renderer Component
 // =============================================================================
 
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
-}
-
 // Vertical distance (px) pointer must travel beyond container to trigger drag-out
 const DRAG_OUT_THRESHOLD = 30
 
@@ -242,6 +240,8 @@ export function HorizontalGroupCell({
   onVariableValueChange,
   onConfigChange,
   onChildDragOut,
+  onTimeRangeSelect,
+  defaultDataSource,
 }: HorizontalGroupCellProps) {
   const [activeDragId, setActiveDragId] = useState<string | null>(null)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -295,6 +295,16 @@ export function HorizontalGroupCell({
     [config, onConfigChange, selectedChildName, onChildSelect]
   )
 
+  const updateChildConfig = useCallback(
+    (childName: string, updates: Partial<CellConfig>) => {
+      const newChildren = config.children.map((c) =>
+        c.name === childName ? { ...c, ...updates } : c,
+      ) as CellConfig[]
+      onConfigChange({ ...config, children: newChildren })
+    },
+    [config, onConfigChange],
+  )
+
   if (config.children.length === 0) {
     return (
       <div className="flex items-center justify-center p-8 text-theme-text-muted border border-dashed border-theme-border rounded-md">
@@ -316,37 +326,27 @@ export function HorizontalGroupCell({
             const state = cellStates[child.name] || { status: 'idle' as const, data: [] }
             const meta = getCellTypeMetadata(child.type)
             const CellRenderer = getCellRenderer(child.type)
-            const rendererProps = meta.getRendererProps(child, state)
             const TitleBarRenderer = meta.titleBarRenderer
 
-            // Build common props for both renderer and title bar
-            const commonProps = {
-              name: child.name,
-              data: state.data || [],
-              status: state.status,
-              error: state.error,
-              timeRange,
-              variables,
-              isEditing: false as const,
-              onRun: () => onChildRun(child.name),
-              onSqlChange: () => {},
-              onOptionsChange: () => {},
-              value: child.type === 'variable' ? variableValues[child.name] : undefined,
-              onValueChange: child.type === 'variable'
-                ? (value: VariableValue) => onVariableValueChange(child.name, value)
-                : undefined,
-              ...rendererProps,
-            }
+            const commonProps = buildCellRendererProps(child, state,
+              {
+                availableVariables: variables,
+                allVariableValues: variableValues,
+                timeRange,
+                isEditing: false,
+                dataSource: resolveCellDataSource(child, variables, defaultDataSource),
+              },
+              {
+                onRun: () => onChildRun(child.name),
+                onSqlChange: (sql) => updateChildConfig(child.name, { sql }),
+                onOptionsChange: (options) => updateChildConfig(child.name, { options }),
+                onContentChange: (content) => updateChildConfig(child.name, { content }),
+                onValueChange: (value) => onVariableValueChange(child.name, value),
+                onTimeRangeSelect,
+              },
+            )
 
-            // Status text for child header
-            let statusText: string | undefined
-            if (state.data && state.data.length > 0) {
-              const totalRows = state.data.reduce((sum, t) => sum + t.numRows, 0)
-              const totalBytes = state.data.reduce(
-                (sum, t) => sum + t.batches.reduce((s: number, b) => s + b.data.byteLength, 0), 0
-              )
-              statusText = `${totalRows.toLocaleString()} rows (${formatBytes(totalBytes)})`
-            }
+            const statusText = buildStatusText(child, state)
 
             return (
               <SortableChild key={child.name} id={child.name}>

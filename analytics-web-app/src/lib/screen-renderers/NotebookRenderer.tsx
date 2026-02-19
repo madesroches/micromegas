@@ -41,17 +41,7 @@ import { HorizontalGroupCell, HorizontalGroupCellEditor } from './cells/Horizont
 import { cleanupTimeParams, useExposeSaveRef } from '@/lib/url-cleanup-utils'
 import { loadWasmEngine } from '@/lib/wasm-engine'
 import { getTimeRangeForApi } from '@/lib/time-range'
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
-}
-
-function formatElapsedMs(ms: number): string {
-  if (ms < 1000) return `${Math.round(ms)}ms`
-  return `${(ms / 1000).toFixed(2)}s`
-}
+import { buildCellRendererProps, buildStatusText, buildHgStatusText } from './notebook-cell-view'
 
 // ============================================================================
 // Constants
@@ -865,6 +855,7 @@ export function NotebookRenderer({
               ? 'border-b-4 border-b-[var(--accent-link)]'
               : ''
         : ''
+      const hgStatusText = buildHgStatusText(hgConfig.children, cellStates)
       return (
         <SortableCell key={cell.name} id={cell.name}>
           {({ dragHandleProps, isDragging, setNodeRef, style }) => (
@@ -875,6 +866,7 @@ export function NotebookRenderer({
                 name={cell.name}
                 type={cell.type}
                 status="idle"
+                statusText={hgStatusText}
                 collapsed={cell.layout.collapsed}
                 onToggleCollapsed={() => toggleCellCollapsed(index)}
                 isSelected={selectedCellIndex === index}
@@ -892,39 +884,40 @@ export function NotebookRenderer({
                 }
               >
                 <HorizontalGroupCell
-                config={hgConfig}
-                cellStates={cellStates}
-                variables={availableVariables}
-                variableValues={variableValues}
-                timeRange={getTimeRangeForApi(rawTimeRange.from, rawTimeRange.to)}
-                selectedChildName={selectedChildName}
-                onChildSelect={(childName) => {
-                  setSelectedCellIndex(index)
-                  setSelectedChildName(childName)
-                }}
-                onChildRun={(childName) => executeCellByName(childName)}
-                onVariableValueChange={(cellName, value) => {
-                  setVariableValue(cellName, value)
-                }}
-                onConfigChange={(newHgConfig) => {
-                  updateCell(index, newHgConfig)
-                }}
-                onChildDragOut={(childName, position) => {
-                  const child = hgConfig.children.find((c) => c.name === childName)
-                  if (!child) return
-                  const newChildren = hgConfig.children.filter((c) => c.name !== childName)
-                  const newCells = [...cells]
-                  newCells[index] = { ...hgConfig, children: newChildren }
-                  // Insert before or after the hg group based on drag direction
-                  const insertIndex = position === 'before' ? index : index + 1
-                  newCells.splice(insertIndex, 0, child)
-                  onConfigChange({ ...notebookConfig, cells: newCells })
-                  if (selectedChildName === childName) {
-                    setSelectedChildName(null)
-                  }
-                }}
-                allCellNames={existingNames}
-              />
+                  config={hgConfig}
+                  cellStates={cellStates}
+                  variables={availableVariables}
+                  variableValues={variableValues}
+                  timeRange={getTimeRangeForApi(rawTimeRange.from, rawTimeRange.to)}
+                  selectedChildName={selectedChildName}
+                  onChildSelect={(childName) => {
+                    setSelectedCellIndex(index)
+                    setSelectedChildName(childName)
+                  }}
+                  onChildRun={(childName) => executeCellByName(childName)}
+                  onVariableValueChange={(cellName, value) => {
+                    setVariableValue(cellName, value)
+                  }}
+                  onConfigChange={(newHgConfig) => {
+                    updateCell(index, newHgConfig)
+                  }}
+                  onChildDragOut={(childName, position) => {
+                    const child = hgConfig.children.find((c) => c.name === childName)
+                    if (!child) return
+                    const newChildren = hgConfig.children.filter((c) => c.name !== childName)
+                    const newCells = [...cells]
+                    newCells[index] = { ...hgConfig, children: newChildren }
+                    const insertIndex = position === 'before' ? index : index + 1
+                    newCells.splice(insertIndex, 0, child)
+                    onConfigChange({ ...notebookConfig, cells: newCells })
+                    if (selectedChildName === childName) {
+                      setSelectedChildName(null)
+                    }
+                  }}
+                  onTimeRangeSelect={handleTimeRangeSelect}
+                  defaultDataSource={dataSource}
+                  allCellNames={existingNames}
+                />
               </CellContainer>
             </div>
           )}
@@ -936,55 +929,36 @@ export function NotebookRenderer({
     const state = cellStates[cell.name] || { status: 'idle', data: [] }
     const meta = getCellTypeMetadata(cell.type)
     const CellRenderer = getCellRenderer(cell.type)
-    const rendererProps = meta.getRendererProps(cell, state)
 
-    // Determine status text
-    const isNonComboVariable = cell.type === 'variable' && (cell as VariableCellConfig).variableType !== 'combobox'
-    let statusText: string | undefined
-    if (isNonComboVariable) {
-      statusText = undefined
-    } else if (state.status === 'loading' && state.fetchProgress) {
-      statusText = `${state.fetchProgress.rows.toLocaleString()} rows (${formatBytes(state.fetchProgress.bytes)})`
-    } else if (state.data.length > 0) {
-      const totalRows = state.data.reduce((sum, t) => sum + t.numRows, 0)
-      const totalBytes = state.data.reduce(
-        (sum, t) => sum + t.batches.reduce((s: number, b) => s + b.data.byteLength, 0), 0
-      )
-      const rowText = `${totalRows.toLocaleString()} rows (${formatBytes(totalBytes)})`
-      statusText = state.elapsedMs != null ? `${rowText} in ${formatElapsedMs(state.elapsedMs)}` : rowText
-    }
-
-    // Effective data source: per-cell overrides notebook-level, resolve $varname references
+    const statusText = buildStatusText(cell, state)
     const cellDataSource = resolveCellDataSource(cell, availableVariables, dataSource)
 
-    // Build common renderer props
-    const commonRendererProps = {
-      name: cell.name,
-      data: state.data,
-      status: state.status,
-      error: state.error,
-      timeRange: getTimeRangeForApi(rawTimeRange.from, rawTimeRange.to),
-      variables: availableVariables,
-      isEditing: selectedCellIndex === index,
-      onRun: () => executeCellByName(cell.name),
-      onSqlChange: (sql: string) => updateCell(index, { sql }),
-      onOptionsChange: (options: Record<string, unknown>) => updateCell(index, { options }),
-      onContentChange: (content: string) => updateCell(index, { content }),
-      onTimeRangeSelect: handleTimeRangeSelect,
-      value: cell.type === 'variable' ? variableValues[cell.name] : undefined,
-      onValueChange: cell.type === 'variable' ? (value: VariableValue) => {
-        setVariableValue(cell.name, value)
+    const commonRendererProps = buildCellRendererProps(cell, state,
+      {
+        availableVariables,
+        allVariableValues: variableValues,
+        timeRange: getTimeRangeForApi(rawTimeRange.from, rawTimeRange.to),
+        isEditing: selectedCellIndex === index,
+        dataSource: cellDataSource,
+      },
+      {
+        onRun: () => executeCellByName(cell.name),
+        onSqlChange: (sql: string) => updateCell(index, { sql }),
+        onOptionsChange: (options: Record<string, unknown>) => updateCell(index, { options }),
+        onContentChange: (content: string) => updateCell(index, { content }),
+        onValueChange: (value: VariableValue) => {
+          setVariableValue(cell.name, value)
 
-        // Auto-run: if this cell has autoRunFromHere, execute from here onward.
-        if (autoRunningRef.current || !cell.autoRunFromHere) return
-        autoRunningRef.current = true
-        executeFromCellByName(cell.name).then(() => {
-          autoRunningRef.current = false
-        })
-      } : undefined,
-      dataSource: cellDataSource,
-      ...rendererProps,
-    }
+          // Auto-run: if this cell has autoRunFromHere, execute from here onward.
+          if (autoRunningRef.current || !cell.autoRunFromHere) return
+          autoRunningRef.current = true
+          executeFromCellByName(cell.name).then(() => {
+            autoRunningRef.current = false
+          })
+        },
+        onTimeRangeSelect: handleTimeRangeSelect,
+      },
+    )
 
     // Render title bar content if metadata defines a titleBarRenderer
     const TitleBarRenderer = meta.titleBarRenderer

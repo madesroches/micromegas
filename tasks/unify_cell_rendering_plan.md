@@ -223,17 +223,17 @@ Mock `getCellTypeMetadata` to return `{ getRendererProps: () => ({}) }` by defau
 3. Update `HorizontalGroupCell.tsx`: add props, add `updateChildConfig`, replace manual prop/status assembly with helpers, import `resolveCellDataSource`, remove local `formatBytes`
 4. Update `NotebookRenderer.tsx`: replace manual prop/status assembly with helpers, pass new props to HorizontalGroupCell, remove local `formatBytes`/`formatElapsedMs`
 
-## Files to Modify
+## Files Modified
 
 - `analytics-web-app/src/lib/screen-renderers/notebook-cell-view.ts` (NEW)
 - `analytics-web-app/src/lib/screen-renderers/__tests__/notebook-cell-view.test.ts` (NEW)
 - `analytics-web-app/src/lib/screen-renderers/cells/HorizontalGroupCell.tsx`
 - `analytics-web-app/src/lib/screen-renderers/NotebookRenderer.tsx`
 
-## Verification
+## Status: Implemented
 
-- `yarn type-check` — no type errors
-- `yarn lint` — no lint errors
-- `yarn test` — 716 tests pass
-- Manual: variable combobox works in hg children, chart drag-to-zoom works in hg children, SQL/options changes from renderer interactions propagate correctly
-- Manual: collapsed HG cell header shows aggregated rows/bytes/elapsed across all children
+All steps completed:
+- `yarn type-check` — passes
+- `yarn lint` — passes (0 errors, 1 pre-existing warning in XYChart.tsx)
+- `yarn test` — 745 tests pass (29 new tests for notebook-cell-view)
+- Manual testing still needed: variable combobox in hg children, chart drag-to-zoom in hg children, SQL/options changes from renderer interactions, collapsed HG cell header aggregate status
