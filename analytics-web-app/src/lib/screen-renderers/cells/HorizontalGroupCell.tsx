@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useRef } from 'react'
 import {
   DndContext,
   closestCenter,
@@ -53,7 +53,7 @@ export interface HorizontalGroupCellProps {
   onChildSelect: (childName: string | null) => void
   onChildRun: (childName: string) => void
   onConfigChange: (config: HorizontalGroupCellConfig) => void
-  onChildDragOut: (childName: string) => void
+  onChildDragOut: (childName: string, position: 'before' | 'after') => void
   /** All cell names in notebook (for uniqueness checks) */
   allCellNames: Set<string>
 }
@@ -217,6 +217,9 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
+// Vertical distance (px) pointer must travel beyond container to trigger drag-out
+const DRAG_OUT_THRESHOLD = 30
+
 export function HorizontalGroupCell({
   config,
   cellStates,
@@ -229,6 +232,7 @@ export function HorizontalGroupCell({
   onChildDragOut,
 }: HorizontalGroupCellProps) {
   const [activeDragId, setActiveDragId] = useState<string | null>(null)
+  const containerRef = useRef<HTMLDivElement>(null)
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } })
   )
@@ -242,13 +246,21 @@ export function HorizontalGroupCell({
       setActiveDragId(null)
       const { active, over } = event
 
-      if (!over) {
-        // Dragged outside the group - extract to top-level
-        onChildDragOut(active.id as string)
-        return
+      // Check if pointer ended outside the container → extract from group
+      if (containerRef.current) {
+        const rect = containerRef.current.getBoundingClientRect()
+        const pointerY = (event.activatorEvent as PointerEvent).clientY + event.delta.y
+        if (pointerY < rect.top - DRAG_OUT_THRESHOLD) {
+          onChildDragOut(active.id as string, 'before')
+          return
+        }
+        if (pointerY > rect.bottom + DRAG_OUT_THRESHOLD) {
+          onChildDragOut(active.id as string, 'after')
+          return
+        }
       }
 
-      if (active.id === over.id) return
+      if (!over || active.id === over.id) return
 
       const oldIndex = config.children.findIndex((c) => c.name === active.id)
       const newIndex = config.children.findIndex((c) => c.name === over.id)
@@ -287,7 +299,7 @@ export function HorizontalGroupCell({
       onDragEnd={handleDragEnd}
     >
       <SortableContext items={config.children.map((c) => c.name)} strategy={horizontalListSortingStrategy}>
-        <div className="flex gap-2 h-full">
+        <div ref={containerRef} className="flex gap-2 h-full">
           {config.children.map((child) => {
             const state = cellStates[child.name] || { status: 'idle' as const, data: [] }
             const meta = getCellTypeMetadata(child.type)

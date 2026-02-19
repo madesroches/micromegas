@@ -506,8 +506,11 @@ export function NotebookRenderer({
   const [showAddCellModal, setShowAddCellModal] = useState(false)
   const [deletingCellIndex, setDeletingCellIndex] = useState<number | null>(null)
   const [activeDragId, setActiveDragId] = useState<string | null>(null)
+  // Drag zone state for visual feedback (state) + synchronous read in handleDragEnd (refs)
   const [dragOverZone, setDragOverZone] = useState<'before' | 'into' | 'after' | null>(null)
   const [dragOverHgName, setDragOverHgName] = useState<string | null>(null)
+  const dragOverZoneRef = useRef<'before' | 'into' | 'after' | null>(null)
+  const dragOverHgNameRef = useRef<string | null>(null)
   const [showSource, setShowSource] = useState(false)
 
   useEffect(() => {
@@ -544,73 +547,83 @@ export function NotebookRenderer({
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
   )
 
+  // Custom sorting strategy: suppress item transforms when dragging into the
+  // "into" zone of an hg cell, so items don't shift as if reordering.
+  const hgAwareSortingStrategy = useMemo<typeof verticalListSortingStrategy>(
+    () => (args) => {
+      if (dragOverZoneRef.current === 'into') {
+        return null
+      }
+      return verticalListSortingStrategy(args)
+    },
+    []
+  )
+
   const handleDragStart = useCallback((event: DragStartEvent) => {
     setActiveDragId(event.active.id as string)
   }, [])
 
-  const handleDragOver = useCallback(
-    (event: DragOverEvent) => {
+  // Compute hg drop zone from a drag event's pointer position relative to the over element.
+  // Returns the zone ('before'/'into'/'after') and hg name, or null if not over an hg cell.
+  const computeHgZone = useCallback(
+    (event: { activatorEvent: Event; delta: { x: number; y: number }; active: { id: string | number }; over: { id: string | number; rect: { top: number; height: number } } | null }) => {
       const { active, over } = event
-      if (!over) {
-        setDragOverZone(null)
-        setDragOverHgName(null)
-        return
-      }
+      if (!over) return null
 
       const overCell = cells.find((c) => c.name === over.id)
-      if (!overCell || overCell.type !== 'hg') {
-        setDragOverZone(null)
-        setDragOverHgName(null)
-        return
-      }
+      if (!overCell || overCell.type !== 'hg') return null
 
       // Don't allow dropping an hg cell into another hg
       const activeCell = cells.find((c) => c.name === active.id)
-      if (activeCell?.type === 'hg') {
-        setDragOverZone(null)
-        setDragOverHgName(null)
-        return
-      }
+      if (activeCell?.type === 'hg') return null
 
-      // Compute zone based on pointer Y relative to the hg cell rect
       const overRect = over.rect
-      if (!overRect) {
-        setDragOverZone(null)
-        setDragOverHgName(null)
-        return
-      }
+      if (!overRect || !overRect.height) return null
 
-      // Use activatorEvent to get pointer position
       const pointerY = (event.activatorEvent as PointerEvent)?.clientY
-      const delta = event.delta
-      if (pointerY === undefined) return
+      if (pointerY === undefined) return null
 
-      const currentY = pointerY + delta.y
+      const currentY = pointerY + event.delta.y
       const relativeY = currentY - overRect.top
       const height = overRect.height
 
+      // Wide "into" zone (80% of height) — the sortable list shifts items during
+      // drag, so the pointer naturally lands near edges. Before/after reordering
+      // is still possible by targeting the cells adjacent to the hg group.
       let zone: 'before' | 'into' | 'after'
-      if (relativeY < height * 0.25) {
+      if (relativeY < height * 0.1) {
         zone = 'before'
-      } else if (relativeY > height * 0.75) {
+      } else if (relativeY > height * 0.9) {
         zone = 'after'
       } else {
         zone = 'into'
       }
 
-      setDragOverZone(zone)
-      setDragOverHgName(over.id as string)
+      return { zone, hgName: over.id as string }
     },
     [cells]
   )
 
+  const handleDragOver = useCallback(
+    (event: DragOverEvent) => {
+      const result = computeHgZone(event)
+      dragOverZoneRef.current = result?.zone ?? null
+      dragOverHgNameRef.current = result?.hgName ?? null
+      setDragOverZone(result?.zone ?? null)
+      setDragOverHgName(result?.hgName ?? null)
+    },
+    [computeHgZone]
+  )
+
   const handleDragEnd = useCallback(
     (event: DragEndEvent) => {
-      const currentZone = dragOverZone
-      const currentHgName = dragOverHgName
+      // Compute zone directly from event data (no state/ref timing issues)
+      const result = computeHgZone(event)
       setActiveDragId(null)
       setDragOverZone(null)
       setDragOverHgName(null)
+      dragOverZoneRef.current = null
+      dragOverHgNameRef.current = null
 
       const { active, over } = event
       if (!over || active.id === over.id) return
@@ -624,8 +637,8 @@ export function NotebookRenderer({
       const activeCell = cells[oldIndex]
       if (
         overCell.type === 'hg' &&
-        currentZone === 'into' &&
-        currentHgName === over.id &&
+        result?.zone === 'into' &&
+        result?.hgName === over.id &&
         activeCell.type !== 'hg'
       ) {
         // Remove dragged cell from top-level and append to hg's children
@@ -665,7 +678,7 @@ export function NotebookRenderer({
         }
       }
     },
-    [cells, notebookConfig, onConfigChange, selectedCellIndex, dragOverZone, dragOverHgName]
+    [cells, notebookConfig, onConfigChange, selectedCellIndex, computeHgZone]
   )
 
   // Cell management
@@ -892,14 +905,15 @@ export function NotebookRenderer({
                 onConfigChange={(newHgConfig) => {
                   updateCell(index, newHgConfig)
                 }}
-                onChildDragOut={(childName) => {
+                onChildDragOut={(childName, position) => {
                   const child = hgConfig.children.find((c) => c.name === childName)
                   if (!child) return
                   const newChildren = hgConfig.children.filter((c) => c.name !== childName)
                   const newCells = [...cells]
                   newCells[index] = { ...hgConfig, children: newChildren }
-                  // Insert extracted child after the hg group
-                  newCells.splice(index + 1, 0, child)
+                  // Insert before or after the hg group based on drag direction
+                  const insertIndex = position === 'before' ? index : index + 1
+                  newCells.splice(insertIndex, 0, child)
                   onConfigChange({ ...notebookConfig, cells: newCells })
                   if (selectedChildName === childName) {
                     setSelectedChildName(null)
@@ -1053,7 +1067,7 @@ export function NotebookRenderer({
               onDragOver={handleDragOver}
               onDragEnd={handleDragEnd}
             >
-              <SortableContext items={cells.map((c) => c.name)} strategy={verticalListSortingStrategy}>
+              <SortableContext items={cells.map((c) => c.name)} strategy={hgAwareSortingStrategy}>
                 <div className="flex flex-col gap-3">
                   {cells.map((cell, index) => renderCell(cell, index))}
 
