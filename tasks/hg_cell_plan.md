@@ -163,87 +163,100 @@ Adding an hg cell creates it with an empty `children: []`. The user then adds ch
 
 ## Implementation Steps
 
-### Phase 1: Type System & Registry
+### Phase 1: Type System & Registry ✅
 
-1. **`notebook-types.ts`**
-   - Add `'hg'` to `CellType` union (line 98)
-   - Add `'hg'` is not a `QueryCellConfig` type — create `HorizontalGroupCellConfig` interface
-   - Add `HorizontalGroupCellConfig` to `CellConfig` union (line 144)
+1. **`notebook-types.ts`** ✅
+   - Added `'hg'` to `CellType` union
+   - Created `HorizontalGroupCellConfig` interface with `children: CellConfig[]`
+   - Added to `CellConfig` union
 
-2. **`notebook-utils.ts`**
-   - Add `flattenCellsForExecution(cells: CellConfig[]): CellConfig[]` utility
-   - Update `cleanupVariableParams` to recurse into hg children when scanning for variable cells
+2. **`notebook-utils.ts`** ✅
+   - Added `flattenCellsForExecution(cells: CellConfig[]): CellConfig[]` utility
+   - Added `collectAllCellNames(cells: CellConfig[]): Set<string>` utility
+   - Updated `cleanupVariableParams` to recurse into hg children when scanning for variable cells
 
-3. **`cells/HorizontalGroupCell.tsx`** (new file)
+3. **`cells/HorizontalGroupCell.tsx`** ✅ (new file)
    - `HorizontalGroupCell` renderer — flex row of children with compact headers
    - `HorizontalGroupCellEditor` — group management (child list, add/remove, child editing)
+   - `AddChildModal` — cell type picker excluding 'hg'
+   - `ChildCellHeader` — compact header with drag handle, type badge, name, run button, menu
    - `hgMetadata: CellTypeMetadata` — no execute method, `canBlockDownstream: false`, `icon: 'H'`, `defaultHeight: 300`
 
-4. **`cell-registry.ts`**
-   - Import and register `hgMetadata` in `CELL_TYPE_METADATA`
+4. **`cell-registry.ts`** ✅
+   - Imported and registered `hgMetadata` in `CELL_TYPE_METADATA`
 
-### Phase 2: Execution Integration
+### Phase 2: Execution Integration ✅
 
-5. **`NotebookRenderer.tsx`**
-   - Compute `executionCells = flattenCellsForExecution(cells)` and pass to `useCellExecution`
-   - Build execution index lookup map for `executeCell` / `executeFromCell` calls
-   - Add `selectedChildName` state (name-based, stable across child reorder)
-   - Update `renderCell` to render hg cells with horizontal child layout
-   - Wire child click → `setSelectedChildIndex`
-   - Wire child run/runFromHere through execution index lookup
-   - Update `handleDeleteCell` to loop through hg children calling `removeCellState`, `removeVariable`, `engine.deregister_table` for each child
-   - Update `handleDuplicateCell` to deep-clone hg children and generate unique names for each child
-   - Update `existingNames` set to include child names (currently `cells.map(c => c.name)` misses children)
-   - Update sort-option monitoring (`cells.forEach` loop) to recurse into hg children for table/log cells, and use execution index map (`executionIndexMap.get(cell.name)`) instead of the top-level loop index when calling `executeCell`
+**Design deviation:** Instead of building a `Map<string, number>` for index translation, used name-based lookup functions (`executeCellByName`, `executeFromCellByName`) that scan the flat execution list by name on each call. This avoids maintaining a separate data structure that could get out of sync with the cell list.
 
-6. **`useNotebookVariables.ts`**
-   - Update cell iteration for variable defaults (currently flat `cells` scan) to also check inside hg `children`
-   - Update `cells.find` for variable delta logic to also search inside hg `children`
+5. **`NotebookRenderer.tsx`** ✅
+   - Computed `executionCells = flattenCellsForExecution(cells)` and passed to `useCellExecution`
+   - Added `executeCellByName` / `executeFromCellByName` helpers (scan by name instead of index map)
+   - Added `selectedChildName` state (name-based, stable across child reorder)
+   - Updated `renderCell` to render hg cells via `HorizontalGroupCell` inside `CellContainer`
+   - Wired child click → `setSelectedChildName`, child run via `executeCellByName`
+   - Updated `handleDeleteCell` to loop through hg children cleaning up state, variables, WASM tables
+   - Updated `handleDuplicateCell` to deep-clone hg children and uniquify all child names
+   - Updated `existingNames` to use `collectAllCellNames` (includes hg children)
+   - Updated sort-option monitoring to recurse into hg children and use `executeCellByName`
+   - Converted `scheduleAutoRun` from index-based to name-based
+   - Added `getAvailableVariables` helper that also collects variables from hg children above
 
-7. **`useCellExecution.ts`**
+6. **`useNotebookVariables.ts`** ✅
+   - Updated `savedDefaultsByName` to use `flattenCellsForExecution` for scanning saved cells
+   - Updated `variableValues` computation to use `flattenCellsForExecution` for all cells
+   - Updated `setVariableValue` delta logic to search flattened cells for current cell
+
+7. **`useCellExecution.ts`** ✅
    - No changes needed (receives flat list, keyed by name)
 
-### Phase 3: Editor Panel
+### Phase 3: Editor Panel ✅
 
-8. **`CellEditor.tsx`**
-   - Handle hg cells: when `cell.type === 'hg'`, pass through to `HorizontalGroupCellEditor`
-   - Add `selectedChildName` and `onChildSelect` props for navigating between group and child editors
+8. **`NotebookRenderer.tsx`** ✅
+   - Added `HgEditorPanel` component with group name editing, children management via `HorizontalGroupCellEditor`, and delete button
+   - When `selectedCell.type === 'hg'`: renders `HgEditorPanel` instead of generic `CellEditor`
+   - `HorizontalGroupCellEditor` handles both group view (child list) and child editing (delegates to child's `EditorComponent`)
 
-### Phase 4: Child Management (within hg)
+### Phase 4: Child Management (within hg) ✅
 
-9. **`HorizontalGroupCellEditor`** (in `HorizontalGroupCell.tsx`)
-   - Add child button (add-cell modal minus 'hg' option)
-   - Remove child (with confirmation)
-   - Reorder children via up/down arrow buttons in the children list (moves left/right in the horizontal layout)
-   - Click child → switch editor to child config
+9. **`HorizontalGroupCellEditor`** (in `HorizontalGroupCell.tsx`) ✅
+   - Add child button opens `AddChildModal` (excludes 'hg' option)
+   - Remove child button on each child row
+   - Reorder children via left/right arrow buttons
+   - Click child name → switches editor to child config with back button
 
-### Phase 5: Drag & Drop Integration
+### Phase 5: Drag & Drop Integration ✅
 
-10. **`NotebookRenderer.tsx`**
-   - Add `dragOverZone` state (`'before' | 'into' | 'after' | null`) and `dragOverHgName` state
-   - Add `onDragOver` handler: when `over.id` resolves to an hg cell, compute pointer Y relative to `over.rect` to determine zone (top 25% / middle 50% / bottom 25%), update `dragOverZone`; clear when over a non-hg cell
-   - Update `handleDragEnd`: when `over.id` is an hg cell and `dragOverZone === 'into'`, remove dragged cell from top-level and append to hg's `children`; for `'before'`/`'after'` zones, use standard `arrayMove`
-   - Add constraint: skip `'into'` zone when dragged item is type `hg`
-   - Pass `dragOverZone` and `dragOverHgName` to hg cell renderer for visual feedback (insertion line or body highlight)
-   - Add `onChildDragOut` callback: receives child name and parent hg name, removes child from hg `children`, inserts as top-level cell after the group
+10. **`NotebookRenderer.tsx`** ✅
+    - Added `dragOverZone` state (`'before' | 'into' | 'after' | null`) and `dragOverHgName` state
+    - Added `handleDragOver` handler: computes pointer Y relative to hg rect for three-zone detection
+    - Updated `handleDragEnd`: middle zone removes cell from top-level and appends to hg children; top/bottom zones do standard `arrayMove`
+    - Added constraint: skips 'into' zone when dragged item is type 'hg'
+    - Visual feedback: `ring-2 ring-accent-link` for middle zone, `border-t-4`/`border-b-4` for top/bottom zones
 
-11. **`HorizontalGroupCell.tsx`**
+11. **`HorizontalGroupCell.tsx`** ✅
     - Nested `DndContext` + `SortableContext` with `horizontalListSortingStrategy` for within-group reordering
     - Child drag handles for horizontal reordering
-    - In nested `onDragEnd`: if `over === null` (child dragged outside bounds), call `onChildDragOut` callback to extract child to top-level
-    - Visual feedback: blue insertion line (top/bottom zone) or blue border highlight (middle zone) based on passed `dragOverZone` prop
+    - In nested `onDragEnd`: if `over === null`, calls `onChildDragOut` to extract child to top-level
 
-## Files to Modify
+### Phase 6: Verification ✅
+
+- `yarn type-check` passes
+- `yarn lint` passes (0 errors, 1 pre-existing warning)
+- `yarn build` succeeds
+- `yarn test` passes (716/716 tests)
+
+## Files Modified
 
 | File | Action | Description |
 |------|--------|-------------|
-| `notebook-types.ts` | Modify | Add `'hg'` to CellType, add `HorizontalGroupCellConfig`, update `CellConfig` union |
-| `notebook-utils.ts` | Modify | Add `flattenCellsForExecution`, update `cleanupVariableParams` to recurse into hg children |
-| `cells/HorizontalGroupCell.tsx` | Create | Renderer, editor, metadata |
-| `cell-registry.ts` | Modify | Import and register hg metadata |
-| `NotebookRenderer.tsx` | Modify | Flatten cells for execution, selection model, hg rendering, three-zone drag, `existingNames` includes child names, sort-option monitoring recurses into hg children |
-| `CellEditor.tsx` | Modify | Handle hg type, child navigation |
-| `useNotebookVariables.ts` | Modify | Recurse into hg children when scanning for variable cells (baseline values and delta logic) |
+| `notebook-types.ts` | Modified | Added `'hg'` to CellType, added `HorizontalGroupCellConfig`, updated `CellConfig` union |
+| `notebook-utils.ts` | Modified | Added `flattenCellsForExecution`, `collectAllCellNames`, updated `cleanupVariableParams` |
+| `cells/HorizontalGroupCell.tsx` | Created | Renderer, editor, child header, add-child modal, metadata |
+| `cell-registry.ts` | Modified | Imported and registered hg metadata |
+| `NotebookRenderer.tsx` | Modified | Flattened cells for execution, added `HgEditorPanel`, three-zone drag, name-based execution, hg rendering, selection model |
+| `useNotebookVariables.ts` | Modified | Recurse into hg children for variable scanning |
+| `CellEditor.tsx` | Not modified | Hg editor handled directly in NotebookRenderer via `HgEditorPanel` |
 
 ## Trade-offs
 

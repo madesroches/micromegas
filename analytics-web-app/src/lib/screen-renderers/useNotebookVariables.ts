@@ -8,6 +8,7 @@ import {
   serializeVariableValue,
   deserializeVariableValue,
   variableValuesEqual,
+  flattenCellsForExecution,
 } from './notebook-utils'
 
 export interface UseNotebookVariablesResult {
@@ -56,10 +57,12 @@ export function useNotebookVariables(
   }, [searchParams])
 
   // Build a lookup map for saved defaults (O(1) access)
+  // Scans into hg children as well
   const savedDefaultsByName = useMemo(() => {
     const map = new Map<string, VariableValue>()
     if (savedCells) {
-      for (const cell of savedCells) {
+      const allCells = flattenCellsForExecution(savedCells)
+      for (const cell of allCells) {
         if (cell.type === 'variable') {
           const varCell = cell as VariableCellConfig
           if (varCell.defaultValue !== undefined) {
@@ -73,22 +76,23 @@ export function useNotebookVariables(
 
   // Compute effective values: saved default → current default → URL override
   // URL values represent deltas from saved baseline
+  // Scans into hg children as well
   const variableValues = useMemo(() => {
     const values: Record<string, VariableValue> = {}
 
+    // Flatten to get all cells including hg children
+    const allCells = flattenCellsForExecution(cells)
+
     // Start with baseline values for all known variables
     // Priority: saved default → current cell default
-    for (const cell of cells) {
+    for (const cell of allCells) {
       if (cell.type === 'variable') {
         const varCell = cell as VariableCellConfig
-        // Use saved default if available, otherwise use current cell's default
         const savedDefault = savedDefaultsByName.get(cell.name)
         const baseline = savedDefault ?? varCell.defaultValue
         if (baseline !== undefined) {
           values[cell.name] = baseline
         } else if (varCell.variableType === 'text') {
-          // Text variables with no default value default to empty string
-          // so that $variable macros in downstream cells substitute correctly
           values[cell.name] = ''
         }
       }
@@ -118,7 +122,8 @@ export function useNotebookVariables(
 
       // Determine baseline: saved default → current cell default
       const savedDefault = savedDefaultsByName.get(cellName)
-      const currentCell = cells.find((c) => c.type === 'variable' && c.name === cellName) as
+      const allCells = flattenCellsForExecution(cells)
+      const currentCell = allCells.find((c) => c.type === 'variable' && c.name === cellName) as
         | VariableCellConfig
         | undefined
       const baseline = savedDefault ?? currentCell?.defaultValue

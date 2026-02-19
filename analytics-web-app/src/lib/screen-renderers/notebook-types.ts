@@ -95,7 +95,7 @@ export function deserializeVariableValue(str: string): VariableValue {
 
 // Note: CellType is defined here and re-exported from cell-registry.ts
 // This avoids circular dependencies while keeping the types together
-export type CellType = 'table' | 'chart' | 'log' | 'markdown' | 'variable' | 'propertytimeline' | 'swimlane' | 'perfettoexport' | 'referencetable'
+export type CellType = 'table' | 'chart' | 'log' | 'markdown' | 'variable' | 'propertytimeline' | 'swimlane' | 'perfettoexport' | 'referencetable' | 'hg'
 
 export type CellStatus = 'idle' | 'loading' | 'success' | 'error' | 'blocked'
 
@@ -141,7 +141,12 @@ export interface ReferenceTableCellConfig extends CellConfigBase {
   options?: Record<string, unknown>
 }
 
-export type CellConfig = QueryCellConfig | MarkdownCellConfig | VariableCellConfig | PerfettoExportCellConfig | ReferenceTableCellConfig
+export interface HorizontalGroupCellConfig extends CellConfigBase {
+  type: 'hg'
+  children: CellConfig[]
+}
+
+export type CellConfig = QueryCellConfig | MarkdownCellConfig | VariableCellConfig | PerfettoExportCellConfig | ReferenceTableCellConfig | HorizontalGroupCellConfig
 
 // ============================================================================
 // Cell Execution State
