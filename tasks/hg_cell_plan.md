@@ -123,17 +123,28 @@ The `HorizontalGroupCellEditor` component manages both views. When `selectedChil
 
 **Top-level vertical reorder:** The hg cell participates in the vertical `SortableContext` like any other cell. Its `id` is the hg cell name.
 
-**Within hg reorder:** Children can be reordered horizontally within the group. This requires a nested `DndContext` + `SortableContext` with `horizontalListSortingStrategy`. Since dnd-kit supports nested contexts, this works by stopping propagation at the child level.
+**Within-hg reorder:** Children can be reordered horizontally within the group. This requires a nested `DndContext` + `SortableContext` with `horizontalListSortingStrategy`. Since dnd-kit supports nested contexts, this works by stopping propagation at the child level.
 
-**Cross-group drag (drag in / drag out):** Cells can be dragged in and out of hg groups with simplified fixed-position rules:
+**Three-zone drop targeting on hg cells:** When a top-level cell is dragged over an hg cell, the hg cell's bounding rect is divided into three vertical zones to disambiguate intent:
 
-- **Drag IN** (top-level cell → hg group): When a top-level cell is dragged over an hg body, the group highlights as a drop target. On drop, the cell is **appended as the last child** of the group (removed from top-level).
-- **Drag OUT** (hg child → top-level): When a child is dragged outside its parent hg body, it becomes a **top-level cell inserted immediately after the group**.
+- **Top ~25%** → reorder before the hg (standard `arrayMove`, same as any cell)
+- **Middle ~50%** → drop into the hg (remove from top-level, append as last child)
+- **Bottom ~25%** → reorder after the hg (standard `arrayMove`, same as any cell)
 
-This avoids collision detection ambiguity — no need to determine insertion position within a container. The hg body is registered as a droppable via `useDroppable` from dnd-kit. On `handleDragEnd`, check `over.id` to determine if the drop target is an hg droppable zone; if so, append to that group's children. For drag-out, detect that a child's drag ended outside its parent hg and insert after the group.
+This uses the existing `closestCenter` collision detection — no `useDroppable` needed. The `SortableContext` reports `over.id` as the hg cell name. In `onDragOver`, compute the pointer's Y position relative to the hg cell's bounding rect (via `over.rect`) to determine the active zone, and set a `dragOverZone` state (`'before' | 'into' | 'after' | null`). Visual feedback during drag:
+- Top/bottom zones: blue insertion line above/below the hg cell
+- Middle zone: blue border highlight on the hg body
+
+In `handleDragEnd`, if `over.id` resolves to an hg cell:
+- Top/bottom zone → `arrayMove` (normal reorder, existing code path)
+- Middle zone → remove dragged cell from top-level, append to hg's `children`
+
+For non-hg `over` targets, `handleDragEnd` behaves exactly as before (standard `arrayMove`).
+
+**Drag OUT** (hg child → top-level): When a child is dragged outside its parent hg body, the nested `DndContext`'s `onDragEnd` detects `over === null` (no valid drop target within the nested context). It emits a callback to the parent NotebookRenderer, which removes the child from the hg's `children` and inserts it as a top-level cell immediately after the group.
 
 **Constraints:**
-- Cannot drag an hg cell into another hg (no nesting)
+- Cannot drag an hg cell into another hg (skip drop-into zone logic when dragged item is type `hg`)
 - Dragging the last child out of a group leaves it empty (shows empty state prompt)
 
 ### Add Cell Modal
@@ -159,7 +170,7 @@ Adding an hg cell creates it with an empty `children: []`. The user then adds ch
 
 2. **`notebook-utils.ts`**
    - Add `flattenCellsForExecution(cells: CellConfig[]): CellConfig[]` utility
-   - Update `cleanupVariableParams` if it iterates cells (check for hg children)
+   - Update `cleanupVariableParams` to recurse into hg children when scanning for variable cells
 
 3. **`cells/HorizontalGroupCell.tsx`** (new file)
    - `HorizontalGroupCell` renderer — flex row of children with compact headers
@@ -178,50 +189,59 @@ Adding an hg cell creates it with an empty `children: []`. The user then adds ch
    - Update `renderCell` to render hg cells with horizontal child layout
    - Wire child click → `setSelectedChildIndex`
    - Wire child run/runFromHere through execution index lookup
-   - Update `handleDeleteCell` to clean up all children of deleted hg cells
-   - Update `handleDuplicateCell` to uniquify all child names
+   - Update `handleDeleteCell` to loop through hg children calling `removeCellState`, `removeVariable`, `engine.deregister_table` for each child
+   - Update `handleDuplicateCell` to deep-clone hg children and generate unique names for each child
+   - Update `existingNames` set to include child names (currently `cells.map(c => c.name)` misses children)
+   - Update sort-option monitoring (`cells.forEach` loop) to recurse into hg children for table/log cells
 
-6. **`useCellExecution.ts`**
+6. **`useNotebookVariables.ts`**
+   - Update cell iteration for variable defaults (currently flat `cells` scan) to also check inside hg `children`
+   - Update `cells.find` for variable delta logic to also search inside hg `children`
+
+7. **`useCellExecution.ts`**
    - No changes needed (receives flat list, keyed by name)
 
 ### Phase 3: Editor Panel
 
-7. **`CellEditor.tsx`**
+8. **`CellEditor.tsx`**
    - Handle hg cells: when `cell.type === 'hg'`, pass through to `HorizontalGroupCellEditor`
    - Add `selectedChildIndex` and `onChildSelect` props for navigating between group and child editors
 
 ### Phase 4: Child Management (within hg)
 
-8. **`HorizontalGroupCellEditor`** (in `HorizontalGroupCell.tsx`)
+9. **`HorizontalGroupCellEditor`** (in `HorizontalGroupCell.tsx`)
    - Add child button (add-cell modal minus 'hg' option)
    - Remove child (with confirmation)
    - Reorder children via up/down arrow buttons in the children list (moves left/right in the horizontal layout)
    - Click child → switch editor to child config
 
-### Phase 5: Cross-Group Drag & Drop
+### Phase 5: Drag & Drop Integration
 
-9. **`NotebookRenderer.tsx`**
-   - Add `useDroppable` on each hg cell body (droppable id: `hg-drop-${cell.name}`)
-   - Update `handleDragEnd` with two new branches:
-     - If `over.id` starts with `hg-drop-`: remove dragged cell from source, append to target hg's children
-     - If dragged cell is an hg child and dropped outside parent hg: remove from hg children, insert after parent group in top-level list
-   - Add constraint: skip drop if dragged item is type `hg`
-   - Add CSS highlight on hg body when `isOver` is true (blue border glow)
+10. **`NotebookRenderer.tsx`**
+   - Add `dragOverZone` state (`'before' | 'into' | 'after' | null`) and `dragOverHgName` state
+   - Add `onDragOver` handler: when `over.id` resolves to an hg cell, compute pointer Y relative to `over.rect` to determine zone (top 25% / middle 50% / bottom 25%), update `dragOverZone`; clear when over a non-hg cell
+   - Update `handleDragEnd`: when `over.id` is an hg cell and `dragOverZone === 'into'`, remove dragged cell from top-level and append to hg's `children`; for `'before'`/`'after'` zones, use standard `arrayMove`
+   - Add constraint: skip `'into'` zone when dragged item is type `hg`
+   - Pass `dragOverZone` and `dragOverHgName` to hg cell renderer for visual feedback (insertion line or body highlight)
+   - Add `onChildDragOut` callback: receives child name and parent hg name, removes child from hg `children`, inserts as top-level cell after the group
 
-10. **`HorizontalGroupCell.tsx`**
+11. **`HorizontalGroupCell.tsx`**
     - Nested `DndContext` + `SortableContext` with `horizontalListSortingStrategy` for within-group reordering
     - Child drag handles for horizontal reordering
+    - In nested `onDragEnd`: if `over === null` (child dragged outside bounds), call `onChildDragOut` callback to extract child to top-level
+    - Visual feedback: blue insertion line (top/bottom zone) or blue border highlight (middle zone) based on passed `dragOverZone` prop
 
 ## Files to Modify
 
 | File | Action | Description |
 |------|--------|-------------|
 | `notebook-types.ts` | Modify | Add `'hg'` to CellType, add `HorizontalGroupCellConfig`, update `CellConfig` union |
-| `notebook-utils.ts` | Modify | Add `flattenCellsForExecution` utility |
+| `notebook-utils.ts` | Modify | Add `flattenCellsForExecution`, update `cleanupVariableParams` to recurse into hg children |
 | `cells/HorizontalGroupCell.tsx` | Create | Renderer, editor, metadata |
 | `cell-registry.ts` | Modify | Import and register hg metadata |
-| `NotebookRenderer.tsx` | Modify | Flatten cells for execution, selection model, hg rendering, cross-group drag |
+| `NotebookRenderer.tsx` | Modify | Flatten cells for execution, selection model, hg rendering, three-zone drag, `existingNames` includes child names, sort-option monitoring recurses into hg children |
 | `CellEditor.tsx` | Modify | Handle hg type, child navigation |
+| `useNotebookVariables.ts` | Modify | Recurse into hg children when scanning for variable cells (baseline values and delta logic) |
 
 ## Trade-offs
 
@@ -234,8 +254,11 @@ The issue specifies children share the parent hg cell's height. This is simpler 
 **Selection model (two indices vs. cell name):**
 Using `selectedCellIndex + selectedChildIndex` is minimal change over the current model. An alternative is switching to `selectedCellName: string | null` which would be cleaner but requires changing more call sites. The two-index approach was chosen for smaller diff.
 
-**Fixed-position cross-group drag:**
-Dragging in always appends as last child; dragging out always inserts after the group. This avoids collision detection ambiguity (no need to determine where within a container the cell lands). Users can fine-tune order within the group via horizontal drag reordering after the cell lands. Full positional cross-container drag would require custom collision detection and `handleDragOver` live preview — significantly more complex for marginal UX gain.
+**Three-zone drop targeting vs. useDroppable:**
+Using `useDroppable` on the hg body would conflict with the `SortableContext` — both register overlapping rects for the same element, causing `closestCenter` to oscillate between the sortable slot and the droppable zone. The three-zone approach avoids this entirely: the sortable context handles collision detection as usual, and the zone is determined by pointer Y position relative to the hg cell's rect in `onDragOver`. Top/bottom zones reorder normally; middle zone triggers drop-into. This keeps the existing collision detection unchanged and makes intent unambiguous through spatial position.
+
+**Drop-into appends as last child:**
+When dropping into an hg via the middle zone, the cell is appended as the last child rather than inserted at a specific position. Users can fine-tune order within the group via horizontal drag reordering after the cell lands. Positional insertion would require computing drop position within the horizontal child layout during the vertical drag — significantly more complex for marginal UX gain.
 
 **No hg-in-hg nesting:**
 The type system allows it but the UI prevents it (add-child modal excludes 'hg'). This keeps the implementation simple while leaving the door open for future nesting if needed.
@@ -254,9 +277,12 @@ The type system allows it but the UI prevents it (add-child modal excludes 'hg')
    - Delete an hg group — verify all children cleaned up
    - Duplicate an hg group — verify all child names uniquified
    - Drag hg in vertical list — verify reorder works
-   - Drag a top-level cell onto an hg body — verify it becomes the last child
+   - Drag a top-level cell to the top zone of an hg — verify it reorders before the hg
+   - Drag a top-level cell to the middle zone of an hg — verify it becomes the last child
+   - Drag a top-level cell to the bottom zone of an hg — verify it reorders after the hg
+   - Verify visual feedback: insertion line for top/bottom zones, body highlight for middle zone
    - Drag a child out of an hg — verify it appears after the group in top-level
-   - Drag an hg cell onto another hg — verify it is rejected (no nesting)
+   - Drag an hg cell onto another hg's middle zone — verify it is rejected (no nesting, treated as reorder)
    - Drag the last child out — verify group shows empty state
    - Reorder children within an hg via horizontal drag
    - Collapse/expand hg — verify children hidden/shown
