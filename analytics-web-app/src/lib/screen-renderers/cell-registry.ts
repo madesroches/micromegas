@@ -152,6 +152,7 @@ import { propertyTimelineMetadata } from './cells/PropertyTimelineCell'
 import { swimlaneMetadata } from './cells/SwimlaneCell'
 import { perfettoExportMetadata } from './cells/PerfettoExportCell'
 import { referenceTableMetadata } from './cells/ReferenceTableCell'
+import { hgMetadata } from './cells/HorizontalGroupCell'
 
 /**
  * Registry of all cell type metadata.
@@ -167,6 +168,7 @@ export const CELL_TYPE_METADATA: Record<CellType, CellTypeMetadata> = {
   swimlane: swimlaneMetadata,
   perfettoexport: perfettoExportMetadata,
   referencetable: referenceTableMetadata,
+  hg: hgMetadata,
 }
 
 /**

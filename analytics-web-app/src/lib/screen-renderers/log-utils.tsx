@@ -141,7 +141,7 @@ export function renderLogColumn(col: LogColumn, row: Record<string, unknown>): R
     default: {
       const formatted = formatCell(value, col.type)
       return (
-        <span className="text-theme-text-secondary mr-3 truncate max-w-[200px]" title={formatted}>
+        <span className="text-theme-text-secondary mr-3 truncate min-w-[60px] max-w-[200px]" title={formatted}>
           {formatted}
         </span>
       )

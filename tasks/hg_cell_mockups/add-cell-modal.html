@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Add Cell Modal with Horizontal Group</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #0a0a0f;
+    color: #e7e9ea;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  :root {
+    --panel-bg: #12121a;
+    --card-bg: #1a1a2e;
+    --border: #2a2a3e;
+    --text-primary: #e7e9ea;
+    --text-secondary: #9ca3af;
+    --text-muted: #6b7280;
+    --accent-link: #1565c0;
+  }
+
+  /* ---- Modal backdrop ---- */
+  .modal-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 50;
+  }
+
+  .modal {
+    width: 380px;
+    background: var(--panel-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    box-shadow: 0 25px 50px rgba(0,0,0,0.5);
+    overflow: hidden;
+  }
+
+  .modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .modal-title {
+    font-size: 18px;
+    font-weight: 500;
+    color: var(--text-primary);
+  }
+
+  .btn-close {
+    width: 28px; height: 28px;
+    border: none; background: transparent;
+    color: var(--text-muted); border-radius: 4px;
+    cursor: pointer; font-size: 18px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .btn-close:hover { background: var(--border); color: var(--text-primary); }
+
+  .modal-body {
+    padding: 8px;
+  }
+
+  .cell-option {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px;
+    border-radius: 8px;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    text-align: left;
+    color: var(--text-primary);
+    transition: background 0.15s;
+  }
+  .cell-option:hover { background: var(--card-bg); }
+
+  .cell-option-icon {
+    width: 40px;
+    height: 40px;
+    background: var(--card-bg);
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    flex-shrink: 0;
+  }
+
+  .cell-option-text {}
+  .cell-option-name {
+    font-weight: 500;
+    font-size: 14px;
+    color: var(--text-primary);
+  }
+  .cell-option-desc {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-top: 2px;
+  }
+
+  /* Highlight the new HG option */
+  .cell-option.highlight {
+    background: rgba(21,101,192,0.08);
+    border: 1px solid rgba(21,101,192,0.3);
+  }
+  .cell-option.highlight .cell-option-icon {
+    background: rgba(21,101,192,0.2);
+    color: var(--accent-link);
+  }
+</style>
+</head>
+<body>
+
+<div class="modal-backdrop">
+  <div class="modal">
+    <div class="modal-header">
+      <h2 class="modal-title">Add Cell</h2>
+      <button class="btn-close">&times;</button>
+    </div>
+
+    <div class="modal-body">
+      <button class="cell-option">
+        <div class="cell-option-icon">T</div>
+        <div class="cell-option-text">
+          <div class="cell-option-name">Table</div>
+          <div class="cell-option-desc">Generic SQL results as a table</div>
+        </div>
+      </button>
+
+      <button class="cell-option">
+        <div class="cell-option-icon">C</div>
+        <div class="cell-option-text">
+          <div class="cell-option-name">Chart</div>
+          <div class="cell-option-desc">Time series line chart</div>
+        </div>
+      </button>
+
+      <button class="cell-option">
+        <div class="cell-option-icon">L</div>
+        <div class="cell-option-text">
+          <div class="cell-option-name">Log</div>
+          <div class="cell-option-desc">Log entries with search and filtering</div>
+        </div>
+      </button>
+
+      <button class="cell-option">
+        <div class="cell-option-icon">M</div>
+        <div class="cell-option-text">
+          <div class="cell-option-name">Markdown</div>
+          <div class="cell-option-desc">Rich text content with variable substitution</div>
+        </div>
+      </button>
+
+      <button class="cell-option">
+        <div class="cell-option-icon">V</div>
+        <div class="cell-option-text">
+          <div class="cell-option-name">Variable</div>
+          <div class="cell-option-desc">User input (dropdown, text, expression)</div>
+        </div>
+      </button>
+
+      <!-- NEW: Horizontal Group option (highlighted) -->
+      <button class="cell-option highlight">
+        <div class="cell-option-icon">H</div>
+        <div class="cell-option-text">
+          <div class="cell-option-name">Horizontal Group</div>
+          <div class="cell-option-desc">Side-by-side container for multiple cells</div>
+        </div>
+      </button>
+
+      <button class="cell-option">
+        <div class="cell-option-icon">P</div>
+        <div class="cell-option-text">
+          <div class="cell-option-name">Property Timeline</div>
+          <div class="cell-option-desc">Property changes over time</div>
+        </div>
+      </button>
+
+      <button class="cell-option">
+        <div class="cell-option-icon">S</div>
+        <div class="cell-option-text">
+          <div class="cell-option-name">Swimlane</div>
+          <div class="cell-option-desc">Horizontal lanes with time segments</div>
+        </div>
+      </button>
+
+      <button class="cell-option">
+        <div class="cell-option-icon">X</div>
+        <div class="cell-option-text">
+          <div class="cell-option-name">Perfetto Export</div>
+          <div class="cell-option-desc">Export trace data to Perfetto viewer</div>
+        </div>
+      </button>
+
+      <button class="cell-option">
+        <div class="cell-option-icon">R</div>
+        <div class="cell-option-text">
+          <div class="cell-option-name">Reference Table</div>
+          <div class="cell-option-desc">CSV-based reference data</div>
+        </div>
+      </button>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

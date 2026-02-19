@@ -6,6 +6,7 @@ export type {
   QueryCellConfig,
   MarkdownCellConfig,
   VariableCellConfig,
+  HorizontalGroupCellConfig,
   CellConfig,
   CellState,
   NotebookConfig,
@@ -20,7 +21,7 @@ export {
   variableValuesEqual,
 } from './notebook-types'
 
-import type { CellConfig, VariableValue } from './notebook-types'
+import type { CellConfig, CellType, HorizontalGroupCellConfig, VariableValue } from './notebook-types'
 import { getVariableString } from './notebook-types'
 
 import type { ScreenConfig } from '@/lib/screens-api'
@@ -45,6 +46,47 @@ export function validateVariableName(name: string): string | null {
     return `"${sanitized}" is a reserved name and cannot be used for variables (conflicts with URL parameters)`
   }
   return null // Valid
+}
+
+/**
+ * Flattens a cell list for execution by expanding hg children into the top-level list.
+ * The hg cell itself is omitted; its children appear in its place (left to right).
+ */
+export function flattenCellsForExecution(cells: CellConfig[]): CellConfig[] {
+  const result: CellConfig[] = []
+  for (const cell of cells) {
+    if (cell.type === 'hg') {
+      result.push(...(cell as HorizontalGroupCellConfig).children)
+    } else {
+      result.push(cell)
+    }
+  }
+  return result
+}
+
+/**
+ * Collects all cell names including children inside hg groups.
+ */
+export function collectAllCellNames(cells: CellConfig[]): Set<string> {
+  const names = new Set<string>()
+  for (const cell of cells) {
+    names.add(cell.name)
+    if (cell.type === 'hg') {
+      for (const child of (cell as HorizontalGroupCellConfig).children) {
+        names.add(child.name)
+      }
+    }
+  }
+  return names
+}
+
+/**
+ * Returns true if a cell type should display a data source selector.
+ * Markdown cells have no queries, variable cells handle their own selector,
+ * referencetable cells don't query, and chart cells manage data source per-query.
+ */
+export function shouldShowDataSource(type: CellType): boolean {
+  return type !== 'markdown' && type !== 'variable' && type !== 'referencetable' && type !== 'chart'
 }
 
 // Default SQL queries per cell type
@@ -175,13 +217,23 @@ export function cleanupVariableParams(
   params: URLSearchParams,
   savedConfig: ScreenConfig,
 ): void {
-  const savedCells = (savedConfig as { cells?: Array<{ type: string; name: string; defaultValue?: string }> }).cells
+  type SavedCell = { type: string; name: string; defaultValue?: string; children?: SavedCell[] }
+  const savedCells = (savedConfig as { cells?: SavedCell[] }).cells
   if (!savedCells) return
+
+  // Flatten saved cells to include hg children
+  const allSavedCells: SavedCell[] = []
+  for (const cell of savedCells) {
+    allSavedCells.push(cell)
+    if (cell.type === 'hg' && cell.children) {
+      allSavedCells.push(...cell.children)
+    }
+  }
 
   const keysToDelete: string[] = []
   params.forEach((_value, key) => {
     if (RESERVED_URL_PARAMS.has(key)) return
-    const savedCell = savedCells.find((c) => c.type === 'variable' && c.name === key)
+    const savedCell = allSavedCells.find((c) => c.type === 'variable' && c.name === key)
     if (savedCell && savedCell.defaultValue === params.get(key)) {
       keysToDelete.push(key)
     }

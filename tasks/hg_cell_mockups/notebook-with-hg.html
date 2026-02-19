@@ -1,0 +1,684 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Notebook with Horizontal Group Cell</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #0a0a0f;
+    color: #e7e9ea;
+    min-height: 100vh;
+  }
+
+  /* ---- Theme tokens ---- */
+  :root {
+    --app-bg: #0a0a0f;
+    --panel-bg: #12121a;
+    --card-bg: #1a1a2e;
+    --border: #2a2a3e;
+    --border-hover: #3a3a4e;
+    --text-primary: #e7e9ea;
+    --text-secondary: #9ca3af;
+    --text-muted: #6b7280;
+    --accent-link: #1565c0;
+    --accent-error: #f87171;
+    --selection-bg: rgba(21,101,192,0.15);
+    --selection-border: #1565c0;
+  }
+
+  .layout {
+    display: flex;
+    height: 100vh;
+  }
+
+  /* ---- Main notebook area ---- */
+  .notebook {
+    flex: 1;
+    padding: 24px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  /* ---- Generic cell shell ---- */
+  .cell {
+    background: var(--panel-bg);
+    border: 2px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    transition: border-color 0.15s;
+  }
+  .cell:hover { border-color: var(--border-hover); }
+  .cell.selected { border-color: var(--selection-border); background: var(--selection-bg); }
+
+  .cell-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border);
+    background: var(--card-bg);
+  }
+  .cell.selected .cell-header { background: var(--selection-bg); }
+
+  .cell-header-left {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .cell-header-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .drag-handle {
+    color: var(--text-muted);
+    cursor: grab;
+    font-size: 14px;
+  }
+
+  .collapse-toggle {
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 12px;
+    background: none;
+    border: none;
+  }
+
+  .type-badge {
+    font-size: 11px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: var(--panel-bg);
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    font-weight: 500;
+  }
+
+  .cell-name {
+    font-weight: 500;
+    color: var(--text-primary);
+  }
+
+  .status-text {
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+
+  .btn-icon {
+    width: 28px;
+    height: 28px;
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+    border-radius: 4px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 13px;
+  }
+  .btn-icon:hover { background: var(--border); color: var(--text-primary); }
+
+  .cell-body {
+    padding: 16px;
+    overflow: auto;
+  }
+
+  /* ---- Variable cell (compact, no body) ---- */
+  .cell-variable .cell-header {
+    border-bottom: none;
+  }
+  .cell-variable .variable-input {
+    flex: 1;
+    min-width: 0;
+    margin: 0 8px;
+  }
+  .cell-variable select {
+    width: 100%;
+    padding: 4px 8px;
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text-primary);
+    font-size: 13px;
+  }
+
+  /* ============================================================
+     HORIZONTAL GROUP CELL — the new hg type
+     ============================================================ */
+  .hg-body {
+    padding: 8px;
+    display: flex;
+    flex-direction: row;
+    gap: 12px;
+  }
+
+  .hg-child {
+    flex: 1;
+    min-width: 0;
+    background: var(--panel-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    transition: border-color 0.15s;
+  }
+  .hg-child:hover { border-color: var(--border-hover); }
+  .hg-child.child-selected { border-color: var(--selection-border); }
+
+  .hg-child-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--border);
+    background: var(--card-bg);
+    font-size: 13px;
+  }
+  .hg-child-header-left {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .hg-child-header-right {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .hg-child-name {
+    font-weight: 500;
+    color: var(--text-primary);
+    font-size: 13px;
+  }
+
+  .hg-child-body {
+    flex: 1;
+    padding: 12px;
+    overflow: auto;
+  }
+
+  /* ---- Fake table ---- */
+  .fake-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+  }
+  .fake-table th {
+    text-align: left;
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--border);
+    color: var(--text-secondary);
+    font-weight: 500;
+    text-transform: uppercase;
+    font-size: 11px;
+  }
+  .fake-table td {
+    padding: 6px 10px;
+    border-bottom: 1px solid rgba(42,42,62,0.5);
+    color: var(--text-primary);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* ---- Fake chart ---- */
+  .fake-chart {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: flex-end;
+    gap: 3px;
+    padding: 8px 0;
+  }
+  .fake-chart-bar {
+    flex: 1;
+    background: linear-gradient(to top, #bf360c, #e65100);
+    border-radius: 2px 2px 0 0;
+    min-width: 4px;
+    opacity: 0.8;
+  }
+
+  /* ---- Resize handle ---- */
+  .resize-handle {
+    height: 4px;
+    cursor: ns-resize;
+    background: transparent;
+    transition: background 0.15s;
+  }
+  .resize-handle:hover { background: var(--accent-link); }
+
+  /* ---- Editor panel ---- */
+  .editor-panel {
+    width: 350px;
+    flex-shrink: 0;
+    background: var(--panel-bg);
+    border-left: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .editor-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+  }
+  .editor-header-left {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .editor-content {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px;
+  }
+
+  .editor-section {
+    margin-bottom: 16px;
+  }
+
+  .editor-label {
+    display: block;
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    margin-bottom: 6px;
+  }
+
+  .editor-input {
+    width: 100%;
+    padding: 8px 12px;
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text-primary);
+    font-size: 13px;
+  }
+  .editor-input:focus {
+    outline: none;
+    border-color: var(--accent-link);
+  }
+
+  .child-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .child-list-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    cursor: pointer;
+    transition: border-color 0.15s;
+  }
+  .child-list-item:hover { border-color: var(--border-hover); }
+
+  .child-list-item .child-actions {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+  }
+
+  .btn-arrow {
+    width: 24px;
+    height: 24px;
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    border-radius: 4px;
+    font-size: 13px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+  }
+  .btn-arrow:hover { color: var(--text-primary); background: var(--border); }
+  .btn-arrow:disabled { opacity: 0.25; cursor: default; }
+  .btn-arrow:disabled:hover { color: var(--text-muted); background: transparent; }
+
+  .child-list-item .child-info {
+    flex: 1;
+    min-width: 0;
+  }
+  .child-list-item .child-info-name {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-primary);
+  }
+  .child-list-item .child-info-type {
+    font-size: 11px;
+    color: var(--text-muted);
+  }
+
+  .btn-remove {
+    width: 24px;
+    height: 24px;
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    border-radius: 4px;
+    font-size: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .btn-remove:hover { color: var(--accent-error); background: rgba(248,113,113,0.1); }
+
+  .btn-add-child {
+    width: 100%;
+    padding: 10px;
+    border: 2px dashed var(--border);
+    border-radius: 8px;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 13px;
+    transition: all 0.15s;
+    margin-top: 8px;
+  }
+  .btn-add-child:hover {
+    border-color: var(--accent-link);
+    color: var(--accent-link);
+    background: rgba(21,101,192,0.1);
+  }
+
+  .editor-footer {
+    padding: 12px;
+    border-top: 1px solid var(--border);
+  }
+  .editor-footer .btn-delete {
+    width: 100%;
+    padding: 8px;
+    border: 1px solid var(--accent-error);
+    border-radius: 6px;
+    background: transparent;
+    color: var(--accent-error);
+    cursor: pointer;
+    font-size: 13px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+  }
+  .editor-footer .btn-delete:hover { background: rgba(248,113,113,0.1); }
+
+  /* ---- Add cell button ---- */
+  .add-cell-btn {
+    width: 100%;
+    padding: 12px;
+    border: 2px dashed var(--border);
+    border-radius: 8px;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 14px;
+    transition: all 0.15s;
+  }
+  .add-cell-btn:hover {
+    border-color: var(--accent-link);
+    color: var(--accent-link);
+    background: rgba(21,101,192,0.1);
+  }
+
+  .view-source-btn {
+    align-self: center;
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    font-size: 12px;
+    cursor: pointer;
+    padding: 8px;
+  }
+  .view-source-btn:hover { color: var(--text-secondary); }
+
+  /* ---- Annotations ---- */
+  .annotation {
+    position: relative;
+  }
+  .annotation-label {
+    position: absolute;
+    top: -22px;
+    left: 12px;
+    font-size: 11px;
+    color: #ffb300;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+  }
+
+  .zap-icon {
+    color: var(--accent-link);
+    font-size: 12px;
+  }
+</style>
+</head>
+<body>
+
+<div class="layout">
+  <!-- ===== NOTEBOOK MAIN AREA ===== -->
+  <div class="notebook">
+
+    <!-- CELL 1: Variable (process_id) -->
+    <div class="cell cell-variable">
+      <div class="cell-header">
+        <div class="cell-header-left">
+          <span class="drag-handle">&#9776;</span>
+          <span class="type-badge">Variable</span>
+          <span class="cell-name">process_id</span>
+        </div>
+        <div class="variable-input">
+          <select>
+            <option>f3a1b2c4 | my-service | 2024-01-15</option>
+          </select>
+        </div>
+        <div class="cell-header-right">
+          <span class="status-text">3 options</span>
+          <button class="btn-icon" title="Run">&#9654;</button>
+          <button class="btn-icon" title="Menu">&#8942;</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- CELL 2: HORIZONTAL GROUP (selected) -->
+    <div class="cell selected" style="margin-top: 8px;">
+      <div class="cell-header">
+        <div class="cell-header-left">
+          <span class="drag-handle">&#9776;</span>
+          <button class="collapse-toggle">&#9660;</button>
+          <span class="type-badge">HG</span>
+          <span class="cell-name">overview_row</span>
+        </div>
+        <div class="cell-header-right">
+          <button class="btn-icon" title="Menu">&#8942;</button>
+        </div>
+      </div>
+
+      <!-- HG body: children side-by-side -->
+      <div class="hg-body" style="height: 250px;">
+
+        <!-- Child 1: Table -->
+        <div class="hg-child">
+          <div class="hg-child-header">
+            <div class="hg-child-header-left">
+              <span class="type-badge" style="font-size:10px; padding:1px 5px;">Table</span>
+              <span class="hg-child-name">cpu_data</span>
+            </div>
+            <div class="hg-child-header-right">
+              <span class="status-text" style="font-size:11px;">200 rows (4.2 KB)</span>
+              <button class="btn-icon" style="width:24px;height:24px;font-size:11px;" title="Run">&#9654;</button>
+              <button class="btn-icon" style="width:24px;height:24px;font-size:11px;" title="Menu">&#8942;</button>
+            </div>
+          </div>
+          <div class="hg-child-body">
+            <table class="fake-table">
+              <thead>
+                <tr><th>time</th><th>metric</th><th>value</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>14:30:01</td><td>cpu_user</td><td>42.3</td></tr>
+                <tr><td>14:30:02</td><td>cpu_user</td><td>38.7</td></tr>
+                <tr><td>14:30:03</td><td>cpu_user</td><td>51.2</td></tr>
+                <tr><td>14:30:04</td><td>cpu_user</td><td>45.8</td></tr>
+                <tr><td>14:30:05</td><td>cpu_user</td><td>39.1</td></tr>
+                <tr><td>14:30:06</td><td>cpu_user</td><td>55.4</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Child 2: Chart -->
+        <div class="hg-child">
+          <div class="hg-child-header">
+            <div class="hg-child-header-left">
+              <span class="type-badge" style="font-size:10px; padding:1px 5px;">Chart</span>
+              <span class="hg-child-name">cpu_chart</span>
+            </div>
+            <div class="hg-child-header-right">
+              <span class="status-text" style="font-size:11px;">200 rows (4.2 KB)</span>
+              <button class="btn-icon" style="width:24px;height:24px;font-size:11px;" title="Run">&#9654;</button>
+              <button class="btn-icon" style="width:24px;height:24px;font-size:11px;" title="Menu">&#8942;</button>
+            </div>
+          </div>
+          <div class="hg-child-body">
+            <div class="fake-chart">
+              <div class="fake-chart-bar" style="height:42%"></div>
+              <div class="fake-chart-bar" style="height:39%"></div>
+              <div class="fake-chart-bar" style="height:51%"></div>
+              <div class="fake-chart-bar" style="height:46%"></div>
+              <div class="fake-chart-bar" style="height:39%"></div>
+              <div class="fake-chart-bar" style="height:55%"></div>
+              <div class="fake-chart-bar" style="height:48%"></div>
+              <div class="fake-chart-bar" style="height:62%"></div>
+              <div class="fake-chart-bar" style="height:44%"></div>
+              <div class="fake-chart-bar" style="height:37%"></div>
+              <div class="fake-chart-bar" style="height:52%"></div>
+              <div class="fake-chart-bar" style="height:59%"></div>
+              <div class="fake-chart-bar" style="height:41%"></div>
+              <div class="fake-chart-bar" style="height:47%"></div>
+              <div class="fake-chart-bar" style="height:35%"></div>
+              <div class="fake-chart-bar" style="height:58%"></div>
+              <div class="fake-chart-bar" style="height:43%"></div>
+              <div class="fake-chart-bar" style="height:50%"></div>
+              <div class="fake-chart-bar" style="height:67%"></div>
+              <div class="fake-chart-bar" style="height:45%"></div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <div class="resize-handle"></div>
+    </div>
+
+    <!-- CELL 3: Regular table below -->
+    <div class="cell">
+      <div class="cell-header">
+        <div class="cell-header-left">
+          <span class="drag-handle">&#9776;</span>
+          <button class="collapse-toggle">&#9660;</button>
+          <span class="type-badge">Table</span>
+          <span class="cell-name">log_entries</span>
+        </div>
+        <div class="cell-header-right">
+          <span class="status-text">1,024 rows (128 KB) in 0.34s</span>
+          <button class="btn-icon" title="Run">&#9654;</button>
+          <button class="btn-icon" title="Menu">&#8942;</button>
+        </div>
+      </div>
+      <div class="cell-body" style="height: 120px;">
+        <table class="fake-table">
+          <thead>
+            <tr><th>time</th><th>level</th><th>msg</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>14:30:01.234</td><td>INFO</td><td>Request received for /api/metrics</td></tr>
+            <tr><td>14:30:01.238</td><td>DEBUG</td><td>Query executed in 4ms</td></tr>
+            <tr><td>14:30:01.240</td><td>INFO</td><td>Response sent: 200 OK</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="resize-handle"></div>
+    </div>
+
+    <button class="add-cell-btn">+ Add Cell</button>
+    <button class="view-source-btn">{ } View source</button>
+  </div>
+
+  <!-- ===== EDITOR PANEL (showing hg group editor) ===== -->
+  <div class="editor-panel">
+    <div class="editor-header">
+      <div class="editor-header-left">
+        <span class="type-badge">HG</span>
+        <span class="cell-name">overview_row</span>
+      </div>
+      <button class="btn-icon" title="Close">&times;</button>
+    </div>
+
+    <div class="editor-content">
+      <!-- Cell name -->
+      <div class="editor-section">
+        <label class="editor-label">Cell Name</label>
+        <input class="editor-input" type="text" value="overview_row" />
+      </div>
+
+      <!-- Children list -->
+      <div class="editor-section">
+        <label class="editor-label">Children</label>
+        <div class="child-list">
+
+          <div class="child-list-item">
+            <div class="child-info">
+              <div class="child-info-name">cpu_data</div>
+              <div class="child-info-type">Table</div>
+            </div>
+            <div class="child-actions">
+              <button class="btn-arrow" disabled title="Move left">&larr;</button>
+              <button class="btn-arrow" title="Move right">&rarr;</button>
+              <button class="btn-remove" title="Remove">&times;</button>
+            </div>
+          </div>
+
+          <div class="child-list-item">
+            <div class="child-info">
+              <div class="child-info-name">cpu_chart</div>
+              <div class="child-info-type">Chart</div>
+            </div>
+            <div class="child-actions">
+              <button class="btn-arrow" title="Move left">&larr;</button>
+              <button class="btn-arrow" disabled title="Move right">&rarr;</button>
+              <button class="btn-remove" title="Remove">&times;</button>
+            </div>
+          </div>
+
+        </div>
+
+        <button class="btn-add-child">+ Add Child Cell</button>
+      </div>
+    </div>
+
+    <div class="editor-footer">
+      <button class="btn-delete">&#128465; Delete Group</button>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>
