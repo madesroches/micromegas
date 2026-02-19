@@ -31,7 +31,7 @@ A pure function `buildCellRendererProps` that:
 - Calls `getCellTypeMetadata` + `getRendererProps` from the registry
 - Handles variable-specific branching (`value` from `context.allVariableValues[cell.name]`, `onValueChange` conditional on `cell.type === 'variable'`)
 - Maps `context.availableVariables` → `props.variables` (scoped variable lookup for renderers)
-- Merges `rendererProps` from metadata
+- Spreads `rendererProps` from metadata **last** (highest precedence) — preserves current behavior where `getRendererProps` can override base fields like `data`, `status`, `options`
 - Returns complete `CellRendererProps`
 
 Also a helper `buildStatusText(cell, state)` that computes the status text string using the full format (rows, bytes, elapsed time, fetch progress). Both top-level and HG children use the same function — HG children currently show a simpler format (rows + bytes only), but the full format is more useful for understanding what's happening inside a collapsed group.
@@ -117,7 +117,7 @@ function buildHgStatusText(
 
 4. Replace manual statusText computation with `buildStatusText(child, state)`.
 
-5. Remove `onVariableValueChange` as a separate prop (absorbed into the callbacks bag). `variableValues` is still needed but now passed as `context.allVariableValues`; `variables` (scoped) becomes `context.availableVariables`.
+5. Keep `onVariableValueChange` as an HG prop — it dispatches runtime state changes (`setVariableValue`) that live in NotebookRenderer, not config mutations. The per-child `onValueChange` closure in step 3 delegates to it: `(value) => onVariableValueChange(child.name, value)`. Similarly, keep `variableValues` as a prop (passed as `context.allVariableValues`) and `variables` (passed as `context.availableVariables`).
 
 ### Changes to `NotebookRenderer.tsx`
 
@@ -164,15 +164,69 @@ function buildHgStatusText(
 - **Auto-run logic** in `onValueChange` — stays in NotebookRenderer's callback, not in the shared function.
 - **titleBarRenderer resolution** — both paths still do `meta.titleBarRenderer ? <TitleBarRenderer {...props} />` since the result goes to different containers (`CellContainer.titleBarContent` vs `ChildCellHeader.titleBarContent`).
 
+## Tests
+
+New file: `analytics-web-app/src/lib/screen-renderers/__tests__/notebook-cell-view.test.ts`
+
+All exported functions are pure (no React, no DOM, no async). Only mock needed: `getCellTypeMetadata` from the cell registry.
+
+### `formatBytes`
+
+- `formatBytes(0)` → `"0 B"`
+- `formatBytes(512)` → `"512 B"`
+- `formatBytes(1024)` → `"1.0 KB"`
+- `formatBytes(1536)` → `"1.5 KB"`
+- `formatBytes(1048576)` → `"1.0 MB"`
+
+### `formatElapsedMs`
+
+- `formatElapsedMs(0)` → `"0ms"`
+- `formatElapsedMs(500)` → `"500ms"`
+- `formatElapsedMs(999)` → `"999ms"`
+- `formatElapsedMs(1000)` → `"1.00s"`
+- `formatElapsedMs(5500)` → `"5.50s"`
+
+### `buildStatusText`
+
+- Non-combobox variable cell (`variableType: 'text'`) → `undefined`
+- Combobox variable cell with data → returns row/byte string (not suppressed)
+- `status: 'loading'` with `fetchProgress: { rows: 100, bytes: 2048 }` → `"100 rows (2.0 KB)"`
+- `status: 'loading'` without `fetchProgress` → `undefined`
+- Data present with `elapsedMs: 320` → `"N rows (X KB) in 320ms"`
+- Data present without `elapsedMs` → `"N rows (X KB)"`
+- Empty data array → `undefined`
+
+### `buildHgStatusText`
+
+- No children → `undefined`
+- All children idle (empty data) → `undefined`
+- Single child with data + elapsed → same format as `buildStatusText`
+- Two children: sums rows, bytes, elapsed across both
+- Mixed: one child has data, one idle → sums only the child with data
+- Children with `elapsedMs` on some but not all → omits elapsed portion
+
+### `buildCellRendererProps`
+
+Mock `getCellTypeMetadata` to return `{ getRendererProps: () => ({}) }` by default.
+
+- **Base mapping**: table cell → result has `name`, `data`, `status`, `error`, `timeRange`, `variables`, `isEditing`, `dataSource` from context; `onRun`, `onSqlChange`, `onOptionsChange`, `onContentChange`, `onTimeRangeSelect` from callbacks; `value` and `onValueChange` are `undefined`
+- **Variable cell**: `value` set from `context.allVariableValues[cell.name]`, `onValueChange` set from callbacks
+- **Variable cell with no value in map**: `value` is `undefined`
+- **Metadata override**: mock `getRendererProps` returning `{ options: { custom: true } }` → result `options` is `{ custom: true }` (overrides base)
+- **Metadata override of `data`**: mock returning `{ data: customData }` → result `data` is `customData` (not `state.data`)
+- **Context passthrough**: `availableVariables` → `props.variables`, `timeRange` → `props.timeRange`, `isEditing` → `props.isEditing`, `dataSource` → `props.dataSource`
+
 ## Implementation Steps
 
-1. Create `analytics-web-app/src/lib/screen-renderers/notebook-cell-view.ts` with `buildCellRendererProps`, `buildStatusText`, and `buildHgStatusText`
-2. Update `HorizontalGroupCell.tsx`: add props, add `updateChildConfig`, replace manual prop/status assembly with helpers, import `resolveCellDataSource`
-3. Update `NotebookRenderer.tsx`: replace manual prop/status assembly with helpers, pass new props to HorizontalGroupCell
+1. Create `analytics-web-app/src/lib/screen-renderers/notebook-cell-view.ts` with `buildCellRendererProps`, `buildStatusText`, `buildHgStatusText`, `formatBytes`, `formatElapsedMs`
+2. Add tests in `analytics-web-app/src/lib/screen-renderers/__tests__/notebook-cell-view.test.ts`
+3. Update `HorizontalGroupCell.tsx`: add props, add `updateChildConfig`, replace manual prop/status assembly with helpers, import `resolveCellDataSource`, remove local `formatBytes`
+4. Update `NotebookRenderer.tsx`: replace manual prop/status assembly with helpers, pass new props to HorizontalGroupCell, remove local `formatBytes`/`formatElapsedMs`
 
 ## Files to Modify
 
 - `analytics-web-app/src/lib/screen-renderers/notebook-cell-view.ts` (NEW)
+- `analytics-web-app/src/lib/screen-renderers/__tests__/notebook-cell-view.test.ts` (NEW)
 - `analytics-web-app/src/lib/screen-renderers/cells/HorizontalGroupCell.tsx`
 - `analytics-web-app/src/lib/screen-renderers/NotebookRenderer.tsx`
 
