@@ -914,7 +914,7 @@ export function NotebookRenderer({
                     const child = hgConfig.children.find((c) => c.name === cellName)
                     if (!child || autoRunningRef.current || !child.autoRunFromHere) return
                     autoRunningRef.current = true
-                    executeFromCellByName(cellName).then(() => {
+                    executeFromCellByName(cellName).finally(() => {
                       autoRunningRef.current = false
                     })
                   }}
@@ -972,7 +972,7 @@ export function NotebookRenderer({
           // Auto-run: if this cell has autoRunFromHere, execute from here onward.
           if (autoRunningRef.current || !cell.autoRunFromHere) return
           autoRunningRef.current = true
-          executeFromCellByName(cell.name).then(() => {
+          executeFromCellByName(cell.name).finally(() => {
             autoRunningRef.current = false
           })
         },
