@@ -445,8 +445,8 @@ export function NotebookRenderer({
       }
     }
 
-    flattenCellsForExecution(cells).forEach(checkCell)
-  }, [cells, executeCellByName])
+    executionCells.forEach(checkCell)
+  }, [executionCells, executeCellByName])
 
   // UI state
   const [selectedCellIndex, setSelectedCellIndex] = useState<number | null>(null)
