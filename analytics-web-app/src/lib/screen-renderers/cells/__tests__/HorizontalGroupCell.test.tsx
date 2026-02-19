@@ -61,6 +61,7 @@ jest.mock('@/lib/data-sources-api', () => ({
 
 // Mock cell-registry
 jest.mock('../../cell-registry', () =>
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
   require('../../__test-utils__/cell-registry-mock').createCellRegistryMock({
     withRenderers: true,
     withEditors: true,
