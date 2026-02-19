@@ -1,5 +1,7 @@
 # Duplicate Cell Plan
 
+**Status**: Completed — PR #834, closes #832
+
 ## Overview
 
 Add a "Duplicate cell" action to the notebook cell dropdown menu, allowing users to quickly clone an existing cell with all its configuration. The duplicate is inserted immediately after the source cell with a unique name and idle execution state.
