@@ -41,7 +41,7 @@ import { HorizontalGroupCell, HorizontalGroupCellEditor } from './cells/Horizont
 import { cleanupTimeParams, useExposeSaveRef } from '@/lib/url-cleanup-utils'
 import { loadWasmEngine } from '@/lib/wasm-engine'
 import { getTimeRangeForApi } from '@/lib/time-range'
-import { buildCellRendererProps, buildStatusText, buildHgStatusText } from './notebook-cell-view'
+import { buildCellRendererProps, buildStatusText, buildHgStatusText, computeHgStatus } from './notebook-cell-view'
 
 // ============================================================================
 // Constants
@@ -864,6 +864,7 @@ export function NotebookRenderer({
               : ''
         : ''
       const hgStatusText = buildHgStatusText(hgConfig.children, cellStates)
+      const hgStatus = computeHgStatus(hgConfig.children, cellStates)
       return (
         <SortableCell key={cell.name} id={cell.name}>
           {({ dragHandleProps, isDragging, setNodeRef, style }) => (
@@ -873,7 +874,7 @@ export function NotebookRenderer({
                 isDragging={isDragging}
                 name={cell.name}
                 type={cell.type}
-                status="idle"
+                status={hgStatus}
                 statusText={hgStatusText}
                 collapsed={cell.layout.collapsed}
                 onToggleCollapsed={() => toggleCellCollapsed(index)}
@@ -882,6 +883,7 @@ export function NotebookRenderer({
                   setSelectedCellIndex(index)
                   setSelectedChildName(null)
                 }}
+                canRun={true}
                 onRun={firstChildName ? () => executeCellByName(firstChildName) : undefined}
                 onRunFromHere={firstChildName ? () => executeFromCellByName(firstChildName) : undefined}
                 onDuplicate={() => handleDuplicateCell(index)}

@@ -48,6 +48,8 @@ interface CellContainerProps extends Omit<HTMLAttributes<HTMLDivElement>, 'child
   dragHandleProps?: Record<string, unknown>
   /** Whether the cell is currently being dragged */
   isDragging?: boolean
+  /** Override whether the run button is shown (defaults to cell type's execute capability) */
+  canRun?: boolean
 }
 
 export const CellContainer = forwardRef<HTMLDivElement, CellContainerProps>(function CellContainer(
@@ -73,6 +75,7 @@ export const CellContainer = forwardRef<HTMLDivElement, CellContainerProps>(func
     children,
     dragHandleProps,
     isDragging,
+    canRun: canRunProp,
     style,
     ...divProps
   },
@@ -80,6 +83,7 @@ export const CellContainer = forwardRef<HTMLDivElement, CellContainerProps>(func
 ) {
   // Get metadata for this cell type
   const meta = getCellTypeMetadata(type)
+  const canRun = canRunProp ?? !!meta.execute
 
   // Normalize height - handle legacy 'auto' values from old configs
   const normalizedHeight = typeof height === 'number' ? height : 300
@@ -120,9 +124,6 @@ export const CellContainer = forwardRef<HTMLDivElement, CellContainerProps>(func
   const contentStyle = normalizedHeight > 0
     ? { height: `${normalizedHeight}px`, overflow: 'auto' as const }
     : { overflow: 'auto' as const }
-
-  // Determine if this cell can run (has an execute method)
-  const canRun = !!meta.execute
 
   return (
     <div

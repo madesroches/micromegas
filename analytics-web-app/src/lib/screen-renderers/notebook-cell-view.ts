@@ -1,6 +1,6 @@
 import type { CellRendererProps } from './cell-registry'
 import { getCellTypeMetadata } from './cell-registry'
-import type { CellConfig, CellState, VariableCellConfig, VariableValue } from './notebook-types'
+import type { CellConfig, CellState, CellStatus, VariableCellConfig, VariableValue } from './notebook-types'
 
 // =============================================================================
 // Interfaces
@@ -79,13 +79,71 @@ export function buildStatusText(
 }
 
 /**
+ * Compute the aggregate CellStatus for an HG group based on children states.
+ * Priority: error > loading > blocked > success > idle
+ */
+export function computeHgStatus(
+  children: CellConfig[],
+  cellStates: Record<string, CellState>,
+): CellStatus {
+  let hasLoading = false
+  let hasError = false
+  let hasBlocked = false
+  let hasSuccess = false
+
+  for (const child of children) {
+    const state = cellStates[child.name]
+    if (!state) continue
+    switch (state.status) {
+      case 'error':
+        hasError = true
+        break
+      case 'loading':
+        hasLoading = true
+        break
+      case 'blocked':
+        hasBlocked = true
+        break
+      case 'success':
+        hasSuccess = true
+        break
+    }
+  }
+
+  if (hasError) return 'error'
+  if (hasLoading) return 'loading'
+  if (hasBlocked) return 'blocked'
+  if (hasSuccess) return 'success'
+  return 'idle'
+}
+
+/**
  * Aggregate status for an HG group: total rows, total bytes, sum of elapsed
- * times across all children that have data.
+ * times across all children that have data.  During loading, shows live
+ * fetch progress aggregated across all loading children.
  */
 export function buildHgStatusText(
   children: CellConfig[],
   cellStates: Record<string, CellState>,
 ): string | undefined {
+  // During loading, aggregate fetch progress from loading children
+  let loadingRows = 0
+  let loadingBytes = 0
+  let hasLoadingProgress = false
+
+  for (const child of children) {
+    const state = cellStates[child.name]
+    if (state?.status === 'loading' && state.fetchProgress) {
+      hasLoadingProgress = true
+      loadingRows += state.fetchProgress.rows
+      loadingBytes += state.fetchProgress.bytes
+    }
+  }
+
+  if (hasLoadingProgress) {
+    return `${loadingRows.toLocaleString()} rows (${formatBytes(loadingBytes)})`
+  }
+
   let totalRows = 0
   let totalBytes = 0
   let totalElapsed = 0
