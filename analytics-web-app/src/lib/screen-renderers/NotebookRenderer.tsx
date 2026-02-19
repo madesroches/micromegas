@@ -26,7 +26,6 @@ import {
   CellType,
   getCellRenderer,
   getCellTypeMetadata,
-  CELL_TYPE_OPTIONS,
   createDefaultCell,
 } from './cell-registry'
 import type { CellConfig, VariableCellConfig, NotebookConfig, QueryCellConfig, HorizontalGroupCellConfig, VariableValue } from './notebook-types'
@@ -42,6 +41,7 @@ import { cleanupTimeParams, useExposeSaveRef } from '@/lib/url-cleanup-utils'
 import { loadWasmEngine } from '@/lib/wasm-engine'
 import { getTimeRangeForApi } from '@/lib/time-range'
 import { buildCellRendererProps, buildStatusText, buildHgStatusText, computeHgStatus } from './notebook-cell-view'
+import { AddCellModal } from './shared'
 
 // ============================================================================
 // Constants
@@ -54,50 +54,6 @@ const EDITOR_PANEL_DEFAULT_WIDTH = 350
 // ============================================================================
 // Modal Components
 // ============================================================================
-
-interface AddCellModalProps {
-  isOpen: boolean
-  onClose: () => void
-  onAdd: (type: CellType) => void
-}
-
-function AddCellModal({ isOpen, onClose, onAdd }: AddCellModalProps) {
-  if (!isOpen) return null
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
-      <div className="absolute inset-0 bg-black/50" onClick={onClose} />
-      <div className="relative w-full max-w-sm bg-app-panel border border-theme-border rounded-lg shadow-xl">
-        <div className="flex items-center justify-between px-4 py-3 border-b border-theme-border">
-          <h2 className="text-lg font-medium text-theme-text-primary">Add Cell</h2>
-          <button
-            onClick={onClose}
-            className="p-1 text-theme-text-muted hover:text-theme-text-primary rounded transition-colors"
-          >
-            <X className="w-5 h-5" />
-          </button>
-        </div>
-        <div className="p-2">
-          {CELL_TYPE_OPTIONS.map((option) => (
-            <button
-              key={option.type}
-              onClick={() => onAdd(option.type)}
-              className="w-full flex items-center gap-3 p-3 rounded-lg hover:bg-app-card transition-colors text-left"
-            >
-              <div className="w-10 h-10 bg-app-card rounded-lg flex items-center justify-center text-lg font-semibold text-theme-text-secondary">
-                {option.icon}
-              </div>
-              <div>
-                <div className="font-medium text-theme-text-primary">{option.name}</div>
-                <div className="text-xs text-theme-text-muted">{option.description}</div>
-              </div>
-            </button>
-          ))}
-        </div>
-      </div>
-    </div>
-  )
-}
 
 interface DeleteCellModalProps {
   isOpen: boolean
