@@ -862,6 +862,14 @@ export function NotebookRenderer({
   // Render
   const selectedCell = selectedCellIndex !== null ? cells[selectedCellIndex] : null
 
+  const datasourceVariables = useMemo(() => {
+    if (selectedCellIndex === null) return undefined
+    return cells
+      .slice(0, selectedCellIndex)
+      .filter((c) => c.type === 'variable' && (c as VariableCellConfig).variableType === 'datasource')
+      .map((c) => c.name)
+  }, [cells, selectedCellIndex])
+
   // Collect available variables for a cell at a given top-level index
   const getAvailableVariables = (index: number): Record<string, VariableValue> => {
     const available: Record<string, VariableValue> = {}
@@ -1155,16 +1163,7 @@ export function NotebookRenderer({
                 allCellNames={existingNames}
                 defaultDataSource={dataSource}
                 showNotebookOption
-                datasourceVariables={
-                  selectedCellIndex !== null
-                    ? cells
-                        .slice(0, selectedCellIndex)
-                        .filter((c) =>
-                          c.type === 'variable' && (c as VariableCellConfig).variableType === 'datasource'
-                        )
-                        .map((c) => c.name)
-                    : undefined
-                }
+                datasourceVariables={datasourceVariables}
                 onClose={() => { setSelectedCellIndex(null); setSelectedChildName(null) }}
                 onUpdate={(updates) => updateCell(selectedCellIndex!, updates)}
                 onDelete={() => setDeletingCellIndex(selectedCellIndex!)}
@@ -1178,16 +1177,7 @@ export function NotebookRenderer({
                 availableColumns={cellStates[selectedCell.name]?.data[0]?.schema.fields.map((f) => f.name)}
                 defaultDataSource={dataSource}
                 showNotebookOption
-                datasourceVariables={
-                  selectedCellIndex !== null
-                    ? cells
-                        .slice(0, selectedCellIndex)
-                        .filter((c) =>
-                          c.type === 'variable' && (c as VariableCellConfig).variableType === 'datasource'
-                        )
-                        .map((c) => c.name)
-                    : undefined
-                }
+                datasourceVariables={datasourceVariables}
                 onClose={() => { setSelectedCellIndex(null); setSelectedChildName(null) }}
                 onUpdate={(updates) => updateCell(selectedCellIndex!, updates)}
                 onRun={() => executeCellByName(selectedCell.name)}
