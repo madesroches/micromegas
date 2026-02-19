@@ -316,13 +316,15 @@ export function XYChart({
   const createMultiSeriesTooltipPlugin = useCallback(
     (seriesInfo: { label: string; unit: string; color: string }[], mode: XAxisMode, labels?: string[]): uPlot.Plugin => {
       let tooltip: HTMLDivElement
+      let overEl: HTMLElement
 
       return {
         hooks: {
           init: (u: uPlot) => {
+            overEl = u.over
             tooltip = document.createElement('div')
             tooltip.style.cssText = `
-              position: absolute;
+              position: fixed;
               background: var(--app-bg);
               border: 1px solid var(--border-color);
               border-radius: 6px;
@@ -333,7 +335,7 @@ export function XYChart({
               box-shadow: 0 4px 12px rgba(0,0,0,0.5);
               display: none;
             `
-            u.over.appendChild(tooltip)
+            document.body.appendChild(tooltip)
           },
           setCursor: (u: uPlot) => {
             const { idx, left, top } = u.cursor
@@ -381,12 +383,13 @@ export function XYChart({
 
             tooltip.innerHTML = html
 
-            // Position tooltip
+            // Position tooltip using fixed coordinates (immune to overflow clipping)
+            const rect = overEl.getBoundingClientRect()
             const tooltipHeight = 30 + seriesInfo.length * 26
             const flipThreshold = tooltipHeight + 10
-            const posTop = top < flipThreshold ? top + 20 : top - tooltipHeight
+            const posTop = top < flipThreshold ? rect.top + top + 20 : rect.top + top - tooltipHeight
 
-            tooltip.style.left = left + 12 + 'px'
+            tooltip.style.left = rect.left + left + 12 + 'px'
             tooltip.style.top = posTop + 'px'
             tooltip.style.display = 'block'
           },
@@ -407,13 +410,15 @@ export function XYChart({
       let tooltip: HTMLDivElement
       let tooltipX: HTMLDivElement
       let tooltipValue: HTMLDivElement
+      let overEl: HTMLElement
 
       return {
         hooks: {
           init: (u: uPlot) => {
+            overEl = u.over
             tooltip = document.createElement('div')
             tooltip.style.cssText = `
-            position: absolute;
+            position: fixed;
             background: var(--app-bg);
             border: 1px solid var(--border-color);
             border-radius: 6px;
@@ -428,7 +433,7 @@ export function XYChart({
             <div style="color: var(--text-muted); margin-bottom: 4px; font-family: monospace;"></div>
             <div style="color: var(--chart-line); font-weight: 600; font-size: 14px;"></div>
           `
-            u.over.appendChild(tooltip)
+            document.body.appendChild(tooltip)
             tooltipX = tooltip.children[0] as HTMLDivElement
             tooltipValue = tooltip.children[1] as HTMLDivElement
           },
@@ -457,12 +462,13 @@ export function XYChart({
               tooltipValue.textContent = formatStatValue(originalValue, originalUnit)
             }
 
-            // Position tooltip - flip below cursor if near top of chart
+            // Position tooltip using fixed coordinates (immune to overflow clipping)
+            const rect = overEl.getBoundingClientRect()
             const tooltipHeight = 60
             const flipThreshold = tooltipHeight + 10
-            const posTop = top < flipThreshold ? top + 20 : top - tooltipHeight
+            const posTop = top < flipThreshold ? rect.top + top + 20 : rect.top + top - tooltipHeight
 
-            tooltip.style.left = left + 10 + 'px'
+            tooltip.style.left = rect.left + left + 10 + 'px'
             tooltip.style.top = posTop + 'px'
             tooltip.style.display = 'block'
           },
