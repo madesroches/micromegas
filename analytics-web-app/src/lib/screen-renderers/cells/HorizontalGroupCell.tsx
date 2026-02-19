@@ -48,10 +48,12 @@ export interface HorizontalGroupCellProps {
   config: HorizontalGroupCellConfig
   cellStates: Record<string, CellState>
   variables: Record<string, VariableValue>
+  variableValues: Record<string, VariableValue>
   timeRange: { begin: string; end: string }
   selectedChildName: string | null
   onChildSelect: (childName: string | null) => void
   onChildRun: (childName: string) => void
+  onVariableValueChange: (cellName: string, value: VariableValue) => void
   onConfigChange: (config: HorizontalGroupCellConfig) => void
   onChildDragOut: (childName: string, position: 'before' | 'after') => void
   /** All cell names in notebook (for uniqueness checks) */
@@ -95,6 +97,8 @@ interface ChildCellHeaderProps {
   onRun: () => void
   onDelete: () => void
   dragHandleProps?: Record<string, unknown>
+  /** Inline title bar content (e.g., variable combobox) */
+  titleBarContent?: React.ReactNode
 }
 
 function ChildCellHeader({
@@ -107,6 +111,7 @@ function ChildCellHeader({
   onRun,
   onDelete,
   dragHandleProps,
+  titleBarContent,
 }: ChildCellHeaderProps) {
   const meta = getCellTypeMetadata(type)
   const canRun = !!meta.execute
@@ -139,7 +144,7 @@ function ChildCellHeader({
         onSelect()
       }}
     >
-      <div className="flex items-center gap-1.5 min-w-0">
+      <div className="flex items-center gap-1.5 min-w-0 flex-1">
         {dragHandleProps && (
           <button
             {...(dragHandleProps as React.ButtonHTMLAttributes<HTMLButtonElement>)}
@@ -154,7 +159,12 @@ function ChildCellHeader({
             {meta.label}
           </span>
         )}
-        <span className="text-sm font-medium text-theme-text-primary truncate">{name}</span>
+        <span className="text-sm font-medium text-theme-text-primary truncate shrink-0">{name}</span>
+        {titleBarContent && (
+          <div className="flex-1 min-w-0" onClick={(e) => e.stopPropagation()}>
+            {titleBarContent}
+          </div>
+        )}
       </div>
 
       <div className="flex items-center gap-1 shrink-0">
@@ -224,10 +234,12 @@ export function HorizontalGroupCell({
   config,
   cellStates,
   variables,
+  variableValues,
   timeRange,
   selectedChildName,
   onChildSelect,
   onChildRun,
+  onVariableValueChange,
   onConfigChange,
   onChildDragOut,
 }: HorizontalGroupCellProps) {
@@ -305,6 +317,26 @@ export function HorizontalGroupCell({
             const meta = getCellTypeMetadata(child.type)
             const CellRenderer = getCellRenderer(child.type)
             const rendererProps = meta.getRendererProps(child, state)
+            const TitleBarRenderer = meta.titleBarRenderer
+
+            // Build common props for both renderer and title bar
+            const commonProps = {
+              name: child.name,
+              data: state.data || [],
+              status: state.status,
+              error: state.error,
+              timeRange,
+              variables,
+              isEditing: false as const,
+              onRun: () => onChildRun(child.name),
+              onSqlChange: () => {},
+              onOptionsChange: () => {},
+              value: child.type === 'variable' ? variableValues[child.name] : undefined,
+              onValueChange: child.type === 'variable'
+                ? (value: VariableValue) => onVariableValueChange(child.name, value)
+                : undefined,
+              ...rendererProps,
+            }
 
             // Status text for child header
             let statusText: string | undefined
@@ -338,6 +370,7 @@ export function HorizontalGroupCell({
                       onRun={() => onChildRun(child.name)}
                       onDelete={() => handleDeleteChild(child.name)}
                       dragHandleProps={dragHandleProps}
+                      titleBarContent={TitleBarRenderer ? <TitleBarRenderer {...commonProps} /> : undefined}
                     />
                     <div className="flex-1 overflow-auto p-2">
                       {state.status === 'error' && state.error ? (
@@ -350,19 +383,7 @@ export function HorizontalGroupCell({
                           Waiting for cell above to succeed
                         </div>
                       ) : (
-                        <CellRenderer
-                          name={child.name}
-                          data={state.data || []}
-                          status={state.status}
-                          error={state.error}
-                          timeRange={timeRange}
-                          variables={variables}
-                          isEditing={false}
-                          onRun={() => onChildRun(child.name)}
-                          onSqlChange={() => {}}
-                          onOptionsChange={() => {}}
-                          {...rendererProps}
-                        />
+                        <CellRenderer {...commonProps} />
                       )}
                     </div>
                   </div>

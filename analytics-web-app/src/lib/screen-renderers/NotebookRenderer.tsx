@@ -895,6 +895,7 @@ export function NotebookRenderer({
                 config={hgConfig}
                 cellStates={cellStates}
                 variables={availableVariables}
+                variableValues={variableValues}
                 timeRange={getTimeRangeForApi(rawTimeRange.from, rawTimeRange.to)}
                 selectedChildName={selectedChildName}
                 onChildSelect={(childName) => {
@@ -902,6 +903,9 @@ export function NotebookRenderer({
                   setSelectedChildName(childName)
                 }}
                 onChildRun={(childName) => executeCellByName(childName)}
+                onVariableValueChange={(cellName, value) => {
+                  setVariableValue(cellName, value)
+                }}
                 onConfigChange={(newHgConfig) => {
                   updateCell(index, newHgConfig)
                 }}
