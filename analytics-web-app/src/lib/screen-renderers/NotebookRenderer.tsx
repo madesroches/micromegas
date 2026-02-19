@@ -489,13 +489,7 @@ export function NotebookRenderer({
       }
     }
 
-    cells.forEach((cell) => {
-      if (cell.type === 'hg') {
-        (cell as HorizontalGroupCellConfig).children.forEach(checkCell)
-      } else {
-        checkCell(cell)
-      }
-    })
+    flattenCellsForExecution(cells).forEach(checkCell)
   }, [cells, executeCellByName])
 
   // UI state
