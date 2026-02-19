@@ -177,6 +177,8 @@ interface HgEditorPanelProps {
   timeRange: { begin: string; end: string }
   allCellNames: Set<string>
   defaultDataSource?: string
+  datasourceVariables?: string[]
+  showNotebookOption?: boolean
   onClose: () => void
   onUpdate: (updates: Partial<CellConfig>) => void
   onDelete: () => void
@@ -190,6 +192,8 @@ function HgEditorPanel({
   timeRange,
   allCellNames,
   defaultDataSource,
+  datasourceVariables,
+  showNotebookOption,
   onClose,
   onUpdate,
   onDelete,
@@ -266,6 +270,8 @@ function HgEditorPanel({
           timeRange={timeRange}
           allCellNames={allCellNames}
           defaultDataSource={defaultDataSource}
+          datasourceVariables={datasourceVariables}
+          showNotebookOption={showNotebookOption}
         />
       </div>
       {/* Footer */}
@@ -1099,6 +1105,17 @@ export function NotebookRenderer({
                 timeRange={getTimeRangeForApi(rawTimeRange.from, rawTimeRange.to)}
                 allCellNames={existingNames}
                 defaultDataSource={dataSource}
+                showNotebookOption
+                datasourceVariables={
+                  selectedCellIndex !== null
+                    ? cells
+                        .slice(0, selectedCellIndex)
+                        .filter((c) =>
+                          c.type === 'variable' && (c as VariableCellConfig).variableType === 'datasource'
+                        )
+                        .map((c) => c.name)
+                    : undefined
+                }
                 onClose={() => { setSelectedCellIndex(null); setSelectedChildName(null) }}
                 onUpdate={(updates) => updateCell(selectedCellIndex!, updates)}
                 onDelete={() => setDeletingCellIndex(selectedCellIndex!)}

@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect } from 'react'
 import { X, Play, Trash2 } from 'lucide-react'
 import { getCellTypeMetadata } from '@/lib/screen-renderers/cell-registry'
 import type { CellConfig, VariableValue } from '@/lib/screen-renderers/notebook-types'
-import { validateCellName, sanitizeCellName } from '@/lib/screen-renderers/notebook-utils'
+import { validateCellName, sanitizeCellName, shouldShowDataSource } from '@/lib/screen-renderers/notebook-utils'
 import { Button } from '@/components/ui/button'
 import { DataSourceField } from '@/components/DataSourceSelector'
 
@@ -76,10 +76,7 @@ export function CellEditor({
     [onUpdate]
   )
 
-  // Determine if this cell should show a data source selector
-  // Variable cells handle their own data source selector internally
-  // Chart cells manage data source per-query internally, so exclude from parent-level selector
-  const shouldShowDataSource = cell.type !== 'markdown' && cell.type !== 'variable' && cell.type !== 'referencetable' && cell.type !== 'chart'
+  const showDataSource = shouldShowDataSource(cell.type)
 
   // Determine if this cell can run
   const canRun = !!meta.execute
@@ -126,7 +123,7 @@ export function CellEditor({
         </div>
 
         {/* Data Source (for SQL-executing cells; variable cells handle their own) */}
-        {shouldShowDataSource && (
+        {showDataSource && (
           <DataSourceField
             value={('dataSource' in cell ? cell.dataSource : undefined) || defaultDataSource || ''}
             onChange={(ds) => onUpdate({ dataSource: ds } as Partial<CellConfig>)}

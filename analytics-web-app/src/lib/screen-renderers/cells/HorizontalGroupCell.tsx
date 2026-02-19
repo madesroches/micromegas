@@ -38,9 +38,10 @@ import type {
   HorizontalGroupCellConfig,
   VariableValue,
 } from '../notebook-types'
-import { resolveCellDataSource } from '../notebook-utils'
+import { resolveCellDataSource, shouldShowDataSource } from '../notebook-utils'
 import { buildCellRendererProps, buildStatusText } from '../notebook-cell-view'
 import { Button } from '@/components/ui/button'
+import { DataSourceField } from '@/components/DataSourceSelector'
 
 // =============================================================================
 // Types for HorizontalGroupCell props (passed from NotebookRenderer)
@@ -469,6 +470,7 @@ interface HorizontalGroupCellEditorProps {
   availableColumns?: string[]
   datasourceVariables?: string[]
   defaultDataSource?: string
+  showNotebookOption?: boolean
 }
 
 export function HorizontalGroupCellEditor({
@@ -482,6 +484,7 @@ export function HorizontalGroupCellEditor({
   availableColumns,
   datasourceVariables,
   defaultDataSource,
+  showNotebookOption,
 }: HorizontalGroupCellEditorProps) {
   const [showAddChildModal, setShowAddChildModal] = useState(false)
 
@@ -504,6 +507,19 @@ export function HorizontalGroupCellEditor({
         <div className="text-xs text-theme-text-muted uppercase font-medium mb-2">
           Editing child: {selectedChild.name}
         </div>
+        {shouldShowDataSource(selectedChild.type) && (
+          <DataSourceField
+            value={('dataSource' in selectedChild ? selectedChild.dataSource : undefined) || defaultDataSource || ''}
+            onChange={(ds) => {
+              const newChildren = config.children.map((c) =>
+                c.name === selectedChild.name ? { ...c, dataSource: ds } : c
+              )
+              onChange({ ...config, children: newChildren })
+            }}
+            datasourceVariables={datasourceVariables}
+            showNotebookOption={showNotebookOption}
+          />
+        )}
         <meta.EditorComponent
           config={selectedChild}
           onChange={(newConfig) => {

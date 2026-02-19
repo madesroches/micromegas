@@ -21,7 +21,7 @@ export {
   variableValuesEqual,
 } from './notebook-types'
 
-import type { CellConfig, HorizontalGroupCellConfig, VariableValue } from './notebook-types'
+import type { CellConfig, CellType, HorizontalGroupCellConfig, VariableValue } from './notebook-types'
 import { getVariableString } from './notebook-types'
 
 import type { ScreenConfig } from '@/lib/screens-api'
@@ -78,6 +78,15 @@ export function collectAllCellNames(cells: CellConfig[]): Set<string> {
     }
   }
   return names
+}
+
+/**
+ * Returns true if a cell type should display a data source selector.
+ * Markdown cells have no queries, variable cells handle their own selector,
+ * referencetable cells don't query, and chart cells manage data source per-query.
+ */
+export function shouldShowDataSource(type: CellType): boolean {
+  return type !== 'markdown' && type !== 'variable' && type !== 'referencetable' && type !== 'chart'
 }
 
 // Default SQL queries per cell type
