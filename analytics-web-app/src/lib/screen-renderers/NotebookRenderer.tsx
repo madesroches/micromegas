@@ -241,25 +241,27 @@ function HgEditorPanel({
       </div>
       {/* Content */}
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
-        {/* Group Name */}
-        <div>
-          <label className="block text-xs font-medium text-theme-text-secondary uppercase mb-1.5">
-            Group Name
-          </label>
-          <input
-            type="text"
-            value={editedName}
-            onChange={(e) => handleNameChange(e.target.value)}
-            className={`w-full px-3 py-2 bg-app-card border rounded-md text-theme-text-primary text-sm focus:outline-none ${
-              nameError
-                ? 'border-accent-error focus:border-accent-error'
-                : 'border-theme-border focus:border-accent-link'
-            }`}
-          />
-          {nameError && (
-            <p className="mt-1 text-xs text-accent-error">{nameError}</p>
-          )}
-        </div>
+        {/* Group Name — only when not editing a child */}
+        {!selectedChildName && (
+          <div>
+            <label className="block text-xs font-medium text-theme-text-secondary uppercase mb-1.5">
+              Group Name
+            </label>
+            <input
+              type="text"
+              value={editedName}
+              onChange={(e) => handleNameChange(e.target.value)}
+              className={`w-full px-3 py-2 bg-app-card border rounded-md text-theme-text-primary text-sm focus:outline-none ${
+                nameError
+                  ? 'border-accent-error focus:border-accent-error'
+                  : 'border-theme-border focus:border-accent-link'
+              }`}
+            />
+            {nameError && (
+              <p className="mt-1 text-xs text-accent-error">{nameError}</p>
+            )}
+          </div>
+        )}
         {/* Children management */}
         <HorizontalGroupCellEditor
           config={config}
@@ -907,6 +909,14 @@ export function NotebookRenderer({
                   onChildRun={(childName) => executeCellByName(childName)}
                   onVariableValueChange={(cellName, value) => {
                     setVariableValue(cellName, value)
+
+                    // Auto-run: if this child variable has autoRunFromHere, execute from it onward
+                    const child = hgConfig.children.find((c) => c.name === cellName)
+                    if (!child || autoRunningRef.current || !child.autoRunFromHere) return
+                    autoRunningRef.current = true
+                    executeFromCellByName(cellName).then(() => {
+                      autoRunningRef.current = false
+                    })
                   }}
                   onConfigChange={(newHgConfig) => {
                     updateCell(index, newHgConfig)

@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from 'react'
+import { useState, useCallback, useRef, useEffect } from 'react'
 import {
   DndContext,
   closestCenter,
@@ -38,7 +38,7 @@ import type {
   HorizontalGroupCellConfig,
   VariableValue,
 } from '../notebook-types'
-import { resolveCellDataSource, shouldShowDataSource } from '../notebook-utils'
+import { resolveCellDataSource, shouldShowDataSource, validateCellName, sanitizeCellName } from '../notebook-utils'
 import { buildCellRendererProps, buildStatusText } from '../notebook-cell-view'
 import { Button } from '@/components/ui/button'
 import { DataSourceField } from '@/components/DataSourceSelector'
@@ -130,7 +130,7 @@ function ChildCellHeader({
 
   const statusLabel =
     status === 'loading'
-      ? 'Running...'
+      ? (statusText || 'Running...')
       : status === 'error'
         ? 'Error'
         : status === 'blocked'
@@ -456,6 +456,128 @@ function AddChildModal({ isOpen, onClose, onAdd }: AddChildModalProps) {
 }
 
 // =============================================================================
+// Child Editor View (with name field)
+// =============================================================================
+
+interface ChildEditorViewProps {
+  child: CellConfig
+  config: HorizontalGroupCellConfig
+  onChange: (config: CellConfig) => void
+  onChildSelect: (childName: string | null) => void
+  allCellNames: Set<string>
+  defaultDataSource?: string
+  datasourceVariables?: string[]
+  showNotebookOption?: boolean
+  variables: Record<string, VariableValue>
+  timeRange: { begin: string; end: string }
+  availableColumns?: string[]
+  meta: CellTypeMetadata
+}
+
+function ChildEditorView({
+  child,
+  config,
+  onChange,
+  onChildSelect,
+  allCellNames,
+  defaultDataSource,
+  datasourceVariables,
+  showNotebookOption,
+  variables,
+  timeRange,
+  availableColumns,
+  meta,
+}: ChildEditorViewProps) {
+  const [editedName, setEditedName] = useState(child.name)
+  const [nameError, setNameError] = useState<string | null>(null)
+
+  useEffect(() => {
+    setEditedName(child.name)
+    setNameError(null)
+  }, [child.name])
+
+  const handleNameChange = useCallback(
+    (value: string) => {
+      setEditedName(value)
+      const error = validateCellName(value, allCellNames, child.name)
+      if (error) {
+        setNameError(error)
+        return
+      }
+      setNameError(null)
+      const sanitized = sanitizeCellName(value)
+      const newChildren = config.children.map((c) =>
+        c.name === child.name ? { ...c, name: sanitized } : c,
+      )
+      onChange({ ...config, children: newChildren })
+      onChildSelect(sanitized)
+    },
+    [child.name, allCellNames, config, onChange, onChildSelect],
+  )
+
+  return (
+    <>
+      <button
+        onClick={() => onChildSelect(null)}
+        className="flex items-center gap-1 text-sm text-accent-link hover:underline mb-3"
+      >
+        <ArrowLeft className="w-3.5 h-3.5" />
+        Back to group
+      </button>
+      {/* Child Name */}
+      <div className="mb-3">
+        <label className="block text-xs font-medium text-theme-text-secondary uppercase mb-1.5">
+          Cell Name
+        </label>
+        <input
+          type="text"
+          value={editedName}
+          onChange={(e) => handleNameChange(e.target.value)}
+          className={`w-full px-3 py-2 bg-app-card border rounded-md text-theme-text-primary text-sm focus:outline-none ${
+            nameError
+              ? 'border-accent-error focus:border-accent-error'
+              : 'border-theme-border focus:border-accent-link'
+          }`}
+        />
+        {nameError && (
+          <p className="mt-1 text-xs text-accent-error">{nameError}</p>
+        )}
+      </div>
+      {shouldShowDataSource(child.type) && (
+        <DataSourceField
+          value={('dataSource' in child ? child.dataSource : undefined) || defaultDataSource || ''}
+          onChange={(ds) => {
+            const newChildren = config.children.map((c) =>
+              c.name === child.name ? { ...c, dataSource: ds } : c,
+            )
+            onChange({ ...config, children: newChildren })
+          }}
+          datasourceVariables={datasourceVariables}
+          showNotebookOption={showNotebookOption}
+        />
+      )}
+      <meta.EditorComponent
+        config={child}
+        onChange={(newConfig) => {
+          const newChildren = config.children.map((c) =>
+            c.name === child.name ? newConfig : c,
+          )
+          onChange({ ...config, children: newChildren })
+          if (newConfig.name !== child.name) {
+            onChildSelect(newConfig.name)
+          }
+        }}
+        variables={variables}
+        timeRange={timeRange}
+        availableColumns={availableColumns}
+        datasourceVariables={datasourceVariables}
+        defaultDataSource={defaultDataSource}
+      />
+    </>
+  )
+}
+
+// =============================================================================
 // Editor Component
 // =============================================================================
 
@@ -496,49 +618,20 @@ export function HorizontalGroupCellEditor({
   if (selectedChild) {
     const meta = getCellTypeMetadata(selectedChild.type)
     return (
-      <>
-        <button
-          onClick={() => onChildSelect(null)}
-          className="flex items-center gap-1 text-sm text-accent-link hover:underline mb-3"
-        >
-          <ArrowLeft className="w-3.5 h-3.5" />
-          Back to group
-        </button>
-        <div className="text-xs text-theme-text-muted uppercase font-medium mb-2">
-          Editing child: {selectedChild.name}
-        </div>
-        {shouldShowDataSource(selectedChild.type) && (
-          <DataSourceField
-            value={('dataSource' in selectedChild ? selectedChild.dataSource : undefined) || defaultDataSource || ''}
-            onChange={(ds) => {
-              const newChildren = config.children.map((c) =>
-                c.name === selectedChild.name ? { ...c, dataSource: ds } : c
-              )
-              onChange({ ...config, children: newChildren })
-            }}
-            datasourceVariables={datasourceVariables}
-            showNotebookOption={showNotebookOption}
-          />
-        )}
-        <meta.EditorComponent
-          config={selectedChild}
-          onChange={(newConfig) => {
-            const newChildren = config.children.map((c) =>
-              c.name === selectedChild.name ? newConfig : c
-            )
-            onChange({ ...config, children: newChildren })
-            // If child was renamed, update selection
-            if (newConfig.name !== selectedChild.name) {
-              onChildSelect(newConfig.name)
-            }
-          }}
-          variables={variables}
-          timeRange={timeRange}
-          availableColumns={availableColumns}
-          datasourceVariables={datasourceVariables}
-          defaultDataSource={defaultDataSource}
-        />
-      </>
+      <ChildEditorView
+        child={selectedChild}
+        config={config}
+        onChange={onChange}
+        onChildSelect={onChildSelect}
+        allCellNames={allCellNames}
+        defaultDataSource={defaultDataSource}
+        datasourceVariables={datasourceVariables}
+        showNotebookOption={showNotebookOption}
+        variables={variables}
+        timeRange={timeRange}
+        availableColumns={availableColumns}
+        meta={meta}
+      />
     )
   }
 
