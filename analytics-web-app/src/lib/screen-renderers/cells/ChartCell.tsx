@@ -227,7 +227,7 @@ export function ChartCell({ data, status, options, onOptionsChange, variables, t
     { unit?: string; label?: string }[] | undefined
   const chartUnit = singleQueryMeta?.[0]?.unit
     ? substituteMacros(singleQueryMeta[0].unit, variables, timeRange)
-    : (resolvedOptions?.unit as string) || undefined
+    : (resolvedOptions?.unit as string) ?? undefined
   const chartTitle = singleQueryMeta?.[0]?.label || undefined
 
   return (
