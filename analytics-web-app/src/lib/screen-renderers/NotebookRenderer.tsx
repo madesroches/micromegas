@@ -466,6 +466,7 @@ export function NotebookRenderer({
                 status={hgStatus}
                 statusText={hgStatusText}
                 collapsed={cell.layout.collapsed}
+                childNames={hgConfig.children.map(c => c.name)}
                 onToggleCollapsed={() => toggleCellCollapsed(index)}
                 isSelected={selectedCellIndex === index}
                 onSelect={() => {
@@ -606,7 +607,7 @@ export function NotebookRenderer({
   return (
     <div className="flex h-full">
       {/* Main content area */}
-      <div className="flex-1 flex flex-col p-6 min-w-0 overflow-auto">
+      <div className="flex-1 flex flex-col p-2 min-w-0 overflow-auto">
         {engineError && (
           <div className="mb-3 px-4 py-2 bg-accent-error/10 border border-accent-error/30 rounded text-xs text-accent-error">
             WASM engine failed to load: {engineError}
@@ -641,7 +642,7 @@ export function NotebookRenderer({
               onDragEnd={handleDragEnd}
             >
               <SortableContext items={cells.map((c) => c.name)} strategy={hgAwareSortingStrategy}>
-                <div className="flex flex-col gap-3">
+                <div className="flex flex-col gap-1">
                   {cells.map((cell, index) => renderCell(cell, index))}
 
                   <button

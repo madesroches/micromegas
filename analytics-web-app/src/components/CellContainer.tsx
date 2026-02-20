@@ -50,6 +50,8 @@ interface CellContainerProps extends Omit<HTMLAttributes<HTMLDivElement>, 'child
   isDragging?: boolean
   /** Override whether the run button is shown (defaults to cell type's execute capability) */
   canRun?: boolean
+  /** Child cell names (for collapsed HG groups to show inline) */
+  childNames?: string[]
 }
 
 export const CellContainer = forwardRef<HTMLDivElement, CellContainerProps>(function CellContainer(
@@ -76,14 +78,15 @@ export const CellContainer = forwardRef<HTMLDivElement, CellContainerProps>(func
     dragHandleProps,
     isDragging,
     canRun: canRunProp,
+    childNames,
     style,
     ...divProps
   },
   ref
 ) {
-  // Get metadata for this cell type
   const meta = getCellTypeMetadata(type)
   const canRun = canRunProp ?? !!meta.execute
+  const isGroup = type === 'hg'
 
   // Normalize height - handle legacy 'auto' values from old configs
   const normalizedHeight = typeof height === 'number' ? height : 300
@@ -125,183 +128,271 @@ export const CellContainer = forwardRef<HTMLDivElement, CellContainerProps>(func
     ? { height: `${normalizedHeight}px`, overflow: 'auto' as const }
     : { overflow: 'auto' as const }
 
+  // --- Shared UI elements ---
+
+  const gripHandle = dragHandleProps ? (
+    <button
+      {...(dragHandleProps as React.ButtonHTMLAttributes<HTMLButtonElement>)}
+      className="opacity-0 group-hover/cell:opacity-100 text-theme-text-muted hover:text-theme-text-primary transition-all cursor-grab active:cursor-grabbing touch-none"
+      onClick={(e) => e.stopPropagation()}
+    >
+      <GripVertical className="w-3.5 h-3.5" />
+    </button>
+  ) : null
+
+  const collapseToggle = onToggleCollapsed ? (
+    <button
+      onClick={(e) => {
+        e.stopPropagation()
+        onToggleCollapsed()
+      }}
+      className="text-theme-text-muted hover:text-theme-text-primary transition-colors"
+    >
+      {collapsed ? (
+        <ChevronRight className="w-3.5 h-3.5" />
+      ) : (
+        <ChevronDown className="w-3.5 h-3.5" />
+      )}
+    </button>
+  ) : null
+
+  const hoverControls = (
+    <div className="flex items-center gap-1 opacity-0 group-hover/cell:opacity-100 shrink-0 transition-opacity">
+      {onRun && canRun && (
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-6 w-6 p-0"
+          onClick={(e) => {
+            e.stopPropagation()
+            onRun()
+          }}
+          disabled={status === 'loading'}
+          title="Run cell"
+        >
+          {status === 'loading' ? (
+            <RotateCcw className="w-3 h-3 animate-spin" />
+          ) : (
+            <Play className="w-3 h-3" />
+          )}
+        </Button>
+      )}
+
+      <DropdownMenu.Root>
+        <DropdownMenu.Trigger asChild>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-6 w-6 p-0"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <MoreVertical className="w-3 h-3" />
+          </Button>
+        </DropdownMenu.Trigger>
+
+        <DropdownMenu.Portal>
+          <DropdownMenu.Content
+            align="end"
+            sideOffset={4}
+            className="w-48 bg-app-panel border border-theme-border rounded-md shadow-lg z-50"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {onRunFromHere && canRun && (
+              <DropdownMenu.Item
+                className="flex items-center gap-2 px-3 py-2 text-sm text-theme-text-primary hover:bg-theme-border/50 cursor-pointer outline-none first:rounded-t-md"
+                onSelect={() => onRunFromHere()}
+              >
+                <Play className="w-4 h-4" />
+                Run from here
+              </DropdownMenu.Item>
+            )}
+            {onToggleAutoRunFromHere && canRun && (
+              <DropdownMenu.Item
+                className="flex items-center gap-2 px-3 py-2 text-sm text-theme-text-primary hover:bg-theme-border/50 cursor-pointer outline-none"
+                onSelect={() => onToggleAutoRunFromHere()}
+              >
+                <Zap className={`w-4 h-4 ${autoRunFromHere ? 'text-accent-link' : ''}`} />
+                {autoRunFromHere ? 'Disable auto-run' : 'Auto-run from here'}
+              </DropdownMenu.Item>
+            )}
+            {onDuplicate && (
+              <DropdownMenu.Item
+                className="flex items-center gap-2 px-3 py-2 text-sm text-theme-text-primary hover:bg-theme-border/50 cursor-pointer outline-none"
+                onSelect={() => onDuplicate()}
+              >
+                <Copy className="w-4 h-4" />
+                Duplicate cell
+              </DropdownMenu.Item>
+            )}
+            {onDelete && (
+              <DropdownMenu.Item
+                className="flex items-center gap-2 px-3 py-2 text-sm text-accent-error hover:bg-theme-border/50 cursor-pointer outline-none last:rounded-b-md"
+                onSelect={() => onDelete()}
+              >
+                <Trash2 className="w-4 h-4" />
+                Delete cell
+              </DropdownMenu.Item>
+            )}
+          </DropdownMenu.Content>
+        </DropdownMenu.Portal>
+      </DropdownMenu.Root>
+    </div>
+  )
+
+  const renderContent = () => {
+    if (status === 'error' && error) {
+      return (
+        <div className="bg-[var(--error-bg)] border border-accent-error rounded-md p-3 flex items-start gap-3">
+          <span className="text-accent-error text-lg">!</span>
+          <div>
+            <div className="font-medium text-accent-error">Query execution failed</div>
+            <div className="text-sm text-theme-text-secondary mt-1">{error}</div>
+          </div>
+        </div>
+      )
+    }
+    if (status === 'blocked') {
+      return (
+        <div className="bg-app-card border border-dashed border-theme-border rounded-md p-6 text-center text-theme-text-muted">
+          Waiting for cell above to succeed
+        </div>
+      )
+    }
+    return children
+  }
+
+  // ===== Variant 1: Collapsed regular cell (not group, not variable) =====
+  if (collapsed && !isGroup && !titleBarContent) {
+    return (
+      <div
+        ref={ref}
+        className={`flex items-center gap-1.5 py-0.5 px-1.5 rounded cursor-pointer group/cell transition-colors ${
+          isSelected
+            ? 'bg-[var(--selection-bg)] border-l-2 border-accent-link'
+            : 'bg-app-panel/30 hover:bg-app-panel/50'
+        } ${isDragging ? 'opacity-50' : ''}`}
+        style={style}
+        onClick={onSelect}
+        {...divProps}
+      >
+        {gripHandle}
+        {collapseToggle}
+        <span className="text-[11px] font-medium text-theme-text-secondary">{name}</span>
+        {autoRunFromHere && (
+          <span className="text-accent-link" title="Auto-run from here">
+            <Zap className="w-3 h-3" />
+          </span>
+        )}
+        {statusLabel && (
+          <>
+            <span className="text-[10px] text-theme-border">&middot;</span>
+            <span className={`text-[10px] ${statusColor}`}>{statusLabel}</span>
+          </>
+        )}
+        <div className="ml-auto">{hoverControls}</div>
+      </div>
+    )
+  }
+
+  // ===== Variant 2: Variable cell (with titleBarContent) =====
+  if (titleBarContent) {
+    return (
+      <div
+        ref={ref}
+        className={`group/cell cursor-pointer transition-colors ${isDragging ? 'opacity-50' : ''}`}
+        style={style}
+        onClick={onSelect}
+        {...divProps}
+      >
+        <div className={`flex items-center gap-2 py-0.5 px-1.5 rounded transition-colors ${
+          isSelected ? 'bg-[var(--selection-bg)] border-l-2 border-accent-link' : 'hover:bg-app-panel/30'
+        }`}>
+          {gripHandle}
+          <span className="text-[11px] font-medium text-theme-text-secondary shrink-0">{name}</span>
+          <div className="flex-1 min-w-0" onClick={(e) => e.stopPropagation()}>
+            {titleBarContent}
+          </div>
+          {statusLabel && <span className={`text-[10px] ${statusColor} shrink-0`}>{statusLabel}</span>}
+          {hoverControls}
+        </div>
+        {!collapsed && (
+          <div className="px-1 pb-1">{renderContent()}</div>
+        )}
+      </div>
+    )
+  }
+
+  // ===== Variant 3: Group (HG) or regular expanded cell =====
   return (
     <div
       ref={ref}
-      className={`bg-app-panel border-2 rounded-lg overflow-hidden cursor-pointer transition-colors ${
-        isSelected
-          ? 'border-[var(--selection-border)] bg-[var(--selection-bg)]'
-          : 'border-theme-border hover:border-[var(--hover-border)]'
+      className={`group/cell cursor-pointer transition-colors ${
+        isSelected && !isGroup ? 'border-l-2 border-accent-link' : ''
       } ${isDragging ? 'opacity-50' : ''}`}
       style={style}
       onClick={onSelect}
       {...divProps}
     >
-      {/* Cell Header */}
-      <div
-        className={`flex items-center justify-between px-3 py-2 border-b border-theme-border ${
-          isSelected ? 'bg-[var(--selection-bg)]' : 'bg-app-card'
-        }`}
-      >
-        <div className="flex items-center gap-2">
-          {/* Drag handle */}
-          {dragHandleProps && (
-            <button
-              {...(dragHandleProps as React.ButtonHTMLAttributes<HTMLButtonElement>)}
-              className="text-theme-text-muted hover:text-theme-text-primary transition-colors cursor-grab active:cursor-grabbing touch-none"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <GripVertical className="w-4 h-4" />
-            </button>
+      {/* Header */}
+      {isGroup ? (
+        // Section divider for groups
+        <div className={`flex items-center gap-1.5 pt-1 pb-0.5 px-1 ${
+          isSelected ? 'border-l-2 border-accent-link pl-1.5' : ''
+        }`}>
+          {gripHandle}
+          {collapseToggle}
+          <span className="text-[11px] font-semibold text-theme-text-muted uppercase tracking-wide whitespace-nowrap">
+            {name}
+          </span>
+          {collapsed && childNames && childNames.length > 0 && (
+            <span className="text-[10px] text-theme-text-muted truncate min-w-0">
+              {childNames.join(', ')}
+            </span>
           )}
-
-          {/* Collapse toggle (hidden when no toggle handler, e.g. variable cells with title bar content) */}
-          {onToggleCollapsed && (
-            <button
-              onClick={(e) => {
-                e.stopPropagation()
-                onToggleCollapsed()
-              }}
-              className="text-theme-text-muted hover:text-theme-text-primary transition-colors"
-            >
-              {collapsed ? (
-                <ChevronRight className="w-4 h-4" />
-              ) : (
-                <ChevronDown className="w-4 h-4" />
-              )}
-            </button>
+          <span className="flex-1 h-px bg-theme-border" />
+          {statusLabel && (
+            <span className={`text-[10px] ${statusColor} whitespace-nowrap shrink-0`}>
+              {statusLabel}
+            </span>
           )}
-
-          {/* For cells with showTypeBadge=false: show name only. For others: show type badge + name */}
+          {hoverControls}
+        </div>
+      ) : (
+        // Pane label for regular expanded cells
+        <div className={`flex items-center gap-1.5 px-1.5 py-0.5 ${
+          isSelected ? 'bg-[var(--selection-bg)]' : ''
+        }`}>
+          {gripHandle}
+          {collapseToggle}
           {!meta.showTypeBadge ? (
-            <span className="font-medium text-theme-text-primary">{name}</span>
+            <span className="text-[11px] font-medium text-theme-text-secondary">{name}</span>
           ) : (
             <>
-              <span className="text-[11px] px-1.5 py-0.5 rounded bg-app-panel text-theme-text-secondary uppercase font-medium">
+              <span className="text-[10px] px-1 py-0.5 rounded bg-app-panel text-theme-text-secondary uppercase font-medium">
                 {meta.label}
               </span>
-              <span className="font-medium text-theme-text-primary">{name}</span>
+              <span className="text-[11px] font-medium text-theme-text-secondary">{name}</span>
             </>
           )}
           {autoRunFromHere && (
             <span className="text-accent-link" title="Auto-run from here">
-              <Zap className="w-3.5 h-3.5" />
+              <Zap className="w-3 h-3" />
             </span>
           )}
-        </div>
-
-        {/* Title bar content (e.g., variable inputs) */}
-        {titleBarContent && (
-          <div className="flex-1 min-w-0 mx-2">
-            {titleBarContent}
-          </div>
-        )}
-
-        <div className="flex items-center gap-2">
-          {/* Status text */}
-          {statusLabel && <span className={`text-xs ${statusColor}`}>{statusLabel}</span>}
-
-          {/* Run button (for cells that can execute) */}
-          {onRun && canRun && (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-7 w-7 p-0"
-              onClick={(e) => {
-                e.stopPropagation()
-                onRun()
-              }}
-              disabled={status === 'loading'}
-              title="Run cell"
-            >
-              {status === 'loading' ? (
-                <RotateCcw className="w-3.5 h-3.5 animate-spin" />
-              ) : (
-                <Play className="w-3.5 h-3.5" />
-              )}
-            </Button>
+          {statusLabel && (
+            <>
+              <span className="text-[10px] text-theme-border">&middot;</span>
+              <span className={`text-[10px] ${statusColor}`}>{statusLabel}</span>
+            </>
           )}
-
-          {/* Menu button — uses Radix DropdownMenu with portal to escape overflow-hidden */}
-          <DropdownMenu.Root>
-            <DropdownMenu.Trigger asChild>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-7 w-7 p-0"
-                onClick={(e) => e.stopPropagation()}
-              >
-                <MoreVertical className="w-3.5 h-3.5" />
-              </Button>
-            </DropdownMenu.Trigger>
-
-            <DropdownMenu.Portal>
-              <DropdownMenu.Content
-                align="end"
-                sideOffset={4}
-                className="w-48 bg-app-panel border border-theme-border rounded-md shadow-lg z-50"
-                onClick={(e) => e.stopPropagation()}
-              >
-                {onRunFromHere && canRun && (
-                  <DropdownMenu.Item
-                    className="flex items-center gap-2 px-3 py-2 text-sm text-theme-text-primary hover:bg-theme-border/50 cursor-pointer outline-none first:rounded-t-md"
-                    onSelect={() => onRunFromHere()}
-                  >
-                    <Play className="w-4 h-4" />
-                    Run from here
-                  </DropdownMenu.Item>
-                )}
-                {onToggleAutoRunFromHere && canRun && (
-                  <DropdownMenu.Item
-                    className="flex items-center gap-2 px-3 py-2 text-sm text-theme-text-primary hover:bg-theme-border/50 cursor-pointer outline-none"
-                    onSelect={() => onToggleAutoRunFromHere()}
-                  >
-                    <Zap className={`w-4 h-4 ${autoRunFromHere ? 'text-accent-link' : ''}`} />
-                    {autoRunFromHere ? 'Disable auto-run' : 'Auto-run from here'}
-                  </DropdownMenu.Item>
-                )}
-                {onDuplicate && (
-                  <DropdownMenu.Item
-                    className="flex items-center gap-2 px-3 py-2 text-sm text-theme-text-primary hover:bg-theme-border/50 cursor-pointer outline-none"
-                    onSelect={() => onDuplicate()}
-                  >
-                    <Copy className="w-4 h-4" />
-                    Duplicate cell
-                  </DropdownMenu.Item>
-                )}
-                {onDelete && (
-                  <DropdownMenu.Item
-                    className="flex items-center gap-2 px-3 py-2 text-sm text-accent-error hover:bg-theme-border/50 cursor-pointer outline-none last:rounded-b-md"
-                    onSelect={() => onDelete()}
-                  >
-                    <Trash2 className="w-4 h-4" />
-                    Delete cell
-                  </DropdownMenu.Item>
-                )}
-              </DropdownMenu.Content>
-            </DropdownMenu.Portal>
-          </DropdownMenu.Root>
+          <div className="ml-auto">{hoverControls}</div>
         </div>
-      </div>
+      )}
 
-      {/* Cell Content */}
+      {/* Content */}
       {!collapsed && (
-        <div className="p-4" style={contentStyle}>
-          {status === 'error' && error ? (
-            <div className="bg-[var(--error-bg)] border border-accent-error rounded-md p-3 flex items-start gap-3">
-              <span className="text-accent-error text-lg">!</span>
-              <div>
-                <div className="font-medium text-accent-error">Query execution failed</div>
-                <div className="text-sm text-theme-text-secondary mt-1">{error}</div>
-              </div>
-            </div>
-          ) : status === 'blocked' ? (
-            <div className="bg-app-card border border-dashed border-theme-border rounded-md p-6 text-center text-theme-text-muted">
-              Waiting for cell above to succeed
-            </div>
-          ) : (
-            children
-          )}
+        <div className={isGroup ? '' : 'px-1 pb-1'} style={contentStyle}>
+          {renderContent()}
         </div>
       )}
 
