@@ -4,6 +4,7 @@ import { ChevronDown, ChevronRight, Copy, Play, RotateCcw, MoreVertical, Trash2,
 import { CellType, CellStatus, getCellTypeMetadata } from '@/lib/screen-renderers/cell-registry'
 import { Button } from '@/components/ui/button'
 import { ResizeHandle } from '@/components/ResizeHandle'
+import { useFadeOnIdle } from '@/hooks/useFadeOnIdle'
 
 interface CellContainerProps extends Omit<HTMLAttributes<HTMLDivElement>, 'children'> {
   /** Cell name/title */
@@ -88,6 +89,9 @@ export const CellContainer = forwardRef<HTMLDivElement, CellContainerProps>(func
   const canRun = canRunProp ?? !!meta.execute
   const isGroup = type === 'hg'
 
+  const revealed = useFadeOnIdle(status)
+  const fadeClass = `fade-on-idle${revealed ? ' revealed' : ''}`
+
   // Normalize height - handle legacy 'auto' values from old configs
   const normalizedHeight = typeof height === 'number' ? height : 300
   const currentHeight = useRef(normalizedHeight)
@@ -146,7 +150,7 @@ export const CellContainer = forwardRef<HTMLDivElement, CellContainerProps>(func
         e.stopPropagation()
         onToggleCollapsed()
       }}
-      className="text-theme-text-muted hover:text-theme-text-primary transition-colors"
+      className={`text-theme-text-muted hover:text-theme-text-primary transition-colors ${fadeClass}`}
     >
       {collapsed ? (
         <ChevronRight className="w-3.5 h-3.5" />
@@ -288,8 +292,8 @@ export const CellContainer = forwardRef<HTMLDivElement, CellContainerProps>(func
         )}
         {statusLabel && (
           <>
-            <span className="text-[10px] text-theme-border">&middot;</span>
-            <span className={`text-[10px] ${statusColor}`}>{statusLabel}</span>
+            <span className={`text-[10px] text-theme-border ${fadeClass}`}>&middot;</span>
+            <span className={`text-[10px] ${statusColor} ${fadeClass}`}>{statusLabel}</span>
           </>
         )}
         <div className="ml-auto">{hoverControls}</div>
@@ -315,7 +319,7 @@ export const CellContainer = forwardRef<HTMLDivElement, CellContainerProps>(func
           <div className="flex-1 min-w-0" onClick={(e) => e.stopPropagation()}>
             {titleBarContent}
           </div>
-          {statusLabel && <span className={`text-[10px] ${statusColor} shrink-0`}>{statusLabel}</span>}
+          {statusLabel && <span className={`text-[10px] ${statusColor} shrink-0 ${fadeClass}`}>{statusLabel}</span>}
           {hoverControls}
         </div>
         {!collapsed && (
@@ -344,11 +348,11 @@ export const CellContainer = forwardRef<HTMLDivElement, CellContainerProps>(func
         }`}>
           {gripHandle}
           {collapseToggle}
-          <span className="text-[11px] font-semibold text-theme-text-muted uppercase tracking-wide whitespace-nowrap">
+          <span className={`text-[11px] font-semibold text-theme-text-muted uppercase tracking-wide whitespace-nowrap ${fadeClass}`}>
             {name}
           </span>
           {collapsed && childNames && childNames.length > 0 && (
-            <span className="text-[10px] text-theme-text-muted truncate min-w-0">
+            <span className={`text-[10px] text-theme-text-muted truncate min-w-0 ${fadeClass}`}>
               {childNames.join(', ')}
             </span>
           )}
@@ -357,13 +361,13 @@ export const CellContainer = forwardRef<HTMLDivElement, CellContainerProps>(func
           )}
           {statusLabel && (
             <>
-              <span className="text-[10px] text-theme-border">&middot;</span>
-              <span className={`text-[10px] ${statusColor} whitespace-nowrap`}>
+              <span className={`text-[10px] text-theme-border ${fadeClass}`}>&middot;</span>
+              <span className={`text-[10px] ${statusColor} whitespace-nowrap ${fadeClass}`}>
                 {statusLabel}
               </span>
             </>
           )}
-          <span className="flex-1 h-px bg-theme-border" />
+          <span className={`flex-1 h-px bg-theme-border ${fadeClass}`} />
           {hoverControls}
         </div>
       ) : (
@@ -393,8 +397,8 @@ export const CellContainer = forwardRef<HTMLDivElement, CellContainerProps>(func
           )}
           {statusLabel && (
             <>
-              <span className="text-[10px] text-theme-border">&middot;</span>
-              <span className={`text-[10px] ${statusColor}`}>{statusLabel}</span>
+              <span className={`text-[10px] text-theme-border ${fadeClass}`}>&middot;</span>
+              <span className={`text-[10px] ${statusColor} ${fadeClass}`}>{statusLabel}</span>
             </>
           )}
           <div className="ml-auto">{hoverControls}</div>
@@ -409,7 +413,11 @@ export const CellContainer = forwardRef<HTMLDivElement, CellContainerProps>(func
       )}
 
       {/* Resize Handle */}
-      {!collapsed && onHeightChange && <ResizeHandle onResize={handleResize} />}
+      {!collapsed && onHeightChange && (
+        <div className={fadeClass}>
+          <ResizeHandle onResize={handleResize} />
+        </div>
+      )}
     </div>
   )
 })
