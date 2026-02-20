@@ -273,7 +273,7 @@ describe('NotebookRenderer', () => {
       await renderNotebook(createDefaultProps({ config: { cells } }))
 
       // Find the cell container and click it
-      const cellContainer = screen.getByText('Query').closest('[class*="group"]')
+      const cellContainer = screen.getByText('Query').closest('[class*="group/cell"]')
       fireEvent.click(cellContainer!)
 
       // The editor panel should appear with cell name input
@@ -285,7 +285,7 @@ describe('NotebookRenderer', () => {
 
       await renderNotebook(createDefaultProps({ config: { cells } }))
 
-      const cellContainer = screen.getByText('My Query').closest('[class*="group"]')
+      const cellContainer = screen.getByText('My Query').closest('[class*="group/cell"]')
       fireEvent.click(cellContainer!)
 
       // Editor should show cell name in input
@@ -298,7 +298,7 @@ describe('NotebookRenderer', () => {
       await renderNotebook(createDefaultProps({ config: { cells } }))
 
       // Select cell
-      const cellContainer = screen.getByText('Query').closest('[class*="group"]')
+      const cellContainer = screen.getByText('Query').closest('[class*="group/cell"]')
       fireEvent.click(cellContainer!)
 
       expect(screen.getByText('Cell Name')).toBeInTheDocument()
@@ -319,7 +319,7 @@ describe('NotebookRenderer', () => {
       await renderNotebook(createDefaultProps({ config: { cells } }))
 
       // Select the cell first
-      const cellContainer = screen.getByText('ToDelete').closest('[class*="group"]')
+      const cellContainer = screen.getByText('ToDelete').closest('[class*="group/cell"]')
       fireEvent.click(cellContainer!)
 
       // Click delete in editor - look for "Delete Cell" button
@@ -342,7 +342,7 @@ describe('NotebookRenderer', () => {
       )
 
       // Select cell
-      const cellContainer = screen.getByText('ToDelete').closest('[class*="group"]')
+      const cellContainer = screen.getByText('ToDelete').closest('[class*="group/cell"]')
       fireEvent.click(cellContainer!)
 
       // Click delete in editor
@@ -369,7 +369,7 @@ describe('NotebookRenderer', () => {
       )
 
       // Select cell - find the cell by name in the main content area
-      const cellContainer = screen.getByText('ToDelete').closest('[class*="group"]')
+      const cellContainer = screen.getByText('ToDelete').closest('[class*="group/cell"]')
       fireEvent.click(cellContainer!)
 
       // Click delete in editor
@@ -400,7 +400,7 @@ describe('NotebookRenderer', () => {
       )
 
       // Select cell
-      const cellContainer = screen.getByText('OldName').closest('[class*="group"]')
+      const cellContainer = screen.getByText('OldName').closest('[class*="group/cell"]')
       fireEvent.click(cellContainer!)
 
       // Update name in editor
@@ -418,7 +418,7 @@ describe('NotebookRenderer', () => {
       await renderNotebook(createDefaultProps({ config: { cells } }))
 
       // Select second cell
-      const cellContainer = screen.getByText('Second').closest('[class*="group"]')
+      const cellContainer = screen.getByText('Second').closest('[class*="group/cell"]')
       fireEvent.click(cellContainer!)
 
       // Try to rename to existing name
@@ -436,7 +436,7 @@ describe('NotebookRenderer', () => {
       await renderNotebook(createDefaultProps({ config: { cells } }))
 
       // Select cell
-      const cellContainer = screen.getByText('Query').closest('[class*="group"]')
+      const cellContainer = screen.getByText('Query').closest('[class*="group/cell"]')
       fireEvent.click(cellContainer!)
 
       // Clear name
@@ -478,7 +478,7 @@ describe('NotebookRenderer', () => {
       )
 
       // Select a cell to show the editor panel
-      const cellContainer = screen.getByText('Query').closest('[class*="group"]')
+      const cellContainer = screen.getByText('Query').closest('[class*="group/cell"]')
       fireEvent.click(cellContainer!)
 
       // Save buttons should NOT be in the renderer (they're in the parent title bar now)

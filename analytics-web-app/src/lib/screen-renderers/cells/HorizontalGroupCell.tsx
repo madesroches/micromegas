@@ -39,7 +39,7 @@ import type {
   VariableValue,
 } from '../notebook-types'
 import { resolveCellDataSource, shouldShowDataSource, validateCellName, sanitizeCellName } from '../notebook-utils'
-import { buildCellRendererProps, buildStatusText, computeHgStatus } from '../notebook-cell-view'
+import { buildCellRendererProps, buildStatusText } from '../notebook-cell-view'
 import { Button } from '@/components/ui/button'
 import { DataSourceField } from '@/components/DataSourceSelector'
 
@@ -104,13 +104,14 @@ interface HgChildPaneProps {
   isDragging: boolean
   setNodeRef: (node: HTMLElement | null) => void
   style: React.CSSProperties
+  showDivider: boolean
 }
 
 function HgChildPane({
   child, state, commonProps,
   isSelected,
   onSelect, onRun, onDeleteChild,
-  dragHandleProps, isDragging, setNodeRef, style,
+  dragHandleProps, isDragging, setNodeRef, style, showDivider,
 }: HgChildPaneProps) {
   const revealed = useFadeOnIdle(state.status)
   const fadeClass = `fade-on-idle${revealed ? ' revealed' : ''}`
@@ -142,10 +143,12 @@ function HgChildPane({
     <div
       ref={setNodeRef}
       style={style}
-      className={`flex-1 min-w-0 flex flex-col group/pane overflow-hidden border-l-2 ${
-        isSelected ? 'border-l-accent-link' : 'border-l-transparent'
-      } ${isDragging ? 'opacity-50' : ''}`}
+      className={`flex-1 min-w-0 flex group/pane overflow-hidden ${isDragging ? 'opacity-50' : ''}`}
     >
+      {showDivider && <div className={`w-px shrink-0 bg-theme-border ${fadeClass}`} />}
+      <div className={`flex-1 min-w-0 flex flex-col border-l-2 ${
+        isSelected ? 'border-l-accent-link' : 'border-l-transparent'
+      }`}>
       {/* Pane label */}
       <div
         className={`flex items-center justify-between px-2 py-0.5 cursor-pointer ${
@@ -244,6 +247,7 @@ function HgChildPane({
           <CellRenderer {...commonProps} />
         )}
       </div>
+      </div>
     </div>
   )
 }
@@ -332,10 +336,6 @@ export function HorizontalGroupCell({
     [config, onConfigChange],
   )
 
-  const hgStatus = computeHgStatus(config.children, cellStates)
-  const groupRevealed = useFadeOnIdle(hgStatus)
-  const dividerFadeClass = `fade-on-idle${groupRevealed ? ' revealed' : ''}`
-
   if (config.children.length === 0) {
     return (
       <div className="flex items-center justify-center p-8 text-theme-text-muted border border-dashed border-theme-border rounded-md">
@@ -353,7 +353,7 @@ export function HorizontalGroupCell({
     >
       <SortableContext items={config.children.map((c) => c.name)} strategy={horizontalListSortingStrategy}>
         <div ref={containerRef} className="flex gap-px h-full">
-          {config.children.flatMap((child, index) => {
+          {config.children.map((child, index) => {
             const state = cellStates[child.name] || { status: 'idle' as const, data: [] }
 
             const commonProps = buildCellRendererProps(child, state,
@@ -374,16 +374,7 @@ export function HorizontalGroupCell({
               },
             )
 
-            const elements: React.ReactNode[] = []
-
-            // Divider between panes (fades with cell metadata)
-            if (index > 0) {
-              elements.push(
-                <div key={`div-${child.name}`} className={`w-px bg-theme-border ${dividerFadeClass}`} />
-              )
-            }
-
-            elements.push(
+            return (
               <SortableChild key={child.name} id={child.name}>
                 {({ dragHandleProps, isDragging, setNodeRef, style }) => (
                   <HgChildPane
@@ -398,12 +389,11 @@ export function HorizontalGroupCell({
                     isDragging={isDragging}
                     setNodeRef={setNodeRef}
                     style={style}
+                    showDivider={index > 0}
                   />
                 )}
               </SortableChild>
             )
-
-            return elements
           })}
         </div>
       </SortableContext>
