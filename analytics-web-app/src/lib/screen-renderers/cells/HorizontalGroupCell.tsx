@@ -113,8 +113,7 @@ function HgChildPane({
   onSelect, onRun, onDeleteChild,
   dragHandleProps, isDragging, setNodeRef, style, showDivider,
 }: HgChildPaneProps) {
-  const revealed = useFadeOnIdle(state.status)
-  const fadeClass = `fade-on-idle${revealed ? ' revealed' : ''}`
+  const fadeClass = useFadeOnIdle(state.status)
 
   const meta = getCellTypeMetadata(child.type)
   const CellRenderer = getCellRenderer(child.type)
@@ -233,7 +232,13 @@ function HgChildPane({
       </div>
 
       {/* Content */}
-      <div className="flex-1 overflow-auto px-1 pb-1">
+      <div
+        className="flex-1 overflow-auto px-1 pb-1"
+        onClick={(e) => {
+          e.stopPropagation();
+          onSelect();
+        }}
+      >
         {state.status === 'error' && state.error ? (
           <div className="bg-[var(--error-bg)] border border-accent-error rounded-md p-2 text-xs">
             <span className="text-accent-error font-medium">Error: </span>
@@ -418,6 +423,7 @@ interface ChildEditorViewProps {
   config: HorizontalGroupCellConfig
   onChange: (config: CellConfig) => void
   onChildSelect: (childName: string | null) => void
+  onRun?: () => void
   allCellNames: Set<string>
   defaultDataSource?: string
   datasourceVariables?: string[]
@@ -433,6 +439,7 @@ function ChildEditorView({
   config,
   onChange,
   onChildSelect,
+  onRun,
   allCellNames,
   defaultDataSource,
   datasourceVariables,
@@ -527,6 +534,12 @@ function ChildEditorView({
         datasourceVariables={datasourceVariables}
         defaultDataSource={defaultDataSource}
       />
+      {onRun && !!meta.execute && (
+        <Button onClick={onRun} className="w-full gap-2">
+          <Play className="w-4 h-4" />
+          Run
+        </Button>
+      )}
     </>
   )
 }
@@ -540,6 +553,7 @@ interface HorizontalGroupCellEditorProps {
   onChange: (config: CellConfig) => void
   selectedChildName: string | null
   onChildSelect: (childName: string | null) => void
+  onChildRun?: (childName: string) => void
   variables: Record<string, VariableValue>
   timeRange: { begin: string; end: string }
   allCellNames: Set<string>
@@ -554,6 +568,7 @@ export function HorizontalGroupCellEditor({
   onChange,
   selectedChildName,
   onChildSelect,
+  onChildRun,
   variables,
   timeRange,
   allCellNames,
@@ -577,6 +592,7 @@ export function HorizontalGroupCellEditor({
         config={config}
         onChange={onChange}
         onChildSelect={onChildSelect}
+        onRun={onChildRun ? () => onChildRun(selectedChild.name) : undefined}
         allCellNames={allCellNames}
         defaultDataSource={defaultDataSource}
         datasourceVariables={datasourceVariables}
@@ -591,7 +607,7 @@ export function HorizontalGroupCellEditor({
 
   // Group editor: list of children with reorder/remove
   const handleAddChild = (type: CellConfig['type']) => {
-    const newCell = createDefaultCell(type, allCellNames)
+    const newCell = createDefaultCell(type, allCellNames, defaultDataSource)
     const newChildren = [...config.children, newCell]
     onChange({ ...config, children: newChildren })
     setShowAddChildModal(false)

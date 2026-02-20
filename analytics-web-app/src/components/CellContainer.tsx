@@ -89,8 +89,7 @@ export const CellContainer = forwardRef<HTMLDivElement, CellContainerProps>(func
   const canRun = canRunProp ?? !!meta.execute
   const isGroup = type === 'hg'
 
-  const revealed = useFadeOnIdle(status)
-  const fadeClass = `fade-on-idle${revealed ? ' revealed' : ''}`
+  const fadeClass = useFadeOnIdle(status)
 
   // Normalize height - handle legacy 'auto' values from old configs
   const normalizedHeight = typeof height === 'number' ? height : 300

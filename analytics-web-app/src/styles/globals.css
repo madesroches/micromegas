@@ -93,7 +93,7 @@
 
 /* Fade-on-idle: cell metadata fades after inactivity, reveals on hover or status change */
 .fade-on-idle {
-  transition: opacity 1s ease-out;
+  transition: opacity 1s ease-out 4s;
   opacity: 0;
 }
 

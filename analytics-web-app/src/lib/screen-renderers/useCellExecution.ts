@@ -260,6 +260,18 @@ export function useCellExecution({
       if (startIndex === 0 && engine) {
         engine.reset()
       }
+      // Reset statuses to idle so useFadeOnIdle detects a change even for
+      // fast cells where React would batch loading→success into one render.
+      setCellStates((prev) => {
+        const next = { ...prev }
+        for (let i = startIndex; i < cells.length; i++) {
+          const name = cells[i].name
+          if (next[name]) {
+            next[name] = { ...next[name], status: 'idle' }
+          }
+        }
+        return next
+      })
       for (let i = startIndex; i < cells.length; i++) {
         const success = await executeCell(i)
         if (!success) {

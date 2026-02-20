@@ -1,27 +1,29 @@
-import { useState, useEffect, useRef } from 'react'
-
-const FADE_DELAY = 4000
+import { useState, useEffect } from 'react'
 
 /**
- * Returns `true` while metadata should be visible, `false` when it should fade.
- * Only reveals on actual status changes (not on mount). Stays revealed during loading.
+ * Returns the CSS class string for fade-on-idle behavior.
+ *
+ * Adds 'revealed' on any non-idle status change for instant visibility.
+ * For loading: stays revealed until status changes.
+ * For terminal states: revealed for 200ms (CSS fade-in), then CSS
+ * transition-delay (4s) handles the wait before fade-out.
  */
-export function useFadeOnIdle(status: string, delay = FADE_DELAY): boolean {
+export function useFadeOnIdle(status: string): string {
   const [revealed, setRevealed] = useState(false)
-  const prevStatusRef = useRef(status)
-  const timerRef = useRef<ReturnType<typeof setTimeout>>()
 
   useEffect(() => {
-    if (status !== prevStatusRef.current) {
-      setRevealed(true)
-      prevStatusRef.current = status
-    }
-    clearTimeout(timerRef.current)
-    if (status !== 'loading') {
-      timerRef.current = setTimeout(() => setRevealed(false), delay)
-    }
-    return () => clearTimeout(timerRef.current)
-  }, [status, delay])
+    if (status === 'idle') return
 
-  return revealed
+    setRevealed(true)
+
+    // During loading, stay revealed until status changes again
+    if (status === 'loading') return
+
+    // For terminal states, keep revealed 200ms (enough for CSS 150ms fade-in),
+    // then remove — CSS transition-delay (4s) handles the wait before fade-out.
+    const id = setTimeout(() => setRevealed(false), 200)
+    return () => clearTimeout(id)
+  }, [status])
+
+  return revealed ? 'fade-on-idle revealed' : 'fade-on-idle'
 }

@@ -39,17 +39,22 @@ export function DataSourceField({ value, onChange, datasourceVariables, showNote
 
 export function DataSourceSelector({ value, onChange, datasourceVariables, showNotebookOption }: DataSourceSelectorProps) {
   const [sources, setSources] = useState<DataSourceSummary[]>([])
+  const [sourcesLoaded, setSourcesLoaded] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
     getDataSourceList()
       .then((data) => {
-        if (!cancelled) setSources(data)
+        if (!cancelled) {
+          setSources(data)
+          setSourcesLoaded(true)
+        }
       })
       .catch((err) => {
         if (!cancelled) {
           setError(err instanceof Error ? err.message : 'Failed to load data sources')
+          setSourcesLoaded(true)
         }
       })
     return () => {
@@ -74,11 +79,13 @@ export function DataSourceSelector({ value, onChange, datasourceVariables, showN
 
   // If the current value doesn't match any option, the <select> silently shows
   // the first option without firing onChange. Sync the config to match.
+  // Only run after sources have loaded to avoid overwriting valid values during async fetch.
   useEffect(() => {
+    if (!sourcesLoaded) return
     if (optionValues.length > 0 && !optionValues.includes(value)) {
       onChangeRef.current(optionValues[0])
     }
-  }, [value, optionValuesKey]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [value, optionValuesKey, sourcesLoaded]) // eslint-disable-line react-hooks/exhaustive-deps
 
   if (error) {
     return (
