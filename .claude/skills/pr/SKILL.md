@@ -66,7 +66,20 @@ The plan file should already be part of the branch's diff (moved/updated and com
    - If done, move it to `tasks/completed/`, commit the move, then proceed
 4. If no plan file is found, that's fine — proceed without one
 
-### Phase 4: Create the Pull Request
+### Phase 4: Update Changelog
+
+Update `CHANGELOG.md` with the changes from this branch.
+
+1. Read `CHANGELOG.md` to understand the current format and the `## Unreleased` section
+2. Review the commits (`git log --oneline main..HEAD`) and the PR summary you're about to write
+3. Add concise bullet points under the `## Unreleased` section:
+   - Group under an existing bold category header (e.g., `**Notebook Enhancements:**`, `**Analytics Web App:**`) or create a new one if nothing fits
+   - Each bullet should be a short description with the issue number in parentheses, e.g., `* Add zoom buttons to chart (#123)`
+   - Match the style of existing entries — start with a verb (Add, Fix, Refactor, Update, Remove), include issue/PR number
+   - Don't duplicate entries that are already in the changelog
+4. Commit the changelog update: `git commit -m "Update changelog"`
+
+### Phase 5: Create the Pull Request
 
 1. Check if the branch has been pushed to the remote:
    - `git rev-parse --abbrev-ref --symbolic-full-name @{u}` to check tracking
