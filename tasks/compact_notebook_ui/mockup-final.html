@@ -231,6 +231,41 @@
   .log-msg .highlight { color: #e7e9ea; }
 
   /* ================================================================
+     Collapsed Group — inline children names after label
+     ================================================================ */
+  .collapsed-group .section-divider { padding-bottom: 4px; }
+  .collapsed-children {
+    font-size: 10px; color: #6b7280; white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis;
+  }
+
+  /* ================================================================
+     Collapsed Cell — compact single line
+     ================================================================ */
+  .collapsed-cell {
+    display: flex; align-items: center; gap: 6px;
+    padding: 3px 6px; border-radius: 4px;
+    background: rgba(42, 42, 62, 0.15);
+    position: relative;
+  }
+  .collapsed-cell:hover { background: rgba(42, 42, 62, 0.3); }
+  .collapsed-cell .chevron {
+    color: #6b7280; font-size: 9px; cursor: pointer;
+    width: 14px; text-align: center; flex-shrink: 0;
+    transition: color 0.15s;
+  }
+  .collapsed-cell .chevron:hover { color: #e7e9ea; }
+  .collapsed-cell .cell-name { font-size: 11px; font-weight: 500; color: #9ca3af; }
+  .collapsed-cell .cell-status { font-size: 10px; color: #6b7280; }
+  .collapsed-cell .sep { font-size: 10px; color: #2a2a3e; }
+  .collapsed-cell-controls {
+    display: flex; gap: 2px; margin-left: auto;
+    opacity: 0; transition: opacity 0.15s;
+  }
+  .collapsed-cell:hover .collapsed-cell-controls { opacity: 1; }
+  .collapsed-cell:hover .grip { opacity: 1; }
+
+  /* ================================================================
      Empty State
      ================================================================ */
   .empty-state {
@@ -577,6 +612,39 @@
       </div>
     </div>
     <div class="resize-handle" title="Drag to resize"></div>
+  </div>
+
+  <!-- ============================================================
+       Group: Admin (collapsed)
+       ============================================================ -->
+  <div class="group collapsed-group">
+    <div class="section-divider">
+      <span class="grip" title="Drag to reorder"><svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor"><circle cx="5" cy="3" r="1.5"/><circle cx="11" cy="3" r="1.5"/><circle cx="5" cy="8" r="1.5"/><circle cx="11" cy="8" r="1.5"/><circle cx="5" cy="13" r="1.5"/><circle cx="11" cy="13" r="1.5"/></svg></span>
+      <span class="chevron">&#x25B6;</span>
+      <span class="label">Admin</span>
+      <span class="collapsed-children">admin_metrics, admin_warnings</span>
+      <span class="line"></span>
+      <span class="section-status">256 rows (2 KB) in 0.1s</span>
+      <span class="section-controls">
+        <button class="icon-btn" title="Run">&#x25B6;</button>
+        <button class="icon-btn" title="Menu">&#x22EE;</button>
+      </span>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       Standalone cell: process_list (collapsed)
+       ============================================================ -->
+  <div class="collapsed-cell">
+    <span class="grip" title="Drag to reorder"><svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor"><circle cx="5" cy="3" r="1.5"/><circle cx="11" cy="3" r="1.5"/><circle cx="5" cy="8" r="1.5"/><circle cx="11" cy="8" r="1.5"/><circle cx="5" cy="13" r="1.5"/><circle cx="11" cy="13" r="1.5"/></svg></span>
+    <span class="chevron">&#x25B6;</span>
+    <span class="cell-name">process_list</span>
+    <span class="sep">&middot;</span>
+    <span class="cell-status">15 rows (1 KB) in 0.2s</span>
+    <span class="collapsed-cell-controls">
+      <button class="icon-btn" title="Run">&#x25B6;</button>
+      <button class="icon-btn" title="Menu">&#x22EE;</button>
+    </span>
   </div>
 
   <!-- Add Cell -->

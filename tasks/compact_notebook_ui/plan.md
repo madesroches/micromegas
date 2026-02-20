@@ -10,7 +10,7 @@ Make the notebook UI more data-dense by switching to a borderless design with th
 
 | File | Purpose |
 |------|---------|
-| `mockup-final.html` | **Target design** — high-fidelity borderless layout with real content (charts, logs), hover-reveal controls, drag handles, resize handles |
+| `mockup-final.html` | **Target design** — high-fidelity borderless layout with real content (charts, logs), hover-reveal controls, drag handles, resize handles, collapsed group, collapsed standalone cell |
 | `mockup-current.html` | Reference snapshot of the current boxed UI for comparison |
 | `mockup-borderless.html` | Early low-fidelity exploration (superseded by `mockup-final.html`) |
 
@@ -77,15 +77,18 @@ This is the biggest change. The thick bordered box with a full header bar become
 **Expanded group (HG):**
 - Replace `border-2 rounded-lg bg-app-panel` box with no border, no background
 - Replace full header bar with a thin section divider:
-  - Layout: `flex items-center gap-2 py-1 px-1`
+  - Layout: `flex items-center gap-1.5 pt-1 pb-0.5 px-1`
+  - Drag grip: hover-only (`opacity-0 group-hover:opacity-100`)
   - Collapse chevron (always visible)
   - Group name: `text-[11px] font-semibold text-theme-text-muted uppercase tracking-wide`
   - Horizontal rule: `flex-1 h-px bg-theme-border`
+  - Status text: `text-[10px] text-theme-text-muted` showing aggregate row count/size/time (always visible)
   - Run + menu buttons: visible on hover only (`opacity-0 group-hover:opacity-100`)
 
 **Collapsed group:**
-- Same divider, but children names listed inline after the group name
+- Same divider, but children names listed inline after the group name as `text-[10px] text-theme-text-muted`
 - `── FLIGHTSQL ── flightsql_metrics, flightsql_warnings ──`
+- Status text still visible after inline children names
 
 **Expanded regular cell:**
 - Small pane label above content (like in child cells below)
@@ -93,8 +96,8 @@ This is the biggest change. The thick bordered box with a full header bar become
 
 **Collapsed regular cell:**
 - Single line: `▶ cell_name · status_text`, controls on hover
-- Subtle background: `bg-app-panel rounded`
-- Height: ~20px
+- Subtle background: `bg-app-panel/30 rounded`
+- Height: ~24px
 
 **Variable cells (auto-collapsed with titleBarContent):**
 - Minimal inline row: `name [select dropdown]` with no border
@@ -128,6 +131,13 @@ The current selection uses `border-[var(--selection-border)]` on the CellContain
 
 - **Group selected:** Thin left accent bar on the section divider (`border-l-2 border-accent-link pl-1`)
 - **Child cell selected:** Subtle highlight on the pane label row (`bg-[var(--selection-bg)]`) + left accent border on the content pane
+
+### Resize handles
+
+Content rows and variable cells have a resize handle at the bottom:
+- Height: 4px, `cursor: ns-resize`
+- Centered pill indicator: 32px wide, 2px tall, `bg-theme-border` → `bg-theme-text-muted` on hover
+- The handle controls the height of the content row above it
 
 ### Drag & drop
 
@@ -186,12 +196,13 @@ Drag handles currently live in the headers. In the borderless design:
 8. **HorizontalGroupCell.tsx** — Vertical divider between children:
    - Add `border-r border-theme-border` on children except `:last-child`
 
-### Phase 4: Variable cells
+### Phase 4: Variable cells & resize handles
 
 9. **CellContainer.tsx** — Variable cell styling:
    - When `titleBarContent` is present:
      - Render as minimal inline row: `name [widget]` with no box chrome
      - Reduce vertical padding to minimum
+   - Add resize handle at bottom of expanded cells/groups (4px tall, centered pill indicator)
 
 ### Phase 5: Selection & interaction polish
 
