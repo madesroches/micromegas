@@ -272,7 +272,7 @@ export function HorizontalGroupCell({
                             <TitleBarRenderer {...commonProps} />
                           </div>
                         )}
-                        {statusLabel && !TitleBarRenderer && (
+                        {statusLabel && (
                           <>
                             <span className="text-[10px] text-theme-border">&middot;</span>
                             <span className={`text-[10px] ${statusColor}`}>{statusLabel}</span>

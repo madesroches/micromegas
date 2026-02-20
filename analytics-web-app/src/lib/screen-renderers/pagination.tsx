@@ -105,7 +105,8 @@ export function PaginationBar({ pagination }: PaginationBarProps) {
   const isLast = currentPage >= totalPages - 1
 
   return (
-    <div className="flex items-center justify-center py-0.5 px-1 flex-shrink-0 relative" onClick={(e) => e.stopPropagation()}>
+    <div className="grid grid-cols-[1fr_auto_1fr] items-center py-0.5 px-1 flex-shrink-0" onClick={(e) => e.stopPropagation()}>
+      <div />
       {/* Centered navigation */}
       <div className="flex items-center gap-0.5">
         <NavButton onClick={() => setPage(0)} disabled={isFirst} title="First page">
@@ -130,8 +131,8 @@ export function PaginationBar({ pagination }: PaginationBarProps) {
       </div>
 
       {/* Row info + page size — right-aligned */}
-      <div className="absolute right-1 top-1/2 -translate-y-1/2 flex items-center gap-1">
-        <span className="text-[10px] text-theme-text-muted whitespace-nowrap select-none">
+      <div className="flex items-center justify-end gap-1 min-w-0">
+        <span className="text-[10px] text-theme-text-muted whitespace-nowrap select-none truncate">
           {(startRow + 1).toLocaleString()}&ndash;{endRow.toLocaleString()} of{' '}
           {totalRows.toLocaleString()}
         </span>

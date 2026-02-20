@@ -60,7 +60,7 @@ export function LogCell({ data, status, options, onOptionsChange }: CellRenderer
           return (
             <div
               key={rowIdx}
-              className={`flex px-2 py-0.5 hover:bg-white/[0.06] transition-colors${i % 2 === 0 ? '' : ' bg-white/[0.03]'}`}
+              className={`flex px-2 py-0.5 hover:bg-app-card/50 transition-colors${i % 2 === 0 ? '' : ' bg-app-card/30'}`}
             >
               {columns.map((col) => (
                 <React.Fragment key={col.name}>{renderLogColumn(col, row)}</React.Fragment>

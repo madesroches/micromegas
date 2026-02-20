@@ -383,7 +383,7 @@ export interface TableBodyProps {
 
 export function TableBody({ data, columns, compact = false, overrides = [], variables = {} }: TableBodyProps) {
   const rowClass = compact
-    ? 'even:bg-white/[0.03] hover:bg-white/[0.06] transition-colors'
+    ? 'even:bg-app-card/30 hover:bg-app-card/50 transition-colors'
     : 'border-b border-theme-border hover:bg-app-card transition-colors'
 
   const cellClass = compact
