@@ -266,10 +266,10 @@ export const CellContainer = forwardRef<HTMLDivElement, CellContainerProps>(func
     return (
       <div
         ref={ref}
-        className={`flex items-center gap-1.5 py-0.5 px-1.5 rounded cursor-pointer group/cell transition-colors ${
+        className={`flex items-center gap-1.5 py-0.5 px-1.5 rounded cursor-pointer group/cell transition-colors border-l-2 ${
           isSelected
-            ? 'bg-[var(--selection-bg)] border-l-2 border-accent-link'
-            : 'bg-app-panel/30 hover:bg-app-panel/50'
+            ? 'bg-[var(--selection-bg)] border-l-accent-link'
+            : 'border-l-transparent bg-app-panel/30 hover:bg-app-panel/50'
         } ${isDragging ? 'opacity-50' : ''}`}
         style={style}
         onClick={onSelect}
@@ -307,8 +307,8 @@ export const CellContainer = forwardRef<HTMLDivElement, CellContainerProps>(func
         onClick={onSelect}
         {...divProps}
       >
-        <div className={`flex items-center gap-2 py-0.5 px-1.5 rounded transition-colors ${
-          isSelected ? 'bg-[var(--selection-bg)] border-l-2 border-accent-link' : 'hover:bg-app-panel/30'
+        <div className={`flex items-center gap-2 py-0.5 px-1.5 rounded transition-colors border-l-2 ${
+          isSelected ? 'bg-[var(--selection-bg)] border-l-accent-link' : 'border-l-transparent hover:bg-app-panel/30'
         }`}>
           {gripHandle}
           <span className="text-[11px] font-medium text-theme-text-secondary shrink-0">{name}</span>
@@ -330,7 +330,7 @@ export const CellContainer = forwardRef<HTMLDivElement, CellContainerProps>(func
     <div
       ref={ref}
       className={`group/cell cursor-pointer transition-colors ${
-        isSelected && !isGroup ? 'border-l-2 border-accent-link' : ''
+        !isGroup ? `border-l-2 ${isSelected ? 'border-l-accent-link' : 'border-l-transparent'}` : ''
       } ${isDragging ? 'opacity-50' : ''}`}
       style={style}
       onClick={onSelect}
@@ -339,8 +339,8 @@ export const CellContainer = forwardRef<HTMLDivElement, CellContainerProps>(func
       {/* Header */}
       {isGroup ? (
         // Section divider for groups
-        <div className={`flex items-center gap-1.5 pt-1 pb-0.5 px-1 ${
-          isSelected ? 'border-l-2 border-accent-link pl-1.5' : ''
+        <div className={`flex items-center gap-1.5 pt-1 pb-0.5 px-1 border-l-2 ${
+          isSelected ? 'border-l-accent-link' : 'border-l-transparent'
         }`}>
           {gripHandle}
           {collapseToggle}

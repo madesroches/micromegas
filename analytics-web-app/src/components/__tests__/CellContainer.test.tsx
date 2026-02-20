@@ -284,14 +284,14 @@ describe('CellContainer', () => {
 
       // Check for left accent bar selection indicator
       const cell = container.firstChild as HTMLElement
-      expect(cell.className).toContain('border-accent-link')
+      expect(cell.className).toContain('border-l-accent-link')
     })
 
     it('should not apply selected styles when isSelected is false', () => {
       const { container } = render(<CellContainer {...defaultProps} isSelected={false} />)
 
       const cell = container.firstChild as HTMLElement
-      expect(cell.className).not.toContain('border-accent-link')
+      expect(cell.className).not.toContain('border-l-accent-link')
     })
   })
 

@@ -239,9 +239,9 @@ export function HorizontalGroupCell({
                   <div
                     ref={setNodeRef}
                     style={style}
-                    className={`flex-1 min-w-0 flex flex-col group/pane overflow-hidden ${
+                    className={`flex-1 min-w-0 flex flex-col group/pane overflow-hidden border-l-2 ${
                       isNotLast ? 'border-r border-theme-border' : ''
-                    } ${isSelected ? 'border-l-2 border-l-accent-link' : ''
+                    } ${isSelected ? 'border-l-accent-link' : 'border-l-transparent'
                     } ${isDragging ? 'opacity-50' : ''}`}
                   >
                     {/* Pane label */}
