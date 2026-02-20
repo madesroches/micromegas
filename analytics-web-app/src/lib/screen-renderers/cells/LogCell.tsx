@@ -51,7 +51,7 @@ export function LogCell({ data, status, options, onOptionsChange }: CellRenderer
   }
 
   return (
-    <div className="flex flex-col h-full bg-app-bg border border-theme-border rounded-md font-mono text-xs">
+    <div className="flex flex-col h-full font-mono text-[12px]">
       <div className="flex-1 overflow-auto min-h-0">
         {Array.from({ length: pagination.endRow - pagination.startRow }, (_, i) => {
           const rowIdx = pagination.startRow + i
@@ -60,7 +60,7 @@ export function LogCell({ data, status, options, onOptionsChange }: CellRenderer
           return (
             <div
               key={rowIdx}
-              className="flex px-3 py-1 border-b border-app-panel hover:bg-app-panel/50 transition-colors"
+              className={`flex px-2 py-0.5 hover:bg-white/[0.06] transition-colors${i % 2 === 0 ? '' : ' bg-white/[0.03]'}`}
             >
               {columns.map((col) => (
                 <React.Fragment key={col.name}>{renderLogColumn(col, row)}</React.Fragment>
