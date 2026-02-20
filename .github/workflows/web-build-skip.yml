@@ -1,0 +1,20 @@
+name: Web Build Skip
+
+on:
+  pull_request:
+    branches: [ "main" ]
+    paths-ignore:
+      - 'analytics-web-app/**'
+      - 'build/analytics_web_ci.py'
+      - '.github/workflows/analytics-web-app.yml'
+      - 'grafana/**'
+      - 'typescript/**'
+      - 'package.json'
+      - 'yarn.lock'
+      - '.github/workflows/grafana-plugin.yml'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "No web/grafana changes, skipping build"
