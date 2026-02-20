@@ -42,7 +42,8 @@
     "uplot": "^1.6.32"
   },
   "resolutions": {
-    "baseline-browser-mapping": "^2.9.16"
+    "baseline-browser-mapping": "^2.9.16",
+    "minimatch": "^10.2.1"
   },
   "devDependencies": {
     "@babel/core": "^7.28.6",
