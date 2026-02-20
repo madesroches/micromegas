@@ -145,7 +145,8 @@ Drag handles currently live in the headers. In the borderless design:
    - `gap-3` → `gap-1`
 
 2. **CellContainer.tsx** — Reduce content padding:
-   - Content area `p-4` → `p-1`
+   - Content area `p-4` → `p-1` for regular cells
+   - Content area `p-4` → `p-0` for HG cells (type === 'hg')
 
 3. **HorizontalGroupCell.tsx** — Tighten children:
    - Container `gap-2` → `gap-px`
@@ -163,6 +164,11 @@ Drag handles currently live in the headers. In the borderless design:
    - Cell collapsed: single compact line with chevron + name + status
 
 ### Phase 3: Compact child headers
+
+6. **CellContainer.test.tsx** — Update tests for borderless rendering:
+   - Fix DOM selector `div[class*="bg-app-panel"]` (line 125) — root no longer has `bg-app-panel`
+   - Fix selection assertions `border-[var(--selection-border)]` (line 287) — now uses left accent bar
+   - Update any assertions that depend on removed classes or changed DOM structure
 
 7. **HorizontalGroupCell.tsx** — Replace `ChildCellHeader` with compact pane label:
    - Remove drag handle from always-visible (hover only)
@@ -197,6 +203,7 @@ Drag handles currently live in the headers. In the borderless design:
 | `analytics-web-app/src/components/CellContainer.tsx` | Borderless rendering, section divider header, compact collapsed states |
 | `analytics-web-app/src/lib/screen-renderers/cells/HorizontalGroupCell.tsx` | Compact pane labels, remove child borders, vertical dividers, tighter spacing |
 | `analytics-web-app/src/lib/screen-renderers/NotebookRenderer.tsx` | Reduce `p-6`→`p-2`, `gap-3`→`gap-1` |
+| `analytics-web-app/src/components/__tests__/CellContainer.test.tsx` | Update DOM selectors and selection assertions for borderless rendering |
 
 ## Testing Strategy
 
