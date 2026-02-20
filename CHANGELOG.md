@@ -3,6 +3,9 @@
 This file documents the historical progress of the Micromegas project. For current focus, please see the main [README.md](./README.md).
 
 ## Unreleased
+* **Security:**
+  * Fix minimatch ReDoS vulnerability via resolution override to v10.x (dependabot alerts #104, #105)
+  * Migrate Grafana eslint config to native flat config, remove @eslint/eslintrc dependency
 * **Notebook Cross-Cell Queries:**
   * Add notebook-local query support via WASM DataFusion engine (#815)
   * Cells with `dataSource: 'notebook'` execute SQL in-browser against other cells' results
