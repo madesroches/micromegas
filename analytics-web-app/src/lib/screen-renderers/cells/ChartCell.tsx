@@ -222,6 +222,14 @@ export function ChartCell({ data, status, options, onOptionsChange, variables, t
 
   const { data: chartData, xAxisMode, xLabels, xColumnName, yColumnName } = chartResult
 
+  // Extract per-query unit and label for single-series charts
+  const singleQueryMeta = (options as Record<string, unknown>)?._queryMeta as
+    { unit?: string; label?: string }[] | undefined
+  const chartUnit = singleQueryMeta?.[0]?.unit
+    ? substituteMacros(singleQueryMeta[0].unit, variables, timeRange)
+    : (resolvedOptions?.unit as string) || undefined
+  const chartTitle = singleQueryMeta?.[0]?.label || undefined
+
   return (
     <div className="h-full">
       <XYChart
@@ -234,7 +242,8 @@ export function ChartCell({ data, status, options, onOptionsChange, variables, t
         onScaleModeChange={handleScaleModeChange}
         chartType={(resolvedOptions?.chart_type as ChartType) ?? 'line'}
         onChartTypeChange={handleChartTypeChange}
-        unit={(resolvedOptions?.unit as string) ?? undefined}
+        unit={chartUnit}
+        title={chartTitle}
         onTimeRangeSelect={onTimeRangeSelect}
       />
     </div>
