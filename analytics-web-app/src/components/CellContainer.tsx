@@ -352,15 +352,18 @@ export const CellContainer = forwardRef<HTMLDivElement, CellContainerProps>(func
               {childNames.join(', ')}
             </span>
           )}
-          <span className="flex-1 h-px bg-theme-border" />
           {status === 'loading' && (
             <RotateCcw className="w-3 h-3 text-accent-link animate-spin shrink-0" />
           )}
           {statusLabel && (
-            <span className={`text-[10px] ${statusColor} whitespace-nowrap shrink-0`}>
-              {statusLabel}
-            </span>
+            <>
+              <span className="text-[10px] text-theme-border">&middot;</span>
+              <span className={`text-[10px] ${statusColor} whitespace-nowrap`}>
+                {statusLabel}
+              </span>
+            </>
           )}
+          <span className="flex-1 h-px bg-theme-border" />
           {hoverControls}
         </div>
       ) : (
