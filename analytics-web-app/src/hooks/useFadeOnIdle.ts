@@ -1,44 +1,29 @@
-import { useState, useEffect, useRef } from 'react'
-
-const FADE_DELAY = 4000
-const FADE_DURATION = 1000 // must match CSS fade-out duration
-
-type FadeState = 'hidden' | 'revealed' | 'fading'
+import { useState, useEffect } from 'react'
 
 /**
  * Returns the CSS class string for fade-on-idle behavior.
  *
- * Three states:
- *  - hidden:   opacity 0, 4s CSS delay (handles hover-leave)
- *  - revealed: opacity 1, shown for FADE_DELAY after status changes
- *  - fading:   opacity 0, no CSS delay (immediate 1s fade after JS timer)
+ * Adds 'revealed' on any non-idle status change for instant visibility.
+ * For loading: stays revealed until status changes.
+ * For terminal states: revealed for 200ms (CSS fade-in), then CSS
+ * transition-delay (4s) handles the wait before fade-out.
  */
 export function useFadeOnIdle(status: string): string {
-  const [state, setState] = useState<FadeState>('hidden')
-  const prevStatusRef = useRef(status)
-  const timerRef = useRef<ReturnType<typeof setTimeout>>()
-  const fadeTimerRef = useRef<ReturnType<typeof setTimeout>>()
+  const [revealed, setRevealed] = useState(false)
 
   useEffect(() => {
-    if (status !== prevStatusRef.current) {
-      setState('revealed')
-      prevStatusRef.current = status
-    }
-    clearTimeout(timerRef.current)
-    clearTimeout(fadeTimerRef.current)
-    if (status !== 'loading') {
-      timerRef.current = setTimeout(() => {
-        setState('fading')
-        fadeTimerRef.current = setTimeout(() => setState('hidden'), FADE_DURATION)
-      }, FADE_DELAY)
-    }
-    return () => {
-      clearTimeout(timerRef.current)
-      clearTimeout(fadeTimerRef.current)
-    }
+    if (status === 'idle') return
+
+    setRevealed(true)
+
+    // During loading, stay revealed until status changes again
+    if (status === 'loading') return
+
+    // For terminal states, keep revealed 200ms (enough for CSS 150ms fade-in),
+    // then remove — CSS transition-delay (4s) handles the wait before fade-out.
+    const id = setTimeout(() => setRevealed(false), 200)
+    return () => clearTimeout(id)
   }, [status])
 
-  if (state === 'revealed') return 'fade-on-idle revealed'
-  if (state === 'fading') return 'fade-on-idle fading'
-  return 'fade-on-idle'
+  return revealed ? 'fade-on-idle revealed' : 'fade-on-idle'
 }

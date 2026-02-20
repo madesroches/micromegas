@@ -97,10 +97,6 @@
   opacity: 0;
 }
 
-.fade-on-idle.fading {
-  transition: opacity 1s ease-out;
-}
-
 .fade-on-idle.revealed {
   transition: opacity 150ms ease-in;
   opacity: 1;
