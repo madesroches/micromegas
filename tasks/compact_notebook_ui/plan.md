@@ -6,7 +6,13 @@
 
 Make the notebook UI more data-dense by switching to a borderless design with thin section dividers. Groups become `── INGESTION ──` horizontal rules instead of boxed panels with heavy headers. Child cell names and status become small inline labels above content. All editing controls (drag handles, run buttons, menus) appear on hover only.
 
-See `mockup-borderless.html` (proposed) and `mockup-current.html` (reference) in this folder.
+### Mockups
+
+| File | Purpose |
+|------|---------|
+| `mockup-final.html` | **Target design** — high-fidelity borderless layout with real content (charts, logs), hover-reveal controls, drag handles, resize handles |
+| `mockup-current.html` | Reference snapshot of the current boxed UI for comparison |
+| `mockup-borderless.html` | Early low-fidelity exploration (superseded by `mockup-final.html`) |
 
 ## Current State
 

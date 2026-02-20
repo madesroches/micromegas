@@ -116,6 +116,50 @@
   .pane-content { flex: 1; padding: 0 4px 4px; overflow: hidden; }
 
   /* ================================================================
+     Drag Handle (grip icon) — hover-only
+     ================================================================ */
+  .grip {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 14px; height: 14px; flex-shrink: 0;
+    color: #4b5563; cursor: grab;
+    opacity: 0; transition: opacity 0.15s;
+  }
+  .grip:hover { color: #9ca3af; }
+  .grip:active { cursor: grabbing; }
+  .var-row:hover .grip,
+  .group:hover > .section-divider .grip,
+  .content-pane:hover .grip { opacity: 1; }
+
+  /* ================================================================
+     Resize Handle — bottom of content rows
+     ================================================================ */
+  .resize-handle {
+    height: 4px; cursor: ns-resize; position: relative;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .resize-handle::after {
+    content: '';
+    width: 32px; height: 2px; border-radius: 1px;
+    background: #2a2a3e; transition: background 0.15s;
+  }
+  .resize-handle:hover::after { background: #6b7280; }
+
+  /* ================================================================
+     Add Cell Button
+     ================================================================ */
+  .add-cell-btn {
+    display: flex; align-items: center; justify-content: center; gap: 6px;
+    width: 100%; padding: 10px;
+    border: 2px dashed #2a2a3e; border-radius: 6px;
+    background: transparent; color: #6b7280;
+    font-size: 12px; cursor: pointer;
+    transition: border-color 0.15s, color 0.15s, background 0.15s;
+  }
+  .add-cell-btn:hover {
+    border-color: #1565c0; color: #1565c0; background: rgba(21, 101, 192, 0.06);
+  }
+
+  /* ================================================================
      Icon Button (shared)
      ================================================================ */
   .icon-btn {
@@ -205,6 +249,7 @@
 
   <!-- Variable: deployment -->
   <div class="var-row">
+    <span class="grip" title="Drag to reorder"><svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor"><circle cx="5" cy="3" r="1.5"/><circle cx="11" cy="3" r="1.5"/><circle cx="5" cy="8" r="1.5"/><circle cx="11" cy="8" r="1.5"/><circle cx="5" cy="13" r="1.5"/><circle cx="11" cy="13" r="1.5"/></svg></span>
     <span class="var-name">deployment</span>
     <select class="var-select"><option>prod</option><option>staging</option></select>
     <div class="var-controls">
@@ -214,11 +259,13 @@
 
   <!-- Variable: jobs -->
   <div class="var-row">
+    <span class="grip" title="Drag to reorder"><svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor"><circle cx="5" cy="3" r="1.5"/><circle cx="11" cy="3" r="1.5"/><circle cx="5" cy="8" r="1.5"/><circle cx="11" cy="8" r="1.5"/><circle cx="5" cy="13" r="1.5"/><circle cx="11" cy="13" r="1.5"/></svg></span>
     <span class="var-name">jobs</span>
     <select class="var-select"><option>jobs</option></select>
     <div class="var-controls">
       <button class="icon-btn" title="Menu">&#x22EE;</button>
     </div>
+    <div class="resize-handle" title="Drag to resize"></div>
   </div>
 
   <!-- ============================================================
@@ -226,6 +273,7 @@
        ============================================================ -->
   <div class="group">
     <div class="section-divider">
+      <span class="grip" title="Drag to reorder"><svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor"><circle cx="5" cy="3" r="1.5"/><circle cx="11" cy="3" r="1.5"/><circle cx="5" cy="8" r="1.5"/><circle cx="11" cy="8" r="1.5"/><circle cx="5" cy="13" r="1.5"/><circle cx="11" cy="13" r="1.5"/></svg></span>
       <span class="chevron">&#x25BC;</span>
       <span class="label">Ingestion</span>
       <span class="line"></span>
@@ -241,6 +289,7 @@
       <div class="content-pane">
         <div class="pane-label">
           <div class="left">
+            <span class="grip" title="Drag to reorder"><svg width="9" height="9" viewBox="0 0 16 16" fill="currentColor"><circle cx="5" cy="3" r="1.5"/><circle cx="11" cy="3" r="1.5"/><circle cx="5" cy="8" r="1.5"/><circle cx="11" cy="8" r="1.5"/><circle cx="5" cy="13" r="1.5"/><circle cx="11" cy="13" r="1.5"/></svg></span>
             <span class="pane-name">ingestion_metrics</span>
             <span class="sep">&middot;</span>
             <span class="pane-status">1,024 rows (12 KB) in 0.3s</span>
@@ -349,6 +398,7 @@
       <div class="content-pane">
         <div class="pane-label">
           <div class="left">
+            <span class="grip" title="Drag to reorder"><svg width="9" height="9" viewBox="0 0 16 16" fill="currentColor"><circle cx="5" cy="3" r="1.5"/><circle cx="11" cy="3" r="1.5"/><circle cx="5" cy="8" r="1.5"/><circle cx="11" cy="8" r="1.5"/><circle cx="5" cy="13" r="1.5"/><circle cx="11" cy="13" r="1.5"/></svg></span>
             <span class="pane-name">ingestion_warnings</span>
             <span class="sep">&middot;</span>
             <span class="pane-status">48 rows (3 KB) in 0.1s</span>
@@ -388,6 +438,7 @@
         </div>
       </div>
     </div>
+    <div class="resize-handle" title="Drag to resize"></div>
   </div>
 
   <!-- ============================================================
@@ -395,6 +446,7 @@
        ============================================================ -->
   <div class="group">
     <div class="section-divider">
+      <span class="grip" title="Drag to reorder"><svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor"><circle cx="5" cy="3" r="1.5"/><circle cx="11" cy="3" r="1.5"/><circle cx="5" cy="8" r="1.5"/><circle cx="11" cy="8" r="1.5"/><circle cx="5" cy="13" r="1.5"/><circle cx="11" cy="13" r="1.5"/></svg></span>
       <span class="chevron">&#x25BC;</span>
       <span class="label">FlightSql</span>
       <span class="line"></span>
@@ -410,6 +462,7 @@
       <div class="content-pane">
         <div class="pane-label">
           <div class="left">
+            <span class="grip" title="Drag to reorder"><svg width="9" height="9" viewBox="0 0 16 16" fill="currentColor"><circle cx="5" cy="3" r="1.5"/><circle cx="11" cy="3" r="1.5"/><circle cx="5" cy="8" r="1.5"/><circle cx="11" cy="8" r="1.5"/><circle cx="5" cy="13" r="1.5"/><circle cx="11" cy="13" r="1.5"/></svg></span>
             <span class="pane-name">flightsql_metrics</span>
             <span class="sep">&middot;</span>
             <span class="pane-status">512 rows (6 KB) in 0.2s</span>
@@ -506,6 +559,7 @@
       <div class="content-pane">
         <div class="pane-label">
           <div class="left">
+            <span class="grip" title="Drag to reorder"><svg width="9" height="9" viewBox="0 0 16 16" fill="currentColor"><circle cx="5" cy="3" r="1.5"/><circle cx="11" cy="3" r="1.5"/><circle cx="5" cy="8" r="1.5"/><circle cx="11" cy="8" r="1.5"/><circle cx="5" cy="13" r="1.5"/><circle cx="11" cy="13" r="1.5"/></svg></span>
             <span class="pane-name">flightsql_warnings</span>
             <span class="sep">&middot;</span>
             <span class="pane-status">0 rows in 0.1s</span>
@@ -522,7 +576,14 @@
         </div>
       </div>
     </div>
+    <div class="resize-handle" title="Drag to resize"></div>
   </div>
+
+  <!-- Add Cell -->
+  <button class="add-cell-btn">
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="2" x2="8" y2="14"/><line x1="2" y1="8" x2="14" y2="8"/></svg>
+    Add Cell
+  </button>
 
 </div>
 
