@@ -1,30 +1,44 @@
 import { useState, useEffect, useRef } from 'react'
 
-// Brief buffer so the 150ms CSS reveal animation finishes before we
-// hand off to the CSS transition-delay (4s in globals.css).
-const REVEAL_BUFFER = 200
+const FADE_DELAY = 4000
+const FADE_DURATION = 1000 // must match CSS fade-out duration
+
+type FadeState = 'hidden' | 'revealed' | 'fading'
 
 /**
- * Returns `true` while metadata should be visible, `false` when it should fade.
- * Only reveals on actual status changes (not on mount). Stays revealed during loading.
- * The 4-second visibility window after reveal is handled by CSS transition-delay.
+ * Returns the CSS class string for fade-on-idle behavior.
+ *
+ * Three states:
+ *  - hidden:   opacity 0, 4s CSS delay (handles hover-leave)
+ *  - revealed: opacity 1, shown for FADE_DELAY after status changes
+ *  - fading:   opacity 0, no CSS delay (immediate 1s fade after JS timer)
  */
-export function useFadeOnIdle(status: string): boolean {
-  const [revealed, setRevealed] = useState(false)
+export function useFadeOnIdle(status: string): string {
+  const [state, setState] = useState<FadeState>('hidden')
   const prevStatusRef = useRef(status)
   const timerRef = useRef<ReturnType<typeof setTimeout>>()
+  const fadeTimerRef = useRef<ReturnType<typeof setTimeout>>()
 
   useEffect(() => {
     if (status !== prevStatusRef.current) {
-      setRevealed(true)
+      setState('revealed')
       prevStatusRef.current = status
     }
     clearTimeout(timerRef.current)
+    clearTimeout(fadeTimerRef.current)
     if (status !== 'loading') {
-      timerRef.current = setTimeout(() => setRevealed(false), REVEAL_BUFFER)
+      timerRef.current = setTimeout(() => {
+        setState('fading')
+        fadeTimerRef.current = setTimeout(() => setState('hidden'), FADE_DURATION)
+      }, FADE_DELAY)
     }
-    return () => clearTimeout(timerRef.current)
+    return () => {
+      clearTimeout(timerRef.current)
+      clearTimeout(fadeTimerRef.current)
+    }
   }, [status])
 
-  return revealed
+  if (state === 'revealed') return 'fade-on-idle revealed'
+  if (state === 'fading') return 'fade-on-idle fading'
+  return 'fade-on-idle'
 }

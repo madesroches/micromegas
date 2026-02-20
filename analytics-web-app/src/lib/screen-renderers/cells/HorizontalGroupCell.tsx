@@ -113,8 +113,7 @@ function HgChildPane({
   onSelect, onRun, onDeleteChild,
   dragHandleProps, isDragging, setNodeRef, style, showDivider,
 }: HgChildPaneProps) {
-  const revealed = useFadeOnIdle(state.status)
-  const fadeClass = `fade-on-idle${revealed ? ' revealed' : ''}`
+  const fadeClass = useFadeOnIdle(state.status)
 
   const meta = getCellTypeMetadata(child.type)
   const CellRenderer = getCellRenderer(child.type)
