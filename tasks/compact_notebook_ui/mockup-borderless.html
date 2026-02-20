@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Option C - Borderless / Divider Lines</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #0a0a0f; color: #e7e9ea; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+
+  .page-header {
+    display: flex; align-items: center; gap: 12px;
+    padding: 8px 16px; border-bottom: 1px solid #2a2a3e; background: #12121a;
+  }
+  .page-header h1 { font-size: 14px; font-weight: 600; }
+  .page-header .btn { font-size: 11px; padding: 3px 10px; background: #1a1a2e; border: 1px solid #2a2a3e; color: #9ca3af; border-radius: 4px; cursor: pointer; }
+  .page-header .btn-primary { background: #1565c0; border-color: #1565c0; color: #fff; }
+
+  .notebook { padding: 8px 12px; }
+
+  .group { margin-bottom: 4px; }
+
+  .section-divider {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 0 4px;
+  }
+  .section-divider .label {
+    font-size: 11px; font-weight: 600; color: #6b7280;
+    text-transform: uppercase; letter-spacing: 0.5px;
+    white-space: nowrap;
+  }
+  .section-divider .line { flex: 1; height: 1px; background: #2a2a3e; }
+  .section-controls {
+    display: flex; align-items: center; gap: 2px;
+    opacity: 0; transition: opacity 0.15s;
+  }
+  .group:hover .section-controls { opacity: 1; }
+
+  .collapsed-children {
+    font-size: 10px; color: #4b5563; font-weight: 400;
+    text-transform: none; letter-spacing: 0;
+  }
+
+  .content-row { display: flex; gap: 1px; }
+  .content-pane {
+    flex: 1; display: flex; flex-direction: column;
+    background: #12121a; border-radius: 4px;
+    overflow: hidden;
+  }
+  .pane-label {
+    font-size: 10px; color: #6b7280; padding: 3px 8px;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .pane-label .left { display: flex; align-items: center; gap: 6px; }
+  .pane-label .name { font-weight: 500; color: #9ca3af; }
+  .pane-label .sep { color: #2a2a3e; }
+  .pane-label .status { color: #6b7280; }
+  .pane-label .right { display: flex; align-items: center; gap: 3px; }
+  .pane-controls {
+    display: flex; gap: 3px;
+    opacity: 0; transition: opacity 0.15s;
+  }
+  .content-pane:hover .pane-controls { opacity: 1; }
+  .pane-icon { color: #6b7280; font-size: 9px; cursor: pointer; }
+  .pane-content { flex: 1; padding: 2px 6px 6px; height: 260px; }
+
+  /* Variable cells - borderless inline */
+  .var-row {
+    display: flex; align-items: center; gap: 8px;
+    padding: 2px 8px;
+  }
+  .var-row .name { font-size: 10px; font-weight: 500; color: #9ca3af; }
+  .var-select {
+    font-size: 11px; padding: 1px 6px; background: #12121a; border: 1px solid #2a2a3e;
+    color: #e7e9ea; border-radius: 3px; outline: none; cursor: pointer;
+  }
+  .var-controls { opacity: 0; transition: opacity 0.15s; }
+  .var-row:hover .var-controls { opacity: 1; }
+
+  /* Collapsed standalone cell */
+  .standalone-collapsed {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 2px 8px;
+    background: #12121a; border-radius: 4px;
+    margin-bottom: 4px;
+  }
+  .standalone-collapsed .left { display: flex; align-items: center; gap: 6px; font-size: 10px; }
+  .standalone-collapsed .name { font-weight: 500; color: #9ca3af; }
+  .standalone-collapsed .sep { color: #2a2a3e; }
+  .standalone-collapsed .status { color: #6b7280; }
+  .standalone-collapsed .chevron { color: #6b7280; font-size: 9px; cursor: pointer; }
+  .standalone-collapsed .right { display: flex; align-items: center; gap: 3px; opacity: 0; transition: opacity 0.15s; }
+  .standalone-collapsed:hover .right { opacity: 1; }
+
+  .chart-placeholder {
+    width: 100%; height: 100%; border-radius: 3px;
+    background: linear-gradient(180deg, rgba(191,54,12,0.12) 0%, rgba(191,54,12,0.03) 100%);
+    display: flex; align-items: center; justify-content: center;
+    color: #bf360c; font-size: 12px; position: relative; overflow: hidden;
+  }
+  .chart-placeholder::before {
+    content: '';
+    position: absolute; bottom: 0; left: 0; right: 0; height: 60%;
+    background: repeating-linear-gradient(90deg, transparent, transparent 8px, rgba(191,54,12,0.1) 8px, rgba(191,54,12,0.1) 9px);
+  }
+  .chart-placeholder::after {
+    content: '';
+    position: absolute; bottom: 20%; left: 5%; right: 5%; height: 2px;
+    background: linear-gradient(90deg, #bf360c, #ffb300, #bf360c, #1565c0, #bf360c);
+    border-radius: 1px; filter: blur(0.5px);
+  }
+
+  .log-placeholder {
+    width: 100%; height: 100%; border-radius: 3px;
+    background: #0a0a0f; padding: 6px; font-family: monospace; font-size: 11px;
+    color: #9ca3af; overflow: hidden; line-height: 1.5;
+  }
+  .log-line { display: flex; gap: 8px; }
+  .log-time { color: #6b7280; }
+  .log-warn { color: #ffb300; }
+  .log-error { color: #ef4444; }
+  .log-info { color: #1565c0; }
+
+  .title-bar { padding: 8px 16px; background: #ffb300; }
+  .title-bar h2 { font-size: 12px; color: #0a0a0f; font-weight: 500; }
+  .title-bar p { font-size: 11px; color: rgba(0,0,0,0.6); margin-top: 2px; }
+
+  .icon-btn { width: 18px; height: 18px; display: flex; align-items: center; justify-content: center; color: #6b7280; background: none; border: none; cursor: pointer; font-size: 9px; }
+</style>
+</head>
+<body>
+  <div class="title-bar">
+    <h2>OPTION C: Borderless with Divider Lines</h2>
+    <p>No boxes. Groups are thin section dividers. Cell name + status in compact label row. Controls on hover.</p>
+  </div>
+
+  <div class="page-header">
+    <span style="font-size:16px;">&#9678;</span>
+    <h1>telemetry-services-dashboard</h1>
+    <button class="btn">&#x1f589; Edit</button>
+    <button class="btn btn-primary">&#x25b6; Run</button>
+  </div>
+
+  <div class="notebook">
+    <!-- Variable cells - minimal inline -->
+    <div class="var-row">
+      <span class="name">deployment</span>
+      <select class="var-select"><option>ingestion</option><option>grid</option></select>
+      <span class="var-controls"><span class="pane-icon">&#x22EE;</span></span>
+    </div>
+    <div class="var-row">
+      <span class="name">jobs</span>
+      <select class="var-select"><option>jobs</option></select>
+      <span class="var-controls"><span class="pane-icon">&#x22EE;</span></span>
+    </div>
+
+    <!-- Expanded group -->
+    <div class="group">
+      <div class="section-divider">
+        <span style="color:#6b7280; font-size:10px; cursor:pointer;">&#x25BC;</span>
+        <span class="label">Ingestion</span>
+        <span class="line"></span>
+        <span class="section-controls">
+          <button class="icon-btn">&#x25B6;</button>
+          <button class="icon-btn">&#x22EE;</button>
+        </span>
+      </div>
+      <div class="content-row">
+        <div class="content-pane">
+          <div class="pane-label">
+            <div class="left">
+              <span class="name">ingestion_metrics</span>
+              <span class="sep">&middot;</span>
+              <span class="status">1,024 rows (12 KB) in 0.3s</span>
+            </div>
+            <div class="right">
+              <span class="pane-controls"><span class="pane-icon">&#x25B6;</span> <span class="pane-icon">&#x22EE;</span></span>
+            </div>
+          </div>
+          <div class="pane-content"><div class="chart-placeholder">metrics chart</div></div>
+        </div>
+        <div class="content-pane">
+          <div class="pane-label">
+            <div class="left">
+              <span class="name">ingestion_warnings</span>
+              <span class="sep">&middot;</span>
+              <span class="status">48 rows (3 KB) in 0.1s</span>
+            </div>
+            <div class="right">
+              <span class="pane-controls"><span class="pane-icon">&#x25B6;</span> <span class="pane-icon">&#x22EE;</span></span>
+            </div>
+          </div>
+          <div class="pane-content"><div class="log-placeholder">
+            <div class="log-line"><span class="log-time">14:01:02</span><span class="log-warn">WARN</span><span>admin connection failed with ssl</span></div>
+            <div class="log-line"><span class="log-time">14:01:01</span><span class="log-warn">WARN</span><span>admin connection failed with ssl</span></div>
+            <div class="log-line"><span class="log-time">14:00:58</span><span class="log-error">ERR </span><span>connection timeout on pool</span></div>
+            <div class="log-line"><span class="log-time">14:00:55</span><span class="log-warn">WARN</span><span>admin connection failed with ssl</span></div>
+            <div class="log-line"><span class="log-time">14:00:51</span><span class="log-info">INFO</span><span>telemetry batch processed ok</span></div>
+            <div class="log-line"><span class="log-time">14:00:48</span><span class="log-warn">WARN</span><span>admin connection failed with ssl</span></div>
+          </div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Collapsed group -->
+    <div class="group">
+      <div class="section-divider">
+        <span style="color:#6b7280; font-size:10px; cursor:pointer;">&#x25B6;</span>
+        <span class="label">FlightSql</span>
+        <span class="collapsed-children">&mdash; flightsql_metrics, flightsql_warnings</span>
+        <span class="line"></span>
+        <span class="section-controls">
+          <button class="icon-btn">&#x25B6;</button>
+          <button class="icon-btn">&#x22EE;</button>
+        </span>
+      </div>
+    </div>
+
+    <!-- Collapsed standalone cell -->
+    <div class="standalone-collapsed">
+      <div class="left">
+        <span class="chevron">&#x25B6;</span>
+        <span class="name">process_list</span>
+        <span class="sep">&middot;</span>
+        <span class="status">15 rows (1 KB) in 0.2s</span>
+      </div>
+      <div class="right">
+        <span class="pane-icon">&#x25B6;</span>
+        <span class="pane-icon">&#x22EE;</span>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
