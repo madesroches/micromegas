@@ -283,6 +283,9 @@ export const CellContainer = forwardRef<HTMLDivElement, CellContainerProps>(func
             <Zap className="w-3 h-3" />
           </span>
         )}
+        {status === 'loading' && (
+          <RotateCcw className="w-3 h-3 text-accent-link animate-spin shrink-0" />
+        )}
         {statusLabel && (
           <>
             <span className="text-[10px] text-theme-border">&middot;</span>
@@ -350,6 +353,9 @@ export const CellContainer = forwardRef<HTMLDivElement, CellContainerProps>(func
             </span>
           )}
           <span className="flex-1 h-px bg-theme-border" />
+          {status === 'loading' && (
+            <RotateCcw className="w-3 h-3 text-accent-link animate-spin shrink-0" />
+          )}
           {statusLabel && (
             <span className={`text-[10px] ${statusColor} whitespace-nowrap shrink-0`}>
               {statusLabel}
@@ -378,6 +384,9 @@ export const CellContainer = forwardRef<HTMLDivElement, CellContainerProps>(func
             <span className="text-accent-link" title="Auto-run from here">
               <Zap className="w-3 h-3" />
             </span>
+          )}
+          {status === 'loading' && (
+            <RotateCcw className="w-3 h-3 text-accent-link animate-spin shrink-0" />
           )}
           {statusLabel && (
             <>
