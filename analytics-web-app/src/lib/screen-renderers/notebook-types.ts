@@ -174,4 +174,5 @@ export interface NotebookConfig {
   cells: CellConfig[]
   timeRangeFrom?: string
   timeRangeTo?: string
+  [key: string]: unknown
 }
