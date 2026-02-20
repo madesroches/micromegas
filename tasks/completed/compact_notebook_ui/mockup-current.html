@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Current UI - Notebook Layout</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #0a0a0f; color: #e7e9ea; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+
+  .page-header {
+    display: flex; align-items: center; gap: 12px;
+    padding: 12px 24px; border-bottom: 1px solid #2a2a3e; background: #12121a;
+  }
+  .page-header h1 { font-size: 16px; font-weight: 600; }
+  .page-header .btn { font-size: 12px; padding: 4px 12px; background: #1a1a2e; border: 1px solid #2a2a3e; color: #9ca3af; border-radius: 4px; cursor: pointer; }
+  .page-header .btn-primary { background: #1565c0; border-color: #1565c0; color: #fff; }
+
+  .notebook { padding: 24px; display: flex; flex-direction: column; gap: 12px; }
+
+  .cell { background: #12121a; border: 2px solid #2a2a3e; border-radius: 8px; overflow: hidden; }
+  .cell-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 12px; background: #1a1a2e; border-bottom: 1px solid #2a2a3e;
+  }
+  .cell-header.no-border { border-bottom: none; }
+  .cell-header-left { display: flex; align-items: center; gap: 8px; }
+  .cell-header-right { display: flex; align-items: center; gap: 8px; }
+  .grip { color: #6b7280; font-size: 14px; cursor: grab; }
+  .chevron { color: #6b7280; font-size: 12px; cursor: pointer; }
+  .badge { font-size: 11px; padding: 2px 6px; background: #12121a; color: #9ca3af; border-radius: 4px; text-transform: uppercase; font-weight: 500; }
+  .cell-name { font-weight: 500; font-size: 14px; }
+  .icon-btn { width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; color: #6b7280; background: none; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; }
+  .status { font-size: 12px; color: #9ca3af; }
+
+  /* Variable cell - inline select in header */
+  .var-select {
+    font-size: 12px; padding: 2px 8px; background: #12121a; border: 1px solid #2a2a3e;
+    color: #e7e9ea; border-radius: 4px; outline: none; cursor: pointer;
+  }
+  .var-header-content { display: flex; align-items: center; gap: 8px; flex: 1; margin: 0 8px; }
+
+  .hg-content { display: flex; gap: 8px; padding: 16px; }
+  .child-cell { flex: 1; border: 1px solid #2a2a3e; border-radius: 6px; overflow: hidden; display: flex; flex-direction: column; }
+  .child-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 6px 8px; background: #1a1a2e; border-bottom: 1px solid #2a2a3e;
+  }
+  .child-header-left { display: flex; align-items: center; gap: 6px; }
+  .child-header-right { display: flex; align-items: center; gap: 4px; }
+  .child-badge { font-size: 10px; padding: 2px 4px; background: #12121a; color: #9ca3af; border-radius: 3px; text-transform: uppercase; font-weight: 500; }
+  .child-name { font-size: 13px; font-weight: 500; }
+  .child-icon { color: #6b7280; font-size: 10px; cursor: pointer; }
+  .child-status { font-size: 10px; color: #9ca3af; }
+  .child-content { padding: 8px; height: 250px; background: #12121a; }
+
+  .chart-placeholder {
+    width: 100%; height: 100%; border-radius: 4px;
+    background: linear-gradient(180deg, rgba(191,54,12,0.15) 0%, rgba(191,54,12,0.05) 100%);
+    border: 1px solid rgba(191,54,12,0.2);
+    display: flex; align-items: center; justify-content: center;
+    color: #bf360c; font-size: 12px; position: relative; overflow: hidden;
+  }
+  .chart-placeholder::before {
+    content: '';
+    position: absolute; bottom: 0; left: 0; right: 0; height: 60%;
+    background: repeating-linear-gradient(90deg, transparent, transparent 8px, rgba(191,54,12,0.1) 8px, rgba(191,54,12,0.1) 9px);
+  }
+  .chart-placeholder::after {
+    content: '';
+    position: absolute; bottom: 20%; left: 5%; right: 5%; height: 2px;
+    background: linear-gradient(90deg, #bf360c, #ffb300, #bf360c, #1565c0, #bf360c);
+    border-radius: 1px; filter: blur(0.5px);
+  }
+
+  .log-placeholder {
+    width: 100%; height: 100%; border-radius: 4px;
+    background: #0a0a0f; padding: 8px; font-family: monospace; font-size: 11px;
+    color: #9ca3af; overflow: hidden; line-height: 1.6;
+  }
+  .log-line { display: flex; gap: 8px; }
+  .log-time { color: #6b7280; }
+  .log-warn { color: #ffb300; }
+  .log-error { color: #ef4444; }
+  .log-info { color: #1565c0; }
+
+  .title-bar { padding: 12px 24px; background: #0a0a0f; border-bottom: 1px solid #2a2a3e; }
+  .title-bar h2 { font-size: 13px; color: #9ca3af; font-weight: 400; }
+</style>
+</head>
+<body>
+  <div class="title-bar"><h2>CURRENT UI (for comparison)</h2></div>
+
+  <div class="page-header">
+    <span style="font-size:18px;">&#9678;</span>
+    <h1>telemetry-services-dashboard</h1>
+    <button class="btn">&#x1f589; Edit</button>
+    <button class="btn btn-primary">&#x25b6; Run</button>
+  </div>
+
+  <div class="notebook">
+    <!-- Variable cells (auto-collapsed, render inline selects in header) -->
+    <div class="cell">
+      <div class="cell-header no-border">
+        <div class="cell-header-left">
+          <span class="grip">&#x2801;&#x2802;</span>
+          <span class="cell-name">deployment</span>
+        </div>
+        <div class="var-header-content">
+          <select class="var-select">
+            <option>ingestion</option>
+            <option>grid</option>
+          </select>
+        </div>
+        <div class="cell-header-right">
+          <button class="icon-btn">&#x22EE;</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="cell">
+      <div class="cell-header no-border">
+        <div class="cell-header-left">
+          <span class="grip">&#x2801;&#x2802;</span>
+          <span class="cell-name">jobs</span>
+        </div>
+        <div class="var-header-content">
+          <select class="var-select">
+            <option>jobs</option>
+          </select>
+        </div>
+        <div class="cell-header-right">
+          <button class="icon-btn">&#x22EE;</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Expanded group -->
+    <div class="cell">
+      <div class="cell-header">
+        <div class="cell-header-left">
+          <span class="grip">&#x2801;&#x2802;</span>
+          <span class="chevron">&#x25BC;</span>
+          <span class="badge">HG</span>
+          <span class="cell-name">Ingestion</span>
+        </div>
+        <div class="cell-header-right">
+          <span class="status">2 cells</span>
+          <button class="icon-btn">&#x25B6;</button>
+          <button class="icon-btn">&#x22EE;</button>
+        </div>
+      </div>
+      <div class="hg-content">
+        <div class="child-cell">
+          <div class="child-header">
+            <div class="child-header-left">
+              <span class="grip" style="font-size:11px;">&#x2801;&#x2802;</span>
+              <span class="child-badge">MET</span>
+              <span class="child-name">ingestion_metrics</span>
+            </div>
+            <div class="child-header-right">
+              <span class="child-status">1,024 rows (12 KB) in 0.3s</span>
+              <span class="child-icon">&#x25B6;</span>
+              <span class="child-icon">&#x22EE;</span>
+            </div>
+          </div>
+          <div class="child-content"><div class="chart-placeholder">metrics chart</div></div>
+        </div>
+        <div class="child-cell">
+          <div class="child-header">
+            <div class="child-header-left">
+              <span class="grip" style="font-size:11px;">&#x2801;&#x2802;</span>
+              <span class="child-badge">LOG</span>
+              <span class="child-name">ingestion_warnings</span>
+            </div>
+            <div class="child-header-right">
+              <span class="child-status">48 rows (3 KB) in 0.1s</span>
+              <span class="child-icon">&#x25B6;</span>
+              <span class="child-icon">&#x22EE;</span>
+            </div>
+          </div>
+          <div class="child-content"><div class="log-placeholder">
+            <div class="log-line"><span class="log-time">14:01:02</span><span class="log-warn">WARN</span><span>admin connection failed with ssl</span></div>
+            <div class="log-line"><span class="log-time">14:01:01</span><span class="log-warn">WARN</span><span>admin connection failed with ssl</span></div>
+            <div class="log-line"><span class="log-time">14:00:58</span><span class="log-error">ERR </span><span>connection timeout on pool</span></div>
+            <div class="log-line"><span class="log-time">14:00:55</span><span class="log-warn">WARN</span><span>admin connection failed with ssl</span></div>
+            <div class="log-line"><span class="log-time">14:00:51</span><span class="log-info">INFO</span><span>telemetry batch processed ok</span></div>
+            <div class="log-line"><span class="log-time">14:00:48</span><span class="log-warn">WARN</span><span>admin connection failed with ssl</span></div>
+          </div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Collapsed group -->
+    <div class="cell">
+      <div class="cell-header no-border">
+        <div class="cell-header-left">
+          <span class="grip">&#x2801;&#x2802;</span>
+          <span class="chevron">&#x25B6;</span>
+          <span class="badge">HG</span>
+          <span class="cell-name">FlightSql</span>
+        </div>
+        <div class="cell-header-right">
+          <span class="status">2 cells</span>
+          <button class="icon-btn">&#x25B6;</button>
+          <button class="icon-btn">&#x22EE;</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Collapsed standalone cell -->
+    <div class="cell">
+      <div class="cell-header no-border">
+        <div class="cell-header-left">
+          <span class="grip">&#x2801;&#x2802;</span>
+          <span class="chevron">&#x25B6;</span>
+          <span class="badge">SQL</span>
+          <span class="cell-name">process_list</span>
+        </div>
+        <div class="cell-header-right">
+          <span class="status">15 rows (1 KB) in 0.2s</span>
+          <button class="icon-btn">&#x25B6;</button>
+          <button class="icon-btn">&#x22EE;</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

@@ -105,41 +105,41 @@ export function PaginationBar({ pagination }: PaginationBarProps) {
   const isLast = currentPage >= totalPages - 1
 
   return (
-    <div className="flex items-center justify-between px-3 py-1.5 bg-app-card border-t border-theme-border flex-shrink-0">
-      {/* Navigation */}
+    <div className="grid grid-cols-[1fr_auto_1fr] items-center py-0.5 px-1 flex-shrink-0" onClick={(e) => e.stopPropagation()}>
+      <div />
+      {/* Centered navigation */}
       <div className="flex items-center gap-0.5">
         <NavButton onClick={() => setPage(0)} disabled={isFirst} title="First page">
-          <ChevronsLeft className="w-3.5 h-3.5" />
+          <ChevronsLeft className="w-3 h-3" />
         </NavButton>
         <NavButton onClick={() => setPage(currentPage - 1)} disabled={isFirst} title="Previous page">
-          <ChevronLeft className="w-3.5 h-3.5" />
+          <ChevronLeft className="w-3 h-3" />
         </NavButton>
-        <span className="text-xs text-theme-text-secondary mx-2 whitespace-nowrap select-none">
-          Page{' '}
-          <span className="text-theme-text-primary font-semibold">{currentPage + 1}</span>
-          {' '}of{' '}
-          <span className="text-theme-text-primary font-semibold">
+        <span className="text-[10px] text-theme-text-muted mx-1 whitespace-nowrap select-none">
+          <span className="text-theme-text-secondary font-medium">{currentPage + 1}</span>
+          {' / '}
+          <span className="text-theme-text-secondary font-medium">
             {totalPages.toLocaleString()}
           </span>
         </span>
         <NavButton onClick={() => setPage(currentPage + 1)} disabled={isLast} title="Next page">
-          <ChevronRight className="w-3.5 h-3.5" />
+          <ChevronRight className="w-3 h-3" />
         </NavButton>
         <NavButton onClick={() => setPage(totalPages - 1)} disabled={isLast} title="Last page">
-          <ChevronsRight className="w-3.5 h-3.5" />
+          <ChevronsRight className="w-3 h-3" />
         </NavButton>
       </div>
 
-      {/* Row info + page size */}
-      <div className="flex items-center gap-3">
-        <span className="text-[11px] text-theme-text-muted whitespace-nowrap select-none">
-          Rows {(startRow + 1).toLocaleString()}&ndash;{endRow.toLocaleString()} of{' '}
+      {/* Row info + page size — right-aligned */}
+      <div className="flex items-center justify-end gap-1 min-w-0">
+        <span className="text-[10px] text-theme-text-muted whitespace-nowrap select-none truncate">
+          {(startRow + 1).toLocaleString()}&ndash;{endRow.toLocaleString()} of{' '}
           {totalRows.toLocaleString()}
         </span>
         <select
           value={pageSize}
           onChange={(e) => setPageSize(Number(e.target.value))}
-          className="text-[11px] px-1.5 py-1 bg-app-bg text-theme-text-secondary border border-theme-border rounded cursor-pointer outline-none hover:border-theme-border-hover focus:border-accent-link"
+          className="text-[10px] px-0.5 bg-transparent text-theme-text-muted border-none cursor-pointer outline-none hover:text-theme-text-secondary"
         >
           {PAGE_SIZE_OPTIONS.map((size) => (
             <option key={size} value={size}>
@@ -147,7 +147,6 @@ export function PaginationBar({ pagination }: PaginationBarProps) {
             </option>
           ))}
         </select>
-        <span className="text-[11px] text-theme-text-muted select-none">rows/page</span>
       </div>
     </div>
   )
@@ -173,7 +172,7 @@ function NavButton({
       onClick={onClick}
       disabled={disabled}
       title={title}
-      className="w-7 h-7 flex items-center justify-center border border-theme-border rounded text-theme-text-secondary transition-colors hover:bg-theme-border/50 hover:text-theme-text-primary hover:border-theme-border-hover disabled:opacity-30 disabled:cursor-default disabled:hover:bg-transparent disabled:hover:text-theme-text-secondary disabled:hover:border-theme-border"
+      className="w-[18px] h-[18px] inline-flex items-center justify-center rounded-sm text-theme-text-muted transition-colors hover:text-theme-text-primary hover:bg-theme-border/40 disabled:opacity-25 disabled:cursor-default disabled:hover:bg-transparent disabled:hover:text-theme-text-muted"
     >
       {children}
     </button>

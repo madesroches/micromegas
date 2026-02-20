@@ -30,11 +30,11 @@ import {
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import type { CellTypeMetadata, CellRendererProps, CellEditorProps } from '../cell-registry'
 import { getCellTypeMetadata, getCellRenderer, createDefaultCell } from '../cell-registry'
+import { useFadeOnIdle } from '@/hooks/useFadeOnIdle'
 import { AddCellModal } from '../shared'
 import type {
   CellConfig,
   CellState,
-  CellStatus,
   HorizontalGroupCellConfig,
   VariableValue,
 } from '../notebook-types'
@@ -89,134 +89,164 @@ function SortableChild({ id, children }: SortableChildProps) {
 }
 
 // =============================================================================
-// Compact Child Header
+// HG Child Pane (extracted for useFadeOnIdle hook)
 // =============================================================================
 
-interface ChildCellHeaderProps {
-  name: string
-  type: CellConfig['type']
-  status: CellStatus
-  statusText?: string
+interface HgChildPaneProps {
+  child: CellConfig
+  state: CellState
+  commonProps: CellRendererProps
   isSelected: boolean
   onSelect: () => void
   onRun: () => void
-  onDelete: () => void
-  dragHandleProps?: Record<string, unknown>
-  /** Inline title bar content (e.g., variable combobox) */
-  titleBarContent?: React.ReactNode
+  onDeleteChild: () => void
+  dragHandleProps: Record<string, unknown>
+  isDragging: boolean
+  setNodeRef: (node: HTMLElement | null) => void
+  style: React.CSSProperties
+  showDivider: boolean
 }
 
-function ChildCellHeader({
-  name,
-  type,
-  status,
-  statusText,
+function HgChildPane({
+  child, state, commonProps,
   isSelected,
-  onSelect,
-  onRun,
-  onDelete,
-  dragHandleProps,
-  titleBarContent,
-}: ChildCellHeaderProps) {
-  const meta = getCellTypeMetadata(type)
+  onSelect, onRun, onDeleteChild,
+  dragHandleProps, isDragging, setNodeRef, style, showDivider,
+}: HgChildPaneProps) {
+  const revealed = useFadeOnIdle(state.status)
+  const fadeClass = `fade-on-idle${revealed ? ' revealed' : ''}`
+
+  const meta = getCellTypeMetadata(child.type)
+  const CellRenderer = getCellRenderer(child.type)
+  const TitleBarRenderer = meta.titleBarRenderer
   const canRun = !!meta.execute
 
+  const statusText = buildStatusText(child, state)
+
   const statusColor =
-    status === 'loading'
+    state.status === 'loading'
       ? 'text-accent-link'
-      : status === 'error'
+      : state.status === 'error'
         ? 'text-accent-error'
         : 'text-theme-text-muted'
 
   const statusLabel =
-    status === 'loading'
+    state.status === 'loading'
       ? (statusText || 'Running...')
-      : status === 'error'
+      : state.status === 'error'
         ? 'Error'
-        : status === 'blocked'
+        : state.status === 'blocked'
           ? 'Blocked'
           : statusText || ''
 
   return (
     <div
-      className={`flex items-center justify-between px-2 py-1.5 border-b cursor-pointer ${
-        isSelected
-          ? 'border-[var(--selection-border)] bg-[var(--selection-bg)]'
-          : 'border-theme-border bg-app-card'
-      }`}
-      onClick={(e) => {
-        e.stopPropagation()
-        onSelect()
-      }}
+      ref={setNodeRef}
+      style={style}
+      className={`flex-1 min-w-0 flex group/pane overflow-hidden ${isDragging ? 'opacity-50' : ''}`}
     >
-      <div className="flex items-center gap-1.5 min-w-0 flex-1">
-        {dragHandleProps && (
-          <button
-            {...(dragHandleProps as React.ButtonHTMLAttributes<HTMLButtonElement>)}
-            className="text-theme-text-muted hover:text-theme-text-primary transition-colors cursor-grab active:cursor-grabbing touch-none"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <GripVertical className="w-3.5 h-3.5" />
-          </button>
-        )}
-        {meta.showTypeBadge && (
-          <span className="text-[10px] px-1 py-0.5 rounded bg-app-panel text-theme-text-secondary uppercase font-medium shrink-0">
-            {meta.label}
+      {showDivider && <div className={`w-px shrink-0 bg-theme-border ${fadeClass}`} />}
+      <div className={`flex-1 min-w-0 flex flex-col border-l-2 ${
+        isSelected ? 'border-l-accent-link' : 'border-l-transparent'
+      }`}>
+      {/* Pane label */}
+      <div
+        className={`flex items-center justify-between px-2 py-0.5 cursor-pointer ${
+          isSelected ? 'bg-[var(--selection-bg)]' : ''
+        }`}
+        onClick={(e) => {
+          e.stopPropagation()
+          onSelect()
+        }}
+      >
+        <div className="flex items-center gap-1 min-w-0 flex-1">
+          {dragHandleProps && (
+            <button
+              {...(dragHandleProps as React.ButtonHTMLAttributes<HTMLButtonElement>)}
+              className="opacity-0 group-hover/pane:opacity-100 text-theme-text-muted hover:text-theme-text-primary transition-all cursor-grab active:cursor-grabbing touch-none"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <GripVertical className="w-3 h-3" />
+            </button>
+          )}
+          <span className="text-[10px] font-medium text-theme-text-secondary truncate shrink-0">
+            {child.name}
           </span>
-        )}
-        <span className="text-sm font-medium text-theme-text-primary truncate shrink-0">{name}</span>
-        {titleBarContent && (
-          <div className="flex-1 min-w-0" onClick={(e) => e.stopPropagation()}>
-            {titleBarContent}
-          </div>
-        )}
-      </div>
+          {TitleBarRenderer && (
+            <div className="flex-1 min-w-0" onClick={(e) => e.stopPropagation()}>
+              <TitleBarRenderer {...commonProps} />
+            </div>
+          )}
+          {statusLabel && (
+            <>
+              <span className={`text-[10px] text-theme-border ${fadeClass}`}>&middot;</span>
+              <span className={`text-[10px] ${statusColor} ${fadeClass}`}>{statusLabel}</span>
+            </>
+          )}
+        </div>
 
-      <div className="flex items-center gap-1 shrink-0">
-        {statusLabel && <span className={`text-[10px] ${statusColor}`}>{statusLabel}</span>}
-        {canRun && (
-          <button
-            className="p-0.5 text-theme-text-muted hover:text-theme-text-primary transition-colors"
-            onClick={(e) => {
-              e.stopPropagation()
-              onRun()
-            }}
-            disabled={status === 'loading'}
-            title="Run cell"
-          >
-            {status === 'loading' ? (
-              <RotateCcw className="w-3 h-3 animate-spin" />
-            ) : (
-              <Play className="w-3 h-3" />
-            )}
-          </button>
-        )}
-        <DropdownMenu.Root>
-          <DropdownMenu.Trigger asChild>
+        <div className="flex items-center gap-0.5 shrink-0 opacity-0 group-hover/pane:opacity-100 transition-opacity">
+          {canRun && (
             <button
               className="p-0.5 text-theme-text-muted hover:text-theme-text-primary transition-colors"
-              onClick={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                e.stopPropagation()
+                onRun()
+              }}
+              disabled={state.status === 'loading'}
+              title="Run cell"
             >
-              <MoreVertical className="w-3 h-3" />
+              {state.status === 'loading' ? (
+                <RotateCcw className="w-3 h-3 animate-spin" />
+              ) : (
+                <Play className="w-3 h-3" />
+              )}
             </button>
-          </DropdownMenu.Trigger>
-          <DropdownMenu.Portal>
-            <DropdownMenu.Content
-              align="end"
-              sideOffset={4}
-              className="w-40 bg-app-panel border border-theme-border rounded-md shadow-lg z-50"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <DropdownMenu.Item
-                className="flex items-center gap-2 px-3 py-2 text-sm text-accent-error hover:bg-theme-border/50 cursor-pointer outline-none rounded-md"
-                onSelect={() => onDelete()}
+          )}
+          <DropdownMenu.Root>
+            <DropdownMenu.Trigger asChild>
+              <button
+                className="p-0.5 text-theme-text-muted hover:text-theme-text-primary transition-colors"
+                onClick={(e) => e.stopPropagation()}
               >
-                <Trash2 className="w-3.5 h-3.5" />
-                Remove from group
-              </DropdownMenu.Item>
-            </DropdownMenu.Content>
-          </DropdownMenu.Portal>
-        </DropdownMenu.Root>
+                <MoreVertical className="w-3 h-3" />
+              </button>
+            </DropdownMenu.Trigger>
+            <DropdownMenu.Portal>
+              <DropdownMenu.Content
+                align="end"
+                sideOffset={4}
+                className="w-40 bg-app-panel border border-theme-border rounded-md shadow-lg z-50"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <DropdownMenu.Item
+                  className="flex items-center gap-2 px-3 py-2 text-sm text-accent-error hover:bg-theme-border/50 cursor-pointer outline-none rounded-md"
+                  onSelect={onDeleteChild}
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  Remove from group
+                </DropdownMenu.Item>
+              </DropdownMenu.Content>
+            </DropdownMenu.Portal>
+          </DropdownMenu.Root>
+        </div>
+      </div>
+
+      {/* Content */}
+      <div className="flex-1 overflow-auto px-1 pb-1">
+        {state.status === 'error' && state.error ? (
+          <div className="bg-[var(--error-bg)] border border-accent-error rounded-md p-2 text-xs">
+            <span className="text-accent-error font-medium">Error: </span>
+            <span className="text-theme-text-secondary">{state.error}</span>
+          </div>
+        ) : state.status === 'blocked' ? (
+          <div className="text-center text-theme-text-muted text-xs p-4">
+            Waiting for cell above to succeed
+          </div>
+        ) : (
+          <CellRenderer {...commonProps} />
+        )}
+      </div>
       </div>
     </div>
   )
@@ -322,12 +352,9 @@ export function HorizontalGroupCell({
       onDragEnd={handleDragEnd}
     >
       <SortableContext items={config.children.map((c) => c.name)} strategy={horizontalListSortingStrategy}>
-        <div ref={containerRef} className="flex gap-2 h-full">
-          {config.children.map((child) => {
+        <div ref={containerRef} className="flex gap-px h-full">
+          {config.children.map((child, index) => {
             const state = cellStates[child.name] || { status: 'idle' as const, data: [] }
-            const meta = getCellTypeMetadata(child.type)
-            const CellRenderer = getCellRenderer(child.type)
-            const TitleBarRenderer = meta.titleBarRenderer
 
             const commonProps = buildCellRendererProps(child, state,
               {
@@ -347,47 +374,23 @@ export function HorizontalGroupCell({
               },
             )
 
-            const statusText = buildStatusText(child, state)
-
             return (
               <SortableChild key={child.name} id={child.name}>
                 {({ dragHandleProps, isDragging, setNodeRef, style }) => (
-                  <div
-                    ref={setNodeRef}
+                  <HgChildPane
+                    child={child}
+                    state={state}
+                    commonProps={commonProps}
+                    isSelected={selectedChildName === child.name}
+                    onSelect={() => onChildSelect(child.name)}
+                    onRun={() => onChildRun(child.name)}
+                    onDeleteChild={() => handleDeleteChild(child.name)}
+                    dragHandleProps={dragHandleProps}
+                    isDragging={isDragging}
+                    setNodeRef={setNodeRef}
                     style={style}
-                    className={`flex-1 min-w-0 border rounded-md overflow-hidden flex flex-col ${
-                      selectedChildName === child.name
-                        ? 'border-[var(--selection-border)]'
-                        : 'border-theme-border'
-                    } ${isDragging ? 'opacity-50' : ''}`}
-                  >
-                    <ChildCellHeader
-                      name={child.name}
-                      type={child.type}
-                      status={state.status}
-                      statusText={statusText}
-                      isSelected={selectedChildName === child.name}
-                      onSelect={() => onChildSelect(child.name)}
-                      onRun={() => onChildRun(child.name)}
-                      onDelete={() => handleDeleteChild(child.name)}
-                      dragHandleProps={dragHandleProps}
-                      titleBarContent={TitleBarRenderer ? <TitleBarRenderer {...commonProps} /> : undefined}
-                    />
-                    <div className="flex-1 overflow-auto p-2">
-                      {state.status === 'error' && state.error ? (
-                        <div className="bg-[var(--error-bg)] border border-accent-error rounded-md p-2 text-xs">
-                          <span className="text-accent-error font-medium">Error: </span>
-                          <span className="text-theme-text-secondary">{state.error}</span>
-                        </div>
-                      ) : state.status === 'blocked' ? (
-                        <div className="text-center text-theme-text-muted text-xs p-4">
-                          Waiting for cell above to succeed
-                        </div>
-                      ) : (
-                        <CellRenderer {...commonProps} />
-                      )}
-                    </div>
-                  </div>
+                    showDivider={index > 0}
+                  />
                 )}
               </SortableChild>
             )

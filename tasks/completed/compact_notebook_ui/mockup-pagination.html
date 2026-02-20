@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pagination Bar — Style Options</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0a0a0f; color: #e7e9ea;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-size: 13px; line-height: 1.4;
+    padding: 32px 24px;
+  }
+
+  h2 { font-size: 14px; font-weight: 600; color: #9ca3af; margin: 40px 0 6px; text-transform: uppercase; letter-spacing: 0.5px; }
+  h2:first-child { margin-top: 0; }
+  .description { font-size: 11px; color: #6b7280; margin-bottom: 12px; }
+
+  /* Fake content above the pagination to give context */
+  .cell-content {
+    background: #0d0d14; border-radius: 3px;
+    padding: 6px 8px; font-family: monospace; font-size: 11px; color: #6b7280;
+    line-height: 1.65; margin-bottom: 0;
+  }
+  .cell-content .row { display: flex; gap: 0; padding: 1px 0; border-bottom: 1px solid rgba(42,42,62,0.25); }
+  .cell-content .row span:nth-child(1) { width: 140px; flex-shrink: 0; color: #4b5563; }
+  .cell-content .row span:nth-child(2) { width: 60px; flex-shrink: 0; color: #9ca3af; }
+  .cell-content .row span:nth-child(3) { flex: 1; color: #6b7280; }
+
+  /* ================================================================
+     Current: bg-app-card bar with bordered buttons
+     ================================================================ */
+  .pag-current {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 6px 12px;
+    background: #12121a; border-top: 1px solid #2a2a3e;
+  }
+  .pag-current .nav { display: flex; align-items: center; gap: 2px; }
+  .pag-current .nav-btn {
+    width: 28px; height: 28px; display: flex; align-items: center; justify-content: center;
+    border: 1px solid #2a2a3e; border-radius: 4px; background: none;
+    color: #9ca3af; cursor: pointer; font-size: 11px;
+  }
+  .pag-current .nav-btn:hover { background: rgba(42,42,62,0.5); color: #e7e9ea; border-color: #3a3a4e; }
+  .pag-current .nav-btn:disabled { opacity: 0.3; cursor: default; }
+  .pag-current .page-info {
+    font-size: 12px; color: #9ca3af; margin: 0 8px; white-space: nowrap;
+  }
+  .pag-current .page-info strong { color: #e7e9ea; font-weight: 600; }
+  .pag-current .right { display: flex; align-items: center; gap: 10px; }
+  .pag-current .row-info { font-size: 11px; color: #6b7280; white-space: nowrap; }
+  .pag-current select {
+    font-size: 11px; padding: 4px 6px; background: #0a0a0f; border: 1px solid #2a2a3e;
+    color: #9ca3af; border-radius: 4px; cursor: pointer; outline: none;
+  }
+  .pag-current .rows-label { font-size: 11px; color: #6b7280; }
+
+  /* ================================================================
+     Option A: Inline ghost — no background, ghost buttons, all in one line
+     ================================================================ */
+  .pag-a {
+    display: flex; align-items: center; gap: 6px;
+    padding: 2px 4px;
+  }
+  .pag-a .nav { display: flex; align-items: center; gap: 1px; }
+  .pag-a .nav-btn {
+    width: 20px; height: 20px; display: inline-flex; align-items: center; justify-content: center;
+    background: none; border: none; border-radius: 3px;
+    color: #6b7280; cursor: pointer; font-size: 10px;
+    transition: color 0.15s, background 0.15s;
+  }
+  .pag-a .nav-btn:hover { color: #e7e9ea; background: rgba(42,42,62,0.4); }
+  .pag-a .nav-btn:disabled { opacity: 0.25; cursor: default; }
+  .pag-a .nav-btn:disabled:hover { background: none; color: #6b7280; }
+  .pag-a .page-info {
+    font-size: 10px; color: #6b7280; white-space: nowrap;
+  }
+  .pag-a .page-info strong { color: #9ca3af; font-weight: 600; }
+  .pag-a .sep { color: #2a2a3e; font-size: 10px; }
+  .pag-a .row-info { font-size: 10px; color: #6b7280; white-space: nowrap; }
+  .pag-a select {
+    font-size: 10px; padding: 1px 4px; background: transparent; border: 1px solid #2a2a3e;
+    color: #6b7280; border-radius: 3px; cursor: pointer; outline: none;
+  }
+  .pag-a select:hover { border-color: #3a3a4e; color: #9ca3af; }
+  .pag-a .spacer { flex: 1; }
+
+  /* ================================================================
+     Option B: Centered minimal — centered nav, row info subtle on right
+     ================================================================ */
+  .pag-b {
+    display: flex; align-items: center; justify-content: center;
+    padding: 3px 4px; position: relative;
+  }
+  .pag-b .nav { display: flex; align-items: center; gap: 1px; }
+  .pag-b .nav-btn {
+    width: 18px; height: 18px; display: inline-flex; align-items: center; justify-content: center;
+    background: none; border: none; border-radius: 2px;
+    color: #4b5563; cursor: pointer; font-size: 9px;
+    transition: color 0.15s, background 0.15s;
+  }
+  .pag-b .nav-btn:hover { color: #e7e9ea; background: rgba(42,42,62,0.4); }
+  .pag-b .nav-btn:disabled { opacity: 0.25; cursor: default; }
+  .pag-b .nav-btn:disabled:hover { background: none; color: #4b5563; }
+  .pag-b .page-info {
+    font-size: 10px; color: #4b5563; white-space: nowrap; margin: 0 4px;
+  }
+  .pag-b .page-info strong { color: #6b7280; font-weight: 500; }
+  .pag-b .right {
+    position: absolute; right: 4px; top: 50%; transform: translateY(-50%);
+    display: flex; align-items: center; gap: 4px;
+  }
+  .pag-b .row-info { font-size: 10px; color: #4b5563; white-space: nowrap; }
+  .pag-b select {
+    font-size: 10px; padding: 0px 3px; background: transparent; border: none;
+    color: #4b5563; cursor: pointer; outline: none;
+  }
+  .pag-b select:hover { color: #6b7280; }
+
+  /* ================================================================
+     Option C: Divider-integrated — styled like a section divider
+     ================================================================ */
+  .pag-c {
+    display: flex; align-items: center; gap: 6px;
+    padding: 2px 4px;
+  }
+  .pag-c .line { flex: 1; height: 1px; background: #2a2a3e; }
+  .pag-c .nav { display: flex; align-items: center; gap: 1px; }
+  .pag-c .nav-btn {
+    width: 20px; height: 20px; display: inline-flex; align-items: center; justify-content: center;
+    background: none; border: none; border-radius: 3px;
+    color: #6b7280; cursor: pointer; font-size: 10px;
+    transition: color 0.15s, background 0.15s;
+  }
+  .pag-c .nav-btn:hover { color: #e7e9ea; background: rgba(42,42,62,0.4); }
+  .pag-c .nav-btn:disabled { opacity: 0.25; cursor: default; }
+  .pag-c .nav-btn:disabled:hover { background: none; color: #6b7280; }
+  .pag-c .page-info {
+    font-size: 10px; color: #6b7280; white-space: nowrap;
+  }
+  .pag-c .page-info strong { color: #9ca3af; font-weight: 600; }
+  .pag-c .row-info { font-size: 10px; color: #6b7280; white-space: nowrap; }
+  .pag-c select {
+    font-size: 10px; padding: 1px 4px; background: transparent; border: 1px solid #2a2a3e;
+    color: #6b7280; border-radius: 3px; cursor: pointer; outline: none;
+  }
+  .pag-c select:hover { border-color: #3a3a4e; color: #9ca3af; }
+</style>
+</head>
+<body>
+
+<!-- ============================================================ -->
+<h2>Current</h2>
+<p class="description">Solid bg-app-card background, bordered nav buttons, border-top separator. Feels heavy next to borderless cells.</p>
+<div class="cell-content">
+  <div class="row"><span>2026-02-20 14:00:58</span><span>WARN</span><span>admin_connection failed with ssl provider</span></div>
+  <div class="row"><span>2026-02-20 14:00:52</span><span>WARN</span><span>admin_connection failed with ssl provider</span></div>
+  <div class="row"><span>2026-02-20 14:00:47</span><span>ERR </span><span>connection_pool timeout on pool #3</span></div>
+</div>
+<div class="pag-current">
+  <div class="nav">
+    <button class="nav-btn" disabled>&#x226A;</button>
+    <button class="nav-btn" disabled>&#x2039;</button>
+    <span class="page-info">Page <strong>1</strong> of <strong>12</strong></span>
+    <button class="nav-btn">&#x203A;</button>
+    <button class="nav-btn">&#x226B;</button>
+  </div>
+  <div class="right">
+    <span class="row-info">Rows 1&ndash;100 of 1,156</span>
+    <select><option>50</option><option selected>100</option><option>250</option><option>500</option></select>
+    <span class="rows-label">rows/page</span>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<h2>Option A: Inline ghost</h2>
+<p class="description">No background, no border-top. Ghost buttons (no border, bg on hover only). Everything in one compact line. Matches the borderless cell aesthetic.</p>
+<div class="cell-content">
+  <div class="row"><span>2026-02-20 14:00:58</span><span>WARN</span><span>admin_connection failed with ssl provider</span></div>
+  <div class="row"><span>2026-02-20 14:00:52</span><span>WARN</span><span>admin_connection failed with ssl provider</span></div>
+  <div class="row"><span>2026-02-20 14:00:47</span><span>ERR </span><span>connection_pool timeout on pool #3</span></div>
+</div>
+<div class="pag-a">
+  <div class="nav">
+    <button class="nav-btn" disabled>&#x226A;</button>
+    <button class="nav-btn" disabled>&#x2039;</button>
+    <span class="page-info"><strong>1</strong> / <strong>12</strong></span>
+    <button class="nav-btn">&#x203A;</button>
+    <button class="nav-btn">&#x226B;</button>
+  </div>
+  <span class="sep">&middot;</span>
+  <span class="row-info">1&ndash;100 of 1,156</span>
+  <span class="spacer"></span>
+  <select><option>50</option><option selected>100</option><option>250</option><option>500</option></select>
+</div>
+
+<!-- ============================================================ -->
+<h2>Option B: Centered minimal</h2>
+<p class="description">Navigation centered, row info positioned to the right as secondary context. Ultra-minimal, almost invisible until needed. Page size is a borderless select.</p>
+<div class="cell-content">
+  <div class="row"><span>2026-02-20 14:00:58</span><span>WARN</span><span>admin_connection failed with ssl provider</span></div>
+  <div class="row"><span>2026-02-20 14:00:52</span><span>WARN</span><span>admin_connection failed with ssl provider</span></div>
+  <div class="row"><span>2026-02-20 14:00:47</span><span>ERR </span><span>connection_pool timeout on pool #3</span></div>
+</div>
+<div class="pag-b">
+  <div class="nav">
+    <button class="nav-btn" disabled>&#x226A;</button>
+    <button class="nav-btn" disabled>&#x2039;</button>
+    <span class="page-info"><strong>1</strong> / <strong>12</strong></span>
+    <button class="nav-btn">&#x203A;</button>
+    <button class="nav-btn">&#x226B;</button>
+  </div>
+  <div class="right">
+    <span class="row-info">1&ndash;100 of 1,156</span>
+    <select><option>50</option><option selected>100</option><option>250</option><option>500</option></select>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<h2>Option C: Divider-integrated</h2>
+<p class="description">Uses the same horizontal rule motif as group section dividers. Navigation and info sit between two lines, tying the pagination into the notebook's visual language.</p>
+<div class="cell-content">
+  <div class="row"><span>2026-02-20 14:00:58</span><span>WARN</span><span>admin_connection failed with ssl provider</span></div>
+  <div class="row"><span>2026-02-20 14:00:52</span><span>WARN</span><span>admin_connection failed with ssl provider</span></div>
+  <div class="row"><span>2026-02-20 14:00:47</span><span>ERR </span><span>connection_pool timeout on pool #3</span></div>
+</div>
+<div class="pag-c">
+  <span class="line"></span>
+  <div class="nav">
+    <button class="nav-btn" disabled>&#x226A;</button>
+    <button class="nav-btn" disabled>&#x2039;</button>
+    <span class="page-info"><strong>1</strong> / <strong>12</strong></span>
+    <button class="nav-btn">&#x203A;</button>
+    <button class="nav-btn">&#x226B;</button>
+  </div>
+  <span class="row-info">1&ndash;100 of 1,156</span>
+  <select><option>50</option><option selected>100</option><option>250</option><option>500</option></select>
+  <span class="line"></span>
+</div>
+
+</body>
+</html>

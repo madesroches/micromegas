@@ -105,12 +105,12 @@ function ReferenceTableCell({ data, status, options, onOptionsChange, variables 
   }
 
   return (
-    <div className="flex flex-col h-full bg-app-bg border border-theme-border rounded-md">
+    <div className="flex flex-col h-full">
       <HiddenColumnsBar hiddenColumns={hiddenColumns} onRestore={handleRestoreColumn} onRestoreAll={handleRestoreAll} compact />
       <div className="flex-1 overflow-auto min-h-0">
         <table className="w-full text-sm">
           <thead className="sticky top-0">
-            <tr className="bg-app-card border-b border-theme-border">
+            <tr className="bg-app-card border-b-2 border-theme-border">
               {visibleColumns.map((col) => (
                 <SortHeader
                   key={col.name}

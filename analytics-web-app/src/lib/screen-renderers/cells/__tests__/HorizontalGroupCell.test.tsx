@@ -229,7 +229,7 @@ describe('HorizontalGroupCell', () => {
           })}
         />
       )
-      const selBorder = container.querySelector('.border-\\[var\\(--selection-border\\)\\]')
+      const selBorder = container.querySelector('.border-l-accent-link')
       expect(selBorder).toBeInTheDocument()
     })
 

@@ -278,8 +278,9 @@ export function SortHeader({
   const showAsc = isActive && sortDirection === 'asc'
   const showDesc = isActive && sortDirection === 'desc'
 
-  const padding = compact ? 'px-3 py-2' : 'px-4 py-3'
+  const padding = compact ? 'px-2 py-1.5' : 'px-4 py-3'
   const hoverBg = compact ? 'hover:bg-app-card/50' : 'hover:bg-app-card'
+  const iconSize = compact ? 'w-2.5 h-2.5' : 'w-3 h-3'
 
   const thContent = (
     <div className="flex items-center gap-1">
@@ -287,20 +288,26 @@ export function SortHeader({
       {isActive && (
         <span className="text-accent-link flex-shrink-0">
           {showAsc ? (
-            <ChevronUp className="w-3 h-3" />
+            <ChevronUp className={iconSize} />
           ) : showDesc ? (
-            <ChevronDown className="w-3 h-3" />
+            <ChevronDown className={iconSize} />
           ) : null}
         </span>
       )}
     </div>
   )
 
-  const thClass = `${padding} text-left text-xs font-semibold uppercase tracking-wider cursor-pointer select-none transition-colors ${
-    isActive
-      ? 'text-theme-text-primary bg-app-card'
-      : `text-theme-text-muted hover:text-theme-text-secondary ${hoverBg}`
-  }`
+  const thClass = compact
+    ? `${padding} text-left text-[11px] font-semibold uppercase tracking-wider cursor-pointer select-none transition-colors ${
+        isActive
+          ? 'text-theme-text-primary'
+          : 'text-theme-text-muted hover:text-theme-text-secondary'
+      }`
+    : `${padding} text-left text-xs font-semibold uppercase tracking-wider cursor-pointer select-none transition-colors ${
+        isActive
+          ? 'text-theme-text-primary bg-app-card'
+          : `text-theme-text-muted hover:text-theme-text-secondary ${hoverBg}`
+      }`
 
   if (!onHide) {
     return (
@@ -376,11 +383,11 @@ export interface TableBodyProps {
 
 export function TableBody({ data, columns, compact = false, overrides = [], variables = {} }: TableBodyProps) {
   const rowClass = compact
-    ? 'border-b border-theme-border hover:bg-app-card/50 transition-colors'
+    ? 'even:bg-app-card/30 hover:bg-app-card/50 transition-colors'
     : 'border-b border-theme-border hover:bg-app-card transition-colors'
 
   const cellClass = compact
-    ? 'px-3 py-2 text-theme-text-primary font-mono truncate max-w-xs'
+    ? 'px-2 py-1 text-[12px] text-theme-text-primary font-mono truncate max-w-xs'
     : 'px-4 py-3 text-sm text-theme-text-primary font-mono truncate max-w-xs'
 
   // Build override lookup map
@@ -504,17 +511,17 @@ export interface HiddenColumnsBarProps {
 export function HiddenColumnsBar({ hiddenColumns, onRestore, onRestoreAll, compact = false }: HiddenColumnsBarProps) {
   if (hiddenColumns.length === 0) return null
 
-  const iconSize = compact ? 'w-3 h-3' : 'w-3.5 h-3.5'
+  const iconSz = compact ? 'w-3 h-3' : 'w-3.5 h-3.5'
   const textSize = compact ? 'text-[10px]' : 'text-xs'
-  const padding = compact ? 'px-3 py-1' : 'px-4 py-1.5'
+  const padding = compact ? 'px-2 py-0.5' : 'px-4 py-1.5'
   const gap = compact ? 'gap-1.5' : 'gap-2'
   const pillPadding = compact ? 'px-1.5 py-0' : 'px-2 py-0.5'
 
   return (
     <div
-      className={`flex items-center ${gap} ${padding} bg-accent-link/[0.08] border-b border-theme-border flex-wrap`}
+      className={`flex items-center ${gap} ${padding} bg-accent-link/[0.08] ${compact ? '' : 'border-b border-theme-border'} flex-wrap`}
     >
-      <EyeOff className={`${iconSize} text-theme-text-muted flex-shrink-0`} />
+      <EyeOff className={`${iconSz} text-theme-text-muted flex-shrink-0`} />
       <span className={`${textSize} text-theme-text-muted`}>Hidden:</span>
       {hiddenColumns.map((col) => (
         <button

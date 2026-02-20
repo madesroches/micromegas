@@ -119,11 +119,11 @@ describe('CellContainer', () => {
 
     it('should call onSelect when cell is clicked', () => {
       const onSelect = jest.fn()
-      render(<CellContainer {...defaultProps} onSelect={onSelect} />)
+      const { container } = render(<CellContainer {...defaultProps} onSelect={onSelect} />)
 
-      // Click on the cell container (not on a button)
-      const cell = screen.getByText('Test Cell').closest('div[class*="bg-app-panel"]')
-      fireEvent.click(cell!)
+      // Click on the cell container root
+      const cell = container.firstChild as HTMLElement
+      fireEvent.click(cell)
 
       expect(onSelect).toHaveBeenCalledTimes(1)
     })
@@ -282,16 +282,16 @@ describe('CellContainer', () => {
     it('should apply selected styles when isSelected is true', () => {
       const { container } = render(<CellContainer {...defaultProps} isSelected={true} />)
 
-      // Check for selected class (uses CSS variable for brand palette)
+      // Check for left accent bar selection indicator
       const cell = container.firstChild as HTMLElement
-      expect(cell.className).toContain('border-[var(--selection-border)]')
+      expect(cell.className).toContain('border-l-accent-link')
     })
 
     it('should not apply selected styles when isSelected is false', () => {
       const { container } = render(<CellContainer {...defaultProps} isSelected={false} />)
 
       const cell = container.firstChild as HTMLElement
-      expect(cell.className).not.toContain('border-[var(--selection-border)]')
+      expect(cell.className).not.toContain('border-l-accent-link')
     })
   })
 
