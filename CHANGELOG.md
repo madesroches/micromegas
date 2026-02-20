@@ -11,6 +11,75 @@ This file documents the historical progress of the Micromegas project. For curre
   * Add "Notebook (local)" option to data source dropdown in cell editor
   * Live download progress (rows/bytes) and execution time in cell title bars
   * Extract shared `serialize_to_ipc` helper in datafusion-wasm crate
+* **WASM Tracing (#817):**
+  * Implement WASM support for micromegas-tracing and telemetry-sink
+  * Add tracing to WASM query engine and fix wasm dispatch init
+  * Add Send + Sync bounds to EventSink trait
+  * Set default-features = false for micromegas-tracing in workspace
+  * Remove unused feature flags from tracing and telemetry-sink
+  * Enable SHOW TABLES in WASM query engine
+* **Horizontal Group Cell:**
+  * Implement horizontal group (hg) cell type for side-by-side cell layout in notebooks (#821)
+  * Pass variable value/onValueChange to hg children, render combobox inline
+  * Add DataSourceField to hg child editors
+  * Show running status and spinner on hg cells
+  * Add Run button for HG child cells in editor panel
+  * Fix drag-into-group oscillation, drag-out, and reorder preview
+  * Fix HG editor rename, child fetch progress, and child variable auto-run
+  * Fix HG child content click to open child editor directly
+  * Clean up hg child state on removal and migrate on rename
+  * Add tests for HorizontalGroupCell (36 tests)
+* **Multi-Query Chart Cells (#749):**
+  * Implement multi-query chart cells with per-query data sources
+  * Refactor CellState.data from Table | null to Table[] for multi-result support
+  * Fix multi-series chart Y-axis unit auto-scaling
+  * Fix chart cells defaulting to notebook instead of global data source
+  * Fix single-query chart not using configured unit and label
+  * Fix tooltip XSS and deduplicate SERIES_COLORS
+  * Portal chart tooltips to document.body to prevent overflow clipping
+  * Stop chart header clicks from selecting cell, fix clipped tooltips
+* **Compact Notebook UI:**
+  * Implement compact borderless notebook UI with minimal visual chrome
+  * Add fade-on-idle behavior for cell metadata with three-state fade machine
+  * Add always-visible loading spinner to cell status area
+  * Unify status text placement between groups and cells
+  * Restyle pagination bar to centered minimal design
+  * Restyle notebook tables to minimal lines with prominent header
+  * Restyle notebook log cells to match compact table design
+  * Fix pagination overlap, hardcoded dark colors, and hidden HG status
+  * Fix selection indicator layout shift with always-present border
+  * Fix fade-on-idle reveal for fast cells and add hover delay
+* **Notebook Enhancements:**
+  * Add notebook pagination and per-cell auto-run (#823)
+  * Add reference table cell type for inline CSV data (#824, #827)
+  * Add duplicate cell action to notebook (#834)
+  * Resolve relative time ranges at cell execution time in all renderers
+  * Fix refresh not updating relative time spans
+  * Fix data source race condition overwriting config on load
+  * Stop column header sort click from opening cell editor (#829)
+  * Deprecate non-notebook screen types for creation
+* **Log Cell Improvements:**
+  * Make log cell display resilient to unexpected or missing columns (#826)
+  * Extract renderLogColumn to shared log-utils module
+  * Preserve SQL column order in log renderers instead of reordering known columns
+  * Hide data source selector for reference table cells
+* **Code Quality:**
+  * Extract 6 hooks from NotebookRenderer (1154 → 736 lines)
+  * Extract buildCellRendererProps to unify cell rendering prop assembly
+  * Consolidate AddCellModal and AddChildModal into shared component
+  * Deduplicate datasourceVariables computation in NotebookRenderer
+* **Security:**
+  * Fix CVE-2025-69873: upgrade ajv 8.17.1 to 8.18.0
+  * Bump qs to 6.14.2 to fix CVE-2026-2391
+* **CI/Build:**
+  * Run native and WASM CI checks in parallel
+  * Fix wasm-builder to copy full Rust workspace for path dependencies
+  * Add build-skip workflow for required check satisfaction
+* **Documentation:**
+  * Fix homepage and documentation URLs in Cargo.toml
+  * Update README roadmap with v0.20.0 and current notebook focus
+* **Scripts:**
+  * Add --release flag to start_services.py and run binaries directly
 
 ## February 2026 - v0.20.0
 * **Client-Side WASM Query Execution:**
