@@ -84,13 +84,14 @@ fn test_screen_type_from_str() {
 #[test]
 fn test_all_screen_types() {
     let all = ScreenType::all();
-    assert_eq!(all.len(), 5);
-    assert!(!all.contains(&ScreenType::ProcessList));
-    assert!(all.contains(&ScreenType::Metrics));
-    assert!(all.contains(&ScreenType::Log));
-    assert!(all.contains(&ScreenType::Table));
+    assert_eq!(all.len(), 1);
     assert!(all.contains(&ScreenType::Notebook));
-    assert!(all.contains(&ScreenType::LocalQuery));
+    // Deprecated types should not be available for creation
+    assert!(!all.contains(&ScreenType::ProcessList));
+    assert!(!all.contains(&ScreenType::Metrics));
+    assert!(!all.contains(&ScreenType::Log));
+    assert!(!all.contains(&ScreenType::Table));
+    assert!(!all.contains(&ScreenType::LocalQuery));
 }
 
 #[test]

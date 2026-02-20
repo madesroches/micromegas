@@ -24,12 +24,16 @@ impl std::error::Error for ParseScreenTypeError {}
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ScreenType {
-    /// Deprecated: no longer available for creation, kept for backward compatibility with existing screens.
+    /// Deprecated: kept for backward compatibility with existing screens.
     ProcessList,
+    /// Deprecated: kept for backward compatibility with existing screens.
     Metrics,
+    /// Deprecated: kept for backward compatibility with existing screens.
     Log,
+    /// Deprecated: kept for backward compatibility with existing screens.
     Table,
     Notebook,
+    /// Deprecated: kept for backward compatibility with existing screens.
     LocalQuery,
 }
 
@@ -52,15 +56,10 @@ impl FromStr for ScreenType {
 }
 
 impl ScreenType {
-    /// Returns all available screen types.
+    /// Returns all available screen types for creation.
+    /// Non-notebook types are deprecated but kept for backward compatibility with existing screens.
     pub fn all() -> Vec<ScreenType> {
-        vec![
-            ScreenType::Metrics,
-            ScreenType::Log,
-            ScreenType::Table,
-            ScreenType::Notebook,
-            ScreenType::LocalQuery,
-        ]
+        vec![ScreenType::Notebook]
     }
 
     /// Returns the string identifier for this screen type.
