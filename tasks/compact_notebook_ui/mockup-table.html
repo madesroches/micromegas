@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Table Cell — Style Options</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0a0a0f; color: #e7e9ea;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-size: 13px; line-height: 1.4;
+    padding: 32px 24px;
+  }
+
+  h2 { font-size: 14px; font-weight: 600; color: #9ca3af; margin: 48px 0 6px; text-transform: uppercase; letter-spacing: 0.5px; }
+  h2:first-child { margin-top: 0; }
+  .description { font-size: 11px; color: #6b7280; margin-bottom: 12px; max-width: 700px; }
+
+  /* Pane label context (to show how table sits inside a cell) */
+  .pane-label {
+    display: flex; align-items: center; gap: 5px;
+    padding: 2px 8px; font-size: 10px; color: #9ca3af;
+  }
+  .pane-label .sep { color: #2a2a3e; }
+  .pane-label .status { color: #6b7280; }
+
+  /* Pagination (option B: centered minimal) */
+  .pag {
+    display: flex; align-items: center; justify-content: center;
+    padding: 2px 4px; position: relative;
+  }
+  .pag .nav { display: flex; align-items: center; gap: 1px; }
+  .pag .nav-btn {
+    width: 18px; height: 18px; display: inline-flex; align-items: center; justify-content: center;
+    background: none; border: none; border-radius: 2px;
+    color: #4b5563; cursor: pointer; font-size: 9px; transition: color 0.15s, background 0.15s;
+  }
+  .pag .nav-btn:hover { color: #e7e9ea; background: rgba(42,42,62,0.4); }
+  .pag .nav-btn:disabled { opacity: 0.25; cursor: default; }
+  .pag .page-info { font-size: 10px; color: #4b5563; white-space: nowrap; margin: 0 4px; }
+  .pag .page-info strong { color: #6b7280; font-weight: 500; }
+  .pag .right {
+    position: absolute; right: 4px; top: 50%; transform: translateY(-50%);
+    display: flex; align-items: center; gap: 4px;
+  }
+  .pag .row-info { font-size: 10px; color: #4b5563; }
+  .pag select { font-size: 10px; padding: 0 3px; background: transparent; border: none; color: #4b5563; cursor: pointer; outline: none; }
+
+  /* ================================================================
+     Hidden columns bar (shared across options)
+     ================================================================ */
+  .hidden-bar {
+    display: flex; align-items: center; gap: 6px;
+    padding: 3px 8px;
+    font-size: 10px; color: #6b7280;
+  }
+  .hidden-pill {
+    display: inline-flex; align-items: center; gap: 3px;
+    padding: 1px 6px; font-size: 10px;
+    background: rgba(21,101,192,0.12); color: #1976d2;
+    border: 1px solid rgba(21,101,192,0.25);
+    border-radius: 99px; cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+  }
+  .hidden-pill:hover { background: rgba(21,101,192,0.22); border-color: rgba(21,101,192,0.45); }
+  .hidden-pill .x { opacity: 0.6; }
+
+  /* ================================================================
+     CURRENT: bordered box with bg-app-card header
+     ================================================================ */
+  .table-current {
+    background: #0a0a0f; border: 1px solid #2a2a3e; border-radius: 6px;
+    overflow: hidden;
+  }
+  .table-current .hidden-bar { border-bottom: 1px solid #2a2a3e; background: rgba(21,101,192,0.06); }
+  .table-current table { width: 100%; border-collapse: collapse; }
+  .table-current thead tr { background: #12121a; border-bottom: 1px solid #2a2a3e; }
+  .table-current th {
+    padding: 8px 12px; text-align: left;
+    font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;
+    color: #6b7280; cursor: pointer; transition: color 0.15s;
+  }
+  .table-current th:hover { color: #9ca3af; }
+  .table-current th.sorted { color: #e7e9ea; background: #12121a; }
+  .table-current td {
+    padding: 8px 12px;
+    font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
+    font-size: 12px; color: #e7e9ea;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 240px;
+  }
+  .table-current tr { border-bottom: 1px solid #2a2a3e; }
+  .table-current tbody tr:hover { background: rgba(18,18,26,0.7); }
+  .table-current .sort-icon { font-size: 9px; color: #1976d2; margin-left: 4px; }
+
+  /* ================================================================
+     OPTION A: Frameless — remove all borders, rely on alignment
+     ================================================================ */
+  .table-a {
+    overflow: hidden;
+  }
+  .table-a table { width: 100%; border-collapse: collapse; }
+  .table-a thead tr { border-bottom: 1px solid #1a1a2e; }
+  .table-a th {
+    padding: 3px 8px; text-align: left;
+    font-size: 9px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px;
+    color: #4b5563; cursor: pointer; transition: color 0.15s;
+  }
+  .table-a th:hover { color: #9ca3af; }
+  .table-a th.sorted { color: #9ca3af; }
+  .table-a td {
+    padding: 2px 8px;
+    font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
+    font-size: 11px; color: #9ca3af; line-height: 1.65;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 240px;
+  }
+  .table-a tbody tr { border-bottom: 1px solid rgba(42,42,62,0.25); }
+  .table-a tbody tr:hover { background: rgba(42,42,62,0.15); }
+  .table-a .sort-icon { font-size: 8px; color: #1976d2; margin-left: 3px; }
+
+  /* ================================================================
+     OPTION B: Log-style — matches the log viewer aesthetic exactly
+     ================================================================ */
+  .table-b {
+    background: #0d0d14; border-radius: 3px;
+    overflow: hidden;
+    font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
+    font-size: 11px; line-height: 1.65;
+  }
+  .table-b .thead {
+    display: flex; gap: 0;
+    padding: 3px 8px;
+    font-size: 9px; font-weight: 600; color: #4b5563;
+    text-transform: uppercase; letter-spacing: 0.3px;
+    border-bottom: 1px solid #1a1a2e;
+    position: sticky; top: 0; background: #0d0d14;
+  }
+  .table-b .thead span { cursor: pointer; transition: color 0.15s; }
+  .table-b .thead span:hover { color: #9ca3af; }
+  .table-b .thead span.sorted { color: #9ca3af; }
+  .table-b .trow {
+    display: flex; gap: 0; padding: 1px 8px;
+    border-bottom: 1px solid rgba(42,42,62,0.25);
+  }
+  .table-b .trow:hover { background: rgba(42,42,62,0.2); }
+  .table-b .trow span { color: #9ca3af; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .table-b .sort-icon { font-size: 8px; color: #1976d2; margin-left: 3px; }
+  /* Column widths for demo */
+  .table-b .col-time { width: 170px; flex-shrink: 0; color: #4b5563 !important; }
+  .table-b .col-process { width: 120px; flex-shrink: 0; }
+  .table-b .col-metric { width: 130px; flex-shrink: 0; }
+  .table-b .col-value { width: 80px; flex-shrink: 0; text-align: right; }
+  .table-b .col-unit { width: 60px; flex-shrink: 0; }
+  .table-b .col-desc { flex: 1; }
+
+  /* ================================================================
+     OPTION C: Minimal lines — ultra-tight, subtle alternating rows
+     ================================================================ */
+  .table-c {
+    overflow: hidden;
+  }
+  .table-c table { width: 100%; border-collapse: collapse; }
+  .table-c thead tr { }
+  .table-c th {
+    padding: 2px 8px; text-align: left;
+    font-size: 9px; font-weight: 500; letter-spacing: 0.2px;
+    color: #4b5563; cursor: pointer; transition: color 0.15s;
+    border-bottom: 1px solid #2a2a3e;
+  }
+  .table-c th:hover { color: #9ca3af; }
+  .table-c th.sorted { color: #9ca3af; }
+  .table-c td {
+    padding: 1px 8px;
+    font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
+    font-size: 11px; color: #9ca3af; line-height: 1.7;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 240px;
+  }
+  .table-c tbody tr:nth-child(even) { background: rgba(42,42,62,0.08); }
+  .table-c tbody tr:hover { background: rgba(42,42,62,0.2); }
+  .table-c .sort-icon { font-size: 8px; color: #1976d2; margin-left: 3px; }
+</style>
+</head>
+<body>
+
+<!-- ================================================================ -->
+<h2>Current</h2>
+<p class="description">Bordered box (border + rounded-md), bg-app-card header row, 8px cell padding. Feels like a boxed panel inside the now-borderless cell container.</p>
+<div class="pane-label">
+  <span>ingestion_metrics</span>
+  <span class="sep">&middot;</span>
+  <span class="status">1,024 rows (12 KB) in 0.3s</span>
+</div>
+<div style="padding: 0 4px 4px;">
+  <div class="table-current">
+    <div class="hidden-bar">
+      <span>Hidden:</span>
+      <span class="hidden-pill">unit <span class="x">&times;</span></span>
+      <span class="hidden-pill">description <span class="x">&times;</span></span>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th>time</th>
+          <th class="sorted">process <span class="sort-icon">&uarr;</span></th>
+          <th>metric</th>
+          <th>value</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td>2026-02-20 14:00:58</td><td>ingestion-srv</td><td>nb_insert_calls</td><td>1,247</td></tr>
+        <tr><td>2026-02-20 14:00:52</td><td>ingestion-srv</td><td>max_insert_ms</td><td>3.2</td></tr>
+        <tr><td>2026-02-20 14:00:47</td><td>ingestion-srv</td><td>nb_close_block</td><td>42</td></tr>
+        <tr><td>2026-02-20 14:00:41</td><td>ingestion-srv</td><td>avg_batch_kb</td><td>128</td></tr>
+        <tr><td>2026-02-20 14:00:35</td><td>flight-sql-srv</td><td>nb_queries</td><td>89</td></tr>
+        <tr><td>2026-02-20 14:00:28</td><td>flight-sql-srv</td><td>max_query_ms</td><td>12.7</td></tr>
+      </tbody>
+    </table>
+    <div class="pag">
+      <div class="nav">
+        <button class="nav-btn" disabled>&#x226A;</button>
+        <button class="nav-btn" disabled>&#x2039;</button>
+        <span class="page-info"><strong>1</strong> / <strong>11</strong></span>
+        <button class="nav-btn">&#x203A;</button>
+        <button class="nav-btn">&#x226B;</button>
+      </div>
+      <div class="right">
+        <span class="row-info">1&ndash;100 of 1,024</span>
+        <select><option selected>100</option></select>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ================================================================ -->
+<h2>Option A: Frameless</h2>
+<p class="description">Drop the outer border and rounded corners. Remove header background. Tighter padding (3px vertical, 8px horizontal). The table blends directly into the cell content area with only a thin header underline for structure.</p>
+<div class="pane-label">
+  <span>ingestion_metrics</span>
+  <span class="sep">&middot;</span>
+  <span class="status">1,024 rows (12 KB) in 0.3s</span>
+</div>
+<div style="padding: 0 4px 4px;">
+  <div class="table-a">
+    <div class="hidden-bar">
+      <span>Hidden:</span>
+      <span class="hidden-pill">unit <span class="x">&times;</span></span>
+      <span class="hidden-pill">description <span class="x">&times;</span></span>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th>time</th>
+          <th class="sorted">process <span class="sort-icon">&uarr;</span></th>
+          <th>metric</th>
+          <th>value</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td>2026-02-20 14:00:58</td><td>ingestion-srv</td><td>nb_insert_calls</td><td>1,247</td></tr>
+        <tr><td>2026-02-20 14:00:52</td><td>ingestion-srv</td><td>max_insert_ms</td><td>3.2</td></tr>
+        <tr><td>2026-02-20 14:00:47</td><td>ingestion-srv</td><td>nb_close_block</td><td>42</td></tr>
+        <tr><td>2026-02-20 14:00:41</td><td>ingestion-srv</td><td>avg_batch_kb</td><td>128</td></tr>
+        <tr><td>2026-02-20 14:00:35</td><td>flight-sql-srv</td><td>nb_queries</td><td>89</td></tr>
+        <tr><td>2026-02-20 14:00:28</td><td>flight-sql-srv</td><td>max_query_ms</td><td>12.7</td></tr>
+        <tr><td>2026-02-20 14:00:22</td><td>flight-sql-srv</td><td>p99_latency_ms</td><td>8.4</td></tr>
+        <tr><td>2026-02-20 14:00:15</td><td>admin-srv</td><td>nb_connections</td><td>5</td></tr>
+      </tbody>
+    </table>
+    <div class="pag">
+      <div class="nav">
+        <button class="nav-btn" disabled>&#x226A;</button>
+        <button class="nav-btn" disabled>&#x2039;</button>
+        <span class="page-info"><strong>1</strong> / <strong>11</strong></span>
+        <button class="nav-btn">&#x203A;</button>
+        <button class="nav-btn">&#x226B;</button>
+      </div>
+      <div class="right">
+        <span class="row-info">1&ndash;100 of 1,024</span>
+        <select><option selected>100</option></select>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ================================================================ -->
+<h2>Option B: Log-style</h2>
+<p class="description">Uses flexbox rows instead of &lt;table&gt;, matching the log viewer exactly: dark #0d0d14 background, monospace throughout, 9px uppercase column headers, very tight row spacing. Consistent with how logs already look in the notebook.</p>
+<div class="pane-label">
+  <span>ingestion_metrics</span>
+  <span class="sep">&middot;</span>
+  <span class="status">1,024 rows (12 KB) in 0.3s</span>
+</div>
+<div style="padding: 0 4px 4px;">
+  <div class="table-b">
+    <div class="hidden-bar" style="background: rgba(21,101,192,0.06);">
+      <span>Hidden:</span>
+      <span class="hidden-pill">unit <span class="x">&times;</span></span>
+      <span class="hidden-pill">description <span class="x">&times;</span></span>
+    </div>
+    <div class="thead">
+      <span class="col-time">time</span>
+      <span class="col-process sorted">process <span class="sort-icon">&uarr;</span></span>
+      <span class="col-metric">metric</span>
+      <span class="col-value">value</span>
+    </div>
+    <div class="trow"><span class="col-time">2026-02-20 14:00:58</span><span class="col-process">ingestion-srv</span><span class="col-metric">nb_insert_calls</span><span class="col-value">1,247</span></div>
+    <div class="trow"><span class="col-time">2026-02-20 14:00:52</span><span class="col-process">ingestion-srv</span><span class="col-metric">max_insert_ms</span><span class="col-value">3.2</span></div>
+    <div class="trow"><span class="col-time">2026-02-20 14:00:47</span><span class="col-process">ingestion-srv</span><span class="col-metric">nb_close_block</span><span class="col-value">42</span></div>
+    <div class="trow"><span class="col-time">2026-02-20 14:00:41</span><span class="col-process">ingestion-srv</span><span class="col-metric">avg_batch_kb</span><span class="col-value">128</span></div>
+    <div class="trow"><span class="col-time">2026-02-20 14:00:35</span><span class="col-process">flight-sql-srv</span><span class="col-metric">nb_queries</span><span class="col-value">89</span></div>
+    <div class="trow"><span class="col-time">2026-02-20 14:00:28</span><span class="col-process">flight-sql-srv</span><span class="col-metric">max_query_ms</span><span class="col-value">12.7</span></div>
+    <div class="trow"><span class="col-time">2026-02-20 14:00:22</span><span class="col-process">flight-sql-srv</span><span class="col-metric">p99_latency_ms</span><span class="col-value">8.4</span></div>
+    <div class="trow"><span class="col-time">2026-02-20 14:00:15</span><span class="col-process">admin-srv</span><span class="col-metric">nb_connections</span><span class="col-value">5</span></div>
+    <div class="pag" style="padding-top:3px;">
+      <div class="nav">
+        <button class="nav-btn" disabled>&#x226A;</button>
+        <button class="nav-btn" disabled>&#x2039;</button>
+        <span class="page-info"><strong>1</strong> / <strong>11</strong></span>
+        <button class="nav-btn">&#x203A;</button>
+        <button class="nav-btn">&#x226B;</button>
+      </div>
+      <div class="right">
+        <span class="row-info">1&ndash;100 of 1,024</span>
+        <select><option selected>100</option></select>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ================================================================ -->
+<h2>Option C: Minimal lines</h2>
+<p class="description">Still uses &lt;table&gt; but with minimum chrome: no outer border, no header background, 1px cell padding, subtle alternating row stripes instead of row borders. Headers are lowercase with normal weight. Maximum data density.</p>
+<div class="pane-label">
+  <span>ingestion_metrics</span>
+  <span class="sep">&middot;</span>
+  <span class="status">1,024 rows (12 KB) in 0.3s</span>
+</div>
+<div style="padding: 0 4px 4px;">
+  <div class="table-c">
+    <div class="hidden-bar">
+      <span>Hidden:</span>
+      <span class="hidden-pill">unit <span class="x">&times;</span></span>
+      <span class="hidden-pill">description <span class="x">&times;</span></span>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th>time</th>
+          <th class="sorted">process <span class="sort-icon">&uarr;</span></th>
+          <th>metric</th>
+          <th>value</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td>2026-02-20 14:00:58</td><td>ingestion-srv</td><td>nb_insert_calls</td><td>1,247</td></tr>
+        <tr><td>2026-02-20 14:00:52</td><td>ingestion-srv</td><td>max_insert_ms</td><td>3.2</td></tr>
+        <tr><td>2026-02-20 14:00:47</td><td>ingestion-srv</td><td>nb_close_block</td><td>42</td></tr>
+        <tr><td>2026-02-20 14:00:41</td><td>ingestion-srv</td><td>avg_batch_kb</td><td>128</td></tr>
+        <tr><td>2026-02-20 14:00:35</td><td>flight-sql-srv</td><td>nb_queries</td><td>89</td></tr>
+        <tr><td>2026-02-20 14:00:28</td><td>flight-sql-srv</td><td>max_query_ms</td><td>12.7</td></tr>
+        <tr><td>2026-02-20 14:00:22</td><td>flight-sql-srv</td><td>p99_latency_ms</td><td>8.4</td></tr>
+        <tr><td>2026-02-20 14:00:15</td><td>admin-srv</td><td>nb_connections</td><td>5</td></tr>
+      </tbody>
+    </table>
+    <div class="pag">
+      <div class="nav">
+        <button class="nav-btn" disabled>&#x226A;</button>
+        <button class="nav-btn" disabled>&#x2039;</button>
+        <span class="page-info"><strong>1</strong> / <strong>11</strong></span>
+        <button class="nav-btn">&#x203A;</button>
+        <button class="nav-btn">&#x226B;</button>
+      </div>
+      <div class="right">
+        <span class="row-info">1&ndash;100 of 1,024</span>
+        <select><option selected>100</option></select>
+      </div>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>
