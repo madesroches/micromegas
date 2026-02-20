@@ -69,7 +69,11 @@ To get started with Micromegas, please refer to the [Getting Started](https://ma
 ## Current Status & Roadmap
 
 ### Unreleased
+* Horizontal group cells: side-by-side cell layout for notebooks
+* Multi-query chart cells with per-query data sources
 * Notebook cross-cell queries: cells can reference each other's results via SQL, powered by DataFusion WASM running in the browser
+* Reference table cell type for inline CSV data
+* Notebook pagination and per-cell auto-run
 
 ### February 2026 - v0.20.0
 * **Client-Side WASM Query Execution:**
