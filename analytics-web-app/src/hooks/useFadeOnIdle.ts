@@ -1,12 +1,15 @@
 import { useState, useEffect, useRef } from 'react'
 
-const FADE_DELAY = 4000
+// Brief buffer so the 150ms CSS reveal animation finishes before we
+// hand off to the CSS transition-delay (4s in globals.css).
+const REVEAL_BUFFER = 200
 
 /**
  * Returns `true` while metadata should be visible, `false` when it should fade.
  * Only reveals on actual status changes (not on mount). Stays revealed during loading.
+ * The 4-second visibility window after reveal is handled by CSS transition-delay.
  */
-export function useFadeOnIdle(status: string, delay = FADE_DELAY): boolean {
+export function useFadeOnIdle(status: string): boolean {
   const [revealed, setRevealed] = useState(false)
   const prevStatusRef = useRef(status)
   const timerRef = useRef<ReturnType<typeof setTimeout>>()
@@ -18,10 +21,10 @@ export function useFadeOnIdle(status: string, delay = FADE_DELAY): boolean {
     }
     clearTimeout(timerRef.current)
     if (status !== 'loading') {
-      timerRef.current = setTimeout(() => setRevealed(false), delay)
+      timerRef.current = setTimeout(() => setRevealed(false), REVEAL_BUFFER)
     }
     return () => clearTimeout(timerRef.current)
-  }, [status, delay])
+  }, [status])
 
   return revealed
 }
