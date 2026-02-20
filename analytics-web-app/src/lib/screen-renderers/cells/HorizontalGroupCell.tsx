@@ -418,6 +418,7 @@ interface ChildEditorViewProps {
   config: HorizontalGroupCellConfig
   onChange: (config: CellConfig) => void
   onChildSelect: (childName: string | null) => void
+  onRun?: () => void
   allCellNames: Set<string>
   defaultDataSource?: string
   datasourceVariables?: string[]
@@ -433,6 +434,7 @@ function ChildEditorView({
   config,
   onChange,
   onChildSelect,
+  onRun,
   allCellNames,
   defaultDataSource,
   datasourceVariables,
@@ -527,6 +529,12 @@ function ChildEditorView({
         datasourceVariables={datasourceVariables}
         defaultDataSource={defaultDataSource}
       />
+      {onRun && !!meta.execute && (
+        <Button onClick={onRun} className="w-full gap-2">
+          <Play className="w-4 h-4" />
+          Run
+        </Button>
+      )}
     </>
   )
 }
@@ -540,6 +548,7 @@ interface HorizontalGroupCellEditorProps {
   onChange: (config: CellConfig) => void
   selectedChildName: string | null
   onChildSelect: (childName: string | null) => void
+  onChildRun?: (childName: string) => void
   variables: Record<string, VariableValue>
   timeRange: { begin: string; end: string }
   allCellNames: Set<string>
@@ -554,6 +563,7 @@ export function HorizontalGroupCellEditor({
   onChange,
   selectedChildName,
   onChildSelect,
+  onChildRun,
   variables,
   timeRange,
   allCellNames,
@@ -577,6 +587,7 @@ export function HorizontalGroupCellEditor({
         config={config}
         onChange={onChange}
         onChildSelect={onChildSelect}
+        onRun={onChildRun ? () => onChildRun(selectedChild.name) : undefined}
         allCellNames={allCellNames}
         defaultDataSource={defaultDataSource}
         datasourceVariables={datasourceVariables}

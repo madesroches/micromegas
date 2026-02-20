@@ -115,6 +115,7 @@ interface HgEditorPanelProps {
   config: HorizontalGroupCellConfig
   selectedChildName: string | null
   onChildSelect: (childName: string | null) => void
+  onChildRun: (childName: string) => void
   variables: Record<string, VariableValue>
   timeRange: { begin: string; end: string }
   allCellNames: Set<string>
@@ -130,6 +131,7 @@ function HgEditorPanel({
   config,
   selectedChildName,
   onChildSelect,
+  onChildRun,
   variables,
   timeRange,
   allCellNames,
@@ -210,6 +212,7 @@ function HgEditorPanel({
           onChange={(newConfig) => onUpdate(newConfig)}
           selectedChildName={selectedChildName}
           onChildSelect={onChildSelect}
+          onChildRun={onChildRun}
           variables={variables}
           timeRange={timeRange}
           allCellNames={allCellNames}
@@ -691,6 +694,7 @@ export function NotebookRenderer({
                 config={selectedCell as HorizontalGroupCellConfig}
                 selectedChildName={selectedChildName}
                 onChildSelect={setSelectedChildName}
+                onChildRun={(childName) => executeCellByName(childName)}
                 variables={variableValues}
                 timeRange={getTimeRangeForApi(rawTimeRange.from, rawTimeRange.to)}
                 allCellNames={existingNames}
