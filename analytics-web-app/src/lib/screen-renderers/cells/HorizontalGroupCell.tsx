@@ -602,7 +602,7 @@ export function HorizontalGroupCellEditor({
 
   // Group editor: list of children with reorder/remove
   const handleAddChild = (type: CellConfig['type']) => {
-    const newCell = createDefaultCell(type, allCellNames)
+    const newCell = createDefaultCell(type, allCellNames, defaultDataSource)
     const newChildren = [...config.children, newCell]
     onChange({ ...config, children: newChildren })
     setShowAddChildModal(false)

@@ -22,6 +22,7 @@ interface UseCellManagerParams {
   setSelectedChildName: (name: string | null) => void
   setShowAddCellModal: (show: boolean) => void
   setDeletingCellIndex: (index: number | null) => void
+  defaultDataSource?: string
 }
 
 interface UseCellManagerResult {
@@ -58,17 +59,18 @@ export function useCellManager({
   setSelectedChildName,
   setShowAddCellModal,
   setDeletingCellIndex,
+  defaultDataSource,
 }: UseCellManagerParams): UseCellManagerResult {
   const handleAddCell = useCallback(
     (type: CellType) => {
-      const newCell = createDefaultCell(type, existingNames)
+      const newCell = createDefaultCell(type, existingNames, defaultDataSource)
       const newCells = [...cells, newCell]
       const newConfig = { ...notebookConfig, cells: newCells }
       onConfigChange(newConfig)
       setShowAddCellModal(false)
       setSelectedCellIndex(newCells.length - 1)
     },
-    [notebookConfig, cells, existingNames, onConfigChange, setShowAddCellModal, setSelectedCellIndex]
+    [notebookConfig, cells, existingNames, onConfigChange, setShowAddCellModal, setSelectedCellIndex, defaultDataSource]
   )
 
   const handleDeleteCell = useCallback(

@@ -404,6 +404,7 @@ export function NotebookRenderer({
     setSelectedChildName,
     setShowAddCellModal,
     setDeletingCellIndex,
+    defaultDataSource: dataSource,
   })
 
   // Render

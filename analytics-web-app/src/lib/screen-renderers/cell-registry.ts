@@ -208,7 +208,7 @@ export const CELL_TYPE_OPTIONS = (Object.entries(CELL_TYPE_METADATA) as [CellTyp
  * Creates a default cell configuration for the given type.
  * Generates a unique name if the base name already exists.
  */
-export function createDefaultCell(type: CellType, existingNames: Set<string>): CellConfig {
+export function createDefaultCell(type: CellType, existingNames: Set<string>, defaultDataSource?: string): CellConfig {
   const meta = CELL_TYPE_METADATA[type]
 
   // Generate unique name (use underscore separator for valid identifiers)
@@ -219,9 +219,16 @@ export function createDefaultCell(type: CellType, existingNames: Set<string>): C
     name = `${meta.label}_${counter}`
   }
 
-  return {
+  const base = {
     name,
     layout: { height: meta.defaultHeight },
     ...meta.createDefaultConfig(),
-  } as CellConfig
+  }
+
+  // Set default data source for cell types that support it
+  if (defaultDataSource && type !== 'markdown' && type !== 'referencetable' && type !== 'hg') {
+    return { ...base, dataSource: defaultDataSource } as CellConfig
+  }
+
+  return base as CellConfig
 }
