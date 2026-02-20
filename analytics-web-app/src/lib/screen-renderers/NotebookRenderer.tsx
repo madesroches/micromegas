@@ -1,55 +1,41 @@
-import { useState, useCallback, useMemo, useEffect, useRef } from 'react'
+import { useState, useCallback, useMemo, useEffect } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Plus, X, Trash2 } from 'lucide-react'
 import {
   DndContext,
   closestCenter,
-  KeyboardSensor,
-  PointerSensor,
-  useSensor,
-  useSensors,
-  DragEndEvent,
-  DragStartEvent,
-  DragOverEvent,
   DragOverlay,
 } from '@dnd-kit/core'
 import {
-  arrayMove,
   SortableContext,
-  sortableKeyboardCoordinates,
   useSortable,
-  verticalListSortingStrategy,
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import { registerRenderer, ScreenRendererProps } from './index'
 import {
-  CellType,
   getCellRenderer,
   getCellTypeMetadata,
-  createDefaultCell,
 } from './cell-registry'
-import type { CellConfig, VariableCellConfig, NotebookConfig, QueryCellConfig, HorizontalGroupCellConfig, VariableValue } from './notebook-types'
+import type { CellConfig, VariableCellConfig, NotebookConfig, HorizontalGroupCellConfig, VariableValue } from './notebook-types'
 import { CellContainer } from '@/components/CellContainer'
 import { CellEditor } from '@/components/CellEditor'
 import { ResizeHandle } from '@/components/ResizeHandle'
 import { Button } from '@/components/ui/button'
 import { useNotebookVariables } from './useNotebookVariables'
-import { useCellExecution, NotebookQueryEngine } from './useCellExecution'
+import { useCellExecution } from './useCellExecution'
 import { cleanupVariableParams, resolveCellDataSource, flattenCellsForExecution, collectAllCellNames, validateCellName, sanitizeCellName } from './notebook-utils'
 import { HorizontalGroupCell, HorizontalGroupCellEditor } from './cells/HorizontalGroupCell'
 import { cleanupTimeParams, useExposeSaveRef } from '@/lib/url-cleanup-utils'
-import { loadWasmEngine } from '@/lib/wasm-engine'
 import { getTimeRangeForApi } from '@/lib/time-range'
 import { buildCellRendererProps, buildStatusText, buildHgStatusText, computeHgStatus } from './notebook-cell-view'
 import { AddCellModal } from './shared'
-
-// ============================================================================
-// Constants
-// ============================================================================
-
-const EDITOR_PANEL_MIN_WIDTH = 280
-const EDITOR_PANEL_MAX_WIDTH = 800
-const EDITOR_PANEL_DEFAULT_WIDTH = 350
+import { useWasmEngine } from './useWasmEngine'
+import { useEditorPanelWidth } from './useEditorPanelWidth'
+import { useNotebookAutoRun } from './useNotebookAutoRun'
+import { useTimeRangeSync } from './useTimeRangeSync'
+import { useCellSortCheck } from './useCellSortCheck'
+import { useNotebookDragDrop } from './useNotebookDragDrop'
+import { useCellManager } from './useCellManager'
 
 // ============================================================================
 // Modal Components
@@ -296,31 +282,7 @@ export function NotebookRenderer({
   const cells = notebookConfig.cells
 
   // Sync time range changes to config
-  // When time range changes, update config and check unsaved state
-  const prevTimeRangeRef = useRef<{ from: string; to: string } | null>(null)
-  useEffect(() => {
-    const current = { from: rawTimeRange.from, to: rawTimeRange.to }
-
-    // On first run, just store current values
-    if (prevTimeRangeRef.current === null) {
-      prevTimeRangeRef.current = current
-      return
-    }
-
-    const prev = prevTimeRangeRef.current
-    if (prev.from === current.from && prev.to === current.to) {
-      return
-    }
-
-    prevTimeRangeRef.current = current
-
-    // Update config with time range
-    onConfigChange({
-      ...notebookConfig,
-      timeRangeFrom: current.from,
-      timeRangeTo: current.to,
-    })
-  }, [rawTimeRange, savedNotebookConfig, notebookConfig, onConfigChange])
+  useTimeRangeSync({ rawTimeRange, config: notebookConfig, onConfigChange })
 
   // Variable values management - hook owns URL access for variables
   const { variableValues, variableValuesRef, setVariableValue, migrateVariable, removeVariable } =
@@ -329,40 +291,8 @@ export function NotebookRenderer({
       savedNotebookConfig?.cells ?? null,
     )
 
-  // Auto-run: guard ref prevents re-entrance when auto-run itself sets variables
-  const autoRunningRef = useRef(false)
-
-  // Debounced auto-run timers (per cell name) for config changes like SQL editing
-  const autoRunTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
-  useEffect(() => {
-    const timers = autoRunTimersRef.current
-    return () => {
-      for (const timer of timers.values()) clearTimeout(timer)
-      timers.clear()
-    }
-  }, [])
-
   // WASM engine for notebook-local queries
-  // Loaded eagerly so remote cell results are always registered for cross-cell references
-  const [engine, setEngine] = useState<NotebookQueryEngine | null>(null)
-  const [engineError, setEngineError] = useState<string | null>(null)
-
-  useEffect(() => {
-    if (engine) return
-    let cancelled = false
-    loadWasmEngine()
-      .then((mod) => {
-        if (!cancelled) {
-          setEngine(new mod.WasmQueryEngine() as unknown as NotebookQueryEngine)
-        }
-      })
-      .catch((err) => {
-        if (!cancelled) {
-          setEngineError(err instanceof Error ? err.message : 'Failed to load WASM engine')
-        }
-      })
-    return () => { cancelled = true }
-  }, [engine])
+  const { engine, engineError } = useWasmEngine()
 
   // Flatten hg children for execution (hg cells are replaced by their children)
   const executionCells = useMemo(() => flattenCellsForExecution(cells), [cells])
@@ -396,69 +326,22 @@ export function NotebookRenderer({
     [executionCells, executeFromCell]
   )
 
-  // Ref to always access the latest executeFromCellByName inside debounced timers
-  const executeFromCellByNameRef = useRef(executeFromCellByName)
-  executeFromCellByNameRef.current = executeFromCellByName
-
-  // Schedule a debounced auto-run for a cell by name (used for SQL editing, content changes)
-  const scheduleAutoRun = useCallback(
-    (cellName: string) => {
-      const timers = autoRunTimersRef.current
-      const existing = timers.get(cellName)
-      if (existing) clearTimeout(existing)
-      timers.set(cellName, setTimeout(() => {
-        timers.delete(cellName)
-        executeFromCellByNameRef.current(cellName)
-      }, 300))
-    },
-    [],
-  )
+  // Auto-run management
+  const { scheduleAutoRun, triggerAutoRun } = useNotebookAutoRun({ executeFromCellByName })
 
   // Handle time range selection from charts (drag-to-zoom)
   const handleTimeRangeSelect = useCallback((from: Date, to: Date) => {
     onTimeRangeChange(from.toISOString(), to.toISOString())
   }, [onTimeRangeChange])
 
-  // Re-execute table cells when sort options change (config is source of truth)
-  // Scans both top-level cells and hg children
-  const prevCellOptionsRef = useRef<Map<string, Record<string, unknown>>>(new Map())
-  useEffect(() => {
-    const checkCell = (cell: CellConfig) => {
-      if (cell.type === 'table' || cell.type === 'log') {
-        const cellConfig = cell as QueryCellConfig
-        const prevOptions = prevCellOptionsRef.current.get(cell.name)
-        const currentOptions = cellConfig.options
-
-        const prevSortColumn = prevOptions?.sortColumn
-        const prevSortDirection = prevOptions?.sortDirection
-        const currentSortColumn = currentOptions?.sortColumn
-        const currentSortDirection = currentOptions?.sortDirection
-
-        if (
-          prevOptions !== undefined &&
-          (prevSortColumn !== currentSortColumn || prevSortDirection !== currentSortDirection)
-        ) {
-          executeCellByName(cell.name)
-        }
-
-        prevCellOptionsRef.current.set(cell.name, currentOptions ?? {})
-      }
-    }
-
-    executionCells.forEach(checkCell)
-  }, [executionCells, executeCellByName])
+  // Re-execute table cells when sort options change
+  useCellSortCheck({ executionCells, executeCellByName })
 
   // UI state
   const [selectedCellIndex, setSelectedCellIndex] = useState<number | null>(null)
   const [selectedChildName, setSelectedChildName] = useState<string | null>(null)
   const [showAddCellModal, setShowAddCellModal] = useState(false)
   const [deletingCellIndex, setDeletingCellIndex] = useState<number | null>(null)
-  const [activeDragId, setActiveDragId] = useState<string | null>(null)
-  // Drag zone state for visual feedback (state) + synchronous read in handleDragEnd (refs)
-  const [dragOverZone, setDragOverZone] = useState<'before' | 'into' | 'after' | null>(null)
-  const [dragOverHgName, setDragOverHgName] = useState<string | null>(null)
-  const dragOverZoneRef = useRef<'before' | 'into' | 'after' | null>(null)
-  const dragOverHgNameRef = useRef<string | null>(null)
   const [showSource, setShowSource] = useState(false)
 
   useEffect(() => {
@@ -470,344 +353,55 @@ export function NotebookRenderer({
     return () => document.removeEventListener('keydown', handleKeyDown)
   }, [showSource])
 
-  // Editor panel width (persisted to localStorage)
-  const [editorPanelWidth, setEditorPanelWidth] = useState(() => {
-    const saved = localStorage.getItem('notebook-editor-panel-width')
-    return saved ? parseInt(saved, 10) : EDITOR_PANEL_DEFAULT_WIDTH
-  })
-
-  useEffect(() => {
-    localStorage.setItem('notebook-editor-panel-width', String(editorPanelWidth))
-  }, [editorPanelWidth])
-
-  const handleEditorPanelResize = useCallback((delta: number) => {
-    setEditorPanelWidth((prev) =>
-      Math.max(EDITOR_PANEL_MIN_WIDTH, Math.min(EDITOR_PANEL_MAX_WIDTH, prev - delta))
-    )
-  }, [])
+  // Editor panel width
+  const { editorPanelWidth, handleEditorPanelResize } = useEditorPanelWidth()
 
   // Existing cell names for uniqueness check (includes hg children)
   const existingNames = useMemo(() => collectAllCellNames(cells), [cells])
 
   // Drag and drop
-  const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
-  )
-
-  // Custom sorting strategy: suppress item transforms when dragging over any
-  // hg cell. Without this, the sortable list shifts items when the pointer
-  // enters the before/after edge zones, which moves the hg cell and causes
-  // the pointer to oscillate between edges — never reaching the "into" zone.
-  const hgAwareSortingStrategy = useMemo<typeof verticalListSortingStrategy>(
-    () => (args) => {
-      if (dragOverHgNameRef.current !== null) {
-        return null
-      }
-      return verticalListSortingStrategy(args)
-    },
-    []
-  )
-
-  const handleDragStart = useCallback((event: DragStartEvent) => {
-    setActiveDragId(event.active.id as string)
-  }, [])
-
-  // Compute hg drop zone from a drag event's pointer position relative to the over element.
-  // Returns the zone ('before'/'into'/'after') and hg name, or null if not over an hg cell.
-  const computeHgZone = useCallback(
-    (event: { activatorEvent: Event; delta: { x: number; y: number }; active: { id: string | number }; over: { id: string | number; rect: { top: number; height: number } } | null }) => {
-      const { active, over } = event
-      if (!over) return null
-
-      const overCell = cells.find((c) => c.name === over.id)
-      if (!overCell || overCell.type !== 'hg') return null
-
-      // Don't allow dropping an hg cell into another hg
-      const activeCell = cells.find((c) => c.name === active.id)
-      if (activeCell?.type === 'hg') return null
-
-      const overRect = over.rect
-      if (!overRect || !overRect.height) return null
-
-      const pointerY = (event.activatorEvent as PointerEvent)?.clientY
-      if (pointerY === undefined) return null
-
-      const currentY = pointerY + event.delta.y
-      const relativeY = currentY - overRect.top
-      const height = overRect.height
-
-      // Wide "into" zone (80% of height) — the sortable list shifts items during
-      // drag, so the pointer naturally lands near edges. Before/after reordering
-      // is still possible by targeting the cells adjacent to the hg group.
-      let zone: 'before' | 'into' | 'after'
-      if (relativeY < height * 0.1) {
-        zone = 'before'
-      } else if (relativeY > height * 0.9) {
-        zone = 'after'
-      } else {
-        zone = 'into'
-      }
-
-      return { zone, hgName: over.id as string }
-    },
-    [cells]
-  )
-
-  const handleDragOver = useCallback(
-    (event: DragOverEvent) => {
-      const result = computeHgZone(event)
-      dragOverZoneRef.current = result?.zone ?? null
-      dragOverHgNameRef.current = result?.hgName ?? null
-      setDragOverZone(result?.zone ?? null)
-      setDragOverHgName(result?.hgName ?? null)
-    },
-    [computeHgZone]
-  )
-
-  const handleDragEnd = useCallback(
-    (event: DragEndEvent) => {
-      // Compute zone directly from event data (no state/ref timing issues)
-      const result = computeHgZone(event)
-      setActiveDragId(null)
-      setDragOverZone(null)
-      setDragOverHgName(null)
-      dragOverZoneRef.current = null
-      dragOverHgNameRef.current = null
-
-      const { active, over } = event
-      if (!over || active.id === over.id) return
-
-      const oldIndex = cells.findIndex((c) => c.name === active.id)
-      const overIndex = cells.findIndex((c) => c.name === over.id)
-      if (oldIndex === -1 || overIndex === -1) return
-
-      // Check if dropping into an hg cell's middle zone
-      const overCell = cells[overIndex]
-      const activeCell = cells[oldIndex]
-      if (
-        overCell.type === 'hg' &&
-        result?.zone === 'into' &&
-        result?.hgName === over.id &&
-        activeCell.type !== 'hg'
-      ) {
-        // Remove dragged cell from top-level and append to hg's children
-        const hgCell = overCell as HorizontalGroupCellConfig
-        const newCells = cells.filter((_, i) => i !== oldIndex)
-        const hgIndex = newCells.findIndex((c) => c.name === hgCell.name)
-        if (hgIndex !== -1) {
-          newCells[hgIndex] = {
-            ...hgCell,
-            children: [...hgCell.children, activeCell],
-          }
-        }
-        onConfigChange({ ...notebookConfig, cells: newCells })
-        // Clear selection if the moved cell was selected
-        if (selectedCellIndex === oldIndex) {
-          setSelectedCellIndex(null)
-          setSelectedChildName(null)
-        } else if (selectedCellIndex !== null && selectedCellIndex > oldIndex) {
-          setSelectedCellIndex(selectedCellIndex - 1)
-        }
-        return
-      }
-
-      // Standard reorder
-      const newCells = arrayMove(cells, oldIndex, overIndex)
-      const newConfig = { ...notebookConfig, cells: newCells }
-      onConfigChange(newConfig)
-
-      // Update selected cell index if needed
-      if (selectedCellIndex === oldIndex) {
-        setSelectedCellIndex(overIndex)
-      } else if (selectedCellIndex !== null) {
-        if (oldIndex < selectedCellIndex && overIndex >= selectedCellIndex) {
-          setSelectedCellIndex(selectedCellIndex - 1)
-        } else if (oldIndex > selectedCellIndex && overIndex <= selectedCellIndex) {
-          setSelectedCellIndex(selectedCellIndex + 1)
-        }
-      }
-    },
-    [cells, notebookConfig, onConfigChange, selectedCellIndex, computeHgZone]
-  )
+  const {
+    sensors,
+    hgAwareSortingStrategy,
+    handleDragStart,
+    handleDragOver,
+    handleDragEnd,
+    activeDragId,
+    dragOverZone,
+    dragOverHgName,
+  } = useNotebookDragDrop({
+    cells,
+    notebookConfig,
+    onConfigChange,
+    selectedCellIndex,
+    setSelectedCellIndex,
+    setSelectedChildName,
+  })
 
   // Cell management
-  const handleAddCell = useCallback(
-    (type: CellType) => {
-      const newCell = createDefaultCell(type, existingNames)
-      const newCells = [...cells, newCell]
-      const newConfig = { ...notebookConfig, cells: newCells }
-      onConfigChange(newConfig)
-      setShowAddCellModal(false)
-      setSelectedCellIndex(newCells.length - 1)
-    },
-    [notebookConfig, cells, existingNames, onConfigChange]
-  )
-
-  const handleDeleteCell = useCallback(
-    (index: number) => {
-      const cell = cells[index]
-      const newCells = cells.filter((_, i) => i !== index)
-      const newConfig = { ...notebookConfig, cells: newCells }
-      onConfigChange(newConfig)
-
-      // Clean up state for the cell (and all children if hg)
-      const cleanupCell = (c: CellConfig) => {
-        removeCellState(c.name)
-        if (c.type === 'variable') {
-          removeVariable(c.name)
-        }
-        if (engine) {
-          try { engine.deregister_table(c.name) } catch { /* ignore */ }
-        }
-      }
-
-      cleanupCell(cell)
-      if (cell.type === 'hg') {
-        (cell as HorizontalGroupCellConfig).children.forEach(cleanupCell)
-      }
-
-      // Update selection
-      if (selectedCellIndex === index) {
-        setSelectedCellIndex(null)
-        setSelectedChildName(null)
-      } else if (selectedCellIndex !== null && selectedCellIndex > index) {
-        setSelectedCellIndex(selectedCellIndex - 1)
-      }
-      setDeletingCellIndex(null)
-    },
-    [notebookConfig, cells, onConfigChange, selectedCellIndex, removeCellState, removeVariable, engine]
-  )
-
-  const handleDuplicateCell = useCallback(
-    (index: number) => {
-      const cell = cells[index]
-      if (!cell) return
-
-      const clone = structuredClone(cell)
-
-      // Track all names (existing + those we generate) to avoid collisions
-      const usedNames = new Set(existingNames)
-
-      const uniquifyName = (baseName: string): string => {
-        const copyBase = baseName + '_copy'
-        let name = copyBase
-        let counter = 1
-        while (usedNames.has(name)) {
-          counter++
-          name = `${copyBase}_${counter}`
-        }
-        usedNames.add(name)
-        return name
-      }
-
-      clone.name = uniquifyName(cell.name)
-
-      // Uniquify children names for hg cells
-      if (clone.type === 'hg') {
-        const hgClone = clone as HorizontalGroupCellConfig
-        hgClone.children = hgClone.children.map((child) => ({
-          ...child,
-          name: uniquifyName(child.name),
-        }))
-      }
-
-      // Insert after the source cell
-      const newCells = [...cells.slice(0, index + 1), clone, ...cells.slice(index + 1)]
-      const newConfig = { ...notebookConfig, cells: newCells }
-      onConfigChange(newConfig)
-      setSelectedCellIndex(index + 1)
-    },
-    [cells, existingNames, notebookConfig, onConfigChange]
-  )
-
-  const updateCell = useCallback(
-    (index: number, updates: Partial<CellConfig>) => {
-      const cell = cells[index]
-      if (!cell) return
-
-      const newCells = [...cells]
-      newCells[index] = { ...cell, ...updates } as CellConfig
-
-      // Handle rename: migrate state to new name
-      if (updates.name && updates.name !== cell.name) {
-        migrateCellState(cell.name, updates.name)
-        if (cell.type === 'variable') {
-          migrateVariable(cell.name, updates.name)
-        }
-      }
-
-      // Handle hg child changes: clean up removed children, migrate renamed children
-      if (cell.type === 'hg' && 'children' in updates) {
-        const oldChildren = (cell as HorizontalGroupCellConfig).children
-        const newChildren = (updates as Partial<HorizontalGroupCellConfig>).children || []
-        const newNames = new Set(newChildren.map(c => c.name))
-
-        for (const oldChild of oldChildren) {
-          if (newNames.has(oldChild.name)) continue
-
-          // Old child name not in new list — check if renamed (same index, same type)
-          const oldIdx = oldChildren.indexOf(oldChild)
-          const newChild = newChildren[oldIdx]
-          if (
-            newChild &&
-            newChild.type === oldChild.type &&
-            !oldChildren.some(c => c.name === newChild.name)
-          ) {
-            // Rename: migrate state to new name
-            migrateCellState(oldChild.name, newChild.name)
-            if (oldChild.type === 'variable') {
-              migrateVariable(oldChild.name, newChild.name)
-            }
-          } else {
-            // Deletion: clean up state
-            removeCellState(oldChild.name)
-            if (oldChild.type === 'variable') {
-              removeVariable(oldChild.name)
-            }
-            if (engine) {
-              try { engine.deregister_table(oldChild.name) } catch { /* ignore */ }
-            }
-          }
-        }
-      }
-
-      // Handle defaultValue change for variable cells:
-      // When user edits the default value, update current value to match
-      // This uses delta logic - if new default matches baseline, URL param is removed
-      if (cell.type === 'variable' && 'defaultValue' in updates) {
-        const newDefault = (updates as Partial<VariableCellConfig>).defaultValue
-        if (newDefault !== undefined) {
-          setVariableValue(cell.name, newDefault)
-        }
-      }
-
-      const newConfig = { ...notebookConfig, cells: newCells }
-      onConfigChange(newConfig)
-
-      // Auto-run: schedule debounced execution when a config value actually changed
-      // (skip view-only keys that aren't execution-relevant)
-      if (cell.autoRunFromHere) {
-        const prev = cell as unknown as Record<string, unknown>
-        const next = updates as unknown as Record<string, unknown>
-        // Keys that affect presentation only, not query results
-        const nonExecKeys = new Set(['layout', 'name', 'autoRunFromHere', 'options'])
-        const hasChange = Object.keys(next).some(k => !nonExecKeys.has(k) && next[k] !== prev[k])
-        if (hasChange) {
-          scheduleAutoRun(cell.name)
-        }
-      }
-    },
-    [cells, notebookConfig, onConfigChange, migrateCellState, migrateVariable, setVariableValue, removeCellState, removeVariable, engine, scheduleAutoRun]
-  )
-
-  const toggleCellCollapsed = useCallback(
-    (index: number) => {
-      const cell = cells[index]
-      updateCell(index, { layout: { ...cell.layout, collapsed: !cell.layout.collapsed } })
-    },
-    [cells, updateCell]
-  )
+  const {
+    handleAddCell,
+    handleDeleteCell,
+    handleDuplicateCell,
+    updateCell,
+    toggleCellCollapsed,
+  } = useCellManager({
+    cells,
+    notebookConfig,
+    existingNames,
+    onConfigChange,
+    removeCellState,
+    migrateCellState,
+    setVariableValue,
+    migrateVariable,
+    removeVariable,
+    scheduleAutoRun,
+    selectedCellIndex,
+    setSelectedCellIndex,
+    setSelectedChildName,
+    setShowAddCellModal,
+    setDeletingCellIndex,
+  })
 
   // Render
   const selectedCell = selectedCellIndex !== null ? cells[selectedCellIndex] : null
@@ -902,14 +496,8 @@ export function NotebookRenderer({
                   onChildRun={(childName) => executeCellByName(childName)}
                   onVariableValueChange={(cellName, value) => {
                     setVariableValue(cellName, value)
-
-                    // Auto-run: if this child variable has autoRunFromHere, execute from it onward
                     const child = hgConfig.children.find((c) => c.name === cellName)
-                    if (!child || autoRunningRef.current || !child.autoRunFromHere) return
-                    autoRunningRef.current = true
-                    executeFromCellByName(cellName).finally(() => {
-                      autoRunningRef.current = false
-                    })
+                    triggerAutoRun(cellName, child?.autoRunFromHere)
                   }}
                   onConfigChange={(newHgConfig) => {
                     updateCell(index, newHgConfig)
@@ -961,13 +549,7 @@ export function NotebookRenderer({
         onContentChange: (content: string) => updateCell(index, { content }),
         onValueChange: (value: VariableValue) => {
           setVariableValue(cell.name, value)
-
-          // Auto-run: if this cell has autoRunFromHere, execute from here onward.
-          if (autoRunningRef.current || !cell.autoRunFromHere) return
-          autoRunningRef.current = true
-          executeFromCellByName(cell.name).finally(() => {
-            autoRunningRef.current = false
-          })
+          triggerAutoRun(cell.name, cell.autoRunFromHere)
         },
         onTimeRangeSelect: handleTimeRangeSelect,
       },
