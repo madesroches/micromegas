@@ -232,7 +232,13 @@ function HgChildPane({
       </div>
 
       {/* Content */}
-      <div className="flex-1 overflow-auto px-1 pb-1">
+      <div
+        className="flex-1 overflow-auto px-1 pb-1"
+        onClick={(e) => {
+          e.stopPropagation();
+          onSelect();
+        }}
+      >
         {state.status === 'error' && state.error ? (
           <div className="bg-[var(--error-bg)] border border-accent-error rounded-md p-2 text-xs">
             <span className="text-accent-error font-medium">Error: </span>
