@@ -153,31 +153,18 @@ See https://pypi.org/project/micromegas
 ---
 # Analytics: Command-line interface
 
-For when you don't feel like starting up a python interpreter...
+Install the micromegas Python package to get the CLI tools:
 
-```cmd
-F:\git\micromegas\python\micromegas\cli>python query_processes.py --help                                                                                                                       
-usage: query_processes [-h] [--since SINCE] [--limit LIMIT]                                                                                                                                    
-                                                                                                                                                                                               
-List processes in the telemetry database                                                                                                                                                       
-                                                                                                                                                                                               
-options:                                                                                                                                                                                       
-  -h, --help     show this help message and exit                                                                                                                                               
-  --since SINCE  [number][m|h|d]                                                                                                                                                               
-  --limit LIMIT                                                                                                                                                                                
-                                                                                                                                                                                               
-If you are in a corporate environment, you may need to set the MICROMEGAS_PYTHON_MODULE_WRAPPER environment variable to specify the python module responsible to authenticate your requests.   
-                                                                                                                                                                                               
+```bash
+pip install micromegas
 ```
 
-```cmd
-F:\git\micromegas\python\micromegas\cli>python query_processes.py --since 15m
-hello someone@acme.com
-    process_id                            exe                                                                 start_time                        username    computer    distro                                cpu_brand
---  ------------------------------------  ------------------------------------------------------------------  --------------------------------  ----------  ----------  ------------------------------------  -------------------------------------
- 0  61db1b72-4330-4335-9e93-5d8fd4f2b661  G:\asdsadasdasdUsdsaasdasdasddddddddddddddddddddddddsddadaator.exe  2024-07-02 18:53:05.545000+00:00  notme       ASDAS3211   WindowsEditor 10                      Intel(R) Xeon(R)
- 1  49bfa0da-4c28-4829-27fb-02b90f3b3779  A:\hgkjhgkjhgkjhgkjhgkjhgkjhgkjhgkjhgkjhgkjhgkjhgkjhgkjhgkjhgr.exe  2024-07-02 18:58:58.228000+00:00  someone     HHFHFHFFF   WindowsClient                         Intel(R) Xeon(R)
- 2  81aee033-4ede-04a3-c5ac-edb2a591270d  B:\asdasssssssskjhkjhdkasjdhaskdjhaslkdjhlaKJHDLKjahator.exe        2024-07-02 19:00:18.204000+00:00  asdasdasda  SFDGACVBCV  Windows                               Intel(R) Xeon(R)
+```bash
+# List recent processes
+micromegas-query "SELECT process_id, exe, start_time, username, computer FROM processes ORDER BY start_time DESC LIMIT 10" --begin 15m
+
+# Query log entries
+micromegas-query "SELECT time, level, msg FROM log_entries LIMIT 100" --begin 1h
 ```
 
 ---
