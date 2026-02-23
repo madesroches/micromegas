@@ -28,7 +28,7 @@ Add JSONB and histogram UDF support to the WASM query engine (`datafusion-wasm`)
 - `sum_histograms` (UDAF) — merge histograms
 - `expand_histogram` (UDTF) — histogram → rows of (bin_center, count)
 - `quantile_from_histogram`, `variance_from_histogram`, `count_from_histogram`, `sum_from_histogram` — scalar accessors
-- Dependencies: `datafusion` only (no external crates beyond std)
+- Dependencies: `datafusion`, `async-trait` (for `TableProvider` impl in `expand.rs`)
 
 ### Property UDFs (`rust/analytics/src/properties/`)
 - `property_get`, `properties_to_dict`, `properties_to_array`, `properties_to_jsonb`, `properties_length`
@@ -55,6 +55,8 @@ Extract the JSONB and histogram UDF modules into a new crate `micromegas-datafus
 ### New Crate: `rust/datafusion-extensions/`
 
 **Dependencies** (all WASM-compatible):
+- `anyhow` (used by `binary_column_accessor.rs`)
+- `async-trait` (used by histogram `expand.rs` for `TableProvider` impl)
 - `datafusion` (already used by datafusion-wasm)
 - `jsonb` (pure Rust, no system deps)
 - `micromegas-tracing` (already WASM-compatible via `dispatch_wasm.rs`)
@@ -89,7 +91,7 @@ pub fn register_extension_udfs(ctx: &datafusion::prelude::SessionContext);
 
 ### Phase 1: Create the `micromegas-datafusion-extensions` crate
 
-1. Create `rust/datafusion-extensions/Cargo.toml` with dependencies: `datafusion`, `jsonb`, `micromegas-tracing`
+1. Create `rust/datafusion-extensions/Cargo.toml` with dependencies: `anyhow`, `async-trait`, `datafusion`, `jsonb`, `micromegas-tracing`
 2. Move `rust/analytics/src/dfext/jsonb/` → `rust/datafusion-extensions/src/jsonb/`
 3. Move `rust/analytics/src/dfext/histogram/` → `rust/datafusion-extensions/src/histogram/`
 4. Create `rust/datafusion-extensions/src/lib.rs` with module declarations and `register_extension_udfs()` function
