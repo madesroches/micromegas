@@ -6,6 +6,7 @@ This file documents the historical progress of the Micromegas project. For curre
 * **Tracing:**
   * Fix empty-string backward compatibility in opt_uuid_from_string for 0.20.0 clients (#850)
 * **Security:**
+  * Upgrade ajv from 6.12.6 to 6.14.0 to fix CVE-2025-69873 (dependabot #109)
   * Fix minimatch ReDoS vulnerability via resolution override to v10.x (dependabot alerts #104, #105)
   * Migrate Grafana eslint config to native flat config, remove @eslint/eslintrc dependency
 * **Notebook Cross-Cell Queries:**
