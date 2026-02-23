@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use arrow::array::{Array, Int32Array, StringArray, StringDictionaryBuilder};
+use arrow::array::{Array, Float64Array, Int32Array, StringArray, StringDictionaryBuilder};
 use arrow::datatypes::{DataType, Field, Int32Type, Schema};
 use arrow::ipc::reader::StreamReader;
 use arrow::ipc::writer::StreamWriter;
@@ -308,4 +308,365 @@ async fn test_dictionary_projection_limit() {
         10,
         "SELECT msg, exe LIMIT 10 should return 10 rows, not all 100"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Extension UDF tests (JSONB + histogram)
+// ---------------------------------------------------------------------------
+
+/// Build IPC stream with a single JSON string column.
+fn create_json_ipc(json_strings: &[&str]) -> Vec<u8> {
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "json_col",
+        DataType::Utf8,
+        false,
+    )]));
+
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![Arc::new(StringArray::from(
+            json_strings.iter().map(|s| *s).collect::<Vec<_>>(),
+        ))],
+    )
+    .expect("failed to create RecordBatch");
+
+    let mut buf = Vec::new();
+    {
+        let mut writer =
+            StreamWriter::try_new(&mut buf, &schema).expect("failed to create StreamWriter");
+        writer.write(&batch).expect("failed to write batch");
+        writer.finish().expect("failed to finish stream");
+    }
+    buf
+}
+
+/// Build IPC stream with a single Float64 column.
+fn create_float_ipc(values: &[f64]) -> Vec<u8> {
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "value",
+        DataType::Float64,
+        false,
+    )]));
+
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![Arc::new(Float64Array::from(values.to_vec()))],
+    )
+    .expect("failed to create RecordBatch");
+
+    let mut buf = Vec::new();
+    {
+        let mut writer =
+            StreamWriter::try_new(&mut buf, &schema).expect("failed to create StreamWriter");
+        writer.write(&batch).expect("failed to write batch");
+        writer.finish().expect("failed to finish stream");
+    }
+    buf
+}
+
+/// Helper: execute SQL and return the first batch.
+async fn execute_and_first_batch(engine: &WasmQueryEngine, sql: &str) -> RecordBatch {
+    let result_bytes = engine
+        .execute_sql(sql)
+        .await
+        .unwrap_or_else(|e| panic!("SQL failed: {sql}\nerror: {e:?}"));
+    let cursor = std::io::Cursor::new(&result_bytes);
+    let reader = StreamReader::try_new(cursor, None).expect("failed to read IPC result");
+    let batches: Vec<_> = reader
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()
+        .expect("failed to collect batches");
+    assert!(!batches.is_empty(), "query returned no batches: {sql}");
+    batches.into_iter().next().expect("no batch")
+}
+
+/// jsonb_parse + jsonb_format_json round-trip.
+#[wasm_bindgen_test]
+async fn test_jsonb_parse_and_format() {
+    let engine = WasmQueryEngine::new();
+    let ipc = create_json_ipc(&[r#"{"name":"alice","age":30}"#, r#"{"name":"bob","age":25}"#]);
+    engine
+        .register_table("data", &ipc)
+        .expect("register_table should succeed");
+
+    let batch = execute_and_first_batch(
+        &engine,
+        "SELECT jsonb_format_json(jsonb_parse(json_col)) AS roundtrip FROM data",
+    )
+    .await;
+
+    assert_eq!(batch.num_rows(), 2);
+    // The round-trip should preserve JSON content (key order may differ with jsonb)
+    let col = batch.column_by_name("roundtrip").expect("roundtrip column");
+    assert_eq!(col.len(), 2);
+    assert!(!col.is_null(0));
+    assert!(!col.is_null(1));
+}
+
+/// jsonb_get + jsonb_as_string / jsonb_as_i64 to extract nested fields.
+#[wasm_bindgen_test]
+async fn test_jsonb_get_and_cast() {
+    let engine = WasmQueryEngine::new();
+    let ipc = create_json_ipc(&[r#"{"name":"alice","age":30}"#, r#"{"name":"bob","age":25}"#]);
+    engine
+        .register_table("data", &ipc)
+        .expect("register_table should succeed");
+
+    let batch = execute_and_first_batch(
+        &engine,
+        "SELECT \
+           jsonb_as_string(jsonb_get(jsonb_parse(json_col), 'name')) AS name, \
+           jsonb_as_i64(jsonb_get(jsonb_parse(json_col), 'age')) AS age \
+         FROM data ORDER BY age",
+    )
+    .await;
+
+    assert_eq!(batch.num_rows(), 2);
+
+    // Check age column (Int64)
+    let age_col = batch
+        .column_by_name("age")
+        .expect("age column")
+        .as_any()
+        .downcast_ref::<arrow::array::Int64Array>()
+        .expect("age should be Int64");
+    assert_eq!(age_col.value(0), 25);
+    assert_eq!(age_col.value(1), 30);
+}
+
+/// jsonb_as_f64 extracts floating-point values.
+#[wasm_bindgen_test]
+async fn test_jsonb_as_f64() {
+    let engine = WasmQueryEngine::new();
+    let ipc = create_json_ipc(&[r#"{"temp":98.6}"#, r#"{"temp":37.0}"#]);
+    engine
+        .register_table("data", &ipc)
+        .expect("register_table should succeed");
+
+    let batch = execute_and_first_batch(
+        &engine,
+        "SELECT jsonb_as_f64(jsonb_get(jsonb_parse(json_col), 'temp')) AS temp FROM data ORDER BY temp",
+    )
+    .await;
+
+    let temp_col = batch
+        .column_by_name("temp")
+        .expect("temp column")
+        .as_any()
+        .downcast_ref::<Float64Array>()
+        .expect("temp should be Float64");
+    assert!((temp_col.value(0) - 37.0).abs() < f64::EPSILON);
+    assert!((temp_col.value(1) - 98.6).abs() < f64::EPSILON);
+}
+
+/// jsonb_object_keys extracts keys from JSON objects.
+#[wasm_bindgen_test]
+async fn test_jsonb_object_keys() {
+    let engine = WasmQueryEngine::new();
+    let ipc = create_json_ipc(&[r#"{"a":1,"b":2}"#]);
+    engine
+        .register_table("data", &ipc)
+        .expect("register_table should succeed");
+
+    let batch = execute_and_first_batch(
+        &engine,
+        "SELECT jsonb_object_keys(jsonb_parse(json_col)) AS keys FROM data",
+    )
+    .await;
+
+    assert_eq!(batch.num_rows(), 1);
+    // Just verify the query executes and returns a non-null result
+    let col = batch.column_by_name("keys").expect("keys column");
+    assert!(!col.is_null(0));
+}
+
+/// make_histogram + count_from_histogram + sum_from_histogram.
+#[wasm_bindgen_test]
+async fn test_histogram_create_and_query() {
+    let engine = WasmQueryEngine::new();
+    let values: Vec<f64> = (0..100).map(|i| i as f64).collect();
+    let ipc = create_float_ipc(&values);
+    engine
+        .register_table("data", &ipc)
+        .expect("register_table should succeed");
+
+    let batch = execute_and_first_batch(
+        &engine,
+        "SELECT \
+           count_from_histogram(make_histogram(0.0, 100.0, 10, value)) AS cnt, \
+           sum_from_histogram(make_histogram(0.0, 100.0, 10, value)) AS total \
+         FROM data",
+    )
+    .await;
+
+    assert_eq!(batch.num_rows(), 1);
+
+    let cnt_col = batch
+        .column_by_name("cnt")
+        .expect("cnt column")
+        .as_any()
+        .downcast_ref::<arrow::array::UInt64Array>()
+        .expect("cnt should be UInt64");
+    assert_eq!(cnt_col.value(0), 100);
+
+    let total_col = batch
+        .column_by_name("total")
+        .expect("total column")
+        .as_any()
+        .downcast_ref::<Float64Array>()
+        .expect("total should be Float64");
+    // sum of 0..100 = 4950
+    assert!((total_col.value(0) - 4950.0).abs() < f64::EPSILON);
+}
+
+/// quantile_from_histogram estimates quantiles.
+#[wasm_bindgen_test]
+async fn test_histogram_quantile() {
+    let engine = WasmQueryEngine::new();
+    let values: Vec<f64> = (0..1000).map(|i| i as f64).collect();
+    let ipc = create_float_ipc(&values);
+    engine
+        .register_table("data", &ipc)
+        .expect("register_table should succeed");
+
+    let batch = execute_and_first_batch(
+        &engine,
+        "SELECT \
+           quantile_from_histogram(make_histogram(0.0, 1000.0, 100, value), 0.5) AS median \
+         FROM data",
+    )
+    .await;
+
+    let median_col = batch
+        .column_by_name("median")
+        .expect("median column")
+        .as_any()
+        .downcast_ref::<Float64Array>()
+        .expect("median should be Float64");
+    // Median of 0..1000 should be close to 500
+    let median = median_col.value(0);
+    assert!(
+        (median - 500.0).abs() < 20.0,
+        "median should be near 500, got {median}"
+    );
+}
+
+/// variance_from_histogram computes variance.
+#[wasm_bindgen_test]
+async fn test_histogram_variance() {
+    let engine = WasmQueryEngine::new();
+    let values: Vec<f64> = (0..100).map(|i| i as f64).collect();
+    let ipc = create_float_ipc(&values);
+    engine
+        .register_table("data", &ipc)
+        .expect("register_table should succeed");
+
+    let batch = execute_and_first_batch(
+        &engine,
+        "SELECT variance_from_histogram(make_histogram(0.0, 100.0, 10, value)) AS var FROM data",
+    )
+    .await;
+
+    let var_col = batch
+        .column_by_name("var")
+        .expect("var column")
+        .as_any()
+        .downcast_ref::<Float64Array>()
+        .expect("var should be Float64");
+    // Variance of 0..100 is 833.33... (sample variance)
+    let var = var_col.value(0);
+    assert!(
+        var > 800.0 && var < 900.0,
+        "variance should be ~833, got {var}"
+    );
+}
+
+/// expand_histogram UDTF turns a histogram into (bin_center, count) rows.
+#[wasm_bindgen_test]
+async fn test_histogram_expand() {
+    let engine = WasmQueryEngine::new();
+    let values: Vec<f64> = (0..100).map(|i| i as f64).collect();
+    let ipc = create_float_ipc(&values);
+    engine
+        .register_table("data", &ipc)
+        .expect("register_table should succeed");
+
+    let result_bytes = engine
+        .execute_sql(
+            "SELECT bin_center, count \
+             FROM expand_histogram(\
+               (SELECT make_histogram(0.0, 100.0, 10, value) FROM data)\
+             )",
+        )
+        .await
+        .expect("expand_histogram query should succeed");
+
+    let rows = count_result_rows(&result_bytes);
+    assert_eq!(rows, 10, "10-bin histogram should expand to 10 rows");
+}
+
+// ---------------------------------------------------------------------------
+// Property UDF tests
+// ---------------------------------------------------------------------------
+
+/// property_get extracts a value from JSONB binary data.
+#[wasm_bindgen_test]
+async fn test_property_get_jsonb() {
+    let engine = WasmQueryEngine::new();
+    let ipc = create_json_ipc(&[
+        r#"{"name":"alice","role":"admin"}"#,
+        r#"{"name":"bob","role":"user"}"#,
+    ]);
+    engine
+        .register_table("data", &ipc)
+        .expect("register_table should succeed");
+
+    let batch = execute_and_first_batch(
+        &engine,
+        "SELECT property_get(jsonb_parse(json_col), 'name') AS name FROM data ORDER BY name",
+    )
+    .await;
+
+    assert_eq!(batch.num_rows(), 2);
+    let name_col = batch.column_by_name("name").expect("name column");
+    // property_get returns Dictionary<Int32, Utf8>
+    let dict = name_col
+        .as_any()
+        .downcast_ref::<arrow::array::DictionaryArray<Int32Type>>()
+        .expect("name should be Dictionary<Int32, Utf8>");
+    let values = dict
+        .values()
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .expect("dictionary values should be Utf8");
+    let key0 = dict.keys().value(0) as usize;
+    let key1 = dict.keys().value(1) as usize;
+    assert_eq!(values.value(key0), "alice");
+    assert_eq!(values.value(key1), "bob");
+}
+
+/// properties_length counts keys in JSONB binary data.
+#[wasm_bindgen_test]
+async fn test_properties_length_jsonb() {
+    let engine = WasmQueryEngine::new();
+    let ipc = create_json_ipc(&[r#"{"a":1,"b":2,"c":3}"#, r#"{"x":10}"#]);
+    engine
+        .register_table("data", &ipc)
+        .expect("register_table should succeed");
+
+    let batch = execute_and_first_batch(
+        &engine,
+        "SELECT properties_length(jsonb_parse(json_col)) AS len FROM data",
+    )
+    .await;
+
+    assert_eq!(batch.num_rows(), 2);
+    let len_col = batch
+        .column_by_name("len")
+        .expect("len column")
+        .as_any()
+        .downcast_ref::<Int32Array>()
+        .expect("len should be Int32");
+    assert_eq!(len_col.value(0), 3);
+    assert_eq!(len_col.value(1), 1);
 }

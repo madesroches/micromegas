@@ -10,7 +10,10 @@
 pub mod properties_column_accessor;
 pub mod properties_to_dict_udf;
 pub mod properties_to_jsonb_udf;
-pub mod property_get;
 pub mod property_set;
 pub mod property_set_jsonb_dictionary_builder;
 pub mod utils;
+
+// Re-export from micromegas-datafusion-extensions
+pub use micromegas_datafusion_extensions::properties::properties_udf;
+pub use micromegas_datafusion_extensions::properties::property_get;

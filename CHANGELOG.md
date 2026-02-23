@@ -3,6 +3,10 @@
 This file documents the historical progress of the Micromegas project. For current focus, please see the main [README.md](./README.md).
 
 ## Unreleased
+* **WASM UDF Extensions:**
+  * Extract JSONB and histogram UDFs into shared `micromegas-datafusion-extensions` crate
+  * Register extension UDFs in WASM query engine for browser-side SQL parity with server
+  * Add WASM integration tests for JSONB and histogram UDFs
 * **Tracing:**
   * Fix empty-string backward compatibility in opt_uuid_from_string for 0.20.0 clients (#850)
 * **Security:**
