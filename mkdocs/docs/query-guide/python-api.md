@@ -555,8 +555,8 @@ Execute arbitrary SQL queries against the analytics service from the command lin
 
 **Usage:**
 ```bash
-cd python/micromegas/cli
-poetry run python query.py "SELECT * FROM list_partitions() LIMIT 5"
+pip install micromegas
+micromegas-query "SELECT * FROM list_partitions() LIMIT 5"
 ```
 
 **Arguments:**
@@ -571,20 +571,20 @@ poetry run python query.py "SELECT * FROM list_partitions() LIMIT 5"
 **Examples:**
 ```bash
 # Query with default time range (last hour)
-poetry run python query.py "SELECT * FROM processes LIMIT 10"
+micromegas-query "SELECT * FROM processes LIMIT 10"
 
 # Query with relative time range (last 24 hours)
-poetry run python query.py "SELECT * FROM log_entries LIMIT 100" --begin 24h
+micromegas-query "SELECT * FROM log_entries LIMIT 100" --begin 24h
 
 # Query with specific timestamps
-poetry run python query.py "SELECT * FROM measures LIMIT 50" \
+micromegas-query "SELECT * FROM measures LIMIT 50" \
     --begin 2024-01-01T00:00:00 --end 2024-01-02T00:00:00
 
 # Output as CSV for piping to other tools
-poetry run python query.py "SELECT * FROM list_partitions()" --format csv
+micromegas-query "SELECT * FROM list_partitions()" --format csv
 
 # Output as JSON
-poetry run python query.py "SELECT view_set_name, num_rows FROM list_partitions()" --format json
+micromegas-query "SELECT view_set_name, num_rows FROM list_partitions()" --format json
 ```
 
 **Environment Variables:**
@@ -593,15 +593,13 @@ poetry run python query.py "SELECT view_set_name, num_rows FROM list_partitions(
 - `MICROMEGAS_OIDC_CLIENT_ID`: OIDC client ID
 - `MICROMEGAS_PYTHON_MODULE_WRAPPER`: Custom authentication module for corporate environments
 
-### Other CLI Tools
+### micromegas-logout
 
-Additional CLI tools are available in `python/micromegas/cli/`:
+Clears cached OIDC authentication tokens:
 
-- **query_processes.py**: List processes in the telemetry database
-- **query_process_log.py**: Query log entries for specific processes
-- **query_process_metrics.py**: Query metrics for specific processes
-- **write_perfetto.py**: Export trace data to Perfetto format
-- **logout.py**: Clear cached authentication tokens
+```bash
+micromegas-logout
+```
 
 ## Time Utilities
 

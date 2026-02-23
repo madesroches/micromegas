@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 import argparse
-import connection
+from micromegas.cli import connection
 import datetime
 import micromegas
 from tabulate import tabulate
