@@ -24,13 +24,13 @@
   },
   "resolutions": {
     "@remix-run/router": "^1.23.2",
-    "eslint/ajv": "6.14.0",
-    "schema-utils/ajv": "6.14.0",
     "diff": "^8.0.3",
+    "eslint/ajv": "6.14.0",
     "js-yaml": "^4.1.1",
     "lodash": "^4.17.23",
     "minimatch": "^10.2.1",
     "qs": "^6.14.2",
-    "react-router": "^6.30.2"
+    "react-router": "^6.30.2",
+    "schema-utils/ajv": "6.14.0"
   }
 }
