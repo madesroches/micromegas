@@ -3520,6 +3520,7 @@ dependencies = [
  "pin-project",
  "raw-cpuid",
  "serde",
+ "serde_json",
  "serial_test",
  "thiserror 2.0.18",
  "thread-id",

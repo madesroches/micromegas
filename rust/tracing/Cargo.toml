@@ -40,12 +40,11 @@ js-sys = "0.3"
 winapi.workspace = true
 
 [dev-dependencies]
-# to tests interop
-log.workspace = true
-# for async and concurrent testing
-tokio = { workspace = true, features = ["time"] }
 futures = "0.3"
+log.workspace = true
+serde_json.workspace = true
 serial_test = "3.2"
+tokio = { workspace = true, features = ["time"] }
 
 [features]
 default = ["tokio"]
