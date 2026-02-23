@@ -37,6 +37,7 @@ mod uuid_serde {
     {
         let s: Option<String> = Option::deserialize(deserializer)?;
         match s {
+            Some(s) if s.is_empty() => Ok(None),
             Some(s) => uuid::Uuid::try_parse(&s)
                 .map(Some)
                 .map_err(serde::de::Error::custom),
