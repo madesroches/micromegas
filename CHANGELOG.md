@@ -3,6 +3,10 @@
 This file documents the historical progress of the Micromegas project. For current focus, please see the main [README.md](./README.md).
 
 ## Unreleased
+* **Python CLI:**
+  * Add `micromegas-query` and `micromegas-logout` as installed CLI entry points via `pip install micromegas`
+  * Move CLI module into package directory for proper entry point resolution
+  * Remove legacy single-purpose CLI scripts superseded by general-purpose `micromegas-query`
 * **Analytics Web App:**
   * Adapt chart Y-axis scale to visible series when hiding in multi-series charts (#836)
   * Hide Y-axis when all series for a unit are hidden
