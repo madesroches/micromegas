@@ -1,5 +1,7 @@
 # WASM Query Engine UDF Support Plan
 
+**Status: COMPLETED**
+
 ## Overview
 
 Add JSONB and histogram UDF support to the WASM query engine (`datafusion-wasm`) so that client-side SQL queries in the browser can use the same analytical functions available on the server. Currently the WASM engine creates a bare `SessionContext` with no custom functions, limiting it to built-in DataFusion SQL.
@@ -163,13 +165,17 @@ pub fn register_extension_udfs(ctx: &datafusion::prelude::SessionContext);
 
 ## Testing Strategy
 
-1. **Existing analytics tests** — must continue passing after the refactor (no behavior change)
-2. **New WASM integration tests** in `rust/datafusion-wasm/tests/wasm_integration.rs`:
-   - `test_jsonb_parse_and_format` — register table with JSON strings, use `jsonb_parse()` and `jsonb_format_json()`
+1. **Existing analytics tests** — continue passing after the refactor (no behavior change) ✅
+2. **New WASM integration tests** in `rust/datafusion-wasm/tests/wasm_integration.rs`: ✅
+   - `test_jsonb_parse_and_format` — round-trip JSON string → JSONB → JSON string
    - `test_jsonb_get_and_cast` — parse JSON, extract fields with `jsonb_get()`, cast with `jsonb_as_string()`/`jsonb_as_i64()`
-   - `test_histogram_create_and_query` — register numeric data, create histogram with `make_histogram()`, extract with accessor UDFs
-   - `test_histogram_expand` — verify `expand_histogram()` UDTF works in WASM
-3. **CI** — `python3 ../build/rust_ci.py` covers both native and (if configured) WASM targets
+   - `test_jsonb_as_f64` — extract floating-point values from JSONB
+   - `test_jsonb_object_keys` — extract object keys from JSONB
+   - `test_histogram_create_and_query` — `make_histogram()` + `count_from_histogram()` + `sum_from_histogram()`
+   - `test_histogram_quantile` — `quantile_from_histogram()` estimates median
+   - `test_histogram_variance` — `variance_from_histogram()` computes variance
+   - `test_histogram_expand` — `expand_histogram()` UDTF expands to (bin_center, count) rows
+3. **CI** — `python3 ../build/rust_ci.py` covers native; `python3 ../build/rust_ci.py wasm` covers WASM (fmt + clippy pass; browser tests require headless Chrome/Firefox)
 
 ## Dependencies Within `dfext`
 
@@ -180,3 +186,8 @@ The `string_column_accessor.rs` is **not** used by jsonb or histogram modules an
 ## Open Questions
 
 None — crate name resolved as `micromegas-datafusion-extensions`.
+
+## Implementation Commits
+
+1. `3600ad81f` — Extract JSONB and histogram UDFs into micromegas-datafusion-extensions crate
+2. `68d62f9b5` — Add WASM integration tests for JSONB and histogram UDFs
