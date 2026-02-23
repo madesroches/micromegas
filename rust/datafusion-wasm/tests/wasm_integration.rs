@@ -604,3 +604,69 @@ async fn test_histogram_expand() {
     let rows = count_result_rows(&result_bytes);
     assert_eq!(rows, 10, "10-bin histogram should expand to 10 rows");
 }
+
+// ---------------------------------------------------------------------------
+// Property UDF tests
+// ---------------------------------------------------------------------------
+
+/// property_get extracts a value from JSONB binary data.
+#[wasm_bindgen_test]
+async fn test_property_get_jsonb() {
+    let engine = WasmQueryEngine::new();
+    let ipc = create_json_ipc(&[
+        r#"{"name":"alice","role":"admin"}"#,
+        r#"{"name":"bob","role":"user"}"#,
+    ]);
+    engine
+        .register_table("data", &ipc)
+        .expect("register_table should succeed");
+
+    let batch = execute_and_first_batch(
+        &engine,
+        "SELECT property_get(jsonb_parse(json_col), 'name') AS name FROM data ORDER BY name",
+    )
+    .await;
+
+    assert_eq!(batch.num_rows(), 2);
+    let name_col = batch.column_by_name("name").expect("name column");
+    // property_get returns Dictionary<Int32, Utf8>
+    let dict = name_col
+        .as_any()
+        .downcast_ref::<arrow::array::DictionaryArray<Int32Type>>()
+        .expect("name should be Dictionary<Int32, Utf8>");
+    let values = dict
+        .values()
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .expect("dictionary values should be Utf8");
+    let key0 = dict.keys().value(0) as usize;
+    let key1 = dict.keys().value(1) as usize;
+    assert_eq!(values.value(key0), "alice");
+    assert_eq!(values.value(key1), "bob");
+}
+
+/// properties_length counts keys in JSONB binary data.
+#[wasm_bindgen_test]
+async fn test_properties_length_jsonb() {
+    let engine = WasmQueryEngine::new();
+    let ipc = create_json_ipc(&[r#"{"a":1,"b":2,"c":3}"#, r#"{"x":10}"#]);
+    engine
+        .register_table("data", &ipc)
+        .expect("register_table should succeed");
+
+    let batch = execute_and_first_batch(
+        &engine,
+        "SELECT properties_length(jsonb_parse(json_col)) AS len FROM data",
+    )
+    .await;
+
+    assert_eq!(batch.num_rows(), 2);
+    let len_col = batch
+        .column_by_name("len")
+        .expect("len column")
+        .as_any()
+        .downcast_ref::<Int32Array>()
+        .expect("len should be Int32");
+    assert_eq!(len_col.value(0), 3);
+    assert_eq!(len_col.value(1), 1);
+}

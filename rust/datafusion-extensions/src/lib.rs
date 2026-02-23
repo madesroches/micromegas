@@ -4,9 +4,12 @@ pub mod binary_column_accessor;
 pub mod histogram;
 /// JSONB support
 pub mod jsonb;
+/// Property UDFs
+pub mod properties;
 
 use std::sync::Arc;
 
+use datafusion::logical_expr::ScalarUDF;
 use datafusion::prelude::SessionContext;
 use histogram::{
     accessors::{make_count_from_histogram_udf, make_sum_from_histogram_udf},
@@ -22,6 +25,10 @@ use jsonb::{
     get::make_jsonb_get_udf,
     keys::make_jsonb_object_keys_udf,
     parse::make_jsonb_parse_udf,
+};
+use properties::{
+    properties_udf::{PropertiesLength, PropertiesToArray},
+    property_get::PropertyGet,
 };
 
 /// Register all extension UDFs on a SessionContext.
@@ -44,4 +51,8 @@ pub fn register_extension_udfs(ctx: &SessionContext) {
     ctx.register_udf(make_jsonb_as_f64_udf());
     ctx.register_udf(make_jsonb_as_i64_udf());
     ctx.register_udf(make_jsonb_object_keys_udf());
+
+    ctx.register_udf(ScalarUDF::from(PropertyGet::new()));
+    ctx.register_udf(ScalarUDF::from(PropertiesToArray::new()));
+    ctx.register_udf(ScalarUDF::from(PropertiesLength::new()));
 }

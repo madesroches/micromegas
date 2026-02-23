@@ -6,8 +6,8 @@ use datafusion::arrow::datatypes::{DataType, Field, Fields, Int32Type};
 use datafusion::config::ConfigOptions;
 use datafusion::logical_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
 use jsonb::RawJsonb;
-use micromegas_analytics::properties::properties_to_dict_udf::PropertiesLength;
 use micromegas_analytics::properties::properties_to_jsonb_udf::PropertiesToJsonb;
+use micromegas_analytics::properties::properties_udf::PropertiesLength;
 use std::sync::Arc;
 
 fn create_test_properties_array(properties: Vec<Vec<(&str, &str)>>) -> ArrayRef {

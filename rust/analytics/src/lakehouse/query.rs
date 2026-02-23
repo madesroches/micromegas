@@ -20,9 +20,7 @@ use crate::{
         view_instance_table_function::ViewInstanceTableFunction,
     },
     properties::{
-        properties_to_dict_udf::{PropertiesLength, PropertiesToArray, PropertiesToDict},
-        properties_to_jsonb_udf::PropertiesToJsonb,
-        property_get::PropertyGet,
+        properties_to_dict_udf::PropertiesToDict, properties_to_jsonb_udf::PropertiesToJsonb,
     },
     time::TimeRange,
 };
@@ -161,11 +159,8 @@ pub fn register_lakehouse_functions(
 /// register functions that are not depended on the lakehouse architecture
 #[span_fn]
 pub fn register_extension_functions(ctx: &SessionContext) {
-    ctx.register_udf(ScalarUDF::from(PropertyGet::new()));
     ctx.register_udf(ScalarUDF::from(PropertiesToDict::new()));
-    ctx.register_udf(ScalarUDF::from(PropertiesToArray::new()));
     ctx.register_udf(ScalarUDF::from(PropertiesToJsonb::new()));
-    ctx.register_udf(ScalarUDF::from(PropertiesLength::new()));
     micromegas_datafusion_extensions::register_extension_udfs(ctx);
 }
 
