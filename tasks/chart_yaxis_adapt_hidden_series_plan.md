@@ -38,17 +38,18 @@ When all series for a given unit are hidden, keep the scale at a sensible defaul
 
 ```typescript
 const unitScaleInfo = useMemo(() => {
-  const unitMap = new Map<string, { seriesIndices: number[]; p99: number; max: number }>()
+  const unitMap = new Map<string, { seriesIndices: number[]; p99: number; max: number; hasVisible: boolean }>()
   for (let i = 0; i < normalizedSeries.length; i++) {
     const u = normalizedSeries[i].unit || ''
     if (!unitMap.has(u)) {
-      unitMap.set(u, { seriesIndices: [], p99: 0, max: 0 })
+      unitMap.set(u, { seriesIndices: [], p99: 0, max: 0, hasVisible: false })
     }
     const info = unitMap.get(u)!
     info.seriesIndices.push(i)
     // Only include visible series in scale calculations
     const isVisible = seriesVisibility ? seriesVisibility[i] : true
     if (isVisible) {
+      info.hasVisible = true
       info.p99 = Math.max(info.p99, allSeriesStats[i].p99)
       info.max = Math.max(info.max, allSeriesStats[i].max)
     }
@@ -56,7 +57,7 @@ const unitScaleInfo = useMemo(() => {
 
   // Fallback: if all series for a unit are hidden, use all-series stats to avoid zero scale
   for (const [, info] of unitMap) {
-    if (info.p99 === 0 && info.max === 0) {
+    if (!info.hasVisible) {
       for (const idx of info.seriesIndices) {
         info.p99 = Math.max(info.p99, allSeriesStats[idx].p99)
         info.max = Math.max(info.max, allSeriesStats[idx].max)
