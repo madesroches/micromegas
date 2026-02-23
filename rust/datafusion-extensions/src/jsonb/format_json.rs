@@ -1,4 +1,4 @@
-use crate::dfext::binary_column_accessor::create_binary_accessor;
+use crate::binary_column_accessor::create_binary_accessor;
 use datafusion::arrow::array::StringDictionaryBuilder;
 use datafusion::arrow::datatypes::{DataType, Int32Type};
 use datafusion::common::{Result, internal_err};

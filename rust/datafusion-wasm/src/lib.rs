@@ -59,9 +59,9 @@ impl WasmQueryEngine {
             .with_default_features()
             .with_physical_optimizer_rules(filtered_rules)
             .build();
-        Self {
-            ctx: SessionContext::new_with_state(state),
-        }
+        let ctx = SessionContext::new_with_state(state);
+        micromegas_datafusion_extensions::register_extension_udfs(&ctx);
+        Self { ctx }
     }
 
     /// Register Arrow IPC stream bytes as a named table.

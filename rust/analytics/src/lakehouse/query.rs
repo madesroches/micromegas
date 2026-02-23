@@ -15,23 +15,6 @@ use super::{
     session_configurator::SessionConfigurator, view::View, view_factory::ViewFactory,
 };
 use crate::{
-    dfext::{
-        histogram::{
-            accessors::{make_count_from_histogram_udf, make_sum_from_histogram_udf},
-            expand::ExpandHistogramTableFunction,
-            histogram_udaf::make_histo_udaf,
-            quantile::make_quantile_from_histogram_udf,
-            sum_histograms_udaf::sum_histograms_udaf,
-            variance::make_variance_from_histogram_udf,
-        },
-        jsonb::{
-            cast::{make_jsonb_as_f64_udf, make_jsonb_as_i64_udf, make_jsonb_as_string_udf},
-            format_json::make_jsonb_format_json_udf,
-            get::make_jsonb_get_udf,
-            keys::make_jsonb_object_keys_udf,
-            parse::make_jsonb_parse_udf,
-        },
-    },
     lakehouse::{
         materialized_view::MaterializedView, table_scan_rewrite::TableScanRewrite,
         view_instance_table_function::ViewInstanceTableFunction,
@@ -183,24 +166,7 @@ pub fn register_extension_functions(ctx: &SessionContext) {
     ctx.register_udf(ScalarUDF::from(PropertiesToArray::new()));
     ctx.register_udf(ScalarUDF::from(PropertiesToJsonb::new()));
     ctx.register_udf(ScalarUDF::from(PropertiesLength::new()));
-    ctx.register_udaf(make_histo_udaf());
-    ctx.register_udaf(sum_histograms_udaf());
-    ctx.register_udf(make_quantile_from_histogram_udf());
-    ctx.register_udf(make_variance_from_histogram_udf());
-    ctx.register_udf(make_count_from_histogram_udf());
-    ctx.register_udf(make_sum_from_histogram_udf());
-    ctx.register_udtf(
-        "expand_histogram",
-        Arc::new(ExpandHistogramTableFunction::new()),
-    );
-
-    ctx.register_udf(make_jsonb_parse_udf());
-    ctx.register_udf(make_jsonb_format_json_udf());
-    ctx.register_udf(make_jsonb_get_udf());
-    ctx.register_udf(make_jsonb_as_string_udf());
-    ctx.register_udf(make_jsonb_as_f64_udf());
-    ctx.register_udf(make_jsonb_as_i64_udf());
-    ctx.register_udf(make_jsonb_object_keys_udf());
+    micromegas_datafusion_extensions::register_extension_udfs(ctx);
 }
 
 #[span_fn]

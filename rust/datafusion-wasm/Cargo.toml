@@ -19,6 +19,7 @@ arrow = { version = "57.3", default-features = false, features = ["ipc"] }
 chrono = { version = "0.4", default-features = false, features = ["wasmbind"] }
 datafusion = { version = "52.1", default-features = false, features = ["nested_expressions", "sql"] }
 getrandom = { version = "0.3", features = ["wasm_js"] }
+micromegas-datafusion-extensions = { path = "../datafusion-extensions" }
 micromegas-telemetry-sink = { path = "../telemetry-sink", default-features = false }
 micromegas-tracing = { path = "../tracing", default-features = false }
 wasm-bindgen = "0.2"

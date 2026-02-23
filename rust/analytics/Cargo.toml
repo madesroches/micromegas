@@ -10,6 +10,7 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
+micromegas-datafusion-extensions.workspace = true
 micromegas-telemetry.workspace = true
 micromegas-tracing = { workspace = true, features = ["tokio"] }
 micromegas-transit.workspace = true

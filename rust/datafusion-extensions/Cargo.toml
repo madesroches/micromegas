@@ -1,0 +1,17 @@
+[package]
+name = "micromegas-datafusion-extensions"
+description = "WASM-compatible DataFusion UDF extensions (JSONB, histogram) for micromegas"
+keywords.workspace = true
+version.workspace = true
+edition.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+datafusion.workspace = true
+jsonb.workspace = true
+micromegas-tracing.workspace = true
