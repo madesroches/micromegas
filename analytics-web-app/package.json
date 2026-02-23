@@ -42,6 +42,7 @@
     "uplot": "^1.6.32"
   },
   "resolutions": {
+    "ajv": "6.14.0",
     "baseline-browser-mapping": "^2.9.16",
     "minimatch": "^10.2.1"
   },
