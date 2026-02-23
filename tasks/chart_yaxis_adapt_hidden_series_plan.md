@@ -32,7 +32,7 @@ The `unitScaleInfo` `useMemo` depends on `[normalizedSeries, allSeriesStats]` bu
 
 Add `seriesVisibility` as a dependency of `unitScaleInfo` and skip hidden series when computing the per-unit p99/max aggregations.
 
-When all series for a given unit are hidden, keep the scale at a sensible default (e.g., the original values) rather than collapsing to zero.
+When all series for a given unit are hidden, hide the corresponding Y-axis entirely rather than showing an axis with stale values. The scale fallback still uses the full-range stats to avoid zero-scale issues if uPlot references the scale internally.
 
 ### Changes to `unitScaleInfo` computation (lines 220-241)
 
@@ -77,18 +77,36 @@ const unitScaleInfo = useMemo(() => {
 
 The single-series path (lines 708+) is unaffected since there's only one series and no legend toggle.
 
+### Hide Y-axis when all series for a unit are hidden
+
+The axis config (lines 619-638) currently always creates visible axes. Use the `hasVisible` flag from `unitScaleInfo` to set `show: false` on axes whose unit has no visible series:
+
+```typescript
+axes.push({
+  show: scaleInfo.hasVisible,  // hide axis when all its series are hidden
+  scale: scaleName,
+  side: scaleInfo.side as 1 | 3,
+  // ... rest unchanged
+})
+```
+
+This cleanly removes the axis labels, ticks, and grid lines for fully-hidden units, reducing visual clutter. When a series is toggled back on, `unitScaleInfo` recomputes with `hasVisible: true` and the axis reappears.
+
 ## Implementation Steps
 
-1. **Update `unitScaleInfo` useMemo** in `XYChart.tsx` (lines 220-241):
-   - Add `seriesVisibility` to the dependency array
-   - Skip hidden series when computing `p99`/`max` aggregates
-   - Add fallback for when all series in a unit group are hidden
+1. ~~**Update `unitScaleInfo` useMemo** in `XYChart.tsx`~~ — **DONE** (lines 220-255):
+   - `seriesVisibility` added to the dependency array
+   - Hidden series skipped when computing `p99`/`max` aggregates
+   - Fallback for fully-hidden units preserves full-range scale
+
+2. ~~**Hide Y-axis for fully-hidden units** in axis config (line 619)~~ — **DONE**:
+   - Set `show: scaleInfo.hasVisible` on each Y-axis
 
 ## Files to Modify
 
 | File | Change |
 |------|--------|
-| `analytics-web-app/src/components/XYChart.tsx` | Filter hidden series in `unitScaleInfo` computation |
+| `analytics-web-app/src/components/XYChart.tsx` | Filter hidden series in `unitScaleInfo` computation; hide axis when all unit series hidden |
 
 ## Trade-offs
 
@@ -107,8 +125,8 @@ The single-series path (lines 708+) is unaffected since there's only one series 
 
 1. **Manual testing**: Open a multi-series chart with series of different magnitudes. Hide the large-value series and verify the Y-axis rescales to fit the remaining visible series.
 2. **Edge cases**:
-   - Hide all series for one unit → scale should fall back to full range
-   - Hide all series entirely → scales should not collapse to zero
+   - Hide all series for one unit → Y-axis for that unit should disappear
+   - Hide all series entirely → all Y-axes should disappear, scales should not collapse to zero
    - Toggle series back to visible → scale should re-expand
    - Ctrl+Click individual toggles → scale adapts per toggle
    - Click to isolate → scale adapts to isolated series

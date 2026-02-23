@@ -617,6 +617,7 @@ export function XYChart({
         const yAxisUnit = adaptiveInfo?.abbrev ?? (scaleInfo.unitName === 'percent' ? '%' : scaleInfo.unitName)
         const axisCf = adaptiveInfo?.conversionFactor ?? 1
         axes.push({
+          show: scaleInfo.hasVisible,
           scale: scaleName,
           side: scaleInfo.side as 1 | 3,
           stroke: '#6a6a7a',
