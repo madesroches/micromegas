@@ -3,6 +3,8 @@
 This file documents the historical progress of the Micromegas project. For current focus, please see the main [README.md](./README.md).
 
 ## Unreleased
+* **Tracing:**
+  * Fix empty-string backward compatibility in opt_uuid_from_string for 0.20.0 clients (#850)
 * **Security:**
   * Fix minimatch ReDoS vulnerability via resolution override to v10.x (dependabot alerts #104, #105)
   * Migrate Grafana eslint config to native flat config, remove @eslint/eslintrc dependency
