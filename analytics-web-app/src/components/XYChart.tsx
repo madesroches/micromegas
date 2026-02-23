@@ -219,16 +219,30 @@ export function XYChart({
 
   // Build per-unit scale info (group series by unit)
   const unitScaleInfo = useMemo(() => {
-    const unitMap = new Map<string, { seriesIndices: number[]; p99: number; max: number }>()
+    const unitMap = new Map<string, { seriesIndices: number[]; p99: number; max: number; hasVisible: boolean }>()
     for (let i = 0; i < normalizedSeries.length; i++) {
       const u = normalizedSeries[i].unit || ''
       if (!unitMap.has(u)) {
-        unitMap.set(u, { seriesIndices: [], p99: 0, max: 0 })
+        unitMap.set(u, { seriesIndices: [], p99: 0, max: 0, hasVisible: false })
       }
       const info = unitMap.get(u)!
       info.seriesIndices.push(i)
-      info.p99 = Math.max(info.p99, allSeriesStats[i].p99)
-      info.max = Math.max(info.max, allSeriesStats[i].max)
+      // Only include visible series in scale calculations
+      const isVisible = seriesVisibility ? seriesVisibility[i] : true
+      if (isVisible) {
+        info.hasVisible = true
+        info.p99 = Math.max(info.p99, allSeriesStats[i].p99)
+        info.max = Math.max(info.max, allSeriesStats[i].max)
+      }
+    }
+    // Fallback: if all series for a unit are hidden, use all-series stats to avoid zero scale
+    for (const [, info] of unitMap) {
+      if (!info.hasVisible) {
+        for (const idx of info.seriesIndices) {
+          info.p99 = Math.max(info.p99, allSeriesStats[idx].p99)
+          info.max = Math.max(info.max, allSeriesStats[idx].max)
+        }
+      }
     }
     // Convert to ordered array: first unit = left axis, second = right, etc.
     const entries = [...unitMap.entries()]
@@ -238,7 +252,7 @@ export function XYChart({
       side: idx === 0 ? 1 : idx === 1 ? 3 : idx % 2 === 0 ? 1 : 3, // 1=left, 3=right, alternate
       ...info,
     }))
-  }, [normalizedSeries, allSeriesStats])
+  }, [normalizedSeries, allSeriesStats, seriesVisibility])
 
   // For single-series, use first series unit for adaptive formatting
   const primaryUnit = normalizedSeries[0]?.unit || unit || ''
@@ -603,6 +617,7 @@ export function XYChart({
         const yAxisUnit = adaptiveInfo?.abbrev ?? (scaleInfo.unitName === 'percent' ? '%' : scaleInfo.unitName)
         const axisCf = adaptiveInfo?.conversionFactor ?? 1
         axes.push({
+          show: scaleInfo.hasVisible,
           scale: scaleName,
           side: scaleInfo.side as 1 | 3,
           stroke: '#6a6a7a',
