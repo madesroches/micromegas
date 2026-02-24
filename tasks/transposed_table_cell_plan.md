@@ -61,7 +61,16 @@ Standard SQL editor — same pattern as TableCell editor: `SyntaxEditor` for SQL
 2. **Create `cells/TransposedTableCell.tsx`**
    - Renderer: iterates over Arrow schema fields as rows, renders each data row as a value column
    - Editor: SQL editor (reuse `SyntaxEditor`, `AvailableVariablesPanel`)
-   - Metadata export: `transposedTableMetadata`
+   - Metadata export: `transposedTableMetadata` with all `CellTypeMetadata` fields:
+     - `icon`: Lucide `TableProperties` component (requires `icon` type change — see step 5)
+     - `label`: `'Transposed'`
+     - `description`: `'SQL results in transposed key-value layout'`
+     - `defaultHeight`: 300
+     - `showTypeBadge`: true
+     - `canBlockDownstream`: true
+     - `execute`: standard query cell pattern — `substituteMacros` + `runQuery`, return `{ data: [data] }`
+     - `getRendererProps`: standard pattern — `{ data, status, options }`
+     - `createDefaultConfig`: `{ type: 'transposed', sql: DEFAULT_SQL.transposed }`
 
 3. **Register in `cell-registry.ts`**
    - Import `transposedTableMetadata`
@@ -70,11 +79,26 @@ Standard SQL editor — same pattern as TableCell editor: `SyntaxEditor` for SQL
 4. **Update `createDefaultCell` in `cell-registry.ts`**
    - The `transposed` type uses SQL, so it should get the default data source (no special exclusion needed — it already falls through)
 
+5. **Change `icon` field from `string` to `ReactNode` across all cell types**
+   - Update `CellTypeMetadata.icon` type from `string` to `ReactNode` in `cell-registry.ts`
+   - Update `CELL_TYPE_OPTIONS` icon type and all rendering sites (`shared.tsx`, `HorizontalGroupCell.tsx`)
+   - Replace single-letter icons with Lucide components in all cell metadata exports:
+     - Table: `Table2`, Chart: `BarChart3`, Log: `ScrollText`, Markdown: `FileText`
+     - Variable: `Variable`, PropertyTimeline: `GanttChart`, Swimlane: `AlignCenter`
+     - PerfettoExport: `Download`, ReferenceTable: `BookOpen`, HorizontalGroup: `Group`
+     - Transposed: `TableProperties`
+
 ## Files to Modify
 
 - `analytics-web-app/src/lib/screen-renderers/notebook-types.ts` — add `'transposed'` to type unions
+- `analytics-web-app/src/lib/screen-renderers/notebook-utils.ts` — add `DEFAULT_SQL.transposed` (done)
 - `analytics-web-app/src/lib/screen-renderers/cells/TransposedTableCell.tsx` — new file
-- `analytics-web-app/src/lib/screen-renderers/cell-registry.ts` — register new cell type
+- `analytics-web-app/src/lib/screen-renderers/cell-registry.ts` — register new cell type, change `icon` type to `ReactNode`
+- `analytics-web-app/src/lib/screen-renderers/shared.tsx` — update icon rendering for `ReactNode`
+- `analytics-web-app/src/lib/screen-renderers/cells/HorizontalGroupCell.tsx` — update icon rendering for `ReactNode`
+- All existing cell files — replace letter icons with Lucide components
+- `analytics-web-app/src/lib/screen-renderers/__test-utils__/cell-registry-mock.ts` — add `transposed` to `BASE_METADATA`, update icon values from strings to `ReactNode`
+- `analytics-web-app/src/lib/screen-renderers/cells/__tests__/PerfettoExportCell.test.tsx` — update icon assertion (`toBe('E')` → match Lucide component)
 
 ## Testing Strategy
 
@@ -87,3 +111,4 @@ Standard SQL editor — same pattern as TableCell editor: `SyntaxEditor` for SQL
 
 - **Name**: "Transposed", type key `transposed`
 - **No column headers for multi-row**: value columns have no headers, consistent with tables not showing row indices
+- **Icons**: Replace all single-letter icons with Lucide components (Swimlane = `AlignCenter`, Transposed = `TableProperties`)
