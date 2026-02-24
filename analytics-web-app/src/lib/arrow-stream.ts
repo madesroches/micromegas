@@ -8,6 +8,7 @@
  * - {"type":"error","code":"..","message":".."}\n on error
  */
 
+import './arrow-compression';
 import { RecordBatch, RecordBatchReader, Schema } from 'apache-arrow';
 import { authenticatedFetch, AuthenticationError, getApiBase } from './api';
 
