@@ -1,4 +1,4 @@
-import { ComponentType } from 'react'
+import { ComponentType, ReactNode } from 'react'
 import { Table } from 'apache-arrow'
 import type { CellConfig, CellState, CellType, CellStatus, VariableValue } from './notebook-types'
 
@@ -96,8 +96,8 @@ export interface CellTypeMetadata {
   /** Display name (e.g., "Table", "Chart") */
   readonly label: string
 
-  /** Icon for the cell type (single character, e.g., "T", "C") */
-  readonly icon: string
+  /** Icon for the cell type (Lucide component or string) */
+  readonly icon: ReactNode
 
   /** Description for add cell modal */
   readonly description: string
@@ -153,6 +153,7 @@ import { swimlaneMetadata } from './cells/SwimlaneCell'
 import { perfettoExportMetadata } from './cells/PerfettoExportCell'
 import { referenceTableMetadata } from './cells/ReferenceTableCell'
 import { hgMetadata } from './cells/HorizontalGroupCell'
+import { transposedTableMetadata } from './cells/TransposedTableCell'
 
 /**
  * Registry of all cell type metadata.
@@ -169,6 +170,7 @@ export const CELL_TYPE_METADATA: Record<CellType, CellTypeMetadata> = {
   perfettoexport: perfettoExportMetadata,
   referencetable: referenceTableMetadata,
   hg: hgMetadata,
+  transposed: transposedTableMetadata,
 }
 
 /**

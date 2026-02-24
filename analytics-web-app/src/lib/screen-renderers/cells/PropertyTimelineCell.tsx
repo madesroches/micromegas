@@ -16,6 +16,7 @@ import { substituteMacros, validateMacros, DEFAULT_SQL } from '../notebook-utils
 import { timestampToMs } from '@/lib/arrow-utils'
 import { extractPropertiesFromRows, createPropertyTimelineGetter } from '@/lib/property-utils'
 import { PropertyTimelineData } from '@/types'
+import { GanttChart } from 'lucide-react'
 
 // =============================================================================
 // Data Transformation
@@ -189,7 +190,7 @@ export const propertyTimelineMetadata: CellTypeMetadata = {
   EditorComponent: PropertyTimelineCellEditor,
 
   label: 'Property Timeline',
-  icon: 'P',
+  icon: <GanttChart />,
   description: 'Display property values over time as horizontal segments',
   showTypeBadge: true,
   defaultHeight: 200,

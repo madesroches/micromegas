@@ -6,6 +6,7 @@ import type { MarkdownCellConfig, CellConfig, CellState } from '../notebook-type
 import { SyntaxEditor } from '@/components/SyntaxEditor'
 import { AvailableVariablesPanel } from '@/components/AvailableVariablesPanel'
 import { substituteMacros, validateMacros } from '../notebook-utils'
+import { FileText } from 'lucide-react'
 
 // =============================================================================
 // Renderer Component
@@ -75,7 +76,7 @@ export const markdownMetadata: CellTypeMetadata = {
   EditorComponent: MarkdownCellEditor,
 
   label: 'Markdown',
-  icon: 'M',
+  icon: <FileText />,
   description: 'Documentation and notes',
   showTypeBadge: false,
   defaultHeight: 150,

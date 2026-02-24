@@ -3,6 +3,10 @@
 This file documents the historical progress of the Micromegas project. For current focus, please see the main [README.md](./README.md).
 
 ## Unreleased
+* **Notebook Enhancements:**
+  * Add transposed table cell type for key-value layout of SQL results
+  * Replace single-letter cell type icons with Lucide components
+  * Stop markdown link clicks from opening cell editor in notebook tables
 * **Analytics Web App:**
   * Add LZ4 compression to Arrow IPC streams for dramatically smaller network transfers
   * Raise FlightSQL client max decoding message size to 100MB

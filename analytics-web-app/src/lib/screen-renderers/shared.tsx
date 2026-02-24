@@ -111,7 +111,7 @@ export function AddCellModal({ isOpen, onClose, onAdd, title = 'Add Cell', exclu
               onClick={() => onAdd(option.type)}
               className="w-full flex items-center gap-3 p-3 rounded-lg hover:bg-app-card transition-colors text-left"
             >
-              <div className="w-10 h-10 bg-app-card rounded-lg flex items-center justify-center text-lg font-semibold text-theme-text-secondary">
+              <div className="w-10 h-10 bg-app-card rounded-lg flex items-center justify-center text-lg font-semibold text-theme-text-secondary [&_svg]:w-5 [&_svg]:h-5">
                 {option.icon}
               </div>
               <div>

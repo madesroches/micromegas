@@ -13,6 +13,7 @@ jest.mock('lucide-react', () => ({
   Plus: () => <span data-testid="plus">+</span>,
   X: () => <span data-testid="x-icon">×</span>,
   ArrowLeft: () => <span data-testid="arrow-left">←</span>,
+  Group: () => <span data-testid="group">⊞</span>,
 }))
 
 // Mock @dnd-kit

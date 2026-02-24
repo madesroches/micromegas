@@ -17,6 +17,7 @@ import { substituteMacros, validateMacros, DEFAULT_SQL } from '../notebook-utils
 import { evaluateVariableExpression } from '../notebook-expression-eval'
 import { getDataSourceList } from '@/lib/data-sources-api'
 import { DataSourceField } from '@/components/DataSourceSelector'
+import { Variable } from 'lucide-react'
 
 /**
  * Parse a default value string into a VariableValue.
@@ -387,7 +388,7 @@ export const variableMetadata: CellTypeMetadata = {
   EditorComponent: VariableCellEditor,
 
   label: 'Variable',
-  icon: 'V',
+  icon: <Variable />,
   description: 'User input (dropdown, text, expression)',
   showTypeBadge: true,
   defaultHeight: 0,

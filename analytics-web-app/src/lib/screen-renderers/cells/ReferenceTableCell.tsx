@@ -16,6 +16,7 @@ import {
 import { usePagination, PaginationBar, DEFAULT_PAGE_SIZE } from '../pagination'
 import { csvToArrowIPC } from './csv-to-arrow'
 import type { Table } from 'apache-arrow'
+import { BookOpen } from 'lucide-react'
 
 // =============================================================================
 // Sorting Utility
@@ -168,7 +169,7 @@ export const referenceTableMetadata: CellTypeMetadata = {
   EditorComponent: ReferenceTableCellEditor,
 
   label: 'Reference Table',
-  icon: 'R',
+  icon: <BookOpen />,
   description: 'Inline CSV data as a queryable table',
   showTypeBadge: true,
   defaultHeight: 200,
