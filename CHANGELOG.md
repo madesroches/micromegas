@@ -92,6 +92,7 @@ This file documents the historical progress of the Micromegas project. For curre
   * Run native and WASM CI checks in parallel
   * Fix wasm-builder to copy full Rust workspace for path dependencies
   * Add build-skip workflow for required check satisfaction
+  * Install clang in wasm-builder Docker image for native dependency compilation
 * **Documentation:**
   * Fix homepage and documentation URLs in Cargo.toml
   * Update README roadmap with v0.20.0 and current notebook focus
