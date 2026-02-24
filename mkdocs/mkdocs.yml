@@ -113,7 +113,7 @@ nav:
     - Build Guide: development/build.md
   - Cost Effectiveness:
     - Overview: cost-effectiveness.md
-    - Cost Modeling: cost-comparisons/cost-modeling.md
+    - Comparison Methodology: cost-comparisons/index.md
     - vs. Datadog: cost-comparisons/datadog.md
     - vs. Dynatrace: cost-comparisons/dynatrace.md
     - vs. Elastic: cost-comparisons/elastic.md
