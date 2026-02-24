@@ -35,27 +35,31 @@ The infrastructure cost for Micromegas comes from standard cloud services:
 
 ## Example Deployment Cost
 
-Here's a real-world cost breakdown for a production Micromegas deployment:
+Here's a real-world cost breakdown for a production Micromegas deployment on AWS Fargate:
 
 ### Data Scale
 
 - **Retention Period:** 90 days
 - **Total Storage:** 8.5 TB in 118 million objects
 - **Log Entries:** 9 billion
-- **Metric Events:** 275 billion  
+- **Metric Events:** 275 billion
 - **Trace Events:** 165 billion
 
 ### Monthly Infrastructure Costs
 
 | Component | Specification | Monthly Cost |
-|-----------|---------------|--------------|
-| **Ingestion Services** | 2 instances × (1 vCPU, 2GB RAM) | ~$30 |
-| **Analytics Service** | 1 instance × (4 vCPU, 8GB RAM) | ~$120 |
-| **Maintenance Daemon** | 1 instance × (4 vCPU, 8GB RAM) | ~$120 |
-| **PostgreSQL Database** | Aurora Serverless (44GB storage) | ~$200 |
-| **Object Storage** | 8.5TB S3 Standard + requests | ~$500 |
-| **Load Balancer** | Application Load Balancer | ~$30 |
-| **Total** | | **~$1,000/month** |
+|-----------|---------------|-------------|
+| **Ingestion Services** | 2 × (1 vCPU, 2 GB) on Fargate | ~$66 |
+| **Analytics Service** | 2 × (4 vCPU, 8 GB) on Fargate | ~$288 |
+| **Maintenance Daemon** | 1 × (4 vCPU, 8 GB) on Fargate | ~$144 |
+| **Analytics Web** | 1 × (0.5 vCPU, 1 GB) on Fargate | ~$18 |
+| **Aurora Serverless v2** | 44 GB storage, 0.5–20 ACU (avg 18.7% ≈ 3.74 ACU) | ~$330 |
+| **S3 Storage** | 8.5 TB @ $0.023/GB | ~$200 |
+| **Application Load Balancer** | Fixed + LCU charges (shared) | ~$25 |
+| **Data Transfer** | Minimal (internal) | ~$10 |
+| **Total** | | **~$1,100/month** |
+
+Resources are sized for redundancy, not peak utilization — a tighter deployment without redundancy would be cheaper. Conversely, autoscaling can add tasks under sustained load.
 
 ### Scale Perspective
 
@@ -95,6 +99,10 @@ Configure retention periods independently for:
 | **Scalability** | Vendor-managed, unpredictable costs | Self-managed, predictable scaling |
 | **Data Ownership** | Third-party hosted | Your cloud account only |
 
+### A Note on Personnel Costs
+
+All cost comparisons focus on platform and infrastructure costs only. Commercial observability platforms are not zero-ops — they require deploying agents, configuring dashboards, managing vendor relationships, and training teams. An integrated in-house solution doesn't cost more in human resources than a fragmented set of off-the-shelf tools. See the [Comparison Methodology](cost-comparisons/index.md) page for details.
+
 ### When Micromegas is Cost Effective
 
 The Micromegas model is particularly advantageous when:
@@ -109,6 +117,7 @@ The Micromegas model is particularly advantageous when:
 
 For in-depth, dollar-for-dollar comparisons with specific platforms:
 
+- [Comparison Methodology](cost-comparisons/index.md)
 - [Micromegas vs. Datadog](cost-comparisons/datadog.md)
 - [Micromegas vs. Dynatrace](cost-comparisons/dynatrace.md)
 - [Micromegas vs. Elastic Observability](cost-comparisons/elastic.md)
@@ -120,7 +129,7 @@ For in-depth, dollar-for-dollar comparisons with specific platforms:
 
 1. **Start small** - Deploy minimal infrastructure and scale as needed
 2. **Monitor usage** - Use cloud billing dashboards to track costs
-3. **Optimize retention** - Balance storage costs with analysis needs  
+3. **Optimize retention** - Balance storage costs with analysis needs
 4. **Leverage tail sampling** - Store everything, process selectively
 5. **Right-size compute** - Match instance types to actual workload demands
 
