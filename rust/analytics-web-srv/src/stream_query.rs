@@ -117,13 +117,13 @@ pub fn substitute_macros(sql: &str, params: &HashMap<String, String>) -> String 
 pub fn encode_schema(
     schema: &Schema,
     tracker: &mut arrow_ipc::writer::DictionaryTracker,
+    options: &IpcWriteOptions,
 ) -> Result<Vec<u8>> {
     let mut buffer = Vec::new();
     let data_gen = IpcDataGenerator::default();
-    let options = IpcWriteOptions::default();
 
-    let encoded = data_gen.schema_to_bytes_with_dictionary_tracker(schema, tracker, &options);
-    write_message(&mut buffer, encoded, &options).context("writing schema message")?;
+    let encoded = data_gen.schema_to_bytes_with_dictionary_tracker(schema, tracker, options);
+    write_message(&mut buffer, encoded, options).context("writing schema message")?;
     Ok(buffer)
 }
 
@@ -131,23 +131,23 @@ pub fn encode_schema(
 pub fn encode_batch(
     batch: &datafusion::arrow::array::RecordBatch,
     tracker: &mut arrow_ipc::writer::DictionaryTracker,
-    compression: &mut CompressionContext,
+    options: &IpcWriteOptions,
 ) -> Result<Vec<u8>> {
     let mut buffer = Vec::new();
     let data_gen = IpcDataGenerator::default();
-    let options = IpcWriteOptions::default();
+    let mut compression = CompressionContext::default();
 
     let (encoded_dicts, encoded_batch) = data_gen
-        .encode(batch, tracker, &options, compression)
+        .encode(batch, tracker, options, &mut compression)
         .context("encoding batch")?;
 
     // Write dictionary batches first (if any)
     for dict in encoded_dicts {
-        write_message(&mut buffer, dict, &options).context("writing dictionary message")?;
+        write_message(&mut buffer, dict, options).context("writing dictionary message")?;
     }
 
     // Write the main batch
-    write_message(&mut buffer, encoded_batch, &options).context("writing batch message")?;
+    write_message(&mut buffer, encoded_batch, options).context("writing batch message")?;
 
     Ok(buffer)
 }
@@ -290,13 +290,15 @@ pub async fn stream_query_handler(
             }
         };
 
-        // Track dictionaries and compression across schema and batches
+        // Track dictionaries across schema and batches
         // Must use same tracker for schema and batches to ensure dictionary IDs align
         let mut dict_tracker = arrow_ipc::writer::DictionaryTracker::new(false);
-        let mut compression = CompressionContext::default();
+        let options = IpcWriteOptions::default()
+            .try_with_compression(Some(arrow_ipc::CompressionType::LZ4_FRAME))
+            .expect("enabling LZ4 compression");
 
         // Encode and send schema
-        let schema_bytes = match encode_schema(&schema, &mut dict_tracker) {
+        let schema_bytes = match encode_schema(&schema, &mut dict_tracker, &options) {
             Ok(bytes) => bytes,
             Err(e) => {
                 yield Ok(json_line(&ErrorFrame {
@@ -320,7 +322,7 @@ pub async fn stream_query_handler(
             ($batch:expr) => {
                 let batch = &$batch;
                 let num_rows = batch.num_rows();
-                let batch_bytes = match encode_batch(batch, &mut dict_tracker, &mut compression) {
+                let batch_bytes = match encode_batch(batch, &mut dict_tracker, &options) {
                     Ok(bytes) => bytes,
                     Err(e) => {
                         yield Ok(json_line(&ErrorFrame {

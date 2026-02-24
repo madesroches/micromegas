@@ -3,7 +3,7 @@
 use analytics_web_srv::stream_query::{
     contains_blocked_function, encode_batch, encode_schema, substitute_macros,
 };
-use arrow_ipc::writer::{CompressionContext, DictionaryTracker};
+use arrow_ipc::writer::{DictionaryTracker, IpcWriteOptions};
 use datafusion::arrow::array::{
     Int32Array, RecordBatch, StringArray, TimestampNanosecondArray, UInt64Array,
 };
@@ -145,6 +145,12 @@ fn test_substitute_macros_no_matching_param() {
 // encode_schema tests
 // =============================================================================
 
+fn create_lz4_options() -> IpcWriteOptions {
+    IpcWriteOptions::default()
+        .try_with_compression(Some(arrow_ipc::CompressionType::LZ4_FRAME))
+        .expect("enabling LZ4 compression")
+}
+
 fn create_test_schema() -> Schema {
     Schema::new(vec![
         Field::new("id", DataType::Int32, false),
@@ -162,7 +168,8 @@ fn create_test_schema() -> Schema {
 fn test_encode_schema_produces_valid_ipc() {
     let schema = create_test_schema();
     let mut tracker = DictionaryTracker::new(false);
-    let ipc_bytes = encode_schema(&schema, &mut tracker).expect("Failed to encode schema");
+    let ipc_bytes = encode_schema(&schema, &mut tracker, &create_lz4_options())
+        .expect("Failed to encode schema");
 
     // IPC bytes should not be empty
     assert!(
@@ -179,7 +186,8 @@ fn test_encode_schema_produces_valid_ipc() {
 fn test_encode_schema_empty_schema() {
     let schema = Schema::empty();
     let mut tracker = DictionaryTracker::new(false);
-    let ipc_bytes = encode_schema(&schema, &mut tracker).expect("Failed to encode empty schema");
+    let ipc_bytes = encode_schema(&schema, &mut tracker, &create_lz4_options())
+        .expect("Failed to encode empty schema");
 
     // Even empty schema should produce valid IPC
     assert!(
@@ -208,7 +216,8 @@ fn test_encode_schema_all_types() {
     ]);
 
     let mut tracker = DictionaryTracker::new(false);
-    let ipc_bytes = encode_schema(&schema, &mut tracker).expect("Failed to encode complex schema");
+    let ipc_bytes = encode_schema(&schema, &mut tracker, &create_lz4_options())
+        .expect("Failed to encode complex schema");
     assert!(!ipc_bytes.is_empty());
 }
 
@@ -244,10 +253,9 @@ fn create_test_batch() -> RecordBatch {
 fn test_encode_batch_produces_valid_ipc() {
     let batch = create_test_batch();
     let mut tracker = DictionaryTracker::new(false);
-    let mut compression = CompressionContext::default();
+    let options = create_lz4_options();
 
-    let ipc_bytes =
-        encode_batch(&batch, &mut tracker, &mut compression).expect("Failed to encode batch");
+    let ipc_bytes = encode_batch(&batch, &mut tracker, &options).expect("Failed to encode batch");
 
     // IPC bytes should not be empty
     assert!(!ipc_bytes.is_empty(), "Batch IPC bytes should not be empty");
@@ -257,10 +265,9 @@ fn test_encode_batch_produces_valid_ipc() {
 fn test_encode_batch_preserves_row_count() {
     let batch = create_test_batch();
     let mut tracker = DictionaryTracker::new(false);
-    let mut compression = CompressionContext::default();
+    let options = create_lz4_options();
 
-    let ipc_bytes =
-        encode_batch(&batch, &mut tracker, &mut compression).expect("Failed to encode batch");
+    let ipc_bytes = encode_batch(&batch, &mut tracker, &options).expect("Failed to encode batch");
 
     // The IPC bytes should be parseable
     // We verify that we have valid data structure
@@ -288,10 +295,10 @@ fn test_encode_batch_empty_batch() {
     .expect("Failed to create empty batch");
 
     let mut tracker = DictionaryTracker::new(false);
-    let mut compression = CompressionContext::default();
+    let options = create_lz4_options();
 
     let ipc_bytes =
-        encode_batch(&batch, &mut tracker, &mut compression).expect("Failed to encode empty batch");
+        encode_batch(&batch, &mut tracker, &options).expect("Failed to encode empty batch");
 
     // Even empty batch should produce valid IPC
     assert!(
@@ -304,7 +311,7 @@ fn test_encode_batch_empty_batch() {
 fn test_encode_multiple_batches_with_tracker() {
     // Test that dictionary tracker properly tracks state across batches
     let mut tracker = DictionaryTracker::new(false);
-    let mut compression = CompressionContext::default();
+    let options = create_lz4_options();
 
     for i in 0..3 {
         let schema = Arc::new(Schema::new(vec![
@@ -318,7 +325,7 @@ fn test_encode_multiple_batches_with_tracker() {
         let batch = RecordBatch::try_new(schema, vec![Arc::new(id_array), Arc::new(value_array)])
             .expect("Failed to create batch");
 
-        let ipc_bytes = encode_batch(&batch, &mut tracker, &mut compression)
+        let ipc_bytes = encode_batch(&batch, &mut tracker, &options)
             .expect("Failed to encode batch in sequence");
 
         assert!(!ipc_bytes.is_empty());
@@ -339,11 +346,11 @@ fn test_encode_schema_and_batch_readable() {
 
     // Use same tracker for schema and batch to ensure dictionary IDs align
     let mut tracker = DictionaryTracker::new(false);
-    let mut compression = CompressionContext::default();
+    let options = create_lz4_options();
 
-    let schema_bytes = encode_schema(&schema, &mut tracker).expect("Failed to encode schema");
-    let batch_bytes =
-        encode_batch(&batch, &mut tracker, &mut compression).expect("Failed to encode batch");
+    let schema_bytes =
+        encode_schema(&schema, &mut tracker, &options).expect("Failed to encode schema");
+    let batch_bytes = encode_batch(&batch, &mut tracker, &options).expect("Failed to encode batch");
 
     // Verify we have valid IPC data
     assert!(!schema_bytes.is_empty());

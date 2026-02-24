@@ -1,5 +1,8 @@
 use anyhow::{Context, Result};
-use arrow_flight::{decode::FlightRecordBatchStream, sql::client::FlightSqlServiceClient};
+use arrow_flight::{
+    decode::FlightRecordBatchStream, flight_service_client::FlightServiceClient,
+    sql::client::FlightSqlServiceClient,
+};
 use datafusion::arrow::{array::RecordBatch, datatypes::SchemaRef};
 use futures::stream::StreamExt;
 use micromegas_analytics::time::TimeRange;
@@ -25,7 +28,9 @@ impl Client {
     ///
     /// * `channel` - The gRPC channel to use for communication.
     pub fn new(channel: Channel) -> Self {
-        let inner = FlightSqlServiceClient::new(channel);
+        let flight_client =
+            FlightServiceClient::new(channel).max_decoding_message_size(100 * 1024 * 1024);
+        let inner = FlightSqlServiceClient::new_from_inner(flight_client);
         Self { inner }
     }
 

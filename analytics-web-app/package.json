@@ -29,6 +29,7 @@
     "d3-dsv": "^3.0.1",
     "date-fns": "^2.30.0",
     "jsep": "^1.4.0",
+    "lz4js": "^0.2.0",
     "lucide-react": "^0.292.0",
     "micromegas-datafusion-wasm": "file:src/lib/datafusion-wasm",
     "react": "^18.3.0",
