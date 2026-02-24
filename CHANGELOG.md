@@ -3,6 +3,9 @@
 This file documents the historical progress of the Micromegas project. For current focus, please see the main [README.md](./README.md).
 
 ## Unreleased
+* **Analytics Web App:**
+  * Add LZ4 compression to Arrow IPC streams for dramatically smaller network transfers
+  * Raise FlightSQL client max decoding message size to 100MB
 * **Python CLI:**
   * Add `micromegas-query` and `micromegas-logout` as installed CLI entry points via `pip install micromegas`
   * Move CLI module into package directory for proper entry point resolution
