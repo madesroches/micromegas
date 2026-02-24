@@ -231,7 +231,7 @@ export function OverrideCell({ format, row, columns, variables = {} }: OverrideC
         components={{
           // Render links with proper security attributes
           a: ({ href, children }) => (
-            <a href={href} rel="noopener noreferrer">
+            <a href={href} rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>
               {children}
             </a>
           ),
