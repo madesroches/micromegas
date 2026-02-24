@@ -130,6 +130,7 @@ FROM blocks
 WHERE process_id = '$process_id'
   AND array_has("streams.tags", 'cpu')
 ORDER BY name, begin`,
+  transposed: `SELECT 1 as value`,
 }
 
 // ============================================================================

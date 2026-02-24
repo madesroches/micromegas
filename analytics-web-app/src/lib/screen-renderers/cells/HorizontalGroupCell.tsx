@@ -26,6 +26,7 @@ import {
   ChevronRight,
   Plus,
   ArrowLeft,
+  Group,
 } from 'lucide-react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import type { CellTypeMetadata, CellRendererProps, CellEditorProps } from '../cell-registry'
@@ -644,7 +645,7 @@ export function HorizontalGroupCellEditor({
                   key={child.name}
                   className="flex items-center gap-1.5 px-2 py-1.5 bg-app-card rounded-md group"
                 >
-                  <span className="text-[10px] px-1 py-0.5 rounded bg-app-panel text-theme-text-secondary uppercase font-medium shrink-0">
+                  <span className="inline-flex items-center justify-center text-[10px] px-1 py-0.5 rounded bg-app-panel text-theme-text-secondary uppercase font-medium shrink-0 [&_svg]:w-3 [&_svg]:h-3">
                     {meta.icon}
                   </span>
                   <button
@@ -725,7 +726,7 @@ export const hgMetadata: CellTypeMetadata = {
   EditorComponent: HorizontalGroupCellEditorWrapper,
 
   label: 'Group',
-  icon: 'H',
+  icon: <Group />,
   description: 'Arrange cells side by side in a row',
   showTypeBadge: true,
   defaultHeight: 300,

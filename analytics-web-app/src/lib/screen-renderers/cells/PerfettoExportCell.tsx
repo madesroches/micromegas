@@ -349,7 +349,7 @@ export const perfettoExportMetadata: CellTypeMetadata = {
   EditorComponent: PerfettoExportCellEditor,
 
   label: 'Perfetto Export',
-  icon: 'E',
+  icon: <Download />,
   description: 'Export spans to Perfetto trace viewer',
   showTypeBadge: true,
   defaultHeight: 80,

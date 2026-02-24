@@ -1,4 +1,5 @@
-import React, { useMemo, useCallback } from 'react'
+import { useMemo } from 'react'
+import { TableProperties } from 'lucide-react'
 import type {
   CellTypeMetadata,
   CellRendererProps,
@@ -10,31 +11,26 @@ import { AvailableVariablesPanel } from '@/components/AvailableVariablesPanel'
 import { DocumentationLink, QUERY_GUIDE_URL } from '@/components/DocumentationLink'
 import { SyntaxEditor } from '@/components/SyntaxEditor'
 import { substituteMacros, DEFAULT_SQL } from '../notebook-utils'
-import { usePagination, PaginationBar, DEFAULT_PAGE_SIZE } from '../pagination'
-import { classifyLogColumns, renderLogColumn } from '../log-utils'
-import { ScrollText } from 'lucide-react'
+import { formatCell } from '../table-utils'
 
 // =============================================================================
 // Renderer Component
 // =============================================================================
 
-export function LogCell({ data, status, options, onOptionsChange }: CellRendererProps) {
+export function TransposedTableCell({ data, status }: CellRendererProps) {
   const table = data[0]
 
-  const columns = useMemo(() => {
-    if (!table) return []
-    return classifyLogColumns(table.schema.fields)
+  const rows = useMemo(() => {
+    if (!table || table.numRows === 0) return []
+    return table.schema.fields.map((field) => ({
+      name: field.name,
+      type: field.type,
+      values: Array.from({ length: table.numRows }, (_, i) => {
+        const row = table.get(i)
+        return row ? row[field.name] : null
+      }),
+    }))
   }, [table])
-
-  const numRows = table?.numRows ?? 0
-
-  // Pagination
-  const pageSize = (options?.pageSize as number | undefined) ?? DEFAULT_PAGE_SIZE
-  const handlePageSizeChange = useCallback(
-    (size: number) => onOptionsChange({ ...options, pageSize: size }),
-    [options, onOptionsChange],
-  )
-  const pagination = usePagination(numRows, pageSize, handlePageSizeChange)
 
   if (status === 'loading') {
     return (
@@ -45,32 +41,30 @@ export function LogCell({ data, status, options, onOptionsChange }: CellRenderer
     )
   }
 
-  if (numRows === 0) {
+  if (!table || table.numRows === 0) {
     return (
-      <div className="text-center py-8 text-theme-text-muted text-sm">No log entries found</div>
+      <div className="text-center py-8 text-theme-text-muted text-sm">No data available</div>
     )
   }
 
   return (
-    <div className="flex flex-col h-full font-mono text-[12px]">
-      <div className="flex-1 overflow-auto min-h-0">
-        {Array.from({ length: pagination.endRow - pagination.startRow }, (_, i) => {
-          const rowIdx = pagination.startRow + i
-          const row = table!.get(rowIdx)
-          if (!row) return null
-          return (
-            <div
-              key={rowIdx}
-              className={`flex px-2 py-0.5 hover:bg-app-card/50 transition-colors${i % 2 === 0 ? '' : ' bg-app-card/30'}`}
-            >
-              {columns.map((col) => (
-                <React.Fragment key={col.name}>{renderLogColumn(col, row)}</React.Fragment>
+    <div className="h-full overflow-auto">
+      <table className="w-full text-sm">
+        <tbody>
+          {rows.map((row) => (
+            <tr key={row.name} className="border-b border-theme-border">
+              <td className="px-3 py-1.5 text-theme-text-muted font-medium whitespace-nowrap align-top">
+                {row.name}
+              </td>
+              {row.values.map((value, colIdx) => (
+                <td key={colIdx} className="px-3 py-1.5 text-theme-text-primary">
+                  {formatCell(value, row.type)}
+                </td>
               ))}
-            </div>
-          )
-        })}
-      </div>
-      <PaginationBar pagination={pagination} />
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   )
 }
@@ -79,8 +73,8 @@ export function LogCell({ data, status, options, onOptionsChange }: CellRenderer
 // Editor Component
 // =============================================================================
 
-function LogCellEditor({ config, onChange, variables, timeRange }: CellEditorProps) {
-  const logConfig = config as QueryCellConfig
+function TransposedTableCellEditor({ config, onChange, variables, timeRange }: CellEditorProps) {
+  const transposedConfig = config as QueryCellConfig
 
   return (
     <>
@@ -89,10 +83,10 @@ function LogCellEditor({ config, onChange, variables, timeRange }: CellEditorPro
           SQL Query
         </label>
         <SyntaxEditor
-          value={logConfig.sql}
-          onChange={(sql) => onChange({ ...logConfig, sql })}
+          value={transposedConfig.sql}
+          onChange={(sql) => onChange({ ...transposedConfig, sql })}
           language="sql"
-          placeholder="SELECT time, level, target, msg FROM log_entries ..."
+          placeholder="SELECT * FROM ..."
           minHeight="150px"
         />
       </div>
@@ -107,21 +101,21 @@ function LogCellEditor({ config, onChange, variables, timeRange }: CellEditorPro
 // =============================================================================
 
 // eslint-disable-next-line react-refresh/only-export-components
-export const logMetadata: CellTypeMetadata = {
-  renderer: LogCell,
-  EditorComponent: LogCellEditor,
+export const transposedTableMetadata: CellTypeMetadata = {
+  renderer: TransposedTableCell,
+  EditorComponent: TransposedTableCellEditor,
 
-  label: 'Log',
-  icon: <ScrollText />,
-  description: 'Log entries viewer with levels',
+  label: 'Transposed',
+  icon: <TableProperties />,
+  description: 'SQL results in transposed key-value layout',
   showTypeBadge: true,
   defaultHeight: 300,
 
   canBlockDownstream: true,
 
   createDefaultConfig: () => ({
-    type: 'log' as const,
-    sql: DEFAULT_SQL.log,
+    type: 'transposed' as const,
+    sql: DEFAULT_SQL.transposed,
   }),
 
   execute: async (config: CellConfig, { variables, timeRange, runQuery }: CellExecutionContext) => {

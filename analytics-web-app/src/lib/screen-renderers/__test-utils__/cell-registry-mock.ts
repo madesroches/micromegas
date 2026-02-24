@@ -85,6 +85,14 @@ const BASE_METADATA = {
     defaultHeight: 300,
     canBlockDownstream: false,
   },
+  transposed: {
+    label: 'Transposed',
+    icon: 'Tr',
+    description: 'SQL results in transposed key-value layout',
+    showTypeBadge: true,
+    defaultHeight: 300,
+    canBlockDownstream: true,
+  },
 } as const
 
 type CellType = keyof typeof BASE_METADATA & string
@@ -211,6 +219,9 @@ export function createCellRegistryMock(options: MockOptions = {}) {
       case 'hg':
         meta.createDefaultConfig = () => ({ type: 'hg', children: [] })
         break
+      case 'transposed':
+        meta.createDefaultConfig = () => ({ type: 'transposed', sql: DEFAULT_SQL.transposed })
+        break
     }
 
     // Add execute method (except markdown and hg which don't execute)
@@ -237,6 +248,7 @@ export function createCellRegistryMock(options: MockOptions = {}) {
     markdown: buildMetadata('markdown'),
     variable: buildMetadata('variable'),
     hg: buildMetadata('hg'),
+    transposed: buildMetadata('transposed'),
   }
 
   const mock: Record<string, unknown> = {

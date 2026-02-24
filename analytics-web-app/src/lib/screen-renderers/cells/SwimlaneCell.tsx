@@ -12,6 +12,7 @@ import { DocumentationLink, QUERY_GUIDE_URL } from '@/components/DocumentationLi
 import { SyntaxEditor } from '@/components/SyntaxEditor'
 import { substituteMacros, validateMacros, DEFAULT_SQL } from '../notebook-utils'
 import { timestampToMs } from '@/lib/arrow-utils'
+import { AlignCenter } from 'lucide-react'
 
 // =============================================================================
 // Constants
@@ -440,7 +441,7 @@ export const swimlaneMetadata: CellTypeMetadata = {
   EditorComponent: SwimlaneCellEditor,
 
   label: 'Swimlane',
-  icon: 'S',
+  icon: <AlignCenter />,
   description: 'Horizontal lanes with time segments',
   showTypeBadge: true,
   defaultHeight: 300,

@@ -339,7 +339,7 @@ describe('perfettoExportMetadata', () => {
     })
 
     it('should have correct icon', () => {
-      expect(perfettoExportMetadata.icon).toBe('E')
+      expect(perfettoExportMetadata.icon).toBeTruthy()
     })
 
     it('should have correct description', () => {

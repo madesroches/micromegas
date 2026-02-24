@@ -13,6 +13,7 @@ import { AvailableVariablesPanel } from '@/components/AvailableVariablesPanel'
 import { DocumentationLink, QUERY_GUIDE_URL } from '@/components/DocumentationLink'
 import { SyntaxEditor } from '@/components/SyntaxEditor'
 import { DataSourceSelector } from '@/components/DataSourceSelector'
+import { BarChart3 } from 'lucide-react'
 import { substituteMacros, validateMacros, DEFAULT_SQL } from '../notebook-utils'
 
 // =============================================================================
@@ -412,7 +413,7 @@ export const chartMetadata: CellTypeMetadata = {
   EditorComponent: ChartCellEditor,
 
   label: 'Chart',
-  icon: 'C',
+  icon: <BarChart3 />,
   description: 'X/Y chart (line, bar, etc.)',
   showTypeBadge: true,
   defaultHeight: 250,

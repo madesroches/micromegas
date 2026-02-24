@@ -1,4 +1,5 @@
 import { useCallback, useMemo } from 'react'
+import { Table2 } from 'lucide-react'
 import type {
   CellTypeMetadata,
   CellRendererProps,
@@ -198,7 +199,7 @@ export const tableMetadata: CellTypeMetadata = {
   EditorComponent: TableCellEditor,
 
   label: 'Table',
-  icon: 'T',
+  icon: <Table2 />,
   description: 'Generic SQL results as a table',
   showTypeBadge: true,
   defaultHeight: 300,
