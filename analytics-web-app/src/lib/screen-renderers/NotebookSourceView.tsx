@@ -11,6 +11,7 @@ interface NotebookSourceViewProps {
 export function NotebookSourceView({ notebookConfig, onConfigChange, onBack }: NotebookSourceViewProps) {
   const [editingSource, setEditingSource] = useState(false)
   const [sourceText, setSourceText] = useState('')
+  const [baselineJson, setBaselineJson] = useState('')
   const [copied, setCopied] = useState(false)
 
   const jsonError = useMemo(() => {
@@ -34,7 +35,7 @@ export function NotebookSourceView({ notebookConfig, onConfigChange, onBack }: N
 
   const configJson = useMemo(() => JSON.stringify(notebookConfig, null, 2), [notebookConfig])
 
-  const hasUnsavedEdits = editingSource && sourceText !== configJson
+  const hasUnsavedEdits = editingSource && sourceText !== baselineJson
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -111,6 +112,7 @@ export function NotebookSourceView({ notebookConfig, onConfigChange, onBack }: N
             onClick={() => {
               setEditingSource(true)
               setSourceText(configJson)
+              setBaselineJson(configJson)
             }}
             className="p-1.5 text-theme-text-muted hover:text-theme-text-primary rounded transition-colors"
             title="Edit source"
