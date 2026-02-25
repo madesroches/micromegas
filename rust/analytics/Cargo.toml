@@ -11,7 +11,7 @@ authors.workspace = true
 
 [dependencies]
 micromegas-datafusion-extensions.workspace = true
-micromegas-telemetry.workspace = true
+micromegas-telemetry = { workspace = true, features = ["server"] }
 micromegas-tracing = { workspace = true, features = ["tokio"] }
 micromegas-transit.workspace = true
 micromegas-ingestion.workspace = true

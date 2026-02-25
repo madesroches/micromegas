@@ -9,17 +9,23 @@ repository.workspace = true
 license.workspace = true
 authors.workspace = true
 
-[dependencies]
-micromegas-transit.workspace = true
+[features]
+default = []
+server = ["dep:bytes", "dep:futures", "dep:object_store", "dep:sqlx", "dep:url"]
 
+[dependencies]
+# Always required
 anyhow.workspace = true
-bytes.workspace = true
 chrono.workspace = true
 ciborium.workspace = true
-futures.workspace = true
 lz4.workspace = true
-object_store.workspace = true
+micromegas-transit.workspace = true
 serde.workspace = true
-sqlx.workspace = true
-url.workspace = true
 uuid.workspace = true
+
+# Server-only
+bytes = { workspace = true, optional = true }
+futures = { workspace = true, optional = true }
+object_store = { workspace = true, optional = true }
+sqlx = { workspace = true, optional = true }
+url = { workspace = true, optional = true }

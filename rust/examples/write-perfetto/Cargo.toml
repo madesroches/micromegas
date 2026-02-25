@@ -20,7 +20,7 @@ name = "validate-perfetto"
 path = "src/validate_trace.rs"
 
 [dependencies]
-micromegas.workspace = true
+micromegas = { workspace = true, features = ["server"] }
 micromegas-analytics.workspace = true
 micromegas-perfetto.workspace = true
 

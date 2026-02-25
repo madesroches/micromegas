@@ -5,13 +5,13 @@
 //!
 //!
 //! ```text
-//! ┌─────────────────┐       
+//! ┌─────────────────┐
 //! │ rust application│──────▶
 //! └─────────────────┘       ┌─────────┐     ┌───────┐     ┌─────────┐     ┌──────────┐
 //!                           │ingestion│────▶│pg & S3│◀────│analytics│◀────│python API│
 //! ┌─────────────────┐       └─────────┘     └───────┘     └─────────┘     └──────────┘
 //! │ unreal engine   │──────▶
-//! └─────────────────┘      
+//! └─────────────────┘
 //!
 //! ```
 //! ## Rust Instrumentation
@@ -97,21 +97,25 @@
 #![allow(missing_docs)]
 #![allow(clippy::new_without_default)]
 
-/// re-exports
-pub use arrow_flight;
-pub use axum;
+/// re-exports (always available)
 pub use chrono;
-pub use datafusion;
-pub use object_store;
-pub use prost;
-pub use sqlx;
-pub use tonic;
 pub use uuid;
 
-/// authentication providers
-pub mod auth {
-    pub use micromegas_auth::*;
-}
+/// re-exports (server-only)
+#[cfg(feature = "server")]
+pub use arrow_flight;
+#[cfg(feature = "server")]
+pub use axum;
+#[cfg(feature = "server")]
+pub use datafusion;
+#[cfg(feature = "server")]
+pub use object_store;
+#[cfg(feature = "server")]
+pub use prost;
+#[cfg(feature = "server")]
+pub use sqlx;
+#[cfg(feature = "server")]
+pub use tonic;
 
 /// telemetry protocol
 pub mod telemetry {
@@ -128,29 +132,38 @@ pub mod tracing {
     pub use micromegas_tracing::*;
 }
 
+// Re-export proc macros at the top level for easy access
+pub use micromegas_proc_macros::*;
+
+/// authentication providers
+#[cfg(feature = "server")]
+pub mod auth {
+    pub use micromegas_auth::*;
+}
+
 /// records telemetry in data lake
+#[cfg(feature = "server")]
 pub mod ingestion {
     pub use micromegas_ingestion::*;
 }
 
 /// makes the telemetry data lake accessible and useful
+#[cfg(feature = "server")]
 pub mod analytics {
     pub use micromegas_analytics::*;
 }
 
 /// perfetto protobufs
+#[cfg(feature = "server")]
 pub mod perfetto {
     pub use micromegas_perfetto::*;
 }
 
-// Re-export proc macros at the top level for easy access
-pub use micromegas_proc_macros::*;
-
-/// Embedable ingestion, analytics and maintenance services.
-/// The user is expected to provide their own authentication.
+#[cfg(feature = "server")]
 pub mod servers;
 
-/// rust analytics client
+#[cfg(feature = "server")]
 pub mod client;
 
+#[cfg(feature = "server")]
 pub mod utils;
