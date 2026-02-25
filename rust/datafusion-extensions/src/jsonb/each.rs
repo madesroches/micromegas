@@ -137,6 +137,7 @@ fn extract_all_jsonb_bytes_from_column(
                     DataFusionError::Execution("failed to cast column to BinaryArray".into())
                 })?;
             Ok((0..binary_array.len())
+                .filter(|&i| !binary_array.is_null(i))
                 .map(|i| binary_array.value(i).to_vec())
                 .collect())
         }
@@ -159,6 +160,7 @@ fn extract_all_jsonb_bytes_from_column(
                     )
                 })?;
             Ok((0..dict_array.len())
+                .filter(|&i| !dict_array.is_null(i))
                 .map(|i| {
                     let key_index = dict_array.keys().value(i) as usize;
                     binary_values.value(key_index).to_vec()
