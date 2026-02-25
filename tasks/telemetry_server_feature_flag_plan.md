@@ -80,10 +80,12 @@ Add a `server` feature that gates the heavy crate dependencies, server/client/ut
 [features]
 default = []
 server = [
+    "dep:anyhow",
     "dep:arrow-flight",
     "dep:async-stream",
     "dep:async-trait",
     "dep:axum",
+    "dep:bytes",
     "dep:datafusion",
     "dep:futures",
     "dep:http",
@@ -114,11 +116,12 @@ serde.workspace = true
 uuid.workspace = true
 
 # Server-only (optional)
+anyhow = { workspace = true, optional = true }
 arrow-flight = { workspace = true, optional = true }
 async-stream = { workspace = true, optional = true }
 async-trait = { workspace = true, optional = true }
 axum = { workspace = true, optional = true }
-bytes.workspace = true
+bytes = { workspace = true, optional = true }
 datafusion = { workspace = true, optional = true }
 futures = { workspace = true, optional = true }
 http = { workspace = true, optional = true }
@@ -225,7 +228,12 @@ micromegas-telemetry = { workspace = true, features = ["server"] }
 micromegas-telemetry = { workspace = true, features = ["server"] }
 ```
 
-**Server binaries** (`telemetry-ingestion-srv`, `flight-sql-srv`, `telemetry-admin-cli`) that depend on the `micromegas` umbrella crate:
+**Server binaries** (`telemetry-ingestion-srv`, `flight-sql-srv`, `telemetry-admin-cli`, `analytics-web-srv`, `http-gateway`, `uri-handler`) that depend on the `micromegas` umbrella crate:
+```toml
+micromegas = { workspace = true, features = ["server"] }
+```
+
+**`rust/examples/write-perfetto/Cargo.toml`** — also needs the server feature (uses `client` module, `datafusion`, `tonic`):
 ```toml
 micromegas = { workspace = true, features = ["server"] }
 ```
@@ -269,7 +277,13 @@ No changes to workspace dependency declarations. Features are specified at the c
 - `rust/ingestion/Cargo.toml`
 - `rust/public/Cargo.toml`
 - `rust/public/src/lib.rs`
-- Server binary Cargo.toml files that depend on `micromegas` (need to identify all of them)
+- `rust/telemetry-ingestion-srv/Cargo.toml`
+- `rust/flight-sql-srv/Cargo.toml`
+- `rust/telemetry-admin-cli/Cargo.toml`
+- `rust/analytics-web-srv/Cargo.toml`
+- `rust/http-gateway/Cargo.toml`
+- `rust/uri-handler/Cargo.toml`
+- `rust/examples/write-perfetto/Cargo.toml`
 
 ## Trade-offs
 
@@ -295,7 +309,8 @@ No changes to workspace dependency declarations. Features are specified at the c
 5. `cargo test` — all existing tests pass
 6. `cargo clippy --workspace -- -D warnings` — no new warnings
 
-## Open Questions
+## Resolved Questions
 
-1. **`bytes` in public crate**: `bytes` is currently a direct dep of `micromegas` public crate (not through optional deps). Need to check if it's used outside server modules — if so, it stays as always-required. Listed it as always-required above since it's a lightweight dep.
-2. **Server binary crates**: Need to enumerate all binaries that depend on the `micromegas` umbrella crate to add `features = ["server"]`. Likely: `telemetry-ingestion-srv`, `flight-sql-srv`, `telemetry-admin-cli`, `analytics-web-srv`.
+1. **`bytes` in public crate**: Only used in server-only modules (`servers/ingestion.rs`, `servers/axum_utils.rs`, `servers/perfetto/perfetto_server.rs`). Made optional and gated behind `server` feature.
+2. **`anyhow` in public crate**: Only used in server-only modules (`client/`, `servers/`, `utils/`). Made optional and gated behind `server` feature.
+3. **Server binary crates**: All crates depending on the `micromegas` umbrella: `telemetry-ingestion-srv`, `flight-sql-srv`, `telemetry-admin-cli`, `analytics-web-srv`, `http-gateway`, `uri-handler`, `examples/write-perfetto`.
