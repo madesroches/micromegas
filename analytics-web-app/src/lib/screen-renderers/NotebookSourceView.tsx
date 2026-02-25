@@ -32,7 +32,9 @@ export function NotebookSourceView({ notebookConfig, onConfigChange, onBack }: N
     onBack()
   }, [onBack])
 
-  const hasUnsavedEdits = editingSource && sourceText !== JSON.stringify(notebookConfig, null, 2)
+  const configJson = useMemo(() => JSON.stringify(notebookConfig, null, 2), [notebookConfig])
+
+  const hasUnsavedEdits = editingSource && sourceText !== configJson
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -67,7 +69,7 @@ export function NotebookSourceView({ notebookConfig, onConfigChange, onBack }: N
         <div className="flex-1" />
         <button
           onClick={async () => {
-            const text = editingSource ? sourceText : JSON.stringify(notebookConfig, null, 2)
+            const text = editingSource ? sourceText : configJson
             try {
               await navigator.clipboard.writeText(text)
               setCopied(true)
@@ -85,6 +87,7 @@ export function NotebookSourceView({ notebookConfig, onConfigChange, onBack }: N
           <>
             <button
               onClick={() => {
+                if (hasUnsavedEdits && !window.confirm('Discard unsaved changes?')) return
                 setEditingSource(false)
                 setSourceText('')
               }}
@@ -107,7 +110,7 @@ export function NotebookSourceView({ notebookConfig, onConfigChange, onBack }: N
           <button
             onClick={() => {
               setEditingSource(true)
-              setSourceText(JSON.stringify(notebookConfig, null, 2))
+              setSourceText(configJson)
             }}
             className="p-1.5 text-theme-text-muted hover:text-theme-text-primary rounded transition-colors"
             title="Edit source"
@@ -132,7 +135,7 @@ export function NotebookSourceView({ notebookConfig, onConfigChange, onBack }: N
         </div>
       ) : (
         <pre className="bg-app-card border border-theme-border rounded-lg p-4 overflow-auto text-xs font-mono text-theme-text-secondary whitespace-pre flex-1 min-h-0">
-          {JSON.stringify(notebookConfig, null, 2)}
+          {configJson}
         </pre>
       )}
     </div>
