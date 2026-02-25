@@ -342,6 +342,42 @@ FROM processes
 LIMIT 5;
 ```
 
+##### `jsonb_each(jsonb_object)`
+
+Expands a JSONB object into rows of key-value pairs. This is a table-returning function (UDTF) that produces one row per object entry.
+
+**Syntax:**
+```sql
+SELECT key, value
+FROM jsonb_each(jsonb_subquery)
+```
+
+**Parameters:**
+
+- `jsonb_object` (Binary/JSONB): A JSONB object value or a subquery returning a single JSONB column. Returns an error if the input is not an object (e.g., array, scalar, or null).
+
+**Returns:**
+
+| Column | Type | Description |
+|--------|------|-------------|
+| key | Utf8 | Object key name |
+| value | Binary (JSONB) | Value as JSONB bytes, composable with `jsonb_as_string`, `jsonb_format_json`, etc. |
+
+**Examples:**
+```sql
+-- Expand process properties into rows
+SELECT key, jsonb_as_string(value) as value
+FROM jsonb_each(
+  (SELECT properties FROM processes WHERE process_id = 'my_process_123')
+)
+
+-- Use with other JSONB functions for nested values
+SELECT key, jsonb_format_json(value) as json_value
+FROM jsonb_each(
+  (SELECT jsonb_parse('{"name": "server", "port": 8080, "tags": ["prod", "us-east"]}'))
+)
+```
+
 #### Data Access Functions
 
 ##### `get_payload(process_id, stream_id, block_id)`

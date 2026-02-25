@@ -15,3 +15,6 @@ async-trait.workspace = true
 datafusion.workspace = true
 jsonb.workspace = true
 micromegas-tracing.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true

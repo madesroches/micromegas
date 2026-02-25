@@ -1,5 +1,7 @@
 /// type conversions
 pub mod cast;
+/// expand object into key-value rows
+pub mod each;
 /// jsonb->json
 pub mod format_json;
 /// get by name

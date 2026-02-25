@@ -21,6 +21,7 @@ use histogram::{
 };
 use jsonb::{
     cast::{make_jsonb_as_f64_udf, make_jsonb_as_i64_udf, make_jsonb_as_string_udf},
+    each::JsonbEachTableFunction,
     format_json::make_jsonb_format_json_udf,
     get::make_jsonb_get_udf,
     keys::make_jsonb_object_keys_udf,
@@ -51,6 +52,7 @@ pub fn register_extension_udfs(ctx: &SessionContext) {
     ctx.register_udf(make_jsonb_as_f64_udf());
     ctx.register_udf(make_jsonb_as_i64_udf());
     ctx.register_udf(make_jsonb_object_keys_udf());
+    ctx.register_udtf("jsonb_each", Arc::new(JsonbEachTableFunction::new()));
 
     ctx.register_udf(ScalarUDF::from(PropertyGet::new()));
     ctx.register_udf(ScalarUDF::from(PropertiesToArray::new()));
