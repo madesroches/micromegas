@@ -11,14 +11,19 @@ import { AvailableVariablesPanel } from '@/components/AvailableVariablesPanel'
 import { DocumentationLink, QUERY_GUIDE_URL } from '@/components/DocumentationLink'
 import { SyntaxEditor } from '@/components/SyntaxEditor'
 import { substituteMacros, DEFAULT_SQL } from '../notebook-utils'
-import { formatCell } from '../table-utils'
+import { formatCell, HiddenColumnsBar, RowContextMenu, useRowManagement } from '../table-utils'
 
 // =============================================================================
 // Renderer Component
 // =============================================================================
 
-export function TransposedTableCell({ data, status }: CellRendererProps) {
+export function TransposedTableCell({ data, status, options, onOptionsChange }: CellRendererProps) {
   const table = data[0]
+
+  const { hiddenRows, handleHideRow, handleRestoreRow, handleRestoreAll } = useRowManagement(
+    options || {},
+    onOptionsChange
+  )
 
   const rows = useMemo(() => {
     if (!table || table.numRows === 0) return []
@@ -31,6 +36,12 @@ export function TransposedTableCell({ data, status }: CellRendererProps) {
       }),
     }))
   }, [table])
+
+  const visibleRows = useMemo(() => {
+    if (hiddenRows.length === 0) return rows
+    const hiddenSet = new Set(hiddenRows)
+    return rows.filter((row) => !hiddenSet.has(row.name))
+  }, [rows, hiddenRows])
 
   if (status === 'loading') {
     return (
@@ -48,23 +59,33 @@ export function TransposedTableCell({ data, status }: CellRendererProps) {
   }
 
   return (
-    <div className="h-full overflow-auto">
-      <table className="w-full text-sm">
-        <tbody>
-          {rows.map((row) => (
-            <tr key={row.name} className="border-b border-theme-border">
-              <td className="px-3 py-1.5 text-theme-text-muted font-medium whitespace-nowrap align-top">
-                {row.name}
-              </td>
-              {row.values.map((value, colIdx) => (
-                <td key={colIdx} className="px-3 py-1.5 text-theme-text-primary">
-                  {formatCell(value, row.type)}
-                </td>
-              ))}
-            </tr>
-          ))}
-        </tbody>
-      </table>
+    <div className="flex flex-col h-full">
+      <HiddenColumnsBar
+        hiddenColumns={hiddenRows}
+        onRestore={handleRestoreRow}
+        onRestoreAll={handleRestoreAll}
+        compact
+      />
+      <div className="flex-1 overflow-auto min-h-0">
+        <table className="w-full text-sm">
+          <tbody>
+            {visibleRows.map((row) => (
+              <tr key={row.name} className="border-b border-theme-border">
+                <RowContextMenu rowName={row.name} onHide={handleHideRow}>
+                  <td className="px-3 py-1.5 text-theme-text-muted font-medium whitespace-nowrap align-top">
+                    {row.name}
+                  </td>
+                </RowContextMenu>
+                {row.values.map((value, colIdx) => (
+                  <td key={colIdx} className="px-3 py-1.5 text-theme-text-primary">
+                    {formatCell(value, row.type)}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   )
 }

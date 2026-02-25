@@ -86,7 +86,8 @@ Rename the `"Hidden:"` label parameter or add a `label` prop to `HiddenColumnsBa
 - Call `useRowManagement(options || {}, onOptionsChange)`
 - Filter `rows` through `hiddenRows` set
 - Wrap each row header `<td>` in `RowContextMenu`
-- Render `HiddenColumnsBar` above the table (compact, passing `hiddenRows` as `hiddenColumns`)
+- Restructure container: replace single `<div className="h-full overflow-auto">` with flex-col layout matching TableCell/ReferenceTableCell — outer `<div className="flex flex-col h-full">`, `HiddenColumnsBar` outside the scroll area, table inside `<div className="flex-1 overflow-auto min-h-0">`
+- Render `HiddenColumnsBar` above the scrollable div (compact, passing `hiddenRows` as `hiddenColumns`)
 
 ### Step 4: Tests
 

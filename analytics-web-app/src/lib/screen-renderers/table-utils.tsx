@@ -626,6 +626,79 @@ export function useColumnManagement(
 }
 
 // =============================================================================
+// Row Management Hook (for transposed tables)
+// =============================================================================
+
+interface RowManagementConfig {
+  hiddenRows?: string[]
+  [key: string]: unknown
+}
+
+export function useRowManagement(
+  config: RowManagementConfig,
+  onChange: (config: RowManagementConfig) => void
+) {
+  const hiddenRows = config.hiddenRows || []
+
+  const handleHideRow = useCallback(
+    (rowName: string) => {
+      const hidden = config.hiddenRows || []
+      if (hidden.includes(rowName)) return
+      onChange({ ...config, hiddenRows: [...hidden, rowName] })
+    },
+    [config, onChange]
+  )
+
+  const handleRestoreRow = useCallback(
+    (rowName: string) => {
+      const hidden = config.hiddenRows || []
+      onChange({ ...config, hiddenRows: hidden.filter((r) => r !== rowName) })
+    },
+    [config, onChange]
+  )
+
+  const handleRestoreAll = useCallback(() => {
+    onChange({ ...config, hiddenRows: [] })
+  }, [config, onChange])
+
+  return {
+    hiddenRows,
+    handleHideRow,
+    handleRestoreRow,
+    handleRestoreAll,
+  }
+}
+
+// =============================================================================
+// Row Context Menu (for transposed tables)
+// =============================================================================
+
+export interface RowContextMenuProps {
+  rowName: string
+  onHide: (name: string) => void
+  children: React.ReactNode
+}
+
+export function RowContextMenu({ rowName, onHide, children }: RowContextMenuProps) {
+  return (
+    <ContextMenu.Root>
+      <ContextMenu.Trigger asChild>{children}</ContextMenu.Trigger>
+      <ContextMenu.Portal>
+        <ContextMenu.Content className="min-w-[180px] bg-app-panel border border-theme-border rounded-md shadow-lg py-1 z-50">
+          <ContextMenu.Item
+            onSelect={() => onHide(rowName)}
+            className="flex items-center gap-2 px-3 py-2 text-sm text-theme-text-secondary hover:bg-theme-border/50 cursor-pointer outline-none"
+          >
+            <EyeOff className="w-4 h-4" />
+            Hide Row
+          </ContextMenu.Item>
+        </ContextMenu.Content>
+      </ContextMenu.Portal>
+    </ContextMenu.Root>
+  )
+}
+
+// =============================================================================
 // Sort Utilities
 // =============================================================================
 
