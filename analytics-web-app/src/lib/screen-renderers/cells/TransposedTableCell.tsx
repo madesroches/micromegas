@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useCallback, useMemo } from 'react'
 import { TableProperties } from 'lucide-react'
 import type {
   CellTypeMetadata,
@@ -9,9 +9,18 @@ import type {
 import type { QueryCellConfig, CellConfig, CellState } from '../notebook-types'
 import { AvailableVariablesPanel } from '@/components/AvailableVariablesPanel'
 import { DocumentationLink, QUERY_GUIDE_URL } from '@/components/DocumentationLink'
+import { OverrideEditor } from '@/components/OverrideEditor'
 import { SyntaxEditor } from '@/components/SyntaxEditor'
 import { substituteMacros, DEFAULT_SQL } from '../notebook-utils'
-import { formatCell, HiddenColumnsBar, RowContextMenu, useRowManagement } from '../table-utils'
+import {
+  ColumnOverride,
+  formatCell,
+  HiddenColumnsBar,
+  OverrideCell,
+  RowContextMenu,
+  TableColumn,
+  useRowManagement,
+} from '../table-utils'
 
 // =============================================================================
 // Renderer Component
@@ -19,13 +28,32 @@ import { formatCell, HiddenColumnsBar, RowContextMenu, useRowManagement } from '
 
 const EMPTY_OPTIONS: Record<string, unknown> = {}
 
-export function TransposedTableCell({ data, status, options, onOptionsChange }: CellRendererProps) {
+export function TransposedTableCell({ data, status, options, onOptionsChange, variables }: CellRendererProps) {
   const table = data[0]
 
   const { hiddenRows, handleHideRow, handleRestoreRow, handleRestoreAll } = useRowManagement(
     options || EMPTY_OPTIONS,
     onOptionsChange
   )
+
+  const overrideMap = useMemo(() => {
+    const overrides = (options?.overrides as ColumnOverride[] | undefined) || []
+    const map = new Map<string, string>()
+    for (const o of overrides) {
+      map.set(o.column, o.format)
+    }
+    return map
+  }, [options?.overrides])
+
+  const columns: TableColumn[] = useMemo(() => {
+    if (!table) return []
+    return table.schema.fields.map((field) => ({ name: field.name, type: field.type }))
+  }, [table])
+
+  const originalRows = useMemo(() => {
+    if (!table || table.numRows === 0) return []
+    return Array.from({ length: table.numRows }, (_, i) => table.get(i) as Record<string, unknown>)
+  }, [table])
 
   const rows = useMemo(() => {
     if (!table || table.numRows === 0) return []
@@ -80,7 +108,16 @@ export function TransposedTableCell({ data, status, options, onOptionsChange }: 
                 </RowContextMenu>
                 {row.values.map((value, colIdx) => (
                   <td key={colIdx} className="px-3 py-1.5 text-theme-text-primary">
-                    {formatCell(value, row.type)}
+                    {overrideMap.has(row.name) ? (
+                      <OverrideCell
+                        format={overrideMap.get(row.name)!}
+                        row={originalRows[colIdx]}
+                        columns={columns}
+                        variables={variables}
+                      />
+                    ) : (
+                      formatCell(value, row.type)
+                    )}
                   </td>
                 ))}
               </tr>
@@ -96,8 +133,23 @@ export function TransposedTableCell({ data, status, options, onOptionsChange }: 
 // Editor Component
 // =============================================================================
 
-function TransposedTableCellEditor({ config, onChange, variables, timeRange }: CellEditorProps) {
+function TransposedTableCellEditor({ config, onChange, variables, timeRange, availableColumns }: CellEditorProps) {
   const transposedConfig = config as QueryCellConfig
+
+  const overrides = useMemo(
+    () => (transposedConfig.options?.overrides as ColumnOverride[] | undefined) || [],
+    [transposedConfig.options?.overrides]
+  )
+
+  const handleOverridesChange = useCallback(
+    (newOverrides: ColumnOverride[]) => {
+      onChange({
+        ...transposedConfig,
+        options: { ...transposedConfig.options, overrides: newOverrides },
+      })
+    },
+    [transposedConfig, onChange]
+  )
 
   return (
     <>
@@ -115,6 +167,14 @@ function TransposedTableCellEditor({ config, onChange, variables, timeRange }: C
       </div>
       <AvailableVariablesPanel variables={variables} timeRange={timeRange} />
       <DocumentationLink url={QUERY_GUIDE_URL} label="Query Guide" />
+      <div className="mt-4">
+        <OverrideEditor
+          overrides={overrides}
+          availableColumns={availableColumns || []}
+          availableVariables={Object.keys(variables)}
+          onChange={handleOverridesChange}
+        />
+      </div>
     </>
   )
 }
