@@ -263,6 +263,49 @@
     color: var(--md-accent-fg-color);
 }
 
+/* Cell type icons in headings */
+.cell-icon {
+    height: 1.2em;
+    width: 1.2em;
+    vertical-align: text-bottom;
+    display: inline;
+    margin-right: 0.3em;
+}
+
+/* Cell type icons in table of contents */
+.md-nav--secondary a[href="#markdown"]::before,
+.md-nav--secondary a[href="#variable"]::before,
+.md-nav--secondary a[href="#table"]::before,
+.md-nav--secondary a[href="#transposed-table"]::before,
+.md-nav--secondary a[href="#chart"]::before,
+.md-nav--secondary a[href="#log"]::before,
+.md-nav--secondary a[href="#property-timeline"]::before,
+.md-nav--secondary a[href="#swimlane"]::before,
+.md-nav--secondary a[href="#perfetto-export"]::before,
+.md-nav--secondary a[href="#reference-table"]::before,
+.md-nav--secondary a[href="#horizontal-group-hg"]::before {
+    content: "";
+    display: inline-block;
+    width: 1em;
+    height: 1em;
+    margin-right: 0.3em;
+    vertical-align: text-bottom;
+    background-size: contain;
+    background-repeat: no-repeat;
+}
+
+.md-nav--secondary a[href="#markdown"]::before { background-image: url("../images/cell-icons/file-text.svg"); }
+.md-nav--secondary a[href="#variable"]::before { background-image: url("../images/cell-icons/variable.svg"); }
+.md-nav--secondary a[href="#table"]::before { background-image: url("../images/cell-icons/table-2.svg"); }
+.md-nav--secondary a[href="#transposed-table"]::before { background-image: url("../images/cell-icons/table-properties.svg"); }
+.md-nav--secondary a[href="#chart"]::before { background-image: url("../images/cell-icons/bar-chart-3.svg"); }
+.md-nav--secondary a[href="#log"]::before { background-image: url("../images/cell-icons/scroll-text.svg"); }
+.md-nav--secondary a[href="#property-timeline"]::before { background-image: url("../images/cell-icons/gantt-chart.svg"); }
+.md-nav--secondary a[href="#swimlane"]::before { background-image: url("../images/cell-icons/align-center.svg"); }
+.md-nav--secondary a[href="#perfetto-export"]::before { background-image: url("../images/cell-icons/download.svg"); }
+.md-nav--secondary a[href="#reference-table"]::before { background-image: url("../images/cell-icons/book-open.svg"); }
+.md-nav--secondary a[href="#horizontal-group-hg"]::before { background-image: url("../images/cell-icons/group.svg"); }
+
 /* Sidebar navigation active item */
 .md-nav__item--active > .md-nav__link {
     color: var(--md-primary-fg-color);

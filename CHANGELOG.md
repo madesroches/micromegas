@@ -14,6 +14,10 @@ This file documents the historical progress of the Micromegas project. For curre
   * Add copy and edit buttons to notebook view source panel
   * Add row hiding to transposed table cell via right-click context menu
   * Sort cell types alphabetically in Add Cell dialog
+  * Stabilize hook references to prevent unnecessary re-renders in notebook components
+* **Documentation:**
+  * Add notebook documentation: cell types reference, variables, execution model, and web app overview
+  * Reorganize mkdocs nav into Analytics Web App, Integrations, and Operations sections
   * Add notebook datasource option to dropdown variable cells (#861)
   * Add transposed table cell type for key-value layout of SQL results
   * Replace single-letter cell type icons with Lucide components
