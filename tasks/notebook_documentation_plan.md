@@ -1,7 +1,7 @@
 # Notebook Documentation Plan
 
 ## Status
-PROPOSED
+DONE
 
 ## Overview
 
@@ -170,6 +170,6 @@ Every notebook has a local DataFusion query engine compiled to WebAssembly. This
 
 **Deployment page in both nav sections**: The deployment page appears under both "Analytics Web App" and "Administration" rather than being moved. This keeps the Administration section intact (3 entries) while making deployment docs discoverable from the web app section too. MkDocs handles dual nav references to the same file without issues.
 
-## Open Questions
+## Decisions
 
-1. Should we include screenshots? The current docs don't use any images besides the logo. Screenshots would help but add maintenance burden.
+1. **No screenshots for first pass.** Add them later once the text content is stable.

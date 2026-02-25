@@ -87,36 +87,45 @@ nav:
     - Async Performance Analysis: query-guide/async-performance-analysis.md
     - Performance: query-guide/performance.md
     - Advanced Features: query-guide/advanced-features.md
-  - Unreal Engine:
-    - Overview: unreal/index.md
-    - Installation: unreal/installation.md
-    - Instrumentation API: unreal/instrumentation-api.md
-    - Examples: unreal/examples.md
-  - Architecture:
-    - Overview: architecture/index.md
-  - Administration:
-    - Authentication: admin/authentication.md
-    - Web App Deployment: admin/web-app.md
-    - Admin SQL Functions: admin/functions-reference.md
-  - Grafana Plugin:
-    - Overview: grafana/index.md
-    - Installation: grafana/installation.md
-    - Configuration: grafana/configuration.md
-    - Authentication: grafana/authentication.md
-    - Usage: grafana/usage.md
-  - HTTP Gateway:
-    - Overview: gateway/index.md
-    - Configuration: gateway/configuration.md
-    - Examples: gateway/examples.md
-  - Development:
-    - Contributing: contributing.md
-    - Build Guide: development/build.md
-  - Cost Effectiveness:
-    - Overview: cost-effectiveness.md
-    - Comparison Methodology: cost-comparisons/index.md
-    - vs. Datadog: cost-comparisons/datadog.md
-    - vs. Dynatrace: cost-comparisons/dynatrace.md
-    - vs. Elastic: cost-comparisons/elastic.md
-    - vs. Grafana Cloud: cost-comparisons/grafana.md
-    - vs. New Relic: cost-comparisons/newrelic.md
-    - vs. Splunk: cost-comparisons/splunk.md
+  - Analytics Web App:
+    - Overview: web-app/index.md
+    - Notebooks:
+        - Overview: web-app/notebooks/index.md
+        - Cell Types: web-app/notebooks/cell-types.md
+        - Variables: web-app/notebooks/variables.md
+        - Execution & Auto-Run: web-app/notebooks/execution.md
+    - Deployment: admin/web-app.md
+  - Integrations:
+    - Unreal Engine:
+        - Overview: unreal/index.md
+        - Installation: unreal/installation.md
+        - Instrumentation API: unreal/instrumentation-api.md
+        - Examples: unreal/examples.md
+    - Grafana Plugin:
+        - Overview: grafana/index.md
+        - Installation: grafana/installation.md
+        - Configuration: grafana/configuration.md
+        - Authentication: grafana/authentication.md
+        - Usage: grafana/usage.md
+    - HTTP Gateway:
+        - Overview: gateway/index.md
+        - Configuration: gateway/configuration.md
+        - Examples: gateway/examples.md
+  - Operations:
+    - Architecture: architecture/index.md
+    - Administration:
+        - Authentication: admin/authentication.md
+        - Web App Deployment: admin/web-app.md
+        - Admin SQL Functions: admin/functions-reference.md
+    - Development:
+        - Contributing: contributing.md
+        - Build Guide: development/build.md
+    - Cost Effectiveness:
+        - Overview: cost-effectiveness.md
+        - Comparison Methodology: cost-comparisons/index.md
+        - vs. Datadog: cost-comparisons/datadog.md
+        - vs. Dynatrace: cost-comparisons/dynatrace.md
+        - vs. Elastic: cost-comparisons/elastic.md
+        - vs. Grafana Cloud: cost-comparisons/grafana.md
+        - vs. New Relic: cost-comparisons/newrelic.md
+        - vs. Splunk: cost-comparisons/splunk.md
