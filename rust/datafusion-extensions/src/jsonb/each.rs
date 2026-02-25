@@ -77,8 +77,9 @@ fn output_schema() -> SchemaRef {
 }
 
 /// Extract key-value entries from JSONB bytes using `RawJsonb::object_each()`.
-fn extract_entries_from_jsonb(jsonb_bytes: &[u8]) -> Result<Vec<(String, Vec<u8>)>, DataFusionError>
-{
+fn extract_entries_from_jsonb(
+    jsonb_bytes: &[u8],
+) -> Result<Vec<(String, Vec<u8>)>, DataFusionError> {
     let jsonb = RawJsonb::new(jsonb_bytes);
     match jsonb.object_each() {
         Ok(Some(entries)) => Ok(entries
@@ -92,9 +93,7 @@ fn extract_entries_from_jsonb(jsonb_bytes: &[u8]) -> Result<Vec<(String, Vec<u8>
     }
 }
 
-fn entries_to_batch(
-    entries: &[(String, Vec<u8>)],
-) -> Result<RecordBatch, DataFusionError> {
+fn entries_to_batch(entries: &[(String, Vec<u8>)]) -> Result<RecordBatch, DataFusionError> {
     if entries.is_empty() {
         return Ok(RecordBatch::new_empty(output_schema()));
     }
@@ -102,8 +101,7 @@ fn entries_to_batch(
     let keys: Vec<&str> = entries.iter().map(|(k, _)| k.as_str()).collect();
     let values: Vec<&[u8]> = entries.iter().map(|(_, v)| v.as_slice()).collect();
 
-    let key_array: ArrayRef =
-        Arc::new(datafusion::arrow::array::StringArray::from(keys));
+    let key_array: ArrayRef = Arc::new(datafusion::arrow::array::StringArray::from(keys));
     let value_array: ArrayRef = Arc::new(BinaryArray::from(values));
 
     RecordBatch::try_new(output_schema(), vec![key_array, value_array])
@@ -123,9 +121,7 @@ fn scalar_to_entries(scalar: &ScalarValue) -> Result<Vec<(String, Vec<u8>)>, Dat
 
 /// Extract JSONB bytes from all rows of a column, handling both plain Binary
 /// and Dictionary<Int32, Binary> encodings.
-fn extract_all_jsonb_bytes_from_column(
-    column: &ArrayRef,
-) -> Result<Vec<Vec<u8>>, DataFusionError> {
+fn extract_all_jsonb_bytes_from_column(column: &ArrayRef) -> Result<Vec<Vec<u8>>, DataFusionError> {
     match column.data_type() {
         DataType::Binary => {
             let binary_array = column
@@ -153,9 +149,7 @@ fn extract_all_jsonb_bytes_from_column(
                 .as_any()
                 .downcast_ref::<GenericBinaryArray<i32>>()
                 .ok_or_else(|| {
-                    DataFusionError::Execution(
-                        "dictionary values are not a binary array".into(),
-                    )
+                    DataFusionError::Execution("dictionary values are not a binary array".into())
                 })?;
             Ok((0..dict_array.len())
                 .filter(|&i| !dict_array.is_null(i))
@@ -218,8 +212,7 @@ impl TableProvider for JsonbEachTableProvider {
             JsonbSource::Subquery(plan) => {
                 let physical_plan = state.create_physical_plan(plan).await?;
                 let task_ctx = state.task_ctx();
-                let batches =
-                    datafusion::physical_plan::collect(physical_plan, task_ctx).await?;
+                let batches = datafusion::physical_plan::collect(physical_plan, task_ctx).await?;
 
                 if batches.is_empty() || batches.iter().all(|b| b.num_rows() == 0) {
                     return Err(DataFusionError::Execution(

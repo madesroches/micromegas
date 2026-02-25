@@ -7,8 +7,7 @@ use micromegas_datafusion_extensions::jsonb::each::JsonbEachTableProvider;
 use std::sync::Arc;
 
 fn parse_json_to_jsonb(json_str: &str) -> Vec<u8> {
-    let parsed =
-        jsonb::parse_value(json_str.as_bytes()).expect("failed to parse test JSON");
+    let parsed = jsonb::parse_value(json_str.as_bytes()).expect("failed to parse test JSON");
     let mut buffer = vec![];
     parsed.write_to_vec(&mut buffer);
     buffer
@@ -114,7 +113,11 @@ async fn test_nested_values() {
     // All values should be valid non-empty JSONB bytes
     for i in 0..values.len() {
         let val_bytes = values.value(i);
-        assert!(!val_bytes.is_empty(), "value for key '{}' should not be empty", keys.value(i));
+        assert!(
+            !val_bytes.is_empty(),
+            "value for key '{}' should not be empty",
+            keys.value(i)
+        );
         // Verify each value is parseable as RawJsonb
         let _raw = jsonb::RawJsonb::new(val_bytes);
     }
@@ -122,8 +125,7 @@ async fn test_nested_values() {
 
 #[tokio::test]
 async fn test_limit() {
-    let provider =
-        create_jsonb_each_provider(r#"{"a": 1, "b": 2, "c": 3, "d": 4, "e": 5}"#);
+    let provider = create_jsonb_each_provider(r#"{"a": 1, "b": 2, "c": 3, "d": 4, "e": 5}"#);
     let batch = collect_jsonb_each(&provider, Some(1)).await;
 
     assert_eq!(batch.num_rows(), 1);
@@ -154,7 +156,11 @@ async fn test_sql_integration() {
 
     // Create a table with a JSONB Binary column
     let jsonb_bytes = parse_json_to_jsonb(r#"{"name": "test", "version": "1.0"}"#);
-    let schema = Arc::new(Schema::new(vec![Field::new("props", DataType::Binary, false)]));
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "props",
+        DataType::Binary,
+        false,
+    )]));
     let array: Arc<BinaryArray> = Arc::new(BinaryArray::from(vec![jsonb_bytes.as_slice()]));
     let batch = RecordBatch::try_new(schema, vec![array]).expect("failed to create batch");
     ctx.register_batch("test_table", batch)
@@ -188,9 +194,15 @@ async fn test_multiple_rows_concatenated() {
     // Create a table with multiple JSONB rows — results should be concatenated
     let jsonb1 = parse_json_to_jsonb(r#"{"a": 1}"#);
     let jsonb2 = parse_json_to_jsonb(r#"{"b": 2}"#);
-    let schema = Arc::new(Schema::new(vec![Field::new("props", DataType::Binary, false)]));
-    let array: Arc<BinaryArray> =
-        Arc::new(BinaryArray::from(vec![jsonb1.as_slice(), jsonb2.as_slice()]));
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "props",
+        DataType::Binary,
+        false,
+    )]));
+    let array: Arc<BinaryArray> = Arc::new(BinaryArray::from(vec![
+        jsonb1.as_slice(),
+        jsonb2.as_slice(),
+    ]));
     let batch = RecordBatch::try_new(schema, vec![array]).expect("failed to create batch");
     ctx.register_batch("multi_table", batch)
         .expect("failed to register batch");
