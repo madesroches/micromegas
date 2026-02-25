@@ -3,6 +3,8 @@
 This file documents the historical progress of the Micromegas project. For current focus, please see the main [README.md](./README.md).
 
 ## Unreleased
+* **Build:**
+  * Gate server-only dependencies behind `server` feature flag on `micromegas-telemetry` and `micromegas` crates (#855)
 * **DataFusion Extensions:**
   * Add `jsonb_each` table function to expand JSONB objects into key-value rows (#860)
 * **Notebook Enhancements:**
