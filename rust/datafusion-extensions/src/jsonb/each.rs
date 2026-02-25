@@ -113,9 +113,7 @@ fn entries_to_batch(
 fn scalar_to_entries(scalar: &ScalarValue) -> Result<Vec<(String, Vec<u8>)>, DataFusionError> {
     match scalar {
         ScalarValue::Binary(Some(bytes)) => extract_entries_from_jsonb(bytes),
-        ScalarValue::Binary(None) => Err(DataFusionError::Execution(
-            "jsonb_each: input is null".into(),
-        )),
+        ScalarValue::Binary(None) => Ok(vec![]),
         _ => Err(DataFusionError::Plan(format!(
             "jsonb_each argument must be Binary (JSONB), got: {:?}",
             scalar.data_type()

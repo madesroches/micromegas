@@ -354,7 +354,7 @@ FROM jsonb_each(jsonb_subquery)
 
 **Parameters:**
 
-- `jsonb_object` (Binary/JSONB): A JSONB object value or a subquery returning a single JSONB column. Returns an error if the input is not an object (e.g., array, scalar, or null).
+- `jsonb_object` (Binary/JSONB): A JSONB object value or a subquery returning a single JSONB column. If the subquery returns multiple rows, the key-value entries from all rows are concatenated. Null values are skipped. Returns an error if a non-null input is not an object (e.g., array or scalar).
 
 **Returns:**
 
