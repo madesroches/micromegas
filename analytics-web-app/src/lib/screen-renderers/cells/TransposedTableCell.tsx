@@ -17,11 +17,13 @@ import { formatCell, HiddenColumnsBar, RowContextMenu, useRowManagement } from '
 // Renderer Component
 // =============================================================================
 
+const EMPTY_OPTIONS: Record<string, unknown> = {}
+
 export function TransposedTableCell({ data, status, options, onOptionsChange }: CellRendererProps) {
   const table = data[0]
 
   const { hiddenRows, handleHideRow, handleRestoreRow, handleRestoreAll } = useRowManagement(
-    options || {},
+    options || EMPTY_OPTIONS,
     onOptionsChange
   )
 
