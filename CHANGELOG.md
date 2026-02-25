@@ -4,6 +4,7 @@ This file documents the historical progress of the Micromegas project. For curre
 
 ## Unreleased
 * **Notebook Enhancements:**
+  * Add notebook datasource option to dropdown variable cells (#861)
   * Add transposed table cell type for key-value layout of SQL results
   * Replace single-letter cell type icons with Lucide components
   * Stop markdown link clicks from opening cell editor in notebook tables
