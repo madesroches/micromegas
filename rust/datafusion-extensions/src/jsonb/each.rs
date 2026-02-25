@@ -215,10 +215,16 @@ impl TableProvider for JsonbEachTableProvider {
                 let batches =
                     datafusion::physical_plan::collect(physical_plan, task_ctx).await?;
 
-                if batches.is_empty() || batches[0].num_rows() == 0 {
+                let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+                if total_rows == 0 {
                     return Err(DataFusionError::Execution(
                         "jsonb_each subquery returned no rows".into(),
                     ));
+                }
+                if total_rows > 1 {
+                    return Err(DataFusionError::Execution(format!(
+                        "jsonb_each subquery must return exactly one row, got {total_rows}"
+                    )));
                 }
 
                 let batch = &batches[0];

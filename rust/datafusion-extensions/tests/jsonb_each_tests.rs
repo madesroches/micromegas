@@ -179,3 +179,32 @@ async fn test_sql_integration() {
     key_list.sort();
     assert_eq!(key_list, vec!["name", "version"]);
 }
+
+#[tokio::test]
+async fn test_multiple_rows_error() {
+    let ctx = SessionContext::new();
+    micromegas_datafusion_extensions::register_extension_udfs(&ctx);
+
+    // Create a table with multiple rows — subquery should fail
+    let jsonb1 = parse_json_to_jsonb(r#"{"a": 1}"#);
+    let jsonb2 = parse_json_to_jsonb(r#"{"b": 2}"#);
+    let schema = Arc::new(Schema::new(vec![Field::new("props", DataType::Binary, false)]));
+    let array: Arc<BinaryArray> =
+        Arc::new(BinaryArray::from(vec![jsonb1.as_slice(), jsonb2.as_slice()]));
+    let batch = RecordBatch::try_new(schema, vec![array]).expect("failed to create batch");
+    ctx.register_batch("multi_table", batch)
+        .expect("failed to register batch");
+
+    let df = ctx
+        .sql("SELECT key, value FROM jsonb_each((SELECT props FROM multi_table))")
+        .await
+        .expect("SQL query failed");
+
+    let result = df.collect().await;
+    assert!(result.is_err());
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("exactly one row"),
+        "unexpected error: {err_msg}"
+    );
+}
