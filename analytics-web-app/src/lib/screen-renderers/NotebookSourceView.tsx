@@ -32,19 +32,29 @@ export function NotebookSourceView({ notebookConfig, onConfigChange, onBack }: N
     onBack()
   }, [onBack])
 
+  const hasUnsavedEdits = editingSource && sourceText !== JSON.stringify(notebookConfig, null, 2)
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') exitSourceView()
+      if (e.key === 'Escape') {
+        if (hasUnsavedEdits) {
+          if (!window.confirm('Discard unsaved changes?')) return
+        }
+        exitSourceView()
+      }
     }
     document.addEventListener('keydown', handleKeyDown)
     return () => document.removeEventListener('keydown', handleKeyDown)
-  }, [exitSourceView])
+  }, [hasUnsavedEdits, exitSourceView])
 
   return (
     <div className="flex flex-col gap-4 h-full">
       <div className="flex items-center gap-3">
         <button
-          onClick={exitSourceView}
+          onClick={() => {
+            if (hasUnsavedEdits && !window.confirm('Discard unsaved changes?')) return
+            exitSourceView()
+          }}
           className="text-sm text-accent-link hover:underline"
         >
           &larr; Back to notebook
