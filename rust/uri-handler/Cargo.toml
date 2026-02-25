@@ -14,7 +14,7 @@ name = "micromegas-uri-handler"
 path = "src/uri_handler.rs"
 
 [dependencies]
-micromegas.workspace = true
+micromegas = { workspace = true, features = ["server"] }
 
 anyhow.workspace = true
 tokio.workspace = true

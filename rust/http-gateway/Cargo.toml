@@ -14,7 +14,7 @@ name = "http-gateway-srv"
 path = "src/http_gateway_srv.rs"
 
 [dependencies]
-micromegas.workspace = true
+micromegas = { workspace = true, features = ["server"] }
 
 anyhow.workspace = true
 clap.workspace = true

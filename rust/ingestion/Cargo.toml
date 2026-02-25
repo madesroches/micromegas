@@ -10,7 +10,7 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
-micromegas-telemetry.workspace = true
+micromegas-telemetry = { workspace = true, features = ["server"] }
 micromegas-tracing.workspace = true
 
 anyhow.workspace = true

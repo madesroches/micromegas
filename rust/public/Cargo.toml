@@ -10,40 +10,80 @@ repository.workspace = true
 license.workspace = true
 authors.workspace = true
 
-[dependencies]
-micromegas-analytics.workspace = true
-micromegas-auth.workspace = true
-micromegas-ingestion.workspace = true
-micromegas-proc-macros.workspace = true
-micromegas-telemetry-sink.workspace = true
-micromegas-telemetry.workspace = true
-micromegas-tracing = { workspace = true, features = ["tokio"] }
-micromegas-perfetto.workspace = true
+[features]
+default = []
+server = [
+    "dep:anyhow",
+    "dep:arrow-flight",
+    "dep:async-stream",
+    "dep:async-trait",
+    "dep:axum",
+    "dep:bytes",
+    "dep:datafusion",
+    "dep:futures",
+    "dep:http",
+    "dep:micromegas-analytics",
+    "dep:micromegas-auth",
+    "dep:micromegas-ingestion",
+    "dep:micromegas-perfetto",
+    "dep:object_store",
+    "dep:once_cell",
+    "dep:prost",
+    "dep:serde_json",
+    "dep:sqlx",
+    "dep:thiserror",
+    "dep:tokio",
+    "dep:tonic",
+    "dep:tower",
+    "micromegas-telemetry/server",
+]
 
-anyhow.workspace = true
-arrow-flight.workspace = true
-async-stream.workspace = true
-async-trait.workspace = true
-axum.workspace = true
-bytes.workspace = true
+[dependencies]
+# Always available
 chrono.workspace = true
-datafusion.workspace = true
-futures.workspace = true
-http.workspace = true
-object_store.workspace = true
-once_cell.workspace = true
-prost.workspace = true
+micromegas-proc-macros.workspace = true
+micromegas-telemetry.workspace = true
+micromegas-telemetry-sink.workspace = true
+micromegas-tracing = { workspace = true, features = ["tokio"] }
 serde.workspace = true
-serde_json.workspace = true
-sqlx.workspace = true
-thiserror.workspace = true
-tokio.workspace = true
-tonic.workspace = true
-tower.workspace = true
 uuid.workspace = true
+
+# Server-only (optional)
+anyhow = { workspace = true, optional = true }
+arrow-flight = { workspace = true, optional = true }
+async-stream = { workspace = true, optional = true }
+async-trait = { workspace = true, optional = true }
+axum = { workspace = true, optional = true }
+bytes = { workspace = true, optional = true }
+datafusion = { workspace = true, optional = true }
+futures = { workspace = true, optional = true }
+http = { workspace = true, optional = true }
+micromegas-analytics = { workspace = true, optional = true }
+micromegas-auth = { workspace = true, optional = true }
+micromegas-ingestion = { workspace = true, optional = true }
+micromegas-perfetto = { workspace = true, optional = true }
+object_store = { workspace = true, optional = true }
+once_cell = { workspace = true, optional = true }
+prost = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+sqlx = { workspace = true, optional = true }
+thiserror = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true }
+tonic = { workspace = true, optional = true }
+tower = { workspace = true, optional = true }
 
 [dev-dependencies]
 wiremock = "0.6"
 
 # Note: jsonwebtoken and rsa are also used in production code for OIDC token validation
 # They're in regular dependencies, not just dev-dependencies
+
+[[test]]
+name = "http_gateway_tests"
+path = "tests/http_gateway_tests.rs"
+required-features = ["server"]
+
+[[test]]
+name = "large_message_tests"
+path = "tests/large_message_tests.rs"
+required-features = ["server"]

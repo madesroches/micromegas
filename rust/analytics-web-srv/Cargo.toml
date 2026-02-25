@@ -10,7 +10,7 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
-micromegas.workspace = true
+micromegas = { workspace = true, features = ["server"] }
 
 anyhow.workspace = true
 arrow-ipc.workspace = true
