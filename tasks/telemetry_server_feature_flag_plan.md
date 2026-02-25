@@ -240,6 +240,19 @@ micromegas = { workspace = true, features = ["server"] }
 
 **`rust/telemetry-sink/Cargo.toml`** — no change needed.
 
+**`rust/public/Cargo.toml`** — add `[[test]]` entries so integration tests only compile when the `server` feature is enabled:
+```toml
+[[test]]
+name = "http_gateway_tests"
+path = "tests/http_gateway_tests.rs"
+required-features = ["server"]
+
+[[test]]
+name = "large_message_tests"
+path = "tests/large_message_tests.rs"
+required-features = ["server"]
+```
+
 ### Workspace root (`rust/Cargo.toml`)
 
 No changes to workspace dependency declarations. Features are specified at the consumer site.
@@ -255,7 +268,7 @@ No changes to workspace dependency declarations. Features are specified at the c
 
 ### Phase 2: `micromegas` (public) crate feature flag
 
-5. Modify `rust/public/Cargo.toml` — add `[features]` section, mark server deps as optional
+5. Modify `rust/public/Cargo.toml` — add `[features]` section, mark server deps as optional, add `[[test]]` entries with `required-features = ["server"]`
 6. Modify `rust/public/src/lib.rs` — gate server modules and re-exports with `#[cfg(feature = "server")]`
 7. Update all server binary Cargo.toml files that depend on `micromegas` — add `features = ["server"]`
 
