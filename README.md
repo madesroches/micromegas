@@ -41,7 +41,7 @@ Micromegas is an observability system designed to provide unified insights into 
 
 Micromegas consists of several key components:
 
-1.  **Instrumentation Libraries:** Lightweight libraries for your applications (available in Rust, Unreal Engine, and [Bevy](https://github.com/madesroches/optimism)) to send telemetry data.
+1.  **Instrumentation Libraries:** Lightweight libraries for your applications (available in Rust and Unreal Engine) to send telemetry data. See [Optimism](https://github.com/madesroches/optimism) for an example Bevy project using Micromegas.
 2.  **Ingestion Service (`telemetry-ingestion-srv`):** A scalable service that receives telemetry data and writes it to blob storage.
 3.  **Analytics Service (`flight-sql-srv`):** A DataFusion-powered service that exposes a FlightSQL endpoint for running queries against your data.
 4.  **PostgreSQL Database:** Stores metadata about processes, streams, and data blocks, keeping the object storage indexable and fast to query.
