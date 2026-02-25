@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Transposed Table — Hide Rows Mockup</title>
+<style>
+  :root {
+    --bg: #0a0a0f;
+    --panel: #14141f;
+    --card: #1a1a2e;
+    --border: #2a2a3e;
+    --text-primary: #e0e0e8;
+    --text-secondary: #a0a0b4;
+    --text-muted: #707088;
+    --accent: #1565c0;
+    --accent-hover: #1976d2;
+    --accent-bg: rgba(21, 101, 192, 0.08);
+    --accent-pill-bg: rgba(21, 101, 192, 0.15);
+    --accent-pill-border: rgba(21, 101, 192, 0.30);
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text-primary);
+    padding: 32px;
+  }
+
+  h1 {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 8px;
+  }
+
+  .description {
+    font-size: 13px;
+    color: var(--text-muted);
+    margin-bottom: 24px;
+    line-height: 1.5;
+  }
+
+  .cell-container {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    max-width: 700px;
+  }
+
+  /* Hidden rows bar */
+  .hidden-bar {
+    display: none;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 8px;
+    background: var(--accent-bg);
+    flex-wrap: wrap;
+    font-size: 11px;
+  }
+  .hidden-bar.visible {
+    display: flex;
+  }
+  .hidden-bar .eye-icon {
+    color: var(--text-muted);
+    flex-shrink: 0;
+  }
+  .hidden-bar .label {
+    color: var(--text-muted);
+    font-size: 10px;
+  }
+  .hidden-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 1px 6px;
+    font-size: 10px;
+    background: var(--accent-pill-bg);
+    color: var(--accent);
+    border: 1px solid var(--accent-pill-border);
+    border-radius: 999px;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+  }
+  .hidden-pill:hover {
+    background: rgba(21, 101, 192, 0.25);
+    border-color: rgba(21, 101, 192, 0.50);
+  }
+  .hidden-pill .x {
+    opacity: 0.7;
+    font-size: 9px;
+    line-height: 1;
+  }
+  .show-all {
+    font-size: 10px;
+    color: var(--accent);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    cursor: pointer;
+    background: none;
+    border: none;
+    display: none;
+  }
+  .show-all:hover { color: var(--accent-hover); }
+
+  /* Transposed table */
+  .transposed-table {
+    width: 100%;
+    font-size: 13px;
+    border-collapse: collapse;
+  }
+  .transposed-table tr {
+    border-bottom: 1px solid var(--border);
+  }
+  .transposed-table tr:last-child {
+    border-bottom: none;
+  }
+  .transposed-table td {
+    padding: 6px 12px;
+    vertical-align: top;
+  }
+  .transposed-table .row-header {
+    color: var(--text-muted);
+    font-weight: 500;
+    white-space: nowrap;
+    cursor: default;
+    user-select: none;
+    position: relative;
+  }
+  .transposed-table .row-value {
+    color: var(--text-primary);
+  }
+
+  /* Context menu */
+  .context-menu {
+    display: none;
+    position: fixed;
+    min-width: 180px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+    padding: 4px 0;
+    z-index: 1000;
+  }
+  .context-menu.open {
+    display: block;
+  }
+  .context-menu-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    font-size: 13px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: background 0.1s;
+  }
+  .context-menu-item:hover {
+    background: rgba(42, 42, 62, 0.5);
+  }
+  .context-menu-item svg {
+    width: 16px;
+    height: 16px;
+    color: var(--text-muted);
+  }
+
+  /* Instruction badge */
+  .instructions {
+    margin-top: 16px;
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .badge {
+    font-size: 11px;
+    padding: 4px 10px;
+    border-radius: 4px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    color: var(--text-secondary);
+  }
+</style>
+</head>
+<body>
+
+<h1>Transposed Table — Hide Rows</h1>
+<p class="description">Right-click any row header (field name) to hide it. Hidden rows appear as restoration pills above the table.</p>
+
+<div class="cell-container">
+  <!-- Hidden rows bar -->
+  <div class="hidden-bar" id="hiddenBar">
+    <svg class="eye-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/>
+      <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/>
+      <line x1="1" y1="1" x2="23" y2="23"/>
+    </svg>
+    <span class="label">Hidden:</span>
+    <div id="pillContainer"></div>
+    <button class="show-all" id="showAllBtn" onclick="restoreAll()">Show all</button>
+  </div>
+
+  <!-- Transposed table -->
+  <div style="overflow: auto;">
+    <table class="transposed-table" id="transposedTable">
+      <tbody id="tableBody"></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Context menu -->
+<div class="context-menu" id="contextMenu">
+  <div class="context-menu-item" id="hideMenuItem">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/>
+      <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/>
+      <line x1="1" y1="1" x2="23" y2="23"/>
+    </svg>
+    Hide Row
+  </div>
+</div>
+
+<div class="instructions">
+  <span class="badge">Right-click row header to hide</span>
+  <span class="badge">Click pill to restore</span>
+  <span class="badge">"Show all" when 2+ hidden</span>
+</div>
+
+<script>
+  // Sample data (transposed: each field is a row)
+  const sampleData = [
+    { name: 'process_id', values: ['a3f2-b8c1', '7d4e-9a2f'] },
+    { name: 'exe',        values: ['/usr/bin/server', '/usr/bin/worker'] },
+    { name: 'username',   values: ['service-account', 'worker-pool'] },
+    { name: 'start_time', values: ['2026-02-25 10:23:41', '2026-02-25 10:24:02'] },
+    { name: 'cpu_usage',  values: ['34.2%', '12.8%'] },
+    { name: 'memory_mb',  values: ['512', '256'] },
+    { name: 'status',     values: ['running', 'running'] },
+    { name: 'pid',        values: ['48201', '48215'] },
+  ]
+
+  let hiddenRows = []
+  let contextTarget = null
+
+  function render() {
+    const tbody = document.getElementById('tableBody')
+    tbody.innerHTML = ''
+
+    const hiddenSet = new Set(hiddenRows)
+    const visibleRows = sampleData.filter(r => !hiddenSet.has(r.name))
+
+    visibleRows.forEach(row => {
+      const tr = document.createElement('tr')
+
+      const th = document.createElement('td')
+      th.className = 'row-header'
+      th.textContent = row.name
+      th.addEventListener('contextmenu', (e) => {
+        e.preventDefault()
+        contextTarget = row.name
+        showContextMenu(e.clientX, e.clientY)
+      })
+      tr.appendChild(th)
+
+      row.values.forEach(val => {
+        const td = document.createElement('td')
+        td.className = 'row-value'
+        td.textContent = val
+        tr.appendChild(td)
+      })
+
+      tbody.appendChild(tr)
+    })
+
+    renderHiddenBar()
+  }
+
+  function renderHiddenBar() {
+    const bar = document.getElementById('hiddenBar')
+    const container = document.getElementById('pillContainer')
+    const showAllBtn = document.getElementById('showAllBtn')
+    container.innerHTML = ''
+
+    if (hiddenRows.length === 0) {
+      bar.classList.remove('visible')
+      return
+    }
+
+    bar.classList.add('visible')
+
+    hiddenRows.forEach(name => {
+      const pill = document.createElement('span')
+      pill.className = 'hidden-pill'
+      pill.innerHTML = `${name}<span class="x">\u2715</span>`
+      pill.onclick = () => restoreRow(name)
+      container.appendChild(pill)
+    })
+
+    showAllBtn.style.display = hiddenRows.length > 1 ? 'inline' : 'none'
+  }
+
+  function hideRow(name) {
+    if (!hiddenRows.includes(name)) {
+      hiddenRows.push(name)
+      render()
+    }
+  }
+
+  function restoreRow(name) {
+    hiddenRows = hiddenRows.filter(r => r !== name)
+    render()
+  }
+
+  function restoreAll() {
+    hiddenRows = []
+    render()
+  }
+
+  function showContextMenu(x, y) {
+    const menu = document.getElementById('contextMenu')
+    menu.style.left = x + 'px'
+    menu.style.top = y + 'px'
+    menu.classList.add('open')
+  }
+
+  function closeContextMenu() {
+    document.getElementById('contextMenu').classList.remove('open')
+    contextTarget = null
+  }
+
+  document.getElementById('hideMenuItem').addEventListener('click', () => {
+    if (contextTarget) {
+      hideRow(contextTarget)
+    }
+    closeContextMenu()
+  })
+
+  document.addEventListener('click', closeContextMenu)
+  document.addEventListener('contextmenu', (e) => {
+    if (!e.target.closest('.row-header')) {
+      closeContextMenu()
+    }
+  })
+
+  // Initial render
+  render()
+</script>
+
+</body>
+</html>
