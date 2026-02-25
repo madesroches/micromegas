@@ -549,6 +549,8 @@ export function HiddenColumnsBar({ hiddenColumns, onRestore, onRestoreAll, compa
 // Column Management Hook
 // =============================================================================
 
+const EMPTY_COLUMNS: string[] = []
+
 interface ColumnManagementConfig {
   sortColumn?: string
   sortDirection?: 'asc' | 'desc'
@@ -562,7 +564,7 @@ export function useColumnManagement(
 ) {
   const sortColumn = config.sortColumn
   const sortDirection = config.sortDirection
-  const hiddenColumns = config.hiddenColumns || []
+  const hiddenColumns = config.hiddenColumns || EMPTY_COLUMNS
 
   const handleSort = useCallback(
     (columnName: string) => {
@@ -629,6 +631,8 @@ export function useColumnManagement(
 // Row Management Hook (for transposed tables)
 // =============================================================================
 
+const EMPTY_ROWS: string[] = []
+
 interface RowManagementConfig {
   hiddenRows?: string[]
   [key: string]: unknown
@@ -638,7 +642,7 @@ export function useRowManagement(
   config: RowManagementConfig,
   onChange: (config: RowManagementConfig) => void
 ) {
-  const hiddenRows = config.hiddenRows || []
+  const hiddenRows = config.hiddenRows || EMPTY_ROWS
 
   const handleHideRow = useCallback(
     (rowName: string) => {
