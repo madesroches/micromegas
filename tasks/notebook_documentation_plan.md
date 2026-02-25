@@ -29,7 +29,7 @@ Add a new top-level "Analytics Web App" nav section in `mkdocs/mkdocs.yml`:
     - Deployment: admin/web-app.md
 ```
 
-This moves the existing deployment page under the new section and adds notebook documentation alongside it.
+The deployment page (`admin/web-app.md`) stays in its current file location but appears in both nav sections — under "Analytics Web App" for discoverability and under "Administration" where it currently lives. MkDocs supports referencing the same file in multiple nav locations. The Administration section keeps all three of its existing entries unchanged.
 
 ### Files to Create
 
@@ -45,7 +45,7 @@ This moves the existing deployment page under the new section and adds notebook 
 
 | File | Change |
 |------|--------|
-| `mkdocs/mkdocs.yml` | Add "Analytics Web App" nav section, relocate deployment page |
+| `mkdocs/mkdocs.yml` | Add "Analytics Web App" nav section (deployment page referenced in both sections) |
 
 ## Page Content Outlines
 
@@ -101,7 +101,7 @@ Document all 11 cell types with consistent structure per type:
 - SQL macro substitution: `$variable`, `$variable.column`, `$begin`, `$end`
 - Longest-name-first matching, SQL single-quote escaping
 - Multi-column variables (combobox with multi-column SQL results)
-- Expression evaluation: available bindings (`$begin`, `$end`, `$duration_ms`, `$innerWidth`, `$devicePixelRatio`, `$variables`), functions (`snap_interval()`, `Math.*`, `new Date()`)
+- Expression evaluation: available bindings (`$begin`, `$end`, `$duration_ms`, `$innerWidth`, `$devicePixelRatio`, plus each upstream variable as `$variableName`), functions (`snap_interval()`, `Math.*`, `new Date()`)
 - URL parameter sync: delta-based encoding, reserved params (`from`, `to`, `type`)
 - Variable scope: cells only see variables from cells above them
 - Available Variables panel in editor
@@ -159,7 +159,7 @@ Every notebook has a local DataFusion query engine compiled to WebAssembly. This
 4. Write `web-app/notebooks/cell-types.md`
 5. Write `web-app/notebooks/variables.md`
 6. Write `web-app/notebooks/execution.md`
-7. Update `mkdocs/mkdocs.yml` nav to add new section and relocate deployment page
+7. Update `mkdocs/mkdocs.yml` nav to add new section (keep deployment page in Administration too)
 8. Build and verify: `cd mkdocs && mkdocs build` (or `mkdocs serve` for local preview)
 
 ## Trade-offs
@@ -168,9 +168,8 @@ Every notebook has a local DataFusion query engine compiled to WebAssembly. This
 
 **New top-level section vs. under Administration**: Notebooks are a user-facing feature, not an admin concern. A dedicated "Analytics Web App" section makes more sense and gives room to grow (future: screen types, local query docs).
 
-**Relocating deployment page**: Moving `admin/web-app.md` under the new section centralizes all web app docs. The alternative (duplicating or cross-linking) would be harder to maintain.
+**Deployment page in both nav sections**: The deployment page appears under both "Analytics Web App" and "Administration" rather than being moved. This keeps the Administration section intact (3 entries) while making deployment docs discoverable from the web app section too. MkDocs handles dual nav references to the same file without issues.
 
 ## Open Questions
 
 1. Should we include screenshots? The current docs don't use any images besides the logo. Screenshots would help but add maintenance burden.
-2. Should the deployment page physically move from `admin/web-app.md` to `web-app/deployment.md`, or just be referenced from the new nav section? (Referencing avoids breaking existing links.)
