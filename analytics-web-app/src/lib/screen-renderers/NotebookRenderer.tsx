@@ -31,6 +31,7 @@ import { buildCellRendererProps, buildStatusText, buildHgStatusText, computeHgSt
 import { AddCellModal } from './shared'
 import { useWasmEngine } from './useWasmEngine'
 import { useEditorPanelWidth } from './useEditorPanelWidth'
+import { NotebookSourceView } from './NotebookSourceView'
 import { useNotebookAutoRun } from './useNotebookAutoRun'
 import { useTimeRangeSync } from './useTimeRangeSync'
 import { useCellSortCheck } from './useCellSortCheck'
@@ -347,15 +348,6 @@ export function NotebookRenderer({
   const [deletingCellIndex, setDeletingCellIndex] = useState<number | null>(null)
   const [showSource, setShowSource] = useState(false)
 
-  useEffect(() => {
-    if (!showSource) return
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setShowSource(false)
-    }
-    document.addEventListener('keydown', handleKeyDown)
-    return () => document.removeEventListener('keydown', handleKeyDown)
-  }, [showSource])
-
   // Editor panel width
   const { editorPanelWidth, handleEditorPanelResize } = useEditorPanelWidth()
 
@@ -618,24 +610,11 @@ export function NotebookRenderer({
           </div>
         )}
         {showSource ? (
-          <div className="flex flex-col gap-4">
-            <div className="flex items-center gap-3">
-              <button
-                onClick={() => setShowSource(false)}
-                className="text-sm text-accent-link hover:underline"
-              >
-                &larr; Back to notebook
-              </button>
-              <span className="text-[11px] px-1.5 py-0.5 rounded bg-app-card text-theme-text-secondary font-mono font-medium">
-                JSON
-              </span>
-              <span className="text-sm text-theme-text-primary font-medium">Notebook Configuration</span>
-              <span className="text-xs text-theme-text-muted">read-only</span>
-            </div>
-            <pre className="bg-app-card border border-theme-border rounded-lg p-4 overflow-auto text-xs font-mono text-theme-text-secondary whitespace-pre">
-              {JSON.stringify(notebookConfig, null, 2)}
-            </pre>
-          </div>
+          <NotebookSourceView
+            notebookConfig={notebookConfig}
+            onConfigChange={onConfigChange}
+            onBack={() => setShowSource(false)}
+          />
         ) : (
           <>
             <DndContext

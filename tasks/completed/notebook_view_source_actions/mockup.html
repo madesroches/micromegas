@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Notebook View Source - Mockup</title>
+<style>
+  :root {
+    --bg-base: #0a0a0f;
+    --bg-panel: #121218;
+    --bg-card: #1a1a24;
+    --border: #2a2a3a;
+    --text-primary: #e0e0e8;
+    --text-secondary: #a0a0b0;
+    --text-muted: #606070;
+    --accent-link: #5b9cf5;
+    --accent-error: #ef4444;
+    --accent-success: #22c55e;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: var(--bg-base);
+    color: var(--text-primary);
+    padding: 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 48px;
+  }
+
+  h2 {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 12px;
+  }
+
+  .panel {
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+
+  .back-link {
+    font-size: 14px;
+    color: var(--accent-link);
+    cursor: pointer;
+    background: none;
+    border: none;
+    font-family: inherit;
+  }
+  .back-link:hover { text-decoration: underline; }
+
+  .badge {
+    font-size: 11px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: var(--bg-card);
+    color: var(--text-secondary);
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    font-weight: 500;
+  }
+
+  .title {
+    font-size: 14px;
+    color: var(--text-primary);
+    font-weight: 500;
+  }
+
+  .mode-label {
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+  .mode-label.editing {
+    color: var(--accent-link);
+  }
+
+  .actions {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin-left: auto;
+  }
+
+  .icon-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 8px;
+    border-radius: 6px;
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--text-muted);
+    font-size: 12px;
+    font-family: inherit;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .icon-btn:hover {
+    color: var(--text-secondary);
+    background: var(--bg-card);
+  }
+  .icon-btn.copied {
+    color: var(--accent-success);
+  }
+
+  .icon-btn.apply {
+    color: var(--accent-link);
+    border-color: var(--accent-link);
+  }
+  .icon-btn.apply:hover {
+    background: rgba(91, 156, 245, 0.1);
+  }
+
+  .icon-btn svg { width: 14px; height: 14px; }
+
+  pre, textarea {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+    overflow: auto;
+    font-size: 12px;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    color: var(--text-secondary);
+    white-space: pre;
+    line-height: 1.5;
+  }
+
+  textarea {
+    width: 100%;
+    min-height: 240px;
+    resize: vertical;
+    outline: none;
+    border-color: var(--accent-link);
+    color: var(--text-primary);
+  }
+
+  .error-bar {
+    font-size: 12px;
+    color: var(--accent-error);
+    background: rgba(239, 68, 68, 0.1);
+    border: 1px solid rgba(239, 68, 68, 0.3);
+    border-radius: 6px;
+    padding: 8px 12px;
+  }
+
+  .section { display: flex; flex-direction: column; gap: 8px; }
+</style>
+</head>
+<body>
+
+<!-- ==================== READ-ONLY STATE ==================== -->
+<div class="section">
+  <h2>Read-only (current + copy button)</h2>
+  <div class="panel">
+    <div class="header">
+      <button class="back-link">&larr; Back to notebook</button>
+      <span class="badge">JSON</span>
+      <span class="title">Notebook Configuration</span>
+      <span class="mode-label">read-only</span>
+      <div class="actions">
+        <button class="icon-btn" title="Copy to clipboard">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+          Copy
+        </button>
+        <button class="icon-btn" title="Edit source">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/></svg>
+          Edit
+        </button>
+      </div>
+    </div>
+    <pre>{
+  "cells": [
+    {
+      "name": "time_range",
+      "cell_type": "variable",
+      "variable_name": "begin",
+      "default_value": "now-1h"
+    },
+    {
+      "name": "log_entries",
+      "cell_type": "table",
+      "sql": "SELECT time, level, target, msg\nFROM log_entries\nWHERE time BETWEEN '{begin}' AND '{end}'\nORDER BY time DESC\nLIMIT 500"
+    },
+    {
+      "name": "summary_chart",
+      "cell_type": "chart",
+      "sql": "SELECT date_trunc('minute', time) as t, count(*) as cnt\nFROM log_entries\nGROUP BY 1 ORDER BY 1"
+    }
+  ]
+}</pre>
+  </div>
+</div>
+
+<!-- ==================== JUST COPIED STATE ==================== -->
+<div class="section">
+  <h2>After clicking Copy (transient feedback)</h2>
+  <div class="panel">
+    <div class="header">
+      <button class="back-link">&larr; Back to notebook</button>
+      <span class="badge">JSON</span>
+      <span class="title">Notebook Configuration</span>
+      <span class="mode-label">read-only</span>
+      <div class="actions">
+        <button class="icon-btn copied" title="Copied!">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+          Copied
+        </button>
+        <button class="icon-btn" title="Edit source">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/></svg>
+          Edit
+        </button>
+      </div>
+    </div>
+    <pre>{
+  "cells": [
+    {
+      "name": "time_range",
+      "cell_type": "variable",
+      ...
+    }
+  ]
+}</pre>
+  </div>
+</div>
+
+<!-- ==================== EDIT MODE ==================== -->
+<div class="section">
+  <h2>Edit mode (textarea writable)</h2>
+  <div class="panel">
+    <div class="header">
+      <button class="back-link">&larr; Back to notebook</button>
+      <span class="badge">JSON</span>
+      <span class="title">Notebook Configuration</span>
+      <span class="mode-label editing">editing</span>
+      <div class="actions">
+        <button class="icon-btn" title="Copy to clipboard">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+          Copy
+        </button>
+        <button class="icon-btn" title="Cancel editing">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          Cancel
+        </button>
+        <button class="icon-btn apply" title="Apply changes">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+          Apply
+        </button>
+      </div>
+    </div>
+    <textarea spellcheck="false">{
+  "cells": [
+    {
+      "name": "time_range",
+      "cell_type": "variable",
+      "variable_name": "begin",
+      "default_value": "now-1h"
+    },
+    {
+      "name": "log_entries",
+      "cell_type": "table",
+      "sql": "SELECT time, level, target, msg\nFROM log_entries\nWHERE time BETWEEN '{begin}' AND '{end}'\nORDER BY time DESC\nLIMIT 500"
+    },
+    {
+      "name": "summary_chart",
+      "cell_type": "chart",
+      "sql": "SELECT date_trunc('minute', time) as t, count(*) as cnt\nFROM log_entries\nGROUP BY 1 ORDER BY 1"
+    }
+  ]
+}</textarea>
+  </div>
+</div>
+
+<!-- ==================== EDIT MODE WITH ERROR ==================== -->
+<div class="section">
+  <h2>Edit mode with JSON parse error</h2>
+  <div class="panel">
+    <div class="header">
+      <button class="back-link">&larr; Back to notebook</button>
+      <span class="badge">JSON</span>
+      <span class="title">Notebook Configuration</span>
+      <span class="mode-label editing">editing</span>
+      <div class="actions">
+        <button class="icon-btn" title="Copy to clipboard">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+          Copy
+        </button>
+        <button class="icon-btn" title="Cancel editing">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          Cancel
+        </button>
+        <button class="icon-btn apply" title="Apply changes">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+          Apply
+        </button>
+      </div>
+    </div>
+    <textarea spellcheck="false">{
+  "cells": [
+    {
+      "name": "time_range",
+      "cell_type": "variable",
+      "variable_name": "begin"
+      "default_value": "now-1h"
+    }
+  ]
+}</textarea>
+    <div class="error-bar">Invalid JSON: Expected ',' or '}' after property value at line 6</div>
+  </div>
+</div>
+
+</body>
+</html>
