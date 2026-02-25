@@ -279,6 +279,7 @@ function VariableCellEditor({ config, onChange, variables, timeRange, datasource
             value={varConfig.dataSource || ''}
             onChange={(ds) => onChange({ ...varConfig, dataSource: ds })}
             datasourceVariables={datasourceVariables}
+            showNotebookOption={true}
             className=""
           />
           <div>
