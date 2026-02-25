@@ -3,6 +3,8 @@
 This file documents the historical progress of the Micromegas project. For current focus, please see the main [README.md](./README.md).
 
 ## Unreleased
+* **DataFusion Extensions:**
+  * Add `jsonb_each` table function to expand JSONB objects into key-value rows (#860)
 * **Notebook Enhancements:**
   * Add notebook datasource option to dropdown variable cells (#861)
   * Add transposed table cell type for key-value layout of SQL results
