@@ -347,6 +347,7 @@ export function NotebookRenderer({
   const [showAddCellModal, setShowAddCellModal] = useState(false)
   const [deletingCellIndex, setDeletingCellIndex] = useState<number | null>(null)
   const [showSource, setShowSource] = useState(false)
+  const handleCloseSource = useCallback(() => setShowSource(false), [])
 
   // Editor panel width
   const { editorPanelWidth, handleEditorPanelResize } = useEditorPanelWidth()
@@ -613,7 +614,7 @@ export function NotebookRenderer({
           <NotebookSourceView
             notebookConfig={notebookConfig}
             onConfigChange={onConfigChange}
-            onBack={() => setShowSource(false)}
+            onBack={handleCloseSource}
           />
         ) : (
           <>
