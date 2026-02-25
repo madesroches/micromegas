@@ -59,11 +59,12 @@ Add from React:
 
 In `TransposedTableCell`:
 
-1. Extract overrides from options: `const overrides = (options?.overrides as ColumnOverride[] | undefined) || []`
-2. Build override lookup map (memoized): `Map<string, string>` from override column name to format string
-3. Build columns array (memoized) from `table.schema.fields` as `TableColumn[]` — needed by `OverrideCell` for type-aware formatting
-4. Build original row records (memoized): for each `colIdx`, `table.get(colIdx)` gives the full row object
-5. In the render loop, for each visible transposed row and each value column:
+1. Add `variables` to the destructured props (matching `TableCell`'s pattern): `{ data, status, options, onOptionsChange, variables }`
+2. Extract overrides from options: `const overrides = (options?.overrides as ColumnOverride[] | undefined) || []`
+3. Build override lookup map (memoized): `Map<string, string>` from override column name to format string
+4. Build columns array (memoized) from `table.schema.fields` as `TableColumn[]` — needed by `OverrideCell` for type-aware formatting
+5. Build original row records (memoized): for each `colIdx`, `table.get(colIdx)` gives the full row object
+6. In the render loop, for each visible transposed row and each value column:
    - Check if `overrideMap.has(row.name)`
    - If yes: render `<OverrideCell format={override} row={originalRows[colIdx]} columns={columns} variables={variables} />`
    - If no: render `formatCell(value, row.type)` as before
@@ -72,9 +73,10 @@ In `TransposedTableCell`:
 
 In `TransposedTableCellEditor`:
 
-1. Extract overrides from config options (memoized)
-2. Add `handleOverridesChange` callback that updates `config.options.overrides`
-3. Add `<OverrideEditor>` below `DocumentationLink`, passing:
+1. Add `availableColumns` to the destructured props (matching `TableCellEditor`'s pattern): `{ config, onChange, variables, timeRange, availableColumns }`
+2. Extract overrides from config options (memoized)
+3. Add `handleOverridesChange` callback that updates `config.options.overrides`
+4. Add `<OverrideEditor>` below `DocumentationLink`, passing:
    - `overrides`
    - `availableColumns={availableColumns || []}`
    - `availableVariables={Object.keys(variables)}`
