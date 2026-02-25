@@ -16,6 +16,10 @@ There is no way to copy the source or edit it inline. The `onConfigChange` prop 
 
 An existing clipboard pattern exists in `CopyableProcessId.tsx` using `navigator.clipboard.writeText()` with a copied/check icon state.
 
+## Mockup
+
+See [notebook_view_source_mockup.html](notebook_view_source_mockup.html) for a visual mockup showing all four UI states: read-only, copied feedback, edit mode, and edit with JSON error.
+
 ## Design
 
 ### Header Bar Changes
@@ -62,7 +66,7 @@ When Edit is active:
 6. Conditionally render `<pre>` (read mode) or `<textarea>` (edit mode) for the content area
 7. Implement copy handler using `navigator.clipboard.writeText()` pattern from `CopyableProcessId`
 8. Implement apply handler: `JSON.parse(sourceText)` -> validate -> `onConfigChange(parsed)` -> `setEditingSource(false)`
-9. Reset edit state when leaving source view (Back to notebook)
+9. Reset edit state when leaving source view — both the Back button and the Escape key handler must clear `editingSource`, `sourceText`, and `jsonError`
 
 ## Files to Modify
 
