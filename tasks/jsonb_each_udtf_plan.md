@@ -40,10 +40,11 @@ SQL: SELECT key, jsonb_as_string(value) FROM jsonb_each((SELECT properties FROM 
                                               parses Expr::ScalarSubquery
                                                          ↓
                                               JsonbEachTableProvider::scan()
-                                              executes subquery → gets Binary scalar
+                                              executes subquery → gets Binary column(s)
+                                              iterates all rows across all batches
                                                          ↓
-                                              RawJsonb::object_each()
-                                              → Vec<(String, OwnedJsonb)>
+                                              RawJsonb::object_each() per row
+                                              → concatenated Vec<(String, OwnedJsonb)>
                                                          ↓
                                               RecordBatch { key: StringArray, value: BinaryArray }
                                                          ↓
@@ -83,7 +84,7 @@ fn extract_entries_from_jsonb(jsonb_bytes: &[u8]) -> Result<Vec<(String, Vec<u8>
 
 **TableFunctionImpl::call()** — same pattern as `expand_histogram`: match on `Expr::Literal` and `Expr::ScalarSubquery`.
 
-**TableProvider::scan()** — execute subquery, extract the Binary JSONB bytes from the first row/column (handling both plain Binary and Dictionary-encoded Binary), call `extract_entries_from_jsonb`, build a `RecordBatch` with `StringArray` and `BinaryArray`, wrap in `MemorySourceConfig` + `DataSourceExec`. Apply limit if specified.
+**TableProvider::scan()** — execute subquery, iterate all rows across all batches extracting Binary JSONB bytes (handling both plain Binary and Dictionary-encoded Binary), call `extract_entries_from_jsonb` per row and concatenate results, build a `RecordBatch` with `StringArray` and `BinaryArray`, wrap in `MemorySourceConfig` + `DataSourceExec`. Apply limit if specified.
 
 ### 2. Update `rust/datafusion-extensions/src/jsonb/mod.rs`
 
@@ -132,6 +133,7 @@ The output rows represent a single object's key-value pairs (typically <100 entr
    - Non-object input → returns error
    - Null input → returns error
    - Nested values (object/array as values) → returned as JSONB Binary, composable with `jsonb_format_json`
+   - Multi-row subquery → concatenates key-value entries from all rows
 
 ## Open Questions
 

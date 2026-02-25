@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use datafusion::arrow::array::{ArrayRef, BinaryArray, DictionaryArray, GenericBinaryArray};
+use datafusion::arrow::array::{Array, ArrayRef, BinaryArray, DictionaryArray, GenericBinaryArray};
 use datafusion::arrow::datatypes::{DataType, Field, Int32Type, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::catalog::Session;
@@ -123,11 +123,11 @@ fn scalar_to_entries(scalar: &ScalarValue) -> Result<Vec<(String, Vec<u8>)>, Dat
     }
 }
 
-/// Extract JSONB bytes from the first row of a column, handling both plain Binary
+/// Extract JSONB bytes from all rows of a column, handling both plain Binary
 /// and Dictionary<Int32, Binary> encodings.
-fn extract_jsonb_bytes_from_column(
+fn extract_all_jsonb_bytes_from_column(
     column: &ArrayRef,
-) -> Result<Vec<u8>, DataFusionError> {
+) -> Result<Vec<Vec<u8>>, DataFusionError> {
     match column.data_type() {
         DataType::Binary => {
             let binary_array = column
@@ -136,7 +136,9 @@ fn extract_jsonb_bytes_from_column(
                 .ok_or_else(|| {
                     DataFusionError::Execution("failed to cast column to BinaryArray".into())
                 })?;
-            Ok(binary_array.value(0).to_vec())
+            Ok((0..binary_array.len())
+                .map(|i| binary_array.value(i).to_vec())
+                .collect())
         }
         DataType::Dictionary(_, value_type) if matches!(value_type.as_ref(), DataType::Binary) => {
             let dict_array = column
@@ -156,8 +158,12 @@ fn extract_jsonb_bytes_from_column(
                         "dictionary values are not a binary array".into(),
                     )
                 })?;
-            let key_index = dict_array.keys().value(0) as usize;
-            Ok(binary_values.value(key_index).to_vec())
+            Ok((0..dict_array.len())
+                .map(|i| {
+                    let key_index = dict_array.keys().value(i) as usize;
+                    binary_values.value(key_index).to_vec()
+                })
+                .collect())
         }
         other => Err(DataFusionError::Execution(format!(
             "jsonb_each subquery must return a Binary or Dictionary<Int32, Binary> column, got: {other:?}"
@@ -215,28 +221,25 @@ impl TableProvider for JsonbEachTableProvider {
                 let batches =
                     datafusion::physical_plan::collect(physical_plan, task_ctx).await?;
 
-                let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
-                if total_rows == 0 {
+                if batches.is_empty() || batches.iter().all(|b| b.num_rows() == 0) {
                     return Err(DataFusionError::Execution(
                         "jsonb_each subquery returned no rows".into(),
                     ));
                 }
-                if total_rows > 1 {
-                    return Err(DataFusionError::Execution(format!(
-                        "jsonb_each subquery must return exactly one row, got {total_rows}"
-                    )));
-                }
 
-                let batch = &batches[0];
-                if batch.num_columns() != 1 {
-                    return Err(DataFusionError::Execution(format!(
-                        "jsonb_each subquery must return exactly one column, got {}",
-                        batch.num_columns()
-                    )));
+                let mut all_entries = Vec::new();
+                for batch in &batches {
+                    if batch.num_columns() != 1 {
+                        return Err(DataFusionError::Execution(format!(
+                            "jsonb_each subquery must return exactly one column, got {}",
+                            batch.num_columns()
+                        )));
+                    }
+                    for jsonb_bytes in extract_all_jsonb_bytes_from_column(batch.column(0))? {
+                        all_entries.extend(extract_entries_from_jsonb(&jsonb_bytes)?);
+                    }
                 }
-
-                let jsonb_bytes = extract_jsonb_bytes_from_column(batch.column(0))?;
-                extract_entries_from_jsonb(&jsonb_bytes)?
+                all_entries
             }
         };
 

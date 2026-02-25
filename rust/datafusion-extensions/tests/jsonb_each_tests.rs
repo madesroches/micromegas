@@ -181,11 +181,11 @@ async fn test_sql_integration() {
 }
 
 #[tokio::test]
-async fn test_multiple_rows_error() {
+async fn test_multiple_rows_concatenated() {
     let ctx = SessionContext::new();
     micromegas_datafusion_extensions::register_extension_udfs(&ctx);
 
-    // Create a table with multiple rows — subquery should fail
+    // Create a table with multiple JSONB rows — results should be concatenated
     let jsonb1 = parse_json_to_jsonb(r#"{"a": 1}"#);
     let jsonb2 = parse_json_to_jsonb(r#"{"b": 2}"#);
     let schema = Arc::new(Schema::new(vec![Field::new("props", DataType::Binary, false)]));
@@ -200,11 +200,17 @@ async fn test_multiple_rows_error() {
         .await
         .expect("SQL query failed");
 
-    let result = df.collect().await;
-    assert!(result.is_err());
-    let err_msg = result.unwrap_err().to_string();
-    assert!(
-        err_msg.contains("exactly one row"),
-        "unexpected error: {err_msg}"
-    );
+    let results = df.collect().await.expect("failed to collect results");
+    assert_eq!(results.len(), 1);
+    let result_batch = &results[0];
+    assert_eq!(result_batch.num_rows(), 2);
+
+    let keys = result_batch
+        .column(0)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .expect("key column should be StringArray");
+    let mut key_list: Vec<String> = (0..keys.len()).map(|i| keys.value(i).to_string()).collect();
+    key_list.sort();
+    assert_eq!(key_list, vec!["a", "b"]);
 }
