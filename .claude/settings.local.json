@@ -5,7 +5,9 @@
       "Bash(where:*)",
       "Bash(yarn type-check:*)",
       "Bash(npx tsc:*)",
-      "Bash(npx eslint:*)"
+      "Bash(npx eslint:*)",
+      "Bash(cd:*)",
+      "Bash(node:*)"
     ]
   }
 }
