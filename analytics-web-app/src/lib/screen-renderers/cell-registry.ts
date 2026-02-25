@@ -197,14 +197,14 @@ export function getCellEditor(type: CellType): ComponentType<CellEditorProps> {
 /**
  * Cell type options derived from metadata (for add cell modal).
  */
-export const CELL_TYPE_OPTIONS = (Object.entries(CELL_TYPE_METADATA) as [CellType, CellTypeMetadata][]).map(
-  ([type, meta]) => ({
+export const CELL_TYPE_OPTIONS = (Object.entries(CELL_TYPE_METADATA) as [CellType, CellTypeMetadata][])
+  .map(([type, meta]) => ({
     type,
     name: meta.label,
     description: meta.description,
     icon: meta.icon,
-  })
-)
+  }))
+  .sort((a, b) => a.name.localeCompare(b.name))
 
 /**
  * Creates a default cell configuration for the given type.

@@ -1,5 +1,6 @@
 import { render, screen, fireEvent } from '@testing-library/react'
 import { DataType, Timestamp, TimeUnit } from 'apache-arrow'
+import { renderHook, act } from '@testing-library/react'
 import {
   expandRowMacros,
   expandVariableMacros,
@@ -10,7 +11,9 @@ import {
   TableColumn,
   SortHeader,
   HiddenColumnsBar,
+  RowContextMenu,
   getNextSortState,
+  useRowManagement,
 } from '../table-utils'
 
 describe('expandRowMacros', () => {
@@ -624,5 +627,112 @@ describe('HiddenColumnsBar', () => {
   it('should render "Hidden:" label', () => {
     render(<HiddenColumnsBar hiddenColumns={['col_a']} onRestore={jest.fn()} />)
     expect(screen.getByText('Hidden:')).toBeInTheDocument()
+  })
+})
+
+// =============================================================================
+// useRowManagement
+// =============================================================================
+
+describe('useRowManagement', () => {
+  it('should return empty hiddenRows by default', () => {
+    const onChange = jest.fn()
+    const { result } = renderHook(() => useRowManagement({}, onChange))
+    expect(result.current.hiddenRows).toEqual([])
+  })
+
+  it('should return hiddenRows from config', () => {
+    const onChange = jest.fn()
+    const { result } = renderHook(() => useRowManagement({ hiddenRows: ['a', 'b'] }, onChange))
+    expect(result.current.hiddenRows).toEqual(['a', 'b'])
+  })
+
+  it('should hide a row', () => {
+    const onChange = jest.fn()
+    const { result } = renderHook(() => useRowManagement({}, onChange))
+    act(() => result.current.handleHideRow('field_a'))
+    expect(onChange).toHaveBeenCalledWith({ hiddenRows: ['field_a'] })
+  })
+
+  it('should not duplicate when hiding an already hidden row', () => {
+    const onChange = jest.fn()
+    const { result } = renderHook(() =>
+      useRowManagement({ hiddenRows: ['field_a'] }, onChange)
+    )
+    act(() => result.current.handleHideRow('field_a'))
+    expect(onChange).not.toHaveBeenCalled()
+  })
+
+  it('should restore a row', () => {
+    const onChange = jest.fn()
+    const { result } = renderHook(() =>
+      useRowManagement({ hiddenRows: ['field_a', 'field_b'] }, onChange)
+    )
+    act(() => result.current.handleRestoreRow('field_a'))
+    expect(onChange).toHaveBeenCalledWith({ hiddenRows: ['field_b'] })
+  })
+
+  it('should restore all rows', () => {
+    const onChange = jest.fn()
+    const { result } = renderHook(() =>
+      useRowManagement({ hiddenRows: ['field_a', 'field_b'] }, onChange)
+    )
+    act(() => result.current.handleRestoreAll())
+    expect(onChange).toHaveBeenCalledWith({ hiddenRows: [] })
+  })
+
+  it('should preserve other config keys when hiding', () => {
+    const onChange = jest.fn()
+    const { result } = renderHook(() =>
+      useRowManagement({ hiddenRows: [], otherKey: 'value' }, onChange)
+    )
+    act(() => result.current.handleHideRow('field_a'))
+    expect(onChange).toHaveBeenCalledWith({ hiddenRows: ['field_a'], otherKey: 'value' })
+  })
+})
+
+// =============================================================================
+// RowContextMenu
+// =============================================================================
+
+describe('RowContextMenu', () => {
+  const renderInTable = (ui: React.ReactElement) =>
+    render(
+      <table>
+        <tbody>
+          <tr>{ui}</tr>
+        </tbody>
+      </table>
+    )
+
+  it('should render children', () => {
+    renderInTable(
+      <RowContextMenu rowName="field_a" onHide={jest.fn()}>
+        <td>field_a</td>
+      </RowContextMenu>
+    )
+    expect(screen.getByText('field_a')).toBeInTheDocument()
+  })
+
+  it('should show context menu on right-click with Hide Row option', () => {
+    renderInTable(
+      <RowContextMenu rowName="field_a" onHide={jest.fn()}>
+        <td>field_a</td>
+      </RowContextMenu>
+    )
+    fireEvent.contextMenu(screen.getByText('field_a'))
+    expect(screen.getByText('Hide Row')).toBeInTheDocument()
+  })
+
+  it('should call onHide when Hide Row is clicked', () => {
+    const onHide = jest.fn()
+    renderInTable(
+      <RowContextMenu rowName="field_a" onHide={onHide}>
+        <td>field_a</td>
+      </RowContextMenu>
+    )
+    fireEvent.contextMenu(screen.getByText('field_a'))
+    fireEvent.click(screen.getByText('Hide Row'))
+    expect(onHide).toHaveBeenCalledWith('field_a')
   })
 })

@@ -8,6 +8,8 @@ This file documents the historical progress of the Micromegas project. For curre
 * **DataFusion Extensions:**
   * Add `jsonb_each` table function to expand JSONB objects into key-value rows (#860)
 * **Notebook Enhancements:**
+  * Add row hiding to transposed table cell via right-click context menu
+  * Sort cell types alphabetically in Add Cell dialog
   * Add notebook datasource option to dropdown variable cells (#861)
   * Add transposed table cell type for key-value layout of SQL results
   * Replace single-letter cell type icons with Lucide components
