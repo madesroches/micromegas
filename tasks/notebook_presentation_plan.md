@@ -154,12 +154,11 @@ Capture from the analytics web app with dark theme, 1920px browser width, no bro
 | `variables.png` | Variable cell with combobox dropdown open listing metrics, editor panel with SQL query | "Variables" |
 | `horizontal_group.png` | Horizontal group with table, chart, and log cells side-by-side, group editor showing children | "Horizontal Groups" |
 | `swimlane.png` | Swimlane showing thread activity across task pool threads, SQL query in editor | "Swimlane & Timeline" |
+| `property_timeline.png` | Property timeline showing map property changes over time, SQL query and variables | Not yet assigned |
 
 ### Still needed
 
-| File | What to capture | Used by slide |
-|------|----------------|---------------|
-| `property_timeline.png` | Property timeline visualization showing property changes over time | Not yet assigned |
+None — all screenshots captured.
 
 ## Files to Create
 
