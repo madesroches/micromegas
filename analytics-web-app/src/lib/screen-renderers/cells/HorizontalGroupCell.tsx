@@ -152,10 +152,11 @@ function HgChildPane({
       }`}>
       {/* Pane label */}
       <div
-        className={`flex items-center justify-between px-2 py-0.5 cursor-pointer ${
+        className={`select-none flex items-center justify-between px-2 py-0.5 cursor-pointer ${
           isSelected ? 'bg-[var(--selection-bg)]' : ''
         }`}
         onDoubleClick={(e) => {
+          e.preventDefault()
           e.stopPropagation()
           onSelect()
         }}
@@ -166,6 +167,7 @@ function HgChildPane({
               {...(dragHandleProps as React.ButtonHTMLAttributes<HTMLButtonElement>)}
               className="opacity-0 group-hover/pane:opacity-100 text-theme-text-muted hover:text-theme-text-primary transition-all cursor-grab active:cursor-grabbing touch-none"
               onClick={(e) => e.stopPropagation()}
+              onDoubleClick={(e) => e.stopPropagation()}
             >
               <GripVertical className="w-3 h-3" />
             </button>
@@ -186,7 +188,7 @@ function HgChildPane({
           )}
         </div>
 
-        <div className="flex items-center gap-0.5 shrink-0 opacity-0 group-hover/pane:opacity-100 transition-opacity">
+        <div className="flex items-center gap-0.5 shrink-0 opacity-0 group-hover/pane:opacity-100 transition-opacity" onDoubleClick={(e) => e.stopPropagation()}>
           {canRun && (
             <button
               className="p-0.5 text-theme-text-muted hover:text-theme-text-primary transition-colors"
@@ -244,6 +246,7 @@ function HgChildPane({
       <div
         className="flex-1 overflow-auto px-1 pb-1"
         onDoubleClick={(e) => {
+          e.preventDefault();
           e.stopPropagation();
           onSelect();
         }}

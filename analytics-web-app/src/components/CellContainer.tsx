@@ -138,6 +138,7 @@ export const CellContainer = forwardRef<HTMLDivElement, CellContainerProps>(func
       {...(dragHandleProps as React.ButtonHTMLAttributes<HTMLButtonElement>)}
       className="opacity-0 group-hover/cell:opacity-100 text-theme-text-muted hover:text-theme-text-primary transition-all cursor-grab active:cursor-grabbing touch-none"
       onClick={(e) => e.stopPropagation()}
+      onDoubleClick={(e) => e.stopPropagation()}
     >
       <GripVertical className="w-3.5 h-3.5" />
     </button>
@@ -149,6 +150,7 @@ export const CellContainer = forwardRef<HTMLDivElement, CellContainerProps>(func
         e.stopPropagation()
         onToggleCollapsed()
       }}
+      onDoubleClick={(e) => e.stopPropagation()}
       className={`text-theme-text-muted hover:text-theme-text-primary transition-colors ${fadeClass}`}
     >
       {collapsed ? (
@@ -160,7 +162,7 @@ export const CellContainer = forwardRef<HTMLDivElement, CellContainerProps>(func
   ) : null
 
   const hoverControls = (
-    <div className="flex items-center gap-1 opacity-0 group-hover/cell:opacity-100 shrink-0 transition-opacity">
+    <div className="flex items-center gap-1 opacity-0 group-hover/cell:opacity-100 shrink-0 transition-opacity" onDoubleClick={(e) => e.stopPropagation()}>
       {onRun && canRun && (
         <Button
           variant="ghost"
@@ -278,13 +280,13 @@ export const CellContainer = forwardRef<HTMLDivElement, CellContainerProps>(func
     return (
       <div
         ref={ref}
-        className={`flex items-center gap-1.5 py-0.5 px-1.5 rounded cursor-pointer group/cell transition-colors border-l-2 ${
+        className={`select-none flex items-center gap-1.5 py-0.5 px-1.5 rounded cursor-pointer group/cell transition-colors border-l-2 ${
           isSelected
             ? 'bg-[var(--selection-bg)] border-l-accent-link'
             : 'border-l-transparent bg-app-panel/30 hover:bg-app-panel/50'
         } ${isDragging ? 'opacity-50' : ''}`}
         style={style}
-        onDoubleClick={onSelect}
+        onDoubleClick={(e) => { e.preventDefault(); onSelect?.() }}
         {...divProps}
       >
         {gripHandle}
@@ -314,9 +316,9 @@ export const CellContainer = forwardRef<HTMLDivElement, CellContainerProps>(func
     return (
       <div
         ref={ref}
-        className={`group/cell cursor-pointer transition-colors ${isDragging ? 'opacity-50' : ''}`}
+        className={`select-none group/cell cursor-pointer transition-colors ${isDragging ? 'opacity-50' : ''}`}
         style={style}
-        onDoubleClick={onSelect}
+        onDoubleClick={(e) => { e.preventDefault(); onSelect?.() }}
         {...divProps}
       >
         <div className={`flex items-center gap-2 py-0.5 px-1.5 rounded transition-colors border-l-2 ${
@@ -324,7 +326,7 @@ export const CellContainer = forwardRef<HTMLDivElement, CellContainerProps>(func
         }`}>
           {gripHandle}
           <span className="text-[11px] font-medium text-theme-text-secondary shrink-0">{name}</span>
-          <div className="flex-1 min-w-0" onClick={(e) => e.stopPropagation()}>
+          <div className="flex-1 min-w-0" onClick={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()}>
             {titleBarContent}
           </div>
           {statusLabel && <span className={`text-[10px] ${statusColor} shrink-0 ${fadeClass}`}>{statusLabel}</span>}
@@ -341,11 +343,11 @@ export const CellContainer = forwardRef<HTMLDivElement, CellContainerProps>(func
   return (
     <div
       ref={ref}
-      className={`group/cell cursor-pointer transition-colors ${
+      className={`select-none group/cell cursor-pointer transition-colors ${
         !isGroup ? `border-l-2 ${isSelected ? 'border-l-accent-link' : 'border-l-transparent'}` : ''
       } ${isDragging ? 'opacity-50' : ''}`}
       style={style}
-      onDoubleClick={onSelect}
+      onDoubleClick={(e) => { e.preventDefault(); onSelect?.() }}
       {...divProps}
     >
       {/* Header */}
