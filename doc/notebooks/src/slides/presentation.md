@@ -40,23 +40,23 @@
 
 ---
 
-## The Solution
+## The Gap
 
 Monitoring (Grafana) ← **???** → Deep analysis (Jupyter)
 
 Single-purpose screens sit in between but don't compose
 
-<div class="fragment">
+--
+
+## The Solution
 
 What if we took those **same components** — tables, charts, logs, timelines — and made them **composable**?
 
 <ul>
-<li>The <strong>iterative, exploratory</strong> nature of Jupyter</li>
-<li>But with <strong>specialized visualizations</strong> that make results instantly readable</li>
-<li>No boilerplate — write SQL, see a chart</li>
+<li class="fragment">The <strong>iterative, exploratory</strong> nature of Jupyter</li>
+<li class="fragment">But with <strong>specialized visualizations</strong> that make results instantly readable</li>
+<li class="fragment">No boilerplate — write SQL, see a chart</li>
 </ul>
-
-</div>
 
 ---
 
