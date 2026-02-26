@@ -154,7 +154,9 @@ Capture from the analytics web app with dark theme, 1920px browser width, no bro
 | `variables.png` | Variable cell with combobox dropdown open listing metrics, editor panel with SQL query | "Variables" |
 | `horizontal_group.png` | Horizontal group with table, chart, and log cells side-by-side, group editor showing children | "Horizontal Groups" |
 | `swimlane.png` | Swimlane showing thread activity across task pool threads, SQL query in editor | "Swimlane & Timeline" |
-| `property_timeline.png` | Property timeline showing map property changes over time, SQL query and variables | Not yet assigned |
+| `property_timeline.png` | Property timeline showing map property changes over time, SQL query and variables | "Property Timeline" |
+| `table_cell.png` | Table cell: SELECT * FROM measures, 3.7M rows, 175 MB, simple query | "The Table Cell" |
+| `log_cell.png` | Log cell with full-text search and level filtering | "Logs" |
 
 ### Still needed
 

@@ -7,6 +7,15 @@
 
 ---
 
+## Agenda
+
+1. **Existing tools** — strengths and gaps
+2. **The solution** — composable notebooks
+3. **Screenshots** — what we built
+4. **Live demo**
+
+---
+
 ## Grafana Dashboards
 
 <ul>
@@ -111,7 +120,17 @@ Tables, charts, logs, markdown — all in one page
 
 ---
 
-## Charts with Drag-to-Zoom
+## The Table Cell
+
+SQL in, rows out
+
+<img src="./table_cell.png" style="max-width: 75%; height: auto;">
+
+3.7M rows · 175 MB · <code>SELECT * FROM measures</code>
+
+---
+
+## Charts
 
 <img src="./chart_zoom.png" style="max-width: 75%; height: auto;">
 
@@ -119,11 +138,19 @@ Drag to select a time range. Everything re-executes.
 
 ---
 
+## Logs
+
+<img src="./log_cell.png" style="max-width: 75%; height: auto;">
+
+Compact and color-coded automatically.
+
+---
+
 ## Variables
 
 <img src="./variables.png" style="max-width: 75%; height: auto;">
 
-Dropdowns, text inputs, computed expressions — all from SQL
+Dropdowns, text inputs, computed JS expressions
 
 ---
 
@@ -135,17 +162,19 @@ Side-by-side layout via drag-and-drop
 
 ---
 
-## Swimlane & Timeline
+## Swimlane
 
 <img src="./swimlane.png" style="max-width: 75%; height: auto;">
 
-Thread activity and property changes over time
+Thread activity over time
 
 ---
 
-## Demo
+## Property Timeline
 
-**Switch to the running analytics web app**
+<img src="./property_timeline.png" style="max-width: 75%; height: auto;">
+
+Property changes over time
 
 ---
 
