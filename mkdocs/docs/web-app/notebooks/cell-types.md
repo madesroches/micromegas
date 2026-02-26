@@ -77,6 +77,8 @@ SELECT DISTINCT name, unit FROM measures
 
 After execution, the current value is validated against available options. If invalid, the default value or first option is auto-selected.
 
+![Combobox variable with dropdown open showing metric options](../../assets/images/notebooks/variables.png){ .screenshot }
+
 ### Expression
 
 Computed value from a JavaScript expression. Evaluated automatically — not user-editable at runtime.
@@ -155,6 +157,8 @@ FROM processes
 ORDER BY $order_by
 LIMIT 100
 ```
+
+![Table cell displaying query results with 3.7M rows](../../assets/images/notebooks/table_cell.png){ .screenshot }
 
 ---
 
@@ -237,6 +241,8 @@ WHERE name = '$metric'
 ORDER BY time
 ```
 
+![Chart cell with frame time data and drag-to-zoom](../../assets/images/notebooks/chart_zoom.png){ .screenshot }
+
 ---
 
 ## ![Log](../../assets/images/cell-icons/scroll-text.svg){ .cell-icon } Log
@@ -287,6 +293,8 @@ ORDER BY time DESC
 LIMIT 500
 ```
 
+![Log cell with level-based coloring and full-text search](../../assets/images/notebooks/log_cell.png){ .screenshot }
+
 ---
 
 ## ![Property Timeline](../../assets/images/cell-icons/gantt-chart.svg){ .cell-icon } Property Timeline
@@ -319,6 +327,8 @@ Visualizes how JSON properties change over time as horizontal timeline segments.
 
 - `time` — timestamp
 - `properties` — JSON object string (e.g., `{"cpu": 45, "state": "running"}`)
+
+![Property timeline showing map property changes over time](../../assets/images/notebooks/property_timeline.png){ .screenshot }
 
 ---
 
@@ -369,6 +379,8 @@ WHERE process_id = '$process_id'
   AND array_has("streams.tags", 'cpu')
 ORDER BY name, begin
 ```
+
+![Swimlane showing thread activity across a task pool](../../assets/images/notebooks/swimlane.png){ .screenshot }
 
 ---
 
@@ -465,3 +477,5 @@ A container cell that arranges its children side by side in a horizontal layout.
 **Example use case:**
 
 Place two related charts side by side — one showing CPU usage and another showing memory usage — for a compact comparison view.
+
+![Horizontal group with table, chart, and log cells side by side](../../assets/images/notebooks/horizontal_group.png){ .screenshot }
