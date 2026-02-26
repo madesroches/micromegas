@@ -57,6 +57,7 @@ Discover how Micromegas achieves this unparalleled cost efficiency and compare i
 
 Learn more about Micromegas through our technical presentations:
 
+- **[Interactive Notebooks for Observability](https://madesroches.github.io/micromegas/notebooks/)** (February 2026) - Composable notebook cells with an in-browser query engine
 - **[Unified Observability for Games](https://madesroches.github.io/micromegas/unified-observability-for-games/)** (January 2026) - Why a unified architecture is easier to use and more powerful
 - **[High-Frequency Observability: Cost-Efficient Telemetry at Scale](https://madesroches.github.io/micromegas/high-frequency-observability/)** (October 2025) - How to record more data for less money with tail sampling and lakehouse architecture
 - **[Design Presentation](https://madesroches.github.io/micromegas/doc/design-presentation/design.html)** (February 2025) - Architecture and design principles
