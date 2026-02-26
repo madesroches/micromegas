@@ -17,6 +17,9 @@
   "dependencies": {
     "reveal.js": "^5.2.1"
   },
+  "resolutions": {
+    "rollup": "^4.59.0"
+  },
   "devDependencies": {
     "vite": "^7.1.3"
   }
