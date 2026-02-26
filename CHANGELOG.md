@@ -3,6 +3,8 @@
 This file documents the historical progress of the Micromegas project. For current focus, please see the main [README.md](./README.md).
 
 ## Unreleased
+* **Security:**
+  * Bump rollup to 4.59.0 to fix CVE (arbitrary file write) across all JS packages
 * **Build:**
   * Gate server-only dependencies behind `server` feature flag on `micromegas-telemetry` and `micromegas` crates (#855)
 * **DataFusion Extensions:**
