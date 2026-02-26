@@ -138,19 +138,28 @@ doc/notebooks/
 └── presentation-plan.md   # Speaker guide
 ```
 
-## Screenshots to Capture
+## Screenshots
 
 Capture from the analytics web app with dark theme, 1920px browser width, no browser chrome.
 
 **Note:** `vite.config.js` sets `publicDir: 'media'`, so files in `media/` are served at root. Reference images in slides as `./filename.png`, **not** `./media/filename.png`.
 
-| Screenshot | What to show |
-|------------|-------------|
-| `notebook_overview.png` | A notebook with a mix of cell types: variable in title bar, table, chart, markdown |
-| `chart_zoom.png` | A chart cell with time-series data, ideally mid-drag or showing the zoom selection |
-| `variables.png` | Variable cells: a combobox dropdown open, a text input, showing compact title-bar rendering |
-| `horizontal_group.png` | An HG cell with 2-3 children side-by-side |
-| `swimlane.png` | A swimlane or property timeline showing thread activity |
+### Available
+
+| File | Source | Used by slide |
+|------|--------|---------------|
+| `notebook_overview.png` | Telemetry-services-dashboard: charts, logs, horizontal groups, variables in title bar | "Cell Types at a Glance" |
+| `notebook_editor.png` | Same dashboard with cell editor panel open on the right | Spare — not referenced by any slide yet |
+| `chart_zoom.png` | Chart cell with frame time data, SQL query in editor, variables in title bar | "Charts with Drag-to-Zoom" |
+| `variables.png` | Variable cell with combobox dropdown open listing metrics, editor panel with SQL query | "Variables" |
+| `horizontal_group.png` | Horizontal group with table, chart, and log cells side-by-side, group editor showing children | "Horizontal Groups" |
+| `swimlane.png` | Swimlane showing thread activity across task pool threads, SQL query in editor | "Swimlane & Timeline" |
+
+### Still needed
+
+| File | What to capture | Used by slide |
+|------|----------------|---------------|
+| `property_timeline.png` | Property timeline visualization showing property changes over time | Not yet assigned |
 
 ## Files to Create
 
