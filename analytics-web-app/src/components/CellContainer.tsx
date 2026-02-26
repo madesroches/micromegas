@@ -280,13 +280,14 @@ export const CellContainer = forwardRef<HTMLDivElement, CellContainerProps>(func
     return (
       <div
         ref={ref}
-        className={`select-none flex items-center gap-1.5 py-0.5 px-1.5 rounded cursor-pointer group/cell transition-colors border-l-2 ${
+        className={`flex items-center gap-1.5 py-0.5 px-1.5 rounded cursor-pointer group/cell transition-colors border-l-2 ${
           isSelected
             ? 'bg-[var(--selection-bg)] border-l-accent-link'
             : 'border-l-transparent bg-app-panel/30 hover:bg-app-panel/50'
         } ${isDragging ? 'opacity-50' : ''}`}
         style={style}
-        onDoubleClick={(e) => { e.preventDefault(); onSelect?.() }}
+        onMouseDown={(e) => { if (e.detail > 1) e.preventDefault() }}
+        onDoubleClick={() => onSelect?.()}
         {...divProps}
       >
         {gripHandle}
@@ -316,9 +317,10 @@ export const CellContainer = forwardRef<HTMLDivElement, CellContainerProps>(func
     return (
       <div
         ref={ref}
-        className={`select-none group/cell cursor-pointer transition-colors ${isDragging ? 'opacity-50' : ''}`}
+        className={`group/cell cursor-pointer transition-colors ${isDragging ? 'opacity-50' : ''}`}
         style={style}
-        onDoubleClick={(e) => { e.preventDefault(); onSelect?.() }}
+        onMouseDown={(e) => { if (e.detail > 1) e.preventDefault() }}
+        onDoubleClick={() => onSelect?.()}
         {...divProps}
       >
         <div className={`flex items-center gap-2 py-0.5 px-1.5 rounded transition-colors border-l-2 ${
@@ -343,11 +345,12 @@ export const CellContainer = forwardRef<HTMLDivElement, CellContainerProps>(func
   return (
     <div
       ref={ref}
-      className={`select-none group/cell cursor-pointer transition-colors ${
+      className={`group/cell cursor-pointer transition-colors ${
         !isGroup ? `border-l-2 ${isSelected ? 'border-l-accent-link' : 'border-l-transparent'}` : ''
       } ${isDragging ? 'opacity-50' : ''}`}
       style={style}
-      onDoubleClick={(e) => { e.preventDefault(); onSelect?.() }}
+      onMouseDown={(e) => { if (e.detail > 1) e.preventDefault() }}
+      onDoubleClick={() => onSelect?.()}
       {...divProps}
     >
       {/* Header */}

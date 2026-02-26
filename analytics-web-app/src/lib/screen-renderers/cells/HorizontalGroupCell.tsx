@@ -152,11 +152,11 @@ function HgChildPane({
       }`}>
       {/* Pane label */}
       <div
-        className={`select-none flex items-center justify-between px-2 py-0.5 cursor-pointer ${
+        className={`flex items-center justify-between px-2 py-0.5 cursor-pointer ${
           isSelected ? 'bg-[var(--selection-bg)]' : ''
         }`}
+        onMouseDown={(e) => { if (e.detail > 1) e.preventDefault() }}
         onDoubleClick={(e) => {
-          e.preventDefault()
           e.stopPropagation()
           onSelect()
         }}
@@ -245,8 +245,8 @@ function HgChildPane({
       {/* Content */}
       <div
         className="flex-1 overflow-auto px-1 pb-1"
+        onMouseDown={(e) => { if (e.detail > 1) e.preventDefault() }}
         onDoubleClick={(e) => {
-          e.preventDefault();
           e.stopPropagation();
           onSelect();
         }}
