@@ -18,6 +18,7 @@ import {
 import { CSS } from '@dnd-kit/utilities'
 import {
   GripVertical,
+  Pencil,
   Play,
   RotateCcw,
   MoreVertical,
@@ -154,7 +155,7 @@ function HgChildPane({
         className={`flex items-center justify-between px-2 py-0.5 cursor-pointer ${
           isSelected ? 'bg-[var(--selection-bg)]' : ''
         }`}
-        onClick={(e) => {
+        onDoubleClick={(e) => {
           e.stopPropagation()
           onSelect()
         }}
@@ -220,7 +221,14 @@ function HgChildPane({
                 onClick={(e) => e.stopPropagation()}
               >
                 <DropdownMenu.Item
-                  className="flex items-center gap-2 px-3 py-2 text-sm text-accent-error hover:bg-theme-border/50 cursor-pointer outline-none rounded-md"
+                  className="flex items-center gap-2 px-3 py-2 text-sm text-theme-text-primary hover:bg-theme-border/50 cursor-pointer outline-none rounded-t-md"
+                  onSelect={onSelect}
+                >
+                  <Pencil className="w-3.5 h-3.5" />
+                  Edit cell
+                </DropdownMenu.Item>
+                <DropdownMenu.Item
+                  className="flex items-center gap-2 px-3 py-2 text-sm text-accent-error hover:bg-theme-border/50 cursor-pointer outline-none rounded-b-md"
                   onSelect={onDeleteChild}
                 >
                   <Trash2 className="w-3.5 h-3.5" />
@@ -235,7 +243,7 @@ function HgChildPane({
       {/* Content */}
       <div
         className="flex-1 overflow-auto px-1 pb-1"
-        onClick={(e) => {
+        onDoubleClick={(e) => {
           e.stopPropagation();
           onSelect();
         }}

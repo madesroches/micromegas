@@ -39,6 +39,7 @@ jest.mock('lucide-react', () => ({
   ChevronLeft: () => <span data-testid="chevron-left">◀</span>,
   ArrowLeft: () => <span data-testid="arrow-left">←</span>,
   Group: () => <span data-testid="group">⊞</span>,
+  Pencil: () => <span data-testid="pencil">✏</span>,
 }))
 
 // @radix-ui/react-dropdown-menu is mocked via moduleNameMapper in jest.config.js
@@ -270,14 +271,14 @@ describe('NotebookRenderer', () => {
   })
 
   describe('cell selection', () => {
-    it('should select cell when clicked', async () => {
+    it('should select cell when double-clicked', async () => {
       const cells = [createTableCell('Query')]
 
       await renderNotebook(createDefaultProps({ config: { cells } }))
 
-      // Find the cell container and click it
+      // Find the cell container and double-click it
       const cellContainer = screen.getByText('Query').closest('[class*="group/cell"]')
-      fireEvent.click(cellContainer!)
+      fireEvent.doubleClick(cellContainer!)
 
       // The editor panel should appear with cell name input
       expect(screen.getByText('Cell Name')).toBeInTheDocument()
@@ -289,7 +290,7 @@ describe('NotebookRenderer', () => {
       await renderNotebook(createDefaultProps({ config: { cells } }))
 
       const cellContainer = screen.getByText('My Query').closest('[class*="group/cell"]')
-      fireEvent.click(cellContainer!)
+      fireEvent.doubleClick(cellContainer!)
 
       // Editor should show cell name in input
       expect(screen.getByDisplayValue('My Query')).toBeInTheDocument()
@@ -302,7 +303,7 @@ describe('NotebookRenderer', () => {
 
       // Select cell
       const cellContainer = screen.getByText('Query').closest('[class*="group/cell"]')
-      fireEvent.click(cellContainer!)
+      fireEvent.doubleClick(cellContainer!)
 
       expect(screen.getByText('Cell Name')).toBeInTheDocument()
 
@@ -323,7 +324,7 @@ describe('NotebookRenderer', () => {
 
       // Select the cell first
       const cellContainer = screen.getByText('ToDelete').closest('[class*="group/cell"]')
-      fireEvent.click(cellContainer!)
+      fireEvent.doubleClick(cellContainer!)
 
       // Click delete in editor - look for "Delete Cell" button
       const deleteButton = screen.getByText('Delete Cell')
@@ -346,7 +347,7 @@ describe('NotebookRenderer', () => {
 
       // Select cell
       const cellContainer = screen.getByText('ToDelete').closest('[class*="group/cell"]')
-      fireEvent.click(cellContainer!)
+      fireEvent.doubleClick(cellContainer!)
 
       // Click delete in editor
       fireEvent.click(screen.getByText('Delete Cell'))
@@ -373,7 +374,7 @@ describe('NotebookRenderer', () => {
 
       // Select cell - find the cell by name in the main content area
       const cellContainer = screen.getByText('ToDelete').closest('[class*="group/cell"]')
-      fireEvent.click(cellContainer!)
+      fireEvent.doubleClick(cellContainer!)
 
       // Click delete in editor
       fireEvent.click(screen.getByText('Delete Cell'))
@@ -404,7 +405,7 @@ describe('NotebookRenderer', () => {
 
       // Select cell
       const cellContainer = screen.getByText('OldName').closest('[class*="group/cell"]')
-      fireEvent.click(cellContainer!)
+      fireEvent.doubleClick(cellContainer!)
 
       // Update name in editor
       const nameInput = screen.getByDisplayValue('OldName')
@@ -422,7 +423,7 @@ describe('NotebookRenderer', () => {
 
       // Select second cell
       const cellContainer = screen.getByText('Second').closest('[class*="group/cell"]')
-      fireEvent.click(cellContainer!)
+      fireEvent.doubleClick(cellContainer!)
 
       // Try to rename to existing name
       const nameInput = screen.getByDisplayValue('Second')
@@ -440,7 +441,7 @@ describe('NotebookRenderer', () => {
 
       // Select cell
       const cellContainer = screen.getByText('Query').closest('[class*="group/cell"]')
-      fireEvent.click(cellContainer!)
+      fireEvent.doubleClick(cellContainer!)
 
       // Clear name
       const nameInput = screen.getByDisplayValue('Query')
@@ -482,7 +483,7 @@ describe('NotebookRenderer', () => {
 
       // Select a cell to show the editor panel
       const cellContainer = screen.getByText('Query').closest('[class*="group/cell"]')
-      fireEvent.click(cellContainer!)
+      fireEvent.doubleClick(cellContainer!)
 
       // Save buttons should NOT be in the renderer (they're in the parent title bar now)
       const editorPanel = screen.getByText('Cell Name').closest('div[class*="border-l"]')

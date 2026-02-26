@@ -1,6 +1,6 @@
 import { ReactNode, useRef, useEffect, forwardRef, HTMLAttributes, useCallback } from 'react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
-import { ChevronDown, ChevronRight, Copy, Play, RotateCcw, MoreVertical, Trash2, GripVertical, Zap } from 'lucide-react'
+import { ChevronDown, ChevronRight, Copy, Pencil, Play, RotateCcw, MoreVertical, Trash2, GripVertical, Zap } from 'lucide-react'
 import { CellType, CellStatus, getCellTypeMetadata } from '@/lib/screen-renderers/cell-registry'
 import { Button } from '@/components/ui/button'
 import { ResizeHandle } from '@/components/ResizeHandle'
@@ -200,9 +200,18 @@ export const CellContainer = forwardRef<HTMLDivElement, CellContainerProps>(func
             className="w-48 bg-app-panel border border-theme-border rounded-md shadow-lg z-50"
             onClick={(e) => e.stopPropagation()}
           >
-            {onRunFromHere && canRun && (
+            {onSelect && (
               <DropdownMenu.Item
                 className="flex items-center gap-2 px-3 py-2 text-sm text-theme-text-primary hover:bg-theme-border/50 cursor-pointer outline-none first:rounded-t-md"
+                onSelect={() => onSelect()}
+              >
+                <Pencil className="w-4 h-4" />
+                Edit cell
+              </DropdownMenu.Item>
+            )}
+            {onRunFromHere && canRun && (
+              <DropdownMenu.Item
+                className="flex items-center gap-2 px-3 py-2 text-sm text-theme-text-primary hover:bg-theme-border/50 cursor-pointer outline-none"
                 onSelect={() => onRunFromHere()}
               >
                 <Play className="w-4 h-4" />
@@ -275,7 +284,7 @@ export const CellContainer = forwardRef<HTMLDivElement, CellContainerProps>(func
             : 'border-l-transparent bg-app-panel/30 hover:bg-app-panel/50'
         } ${isDragging ? 'opacity-50' : ''}`}
         style={style}
-        onClick={onSelect}
+        onDoubleClick={onSelect}
         {...divProps}
       >
         {gripHandle}
@@ -307,7 +316,7 @@ export const CellContainer = forwardRef<HTMLDivElement, CellContainerProps>(func
         ref={ref}
         className={`group/cell cursor-pointer transition-colors ${isDragging ? 'opacity-50' : ''}`}
         style={style}
-        onClick={onSelect}
+        onDoubleClick={onSelect}
         {...divProps}
       >
         <div className={`flex items-center gap-2 py-0.5 px-1.5 rounded transition-colors border-l-2 ${
@@ -336,7 +345,7 @@ export const CellContainer = forwardRef<HTMLDivElement, CellContainerProps>(func
         !isGroup ? `border-l-2 ${isSelected ? 'border-l-accent-link' : 'border-l-transparent'}` : ''
       } ${isDragging ? 'opacity-50' : ''}`}
       style={style}
-      onClick={onSelect}
+      onDoubleClick={onSelect}
       {...divProps}
     >
       {/* Header */}

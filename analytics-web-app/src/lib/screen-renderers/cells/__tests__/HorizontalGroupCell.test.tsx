@@ -14,6 +14,7 @@ jest.mock('lucide-react', () => ({
   X: () => <span data-testid="x-icon">×</span>,
   ArrowLeft: () => <span data-testid="arrow-left">←</span>,
   Group: () => <span data-testid="group">⊞</span>,
+  Pencil: () => <span data-testid="pencil">✏</span>,
 }))
 
 // Mock @dnd-kit
@@ -269,7 +270,7 @@ describe('HorizontalGroupCell', () => {
   })
 
   describe('interactions', () => {
-    it('click child header calls onChildSelect with child name', () => {
+    it('double-click child header calls onChildSelect with child name', () => {
       const onChildSelect = jest.fn()
       const children = [makeChild('clickme', 'table')]
       render(
@@ -280,7 +281,7 @@ describe('HorizontalGroupCell', () => {
           })}
         />
       )
-      fireEvent.click(screen.getByText('clickme'))
+      fireEvent.doubleClick(screen.getByText('clickme'))
       expect(onChildSelect).toHaveBeenCalledWith('clickme')
     })
 
