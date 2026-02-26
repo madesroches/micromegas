@@ -69,10 +69,10 @@ Dropdown populated by a SQL query. Single-column queries produce simple string o
 
 ```sql
 -- Single column: options are strings
-SELECT DISTINCT name FROM measures WHERE time >= '$begin' AND time < '$end'
+SELECT DISTINCT name FROM measures
 
 -- Multi-column: options are objects with .name and .unit fields
-SELECT DISTINCT name, unit FROM measures WHERE time >= '$begin' AND time < '$end'
+SELECT DISTINCT name, unit FROM measures
 ```
 
 After execution, the current value is validated against available options. If invalid, the default value or first option is auto-selected.
@@ -135,6 +135,7 @@ SQL query results displayed in a sortable, paginated table.
 - Client-side pagination with configurable page size
 - Sort column available as `$order_by` macro in SQL for server-side sorting
 - Column format overrides with markdown and row macros (`$row.columnName`)
+- Results registered in the [local WASM query engine](execution.md#local-wasm-query-engine) under the cell name for downstream queries
 
 **Column format overrides:**
 
@@ -151,7 +152,6 @@ This renders the `exe` column as a link to the process page.
 ```sql
 SELECT process_id, exe, start_time, username, computer
 FROM processes
-WHERE start_time >= '$begin' AND start_time < '$end'
 ORDER BY $order_by
 LIMIT 100
 ```
@@ -173,6 +173,12 @@ Same as Table — `sql`, `dataSource`, and options for hidden rows, page size, a
 | `pageSize` | number | Page size for scrolling |
 | `hiddenRows` | string[] | Hidden row names (original column names) |
 | `overrides` | array | Row rendering overrides |
+
+**Features:**
+
+- Row hiding via right-click context menu, with a restoration bar to unhide
+- Row format overrides with markdown and row macros (same syntax as table column overrides)
+- Results registered in the [local WASM query engine](execution.md#local-wasm-query-engine) under the cell name for downstream queries
 
 **Example:**
 
@@ -227,7 +233,7 @@ Multi-query time-series charts supporting line and bar chart types.
 ```sql
 SELECT time, value
 FROM measures
-WHERE name = '$metric' AND time >= '$begin' AND time < '$end'
+WHERE name = '$metric'
 ORDER BY time
 ```
 
@@ -261,6 +267,8 @@ The renderer auto-classifies columns by name:
 
 Additional columns are rendered as fixed-width monospace text.
 
+- Results registered in the [local WASM query engine](execution.md#local-wasm-query-engine) under the cell name for downstream queries
+
 **Level coloring:**
 
 | Level | Color |
@@ -275,7 +283,6 @@ Additional columns are rendered as fixed-width monospace text.
 ```sql
 SELECT time, level, target, msg
 FROM log_entries
-WHERE time >= '$begin' AND time < '$end'
 ORDER BY time DESC
 LIMIT 500
 ```
@@ -306,6 +313,7 @@ Visualizes how JSON properties change over time as horizontal timeline segments.
 - Interactive key selection — add or remove property keys from the display
 - Time range zoom via drag selection
 - Fills time gaps with "no value" state
+- Results registered in the [local WASM query engine](execution.md#local-wasm-query-engine) under the cell name for downstream queries
 
 **Expected columns:**
 
@@ -342,6 +350,7 @@ Multiple rows with the same `id` create multiple segments in one lane. Lanes are
 - Horizontal time bars in the center
 - Drag-to-zoom time selection
 - Time axis with formatted tick marks
+- Results registered in the [local WASM query engine](execution.md#local-wasm-query-engine) under the cell name for downstream queries
 
 **Example SQL:**
 
