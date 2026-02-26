@@ -60,7 +60,6 @@ SQL queries, markdown content, and chart unit labels all support macro substitut
 -- Simple variable
 SELECT * FROM measures
 WHERE name = '$metric'
-  AND time >= '$begin' AND time < '$end'
 
 -- Multi-column variable (combobox returning name + unit columns)
 SELECT time, value
@@ -136,7 +135,6 @@ SELECT
   avg(value) as value
 FROM measures
 WHERE name = '$metric'
-  AND time >= '$begin' AND time < '$end'
 GROUP BY 1
 ORDER BY 1
 ```

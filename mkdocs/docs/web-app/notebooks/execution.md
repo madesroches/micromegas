@@ -56,14 +56,32 @@ The time range controls which time window is queried. It is managed at the page 
 - **Relative**: `now-5m`, `now-1h`, `now-7d` — evaluated fresh at each execution, so results always reflect the latest data.
 - **Absolute**: specific ISO 8601 timestamps — fixed time window that doesn't change on re-execution.
 
-### In Queries
+### Implicit Time Filtering
 
-Use `$begin` and `$end` macros in SQL to reference the resolved time range:
+When a query is sent to the server, the current time range is passed as **separate metadata** alongside the SQL. The server's query planner automatically injects time filters into the execution plan for all materialized views — you do not need to write `WHERE time >= '$begin' AND time < '$end'` in your SQL.
+
+Each view defines which columns are filtered:
+
+| View | Filtered Columns |
+|------|-----------------|
+| Metrics, logs, async events | `time BETWEEN begin AND end` |
+| Blocks | `begin_time <= end AND insert_time >= begin` |
+| Export logs | Configurable time column |
+
+This means a simple query like `SELECT time, value FROM measures WHERE name = '$metric'` is automatically scoped to the selected time range.
+
+### Explicit Time References
+
+The `$begin` and `$end` macros are still available for cases where you need the time range values explicitly — for example, in markdown content, link URLs, or `date_bin()` aggregations:
 
 ```sql
-SELECT time, value FROM measures
-WHERE time >= '$begin' AND time < '$end'
-ORDER BY time
+SELECT
+  date_bin('$bin_interval', time) as time,
+  avg(value) as value
+FROM measures
+WHERE name = '$metric'
+GROUP BY 1
+ORDER BY 1
 ```
 
 The macros are replaced with absolute ISO 8601 timestamps after resolving any relative expressions.
@@ -107,7 +125,7 @@ Every notebook has a local [DataFusion](https://datafusion.apache.org/) query en
 
 ### How It Works
 
-1. When a data cell (table, chart, log, etc.) executes a remote SQL query, the result is automatically **registered as a named table** in the local WASM engine under the cell's name.
+1. When a data cell (table, transposed table, chart, log, etc.) executes a remote SQL query, the result is automatically **registered as a named table** in the local WASM engine under the cell's name.
 2. Any downstream cell can query upstream results locally using `SELECT ... FROM cell_name` — no round-trip to the server.
 3. This enables interactive data transformation: fetch data once from the server, then reshape, filter, join, and aggregate locally.
 
@@ -146,7 +164,6 @@ This avoids redundant server round-trips and enables rapid iteration on data sha
 ```
 Cell 1: "raw_data" (Table)
   SQL: SELECT time, name, value FROM measures
-       WHERE time >= '$begin' AND time < '$end'
 
 Cell 2: "thresholds" (Reference Table)
   CSV: name,warn,error
