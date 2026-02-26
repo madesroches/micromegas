@@ -142,6 +142,8 @@ doc/notebooks/
 
 Capture from the analytics web app with dark theme, 1920px browser width, no browser chrome.
 
+**Note:** `vite.config.js` sets `publicDir: 'media'`, so files in `media/` are served at root. Reference images in slides as `./filename.png`, **not** `./media/filename.png`.
+
 | Screenshot | What to show |
 |------------|-------------|
 | `notebook_overview.png` | A notebook with a mix of cell types: variable in title bar, table, chart, markdown |
