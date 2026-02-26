@@ -19,6 +19,8 @@ This file documents the historical progress of the Micromegas project. For curre
   * Sort cell types alphabetically in Add Cell dialog
   * Stabilize hook references to prevent unnecessary re-renders in notebook components
 * **Documentation:**
+  * Add screenshots to notebook documentation pages
+  * Fix rustdoc warnings in analytics crate
   * Add Interactive Notebooks for Observability presentation with Reveal.js + Micromegas brand theme
   * Add notebook documentation: cell types reference, variables, execution model, and web app overview
   * Reorganize mkdocs nav into Analytics Web App, Integrations, and Operations sections
