@@ -77,30 +77,29 @@ An ordered list of cells that execute top-to-bottom.
 
 **Composability through an in-browser query engine**
 
-<div style="font-size: 0.75em; margin-top: 1em;">
-
-```
-┌─────────────────────────────┐
-│  Cell A: SQL query           │
-│  SELECT ... FROM server      │──→ result registered as table "A"
-└─────────────────────────────┘
-              │
-              ▼
-┌─────────────────────────────┐
-│  Cell B: local query         │
-│  SELECT * FROM A WHERE ...   │──→ runs entirely in-browser
-└─────────────────────────────┘
-              │
-              ▼
-┌─────────────────────────────┐
-│  Cell C: visualization       │
-│  Chart / Table / Timeline    │──→ no extra server round-trips
-└─────────────────────────────┘
-```
-
+<div style="font-size: 0.5em; margin-top: 0.5em; display: grid; grid-template-columns: auto 1fr; column-gap: 1em; row-gap: 0; align-items: center;">
+  <div style="border: 1px solid var(--color-border); border-radius: 6px; padding: 0.3em 0.8em; background: var(--color-bg-2); font-family: var(--font-mono); text-align: left;">
+    <div>Cell A: <span style="color: var(--color-wheat);">SQL query</span></div>
+    <div><code>SELECT ... FROM server</code></div>
+  </div>
+  <div>→ result registered as table <strong>"A"</strong></div>
+  <div style="text-align: center; font-size: 1.3em; line-height: 1.2;">↓</div>
+  <div></div>
+  <div style="border: 1px solid var(--color-border); border-radius: 6px; padding: 0.3em 0.8em; background: var(--color-bg-2); font-family: var(--font-mono); text-align: left;">
+    <div>Cell B: <span style="color: var(--color-horizon);">local query</span></div>
+    <div><code>SELECT * FROM A WHERE ...</code></div>
+  </div>
+  <div>→ runs entirely <strong>in-browser</strong></div>
+  <div style="text-align: center; font-size: 1.3em; line-height: 1.2;">↓</div>
+  <div></div>
+  <div style="border: 1px solid var(--color-border); border-radius: 6px; padding: 0.3em 0.8em; background: var(--color-bg-2); font-family: var(--font-mono); text-align: left;">
+    <div>Cell C: <span style="color: var(--color-rust);">visualization</span></div>
+    <div><code>Chart / Table / Timeline</code></div>
+  </div>
+  <div>→ <strong>no</strong> extra server round-trips</div>
 </div>
 
-<p class="fragment" style="margin-top: 1em;">This is what makes notebooks more than just a list of queries.</p>
+<p style="margin-top: 0.3em; font-size: 0.8em;">This is what makes notebooks more than just a list of queries.</p>
 
 ---
 
