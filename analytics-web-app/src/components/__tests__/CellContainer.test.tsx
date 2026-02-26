@@ -16,6 +16,7 @@ jest.mock('lucide-react', () => ({
   GripVertical: () => <span data-testid="grip">⠿</span>,
   Zap: () => <span data-testid="zap">⚡</span>,
   Copy: () => <span data-testid="copy">📋</span>,
+  Pencil: () => <span data-testid="pencil">✏</span>,
 }))
 
 // @radix-ui/react-dropdown-menu is mocked via moduleNameMapper in jest.config.js
@@ -117,13 +118,13 @@ describe('CellContainer', () => {
       expect(onToggleCollapsed).toHaveBeenCalledTimes(1)
     })
 
-    it('should call onSelect when cell is clicked', () => {
+    it('should call onSelect when cell is double-clicked', () => {
       const onSelect = jest.fn()
       const { container } = render(<CellContainer {...defaultProps} onSelect={onSelect} />)
 
-      // Click on the cell container root
+      // Double-click on the cell container root
       const cell = container.firstChild as HTMLElement
-      fireEvent.click(cell)
+      fireEvent.doubleClick(cell)
 
       expect(onSelect).toHaveBeenCalledTimes(1)
     })
@@ -147,7 +148,7 @@ describe('CellContainer', () => {
       const runButton = screen.getByTitle('Run cell')
       fireEvent.click(runButton)
 
-      // onRun should be called but onSelect should not (stopPropagation)
+      // onRun should be called but onSelect should not
       expect(onRun).toHaveBeenCalledTimes(1)
       expect(onSelect).not.toHaveBeenCalled()
     })

@@ -6,7 +6,8 @@ import type {
   CellExecutionContext,
 } from '../cell-registry'
 import type { CellConfigBase, CellConfig, CellState, VariableValue } from '../notebook-types'
-import { XYChart, SERIES_COLORS, ScaleMode, ChartType } from '@/components/XYChart'
+import { SERIES_COLORS } from '@/components/chart-constants'
+import { XYChart, ScaleMode, ChartType } from '@/components/XYChart'
 import { extractChartData, extractMultiSeriesChartData } from '@/lib/arrow-utils'
 import type { ChartSeriesData } from '@/lib/arrow-utils'
 import { AvailableVariablesPanel } from '@/components/AvailableVariablesPanel'

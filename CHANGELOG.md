@@ -8,6 +8,9 @@ This file documents the historical progress of the Micromegas project. For curre
 * **DataFusion Extensions:**
   * Add `jsonb_each` table function to expand JSONB objects into key-value rows (#860)
 * **Notebook Enhancements:**
+  * Switch cell selection from single-click to double-click and add Edit cell to context menus
+  * Move SERIES_COLORS to shared chart-constants module
+  * Fix health check URL in start_analytics_web.py
   * Add column override support to transposed table cells (#868)
   * Add process info notebook with analysis links and clamped time range
   * Fix unsaved edits detection by snapshotting baseline JSON on edit start

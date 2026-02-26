@@ -18,6 +18,7 @@ import {
 import { CSS } from '@dnd-kit/utilities'
 import {
   GripVertical,
+  Pencil,
   Play,
   RotateCcw,
   MoreVertical,
@@ -154,7 +155,8 @@ function HgChildPane({
         className={`flex items-center justify-between px-2 py-0.5 cursor-pointer ${
           isSelected ? 'bg-[var(--selection-bg)]' : ''
         }`}
-        onClick={(e) => {
+        onMouseDown={(e) => { if (e.detail > 1) e.preventDefault() }}
+        onDoubleClick={(e) => {
           e.stopPropagation()
           onSelect()
         }}
@@ -165,6 +167,7 @@ function HgChildPane({
               {...(dragHandleProps as React.ButtonHTMLAttributes<HTMLButtonElement>)}
               className="opacity-0 group-hover/pane:opacity-100 text-theme-text-muted hover:text-theme-text-primary transition-all cursor-grab active:cursor-grabbing touch-none"
               onClick={(e) => e.stopPropagation()}
+              onDoubleClick={(e) => e.stopPropagation()}
             >
               <GripVertical className="w-3 h-3" />
             </button>
@@ -185,7 +188,7 @@ function HgChildPane({
           )}
         </div>
 
-        <div className="flex items-center gap-0.5 shrink-0 opacity-0 group-hover/pane:opacity-100 transition-opacity">
+        <div className="flex items-center gap-0.5 shrink-0 opacity-0 group-hover/pane:opacity-100 transition-opacity" onDoubleClick={(e) => e.stopPropagation()}>
           {canRun && (
             <button
               className="p-0.5 text-theme-text-muted hover:text-theme-text-primary transition-colors"
@@ -220,7 +223,14 @@ function HgChildPane({
                 onClick={(e) => e.stopPropagation()}
               >
                 <DropdownMenu.Item
-                  className="flex items-center gap-2 px-3 py-2 text-sm text-accent-error hover:bg-theme-border/50 cursor-pointer outline-none rounded-md"
+                  className="flex items-center gap-2 px-3 py-2 text-sm text-theme-text-primary hover:bg-theme-border/50 cursor-pointer outline-none rounded-t-md"
+                  onSelect={onSelect}
+                >
+                  <Pencil className="w-3.5 h-3.5" />
+                  Edit cell
+                </DropdownMenu.Item>
+                <DropdownMenu.Item
+                  className="flex items-center gap-2 px-3 py-2 text-sm text-accent-error hover:bg-theme-border/50 cursor-pointer outline-none rounded-b-md"
                   onSelect={onDeleteChild}
                 >
                   <Trash2 className="w-3.5 h-3.5" />
@@ -235,7 +245,8 @@ function HgChildPane({
       {/* Content */}
       <div
         className="flex-1 overflow-auto px-1 pb-1"
-        onClick={(e) => {
+        onMouseDown={(e) => { if (e.detail > 1) e.preventDefault() }}
+        onDoubleClick={(e) => {
           e.stopPropagation();
           onSelect();
         }}

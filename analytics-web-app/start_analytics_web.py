@@ -330,7 +330,7 @@ def main():
                 import urllib.request
                 import urllib.error
 
-                health_url = f"http://localhost:{backend_port}{base_path}/health"
+                health_url = f"http://localhost:{backend_port}{base_path}/api/health"
                 response = urllib.request.urlopen(health_url, timeout=1)
                 if response.status == 200:
                     backend_ready = True

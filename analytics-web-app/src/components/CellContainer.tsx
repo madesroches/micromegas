@@ -1,6 +1,6 @@
 import { ReactNode, useRef, useEffect, forwardRef, HTMLAttributes, useCallback } from 'react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
-import { ChevronDown, ChevronRight, Copy, Play, RotateCcw, MoreVertical, Trash2, GripVertical, Zap } from 'lucide-react'
+import { ChevronDown, ChevronRight, Copy, Pencil, Play, RotateCcw, MoreVertical, Trash2, GripVertical, Zap } from 'lucide-react'
 import { CellType, CellStatus, getCellTypeMetadata } from '@/lib/screen-renderers/cell-registry'
 import { Button } from '@/components/ui/button'
 import { ResizeHandle } from '@/components/ResizeHandle'
@@ -138,6 +138,7 @@ export const CellContainer = forwardRef<HTMLDivElement, CellContainerProps>(func
       {...(dragHandleProps as React.ButtonHTMLAttributes<HTMLButtonElement>)}
       className="opacity-0 group-hover/cell:opacity-100 text-theme-text-muted hover:text-theme-text-primary transition-all cursor-grab active:cursor-grabbing touch-none"
       onClick={(e) => e.stopPropagation()}
+      onDoubleClick={(e) => e.stopPropagation()}
     >
       <GripVertical className="w-3.5 h-3.5" />
     </button>
@@ -149,6 +150,7 @@ export const CellContainer = forwardRef<HTMLDivElement, CellContainerProps>(func
         e.stopPropagation()
         onToggleCollapsed()
       }}
+      onDoubleClick={(e) => e.stopPropagation()}
       className={`text-theme-text-muted hover:text-theme-text-primary transition-colors ${fadeClass}`}
     >
       {collapsed ? (
@@ -160,7 +162,7 @@ export const CellContainer = forwardRef<HTMLDivElement, CellContainerProps>(func
   ) : null
 
   const hoverControls = (
-    <div className="flex items-center gap-1 opacity-0 group-hover/cell:opacity-100 shrink-0 transition-opacity">
+    <div className="flex items-center gap-1 opacity-0 group-hover/cell:opacity-100 shrink-0 transition-opacity" onDoubleClick={(e) => e.stopPropagation()}>
       {onRun && canRun && (
         <Button
           variant="ghost"
@@ -200,6 +202,15 @@ export const CellContainer = forwardRef<HTMLDivElement, CellContainerProps>(func
             className="w-48 bg-app-panel border border-theme-border rounded-md shadow-lg z-50"
             onClick={(e) => e.stopPropagation()}
           >
+            {onSelect && (
+              <DropdownMenu.Item
+                className="flex items-center gap-2 px-3 py-2 text-sm text-theme-text-primary hover:bg-theme-border/50 cursor-pointer outline-none first:rounded-t-md"
+                onSelect={() => onSelect()}
+              >
+                <Pencil className="w-4 h-4" />
+                Edit cell
+              </DropdownMenu.Item>
+            )}
             {onRunFromHere && canRun && (
               <DropdownMenu.Item
                 className="flex items-center gap-2 px-3 py-2 text-sm text-theme-text-primary hover:bg-theme-border/50 cursor-pointer outline-none first:rounded-t-md"
@@ -275,7 +286,8 @@ export const CellContainer = forwardRef<HTMLDivElement, CellContainerProps>(func
             : 'border-l-transparent bg-app-panel/30 hover:bg-app-panel/50'
         } ${isDragging ? 'opacity-50' : ''}`}
         style={style}
-        onClick={onSelect}
+        onMouseDown={(e) => { if (e.detail > 1) e.preventDefault() }}
+        onDoubleClick={() => onSelect?.()}
         {...divProps}
       >
         {gripHandle}
@@ -307,7 +319,8 @@ export const CellContainer = forwardRef<HTMLDivElement, CellContainerProps>(func
         ref={ref}
         className={`group/cell cursor-pointer transition-colors ${isDragging ? 'opacity-50' : ''}`}
         style={style}
-        onClick={onSelect}
+        onMouseDown={(e) => { if (e.detail > 1) e.preventDefault() }}
+        onDoubleClick={() => onSelect?.()}
         {...divProps}
       >
         <div className={`flex items-center gap-2 py-0.5 px-1.5 rounded transition-colors border-l-2 ${
@@ -315,7 +328,7 @@ export const CellContainer = forwardRef<HTMLDivElement, CellContainerProps>(func
         }`}>
           {gripHandle}
           <span className="text-[11px] font-medium text-theme-text-secondary shrink-0">{name}</span>
-          <div className="flex-1 min-w-0" onClick={(e) => e.stopPropagation()}>
+          <div className="flex-1 min-w-0" onClick={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()}>
             {titleBarContent}
           </div>
           {statusLabel && <span className={`text-[10px] ${statusColor} shrink-0 ${fadeClass}`}>{statusLabel}</span>}
@@ -336,7 +349,8 @@ export const CellContainer = forwardRef<HTMLDivElement, CellContainerProps>(func
         !isGroup ? `border-l-2 ${isSelected ? 'border-l-accent-link' : 'border-l-transparent'}` : ''
       } ${isDragging ? 'opacity-50' : ''}`}
       style={style}
-      onClick={onSelect}
+      onMouseDown={(e) => { if (e.detail > 1) e.preventDefault() }}
+      onDoubleClick={() => onSelect?.()}
       {...divProps}
     >
       {/* Header */}
