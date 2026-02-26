@@ -4,12 +4,16 @@ Notebooks are the primary screen type in the analytics web app. A notebook is an
 
 Notebooks can replicate everything the built-in screen types (process list, metrics, log, table) can do, with greater flexibility and composability. Each cell's query results are automatically registered in a local WebAssembly query engine, so downstream cells can query upstream results without additional server round-trips.
 
+![Notebook with charts, logs, and variable cells](../../assets/images/notebooks/notebook_overview.png){ .screenshot }
+
 ## Layout
 
 A notebook has two panels:
 
 - **Cell list** (left) — the ordered sequence of cells. Each cell has a header showing its name, type, status, and execution stats.
 - **Editor panel** (right) — configuration for the currently selected cell. Click a cell header to select it and open its editor. A draggable resize handle separates the two panels.
+
+![Editor panel open showing cell configuration](../../assets/images/notebooks/notebook_editor.png){ .screenshot }
 
 ## Creating a Notebook
 

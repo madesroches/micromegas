@@ -29,7 +29,7 @@ pub fn parse_parquet_metadata(bytes: &Bytes) -> Result<ParquetMetaData> {
 /// just the FileMetaData portion that `decode_metadata()` expects.
 ///
 /// ## Background
-/// `ParquetMetaDataWriter` outputs: [Page Indexes][FileMetaData][Length][PAR1]
+/// `ParquetMetaDataWriter` outputs: \[Page Indexes\]\[FileMetaData\]\[Length\]\[PAR1\]
 /// But `decode_metadata()` expects just the raw FileMetaData thrift bytes.
 /// We extract the FileMetaData portion using the footer length field.
 pub fn serialize_parquet_metadata(pmd: &ParquetMetaData) -> Result<bytes::Bytes> {
