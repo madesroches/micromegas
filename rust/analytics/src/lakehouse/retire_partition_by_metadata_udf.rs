@@ -318,8 +318,8 @@ impl AsyncScalarUDFImpl for RetirePartitionByMetadata {
 ///
 /// # Returns
 /// A string message indicating success or failure:
-/// - "SUCCESS: Retired partition <view_set>/<instance> [<begin>, <end>)" on successful retirement
-/// - "ERROR: Partition not found: <view_set>/<instance> [<begin>, <end>)" if the partition doesn't exist
+/// - "SUCCESS: Retired partition \<view_set\>/\<instance\> [\<begin\>, \<end\>)" on successful retirement
+/// - "ERROR: Partition not found: \<view_set\>/\<instance\> [\<begin\>, \<end\>)" if the partition doesn't exist
 /// - "ERROR: Database error: \<details\>" for any database-related failures
 pub fn make_retire_partition_by_metadata_udf(
     lake: Arc<DataLakeConnection>,
