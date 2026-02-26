@@ -3,7 +3,7 @@
 
 ## Unified Observability for Games
 
-<p style="font-size: 0.6em;">Marc-Antoine Desroches · <a href="mailto:madesroches@gmail.com">madesroches@gmail.com</a><br><a href="https://github.com/madesroches/micromegas">github.com/madesroches/micromegas</a></p>
+<p style="font-size: 0.6em;">Marc-Antoine Desroches · <a href="mailto:madesroches@gmail.com">madesroches@gmail.com</a><br><a href="https://madesroches.github.io/micromegas/">madesroches.github.io/micromegas</a></p>
 
 ---
 
@@ -298,7 +298,7 @@ AND **more powerful** (automatic correlation, queries you couldn't run before).
 <!-- .slide: data-state="hide-sidebar" -->
 <img src="./micromegas-vertical-compact.svg" alt="micromegas" class="plain" style="height: 340px; margin: 0;">
 
-**https://github.com/madesroches/micromegas**
+**https://madesroches.github.io/micromegas/**
 
 Happy to help with initial setup and infra management
 

@@ -107,6 +107,15 @@ jobs:
         mkdir -p public_docs/unified-observability-for-games
         cp doc/unified-observability-for-games/dist/presentation-inline.html public_docs/unified-observability-for-games/index.html
         cp -r doc/unified-observability-for-games/dist/*.{png,svg} public_docs/unified-observability-for-games/ 2>/dev/null || echo "No media files to copy (already inlined)"
+
+        # Build interactive notebooks presentation
+        cd doc/notebooks
+        yarn install
+        yarn build:standalone
+        cd ../..
+        mkdir -p public_docs/notebooks
+        cp doc/notebooks/dist/presentation-inline.html public_docs/notebooks/index.html
+        cp -r doc/notebooks/dist/*.{png,svg} public_docs/notebooks/ 2>/dev/null || echo "No media files to copy (already inlined)"
         
         # Copy welcome page build output as the root index
         cp -r welcome/dist/* public_docs/
