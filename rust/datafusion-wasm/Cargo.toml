@@ -1,6 +1,6 @@
 [package]
 name = "micromegas-datafusion-wasm"
-version = "0.21.0"
+version = "0.22.0"
 edition = "2024"
 license = "Apache-2.0"
 homepage = "https://madesroches.github.io/micromegas/"
@@ -19,9 +19,9 @@ arrow = { version = "57.3", default-features = false, features = ["ipc"] }
 chrono = { version = "0.4", default-features = false, features = ["wasmbind"] }
 datafusion = { version = "52.1", default-features = false, features = ["nested_expressions", "sql"] }
 getrandom = { version = "0.3", features = ["wasm_js"] }
-micromegas-datafusion-extensions = { path = "../datafusion-extensions" }
-micromegas-telemetry-sink = { path = "../telemetry-sink", default-features = false }
-micromegas-tracing = { path = "../tracing", default-features = false }
+micromegas-datafusion-extensions = { path = "../datafusion-extensions", version = "^0.22" }
+micromegas-telemetry-sink = { path = "../telemetry-sink", version = "^0.22", default-features = false }
+micromegas-tracing = { path = "../tracing", version = "^0.22", default-features = false }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 

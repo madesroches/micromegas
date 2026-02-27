@@ -2316,7 +2316,7 @@ dependencies = [
 
 [[package]]
 name = "micromegas-datafusion-extensions"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2327,7 +2327,7 @@ dependencies = [
 
 [[package]]
 name = "micromegas-datafusion-wasm"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "arrow",
  "chrono",
@@ -2343,7 +2343,7 @@ dependencies = [
 
 [[package]]
 name = "micromegas-derive-transit"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "quote",
  "syn 1.0.109",
@@ -2351,7 +2351,7 @@ dependencies = [
 
 [[package]]
 name = "micromegas-telemetry"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2364,7 +2364,7 @@ dependencies = [
 
 [[package]]
 name = "micromegas-telemetry-sink"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2391,7 +2391,7 @@ dependencies = [
 
 [[package]]
 name = "micromegas-tracing"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2414,7 +2414,7 @@ dependencies = [
 
 [[package]]
 name = "micromegas-tracing-proc-macros"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2423,7 +2423,7 @@ dependencies = [
 
 [[package]]
 name = "micromegas-transit"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "anyhow",
  "lazy_static",

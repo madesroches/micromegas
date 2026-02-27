@@ -3,6 +3,8 @@
 This file documents the historical progress of the Micromegas project. For current focus, please see the main [README.md](./README.md).
 
 ## Unreleased
+
+## February 2026 - v0.21.0
 * **Security:**
   * Bump rollup to 4.59.0 to fix CVE (arbitrary file write) across all JS packages
 * **Build:**

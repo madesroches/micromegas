@@ -15,8 +15,12 @@ static INIT: Once = Once::new();
 
 fn ensure_tracing() {
     INIT.call_once(|| {
-        let guard = micromegas_telemetry_sink::init_telemetry().expect("failed to init telemetry");
-        std::mem::forget(guard); // leak — WASM module lives for page lifetime
+        #[cfg(target_arch = "wasm32")]
+        {
+            let guard =
+                micromegas_telemetry_sink::init_telemetry().expect("failed to init telemetry");
+            std::mem::forget(guard); // leak — WASM module lives for page lifetime
+        }
     });
 }
 
