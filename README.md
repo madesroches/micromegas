@@ -70,11 +70,27 @@ To get started with Micromegas, please refer to the [Getting Started](https://ma
 ## Current Status & Roadmap
 
 ### Unreleased
-* Horizontal group cells: side-by-side cell layout for notebooks
-* Multi-query chart cells with per-query data sources
-* Notebook cross-cell queries: cells can reference each other's results via SQL, powered by DataFusion WASM running in the browser
-* Reference table cell type for inline CSV data
-* Notebook pagination and per-cell auto-run
+
+### February 2026 - v0.21.0
+* **Notebook Cross-Cell Queries:**
+  * Cells with `dataSource: 'notebook'` execute SQL in-browser via WASM DataFusion against other cells' results
+  * Live download progress and execution time in cell title bars
+* **Horizontal Group Cell:**
+  * Side-by-side cell layout in notebooks with variable passing and drag-and-drop reordering
+* **Multi-Query Chart Cells:**
+  * Per-query data sources in chart cells; `CellState.data` is now `Table[]`
+* **Compact Notebook UI:**
+  * Borderless notebook with minimal chrome, fade-on-idle cell metadata, restyled tables and log cells
+* **WASM Tracing:**
+  * `micromegas-tracing` and `micromegas-telemetry-sink` now support WASM targets
+* **New Crate: `micromegas-datafusion-extensions`:**
+  * Shared WASM-compatible crate for JSONB and histogram UDFs; adds `jsonb_each` table function
+* **Python CLI:**
+  * `micromegas-query` and `micromegas-logout` as installed CLI entry points via `pip install micromegas`
+* **LZ4 Compression:**
+  * LZ4 Arrow IPC compression for dramatically smaller network transfers
+* **Security:**
+  * Bump rollup to 4.59.0, ajv to 6.14.0, fix minimatch ReDoS
 
 ### February 2026 - v0.20.0
 * **Client-Side WASM Query Execution:**
