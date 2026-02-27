@@ -4,6 +4,9 @@ This file documents the historical progress of the Micromegas project. For curre
 
 ## Unreleased
 
+* **Security:**
+  * Fix minimatch ReDoS vulnerabilities across JS packages (Dependabot alerts #116–#123)
+
 ## February 2026 - v0.21.0
 * **Security:**
   * Bump rollup to 4.59.0 to fix CVE (arbitrary file write) across all JS packages
