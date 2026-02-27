@@ -35,7 +35,10 @@ run_command("cargo release -p micromegas-telemetry-sink -x --no-confirm")
 # Layer 7: Perfetto (depends on tracing, transit)
 run_command("cargo release -p micromegas-perfetto -x --no-confirm")
 
-# Layer 8: Analytics (depends on ingestion, telemetry, tracing, transit, perfetto)
+# Layer 7.5: DataFusion extensions (depends on tracing)
+run_command("cargo release -p micromegas-datafusion-extensions -x --no-confirm")
+
+# Layer 8: Analytics (depends on ingestion, telemetry, tracing, transit, perfetto, datafusion-extensions)
 run_command("cargo release -p micromegas-analytics -x --no-confirm")
 
 # Layer 9: Top-level proc macros (depends on tracing, analytics)
