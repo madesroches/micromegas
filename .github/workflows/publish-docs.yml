@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - doc
   # Also run on any branch when the workflow config changes
   pull_request:
     paths:
@@ -127,7 +128,7 @@ jobs:
         echo "micromegas.info" > public_docs/CNAME
 
     - name: Deploy to GitHub Pages
-      if: github.ref == 'refs/heads/main'
+      if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/doc'
       uses: peaceiris/actions-gh-pages@v4
       with:
         github_token: ${{ secrets.GITHUB_TOKEN }}
