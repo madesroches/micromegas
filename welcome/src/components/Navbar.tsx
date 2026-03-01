@@ -1,4 +1,4 @@
-import { Github, BookOpen } from 'lucide-react'
+import { Github, BookOpen, PenLine } from 'lucide-react'
 
 export default function Navbar() {
   return (
@@ -30,6 +30,13 @@ export default function Navbar() {
           Micromegas
         </a>
         <div className="flex items-center gap-4">
+          <a
+            href="/docs/blog/"
+            className="flex items-center gap-1.5 text-sm text-theme-text-secondary hover:text-theme-text-primary transition-colors"
+          >
+            <PenLine size={16} />
+            Blog
+          </a>
           <a
             href="/docs/"
             className="flex items-center gap-1.5 text-sm text-theme-text-secondary hover:text-theme-text-primary transition-colors"
