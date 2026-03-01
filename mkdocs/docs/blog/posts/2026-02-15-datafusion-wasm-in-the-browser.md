@@ -91,7 +91,7 @@ WASM is single-threaded (no spawning threads), so queries run on the main thread
 
 ### Tracing in WASM
 
-One thing we're proud of: `micromegas-tracing` works in WASM without modification. The same instrumentation API that emits telemetry on native targets routes logs to the browser console in WASM via a `ConsoleEventSink`. The query engine is observable from the same platform that serves as an observability tool — it's turtles all the way down.
+`micromegas-tracing` compiles to WASM without modification. Right now it's a hack — logs route to the browser console via a `ConsoleEventSink` instead of proper telemetry collection. But it means instrumented Rust code works on both native and WASM targets without `#[cfg]` gates everywhere. Proper browser-to-server telemetry is on the roadmap.
 
 ## How It Fits Into Notebooks
 
