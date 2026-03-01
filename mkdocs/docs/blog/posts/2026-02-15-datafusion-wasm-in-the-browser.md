@@ -15,7 +15,7 @@ tags:
 
 # We Put a Data Warehouse in Your Browser
 
-We compiled Apache DataFusion to WebAssembly. Full SQL running client-side — the same query engine that powers the Micromegas backend, now running in a browser tab. And it scales your analytics compute for free.
+Apache DataFusion already supports compiling to WebAssembly — so we took advantage of it. Full SQL running client-side, the same query engine that powers the Micromegas backend, now running in a browser tab. And it scales your analytics compute for free.
 
 <!-- more -->
 
@@ -37,7 +37,7 @@ That's fine for the first query that fetches raw data. But the second cell that 
 
 ## DataFusion, Compiled to WASM
 
-So we compiled Apache DataFusion to WebAssembly. The server delivers data once via Arrow IPC. After that, all exploration and reshaping happens locally in the browser.
+DataFusion already compiles to `wasm32-unknown-unknown` — the hard work was done by the DataFusion community. We just wrapped it with `wasm-bindgen` and plugged it into the notebook. The server delivers data once via Arrow IPC. After that, all exploration and reshaping happens locally in the browser.
 
 ```
 WASM Path:
