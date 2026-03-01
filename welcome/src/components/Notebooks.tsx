@@ -14,14 +14,14 @@ export default function Notebooks() {
         <div className="mb-6 grid grid-cols-1 gap-6 lg:grid-cols-2">
           <div className="overflow-hidden rounded-xl border border-theme-border">
             <img
-              src="/micromegas/screenshots/perf-notebook.png"
+              src="/screenshots/perf-notebook.png"
               alt="Performance analysis notebook with chart, variables, and thread coverage swimlanes"
               className="w-full"
             />
           </div>
           <div className="overflow-hidden rounded-xl border border-theme-border">
             <img
-              src="/micromegas/screenshots/process-list.png"
+              src="/screenshots/process-list.png"
               alt="Process list notebook with SQL query and table output"
               className="w-full"
             />
@@ -37,7 +37,7 @@ export default function Notebooks() {
             </p>
           </div>
           <img
-            src="/micromegas/screenshots/metrics-logs.png"
+            src="/screenshots/metrics-logs.png"
             alt="Thread coverage swimlanes alongside log entries for easy correlation"
             className="w-full"
           />

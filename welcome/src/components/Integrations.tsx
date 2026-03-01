@@ -39,25 +39,25 @@ export default function Integrations() {
             icon={<LayoutDashboard size={24} className="text-brand-rust" />}
             title="Analytics Web App"
             description="Interactive notebooks for exploration and investigation. SQL cells, charts, tables, and log viewers in a shareable interface."
-            href="/micromegas/docs/admin/web-app/"
+            href="/docs/admin/web-app/"
           />
           <IntegrationCard
             icon={<BarChart3 size={24} className="text-brand-blue" />}
             title="Grafana Plugin"
             description="Native Grafana data source for building dashboards. Query your telemetry data alongside other Grafana sources."
-            href="/micromegas/docs/grafana/"
+            href="/docs/grafana/"
           />
           <IntegrationCard
             icon={<Code size={24} className="text-brand-gold" />}
             title="Python API"
             description="Programmatic access via Arrow FlightSQL. Build custom analysis pipelines with pandas, polars, or any Arrow-compatible library."
-            href="/micromegas/docs/query-guide/python-api/"
+            href="/docs/query-guide/python-api/"
           />
           <IntegrationCard
             icon={<Plug size={24} className="text-brand-rust" />}
             title="FlightSQL Protocol"
             description="Standard Apache Arrow FlightSQL protocol. Any compatible client can query your data — no vendor lock-in."
-            href="/micromegas/docs/query-guide/"
+            href="/docs/query-guide/"
           />
         </div>
 
@@ -72,7 +72,7 @@ export default function Integrations() {
             </p>
           </div>
           <img
-            src="/micromegas/screenshots/perfetto-trace.png"
+            src="/screenshots/perfetto-trace.png"
             alt="Micromegas trace data visualized in the Perfetto trace viewer"
             className="w-full"
           />

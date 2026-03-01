@@ -1,6 +1,6 @@
 site_name: Micromegas Documentation
 site_description: Unified observability platform with high-performance telemetry collection and analytics
-site_url: https://micromegas.dev
+site_url: https://micromegas.info
 repo_url: https://github.com/madesroches/micromegas
 repo_name: madesroches/micromegas
 
@@ -44,6 +44,14 @@ theme:
 plugins:
   - search
   - mkdocstrings
+  - blog:
+      blog_dir: blog
+      post_date_format: long
+      post_url_format: "{date}/{slug}"
+      archive: true
+      archive_date_format: yyyy
+      categories: true
+  - tags
 
 markdown_extensions:
   - admonition
@@ -75,6 +83,7 @@ extra_css:
 
 nav:
   - Home: index.md
+  - Blog: blog/index.md
   - Getting Started: getting-started.md
   - Query Guide:
     - Overview: query-guide/index.md
