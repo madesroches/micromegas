@@ -62,7 +62,7 @@ export default function Hero() {
 
         <div className="flex flex-wrap items-center justify-center gap-4">
           <a
-            href="/micromegas/docs/getting-started/"
+            href="/docs/getting-started/"
             className="inline-flex items-center gap-2 rounded-lg bg-brand-blue px-6 py-3 text-sm font-medium text-white transition-colors hover:bg-brand-blue-dark"
           >
             Get Started

@@ -14,7 +14,7 @@ export default function Footer() {
 
         <div className="mb-16 flex flex-wrap items-center justify-center gap-4">
           <a
-            href="/micromegas/docs/"
+            href="/docs/"
             className="inline-flex items-center gap-2 rounded-lg bg-brand-blue px-6 py-3 text-sm font-medium text-white transition-colors hover:bg-brand-blue-dark"
           >
             <BookOpen size={16} />
@@ -28,7 +28,7 @@ export default function Footer() {
             View on GitHub
           </a>
           <a
-            href="/micromegas/docs/cost-effectiveness/"
+            href="/docs/cost-effectiveness/"
             className="inline-flex items-center gap-2 rounded-lg border border-theme-border px-6 py-3 text-sm font-medium text-theme-text-primary transition-colors hover:border-theme-border-hover hover:bg-app-card/50"
           >
             Cost Comparison

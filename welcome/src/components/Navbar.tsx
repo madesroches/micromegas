@@ -4,7 +4,7 @@ export default function Navbar() {
   return (
     <nav className="fixed top-0 left-0 right-0 z-50 border-b border-theme-border bg-app-bg/80 backdrop-blur-lg">
       <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-3">
-        <a href="/micromegas/" className="flex items-center gap-2 text-theme-text-primary font-semibold text-lg">
+        <a href="/" className="flex items-center gap-2 text-theme-text-primary font-semibold text-lg">
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" className="h-8 w-8">
             <defs>
               <linearGradient id="nav-ring1" x1="0%" y1="0%" x2="100%" y2="100%">
@@ -31,7 +31,7 @@ export default function Navbar() {
         </a>
         <div className="flex items-center gap-4">
           <a
-            href="/micromegas/docs/"
+            href="/docs/"
             className="flex items-center gap-1.5 text-sm text-theme-text-secondary hover:text-theme-text-primary transition-colors"
           >
             <BookOpen size={16} />
