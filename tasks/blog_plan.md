@@ -75,10 +75,10 @@ Source of truth: LinkedIn data exports at `~/posts/linkedin_export/` (Shares.csv
 - `~/posts/analytics-webapp/analytics-webapp.md` — notebooks vs dashboards
 - `~/posts/creative-destruction/` — game industry layoffs (draft expands on the 2026-02-05 post)
 
-### Phase 4: Cleanup (before merge to main)
+### Phase 4: Cleanup (before merge to main) ✅
 
-- Remove `doc` branch from CI triggers in `publish-docs.yml`
-- Remove `doc` branch from deploy condition
+- ✅ Remove `doc` branch from CI triggers in `publish-docs.yml`
+- ✅ Remove `doc` branch from deploy condition
 
 ## Commits so far
 
