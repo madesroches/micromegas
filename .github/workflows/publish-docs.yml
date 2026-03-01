@@ -123,6 +123,9 @@ jobs:
         # Disable Jekyll
         touch public_docs/.nojekyll
 
+        # Custom domain
+        echo "micromegas.info" > public_docs/CNAME
+
     - name: Deploy to GitHub Pages
       if: github.ref == 'refs/heads/main'
       uses: peaceiris/actions-gh-pages@v4
