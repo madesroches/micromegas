@@ -47,14 +47,14 @@ Source of truth: LinkedIn data exports at `~/posts/linkedin_export/` (Shares.csv
 | 2025-02-21 | One year of open source | skipped — no content |
 | 2026-02-05 | Creative destruction in games industry | ✅ |
 
-#### Future posts — release announcements
+#### Release announcements — completed
 
-| Date | Version | Notable feature |
-|------|---------|-----------------|
-| 2025-11-14 | v0.15.0 | Auth framework + OIDC |
-| 2025-10-23 | v0.14.0 | JSONB migration, SQL-Arrow NULL handling |
-| 2025-09-03 | v0.12.0 | Async span tracing, 20ns overhead |
-| 2024-10-04 | v0.2.0 | Unreal Engine observability |
+| Date | Version | Notable feature | Status |
+|------|---------|-----------------|--------|
+| 2025-11-14 | v0.15.0 | Auth framework + OIDC | ✅ |
+| 2025-10-23 | v0.14.0 | JSONB migration, SQL-Arrow NULL handling | ✅ |
+| 2025-09-03 | v0.12.0 | Async span tracing, 20ns overhead | ✅ |
+| 2024-10-04 | v0.2.0 | Unreal Engine observability | ✅ |
 
 #### Future posts — shorter / narrative
 
