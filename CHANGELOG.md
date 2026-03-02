@@ -8,6 +8,7 @@ This file documents the historical progress of the Micromegas project. For curre
   * Update DataFusion to 52.2 and remove LimitPushdown workaround (#809)
 * **Security:**
   * Fix minimatch ReDoS vulnerabilities across JS packages (Dependabot alerts #116–#123)
+  * Bump serialize-javascript to 7.0.3 and OpenTelemetry SDK to 1.40.0 (Dependabot security alerts)
 
 ## February 2026 - v0.21.0
 * **Security:**
