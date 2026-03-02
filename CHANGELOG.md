@@ -5,7 +5,9 @@ This file documents the historical progress of the Micromegas project. For curre
 ## Unreleased
 
 * **Dependencies:**
-  * Update DataFusion to 52.2 and remove LimitPushdown workaround (#809)
+  * Update DataFusion to 52.2 and remove LimitPushdown workaround (#882)
+* **Analytics Web App:**
+  * Remove local_query screen type (#871)
 * **Security:**
   * Fix minimatch ReDoS vulnerabilities across JS packages (Dependabot alerts #116–#123)
 
