@@ -39,9 +39,8 @@ impl WasmQueryEngine {
         ensure_tracing();
         info!("WasmQueryEngine created");
 
-        let ctx = SessionContext::new_with_config(
-            SessionConfig::default().with_information_schema(true),
-        );
+        let ctx =
+            SessionContext::new_with_config(SessionConfig::default().with_information_schema(true));
         micromegas_datafusion_extensions::register_extension_udfs(&ctx);
         Self { ctx }
     }
