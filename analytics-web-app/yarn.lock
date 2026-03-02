@@ -6273,7 +6273,7 @@ rimraf@^3.0.2:
   dependencies:
     glob "^7.1.3"
 
-rollup@^4.34.9:
+rollup@^4.34.9, rollup@^4.59.0:
   version "4.59.0"
   resolved "https://artifactory.ubisoft.org/api/npm/npm/rollup/-/rollup-4.59.0.tgz#cf74edac17c1486f562d728a4d923a694abdf06f"
   integrity sha512-2oMpl67a3zCH9H79LeMcbDhXW/UmWG/y2zuqnF2jQq5uq9TbM9TVyXvA4+t+ne2IIkBdrLpAaRQAvo7YI/Yyeg==
