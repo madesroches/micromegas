@@ -117,7 +117,6 @@ fn test_screen_type_info() {
     assert_eq!(notebook_info.name, "notebook");
     assert!(!notebook_info.icon.is_empty());
     assert!(!notebook_info.description.is_empty());
-
 }
 
 #[test]
@@ -151,7 +150,6 @@ fn test_screen_type_default_config() {
     let notebook_config = ScreenType::Notebook.default_config();
     assert!(notebook_config.get("cells").is_some());
     assert!(notebook_config["cells"].is_array());
-
 }
 
 #[test]
