@@ -12,7 +12,7 @@ impl fmt::Display for ParseScreenTypeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "invalid screen type '{}', expected one of: metrics, log, table, notebook, local_query",
+            "invalid screen type '{}', expected one of: metrics, log, table, notebook",
             self.invalid_value
         )
     }
@@ -33,8 +33,6 @@ pub enum ScreenType {
     /// Deprecated: kept for backward compatibility with existing screens.
     Table,
     Notebook,
-    /// Deprecated: kept for backward compatibility with existing screens.
-    LocalQuery,
 }
 
 impl FromStr for ScreenType {
@@ -47,7 +45,6 @@ impl FromStr for ScreenType {
             "log" => Ok(ScreenType::Log),
             "table" => Ok(ScreenType::Table),
             "notebook" => Ok(ScreenType::Notebook),
-            "local_query" => Ok(ScreenType::LocalQuery),
             _ => Err(ParseScreenTypeError {
                 invalid_value: s.to_string(),
             }),
@@ -70,7 +67,6 @@ impl ScreenType {
             ScreenType::Log => "log",
             ScreenType::Table => "table",
             ScreenType::Notebook => "notebook",
-            ScreenType::LocalQuery => "local_query",
         }
     }
 
@@ -108,12 +104,6 @@ impl ScreenType {
                 description: "Multi-cell notebook with tables, charts, logs, and variables"
                     .to_string(),
             },
-            ScreenType::LocalQuery => ScreenTypeInfo {
-                name: "local_query".to_string(),
-                display_name: "Local Query".to_string(),
-                icon: "database".to_string(),
-                description: "In-browser SQL queries using WASM DataFusion".to_string(),
-            },
         }
     }
 
@@ -148,13 +138,6 @@ impl ScreenType {
                 "timeRangeFrom": "now-5m",
                 "timeRangeTo": "now",
                 "cells": []
-            }),
-            ScreenType::LocalQuery => serde_json::json!({
-                "timeRangeFrom": "now-1h",
-                "timeRangeTo": "now",
-                "sourceSql": "SELECT *\nFROM log_entries\nLIMIT 100",
-                "sourceTableName": "data",
-                "localSql": "SELECT msg, exe\nFROM data LIMIT 10"
             }),
         }
     }
