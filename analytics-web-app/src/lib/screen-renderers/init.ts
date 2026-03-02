@@ -15,7 +15,6 @@ import './MetricsRenderer'
 import './LogRenderer'
 import './TableRenderer'
 import './NotebookRenderer'
-import './LocalQueryRenderer'
 
 // Cell renderers are now imported directly by cell-registry.ts via metadata exports
 // No side-effect imports needed
