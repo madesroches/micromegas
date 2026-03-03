@@ -34,6 +34,11 @@ let lastRefreshAttempt = 0
 const REFRESH_COOLDOWN_MS = 5000 // Don't attempt refresh more than once every 5 seconds
 
 async function refreshToken(): Promise<boolean> {
+  // If a refresh is already in progress, let concurrent callers wait for it
+  if (refreshPromise) {
+    return refreshPromise
+  }
+
   const now = Date.now()
 
   // Prevent refresh loops: if we just attempted a refresh, don't try again
@@ -41,13 +46,7 @@ async function refreshToken(): Promise<boolean> {
     return false
   }
 
-  // Set timestamp immediately to prevent race conditions with concurrent calls
   lastRefreshAttempt = now
-
-  // If a refresh is already in progress, wait for it
-  if (refreshPromise) {
-    return refreshPromise
-  }
 
   refreshPromise = (async () => {
     try {
