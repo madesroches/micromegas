@@ -122,7 +122,8 @@ Already documented in `CHANGELOG.md` under Unreleased:
 1. Run `delete_duplicate_*()` UDFs to clean existing duplicates
 2. Verify no duplicates remain with `SELECT id, COUNT(*) ... HAVING COUNT(*) > 1`
 3. Optionally run the `CREATE UNIQUE INDEX CONCURRENTLY` SQL manually ahead of time
-4. Deploy new code — migration handles everything, `IF NOT EXISTS` makes pre-applied indexes a no-op
+4. Deploy ingestion service first — the v3 migration creates the unique indexes that `ON CONFLICT` in the replication code depends on. Existing lakehouse services can keep running during this step.
+5. Deploy remaining services — the unique indexes are now in place for `ON CONFLICT`, `IF NOT EXISTS` makes pre-applied indexes a no-op
 
 ## Trade-offs
 
