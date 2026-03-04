@@ -1,7 +1,9 @@
 import { format } from 'sql-formatter'
 
-export function formatSQL(q: string) {
-  return format(q).replace(/(\$ \{ .*? \})|(\$ __)|(\$ \w+)/g, (m: string) => {
-    return m.replace(/\s/g, '')
-  })
+export function formatSQL(q: string): string {
+  try {
+    return format(q, { paramTypes: { named: ['$'] } })
+  } catch {
+    return q
+  }
 }
