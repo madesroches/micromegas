@@ -118,7 +118,7 @@ export function useCellExecution({
       // Mark cell as loading
       setCellStates((prev) => ({
         ...prev,
-        [cell.name]: { ...prev[cell.name], status: 'loading', error: undefined, data: [], fetchProgress: undefined },
+        [cell.name]: { ...prev[cell.name], status: 'loading', error: undefined, fetchProgress: undefined },
       }))
 
       const startTime = performance.now()

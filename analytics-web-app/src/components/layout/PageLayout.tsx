@@ -23,12 +23,18 @@ interface PageLayoutProps {
   timeRangeControl?: TimeRangeControlProps
   /** Process ID for pivot button navigation */
   processId?: string
+  /** Current auto-refresh interval in ms (0 = off) */
+  refreshIntervalMs?: number
+  /** Callback to change the auto-refresh interval */
+  onRefreshIntervalChange?: (ms: number) => void
+  /** Whether the screen is currently executing */
+  isExecuting?: boolean
 }
 
-function PageLayoutContent({ children, onRefresh, rightPanel, timeRangeControl, processId }: PageLayoutProps) {
+function PageLayoutContent({ children, onRefresh, rightPanel, timeRangeControl, processId, refreshIntervalMs, onRefreshIntervalChange, isExecuting }: PageLayoutProps) {
   return (
     <div className="min-h-screen bg-app-bg text-theme-text-primary">
-      <Header onRefresh={onRefresh} timeRangeControl={timeRangeControl} processId={processId} />
+      <Header onRefresh={onRefresh} timeRangeControl={timeRangeControl} processId={processId} refreshIntervalMs={refreshIntervalMs} onRefreshIntervalChange={onRefreshIntervalChange} isExecuting={isExecuting} />
       <div className="flex h-[calc(100vh-57px)]">
         <Sidebar />
         <main className="flex-1 overflow-auto">{children}</main>
@@ -38,7 +44,7 @@ function PageLayoutContent({ children, onRefresh, rightPanel, timeRangeControl, 
   )
 }
 
-export function PageLayout({ children, onRefresh, rightPanel, timeRangeControl, processId }: PageLayoutProps) {
+export function PageLayout({ children, onRefresh, rightPanel, timeRangeControl, processId, refreshIntervalMs, onRefreshIntervalChange, isExecuting }: PageLayoutProps) {
   return (
     <Suspense
       fallback={
@@ -47,7 +53,7 @@ export function PageLayout({ children, onRefresh, rightPanel, timeRangeControl, 
         </div>
       }
     >
-      <PageLayoutContent onRefresh={onRefresh} rightPanel={rightPanel} timeRangeControl={timeRangeControl} processId={processId}>
+      <PageLayoutContent onRefresh={onRefresh} rightPanel={rightPanel} timeRangeControl={timeRangeControl} processId={processId} refreshIntervalMs={refreshIntervalMs} onRefreshIntervalChange={onRefreshIntervalChange} isExecuting={isExecuting}>
         {children}
       </PageLayoutContent>
     </Suspense>

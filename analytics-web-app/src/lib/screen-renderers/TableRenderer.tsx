@@ -54,6 +54,7 @@ export function TableRenderer({
   refreshTrigger,
   onSaveRef,
   dataSource,
+  onExecutingChange,
 }: ScreenRendererProps) {
   const tableConfig = config as unknown as TableConfig
   const savedTableConfig = savedConfig as unknown as TableConfig | null
@@ -71,6 +72,9 @@ export function TableRenderer({
   // Query execution
   const streamQuery = useStreamQuery()
   const queryError = streamQuery.error?.message ?? null
+
+  // Report execution state to parent
+  useEffect(() => { onExecutingChange?.(streamQuery.isStreaming) }, [streamQuery.isStreaming, onExecutingChange])
 
   // Track current SQL for re-execution
   const currentSqlRef = useRef<string>(tableConfig.sql)

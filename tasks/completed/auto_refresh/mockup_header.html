@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Auto-Refresh — Header Mockup</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0a0a0f; color: #e7e9ea;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-size: 14px; line-height: 1.4;
+    padding: 40px;
+  }
+
+  h2 { font-size: 13px; color: #6b7280; margin-bottom: 12px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.5px; }
+  .spacer { height: 48px; }
+
+  /* ================================================================
+     Header Bar
+     ================================================================ */
+  .header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 24px;
+    background: #12121a; border-bottom: 1px solid #2a2a3e;
+  }
+  .header-left { display: flex; align-items: center; gap: 20px; }
+  .header-right { display: flex; align-items: center; gap: 16px; }
+
+  /* Logo */
+  .logo {
+    font-size: 16px; font-weight: 700; color: #e7e9ea;
+    letter-spacing: -0.5px;
+  }
+  .logo span { color: #bf360c; }
+
+  /* Time range group */
+  .time-group {
+    display: flex; align-items: center;
+    border-radius: 6px; overflow: hidden;
+  }
+  .time-picker {
+    padding: 6px 12px;
+    background: #2a2a3e; border: none; color: #e7e9ea;
+    font-size: 12px; cursor: pointer;
+  }
+  .time-picker:hover { background: #3a3a4e; }
+  .zoom-btn {
+    padding: 6px 8px;
+    background: #2a2a3e; border: none; border-left: 1px solid #1a1a2e;
+    color: #e7e9ea; cursor: pointer; font-size: 12px;
+  }
+  .zoom-btn:hover { background: #3a3a4e; }
+
+  /* Refresh button group */
+  .refresh-group {
+    display: flex; align-items: center;
+    border-radius: 6px; overflow: hidden;
+  }
+  .refresh-btn {
+    display: flex; align-items: center; gap: 6px;
+    padding: 6px 10px;
+    background: #2a2a3e; border: none;
+    color: #e7e9ea; cursor: pointer; font-size: 12px;
+  }
+  .refresh-btn:hover { background: #3a3a4e; }
+  .refresh-btn svg { width: 14px; height: 14px; }
+
+  /* Active state: spinning icon */
+  .refresh-btn.active svg {
+    animation: spin 1.5s linear infinite;
+  }
+  .refresh-btn.active .interval-label {
+    color: #4fc3f7; font-weight: 500;
+  }
+
+  @keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+  }
+
+  .interval-chevron {
+    display: flex; align-items: center;
+    padding: 6px 6px;
+    background: #2a2a3e; border: none; border-left: 1px solid #1a1a2e;
+    color: #9ca3af; cursor: pointer; font-size: 10px;
+  }
+  .interval-chevron:hover { background: #3a3a4e; color: #e7e9ea; }
+
+  /* User avatar */
+  .avatar {
+    width: 28px; height: 28px; border-radius: 50%;
+    background: #1565c0; display: flex; align-items: center; justify-content: center;
+    font-size: 11px; font-weight: 600; color: white; cursor: pointer;
+  }
+
+  /* ================================================================
+     Screen title area (below header)
+     ================================================================ */
+  .screen-title {
+    padding: 24px 24px 0;
+    display: flex; align-items: center; gap: 12px;
+  }
+  .screen-icon {
+    width: 36px; height: 36px; border-radius: 6px;
+    background: #1a1a2e; display: flex; align-items: center; justify-content: center;
+    color: #1565c0; font-size: 18px;
+  }
+  .screen-name { font-size: 22px; font-weight: 600; }
+
+  /* Annotation labels */
+  .annotation {
+    position: relative;
+    margin-top: 8px;
+  }
+  .annotation-line {
+    position: absolute;
+    border-left: 2px solid #bf360c;
+    border-bottom: 2px solid #bf360c;
+  }
+  .annotation-label {
+    font-size: 11px; color: #bf360c; font-weight: 500;
+    padding: 3px 8px;
+    background: rgba(191, 54, 12, 0.1);
+    border-radius: 3px;
+    display: inline-block;
+    margin-top: 4px;
+  }
+</style>
+</head>
+<body>
+
+<!-- ============================================================
+     State 1: Auto-refresh OFF (default)
+     ============================================================ -->
+<h2>Auto-refresh off (default)</h2>
+<div class="header">
+  <div class="header-left">
+    <div class="logo"><span>m</span>icromegas</div>
+  </div>
+  <div class="header-right">
+    <div class="time-group">
+      <button class="time-picker">Last 1 hour</button>
+      <button class="zoom-btn">&#x2212;</button>
+      <button class="zoom-btn">+</button>
+    </div>
+    <div class="refresh-group">
+      <button class="refresh-btn">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="23 4 23 10 17 10"/>
+          <polyline points="1 20 1 14 7 14"/>
+          <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+        </svg>
+      </button>
+      <button class="interval-chevron">&#9660;</button>
+    </div>
+    <div class="avatar">MD</div>
+  </div>
+</div>
+
+<div class="spacer"></div>
+
+<!-- ============================================================
+     State 2: Auto-refresh ACTIVE (5s)
+     ============================================================ -->
+<h2>Auto-refresh active — 5s interval</h2>
+<div class="header">
+  <div class="header-left">
+    <div class="logo"><span>m</span>icromegas</div>
+  </div>
+  <div class="header-right">
+    <div class="time-group">
+      <button class="time-picker">Last 1 hour</button>
+      <button class="zoom-btn">&#x2212;</button>
+      <button class="zoom-btn">+</button>
+    </div>
+    <div class="refresh-group">
+      <button class="refresh-btn active">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="23 4 23 10 17 10"/>
+          <polyline points="1 20 1 14 7 14"/>
+          <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+        </svg>
+        <span class="interval-label">5s</span>
+      </button>
+      <button class="interval-chevron">&#9660;</button>
+    </div>
+    <div class="avatar">MD</div>
+  </div>
+</div>
+
+<div class="spacer"></div>
+
+<!-- ============================================================
+     State 3: Auto-refresh ACTIVE (1m)
+     ============================================================ -->
+<h2>Auto-refresh active — 1m interval</h2>
+<div class="header">
+  <div class="header-left">
+    <div class="logo"><span>m</span>icromegas</div>
+  </div>
+  <div class="header-right">
+    <div class="time-group">
+      <button class="time-picker">Last 15 minutes</button>
+      <button class="zoom-btn">&#x2212;</button>
+      <button class="zoom-btn">+</button>
+    </div>
+    <div class="refresh-group">
+      <button class="refresh-btn active">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="23 4 23 10 17 10"/>
+          <polyline points="1 20 1 14 7 14"/>
+          <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+        </svg>
+        <span class="interval-label">1m</span>
+      </button>
+      <button class="interval-chevron">&#9660;</button>
+    </div>
+    <div class="avatar">MD</div>
+  </div>
+</div>
+
+</body>
+</html>

@@ -251,6 +251,7 @@ export function NotebookRenderer({
   refreshTrigger,
   onSaveRef,
   dataSource,
+  onExecutingChange,
 }: ScreenRendererProps) {
   const [, setSearchParams] = useSearchParams()
 
@@ -311,6 +312,13 @@ export function NotebookRenderer({
     dataSource,
     engine,
   })
+
+  // Report execution state to parent
+  const isExecuting = useMemo(
+    () => Object.values(cellStates).some((s) => s.status === 'loading'),
+    [cellStates]
+  )
+  useEffect(() => { onExecutingChange?.(isExecuting) }, [isExecuting, onExecutingChange])
 
   // Execute a cell by name (finds it in the flat execution list)
   const executeCellByName = useCallback(

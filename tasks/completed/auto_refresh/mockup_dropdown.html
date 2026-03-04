@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Auto-Refresh — Dropdown Mockup</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0a0a0f; color: #e7e9ea;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-size: 14px; line-height: 1.4;
+    padding: 40px;
+  }
+
+  h2 { font-size: 13px; color: #6b7280; margin-bottom: 12px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.5px; }
+  .spacer { height: 48px; }
+
+  /* ================================================================
+     Header Bar
+     ================================================================ */
+  .header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 24px;
+    background: #12121a; border-bottom: 1px solid #2a2a3e;
+  }
+  .header-left { display: flex; align-items: center; gap: 20px; }
+  .header-right { display: flex; align-items: center; gap: 16px; }
+
+  .logo {
+    font-size: 16px; font-weight: 700; color: #e7e9ea;
+    letter-spacing: -0.5px;
+  }
+  .logo span { color: #bf360c; }
+
+  .time-group {
+    display: flex; align-items: center;
+    border-radius: 6px; overflow: hidden;
+  }
+  .time-picker {
+    padding: 6px 12px;
+    background: #2a2a3e; border: none; color: #e7e9ea;
+    font-size: 12px; cursor: pointer;
+  }
+  .zoom-btn {
+    padding: 6px 8px;
+    background: #2a2a3e; border: none; border-left: 1px solid #1a1a2e;
+    color: #e7e9ea; cursor: pointer; font-size: 12px;
+  }
+
+  /* Refresh button group */
+  .refresh-group {
+    position: relative;
+    display: flex; align-items: center;
+    border-radius: 6px; overflow: visible;
+  }
+  .refresh-btn {
+    display: flex; align-items: center; gap: 6px;
+    padding: 6px 10px;
+    background: #2a2a3e; border: none;
+    color: #e7e9ea; cursor: pointer; font-size: 12px;
+    border-radius: 6px 0 0 6px;
+  }
+  .refresh-btn:hover { background: #3a3a4e; }
+  .refresh-btn svg { width: 14px; height: 14px; }
+  .refresh-btn.active svg {
+    animation: spin 1.5s linear infinite;
+  }
+  .refresh-btn.active .interval-label {
+    color: #4fc3f7; font-weight: 500;
+  }
+
+  @keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+  }
+
+  .interval-chevron {
+    display: flex; align-items: center;
+    padding: 6px 6px;
+    background: #3a3a4e; border: none; border-left: 1px solid #1a1a2e;
+    color: #e7e9ea; cursor: pointer; font-size: 10px;
+    border-radius: 0 6px 6px 0;
+  }
+
+  /* ================================================================
+     Dropdown Popover
+     ================================================================ */
+  .dropdown {
+    position: absolute; top: 100%; right: 0;
+    margin-top: 4px;
+    width: 140px;
+    background: #1a1a2e;
+    border: 1px solid #2a2a3e;
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+    overflow: hidden;
+    z-index: 100;
+  }
+  .dropdown-header {
+    padding: 8px 12px;
+    font-size: 11px; font-weight: 600; color: #6b7280;
+    text-transform: uppercase; letter-spacing: 0.5px;
+    border-bottom: 1px solid #2a2a3e;
+  }
+  .dropdown-item {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 7px 12px;
+    font-size: 12px; color: #e7e9ea;
+    cursor: pointer;
+    transition: background 0.1s;
+  }
+  .dropdown-item:hover { background: #2a2a3e; }
+  .dropdown-item.active { color: #4fc3f7; }
+  .dropdown-item .check {
+    font-size: 12px; color: #4fc3f7;
+  }
+
+  .avatar {
+    width: 28px; height: 28px; border-radius: 50%;
+    background: #1565c0; display: flex; align-items: center; justify-content: center;
+    font-size: 11px; font-weight: 600; color: white; cursor: pointer;
+  }
+</style>
+</head>
+<body>
+
+<!-- ============================================================
+     Dropdown open — no interval selected
+     ============================================================ -->
+<h2>Dropdown open — auto-refresh off</h2>
+<div class="header">
+  <div class="header-left">
+    <div class="logo"><span>m</span>icromegas</div>
+  </div>
+  <div class="header-right">
+    <div class="time-group">
+      <button class="time-picker">Last 1 hour</button>
+      <button class="zoom-btn">&#x2212;</button>
+      <button class="zoom-btn">+</button>
+    </div>
+    <div class="refresh-group">
+      <button class="refresh-btn">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="23 4 23 10 17 10"/>
+          <polyline points="1 20 1 14 7 14"/>
+          <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+        </svg>
+      </button>
+      <button class="interval-chevron">&#9660;</button>
+
+      <!-- Dropdown -->
+      <div class="dropdown">
+        <div class="dropdown-header">Auto-refresh</div>
+        <div class="dropdown-item active">
+          <span>Off</span>
+          <span class="check">&#10003;</span>
+        </div>
+        <div class="dropdown-item"><span>5s</span></div>
+        <div class="dropdown-item"><span>10s</span></div>
+        <div class="dropdown-item"><span>30s</span></div>
+        <div class="dropdown-item"><span>1m</span></div>
+        <div class="dropdown-item"><span>5m</span></div>
+        <div class="dropdown-item"><span>15m</span></div>
+        <div class="dropdown-item"><span>30m</span></div>
+        <div class="dropdown-item"><span>1h</span></div>
+      </div>
+    </div>
+    <div class="avatar">MD</div>
+  </div>
+</div>
+
+<div style="height: 320px;"></div>
+
+<!-- ============================================================
+     Dropdown open — 5s selected
+     ============================================================ -->
+<h2>Dropdown open — 5s active</h2>
+<div class="header">
+  <div class="header-left">
+    <div class="logo"><span>m</span>icromegas</div>
+  </div>
+  <div class="header-right">
+    <div class="time-group">
+      <button class="time-picker">Last 1 hour</button>
+      <button class="zoom-btn">&#x2212;</button>
+      <button class="zoom-btn">+</button>
+    </div>
+    <div class="refresh-group">
+      <button class="refresh-btn active">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="23 4 23 10 17 10"/>
+          <polyline points="1 20 1 14 7 14"/>
+          <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+        </svg>
+        <span class="interval-label">5s</span>
+      </button>
+      <button class="interval-chevron">&#9660;</button>
+
+      <!-- Dropdown -->
+      <div class="dropdown">
+        <div class="dropdown-header">Auto-refresh</div>
+        <div class="dropdown-item"><span>Off</span></div>
+        <div class="dropdown-item active">
+          <span>5s</span>
+          <span class="check">&#10003;</span>
+        </div>
+        <div class="dropdown-item"><span>10s</span></div>
+        <div class="dropdown-item"><span>30s</span></div>
+        <div class="dropdown-item"><span>1m</span></div>
+        <div class="dropdown-item"><span>5m</span></div>
+        <div class="dropdown-item"><span>15m</span></div>
+        <div class="dropdown-item"><span>30m</span></div>
+        <div class="dropdown-item"><span>1h</span></div>
+      </div>
+    </div>
+    <div class="avatar">MD</div>
+  </div>
+</div>
+
+</body>
+</html>

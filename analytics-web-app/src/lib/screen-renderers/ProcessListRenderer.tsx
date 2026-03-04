@@ -92,6 +92,7 @@ export function ProcessListRenderer({
   refreshTrigger,
   onSaveRef,
   dataSource,
+  onExecutingChange,
 }: ScreenRendererProps) {
   const processListConfig = config as unknown as ProcessListConfig
   const savedProcessListConfig = savedConfig as unknown as ProcessListConfig | null
@@ -109,6 +110,9 @@ export function ProcessListRenderer({
   // Query execution
   const streamQuery = useStreamQuery()
   const queryError = streamQuery.error?.message ?? null
+
+  // Report execution state to parent
+  useEffect(() => { onExecutingChange?.(streamQuery.isStreaming) }, [streamQuery.isStreaming, onExecutingChange])
 
   // Track current SQL for re-execution
   const currentSqlRef = useRef<string>(processListConfig.sql)
