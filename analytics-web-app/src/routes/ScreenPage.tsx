@@ -1,6 +1,7 @@
 import { Suspense, useState, useCallback, useMemo, useEffect, useRef } from 'react'
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import { usePageTitle } from '@/hooks/usePageTitle'
+import { useRefreshInterval } from '@/hooks/useRefreshInterval'
 import { AlertCircle, Save, GitCompareArrows } from 'lucide-react'
 import { PageLayout } from '@/components/layout'
 import { AuthGuard } from '@/components/AuthGuard'
@@ -88,6 +89,9 @@ function ScreenPageContent() {
 
   // Refresh trigger - increment to tell renderer to re-execute query
   const [refreshTrigger, setRefreshTrigger] = useState(0)
+
+  // Execution state reported by renderer (for header spinner)
+  const [isExecuting, setIsExecuting] = useState(false)
 
   // Compute raw time range values (for renderer)
   // Priority: URL (if present) → saved config → current config
@@ -201,6 +205,18 @@ function ScreenPageContent() {
   const handleRefresh = useCallback(() => {
     setRefreshTrigger((n) => n + 1)
   }, [])
+
+  // Auto-refresh interval (persisted in screenConfig)
+  const refreshIntervalMs = (screenConfig?.refreshIntervalMs as number) ?? 0
+
+  const handleRefreshIntervalChange = useCallback(
+    (ms: number) => {
+      handleScreenConfigChange((prev) => ({ ...prev, refreshIntervalMs: ms }))
+    },
+    [handleScreenConfigChange]
+  )
+
+  useRefreshInterval(refreshIntervalMs, handleRefresh)
 
   // Save existing screen — API call + state update only; URL cleanup is the renderer's job
   const handleSave = useCallback(async (): Promise<ScreenConfig | null> => {
@@ -337,6 +353,9 @@ function ScreenPageContent() {
           timeRangeTo: rawTimeRange.to,
           onTimeRangeChange: handleTimeRangeChange,
         }}
+        refreshIntervalMs={refreshIntervalMs}
+        onRefreshIntervalChange={handleRefreshIntervalChange}
+        isExecuting={isExecuting}
       >
         <div className="flex flex-col h-full">
           {/* Header */}
@@ -420,6 +439,7 @@ function ScreenPageContent() {
               refreshTrigger={refreshTrigger}
               onSaveRef={saveRef}
               dataSource={dataSource}
+              onExecutingChange={setIsExecuting}
             />
           </div>
         </div>

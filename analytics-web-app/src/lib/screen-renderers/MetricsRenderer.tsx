@@ -43,6 +43,7 @@ export function MetricsRenderer({
   refreshTrigger,
   onSaveRef,
   dataSource,
+  onExecutingChange,
 }: ScreenRendererProps) {
   const metricsConfig = config as unknown as MetricsConfig
   const savedMetricsConfig = savedConfig as unknown as MetricsConfig | null
@@ -70,6 +71,9 @@ export function MetricsRenderer({
     refreshTrigger,
     dataSource: effectiveDataSource,
   })
+
+  // Report execution state to parent
+  useEffect(() => { onExecutingChange?.(query.isLoading) }, [query.isLoading, onExecutingChange])
 
   // Sync scale mode from config when loaded
   useEffect(() => {

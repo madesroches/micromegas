@@ -6,6 +6,7 @@ import { getConfig } from '@/lib/config'
 import { zoomTimeRange } from '@/lib/time-range'
 import { TimeRangePicker } from './TimeRangePicker'
 import { PivotButton } from './PivotButton'
+import { RefreshIntervalPicker } from './RefreshIntervalPicker'
 import { MicromegasLogo } from '@/components/MicromegasLogo'
 import type { TimeRangeControlProps } from './PageLayout'
 
@@ -15,9 +16,15 @@ interface HeaderProps {
   timeRangeControl?: TimeRangeControlProps
   /** Process ID for pivot button navigation */
   processId?: string
+  /** Current auto-refresh interval in ms (0 = off) */
+  refreshIntervalMs?: number
+  /** Callback to change the auto-refresh interval */
+  onRefreshIntervalChange?: (ms: number) => void
+  /** Whether the screen is currently executing */
+  isExecuting?: boolean
 }
 
-export function Header({ onRefresh, timeRangeControl, processId }: HeaderProps) {
+export function Header({ onRefresh, timeRangeControl, processId, refreshIntervalMs, onRefreshIntervalChange, isExecuting }: HeaderProps) {
   const { user, logout, status } = useAuth()
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false)
   const [isLoggingOut, setIsLoggingOut] = useState(false)
@@ -88,22 +95,41 @@ export function Header({ onRefresh, timeRangeControl, processId }: HeaderProps) 
             >
               <ZoomIn className="w-4 h-4" />
             </button>
+            {onRefresh && onRefreshIntervalChange ? (
+              <RefreshIntervalPicker
+                intervalMs={refreshIntervalMs ?? 0}
+                onIntervalChange={onRefreshIntervalChange}
+                onRefresh={onRefresh}
+                isExecuting={isExecuting}
+              />
+            ) : (
+              <button
+                onClick={onRefresh}
+                className="px-2 sm:px-2.5 py-1.5 bg-theme-border border-l border-theme-border-hover rounded-r-md text-theme-text-primary hover:bg-theme-border-hover transition-colors"
+                title="Refresh"
+              >
+                <RefreshCw className="w-4 h-4" />
+              </button>
+            )}
+          </div>
+        ) : onRefresh ? (
+          onRefreshIntervalChange ? (
+            <RefreshIntervalPicker
+              intervalMs={refreshIntervalMs ?? 0}
+              onIntervalChange={onRefreshIntervalChange}
+              onRefresh={onRefresh}
+              isExecuting={isExecuting}
+              className="rounded-l-md"
+            />
+          ) : (
             <button
               onClick={onRefresh}
-              className="px-2 sm:px-2.5 py-1.5 bg-theme-border border-l border-theme-border-hover rounded-r-md text-theme-text-primary hover:bg-theme-border-hover transition-colors"
+              className="px-2.5 py-1.5 bg-theme-border rounded-md text-theme-text-primary hover:bg-theme-border-hover transition-colors"
               title="Refresh"
             >
               <RefreshCw className="w-4 h-4" />
             </button>
-          </div>
-        ) : onRefresh ? (
-          <button
-            onClick={onRefresh}
-            className="px-2.5 py-1.5 bg-theme-border rounded-md text-theme-text-primary hover:bg-theme-border-hover transition-colors"
-            title="Refresh"
-          >
-            <RefreshCw className="w-4 h-4" />
-          </button>
+          )
         ) : null}
 
         {/* User Menu */}

@@ -38,6 +38,8 @@ export interface ScreenRendererProps {
   onSaveRef?: MutableRefObject<(() => Promise<void>) | null>
   /** Active data source name for queries */
   dataSource: string
+  /** Report execution state changes (for spinner in header) */
+  onExecutingChange?: (executing: boolean) => void
 }
 
 /**

@@ -163,6 +163,7 @@ export function LogRenderer({
   refreshTrigger,
   onSaveRef,
   dataSource,
+  onExecutingChange,
 }: ScreenRendererProps) {
   const logConfig = config as unknown as LogConfig
   const savedLogConfig = savedConfig as unknown as LogConfig | null
@@ -313,6 +314,9 @@ export function LogRenderer({
   // Query execution - using useStreamQuery directly for filter-based re-execution
   const streamQuery = useStreamQuery()
   const queryError = streamQuery.error?.message ?? null
+
+  // Report execution state to parent
+  useEffect(() => { onExecutingChange?.(streamQuery.isStreaming) }, [streamQuery.isStreaming, onExecutingChange])
 
   // Store result table when query completes
   useEffect(() => {
