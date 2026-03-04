@@ -155,9 +155,9 @@ export function SyntaxEditor({
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && onRunShortcut) {
         e.preventDefault()
-        onRunShortcut?.()
+        onRunShortcut()
       }
     },
     [onRunShortcut]
