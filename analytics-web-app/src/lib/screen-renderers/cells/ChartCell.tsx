@@ -256,7 +256,7 @@ export function ChartCell({ data, status, options, onOptionsChange, variables, t
 // Editor Component
 // =============================================================================
 
-function ChartCellEditor({ config, onChange, variables, timeRange, datasourceVariables, defaultDataSource }: CellEditorProps) {
+function ChartCellEditor({ config, onChange, variables, timeRange, datasourceVariables, defaultDataSource, onRun }: CellEditorProps) {
   // Always work with v2 format
   const v2 = useMemo(() => migrateChartConfig(config), [config])
 
@@ -349,6 +349,7 @@ function ChartCellEditor({ config, onChange, variables, timeRange, datasourceVar
                 language="sql"
                 placeholder="SELECT time, value FROM ..."
                 minHeight="80px"
+                onRunShortcut={onRun}
               />
             </div>
 

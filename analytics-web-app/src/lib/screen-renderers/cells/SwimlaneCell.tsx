@@ -396,7 +396,7 @@ export function SwimlaneCell({
 // Editor Component
 // =============================================================================
 
-function SwimlaneCellEditor({ config, onChange, variables, timeRange }: CellEditorProps) {
+function SwimlaneCellEditor({ config, onChange, variables, timeRange, onRun }: CellEditorProps) {
   const slConfig = config as QueryCellConfig
 
   // Validate macro references in SQL
@@ -416,6 +416,7 @@ function SwimlaneCellEditor({ config, onChange, variables, timeRange }: CellEdit
           language="sql"
           placeholder="SELECT id, name, begin, end FROM ..."
           minHeight="150px"
+          onRunShortcut={onRun}
         />
       </div>
       {validationErrors.length > 0 && (

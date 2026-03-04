@@ -1,4 +1,6 @@
 import { useRef, useEffect, useCallback } from 'react'
+import { Braces, Keyboard } from 'lucide-react'
+import { formatSQL } from '@/lib/sqlFormatter'
 
 export type SyntaxLanguage = 'sql' | 'markdown'
 
@@ -9,6 +11,7 @@ interface SyntaxEditorProps {
   placeholder?: string
   className?: string
   minHeight?: string
+  onRunShortcut?: () => void
 }
 
 // SQL syntax highlighting - returns HTML string
@@ -127,9 +130,11 @@ export function SyntaxEditor({
   placeholder,
   className = '',
   minHeight = '150px',
+  onRunShortcut,
 }: SyntaxEditorProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const preRef = useRef<HTMLPreElement>(null)
+  const isSql = language === 'sql'
 
   // Synchronize scroll between textarea and pre
   const handleScroll = useCallback(() => {
@@ -148,31 +153,79 @@ export function SyntaxEditor({
     }
   }, [handleScroll])
 
-  const highlightedCode =
-    language === 'sql' ? highlightSql(value) : highlightMarkdown(value)
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && onRunShortcut) {
+        e.preventDefault()
+        onRunShortcut()
+      }
+    },
+    [onRunShortcut]
+  )
+
+  const handleFormat = useCallback(() => {
+    onChange(formatSQL(value))
+  }, [value, onChange])
+
+  const highlightedCode = isSql ? highlightSql(value) : highlightMarkdown(value)
+
+  const preClass = isSql
+    ? 'absolute inset-0 p-3 font-mono text-xs leading-relaxed whitespace-pre pointer-events-none overflow-hidden m-0'
+    : 'absolute inset-0 p-3 font-mono text-xs leading-relaxed whitespace-pre-wrap break-words pointer-events-none overflow-hidden m-0'
 
   return (
     <div
-      className={`relative border border-theme-border rounded-md focus-within:border-accent-link bg-app-bg overflow-hidden resize-y ${className}`}
+      className={`flex flex-col border border-theme-border rounded-md focus-within:border-accent-link bg-app-bg overflow-hidden resize-y ${className}`}
       style={{ minHeight }}
     >
-      {/* Highlighted code layer (behind) */}
-      <pre
-        ref={preRef}
-        className="absolute inset-0 p-3 font-mono text-xs leading-relaxed whitespace-pre-wrap break-words pointer-events-none overflow-hidden m-0"
-        aria-hidden="true"
-        dangerouslySetInnerHTML={{ __html: highlightedCode }}
-      />
-      {/* Transparent textarea (in front, captures input) */}
-      <textarea
-        ref={textareaRef}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="absolute inset-0 w-full h-full p-3 bg-transparent text-transparent caret-theme-text-primary font-mono text-xs leading-relaxed resize-none focus:outline-none"
-        style={{ minHeight }}
-        placeholder={placeholder}
-        spellCheck={false}
-      />
+      {/* Editor area */}
+      <div className="relative flex-1 min-h-0 overflow-hidden">
+        {/* Highlighted code layer (behind) */}
+        <pre
+          ref={preRef}
+          className={preClass}
+          aria-hidden="true"
+          dangerouslySetInnerHTML={{ __html: highlightedCode }}
+        />
+        {/* Transparent textarea (in front, captures input) */}
+        <textarea
+          ref={textareaRef}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          onKeyDown={handleKeyDown}
+          className="absolute inset-0 w-full h-full p-3 bg-transparent text-transparent caret-theme-text-primary font-mono text-xs leading-relaxed resize-none focus:outline-none"
+          style={isSql ? { whiteSpace: 'pre' } : undefined}
+          placeholder={placeholder}
+          spellCheck={false}
+        />
+      </div>
+      {/* SQL toolbar */}
+      {isSql && (
+        <div className="flex items-center gap-2 px-3 py-1.5 border-t border-theme-border bg-app-card shrink-0">
+          <button
+            type="button"
+            onClick={handleFormat}
+            className="flex items-center gap-1 px-2 py-0.5 text-[11px] text-theme-text-secondary border border-theme-border rounded hover:text-theme-text-primary hover:border-accent-link hover:bg-accent-link/10 transition-all"
+            title="Format SQL"
+          >
+            <Braces className="w-3.5 h-3.5" />
+            Format
+          </button>
+          {onRunShortcut && (
+            <span className="flex items-center gap-1 ml-auto text-[11px] text-theme-text-muted">
+              <Keyboard className="w-3.5 h-3.5" />
+              <kbd className="px-1 py-px text-[10px] bg-app-panel border border-theme-border rounded text-theme-text-secondary">
+                Ctrl
+              </kbd>
+              +
+              <kbd className="px-1 py-px text-[10px] bg-app-panel border border-theme-border rounded text-theme-text-secondary">
+                Enter
+              </kbd>
+              {' '}to run
+            </span>
+          )}
+        </div>
+      )}
     </div>
   )
 }

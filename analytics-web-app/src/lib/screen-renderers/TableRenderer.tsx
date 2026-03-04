@@ -275,6 +275,7 @@ export function TableRenderer({
                 }}
                 language="sql"
                 minHeight="192px"
+                onRunShortcut={handleSqlRun}
               />
 
               {/* Error */}

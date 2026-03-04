@@ -145,7 +145,7 @@ export function PropertyTimelineCell({
 // Editor Component
 // =============================================================================
 
-function PropertyTimelineCellEditor({ config, onChange, variables, timeRange }: CellEditorProps) {
+function PropertyTimelineCellEditor({ config, onChange, variables, timeRange, onRun }: CellEditorProps) {
   const ptConfig = config as QueryCellConfig
 
   // Validate macro references in SQL
@@ -165,6 +165,7 @@ function PropertyTimelineCellEditor({ config, onChange, variables, timeRange }: 
           language="sql"
           placeholder="SELECT time, properties FROM ..."
           minHeight="150px"
+          onRunShortcut={onRun}
         />
       </div>
       {validationErrors.length > 0 && (

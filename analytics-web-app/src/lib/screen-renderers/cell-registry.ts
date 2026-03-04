@@ -77,6 +77,8 @@ export interface CellEditorProps {
   datasourceVariables?: string[]
   /** The global default data source name (fallback when cell has none) */
   defaultDataSource?: string
+  /** Run the cell (for Ctrl+Enter shortcut in SQL editors) */
+  onRun?: () => void
 }
 
 /**

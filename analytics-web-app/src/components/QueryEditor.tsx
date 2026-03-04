@@ -108,6 +108,7 @@ export function QueryEditor({
           }}
           language="sql"
           minHeight="192px"
+          onRunShortcut={handleRun}
         />
 
         {/* Error */}

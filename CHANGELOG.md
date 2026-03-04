@@ -7,6 +7,8 @@ This file documents the historical progress of the Micromegas project. For curre
 * **Dependencies:**
   * Update DataFusion to 52.2 and remove LimitPushdown workaround (#882)
 * **Analytics Web App:**
+  * Add SQL editor improvements: horizontal scrolling, format button, and Ctrl+Enter to run
+  * Replace sql-formatter-plus with sql-formatter (zero-dependency, actively maintained)
   * Fix concurrent token refresh race in authenticatedFetch
   * Remove local_query screen type (#871)
 * **Security:**

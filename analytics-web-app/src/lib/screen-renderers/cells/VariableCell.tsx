@@ -230,7 +230,7 @@ export function VariableTitleBarContent(props: CellRendererProps) {
 // Editor Component
 // =============================================================================
 
-function VariableCellEditor({ config, onChange, variables, timeRange, datasourceVariables }: CellEditorProps) {
+function VariableCellEditor({ config, onChange, variables, timeRange, datasourceVariables, onRun }: CellEditorProps) {
   const varConfig = config as VariableCellConfig
   const variableType = varConfig.variableType || 'combobox'
   const isCombobox = variableType === 'combobox'
@@ -292,6 +292,7 @@ function VariableCellEditor({ config, onChange, variables, timeRange, datasource
               language="sql"
               placeholder="SELECT value, label FROM ..."
               minHeight="150px"
+              onRunShortcut={onRun}
             />
           </div>
           {validationErrors.length > 0 && (

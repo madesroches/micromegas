@@ -117,7 +117,7 @@ export function TableCell({ data, status, options, onOptionsChange, variables }:
 // Editor Component
 // =============================================================================
 
-function TableCellEditor({ config, onChange, variables, timeRange, availableColumns }: CellEditorProps) {
+function TableCellEditor({ config, onChange, variables, timeRange, availableColumns, onRun }: CellEditorProps) {
   const tableConfig = config as QueryCellConfig
 
   // Compute the current $order_by value from sort state
@@ -162,6 +162,7 @@ function TableCellEditor({ config, onChange, variables, timeRange, availableColu
           language="sql"
           placeholder="SELECT * FROM ..."
           minHeight="150px"
+          onRunShortcut={onRun}
         />
       </div>
       {validationErrors.length > 0 && (

@@ -545,6 +545,7 @@ function ChildEditorView({
         availableColumns={availableColumns}
         datasourceVariables={datasourceVariables}
         defaultDataSource={defaultDataSource}
+        onRun={onRun}
       />
       {onRun && !!meta.execute && (
         <Button onClick={onRun} className="w-full gap-2">
