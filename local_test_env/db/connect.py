@@ -3,9 +3,10 @@ import subprocess
 import os
 
 username = os.environ.get("MICROMEGAS_DB_USERNAME")
+port = os.environ.get("MICROMEGAS_DB_PORT", "5432")
 
 subprocess.run(
-    "psql -h localhost -p 5432 -U {username}".format(username=username),
+    "psql -h localhost -p {port} -U {username}".format(port=port, username=username),
     shell=True,
     check=True,
 )
