@@ -88,12 +88,16 @@ See `mockup_header.html` and `mockup_dropdown.html` for visual reference.
 
 ### Step 2: Create `RefreshIntervalPicker` component
 - **New file:** `analytics-web-app/src/components/layout/RefreshIntervalPicker.tsx`
-- Dropdown with presets, spinning icon state, interval label
+- Use `@radix-ui/react-dropdown-menu` for the interval dropdown (already a dependency, used in `SplitButton.tsx`)
+- Spinning icon state, interval label
 - Reuse existing styling patterns (bg-theme-border, hover states, rounded-md)
 
 ### Step 3: Update Header to include the picker
 - **Modify:** `analytics-web-app/src/components/layout/Header.tsx`
-- Replace the standalone refresh button with `RefreshIntervalPicker` when `onRefreshIntervalChange` is provided
+- Header has **two** refresh button code paths that both need updating:
+  1. Inside the `timeRangeControl` block (line 91-97) — refresh button joined with zoom buttons
+  2. Standalone `onRefresh` branch (lines 100-106) — refresh button rendered alone
+- When `onRefreshIntervalChange` is provided, replace the refresh button in **both** paths with `RefreshIntervalPicker`
 - Keep the simple refresh button as fallback for non-screen pages
 
 ### Step 4: Thread props through PageLayout
