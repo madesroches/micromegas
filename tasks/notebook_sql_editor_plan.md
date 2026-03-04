@@ -17,13 +17,13 @@ The SQL editor is `SyntaxEditor` (`analytics-web-app/src/components/SyntaxEditor
 
 ### 1. Horizontal Scrolling in SyntaxEditor
 
-Change the `<pre>` and `<textarea>` from wrapping to horizontal scroll:
+Change the `<pre>` and `<textarea>` from wrapping to horizontal scroll **only when `language === 'sql'`**. Markdown editing must keep word wrapping (MarkdownCell uses SyntaxEditor with `language="markdown"`).
 
-- `<pre>`: Replace `whitespace-pre-wrap break-words` with `whitespace-pre` and allow `overflow-x: auto` (but keep `pointer-events-none`, so scrolling is driven by the textarea).
-- `<textarea>`: Add `white-space: pre` and `overflow-x: auto` via style. CSS `white-space` on textareas requires the style attribute (Tailwind has no utility for textarea wrapping).
+- `<pre>`: When SQL, use `whitespace-pre` and keep `overflow-hidden` (instead of `whitespace-pre-wrap break-words overflow-hidden`). Keep `pointer-events-none` so scrolling is driven by the textarea. The existing `scrollLeft` sync sets `preRef.scrollLeft` programmatically, which works on `overflow-hidden` elements — no scrollbar needed on the pre. When markdown, keep existing `whitespace-pre-wrap break-words overflow-hidden`.
+- `<textarea>`: When SQL, add `style={{ whiteSpace: 'pre' }}` to prevent wrapping. When markdown, leave default wrapping.
 - Both layers must scroll-sync horizontally (already handled by the existing `handleScroll` callback which syncs `scrollLeft`).
 
-The container `<div>` already has `overflow-hidden` — change to `overflow: hidden` on Y only so the textarea can scroll horizontally, or keep the container as-is since the absolute-positioned children handle their own overflow.
+The container `<div>` already has `overflow-hidden` — keep the container as-is since the absolute-positioned children handle their own overflow.
 
 ### 2. SQL Format Button and Toolbar
 
@@ -44,11 +44,9 @@ The post-processing regex preserves `$variable` references that the formatter br
 
 Add a toolbar row below the editor (similar to the Grafana plugin's `QueryTool` component at `grafana/src/components/QueryTool.tsx`). The toolbar contains:
 - **Format button** (`{}` icon) — formats the SQL
-- **Ctrl+Enter hint** (keyboard icon + tooltip) — tells users about the run shortcut
+- **Ctrl+Enter hint** (keyboard icon + tooltip) — tells users about the run shortcut. Only shown when `onRunShortcut` is provided, so the hint never appears without a functioning shortcut.
 
-The toolbar is part of `SyntaxEditor` and only shown when `language === 'sql'`. It sits below the editor area inside the same border, as a small row with `text-xs` controls.
-
-**Props change**: Add optional `showToolbar?: boolean` prop (default false). When true and language is `sql`, show the toolbar. This keeps `SyntaxEditor` clean for markdown use.
+The toolbar is part of `SyntaxEditor` and shown automatically when `language === 'sql'`. It sits below the editor area inside the same border, as a small row with `text-xs` controls. The format button always appears for SQL; the keyboard hint is conditional on `onRunShortcut` being provided.
 
 ### 3. Ctrl+Enter to Run
 
@@ -57,7 +55,8 @@ The toolbar is part of `SyntaxEditor` and only shown when `language === 'sql'`. 
 **Wiring**: Thread `onRun` from `CellEditor` into the type-specific editors:
 1. Extend `CellEditorProps` (`cell-registry.ts`) with `onRun?: () => void`
 2. `CellEditor.tsx` passes `onRun` to `meta.EditorComponent`
-3. Each cell editor that uses `SyntaxEditor` passes `onRun` as `onRunShortcut`
+3. `HorizontalGroupCell.tsx`'s `ChildEditorView` also renders `meta.EditorComponent` — pass its existing `onRun` prop through as well
+4. Each cell editor that uses `SyntaxEditor` passes `onRun` as `onRunShortcut`
 
 This keeps the shortcut scoped to when the SQL editor is focused.
 
@@ -71,15 +70,19 @@ This keeps the shortcut scoped to when the SQL editor is focused.
 - New file: `analytics-web-app/src/lib/sqlFormatter.ts`
 - Same implementation as Grafana plugin's `formatSQL`
 
-### Step 3: Update SyntaxEditor for horizontal scrolling
-- In `SyntaxEditor.tsx`, change `<pre>` classes: `whitespace-pre-wrap break-words` → `whitespace-pre`
-- Add `style={{ whiteSpace: 'pre', overflowWrap: 'normal' }}` to textarea to prevent wrapping
+### Step 3: Update SyntaxEditor for horizontal scrolling (SQL only)
+- Make `<pre>` classes conditional on `language`:
+  - SQL: replace `whitespace-pre-wrap break-words` with `whitespace-pre` (keep `overflow-hidden`; programmatic `scrollLeft` sync handles scrolling)
+  - Markdown: keep existing `whitespace-pre-wrap break-words overflow-hidden`
+- Make `<textarea>` wrapping conditional on `language`:
+  - SQL: add `style={{ whiteSpace: 'pre' }}`
+  - Markdown: no style override (keeps default wrapping)
 - Verify scroll sync still works (it should — `scrollLeft` sync already exists)
 
 ### Step 4: Add toolbar with format button and keyboard hint to SyntaxEditor
-- Add props: `showToolbar?: boolean`, `onRunShortcut?: () => void`
-- When `showToolbar` is true and language is `sql`, render a toolbar row below the editor area (inside the border container)
-- Toolbar contains: Format button (brackets-curly / `WrapText` icon from lucide), keyboard hint icon with "Ctrl+Enter to run" tooltip
+- Add prop: `onRunShortcut?: () => void`
+- When `language === 'sql'`, automatically render a toolbar row below the editor area (inside the border container)
+- Toolbar contains: Format button (brackets-curly / `WrapText` icon from lucide), keyboard hint icon with "Ctrl+Enter to run" tooltip (only when `onRunShortcut` is provided)
 - Format button calls `formatSQL(value)` and passes result to `onChange`
 - Import `formatSQL` from `@/lib/sqlFormatter`
 - Restructure the component: container holds the editor area (relative, flex-1) + toolbar row (flex, no-shrink)
@@ -92,14 +95,18 @@ This keeps the shortcut scoped to when the SQL editor is focused.
 ### Step 6: Thread `onRun` through CellEditorProps
 - Add `onRun?: () => void` to `CellEditorProps` in `cell-registry.ts`
 - In `CellEditor.tsx`, pass `onRun` to `meta.EditorComponent`
+- In `HorizontalGroupCell.tsx`, pass `onRun` from `ChildEditorView` to `meta.EditorComponent`
 
 ### Step 7: Update cell editors to use new SyntaxEditor props
-- `TableCell.tsx`, `LogCell.tsx`, `ChartCell.tsx`, `TransposedTableCell.tsx`, `PropertyTimelineCell.tsx`, `SwimlaneCell.tsx`: add `showToolbar` and `onRunShortcut={onRun}` to their `<SyntaxEditor>` calls
-- `VariableCell.tsx`: only if it has SQL mode
-- `MarkdownCell.tsx`: skip (markdown, not SQL)
+- `TableCell.tsx`, `LogCell.tsx`, `ChartCell.tsx`, `TransposedTableCell.tsx`, `PropertyTimelineCell.tsx`, `SwimlaneCell.tsx`: add `onRunShortcut={onRun}` to their `<SyntaxEditor>` calls (toolbar shows automatically for SQL)
+- `VariableCell.tsx`: add `onRunShortcut={onRun}` when in SQL/combobox mode
+- `MarkdownCell.tsx`: skip (markdown, not SQL — no toolbar rendered)
 
 ### Step 8: Update QueryEditor (non-notebook SQL panel)
-- `QueryEditor.tsx` also uses `SyntaxEditor` — add `showToolbar` and wire Ctrl+Enter to its `handleRun`
+- `QueryEditor.tsx` also uses `SyntaxEditor` — wire `onRunShortcut` to its `handleRun` (toolbar shows automatically)
+
+### Step 9: Update TableRenderer (standalone SQL renderer)
+- `TableRenderer.tsx` also uses `SyntaxEditor` directly (line 270) — wire `onRunShortcut` to its `handleSqlRun` callback
 
 ## Files to Modify
 
@@ -110,6 +117,7 @@ This keeps the shortcut scoped to when the SQL editor is focused.
 | `analytics-web-app/src/components/SyntaxEditor.tsx` | Horizontal scroll, format button, Ctrl+Enter |
 | `analytics-web-app/src/lib/screen-renderers/cell-registry.ts` | Add `onRun` to `CellEditorProps` |
 | `analytics-web-app/src/components/CellEditor.tsx` | Pass `onRun` to EditorComponent |
+| `analytics-web-app/src/lib/screen-renderers/cells/HorizontalGroupCell.tsx` | Pass `onRun` from ChildEditorView to EditorComponent |
 | `analytics-web-app/src/lib/screen-renderers/cells/TableCell.tsx` | Wire new props |
 | `analytics-web-app/src/lib/screen-renderers/cells/LogCell.tsx` | Wire new props |
 | `analytics-web-app/src/lib/screen-renderers/cells/ChartCell.tsx` | Wire new props |
@@ -118,6 +126,7 @@ This keeps the shortcut scoped to when the SQL editor is focused.
 | `analytics-web-app/src/lib/screen-renderers/cells/SwimlaneCell.tsx` | Wire new props |
 | `analytics-web-app/src/lib/screen-renderers/cells/VariableCell.tsx` | Wire new props (if SQL mode) |
 | `analytics-web-app/src/components/QueryEditor.tsx` | Wire new props |
+| `analytics-web-app/src/lib/screen-renderers/TableRenderer.tsx` | Wire `onRunShortcut` to `handleSqlRun` |
 
 ## Testing Strategy
 
