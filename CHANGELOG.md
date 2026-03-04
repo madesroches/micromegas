@@ -4,6 +4,14 @@ This file documents the historical progress of the Micromegas project. For curre
 
 ## Unreleased
 
+* **Database Migration (REQUIRED before upgrade):**
+  * Run the following SQL on your database before deploying this version:
+    ```sql
+    CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS processes_process_id_unique ON processes(process_id);
+    CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS streams_stream_id_unique ON streams(stream_id);
+    CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS blocks_block_id_unique ON blocks(block_id);
+    ```
+  * If you have existing duplicate rows, clean them up first using `delete_duplicate_blocks()`, `delete_duplicate_streams()`, `delete_duplicate_processes()` or manual deduplication
 * **Dependencies:**
   * Update DataFusion to 52.2 and remove LimitPushdown workaround (#882)
 * **Analytics Web App:**

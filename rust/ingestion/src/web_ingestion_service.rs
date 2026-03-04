@@ -72,9 +72,7 @@ impl WebIngestionService {
         let begin_insert = now();
         let insert_time = sqlx::types::chrono::Utc::now();
         let result = sqlx::query(
-            "INSERT INTO blocks
-             SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11
-             WHERE NOT EXISTS (SELECT 1 FROM blocks WHERE block_id = $1);",
+            "INSERT INTO blocks VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT (block_id) DO NOTHING;",
         )
         .bind(block_id)
         .bind(stream_id)
@@ -127,9 +125,7 @@ impl WebIngestionService {
             IngestionServiceError::ParseError(format!("encoding objects_metadata: {e}"))
         })?;
         let result = sqlx::query(
-            "INSERT INTO streams
-             SELECT $1,$2,$3,$4,$5,$6,$7
-             WHERE NOT EXISTS (SELECT 1 FROM streams WHERE stream_id = $1);",
+            "INSERT INTO streams VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (stream_id) DO NOTHING;",
         )
         .bind(stream_info.stream_id)
         .bind(stream_info.process_id)
@@ -160,9 +156,7 @@ impl WebIngestionService {
 
         let insert_time = sqlx::types::chrono::Utc::now();
         let result = sqlx::query(
-            "INSERT INTO processes
-             SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13
-             WHERE NOT EXISTS (SELECT 1 FROM processes WHERE process_id = $1);",
+            "INSERT INTO processes VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) ON CONFLICT (process_id) DO NOTHING;",
         )
         .bind(process_info.process_id)
         .bind(process_info.exe)

@@ -51,7 +51,7 @@ async fn ingest_streams(
                 extract_properties_from_properties_column(properties_accessor.as_ref(), row)?;
             let properties = micromegas_telemetry::property::make_properties(&properties_map);
 
-            sqlx::query("INSERT INTO streams VALUES($1,$2,$3,$4,$5,$6,$7);")
+            sqlx::query("INSERT INTO streams VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (stream_id) DO NOTHING;")
                 .bind(stream_id)
                 .bind(process_id)
                 .bind(dependencies_metadata_column.value(row))
@@ -106,7 +106,7 @@ async fn ingest_processes(
                 extract_properties_from_properties_column(properties_accessor.as_ref(), row)?;
             let properties = micromegas_telemetry::property::make_properties(&properties_map);
             sqlx::query(
-                "INSERT INTO processes VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13);",
+                "INSERT INTO processes VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) ON CONFLICT (process_id) DO NOTHING;",
             )
             .bind(process_id)
             .bind(exe_column.value(row)?)
@@ -186,7 +186,7 @@ async fn ingest_blocks(
             let block_id = Uuid::parse_str(block_id_column.value(row)?)?;
             let stream_id = Uuid::parse_str(stream_id_column.value(row)?)?;
             let process_id = Uuid::parse_str(process_id_column.value(row)?)?;
-            sqlx::query("INSERT INTO blocks VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11);")
+            sqlx::query("INSERT INTO blocks VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT (block_id) DO NOTHING;")
                 .bind(block_id)
                 .bind(stream_id)
                 .bind(process_id)

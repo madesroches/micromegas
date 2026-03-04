@@ -5,7 +5,7 @@ use sqlx::Executor;
 use sqlx::Row;
 
 /// The latest schema version for the data lake.
-pub const LATEST_DATA_LAKE_SCHEMA_VERSION: i32 = 2;
+pub const LATEST_DATA_LAKE_SCHEMA_VERSION: i32 = 3;
 
 /// Reads the current schema version from the database.
 pub async fn read_data_lake_schema_version(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> i32 {
@@ -55,6 +55,26 @@ pub async fn upgrade_data_lake_schema_v2(
     Ok(())
 }
 
+/// Upgrades the data lake schema to version 3.
+/// Drops old non-unique indexes (superseded by the unique indexes created before this transaction).
+pub async fn upgrade_data_lake_schema_v3(
+    tr: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+) -> Result<()> {
+    tr.execute("DROP INDEX IF EXISTS process_id;")
+        .await
+        .with_context(|| "dropping old non-unique index process_id")?;
+    tr.execute("DROP INDEX IF EXISTS stream_id;")
+        .await
+        .with_context(|| "dropping old non-unique index stream_id")?;
+    tr.execute("DROP INDEX IF EXISTS block_id;")
+        .await
+        .with_context(|| "dropping old non-unique index block_id")?;
+    tr.execute("UPDATE migration SET version=3;")
+        .await
+        .with_context(|| "updating data lake schema version to 3")?;
+    Ok(())
+}
+
 /// Executes the database migration.
 pub async fn execute_migration(pool: sqlx::Pool<sqlx::Postgres>) -> Result<()> {
     let mut current_version = read_data_lake_schema_version(&mut pool.begin().await?).await;
@@ -69,6 +89,29 @@ pub async fn execute_migration(pool: sqlx::Pool<sqlx::Postgres>) -> Result<()> {
         info!("upgrading data_lake_schema to v2");
         let mut tr = pool.begin().await?;
         upgrade_data_lake_schema_v2(&mut tr).await?;
+        current_version = read_data_lake_schema_version(&mut tr).await;
+        tr.commit().await?;
+    }
+    if 2 == current_version {
+        info!("upgrading data_lake_schema to v3");
+        // CREATE UNIQUE INDEX CONCURRENTLY cannot run inside a transaction.
+        // Run these outside any transaction, then do the rest in a transaction.
+        // IF NOT EXISTS makes this idempotent and safe for retries.
+        sqlx::query("CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS processes_process_id_unique ON processes(process_id);")
+            .execute(&pool)
+            .await
+            .with_context(|| "creating unique index on processes(process_id)")?;
+        sqlx::query("CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS streams_stream_id_unique ON streams(stream_id);")
+            .execute(&pool)
+            .await
+            .with_context(|| "creating unique index on streams(stream_id)")?;
+        sqlx::query("CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS blocks_block_id_unique ON blocks(block_id);")
+            .execute(&pool)
+            .await
+            .with_context(|| "creating unique index on blocks(block_id)")?;
+
+        let mut tr = pool.begin().await?;
+        upgrade_data_lake_schema_v3(&mut tr).await?;
         current_version = read_data_lake_schema_version(&mut tr).await;
         tr.commit().await?;
     }
