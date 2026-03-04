@@ -1,7 +1,6 @@
 import { useLocation } from 'react-router-dom'
 import { AppLink } from '@/components/AppLink'
 import { useAuth } from '@/lib/auth'
-import { LayoutGrid, Layers, Wrench } from 'lucide-react'
 import { LayoutGrid, Layers, Wrench, Map } from 'lucide-react'
 
 interface NavItem {

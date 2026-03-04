@@ -1,10 +1,10 @@
 import { Suspense, useState, useCallback, useEffect, useRef, useMemo } from 'react'
-import { Map as MapIcon, Layers, Eye, EyeOff, Focus, FlaskConical } from 'lucide-react'
+import { Map as MapIcon, Layers, Eye, EyeOff, Focus, FlaskConical, Palette, Magnet, RotateCcw } from 'lucide-react'
 import { PageLayout } from '@/components/layout'
 import { AuthGuard } from '@/components/AuthGuard'
 import { QueryEditor } from '@/components/QueryEditor'
 import { ErrorBanner } from '@/components/ErrorBanner'
-import { MapViewer, DeathEvent } from '@/components/map/MapViewer'
+import { MapViewer, DeathEvent, MapBounds } from '@/components/map/MapViewer'
 import { DeathDetailPanel } from '@/components/map/DeathDetailPanel'
 import { useMapData, MAP_VARIABLES } from '@/hooks/useMapData'
 import { useScreenConfig } from '@/hooks/useScreenConfig'
@@ -37,7 +37,7 @@ const MOCK_DEATH_CAUSES = [
   'Unknown',
 ]
 
-function generateMockEvents(count: number, seed: number = 42): DeathEvent[] {
+function generateMockEvents(count: number, seed: number = 42, mapBounds: MapBounds | null = null): DeathEvent[] {
   // Simple seeded random for reproducible results
   const seededRandom = (s: number) => {
     const x = Math.sin(s) * 10000
@@ -47,6 +47,28 @@ function generateMockEvents(count: number, seed: number = 42): DeathEvent[] {
   const events: DeathEvent[] = []
   const now = new Date()
 
+  // Derive hotspots and spread from map bounds if available
+  const boundsMinX = mapBounds ? mapBounds.min.x : -5000
+  const boundsMaxX = mapBounds ? mapBounds.max.x : 5000
+  const boundsMinY = mapBounds ? mapBounds.min.y : -5000
+  const boundsMaxY = mapBounds ? mapBounds.max.y : 5000
+  const boundsMinZ = mapBounds ? mapBounds.min.z : 0
+  const boundsMaxZ = mapBounds ? mapBounds.max.z : 200
+
+  const centerX = (boundsMinX + boundsMaxX) / 2
+  const centerY = (boundsMinY + boundsMaxY) / 2
+  const rangeX = boundsMaxX - boundsMinX
+  const rangeY = boundsMaxY - boundsMinY
+
+  const hotspots = [
+    { x: centerX, y: centerY },
+    { x: centerX + rangeX * 0.3, y: centerY + rangeY * 0.2 },
+    { x: centerX - rangeX * 0.2, y: centerY + rangeY * 0.3 },
+    { x: centerX + rangeX * 0.15, y: centerY - rangeY * 0.25 },
+    { x: centerX - rangeX * 0.3, y: centerY - rangeY * 0.1 },
+  ]
+  const spread = Math.max(rangeX, rangeY) * 0.2
+
   for (let i = 0; i < count; i++) {
     const r1 = seededRandom(seed + i * 3)
     const r2 = seededRandom(seed + i * 3 + 1)
@@ -55,25 +77,15 @@ function generateMockEvents(count: number, seed: number = 42): DeathEvent[] {
     const r5 = seededRandom(seed + i * 11)
     const r6 = seededRandom(seed + i * 13)
 
-    // Generate coordinates in a typical game map range
-    // Clustered around a few hotspots for more realistic distribution
-    const hotspots = [
-      { x: 0, y: 0 },
-      { x: 3000, y: 2000 },
-      { x: -2000, y: 3000 },
-      { x: 1500, y: -2500 },
-      { x: -3000, y: -1000 },
-    ]
     const hotspot = hotspots[Math.floor(r4 * hotspots.length)]
-    const spread = 2000
 
     events.push({
       id: `mock-${i}`,
-      time: new Date(now.getTime() - r6 * 3600000 * 24), // Random time in last 24h
+      time: new Date(now.getTime() - r6 * 3600000 * 24),
       processId: `process-${Math.floor(r5 * 100)}`,
       x: hotspot.x + (r1 - 0.5) * spread,
       y: hotspot.y + (r2 - 0.5) * spread,
-      z: r3 * 200, // Height between 0-200
+      z: boundsMinZ + r3 * (boundsMaxZ - boundsMinZ),
       playerName: MOCK_PLAYER_NAMES[Math.floor(r4 * MOCK_PLAYER_NAMES.length)],
       deathCause: MOCK_DEATH_CAUSES[Math.floor(r5 * MOCK_DEATH_CAUSES.length)],
     })
@@ -155,11 +167,16 @@ function MapPageContent() {
   const [fitToDataTrigger, setFitToDataTrigger] = useState(0)
   const [useMockData, setUseMockData] = useState(false)
   const [mockEventCount, setMockEventCount] = useState(1000)
+  const [mapBounds, setMapBounds] = useState<MapBounds | null>(null)
+  const [resetViewTrigger, setResetViewTrigger] = useState(0)
+  const [markerColor, setMarkerColor] = useState('#bf360c')
+  const [markerSize, setMarkerSize] = useState(10)
+  const [groundSnap, setGroundSnap] = useState(false)
 
   // Generate mock events (memoized to avoid regenerating on every render)
   const mockEvents = useMemo(
-    () => (useMockData ? generateMockEvents(mockEventCount) : []),
-    [useMockData, mockEventCount]
+    () => (useMockData ? generateMockEvents(mockEventCount, 42, mapBounds) : []),
+    [useMockData, mockEventCount, mapBounds]
   )
 
   // Use mock data or real data based on toggle
@@ -224,6 +241,14 @@ function MapPageContent() {
 
   const handleFitToData = useCallback(() => {
     setFitToDataTrigger((prev) => prev + 1)
+  }, [])
+
+  const handleMapBoundsChange = useCallback((bounds: MapBounds | null) => {
+    setMapBounds(bounds)
+  }, [])
+
+  const handleResetView = useCallback(() => {
+    setResetViewTrigger((prev) => prev + 1)
   }, [])
 
   const currentValues = {
@@ -323,6 +348,55 @@ function MapPageContent() {
 
             <div className="h-6 w-px bg-theme-border" />
 
+            <div className="flex items-center gap-2">
+              <Palette className="w-4 h-4 text-theme-text-muted" />
+              <input
+                type="color"
+                value={markerColor}
+                onChange={(e) => setMarkerColor(e.target.value)}
+                className="w-7 h-7 rounded cursor-pointer border border-theme-border bg-transparent"
+                title="Marker color"
+              />
+            </div>
+
+            <div className="flex items-center gap-2">
+              <label className="text-xs text-theme-text-muted">Size:</label>
+              <input
+                type="range"
+                min="1"
+                max="50"
+                value={markerSize}
+                onChange={(e) => setMarkerSize(Number(e.target.value))}
+                className="w-20 accent-accent-link"
+              />
+              <span className="text-xs text-theme-text-muted w-5">{markerSize}</span>
+            </div>
+
+            <button
+              onClick={() => setGroundSnap(!groundSnap)}
+              disabled={!mapBounds}
+              className={`flex items-center gap-2 px-3 py-1.5 rounded text-sm transition-colors ${
+                groundSnap
+                  ? 'bg-accent text-white'
+                  : 'bg-app-card text-theme-text-secondary hover:text-theme-text-primary'
+              } disabled:opacity-50 disabled:cursor-not-allowed`}
+              title="Snap markers to ground surface"
+            >
+              <Magnet className="w-4 h-4" />
+              Ground Snap
+            </button>
+
+            <button
+              onClick={handleResetView}
+              className="flex items-center gap-2 px-3 py-1.5 rounded text-sm transition-colors bg-app-card text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-border"
+              title="Reset camera to initial view"
+            >
+              <RotateCcw className="w-4 h-4" />
+              Reset View
+            </button>
+
+            <div className="h-6 w-px bg-theme-border" />
+
             <button
               onClick={() => setUseMockData(!useMockData)}
               className={`flex items-center gap-2 px-3 py-1.5 rounded text-sm transition-colors ${
@@ -410,6 +484,11 @@ function MapPageContent() {
                 heatmapRadius={heatmapRadius}
                 heatmapIntensity={heatmapIntensity}
                 fitToDataTrigger={fitToDataTrigger}
+                onMapBoundsChange={handleMapBoundsChange}
+                markerColor={markerColor}
+                markerSize={markerSize}
+                groundSnap={groundSnap}
+                resetViewTrigger={resetViewTrigger}
               />
             )}
 
