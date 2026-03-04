@@ -47,13 +47,23 @@ The interval value persists in `screenConfig.refreshIntervalMs` so it saves with
 ```typescript
 function useRefreshInterval(
   intervalMs: number,
+  isExecuting: boolean,
   onTick: () => void
 ): void
 ```
 
-- When `intervalMs > 0`, starts a `setInterval` that calls `onTick`
-- Cleans up on unmount or when `intervalMs` changes
+- When `intervalMs > 0` and `isExecuting` is false, starts a `setInterval` that calls `onTick`
+- Skips ticks while `isExecuting` is true — the interval pauses and resumes with a fresh cycle once execution completes (Grafana's "interval after completion" behaviour)
+- Cleans up on unmount or when `intervalMs`/`isExecuting` changes
 - Uses a ref for `onTick` to avoid resetting the interval when the callback identity changes
+
+### Execution Awareness
+
+Renderers report their execution state to ScreenPage via `onExecutingChange` callback on `ScreenRendererProps`. This drives two behaviours:
+- **Spinner**: the refresh icon in the header spins while executing
+- **Timer pause**: `useRefreshInterval` skips ticks during execution to avoid queueing overlapping queries
+
+`useCellExecution` preserves previous cell `data` when re-executing (by design) so notebook cells show their last results during loading rather than flashing empty. All cell renderers already guard on `status === 'loading'` before rendering data.
 
 ### Props Flow
 
@@ -109,8 +119,18 @@ See `mockup_header.html` and `mockup_dropdown.html` for visual reference.
 - **Modify:** `analytics-web-app/src/routes/ScreenPage.tsx`
 - Read `refreshIntervalMs` from `screenConfig` (default 0)
 - Create handler to update config: `handleRefreshIntervalChange(ms)` → `handleScreenConfigChange`
-- Call `useRefreshInterval(intervalMs, handleRefresh)`
+- Call `useRefreshInterval(intervalMs, isExecuting, handleRefresh)`
 - Pass interval props to `PageLayout`
+
+### Step 6: Execution-aware refresh
+- **Modify:** `analytics-web-app/src/lib/screen-renderers/index.ts` — add `onExecutingChange?: (executing: boolean) => void` to `ScreenRendererProps`
+- **Modify:** all 5 renderers — report execution state via `onExecutingChange`
+- **Modify:** `analytics-web-app/src/routes/ScreenPage.tsx` — track `isExecuting` state, pass to `useRefreshInterval` and `PageLayout`/`Header`
+- **Modify:** `analytics-web-app/src/lib/screen-renderers/useCellExecution.ts` — preserve previous `data` when re-executing (omit `data: []` from loading state reset) so notebook cells keep their content visible during auto-refresh rather than flashing empty
+
+### Step 7: Header toolbar height fix
+- **Modify:** `analytics-web-app/src/components/layout/Header.tsx` — use `flex items-stretch h-8` on toolbar container, `flex items-center justify-center` on icon buttons to equalize heights
+- **Modify:** `analytics-web-app/src/components/layout/TimeRangePicker/index.tsx` — add `h-full` to wrapper and button for consistent height
 
 ## Files to Modify
 
@@ -121,6 +141,14 @@ See `mockup_header.html` and `mockup_dropdown.html` for visual reference.
 | `analytics-web-app/src/components/layout/Header.tsx` | Integrate picker next to refresh button |
 | `analytics-web-app/src/components/layout/PageLayout.tsx` | Thread new props |
 | `analytics-web-app/src/routes/ScreenPage.tsx` | Wire interval state + hook |
+| `analytics-web-app/src/lib/screen-renderers/index.ts` | Add `onExecutingChange` to `ScreenRendererProps` |
+| `analytics-web-app/src/lib/screen-renderers/useCellExecution.ts` | Preserve data during re-execution |
+| `analytics-web-app/src/lib/screen-renderers/LogRenderer.tsx` | Report execution state |
+| `analytics-web-app/src/lib/screen-renderers/MetricsRenderer.tsx` | Report execution state |
+| `analytics-web-app/src/lib/screen-renderers/NotebookRenderer.tsx` | Report execution state |
+| `analytics-web-app/src/lib/screen-renderers/ProcessListRenderer.tsx` | Report execution state |
+| `analytics-web-app/src/lib/screen-renderers/TableRenderer.tsx` | Report execution state |
+| `analytics-web-app/src/components/layout/TimeRangePicker/index.tsx` | Height consistency fix |
 
 ## Mockups
 
@@ -132,6 +160,10 @@ See `mockup_header.html` and `mockup_dropdown.html` for visual reference.
 **Screen-level vs notebook-only:** Putting auto-refresh at the ScreenPage/Header level means all screen types benefit with zero extra work per renderer. The `refreshTrigger` mechanism already exists for all of them. Downside: the interval setting is in the generic `ScreenConfig` rather than typed in `NotebookConfig`, but the index signature handles this cleanly.
 
 **URL param vs config-only:** Could store interval in a URL param (`?refresh=5s`) for shareability. Decided against — auto-refresh is a personal workflow preference, not something you'd typically want to share via link. Persisting in config (saved with screen) is sufficient.
+
+**Pause during execution:** Auto-refresh pauses while a query is executing and resumes with a fresh interval once complete, matching Grafana's "interval after completion" behaviour. This prevents overlapping queries from stacking up.
+
+**Preserve data during re-execution:** Notebook cells keep their previous results visible while re-executing (no flash to empty), following Grafana's panel behaviour. All cell renderers guard on `status === 'loading'` so stale data is never rendered — the previous content simply stays in memory.
 
 **Pause during editing:** Considered pausing auto-refresh while the user is editing a cell. Deferred — Grafana doesn't do this either, and the user can simply set interval to "Off". Can add later if needed.
 
