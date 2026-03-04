@@ -23,6 +23,7 @@ This file documents the historical progress of the Micromegas project. For curre
 * **Security:**
   * Fix minimatch ReDoS vulnerabilities across JS packages (Dependabot alerts #116–#123)
   * Bump serialize-javascript to 7.0.3 and OpenTelemetry SDK to 1.40.0 (Dependabot security alerts)
+  * Bump authlib to 1.6.9, dompurify to 3.2.7+, and immutable to 5.1.5 (Dependabot security alerts)
 * **Build:**
   * Add wasm-opt optimization step to WASM Docker builder for smaller binaries
 
