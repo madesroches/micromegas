@@ -133,7 +133,7 @@ export function TransposedTableCell({ data, status, options, onOptionsChange, va
 // Editor Component
 // =============================================================================
 
-function TransposedTableCellEditor({ config, onChange, variables, timeRange, availableColumns }: CellEditorProps) {
+function TransposedTableCellEditor({ config, onChange, variables, timeRange, availableColumns, onRun }: CellEditorProps) {
   const transposedConfig = config as QueryCellConfig
 
   const overrides = useMemo(
@@ -163,6 +163,7 @@ function TransposedTableCellEditor({ config, onChange, variables, timeRange, ava
           language="sql"
           placeholder="SELECT * FROM ..."
           minHeight="150px"
+          onRunShortcut={onRun}
         />
       </div>
       <AvailableVariablesPanel variables={variables} timeRange={timeRange} />

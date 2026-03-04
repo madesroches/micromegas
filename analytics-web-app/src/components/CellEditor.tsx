@@ -142,6 +142,7 @@ export function CellEditor({
           availableColumns={availableColumns}
           datasourceVariables={datasourceVariables}
           defaultDataSource={defaultDataSource}
+          onRun={onRun}
         />
       </div>
 

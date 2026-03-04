@@ -79,7 +79,7 @@ export function LogCell({ data, status, options, onOptionsChange }: CellRenderer
 // Editor Component
 // =============================================================================
 
-function LogCellEditor({ config, onChange, variables, timeRange }: CellEditorProps) {
+function LogCellEditor({ config, onChange, variables, timeRange, onRun }: CellEditorProps) {
   const logConfig = config as QueryCellConfig
 
   return (
@@ -94,6 +94,7 @@ function LogCellEditor({ config, onChange, variables, timeRange }: CellEditorPro
           language="sql"
           placeholder="SELECT time, level, target, msg FROM log_entries ..."
           minHeight="150px"
+          onRunShortcut={onRun}
         />
       </div>
       <AvailableVariablesPanel variables={variables} timeRange={timeRange} />
