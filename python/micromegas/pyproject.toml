@@ -9,7 +9,7 @@ repository = "https://github.com/madesroches/micromegas/"
 readme = "README.md"
 
 [tool.poetry.dependencies]
-authlib = "^1.6.6"
+authlib = "^1.6.7"
 certifi = "^2025.4.26"
 grpcio = "^1.69.0"
 numpy = "^2.2.6"
