@@ -216,7 +216,7 @@ function ScreenPageContent() {
     [handleScreenConfigChange]
   )
 
-  useRefreshInterval(refreshIntervalMs, handleRefresh)
+  useRefreshInterval(refreshIntervalMs, isExecuting, handleRefresh)
 
   // Save existing screen — API call + state update only; URL cleanup is the renderer's job
   const handleSave = useCallback(async (): Promise<ScreenConfig | null> => {
