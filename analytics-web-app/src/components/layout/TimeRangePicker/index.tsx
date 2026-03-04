@@ -185,10 +185,10 @@ export function TimeRangePicker({ from, to, onChange }: TimeRangePickerProps) {
   }, [isOpen])
 
   return (
-    <div className="relative">
+    <div className="relative h-full">
       <button
         onClick={() => setIsOpen(!isOpen)}
-        className="flex items-center gap-2 px-3 py-1.5 bg-theme-border rounded-l-md text-sm text-theme-text-primary hover:bg-theme-border-hover transition-colors"
+        className="flex items-center gap-2 px-3 py-1.5 h-full bg-theme-border rounded-l-md text-sm text-theme-text-primary hover:bg-theme-border-hover transition-colors"
         aria-expanded={isOpen}
         aria-haspopup="dialog"
         aria-label={`Time range: ${parsed.label}. Press to change.`}

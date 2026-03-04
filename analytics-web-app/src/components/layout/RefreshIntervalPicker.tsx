@@ -38,23 +38,23 @@ export function RefreshIntervalPicker({
   const activeLabel = labelForMs(intervalMs)
 
   return (
-    <div className="flex items-center">
+    <div className="flex items-stretch h-full">
       <button
         onClick={onRefresh}
-        className={`px-2 sm:px-2.5 py-1.5 bg-theme-border border-l border-theme-border-hover text-theme-text-primary hover:bg-theme-border-hover transition-colors ${className}`}
+        className={`flex items-center justify-center px-2 sm:px-2.5 bg-theme-border border-l border-theme-border-hover text-theme-text-primary hover:bg-theme-border-hover transition-colors ${className}`}
         title={activeLabel ? `Auto-refreshing every ${activeLabel}` : 'Refresh'}
       >
         <RefreshCw className={`w-4 h-4 ${isExecuting ? 'animate-spin' : ''}`} />
       </button>
       {activeLabel && (
-        <span className="px-1.5 py-1.5 bg-theme-border border-l border-theme-border-hover text-xs text-theme-text-secondary select-none">
+        <span className="flex items-center px-1.5 bg-theme-border border-l border-theme-border-hover text-xs text-theme-text-secondary select-none">
           {activeLabel}
         </span>
       )}
       <DropdownMenu.Root>
         <DropdownMenu.Trigger asChild>
           <button
-            className="px-1.5 py-1.5 bg-theme-border border-l border-theme-border-hover rounded-r-md text-theme-text-primary hover:bg-theme-border-hover transition-colors"
+            className="flex items-center justify-center px-1.5 bg-theme-border border-l border-theme-border-hover rounded-r-md text-theme-text-primary hover:bg-theme-border-hover transition-colors"
             title="Auto-refresh interval"
           >
             <ChevronDown className="w-3 h-3" />

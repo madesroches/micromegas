@@ -69,7 +69,7 @@ export function Header({ onRefresh, timeRangeControl, processId, refreshInterval
 
         {/* Time Range Controls (only shown when page provides timeRangeControl) */}
         {timeRangeControl ? (
-          <div className="flex items-center">
+          <div className="flex items-stretch h-8">
             <TimeRangePicker
               from={timeRangeControl.timeRangeFrom}
               to={timeRangeControl.timeRangeTo}
@@ -80,7 +80,7 @@ export function Header({ onRefresh, timeRangeControl, processId, refreshInterval
                 const zoomed = zoomTimeRange(timeRangeControl.timeRangeFrom, timeRangeControl.timeRangeTo, 'out')
                 timeRangeControl.onTimeRangeChange(zoomed.from, zoomed.to)
               }}
-              className="px-2 py-1.5 bg-theme-border border-l border-theme-border-hover text-theme-text-primary hover:bg-theme-border-hover transition-colors"
+              className="flex items-center justify-center px-2 bg-theme-border border-l border-theme-border-hover text-theme-text-primary hover:bg-theme-border-hover transition-colors"
               title="Zoom out"
             >
               <ZoomOut className="w-4 h-4" />
@@ -90,7 +90,7 @@ export function Header({ onRefresh, timeRangeControl, processId, refreshInterval
                 const zoomed = zoomTimeRange(timeRangeControl.timeRangeFrom, timeRangeControl.timeRangeTo, 'in')
                 timeRangeControl.onTimeRangeChange(zoomed.from, zoomed.to)
               }}
-              className="px-2 py-1.5 bg-theme-border border-l border-theme-border-hover text-theme-text-primary hover:bg-theme-border-hover transition-colors"
+              className="flex items-center justify-center px-2 bg-theme-border border-l border-theme-border-hover text-theme-text-primary hover:bg-theme-border-hover transition-colors"
               title="Zoom in"
             >
               <ZoomIn className="w-4 h-4" />
@@ -105,7 +105,7 @@ export function Header({ onRefresh, timeRangeControl, processId, refreshInterval
             ) : (
               <button
                 onClick={onRefresh}
-                className="px-2 sm:px-2.5 py-1.5 bg-theme-border border-l border-theme-border-hover rounded-r-md text-theme-text-primary hover:bg-theme-border-hover transition-colors"
+                className="flex items-center justify-center px-2 sm:px-2.5 bg-theme-border border-l border-theme-border-hover rounded-r-md text-theme-text-primary hover:bg-theme-border-hover transition-colors"
                 title="Refresh"
               >
                 <RefreshCw className="w-4 h-4" />
