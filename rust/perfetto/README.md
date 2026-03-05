@@ -4,5 +4,5 @@ This crate provides a library to write Perfetto traces for the Micromegas observ
 
 ## Documentation
 
-- 📖 [Complete Documentation](https://madesroches.github.io/micromegas/)
+- 📖 [Complete Documentation](https://micromegas.info/)
 - 💻 [GitHub Repository](https://github.com/madesroches/micromegas)

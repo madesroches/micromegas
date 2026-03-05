@@ -4,6 +4,6 @@ This crate provides a Telemetry HTTP sink library for logging, metrics, memory, 
 
 ## Documentation
 
-- 📖 [Complete Documentation](https://madesroches.github.io/micromegas/)
-- 🚀 [Getting Started Guide](https://madesroches.github.io/micromegas/docs/getting-started/)
+- 📖 [Complete Documentation](https://micromegas.info/)
+- 🚀 [Getting Started Guide](https://micromegas.info/docs/getting-started/)
 - 💻 [GitHub Repository](https://github.com/madesroches/micromegas)

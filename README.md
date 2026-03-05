@@ -1,5 +1,5 @@
 <p align="center">
-  <a href="https://madesroches.github.io/micromegas/"><img src="branding/micromegas-primary-light.svg" alt="Micromegas Logo" width="400"/></a><br/>
+  <a href="https://micromegas.info/"><img src="branding/micromegas-primary-light.svg" alt="Micromegas Logo" width="400"/></a><br/>
   <strong>A unified observability platform for logs, metrics, and traces, built for high-volume environments.</strong>
 </p>
 
@@ -10,10 +10,10 @@
 </p>
 
 <p align="center">
-  <a href="https://madesroches.github.io/micromegas/">Website</a> •
-  <a href="https://madesroches.github.io/micromegas/docs/">Documentation</a> •
-  <a href="https://madesroches.github.io/micromegas/rustdoc/micromegas/">Rust API Docs</a> •
-  <a href="https://madesroches.github.io/micromegas/docs/grafana/">Grafana Plugin</a> •
+  <a href="https://micromegas.info/">Website</a> •
+  <a href="https://micromegas.info/docs/">Documentation</a> •
+  <a href="https://micromegas.info/rustdoc/micromegas/">Rust API Docs</a> •
+  <a href="https://micromegas.info/docs/grafana/">Grafana Plugin</a> •
   <a href="#presentations">Presentations</a>
 </p>
 
@@ -51,21 +51,21 @@ Micromegas consists of several key components:
 
 Unlike traditional observability platforms with opaque and often escalating costs, Micromegas offers a transparent and **orders of magnitude more efficient** solution. With Micromegas, you can afford to record billions of events without relying heavily on sampling, gaining a complete and accurate picture of your systems. By leveraging your own cloud infrastructure, Micromegas drastically reduces your observability spend, especially at scale.
 
-Discover how Micromegas achieves this unparalleled cost efficiency and compare it with traditional solutions in our detailed [Cost Effectiveness](https://madesroches.github.io/micromegas/docs/cost-effectiveness/) document.
+Discover how Micromegas achieves this unparalleled cost efficiency and compare it with traditional solutions in our detailed [Cost Effectiveness](https://micromegas.info/docs/cost-effectiveness/) document.
 
 ## Presentations
 
 Learn more about Micromegas through our technical presentations:
 
-- **[Interactive Notebooks for Observability](https://madesroches.github.io/micromegas/notebooks/)** (February 2026) - Composable notebook cells with an in-browser query engine
-- **[Unified Observability for Games](https://madesroches.github.io/micromegas/unified-observability-for-games/)** (January 2026) - Why a unified architecture is easier to use and more powerful
-- **[High-Frequency Observability: Cost-Efficient Telemetry at Scale](https://madesroches.github.io/micromegas/high-frequency-observability/)** (October 2025) - How to record more data for less money with tail sampling and lakehouse architecture
-- **[Design Presentation](https://madesroches.github.io/micromegas/doc/design-presentation/design.html)** (February 2025) - Architecture and design principles
-- **[Unreal Engine Guide](https://madesroches.github.io/micromegas/doc/unreal-observability/unreal-observability.html)** (July 2024) - Integrating Micromegas with Unreal Engine
+- **[Interactive Notebooks for Observability](https://micromegas.info/notebooks/)** (February 2026) - Composable notebook cells with an in-browser query engine
+- **[Unified Observability for Games](https://micromegas.info/unified-observability-for-games/)** (January 2026) - Why a unified architecture is easier to use and more powerful
+- **[High-Frequency Observability: Cost-Efficient Telemetry at Scale](https://micromegas.info/high-frequency-observability/)** (October 2025) - How to record more data for less money with tail sampling and lakehouse architecture
+- **[Design Presentation](https://micromegas.info/doc/design-presentation/design.html)** (February 2025) - Architecture and design principles
+- **[Unreal Engine Guide](https://micromegas.info/doc/unreal-observability/unreal-observability.html)** (July 2024) - Integrating Micromegas with Unreal Engine
 
 ## Getting Started
 
-To get started with Micromegas, please refer to the [Getting Started](https://madesroches.github.io/micromegas/docs/getting-started/) guide.
+To get started with Micromegas, please refer to the [Getting Started](https://micromegas.info/docs/getting-started/) guide.
 
 ## Current Status & Roadmap
 
@@ -146,7 +146,7 @@ For a detailed history of changes, please see the [CHANGELOG.md](./CHANGELOG.md)
 
 ## Contributing
 
-We welcome contributions from the community! If you're interested in helping improve Micromegas, please see our [Contribution Guidelines](https://madesroches.github.io/micromegas/docs/contributing/) for more details on how to get involved.
+We welcome contributions from the community! If you're interested in helping improve Micromegas, please see our [Contribution Guidelines](https://micromegas.info/docs/contributing/) for more details on how to get involved.
 
 Whether it's bug reports, feature requests, or code contributions, your input is valuable.
 

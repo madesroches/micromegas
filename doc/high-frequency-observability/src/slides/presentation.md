@@ -3,7 +3,7 @@
 
 ## Unified Observability for Video Games
 
-<p style="font-size: 0.6em;">Marc-Antoine Desroches · <a href="mailto:madesroches@gmail.com">madesroches@gmail.com</a><br><a href="https://madesroches.github.io/micromegas/">madesroches.github.io/micromegas</a></p>
+<p style="font-size: 0.6em;">Marc-Antoine Desroches · <a href="mailto:madesroches@gmail.com">madesroches@gmail.com</a><br><a href="https://micromegas.info/">micromegas.info</a></p>
 
 ---
 
@@ -385,7 +385,7 @@ Detailed CPU trace analysis
 
 ## Micromegas is Open Source
 
-🌟 **https://madesroches.github.io/micromegas/**
+🌟 **https://micromegas.info/**
 
 <ul>
 <li class="fragment">Drop a star (always makes my day!)</li>

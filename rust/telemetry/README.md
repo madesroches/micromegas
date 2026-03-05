@@ -4,5 +4,5 @@ This crate provides structures and functions common to both the analytics and in
 
 ## Documentation
 
-- 📖 [Complete Documentation](https://madesroches.github.io/micromegas/)
+- 📖 [Complete Documentation](https://micromegas.info/)
 - 💻 [GitHub Repository](https://github.com/madesroches/micromegas)

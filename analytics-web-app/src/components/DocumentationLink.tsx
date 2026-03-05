@@ -22,7 +22,7 @@ export function DocumentationLink({ url, label }: DocumentationLinkProps) {
 }
 
 // Documentation URLs
-const DOCS_BASE_URL = 'https://madesroches.github.io/micromegas/docs'
+const DOCS_BASE_URL = 'https://micromegas.info/docs'
 const SCHEMA_REF_URL = `${DOCS_BASE_URL}/query-guide/schema-reference`
 
 export const QUERY_GUIDE_URL = `${DOCS_BASE_URL}/query-guide/`

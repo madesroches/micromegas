@@ -4,6 +4,6 @@ This crate makes the telemetry data lake accessible and useful, providing functi
 
 ## Documentation
 
-- 📖 [Complete Documentation](https://madesroches.github.io/micromegas/)
-- 📊 [Query Guide](https://madesroches.github.io/micromegas/docs/query-guide/)
+- 📖 [Complete Documentation](https://micromegas.info/)
+- 📊 [Query Guide](https://micromegas.info/docs/query-guide/)
 - 💻 [GitHub Repository](https://github.com/madesroches/micromegas)
