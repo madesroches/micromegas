@@ -127,12 +127,21 @@ Extend `validateMacros()` with a `cellResults` parameter to check:
 
 #### During Execution (`useCellExecution.ts`)
 
-Add a `cellStatesRef` (a `useRef` mirroring `cellStates`) so that cell results from earlier executions are available synchronously during sequential execution. This mirrors the existing `variableValuesRef` pattern:
+Add a `cellStatesRef` (a `useRef`) so that cell results from earlier executions are available synchronously during sequential execution. This mirrors the existing `variableValuesRef` pattern in `useNotebookVariables.ts`, where the ref is mutated eagerly at the call site (not via `useEffect`, which only fires after render — too late for the next cell in a sequential run).
 
 ```typescript
 const cellStatesRef = useRef<Record<string, CellState>>({})
-useEffect(() => { cellStatesRef.current = cellStates }, [cellStates])
 ```
+
+Update the ref **eagerly** (synchronously, before the React state update) every time a cell completes — both on success and error paths inside `executeCell`. For example, after building `newState`:
+
+```typescript
+// Eager ref update so the next cell in a sequential run sees this result immediately
+cellStatesRef.current = { ...cellStatesRef.current, [cell.name]: newState }
+setCellStates((prev) => ({ ...prev, [cell.name]: newState }))
+```
+
+This must happen at **every** `setCellStates` call site inside `executeCell` that updates a cell's final state (success and error). The `useEffect` approach alone would fail because React batches state updates and the effect fires after render, but `executeFromCell` awaits `executeCell(i)` then immediately calls `executeCell(i+1)` before any render occurs.
 
 Then build `availableCellResults` from the ref inside `executeCell`:
 
@@ -146,8 +155,6 @@ for (let i = 0; i < cellIndex; i++) {
   }
 }
 ```
-
-Also update the ref eagerly after each cell completes (alongside `setCellStates`) so that the next cell in a sequential run sees the latest results without waiting for a React render.
 
 Pass `availableCellResults` in the `CellExecutionContext` object. Cell `execute()` functions access it as `context.cellResults` and pass it to `substituteMacros`.
 
@@ -238,7 +245,7 @@ export interface CellRendererProps {
 
 3. **`cell-registry.ts`** — Add `cellResults: Record<string, Table>` to `CellExecutionContext`.
 
-4. **`useCellExecution.ts`** — Add a `cellStatesRef` (`useRef` mirroring `cellStates`, updated eagerly after each cell completes). Build `availableCellResults` map from the ref for upstream cells. Pass it in `CellExecutionContext`.
+4. **`useCellExecution.ts`** — Add a `cellStatesRef` (`useRef`, mutated synchronously at every `setCellStates` call site in `executeCell` — not via `useEffect`). Build `availableCellResults` map from the ref for upstream cells. Pass it in `CellExecutionContext`.
 
 5. **Cell execute functions** — Update `substituteMacros()` calls in execute methods to pass `context.cellResults`: `TableCell`, `TransposedTableCell`, `LogCell`, `ChartCell` (execute only), `SwimlaneCell`, `PropertyTimelineCell`, `VariableCell` (combobox). Each just passes the new `context.cellResults` parameter.
 
@@ -248,7 +255,9 @@ export interface CellRendererProps {
    - `MarkdownCell` — has no execute method; its renderer calls `substituteMacros(content, variables, timeRange)` → add `cellResults`
    - `ChartCell` — renderer calls `substituteMacros` for option values (`substituteOptionsWithMacros`), per-series units, and chart labels → add `cellResults` to each call
 
-8. **`NotebookRenderer.tsx`** — Pass `cellResults` through `buildCellRendererProps` so renderers receive it. Same for `HorizontalGroupCell` renderer props.
+8. **`notebook-cell-view.ts`** — Add `cellResults?: Record<string, Table>` to `CellViewContext`. Update `buildCellRendererProps` to forward `context.cellResults` into the returned `CellRendererProps`.
+
+8b. **`NotebookRenderer.tsx`** — Pass `cellResults` through `CellViewContext` when calling `buildCellRendererProps`, so renderers receive it. Same for `HorizontalGroupCell` renderer props.
 
 ### Phase 3: Editor UI
 
@@ -300,7 +309,7 @@ export interface CellRendererProps {
 | `src/lib/screen-renderers/cells/PropertyTimelineCell.tsx` | Pass `cellResults` to `substituteMacros` |
 | `src/lib/screen-renderers/cells/VariableCell.tsx` | Pass `cellResults` to `substituteMacros` |
 | `src/lib/screen-renderers/cells/MarkdownCell.tsx` | Pass `cellResults` to `substituteMacros` in renderer (no execute method) |
-| `src/lib/screen-renderers/notebook-cell-view.ts` | Thread `cellResults` through `buildCellRendererProps` |
+| `src/lib/screen-renderers/notebook-cell-view.ts` | Add `cellResults` to `CellViewContext`, forward it through `buildCellRendererProps` |
 | `src/lib/screen-renderers/cells/HorizontalGroupCell.tsx` | Thread `cellResults` through to children |
 | `mkdocs/docs/web-app/notebooks/variables.md` | Document `$cell[N].column` syntax in macro substitution section |
 
