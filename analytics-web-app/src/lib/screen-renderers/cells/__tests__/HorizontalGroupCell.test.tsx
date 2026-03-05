@@ -3,6 +3,7 @@ import React from 'react'
 
 // Mock lucide-react icons
 jest.mock('lucide-react', () => ({
+  Download: () => <span data-testid="download">⬇</span>,
   GripVertical: () => <span data-testid="grip">⠿</span>,
   Play: () => <span data-testid="play">▶</span>,
   RotateCcw: () => <span data-testid="rotate">↻</span>,
@@ -59,6 +60,12 @@ jest.mock('@dnd-kit/utilities', () => ({
 // Mock data-sources-api (used by DataSourceSelector)
 jest.mock('@/lib/data-sources-api', () => ({
   getDataSourceList: jest.fn().mockReturnValue(new Promise(() => {})),
+}))
+
+// Mock arrow-to-csv
+jest.mock('../arrow-to-csv', () => ({
+  arrowTableToCsv: jest.fn(() => 'col1,col2\n1,2'),
+  triggerCsvDownload: jest.fn(),
 }))
 
 // Mock cell-registry

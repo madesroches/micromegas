@@ -30,7 +30,8 @@ Explore the codebase to understand the relevant architecture:
 2. Understand existing patterns in neighboring code
 3. Check for related completed plans in `tasks/` and `tasks/completed/` for precedent
 4. Note any existing utilities, types, or abstractions that should be reused
-5. Use Task tool with Explore agents for broad searches when needed
+5. Check `mkdocs/docs/` for documentation pages that cover the affected area and will need updates
+6. Use Task tool with Explore agents for broad searches when needed
 
 ### Phase 3: Research External Dependencies (if needed)
 
@@ -70,6 +71,9 @@ Quick reference list of files that will be touched.
 
 ## Trade-offs
 What alternatives were considered and why this approach was chosen.
+
+## Documentation
+Which mkdocs pages in `mkdocs/docs/` need to be created or updated.
 
 ## Testing Strategy
 How to verify the implementation works.

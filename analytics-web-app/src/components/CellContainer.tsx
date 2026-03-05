@@ -1,6 +1,6 @@
 import { ReactNode, useRef, useEffect, forwardRef, HTMLAttributes, useCallback } from 'react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
-import { ChevronDown, ChevronRight, Copy, Pencil, Play, RotateCcw, MoreVertical, Trash2, GripVertical, Zap } from 'lucide-react'
+import { ChevronDown, ChevronRight, Copy, Download, Pencil, Play, RotateCcw, MoreVertical, Trash2, GripVertical, Zap } from 'lucide-react'
 import { CellType, CellStatus, getCellTypeMetadata } from '@/lib/screen-renderers/cell-registry'
 import { Button } from '@/components/ui/button'
 import { ResizeHandle } from '@/components/ResizeHandle'
@@ -51,6 +51,8 @@ interface CellContainerProps extends Omit<HTMLAttributes<HTMLDivElement>, 'child
   isDragging?: boolean
   /** Override whether the run button is shown (defaults to cell type's execute capability) */
   canRun?: boolean
+  /** Download cell data as CSV */
+  onDownloadCsv?: () => void
   /** Child cell names (for collapsed HG groups to show inline) */
   childNames?: string[]
 }
@@ -69,6 +71,7 @@ export const CellContainer = forwardRef<HTMLDivElement, CellContainerProps>(func
     onRunFromHere,
     autoRunFromHere,
     onToggleAutoRunFromHere,
+    onDownloadCsv,
     onDuplicate,
     onDelete,
     statusText,
@@ -227,6 +230,15 @@ export const CellContainer = forwardRef<HTMLDivElement, CellContainerProps>(func
               >
                 <Zap className={`w-4 h-4 ${autoRunFromHere ? 'text-accent-link' : ''}`} />
                 {autoRunFromHere ? 'Disable auto-run' : 'Auto-run from here'}
+              </DropdownMenu.Item>
+            )}
+            {onDownloadCsv && (
+              <DropdownMenu.Item
+                className="flex items-center gap-2 px-3 py-2 text-sm text-theme-text-primary hover:bg-theme-border/50 cursor-pointer outline-none"
+                onSelect={() => onDownloadCsv()}
+              >
+                <Download className="w-4 h-4" />
+                Download CSV
               </DropdownMenu.Item>
             )}
             {onDuplicate && (

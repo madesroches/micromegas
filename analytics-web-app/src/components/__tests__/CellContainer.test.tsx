@@ -9,6 +9,7 @@ jest.mock('@/lib/screen-renderers/cell-registry', () => require('@/lib/screen-re
 jest.mock('lucide-react', () => ({
   ChevronDown: () => <span data-testid="chevron-down">▼</span>,
   ChevronRight: () => <span data-testid="chevron-right">▶</span>,
+  Download: () => <span data-testid="download">⬇</span>,
   Play: () => <span data-testid="play">▶</span>,
   RotateCcw: () => <span data-testid="rotate">↻</span>,
   MoreVertical: () => <span data-testid="more">⋮</span>,
