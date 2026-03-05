@@ -117,7 +117,7 @@ export function TableCell({ data, status, options, onOptionsChange, variables }:
 // Editor Component
 // =============================================================================
 
-function TableCellEditor({ config, onChange, variables, timeRange, availableColumns, onRun }: CellEditorProps) {
+function TableCellEditor({ config, onChange, variables, timeRange, availableColumns, onRun, cellResults }: CellEditorProps) {
   const tableConfig = config as QueryCellConfig
 
   // Compute the current $order_by value from sort state
@@ -146,9 +146,9 @@ function TableCellEditor({ config, onChange, variables, timeRange, availableColu
 
   // Validate macro references in SQL
   const validationErrors = useMemo(() => {
-    const result = validateMacros(tableConfig.sql, variables)
+    const result = validateMacros(tableConfig.sql, variables, cellResults)
     return result.errors
-  }, [tableConfig.sql, variables])
+  }, [tableConfig.sql, variables, cellResults])
 
   return (
     <>
@@ -176,6 +176,7 @@ function TableCellEditor({ config, onChange, variables, timeRange, availableColu
         variables={variables}
         timeRange={timeRange}
         additionalVariables={tableVariables}
+        cellResults={cellResults}
       />
       <DocumentationLink url={QUERY_GUIDE_URL} label="Query Guide" />
       <div className="mt-4">
@@ -212,9 +213,9 @@ export const tableMetadata: CellTypeMetadata = {
     sql: DEFAULT_SQL.table,
   }),
 
-  execute: async (config: CellConfig, { variables, timeRange, runQuery }: CellExecutionContext) => {
+  execute: async (config: CellConfig, { variables, cellResults, timeRange, runQuery }: CellExecutionContext) => {
     const tableConfig = config as QueryCellConfig
-    let sql = substituteMacros(tableConfig.sql, variables, timeRange)
+    let sql = substituteMacros(tableConfig.sql, variables, timeRange, cellResults)
 
     // Handle $order_by substitution based on sort state in options
     const sortColumn = tableConfig.options?.sortColumn as string | undefined

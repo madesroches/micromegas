@@ -42,6 +42,7 @@ SQL queries, markdown content, and chart unit labels all support macro substitut
 
 | Macro | Description |
 |-------|-------------|
+| `$cellName[N].column` | Replaced with a value from an upstream cell's result table (row N, named column) |
 | `$variableName` | Replaced with the variable's value |
 | `$variableName.column` | Replaced with a specific column from a multi-column variable |
 | `$begin` | Start of the current time range (ISO 8601 timestamp) |
@@ -50,6 +51,7 @@ SQL queries, markdown content, and chart unit labels all support macro substitut
 
 ### Matching Rules
 
+- **Cell result references first**: `$cell[N].column` references are resolved before dotted variable and simple variable patterns.
 - **Longest name first**: variables are substituted in order of name length (longest first) to prevent partial matches. For example, with variables `$metric` and `$metric_name`, the longer `$metric_name` is substituted first so `$metric` doesn't accidentally match the prefix.
 - **Dotted access first**: `$variable.column` references are resolved before simple `$variable` references.
 - **SQL escaping**: all substituted values have single quotes escaped (`'` becomes `''`) to prevent SQL injection.
@@ -71,6 +73,12 @@ ORDER BY time
 SELECT process_id, exe, start_time
 FROM processes
 ORDER BY $order_by
+LIMIT 100
+
+-- Cell result reference (upstream cell "game_session" returns a table with process_id column)
+SELECT time, level, target, msg
+FROM view_instance('log_entries', '$game_session[0].process_id')
+ORDER BY time DESC
 LIMIT 100
 ```
 
@@ -145,13 +153,13 @@ Expressions use an allowlist-based sandbox. Only arithmetic operations, allowed 
 
 ## Variable Scope
 
-A cell can only reference variables from cells that appear **above it** in the notebook. This is enforced during both substitution and the Available Variables panel display.
+A cell can only reference variables and cell results from cells that appear **above it** in the notebook. This is enforced during both substitution and the Available Variables panel display.
 
 - Variables in the main cell list are visible to all cells below.
 - Variables inside a horizontal group (HG) are visible to cells below the group.
 - A variable cell cannot reference other variable cells at the same level.
 
-The editor panel shows an **Available Variables** panel listing all variables accessible to the currently selected cell, including `$begin`, `$end`, and any upstream user-defined variables with their current values. Multi-column variables show both the full object and individual `.column` accessors.
+The editor panel shows an **Available Variables** panel listing all variables accessible to the currently selected cell, including `$begin`, `$end`, upstream user-defined variables with their current values, and upstream cell results with their column schemas. Multi-column variables show both the full object and individual `.column` accessors. Cell results show `$cellName[0].column` entries for each column in the result schema.
 
 ## URL Parameter Sync
 

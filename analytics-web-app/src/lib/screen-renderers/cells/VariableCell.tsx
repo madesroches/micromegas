@@ -230,7 +230,7 @@ export function VariableTitleBarContent(props: CellRendererProps) {
 // Editor Component
 // =============================================================================
 
-function VariableCellEditor({ config, onChange, variables, timeRange, datasourceVariables, onRun }: CellEditorProps) {
+function VariableCellEditor({ config, onChange, variables, timeRange, datasourceVariables, onRun, cellResults }: CellEditorProps) {
   const varConfig = config as VariableCellConfig
   const variableType = varConfig.variableType || 'combobox'
   const isCombobox = variableType === 'combobox'
@@ -240,9 +240,9 @@ function VariableCellEditor({ config, onChange, variables, timeRange, datasource
   // Validate macro references in SQL (only for combobox type)
   const validationErrors = useMemo(() => {
     if (!isCombobox || !varConfig.sql) return []
-    const result = validateMacros(varConfig.sql, variables)
+    const result = validateMacros(varConfig.sql, variables, cellResults)
     return result.errors
-  }, [isCombobox, varConfig.sql, variables])
+  }, [isCombobox, varConfig.sql, variables, cellResults])
 
   return (
     <>
@@ -302,7 +302,7 @@ function VariableCellEditor({ config, onChange, variables, timeRange, datasource
               ))}
             </div>
           )}
-          <AvailableVariablesPanel variables={variables} timeRange={timeRange} />
+          <AvailableVariablesPanel variables={variables} timeRange={timeRange} cellResults={cellResults} />
           <DocumentationLink url={QUERY_GUIDE_URL} label="Query Guide" />
         </>
       )}
@@ -403,7 +403,7 @@ export const variableMetadata: CellTypeMetadata = {
     sql: DEFAULT_SQL.variable,
   }),
 
-  execute: async (config: CellConfig, { variables, timeRange, runQuery }: CellExecutionContext) => {
+  execute: async (config: CellConfig, { variables, cellResults, timeRange, runQuery }: CellExecutionContext) => {
     const varConfig = config as VariableCellConfig
 
     // Expression variables: evaluate expression and set variable value
@@ -443,7 +443,7 @@ export const variableMetadata: CellTypeMetadata = {
       return null // Nothing to execute
     }
 
-    const sql = substituteMacros(varConfig.sql, variables, timeRange)
+    const sql = substituteMacros(varConfig.sql, variables, timeRange, cellResults)
     const result = await runQuery(sql)
 
     // Extract options from result with multi-column support

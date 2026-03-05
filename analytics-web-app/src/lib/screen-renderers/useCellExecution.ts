@@ -97,6 +97,19 @@ export function useCellExecution({
 }: UseCellExecutionParams): UseCellExecutionResult {
   const [cellStates, setCellStates] = useState<Record<string, CellState>>({})
   const abortControllerRef = useRef<AbortController | null>(null)
+  const cellResultsRef = useRef<Record<string, Table>>({})
+
+  // Helper: update both the ref (for synchronous access) and React state atomically
+  const completeCellExecution = useCallback((name: string, state: CellState) => {
+    if (state.data.length > 0) {
+      cellResultsRef.current = { ...cellResultsRef.current, [name]: state.data[0] }
+    } else if (name in cellResultsRef.current) {
+      const next = { ...cellResultsRef.current }
+      delete next[name]
+      cellResultsRef.current = next
+    }
+    setCellStates((prev) => ({ ...prev, [name]: state }))
+  }, [])
 
   // Execute a single cell
   const executeCell = useCallback(
@@ -108,10 +121,7 @@ export function useCellExecution({
 
       // Cell doesn't have an execute method (e.g., markdown)
       if (!meta.execute) {
-        setCellStates((prev) => ({
-          ...prev,
-          [cell.name]: { status: 'success', data: [] },
-        }))
+        completeCellExecution(cell.name, { status: 'success', data: [] })
         return true
       }
 
@@ -131,11 +141,14 @@ export function useCellExecution({
 
       // Gather variables from cells above (use ref for synchronous access during execution)
       const availableVariables: Record<string, VariableValue> = {}
+      const availableCellResults: Record<string, Table> = {}
       for (let i = 0; i < cellIndex; i++) {
         const prevCell = cells[i]
         if (prevCell.type === 'variable' && variableValuesRef.current[prevCell.name] !== undefined) {
           availableVariables[prevCell.name] = variableValuesRef.current[prevCell.name]
         }
+        const table = cellResultsRef.current[prevCell.name]
+        if (table) availableCellResults[prevCell.name] = table
       }
 
       // Create new abort controller for this execution
@@ -148,6 +161,7 @@ export function useCellExecution({
         const isNotebookSource = cellDataSource === 'notebook'
         const context: CellExecutionContext = {
           variables: availableVariables,
+          cellResults: availableCellResults,
           timeRange,
           registerTable: engine
             ? (ipcBytes: Uint8Array) => { engine.register_table(cell.name, ipcBytes) }
@@ -230,7 +244,7 @@ export function useCellExecution({
           ? { status: 'success', data: result.data ?? [], ...result, elapsedMs }
           : { status: 'success', data: [] }
 
-        setCellStates((prev) => ({ ...prev, [cell.name]: newState }))
+        completeCellExecution(cell.name, newState)
 
         // Post-execution side effects (e.g., validate/auto-select value for variables)
         if (meta.onExecutionComplete) {
@@ -246,14 +260,11 @@ export function useCellExecution({
           return false
         }
         const errorMessage = err instanceof Error ? err.message : String(err)
-        setCellStates((prev) => ({
-          ...prev,
-          [cell.name]: { status: 'error', error: errorMessage, data: [] },
-        }))
+        completeCellExecution(cell.name, { status: 'error', error: errorMessage, data: [] })
         return false
       }
     },
-    [cells, rawTimeRange, variableValuesRef, setVariableValue, dataSource, engine]
+    [cells, rawTimeRange, variableValuesRef, setVariableValue, dataSource, engine, completeCellExecution]
   )
 
   // Execute from a cell index (that cell and all below)
@@ -262,6 +273,7 @@ export function useCellExecution({
       // Reset WASM engine when re-executing from the top
       if (startIndex === 0 && engine) {
         engine.reset()
+        cellResultsRef.current = {}
       }
       // Reset statuses to idle so useFadeOnIdle detects a change even for
       // fast cells where React would batch loading→success into one render.
@@ -340,6 +352,12 @@ export function useCellExecution({
   // Migrate cell state when a cell is renamed
   const migrateCellState = useCallback((oldName: string, newName: string) => {
     engine?.deregister_table(oldName)
+    if (oldName in cellResultsRef.current) {
+      const next = { ...cellResultsRef.current }
+      next[newName] = next[oldName]
+      delete next[oldName]
+      cellResultsRef.current = next
+    }
     setCellStates((prev) => {
       const next = { ...prev }
       if (oldName in next) {
@@ -353,6 +371,11 @@ export function useCellExecution({
   // Remove cell state when a cell is deleted
   const removeCellState = useCallback((cellName: string) => {
     engine?.deregister_table(cellName)
+    if (cellName in cellResultsRef.current) {
+      const next = { ...cellResultsRef.current }
+      delete next[cellName]
+      cellResultsRef.current = next
+    }
     setCellStates((prev) => {
       const next = { ...prev }
       delete next[cellName]

@@ -85,7 +85,8 @@ function queryTableName(cellName: string, queryName?: string): string {
 function substituteOptionsWithMacros(
   options: Record<string, unknown> | undefined,
   variables: Record<string, VariableValue>,
-  timeRange: { begin: string; end: string }
+  timeRange: { begin: string; end: string },
+  cellResults?: Record<string, import('apache-arrow').Table>,
 ): Record<string, unknown> {
   if (!options) return {}
 
@@ -94,7 +95,7 @@ function substituteOptionsWithMacros(
   for (const [key, value] of Object.entries(options)) {
     if (typeof value === 'string') {
       // Apply macro substitution to string values
-      result[key] = substituteMacros(value, variables, timeRange)
+      result[key] = substituteMacros(value, variables, timeRange, cellResults)
     } else {
       // Keep non-string values as-is
       result[key] = value
@@ -108,7 +109,7 @@ function substituteOptionsWithMacros(
 // Renderer Component
 // =============================================================================
 
-export function ChartCell({ data, status, options, onOptionsChange, variables, timeRange, onTimeRangeSelect }: CellRendererProps) {
+export function ChartCell({ data, status, options, onOptionsChange, variables, timeRange, onTimeRangeSelect, cellResults }: CellRendererProps) {
   // Detect multi-series: more than one table in the data array
   const isMultiSeries = data.length > 1
 
@@ -138,8 +139,8 @@ export function ChartCell({ data, status, options, onOptionsChange, variables, t
 
   // Substitute macros in options
   const resolvedOptions = useMemo(
-    () => substituteOptionsWithMacros(options, variables, timeRange),
-    [options, variables, timeRange]
+    () => substituteOptionsWithMacros(options, variables, timeRange, cellResults),
+    [options, variables, timeRange, cellResults]
   )
 
   const handleScaleModeChange = useCallback(
@@ -185,7 +186,7 @@ export function ChartCell({ data, status, options, onOptionsChange, variables, t
     // Resolve macros in per-series units
     const resolvedSeries: ChartSeriesData[] = multiResult.series.map(s => ({
       ...s,
-      unit: s.unit ? substituteMacros(s.unit, variables, timeRange) : '',
+      unit: s.unit ? substituteMacros(s.unit, variables, timeRange, cellResults) : '',
     }))
 
     return (
@@ -228,7 +229,7 @@ export function ChartCell({ data, status, options, onOptionsChange, variables, t
   const singleQueryMeta = (options as Record<string, unknown>)?._queryMeta as
     { unit?: string; label?: string }[] | undefined
   const chartUnit = singleQueryMeta?.[0]?.unit
-    ? substituteMacros(singleQueryMeta[0].unit, variables, timeRange)
+    ? substituteMacros(singleQueryMeta[0].unit, variables, timeRange, cellResults)
     : (resolvedOptions?.unit as string) ?? undefined
   const chartTitle = singleQueryMeta?.[0]?.label || undefined
 
@@ -256,7 +257,7 @@ export function ChartCell({ data, status, options, onOptionsChange, variables, t
 // Editor Component
 // =============================================================================
 
-function ChartCellEditor({ config, onChange, variables, timeRange, datasourceVariables, defaultDataSource, onRun }: CellEditorProps) {
+function ChartCellEditor({ config, onChange, variables, timeRange, datasourceVariables, defaultDataSource, onRun, cellResults }: CellEditorProps) {
   // Always work with v2 format
   const v2 = useMemo(() => migrateChartConfig(config), [config])
 
@@ -289,15 +290,15 @@ function ChartCellEditor({ config, onChange, variables, timeRange, datasourceVar
     const errors: string[] = []
     for (let i = 0; i < v2.queries.length; i++) {
       const q = v2.queries[i]
-      const sqlValidation = validateMacros(q.sql, variables)
+      const sqlValidation = validateMacros(q.sql, variables, cellResults)
       sqlValidation.errors.forEach(e => errors.push(`Query ${i + 1}: ${e}`))
       if (q.unit) {
-        const unitValidation = validateMacros(q.unit, variables)
+        const unitValidation = validateMacros(q.unit, variables, cellResults)
         unitValidation.errors.forEach(e => errors.push(`Query ${i + 1} unit: ${e}`))
       }
     }
     return errors
-  }, [v2.queries, variables])
+  }, [v2.queries, variables, cellResults])
 
   return (
     <>
@@ -399,7 +400,7 @@ function ChartCellEditor({ config, onChange, variables, timeRange, datasourceVar
           ))}
         </div>
       )}
-      <AvailableVariablesPanel variables={variables} timeRange={timeRange} />
+      <AvailableVariablesPanel variables={variables} timeRange={timeRange} cellResults={cellResults} />
       <DocumentationLink url={QUERY_GUIDE_URL} label="Query Guide" />
     </>
   )
@@ -427,13 +428,13 @@ export const chartMetadata: CellTypeMetadata = {
     sql: DEFAULT_SQL.chart,
   }),
 
-  execute: async (config: CellConfig, { variables, timeRange, runQuery, runQueryAs }: CellExecutionContext) => {
+  execute: async (config: CellConfig, { variables, cellResults, timeRange, runQuery, runQueryAs }: CellExecutionContext) => {
     const v2 = migrateChartConfig(config)
 
     if (v2.queries.length <= 1) {
       // Single query path — always use runQueryAs when available so per-query
       // dataSource is respected (v2 configs have no top-level dataSource)
-      const sql = substituteMacros(v2.queries[0]?.sql ?? '', variables, timeRange)
+      const sql = substituteMacros(v2.queries[0]?.sql ?? '', variables, timeRange, cellResults)
       if (runQueryAs) {
         const tableName = queryTableName(config.name, v2.queries[0]?.name)
         const table = await runQueryAs(sql, tableName, v2.queries[0]?.dataSource)
@@ -446,7 +447,7 @@ export const chartMetadata: CellTypeMetadata = {
     // Multi-query execution — return flat array of tables
     const tables: import('apache-arrow').Table[] = []
     for (const query of v2.queries) {
-      const sql = substituteMacros(query.sql, variables, timeRange)
+      const sql = substituteMacros(query.sql, variables, timeRange, cellResults)
       if (runQueryAs) {
         const tableName = queryTableName(config.name, query.name)
         tables.push(await runQueryAs(sql, tableName, query.dataSource))

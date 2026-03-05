@@ -396,13 +396,13 @@ export function SwimlaneCell({
 // Editor Component
 // =============================================================================
 
-function SwimlaneCellEditor({ config, onChange, variables, timeRange, onRun }: CellEditorProps) {
+function SwimlaneCellEditor({ config, onChange, variables, timeRange, onRun, cellResults }: CellEditorProps) {
   const slConfig = config as QueryCellConfig
 
   // Validate macro references in SQL
   const validationErrors = useMemo(() => {
-    return validateMacros(slConfig.sql, variables).errors
-  }, [slConfig.sql, variables])
+    return validateMacros(slConfig.sql, variables, cellResults).errors
+  }, [slConfig.sql, variables, cellResults])
 
   return (
     <>
@@ -426,7 +426,7 @@ function SwimlaneCellEditor({ config, onChange, variables, timeRange, onRun }: C
           ))}
         </div>
       )}
-      <AvailableVariablesPanel variables={variables} timeRange={timeRange} />
+      <AvailableVariablesPanel variables={variables} timeRange={timeRange} cellResults={cellResults} />
       <DocumentationLink url={QUERY_GUIDE_URL} label="Query Guide" />
     </>
   )
@@ -455,8 +455,8 @@ export const swimlaneMetadata: CellTypeMetadata = {
     options: {},
   }),
 
-  execute: async (config: CellConfig, { variables, timeRange, runQuery }: CellExecutionContext) => {
-    const sql = substituteMacros((config as QueryCellConfig).sql, variables, timeRange)
+  execute: async (config: CellConfig, { variables, cellResults, timeRange, runQuery }: CellExecutionContext) => {
+    const sql = substituteMacros((config as QueryCellConfig).sql, variables, timeRange, cellResults)
     const data = await runQuery(sql)
     return { data: [data] }
   },

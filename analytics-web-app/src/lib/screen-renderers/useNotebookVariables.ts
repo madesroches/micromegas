@@ -99,8 +99,14 @@ export function useNotebookVariables(
     }
 
     // Override with URL values (these are the deltas from saved state)
+    // Only apply overrides for variables that correspond to actual variable cells
+    const knownVariableNames = new Set(
+      allCells.filter((c) => c.type === 'variable').map((c) => c.name)
+    )
     for (const [name, value] of Object.entries(configVariables)) {
-      values[name] = value
+      if (knownVariableNames.has(name)) {
+        values[name] = value
+      }
     }
 
     return values
