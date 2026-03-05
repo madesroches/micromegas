@@ -25,6 +25,7 @@ import { useNotebookVariables } from './useNotebookVariables'
 import { useCellExecution } from './useCellExecution'
 import { cleanupVariableParams, resolveCellDataSource, flattenCellsForExecution, collectAllCellNames, validateCellName, sanitizeCellName } from './notebook-utils'
 import { HorizontalGroupCell, HorizontalGroupCellEditor } from './cells/HorizontalGroupCell'
+import { arrowTableToCsv, triggerCsvDownload } from './cells/arrow-to-csv'
 import { cleanupTimeParams, useExposeSaveRef } from '@/lib/url-cleanup-utils'
 import { getTimeRangeForApi } from '@/lib/time-range'
 import { buildCellRendererProps, buildStatusText, buildHgStatusText, computeHgStatus } from './notebook-cell-view'
@@ -619,6 +620,14 @@ export function NotebookRenderer({
             autoRunFromHere={cell.autoRunFromHere}
             onToggleAutoRunFromHere={() =>
               updateCell(index, { autoRunFromHere: !cell.autoRunFromHere })
+            }
+            onDownloadCsv={
+              state.data.length > 0 && state.data[0].numRows > 0
+                ? () => {
+                    const csv = arrowTableToCsv(state.data[0])
+                    triggerCsvDownload(csv, `${cell.name}.csv`)
+                  }
+                : undefined
             }
             onDuplicate={() => handleDuplicateCell(index)}
             onDelete={() => setDeletingCellIndex(index)}

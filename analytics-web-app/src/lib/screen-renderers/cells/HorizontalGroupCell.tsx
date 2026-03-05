@@ -17,6 +17,7 @@ import {
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import {
+  Download,
   GripVertical,
   Pencil,
   Play,
@@ -44,6 +45,7 @@ import { resolveCellDataSource, shouldShowDataSource, validateCellName, sanitize
 import { buildCellRendererProps, buildStatusText } from '../notebook-cell-view'
 import { Button } from '@/components/ui/button'
 import { DataSourceField } from '@/components/DataSourceSelector'
+import { arrowTableToCsv, triggerCsvDownload } from './arrow-to-csv'
 
 // =============================================================================
 // Types for HorizontalGroupCell props (passed from NotebookRenderer)
@@ -102,6 +104,7 @@ interface HgChildPaneProps {
   isSelected: boolean
   onSelect: () => void
   onRun: () => void
+  onDownloadCsv?: () => void
   onDeleteChild: () => void
   dragHandleProps: Record<string, unknown>
   isDragging: boolean
@@ -113,7 +116,7 @@ interface HgChildPaneProps {
 function HgChildPane({
   child, state, commonProps,
   isSelected,
-  onSelect, onRun, onDeleteChild,
+  onSelect, onRun, onDownloadCsv, onDeleteChild,
   dragHandleProps, isDragging, setNodeRef, style, showDivider,
 }: HgChildPaneProps) {
   const fadeClass = useFadeOnIdle(state.status)
@@ -230,6 +233,15 @@ function HgChildPane({
                   <Pencil className="w-3.5 h-3.5" />
                   Edit cell
                 </DropdownMenu.Item>
+                {onDownloadCsv && (
+                  <DropdownMenu.Item
+                    className="flex items-center gap-2 px-3 py-2 text-sm text-theme-text-primary hover:bg-theme-border/50 cursor-pointer outline-none"
+                    onSelect={() => onDownloadCsv()}
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    Download CSV
+                  </DropdownMenu.Item>
+                )}
                 <DropdownMenu.Item
                   className="flex items-center gap-2 px-3 py-2 text-sm text-accent-error hover:bg-theme-border/50 cursor-pointer outline-none rounded-b-md"
                   onSelect={onDeleteChild}
@@ -404,6 +416,14 @@ export function HorizontalGroupCell({
                     isSelected={selectedChildName === child.name}
                     onSelect={() => onChildSelect(child.name)}
                     onRun={() => onChildRun(child.name)}
+                    onDownloadCsv={
+                      state.data.length > 0 && state.data[0].numRows > 0
+                        ? () => {
+                            const csv = arrowTableToCsv(state.data[0])
+                            triggerCsvDownload(csv, `${child.name}.csv`)
+                          }
+                        : undefined
+                    }
                     onDeleteChild={() => handleDeleteChild(child.name)}
                     dragHandleProps={dragHandleProps}
                     isDragging={isDragging}

@@ -16,7 +16,7 @@ Add a "Download CSV" option to the existing context menu (three-dot dropdown) on
 
 ### Data Flow
 1. `NotebookRenderer.tsx` builds `CellRendererProps` via `buildCellRendererProps()` (notebook-cell-view.ts:186)
-2. Cell state holds `data: Table[]` (notebook-types.ts:155)
+2. Cell state holds `data: Table[]` (notebook-types.ts:158)
 3. Props are passed to `<CellRenderer>` inside `<CellContainer>` children
 4. CellContainer itself never sees the data
 
@@ -86,7 +86,7 @@ interface CellContainerProps {
 }
 ```
 
-Add a menu item in the dropdown (after "Run from here", before "Duplicate"):
+Add a menu item in the dropdown (after "Auto-run from here", before "Duplicate"):
 
 ```typescript
 {onDownloadCsv && (
@@ -170,3 +170,7 @@ HG children do **not** use `CellContainer`. They render via `HgChildPane` (Horiz
 - Click "Download CSV" — verify browser downloads a .csv file with correct content
 - Verify menu item does NOT appear on cells with no data (markdown, empty results)
 - Verify it works for cells inside HG groups
+
+## Status: Complete
+
+All implementation steps done. Documentation updated in `mkdocs/docs/web-app/notebooks/index.md`.

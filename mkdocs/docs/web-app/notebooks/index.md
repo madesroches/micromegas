@@ -33,7 +33,11 @@ Click a cell's header to select it. The editor panel on the right shows the cell
 
 ### Removing and Duplicating
 
-Use the cell's context menu (right-click or the more button) to duplicate or delete a cell.
+Use the cell's context menu (three-dot button) to duplicate or delete a cell.
+
+### Downloading Data as CSV
+
+Data cells (table, chart, log, etc.) with results show a **Download CSV** option in the context menu. Clicking it converts the cell's Arrow Table result to CSV format and triggers a browser download named `cellName.csv`. This also works for cells inside horizontal groups. The option is hidden for cells with no data (e.g., markdown cells or cells that haven't been executed).
 
 ### Reordering (Drag and Drop)
 
