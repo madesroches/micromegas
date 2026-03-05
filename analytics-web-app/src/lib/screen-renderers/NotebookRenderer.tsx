@@ -684,7 +684,7 @@ export function NotebookRenderer({
                 selectedChildName={selectedChildName}
                 onChildSelect={setSelectedChildName}
                 onChildRun={(childName) => executeCellByName(childName)}
-                variables={variableValues}
+                variables={getAvailableVariables(selectedCellIndex!)}
                 timeRange={getTimeRangeForApi(rawTimeRange.from, rawTimeRange.to)}
                 allCellNames={existingNames}
                 defaultDataSource={dataSource}
@@ -697,7 +697,7 @@ export function NotebookRenderer({
             ) : (
               <CellEditor
                 cell={selectedCell}
-                variables={variableValues}
+                variables={getAvailableVariables(selectedCellIndex!)}
                 timeRange={getTimeRangeForApi(rawTimeRange.from, rawTimeRange.to)}
                 existingNames={existingNames}
                 availableColumns={cellStates[selectedCell.name]?.data[0]?.schema.fields.map((f) => f.name)}
