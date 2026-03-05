@@ -115,11 +115,14 @@ export function useCellExecution({
         return true
       }
 
-      // Mark cell as loading
-      setCellStates((prev) => ({
-        ...prev,
-        [cell.name]: { ...prev[cell.name], status: 'loading', error: undefined, fetchProgress: undefined },
-      }))
+      // Mark cell as loading (preserve previous data for re-renders during loading)
+      setCellStates((prev) => {
+        const prevData = prev[cell.name]?.data ?? []
+        return {
+          ...prev,
+          [cell.name]: { ...prev[cell.name], status: 'loading', error: undefined, fetchProgress: undefined, data: prevData },
+        }
+      })
 
       const startTime = performance.now()
 
