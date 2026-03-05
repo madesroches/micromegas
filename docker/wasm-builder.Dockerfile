@@ -7,8 +7,15 @@
 FROM rust:1-bookworm
 
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends clang binaryen && \
+    apt-get install -y --no-install-recommends clang curl ca-certificates && \
     rm -rf /var/lib/apt/lists/*
+
+# Install recent binaryen from GitHub (Debian's version is too old for externref)
+ARG BINARYEN_VERSION=126
+RUN ARCH=$(dpkg --print-architecture) && \
+    if [ "$ARCH" = "arm64" ]; then BINARYEN_ARCH="aarch64"; else BINARYEN_ARCH="x86_64"; fi && \
+    curl -fsSL "https://github.com/WebAssembly/binaryen/releases/download/version_${BINARYEN_VERSION}/binaryen-version_${BINARYEN_VERSION}-${BINARYEN_ARCH}-linux.tar.gz" | \
+    tar xz -C /usr/local --strip-components=1
 
 RUN rustup target add wasm32-unknown-unknown
 
@@ -27,7 +34,7 @@ RUN cargo build --target wasm32-unknown-unknown --release
 RUN mkdir -p pkg && \
     wasm-bindgen target/wasm32-unknown-unknown/release/micromegas_datafusion_wasm.wasm \
         --out-dir pkg --target web && \
-    wasm-opt pkg/micromegas_datafusion_wasm_bg.wasm -Os -o pkg/micromegas_datafusion_wasm_bg.wasm
+    wasm-opt pkg/micromegas_datafusion_wasm_bg.wasm -Os --enable-reference-types -o pkg/micromegas_datafusion_wasm_bg.wasm
 
 # Write package.json for the WASM package (keep in sync with WASM_PACKAGE_JSON in build.py)
 RUN printf '{\n  "name": "micromegas-datafusion-wasm",\n  "version": "0.1.0",\n  "type": "module",\n  "main": "micromegas_datafusion_wasm.js",\n  "types": "micromegas_datafusion_wasm.d.ts"\n}\n' > pkg/package.json

@@ -108,7 +108,7 @@ def build(skip_opt: bool = False) -> None:
     elif shutil.which("wasm-opt"):
         print("Optimizing with wasm-opt...")
         wasm_bg = PKG_DIR / "micromegas_datafusion_wasm_bg.wasm"
-        run(["wasm-opt", str(wasm_bg), "-Os", "-o", str(wasm_bg)])
+        run(["wasm-opt", str(wasm_bg), "-Os", "--enable-reference-types", "-o", str(wasm_bg)])
 
     print(f"Copying artifacts to {OUTPUT_DIR}...")
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
