@@ -12,10 +12,16 @@ RUN apt-get update && \
 
 # Install recent binaryen from GitHub (Debian's version is too old for externref)
 ARG BINARYEN_VERSION=126
+ARG BINARYEN_SHA256_X86_64=e487e0eac1f02a6739816c617270b033e5d3f8ca90439301fd0286460322fd76
+ARG BINARYEN_SHA256_AARCH64=4013cbcee8928abca015884e3f89d01804f6e1d9f40a4ea01dcdd0aba3e609f5
 RUN ARCH=$(dpkg --print-architecture) && \
-    if [ "$ARCH" = "arm64" ]; then BINARYEN_ARCH="aarch64"; else BINARYEN_ARCH="x86_64"; fi && \
-    curl -fsSL "https://github.com/WebAssembly/binaryen/releases/download/version_${BINARYEN_VERSION}/binaryen-version_${BINARYEN_VERSION}-${BINARYEN_ARCH}-linux.tar.gz" | \
-    tar xz -C /usr/local --strip-components=1
+    if [ "$ARCH" = "arm64" ]; then BINARYEN_ARCH="aarch64"; EXPECTED_SHA256="$BINARYEN_SHA256_AARCH64"; \
+    else BINARYEN_ARCH="x86_64"; EXPECTED_SHA256="$BINARYEN_SHA256_X86_64"; fi && \
+    curl -fsSL "https://github.com/WebAssembly/binaryen/releases/download/version_${BINARYEN_VERSION}/binaryen-version_${BINARYEN_VERSION}-${BINARYEN_ARCH}-linux.tar.gz" \
+         -o /tmp/binaryen.tar.gz && \
+    echo "${EXPECTED_SHA256}  /tmp/binaryen.tar.gz" | sha256sum -c - && \
+    tar xzf /tmp/binaryen.tar.gz -C /usr/local --strip-components=1 && \
+    rm /tmp/binaryen.tar.gz
 
 RUN rustup target add wasm32-unknown-unknown
 
