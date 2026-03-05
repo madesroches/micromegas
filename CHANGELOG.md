@@ -29,6 +29,8 @@ This file documents the historical progress of the Micromegas project. For curre
   * Remove dead troubleshooting link from Grafana plugin README
 * **Build:**
   * Add wasm-opt optimization step to WASM Docker builder for smaller binaries
+  * Fix wasm-opt corrupting externref table by upgrading binaryen and enabling reference-types
+  * Add SHA256 checksum verification for binaryen download in WASM builder
 
 ## February 2026 - v0.21.0
 * **Security:**
