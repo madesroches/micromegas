@@ -127,32 +127,32 @@ Extend `validateMacros()` with a `cellResults` parameter to check:
 
 #### During Execution (`useCellExecution.ts`)
 
-Add a `cellStatesRef` (a `useRef`) so that cell results from earlier executions are available synchronously during sequential execution. This mirrors the existing `variableValuesRef` pattern in `useNotebookVariables.ts`, where the ref is mutated eagerly at the call site (not via `useEffect`, which only fires after render — too late for the next cell in a sequential run).
+Add a `cellResultsRef` (a `useRef`) storing only the Arrow Tables needed for macro substitution — not the full `CellState`. This mirrors the existing `variableValuesRef` pattern for synchronous access during sequential execution, where React state updates are batched and `useEffect` fires after render (too late for the next cell in a sequential run).
 
 ```typescript
-const cellStatesRef = useRef<Record<string, CellState>>({})
+const cellResultsRef = useRef<Record<string, Table>>({})
 ```
 
-Update the ref **eagerly** (synchronously, before the React state update) every time a cell completes — both on success and error paths inside `executeCell`. For example, after building `newState`:
+Extract a helper that updates both the ref and React state atomically, preventing the ref from getting out of sync:
 
 ```typescript
-// Eager ref update so the next cell in a sequential run sees this result immediately
-cellStatesRef.current = { ...cellStatesRef.current, [cell.name]: newState }
-setCellStates((prev) => ({ ...prev, [cell.name]: newState }))
+const completeCellExecution = (name: string, state: CellState) => {
+  if (state.data.length > 0) {
+    cellResultsRef.current = { ...cellResultsRef.current, [name]: state.data[0] }
+  }
+  setCellStates((prev) => ({ ...prev, [name]: state }))
+}
 ```
 
-This must happen at **every** `setCellStates` call site inside `executeCell` that updates a cell's final state (success and error). The `useEffect` approach alone would fail because React batches state updates and the effect fires after render, but `executeFromCell` awaits `executeCell(i)` then immediately calls `executeCell(i+1)` before any render occurs.
+Use `completeCellExecution` at every site in `executeCell` that sets a cell's final state (no-execute success, success, and error). The helper ensures the ref always stays in sync without requiring manual duplication at each call site. Also reset the ref when the WASM engine resets in `executeFromCell`: `cellResultsRef.current = {}`, and handle `migrateCellState`/`removeCellState` with trivial key rename/delete on the ref.
 
 Then build `availableCellResults` from the ref inside `executeCell`:
 
 ```typescript
 const availableCellResults: Record<string, Table> = {}
 for (let i = 0; i < cellIndex; i++) {
-  const prevCell = cells[i]
-  const state = cellStatesRef.current[prevCell.name]
-  if (state?.status === 'success' && state.data.length > 0) {
-    availableCellResults[prevCell.name] = state.data[0]
-  }
+  const table = cellResultsRef.current[cells[i].name]
+  if (table) availableCellResults[cells[i].name] = table
 }
 ```
 
@@ -245,7 +245,7 @@ export interface CellRendererProps {
 
 3. **`cell-registry.ts`** — Add `cellResults: Record<string, Table>` to `CellExecutionContext`.
 
-4. **`useCellExecution.ts`** — Add a `cellStatesRef` (`useRef`, mutated synchronously at every `setCellStates` call site in `executeCell` — not via `useEffect`). Build `availableCellResults` map from the ref for upstream cells. Pass it in `CellExecutionContext`.
+4. **`useCellExecution.ts`** — Add a `cellResultsRef` (`useRef<Record<string, Table>>({})`). Extract a `completeCellExecution` helper that updates both the ref and React state. Use it at all final-state `setCellStates` call sites in `executeCell`. Reset the ref when the engine resets; handle migrate/remove. Build `availableCellResults` map from the ref for upstream cells. Pass it in `CellExecutionContext`.
 
 5. **Cell execute functions** — Update `substituteMacros()` calls in execute methods to pass `context.cellResults`: `TableCell`, `TransposedTableCell`, `LogCell`, `ChartCell` (execute only), `SwimlaneCell`, `PropertyTimelineCell`, `VariableCell` (combobox). Each just passes the new `context.cellResults` parameter.
 
@@ -297,7 +297,7 @@ export interface CellRendererProps {
 | `src/lib/screen-renderers/notebook-utils.ts` | Add `cellResults` param to `substituteMacros` and `validateMacros`, new regex pass, update simple variable lookahead to `(?![.\[])` |
 | `src/lib/screen-renderers/__tests__/notebook-utils.test.ts` | Tests for `$cell[N].col` substitution and validation |
 | `src/lib/screen-renderers/cell-registry.ts` | Add `cellResults` to `CellExecutionContext`, `CellRendererProps`, and `CellEditorProps` |
-| `src/lib/screen-renderers/useCellExecution.ts` | Add `cellStatesRef`, build `availableCellResults`, pass to context |
+| `src/lib/screen-renderers/useCellExecution.ts` | Add `cellResultsRef` (`Record<string, Table>`), `completeCellExecution` helper, build `availableCellResults`, pass to context |
 | `src/lib/screen-renderers/NotebookRenderer.tsx` | Add `getAvailableCellResults()`, pass to editor panels |
 | `src/components/CellEditor.tsx` | Thread `cellResults` prop to editor component |
 | `src/components/AvailableVariablesPanel.tsx` | Add `cellResults` prop, render cell result schemas |
