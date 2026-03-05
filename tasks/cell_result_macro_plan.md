@@ -269,7 +269,7 @@ export interface CellRendererProps {
 
 12. **`AvailableVariablesPanel.tsx`** — Add `cellResults` prop. Render a "Cell Results" section showing `$cell[0].column` entries with schema info.
 
-13. **Cell editor components** — Pass `cellResults` to `AvailableVariablesPanel` in all editor components that use it.
+13. **Cell editor components** — Pass `cellResults` to `AvailableVariablesPanel` and to `validateMacros()` calls in all editor components that use them: `TableCell`, `ChartCell`, `MarkdownCell`, `VariableCell`, `PropertyTimelineCell`, `SwimlaneCell`.
 
 ### Phase 4: HG Cell Support
 
@@ -347,6 +347,6 @@ export interface CellRendererProps {
 4. Verify the Available Variables panel shows cell result schemas
 5. Verify validation errors appear in the editor for bad references
 
-## Open Questions
+## Closed Questions
 
-1. **Should `$cell[0]` without a column be supported?** Current design requires `.column`. A possible use case is single-column results, but that can be written as `$cell[0].col_name`.
+1. **Should `$cell[0]` without a column be supported?** No. The `.column` suffix is always required. Even for single-column results, write `$cell[0].col_name`.
