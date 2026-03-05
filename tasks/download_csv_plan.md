@@ -155,10 +155,14 @@ HG children do **not** use `CellContainer`. They render via `HgChildPane` (Horiz
 - Test with empty table (0 rows) — verify only header row
 - Test with values containing commas, quotes, newlines — verify proper CSV escaping
 
+### Test Mock Updates
+- **`analytics-web-app/src/components/__tests__/CellContainer.test.tsx`** — Add `Download` to the lucide-react mock (lines 9-20) since CellContainer will now import it
+- **`analytics-web-app/src/lib/screen-renderers/cells/__tests__/HorizontalGroupCell.test.tsx`** — Add `Download` to the lucide-react mock since HgChildPane will now import it
+
 ### Integration
 - `yarn build` — verify no type errors
 - `yarn lint` — verify lint passes
-- Existing CellContainer tests still pass
+- Existing CellContainer and HorizontalGroupCell tests still pass (after mock updates above)
 
 ### Manual
 - Open a notebook with table/log cells that have data
