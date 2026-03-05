@@ -24,7 +24,6 @@ For complete documentation, see:
 - [Authentication Guide](https://micromegas.info/docs/grafana/authentication/) - Set up API keys or OAuth 2.0
 - [Usage Guide](https://micromegas.info/docs/grafana/usage/) - Query builder and SQL examples
 
-
 ## Development
 
 For development instructions, see [DEVELOPMENT.md](DEVELOPMENT.md).
