@@ -119,6 +119,7 @@ interface HgEditorPanelProps {
   onChildRun: (childName: string) => void
   variables: Record<string, VariableValue>
   timeRange: { begin: string; end: string }
+  cellResults?: Record<string, import('apache-arrow').Table>
   allCellNames: Set<string>
   defaultDataSource?: string
   datasourceVariables?: string[]
@@ -135,6 +136,7 @@ function HgEditorPanel({
   onChildRun,
   variables,
   timeRange,
+  cellResults,
   allCellNames,
   defaultDataSource,
   datasourceVariables,
@@ -216,6 +218,7 @@ function HgEditorPanel({
           onChildRun={onChildRun}
           variables={variables}
           timeRange={timeRange}
+          cellResults={cellResults}
           allCellNames={allCellNames}
           defaultDataSource={defaultDataSource}
           datasourceVariables={datasourceVariables}
@@ -419,6 +422,27 @@ export function NotebookRenderer({
       .map((c) => c.name)
   }, [cells, selectedCellIndex])
 
+  // Collect available cell results for a cell at a given top-level index
+  const getAvailableCellResults = (index: number): Record<string, import('apache-arrow').Table> => {
+    const results: Record<string, import('apache-arrow').Table> = {}
+    for (let i = 0; i < index; i++) {
+      const cell = cells[i]
+      const state = cellStates[cell.name]
+      if (state?.status === 'success' && state.data.length > 0) {
+        results[cell.name] = state.data[0]
+      }
+      if (cell.type === 'hg') {
+        for (const child of (cell as HorizontalGroupCellConfig).children) {
+          const childState = cellStates[child.name]
+          if (childState?.status === 'success' && childState.data.length > 0) {
+            results[child.name] = childState.data[0]
+          }
+        }
+      }
+    }
+    return results
+  }
+
   // Collect available variables for a cell at a given top-level index
   const getAvailableVariables = (index: number): Record<string, VariableValue> => {
     const available: Record<string, VariableValue> = {}
@@ -441,6 +465,7 @@ export function NotebookRenderer({
 
   const renderCell = (cell: CellConfig, index: number) => {
     const availableVariables = getAvailableVariables(index)
+    const availableCellResults = getAvailableCellResults(index)
 
     // HG cell: render children side by side
     if (cell.type === 'hg') {
@@ -494,6 +519,7 @@ export function NotebookRenderer({
                   variables={availableVariables}
                   variableValues={variableValues}
                   timeRange={getTimeRangeForApi(rawTimeRange.from, rawTimeRange.to)}
+                  cellResults={availableCellResults}
                   selectedChildName={selectedChildName}
                   onChildSelect={(childName) => {
                     setSelectedCellIndex(index)
@@ -547,6 +573,7 @@ export function NotebookRenderer({
         timeRange: getTimeRangeForApi(rawTimeRange.from, rawTimeRange.to),
         isEditing: selectedCellIndex === index,
         dataSource: cellDataSource,
+        cellResults: availableCellResults,
       },
       {
         onRun: () => executeCellByName(cell.name),
@@ -686,6 +713,7 @@ export function NotebookRenderer({
                 onChildRun={(childName) => executeCellByName(childName)}
                 variables={getAvailableVariables(selectedCellIndex!)}
                 timeRange={getTimeRangeForApi(rawTimeRange.from, rawTimeRange.to)}
+                cellResults={getAvailableCellResults(selectedCellIndex!)}
                 allCellNames={existingNames}
                 defaultDataSource={dataSource}
                 showNotebookOption
@@ -699,6 +727,7 @@ export function NotebookRenderer({
                 cell={selectedCell}
                 variables={getAvailableVariables(selectedCellIndex!)}
                 timeRange={getTimeRangeForApi(rawTimeRange.from, rawTimeRange.to)}
+                cellResults={getAvailableCellResults(selectedCellIndex!)}
                 existingNames={existingNames}
                 availableColumns={cellStates[selectedCell.name]?.data[0]?.schema.fields.map((f) => f.name)}
                 defaultDataSource={dataSource}

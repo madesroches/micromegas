@@ -49,6 +49,8 @@ export interface CellRendererProps {
   onTimeRangeSelect?: (from: Date, to: Date) => void
   /** Effective data source for query routing */
   dataSource?: string
+  /** Upstream cell result tables (for $cell[N].col macro substitution) */
+  cellResults?: Record<string, Table>
 }
 
 /**
@@ -56,6 +58,7 @@ export interface CellRendererProps {
  */
 export interface CellExecutionContext {
   variables: Record<string, VariableValue>
+  cellResults: Record<string, Table>
   timeRange: { begin: string; end: string }
   runQuery: (sql: string) => Promise<Table>
   runQueryAs?: (sql: string, tableName: string, dataSource?: string) => Promise<Table>
@@ -79,6 +82,8 @@ export interface CellEditorProps {
   defaultDataSource?: string
   /** Run the cell (for Ctrl+Enter shortcut in SQL editors) */
   onRun?: () => void
+  /** Upstream cell result tables (for $cell[N].col macro validation) */
+  cellResults?: Record<string, Table>
 }
 
 /**

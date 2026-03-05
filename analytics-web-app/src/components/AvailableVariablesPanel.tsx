@@ -1,3 +1,4 @@
+import type { Table } from 'apache-arrow'
 import type { VariableValue } from '@/lib/screen-renderers/notebook-types'
 import { isMultiColumnValue } from '@/lib/screen-renderers/notebook-types'
 
@@ -6,12 +7,15 @@ interface AvailableVariablesPanelProps {
   timeRange: { begin: string; end: string }
   /** Additional variables to display (e.g., $order_by for table cells) */
   additionalVariables?: { name: string; description: string }[]
+  /** Upstream cell result tables (for $cell[N].col references) */
+  cellResults?: Record<string, Table>
 }
 
 export function AvailableVariablesPanel({
   variables,
   timeRange,
   additionalVariables,
+  cellResults,
 }: AvailableVariablesPanelProps) {
   // Time range variables (always simple strings)
   const timeVars = [
@@ -33,9 +37,14 @@ export function AvailableVariablesPanel({
     isMultiColumn: false,
   }))
 
+  // Cell result entries
+  const cellResultEntries = Object.entries(cellResults ?? {}).filter(
+    ([, table]) => table.numRows > 0,
+  )
+
   const allVars = [...timeVars, ...userVars, ...additionalVars]
 
-  if (allVars.length === 0) return null
+  if (allVars.length === 0 && cellResultEntries.length === 0) return null
 
   return (
     <div>
@@ -68,6 +77,22 @@ export function AvailableVariablesPanel({
                 <span className="text-theme-text-muted truncate ml-2">{v.value as string}</span>
               </div>
             )}
+          </div>
+        ))}
+        {cellResultEntries.length > 0 && allVars.length > 0 && (
+          <div className="border-t border-theme-border my-1" />
+        )}
+        {cellResultEntries.map(([cellName, table]) => (
+          <div key={cellName} className="space-y-0.5">
+            <div className="flex justify-between py-0.5">
+              <span className="text-theme-text-secondary font-mono font-medium">{cellName}</span>
+              <span className="text-theme-text-muted">{table.numRows} rows</span>
+            </div>
+            {table.schema.fields.map((field) => (
+              <div key={field.name} className="flex justify-between py-0.5 pl-2">
+                <span className="text-accent-link font-mono">${cellName}[0].{field.name}</span>
+              </div>
+            ))}
           </div>
         ))}
       </div>

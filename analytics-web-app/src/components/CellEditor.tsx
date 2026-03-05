@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect } from 'react'
+import type { Table } from 'apache-arrow'
 import { X, Play, Trash2 } from 'lucide-react'
 import { getCellTypeMetadata } from '@/lib/screen-renderers/cell-registry'
 import type { CellConfig, VariableValue } from '@/lib/screen-renderers/notebook-types'
@@ -15,6 +16,7 @@ interface CellEditorProps {
   defaultDataSource?: string
   datasourceVariables?: string[]
   showNotebookOption?: boolean
+  cellResults?: Record<string, Table>
   onClose: () => void
   onUpdate: (updates: Partial<CellConfig>) => void
   onRun: () => void
@@ -30,6 +32,7 @@ export function CellEditor({
   defaultDataSource,
   datasourceVariables,
   showNotebookOption,
+  cellResults,
   onClose,
   onUpdate,
   onRun,
@@ -143,6 +146,7 @@ export function CellEditor({
           datasourceVariables={datasourceVariables}
           defaultDataSource={defaultDataSource}
           onRun={onRun}
+          cellResults={cellResults}
         />
       </div>
 

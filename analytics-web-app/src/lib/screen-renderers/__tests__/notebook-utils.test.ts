@@ -17,6 +17,7 @@ Object.defineProperty(window, 'matchMedia', {
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 jest.mock('../cell-registry', () => require('../__test-utils__/cell-registry-mock').createCellRegistryMock())
 
+import { tableFromArrays } from 'apache-arrow'
 import { substituteMacros, DEFAULT_SQL, sanitizeCellName, validateCellName, validateMacros } from '../notebook-utils'
 import { serializeVariableValue, deserializeVariableValue, getVariableString, isMultiColumnValue } from '../notebook-types'
 import { createDefaultCell } from '../cell-registry'
@@ -265,6 +266,145 @@ describe('validateMacros', () => {
 
   it('should ignore $order_by special variable', () => {
     const result = validateMacros('SELECT * FROM logs ORDER BY $order_by', {})
+    expect(result.valid).toBe(true)
+  })
+
+  it('should not report "Unknown variable" for valid cell result references', () => {
+    const table = tableFromArrays({ process_id: ['abc123'] })
+    const result = validateMacros(
+      "SELECT * FROM view_instance('log_entries', '$game_session[0].process_id')",
+      {},
+      { game_session: table },
+    )
+    expect(result.valid).toBe(true)
+    expect(result.errors).toHaveLength(0)
+  })
+})
+
+describe('cell result ref substitution', () => {
+  const defaultTimeRange = { begin: '2024-01-01T00:00:00Z', end: '2024-01-02T00:00:00Z' }
+
+  it('should substitute $cell[0].col from an Arrow Table', () => {
+    const table = tableFromArrays({ process_id: ['abc123'], name: ['server1'] })
+    const result = substituteMacros(
+      "SELECT * FROM view_instance('log_entries', '$game_session[0].process_id')",
+      {},
+      defaultTimeRange,
+      { game_session: table },
+    )
+    expect(result).toBe("SELECT * FROM view_instance('log_entries', 'abc123')")
+  })
+
+  it('should leave macro unresolved for out-of-bounds row index', () => {
+    const table = tableFromArrays({ col: ['val'] })
+    const result = substituteMacros(
+      'SELECT $cell[5].col',
+      {},
+      defaultTimeRange,
+      { cell: table },
+    )
+    expect(result).toBe('SELECT $cell[5].col')
+  })
+
+  it('should leave macro unresolved for missing column', () => {
+    const table = tableFromArrays({ col: ['val'] })
+    const result = substituteMacros(
+      'SELECT $cell[0].missing',
+      {},
+      defaultTimeRange,
+      { cell: table },
+    )
+    expect(result).toBe('SELECT $cell[0].missing')
+  })
+
+  it('should leave macro unresolved for unknown cell', () => {
+    const result = substituteMacros(
+      'SELECT $unknown_cell[0].col',
+      {},
+      defaultTimeRange,
+      {},
+    )
+    expect(result).toBe('SELECT $unknown_cell[0].col')
+  })
+
+  it('should not interfere with existing $variable.column patterns', () => {
+    const table = tableFromArrays({ id: ['1'] })
+    const result = substituteMacros(
+      "SELECT '$metric.name', '$cell[0].id'",
+      { metric: { name: 'cpu', unit: 'pct' } },
+      defaultTimeRange,
+      { cell: table },
+    )
+    expect(result).toBe("SELECT 'cpu', '1'")
+  })
+
+  it('should not interfere with simple $variable patterns', () => {
+    const table = tableFromArrays({ id: ['1'] })
+    const result = substituteMacros(
+      "SELECT '$host', '$cell[0].id'",
+      { host: 'server1' },
+      defaultTimeRange,
+      { cell: table },
+    )
+    expect(result).toBe("SELECT 'server1', '1'")
+  })
+
+  it('should escape single quotes in cell result values', () => {
+    const table = tableFromArrays({ msg: ["it's working"] })
+    const result = substituteMacros(
+      "SELECT '$cell[0].msg'",
+      {},
+      defaultTimeRange,
+      { cell: table },
+    )
+    expect(result).toBe("SELECT 'it''s working'")
+  })
+
+  it('simple variable pattern should not partially match $cell_name in $cell_name[0].col', () => {
+    const table = tableFromArrays({ id: ['abc'] })
+    const result = substituteMacros(
+      'SELECT $cell_name[0].id',
+      { cell_name: 'should_not_match' },
+      defaultTimeRange,
+      { cell_name: table },
+    )
+    expect(result).toBe('SELECT abc')
+  })
+})
+
+describe('validateMacros with cell results', () => {
+  it('should report error for unknown cell name', () => {
+    const result = validateMacros('$unknown[0].col', {}, { })
+    expect(result.valid).toBe(false)
+    expect(result.errors).toContain('Unknown cell: unknown')
+  })
+
+  it('should report error for out-of-bounds row index', () => {
+    const table = tableFromArrays({ col: ['val'] })
+    const result = validateMacros('$cell[5].col', {}, { cell: table })
+    expect(result.valid).toBe(false)
+    expect(result.errors[0]).toContain('Row index 5 out of bounds')
+    expect(result.errors[0]).toContain('1 rows')
+  })
+
+  it('should report error for unknown column', () => {
+    const table = tableFromArrays({ col: ['val'], other: ['x'] })
+    const result = validateMacros('$cell[0].missing', {}, { cell: table })
+    expect(result.valid).toBe(false)
+    expect(result.errors[0]).toContain("Column 'missing' not found in cell 'cell'")
+    expect(result.errors[0]).toContain('col, other')
+  })
+
+  it('should pass for valid cell result reference', () => {
+    const table = tableFromArrays({ col: ['val'] })
+    const result = validateMacros('$cell[0].col', {}, { cell: table })
+    expect(result.valid).toBe(true)
+  })
+
+  it('should skip cell result validation when cellResults is undefined', () => {
+    const result = validateMacros('$cell[0].col', {})
+    // No cellResults provided, so no validation errors for cell refs
+    // But should not report as unknown variable either (lookahead prevents simple match)
     expect(result.valid).toBe(true)
   })
 })

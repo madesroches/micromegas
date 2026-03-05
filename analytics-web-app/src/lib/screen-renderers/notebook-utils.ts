@@ -21,6 +21,7 @@ export {
   variableValuesEqual,
 } from './notebook-types'
 
+import type { Table } from 'apache-arrow'
 import type { CellConfig, CellType, HorizontalGroupCellConfig, VariableValue } from './notebook-types'
 import { getVariableString } from './notebook-types'
 
@@ -263,7 +264,8 @@ function escapeSqlValue(value: string): string {
 export function substituteMacros(
   sql: string,
   variables: Record<string, VariableValue>,
-  timeRange: { begin: string; end: string }
+  timeRange: { begin: string; end: string },
+  cellResults?: Record<string, Table>,
 ): string {
   let result = sql
 
@@ -271,7 +273,22 @@ export function substituteMacros(
   result = result.replace(/\$begin\b/g, escapeSqlValue(timeRange.begin))
   result = result.replace(/\$end\b/g, escapeSqlValue(timeRange.end))
 
-  // 2. Handle dotted variable references first: $variable.column
+  // 2. Cell result row references: $cell[N].column
+  //    Must process before dotted/simple variables to avoid partial matches
+  if (cellResults) {
+    const cellRefPattern = /\$([a-zA-Z_][a-zA-Z0-9_]*)\[(\d+)\]\.([a-zA-Z_][a-zA-Z0-9_]*)\b/g
+    result = result.replace(cellRefPattern, (match, cellName, rowIdxStr, colName) => {
+      const table = cellResults[cellName]
+      if (!table) return match // leave unresolved
+      const rowIdx = parseInt(rowIdxStr, 10)
+      if (rowIdx >= table.numRows) return match
+      const row = table.get(rowIdx)
+      if (!row || row[colName] === undefined || row[colName] === null) return match
+      return escapeSqlValue(String(row[colName]))
+    })
+  }
+
+  // 3. Handle dotted variable references first: $variable.column
   //    Must process before simple variables to avoid partial matches
   const dottedPattern = /\$([a-zA-Z_][a-zA-Z0-9_]*)\.([a-zA-Z_][a-zA-Z0-9_]*)\b/g
   result = result.replace(dottedPattern, (match, varName, colName) => {
@@ -296,7 +313,7 @@ export function substituteMacros(
   //    Use negative lookahead (?!\.) to avoid matching $variable in $variable.column
   const sortedVars = Object.entries(variables).sort((a, b) => b[0].length - a[0].length)
   for (const [name, value] of sortedVars) {
-    const regex = new RegExp(`\\$${name}\\b(?!\\.)`, 'g')
+    const regex = new RegExp(`\\$${name}\\b(?![.\\[])`, 'g')
 
     if (typeof value === 'string') {
       result = result.replace(regex, escapeSqlValue(value))
@@ -324,13 +341,35 @@ export interface MacroValidationResult {
  */
 export function validateMacros(
   text: string,
-  variables: Record<string, VariableValue>
+  variables: Record<string, VariableValue>,
+  cellResults?: Record<string, Table>,
 ): MacroValidationResult {
   const errors: string[] = []
 
+  // Check cell result references: $cell[N].column
+  const cellRefPattern = /\$([a-zA-Z_][a-zA-Z0-9_]*)\[(\d+)\]\.([a-zA-Z_][a-zA-Z0-9_]*)\b/g
+  let match
+  while ((match = cellRefPattern.exec(text)) !== null) {
+    const [, cellName, rowIdxStr, colName] = match
+    if (!cellResults) continue
+    const table = cellResults[cellName]
+    if (!table) {
+      errors.push(`Unknown cell: ${cellName}`)
+    } else {
+      const rowIdx = parseInt(rowIdxStr, 10)
+      if (rowIdx >= table.numRows) {
+        errors.push(`Row index ${rowIdx} out of bounds for cell '${cellName}' (${table.numRows} rows)`)
+      } else {
+        const columns = table.schema.fields.map(f => f.name)
+        if (!columns.includes(colName)) {
+          errors.push(`Column '${colName}' not found in cell '${cellName}'. Available: ${columns.join(', ')}`)
+        }
+      }
+    }
+  }
+
   // Check dotted references: $variable.column
   const dottedPattern = /\$([a-zA-Z_][a-zA-Z0-9_]*)\.([a-zA-Z_][a-zA-Z0-9_]*)\b/g
-  let match
   while ((match = dottedPattern.exec(text)) !== null) {
     const [, varName, colName] = match
     const value = variables[varName]
@@ -348,8 +387,9 @@ export function validateMacros(
     }
   }
 
-  // Check simple variable references: $variable (not followed by a dot)
-  const simplePattern = /\$([a-zA-Z_][a-zA-Z0-9_]*)\b(?!\.)/g
+  // Check simple variable references: $variable (not followed by a dot or bracket)
+  // eslint-disable-next-line no-useless-escape
+  const simplePattern = /\$([a-zA-Z_][a-zA-Z0-9_]*)\b(?![.\[])/g
   while ((match = simplePattern.exec(text)) !== null) {
     const [, varName] = match
     // Skip built-in variables

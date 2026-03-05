@@ -1,3 +1,4 @@
+import type { Table } from 'apache-arrow'
 import type { CellRendererProps } from './cell-registry'
 import { getCellTypeMetadata } from './cell-registry'
 import type { CellConfig, CellState, CellStatus, VariableCellConfig, VariableValue } from './notebook-types'
@@ -14,6 +15,8 @@ export interface CellViewContext {
   timeRange: { begin: string; end: string }
   isEditing: boolean
   dataSource?: string
+  /** Upstream cell result tables (for $cell[N].col macro substitution) */
+  cellResults?: Record<string, Table>
 }
 
 export interface CellViewCallbacks {
@@ -209,6 +212,7 @@ export function buildCellRendererProps(
     onValueChange:
       cell.type === 'variable' ? callbacks.onValueChange : undefined,
     dataSource: context.dataSource,
+    cellResults: context.cellResults,
     // Metadata rendererProps spread last (highest precedence) — preserves
     // current behavior where getRendererProps can override base fields like
     // data, status, options.

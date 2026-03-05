@@ -17,47 +17,9 @@ ORDER BY time DESC
 LIMIT 100
 ```
 
-## Current State
+## Status: IMPLEMENTED
 
-### Macro Substitution
-**File:** `analytics-web-app/src/lib/screen-renderers/notebook-utils.ts:263-311`
-
-`substituteMacros()` handles three patterns in order:
-1. `$begin` / `$end` — time range (line 270-272)
-2. `$variable.column` — dotted multi-column variable access (line 274-292)
-3. `$variable` — simple variable reference (line 294-308)
-
-All patterns only reference `variables: Record<string, VariableValue>`, which is populated exclusively from `variable` type cells.
-
-### Variable Collection During Execution
-**File:** `analytics-web-app/src/lib/screen-renderers/useCellExecution.ts:132-139`
-
-```typescript
-const availableVariables: Record<string, VariableValue> = {}
-for (let i = 0; i < cellIndex; i++) {
-  const prevCell = cells[i]
-  if (prevCell.type === 'variable' && variableValuesRef.current[prevCell.name] !== undefined) {
-    availableVariables[prevCell.name] = variableValuesRef.current[prevCell.name]
-  }
-}
-```
-
-Only `variable` type cells contribute. Cell result data (`cellStates[name].data`) is available but not exposed to macro substitution. Note: `cellStates` is React state (`useState`), not a ref — state updates from a previous cell's execution are batched and not visible synchronously in the next cell's callback closure.
-
-### Variable Collection for Editor Panel
-**File:** `analytics-web-app/src/lib/screen-renderers/NotebookRenderer.tsx:422-440`
-
-`getAvailableVariables(index)` mirrors the execution logic — only `variable` cells above the current index, plus variable children inside HG groups.
-
-### Cell Result Storage
-**File:** `analytics-web-app/src/lib/screen-renderers/notebook-types.ts:155-167`
-
-`CellState.data` is `Table[]` (Apache Arrow). During execution, results are also registered in the WASM engine by cell name (line 179 of `useCellExecution.ts`). The Arrow `Table` supports `table.get(rowIndex)` which returns a row as `Record<string, unknown>`.
-
-### Macro Validation
-**File:** `analytics-web-app/src/lib/screen-renderers/notebook-utils.ts:325-365`
-
-`validateMacros()` checks dotted and simple variable references against known variables. No awareness of cell results.
+All phases complete. Type-check, lint, and tests (805 total, 14 new) pass.
 
 ## Design
 
@@ -235,83 +197,76 @@ export interface CellRendererProps {
 
 ## Implementation Steps
 
-### Phase 1: Core Substitution
+### Phase 1: Core Substitution — DONE
 
-1. **`notebook-utils.ts`** — Add `cellResults?: Record<string, Table>` parameter to `substituteMacros()` and `validateMacros()`. Add the `$cell[N].col` regex pass before existing patterns. Update the simple variable negative lookahead from `(?!\.)` to `(?![.\[])` in both functions to prevent partial matches on cell result syntax. Update existing callers to pass `undefined` (no behavior change).
+1. [x] **`notebook-utils.ts`** — Added `cellResults?: Record<string, Table>` parameter to `substituteMacros()` and `validateMacros()`. Added the `$cell[N].col` regex pass before existing patterns. Updated the simple variable negative lookahead from `(?!\.)` to `(?![.\[])` in both functions.
 
-2. **`notebook-utils.test.ts`** — Add tests for the new pattern: basic substitution, out-of-bounds row index, missing column, missing cell, interaction with existing `$variable.column` patterns.
+2. [x] **`notebook-utils.test.ts`** — Added 14 tests: basic substitution, out-of-bounds row index, missing column, missing cell, interaction with existing `$variable.column` and `$variable` patterns, SQL escaping, lookahead correctness, and validation errors for unknown cells/rows/columns.
 
-### Phase 2: Execution Wiring
+### Phase 2: Execution Wiring — DONE
 
-3. **`cell-registry.ts`** — Add `cellResults: Record<string, Table>` to `CellExecutionContext`.
+3. [x] **`cell-registry.ts`** — Added `cellResults: Record<string, Table>` to `CellExecutionContext`.
 
-4. **`useCellExecution.ts`** — Add a `cellResultsRef` (`useRef<Record<string, Table>>({})`). Extract a `completeCellExecution` helper that updates both the ref and React state. Use it at all final-state `setCellStates` call sites in `executeCell`. Reset the ref when the engine resets; handle migrate/remove. Build `availableCellResults` map from the ref for upstream cells. Pass it in `CellExecutionContext`.
+4. [x] **`useCellExecution.ts`** — Added `cellResultsRef` (`useRef<Record<string, Table>>({})`), `completeCellExecution` helper updating both ref and React state. Used at all final-state sites (no-execute, success, error). Ref reset on engine reset; migrate/remove handled. `availableCellResults` built from ref for upstream cells, passed in `CellExecutionContext`.
 
-5. **Cell execute functions** — Update `substituteMacros()` calls in execute methods to pass `context.cellResults`: `TableCell`, `TransposedTableCell`, `LogCell`, `ChartCell` (execute only), `SwimlaneCell`, `PropertyTimelineCell`, `VariableCell` (combobox). Each just passes the new `context.cellResults` parameter.
+5. [x] **Cell execute functions** — Updated `substituteMacros()` calls in execute methods to pass `context.cellResults`: `TableCell`, `TransposedTableCell`, `LogCell`, `ChartCell`, `SwimlaneCell`, `PropertyTimelineCell`, `VariableCell`.
 
-6. **`cell-registry.ts`** — Add `cellResults?: Record<string, Table>` to `CellRendererProps`.
+6. [x] **`cell-registry.ts`** — Added `cellResults?: Record<string, Table>` to `CellRendererProps`.
 
-7. **Cell renderer functions** — Update `substituteMacros()` calls in renderers to pass `cellResults` from props:
-   - `MarkdownCell` — has no execute method; its renderer calls `substituteMacros(content, variables, timeRange)` → add `cellResults`
-   - `ChartCell` — renderer calls `substituteMacros` for option values (`substituteOptionsWithMacros`), per-series units, and chart labels → add `cellResults` to each call
+7. [x] **Cell renderer functions** — Updated `substituteMacros()` calls in renderers:
+   - `MarkdownCell` — renderer passes `cellResults`
+   - `ChartCell` — renderer passes `cellResults` to `substituteOptionsWithMacros`, per-series units, and chart labels
 
-8. **`notebook-cell-view.ts`** — Add `cellResults?: Record<string, Table>` to `CellViewContext`. Update `buildCellRendererProps` to forward `context.cellResults` into the returned `CellRendererProps`.
+8. [x] **`notebook-cell-view.ts`** — Added `cellResults?: Record<string, Table>` to `CellViewContext`. `buildCellRendererProps` forwards `context.cellResults`.
 
-8b. **`NotebookRenderer.tsx`** — Pass `cellResults` through `CellViewContext` when calling `buildCellRendererProps`, so renderers receive it. Same for `HorizontalGroupCell` renderer props.
+8b. [x] **`NotebookRenderer.tsx`** — `cellResults` threaded through `CellViewContext` for `buildCellRendererProps` and `HorizontalGroupCell`.
 
-### Phase 3: Editor UI
+### Phase 3: Editor UI — DONE
 
-9. **`NotebookRenderer.tsx`** — Add `getAvailableCellResults(index)` and pass it to `CellEditor` and `HgEditorPanel`.
+9. [x] **`NotebookRenderer.tsx`** — Added `getAvailableCellResults(index)`, passed to `CellEditor` and `HgEditorPanel`.
 
-10. **`CellEditor.tsx`** — Add `cellResults` to the component's local `CellEditorProps` interface (defined in `CellEditor.tsx`, separate from the one in `cell-registry.ts`). Thread `cellResults` prop to `meta.EditorComponent`.
+10. [x] **`CellEditor.tsx`** — Added `cellResults` to local `CellEditorProps`, threaded to `meta.EditorComponent`.
 
-11. **`cell-registry.ts`** — Add `cellResults?: Record<string, Table>` to `CellEditorProps`.
+11. [x] **`cell-registry.ts`** — Added `cellResults?: Record<string, Table>` to `CellEditorProps`.
 
-12. **`AvailableVariablesPanel.tsx`** — Add `cellResults` prop. Render a "Cell Results" section showing `$cell[0].column` entries with schema info.
+12. [x] **`AvailableVariablesPanel.tsx`** — Added `cellResults` prop. Renders a "Cell Results" section with `$cell[0].column` entries and row count per cell.
 
-13. **Cell editor components** — Pass `cellResults` to `AvailableVariablesPanel` and to `validateMacros()` calls in all editor components that use them: `TableCell`, `ChartCell`, `MarkdownCell`, `VariableCell`, `PropertyTimelineCell`, `SwimlaneCell`.
+13. [x] **Cell editor components** — All editors that use `validateMacros` or `AvailableVariablesPanel` now accept `cellResults` and pass it through: `TableCell`, `ChartCell`, `MarkdownCell`, `VariableCell`, `PropertyTimelineCell`, `SwimlaneCell`, `LogCell`, `TransposedTableCell`. `useMemo` dependency arrays updated accordingly.
 
-### Phase 4: HG Cell Support
+### Phase 4: HG Cell Support — DONE
 
-14. **`HorizontalGroupCell.tsx`** — Thread `cellResults` through to child cell renderers and editors, same as `variables`.
+14. [x] **`HorizontalGroupCell.tsx`** — Added `cellResults` to `HorizontalGroupCellProps`, `HorizontalGroupCellEditorProps`, and `ChildEditorViewProps`. Threaded through to `buildCellRendererProps` and `meta.EditorComponent`.
 
-### Phase 5: Documentation
+### Phase 5: Documentation — DONE
 
-15. **`mkdocs/docs/web-app/notebooks/variables.md`** — Update the "SQL Macro Substitution" section:
-    - Add `$cellName[N].column` to the syntax table with description: "Replaced with a value from an upstream cell's result table (row N, named column)"
-    - Add a matching rule: "Cell result references first: `$cell[N].column` references are resolved before dotted variable and simple variable patterns."
-    - Add an example showing a downstream cell referencing an upstream query result:
-      ```sql
-      -- Upstream cell "game_session" returns a table with process_id column
-      SELECT time, level, target, msg
-      FROM view_instance('log_entries', '$game_session[0].process_id')
-      ORDER BY time DESC
-      LIMIT 100
-      ```
-    - Add a brief note in the "Variable Scope" section that cell result references follow the same top-to-bottom scoping: only cells above can be referenced.
+15. [x] **`mkdocs/docs/web-app/notebooks/variables.md`** — Updated:
+    - Syntax table: added `$cellName[N].column`
+    - Matching rules: added "Cell result references first"
+    - Examples: added upstream cell reference example
+    - Variable Scope: noted cell result references follow same top-to-bottom scoping
 
-## Files to Modify
+## Files Modified
 
 | File | Change |
 |------|--------|
-| `src/lib/screen-renderers/notebook-utils.ts` | Add `cellResults` param to `substituteMacros` and `validateMacros`, new regex pass, update simple variable lookahead to `(?![.\[])` |
-| `src/lib/screen-renderers/__tests__/notebook-utils.test.ts` | Tests for `$cell[N].col` substitution and validation |
-| `src/lib/screen-renderers/cell-registry.ts` | Add `cellResults` to `CellExecutionContext`, `CellRendererProps`, and `CellEditorProps` |
-| `src/lib/screen-renderers/useCellExecution.ts` | Add `cellResultsRef` (`Record<string, Table>`), `completeCellExecution` helper, build `availableCellResults`, pass to context |
-| `src/lib/screen-renderers/NotebookRenderer.tsx` | Add `getAvailableCellResults()`, pass to editor panels |
-| `src/components/CellEditor.tsx` | Thread `cellResults` prop to editor component |
-| `src/components/AvailableVariablesPanel.tsx` | Add `cellResults` prop, render cell result schemas |
-| `src/lib/screen-renderers/cells/TableCell.tsx` | Pass `cellResults` to `substituteMacros` |
-| `src/lib/screen-renderers/cells/TransposedTableCell.tsx` | Pass `cellResults` to `substituteMacros` |
-| `src/lib/screen-renderers/cells/LogCell.tsx` | Pass `cellResults` to `substituteMacros` |
-| `src/lib/screen-renderers/cells/ChartCell.tsx` | Pass `cellResults` to `substituteMacros` in execute and renderer |
-| `src/lib/screen-renderers/cells/SwimlaneCell.tsx` | Pass `cellResults` to `substituteMacros` |
-| `src/lib/screen-renderers/cells/PropertyTimelineCell.tsx` | Pass `cellResults` to `substituteMacros` |
-| `src/lib/screen-renderers/cells/VariableCell.tsx` | Pass `cellResults` to `substituteMacros` |
-| `src/lib/screen-renderers/cells/MarkdownCell.tsx` | Pass `cellResults` to `substituteMacros` in renderer (no execute method) |
-| `src/lib/screen-renderers/notebook-cell-view.ts` | Add `cellResults` to `CellViewContext`, forward it through `buildCellRendererProps` |
-| `src/lib/screen-renderers/cells/HorizontalGroupCell.tsx` | Thread `cellResults` through to children |
-| `mkdocs/docs/web-app/notebooks/variables.md` | Document `$cell[N].column` syntax in macro substitution section |
+| `src/lib/screen-renderers/notebook-utils.ts` | Added `cellResults` param to `substituteMacros` and `validateMacros`, new regex pass, updated simple variable lookahead to `(?![.\[])` |
+| `src/lib/screen-renderers/__tests__/notebook-utils.test.ts` | 14 new tests for `$cell[N].col` substitution and validation |
+| `src/lib/screen-renderers/cell-registry.ts` | Added `cellResults` to `CellExecutionContext`, `CellRendererProps`, and `CellEditorProps` |
+| `src/lib/screen-renderers/useCellExecution.ts` | Added `cellResultsRef`, `completeCellExecution` helper, builds `availableCellResults`, passes to context |
+| `src/lib/screen-renderers/NotebookRenderer.tsx` | Added `getAvailableCellResults()`, passes to editor panels and renderers, updated `HgEditorPanelProps` |
+| `src/components/CellEditor.tsx` | Threads `cellResults` prop to editor component |
+| `src/components/AvailableVariablesPanel.tsx` | Added `cellResults` prop, renders cell result schemas section |
+| `src/lib/screen-renderers/cells/TableCell.tsx` | Passes `cellResults` to `substituteMacros` and `validateMacros` in execute and editor |
+| `src/lib/screen-renderers/cells/TransposedTableCell.tsx` | Passes `cellResults` to `substituteMacros` in execute, `AvailableVariablesPanel` in editor |
+| `src/lib/screen-renderers/cells/LogCell.tsx` | Passes `cellResults` to `substituteMacros` in execute, `AvailableVariablesPanel` in editor |
+| `src/lib/screen-renderers/cells/ChartCell.tsx` | Passes `cellResults` to `substituteMacros` in execute and renderer, `validateMacros` and `AvailableVariablesPanel` in editor |
+| `src/lib/screen-renderers/cells/SwimlaneCell.tsx` | Passes `cellResults` to `substituteMacros` in execute, `validateMacros` and `AvailableVariablesPanel` in editor |
+| `src/lib/screen-renderers/cells/PropertyTimelineCell.tsx` | Passes `cellResults` to `substituteMacros` in execute, `validateMacros` and `AvailableVariablesPanel` in editor |
+| `src/lib/screen-renderers/cells/VariableCell.tsx` | Passes `cellResults` to `substituteMacros` in execute, `validateMacros` and `AvailableVariablesPanel` in editor |
+| `src/lib/screen-renderers/cells/MarkdownCell.tsx` | Passes `cellResults` to `substituteMacros` in renderer, `validateMacros` and `AvailableVariablesPanel` in editor |
+| `src/lib/screen-renderers/notebook-cell-view.ts` | Added `cellResults` to `CellViewContext`, forwarded through `buildCellRendererProps` |
+| `src/lib/screen-renderers/cells/HorizontalGroupCell.tsx` | Threads `cellResults` through props, `buildCellRendererProps`, `ChildEditorView`, `meta.EditorComponent` |
+| `mkdocs/docs/web-app/notebooks/variables.md` | Documented `$cell[N].column` syntax, matching rule, example, and scope note |
 
 ## Trade-offs
 
@@ -327,18 +282,29 @@ export interface CellRendererProps {
 
 **Chosen: Regex.** Consistent with the existing macro system. The new pattern `$name[N].col` is unambiguous and doesn't conflict with SQL syntax (`$` is not a standard SQL token). An AST approach would be over-engineering for macro substitution.
 
-## Testing Strategy
+## Testing
 
-### Unit Tests (`notebook-utils.test.ts`)
-- `$cell[0].col` substitutes correctly from an Arrow Table
-- `$cell[0].col` with out-of-bounds row index leaves macro unresolved
-- `$cell[0].missing_col` leaves macro unresolved
-- `$unknown_cell[0].col` leaves macro unresolved
-- Cell result refs don't interfere with existing `$variable.column` patterns
-- Cell result refs don't interfere with `$variable` patterns
-- `validateMacros` reports errors for unknown cells, out-of-bounds rows, missing columns
-- Simple variable pattern does not partially match `$cell_name` in `$cell_name[0].col` (lookahead `(?![.\[])`)
-- `validateMacros` does not report "Unknown variable" for valid cell result references
+### Unit Tests (`notebook-utils.test.ts`) — 14 new tests, all passing
+
+**`cell result ref substitution` describe block:**
+- [x] `$cell[0].col` substitutes correctly from an Arrow Table
+- [x] Out-of-bounds row index leaves macro unresolved
+- [x] Missing column leaves macro unresolved
+- [x] Unknown cell leaves macro unresolved
+- [x] Cell result refs don't interfere with existing `$variable.column` patterns
+- [x] Cell result refs don't interfere with `$variable` patterns
+- [x] Single quotes in cell result values are escaped
+- [x] Simple variable pattern does not partially match `$cell_name` in `$cell_name[0].col` (lookahead)
+
+**`validateMacros with cell results` describe block:**
+- [x] Reports error for unknown cell name
+- [x] Reports error for out-of-bounds row index
+- [x] Reports error for unknown column (shows available columns)
+- [x] Passes for valid cell result reference
+- [x] Skips cell result validation when `cellResults` is undefined
+
+**`validateMacros` existing block (new test):**
+- [x] Does not report "Unknown variable" for valid cell result references
 
 ### Manual Testing
 1. Create a notebook with a query cell returning multiple columns
@@ -346,6 +312,10 @@ export interface CellRendererProps {
 3. Verify substitution works and query executes
 4. Verify the Available Variables panel shows cell result schemas
 5. Verify validation errors appear in the editor for bad references
+
+## Open Questions
+
+1. **Should available variables and cell results be scoped per-cell?** Currently both `getAvailableVariables(index)` and `getAvailableCellResults(index)` only expose upstream cells. This prevents circular references but limits flexibility. An alternative would be to expose all variables and cell results regardless of position — this would simplify the code (no index-based filtering) and allow more flexible notebook layouts, but would require a dependency graph to detect cycles. Worth reviewing if the upstream-only restriction causes friction.
 
 ## Closed Questions
 

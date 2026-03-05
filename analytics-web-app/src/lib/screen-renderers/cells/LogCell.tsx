@@ -79,7 +79,7 @@ export function LogCell({ data, status, options, onOptionsChange }: CellRenderer
 // Editor Component
 // =============================================================================
 
-function LogCellEditor({ config, onChange, variables, timeRange, onRun }: CellEditorProps) {
+function LogCellEditor({ config, onChange, variables, timeRange, onRun, cellResults }: CellEditorProps) {
   const logConfig = config as QueryCellConfig
 
   return (
@@ -97,7 +97,7 @@ function LogCellEditor({ config, onChange, variables, timeRange, onRun }: CellEd
           onRunShortcut={onRun}
         />
       </div>
-      <AvailableVariablesPanel variables={variables} timeRange={timeRange} />
+      <AvailableVariablesPanel variables={variables} timeRange={timeRange} cellResults={cellResults} />
       <DocumentationLink url={QUERY_GUIDE_URL} label="Query Guide" />
     </>
   )
@@ -125,8 +125,8 @@ export const logMetadata: CellTypeMetadata = {
     sql: DEFAULT_SQL.log,
   }),
 
-  execute: async (config: CellConfig, { variables, timeRange, runQuery }: CellExecutionContext) => {
-    const sql = substituteMacros((config as QueryCellConfig).sql, variables, timeRange)
+  execute: async (config: CellConfig, { variables, cellResults, timeRange, runQuery }: CellExecutionContext) => {
+    const sql = substituteMacros((config as QueryCellConfig).sql, variables, timeRange, cellResults)
     const data = await runQuery(sql)
     return { data: [data] }
   },

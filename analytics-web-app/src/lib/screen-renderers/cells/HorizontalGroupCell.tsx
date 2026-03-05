@@ -55,6 +55,7 @@ export interface HorizontalGroupCellProps {
   variables: Record<string, VariableValue>
   variableValues: Record<string, VariableValue>
   timeRange: { begin: string; end: string }
+  cellResults?: Record<string, import('apache-arrow').Table>
   selectedChildName: string | null
   onChildSelect: (childName: string | null) => void
   onChildRun: (childName: string) => void
@@ -282,6 +283,7 @@ export function HorizontalGroupCell({
   variables,
   variableValues,
   timeRange,
+  cellResults,
   selectedChildName,
   onChildSelect,
   onChildRun,
@@ -380,6 +382,7 @@ export function HorizontalGroupCell({
                 timeRange,
                 isEditing: false,
                 dataSource: resolveCellDataSource(child, variables, defaultDataSource),
+                cellResults,
               },
               {
                 onRun: () => onChildRun(child.name),
@@ -442,6 +445,7 @@ interface ChildEditorViewProps {
   showNotebookOption?: boolean
   variables: Record<string, VariableValue>
   timeRange: { begin: string; end: string }
+  cellResults?: Record<string, import('apache-arrow').Table>
   availableColumns?: string[]
   meta: CellTypeMetadata
 }
@@ -458,6 +462,7 @@ function ChildEditorView({
   showNotebookOption,
   variables,
   timeRange,
+  cellResults,
   availableColumns,
   meta,
 }: ChildEditorViewProps) {
@@ -546,6 +551,7 @@ function ChildEditorView({
         datasourceVariables={datasourceVariables}
         defaultDataSource={defaultDataSource}
         onRun={onRun}
+        cellResults={cellResults}
       />
       {onRun && !!meta.execute && (
         <Button onClick={onRun} className="w-full gap-2">
@@ -569,6 +575,7 @@ interface HorizontalGroupCellEditorProps {
   onChildRun?: (childName: string) => void
   variables: Record<string, VariableValue>
   timeRange: { begin: string; end: string }
+  cellResults?: Record<string, import('apache-arrow').Table>
   allCellNames: Set<string>
   availableColumns?: string[]
   datasourceVariables?: string[]
@@ -584,6 +591,7 @@ export function HorizontalGroupCellEditor({
   onChildRun,
   variables,
   timeRange,
+  cellResults,
   allCellNames,
   availableColumns,
   datasourceVariables,
@@ -612,6 +620,7 @@ export function HorizontalGroupCellEditor({
         showNotebookOption={showNotebookOption}
         variables={variables}
         timeRange={timeRange}
+        cellResults={cellResults}
         availableColumns={availableColumns}
         meta={meta}
       />
