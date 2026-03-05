@@ -7,7 +7,7 @@ It can help you collect and query logs, metrics and traces.
 
 ## Documentation
 
-- 📖 [Complete Documentation](https://madesroches.github.io/micromegas/)
-- 🚀 [Getting Started Guide](https://madesroches.github.io/micromegas/docs/getting-started/)
-- 📊 [Query Guide](https://madesroches.github.io/micromegas/docs/query-guide/)
+- 📖 [Complete Documentation](https://micromegas.info/)
+- 🚀 [Getting Started Guide](https://micromegas.info/docs/getting-started/)
+- 📊 [Query Guide](https://micromegas.info/docs/query-guide/)
 - 💻 [GitHub Repository](https://github.com/madesroches/micromegas)

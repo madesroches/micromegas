@@ -2,7 +2,7 @@
 
 Micromegas presentation: "Cost-Efficient Telemetry at Scale"
 
-**Live version:** https://madesroches.github.io/micromegas/high-frequency-observability/
+**Live version:** https://micromegas.info/high-frequency-observability/
 
 Built with Reveal.js, Micromegas brand theme, and Mermaid diagrams.
 

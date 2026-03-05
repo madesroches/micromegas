@@ -4,5 +4,5 @@ This crate provides macros to help with instrumentation for the Micromegas obser
 
 ## Documentation
 
-- 📖 [Complete Documentation](https://madesroches.github.io/micromegas/)
+- 📖 [Complete Documentation](https://micromegas.info/)
 - 💻 [GitHub Repository](https://github.com/madesroches/micromegas)

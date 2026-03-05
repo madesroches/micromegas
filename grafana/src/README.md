@@ -19,4 +19,4 @@ Find out more here:
 
 [Arrow](https://arrow.apache.org/blog/2022/02/16/introducing-arrow-flight-sql/)
 
-[Docs](https://madesroches.github.io/micromegas/docs/grafana/)
+[Docs](https://micromegas.info/docs/grafana/)

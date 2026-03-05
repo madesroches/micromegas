@@ -2,7 +2,7 @@
 
 Python analytics client for https://github.com/madesroches/micromegas/
 
-📖 **[Complete Python API Documentation](https://madesroches.github.io/micromegas/docs/query-guide/python-api/)** - Comprehensive guide with all methods, examples, and advanced patterns
+📖 **[Complete Python API Documentation](https://micromegas.info/docs/query-guide/python-api/)** - Comprehensive guide with all methods, examples, and advanced patterns
 
 ## Example usage
 
@@ -85,11 +85,11 @@ if not streams.empty:
 
 ## Quick Start
 
-For a complete getting started guide, see the [Python API Documentation](https://madesroches.github.io/micromegas/docs/query-guide/python-api/).
+For a complete getting started guide, see the [Python API Documentation](https://micromegas.info/docs/query-guide/python-api/).
 
 ## Schema Reference
 
-For complete schema information including all available tables, columns, and data types, see the [Schema Reference](https://madesroches.github.io/micromegas/docs/query-guide/schema-reference/).
+For complete schema information including all available tables, columns, and data types, see the [Schema Reference](https://micromegas.info/docs/query-guide/schema-reference/).
 
 ## SQL Reference
 

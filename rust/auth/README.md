@@ -4,6 +4,6 @@ This crate provides authentication and authorization mechanisms for the Micromeg
 
 ## Documentation
 
-- 📖 [Complete Documentation](https://madesroches.github.io/micromegas/docs/)
-- 🔐 [Authentication Guide](https://madesroches.github.io/micromegas/docs/admin/authentication/)
+- 📖 [Complete Documentation](https://micromegas.info/docs/)
+- 🔐 [Authentication Guide](https://micromegas.info/docs/admin/authentication/)
 - 💻 [GitHub Repository](https://github.com/madesroches/micromegas)

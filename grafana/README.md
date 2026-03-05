@@ -17,13 +17,12 @@ npm run build
 
 For complete documentation, see:
 
-**[📚 Grafana Plugin Documentation](https://madesroches.github.io/micromegas/docs/grafana/)**
+**[📚 Grafana Plugin Documentation](https://micromegas.info/docs/grafana/)**
 
-- [Installation Guide](https://madesroches.github.io/micromegas/docs/grafana/installation/) - Install and set up the plugin
-- [Configuration Guide](https://madesroches.github.io/micromegas/docs/grafana/configuration/) - Configure connection settings
-- [Authentication Guide](https://madesroches.github.io/micromegas/docs/grafana/authentication/) - Set up API keys or OAuth 2.0
-- [Usage Guide](https://madesroches.github.io/micromegas/docs/grafana/usage/) - Query builder and SQL examples
-- [Troubleshooting Guide](https://madesroches.github.io/micromegas/docs/grafana/troubleshooting/) - Common issues and solutions
+- [Installation Guide](https://micromegas.info/docs/grafana/installation/) - Install and set up the plugin
+- [Configuration Guide](https://micromegas.info/docs/grafana/configuration/) - Configure connection settings
+- [Authentication Guide](https://micromegas.info/docs/grafana/authentication/) - Set up API keys or OAuth 2.0
+- [Usage Guide](https://micromegas.info/docs/grafana/usage/) - Query builder and SQL examples
 
 ## Development
 

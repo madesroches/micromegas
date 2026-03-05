@@ -21,5 +21,5 @@ This crate provides shared user-defined functions that work in both native and `
 
 ## Documentation
 
-- [Home Page](https://madesroches.github.io/micromegas/)
+- [Home Page](https://micromegas.info/)
 - [GitHub Repository](https://github.com/madesroches/micromegas)
