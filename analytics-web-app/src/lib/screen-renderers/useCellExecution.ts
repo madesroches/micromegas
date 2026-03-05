@@ -103,6 +103,10 @@ export function useCellExecution({
   const completeCellExecution = useCallback((name: string, state: CellState) => {
     if (state.data.length > 0) {
       cellResultsRef.current = { ...cellResultsRef.current, [name]: state.data[0] }
+    } else if (name in cellResultsRef.current) {
+      const next = { ...cellResultsRef.current }
+      delete next[name]
+      cellResultsRef.current = next
     }
     setCellStates((prev) => ({ ...prev, [name]: state }))
   }, [])
