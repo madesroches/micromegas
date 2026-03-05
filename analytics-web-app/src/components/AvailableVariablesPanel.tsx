@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import type { Table } from 'apache-arrow'
 import type { VariableValue } from '@/lib/screen-renderers/notebook-types'
 import { isMultiColumnValue } from '@/lib/screen-renderers/notebook-types'
@@ -9,6 +10,35 @@ interface AvailableVariablesPanelProps {
   additionalVariables?: { name: string; description: string }[]
   /** Upstream cell result tables (for $cell[N].col references) */
   cellResults?: Record<string, Table>
+}
+
+function CellResultEntry({ cellName, table }: { cellName: string; table: Table }) {
+  const [expanded, setExpanded] = useState(false)
+  return (
+    <div className="space-y-0.5">
+      <button
+        type="button"
+        className="flex justify-between items-center w-full py-0.5 hover:bg-app-hover rounded cursor-pointer text-left"
+        onClick={() => setExpanded(!expanded)}
+      >
+        <span className="text-theme-text-secondary font-mono font-medium">
+          <span className="text-theme-text-muted mr-1 inline-block w-3">{expanded ? '▾' : '▸'}</span>
+          {cellName}
+        </span>
+        <span className="text-theme-text-muted">
+          {table.schema.fields.length} cols, {table.numRows} rows
+        </span>
+      </button>
+      {expanded &&
+        table.schema.fields.map((field) => (
+          <div key={field.name} className="flex justify-between py-0.5 pl-5">
+            <span className="text-accent-link font-mono">
+              ${cellName}[0].{field.name}
+            </span>
+          </div>
+        ))}
+    </div>
+  )
 }
 
 export function AvailableVariablesPanel({
@@ -83,17 +113,7 @@ export function AvailableVariablesPanel({
           <div className="border-t border-theme-border my-1" />
         )}
         {cellResultEntries.map(([cellName, table]) => (
-          <div key={cellName} className="space-y-0.5">
-            <div className="flex justify-between py-0.5">
-              <span className="text-theme-text-secondary font-mono font-medium">{cellName}</span>
-              <span className="text-theme-text-muted">{table.numRows} rows</span>
-            </div>
-            {table.schema.fields.map((field) => (
-              <div key={field.name} className="flex justify-between py-0.5 pl-2">
-                <span className="text-accent-link font-mono">${cellName}[0].{field.name}</span>
-              </div>
-            ))}
-          </div>
+          <CellResultEntry key={cellName} cellName={cellName} table={table} />
         ))}
       </div>
     </div>

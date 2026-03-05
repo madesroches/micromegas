@@ -315,8 +315,10 @@ export interface CellRendererProps {
 
 ## Open Questions
 
-1. **Should available variables and cell results be scoped per-cell?** Currently both `getAvailableVariables(index)` and `getAvailableCellResults(index)` only expose upstream cells. This prevents circular references but limits flexibility. An alternative would be to expose all variables and cell results regardless of position — this would simplify the code (no index-based filtering) and allow more flexible notebook layouts, but would require a dependency graph to detect cycles. Worth reviewing if the upstream-only restriction causes friction.
+(none)
 
 ## Closed Questions
 
 1. **Should `$cell[0]` without a column be supported?** No. The `.column` suffix is always required. Even for single-column results, write `$cell[0].col_name`.
+
+2. **Should available variables and cell results be scoped per-cell?** Keep upstream-only scoping. The sequential execution model (`executeFromCell` runs cells top-to-bottom; failures block downstream) makes positional scoping the natural fit — you can't use a result that hasn't been computed yet. Exposing all variables regardless of position would require a dependency graph, topological sorting, and cycle detection, fundamentally changing the execution architecture for no demonstrated benefit. The only minor limitation is that HG siblings can't reference each other, but HG children are conceptually independent (displayed side-by-side). No user friction has been reported. The current model is simple, predictable ("top-to-bottom, like a script"), and prevents cycles structurally without runtime checks.
