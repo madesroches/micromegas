@@ -14,6 +14,9 @@ This file documents the historical progress of the Micromegas project. For curre
   * If you have existing duplicate rows, clean them up first using `delete_duplicate_blocks()`, `delete_duplicate_streams()`, `delete_duplicate_processes()` or manual deduplication
 * **Dependencies:**
   * Update DataFusion to 52.2 and remove LimitPushdown workaround (#882)
+* **Notebook Enhancements:**
+  * Add cell result row references in macros — `$cell[N].column` syntax for chaining queries (#898)
+  * Fix available variables showing orphaned URL params and unscoped variables
 * **Analytics Web App:**
   * Fix crash on first notebook cell execution when loading state has no data field
   * Add auto-refresh feature with configurable intervals and execution-aware spinner (#892)
