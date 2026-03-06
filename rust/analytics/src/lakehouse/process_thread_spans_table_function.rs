@@ -19,6 +19,7 @@ use datafusion::{
         DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
         execution_plan::{Boundedness, EmissionType},
         limit::GlobalLimitExec,
+        projection::ProjectionExec,
         stream::RecordBatchStreamAdapter,
     },
 };
@@ -309,15 +310,30 @@ impl TableProvider for ProcessThreadSpansTableProvider {
     async fn scan(
         &self,
         _state: &dyn Session,
-        _projection: Option<&Vec<usize>>,
+        projection: Option<&Vec<usize>>,
         _filters: &[Expr],
         limit: Option<usize>,
     ) -> DFResult<Arc<dyn ExecutionPlan>> {
-        let plan: Arc<dyn ExecutionPlan> = self.execution_plan.clone();
-        if let Some(fetch) = limit {
-            Ok(Arc::new(GlobalLimitExec::new(plan, 0, Some(fetch))))
-        } else {
-            Ok(plan)
+        let mut plan: Arc<dyn ExecutionPlan> = self.execution_plan.clone();
+        if let Some(projection) = projection {
+            let schema = plan.schema();
+            let projected_exprs: Vec<(Arc<dyn datafusion::physical_expr::PhysicalExpr>, String)> =
+                projection
+                    .iter()
+                    .map(|&i| {
+                        let name = schema.field(i).name().clone();
+                        let expr = Arc::new(datafusion::physical_expr::expressions::Column::new(
+                            &name, i,
+                        ))
+                            as Arc<dyn datafusion::physical_expr::PhysicalExpr>;
+                        (expr, name)
+                    })
+                    .collect();
+            plan = Arc::new(ProjectionExec::try_new(projected_exprs, plan)?);
         }
+        if let Some(fetch) = limit {
+            plan = Arc::new(GlobalLimitExec::new(plan, 0, Some(fetch)));
+        }
+        Ok(plan)
     }
 }
