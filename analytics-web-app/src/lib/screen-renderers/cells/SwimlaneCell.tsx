@@ -257,7 +257,7 @@ function Swimlane({ lanes, timeRange, onTimeRangeSelect }: SwimlaneProps) {
   }
 
   return (
-    <div className="h-full flex flex-col">
+    <div className="flex-1 min-h-0 flex flex-col">
       {/* Scrollable lanes area */}
       <div className="flex-1 overflow-auto min-h-0">
         <div className="divide-y divide-theme-border/50">
@@ -384,7 +384,7 @@ export function SwimlaneCell({
   }
 
   return (
-    <div className="h-full">
+    <div className="flex-1 min-h-0">
       <Swimlane
         lanes={lanes}
         timeRange={{ from: timeRangeMs.begin, to: timeRangeMs.end }}

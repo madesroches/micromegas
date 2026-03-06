@@ -459,7 +459,7 @@ export const CellContainer = forwardRef<HTMLDivElement, CellContainerProps>(func
 
       {/* Content */}
       {!collapsed && (
-        <div className={isGroup ? '' : 'px-1 pb-1'} style={contentStyle}>
+        <div className={`${isGroup ? '' : 'px-1 pb-1'} flex flex-col`} style={contentStyle}>
           {renderContent()}
         </div>
       )}
