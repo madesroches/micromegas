@@ -20,6 +20,8 @@ This file documents the historical progress of the Micromegas project. For curre
   * Add cell result row references in macros — `$cell[N].column` syntax for chaining queries (#898)
   * Fix available variables showing orphaned URL params and unscoped variables
 * **Analytics Web App:**
+  * Fix page-level and swimlane cell scrollbar issues with flex layout
+  * Fix swimlane TimeAxis tick alignment to prevent horizontal overflow
   * Add Ctrl+S keyboard shortcut to save screens
   * Fix crash on first notebook cell execution when loading state has no data field
   * Add auto-refresh feature with configurable intervals and execution-aware spinner (#892)
