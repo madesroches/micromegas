@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import { useLocation } from 'react-router-dom'
 import { useAuth } from '@/lib/auth'
 import { getConfig } from '@/lib/config'
+import { navigateTo } from '@/lib/navigation'
 import { Card, CardContent } from '@/components/ui/card'
 import { AlertCircle } from 'lucide-react'
 
@@ -20,7 +21,7 @@ export function AuthGuard({ children, requireAdmin }: AuthGuardProps) {
       const returnUrl = encodeURIComponent(pathname)
       // Use runtime base path for redirect to login page
       const { basePath } = getConfig()
-      window.location.href = `${basePath}/login?return_url=${returnUrl}`
+      navigateTo(`${basePath}/login?return_url=${returnUrl}`)
     }
   }, [status, pathname])
 

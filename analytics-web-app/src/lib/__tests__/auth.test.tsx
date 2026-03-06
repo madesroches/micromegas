@@ -5,6 +5,12 @@ import { AuthProvider, useAuth } from '../auth'
 // Mock fetch globally
 global.fetch = jest.fn()
 
+// Mock navigation module (jsdom 26 freezes window.location methods)
+const mockNavigateTo = jest.fn()
+jest.mock('../navigation', () => ({
+  navigateTo: (...args: unknown[]) => mockNavigateTo(...args),
+}))
+
 describe('AuthProvider', () => {
   beforeEach(() => {
     jest.clearAllMocks()
@@ -292,7 +298,9 @@ describe('useAuth hook', () => {
     })
 
     await waitFor(() => {
-      expect(window.location.href).toContain('/auth/login')
+      expect(mockNavigateTo).toHaveBeenCalledWith(
+        expect.stringContaining('/auth/login')
+      )
     })
   })
 

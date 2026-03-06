@@ -3,6 +3,7 @@ import { useAuth } from '@/lib/auth'
 import { RefreshCw, ChevronDown, LogOut, ZoomIn, ZoomOut } from 'lucide-react'
 import { AppLink } from '@/components/AppLink'
 import { getConfig } from '@/lib/config'
+import { navigateTo } from '@/lib/navigation'
 import { zoomTimeRange } from '@/lib/time-range'
 import { TimeRangePicker } from './TimeRangePicker'
 import { PivotButton } from './PivotButton'
@@ -34,7 +35,7 @@ export function Header({ onRefresh, timeRangeControl, processId, refreshInterval
     try {
       await logout()
       // Use full base path for raw browser navigation (not React Router)
-      window.location.href = `${getConfig().basePath}/login`
+      navigateTo(`${getConfig().basePath}/login`)
     } catch (error) {
       console.error('Logout failed:', error)
       setIsLoggingOut(false)

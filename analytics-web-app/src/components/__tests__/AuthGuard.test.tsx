@@ -5,38 +5,16 @@ import { AuthProvider } from '@/lib/auth'
 // Mock fetch globally
 global.fetch = jest.fn()
 
-// Mock window.location
-const originalLocation = window.location
-const mockLocationHref = jest.fn()
-
-beforeAll(() => {
-  delete (window as unknown as { location?: Location }).location
-  const mockLocation = { ...originalLocation, href: '' }
-  Object.defineProperty(window, 'location', {
-    value: mockLocation,
-    writable: true,
-    configurable: true,
-  })
-  Object.defineProperty(window.location, 'href', {
-    set: mockLocationHref,
-    get: () => '',
-    configurable: true,
-  })
-})
-
-afterAll(() => {
-  Object.defineProperty(window, 'location', {
-    value: originalLocation,
-    writable: true,
-    configurable: true,
-  })
-})
+// Mock navigation module (jsdom 26 freezes window.location methods)
+const mockNavigateTo = jest.fn()
+jest.mock('@/lib/navigation', () => ({
+  navigateTo: (...args: unknown[]) => mockNavigateTo(...args),
+}))
 
 describe('AuthGuard', () => {
   beforeEach(() => {
     jest.clearAllMocks()
     ;(global.fetch as jest.Mock).mockReset()
-    mockLocationHref.mockClear()
   })
 
   afterEach(() => {
@@ -102,7 +80,7 @@ describe('AuthGuard', () => {
 
     await waitFor(() => {
       // With empty basePath from mocked config, login URL is relative
-      expect(mockLocationHref).toHaveBeenCalledWith(
+      expect(mockNavigateTo).toHaveBeenCalledWith(
         '/login?return_url=%2F'
       )
     })

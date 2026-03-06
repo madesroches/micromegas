@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom'
 import { usePageTitle } from '@/hooks/usePageTitle'
 import { useAuth } from '@/lib/auth'
 import { getConfig } from '@/lib/config'
+import { navigateTo } from '@/lib/navigation'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { AlertCircle, LogIn } from 'lucide-react'
@@ -27,7 +28,7 @@ function LoginContent() {
   useEffect(() => {
     // If already authenticated, redirect to return URL
     if (status === 'authenticated') {
-      window.location.href = returnUrl
+      navigateTo(returnUrl)
     }
   }, [status, returnUrl])
 
