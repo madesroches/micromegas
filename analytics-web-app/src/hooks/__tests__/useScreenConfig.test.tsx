@@ -178,13 +178,11 @@ describe('useScreenConfig', () => {
 
       expect(result.current.config.search).toBe('initial')
 
-      // Simulate browser back/forward by changing window.location and firing popstate
+      // Simulate browser back/forward by reconfiguring jsdom URL and firing popstate
       await act(async () => {
-        // Mock window.location.search for popstate handler
-        Object.defineProperty(window, 'location', {
-          value: { search: '?search=from-history' },
-          writable: true,
-        })
+        // Use jsdom's href setter to change URL (triggers navigation internally)
+        // We need to use history.pushState to change URL without navigation
+        window.history.pushState({}, '', '?search=from-history')
         window.dispatchEvent(new PopStateEvent('popstate'))
       })
 

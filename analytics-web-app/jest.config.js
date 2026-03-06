@@ -1,6 +1,9 @@
 /** @type {import('jest').Config} */
 export default {
   testEnvironment: 'jsdom',
+  testEnvironmentOptions: {
+    url: 'http://localhost:3000',
+  },
   setupFilesAfterEnv: ['<rootDir>/src/test-setup.ts'],
   moduleNameMapper: {
     '^@/(.*)$': '<rootDir>/src/$1',

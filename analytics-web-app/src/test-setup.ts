@@ -54,24 +54,5 @@ jest.mock('react-router-dom', () => ({
   useSearchParams: jest.fn(() => [new URLSearchParams(), jest.fn()]),
 }))
 
-// Mock window.location
-const locationMock: Location = {
-  href: 'http://localhost:3000',
-  origin: 'http://localhost:3000',
-  protocol: 'http:',
-  host: 'localhost:3000',
-  hostname: 'localhost',
-  port: '3000',
-  pathname: '/',
-  search: '',
-  hash: '',
-  assign: jest.fn(),
-  reload: jest.fn(),
-  replace: jest.fn(),
-  ancestorOrigins: { length: 0, contains: () => false, item: () => null, [Symbol.iterator]: function* () {} },
-  toString: () => 'http://localhost:3000',
-}
-
-// @ts-expect-error - Override readonly property for testing
-delete window.location
-window.location = locationMock
+// window.location is configured via jest testEnvironmentOptions.url = 'http://localhost:3000'
+// In jsdom 26+, window.location cannot be replaced. Use jest.spyOn in individual tests.

@@ -1,6 +1,7 @@
 /* eslint-disable react-refresh/only-export-components */
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react'
 import { getAuthBase } from './api'
+import { navigateTo } from './navigation'
 
 export interface User {
   sub: string
@@ -90,7 +91,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const login = useCallback((returnUrl?: string) => {
     const currentPath = returnUrl || window.location.pathname
     const loginUrl = `${getAuthBase()}/auth/login?return_url=${encodeURIComponent(currentPath)}`
-    window.location.href = loginUrl
+    navigateTo(loginUrl)
   }, [])
 
   const logout = useCallback(async () => {
