@@ -33,6 +33,8 @@ This file documents the historical progress of the Micromegas project. For curre
   * Fix minimatch ReDoS vulnerabilities across JS packages (Dependabot alerts #116–#123)
   * Bump serialize-javascript to 7.0.3 and OpenTelemetry SDK to 1.40.0 (Dependabot security alerts)
   * Bump authlib to 1.6.9, dompurify to 3.2.7+, and immutable to 5.1.5 (Dependabot security alerts)
+  * Bump dompurify to 3.3.2, jest to 30, and @types/jest to 30 (Dependabot security alerts)
+  * Migrate window.location.href assignments to navigateTo() wrapper for jsdom 26 compatibility
 * **Analytics:**
   * Add `process_thread_spans(process_id)` table function for cross-thread span analysis
   * Extract `get_process_thread_list` as shared utility for process stream discovery
