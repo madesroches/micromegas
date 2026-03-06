@@ -17,7 +17,6 @@ No new materialized views are created. The function reuses existing per-stream `
 | Purpose | File | Lines |
 |---------|------|-------|
 | Find CPU streams for a process | `perfetto_trace_execution_plan.rs` | `get_process_thread_list` (316-371) |
-| Build per-stream SQL query | `perfetto_trace_execution_plan.rs` | `format_thread_spans_query` (374-387) |
 | Parallel per-stream query + streaming | `perfetto_trace_execution_plan.rs` | `generate_thread_spans_with_writer` (400-471) |
 | Table function → execution plan pattern | `perfetto_trace_table_function.rs` | Full file |
 | Execution plan → TableProvider wrapper | `perfetto_trace_execution_plan.rs` | `PerfettoTraceTableProvider` (563-606) |
@@ -33,6 +32,8 @@ No new materialized views are created. The function reuses existing per-stream `
 SELECT stream_id, thread_name, begin, "end", duration, name, depth, ...
 FROM process_thread_spans('process-uuid')
 ```
+
+The time range is provided out of band via the session's `query_range`, following the same pattern as `ViewInstanceTableFunction`. The `query_range` flows from the FlightSQL service through `register_lakehouse_functions` into the table function at construction time. The execution plan passes it to the inner `make_session_context` call, which is required because `ThreadSpansView::jit_update` bails if `query_range` is `None`.
 
 ### Output schema
 
@@ -60,7 +61,7 @@ line:        UInt32
 process_thread_spans('pid')
         |
         v
-ProcessThreadSpansTableFunction::call()     -- parses process_id literal
+ProcessThreadSpansTableFunction::call()     -- parses process_id; has query_range from constructor
         |
         v
 ProcessThreadSpansTableProvider              -- wraps execution plan
@@ -69,14 +70,14 @@ ProcessThreadSpansTableProvider              -- wraps execution plan
 ProcessThreadSpansExecutionPlan::execute()   -- async stream
         |
         v
-make_session_context()                       -- full query context
+make_session_context(query_range)            -- full query context with time range
         |
         v
 get_process_thread_list()                    -- find CPU streams from blocks table
         |
         v
 for each (stream_id, thread_name):           -- parallel with buffered()
-    ctx.sql("SELECT ... FROM view_instance('thread_spans', stream_id)")
+    ctx.sql("SELECT * FROM view_instance('thread_spans', stream_id)")
         |
         v
     augment_batch(batch, stream_id, thread_name)  -- prepend identity columns
@@ -112,7 +113,9 @@ fn augment_batch(
 
 ### Shared utilities
 
-`get_process_thread_list` and `format_thread_spans_query` are currently private functions in `perfetto_trace_execution_plan.rs`. They need to be made `pub(crate)` so the new module can reuse them.
+`get_process_thread_list` is currently a private function in `perfetto_trace_execution_plan.rs`. It needs to be made `pub(crate)` so the new module can reuse it.
+
+`format_thread_spans_query` is **not** reused — it selects only 6 columns (`begin, end, name, filename, target, line`) for Perfetto rendering, but the output schema requires all 11 span columns. The new module uses `SELECT * FROM view_instance('thread_spans', stream_id)` instead.
 
 ## Implementation Steps
 
@@ -120,7 +123,6 @@ fn augment_batch(
 
 In `perfetto_trace_execution_plan.rs`, change visibility of:
 - `get_process_thread_list` → `pub(crate)`
-- `format_thread_spans_query` → `pub(crate)`
 
 ### Step 2: Create the table function module
 
@@ -129,16 +131,16 @@ New file: `rust/analytics/src/lakehouse/process_thread_spans_table_function.rs`
 Contains three types:
 
 **`ProcessThreadSpansTableFunction`** (implements `TableFunctionImpl`)
-- Holds: `lakehouse`, `view_factory`, `part_provider` (same fields as `PerfettoTraceTableFunction`)
+- Holds: `lakehouse`, `view_factory`, `part_provider`, `query_range` (same fields as `ViewInstanceTableFunction`)
 - `call(exprs)`: parses single `process_id` string argument, constructs `ProcessThreadSpansExecutionPlan`, wraps in `ProcessThreadSpansTableProvider`
 - Defines `output_schema()`: builds schema with stream_id + thread_name + `get_spans_schema()` fields
 
 **`ProcessThreadSpansExecutionPlan`** (implements `ExecutionPlan`)
-- Holds: `schema`, `process_id`, `lakehouse`, `view_factory`, `part_provider`, `properties`
+- Holds: `schema`, `process_id`, `query_range`, `lakehouse`, `view_factory`, `part_provider`, `properties`
 - `execute()`: returns a `RecordBatchStreamAdapter` wrapping an async stream that:
-  1. Calls `make_session_context` (same as perfetto does at line 242-252)
+  1. Calls `make_session_context` with `query_range` (same as perfetto does at line 242-252, using `NoOpSessionConfigurator`)
   2. Calls `get_process_thread_list` to discover CPU streams
-  3. For each stream, builds SQL via `format_thread_spans_query`
+  3. For each stream, builds SQL: `SELECT * FROM view_instance('thread_spans', '{stream_id}')`
   4. Runs queries in parallel using `stream::iter().map().buffered(max_concurrent)` (same pattern as perfetto line 422-436)
   5. For each stream's result batches, calls `augment_batch` to prepend stream identity
   6. Yields augmented batches
@@ -156,6 +158,7 @@ ctx.register_udtf(
         lakehouse.clone(),
         view_factory.clone(),
         part_provider.clone(),
+        query_range,
     )),
 );
 ```
@@ -177,7 +180,7 @@ Add `process_thread_spans` entry to `mkdocs/docs/query-guide/functions-reference
 | File | Change |
 |------|--------|
 | `rust/analytics/src/lakehouse/process_thread_spans_table_function.rs` | **New** — table function, execution plan, table provider |
-| `rust/analytics/src/lakehouse/perfetto_trace_execution_plan.rs` | Make `get_process_thread_list` and `format_thread_spans_query` `pub(crate)` |
+| `rust/analytics/src/lakehouse/perfetto_trace_execution_plan.rs` | Make `get_process_thread_list` `pub(crate)` |
 | `rust/analytics/src/lakehouse/query.rs` | Register `process_thread_spans` UDTF in `register_lakehouse_functions` |
 | `rust/analytics/src/lakehouse/mod.rs` | Add `pub mod process_thread_spans_table_function;` |
 | `mkdocs/docs/query-guide/functions-reference.md` | Document the new table function |
@@ -188,12 +191,12 @@ Add `process_thread_spans` entry to `mkdocs/docs/query-guide/functions-reference
 **Table function vs. materialized view (like async_events)**:
 The materialized view approach would create new per-process partitions with stream identity baked in. This adds storage cost, partition management complexity, and the tricky problem of grouping contiguous blocks per stream for correct call trees. The table function approach reuses existing per-stream materialization with zero storage overhead. The tradeoff is slightly higher query latency since streams are discovered and queried at runtime. For notebook use cases where this runs once and results are cached in the WASM engine, this is acceptable.
 
-**Sharing functions from perfetto module vs. duplicating**:
-Making `get_process_thread_list` and `format_thread_spans_query` `pub(crate)` is cleaner than duplicating. These functions are general-purpose (find CPU streams, build span query) and not Perfetto-specific. If more consumers appear, they could move to a shared module, but `pub(crate)` is sufficient for now.
+**Sharing `get_process_thread_list` from perfetto module vs. duplicating**:
+Making `get_process_thread_list` `pub(crate)` is cleaner than duplicating. This function is general-purpose (find CPU streams for a process) and not Perfetto-specific. `format_thread_spans_query` is not reused because it selects only the 6 columns needed for Perfetto rendering, not the full span schema. If more consumers appear, shared functions could move to a dedicated module, but `pub(crate)` is sufficient for now.
 
 ## Documentation
 
-- `mkdocs/docs/query-guide/functions-reference.md` — add `process_thread_spans(process_id)` entry
+- `mkdocs/docs/query-guide/functions-reference.md` — add `process_thread_spans(process_id)` entry (note: time range is provided out of band via the query's begin/end parameters)
 - `mkdocs/docs/query-guide/schema-reference.md` — note under `thread_spans` that process-level access is available via `process_thread_spans()`
 
 ## Testing Strategy
