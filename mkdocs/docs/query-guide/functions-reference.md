@@ -145,6 +145,55 @@ ORDER BY chunk_id;
 
 **Note:** The returned binary data is in Perfetto protobuf format and can be loaded directly into the [Perfetto UI](https://ui.perfetto.dev/) for visualization and analysis.
 
+#### `process_thread_spans(process_id)`
+
+Returns thread spans from all CPU streams of a process, with `stream_id` and `thread_name` columns prepended. Enables cross-thread span analysis without requiring per-stream queries.
+
+**Syntax:**
+```sql
+SELECT stream_id, thread_name, name, duration, ...
+FROM process_thread_spans('process-uuid')
+```
+
+**Parameters:**
+
+- `process_id` (`Utf8`): Process UUID to query
+
+**Note:** The time range is provided out of band via the query's begin/end parameters, not as function arguments.
+
+**Returns:** Same schema as `thread_spans` with two additional leading columns:
+
+| Column | Type | Description |
+|--------|------|-------------|
+| stream_id | Dictionary(Int16, Utf8) | Stream identifier |
+| thread_name | Dictionary(Int16, Utf8) | Thread display name |
+| id | Int64 | Span identifier |
+| parent | Int64 | Parent span identifier |
+| depth | UInt32 | Nesting depth |
+| hash | UInt32 | Span hash |
+| begin | Timestamp(Nanosecond) | Span start time |
+| end | Timestamp(Nanosecond) | Span end time |
+| duration | Int64 | Duration in nanoseconds |
+| name | Dictionary(Int16, Utf8) | Span name (function) |
+| target | Dictionary(Int16, Utf8) | Module/target |
+| filename | Dictionary(Int16, Utf8) | Source file |
+| line | UInt32 | Line number |
+
+**Examples:**
+```sql
+-- Get all spans across threads for a process
+SELECT stream_id, thread_name, name, duration
+FROM process_thread_spans('process-uuid-123')
+ORDER BY begin;
+
+-- Analyze frame time per thread
+SELECT thread_name, name, AVG(duration) / 1000000.0 as avg_ms
+FROM process_thread_spans('my-process-id')
+WHERE depth = 0
+GROUP BY thread_name, name
+ORDER BY avg_ms DESC;
+```
+
 ### Scalar Functions
 
 #### JSON/JSONB Functions
