@@ -357,6 +357,7 @@ export function NotebookRenderer({
   const [selectedCellIndex, setSelectedCellIndex] = useState<number | null>(null)
   const [selectedChildName, setSelectedChildName] = useState<string | null>(null)
   const [showAddCellModal, setShowAddCellModal] = useState(false)
+  const [insertAtIndex, setInsertAtIndex] = useState<number | null>(null)
   const [deletingCellIndex, setDeletingCellIndex] = useState<number | null>(null)
   const [showSource, setShowSource] = useState(false)
   const handleCloseSource = useCallback(() => setShowSource(false), [])
@@ -389,6 +390,7 @@ export function NotebookRenderer({
   // Cell management
   const {
     handleAddCell,
+    handleInsertCell,
     handleDeleteCell,
     handleDuplicateCell,
     updateCell,
@@ -507,6 +509,8 @@ export function NotebookRenderer({
                 canRun={true}
                 onRun={firstChildName ? () => executeCellByName(firstChildName) : undefined}
                 onRunFromHere={firstChildName ? () => executeFromCellByName(firstChildName) : undefined}
+                onInsertAbove={() => { setInsertAtIndex(index); setShowAddCellModal(true) }}
+                onInsertBelow={() => { setInsertAtIndex(index + 1); setShowAddCellModal(true) }}
                 onDuplicate={() => handleDuplicateCell(index)}
                 onDelete={() => setDeletingCellIndex(index)}
                 height={cell.layout.height}
@@ -629,6 +633,8 @@ export function NotebookRenderer({
                   }
                 : undefined
             }
+            onInsertAbove={() => { setInsertAtIndex(index); setShowAddCellModal(true) }}
+            onInsertBelow={() => { setInsertAtIndex(index + 1); setShowAddCellModal(true) }}
             onDuplicate={() => handleDuplicateCell(index)}
             onDelete={() => setDeletingCellIndex(index)}
             statusText={statusText}
@@ -753,7 +759,19 @@ export function NotebookRenderer({
       )}
 
       {/* Modals */}
-      <AddCellModal isOpen={showAddCellModal} onClose={() => setShowAddCellModal(false)} onAdd={handleAddCell} />
+      <AddCellModal
+        isOpen={showAddCellModal}
+        onClose={() => { setShowAddCellModal(false); setInsertAtIndex(null) }}
+        onAdd={(type) => {
+          if (insertAtIndex !== null) {
+            handleInsertCell(type, insertAtIndex)
+            setShowAddCellModal(false)
+            setInsertAtIndex(null)
+          } else {
+            handleAddCell(type)
+          }
+        }}
+      />
       <DeleteCellModal
         isOpen={deletingCellIndex !== null}
         cellName={deletingCellIndex !== null ? cells[deletingCellIndex]?.name || '' : ''}

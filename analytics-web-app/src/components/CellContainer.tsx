@@ -1,6 +1,6 @@
 import { ReactNode, useRef, useEffect, forwardRef, HTMLAttributes, useCallback } from 'react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
-import { ChevronDown, ChevronRight, Copy, Download, Pencil, Play, RotateCcw, MoreVertical, Trash2, GripVertical, Zap } from 'lucide-react'
+import { ChevronDown, ChevronRight, Copy, Download, Pencil, Play, Plus, RotateCcw, MoreVertical, Trash2, GripVertical, Zap } from 'lucide-react'
 import { CellType, CellStatus, getCellTypeMetadata } from '@/lib/screen-renderers/cell-registry'
 import { Button } from '@/components/ui/button'
 import { ResizeHandle } from '@/components/ResizeHandle'
@@ -53,6 +53,10 @@ interface CellContainerProps extends Omit<HTMLAttributes<HTMLDivElement>, 'child
   canRun?: boolean
   /** Download cell data as CSV */
   onDownloadCsv?: () => void
+  /** Insert a new cell above this one */
+  onInsertAbove?: () => void
+  /** Insert a new cell below this one */
+  onInsertBelow?: () => void
   /** Child cell names (for collapsed HG groups to show inline) */
   childNames?: string[]
 }
@@ -72,6 +76,8 @@ export const CellContainer = forwardRef<HTMLDivElement, CellContainerProps>(func
     autoRunFromHere,
     onToggleAutoRunFromHere,
     onDownloadCsv,
+    onInsertAbove,
+    onInsertBelow,
     onDuplicate,
     onDelete,
     statusText,
@@ -239,6 +245,27 @@ export const CellContainer = forwardRef<HTMLDivElement, CellContainerProps>(func
               >
                 <Download className="w-4 h-4" />
                 Download CSV
+              </DropdownMenu.Item>
+            )}
+            {(onInsertAbove || onInsertBelow) && (
+              <DropdownMenu.Separator className="h-px bg-theme-border my-1" />
+            )}
+            {onInsertAbove && (
+              <DropdownMenu.Item
+                className="flex items-center gap-2 px-3 py-2 text-sm text-theme-text-primary hover:bg-theme-border/50 cursor-pointer outline-none"
+                onSelect={() => onInsertAbove()}
+              >
+                <Plus className="w-4 h-4" />
+                Insert cell above
+              </DropdownMenu.Item>
+            )}
+            {onInsertBelow && (
+              <DropdownMenu.Item
+                className="flex items-center gap-2 px-3 py-2 text-sm text-theme-text-primary hover:bg-theme-border/50 cursor-pointer outline-none"
+                onSelect={() => onInsertBelow()}
+              >
+                <Plus className="w-4 h-4" />
+                Insert cell below
               </DropdownMenu.Item>
             )}
             {onDuplicate && (

@@ -27,6 +27,7 @@ interface UseCellManagerParams {
 
 interface UseCellManagerResult {
   handleAddCell: (type: CellType) => void
+  handleInsertCell: (type: CellType, atIndex: number) => void
   handleDeleteCell: (index: number) => void
   handleDuplicateCell: (index: number) => void
   updateCell: (index: number, updates: Partial<CellConfig>) => void
@@ -71,6 +72,17 @@ export function useCellManager({
       setSelectedCellIndex(newCells.length - 1)
     },
     [notebookConfig, cells, existingNames, onConfigChange, setShowAddCellModal, setSelectedCellIndex, defaultDataSource]
+  )
+
+  const handleInsertCell = useCallback(
+    (type: CellType, atIndex: number) => {
+      const newCell = createDefaultCell(type, existingNames, defaultDataSource)
+      const newCells = [...cells.slice(0, atIndex), newCell, ...cells.slice(atIndex)]
+      const newConfig = { ...notebookConfig, cells: newCells }
+      onConfigChange(newConfig)
+      setSelectedCellIndex(atIndex)
+    },
+    [notebookConfig, cells, existingNames, onConfigChange, setSelectedCellIndex, defaultDataSource]
   )
 
   const handleDeleteCell = useCallback(
@@ -234,6 +246,7 @@ export function useCellManager({
 
   return {
     handleAddCell,
+    handleInsertCell,
     handleDeleteCell,
     handleDuplicateCell,
     updateCell,
