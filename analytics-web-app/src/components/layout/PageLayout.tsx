@@ -33,11 +33,11 @@ interface PageLayoutProps {
 
 function PageLayoutContent({ children, onRefresh, rightPanel, timeRangeControl, processId, refreshIntervalMs, onRefreshIntervalChange, isExecuting }: PageLayoutProps) {
   return (
-    <div className="min-h-screen bg-app-bg text-theme-text-primary">
+    <div className="h-screen bg-app-bg text-theme-text-primary flex flex-col">
       <Header onRefresh={onRefresh} timeRangeControl={timeRangeControl} processId={processId} refreshIntervalMs={refreshIntervalMs} onRefreshIntervalChange={onRefreshIntervalChange} isExecuting={isExecuting} />
-      <div className="flex h-[calc(100vh-57px)]">
+      <div className="flex flex-1 min-h-0">
         <Sidebar />
-        <main className="flex-1 overflow-auto">{children}</main>
+        <main className="flex-1 overflow-auto flex flex-col">{children}</main>
         {rightPanel}
       </div>
     </div>

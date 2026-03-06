@@ -123,10 +123,12 @@ function TimeAxis({ from, to }: { from: number; to: number }) {
     <div className="relative h-full">
       {ticks.map((time, i) => {
         const percent = range === 0 ? 50 : ((time - from) / range) * 100
+        const isFirst = i === 0
+        const isLast = i === ticks.length - 1
         return (
           <span
             key={i}
-            className="absolute -translate-x-1/2"
+            className={`absolute ${isFirst ? '' : isLast ? '-translate-x-full' : '-translate-x-1/2'}`}
             style={{ left: `${percent}%` }}
           >
             {TIME_AXIS_FORMAT.format(time)}
@@ -255,7 +257,7 @@ function Swimlane({ lanes, timeRange, onTimeRangeSelect }: SwimlaneProps) {
   }
 
   return (
-    <div className="h-full flex flex-col">
+    <div className="flex-1 min-h-0 flex flex-col">
       {/* Scrollable lanes area */}
       <div className="flex-1 overflow-auto min-h-0">
         <div className="divide-y divide-theme-border/50">
@@ -382,7 +384,7 @@ export function SwimlaneCell({
   }
 
   return (
-    <div className="h-full">
+    <div className="flex-1 min-h-0">
       <Swimlane
         lanes={lanes}
         timeRange={{ from: timeRangeMs.begin, to: timeRangeMs.end }}
