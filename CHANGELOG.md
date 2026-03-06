@@ -15,10 +15,12 @@ This file documents the historical progress of the Micromegas project. For curre
 * **Dependencies:**
   * Update DataFusion to 52.2 and remove LimitPushdown workaround (#882)
 * **Notebook Enhancements:**
+  * Add Insert cell above/below options to cell context menu
   * Add Download CSV menu option for notebook cells (#900)
   * Add cell result row references in macros — `$cell[N].column` syntax for chaining queries (#898)
   * Fix available variables showing orphaned URL params and unscoped variables
 * **Analytics Web App:**
+  * Add Ctrl+S keyboard shortcut to save screens
   * Fix crash on first notebook cell execution when loading state has no data field
   * Add auto-refresh feature with configurable intervals and execution-aware spinner (#892)
   * Add SQL editor improvements: horizontal scrolling, format button, and Ctrl+Enter to run
