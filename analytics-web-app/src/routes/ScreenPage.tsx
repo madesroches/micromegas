@@ -274,6 +274,20 @@ function ScreenPageContent() {
     [rawTimeRange]
   )
 
+  // Ctrl+S keyboard shortcut to save
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+        e.preventDefault()
+        if (screen && hasUnsavedChanges && !isSaving) {
+          handleTitleBarSave()
+        }
+      }
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [screen, hasUnsavedChanges, isSaving, handleTitleBarSave])
+
   // Loading state - also check if loaded screen matches URL
   const isLoadingScreen = isLoading || (!isNew && screen?.name !== name)
   if (isLoadingScreen) {
