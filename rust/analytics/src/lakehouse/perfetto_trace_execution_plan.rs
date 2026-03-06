@@ -1,6 +1,7 @@
 use super::{
     lakehouse_context::LakehouseContext, partition_cache::QueryPartitionProvider,
-    session_configurator::NoOpSessionConfigurator, view_factory::ViewFactory,
+    process_streams::get_process_thread_list, session_configurator::NoOpSessionConfigurator,
+    view_factory::ViewFactory,
 };
 use crate::dfext::{
     string_column_accessor::string_column_by_name, typed_column::typed_column_by_name,
@@ -310,8 +311,6 @@ async fn get_process_exe(
     let exes = string_column_by_name(&batches[0], "exe")?;
     Ok(exes.value(0)?.to_owned())
 }
-
-use super::process_streams::get_process_thread_list;
 
 /// Format the SQL query for thread spans
 fn format_thread_spans_query(stream_id: &str, time_range: &TimeRange) -> String {
