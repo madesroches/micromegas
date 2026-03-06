@@ -334,6 +334,8 @@ WHERE parent = 42  -- specific parent span
 ORDER BY begin;
 ```
 
+**Process-level access:** Use [`process_thread_spans(process_id)`](functions-reference.md#process_thread_spansprocess_id) to query thread spans across all CPU streams of a process with `stream_id` and `thread_name` columns prepended.
+
 ### `async_events`
 
 Asynchronous span events for tracking async operations with call hierarchy depth information.

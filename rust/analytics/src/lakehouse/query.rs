@@ -5,8 +5,9 @@ use super::{
     materialize_partitions_table_function::MaterializePartitionsTableFunction,
     partition::Partition, partition_cache::QueryPartitionProvider,
     partitioned_table_provider::PartitionedTableProvider,
-    perfetto_trace_table_function::PerfettoTraceTableFunction, reader_factory::ReaderFactory,
-    retire_partition_by_file_udf::make_retire_partition_by_file_udf,
+    perfetto_trace_table_function::PerfettoTraceTableFunction,
+    process_thread_spans_table_function::ProcessThreadSpansTableFunction,
+    reader_factory::ReaderFactory, retire_partition_by_file_udf::make_retire_partition_by_file_udf,
     retire_partition_by_metadata_udf::make_retire_partition_by_metadata_udf,
     retire_partitions_table_function::RetirePartitionsTableFunction,
     session_configurator::SessionConfigurator, view::View, view_factory::ViewFactory,
@@ -132,6 +133,15 @@ pub fn register_lakehouse_functions(
         Arc::new(MaterializePartitionsTableFunction::new(
             lakehouse.clone(),
             view_factory.clone(),
+        )),
+    );
+    ctx.register_udtf(
+        "process_thread_spans",
+        Arc::new(ProcessThreadSpansTableFunction::new(
+            lakehouse.clone(),
+            view_factory.clone(),
+            part_provider.clone(),
+            query_range,
         )),
     );
     ctx.register_udf(
