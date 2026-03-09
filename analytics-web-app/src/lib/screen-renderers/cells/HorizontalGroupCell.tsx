@@ -122,10 +122,13 @@ function HgChildPane({
   onSelect, onRun, onDownloadCsv, onDeleteChild,
   dragHandleProps, isDragging, setNodeRef, style, showDivider, onChildRef,
 }: HgChildPaneProps) {
+  const setNodeRefStable = useRef(setNodeRef)
+  setNodeRefStable.current = setNodeRef
+
   const combinedRef = useCallback((el: HTMLElement | null) => {
-    setNodeRef(el)
+    setNodeRefStable.current(el)
     onChildRef?.(child.name, el)
-  }, [setNodeRef, onChildRef, child.name])
+  }, [onChildRef, child.name])
   const fadeClass = useFadeOnIdle(state.status)
 
   const meta = getCellTypeMetadata(child.type)

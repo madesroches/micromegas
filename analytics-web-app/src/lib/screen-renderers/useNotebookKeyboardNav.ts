@@ -50,16 +50,6 @@ export function useNotebookKeyboardNav({
     [cells],
   )
 
-  const scrollToTarget = useCallback(
-    (target: NavTarget) => {
-      const name = target.childName ?? cells[target.cellIndex]?.name
-      if (!name) return
-      const el = refMap.current.get(name)
-      el?.scrollIntoView?.({ behavior: 'smooth', block: 'nearest' })
-    },
-    [cells],
-  )
-
   // Find current position in navTargets, handling the HG-group-selected case
   const findCurrentIndex = useCallback((): number => {
     if (selectedCellIndex === null) return -1
@@ -113,12 +103,11 @@ export function useNotebookKeyboardNav({
       const target = navTargets[newIndex]
       setSelectedCellIndex(target.cellIndex)
       setSelectedChildName(target.childName)
-      scrollToTarget(target)
     }
 
     document.addEventListener('keydown', handler)
     return () => document.removeEventListener('keydown', handler)
-  }, [disabled, navTargets, findCurrentIndex, setSelectedCellIndex, setSelectedChildName, scrollToTarget])
+  }, [disabled, navTargets, findCurrentIndex, setSelectedCellIndex, setSelectedChildName])
 
   // Scroll into view on any selection change (benefits mouse selection too)
   useEffect(() => {
