@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useEffect } from 'react'
+import { useState, useCallback, useRef, useMemo, useEffect } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Plus, X, Trash2 } from 'lucide-react'
 import {
@@ -91,6 +91,8 @@ function DeleteCellModal({ isOpen, cellName, onClose, onConfirm }: DeleteCellMod
 
 interface SortableCellProps {
   id: string
+  /** Optional extra ref callback to invoke alongside dnd-kit's setNodeRef */
+  onNodeRef?: (name: string, el: HTMLElement | null) => void
   children: (props: {
     dragHandleProps: Record<string, unknown>
     isDragging: boolean
@@ -99,15 +101,22 @@ interface SortableCellProps {
   }) => React.ReactNode
 }
 
-function SortableCell({ id, children }: SortableCellProps) {
+function SortableCell({ id, onNodeRef, children }: SortableCellProps) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id })
+  const setNodeRefStable = useRef(setNodeRef)
+  setNodeRefStable.current = setNodeRef
+
+  const combinedRef = useCallback((el: HTMLElement | null) => {
+    setNodeRefStable.current(el)
+    onNodeRef?.(id, el)
+  }, [onNodeRef, id])
 
   const style: React.CSSProperties = {
     transform: CSS.Transform.toString(transform),
     transition,
   }
 
-  return <>{children({ dragHandleProps: { ...attributes, ...listeners }, isDragging, setNodeRef, style })}</>
+  return <>{children({ dragHandleProps: { ...attributes, ...listeners }, isDragging, setNodeRef: combinedRef, style })}</>
 }
 
 // ============================================================================
@@ -613,15 +622,10 @@ export function NotebookRenderer({
     const onToggleCollapsed = autoCollapse ? undefined : () => toggleCellCollapsed(index)
 
     return (
-      <SortableCell key={cell.name} id={cell.name}>
-        {({ dragHandleProps, isDragging, setNodeRef, style }) => {
-          const combinedRef = (el: HTMLElement | null) => {
-            setNodeRef(el)
-            setCellRef(cell.name, el)
-          }
-          return (
+      <SortableCell key={cell.name} id={cell.name} onNodeRef={setCellRef}>
+        {({ dragHandleProps, isDragging, setNodeRef, style }) => (
           <CellContainer
-            ref={combinedRef}
+            ref={setNodeRef}
             style={style}
             dragHandleProps={dragHandleProps}
             isDragging={isDragging}
@@ -663,7 +667,7 @@ export function NotebookRenderer({
           >
             <CellRenderer {...commonRendererProps} />
           </CellContainer>
-        )}}
+        )}
       </SortableCell>
     )
   }

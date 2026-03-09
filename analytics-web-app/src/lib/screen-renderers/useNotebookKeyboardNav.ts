@@ -81,7 +81,7 @@ export function useNotebookKeyboardNav({
     if (disabled) return
 
     const handler = (e: KeyboardEvent) => {
-      if (!e.ctrlKey) return
+      if (!e.altKey) return
       if (e.key !== 'PageDown' && e.key !== 'PageUp') return
 
       e.preventDefault()

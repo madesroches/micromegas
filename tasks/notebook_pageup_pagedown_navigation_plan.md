@@ -1,10 +1,10 @@
-# Notebook Ctrl+PageUp/PageDown Cell Navigation Plan
+# Notebook Alt+PageUp/PageDown Cell Navigation Plan
 
 **Issue**: [#909](https://github.com/madesroches/micromegas/issues/909)
 
 ## Overview
 
-Add Ctrl+PageUp and Ctrl+PageDown keyboard navigation to move between cells in the notebook view. Currently there is no keyboard-based cell navigation — selection is only possible via mouse click or the context menu. This makes it tedious to move through large notebooks.
+Add Alt+PageUp and Alt+PageDown keyboard navigation to move between cells in the notebook view. Currently there is no keyboard-based cell navigation — selection is only possible via mouse click or the context menu. This makes it tedious to move through large notebooks.
 
 ## Current State
 
@@ -61,8 +61,8 @@ A custom hook that:
 1. Maintains a ref map (`Map<string, HTMLElement>`) keyed by cell name to track each cell's DOM element
 2. Builds the flat navigation list from the cells array (skipping children of collapsed HG groups)
 3. Attaches a `keydown` listener on `document`
-4. On Ctrl+PageDown: selects the next nav target and scrolls it into view
-5. On Ctrl+PageUp: selects the previous nav target and scrolls it into view
+4. On Alt+PageDown: selects the next nav target and scrolls it into view
+5. On Alt+PageUp: selects the previous nav target and scrolls it into view
 
 ```typescript
 interface UseNotebookKeyboardNavParams {
@@ -84,18 +84,18 @@ interface UseNotebookKeyboardNavResult {
 
 | Key | Action |
 |-----|--------|
-| Ctrl+PageDown | Select next nav target, scroll into view |
-| Ctrl+PageUp | Select previous nav target, scroll into view |
+| Alt+PageDown | Select next nav target, scroll into view |
+| Alt+PageUp | Select previous nav target, scroll into view |
 
-**Why Ctrl modifier**: Plain PageUp/PageDown would conflict with scrolling inside editors (CodeMirror SQL editor, textareas). Using Ctrl+PageUp/PageDown avoids all conflicts — CodeMirror doesn't bind these, and the Ctrl modifier makes the intent unambiguous. This matches the convention used by VS Code (switch tabs), Excel (switch sheets), and browsers (switch tabs).
+**Why Alt modifier**: Plain PageUp/PageDown would conflict with scrolling inside editors (CodeMirror SQL editor, textareas). Ctrl+PageUp/PageDown is intercepted by browsers to switch tabs and cannot be prevented. Alt+PageUp/PageDown avoids both conflicts — CodeMirror doesn't bind these, browsers don't intercept them, and the Alt modifier makes the intent unambiguous.
 
-**No focus guard needed**: Because the Ctrl modifier has no default browser behavior in inputs/textareas/contenteditable, no `e.target` check is required. The handler simply checks `e.ctrlKey && e.key === 'PageDown'` and calls `e.preventDefault()`.
+**No focus guard needed**: Because the Alt modifier has no default browser behavior in inputs/textareas/contenteditable, no `e.target` check is required. The handler simply checks `e.altKey && e.key === 'PageDown'` and calls `e.preventDefault()`.
 
-**When no cell is selected**: Ctrl+PageDown selects the first nav target, Ctrl+PageUp selects the last.
+**When no cell is selected**: Alt+PageDown selects the first nav target, Alt+PageUp selects the last.
 
-**When an HG group header is selected**: The HG group itself is not a nav target (only its children are). The current position is resolved by finding the first navTarget with `cellIndex >= selectedCellIndex`. This naturally lands on the first child of the selected group (if expanded) or the next visible cell after it. From there, Ctrl+PageDown/PageUp proceeds normally.
+**When an HG group header is selected**: The HG group itself is not a nav target (only its children are). The current position is resolved by finding the first navTarget with `cellIndex >= selectedCellIndex`. This naturally lands on the first child of the selected group (if expanded) or the next visible cell after it. From there, Alt+PageDown/PageUp proceeds normally.
 
-**At boundaries**: Do nothing (no wrapping). Ctrl+PageDown on the last target stays on it. Ctrl+PageUp on the first stays on it.
+**At boundaries**: Do nothing (no wrapping). Alt+PageDown on the last target stays on it. Alt+PageUp on the first stays on it.
 
 **Scroll behavior**: `element.scrollIntoView({ behavior: 'smooth', block: 'nearest' })` — only scrolls if the cell is outside the visible area.
 
@@ -130,7 +130,7 @@ const combinedRef = (el: HTMLElement | null) => {
 
 ### Listener setup
 
-The keydown listener is attached to `document` via `useEffect`. Since the Ctrl modifier makes the shortcut unambiguous, a global listener is safe — no container ref or `tabIndex` changes needed. The handler calls `e.preventDefault()` to suppress the browser's default Ctrl+PageDown behavior (switch tabs in some browsers).
+The keydown listener is attached to `document` via `useEffect`. Since the Alt modifier makes the shortcut unambiguous, a global listener is safe — no container ref or `tabIndex` changes needed. The handler calls `e.preventDefault()` to suppress the browser's default Alt+PageDown behavior (switch tabs in some browsers).
 
 ## Implementation Steps
 
@@ -138,7 +138,7 @@ The keydown listener is attached to `document` via `useEffect`. Since the Ctrl m
    - Implement the hook with ref map, flat nav list, and document-level keydown handler
    - Build `navTargets` with `useMemo` from cells array (skip collapsed HG children)
    - Find current position by matching `(selectedCellIndex, selectedChildName)`
-   - On Ctrl+PageDown/Ctrl+PageUp: compute new target, call `setSelectedCellIndex` + `setSelectedChildName`, scroll into view
+   - On Alt+PageDown/Alt+PageUp: compute new target, call `setSelectedCellIndex` + `setSelectedChildName`, scroll into view
    - Export `UseNotebookKeyboardNavParams`, `UseNotebookKeyboardNavResult`
 
 2. **Wire the hook into `NotebookRenderer.tsx`**
@@ -169,11 +169,11 @@ The keydown listener is attached to `document` via `useEffect`. Since the Ctrl m
 
 ## Trade-offs
 
-### Ctrl+PageUp/PageDown vs. plain PageUp/PageDown vs. Arrow keys
-**Chosen: Ctrl+PageUp/PageDown.** Arrow keys conflict with scrolling, text editing, and dnd-kit's keyboard sensor. Plain PageUp/PageDown conflict with scrolling inside the SQL editor (CodeMirror) and textareas — using them would require a focus guard that suppresses navigation when editing SQL, which defeats the purpose. Ctrl+PageUp/PageDown is conflict-free (CodeMirror doesn't bind it), needs no focus guard, and matches established conventions (VS Code tabs, Excel sheets, browser tabs).
+### Alt+PageUp/PageDown vs. plain PageUp/PageDown vs. Arrow keys
+**Chosen: Alt+PageUp/PageDown.** Arrow keys conflict with scrolling, text editing, and dnd-kit's keyboard sensor. Plain PageUp/PageDown conflict with scrolling inside the SQL editor (CodeMirror) and textareas. Ctrl+PageUp/PageDown is intercepted by browsers to switch tabs and cannot be prevented with `e.preventDefault()`. Alt+PageUp/PageDown is conflict-free — not bound by CodeMirror, not intercepted by browsers — and needs no focus guard.
 
 ### Global keydown (document) vs. container-scoped
-**Chosen: Global (document-level).** The Ctrl modifier makes the shortcut unambiguous, so there's no risk of firing in unintended contexts. A container-scoped listener would require `tabIndex={-1}` on the scroll container and the user to click in the cell area before navigation works — the Ctrl modifier eliminates this usability gap.
+**Chosen: Global (document-level).** The Alt modifier makes the shortcut unambiguous, so there's no risk of firing in unintended contexts. A container-scoped listener would require `tabIndex={-1}` on the scroll container and the user to click in the cell area before navigation works — the Alt modifier eliminates this usability gap.
 
 ### Hook vs. inline
 **Chosen: Separate hook.** Follows the established pattern of extracting concerns into hooks (useWasmEngine, useEditorPanelWidth, useCellManager, etc.). Keeps NotebookRenderer from growing.
@@ -183,24 +183,24 @@ The keydown listener is attached to `document` via `useEffect`. Since the Ctrl m
 
 ## Documentation
 
-- `mkdocs/docs/web-app/notebooks/index.md` — Add a "Keyboard Navigation" subsection under "Working with Cells" documenting Ctrl+PageUp/PageDown behavior.
+- `mkdocs/docs/web-app/notebooks/index.md` — Add a "Keyboard Navigation" subsection under "Working with Cells" documenting Alt+PageUp/PageDown behavior.
 
 ## Testing Strategy
 
 1. **Manual testing**:
    - Open a notebook with 10+ cells that overflow the viewport
-   - Press Ctrl+PageDown — first cell should be selected and visible
-   - Press Ctrl+PageDown repeatedly — selection moves down one cell at a time, scrolling as needed
-   - Press Ctrl+PageUp — selection moves up
-   - At first cell, Ctrl+PageUp does nothing; at last cell, Ctrl+PageDown does nothing
-   - Click into the SQL editor in the right panel, press Ctrl+PageDown — cell selection should still advance (Ctrl modifier avoids conflict with editor scrolling)
+   - Press Alt+PageDown — first cell should be selected and visible
+   - Press Alt+PageDown repeatedly — selection moves down one cell at a time, scrolling as needed
+   - Press Alt+PageUp — selection moves up
+   - At first cell, Alt+PageUp does nothing; at last cell, Alt+PageDown does nothing
+   - Click into the SQL editor in the right panel, press Alt+PageDown — cell selection should still advance (Alt modifier avoids conflict with editor scrolling)
    - Press plain PageDown in the SQL editor — editor should scroll normally, cell selection should not change
-   - Open a modal (Add Cell, Delete Cell), press Ctrl+PageDown — nothing should happen
-   - Switch to Source View, press Ctrl+PageDown — nothing should happen
+   - Open a modal (Add Cell, Delete Cell), press Alt+PageDown — nothing should happen
+   - Switch to Source View, press Alt+PageDown — nothing should happen
 
 2. **Edge cases**:
-   - Empty notebook (no cells) — Ctrl+PageUp/PageDown do nothing
+   - Empty notebook (no cells) — Alt+PageUp/PageDown do nothing
    - Single cell — both keys select it but don't go past it
-   - HG cells — children are individually navigable (Ctrl+PageDown steps through each child in left-to-right order)
+   - HG cells — children are individually navigable (Alt+PageDown steps through each child in left-to-right order)
    - Empty HG group (no children) — skipped entirely in navigation
    - Collapsed HG group — children are skipped in navigation (they have no DOM elements when collapsed); navigation jumps to the next visible cell
