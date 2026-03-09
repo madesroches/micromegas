@@ -19,6 +19,7 @@ This file documents the historical progress of the Micromegas project. For curre
   * Add Download CSV menu option for notebook cells (#900)
   * Add cell result row references in macros — `$cell[N].column` syntax for chaining queries (#898)
   * Fix available variables showing orphaned URL params and unscoped variables
+  * Fix timestamp values rendering as raw integers in macro expansion (#908, #910)
 * **Analytics Web App:**
   * Fix page-level and swimlane cell scrollbar issues with flex layout
   * Fix swimlane TimeAxis tick alignment to prevent horizontal overflow
