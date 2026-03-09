@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useEffect } from 'react'
+import { useState, useCallback, useRef, useMemo, useEffect } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Plus, X, Trash2 } from 'lucide-react'
 import {
@@ -37,6 +37,7 @@ import { useNotebookAutoRun } from './useNotebookAutoRun'
 import { useTimeRangeSync } from './useTimeRangeSync'
 import { useCellSortCheck } from './useCellSortCheck'
 import { useNotebookDragDrop } from './useNotebookDragDrop'
+import { useNotebookKeyboardNav } from './useNotebookKeyboardNav'
 import { useCellManager } from './useCellManager'
 
 // ============================================================================
@@ -90,6 +91,8 @@ function DeleteCellModal({ isOpen, cellName, onClose, onConfirm }: DeleteCellMod
 
 interface SortableCellProps {
   id: string
+  /** Optional extra ref callback to invoke alongside dnd-kit's setNodeRef */
+  onNodeRef?: (name: string, el: HTMLElement | null) => void
   children: (props: {
     dragHandleProps: Record<string, unknown>
     isDragging: boolean
@@ -98,15 +101,22 @@ interface SortableCellProps {
   }) => React.ReactNode
 }
 
-function SortableCell({ id, children }: SortableCellProps) {
+function SortableCell({ id, onNodeRef, children }: SortableCellProps) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id })
+  const setNodeRefStable = useRef(setNodeRef)
+  setNodeRefStable.current = setNodeRef
+
+  const combinedRef = useCallback((el: HTMLElement | null) => {
+    setNodeRefStable.current(el)
+    onNodeRef?.(id, el)
+  }, [onNodeRef, id])
 
   const style: React.CSSProperties = {
     transform: CSS.Transform.toString(transform),
     transition,
   }
 
-  return <>{children({ dragHandleProps: { ...attributes, ...listeners }, isDragging, setNodeRef, style })}</>
+  return <>{children({ dragHandleProps: { ...attributes, ...listeners }, isDragging, setNodeRef: combinedRef, style })}</>
 }
 
 // ============================================================================
@@ -414,6 +424,16 @@ export function NotebookRenderer({
     defaultDataSource: dataSource,
   })
 
+  // Keyboard navigation
+  const { setCellRef } = useNotebookKeyboardNav({
+    cells,
+    selectedCellIndex,
+    selectedChildName,
+    setSelectedCellIndex,
+    setSelectedChildName,
+    disabled: showSource || showAddCellModal || deletingCellIndex !== null,
+  })
+
   // Render
   const selectedCell = selectedCellIndex !== null ? cells[selectedCellIndex] : null
 
@@ -555,6 +575,7 @@ export function NotebookRenderer({
                   onTimeRangeSelect={handleTimeRangeSelect}
                   defaultDataSource={dataSource}
                   allCellNames={existingNames}
+                  onChildRef={setCellRef}
                 />
               </CellContainer>
             </div>
@@ -601,7 +622,7 @@ export function NotebookRenderer({
     const onToggleCollapsed = autoCollapse ? undefined : () => toggleCellCollapsed(index)
 
     return (
-      <SortableCell key={cell.name} id={cell.name}>
+      <SortableCell key={cell.name} id={cell.name} onNodeRef={setCellRef}>
         {({ dragHandleProps, isDragging, setNodeRef, style }) => (
           <CellContainer
             ref={setNodeRef}

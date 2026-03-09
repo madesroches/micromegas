@@ -68,6 +68,8 @@ export interface HorizontalGroupCellProps {
   defaultDataSource?: string
   /** All cell names in notebook (for uniqueness checks) */
   allCellNames: Set<string>
+  /** Callback to register a child cell's DOM element for keyboard navigation */
+  onChildRef?: (name: string, el: HTMLElement | null) => void
 }
 
 // =============================================================================
@@ -111,14 +113,22 @@ interface HgChildPaneProps {
   setNodeRef: (node: HTMLElement | null) => void
   style: React.CSSProperties
   showDivider: boolean
+  onChildRef?: (name: string, el: HTMLElement | null) => void
 }
 
 function HgChildPane({
   child, state, commonProps,
   isSelected,
   onSelect, onRun, onDownloadCsv, onDeleteChild,
-  dragHandleProps, isDragging, setNodeRef, style, showDivider,
+  dragHandleProps, isDragging, setNodeRef, style, showDivider, onChildRef,
 }: HgChildPaneProps) {
+  const setNodeRefStable = useRef(setNodeRef)
+  setNodeRefStable.current = setNodeRef
+
+  const combinedRef = useCallback((el: HTMLElement | null) => {
+    setNodeRefStable.current(el)
+    onChildRef?.(child.name, el)
+  }, [onChildRef, child.name])
   const fadeClass = useFadeOnIdle(state.status)
 
   const meta = getCellTypeMetadata(child.type)
@@ -146,7 +156,7 @@ function HgChildPane({
 
   return (
     <div
-      ref={setNodeRef}
+      ref={combinedRef}
       style={style}
       className={`flex-1 min-w-0 flex group/pane overflow-hidden ${isDragging ? 'opacity-50' : ''}`}
     >
@@ -304,6 +314,7 @@ export function HorizontalGroupCell({
   onChildDragOut,
   onTimeRangeSelect,
   defaultDataSource,
+  onChildRef,
 }: HorizontalGroupCellProps) {
   const [activeDragId, setActiveDragId] = useState<string | null>(null)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -430,6 +441,7 @@ export function HorizontalGroupCell({
                     setNodeRef={setNodeRef}
                     style={style}
                     showDivider={index > 0}
+                    onChildRef={onChildRef}
                   />
                 )}
               </SortableChild>
