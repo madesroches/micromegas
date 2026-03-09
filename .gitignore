@@ -63,3 +63,6 @@ grafana/coverage/
 rust/datafusion-wasm/pkg/
 analytics-web-app/src/lib/datafusion-wasm/micromegas_datafusion_wasm_bg.wasm
 analytics-web-app/src/lib/datafusion-wasm/micromegas_datafusion_wasm_bg.wasm.d.ts
+analytics-web-app/src/lib/datafusion-wasm/micromegas_datafusion_wasm.js
+analytics-web-app/src/lib/datafusion-wasm/micromegas_datafusion_wasm.d.ts
+analytics-web-app/src/lib/datafusion-wasm/package.json
