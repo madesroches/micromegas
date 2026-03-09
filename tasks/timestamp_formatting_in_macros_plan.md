@@ -172,7 +172,7 @@ No mkdocs changes needed — these are bug fixes to existing behavior, not new f
 
 ### Unit Tests
 - `notebook-utils.test.ts`: Verify `$cell[0].start_time` with a `Timestamp(NANOSECOND)` column produces RFC3339 output
-- `table-utils.test.tsx`: Verify `expandRowMacros` with a hidden timestamp column and complete `columnTypes` map produces RFC3339 output
+- `table-utils.test.tsx`: Render `OverrideCell` with `columns` containing only visible (non-timestamp) columns and `allColumns` containing all columns including a hidden timestamp column; verify `$row.timestamp_col` renders as RFC3339
 - Verify existing tests continue to pass (no regressions in non-time column handling)
 
 ### Manual Testing
