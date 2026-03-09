@@ -37,6 +37,7 @@ import { useNotebookAutoRun } from './useNotebookAutoRun'
 import { useTimeRangeSync } from './useTimeRangeSync'
 import { useCellSortCheck } from './useCellSortCheck'
 import { useNotebookDragDrop } from './useNotebookDragDrop'
+import { useNotebookKeyboardNav } from './useNotebookKeyboardNav'
 import { useCellManager } from './useCellManager'
 
 // ============================================================================
@@ -414,6 +415,16 @@ export function NotebookRenderer({
     defaultDataSource: dataSource,
   })
 
+  // Keyboard navigation
+  const { setCellRef } = useNotebookKeyboardNav({
+    cells,
+    selectedCellIndex,
+    selectedChildName,
+    setSelectedCellIndex,
+    setSelectedChildName,
+    disabled: showSource || showAddCellModal || deletingCellIndex !== null,
+  })
+
   // Render
   const selectedCell = selectedCellIndex !== null ? cells[selectedCellIndex] : null
 
@@ -555,6 +566,7 @@ export function NotebookRenderer({
                   onTimeRangeSelect={handleTimeRangeSelect}
                   defaultDataSource={dataSource}
                   allCellNames={existingNames}
+                  onChildRef={setCellRef}
                 />
               </CellContainer>
             </div>
@@ -602,9 +614,14 @@ export function NotebookRenderer({
 
     return (
       <SortableCell key={cell.name} id={cell.name}>
-        {({ dragHandleProps, isDragging, setNodeRef, style }) => (
+        {({ dragHandleProps, isDragging, setNodeRef, style }) => {
+          const combinedRef = (el: HTMLElement | null) => {
+            setNodeRef(el)
+            setCellRef(cell.name, el)
+          }
+          return (
           <CellContainer
-            ref={setNodeRef}
+            ref={combinedRef}
             style={style}
             dragHandleProps={dragHandleProps}
             isDragging={isDragging}
@@ -646,7 +663,7 @@ export function NotebookRenderer({
           >
             <CellRenderer {...commonRendererProps} />
           </CellContainer>
-        )}
+        )}}
       </SortableCell>
     )
   }

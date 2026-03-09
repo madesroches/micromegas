@@ -93,6 +93,8 @@ interface UseNotebookKeyboardNavResult {
 
 **When no cell is selected**: Ctrl+PageDown selects the first nav target, Ctrl+PageUp selects the last.
 
+**When an HG group header is selected**: The HG group itself is not a nav target (only its children are). The current position is resolved by finding the first navTarget with `cellIndex >= selectedCellIndex`. This naturally lands on the first child of the selected group (if expanded) or the next visible cell after it. From there, Ctrl+PageDown/PageUp proceeds normally.
+
 **At boundaries**: Do nothing (no wrapping). Ctrl+PageDown on the last target stays on it. Ctrl+PageUp on the first stays on it.
 
 **Scroll behavior**: `element.scrollIntoView({ behavior: 'smooth', block: 'nearest' })` — only scrolls if the cell is outside the visible area.
