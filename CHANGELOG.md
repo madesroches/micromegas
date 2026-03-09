@@ -18,6 +18,7 @@ This file documents the historical progress of the Micromegas project. For curre
   * Add Insert cell above/below options to cell context menu
   * Add Download CSV menu option for notebook cells (#900)
   * Add cell result row references in macros — `$cell[N].column` syntax for chaining queries (#898)
+  * Add Alt+PageUp/PageDown keyboard navigation for notebook cells (#909)
   * Fix available variables showing orphaned URL params and unscoped variables
   * Fix timestamp values rendering as raw integers in macro expansion (#908, #910)
 * **Analytics Web App:**
