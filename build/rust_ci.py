@@ -21,6 +21,7 @@ def run_wasm():
         ("WASM Formatting Check", "cargo fmt --check", wasm_crate),
         ("WASM Clippy", "cargo clippy --target wasm32-unknown-unknown -- -D warnings", wasm_crate),
         ("WASM Tests", "python3 build.py --test", wasm_crate),
+        ("WASM Bindings Freshness Check", "python3 build.py --check", wasm_crate),
     ]
     _run_steps("WASM", steps)
 

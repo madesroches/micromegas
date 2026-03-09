@@ -126,10 +126,34 @@ def build(skip_opt: bool = False) -> None:
     print("Done!")
 
 
+TRACKED_BINDINGS = [
+    OUTPUT_DIR / "micromegas_datafusion_wasm.js",
+    OUTPUT_DIR / "micromegas_datafusion_wasm.d.ts",
+    OUTPUT_DIR / "package.json",
+]
+
+
+def check() -> None:
+    """Build WASM and verify tracked bindings are up to date."""
+    build(skip_opt=True)
+    result = subprocess.run(
+        ["git", "diff", "--exit-code", "--"] + [str(f) for f in TRACKED_BINDINGS],
+        cwd=CRATE_DIR.parent.parent,
+    )
+    if result.returncode != 0:
+        print("\nERROR: Tracked WASM bindings are out of date.")
+        print("Run: python3 rust/datafusion-wasm/build.py")
+        sys.exit(1)
+    print("Tracked WASM bindings are up to date.")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Build or test micromegas-datafusion-wasm")
     parser.add_argument(
         "--test", action="store_true", help="Run WASM integration tests in headless Firefox"
+    )
+    parser.add_argument(
+        "--check", action="store_true", help="Build and verify tracked bindings are up to date"
     )
     parser.add_argument(
         "--debug", action="store_true", help="Skip wasm-opt optimization (faster builds)"
@@ -138,6 +162,8 @@ def main() -> None:
 
     if args.test:
         test()
+    elif args.check:
+        check()
     else:
         build(skip_opt=args.debug)
 

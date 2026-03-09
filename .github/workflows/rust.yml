@@ -78,6 +78,8 @@ jobs:
       run: |
         rustup target add wasm32-unknown-unknown
         cargo install wasm-pack
+        WASM_BINDGEN_VERSION=$(python3 -c "import re; t=open('rust/datafusion-wasm/Cargo.lock').read(); m=re.search(r'\[\[package\]\]\s*name\s*=\s*\"wasm-bindgen\"\s*version\s*=\s*\"([^\"]+)\"', t); print(m.group(1))")
+        cargo install wasm-bindgen-cli --version "$WASM_BINDGEN_VERSION"
 
     - name: Run WASM CI
       run: ./build/rust_ci.py wasm
