@@ -21,6 +21,7 @@ WASM_FILE = "micromegas_datafusion_wasm.wasm"
 WASM_PACKAGE_JSON = {
     "name": "micromegas-datafusion-wasm",
     "version": "0.1.0",
+    "private": True,
     "type": "module",
     "main": "micromegas_datafusion_wasm.js",
     "types": "micromegas_datafusion_wasm.d.ts",
