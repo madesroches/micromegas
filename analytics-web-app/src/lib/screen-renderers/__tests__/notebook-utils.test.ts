@@ -17,7 +17,7 @@ Object.defineProperty(window, 'matchMedia', {
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 jest.mock('../cell-registry', () => require('../__test-utils__/cell-registry-mock').createCellRegistryMock())
 
-import { tableFromArrays } from 'apache-arrow'
+import { tableFromArrays, vectorFromArray, Table, Timestamp, TimeUnit } from 'apache-arrow'
 import { substituteMacros, DEFAULT_SQL, sanitizeCellName, validateCellName, validateMacros } from '../notebook-utils'
 import { serializeVariableValue, deserializeVariableValue, getVariableString, isMultiColumnValue } from '../notebook-types'
 import { createDefaultCell } from '../cell-registry'
@@ -369,6 +369,34 @@ describe('cell result ref substitution', () => {
       { cell_name: table },
     )
     expect(result).toBe('SELECT abc')
+  })
+
+  it('should format timestamp values as RFC3339', () => {
+    // Build a table with a Timestamp(MILLISECOND) column
+    const timestampType = new Timestamp(TimeUnit.MILLISECOND, null)
+    // 2024-01-15T10:30:00.000Z in milliseconds
+    const ms = 1705314600000
+    const vector = vectorFromArray([ms], timestampType)
+    const table = new Table({ start_time: vector })
+
+    const result = substituteMacros(
+      "SELECT '$cell[0].start_time'",
+      {},
+      defaultTimeRange,
+      { cell: table },
+    )
+    expect(result).toBe("SELECT '2024-01-15T10:30:00.000Z'")
+  })
+
+  it('should still format non-time columns as plain strings', () => {
+    const table = tableFromArrays({ name: ['server1'] })
+    const result = substituteMacros(
+      "SELECT '$cell[0].name'",
+      {},
+      defaultTimeRange,
+      { cell: table },
+    )
+    expect(result).toBe("SELECT 'server1'")
   })
 })
 

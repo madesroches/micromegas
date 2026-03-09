@@ -21,8 +21,9 @@ export {
   variableValuesEqual,
 } from './notebook-types'
 
-import type { Table } from 'apache-arrow'
+import type { Table, DataType } from 'apache-arrow'
 import type { CellConfig, CellType, HorizontalGroupCellConfig, VariableValue } from './notebook-types'
+import { isTimeType, timestampToDate } from '@/lib/arrow-utils'
 import { getVariableString } from './notebook-types'
 
 import type { ScreenConfig } from '@/lib/screens-api'
@@ -247,6 +248,17 @@ export function cleanupVariableParams(
 }
 
 /**
+ * Format an Arrow value as a string, converting timestamps to RFC3339.
+ */
+function formatArrowValue(value: unknown, dataType?: DataType): string {
+  if (dataType && isTimeType(dataType)) {
+    const date = timestampToDate(value, dataType)
+    if (date) return date.toISOString()
+  }
+  return String(value)
+}
+
+/**
  * Escapes single quotes in a value for SQL safety.
  */
 function escapeSqlValue(value: string): string {
@@ -284,7 +296,8 @@ export function substituteMacros(
       if (rowIdx >= table.numRows) return match
       const row = table.get(rowIdx)
       if (!row || row[colName] === undefined || row[colName] === null) return match
-      return escapeSqlValue(String(row[colName]))
+      const field = table.schema.fields.find((f) => f.name === colName)
+      return escapeSqlValue(formatArrowValue(row[colName], field?.type))
     })
   }
 
