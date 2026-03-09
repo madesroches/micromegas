@@ -201,6 +201,8 @@ interface OverrideCellProps {
   format: string
   row: Record<string, unknown>
   columns: TableColumn[]
+  /** All columns including hidden (for type resolution in overrides) */
+  allColumns?: TableColumn[]
   /** Notebook variables for macro expansion */
   variables?: Record<string, VariableValue>
 }
@@ -210,15 +212,15 @@ interface OverrideCellProps {
  * Expands both notebook variables ($name) and row data ($row.column).
  * Timestamps are automatically formatted as RFC3339 for URL compatibility.
  */
-export function OverrideCell({ format, row, columns, variables = {} }: OverrideCellProps) {
-  // Build column type map for proper value formatting
+export function OverrideCell({ format, row, columns, allColumns, variables = {} }: OverrideCellProps) {
+  // Build column type map for proper value formatting (use allColumns for type resolution when available)
   const columnTypes = useMemo(() => {
     const map = new Map<string, DataType>()
-    for (const col of columns) {
+    for (const col of (allColumns || columns)) {
       map.set(col.name, col.type)
     }
     return map
-  }, [columns])
+  }, [allColumns, columns])
 
   // First expand notebook variables, then row macros
   const withVariables = expandVariableMacros(format, variables)
@@ -373,6 +375,8 @@ export interface TableData {
 export interface TableBodyProps {
   data: TableData
   columns: TableColumn[]
+  /** All columns including hidden (for type resolution in overrides) */
+  allColumns?: TableColumn[]
   /** Use compact styling for notebook cells */
   compact?: boolean
   /** Column overrides for custom rendering */
@@ -381,7 +385,7 @@ export interface TableBodyProps {
   variables?: Record<string, VariableValue>
 }
 
-export function TableBody({ data, columns, compact = false, overrides = [], variables = {} }: TableBodyProps) {
+export function TableBody({ data, columns, allColumns, compact = false, overrides = [], variables = {} }: TableBodyProps) {
   const rowClass = compact
     ? 'even:bg-app-card/30 hover:bg-app-card/50 transition-colors'
     : 'border-b border-theme-border hover:bg-app-card transition-colors'
@@ -414,7 +418,7 @@ export function TableBody({ data, columns, compact = false, overrides = [], vari
               if (override) {
                 return (
                   <td key={col.name} className={cellClass}>
-                    <OverrideCell format={override} row={row} columns={columns} variables={variables} />
+                    <OverrideCell format={override} row={row} columns={columns} allColumns={allColumns} variables={variables} />
                   </td>
                 )
               }

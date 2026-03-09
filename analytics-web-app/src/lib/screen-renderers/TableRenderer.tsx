@@ -395,7 +395,7 @@ export function TableRenderer({
               ))}
             </tr>
           </thead>
-          <TableBody data={table} columns={visibleColumns} overrides={tableConfig.overrides} />
+          <TableBody data={table} columns={visibleColumns} allColumns={allColumns} overrides={tableConfig.overrides} />
         </table>
       </div>
     )

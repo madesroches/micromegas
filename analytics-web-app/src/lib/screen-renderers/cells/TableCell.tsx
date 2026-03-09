@@ -105,7 +105,7 @@ export function TableCell({ data, status, options, onOptionsChange, variables }:
               ))}
             </tr>
           </thead>
-          <TableBody data={slicedData} columns={visibleColumns} compact overrides={overrides} variables={variables} />
+          <TableBody data={slicedData} columns={visibleColumns} allColumns={allColumns} compact overrides={overrides} variables={variables} />
         </table>
       </div>
       <PaginationBar pagination={pagination} />

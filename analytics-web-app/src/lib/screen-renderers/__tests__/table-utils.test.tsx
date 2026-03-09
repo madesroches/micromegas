@@ -410,6 +410,51 @@ describe('OverrideCell', () => {
   })
 })
 
+describe('OverrideCell with hidden timestamp column', () => {
+  it('should format hidden timestamp column as RFC3339 when allColumns is provided', () => {
+    const timestampType = new Timestamp(TimeUnit.MICROSECOND, null)
+    // Visible columns only (no timestamp)
+    const visibleColumns: TableColumn[] = [
+      { name: 'name', type: new DataType() },
+    ]
+    // All columns including hidden timestamp
+    const allColumns: TableColumn[] = [
+      { name: 'name', type: new DataType() },
+      { name: 'start_time', type: timestampType },
+    ]
+    // 2024-01-15T10:30:00.000Z in microseconds
+    const microsSinceEpoch = BigInt(1705314600000000)
+
+    render(
+      <OverrideCell
+        format="Started: $row.start_time"
+        row={{ name: 'server1', start_time: microsSinceEpoch }}
+        columns={visibleColumns}
+        allColumns={allColumns}
+      />
+    )
+    expect(screen.getByText('Started: 2024-01-15T10:30:00.000Z')).toBeInTheDocument()
+  })
+
+  it('should fall back to String() when allColumns is not provided and column is hidden', () => {
+    // Only visible columns (no timestamp type info)
+    const visibleColumns: TableColumn[] = [
+      { name: 'name', type: new DataType() },
+    ]
+    const microsSinceEpoch = BigInt(1705314600000000)
+
+    render(
+      <OverrideCell
+        format="Started: $row.start_time"
+        row={{ name: 'server1', start_time: microsSinceEpoch }}
+        columns={visibleColumns}
+      />
+    )
+    // Without allColumns, the timestamp type is unknown, so it renders as a raw bigint
+    expect(screen.getByText(`Started: ${microsSinceEpoch}`)).toBeInTheDocument()
+  })
+})
+
 describe('expandRowMacros with timestamps', () => {
   it('should format timestamp columns as RFC3339 (ISO 8601)', () => {
     // Create a timestamp type (microseconds)
