@@ -133,14 +133,42 @@ TRACKED_BINDINGS = [
 ]
 
 
+def _normalize_closure_hashes(text: str) -> str:
+    """Replace compiler-generated closure hashes with a placeholder.
+
+    Symbol names like ``__invoke__h04fdd830bb54d5e4`` change with every
+    Rust compiler version even when the source is identical.  Normalizing
+    them lets us detect *real* binding changes while ignoring hash churn.
+    """
+    return re.sub(r"__h[0-9a-f]{16}\b", "__hXXXX", text)
+
+
 def check() -> None:
     """Build WASM and verify tracked bindings are up to date."""
     build(skip_opt=True)
-    result = subprocess.run(
-        ["git", "diff", "--exit-code", "--"] + [str(f) for f in TRACKED_BINDINGS],
-        cwd=CRATE_DIR.parent.parent,
-    )
-    if result.returncode != 0:
+
+    repo_root = CRATE_DIR.parent.parent
+    has_diff = False
+    for path in TRACKED_BINDINGS:
+        # Compare the committed version against the working-tree version
+        committed = subprocess.run(
+            ["git", "show", f"HEAD:{path.relative_to(repo_root)}"],
+            capture_output=True,
+            text=True,
+            cwd=repo_root,
+        )
+        if committed.returncode != 0:
+            # File is new / untracked — that counts as a real diff
+            print(f"  {path.name}: new file (not yet committed)")
+            has_diff = True
+            continue
+
+        current = path.read_text()
+        if _normalize_closure_hashes(committed.stdout) != _normalize_closure_hashes(current):
+            print(f"  {path.name}: binding change detected (beyond closure hashes)")
+            has_diff = True
+
+    if has_diff:
         print("\nERROR: Tracked WASM bindings are out of date.")
         print("Run: python3 rust/datafusion-wasm/build.py")
         sys.exit(1)
