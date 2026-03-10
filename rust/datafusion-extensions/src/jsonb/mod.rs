@@ -10,6 +10,8 @@ pub mod get;
 pub mod keys;
 /// jsonb_parse
 pub mod parse;
+/// JSONPath query
+pub mod path_query;
 
 // Re-export for convenience in tests
 pub use cast::{JsonbAsF64, JsonbAsI64, JsonbAsString};
@@ -17,3 +19,4 @@ pub use format_json::JsonbFormatJson;
 pub use get::JsonbGet;
 pub use keys::JsonbObjectKeys;
 pub use parse::JsonbParse;
+pub use path_query::{JsonbPathQuery, JsonbPathQueryFirst};

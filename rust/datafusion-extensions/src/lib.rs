@@ -26,6 +26,7 @@ use jsonb::{
     get::make_jsonb_get_udf,
     keys::make_jsonb_object_keys_udf,
     parse::make_jsonb_parse_udf,
+    path_query::{make_jsonb_path_query_first_udf, make_jsonb_path_query_udf},
 };
 use properties::{
     properties_udf::{PropertiesLength, PropertiesToArray},
@@ -52,6 +53,8 @@ pub fn register_extension_udfs(ctx: &SessionContext) {
     ctx.register_udf(make_jsonb_as_f64_udf());
     ctx.register_udf(make_jsonb_as_i64_udf());
     ctx.register_udf(make_jsonb_object_keys_udf());
+    ctx.register_udf(make_jsonb_path_query_first_udf());
+    ctx.register_udf(make_jsonb_path_query_udf());
     ctx.register_udtf("jsonb_each", Arc::new(JsonbEachTableFunction::new()));
 
     ctx.register_udf(ScalarUDF::from(PropertyGet::new()));
