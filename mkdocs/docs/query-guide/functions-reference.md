@@ -225,6 +225,76 @@ SELECT jsonb_parse('{"name": "web_server", "port": 8080}') as parsed_json
 FROM processes;
 ```
 
+##### `jsonb_path_query_first(jsonb, path)`
+
+Returns the first match of a JSONPath expression on a JSONB value, or NULL if no match is found.
+
+**Syntax:**
+```sql
+jsonb_path_query_first(jsonb, path)
+```
+
+**Parameters:**
+
+- `jsonb` (Multiple formats supported): JSONB value in any of these formats:
+
+   * `Binary` - Plain JSONB binary
+   * `Dictionary<Int32, Binary>` - Dictionary-encoded JSONB
+
+- `path` (`Utf8`): A JSONPath expression string (e.g., `$.store.book[0].title`)
+
+**Returns:** `Dictionary<Int32, Binary>` - Dictionary-encoded JSONB value of the first match, or NULL if no match
+
+**Examples:**
+```sql
+-- Extract a nested value
+SELECT jsonb_path_query_first(jsonb_parse('{"user": {"name": "Alice"}}'), '$.user.name') as name;
+-- Returns: "Alice" (as JSONB)
+
+-- Array index access
+SELECT jsonb_path_query_first(jsonb_parse('{"items": [10, 20, 30]}'), '$.items[1]') as second;
+-- Returns: 20
+
+-- First wildcard match
+SELECT jsonb_as_string(jsonb_path_query_first(data, '$.tags[0]')) as first_tag
+FROM processes;
+```
+
+##### `jsonb_path_query(jsonb, path)`
+
+Returns all matches of a JSONPath expression on a JSONB value as a JSONB array.
+
+**Syntax:**
+```sql
+jsonb_path_query(jsonb, path)
+```
+
+**Parameters:**
+
+- `jsonb` (Multiple formats supported): JSONB value in any of these formats:
+
+   * `Binary` - Plain JSONB binary
+   * `Dictionary<Int32, Binary>` - Dictionary-encoded JSONB
+
+- `path` (`Utf8`): A JSONPath expression string (e.g., `$.store.book[*].title`)
+
+**Returns:** `Dictionary<Int32, Binary>` - Dictionary-encoded JSONB array containing all matched values, or an empty array if no match
+
+**Examples:**
+```sql
+-- Extract all names from an array of objects
+SELECT jsonb_path_query(jsonb_parse('{"users": [{"name": "Alice"}, {"name": "Bob"}]}'), '$.users[*].name') as names;
+-- Returns: ["Alice", "Bob"]
+
+-- All array elements
+SELECT jsonb_path_query(jsonb_parse('[1, 2, 3]'), '$[*]') as all_items;
+-- Returns: [1, 2, 3]
+
+-- No match returns empty array
+SELECT jsonb_path_query(jsonb_parse('{"a": 1}'), '$.missing') as result;
+-- Returns: []
+```
+
 ##### `jsonb_get(jsonb, key)`
 
 Extracts a value from a JSONB object by key name.
