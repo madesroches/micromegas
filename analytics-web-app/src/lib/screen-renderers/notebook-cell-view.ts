@@ -16,9 +16,9 @@ export interface CellViewContext {
   isEditing: boolean
   dataSource?: string
   /** Upstream cell result tables (for $cell[N].col macro substitution) */
-  cellResults?: Record<string, Table>
+  cellResults: Record<string, Table>
   /** Selected rows from upstream cells (for $cell.selected.col macro substitution) */
-  cellSelections?: Record<string, Record<string, unknown>>
+  cellSelections: Record<string, Record<string, unknown>>
 }
 
 export interface CellViewCallbacks {

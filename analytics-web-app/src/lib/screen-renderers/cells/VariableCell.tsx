@@ -240,7 +240,7 @@ function VariableCellEditor({ config, onChange, variables, timeRange, datasource
   // Validate macro references in SQL (only for combobox type)
   const validationErrors = useMemo(() => {
     if (!isCombobox || !varConfig.sql) return []
-    const result = validateMacros(varConfig.sql, variables, cellResults ?? {}, cellSelections ?? {})
+    const result = validateMacros(varConfig.sql, variables, cellResults, cellSelections)
     return result.errors
   }, [isCombobox, varConfig.sql, variables, cellResults, cellSelections])
 
@@ -302,7 +302,7 @@ function VariableCellEditor({ config, onChange, variables, timeRange, datasource
               ))}
             </div>
           )}
-          <AvailableVariablesPanel variables={variables} timeRange={timeRange} cellResults={cellResults} />
+          <AvailableVariablesPanel variables={variables} timeRange={timeRange} cellResults={cellResults} cellSelections={cellSelections} />
           <DocumentationLink url={QUERY_GUIDE_URL} label="Query Guide" />
         </>
       )}
@@ -443,7 +443,7 @@ export const variableMetadata: CellTypeMetadata = {
       return null // Nothing to execute
     }
 
-    const sql = substituteMacros(varConfig.sql, variables, timeRange, cellResults, cellSelections ?? {})
+    const sql = substituteMacros(varConfig.sql, variables, timeRange, cellResults, cellSelections)
     const result = await runQuery(sql)
 
     // Extract options from result with multi-column support

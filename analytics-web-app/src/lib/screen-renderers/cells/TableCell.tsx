@@ -228,7 +228,7 @@ function TableCellEditor({ config, onChange, variables, timeRange, availableColu
 
   // Validate macro references in SQL
   const validationErrors = useMemo(() => {
-    const result = validateMacros(tableConfig.sql, variables, cellResults ?? {}, cellSelections ?? {})
+    const result = validateMacros(tableConfig.sql, variables, cellResults, cellSelections)
     return result.errors
   }, [tableConfig.sql, variables, cellResults, cellSelections])
 
@@ -305,7 +305,7 @@ export const tableMetadata: CellTypeMetadata = {
 
   execute: async (config: CellConfig, { variables, cellResults, cellSelections, timeRange, runQuery }: CellExecutionContext) => {
     const tableConfig = config as QueryCellConfig
-    let sql = substituteMacros(tableConfig.sql, variables, timeRange, cellResults, cellSelections ?? {})
+    let sql = substituteMacros(tableConfig.sql, variables, timeRange, cellResults, cellSelections)
 
     // Handle $order_by substitution based on sort state in options
     const sortColumn = tableConfig.options?.sortColumn as string | undefined

@@ -50,9 +50,9 @@ export interface CellRendererProps {
   /** Effective data source for query routing */
   dataSource?: string
   /** Upstream cell result tables (for $cell[N].col macro substitution) */
-  cellResults?: Record<string, Table>
+  cellResults: Record<string, Table>
   /** Selected rows from upstream cells (for $cell.selected.col macro substitution) */
-  cellSelections?: Record<string, Record<string, unknown>>
+  cellSelections: Record<string, Record<string, unknown>>
   /** Row selection mode for this cell */
   selectionMode?: 'none' | 'single'
   /** Callback when the selected row changes */
@@ -65,7 +65,7 @@ export interface CellRendererProps {
 export interface CellExecutionContext {
   variables: Record<string, VariableValue>
   cellResults: Record<string, Table>
-  cellSelections?: Record<string, Record<string, unknown>>
+  cellSelections: Record<string, Record<string, unknown>>
   timeRange: { begin: string; end: string }
   runQuery: (sql: string) => Promise<Table>
   runQueryAs?: (sql: string, tableName: string, dataSource?: string) => Promise<Table>
@@ -90,9 +90,9 @@ export interface CellEditorProps {
   /** Run the cell (for Ctrl+Enter shortcut in SQL editors) */
   onRun?: () => void
   /** Upstream cell result tables (for $cell[N].col macro validation) */
-  cellResults?: Record<string, Table>
+  cellResults: Record<string, Table>
   /** Selected rows from upstream cells (for $cell.selected.col macro validation) */
-  cellSelections?: Record<string, Record<string, unknown>>
+  cellSelections: Record<string, Record<string, unknown>>
 }
 
 /**

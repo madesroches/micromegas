@@ -16,8 +16,8 @@ interface CellEditorProps {
   defaultDataSource?: string
   datasourceVariables?: string[]
   showNotebookOption?: boolean
-  cellResults?: Record<string, Table>
-  cellSelections?: Record<string, Record<string, unknown>>
+  cellResults: Record<string, Table>
+  cellSelections: Record<string, Record<string, unknown>>
   onClose: () => void
   onUpdate: (updates: Partial<CellConfig>) => void
   onRun: () => void

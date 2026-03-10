@@ -130,7 +130,8 @@ interface HgEditorPanelProps {
   onChildRun: (childName: string) => void
   variables: Record<string, VariableValue>
   timeRange: { begin: string; end: string }
-  cellResults?: Record<string, import('apache-arrow').Table>
+  cellResults: Record<string, import('apache-arrow').Table>
+  cellSelections: Record<string, Record<string, unknown>>
   allCellNames: Set<string>
   defaultDataSource?: string
   datasourceVariables?: string[]
@@ -148,6 +149,7 @@ function HgEditorPanel({
   variables,
   timeRange,
   cellResults,
+  cellSelections,
   allCellNames,
   defaultDataSource,
   datasourceVariables,
@@ -230,6 +232,7 @@ function HgEditorPanel({
           variables={variables}
           timeRange={timeRange}
           cellResults={cellResults}
+          cellSelections={cellSelections}
           allCellNames={allCellNames}
           defaultDataSource={defaultDataSource}
           datasourceVariables={datasourceVariables}
@@ -766,6 +769,7 @@ export function NotebookRenderer({
                 variables={getAvailableVariables(selectedCellIndex!)}
                 timeRange={getTimeRangeForApi(rawTimeRange.from, rawTimeRange.to)}
                 cellResults={getAvailableCellResults(selectedCellIndex!)}
+                cellSelections={getAvailableCellSelections(selectedCellIndex!)}
                 allCellNames={existingNames}
                 defaultDataSource={dataSource}
                 showNotebookOption

@@ -57,8 +57,8 @@ export interface HorizontalGroupCellProps {
   variables: Record<string, VariableValue>
   variableValues: Record<string, VariableValue>
   timeRange: { begin: string; end: string }
-  cellResults?: Record<string, import('apache-arrow').Table>
-  cellSelections?: Record<string, Record<string, unknown>>
+  cellResults: Record<string, import('apache-arrow').Table>
+  cellSelections: Record<string, Record<string, unknown>>
   selectedChildName: string | null
   onChildSelect: (childName: string | null) => void
   onChildRun: (childName: string) => void
@@ -490,7 +490,8 @@ interface ChildEditorViewProps {
   showNotebookOption?: boolean
   variables: Record<string, VariableValue>
   timeRange: { begin: string; end: string }
-  cellResults?: Record<string, import('apache-arrow').Table>
+  cellResults: Record<string, import('apache-arrow').Table>
+  cellSelections: Record<string, Record<string, unknown>>
   availableColumns?: string[]
   meta: CellTypeMetadata
 }
@@ -508,6 +509,7 @@ function ChildEditorView({
   variables,
   timeRange,
   cellResults,
+  cellSelections,
   availableColumns,
   meta,
 }: ChildEditorViewProps) {
@@ -597,6 +599,7 @@ function ChildEditorView({
         defaultDataSource={defaultDataSource}
         onRun={onRun}
         cellResults={cellResults}
+        cellSelections={cellSelections}
       />
       {onRun && !!meta.execute && (
         <Button onClick={onRun} className="w-full gap-2">
@@ -620,7 +623,8 @@ interface HorizontalGroupCellEditorProps {
   onChildRun?: (childName: string) => void
   variables: Record<string, VariableValue>
   timeRange: { begin: string; end: string }
-  cellResults?: Record<string, import('apache-arrow').Table>
+  cellResults: Record<string, import('apache-arrow').Table>
+  cellSelections: Record<string, Record<string, unknown>>
   allCellNames: Set<string>
   availableColumns?: string[]
   datasourceVariables?: string[]
@@ -637,6 +641,7 @@ export function HorizontalGroupCellEditor({
   variables,
   timeRange,
   cellResults,
+  cellSelections,
   allCellNames,
   availableColumns,
   datasourceVariables,
@@ -666,6 +671,7 @@ export function HorizontalGroupCellEditor({
         variables={variables}
         timeRange={timeRange}
         cellResults={cellResults}
+        cellSelections={cellSelections}
         availableColumns={availableColumns}
         meta={meta}
       />

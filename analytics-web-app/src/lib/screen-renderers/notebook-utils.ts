@@ -485,13 +485,13 @@ export function validateMacros(
  */
 export function findUnresolvedSelectionMacro(
   sql: string,
-  cellSelections?: Record<string, Record<string, unknown>>,
+  cellSelections: Record<string, Record<string, unknown>>,
 ): string | null {
   const pattern = selectedRefRegex()
   let match
   while ((match = pattern.exec(sql)) !== null) {
     const cellName = match[1]
-    if (!cellSelections || !cellSelections[cellName]) {
+    if (!cellSelections[cellName]) {
       return cellName
     }
   }

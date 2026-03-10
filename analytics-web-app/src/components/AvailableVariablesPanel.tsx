@@ -9,9 +9,9 @@ interface AvailableVariablesPanelProps {
   /** Additional variables to display (e.g., $order_by for table cells) */
   additionalVariables?: { name: string; description: string }[]
   /** Upstream cell result tables (for $cell[N].col references) */
-  cellResults?: Record<string, Table>
+  cellResults: Record<string, Table>
   /** Selected rows from upstream cells (for $cell.selected.col references) */
-  cellSelections?: Record<string, Record<string, unknown>>
+  cellSelections: Record<string, Record<string, unknown>>
 }
 
 function CellSelectionEntry({ cellName, selection }: { cellName: string; selection: Record<string, unknown> }) {
@@ -102,12 +102,12 @@ export function AvailableVariablesPanel({
   }))
 
   // Cell result entries
-  const cellResultEntries = Object.entries(cellResults ?? {}).filter(
+  const cellResultEntries = Object.entries(cellResults).filter(
     ([, table]) => table.numRows > 0,
   )
 
   // Cell selection entries
-  const cellSelectionEntries = Object.entries(cellSelections ?? {})
+  const cellSelectionEntries = Object.entries(cellSelections)
 
   const allVars = [...timeVars, ...userVars, ...additionalVars]
 
