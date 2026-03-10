@@ -88,7 +88,7 @@ export function extractMacroColumns(template: string): string[] {
 }
 
 // Built-in macros that are always valid
-const BUILTIN_MACROS = new Set(['row', 'begin', 'end'])
+const BUILTIN_MACROS = new Set(['row', 'from', 'to'])
 
 /**
  * Find unknown macro patterns like $name that aren't known variables.
@@ -205,6 +205,8 @@ interface OverrideCellProps {
   allColumns?: TableColumn[]
   /** Notebook variables for macro expansion */
   variables?: Record<string, VariableValue>
+  /** Time range for $from/$to macro expansion */
+  timeRange?: { begin: string; end: string }
 }
 
 /**
@@ -212,7 +214,7 @@ interface OverrideCellProps {
  * Expands both notebook variables ($name) and row data ($row.column).
  * Timestamps are automatically formatted as RFC3339 for URL compatibility.
  */
-export function OverrideCell({ format, row, columns, allColumns, variables = {} }: OverrideCellProps) {
+export function OverrideCell({ format, row, columns, allColumns, variables = {}, timeRange }: OverrideCellProps) {
   // Build column type map for proper value formatting (use allColumns for type resolution when available)
   const columnTypes = useMemo(() => {
     const map = new Map<string, DataType>()
@@ -222,8 +224,14 @@ export function OverrideCell({ format, row, columns, allColumns, variables = {} 
     return map
   }, [allColumns, columns])
 
-  // First expand notebook variables, then row macros
-  const withVariables = expandVariableMacros(format, variables)
+  // Merge time range into variables for $from/$to expansion
+  const allVariables = useMemo(() => {
+    if (!timeRange) return variables
+    return { ...variables, from: timeRange.begin, to: timeRange.end }
+  }, [variables, timeRange])
+
+  // First expand notebook variables (including $from/$to), then row macros
+  const withVariables = expandVariableMacros(format, allVariables)
   const expanded = expandRowMacros(withVariables, row, columnTypes)
 
   return (
@@ -383,9 +391,11 @@ export interface TableBodyProps {
   overrides?: ColumnOverride[]
   /** Notebook variables for macro expansion in overrides */
   variables?: Record<string, VariableValue>
+  /** Time range for $from/$to macro expansion in overrides */
+  timeRange?: { begin: string; end: string }
 }
 
-export function TableBody({ data, columns, allColumns, compact = false, overrides = [], variables = {} }: TableBodyProps) {
+export function TableBody({ data, columns, allColumns, compact = false, overrides = [], variables = {}, timeRange }: TableBodyProps) {
   const rowClass = compact
     ? 'even:bg-app-card/30 hover:bg-app-card/50 transition-colors'
     : 'border-b border-theme-border hover:bg-app-card transition-colors'
@@ -418,7 +428,7 @@ export function TableBody({ data, columns, allColumns, compact = false, override
               if (override) {
                 return (
                   <td key={col.name} className={cellClass}>
-                    <OverrideCell format={override} row={row} columns={columns} allColumns={allColumns} variables={variables} />
+                    <OverrideCell format={override} row={row} columns={columns} allColumns={allColumns} variables={variables} timeRange={timeRange} />
                   </td>
                 )
               }

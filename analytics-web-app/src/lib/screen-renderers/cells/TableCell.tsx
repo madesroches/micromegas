@@ -26,7 +26,7 @@ import { usePagination, PaginationBar, DEFAULT_PAGE_SIZE } from '../pagination'
 // Renderer Component
 // =============================================================================
 
-export function TableCell({ data, status, options, onOptionsChange, variables }: CellRendererProps) {
+export function TableCell({ data, status, options, onOptionsChange, variables, timeRange }: CellRendererProps) {
   const table = data[0]
 
   // Extract overrides from options
@@ -105,7 +105,7 @@ export function TableCell({ data, status, options, onOptionsChange, variables }:
               ))}
             </tr>
           </thead>
-          <TableBody data={slicedData} columns={visibleColumns} allColumns={allColumns} compact overrides={overrides} variables={variables} />
+          <TableBody data={slicedData} columns={visibleColumns} allColumns={allColumns} compact overrides={overrides} variables={variables} timeRange={timeRange} />
         </table>
       </div>
       <PaginationBar pagination={pagination} />

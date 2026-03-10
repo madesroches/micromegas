@@ -51,7 +51,7 @@ export function buildSortedIndices(
 // Renderer Component
 // =============================================================================
 
-function ReferenceTableCell({ data, status, options, onOptionsChange, variables }: CellRendererProps) {
+function ReferenceTableCell({ data, status, options, onOptionsChange, variables, timeRange }: CellRendererProps) {
   const table = data[0]
 
   const {
@@ -129,7 +129,7 @@ function ReferenceTableCell({ data, status, options, onOptionsChange, variables 
               ))}
             </tr>
           </thead>
-          <TableBody data={slicedData} columns={visibleColumns} compact variables={variables} />
+          <TableBody data={slicedData} columns={visibleColumns} compact variables={variables} timeRange={timeRange} />
         </table>
       </div>
       <PaginationBar pagination={pagination} />

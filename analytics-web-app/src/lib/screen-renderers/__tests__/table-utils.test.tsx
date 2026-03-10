@@ -219,8 +219,8 @@ describe('findUnknownMacros', () => {
     expect(findUnknownMacros(template, [])).toEqual([])
   })
 
-  it('should not flag $begin and $end as unknown', () => {
-    const template = '[View](/process?from=$begin&to=$end)'
+  it('should not flag $from and $to as unknown', () => {
+    const template = '[View](/process?from=$from&to=$to)'
     expect(findUnknownMacros(template, [])).toEqual([])
   })
 
@@ -308,8 +308,8 @@ describe('validateFormatMacros', () => {
     expect(result.unknownMacros).toEqual(['$invalid'])
   })
 
-  it('should not flag $begin and $end as unknown', () => {
-    const template = '[View](/process?from=$begin&to=$end)'
+  it('should not flag $from and $to as unknown', () => {
+    const template = '[View](/process?from=$from&to=$to)'
     const availableColumns = ['id', 'name']
     const result = validateFormatMacros(template, availableColumns)
     expect(result.missingColumns).toEqual([])
@@ -407,6 +407,19 @@ describe('OverrideCell', () => {
     )
     const link = screen.getByRole('link', { name: 'cpu_usage on server1' })
     expect(link).toHaveAttribute('href', '/metrics?name=cpu_usage')
+  })
+
+  it('should expand $from and $to time range macros', () => {
+    render(
+      <OverrideCell
+        format="[View](/details?from=$from&to=$to&id=$row.id)"
+        row={{ id: '123' }}
+        columns={stringColumns}
+        timeRange={{ begin: '2024-01-01T00:00:00Z', end: '2024-01-02T00:00:00Z' }}
+      />
+    )
+    const link = screen.getByRole('link', { name: 'View' })
+    expect(link).toHaveAttribute('href', '/details?from=2024-01-01T00:00:00Z&to=2024-01-02T00:00:00Z&id=123')
   })
 })
 

@@ -212,7 +212,7 @@ export interface ExpressionContext {
  * Evaluates an expression using an allowlist-based AST evaluator.
  *
  * Available bindings:
- * - `$begin`, `$end`: ISO 8601 timestamp strings
+ * - `$from`, `$to`: ISO 8601 timestamp strings
  * - `$duration_ms`: time range duration in milliseconds
  * - `$innerWidth`: viewport width in CSS pixels
  * - `$devicePixelRatio`: device pixel ratio (e.g., 2 for retina)
@@ -229,8 +229,8 @@ export function evaluateVariableExpression(
   const { begin, end, durationMs, innerWidth, devicePixelRatio, variables } = context
 
   const bindings: Record<string, unknown> = {
-    $begin: begin,
-    $end: end,
+    $from: begin,
+    $to: end,
     $duration_ms: durationMs,
     $innerWidth: innerWidth,
     $devicePixelRatio: devicePixelRatio,

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { ChevronLeft, ChevronRight, ChevronDown, Play } from 'lucide-react'
 import { registerRenderer, ScreenRendererProps } from './index'
@@ -83,6 +83,12 @@ export function TableRenderer({
 
   // Build ORDER BY value from sort state
   const orderByValue = buildOrderByClause(sortColumn, sortDirection)
+
+  // Compute time range for column override macro expansion
+  const timeRange = useMemo(
+    () => getTimeRangeForApi(rawTimeRange.from, rawTimeRange.to),
+    [rawTimeRange.from, rawTimeRange.to]
+  )
 
   // Execute query with $order_by substitution
   const executeQuery = useCallback(
@@ -395,7 +401,7 @@ export function TableRenderer({
               ))}
             </tr>
           </thead>
-          <TableBody data={table} columns={visibleColumns} allColumns={allColumns} overrides={tableConfig.overrides} />
+          <TableBody data={table} columns={visibleColumns} allColumns={allColumns} overrides={tableConfig.overrides} timeRange={timeRange} />
         </table>
       </div>
     )

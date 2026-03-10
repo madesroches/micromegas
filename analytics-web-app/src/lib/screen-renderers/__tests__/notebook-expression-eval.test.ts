@@ -112,9 +112,9 @@ describe('evaluateVariableExpression', () => {
   })
 
   describe('bindings', () => {
-    it('should provide $begin and $end as strings', () => {
-      expect(evaluateVariableExpression('$begin', baseContext)).toBe('2024-01-01T00:00:00Z')
-      expect(evaluateVariableExpression('$end', baseContext)).toBe('2024-01-02T00:00:00Z')
+    it('should provide $from and $to as strings', () => {
+      expect(evaluateVariableExpression('$from', baseContext)).toBe('2024-01-01T00:00:00Z')
+      expect(evaluateVariableExpression('$to', baseContext)).toBe('2024-01-02T00:00:00Z')
     })
 
     it('should provide $duration_ms', () => {
@@ -139,9 +139,9 @@ describe('evaluateVariableExpression', () => {
   })
 
   describe('allowed functions', () => {
-    it('should allow Date arithmetic with $begin and $end', () => {
+    it('should allow Date arithmetic with $from and $to', () => {
       const result = evaluateVariableExpression(
-        'new Date($end) - new Date($begin)',
+        'new Date($to) - new Date($from)',
         baseContext
       )
       expect(result).toBe('86400000')
@@ -219,7 +219,7 @@ describe('evaluateVariableExpression', () => {
     })
 
     it('should reject property access on non-Math objects', () => {
-      expect(() => evaluateVariableExpression('$begin.length', baseContext)).toThrow(/not allowed/)
+      expect(() => evaluateVariableExpression('$from.length', baseContext)).toThrow(/not allowed/)
     })
 
     it('should reject computed member access (bracket notation)', () => {
