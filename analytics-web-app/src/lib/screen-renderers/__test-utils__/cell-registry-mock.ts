@@ -117,7 +117,7 @@ const createSqlExecute = () => {
     if (!config.sql) {
       return { data: [] }
     }
-    const sql = substituteMacros(config.sql, variables, timeRange)
+    const sql = substituteMacros(config.sql, variables, timeRange, {}, {})
     const data = await runQuery(sql)
     return { data: [data] }
   }
@@ -140,7 +140,7 @@ const createVariableExecute = () => {
     if (config.variableType !== 'combobox' || !config.sql) {
       return null // Nothing to execute
     }
-    const sql = substituteMacros(config.sql, variables, timeRange)
+    const sql = substituteMacros(config.sql, variables, timeRange, {}, {})
     const data = await runQuery(sql)
     return { data: [data], variableOptions: [{ label: 'Option 1', value: 'val0' }] }
   }

@@ -150,7 +150,7 @@ function PropertyTimelineCellEditor({ config, onChange, variables, timeRange, on
 
   // Validate macro references in SQL
   const validationErrors = useMemo(() => {
-    return validateMacros(ptConfig.sql, variables, cellResults).errors
+    return validateMacros(ptConfig.sql, variables, cellResults ?? {}, {}).errors
   }, [ptConfig.sql, variables, cellResults])
 
   return (
@@ -205,7 +205,7 @@ export const propertyTimelineMetadata: CellTypeMetadata = {
   }),
 
   execute: async (config: CellConfig, { variables, cellResults, cellSelections, timeRange, runQuery }: CellExecutionContext) => {
-    const sql = substituteMacros((config as QueryCellConfig).sql, variables, timeRange, cellResults, cellSelections)
+    const sql = substituteMacros((config as QueryCellConfig).sql, variables, timeRange, cellResults, cellSelections ?? {})
     const data = await runQuery(sql)
     return { data: [data] }
   },

@@ -96,7 +96,7 @@ function substituteOptionsWithMacros(
   for (const [key, value] of Object.entries(options)) {
     if (typeof value === 'string') {
       // Apply macro substitution to string values
-      result[key] = substituteMacros(value, variables, timeRange, cellResults, cellSelections)
+      result[key] = substituteMacros(value, variables, timeRange, cellResults ?? {}, cellSelections ?? {})
     } else {
       // Keep non-string values as-is
       result[key] = value
@@ -187,7 +187,7 @@ export function ChartCell({ data, status, options, onOptionsChange, variables, t
     // Resolve macros in per-series units
     const resolvedSeries: ChartSeriesData[] = multiResult.series.map(s => ({
       ...s,
-      unit: s.unit ? substituteMacros(s.unit, variables, timeRange, cellResults, cellSelections) : '',
+      unit: s.unit ? substituteMacros(s.unit, variables, timeRange, cellResults ?? {}, cellSelections ?? {}) : '',
     }))
 
     return (
@@ -230,7 +230,7 @@ export function ChartCell({ data, status, options, onOptionsChange, variables, t
   const singleQueryMeta = (options as Record<string, unknown>)?._queryMeta as
     { unit?: string; label?: string }[] | undefined
   const chartUnit = singleQueryMeta?.[0]?.unit
-    ? substituteMacros(singleQueryMeta[0].unit, variables, timeRange, cellResults, cellSelections)
+    ? substituteMacros(singleQueryMeta[0].unit, variables, timeRange, cellResults ?? {}, cellSelections ?? {})
     : (resolvedOptions?.unit as string) ?? undefined
   const chartTitle = singleQueryMeta?.[0]?.label || undefined
 
@@ -291,10 +291,10 @@ function ChartCellEditor({ config, onChange, variables, timeRange, datasourceVar
     const errors: string[] = []
     for (let i = 0; i < v2.queries.length; i++) {
       const q = v2.queries[i]
-      const sqlValidation = validateMacros(q.sql, variables, cellResults)
+      const sqlValidation = validateMacros(q.sql, variables, cellResults ?? {}, {})
       sqlValidation.errors.forEach(e => errors.push(`Query ${i + 1}: ${e}`))
       if (q.unit) {
-        const unitValidation = validateMacros(q.unit, variables, cellResults)
+        const unitValidation = validateMacros(q.unit, variables, cellResults ?? {}, {})
         unitValidation.errors.forEach(e => errors.push(`Query ${i + 1} unit: ${e}`))
       }
     }
@@ -435,7 +435,7 @@ export const chartMetadata: CellTypeMetadata = {
     if (v2.queries.length <= 1) {
       // Single query path — always use runQueryAs when available so per-query
       // dataSource is respected (v2 configs have no top-level dataSource)
-      const sql = substituteMacros(v2.queries[0]?.sql ?? '', variables, timeRange, cellResults, cellSelections)
+      const sql = substituteMacros(v2.queries[0]?.sql ?? '', variables, timeRange, cellResults, cellSelections ?? {})
       if (runQueryAs) {
         const tableName = queryTableName(config.name, v2.queries[0]?.name)
         const table = await runQueryAs(sql, tableName, v2.queries[0]?.dataSource)
@@ -448,7 +448,7 @@ export const chartMetadata: CellTypeMetadata = {
     // Multi-query execution — return flat array of tables
     const tables: import('apache-arrow').Table[] = []
     for (const query of v2.queries) {
-      const sql = substituteMacros(query.sql, variables, timeRange, cellResults, cellSelections)
+      const sql = substituteMacros(query.sql, variables, timeRange, cellResults, cellSelections ?? {})
       if (runQueryAs) {
         const tableName = queryTableName(config.name, query.name)
         tables.push(await runQueryAs(sql, tableName, query.dataSource))

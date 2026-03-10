@@ -16,7 +16,7 @@ export function MarkdownCell({ content, variables, timeRange, cellResults, cellS
   // Apply macro substitution to markdown content
   const markdownContent = useMemo(() => {
     if (!content) return ''
-    return substituteMacros(content, variables, timeRange, cellResults, cellSelections)
+    return substituteMacros(content, variables, timeRange, cellResults ?? {}, cellSelections ?? {})
   }, [content, variables, timeRange, cellResults, cellSelections])
 
   return (
@@ -36,7 +36,7 @@ function MarkdownCellEditor({ config, onChange, variables, timeRange, cellResult
   // Validate macro references in content
   const validationErrors = useMemo(() => {
     if (!mdConfig.content) return []
-    const result = validateMacros(mdConfig.content, variables, cellResults)
+    const result = validateMacros(mdConfig.content, variables, cellResults ?? {}, {})
     return result.errors
   }, [mdConfig.content, variables, cellResults])
 

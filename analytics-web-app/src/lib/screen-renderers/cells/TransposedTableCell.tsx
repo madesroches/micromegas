@@ -204,7 +204,7 @@ export const transposedTableMetadata: CellTypeMetadata = {
   }),
 
   execute: async (config: CellConfig, { variables, cellResults, cellSelections, timeRange, runQuery }: CellExecutionContext) => {
-    const sql = substituteMacros((config as QueryCellConfig).sql, variables, timeRange, cellResults, cellSelections)
+    const sql = substituteMacros((config as QueryCellConfig).sql, variables, timeRange, cellResults, cellSelections ?? {})
     const data = await runQuery(sql)
     return { data: [data] }
   },

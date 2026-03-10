@@ -306,8 +306,8 @@ export function substituteMacros(
   sql: string,
   variables: Record<string, VariableValue>,
   timeRange: { begin: string; end: string },
-  cellResults?: Record<string, Table>,
-  cellSelections?: Record<string, Record<string, unknown>>,
+  cellResults: Record<string, Table>,
+  cellSelections: Record<string, Record<string, unknown>>,
 ): string {
   let result = sql
 
@@ -317,33 +317,29 @@ export function substituteMacros(
 
   // 2. Cell result row references: $cell[N].column
   //    Must process before dotted/simple variables to avoid partial matches
-  if (cellResults) {
-    result = result.replace(cellRefRegex(), (match, cellName, rowIdxStr, colName) => {
-      const table = cellResults[cellName]
-      if (!table) return match // leave unresolved
-      const rowIdx = parseInt(rowIdxStr, 10)
-      if (rowIdx >= table.numRows) return match
-      const row = table.get(rowIdx)
-      if (!row || row[colName] === undefined || row[colName] === null) return match
-      const field = table.schema.fields.find((f) => f.name === colName)
-      return escapeSqlValue(formatArrowValue(row[colName], field?.type))
-    })
-  }
+  result = result.replace(cellRefRegex(), (match, cellName, rowIdxStr, colName) => {
+    const table = cellResults[cellName]
+    if (!table) return match // leave unresolved
+    const rowIdx = parseInt(rowIdxStr, 10)
+    if (rowIdx >= table.numRows) return match
+    const row = table.get(rowIdx)
+    if (!row || row[colName] === undefined || row[colName] === null) return match
+    const field = table.schema.fields.find((f) => f.name === colName)
+    return escapeSqlValue(formatArrowValue(row[colName], field?.type))
+  })
 
   // 2b. Selected row references: $cell.selected.column
   //     Must process before dotted variable pass to avoid partial matches.
   //     When no selection exists, resolves to empty string.
-  if (cellSelections) {
-    result = result.replace(selectedRefRegex(), (match, cellName, colName) => {
-      const selection = cellSelections[cellName]
-      if (!selection) return ''
-      const value = selection[colName]
-      if (value === undefined || value === null) return ''
-      const table = cellResults?.[cellName]
-      const field = table?.schema.fields.find((f) => f.name === colName)
-      return escapeSqlValue(formatArrowValue(value, field?.type))
-    })
-  }
+  result = result.replace(selectedRefRegex(), (match, cellName, colName) => {
+    const selection = cellSelections[cellName]
+    if (!selection) return ''
+    const value = selection[colName]
+    if (value === undefined || value === null) return ''
+    const table = cellResults[cellName]
+    const field = table?.schema.fields.find((f) => f.name === colName)
+    return escapeSqlValue(formatArrowValue(value, field?.type))
+  })
 
   // 3. Handle dotted variable references first: $variable.column
   //    Must process before simple variables to avoid partial matches
@@ -398,8 +394,8 @@ export interface MacroValidationResult {
 export function validateMacros(
   text: string,
   variables: Record<string, VariableValue>,
-  cellResults?: Record<string, Table>,
-  cellSelections?: Record<string, Record<string, unknown>>,
+  cellResults: Record<string, Table>,
+  cellSelections: Record<string, Record<string, unknown>>,
 ): MacroValidationResult {
   const errors: string[] = []
 
@@ -408,7 +404,6 @@ export function validateMacros(
   let match
   while ((match = cellRefPattern.exec(text)) !== null) {
     const [, cellName, rowIdxStr, colName] = match
-    if (!cellResults) continue
     const table = cellResults[cellName]
     if (!table) {
       errors.push(`Unknown cell: ${cellName}`)
@@ -429,7 +424,6 @@ export function validateMacros(
   const selectedRefPattern = selectedRefRegex()
   while ((match = selectedRefPattern.exec(text)) !== null) {
     const [, cellName, colName] = match
-    if (!cellSelections) continue
     if (!(cellName in cellSelections)) {
       errors.push(`Unknown cell: ${cellName}`)
     } else {

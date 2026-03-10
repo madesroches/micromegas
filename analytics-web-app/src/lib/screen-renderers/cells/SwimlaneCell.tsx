@@ -403,7 +403,7 @@ function SwimlaneCellEditor({ config, onChange, variables, timeRange, onRun, cel
 
   // Validate macro references in SQL
   const validationErrors = useMemo(() => {
-    return validateMacros(slConfig.sql, variables, cellResults).errors
+    return validateMacros(slConfig.sql, variables, cellResults ?? {}, {}).errors
   }, [slConfig.sql, variables, cellResults])
 
   return (
@@ -458,7 +458,7 @@ export const swimlaneMetadata: CellTypeMetadata = {
   }),
 
   execute: async (config: CellConfig, { variables, cellResults, cellSelections, timeRange, runQuery }: CellExecutionContext) => {
-    const sql = substituteMacros((config as QueryCellConfig).sql, variables, timeRange, cellResults, cellSelections)
+    const sql = substituteMacros((config as QueryCellConfig).sql, variables, timeRange, cellResults, cellSelections ?? {})
     const data = await runQuery(sql)
     return { data: [data] }
   },
