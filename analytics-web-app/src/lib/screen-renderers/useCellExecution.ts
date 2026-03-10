@@ -131,16 +131,27 @@ export function useCellExecution({
         return true
       }
 
+      // Gather variables, cell results, and selections from cells above
+      // (use refs for synchronous access during execution)
+      const availableVariables: Record<string, VariableValue> = {}
+      const availableCellResults: Record<string, Table> = {}
+      const availableCellSelections: Record<string, Record<string, unknown>> = {}
+      for (let i = 0; i < cellIndex; i++) {
+        const prevCell = cells[i]
+        if (prevCell.type === 'variable' && variableValuesRef.current[prevCell.name] !== undefined) {
+          availableVariables[prevCell.name] = variableValuesRef.current[prevCell.name]
+        }
+        const table = cellResultsRef.current[prevCell.name]
+        if (table) availableCellResults[prevCell.name] = table
+        const selection = cellSelectionsRef.current[prevCell.name]
+        if (selection) availableCellSelections[prevCell.name] = selection
+      }
+
       // Check for unresolved $cell.selected.column macros — if the SQL contains
       // a selection reference but no row is selected, show a waiting placeholder
       const cellSql = (cell as QueryCellConfig).sql
       if (cellSql) {
-        const availableSels: Record<string, Record<string, unknown>> = {}
-        for (let i = 0; i < cellIndex; i++) {
-          const sel = cellSelectionsRef.current[cells[i].name]
-          if (sel) availableSels[cells[i].name] = sel
-        }
-        const unresolvedCell = findUnresolvedSelectionMacro(cellSql, availableSels)
+        const unresolvedCell = findUnresolvedSelectionMacro(cellSql, availableCellSelections)
         if (unresolvedCell) {
           completeCellExecution(cell.name, {
             status: 'blocked',
@@ -164,21 +175,6 @@ export function useCellExecution({
 
       // Resolve relative time range to absolute times fresh at execution time
       const timeRange = getTimeRangeForApi(rawTimeRange.from, rawTimeRange.to)
-
-      // Gather variables from cells above (use ref for synchronous access during execution)
-      const availableVariables: Record<string, VariableValue> = {}
-      const availableCellResults: Record<string, Table> = {}
-      const availableCellSelections: Record<string, Record<string, unknown>> = {}
-      for (let i = 0; i < cellIndex; i++) {
-        const prevCell = cells[i]
-        if (prevCell.type === 'variable' && variableValuesRef.current[prevCell.name] !== undefined) {
-          availableVariables[prevCell.name] = variableValuesRef.current[prevCell.name]
-        }
-        const table = cellResultsRef.current[prevCell.name]
-        if (table) availableCellResults[prevCell.name] = table
-        const selection = cellSelectionsRef.current[prevCell.name]
-        if (selection) availableCellSelections[prevCell.name] = selection
-      }
 
       // Create new abort controller for this execution
       abortControllerRef.current?.abort()
