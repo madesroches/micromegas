@@ -169,11 +169,11 @@ describe('MarkdownCell', () => {
       expect(screen.getByText('Metric: DeltaTime (seconds)')).toBeInTheDocument()
     })
 
-    it('should substitute $begin and $end time range variables', () => {
+    it('should substitute $from and $to time range variables', () => {
       render(
         <MarkdownCell
           {...createMockProps({
-            content: 'Time range: $begin to $end',
+            content: 'Time range: $from to $to',
             timeRange: { begin: '2024-01-01T00:00:00Z', end: '2024-01-02T00:00:00Z' },
           })}
         />

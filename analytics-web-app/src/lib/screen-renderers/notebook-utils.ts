@@ -267,7 +267,7 @@ function escapeSqlValue(value: string): string {
 
 /**
  * Substitutes macros in SQL with variable values and time range.
- * - $begin and $end are replaced with timestamp values (user controls quoting)
+ * - $from and $to are replaced with timestamp values (user controls quoting)
  * - $variable.column syntax accesses specific columns in multi-column variables
  * - $variable syntax accesses the first column value (or the string value for simple variables)
  * - User variables are replaced without quotes (SQL author controls quoting)
@@ -281,9 +281,9 @@ export function substituteMacros(
 ): string {
   let result = sql
 
-  // 1. Substitute $begin and $end (user controls quoting, like other variables)
-  result = result.replace(/\$begin\b/g, escapeSqlValue(timeRange.begin))
-  result = result.replace(/\$end\b/g, escapeSqlValue(timeRange.end))
+  // 1. Substitute $from and $to (user controls quoting, like other variables)
+  result = result.replace(/\$from\b/g, escapeSqlValue(timeRange.begin))
+  result = result.replace(/\$to\b/g, escapeSqlValue(timeRange.end))
 
   // 2. Cell result row references: $cell[N].column
   //    Must process before dotted/simple variables to avoid partial matches
@@ -406,7 +406,7 @@ export function validateMacros(
   while ((match = simplePattern.exec(text)) !== null) {
     const [, varName] = match
     // Skip built-in variables
-    if (varName === 'begin' || varName === 'end' || varName === 'order_by') {
+    if (varName === 'from' || varName === 'to' || varName === 'order_by') {
       continue
     }
     if (variables[varName] === undefined) {

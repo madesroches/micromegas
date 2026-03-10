@@ -323,7 +323,7 @@ function VariableCellEditor({ config, onChange, variables, timeRange, datasource
           </div>
           <div className="text-xs text-theme-text-muted space-y-1">
             <div>
-              Bindings: <code className="text-theme-text-primary">$begin</code>, <code className="text-theme-text-primary">$end</code>,{' '}
+              Bindings: <code className="text-theme-text-primary">$from</code>, <code className="text-theme-text-primary">$to</code>,{' '}
               <code className="text-theme-text-primary">$duration_ms</code>,{' '}
               <code className="text-theme-text-primary">$innerWidth</code>,{' '}
               <code className="text-theme-text-primary">$devicePixelRatio</code>,{' '}

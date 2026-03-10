@@ -49,8 +49,8 @@ export function AvailableVariablesPanel({
 }: AvailableVariablesPanelProps) {
   // Time range variables (always simple strings)
   const timeVars = [
-    { name: 'begin', value: timeRange.begin, isMultiColumn: false },
-    { name: 'end', value: timeRange.end, isMultiColumn: false },
+    { name: 'from', value: timeRange.begin, isMultiColumn: false },
+    { name: 'to', value: timeRange.end, isMultiColumn: false },
   ]
 
   // User variables (can be simple strings or multi-column objects)
