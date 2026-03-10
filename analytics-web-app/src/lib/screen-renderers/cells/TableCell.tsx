@@ -37,10 +37,10 @@ export function TableCell({ data, status, options, onOptionsChange, variables, t
   const [selectedRowIndex, setSelectedRowIndex] = useState<number | null>(null)
 
   // Clear selection when data changes (re-execution)
-  const dataRef = useMemo(() => table, [table])
   useEffect(() => {
     setSelectedRowIndex(null)
-  }, [dataRef])
+    onSelectionChange?.(null)
+  }, [table, onSelectionChange])
 
   const handleRowSelect = useCallback(
     (rowIndex: number | null) => {

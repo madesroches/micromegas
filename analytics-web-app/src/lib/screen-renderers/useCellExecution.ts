@@ -308,6 +308,10 @@ export function useCellExecution({
       // Reset selections for cells being re-executed
       if (startIndex === 0) {
         cellSelectionsRef.current = {}
+      } else {
+        for (let i = startIndex; i < cells.length; i++) {
+          delete cellSelectionsRef.current[cells[i].name]
+        }
       }
       // Reset statuses to idle so useFadeOnIdle detects a change even for
       // fast cells where React would batch loading→success into one render.

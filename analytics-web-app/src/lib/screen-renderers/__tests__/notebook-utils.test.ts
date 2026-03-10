@@ -698,7 +698,7 @@ describe('selected row ref substitution', () => {
     expect(result).toBe("SELECT * FROM view_instance('log_entries', 'abc123')")
   })
 
-  it('should leave macro unresolved for missing cell', () => {
+  it('should resolve to empty string for missing cell', () => {
     const result = substituteMacros(
       'SELECT $unknown.selected.col',
       {},
@@ -706,10 +706,10 @@ describe('selected row ref substitution', () => {
       {},
       {},
     )
-    expect(result).toBe('SELECT $unknown.selected.col')
+    expect(result).toBe('SELECT ')
   })
 
-  it('should leave macro unresolved for missing column in selection', () => {
+  it('should resolve to empty string for missing column in selection', () => {
     const result = substituteMacros(
       'SELECT $cell.selected.missing',
       {},
@@ -717,10 +717,10 @@ describe('selected row ref substitution', () => {
       {},
       { cell: { col: 'val' } },
     )
-    expect(result).toBe('SELECT $cell.selected.missing')
+    expect(result).toBe('SELECT ')
   })
 
-  it('should leave macro unresolved when no selection exists (cell not in cellSelections)', () => {
+  it('should resolve to empty string when no selection exists (cell not in cellSelections)', () => {
     const result = substituteMacros(
       'SELECT $cell.selected.col',
       {},
@@ -728,7 +728,7 @@ describe('selected row ref substitution', () => {
       {},
       {},
     )
-    expect(result).toBe('SELECT $cell.selected.col')
+    expect(result).toBe('SELECT ')
   })
 
   it('should escape single quotes in selected values', () => {
@@ -789,7 +789,7 @@ describe('selected row ref substitution', () => {
       {},
       { cell: { col: null as unknown } },
     )
-    expect(result).toBe('SELECT $cell.selected.col')
+    expect(result).toBe('SELECT ')
   })
 })
 

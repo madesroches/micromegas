@@ -313,14 +313,15 @@ export function substituteMacros(
   }
 
   // 2b. Selected row references: $cell.selected.column
-  //     Must process before dotted variable pass to avoid partial matches
+  //     Must process before dotted variable pass to avoid partial matches.
+  //     When no selection exists, resolves to empty string.
   if (cellSelections) {
     const selectedPattern = /\$([a-zA-Z_][a-zA-Z0-9_]*)\.selected\.([a-zA-Z_][a-zA-Z0-9_]*)\b/g
     result = result.replace(selectedPattern, (match, cellName, colName) => {
       const selection = cellSelections[cellName]
-      if (!selection) return match // leave unresolved
+      if (!selection) return ''
       const value = selection[colName]
-      if (value === undefined || value === null) return match
+      if (value === undefined || value === null) return ''
       const table = cellResults?.[cellName]
       const field = table?.schema.fields.find((f) => f.name === colName)
       return escapeSqlValue(formatArrowValue(value, field?.type))
