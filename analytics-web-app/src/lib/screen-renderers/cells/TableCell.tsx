@@ -17,7 +17,6 @@ import {
   SortHeader,
   TableBody,
   HiddenColumnsBar,
-  SelectionBadge,
   buildOrderByClause,
   useColumnManagement,
   ColumnOverride,
@@ -173,21 +172,6 @@ export function TableCell({ data, status, options, onOptionsChange, variables, t
           />
         </table>
       </div>
-      {selectionMode === 'single' && selectedRowIndex !== null && table.get(selectedRowIndex) && (
-        <SelectionBadge
-          selectedRowIndex={selectedRowIndex}
-          row={(() => {
-            const r = table.get(selectedRowIndex)!
-            const obj: Record<string, unknown> = {}
-            for (const field of table.schema.fields) {
-              obj[field.name] = r[field.name]
-            }
-            return obj
-          })()}
-          columns={visibleColumns}
-          onClear={() => handleRowSelect(null)}
-        />
-      )}
       <PaginationBar pagination={pagination} />
     </div>
   )

@@ -488,54 +488,6 @@ export function TableBody({ data, columns, allColumns, compact = false, override
 }
 
 // =============================================================================
-// Selection Badge Component
-// =============================================================================
-
-export interface SelectionBadgeProps {
-  /** Currently selected row index */
-  selectedRowIndex: number
-  /** Row data for the selected row */
-  row: Record<string, unknown>
-  /** Columns for display */
-  columns: TableColumn[]
-  /** Clear the selection */
-  onClear: () => void
-}
-
-export function SelectionBadge({ selectedRowIndex, row, columns, onClear }: SelectionBadgeProps) {
-  // Show first 2 column values as preview
-  const preview = columns
-    .slice(0, 2)
-    .map((col) => {
-      const val = row[col.name]
-      if (val == null) return '-'
-      const s = String(val)
-      return s.length > 24 ? s.slice(0, 24) + '...' : s
-    })
-    .join(' / ')
-
-  return (
-    <div className="flex items-center gap-2 px-2 py-1 text-xs bg-[rgba(21,101,192,0.08)] border-t border-theme-border">
-      <span className="text-theme-text-secondary">
-        Selected: row {selectedRowIndex}
-      </span>
-      <span className="text-theme-text-muted">&mdash;</span>
-      <span className="text-theme-text-primary font-mono truncate">{preview}</span>
-      <button
-        onClick={(e) => {
-          e.stopPropagation()
-          onClear()
-        }}
-        className="ml-auto text-theme-text-muted hover:text-theme-text-primary transition-colors"
-        title="Clear selection"
-      >
-        <X className="w-3 h-3" />
-      </button>
-    </div>
-  )
-}
-
-// =============================================================================
 // Cell Formatting
 // =============================================================================
 
