@@ -15,6 +15,7 @@ This file documents the historical progress of the Micromegas project. For curre
 * **Dependencies:**
   * Update DataFusion to 52.2 and remove LimitPushdown workaround (#882)
 * **Notebook Enhancements:**
+  * Rename $begin/$end macros to $from/$to and fix expansion in column overrides (#914)
   * Add Insert cell above/below options to cell context menu
   * Add Download CSV menu option for notebook cells (#900)
   * Add cell result row references in macros — `$cell[N].column` syntax for chaining queries (#898)
