@@ -145,7 +145,7 @@ export function useCellExecution({
           completeCellExecution(cell.name, {
             status: 'blocked',
             data: [],
-            error: `Select a row in **${unresolvedCell}** to view results`,
+            error: `Select a row in "${unresolvedCell}" to view results`,
           })
           return true // don't block downstream — they may not depend on selections
         }
