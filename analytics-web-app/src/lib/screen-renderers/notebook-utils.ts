@@ -275,6 +275,25 @@ function escapeSqlValue(value: string): string {
   return value.replace(/'/g, "''")
 }
 
+// ==========================================================================
+// Macro regex patterns
+// ==========================================================================
+// Each function returns a fresh RegExp with the 'g' flag so callers get
+// independent lastIndex state.  Defined once to avoid drift between
+// substituteMacros, validateMacros, and findUnresolvedSelectionMacro.
+
+/** $cell[N].column — cell result row reference */
+const cellRefRegex = () => /\$([a-zA-Z_][a-zA-Z0-9_]*)\[(\d+)\]\.([a-zA-Z_][a-zA-Z0-9_]*)\b/g
+
+/** $cell.selected.column — selected row reference (captures cell + column) */
+const selectedRefRegex = () => /\$([a-zA-Z_][a-zA-Z0-9_]*)\.selected\.([a-zA-Z_][a-zA-Z0-9_]*)\b/g
+
+/** $variable.column — dotted variable reference */
+const dottedVarRegex = () => /\$([a-zA-Z_][a-zA-Z0-9_]*)\.([a-zA-Z_][a-zA-Z0-9_]*)\b/g
+
+/** $variable (not followed by . or [) — simple variable reference */
+const simpleVarRegex = () => /\$([a-zA-Z_][a-zA-Z0-9_]*)\b(?![.[])/g
+
 /**
  * Substitutes macros in SQL with variable values and time range.
  * - $from and $to are replaced with timestamp values (user controls quoting)
@@ -299,8 +318,7 @@ export function substituteMacros(
   // 2. Cell result row references: $cell[N].column
   //    Must process before dotted/simple variables to avoid partial matches
   if (cellResults) {
-    const cellRefPattern = /\$([a-zA-Z_][a-zA-Z0-9_]*)\[(\d+)\]\.([a-zA-Z_][a-zA-Z0-9_]*)\b/g
-    result = result.replace(cellRefPattern, (match, cellName, rowIdxStr, colName) => {
+    result = result.replace(cellRefRegex(), (match, cellName, rowIdxStr, colName) => {
       const table = cellResults[cellName]
       if (!table) return match // leave unresolved
       const rowIdx = parseInt(rowIdxStr, 10)
@@ -316,8 +334,7 @@ export function substituteMacros(
   //     Must process before dotted variable pass to avoid partial matches.
   //     When no selection exists, resolves to empty string.
   if (cellSelections) {
-    const selectedPattern = /\$([a-zA-Z_][a-zA-Z0-9_]*)\.selected\.([a-zA-Z_][a-zA-Z0-9_]*)\b/g
-    result = result.replace(selectedPattern, (match, cellName, colName) => {
+    result = result.replace(selectedRefRegex(), (match, cellName, colName) => {
       const selection = cellSelections[cellName]
       if (!selection) return ''
       const value = selection[colName]
@@ -330,8 +347,7 @@ export function substituteMacros(
 
   // 3. Handle dotted variable references first: $variable.column
   //    Must process before simple variables to avoid partial matches
-  const dottedPattern = /\$([a-zA-Z_][a-zA-Z0-9_]*)\.([a-zA-Z_][a-zA-Z0-9_]*)\b/g
-  result = result.replace(dottedPattern, (match, varName, colName) => {
+  result = result.replace(dottedVarRegex(), (match, varName, colName) => {
     const value = variables[varName]
     if (value === undefined) return match // Leave unresolved
 
@@ -388,7 +404,7 @@ export function validateMacros(
   const errors: string[] = []
 
   // Check cell result references: $cell[N].column
-  const cellRefPattern = /\$([a-zA-Z_][a-zA-Z0-9_]*)\[(\d+)\]\.([a-zA-Z_][a-zA-Z0-9_]*)\b/g
+  const cellRefPattern = cellRefRegex()
   let match
   while ((match = cellRefPattern.exec(text)) !== null) {
     const [, cellName, rowIdxStr, colName] = match
@@ -410,7 +426,7 @@ export function validateMacros(
   }
 
   // Check selected row references: $cell.selected.column
-  const selectedRefPattern = /\$([a-zA-Z_][a-zA-Z0-9_]*)\.selected\.([a-zA-Z_][a-zA-Z0-9_]*)\b/g
+  const selectedRefPattern = selectedRefRegex()
   while ((match = selectedRefPattern.exec(text)) !== null) {
     const [, cellName, colName] = match
     if (!cellSelections) continue
@@ -427,13 +443,13 @@ export function validateMacros(
 
   // Collect selected ref cell names so dotted validation skips them
   const selectedRefCellNames = new Set<string>()
-  const selectedRefScan = /\$([a-zA-Z_][a-zA-Z0-9_]*)\.selected\.[a-zA-Z_][a-zA-Z0-9_]*\b/g
+  const selectedRefScan = selectedRefRegex()
   while ((match = selectedRefScan.exec(text)) !== null) {
     selectedRefCellNames.add(match[1])
   }
 
   // Check dotted references: $variable.column (skip $cell.selected.column which was handled above)
-  const dottedPattern = /\$([a-zA-Z_][a-zA-Z0-9_]*)\.([a-zA-Z_][a-zA-Z0-9_]*)\b/g
+  const dottedPattern = dottedVarRegex()
   while ((match = dottedPattern.exec(text)) !== null) {
     const [, varName, colName] = match
     // Skip $cell.selected (part of $cell.selected.column pattern)
@@ -454,8 +470,7 @@ export function validateMacros(
   }
 
   // Check simple variable references: $variable (not followed by a dot or bracket)
-  // eslint-disable-next-line no-useless-escape
-  const simplePattern = /\$([a-zA-Z_][a-zA-Z0-9_]*)\b(?![.\[])/g
+  const simplePattern = simpleVarRegex()
   while ((match = simplePattern.exec(text)) !== null) {
     const [, varName] = match
     // Skip built-in variables
@@ -478,7 +493,7 @@ export function findUnresolvedSelectionMacro(
   sql: string,
   cellSelections?: Record<string, Record<string, unknown>>,
 ): string | null {
-  const pattern = /\$([a-zA-Z_][a-zA-Z0-9_]*)\.selected\.[a-zA-Z_][a-zA-Z0-9_]*\b/g
+  const pattern = selectedRefRegex()
   let match
   while ((match = pattern.exec(sql)) !== null) {
     const cellName = match[1]
