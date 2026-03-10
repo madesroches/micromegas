@@ -9,6 +9,7 @@ use datafusion::logical_expr::{
 use jsonb::RawJsonb;
 use jsonb::jsonpath::parse_json_path;
 use std::any::Any;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 /// A scalar UDF that returns the first match of a JSONPath expression on a JSONB value.
@@ -77,19 +78,24 @@ impl ScalarUDFImpl for JsonbPathQueryFirst {
             })?;
 
         let mut builder = BinaryDictionaryBuilder::<Int32Type>::new();
+        let mut path_cache: HashMap<&str, _> = HashMap::new();
 
         for i in 0..accessor.len() {
             if accessor.is_null(i) || paths.is_null(i) {
                 builder.append_null();
             } else {
                 let path_str = paths.value(i);
-                let json_path = parse_json_path(path_str.as_bytes()).map_err(|e| {
-                    DataFusionError::Execution(format!(
-                        "jsonb_path_query_first: invalid JSONPath '{path_str}': {e}"
-                    ))
-                })?;
+                if !path_cache.contains_key(path_str) {
+                    let parsed = parse_json_path(path_str.as_bytes()).map_err(|e| {
+                        DataFusionError::Execution(format!(
+                            "jsonb_path_query_first: invalid JSONPath '{path_str}': {e}"
+                        ))
+                    })?;
+                    path_cache.insert(path_str, parsed);
+                }
+                let json_path = path_cache.get(path_str).expect("just inserted");
                 let raw = RawJsonb::new(accessor.value(i));
-                match raw.select_first_by_path(&json_path) {
+                match raw.select_first_by_path(json_path) {
                     Ok(Some(value)) => builder.append_value(value.as_ref()),
                     Ok(None) => builder.append_null(),
                     Err(e) => return Err(DataFusionError::External(e.into())),
@@ -172,19 +178,24 @@ impl ScalarUDFImpl for JsonbPathQuery {
             })?;
 
         let mut builder = BinaryDictionaryBuilder::<Int32Type>::new();
+        let mut path_cache: HashMap<&str, _> = HashMap::new();
 
         for i in 0..accessor.len() {
             if accessor.is_null(i) || paths.is_null(i) {
                 builder.append_null();
             } else {
                 let path_str = paths.value(i);
-                let json_path = parse_json_path(path_str.as_bytes()).map_err(|e| {
-                    DataFusionError::Execution(format!(
-                        "jsonb_path_query: invalid JSONPath '{path_str}': {e}"
-                    ))
-                })?;
+                if !path_cache.contains_key(path_str) {
+                    let parsed = parse_json_path(path_str.as_bytes()).map_err(|e| {
+                        DataFusionError::Execution(format!(
+                            "jsonb_path_query: invalid JSONPath '{path_str}': {e}"
+                        ))
+                    })?;
+                    path_cache.insert(path_str, parsed);
+                }
+                let json_path = path_cache.get(path_str).expect("just inserted");
                 let raw = RawJsonb::new(accessor.value(i));
-                match raw.select_array_by_path(&json_path) {
+                match raw.select_array_by_path(json_path) {
                     Ok(value) => builder.append_value(value.as_ref()),
                     Err(e) => return Err(DataFusionError::External(e.into())),
                 }

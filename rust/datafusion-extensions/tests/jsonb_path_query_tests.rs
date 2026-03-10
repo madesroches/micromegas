@@ -25,17 +25,29 @@ fn setup_ctx() -> SessionContext {
 }
 
 fn create_binary_table(ctx: &SessionContext, table_name: &str, json_strings: &[&str]) {
-    let jsonb_values: Vec<Vec<u8>> = json_strings
+    create_nullable_binary_table(
+        ctx,
+        table_name,
+        &json_strings.iter().map(|s| Some(*s)).collect::<Vec<_>>(),
+    );
+}
+
+fn create_nullable_binary_table(
+    ctx: &SessionContext,
+    table_name: &str,
+    json_strings: &[Option<&str>],
+) {
+    let jsonb_values: Vec<Option<Vec<u8>>> = json_strings
         .iter()
-        .map(|s| parse_json_to_jsonb(s))
+        .map(|s| s.map(|s| parse_json_to_jsonb(s)))
         .collect();
-    let refs: Vec<&[u8]> = jsonb_values.iter().map(|v| v.as_slice()).collect();
+    let refs: Vec<Option<&[u8]>> = jsonb_values.iter().map(|v| v.as_deref()).collect();
     let schema = Arc::new(Schema::new(vec![Field::new(
         "data",
         DataType::Binary,
-        false,
+        true,
     )]));
-    let array: Arc<BinaryArray> = Arc::new(BinaryArray::from(refs));
+    let array: Arc<BinaryArray> = Arc::new(refs.into_iter().collect::<BinaryArray>());
     let batch = RecordBatch::try_new(schema, vec![array]).expect("failed to create batch");
     ctx.register_batch(table_name, batch)
         .expect("failed to register batch");
@@ -291,4 +303,110 @@ async fn test_composable_with_jsonb_as_string() {
         .expect("expected string values");
     let key = dict.keys().value(0) as usize;
     assert_eq!(values.value(key), "hello world");
+}
+
+#[tokio::test]
+async fn test_path_query_first_filter_expression() {
+    let ctx = setup_ctx();
+    create_binary_table(
+        &ctx,
+        "t",
+        &[r#"{"items": [{"key": "foo", "value": 1}, {"key": "bar", "value": 2}]}"#],
+    );
+    let results = query_first_result(
+        &ctx,
+        r#"SELECT jsonb_path_query_first(data, '$.items[*]?(@.key=="bar").value') FROM t"#,
+    )
+    .await;
+    assert_eq!(results, vec![Some("2".to_string())]);
+}
+
+#[tokio::test]
+async fn test_path_query_filter_expression() {
+    let ctx = setup_ctx();
+    create_binary_table(
+        &ctx,
+        "t",
+        &[r#"[{"name": "Group", "v": 1}, {"name": "Other", "v": 2}, {"name": "Group", "v": 3}]"#],
+    );
+    let results = query_first_result(
+        &ctx,
+        r#"SELECT jsonb_path_query(data, '$[*]?(@.name=="Group").v') FROM t"#,
+    )
+    .await;
+    assert_eq!(results, vec![Some("[1,3]".to_string())]);
+}
+
+#[tokio::test]
+async fn test_path_query_first_null_input() {
+    let ctx = setup_ctx();
+    create_nullable_binary_table(&ctx, "t", &[Some(r#"{"a": 1}"#), None, Some(r#"{"a": 3}"#)]);
+    let results =
+        query_first_result(&ctx, "SELECT jsonb_path_query_first(data, '$.a') FROM t").await;
+    assert_eq!(
+        results,
+        vec![Some("1".to_string()), None, Some("3".to_string())]
+    );
+}
+
+#[tokio::test]
+async fn test_path_query_null_input() {
+    let ctx = setup_ctx();
+    create_nullable_binary_table(&ctx, "t", &[None, Some(r#"{"a": 1}"#)]);
+    let results = query_first_result(&ctx, "SELECT jsonb_path_query(data, '$.a') FROM t").await;
+    assert_eq!(results, vec![None, Some("[1]".to_string())]);
+}
+
+#[tokio::test]
+async fn test_path_query_first_empty_object() {
+    let ctx = setup_ctx();
+    create_binary_table(&ctx, "t", &[r#"{}"#]);
+    let results = query_first_result(
+        &ctx,
+        "SELECT jsonb_path_query_first(data, '$.anything') FROM t",
+    )
+    .await;
+    assert_eq!(results, vec![None]);
+}
+
+#[tokio::test]
+async fn test_path_query_empty_array() {
+    let ctx = setup_ctx();
+    create_binary_table(&ctx, "t", &[r#"[]"#]);
+    let results = query_first_result(&ctx, "SELECT jsonb_path_query(data, '$[*]') FROM t").await;
+    assert_eq!(results, vec![Some("[]".to_string())]);
+}
+
+#[tokio::test]
+async fn test_path_query_first_per_row_path() {
+    let ctx = setup_ctx();
+    // Build a table with both a data column and a path column
+    let json1 = parse_json_to_jsonb(r#"{"a": 1, "b": 2}"#);
+    let json2 = parse_json_to_jsonb(r#"{"a": 10, "b": 20}"#);
+    let json3 = parse_json_to_jsonb(r#"{"a": 100, "b": 200}"#);
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("data", DataType::Binary, false),
+        Field::new("path", DataType::Utf8, false),
+    ]));
+    let data_array: Arc<BinaryArray> = Arc::new(BinaryArray::from(vec![
+        json1.as_slice(),
+        json2.as_slice(),
+        json3.as_slice(),
+    ]));
+    let path_array: Arc<StringArray> = Arc::new(StringArray::from(vec!["$.a", "$.b", "$.a"]));
+    let batch =
+        RecordBatch::try_new(schema, vec![data_array, path_array]).expect("failed to create batch");
+    ctx.register_batch("t", batch)
+        .expect("failed to register batch");
+
+    let results =
+        query_first_result(&ctx, "SELECT jsonb_path_query_first(data, path) FROM t").await;
+    assert_eq!(
+        results,
+        vec![
+            Some("1".to_string()),
+            Some("20".to_string()),
+            Some("100".to_string()),
+        ]
+    );
 }
