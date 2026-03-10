@@ -230,7 +230,7 @@ export function VariableTitleBarContent(props: CellRendererProps) {
 // Editor Component
 // =============================================================================
 
-function VariableCellEditor({ config, onChange, variables, timeRange, datasourceVariables, onRun, cellResults }: CellEditorProps) {
+function VariableCellEditor({ config, onChange, variables, timeRange, datasourceVariables, onRun, cellResults, cellSelections }: CellEditorProps) {
   const varConfig = config as VariableCellConfig
   const variableType = varConfig.variableType || 'combobox'
   const isCombobox = variableType === 'combobox'
@@ -240,9 +240,9 @@ function VariableCellEditor({ config, onChange, variables, timeRange, datasource
   // Validate macro references in SQL (only for combobox type)
   const validationErrors = useMemo(() => {
     if (!isCombobox || !varConfig.sql) return []
-    const result = validateMacros(varConfig.sql, variables, cellResults ?? {}, {})
+    const result = validateMacros(varConfig.sql, variables, cellResults ?? {}, cellSelections ?? {})
     return result.errors
-  }, [isCombobox, varConfig.sql, variables, cellResults])
+  }, [isCombobox, varConfig.sql, variables, cellResults, cellSelections])
 
   return (
     <>

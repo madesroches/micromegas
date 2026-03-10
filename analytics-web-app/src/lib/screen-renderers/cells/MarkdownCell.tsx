@@ -30,15 +30,15 @@ export function MarkdownCell({ content, variables, timeRange, cellResults, cellS
 // Editor Component
 // =============================================================================
 
-function MarkdownCellEditor({ config, onChange, variables, timeRange, cellResults }: CellEditorProps) {
+function MarkdownCellEditor({ config, onChange, variables, timeRange, cellResults, cellSelections }: CellEditorProps) {
   const mdConfig = config as MarkdownCellConfig
 
   // Validate macro references in content
   const validationErrors = useMemo(() => {
     if (!mdConfig.content) return []
-    const result = validateMacros(mdConfig.content, variables, cellResults ?? {}, {})
+    const result = validateMacros(mdConfig.content, variables, cellResults ?? {}, cellSelections ?? {})
     return result.errors
-  }, [mdConfig.content, variables, cellResults])
+  }, [mdConfig.content, variables, cellResults, cellSelections])
 
   return (
     <>

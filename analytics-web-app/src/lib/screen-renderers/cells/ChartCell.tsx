@@ -258,7 +258,7 @@ export function ChartCell({ data, status, options, onOptionsChange, variables, t
 // Editor Component
 // =============================================================================
 
-function ChartCellEditor({ config, onChange, variables, timeRange, datasourceVariables, defaultDataSource, onRun, cellResults }: CellEditorProps) {
+function ChartCellEditor({ config, onChange, variables, timeRange, datasourceVariables, defaultDataSource, onRun, cellResults, cellSelections }: CellEditorProps) {
   // Always work with v2 format
   const v2 = useMemo(() => migrateChartConfig(config), [config])
 
@@ -291,15 +291,15 @@ function ChartCellEditor({ config, onChange, variables, timeRange, datasourceVar
     const errors: string[] = []
     for (let i = 0; i < v2.queries.length; i++) {
       const q = v2.queries[i]
-      const sqlValidation = validateMacros(q.sql, variables, cellResults ?? {}, {})
+      const sqlValidation = validateMacros(q.sql, variables, cellResults ?? {}, cellSelections ?? {})
       sqlValidation.errors.forEach(e => errors.push(`Query ${i + 1}: ${e}`))
       if (q.unit) {
-        const unitValidation = validateMacros(q.unit, variables, cellResults ?? {}, {})
+        const unitValidation = validateMacros(q.unit, variables, cellResults ?? {}, cellSelections ?? {})
         unitValidation.errors.forEach(e => errors.push(`Query ${i + 1} unit: ${e}`))
       }
     }
     return errors
-  }, [v2.queries, variables, cellResults])
+  }, [v2.queries, variables, cellResults, cellSelections])
 
   return (
     <>

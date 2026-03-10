@@ -398,13 +398,13 @@ export function SwimlaneCell({
 // Editor Component
 // =============================================================================
 
-function SwimlaneCellEditor({ config, onChange, variables, timeRange, onRun, cellResults }: CellEditorProps) {
+function SwimlaneCellEditor({ config, onChange, variables, timeRange, onRun, cellResults, cellSelections }: CellEditorProps) {
   const slConfig = config as QueryCellConfig
 
   // Validate macro references in SQL
   const validationErrors = useMemo(() => {
-    return validateMacros(slConfig.sql, variables, cellResults ?? {}, {}).errors
-  }, [slConfig.sql, variables, cellResults])
+    return validateMacros(slConfig.sql, variables, cellResults ?? {}, cellSelections ?? {}).errors
+  }, [slConfig.sql, variables, cellResults, cellSelections])
 
   return (
     <>

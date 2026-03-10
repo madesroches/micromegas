@@ -45,17 +45,6 @@ function CellSelectionEntry({ cellName, selection }: { cellName: string; selecti
   )
 }
 
-function CellSelectionPlaceholder({ cellName }: { cellName: string }) {
-  return (
-    <div className="flex justify-between py-0.5">
-      <span className="text-theme-text-secondary font-mono font-medium">
-        {cellName}.selected
-      </span>
-      <span className="text-amber-500 text-[10px]">no selection</span>
-    </div>
-  )
-}
-
 function CellResultEntry({ cellName, table }: { cellName: string; table: Table }) {
   const [expanded, setExpanded] = useState(false)
   return (
@@ -166,13 +155,9 @@ export function AvailableVariablesPanel({
         {cellSelectionEntries.length > 0 && (cellResultEntries.length > 0 || allVars.length > 0) && (
           <div className="border-t border-theme-border my-1" />
         )}
-        {cellSelectionEntries.map(([cellName, selection]) =>
-          selection ? (
-            <CellSelectionEntry key={cellName} cellName={cellName} selection={selection} />
-          ) : (
-            <CellSelectionPlaceholder key={cellName} cellName={cellName} />
-          )
-        )}
+        {cellSelectionEntries.map(([cellName, selection]) => (
+          <CellSelectionEntry key={cellName} cellName={cellName} selection={selection} />
+        ))}
       </div>
     </div>
   )

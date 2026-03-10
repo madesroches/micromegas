@@ -145,13 +145,13 @@ export function PropertyTimelineCell({
 // Editor Component
 // =============================================================================
 
-function PropertyTimelineCellEditor({ config, onChange, variables, timeRange, onRun, cellResults }: CellEditorProps) {
+function PropertyTimelineCellEditor({ config, onChange, variables, timeRange, onRun, cellResults, cellSelections }: CellEditorProps) {
   const ptConfig = config as QueryCellConfig
 
   // Validate macro references in SQL
   const validationErrors = useMemo(() => {
-    return validateMacros(ptConfig.sql, variables, cellResults ?? {}, {}).errors
-  }, [ptConfig.sql, variables, cellResults])
+    return validateMacros(ptConfig.sql, variables, cellResults ?? {}, cellSelections ?? {}).errors
+  }, [ptConfig.sql, variables, cellResults, cellSelections])
 
   return (
     <>

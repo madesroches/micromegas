@@ -51,9 +51,9 @@ export function TableCell({ data, status, options, onOptionsChange, variables, t
   const handleRowSelect = useCallback(
     (rowIndex: number | null) => {
       setSelectedRowIndex(rowIndex)
-      if (!table || !onSelectionChange) return
+      if (!table || !onSelectionChangeRef.current) return
       if (rowIndex === null) {
-        onSelectionChange(null)
+        onSelectionChangeRef.current(null)
       } else {
         const row = table.get(rowIndex)
         if (row) {
@@ -62,11 +62,11 @@ export function TableCell({ data, status, options, onOptionsChange, variables, t
           for (const field of table.schema.fields) {
             obj[field.name] = row[field.name]
           }
-          onSelectionChange(obj)
+          onSelectionChangeRef.current(obj)
         }
       }
     },
-    [table, onSelectionChange],
+    [table],
   )
 
   // Column management (sort, hide/restore)
