@@ -51,18 +51,28 @@ export function validateVariableName(name: string): string | null {
 }
 
 /**
+ * Visits every leaf cell in a cell list, expanding hg group children in place.
+ * The hg cell itself is skipped; its children are visited left to right.
+ */
+export function forEachCell(cells: CellConfig[], fn: (cell: CellConfig) => void): void {
+  for (const cell of cells) {
+    if (cell.type === 'hg') {
+      for (const child of (cell as HorizontalGroupCellConfig).children) {
+        fn(child)
+      }
+    } else {
+      fn(cell)
+    }
+  }
+}
+
+/**
  * Flattens a cell list for execution by expanding hg children into the top-level list.
  * The hg cell itself is omitted; its children appear in its place (left to right).
  */
 export function flattenCellsForExecution(cells: CellConfig[]): CellConfig[] {
   const result: CellConfig[] = []
-  for (const cell of cells) {
-    if (cell.type === 'hg') {
-      result.push(...(cell as HorizontalGroupCellConfig).children)
-    } else {
-      result.push(cell)
-    }
-  }
+  forEachCell(cells, (cell) => result.push(cell))
   return result
 }
 

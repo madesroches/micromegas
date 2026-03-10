@@ -23,7 +23,7 @@ import { ResizeHandle } from '@/components/ResizeHandle'
 import { Button } from '@/components/ui/button'
 import { useNotebookVariables } from './useNotebookVariables'
 import { useCellExecution } from './useCellExecution'
-import { cleanupVariableParams, resolveCellDataSource, flattenCellsForExecution, collectAllCellNames, validateCellName, sanitizeCellName } from './notebook-utils'
+import { cleanupVariableParams, resolveCellDataSource, flattenCellsForExecution, forEachCell, collectAllCellNames, validateCellName, sanitizeCellName } from './notebook-utils'
 import { HorizontalGroupCell, HorizontalGroupCellEditor } from './cells/HorizontalGroupCell'
 import { arrowTableToCsv, triggerCsvDownload } from './cells/arrow-to-csv'
 import { cleanupTimeParams, useExposeSaveRef } from '@/lib/url-cleanup-utils'
@@ -439,67 +439,45 @@ export function NotebookRenderer({
 
   const datasourceVariables = useMemo(() => {
     if (selectedCellIndex === null) return undefined
-    return cells
-      .slice(0, selectedCellIndex)
-      .filter((c) => c.type === 'variable' && (c as VariableCellConfig).variableType === 'datasource')
-      .map((c) => c.name)
+    const result: string[] = []
+    forEachCell(cells.slice(0, selectedCellIndex), (cell) => {
+      if (cell.type === 'variable' && (cell as VariableCellConfig).variableType === 'datasource') {
+        result.push(cell.name)
+      }
+    })
+    return result
   }, [cells, selectedCellIndex])
 
   // Collect available cell results for a cell at a given top-level index
   const getAvailableCellResults = (index: number): Record<string, import('apache-arrow').Table> => {
     const results: Record<string, import('apache-arrow').Table> = {}
-    for (let i = 0; i < index; i++) {
-      const cell = cells[i]
+    forEachCell(cells.slice(0, index), (cell) => {
       const state = cellStates[cell.name]
       if (state?.status === 'success' && state.data.length > 0) {
         results[cell.name] = state.data[0]
       }
-      if (cell.type === 'hg') {
-        for (const child of (cell as HorizontalGroupCellConfig).children) {
-          const childState = cellStates[child.name]
-          if (childState?.status === 'success' && childState.data.length > 0) {
-            results[child.name] = childState.data[0]
-          }
-        }
-      }
-    }
+    })
     return results
   }
 
   // Collect available cell selections for a cell at a given top-level index
   const getAvailableCellSelections = (index: number): Record<string, Record<string, unknown>> => {
     const selections: Record<string, Record<string, unknown>> = {}
-    for (let i = 0; i < index; i++) {
-      const cell = cells[i]
+    forEachCell(cells.slice(0, index), (cell) => {
       const sel = cellSelectionsRef.current[cell.name]
       if (sel) selections[cell.name] = sel
-      if (cell.type === 'hg') {
-        for (const child of (cell as HorizontalGroupCellConfig).children) {
-          const childSel = cellSelectionsRef.current[child.name]
-          if (childSel) selections[child.name] = childSel
-        }
-      }
-    }
+    })
     return selections
   }
 
   // Collect available variables for a cell at a given top-level index
   const getAvailableVariables = (index: number): Record<string, VariableValue> => {
     const available: Record<string, VariableValue> = {}
-    for (let i = 0; i < index; i++) {
-      const prevCell = cells[i]
-      if (prevCell.type === 'variable' && variableValues[prevCell.name] !== undefined) {
-        available[prevCell.name] = variableValues[prevCell.name]
+    forEachCell(cells.slice(0, index), (cell) => {
+      if (cell.type === 'variable' && variableValues[cell.name] !== undefined) {
+        available[cell.name] = variableValues[cell.name]
       }
-      // Also collect variable cells inside hg groups above
-      if (prevCell.type === 'hg') {
-        for (const child of (prevCell as HorizontalGroupCellConfig).children) {
-          if (child.type === 'variable' && variableValues[child.name] !== undefined) {
-            available[child.name] = variableValues[child.name]
-          }
-        }
-      }
-    }
+    })
     return available
   }
 
