@@ -307,7 +307,7 @@ export const CellContainer = forwardRef<HTMLDivElement, CellContainerProps>(func
     if (status === 'blocked') {
       return (
         <div className="bg-app-card border border-dashed border-theme-border rounded-md p-6 text-center text-theme-text-muted">
-          Waiting for cell above to succeed
+          {error || 'Waiting for cell above to succeed'}
         </div>
       )
     }

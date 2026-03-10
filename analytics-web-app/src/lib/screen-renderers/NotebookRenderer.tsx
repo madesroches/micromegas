@@ -16,14 +16,14 @@ import {
   getCellRenderer,
   getCellTypeMetadata,
 } from './cell-registry'
-import type { CellConfig, VariableCellConfig, NotebookConfig, HorizontalGroupCellConfig, VariableValue } from './notebook-types'
+import type { CellConfig, VariableCellConfig, QueryCellConfig, NotebookConfig, HorizontalGroupCellConfig, VariableValue } from './notebook-types'
 import { CellContainer } from '@/components/CellContainer'
 import { CellEditor } from '@/components/CellEditor'
 import { ResizeHandle } from '@/components/ResizeHandle'
 import { Button } from '@/components/ui/button'
 import { useNotebookVariables } from './useNotebookVariables'
 import { useCellExecution } from './useCellExecution'
-import { cleanupVariableParams, resolveCellDataSource, flattenCellsForExecution, collectAllCellNames, validateCellName, sanitizeCellName } from './notebook-utils'
+import { cleanupVariableParams, resolveCellDataSource, flattenCellsForExecution, forEachCell, collectAllCellNames, validateCellName, sanitizeCellName } from './notebook-utils'
 import { HorizontalGroupCell, HorizontalGroupCellEditor } from './cells/HorizontalGroupCell'
 import { arrowTableToCsv, triggerCsvDownload } from './cells/arrow-to-csv'
 import { cleanupTimeParams, useExposeSaveRef } from '@/lib/url-cleanup-utils'
@@ -130,7 +130,8 @@ interface HgEditorPanelProps {
   onChildRun: (childName: string) => void
   variables: Record<string, VariableValue>
   timeRange: { begin: string; end: string }
-  cellResults?: Record<string, import('apache-arrow').Table>
+  cellResults: Record<string, import('apache-arrow').Table>
+  cellSelections: Record<string, Record<string, unknown>>
   allCellNames: Set<string>
   defaultDataSource?: string
   datasourceVariables?: string[]
@@ -148,6 +149,7 @@ function HgEditorPanel({
   variables,
   timeRange,
   cellResults,
+  cellSelections,
   allCellNames,
   defaultDataSource,
   datasourceVariables,
@@ -230,6 +232,7 @@ function HgEditorPanel({
           variables={variables}
           timeRange={timeRange}
           cellResults={cellResults}
+          cellSelections={cellSelections}
           allCellNames={allCellNames}
           defaultDataSource={defaultDataSource}
           datasourceVariables={datasourceVariables}
@@ -317,7 +320,7 @@ export function NotebookRenderer({
   const executionCells = useMemo(() => flattenCellsForExecution(cells), [cells])
 
   // Cell execution state management (uses flattened list)
-  const { cellStates, executeCell, executeFromCell, migrateCellState, removeCellState } = useCellExecution({
+  const { cellStates, executeCell, executeFromCell, migrateCellState, removeCellState, updateCellSelection, cellSelectionsRef } = useCellExecution({
     cells: executionCells,
     rawTimeRange,
     variableValuesRef,
@@ -352,8 +355,17 @@ export function NotebookRenderer({
     [executionCells, executeFromCell]
   )
 
+  // Execute cells after a named cell (skips the cell itself)
+  const executeAfterCellByName = useCallback(
+    async (name: string) => {
+      const idx = executionCells.findIndex((c) => c.name === name)
+      if (idx !== -1 && idx + 1 < executionCells.length) await executeFromCell(idx + 1)
+    },
+    [executionCells, executeFromCell]
+  )
+
   // Auto-run management
-  const { scheduleAutoRun, triggerAutoRun } = useNotebookAutoRun({ executeFromCellByName })
+  const { scheduleAutoRun, triggerAutoRun } = useNotebookAutoRun({ executeFromCellByName, executeAfterCellByName })
 
   // Handle time range selection from charts (drag-to-zoom)
   const handleTimeRangeSelect = useCallback((from: Date, to: Date) => {
@@ -439,56 +451,52 @@ export function NotebookRenderer({
 
   const datasourceVariables = useMemo(() => {
     if (selectedCellIndex === null) return undefined
-    return cells
-      .slice(0, selectedCellIndex)
-      .filter((c) => c.type === 'variable' && (c as VariableCellConfig).variableType === 'datasource')
-      .map((c) => c.name)
+    const result: string[] = []
+    forEachCell(cells.slice(0, selectedCellIndex), (cell) => {
+      if (cell.type === 'variable' && (cell as VariableCellConfig).variableType === 'datasource') {
+        result.push(cell.name)
+      }
+    })
+    return result
   }, [cells, selectedCellIndex])
 
   // Collect available cell results for a cell at a given top-level index
   const getAvailableCellResults = (index: number): Record<string, import('apache-arrow').Table> => {
     const results: Record<string, import('apache-arrow').Table> = {}
-    for (let i = 0; i < index; i++) {
-      const cell = cells[i]
+    forEachCell(cells.slice(0, index), (cell) => {
       const state = cellStates[cell.name]
       if (state?.status === 'success' && state.data.length > 0) {
         results[cell.name] = state.data[0]
       }
-      if (cell.type === 'hg') {
-        for (const child of (cell as HorizontalGroupCellConfig).children) {
-          const childState = cellStates[child.name]
-          if (childState?.status === 'success' && childState.data.length > 0) {
-            results[child.name] = childState.data[0]
-          }
-        }
-      }
-    }
+    })
     return results
+  }
+
+  // Collect available cell selections for a cell at a given top-level index
+  const getAvailableCellSelections = (index: number): Record<string, Record<string, unknown>> => {
+    const selections: Record<string, Record<string, unknown>> = {}
+    forEachCell(cells.slice(0, index), (cell) => {
+      const sel = cellSelectionsRef.current[cell.name]
+      if (sel) selections[cell.name] = sel
+    })
+    return selections
   }
 
   // Collect available variables for a cell at a given top-level index
   const getAvailableVariables = (index: number): Record<string, VariableValue> => {
     const available: Record<string, VariableValue> = {}
-    for (let i = 0; i < index; i++) {
-      const prevCell = cells[i]
-      if (prevCell.type === 'variable' && variableValues[prevCell.name] !== undefined) {
-        available[prevCell.name] = variableValues[prevCell.name]
+    forEachCell(cells.slice(0, index), (cell) => {
+      if (cell.type === 'variable' && variableValues[cell.name] !== undefined) {
+        available[cell.name] = variableValues[cell.name]
       }
-      // Also collect variable cells inside hg groups above
-      if (prevCell.type === 'hg') {
-        for (const child of (prevCell as HorizontalGroupCellConfig).children) {
-          if (child.type === 'variable' && variableValues[child.name] !== undefined) {
-            available[child.name] = variableValues[child.name]
-          }
-        }
-      }
-    }
+    })
     return available
   }
 
   const renderCell = (cell: CellConfig, index: number) => {
     const availableVariables = getAvailableVariables(index)
     const availableCellResults = getAvailableCellResults(index)
+    const availableCellSelections = getAvailableCellSelections(index)
 
     // HG cell: render children side by side
     if (cell.type === 'hg') {
@@ -545,6 +553,8 @@ export function NotebookRenderer({
                   variableValues={variableValues}
                   timeRange={getTimeRangeForApi(rawTimeRange.from, rawTimeRange.to)}
                   cellResults={availableCellResults}
+                  cellSelections={availableCellSelections}
+                  onSelectionChange={updateCellSelection}
                   selectedChildName={selectedChildName}
                   onChildSelect={(childName) => {
                     setSelectedCellIndex(index)
@@ -592,6 +602,8 @@ export function NotebookRenderer({
     const statusText = buildStatusText(cell, state)
     const cellDataSource = resolveCellDataSource(cell, availableVariables, dataSource)
 
+    const selectionMode = ((cell as QueryCellConfig).options?.selectionMode as 'none' | 'single' | undefined) || 'none'
+
     const commonRendererProps = buildCellRendererProps(cell, state,
       {
         availableVariables,
@@ -600,6 +612,7 @@ export function NotebookRenderer({
         isEditing: selectedCellIndex === index,
         dataSource: cellDataSource,
         cellResults: availableCellResults,
+        cellSelections: availableCellSelections,
       },
       {
         onRun: () => executeCellByName(cell.name),
@@ -613,6 +626,12 @@ export function NotebookRenderer({
         onTimeRangeSelect: handleTimeRangeSelect,
       },
     )
+
+    // Attach selection props
+    if (selectionMode === 'single') {
+      commonRendererProps.selectionMode = selectionMode
+      commonRendererProps.onSelectionChange = (row) => updateCellSelection(cell.name, row)
+    }
 
     // Render title bar content if metadata defines a titleBarRenderer
     const TitleBarRenderer = meta.titleBarRenderer
@@ -750,6 +769,7 @@ export function NotebookRenderer({
                 variables={getAvailableVariables(selectedCellIndex!)}
                 timeRange={getTimeRangeForApi(rawTimeRange.from, rawTimeRange.to)}
                 cellResults={getAvailableCellResults(selectedCellIndex!)}
+                cellSelections={getAvailableCellSelections(selectedCellIndex!)}
                 allCellNames={existingNames}
                 defaultDataSource={dataSource}
                 showNotebookOption
@@ -764,6 +784,7 @@ export function NotebookRenderer({
                 variables={getAvailableVariables(selectedCellIndex!)}
                 timeRange={getTimeRangeForApi(rawTimeRange.from, rawTimeRange.to)}
                 cellResults={getAvailableCellResults(selectedCellIndex!)}
+                cellSelections={getAvailableCellSelections(selectedCellIndex!)}
                 existingNames={existingNames}
                 availableColumns={cellStates[selectedCell.name]?.data[0]?.schema.fields.map((f) => f.name)}
                 defaultDataSource={dataSource}

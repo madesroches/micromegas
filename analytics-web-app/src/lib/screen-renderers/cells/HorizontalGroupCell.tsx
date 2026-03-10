@@ -57,7 +57,8 @@ export interface HorizontalGroupCellProps {
   variables: Record<string, VariableValue>
   variableValues: Record<string, VariableValue>
   timeRange: { begin: string; end: string }
-  cellResults?: Record<string, import('apache-arrow').Table>
+  cellResults: Record<string, import('apache-arrow').Table>
+  cellSelections: Record<string, Record<string, unknown>>
   selectedChildName: string | null
   onChildSelect: (childName: string | null) => void
   onChildRun: (childName: string) => void
@@ -65,6 +66,7 @@ export interface HorizontalGroupCellProps {
   onConfigChange: (config: HorizontalGroupCellConfig) => void
   onChildDragOut: (childName: string, position: 'before' | 'after') => void
   onTimeRangeSelect?: (from: Date, to: Date) => void
+  onSelectionChange?: (cellName: string, selectedRow: Record<string, unknown> | null) => void
   defaultDataSource?: string
   /** All cell names in notebook (for uniqueness checks) */
   allCellNames: Set<string>
@@ -281,7 +283,7 @@ function HgChildPane({
           </div>
         ) : state.status === 'blocked' ? (
           <div className="text-center text-theme-text-muted text-xs p-4">
-            Waiting for cell above to succeed
+            {state.error || 'Waiting for cell above to succeed'}
           </div>
         ) : (
           <CellRenderer {...commonProps} />
@@ -306,6 +308,7 @@ export function HorizontalGroupCell({
   variableValues,
   timeRange,
   cellResults,
+  cellSelections,
   selectedChildName,
   onChildSelect,
   onChildRun,
@@ -313,6 +316,7 @@ export function HorizontalGroupCell({
   onConfigChange,
   onChildDragOut,
   onTimeRangeSelect,
+  onSelectionChange,
   defaultDataSource,
   onChildRef,
 }: HorizontalGroupCellProps) {
@@ -398,6 +402,8 @@ export function HorizontalGroupCell({
           {config.children.map((child, index) => {
             const state = cellStates[child.name] || { status: 'idle' as const, data: [] }
 
+            const childSelectionMode = ((child as import('../notebook-types').QueryCellConfig).options?.selectionMode as 'none' | 'single' | undefined) || 'none'
+
             const commonProps = buildCellRendererProps(child, state,
               {
                 availableVariables: variables,
@@ -406,6 +412,7 @@ export function HorizontalGroupCell({
                 isEditing: false,
                 dataSource: resolveCellDataSource(child, variables, defaultDataSource),
                 cellResults,
+                cellSelections,
               },
               {
                 onRun: () => onChildRun(child.name),
@@ -416,6 +423,12 @@ export function HorizontalGroupCell({
                 onTimeRangeSelect,
               },
             )
+
+            // Attach selection props for table cells
+            if (childSelectionMode === 'single' && onSelectionChange) {
+              commonProps.selectionMode = childSelectionMode
+              commonProps.onSelectionChange = (row) => onSelectionChange(child.name, row)
+            }
 
             return (
               <SortableChild key={child.name} id={child.name}>
@@ -477,7 +490,8 @@ interface ChildEditorViewProps {
   showNotebookOption?: boolean
   variables: Record<string, VariableValue>
   timeRange: { begin: string; end: string }
-  cellResults?: Record<string, import('apache-arrow').Table>
+  cellResults: Record<string, import('apache-arrow').Table>
+  cellSelections: Record<string, Record<string, unknown>>
   availableColumns?: string[]
   meta: CellTypeMetadata
 }
@@ -495,6 +509,7 @@ function ChildEditorView({
   variables,
   timeRange,
   cellResults,
+  cellSelections,
   availableColumns,
   meta,
 }: ChildEditorViewProps) {
@@ -584,6 +599,7 @@ function ChildEditorView({
         defaultDataSource={defaultDataSource}
         onRun={onRun}
         cellResults={cellResults}
+        cellSelections={cellSelections}
       />
       {onRun && !!meta.execute && (
         <Button onClick={onRun} className="w-full gap-2">
@@ -607,7 +623,8 @@ interface HorizontalGroupCellEditorProps {
   onChildRun?: (childName: string) => void
   variables: Record<string, VariableValue>
   timeRange: { begin: string; end: string }
-  cellResults?: Record<string, import('apache-arrow').Table>
+  cellResults: Record<string, import('apache-arrow').Table>
+  cellSelections: Record<string, Record<string, unknown>>
   allCellNames: Set<string>
   availableColumns?: string[]
   datasourceVariables?: string[]
@@ -624,6 +641,7 @@ export function HorizontalGroupCellEditor({
   variables,
   timeRange,
   cellResults,
+  cellSelections,
   allCellNames,
   availableColumns,
   datasourceVariables,
@@ -653,6 +671,7 @@ export function HorizontalGroupCellEditor({
         variables={variables}
         timeRange={timeRange}
         cellResults={cellResults}
+        cellSelections={cellSelections}
         availableColumns={availableColumns}
         meta={meta}
       />

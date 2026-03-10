@@ -51,18 +51,28 @@ export function validateVariableName(name: string): string | null {
 }
 
 /**
+ * Visits every leaf cell in a cell list, expanding hg group children in place.
+ * The hg cell itself is skipped; its children are visited left to right.
+ */
+export function forEachCell(cells: CellConfig[], fn: (cell: CellConfig) => void): void {
+  for (const cell of cells) {
+    if (cell.type === 'hg') {
+      for (const child of (cell as HorizontalGroupCellConfig).children) {
+        fn(child)
+      }
+    } else {
+      fn(cell)
+    }
+  }
+}
+
+/**
  * Flattens a cell list for execution by expanding hg children into the top-level list.
  * The hg cell itself is omitted; its children appear in its place (left to right).
  */
 export function flattenCellsForExecution(cells: CellConfig[]): CellConfig[] {
   const result: CellConfig[] = []
-  for (const cell of cells) {
-    if (cell.type === 'hg') {
-      result.push(...(cell as HorizontalGroupCellConfig).children)
-    } else {
-      result.push(cell)
-    }
-  }
+  forEachCell(cells, (cell) => result.push(cell))
   return result
 }
 
@@ -265,6 +275,25 @@ function escapeSqlValue(value: string): string {
   return value.replace(/'/g, "''")
 }
 
+// ==========================================================================
+// Macro regex patterns
+// ==========================================================================
+// Each function returns a fresh RegExp with the 'g' flag so callers get
+// independent lastIndex state.  Defined once to avoid drift between
+// substituteMacros, validateMacros, and findUnresolvedSelectionMacro.
+
+/** $cell[N].column — cell result row reference */
+const cellRefRegex = () => /\$([a-zA-Z_][a-zA-Z0-9_]*)\[(\d+)\]\.([a-zA-Z_][a-zA-Z0-9_]*)\b/g
+
+/** $cell.selected.column — selected row reference (captures cell + column) */
+const selectedRefRegex = () => /\$([a-zA-Z_][a-zA-Z0-9_]*)\.selected\.([a-zA-Z_][a-zA-Z0-9_]*)\b/g
+
+/** $variable.column — dotted variable reference */
+const dottedVarRegex = () => /\$([a-zA-Z_][a-zA-Z0-9_]*)\.([a-zA-Z_][a-zA-Z0-9_]*)\b/g
+
+/** $variable (not followed by . or [) — simple variable reference */
+const simpleVarRegex = () => /\$([a-zA-Z_][a-zA-Z0-9_]*)\b(?![.[])/g
+
 /**
  * Substitutes macros in SQL with variable values and time range.
  * - $from and $to are replaced with timestamp values (user controls quoting)
@@ -277,7 +306,8 @@ export function substituteMacros(
   sql: string,
   variables: Record<string, VariableValue>,
   timeRange: { begin: string; end: string },
-  cellResults?: Record<string, Table>,
+  cellResults: Record<string, Table>,
+  cellSelections: Record<string, Record<string, unknown>>,
 ): string {
   let result = sql
 
@@ -287,24 +317,33 @@ export function substituteMacros(
 
   // 2. Cell result row references: $cell[N].column
   //    Must process before dotted/simple variables to avoid partial matches
-  if (cellResults) {
-    const cellRefPattern = /\$([a-zA-Z_][a-zA-Z0-9_]*)\[(\d+)\]\.([a-zA-Z_][a-zA-Z0-9_]*)\b/g
-    result = result.replace(cellRefPattern, (match, cellName, rowIdxStr, colName) => {
-      const table = cellResults[cellName]
-      if (!table) return match // leave unresolved
-      const rowIdx = parseInt(rowIdxStr, 10)
-      if (rowIdx >= table.numRows) return match
-      const row = table.get(rowIdx)
-      if (!row || row[colName] === undefined || row[colName] === null) return match
-      const field = table.schema.fields.find((f) => f.name === colName)
-      return escapeSqlValue(formatArrowValue(row[colName], field?.type))
-    })
-  }
+  result = result.replace(cellRefRegex(), (match, cellName, rowIdxStr, colName) => {
+    const table = cellResults[cellName]
+    if (!table) return match // leave unresolved
+    const rowIdx = parseInt(rowIdxStr, 10)
+    if (rowIdx >= table.numRows) return match
+    const row = table.get(rowIdx)
+    if (!row || row[colName] === undefined || row[colName] === null) return match
+    const field = table.schema.fields.find((f) => f.name === colName)
+    return escapeSqlValue(formatArrowValue(row[colName], field?.type))
+  })
+
+  // 2b. Selected row references: $cell.selected.column
+  //     Must process before dotted variable pass to avoid partial matches.
+  //     When no selection exists, resolves to empty string.
+  result = result.replace(selectedRefRegex(), (match, cellName, colName) => {
+    const selection = cellSelections[cellName]
+    if (!selection) return ''
+    const value = selection[colName]
+    if (value === undefined || value === null) return ''
+    const table = cellResults[cellName]
+    const field = table?.schema.fields.find((f) => f.name === colName)
+    return escapeSqlValue(formatArrowValue(value, field?.type))
+  })
 
   // 3. Handle dotted variable references first: $variable.column
   //    Must process before simple variables to avoid partial matches
-  const dottedPattern = /\$([a-zA-Z_][a-zA-Z0-9_]*)\.([a-zA-Z_][a-zA-Z0-9_]*)\b/g
-  result = result.replace(dottedPattern, (match, varName, colName) => {
+  result = result.replace(dottedVarRegex(), (match, varName, colName) => {
     const value = variables[varName]
     if (value === undefined) return match // Leave unresolved
 
@@ -355,16 +394,16 @@ export interface MacroValidationResult {
 export function validateMacros(
   text: string,
   variables: Record<string, VariableValue>,
-  cellResults?: Record<string, Table>,
+  cellResults: Record<string, Table>,
+  cellSelections: Record<string, Record<string, unknown>>,
 ): MacroValidationResult {
   const errors: string[] = []
 
   // Check cell result references: $cell[N].column
-  const cellRefPattern = /\$([a-zA-Z_][a-zA-Z0-9_]*)\[(\d+)\]\.([a-zA-Z_][a-zA-Z0-9_]*)\b/g
+  const cellRefPattern = cellRefRegex()
   let match
   while ((match = cellRefPattern.exec(text)) !== null) {
     const [, cellName, rowIdxStr, colName] = match
-    if (!cellResults) continue
     const table = cellResults[cellName]
     if (!table) {
       errors.push(`Unknown cell: ${cellName}`)
@@ -381,10 +420,34 @@ export function validateMacros(
     }
   }
 
-  // Check dotted references: $variable.column
-  const dottedPattern = /\$([a-zA-Z_][a-zA-Z0-9_]*)\.([a-zA-Z_][a-zA-Z0-9_]*)\b/g
+  // Check selected row references: $cell.selected.column
+  const selectedRefPattern = selectedRefRegex()
+  while ((match = selectedRefPattern.exec(text)) !== null) {
+    const [, cellName, colName] = match
+    if (!(cellName in cellSelections)) {
+      errors.push(`Unknown cell: ${cellName}`)
+    } else {
+      const selection = cellSelections[cellName]
+      if (selection && selection[colName] === undefined) {
+        const columns = Object.keys(selection)
+        errors.push(`Column '${colName}' not found in cell '${cellName}'. Available: ${columns.join(', ')}`)
+      }
+    }
+  }
+
+  // Collect selected ref cell names so dotted validation skips them
+  const selectedRefCellNames = new Set<string>()
+  const selectedRefScan = selectedRefRegex()
+  while ((match = selectedRefScan.exec(text)) !== null) {
+    selectedRefCellNames.add(match[1])
+  }
+
+  // Check dotted references: $variable.column (skip $cell.selected.column which was handled above)
+  const dottedPattern = dottedVarRegex()
   while ((match = dottedPattern.exec(text)) !== null) {
     const [, varName, colName] = match
+    // Skip $cell.selected (part of $cell.selected.column pattern)
+    if (colName === 'selected' && selectedRefCellNames.has(varName)) continue
     const value = variables[varName]
 
     if (value === undefined) {
@@ -401,8 +464,7 @@ export function validateMacros(
   }
 
   // Check simple variable references: $variable (not followed by a dot or bracket)
-  // eslint-disable-next-line no-useless-escape
-  const simplePattern = /\$([a-zA-Z_][a-zA-Z0-9_]*)\b(?![.\[])/g
+  const simplePattern = simpleVarRegex()
   while ((match = simplePattern.exec(text)) !== null) {
     const [, varName] = match
     // Skip built-in variables
@@ -415,6 +477,25 @@ export function validateMacros(
   }
 
   return { valid: errors.length === 0, errors }
+}
+
+/**
+ * Checks if a SQL string contains unresolved $cell.selected.column macros.
+ * Returns the cell name if found, null otherwise.
+ */
+export function findUnresolvedSelectionMacro(
+  sql: string,
+  cellSelections: Record<string, Record<string, unknown>>,
+): string | null {
+  const pattern = selectedRefRegex()
+  let match
+  while ((match = pattern.exec(sql)) !== null) {
+    const cellName = match[1]
+    if (!cellSelections[cellName]) {
+      return cellName
+    }
+  }
+  return null
 }
 
 /**

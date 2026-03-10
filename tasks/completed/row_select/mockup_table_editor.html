@@ -1,0 +1,452 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Table Cell Editor — Row Selection Options</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0a0a0f; color: #e7e9ea;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-size: 13px; line-height: 1.4;
+    padding: 32px 24px;
+  }
+
+  h1 { font-size: 16px; font-weight: 600; color: #e7e9ea; margin-bottom: 4px; }
+  h2 { font-size: 14px; font-weight: 600; color: #9ca3af; margin: 48px 0 6px; text-transform: uppercase; letter-spacing: 0.5px; }
+  h2:first-of-type { margin-top: 24px; }
+  .subtitle { font-size: 12px; color: #6b7280; margin-bottom: 24px; }
+  .description { font-size: 11px; color: #6b7280; margin-bottom: 12px; max-width: 700px; }
+
+  /* ================================================================
+     Editor panel (sidebar) — matches existing editor styling
+     ================================================================ */
+  .editor-panel {
+    background: #0a0a0f; border: 1px solid #2a2a3e; border-radius: 6px;
+    max-width: 380px; overflow: hidden;
+  }
+
+  /* Section label */
+  .section-label {
+    display: block; font-size: 10px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.5px;
+    color: #6b7280; margin-bottom: 6px;
+  }
+
+  /* SQL editor box */
+  .sql-editor {
+    margin: 12px 12px 0;
+  }
+  .sql-box {
+    padding: 8px 10px; min-height: 120px;
+    background: #12121a; border: 1px solid #2a2a3e; border-radius: 4px;
+    font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
+    font-size: 12px; line-height: 1.6; color: #9ca3af;
+  }
+  .sql-box .kw { color: #c792ea; }
+  .sql-box .fn { color: #82aaff; }
+  .sql-box .str { color: #c3e88d; }
+  .sql-box .macro { color: #f78c6c; }
+
+  /* Available variables section (simplified) */
+  .vars-section {
+    margin: 12px;
+  }
+  .var-entry {
+    display: flex; align-items: baseline; gap: 6px;
+    padding: 1px 0; font-size: 10px;
+  }
+  .var-name {
+    font-family: 'SF Mono', 'Cascadia Code', monospace;
+    color: #f78c6c; font-size: 10px;
+  }
+  .var-value {
+    font-family: 'SF Mono', 'Cascadia Code', monospace;
+    color: #4b5563; font-size: 10px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+
+  /* Documentation link */
+  .doc-link {
+    display: flex; align-items: center; gap: 4px;
+    margin: 8px 12px; font-size: 11px; color: #1976d2;
+    text-decoration: none;
+  }
+  .doc-link:hover { text-decoration: underline; }
+
+  /* ================================================================
+     Collapsible section (matches OverrideEditor pattern)
+     ================================================================ */
+  .collapsible { border-top: 1px solid #2a2a3e; }
+  .collapsible-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 12px;
+    background: #12121a; cursor: pointer;
+    transition: background 0.15s;
+  }
+  .collapsible-header:hover { background: rgba(18,18,26,0.8); }
+  .collapsible-header .left {
+    display: flex; align-items: center; gap: 6px;
+  }
+  .collapsible-header .chevron {
+    width: 14px; height: 14px; color: #4b5563; font-size: 10px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .collapsible-header .title {
+    font-size: 13px; font-weight: 600; color: #e7e9ea;
+  }
+  .collapsible-header .badge {
+    padding: 1px 6px; font-size: 10px;
+    background: rgba(21,101,192,0.2); color: #1976d2;
+    border-radius: 3px;
+  }
+  .collapsible-body {
+    padding: 12px;
+  }
+
+  /* ================================================================
+     Selection mode options
+     ================================================================ */
+  .selection-option {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 0;
+  }
+  .selection-option label {
+    font-size: 12px; color: #e7e9ea; cursor: pointer;
+  }
+  .selection-option .hint {
+    font-size: 10px; color: #4b5563; margin-left: 22px; margin-top: 1px;
+  }
+
+  /* Custom radio buttons */
+  .radio-input {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 14px; height: 14px;
+    border: 1.5px solid #4b5563; border-radius: 50%;
+    cursor: pointer; position: relative; flex-shrink: 0;
+    transition: border-color 0.15s;
+  }
+  .radio-input:hover { border-color: #6b7280; }
+  .radio-input.checked {
+    border-color: #1976d2;
+  }
+  .radio-input.checked::after {
+    content: '';
+    position: absolute; top: 2px; left: 2px; right: 2px; bottom: 2px;
+    background: #1976d2; border-radius: 50%;
+  }
+
+  /* Help text block */
+  .help-text {
+    font-size: 10px; color: #4b5563; line-height: 1.5;
+    padding-top: 8px; border-top: 1px solid rgba(42,42,62,0.5);
+    margin-top: 8px;
+  }
+  .help-text code {
+    padding: 1px 4px; font-size: 10px;
+    background: rgba(42,42,62,0.4); border-radius: 2px;
+    font-family: 'SF Mono', 'Cascadia Code', monospace;
+    color: #f78c6c;
+  }
+
+  /* Side-by-side layout */
+  .side-by-side {
+    display: flex; gap: 32px; flex-wrap: wrap;
+    align-items: flex-start;
+  }
+
+  /* ================================================================
+     Table preview
+     ================================================================ */
+  .table-preview {
+    background: #0a0a0f; border: 1px solid #2a2a3e; border-radius: 6px;
+    overflow: hidden; max-width: 540px;
+  }
+  .table-preview table { width: 100%; border-collapse: collapse; }
+  .table-preview thead tr { background: #12121a; border-bottom: 1px solid #2a2a3e; }
+  .table-preview th {
+    padding: 6px 12px; text-align: left;
+    font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;
+    color: #6b7280;
+  }
+  .table-preview td {
+    padding: 6px 12px;
+    font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
+    font-size: 12px; color: #e7e9ea;
+    white-space: nowrap;
+  }
+  .table-preview tr { border-bottom: 1px solid #2a2a3e; }
+  .table-preview tbody tr { cursor: pointer; transition: background 0.15s; }
+  .table-preview tbody tr:hover { background: rgba(18,18,26,0.7); }
+  .table-preview tbody tr.selected {
+    background: rgba(21,101,192,0.08);
+  }
+  .table-preview tbody tr.selected .radio-cell .radio-dot {
+    border-color: #1976d2;
+  }
+  .table-preview tbody tr.selected .radio-cell .radio-dot::after {
+    content: '';
+    position: absolute; top: 2px; left: 2px; right: 2px; bottom: 2px;
+    background: #1976d2; border-radius: 50%;
+  }
+  .table-preview .radio-cell {
+    width: 28px; text-align: center; padding: 6px 4px;
+  }
+  .radio-dot {
+    display: inline-block; width: 12px; height: 12px;
+    border: 1.5px solid #4b5563; border-radius: 50%;
+    vertical-align: middle; position: relative;
+  }
+  .pane-label {
+    display: flex; align-items: center; gap: 5px;
+    padding: 2px 8px; font-size: 10px; color: #9ca3af;
+  }
+  .pane-label .sep { color: #2a2a3e; }
+  .pane-label .status { color: #6b7280; }
+
+  /* Selection badge */
+  .selection-badge {
+    display: flex; align-items: center; gap: 6px;
+    padding: 3px 8px; font-size: 10px; color: #6b7280;
+    border-top: 1px solid #2a2a3e;
+  }
+  .selection-badge .label { color: #1976d2; font-weight: 500; }
+  .selection-badge .value {
+    font-family: 'SF Mono', 'Cascadia Code', monospace;
+    color: #9ca3af; font-size: 10px;
+  }
+  .selection-badge .clear {
+    margin-left: auto; color: #4b5563; cursor: pointer; font-size: 9px;
+  }
+
+  .table-preview.no-radio tbody tr { cursor: default; }
+</style>
+</head>
+<body>
+
+<h1>Table Cell Editor — Row Selection Config</h1>
+<p class="subtitle">A "Row Selection" collapsible section below Overrides. Collapsed by default. None/Single radio choice.</p>
+
+<!-- ================================================================ -->
+<h2>Collapsed — Selection Disabled (Default)</h2>
+<p class="description">New tables default to no selection. The section is collapsed, showing "None" in a muted badge. No radio column in the table.</p>
+
+<div class="side-by-side">
+  <div class="editor-panel">
+    <div class="sql-editor">
+      <span class="section-label">SQL Query</span>
+      <div class="sql-box">
+        <span class="kw">SELECT</span> exe, process_id, start_time, username<br>
+        <span class="kw">FROM</span> <span class="fn">list_processes</span>()<br>
+        <span class="kw">ORDER BY</span> <span class="macro">$order_by</span><br>
+        <span class="kw">LIMIT</span> 100
+      </div>
+    </div>
+    <div class="vars-section">
+      <span class="section-label">Available Variables</span>
+      <div class="var-entry"><span class="var-name">$from</span></div>
+      <div class="var-entry"><span class="var-name">$to</span></div>
+      <div class="var-entry"><span class="var-name">$order_by</span> <span class="var-value">start_time DESC</span></div>
+    </div>
+    <div class="doc-link">Query Guide</div>
+
+    <div class="collapsible">
+      <div class="collapsible-header">
+        <div class="left">
+          <span class="chevron">&#x25B6;</span>
+          <span class="title">Overrides</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="collapsible">
+      <div class="collapsible-header">
+        <div class="left">
+          <span class="chevron">&#x25B6;</span>
+          <span class="title">Row Selection</span>
+          <span class="badge" style="background: rgba(75,85,99,0.2); color: #6b7280;">None</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div>
+    <div class="pane-label">
+      <span>processes</span>
+      <span class="sep">&middot;</span>
+      <span class="status">5 rows in 0.2s</span>
+    </div>
+    <div class="table-preview no-radio">
+      <table>
+        <thead>
+          <tr>
+            <th>exe</th>
+            <th>process_id</th>
+            <th>start_time</th>
+            <th>username</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td>ingestion-srv</td><td>a1b2c3d4-e5f6</td><td>2026-03-10 08:00:12</td><td>svc-telemetry</td></tr>
+          <tr><td>flight-sql-srv</td><td>f7e8d9c0-b1a2</td><td>2026-03-10 08:01:45</td><td>svc-analytics</td></tr>
+          <tr><td>game-server</td><td>1234abcd-5678</td><td>2026-03-10 09:15:30</td><td>player-host</td></tr>
+          <tr><td>telemetry-admin</td><td>9876fedc-ba09</td><td>2026-03-10 08:00:05</td><td>admin</td></tr>
+          <tr><td>web-frontend</td><td>abcd1234-ef56</td><td>2026-03-10 10:22:18</td><td>web-svc</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- ================================================================ -->
+<h2>Collapsed — Selection Enabled</h2>
+<p class="description">When selection is set to "Single", the collapsed badge shows "Single" in the accent color. The table shows the radio column.</p>
+
+<div class="side-by-side">
+  <div class="editor-panel">
+    <div class="sql-editor">
+      <span class="section-label">SQL Query</span>
+      <div class="sql-box">
+        <span class="kw">SELECT</span> exe, process_id, start_time, username<br>
+        <span class="kw">FROM</span> <span class="fn">list_processes</span>()<br>
+        <span class="kw">ORDER BY</span> <span class="macro">$order_by</span><br>
+        <span class="kw">LIMIT</span> 100
+      </div>
+    </div>
+    <div class="vars-section">
+      <span class="section-label">Available Variables</span>
+      <div class="var-entry"><span class="var-name">$from</span></div>
+      <div class="var-entry"><span class="var-name">$to</span></div>
+      <div class="var-entry"><span class="var-name">$order_by</span> <span class="var-value">start_time DESC</span></div>
+    </div>
+    <div class="doc-link">Query Guide</div>
+
+    <div class="collapsible">
+      <div class="collapsible-header">
+        <div class="left">
+          <span class="chevron">&#x25B6;</span>
+          <span class="title">Overrides</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="collapsible">
+      <div class="collapsible-header">
+        <div class="left">
+          <span class="chevron">&#x25B6;</span>
+          <span class="title">Row Selection</span>
+          <span class="badge">Single</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div>
+    <div class="pane-label">
+      <span>processes</span>
+      <span class="sep">&middot;</span>
+      <span class="status">5 rows in 0.2s</span>
+    </div>
+    <div class="table-preview">
+      <table>
+        <thead>
+          <tr>
+            <th class="radio-cell"></th>
+            <th>exe</th>
+            <th>process_id</th>
+            <th>start_time</th>
+            <th>username</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td class="radio-cell"><span class="radio-dot"></span></td><td>ingestion-srv</td><td>a1b2c3d4-e5f6</td><td>2026-03-10 08:00:12</td><td>svc-telemetry</td></tr>
+          <tr class="selected"><td class="radio-cell"><span class="radio-dot"></span></td><td>flight-sql-srv</td><td>f7e8d9c0-b1a2</td><td>2026-03-10 08:01:45</td><td>svc-analytics</td></tr>
+          <tr><td class="radio-cell"><span class="radio-dot"></span></td><td>game-server</td><td>1234abcd-5678</td><td>2026-03-10 09:15:30</td><td>player-host</td></tr>
+          <tr><td class="radio-cell"><span class="radio-dot"></span></td><td>telemetry-admin</td><td>9876fedc-ba09</td><td>2026-03-10 08:00:05</td><td>admin</td></tr>
+          <tr><td class="radio-cell"><span class="radio-dot"></span></td><td>web-frontend</td><td>abcd1234-ef56</td><td>2026-03-10 10:22:18</td><td>web-svc</td></tr>
+        </tbody>
+      </table>
+      <div class="selection-badge">
+        <span class="label">Selected:</span>
+        <span class="value">row 1 &mdash; flight-sql-srv / f7e8d9c0-b1a2</span>
+        <span class="clear">&times; clear</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ================================================================ -->
+<h2>Expanded — Choosing Selection Mode</h2>
+<p class="description">Clicking the header expands to show None/Single radio options with descriptions and macro syntax help.</p>
+
+<div class="side-by-side">
+  <div class="editor-panel">
+    <div class="sql-editor">
+      <span class="section-label">SQL Query</span>
+      <div class="sql-box">
+        <span class="kw">SELECT</span> exe, process_id, start_time, username<br>
+        <span class="kw">FROM</span> <span class="fn">list_processes</span>()<br>
+        <span class="kw">ORDER BY</span> <span class="macro">$order_by</span><br>
+        <span class="kw">LIMIT</span> 100
+      </div>
+    </div>
+    <div class="vars-section">
+      <span class="section-label">Available Variables</span>
+      <div class="var-entry"><span class="var-name">$from</span></div>
+      <div class="var-entry"><span class="var-name">$to</span></div>
+      <div class="var-entry"><span class="var-name">$order_by</span> <span class="var-value">start_time DESC</span></div>
+    </div>
+    <div class="doc-link">Query Guide</div>
+
+    <div class="collapsible">
+      <div class="collapsible-header">
+        <div class="left">
+          <span class="chevron">&#x25B6;</span>
+          <span class="title">Overrides</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Row Selection section EXPANDED -->
+    <div class="collapsible">
+      <div class="collapsible-header">
+        <div class="left">
+          <span class="chevron">&#x25BC;</span>
+          <span class="title">Row Selection</span>
+          <span class="badge">Single</span>
+        </div>
+      </div>
+      <div class="collapsible-body">
+        <!-- None -->
+        <div class="selection-option">
+          <span class="radio-input"></span>
+          <label>None</label>
+        </div>
+        <div class="selection-option" style="padding-top: 0;">
+          <div class="hint">Table rows are not selectable</div>
+        </div>
+
+        <!-- Single (selected) -->
+        <div class="selection-option">
+          <span class="radio-input checked"></span>
+          <label>Single</label>
+        </div>
+        <div class="selection-option" style="padding-top: 0;">
+          <div class="hint">Click a row to select it. Downstream cells reference it via macros.</div>
+        </div>
+
+        <!-- Help text -->
+        <div class="help-text">
+          Downstream cells reference columns from the selected row:<br><br>
+          <code>$processes.selected.process_id</code><br>
+          <code>$processes.selected.exe</code><br><br>
+          When no row is selected, dependent cells show a placeholder.
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

@@ -145,13 +145,13 @@ export function PropertyTimelineCell({
 // Editor Component
 // =============================================================================
 
-function PropertyTimelineCellEditor({ config, onChange, variables, timeRange, onRun, cellResults }: CellEditorProps) {
+function PropertyTimelineCellEditor({ config, onChange, variables, timeRange, onRun, cellResults, cellSelections }: CellEditorProps) {
   const ptConfig = config as QueryCellConfig
 
   // Validate macro references in SQL
   const validationErrors = useMemo(() => {
-    return validateMacros(ptConfig.sql, variables, cellResults).errors
-  }, [ptConfig.sql, variables, cellResults])
+    return validateMacros(ptConfig.sql, variables, cellResults, cellSelections).errors
+  }, [ptConfig.sql, variables, cellResults, cellSelections])
 
   return (
     <>
@@ -175,7 +175,7 @@ function PropertyTimelineCellEditor({ config, onChange, variables, timeRange, on
           ))}
         </div>
       )}
-      <AvailableVariablesPanel variables={variables} timeRange={timeRange} cellResults={cellResults} />
+      <AvailableVariablesPanel variables={variables} timeRange={timeRange} cellResults={cellResults} cellSelections={cellSelections} />
       <DocumentationLink url={QUERY_GUIDE_URL} label="Query Guide" />
     </>
   )
@@ -204,8 +204,8 @@ export const propertyTimelineMetadata: CellTypeMetadata = {
     options: {},
   }),
 
-  execute: async (config: CellConfig, { variables, cellResults, timeRange, runQuery }: CellExecutionContext) => {
-    const sql = substituteMacros((config as QueryCellConfig).sql, variables, timeRange, cellResults)
+  execute: async (config: CellConfig, { variables, cellResults, cellSelections, timeRange, runQuery }: CellExecutionContext) => {
+    const sql = substituteMacros((config as QueryCellConfig).sql, variables, timeRange, cellResults, cellSelections)
     const data = await runQuery(sql)
     return { data: [data] }
   },

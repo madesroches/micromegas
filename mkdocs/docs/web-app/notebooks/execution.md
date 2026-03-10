@@ -38,14 +38,14 @@ Each cell has an `autoRunFromHere` toggle. When enabled, changes to that cell or
 
 ### Trigger Behavior
 
-| Change Type | Behavior |
-|-------------|----------|
-| SQL or content edit | **Debounced** (300ms) — waits for the user to stop typing before executing |
-| Variable value change | **Immediate** — executes as soon as the value changes |
-| Time range change | **Immediate** — full re-execution from the first cell |
-| Refresh button | **Immediate** — full re-execution from the first cell |
+| Change Type | What Executes | Timing |
+|-------------|---------------|--------|
+| SQL or content edit | The edited cell and all cells below it | **Debounced** (300ms) — waits for the user to stop typing |
+| Variable value selection | Only cells *after* the variable cell | **Immediate** — the variable's own query is not re-run since the user already chose a value |
+| Time range change | All cells from the first cell | **Immediate** |
+| Refresh button | All cells from the first cell | **Immediate** |
 
-A re-entrance guard prevents recursive auto-run — if execution is already in progress from an auto-run trigger, additional triggers are queued rather than creating parallel executions.
+A re-entrance guard prevents recursive auto-run — if execution is already in progress from an auto-run trigger, additional triggers are ignored rather than creating parallel executions.
 
 ## Time Range
 

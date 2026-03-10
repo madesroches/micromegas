@@ -134,7 +134,7 @@ export function TransposedTableCell({ data, status, options, onOptionsChange, va
 // Editor Component
 // =============================================================================
 
-function TransposedTableCellEditor({ config, onChange, variables, timeRange, availableColumns, onRun, cellResults }: CellEditorProps) {
+function TransposedTableCellEditor({ config, onChange, variables, timeRange, availableColumns, onRun, cellResults, cellSelections }: CellEditorProps) {
   const transposedConfig = config as QueryCellConfig
 
   const overrides = useMemo(
@@ -167,7 +167,7 @@ function TransposedTableCellEditor({ config, onChange, variables, timeRange, ava
           onRunShortcut={onRun}
         />
       </div>
-      <AvailableVariablesPanel variables={variables} timeRange={timeRange} cellResults={cellResults} />
+      <AvailableVariablesPanel variables={variables} timeRange={timeRange} cellResults={cellResults} cellSelections={cellSelections} />
       <DocumentationLink url={QUERY_GUIDE_URL} label="Query Guide" />
       <div className="mt-4">
         <OverrideEditor
@@ -203,8 +203,8 @@ export const transposedTableMetadata: CellTypeMetadata = {
     sql: DEFAULT_SQL.transposed,
   }),
 
-  execute: async (config: CellConfig, { variables, cellResults, timeRange, runQuery }: CellExecutionContext) => {
-    const sql = substituteMacros((config as QueryCellConfig).sql, variables, timeRange, cellResults)
+  execute: async (config: CellConfig, { variables, cellResults, cellSelections, timeRange, runQuery }: CellExecutionContext) => {
+    const sql = substituteMacros((config as QueryCellConfig).sql, variables, timeRange, cellResults, cellSelections)
     const data = await runQuery(sql)
     return { data: [data] }
   },

@@ -28,19 +28,19 @@ describe('substituteMacros', () => {
   describe('time range substitution', () => {
     it('should substitute $from without adding quotes (user controls quoting)', () => {
       const sql = "SELECT * FROM logs WHERE time >= '$from'"
-      const result = substituteMacros(sql, {}, defaultTimeRange)
+      const result = substituteMacros(sql, {}, defaultTimeRange, {}, {})
       expect(result).toBe("SELECT * FROM logs WHERE time >= '2024-01-01T00:00:00Z'")
     })
 
     it('should substitute $to without adding quotes (user controls quoting)', () => {
       const sql = "SELECT * FROM logs WHERE time <= '$to'"
-      const result = substituteMacros(sql, {}, defaultTimeRange)
+      const result = substituteMacros(sql, {}, defaultTimeRange, {}, {})
       expect(result).toBe("SELECT * FROM logs WHERE time <= '2024-01-02T00:00:00Z'")
     })
 
     it('should substitute both $from and $to', () => {
       const sql = "SELECT * FROM logs WHERE time BETWEEN '$from' AND '$to'"
-      const result = substituteMacros(sql, {}, defaultTimeRange)
+      const result = substituteMacros(sql, {}, defaultTimeRange, {}, {})
       expect(result).toBe(
         "SELECT * FROM logs WHERE time BETWEEN '2024-01-01T00:00:00Z' AND '2024-01-02T00:00:00Z'"
       )
@@ -48,7 +48,7 @@ describe('substituteMacros', () => {
 
     it('should substitute multiple occurrences of $from', () => {
       const sql = "SELECT '$from', '$from'"
-      const result = substituteMacros(sql, {}, defaultTimeRange)
+      const result = substituteMacros(sql, {}, defaultTimeRange, {}, {})
       expect(result).toBe("SELECT '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z'")
     })
   })
@@ -56,25 +56,25 @@ describe('substituteMacros', () => {
   describe('user variable substitution', () => {
     it('should substitute user variables without adding quotes', () => {
       const sql = "SELECT * FROM measures WHERE name = '$metric'"
-      const result = substituteMacros(sql, { metric: 'cpu_usage' }, defaultTimeRange)
+      const result = substituteMacros(sql, { metric: 'cpu_usage' }, defaultTimeRange, {}, {})
       expect(result).toBe("SELECT * FROM measures WHERE name = 'cpu_usage'")
     })
 
     it('should substitute variables without quotes when not wrapped', () => {
       const sql = 'SELECT $limit'
-      const result = substituteMacros(sql, { limit: '100' }, defaultTimeRange)
+      const result = substituteMacros(sql, { limit: '100' }, defaultTimeRange, {}, {})
       expect(result).toBe('SELECT 100')
     })
 
     it('should escape single quotes in variable values', () => {
       const sql = "SELECT * FROM logs WHERE msg = '$search'"
-      const result = substituteMacros(sql, { search: "it's working" }, defaultTimeRange)
+      const result = substituteMacros(sql, { search: "it's working" }, defaultTimeRange, {}, {})
       expect(result).toBe("SELECT * FROM logs WHERE msg = 'it''s working'")
     })
 
     it('should escape multiple single quotes in variable values', () => {
       const sql = "SELECT * FROM logs WHERE msg = '$search'"
-      const result = substituteMacros(sql, { search: "it's not it's" }, defaultTimeRange)
+      const result = substituteMacros(sql, { search: "it's not it's" }, defaultTimeRange, {}, {})
       expect(result).toBe("SELECT * FROM logs WHERE msg = 'it''s not it''s'")
     })
 
@@ -83,7 +83,9 @@ describe('substituteMacros', () => {
       const result = substituteMacros(
         sql,
         { metric: 'cpu_usage', host: 'server1' },
-        defaultTimeRange
+        defaultTimeRange,
+        {},
+        {}
       )
       expect(result).toBe("SELECT * FROM measures WHERE name = 'cpu_usage' AND host = 'server1'")
     })
@@ -93,21 +95,23 @@ describe('substituteMacros', () => {
       const result = substituteMacros(
         sql,
         { metric: 'cpu', metric_name: 'CPU Usage' },
-        defaultTimeRange
+        defaultTimeRange,
+        {},
+        {}
       )
       expect(result).toBe('SELECT cpu, CPU Usage')
     })
 
     it('should not substitute variable-like strings that are not word boundaries', () => {
       const sql = 'SELECT $metric_extended'
-      const result = substituteMacros(sql, { metric: 'cpu' }, defaultTimeRange)
+      const result = substituteMacros(sql, { metric: 'cpu' }, defaultTimeRange, {}, {})
       // Should NOT match because $metric is followed by _extended (not a word boundary)
       expect(result).toBe('SELECT $metric_extended')
     })
 
     it('should substitute at word boundaries', () => {
       const sql = 'SELECT $metric FROM table'
-      const result = substituteMacros(sql, { metric: 'cpu' }, defaultTimeRange)
+      const result = substituteMacros(sql, { metric: 'cpu' }, defaultTimeRange, {}, {})
       expect(result).toBe('SELECT cpu FROM table')
     })
   })
@@ -115,7 +119,7 @@ describe('substituteMacros', () => {
   describe('edge cases', () => {
     it('should leave unmatched variables unchanged', () => {
       const sql = 'SELECT $unknown'
-      const result = substituteMacros(sql, {}, defaultTimeRange)
+      const result = substituteMacros(sql, {}, defaultTimeRange, {}, {})
       expect(result).toBe('SELECT $unknown')
     })
 
@@ -126,19 +130,19 @@ describe('substituteMacros', () => {
 
     it('should handle SQL with no variables', () => {
       const sql = 'SELECT * FROM logs LIMIT 100'
-      const result = substituteMacros(sql, { metric: 'cpu' }, defaultTimeRange)
+      const result = substituteMacros(sql, { metric: 'cpu' }, defaultTimeRange, {}, {})
       expect(result).toBe('SELECT * FROM logs LIMIT 100')
     })
 
     it('should handle empty variables object', () => {
       const sql = 'SELECT $metric'
-      const result = substituteMacros(sql, {}, defaultTimeRange)
+      const result = substituteMacros(sql, {}, defaultTimeRange, {}, {})
       expect(result).toBe('SELECT $metric')
     })
 
     it('should handle variable with empty string value', () => {
       const sql = "SELECT * FROM logs WHERE filter = '$filter'"
-      const result = substituteMacros(sql, { filter: '' }, defaultTimeRange)
+      const result = substituteMacros(sql, { filter: '' }, defaultTimeRange, {}, {})
       expect(result).toBe("SELECT * FROM logs WHERE filter = ''")
     })
   })
@@ -149,7 +153,9 @@ describe('substituteMacros', () => {
       const result = substituteMacros(
         sql,
         { metric: { name: 'cpu_usage', unit: 'percent' } },
-        defaultTimeRange
+        defaultTimeRange,
+        {},
+        {}
       )
       expect(result).toBe("SELECT * FROM measures WHERE name = 'cpu_usage'")
     })
@@ -159,7 +165,9 @@ describe('substituteMacros', () => {
       const result = substituteMacros(
         sql,
         { metric: { name: 'cpu_usage', unit: 'percent' } },
-        defaultTimeRange
+        defaultTimeRange,
+        {},
+        {}
       )
       expect(result).toBe("SELECT 'cpu_usage' AS name, 'percent' AS unit")
     })
@@ -169,7 +177,9 @@ describe('substituteMacros', () => {
       const result = substituteMacros(
         sql,
         { metric: { name: 'cpu_usage', unit: 'percent' } },
-        defaultTimeRange
+        defaultTimeRange,
+        {},
+        {}
       )
       expect(result).toBe("SELECT '$metric.unknown'")
     })
@@ -179,7 +189,9 @@ describe('substituteMacros', () => {
       const result = substituteMacros(
         sql,
         { metric: 'cpu_usage' },
-        defaultTimeRange
+        defaultTimeRange,
+        {},
+        {}
       )
       // Simple variable can't have column access, left unchanged
       expect(result).toBe("SELECT '$metric.name'")
@@ -190,7 +202,9 @@ describe('substituteMacros', () => {
       const result = substituteMacros(
         sql,
         { metric: { name: 'cpu_usage', unit: 'percent' } },
-        defaultTimeRange
+        defaultTimeRange,
+        {},
+        {}
       )
       expect(result).toBe(`SELECT '{"name":"cpu_usage","unit":"percent"}'`)
     })
@@ -200,7 +214,9 @@ describe('substituteMacros', () => {
       const result = substituteMacros(
         sql,
         { metric: { name: 'cpu', description: "it's hot" } },
-        defaultTimeRange
+        defaultTimeRange,
+        {},
+        {}
       )
       expect(result).toBe("SELECT 'it''s hot'")
     })
@@ -214,7 +230,9 @@ describe('substituteMacros', () => {
           metric: { name: 'cpu', unit: 'percent' },
           host: 'server1',
         },
-        defaultTimeRange
+        defaultTimeRange,
+        {},
+        {}
       )
       expect(result).toBe("SELECT * FROM measures WHERE name = 'cpu' AND host = 'server1'")
     })
@@ -223,7 +241,7 @@ describe('substituteMacros', () => {
 
 describe('validateMacros', () => {
   it('should return valid for correct simple variable references', () => {
-    const result = validateMacros('SELECT $metric', { metric: 'cpu' })
+    const result = validateMacros('SELECT $metric', { metric: 'cpu' }, {}, {})
     expect(result.valid).toBe(true)
     expect(result.errors).toHaveLength(0)
   })
@@ -231,20 +249,22 @@ describe('validateMacros', () => {
   it('should return valid for correct dotted variable references', () => {
     const result = validateMacros(
       "SELECT '$metric.name'",
-      { metric: { name: 'cpu', unit: 'percent' } }
+      { metric: { name: 'cpu', unit: 'percent' } },
+      {},
+      {}
     )
     expect(result.valid).toBe(true)
     expect(result.errors).toHaveLength(0)
   })
 
   it('should report error for unknown variable', () => {
-    const result = validateMacros('SELECT $unknown', {})
+    const result = validateMacros('SELECT $unknown', {}, {}, {})
     expect(result.valid).toBe(false)
     expect(result.errors).toContain('Unknown variable: unknown')
   })
 
   it('should report error for dotted access on simple variable', () => {
-    const result = validateMacros("SELECT '$metric.name'", { metric: 'cpu' })
+    const result = validateMacros("SELECT '$metric.name'", { metric: 'cpu' }, {}, {})
     expect(result.valid).toBe(false)
     expect(result.errors[0]).toContain("Variable 'metric' is not a multi-column variable")
   })
@@ -252,7 +272,9 @@ describe('validateMacros', () => {
   it('should report error for unknown column in multi-column variable', () => {
     const result = validateMacros(
       "SELECT '$metric.unknown'",
-      { metric: { name: 'cpu', unit: 'percent' } }
+      { metric: { name: 'cpu', unit: 'percent' } },
+      {},
+      {}
     )
     expect(result.valid).toBe(false)
     expect(result.errors[0]).toContain("Column 'unknown' not found in variable 'metric'")
@@ -260,12 +282,12 @@ describe('validateMacros', () => {
   })
 
   it('should ignore built-in variables', () => {
-    const result = validateMacros('SELECT * FROM logs WHERE time >= $from AND time <= $to', {})
+    const result = validateMacros('SELECT * FROM logs WHERE time >= $from AND time <= $to', {}, {}, {})
     expect(result.valid).toBe(true)
   })
 
   it('should ignore $order_by special variable', () => {
-    const result = validateMacros('SELECT * FROM logs ORDER BY $order_by', {})
+    const result = validateMacros('SELECT * FROM logs ORDER BY $order_by', {}, {}, {})
     expect(result.valid).toBe(true)
   })
 
@@ -275,6 +297,7 @@ describe('validateMacros', () => {
       "SELECT * FROM view_instance('log_entries', '$game_session[0].process_id')",
       {},
       { game_session: table },
+      {},
     )
     expect(result.valid).toBe(true)
     expect(result.errors).toHaveLength(0)
@@ -291,6 +314,7 @@ describe('cell result ref substitution', () => {
       {},
       defaultTimeRange,
       { game_session: table },
+      {},
     )
     expect(result).toBe("SELECT * FROM view_instance('log_entries', 'abc123')")
   })
@@ -302,6 +326,7 @@ describe('cell result ref substitution', () => {
       {},
       defaultTimeRange,
       { cell: table },
+      {},
     )
     expect(result).toBe('SELECT $cell[5].col')
   })
@@ -313,6 +338,7 @@ describe('cell result ref substitution', () => {
       {},
       defaultTimeRange,
       { cell: table },
+      {},
     )
     expect(result).toBe('SELECT $cell[0].missing')
   })
@@ -322,6 +348,7 @@ describe('cell result ref substitution', () => {
       'SELECT $unknown_cell[0].col',
       {},
       defaultTimeRange,
+      {},
       {},
     )
     expect(result).toBe('SELECT $unknown_cell[0].col')
@@ -334,6 +361,7 @@ describe('cell result ref substitution', () => {
       { metric: { name: 'cpu', unit: 'pct' } },
       defaultTimeRange,
       { cell: table },
+      {},
     )
     expect(result).toBe("SELECT 'cpu', '1'")
   })
@@ -345,6 +373,7 @@ describe('cell result ref substitution', () => {
       { host: 'server1' },
       defaultTimeRange,
       { cell: table },
+      {},
     )
     expect(result).toBe("SELECT 'server1', '1'")
   })
@@ -356,6 +385,7 @@ describe('cell result ref substitution', () => {
       {},
       defaultTimeRange,
       { cell: table },
+      {},
     )
     expect(result).toBe("SELECT 'it''s working'")
   })
@@ -367,6 +397,7 @@ describe('cell result ref substitution', () => {
       { cell_name: 'should_not_match' },
       defaultTimeRange,
       { cell_name: table },
+      {},
     )
     expect(result).toBe('SELECT abc')
   })
@@ -384,6 +415,7 @@ describe('cell result ref substitution', () => {
       {},
       defaultTimeRange,
       { cell: table },
+      {},
     )
     expect(result).toBe("SELECT '2024-01-15T10:30:00.000Z'")
   })
@@ -395,6 +427,7 @@ describe('cell result ref substitution', () => {
       {},
       defaultTimeRange,
       { cell: table },
+      {},
     )
     expect(result).toBe("SELECT 'server1'")
   })
@@ -402,14 +435,14 @@ describe('cell result ref substitution', () => {
 
 describe('validateMacros with cell results', () => {
   it('should report error for unknown cell name', () => {
-    const result = validateMacros('$unknown[0].col', {}, { })
+    const result = validateMacros('$unknown[0].col', {}, { }, {})
     expect(result.valid).toBe(false)
     expect(result.errors).toContain('Unknown cell: unknown')
   })
 
   it('should report error for out-of-bounds row index', () => {
     const table = tableFromArrays({ col: ['val'] })
-    const result = validateMacros('$cell[5].col', {}, { cell: table })
+    const result = validateMacros('$cell[5].col', {}, { cell: table }, {})
     expect(result.valid).toBe(false)
     expect(result.errors[0]).toContain('Row index 5 out of bounds')
     expect(result.errors[0]).toContain('1 rows')
@@ -417,7 +450,7 @@ describe('validateMacros with cell results', () => {
 
   it('should report error for unknown column', () => {
     const table = tableFromArrays({ col: ['val'], other: ['x'] })
-    const result = validateMacros('$cell[0].missing', {}, { cell: table })
+    const result = validateMacros('$cell[0].missing', {}, { cell: table }, {})
     expect(result.valid).toBe(false)
     expect(result.errors[0]).toContain("Column 'missing' not found in cell 'cell'")
     expect(result.errors[0]).toContain('col, other')
@@ -425,15 +458,15 @@ describe('validateMacros with cell results', () => {
 
   it('should pass for valid cell result reference', () => {
     const table = tableFromArrays({ col: ['val'] })
-    const result = validateMacros('$cell[0].col', {}, { cell: table })
+    const result = validateMacros('$cell[0].col', {}, { cell: table }, {})
     expect(result.valid).toBe(true)
   })
 
-  it('should skip cell result validation when cellResults is undefined', () => {
-    const result = validateMacros('$cell[0].col', {})
-    // No cellResults provided, so no validation errors for cell refs
-    // But should not report as unknown variable either (lookahead prevents simple match)
-    expect(result.valid).toBe(true)
+  it('should report unknown cell when cellResults is empty', () => {
+    const result = validateMacros('$cell[0].col', {}, {}, {})
+    // With an empty cellResults, the cell reference is unknown
+    expect(result.valid).toBe(false)
+    expect(result.errors).toContain('Unknown cell: cell')
   })
 })
 
@@ -682,4 +715,165 @@ describe('createDefaultCell', () => {
 
   // Note: unknown type fallback removed - with the new metadata-based design,
   // TypeScript enforces valid cell types and the registry would throw for unknown types
+})
+
+describe('selected row ref substitution', () => {
+  const defaultTimeRange = { begin: '2024-01-01T00:00:00Z', end: '2024-01-02T00:00:00Z' }
+
+  it('should substitute $cell.selected.col from a selection object', () => {
+    const result = substituteMacros(
+      "SELECT * FROM view_instance('log_entries', '$processes.selected.process_id')",
+      {},
+      defaultTimeRange,
+      {},
+      { processes: { process_id: 'abc123', exe: 'server1' } },
+    )
+    expect(result).toBe("SELECT * FROM view_instance('log_entries', 'abc123')")
+  })
+
+  it('should resolve to empty string for missing cell', () => {
+    const result = substituteMacros(
+      'SELECT $unknown.selected.col',
+      {},
+      defaultTimeRange,
+      {},
+      {},
+    )
+    expect(result).toBe('SELECT ')
+  })
+
+  it('should resolve to empty string for missing column in selection', () => {
+    const result = substituteMacros(
+      'SELECT $cell.selected.missing',
+      {},
+      defaultTimeRange,
+      {},
+      { cell: { col: 'val' } },
+    )
+    expect(result).toBe('SELECT ')
+  })
+
+  it('should resolve to empty string when no selection exists (cell not in cellSelections)', () => {
+    const result = substituteMacros(
+      'SELECT $cell.selected.col',
+      {},
+      defaultTimeRange,
+      {},
+      {},
+    )
+    expect(result).toBe('SELECT ')
+  })
+
+  it('should escape single quotes in selected values', () => {
+    const result = substituteMacros(
+      "SELECT '$cell.selected.msg'",
+      {},
+      defaultTimeRange,
+      {},
+      { cell: { msg: "it's working" } },
+    )
+    expect(result).toBe("SELECT 'it''s working'")
+  })
+
+  it('should not interfere with $cell[N].col pattern', () => {
+    const table = tableFromArrays({ id: ['row0'] })
+    const result = substituteMacros(
+      "SELECT '$cell[0].id', '$cell.selected.id'",
+      {},
+      defaultTimeRange,
+      { cell: table },
+      { cell: { id: 'selected_val' } },
+    )
+    expect(result).toBe("SELECT 'row0', 'selected_val'")
+  })
+
+  it('should not interfere with $variable.column pattern', () => {
+    const result = substituteMacros(
+      "SELECT '$metric.name', '$cell.selected.id'",
+      { metric: { name: 'cpu', unit: 'pct' } },
+      defaultTimeRange,
+      {},
+      { cell: { id: 'abc' } },
+    )
+    expect(result).toBe("SELECT 'cpu', 'abc'")
+  })
+
+  it('should format timestamp values from selection using Arrow table schema', () => {
+    const timestampType = new Timestamp(TimeUnit.MILLISECOND, null)
+    const ms = 1705314600000
+    const vector = vectorFromArray([ms], timestampType)
+    const table = new Table({ start_time: vector })
+
+    const result = substituteMacros(
+      "SELECT '$cell.selected.start_time'",
+      {},
+      defaultTimeRange,
+      { cell: table },
+      { cell: { start_time: ms } },
+    )
+    expect(result).toBe("SELECT '2024-01-15T10:30:00.000Z'")
+  })
+
+  it('should handle null values in selection gracefully', () => {
+    const result = substituteMacros(
+      'SELECT $cell.selected.col',
+      {},
+      defaultTimeRange,
+      {},
+      { cell: { col: null as unknown } },
+    )
+    expect(result).toBe('SELECT ')
+  })
+})
+
+describe('validateMacros with cell selections', () => {
+  it('should report error for unknown cell in selection reference', () => {
+    const result = validateMacros(
+      '$unknown.selected.col',
+      {},
+      {},
+      { some_cell: { col: 'val' } },
+    )
+    expect(result.valid).toBe(false)
+    expect(result.errors).toContain('Unknown cell: unknown')
+  })
+
+  it('should report error for unknown column in selection reference', () => {
+    const result = validateMacros(
+      '$cell.selected.missing',
+      {},
+      {},
+      { cell: { col: 'val', other: 'x' } },
+    )
+    expect(result.valid).toBe(false)
+    expect(result.errors[0]).toContain("Column 'missing' not found in cell 'cell'")
+    expect(result.errors[0]).toContain('col, other')
+  })
+
+  it('should pass for valid selection reference', () => {
+    const result = validateMacros(
+      '$cell.selected.col',
+      {},
+      {},
+      { cell: { col: 'val' } },
+    )
+    expect(result.valid).toBe(true)
+  })
+
+  it('should report unknown cell when cellSelections is empty', () => {
+    const result = validateMacros('$cell.selected.col', {}, {}, {})
+    expect(result.valid).toBe(false)
+    expect(result.errors).toContain('Unknown cell: cell')
+  })
+
+  it('should not report $cell.selected as unknown variable in dotted validation', () => {
+    const result = validateMacros(
+      '$cell.selected.col',
+      {},
+      {},
+      { cell: { col: 'val' } },
+    )
+    expect(result.valid).toBe(true)
+    expect(result.errors).toHaveLength(0)
+  })
 })
