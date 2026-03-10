@@ -18,6 +18,7 @@ This file documents the historical progress of the Micromegas project. For curre
   * Rename $begin/$end macros to $from/$to and fix expansion in column overrides (#914)
   * Add Insert cell above/below options to cell context menu
   * Add Download CSV menu option for notebook cells (#900)
+  * Add row selection to table cells with `$cell.selected.column` macros for interactive drill-down (#915)
   * Add cell result row references in macros — `$cell[N].column` syntax for chaining queries (#898)
   * Add Alt+PageUp/PageDown keyboard navigation for notebook cells (#909)
   * Fix available variables showing orphaned URL params and unscoped variables
