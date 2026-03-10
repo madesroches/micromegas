@@ -352,8 +352,17 @@ export function NotebookRenderer({
     [executionCells, executeFromCell]
   )
 
+  // Execute cells after a named cell (skips the cell itself)
+  const executeAfterCellByName = useCallback(
+    async (name: string) => {
+      const idx = executionCells.findIndex((c) => c.name === name)
+      if (idx !== -1 && idx + 1 < executionCells.length) await executeFromCell(idx + 1)
+    },
+    [executionCells, executeFromCell]
+  )
+
   // Auto-run management
-  const { scheduleAutoRun, triggerAutoRun } = useNotebookAutoRun({ executeFromCellByName })
+  const { scheduleAutoRun, triggerAutoRun } = useNotebookAutoRun({ executeFromCellByName, executeAfterCellByName })
 
   // Handle time range selection from charts (drag-to-zoom)
   const handleTimeRangeSelect = useCallback((from: Date, to: Date) => {
