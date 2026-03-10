@@ -283,7 +283,7 @@ function HgChildPane({
           </div>
         ) : state.status === 'blocked' ? (
           <div className="text-center text-theme-text-muted text-xs p-4">
-            Waiting for cell above to succeed
+            {state.error || 'Waiting for cell above to succeed'}
           </div>
         ) : (
           <CellRenderer {...commonProps} />

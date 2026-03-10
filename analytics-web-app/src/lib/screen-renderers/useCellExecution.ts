@@ -390,9 +390,11 @@ export function useCellExecution({
   // Update selection for a cell and re-execute downstream cells
   const updateCellSelection = useCallback(
     (cellName: string, selectedRow: Record<string, unknown> | null) => {
+      const hadSelection = cellName in cellSelectionsRef.current
       if (selectedRow) {
         cellSelectionsRef.current = { ...cellSelectionsRef.current, [cellName]: selectedRow }
       } else {
+        if (!hadSelection) return // no-op: nothing to clear, skip re-execution
         const next = { ...cellSelectionsRef.current }
         delete next[cellName]
         cellSelectionsRef.current = next
