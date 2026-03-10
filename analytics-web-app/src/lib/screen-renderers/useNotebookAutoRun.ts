@@ -7,19 +7,26 @@ interface UseNotebookAutoRunParams {
 }
 
 interface UseNotebookAutoRunResult {
-  /** Schedule a debounced auto-run (for config changes like SQL editing) */
+  /** Schedule a debounced auto-run: re-executes the cell and all cells below (for config editing) */
   scheduleAutoRun: (cellName: string) => void
-  /** Trigger immediate auto-run with re-entrance guard (for variable value changes) */
+  /** Trigger immediate auto-run: executes only cells *after* the named cell (for value selection) */
   triggerAutoRun: (cellName: string, autoRunFromHere?: boolean) => void
 }
 
 /**
  * Manages auto-run behavior for notebook cells.
  *
- * Owns:
- * - Re-entrance guard ref preventing recursive auto-run when execution itself sets variables
- * - Debounced per-cell timers for config changes (SQL editing, content changes)
- * - Immediate guarded execution for variable value changes
+ * Two distinct auto-run triggers:
+ * - **Config editing** (scheduleAutoRun): When a cell's configuration changes
+ *   (e.g. SQL editing), the cell itself is re-executed along with all cells below
+ *   it, after a 300ms debounce.
+ * - **Value selection** (triggerAutoRun): When a user selects a value in a
+ *   variable cell (e.g. dropdown), only the cells *after* the variable are
+ *   executed — the variable cell's own query is not re-run since the value is
+ *   already set by the user interaction.
+ *
+ * A re-entrance guard prevents recursive auto-run when execution itself sets
+ * variables (e.g. expression variables computed during execution).
  */
 export function useNotebookAutoRun({
   executeFromCellByName,
