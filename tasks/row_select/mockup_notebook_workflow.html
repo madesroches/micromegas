@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Row Selection — Notebook Workflow</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0a0a0f; color: #e7e9ea;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-size: 13px; line-height: 1.4;
+    padding: 32px 24px;
+  }
+
+  h1 { font-size: 16px; font-weight: 600; color: #e7e9ea; margin-bottom: 4px; }
+  h2 { font-size: 14px; font-weight: 600; color: #9ca3af; margin: 48px 0 6px; text-transform: uppercase; letter-spacing: 0.5px; }
+  h2:first-of-type { margin-top: 24px; }
+  .subtitle { font-size: 12px; color: #6b7280; margin-bottom: 24px; }
+  .description { font-size: 11px; color: #6b7280; margin-bottom: 12px; max-width: 700px; }
+
+  /* Notebook cell container */
+  .cell {
+    margin: 12px 0; border-radius: 6px;
+    overflow: hidden;
+  }
+  .cell-header {
+    display: flex; align-items: center; gap: 6px;
+    padding: 4px 8px; font-size: 10px; color: #9ca3af;
+  }
+  .cell-header .name { font-weight: 600; }
+  .cell-header .type { color: #4b5563; }
+  .cell-header .sep { color: #2a2a3e; }
+  .cell-header .status { color: #6b7280; }
+  .cell-header .status.success { color: #22c55e; }
+  .cell-header .status.blocked { color: #f59e0b; }
+  .cell-header .status.waiting { color: #6b7280; font-style: italic; }
+
+  /* Table styling */
+  .table-box {
+    background: #0a0a0f; border: 1px solid #2a2a3e; border-radius: 6px;
+    overflow: hidden; margin: 0 4px 4px;
+  }
+  .table-box table { width: 100%; border-collapse: collapse; }
+  .table-box thead tr { background: #12121a; border-bottom: 1px solid #2a2a3e; }
+  .table-box th {
+    padding: 6px 12px; text-align: left;
+    font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;
+    color: #6b7280;
+  }
+  .table-box td {
+    padding: 6px 12px;
+    font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
+    font-size: 12px; color: #e7e9ea;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 240px;
+  }
+  .table-box tr { border-bottom: 1px solid #2a2a3e; }
+  .table-box tbody tr { cursor: pointer; transition: background 0.15s; }
+  .table-box tbody tr:hover { background: rgba(18,18,26,0.7); }
+
+  /* Selected row — left border accent style */
+  .table-box tbody tr.selected {
+    background: rgba(21,101,192,0.08);
+    box-shadow: inset 3px 0 0 #1976d2;
+  }
+
+  /* Selection info badge */
+  .selection-badge {
+    display: flex; align-items: center; gap: 6px;
+    padding: 3px 8px; font-size: 10px; color: #6b7280;
+    border-top: 1px solid #2a2a3e;
+  }
+  .selection-badge .label { color: #1976d2; font-weight: 500; }
+  .selection-badge .value {
+    font-family: 'SF Mono', 'Cascadia Code', monospace;
+    color: #9ca3af; font-size: 10px;
+  }
+  .selection-badge .clear {
+    margin-left: auto; color: #4b5563; cursor: pointer; font-size: 9px;
+  }
+
+  /* SQL editor (simplified) */
+  .sql-box {
+    margin: 0 4px 4px; padding: 8px 12px;
+    background: #12121a; border: 1px solid #2a2a3e; border-radius: 6px;
+    font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
+    font-size: 12px; line-height: 1.6; color: #9ca3af;
+  }
+  .sql-box .kw { color: #c792ea; }
+  .sql-box .fn { color: #82aaff; }
+  .sql-box .str { color: #c3e88d; }
+  .sql-box .macro { color: #f78c6c; background: rgba(247,140,108,0.1); padding: 0 2px; border-radius: 2px; }
+  .sql-box .comment { color: #546e7a; font-style: italic; }
+
+  /* Markdown cell */
+  .md-box {
+    margin: 0 4px 4px; padding: 8px 12px;
+    border: 1px solid #2a2a3e; border-radius: 6px;
+    font-size: 13px; color: #e7e9ea; line-height: 1.5;
+  }
+  .md-box .resolved { color: #c3e88d; font-weight: 500; }
+  .md-box .unresolved { color: #f59e0b; font-style: italic; }
+
+  /* No selection placeholder */
+  .no-selection {
+    margin: 0 4px 4px; padding: 16px;
+    border: 1px dashed #2a2a3e; border-radius: 6px;
+    text-align: center; color: #4b5563; font-size: 12px;
+  }
+  .no-selection .icon { font-size: 20px; margin-bottom: 4px; opacity: 0.3; }
+  .no-selection .hint { font-size: 10px; color: #374151; margin-top: 2px; }
+
+  /* Available variables panel (side panel preview) */
+  .vars-panel {
+    margin: 0 4px 4px; padding: 8px;
+    background: #12121a; border: 1px solid #2a2a3e; border-radius: 6px;
+    max-width: 340px;
+  }
+  .vars-panel .section-title {
+    font-size: 9px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;
+    color: #4b5563; margin-bottom: 6px;
+  }
+  .vars-panel .var-entry {
+    display: flex; align-items: baseline; gap: 6px;
+    padding: 2px 0; font-size: 11px;
+  }
+  .vars-panel .var-name {
+    font-family: 'SF Mono', 'Cascadia Code', monospace;
+    color: #f78c6c; font-size: 10px;
+  }
+  .vars-panel .var-value {
+    font-family: 'SF Mono', 'Cascadia Code', monospace;
+    color: #6b7280; font-size: 10px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .vars-panel .var-group { margin-bottom: 8px; }
+  .vars-panel .var-group-header {
+    display: flex; align-items: center; gap: 4px;
+    font-size: 10px; color: #6b7280; margin-bottom: 2px; cursor: pointer;
+  }
+  .vars-panel .var-group-header .expand { font-size: 8px; color: #4b5563; }
+  .vars-panel .var-group-header .cell-info { color: #4b5563; font-size: 9px; }
+  .vars-panel .indent { padding-left: 12px; }
+
+  .divider { border: none; border-top: 1px solid #1a1a2e; margin: 8px 0; }
+
+  /* Arrow between cells */
+  .cell-arrow {
+    text-align: center; color: #2a2a3e; font-size: 16px; margin: 2px 0;
+  }
+</style>
+</head>
+<body>
+
+<h1>Row Selection — Notebook Workflow</h1>
+<p class="subtitle">Shows a complete notebook with row selection driving downstream cells. Uses left-border accent style (Option A).</p>
+
+<!-- ================================================================ -->
+<h2>Workflow: Process Drill-down</h2>
+<p class="description">Cell 1 lists processes. Selecting a row makes its columns available as $processes.selected.column_name. Downstream cells use these macros to show logs and details for the selected process.</p>
+
+<!-- Cell 1: Processes table with selection -->
+<div class="cell">
+  <div class="cell-header">
+    <span class="name">processes</span>
+    <span class="sep">&middot;</span>
+    <span class="type">table</span>
+    <span class="sep">&middot;</span>
+    <span class="status success">5 rows in 0.2s</span>
+  </div>
+  <div class="table-box">
+    <table>
+      <thead>
+        <tr>
+          <th>exe</th>
+          <th>process_id</th>
+          <th>start_time</th>
+          <th>username</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td>ingestion-srv</td><td>a1b2c3d4-e5f6</td><td>2026-03-10 08:00:12</td><td>svc-telemetry</td></tr>
+        <tr class="selected"><td>flight-sql-srv</td><td>f7e8d9c0-b1a2</td><td>2026-03-10 08:01:45</td><td>svc-analytics</td></tr>
+        <tr><td>game-server</td><td>1234abcd-5678</td><td>2026-03-10 09:15:30</td><td>player-host</td></tr>
+        <tr><td>telemetry-admin</td><td>9876fedc-ba09</td><td>2026-03-10 08:00:05</td><td>admin</td></tr>
+        <tr><td>web-frontend</td><td>abcd1234-ef56</td><td>2026-03-10 10:22:18</td><td>web-svc</td></tr>
+      </tbody>
+    </table>
+    <div class="selection-badge">
+      <span class="label">Selected:</span>
+      <span class="value">row 1 &mdash; flight-sql-srv / f7e8d9c0-b1a2</span>
+      <span class="clear">&times; clear</span>
+    </div>
+  </div>
+</div>
+
+<div class="cell-arrow">&darr;</div>
+
+<!-- Cell 2: SQL cell referencing selected row -->
+<div class="cell">
+  <div class="cell-header">
+    <span class="name">process_logs</span>
+    <span class="sep">&middot;</span>
+    <span class="type">log</span>
+    <span class="sep">&middot;</span>
+    <span class="status success">247 rows in 0.8s</span>
+  </div>
+  <div class="sql-box">
+    <span class="kw">SELECT</span> time, level, target, msg<br>
+    <span class="kw">FROM</span> <span class="fn">view_instance</span>(<span class="str">'log_entries'</span>, <span class="str">'<span class="macro">$processes.selected.process_id</span>'</span>)<br>
+    <span class="kw">WHERE</span> time &gt;= <span class="str">'<span class="macro">$from</span>'</span> <span class="kw">AND</span> time &lt;= <span class="str">'<span class="macro">$to</span>'</span><br>
+    <span class="kw">ORDER BY</span> time <span class="kw">DESC</span><br>
+    <span class="kw">LIMIT</span> 100
+  </div>
+</div>
+
+<div class="cell-arrow">&darr;</div>
+
+<!-- Cell 3: Markdown cell using selected row -->
+<div class="cell">
+  <div class="cell-header">
+    <span class="name">process_info</span>
+    <span class="sep">&middot;</span>
+    <span class="type">markdown</span>
+  </div>
+  <div class="md-box">
+    Process: <span class="resolved">flight-sql-srv</span> (ID: <span class="resolved">f7e8d9c0-b1a2</span>)<br>
+    Started: <span class="resolved">2026-03-10 08:01:45</span> by <span class="resolved">svc-analytics</span>
+  </div>
+</div>
+
+<!-- ================================================================ -->
+<h2>No Selection State</h2>
+<p class="description">When no row is selected in the upstream table, dependent cells show a placeholder. Two options for handling this:</p>
+
+<!-- Option 1: Placeholder message -->
+<div style="margin-top: 16px;">
+  <p class="description" style="margin-bottom: 4px;"><strong>Option 1: Placeholder message</strong> — Dependent cell shows a friendly message instead of erroring.</p>
+  <div class="cell">
+    <div class="cell-header">
+      <span class="name">process_logs</span>
+      <span class="sep">&middot;</span>
+      <span class="type">log</span>
+      <span class="sep">&middot;</span>
+      <span class="status waiting">waiting for selection</span>
+    </div>
+    <div class="no-selection">
+      <div class="icon">&#x1F449;</div>
+      Select a row in <strong>processes</strong> to view logs
+      <div class="hint">This cell uses $processes.selected.process_id</div>
+    </div>
+  </div>
+</div>
+
+<!-- Option 2: Blocked state (reuse existing blocked styling) -->
+<div style="margin-top: 16px;">
+  <p class="description" style="margin-bottom: 4px;"><strong>Option 2: Blocked state</strong> — Reuse the existing "blocked" status. Simple, no new UI needed.</p>
+  <div class="cell">
+    <div class="cell-header">
+      <span class="name">process_logs</span>
+      <span class="sep">&middot;</span>
+      <span class="type">log</span>
+      <span class="sep">&middot;</span>
+      <span class="status blocked">blocked — no row selected in processes</span>
+    </div>
+  </div>
+</div>
+
+<!-- ================================================================ -->
+<h2>Available Variables Panel (Editor Sidebar)</h2>
+<p class="description">How the selected row appears in the Available Variables panel when editing a downstream cell. Shows the $cell.selected.column syntax for each column in the selected row.</p>
+
+<div style="display: flex; gap: 16px; margin-top: 8px;">
+  <!-- Panel with selection -->
+  <div>
+    <p class="description" style="margin-bottom: 4px;"><strong>Row selected</strong></p>
+    <div class="vars-panel">
+      <div class="section-title">Time Range</div>
+      <div class="var-entry"><span class="var-name">$from</span> <span class="var-value">2026-03-10T00:00:00Z</span></div>
+      <div class="var-entry"><span class="var-name">$to</span> <span class="var-value">2026-03-10T23:59:59Z</span></div>
+
+      <hr class="divider">
+
+      <div class="section-title">Cell Results</div>
+      <div class="var-group">
+        <div class="var-group-header">
+          <span class="expand">&#x25BC;</span>
+          <span>processes</span>
+          <span class="cell-info">5 rows, 4 cols — row 1 selected</span>
+        </div>
+        <div class="indent">
+          <div class="var-entry"><span class="var-name">$processes.selected.exe</span> <span class="var-value">flight-sql-srv</span></div>
+          <div class="var-entry"><span class="var-name">$processes.selected.process_id</span> <span class="var-value">f7e8d9c0-b1a2</span></div>
+          <div class="var-entry"><span class="var-name">$processes.selected.start_time</span> <span class="var-value">2026-03-10T08:01:45Z</span></div>
+          <div class="var-entry"><span class="var-name">$processes.selected.username</span> <span class="var-value">svc-analytics</span></div>
+        </div>
+      </div>
+      <div class="var-group">
+        <div class="var-group-header">
+          <span class="expand">&#x25B6;</span>
+          <span>process_logs</span>
+          <span class="cell-info">247 rows, 4 cols</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Panel without selection -->
+  <div>
+    <p class="description" style="margin-bottom: 4px;"><strong>No row selected</strong></p>
+    <div class="vars-panel">
+      <div class="section-title">Time Range</div>
+      <div class="var-entry"><span class="var-name">$from</span> <span class="var-value">2026-03-10T00:00:00Z</span></div>
+      <div class="var-entry"><span class="var-name">$to</span> <span class="var-value">2026-03-10T23:59:59Z</span></div>
+
+      <hr class="divider">
+
+      <div class="section-title">Cell Results</div>
+      <div class="var-group">
+        <div class="var-group-header">
+          <span class="expand">&#x25BC;</span>
+          <span>processes</span>
+          <span class="cell-info">5 rows, 4 cols — no selection</span>
+        </div>
+        <div class="indent">
+          <div class="var-entry"><span class="var-name" style="opacity: 0.5;">$processes.selected.exe</span> <span class="var-value" style="color: #f59e0b;">no selection</span></div>
+          <div class="var-entry"><span class="var-name" style="opacity: 0.5;">$processes.selected.process_id</span> <span class="var-value" style="color: #f59e0b;">no selection</span></div>
+          <div class="var-entry"><span class="var-name" style="opacity: 0.5;">$processes.selected.start_time</span> <span class="var-value" style="color: #f59e0b;">no selection</span></div>
+          <div class="var-entry"><span class="var-name" style="opacity: 0.5;">$processes.selected.username</span> <span class="var-value" style="color: #f59e0b;">no selection</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

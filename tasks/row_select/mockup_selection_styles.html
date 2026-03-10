@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Row Selection — Visual Style Options</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0a0a0f; color: #e7e9ea;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-size: 13px; line-height: 1.4;
+    padding: 32px 24px;
+  }
+
+  h1 { font-size: 16px; font-weight: 600; color: #e7e9ea; margin-bottom: 4px; }
+  h2 { font-size: 14px; font-weight: 600; color: #9ca3af; margin: 48px 0 6px; text-transform: uppercase; letter-spacing: 0.5px; }
+  h2:first-of-type { margin-top: 24px; }
+  .subtitle { font-size: 12px; color: #6b7280; margin-bottom: 24px; }
+  .description { font-size: 11px; color: #6b7280; margin-bottom: 12px; max-width: 700px; }
+
+  .pane-label {
+    display: flex; align-items: center; gap: 5px;
+    padding: 2px 8px; font-size: 10px; color: #9ca3af;
+  }
+  .pane-label .sep { color: #2a2a3e; }
+  .pane-label .status { color: #6b7280; }
+
+  /* Shared table base */
+  .table-box {
+    background: #0a0a0f; border: 1px solid #2a2a3e; border-radius: 6px;
+    overflow: hidden;
+  }
+  .table-box table { width: 100%; border-collapse: collapse; }
+  .table-box thead tr { background: #12121a; border-bottom: 1px solid #2a2a3e; }
+  .table-box th {
+    padding: 6px 12px; text-align: left;
+    font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;
+    color: #6b7280; cursor: pointer; transition: color 0.15s;
+  }
+  .table-box th:hover { color: #9ca3af; }
+  .table-box th.sorted { color: #e7e9ea; }
+  .table-box td {
+    padding: 6px 12px;
+    font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
+    font-size: 12px; color: #e7e9ea;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 240px;
+  }
+  .table-box tr { border-bottom: 1px solid #2a2a3e; }
+  .table-box tbody tr { cursor: pointer; transition: background 0.15s; }
+  .table-box tbody tr:hover { background: rgba(18,18,26,0.7); }
+  .table-box .sort-icon { font-size: 9px; color: #1976d2; margin-left: 4px; }
+
+  /* Pagination */
+  .pag {
+    display: flex; align-items: center; justify-content: center;
+    padding: 2px 4px; position: relative;
+  }
+  .pag .nav { display: flex; align-items: center; gap: 1px; }
+  .pag .nav-btn {
+    width: 18px; height: 18px; display: inline-flex; align-items: center; justify-content: center;
+    background: none; border: none; border-radius: 2px;
+    color: #4b5563; cursor: pointer; font-size: 9px;
+  }
+  .pag .page-info { font-size: 10px; color: #4b5563; margin: 0 4px; }
+  .pag .page-info strong { color: #6b7280; font-weight: 500; }
+  .pag .right {
+    position: absolute; right: 4px; top: 50%; transform: translateY(-50%);
+    display: flex; align-items: center; gap: 4px;
+  }
+  .pag .row-info { font-size: 10px; color: #4b5563; }
+
+  /* ================================================================
+     OPTION A: Left border accent
+     ================================================================ */
+  .opt-a tbody tr.selected {
+    background: rgba(21,101,192,0.08);
+    box-shadow: inset 3px 0 0 #1976d2;
+  }
+  .opt-a tbody tr.selected td { color: #e7e9ea; }
+
+  /* ================================================================
+     OPTION B: Full row highlight
+     ================================================================ */
+  .opt-b tbody tr.selected {
+    background: rgba(21,101,192,0.15);
+  }
+  .opt-b tbody tr.selected td { color: #e7e9ea; }
+
+  /* ================================================================
+     OPTION C: Radio indicator column
+     ================================================================ */
+  .opt-c .radio-col { width: 28px; text-align: center; padding: 6px 4px !important; }
+  .opt-c .radio {
+    display: inline-block; width: 12px; height: 12px;
+    border: 1.5px solid #4b5563; border-radius: 50%;
+    vertical-align: middle; position: relative;
+    transition: border-color 0.15s;
+  }
+  .opt-c tbody tr:hover .radio { border-color: #6b7280; }
+  .opt-c tbody tr.selected .radio {
+    border-color: #1976d2;
+  }
+  .opt-c tbody tr.selected .radio::after {
+    content: '';
+    position: absolute; top: 2px; left: 2px; right: 2px; bottom: 2px;
+    background: #1976d2; border-radius: 50%;
+  }
+  .opt-c tbody tr.selected {
+    background: rgba(21,101,192,0.08);
+  }
+
+  /* ================================================================
+     OPTION D: Checkbox column (multi-select future-proof)
+     ================================================================ */
+  .opt-d .check-col { width: 28px; text-align: center; padding: 6px 4px !important; }
+  .opt-d .check {
+    display: inline-block; width: 12px; height: 12px;
+    border: 1.5px solid #4b5563; border-radius: 2px;
+    vertical-align: middle; position: relative;
+    transition: border-color 0.15s, background 0.15s;
+  }
+  .opt-d tbody tr:hover .check { border-color: #6b7280; }
+  .opt-d tbody tr.selected .check {
+    border-color: #1976d2; background: #1976d2;
+  }
+  .opt-d tbody tr.selected .check::after {
+    content: '';
+    position: absolute; top: 1px; left: 3px;
+    width: 4px; height: 7px;
+    border: solid #fff; border-width: 0 1.5px 1.5px 0;
+    transform: rotate(45deg);
+  }
+  .opt-d tbody tr.selected {
+    background: rgba(21,101,192,0.08);
+  }
+
+  /* ================================================================
+     Selection info badge (shows below table when row is selected)
+     ================================================================ */
+  .selection-badge {
+    display: flex; align-items: center; gap: 6px;
+    padding: 3px 8px; font-size: 10px; color: #6b7280;
+    border-top: 1px solid #2a2a3e;
+  }
+  .selection-badge .label { color: #1976d2; font-weight: 500; }
+  .selection-badge .value {
+    font-family: 'SF Mono', 'Cascadia Code', monospace;
+    color: #9ca3af; font-size: 10px;
+  }
+  .selection-badge .clear {
+    margin-left: auto; color: #4b5563; cursor: pointer; font-size: 9px;
+    transition: color 0.15s;
+  }
+  .selection-badge .clear:hover { color: #9ca3af; }
+</style>
+</head>
+<body>
+
+<h1>Row Selection in Table Cells</h1>
+<p class="subtitle">Issue #915 — Visual style options for selected rows. Click a row to select it; downstream cells reference it via $cell.selected.column.</p>
+
+<!-- ================================================================ -->
+<h2>Option A: Left Border Accent</h2>
+<p class="description">Subtle left border indicator (3px blue) with faint background tint. Minimal — doesn't compete with hover state. Similar to VS Code's active line gutter.</p>
+<div class="pane-label">
+  <span>processes</span>
+  <span class="sep">&middot;</span>
+  <span class="status">5 rows in 0.2s</span>
+</div>
+<div style="padding: 0 4px 4px;">
+  <div class="table-box opt-a">
+    <table>
+      <thead>
+        <tr>
+          <th class="sorted">exe <span class="sort-icon">&uarr;</span></th>
+          <th>process_id</th>
+          <th>start_time</th>
+          <th>username</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td>ingestion-srv</td><td>a1b2c3d4-e5f6</td><td>2026-03-10 08:00:12</td><td>svc-telemetry</td></tr>
+        <tr class="selected"><td>flight-sql-srv</td><td>f7e8d9c0-b1a2</td><td>2026-03-10 08:01:45</td><td>svc-analytics</td></tr>
+        <tr><td>game-server</td><td>1234abcd-5678</td><td>2026-03-10 09:15:30</td><td>player-host</td></tr>
+        <tr><td>telemetry-admin</td><td>9876fedc-ba09</td><td>2026-03-10 08:00:05</td><td>admin</td></tr>
+        <tr><td>web-frontend</td><td>abcd1234-ef56</td><td>2026-03-10 10:22:18</td><td>web-svc</td></tr>
+      </tbody>
+    </table>
+    <div class="selection-badge">
+      <span class="label">Selected:</span>
+      <span class="value">row 1 &mdash; flight-sql-srv / f7e8d9c0-b1a2</span>
+      <span class="clear">&times; clear</span>
+    </div>
+    <div class="pag">
+      <div class="nav">
+        <button class="nav-btn" disabled>&#x226A;</button>
+        <button class="nav-btn" disabled>&#x2039;</button>
+        <span class="page-info"><strong>1</strong> / <strong>1</strong></span>
+        <button class="nav-btn" disabled>&#x203A;</button>
+        <button class="nav-btn" disabled>&#x226B;</button>
+      </div>
+      <div class="right">
+        <span class="row-info">1&ndash;5 of 5</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ================================================================ -->
+<h2>Option B: Full Row Highlight</h2>
+<p class="description">Stronger blue background on the selected row. More visible at a glance — immediately obvious which row is active. Similar to file explorer selection.</p>
+<div class="pane-label">
+  <span>processes</span>
+  <span class="sep">&middot;</span>
+  <span class="status">5 rows in 0.2s</span>
+</div>
+<div style="padding: 0 4px 4px;">
+  <div class="table-box opt-b">
+    <table>
+      <thead>
+        <tr>
+          <th class="sorted">exe <span class="sort-icon">&uarr;</span></th>
+          <th>process_id</th>
+          <th>start_time</th>
+          <th>username</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td>ingestion-srv</td><td>a1b2c3d4-e5f6</td><td>2026-03-10 08:00:12</td><td>svc-telemetry</td></tr>
+        <tr class="selected"><td>flight-sql-srv</td><td>f7e8d9c0-b1a2</td><td>2026-03-10 08:01:45</td><td>svc-analytics</td></tr>
+        <tr><td>game-server</td><td>1234abcd-5678</td><td>2026-03-10 09:15:30</td><td>player-host</td></tr>
+        <tr><td>telemetry-admin</td><td>9876fedc-ba09</td><td>2026-03-10 08:00:05</td><td>admin</td></tr>
+        <tr><td>web-frontend</td><td>abcd1234-ef56</td><td>2026-03-10 10:22:18</td><td>web-svc</td></tr>
+      </tbody>
+    </table>
+    <div class="selection-badge">
+      <span class="label">Selected:</span>
+      <span class="value">row 1 &mdash; flight-sql-srv / f7e8d9c0-b1a2</span>
+      <span class="clear">&times; clear</span>
+    </div>
+    <div class="pag">
+      <div class="nav">
+        <button class="nav-btn" disabled>&#x226A;</button>
+        <button class="nav-btn" disabled>&#x2039;</button>
+        <span class="page-info"><strong>1</strong> / <strong>1</strong></span>
+        <button class="nav-btn" disabled>&#x203A;</button>
+        <button class="nav-btn" disabled>&#x226B;</button>
+      </div>
+      <div class="right">
+        <span class="row-info">1&ndash;5 of 5</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ================================================================ -->
+<h2>Option C: Radio Indicator</h2>
+<p class="description">Adds a narrow first column with radio buttons. Makes selectability discoverable without hovering. Clearly communicates single-selection semantics. Slightly wider table.</p>
+<div class="pane-label">
+  <span>processes</span>
+  <span class="sep">&middot;</span>
+  <span class="status">5 rows in 0.2s</span>
+</div>
+<div style="padding: 0 4px 4px;">
+  <div class="table-box opt-c">
+    <table>
+      <thead>
+        <tr>
+          <th class="radio-col"></th>
+          <th class="sorted">exe <span class="sort-icon">&uarr;</span></th>
+          <th>process_id</th>
+          <th>start_time</th>
+          <th>username</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td class="radio-col"><span class="radio"></span></td><td>ingestion-srv</td><td>a1b2c3d4-e5f6</td><td>2026-03-10 08:00:12</td><td>svc-telemetry</td></tr>
+        <tr class="selected"><td class="radio-col"><span class="radio"></span></td><td>flight-sql-srv</td><td>f7e8d9c0-b1a2</td><td>2026-03-10 08:01:45</td><td>svc-analytics</td></tr>
+        <tr><td class="radio-col"><span class="radio"></span></td><td>game-server</td><td>1234abcd-5678</td><td>2026-03-10 09:15:30</td><td>player-host</td></tr>
+        <tr><td class="radio-col"><span class="radio"></span></td><td>telemetry-admin</td><td>9876fedc-ba09</td><td>2026-03-10 08:00:05</td><td>admin</td></tr>
+        <tr><td class="radio-col"><span class="radio"></span></td><td>web-frontend</td><td>abcd1234-ef56</td><td>2026-03-10 10:22:18</td><td>web-svc</td></tr>
+      </tbody>
+    </table>
+    <div class="pag">
+      <div class="nav">
+        <button class="nav-btn" disabled>&#x226A;</button>
+        <button class="nav-btn" disabled>&#x2039;</button>
+        <span class="page-info"><strong>1</strong> / <strong>1</strong></span>
+        <button class="nav-btn" disabled>&#x203A;</button>
+        <button class="nav-btn" disabled>&#x226B;</button>
+      </div>
+      <div class="right">
+        <span class="row-info">1&ndash;5 of 5</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ================================================================ -->
+<h2>Option D: Checkbox (Multi-select Future-proof)</h2>
+<p class="description">Checkbox instead of radio. Same as Option C visually but uses square checkboxes. Could extend to multi-select in the future (e.g. $cell.selected becoming an array). For now, only one row selectable at a time.</p>
+<div class="pane-label">
+  <span>processes</span>
+  <span class="sep">&middot;</span>
+  <span class="status">5 rows in 0.2s</span>
+</div>
+<div style="padding: 0 4px 4px;">
+  <div class="table-box opt-d">
+    <table>
+      <thead>
+        <tr>
+          <th class="check-col"></th>
+          <th class="sorted">exe <span class="sort-icon">&uarr;</span></th>
+          <th>process_id</th>
+          <th>start_time</th>
+          <th>username</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td class="check-col"><span class="check"></span></td><td>ingestion-srv</td><td>a1b2c3d4-e5f6</td><td>2026-03-10 08:00:12</td><td>svc-telemetry</td></tr>
+        <tr class="selected"><td class="check-col"><span class="check"></span></td><td>flight-sql-srv</td><td>f7e8d9c0-b1a2</td><td>2026-03-10 08:01:45</td><td>svc-analytics</td></tr>
+        <tr><td class="check-col"><span class="check"></span></td><td>game-server</td><td>1234abcd-5678</td><td>2026-03-10 09:15:30</td><td>player-host</td></tr>
+        <tr><td class="check-col"><span class="check"></span></td><td>telemetry-admin</td><td>9876fedc-ba09</td><td>2026-03-10 08:00:05</td><td>admin</td></tr>
+        <tr><td class="check-col"><span class="check"></span></td><td>web-frontend</td><td>abcd1234-ef56</td><td>2026-03-10 10:22:18</td><td>web-svc</td></tr>
+      </tbody>
+    </table>
+    <div class="pag">
+      <div class="nav">
+        <button class="nav-btn" disabled>&#x226A;</button>
+        <button class="nav-btn" disabled>&#x2039;</button>
+        <span class="page-info"><strong>1</strong> / <strong>1</strong></span>
+        <button class="nav-btn" disabled>&#x203A;</button>
+        <button class="nav-btn" disabled>&#x226B;</button>
+      </div>
+      <div class="right">
+        <span class="row-info">1&ndash;5 of 5</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

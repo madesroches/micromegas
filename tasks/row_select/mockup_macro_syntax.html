@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Row Selection — Macro Syntax Options</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0a0a0f; color: #e7e9ea;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-size: 13px; line-height: 1.4;
+    padding: 32px 24px;
+  }
+
+  h1 { font-size: 16px; font-weight: 600; color: #e7e9ea; margin-bottom: 4px; }
+  h2 { font-size: 14px; font-weight: 600; color: #9ca3af; margin: 48px 0 6px; text-transform: uppercase; letter-spacing: 0.5px; }
+  h2:first-of-type { margin-top: 24px; }
+  .subtitle { font-size: 12px; color: #6b7280; margin-bottom: 24px; }
+  .description { font-size: 11px; color: #6b7280; margin-bottom: 12px; max-width: 700px; }
+
+  /* SQL examples */
+  .syntax-card {
+    margin: 8px 0 24px; padding: 12px 16px;
+    background: #12121a; border: 1px solid #2a2a3e; border-radius: 6px;
+    max-width: 700px;
+  }
+  .syntax-title {
+    font-size: 11px; font-weight: 600; color: #e7e9ea; margin-bottom: 8px;
+  }
+  .syntax-example {
+    font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
+    font-size: 12px; line-height: 1.8; color: #9ca3af;
+  }
+  .syntax-example .kw { color: #c792ea; }
+  .syntax-example .fn { color: #82aaff; }
+  .syntax-example .str { color: #c3e88d; }
+  .syntax-example .macro { color: #f78c6c; background: rgba(247,140,108,0.1); padding: 1px 3px; border-radius: 2px; }
+  .syntax-example .comment { color: #546e7a; font-style: italic; }
+
+  .pros-cons {
+    display: flex; gap: 24px; margin-top: 8px; font-size: 11px;
+  }
+  .pros, .cons { flex: 1; }
+  .pros .label { color: #22c55e; font-weight: 600; font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
+  .cons .label { color: #ef4444; font-weight: 600; font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
+  .pros li, .cons li { color: #6b7280; padding: 1px 0; list-style: none; }
+  .pros li::before { content: '+ '; color: #22c55e; }
+  .cons li::before { content: '- '; color: #ef4444; }
+
+  .comparison-table {
+    width: 100%; max-width: 700px; border-collapse: collapse;
+    margin: 12px 0;
+  }
+  .comparison-table th {
+    padding: 6px 12px; text-align: left;
+    font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;
+    color: #6b7280; border-bottom: 1px solid #2a2a3e;
+  }
+  .comparison-table td {
+    padding: 6px 12px;
+    font-family: 'SF Mono', 'Cascadia Code', monospace;
+    font-size: 11px; color: #9ca3af;
+    border-bottom: 1px solid rgba(42,42,62,0.5);
+  }
+  .comparison-table td:first-child {
+    font-family: inherit; color: #6b7280; font-size: 11px;
+  }
+  .comparison-table .macro { color: #f78c6c; }
+  .comparison-table .recommended { background: rgba(21,101,192,0.06); }
+
+  .badge {
+    display: inline-block; padding: 1px 6px; font-size: 9px; font-weight: 600;
+    border-radius: 3px; text-transform: uppercase; letter-spacing: 0.3px;
+    vertical-align: middle; margin-left: 6px;
+  }
+  .badge.rec { background: rgba(21,101,192,0.15); color: #1976d2; }
+</style>
+</head>
+<body>
+
+<h1>Row Selection — Macro Syntax Options</h1>
+<p class="subtitle">Three syntax alternatives for referencing selected row columns in downstream cells.</p>
+
+<!-- ================================================================ -->
+<h2>Syntax Option 1: $cell.selected.column <span class="badge rec">recommended</span></h2>
+<p class="description">Introduces a <code>.selected</code> accessor on the cell name. Reads naturally as "the selected row's column from this cell". New regex pattern, doesn't conflict with existing <code>$cell[N].col</code> syntax.</p>
+
+<div class="syntax-card">
+  <div class="syntax-title">SQL Example</div>
+  <div class="syntax-example">
+    <span class="comment">-- upstream cell "processes" has a selected row</span><br>
+    <span class="kw">SELECT</span> time, level, target, msg<br>
+    <span class="kw">FROM</span> <span class="fn">view_instance</span>(<span class="str">'log_entries'</span>, <span class="str">'<span class="macro">$processes.selected.process_id</span>'</span>)<br>
+    <span class="kw">WHERE</span> time &gt;= <span class="str">'<span class="macro">$from</span>'</span><br>
+    <span class="kw">ORDER BY</span> time <span class="kw">DESC</span>
+  </div>
+</div>
+
+<div class="syntax-card">
+  <div class="syntax-title">Markdown Example</div>
+  <div class="syntax-example">
+    Process: <span class="macro">$processes.selected.exe</span><br>
+    Started at: <span class="macro">$processes.selected.start_time</span><br>
+    User: <span class="macro">$processes.selected.username</span>
+  </div>
+</div>
+
+<div class="pros-cons">
+  <div class="pros">
+    <div class="label">Pros</div>
+    <ul>
+      <li>Reads naturally: "processes selected process_id"</li>
+      <li>Self-documenting — <code>.selected</code> is explicit</li>
+      <li>Easy regex: <code>$name.selected.col</code></li>
+      <li>Doesn't conflict with existing <code>$cell[N].col</code></li>
+      <li>Consistent with <code>$variable.column</code> dotted style</li>
+    </ul>
+  </div>
+  <div class="cons">
+    <div class="label">Cons</div>
+    <ul>
+      <li>Longer than bracket syntax</li>
+      <li>"selected" is a reserved word (can't name a column "selected")</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ================================================================ -->
+<h2>Syntax Option 2: $cell[selected].column</h2>
+<p class="description">Uses the existing bracket accessor but with the keyword <code>selected</code> instead of a numeric index. Maximum consistency with <code>$cell[0].column</code> syntax.</p>
+
+<div class="syntax-card">
+  <div class="syntax-title">SQL Example</div>
+  <div class="syntax-example">
+    <span class="comment">-- same pattern as $cell[0].col but dynamic</span><br>
+    <span class="kw">SELECT</span> time, level, target, msg<br>
+    <span class="kw">FROM</span> <span class="fn">view_instance</span>(<span class="str">'log_entries'</span>, <span class="str">'<span class="macro">$processes[selected].process_id</span>'</span>)<br>
+    <span class="kw">WHERE</span> time &gt;= <span class="str">'<span class="macro">$from</span>'</span><br>
+    <span class="kw">ORDER BY</span> time <span class="kw">DESC</span>
+  </div>
+</div>
+
+<div class="pros-cons">
+  <div class="pros">
+    <div class="label">Pros</div>
+    <ul>
+      <li>Maximally consistent with <code>$cell[0].col</code></li>
+      <li>Bracket position = row selector (number or keyword)</li>
+      <li>Extends existing regex naturally</li>
+    </ul>
+  </div>
+  <div class="cons">
+    <div class="label">Cons</div>
+    <ul>
+      <li>Less readable in long expressions</li>
+      <li>Bracket syntax feels more "programmatic"</li>
+      <li>Harder to distinguish from numeric refs at a glance</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ================================================================ -->
+<h2>Syntax Option 3: $selected.cell.column</h2>
+<p class="description">Prefix-style with <code>$selected</code> as a namespace. Immediately signals that this value depends on user interaction.</p>
+
+<div class="syntax-card">
+  <div class="syntax-title">SQL Example</div>
+  <div class="syntax-example">
+    <span class="comment">-- $selected namespace makes dependency obvious</span><br>
+    <span class="kw">SELECT</span> time, level, target, msg<br>
+    <span class="kw">FROM</span> <span class="fn">view_instance</span>(<span class="str">'log_entries'</span>, <span class="str">'<span class="macro">$selected.processes.process_id</span>'</span>)<br>
+    <span class="kw">WHERE</span> time &gt;= <span class="str">'<span class="macro">$from</span>'</span><br>
+    <span class="kw">ORDER BY</span> time <span class="kw">DESC</span>
+  </div>
+</div>
+
+<div class="pros-cons">
+  <div class="pros">
+    <div class="label">Pros</div>
+    <ul>
+      <li>Clear visual signal of interactive dependency</li>
+      <li>All selected refs have same prefix — easy to search</li>
+      <li>Won't conflict with any cell named "selected"</li>
+    </ul>
+  </div>
+  <div class="cons">
+    <div class="label">Cons</div>
+    <ul>
+      <li>Inconsistent with existing <code>$cell[N].col</code> pattern</li>
+      <li>Three dots: <code>$selected.cell.column</code> is deep nesting</li>
+      <li>"selected" could collide with a variable named "selected"</li>
+      <li>Ambiguous: is "processes" a cell name or column?</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ================================================================ -->
+<h2>Comparison</h2>
+
+<table class="comparison-table">
+  <thead>
+    <tr>
+      <th>Use Case</th>
+      <th>Option 1 ($cell.selected.col)</th>
+      <th>Option 2 ($cell[selected].col)</th>
+      <th>Option 3 ($selected.cell.col)</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr class="recommended">
+      <td>Access process_id</td>
+      <td class="macro">$processes.selected.process_id</td>
+      <td class="macro">$processes[selected].process_id</td>
+      <td class="macro">$selected.processes.process_id</td>
+    </tr>
+    <tr>
+      <td>In SQL string</td>
+      <td class="macro">'$p.selected.id'</td>
+      <td class="macro">'$p[selected].id'</td>
+      <td class="macro">'$selected.p.id'</td>
+    </tr>
+    <tr>
+      <td>Co-exists with $cell[0].col</td>
+      <td>No conflict</td>
+      <td>Same pattern family</td>
+      <td>No conflict</td>
+    </tr>
+    <tr>
+      <td>Co-exists with $variable.col</td>
+      <td>Disambiguated by "selected" keyword</td>
+      <td>Disambiguated by brackets</td>
+      <td>Could conflict with $selected variable</td>
+    </tr>
+    <tr>
+      <td>Regex complexity</td>
+      <td>New 3-part pattern</td>
+      <td>Extend existing bracket pattern</td>
+      <td>New 3-part pattern</td>
+    </tr>
+  </tbody>
+</table>
+
+<p class="description" style="margin-top: 16px;">
+  <strong>Recommendation:</strong> Option 1 (<code>$cell.selected.column</code>) balances readability with consistency.
+  It reads naturally in both SQL and markdown, doesn't conflict with existing patterns, and the <code>.selected</code> keyword
+  clearly communicates the interactive nature of the reference.
+  Option 2 is the best alternative if maximal consistency with <code>$cell[N].col</code> is preferred.
+</p>
+
+</body>
+</html>
