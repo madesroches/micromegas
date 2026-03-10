@@ -77,8 +77,33 @@ async fn test_empty_object() {
 }
 
 #[tokio::test]
-async fn test_non_object_error() {
-    let provider = create_jsonb_each_provider(r#"[1, 2]"#);
+async fn test_array_input() {
+    let provider = create_jsonb_each_provider(r#"[10, "hello", true]"#);
+    let batch = collect_jsonb_each(&provider, None).await;
+
+    assert_eq!(batch.num_rows(), 3);
+
+    let keys = batch
+        .column(0)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .expect("key column should be StringArray");
+    let key_list: Vec<String> = (0..keys.len()).map(|i| keys.value(i).to_string()).collect();
+    assert_eq!(key_list, vec!["0", "1", "2"]);
+
+    let values = batch
+        .column(1)
+        .as_any()
+        .downcast_ref::<BinaryArray>()
+        .expect("value column should be BinaryArray");
+    for i in 0..values.len() {
+        assert!(!values.value(i).is_empty());
+    }
+}
+
+#[tokio::test]
+async fn test_scalar_error() {
+    let provider = create_jsonb_each_provider(r#"42"#);
     let ctx = SessionContext::new();
     let state = ctx.state();
     let result = provider.scan(&state, None, &[], None).await;
@@ -86,7 +111,7 @@ async fn test_non_object_error() {
     assert!(result.is_err());
     let err_msg = result.unwrap_err().to_string();
     assert!(
-        err_msg.contains("not a JSONB object"),
+        err_msg.contains("not a JSONB object or array"),
         "unexpected error: {err_msg}"
     );
 }

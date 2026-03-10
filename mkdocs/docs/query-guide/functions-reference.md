@@ -461,9 +461,11 @@ FROM processes
 LIMIT 5;
 ```
 
-##### `jsonb_each(jsonb_object)`
+##### `jsonb_each(jsonb_value)`
 
-Expands a JSONB object into rows of key-value pairs. This is a table-returning function (UDTF) that produces one row per object entry.
+Expands a JSONB object or array into rows of key-value pairs. This is a table-returning function (UDTF) that produces one row per entry.
+
+For objects, `key` is the field name. For arrays, `key` is the element index as a string (`"0"`, `"1"`, ...).
 
 **Syntax:**
 ```sql
@@ -473,13 +475,13 @@ FROM jsonb_each(jsonb_subquery)
 
 **Parameters:**
 
-- `jsonb_object` (Binary/JSONB): A JSONB object value or a subquery returning a single JSONB column. If the subquery returns multiple rows, the key-value entries from all rows are concatenated. Null values are skipped. Returns an error if a non-null input is not an object (e.g., array or scalar).
+- `jsonb_value` (Binary/JSONB): A JSONB object or array value, provided as a literal or a subquery returning a single JSONB column. If the subquery returns multiple rows, the entries from all rows are concatenated. Null values are skipped. Returns an error if the input is a scalar (e.g., number or string).
 
 **Returns:**
 
 | Column | Type | Description |
 |--------|------|-------------|
-| key | Utf8 | Object key name |
+| key | Utf8 | Object field name, or array index as a string |
 | value | Binary (JSONB) | Value as JSONB bytes, composable with `jsonb_as_string`, `jsonb_format_json`, etc. |
 
 **Examples:**
@@ -495,6 +497,13 @@ SELECT key, jsonb_format_json(value) as json_value
 FROM jsonb_each(
   (SELECT jsonb_parse('{"name": "server", "port": 8080, "tags": ["prod", "us-east"]}'))
 )
+
+-- Expand a JSONB array into rows
+SELECT key as index, jsonb_format_json(value) as element
+FROM jsonb_each(
+  (SELECT jsonb_parse('[10, 20, 30]'))
+)
+-- Returns: ("0", 10), ("1", 20), ("2", 30)
 ```
 
 #### Data Access Functions

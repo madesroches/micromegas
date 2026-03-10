@@ -16,7 +16,9 @@ use jsonb::RawJsonb;
 use std::any::Any;
 use std::sync::Arc;
 
-/// A DataFusion `TableFunctionImpl` that expands a JSONB object into rows of (key, value).
+/// A DataFusion `TableFunctionImpl` that expands a JSONB object or array into rows of (key, value).
+///
+/// For objects, `key` is the field name. For arrays, `key` is the element index (as a string).
 ///
 /// Usage:
 /// ```sql
@@ -76,18 +78,32 @@ fn output_schema() -> SchemaRef {
     ]))
 }
 
-/// Extract key-value entries from JSONB bytes using `RawJsonb::object_each()`.
+/// Extract key-value entries from JSONB bytes.
+///
+/// For objects, uses `object_each()` with field names as keys.
+/// For arrays, uses `array_values()` with element indices as keys.
 fn extract_entries_from_jsonb(
     jsonb_bytes: &[u8],
 ) -> Result<Vec<(String, Vec<u8>)>, DataFusionError> {
     let jsonb = RawJsonb::new(jsonb_bytes);
     match jsonb.object_each() {
-        Ok(Some(entries)) => Ok(entries
+        Ok(Some(entries)) => {
+            return Ok(entries
+                .into_iter()
+                .map(|(k, v)| (k, v.as_ref().to_vec()))
+                .collect());
+        }
+        Ok(None) => {}
+        Err(e) => return Err(DataFusionError::External(e.into())),
+    }
+    match jsonb.array_values() {
+        Ok(Some(values)) => Ok(values
             .into_iter()
-            .map(|(k, v)| (k, v.as_ref().to_vec()))
+            .enumerate()
+            .map(|(i, v)| (i.to_string(), v.as_ref().to_vec()))
             .collect()),
         Ok(None) => Err(DataFusionError::Execution(
-            "jsonb_each: input is not a JSONB object".into(),
+            "jsonb_each: input is not a JSONB object or array".into(),
         )),
         Err(e) => Err(DataFusionError::External(e.into())),
     }
