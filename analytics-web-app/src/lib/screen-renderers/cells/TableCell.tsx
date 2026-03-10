@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useEffect } from 'react'
+import { useState, useCallback, useMemo, useEffect, useRef } from 'react'
 import { Table2 } from 'lucide-react'
 import type {
   CellTypeMetadata,
@@ -36,11 +36,17 @@ export function TableCell({ data, status, options, onOptionsChange, variables, t
   // Selection state (ephemeral, like currentPage)
   const [selectedRowIndex, setSelectedRowIndex] = useState<number | null>(null)
 
+  // Stable ref for onSelectionChange to avoid infinite re-render loop:
+  // the callback is an inline arrow in NotebookRenderer, so including it
+  // in the useEffect deps would fire the effect on every render.
+  const onSelectionChangeRef = useRef(onSelectionChange)
+  onSelectionChangeRef.current = onSelectionChange
+
   // Clear selection when data changes (re-execution)
   useEffect(() => {
     setSelectedRowIndex(null)
-    onSelectionChange?.(null)
-  }, [table, onSelectionChange])
+    onSelectionChangeRef.current?.(null)
+  }, [table])
 
   const handleRowSelect = useCallback(
     (rowIndex: number | null) => {
