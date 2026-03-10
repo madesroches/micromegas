@@ -40,6 +40,9 @@ This file documents the historical progress of the Micromegas project. For curre
   * Bump dompurify to 3.3.2, jest to 30, and @types/jest to 30 (Dependabot security alerts)
   * Migrate window.location.href assignments to navigateTo() wrapper for jsdom 26 compatibility
 * **Analytics:**
+  * Add `jsonb_path_query_first` and `jsonb_path_query` UDFs for JSONPath traversal of JSONB columns (#920)
+  * Extend `jsonb_each` to support array inputs (#920)
+  * Bump jsonb dependency from 0.5.3 to 0.5.5 (#920)
   * Add `process_thread_spans(process_id)` table function for cross-thread span analysis
   * Extract `get_process_thread_list` as shared utility for process stream discovery
 * **Documentation:**
