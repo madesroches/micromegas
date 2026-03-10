@@ -17,6 +17,8 @@ export interface CellViewContext {
   dataSource?: string
   /** Upstream cell result tables (for $cell[N].col macro substitution) */
   cellResults?: Record<string, Table>
+  /** Selected rows from upstream cells (for $cell.selected.col macro substitution) */
+  cellSelections?: Record<string, Record<string, unknown>>
 }
 
 export interface CellViewCallbacks {
@@ -213,6 +215,7 @@ export function buildCellRendererProps(
       cell.type === 'variable' ? callbacks.onValueChange : undefined,
     dataSource: context.dataSource,
     cellResults: context.cellResults,
+    cellSelections: context.cellSelections,
     // Metadata rendererProps spread last (highest precedence) — preserves
     // current behavior where getRendererProps can override base fields like
     // data, status, options.

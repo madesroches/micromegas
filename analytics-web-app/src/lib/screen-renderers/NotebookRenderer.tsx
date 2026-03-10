@@ -16,7 +16,7 @@ import {
   getCellRenderer,
   getCellTypeMetadata,
 } from './cell-registry'
-import type { CellConfig, VariableCellConfig, NotebookConfig, HorizontalGroupCellConfig, VariableValue } from './notebook-types'
+import type { CellConfig, VariableCellConfig, QueryCellConfig, NotebookConfig, HorizontalGroupCellConfig, VariableValue } from './notebook-types'
 import { CellContainer } from '@/components/CellContainer'
 import { CellEditor } from '@/components/CellEditor'
 import { ResizeHandle } from '@/components/ResizeHandle'
@@ -317,7 +317,7 @@ export function NotebookRenderer({
   const executionCells = useMemo(() => flattenCellsForExecution(cells), [cells])
 
   // Cell execution state management (uses flattened list)
-  const { cellStates, executeCell, executeFromCell, migrateCellState, removeCellState } = useCellExecution({
+  const { cellStates, executeCell, executeFromCell, migrateCellState, removeCellState, updateCellSelection, cellSelectionsRef } = useCellExecution({
     cells: executionCells,
     rawTimeRange,
     variableValuesRef,
@@ -466,6 +466,23 @@ export function NotebookRenderer({
     return results
   }
 
+  // Collect available cell selections for a cell at a given top-level index
+  const getAvailableCellSelections = (index: number): Record<string, Record<string, unknown>> => {
+    const selections: Record<string, Record<string, unknown>> = {}
+    for (let i = 0; i < index; i++) {
+      const cell = cells[i]
+      const sel = cellSelectionsRef.current[cell.name]
+      if (sel) selections[cell.name] = sel
+      if (cell.type === 'hg') {
+        for (const child of (cell as HorizontalGroupCellConfig).children) {
+          const childSel = cellSelectionsRef.current[child.name]
+          if (childSel) selections[child.name] = childSel
+        }
+      }
+    }
+    return selections
+  }
+
   // Collect available variables for a cell at a given top-level index
   const getAvailableVariables = (index: number): Record<string, VariableValue> => {
     const available: Record<string, VariableValue> = {}
@@ -489,6 +506,7 @@ export function NotebookRenderer({
   const renderCell = (cell: CellConfig, index: number) => {
     const availableVariables = getAvailableVariables(index)
     const availableCellResults = getAvailableCellResults(index)
+    const availableCellSelections = getAvailableCellSelections(index)
 
     // HG cell: render children side by side
     if (cell.type === 'hg') {
@@ -545,6 +563,8 @@ export function NotebookRenderer({
                   variableValues={variableValues}
                   timeRange={getTimeRangeForApi(rawTimeRange.from, rawTimeRange.to)}
                   cellResults={availableCellResults}
+                  cellSelections={availableCellSelections}
+                  onSelectionChange={updateCellSelection}
                   selectedChildName={selectedChildName}
                   onChildSelect={(childName) => {
                     setSelectedCellIndex(index)
@@ -592,6 +612,8 @@ export function NotebookRenderer({
     const statusText = buildStatusText(cell, state)
     const cellDataSource = resolveCellDataSource(cell, availableVariables, dataSource)
 
+    const selectionMode = ((cell as QueryCellConfig).options?.selectionMode as 'none' | 'single' | undefined) || 'none'
+
     const commonRendererProps = buildCellRendererProps(cell, state,
       {
         availableVariables,
@@ -600,6 +622,7 @@ export function NotebookRenderer({
         isEditing: selectedCellIndex === index,
         dataSource: cellDataSource,
         cellResults: availableCellResults,
+        cellSelections: availableCellSelections,
       },
       {
         onRun: () => executeCellByName(cell.name),
@@ -613,6 +636,12 @@ export function NotebookRenderer({
         onTimeRangeSelect: handleTimeRangeSelect,
       },
     )
+
+    // Attach selection props
+    if (selectionMode === 'single') {
+      commonRendererProps.selectionMode = selectionMode
+      commonRendererProps.onSelectionChange = (row) => updateCellSelection(cell.name, row)
+    }
 
     // Render title bar content if metadata defines a titleBarRenderer
     const TitleBarRenderer = meta.titleBarRenderer
@@ -764,6 +793,7 @@ export function NotebookRenderer({
                 variables={getAvailableVariables(selectedCellIndex!)}
                 timeRange={getTimeRangeForApi(rawTimeRange.from, rawTimeRange.to)}
                 cellResults={getAvailableCellResults(selectedCellIndex!)}
+                cellSelections={getAvailableCellSelections(selectedCellIndex!)}
                 existingNames={existingNames}
                 availableColumns={cellStates[selectedCell.name]?.data[0]?.schema.fields.map((f) => f.name)}
                 defaultDataSource={dataSource}

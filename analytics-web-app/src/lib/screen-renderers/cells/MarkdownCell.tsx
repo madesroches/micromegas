@@ -12,12 +12,12 @@ import { FileText } from 'lucide-react'
 // Renderer Component
 // =============================================================================
 
-export function MarkdownCell({ content, variables, timeRange, cellResults }: CellRendererProps) {
+export function MarkdownCell({ content, variables, timeRange, cellResults, cellSelections }: CellRendererProps) {
   // Apply macro substitution to markdown content
   const markdownContent = useMemo(() => {
     if (!content) return ''
-    return substituteMacros(content, variables, timeRange, cellResults)
-  }, [content, variables, timeRange, cellResults])
+    return substituteMacros(content, variables, timeRange, cellResults, cellSelections)
+  }, [content, variables, timeRange, cellResults, cellSelections])
 
   return (
     <div className="prose prose-invert max-w-none prose-headings:text-theme-text-primary prose-p:text-theme-text-secondary prose-a:text-accent-link prose-strong:text-theme-text-primary prose-code:text-accent-highlight prose-code:bg-app-card prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-code:before:content-none prose-code:after:content-none prose-pre:bg-app-card prose-li:text-theme-text-secondary">

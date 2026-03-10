@@ -17,6 +17,7 @@ interface CellEditorProps {
   datasourceVariables?: string[]
   showNotebookOption?: boolean
   cellResults?: Record<string, Table>
+  cellSelections?: Record<string, Record<string, unknown>>
   onClose: () => void
   onUpdate: (updates: Partial<CellConfig>) => void
   onRun: () => void
@@ -33,6 +34,7 @@ export function CellEditor({
   datasourceVariables,
   showNotebookOption,
   cellResults,
+  cellSelections,
   onClose,
   onUpdate,
   onRun,
@@ -147,6 +149,7 @@ export function CellEditor({
           defaultDataSource={defaultDataSource}
           onRun={onRun}
           cellResults={cellResults}
+          cellSelections={cellSelections}
         />
       </div>
 

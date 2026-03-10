@@ -457,8 +457,8 @@ export const swimlaneMetadata: CellTypeMetadata = {
     options: {},
   }),
 
-  execute: async (config: CellConfig, { variables, cellResults, timeRange, runQuery }: CellExecutionContext) => {
-    const sql = substituteMacros((config as QueryCellConfig).sql, variables, timeRange, cellResults)
+  execute: async (config: CellConfig, { variables, cellResults, cellSelections, timeRange, runQuery }: CellExecutionContext) => {
+    const sql = substituteMacros((config as QueryCellConfig).sql, variables, timeRange, cellResults, cellSelections)
     const data = await runQuery(sql)
     return { data: [data] }
   },

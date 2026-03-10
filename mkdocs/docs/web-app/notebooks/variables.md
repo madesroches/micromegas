@@ -43,6 +43,7 @@ SQL queries, markdown content, and chart unit labels all support macro substitut
 | Macro | Description |
 |-------|-------------|
 | `$cellName[N].column` | Replaced with a value from an upstream cell's result table (row N, named column) |
+| `$cellName.selected.column` | Replaced with a value from the selected row in an upstream table cell |
 | `$variableName` | Replaced with the variable's value |
 | `$variableName.column` | Replaced with a specific column from a multi-column variable |
 | `$begin` | Start of the current time range (ISO 8601 timestamp) |
@@ -51,7 +52,8 @@ SQL queries, markdown content, and chart unit labels all support macro substitut
 
 ### Matching Rules
 
-- **Cell result references first**: `$cell[N].column` references are resolved before dotted variable and simple variable patterns.
+- **Cell result references first**: `$cell[N].column` references are resolved before other patterns.
+- **Selected row references next**: `$cell.selected.column` references are resolved after cell result refs but before dotted variable patterns. The keyword `selected` disambiguates from dotted variable access.
 - **Longest name first**: variables are substituted in order of name length (longest first) to prevent partial matches. For example, with variables `$metric` and `$metric_name`, the longer `$metric_name` is substituted first so `$metric` doesn't accidentally match the prefix.
 - **Dotted access first**: `$variable.column` references are resolved before simple `$variable` references.
 - **SQL escaping**: all substituted values have single quotes escaped (`'` becomes `''`) to prevent SQL injection.
@@ -80,7 +82,22 @@ SELECT time, level, target, msg
 FROM view_instance('log_entries', '$game_session[0].process_id')
 ORDER BY time DESC
 LIMIT 100
+
+-- Selected row reference (upstream cell "processes" has row selection enabled)
+SELECT time, level, target, msg
+FROM view_instance('log_entries', '$processes.selected.process_id')
+ORDER BY time DESC
+LIMIT 100
 ```
+
+### Row Selection
+
+Table cells support interactive row selection. When enabled (via the **Row Selection** section in the cell editor), a radio-button column appears in the table. Clicking a row selects it, and its values become available to downstream cells via `$cellName.selected.column` macros.
+
+- **Selection mode** is configured in the cell editor: None (default) or Single.
+- **Selection state** is ephemeral (like pagination) — it resets when the cell re-executes.
+- **Waiting for selection**: when a downstream cell references `$cell.selected.column` but no row is selected yet, the cell shows a "waiting for selection" placeholder instead of executing.
+- The Available Variables panel shows `$cellName.selected.column` entries for cells with selection enabled.
 
 ### Column Format Overrides
 

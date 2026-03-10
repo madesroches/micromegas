@@ -278,6 +278,7 @@ export function substituteMacros(
   variables: Record<string, VariableValue>,
   timeRange: { begin: string; end: string },
   cellResults?: Record<string, Table>,
+  cellSelections?: Record<string, Record<string, unknown>>,
 ): string {
   let result = sql
 
@@ -298,6 +299,21 @@ export function substituteMacros(
       if (!row || row[colName] === undefined || row[colName] === null) return match
       const field = table.schema.fields.find((f) => f.name === colName)
       return escapeSqlValue(formatArrowValue(row[colName], field?.type))
+    })
+  }
+
+  // 2b. Selected row references: $cell.selected.column
+  //     Must process before dotted variable pass to avoid partial matches
+  if (cellSelections) {
+    const selectedPattern = /\$([a-zA-Z_][a-zA-Z0-9_]*)\.selected\.([a-zA-Z_][a-zA-Z0-9_]*)\b/g
+    result = result.replace(selectedPattern, (match, cellName, colName) => {
+      const selection = cellSelections[cellName]
+      if (!selection) return match // leave unresolved
+      const value = selection[colName]
+      if (value === undefined || value === null) return match
+      const table = cellResults?.[cellName]
+      const field = table?.schema.fields.find((f) => f.name === colName)
+      return escapeSqlValue(formatArrowValue(value, field?.type))
     })
   }
 
@@ -356,6 +372,7 @@ export function validateMacros(
   text: string,
   variables: Record<string, VariableValue>,
   cellResults?: Record<string, Table>,
+  cellSelections?: Record<string, Record<string, unknown>>,
 ): MacroValidationResult {
   const errors: string[] = []
 
@@ -381,10 +398,35 @@ export function validateMacros(
     }
   }
 
-  // Check dotted references: $variable.column
+  // Check selected row references: $cell.selected.column
+  const selectedRefPattern = /\$([a-zA-Z_][a-zA-Z0-9_]*)\.selected\.([a-zA-Z_][a-zA-Z0-9_]*)\b/g
+  while ((match = selectedRefPattern.exec(text)) !== null) {
+    const [, cellName, colName] = match
+    if (!cellSelections) continue
+    if (!(cellName in cellSelections)) {
+      errors.push(`Unknown cell: ${cellName}`)
+    } else {
+      const selection = cellSelections[cellName]
+      if (selection && selection[colName] === undefined) {
+        const columns = Object.keys(selection)
+        errors.push(`Column '${colName}' not found in cell '${cellName}'. Available: ${columns.join(', ')}`)
+      }
+    }
+  }
+
+  // Collect selected ref cell names so dotted validation skips them
+  const selectedRefCellNames = new Set<string>()
+  const selectedRefScan = /\$([a-zA-Z_][a-zA-Z0-9_]*)\.selected\.[a-zA-Z_][a-zA-Z0-9_]*\b/g
+  while ((match = selectedRefScan.exec(text)) !== null) {
+    selectedRefCellNames.add(match[1])
+  }
+
+  // Check dotted references: $variable.column (skip $cell.selected.column which was handled above)
   const dottedPattern = /\$([a-zA-Z_][a-zA-Z0-9_]*)\.([a-zA-Z_][a-zA-Z0-9_]*)\b/g
   while ((match = dottedPattern.exec(text)) !== null) {
     const [, varName, colName] = match
+    // Skip $cell.selected (part of $cell.selected.column pattern)
+    if (colName === 'selected' && selectedRefCellNames.has(varName)) continue
     const value = variables[varName]
 
     if (value === undefined) {
@@ -415,6 +457,25 @@ export function validateMacros(
   }
 
   return { valid: errors.length === 0, errors }
+}
+
+/**
+ * Checks if a SQL string contains unresolved $cell.selected.column macros.
+ * Returns the cell name if found, null otherwise.
+ */
+export function findUnresolvedSelectionMacro(
+  sql: string,
+  cellSelections?: Record<string, Record<string, unknown>>,
+): string | null {
+  const pattern = /\$([a-zA-Z_][a-zA-Z0-9_]*)\.selected\.[a-zA-Z_][a-zA-Z0-9_]*\b/g
+  let match
+  while ((match = pattern.exec(sql)) !== null) {
+    const cellName = match[1]
+    if (!cellSelections || !cellSelections[cellName]) {
+      return cellName
+    }
+  }
+  return null
 }
 
 /**

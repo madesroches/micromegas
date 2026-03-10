@@ -393,16 +393,28 @@ export interface TableBodyProps {
   variables?: Record<string, VariableValue>
   /** Time range for $from/$to macro expansion in overrides */
   timeRange?: { begin: string; end: string }
+  /** Row selection mode */
+  selectionMode?: 'none' | 'single'
+  /** Currently selected row index */
+  selectedRowIndex?: number | null
+  /** Callback when a row is selected */
+  onRowSelect?: (rowIndex: number | null) => void
 }
 
-export function TableBody({ data, columns, allColumns, compact = false, overrides = [], variables = {}, timeRange }: TableBodyProps) {
-  const rowClass = compact
+export function TableBody({ data, columns, allColumns, compact = false, overrides = [], variables = {}, timeRange, selectionMode, selectedRowIndex, onRowSelect }: TableBodyProps) {
+  const baseRowClass = compact
     ? 'even:bg-app-card/30 hover:bg-app-card/50 transition-colors'
     : 'border-b border-theme-border hover:bg-app-card transition-colors'
+
+  const selectedRowClass = compact
+    ? 'bg-[rgba(21,101,192,0.08)] hover:bg-[rgba(21,101,192,0.12)] transition-colors'
+    : 'bg-[rgba(21,101,192,0.08)] border-b border-theme-border hover:bg-[rgba(21,101,192,0.12)] transition-colors'
 
   const cellClass = compact
     ? 'px-2 py-1 text-[12px] text-theme-text-primary font-mono truncate max-w-xs'
     : 'px-4 py-3 text-sm text-theme-text-primary font-mono truncate max-w-xs'
+
+  const showRadio = selectionMode === 'single'
 
   // Build override lookup map
   const overrideMap = useMemo(() => {
@@ -418,8 +430,27 @@ export function TableBody({ data, columns, allColumns, compact = false, override
       {Array.from({ length: data.numRows }, (_, rowIdx) => {
         const row = data.get(rowIdx)
         if (!row) return null
+        const isSelected = selectedRowIndex === rowIdx
+        const rowClass = isSelected ? selectedRowClass : baseRowClass
+        const cursorClass = showRadio ? ' cursor-pointer' : ''
         return (
-          <tr key={rowIdx} className={rowClass}>
+          <tr
+            key={rowIdx}
+            className={rowClass + cursorClass}
+            onClick={showRadio ? () => onRowSelect?.(isSelected ? null : rowIdx) : undefined}
+          >
+            {showRadio && (
+              <td className={compact ? 'px-1 py-1 w-8 text-center' : 'px-2 py-3 w-10 text-center'}>
+                <span
+                  className={`inline-block w-3.5 h-3.5 rounded-full border-2 ${
+                    isSelected
+                      ? 'border-accent-link bg-accent-link'
+                      : 'border-theme-text-muted'
+                  }`}
+                  style={isSelected ? { boxShadow: 'inset 0 0 0 2px var(--app-bg)' } : undefined}
+                />
+              </td>
+            )}
             {columns.map((col) => {
               const value = row[col.name]
               const override = overrideMap.get(col.name)
@@ -453,6 +484,54 @@ export function TableBody({ data, columns, allColumns, compact = false, override
         )
       })}
     </tbody>
+  )
+}
+
+// =============================================================================
+// Selection Badge Component
+// =============================================================================
+
+export interface SelectionBadgeProps {
+  /** Currently selected row index */
+  selectedRowIndex: number
+  /** Row data for the selected row */
+  row: Record<string, unknown>
+  /** Columns for display */
+  columns: TableColumn[]
+  /** Clear the selection */
+  onClear: () => void
+}
+
+export function SelectionBadge({ selectedRowIndex, row, columns, onClear }: SelectionBadgeProps) {
+  // Show first 2 column values as preview
+  const preview = columns
+    .slice(0, 2)
+    .map((col) => {
+      const val = row[col.name]
+      if (val == null) return '-'
+      const s = String(val)
+      return s.length > 24 ? s.slice(0, 24) + '...' : s
+    })
+    .join(' / ')
+
+  return (
+    <div className="flex items-center gap-2 px-2 py-1 text-xs bg-[rgba(21,101,192,0.08)] border-t border-theme-border">
+      <span className="text-theme-text-secondary">
+        Selected: row {selectedRowIndex}
+      </span>
+      <span className="text-theme-text-muted">&mdash;</span>
+      <span className="text-theme-text-primary font-mono truncate">{preview}</span>
+      <button
+        onClick={(e) => {
+          e.stopPropagation()
+          onClear()
+        }}
+        className="ml-auto text-theme-text-muted hover:text-theme-text-primary transition-colors"
+        title="Clear selection"
+      >
+        <X className="w-3 h-3" />
+      </button>
+    </div>
   )
 }
 

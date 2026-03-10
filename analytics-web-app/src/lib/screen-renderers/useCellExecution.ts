@@ -4,7 +4,8 @@ import type { CellConfig, CellState, VariableValue } from './notebook-types'
 import { getCellTypeMetadata, CellExecutionContext } from './cell-registry'
 import { streamQuery, fetchQueryIPC } from '@/lib/arrow-stream'
 import { getTimeRangeForApi } from '@/lib/time-range'
-import { resolveCellDataSource } from './notebook-utils'
+import { resolveCellDataSource, findUnresolvedSelectionMacro } from './notebook-utils'
+import type { QueryCellConfig } from './notebook-types'
 
 /** Minimal interface for the WASM query engine (decoupled from WASM module type) */
 export interface NotebookQueryEngine {
@@ -42,6 +43,10 @@ export interface UseCellExecutionResult {
   migrateCellState: (oldName: string, newName: string) => void
   /** Remove cell state when a cell is deleted */
   removeCellState: (cellName: string) => void
+  /** Update selection for a cell and re-execute downstream cells */
+  updateCellSelection: (cellName: string, selectedRow: Record<string, unknown> | null) => void
+  /** Ref for synchronous access to cell selections */
+  cellSelectionsRef: React.MutableRefObject<Record<string, Record<string, unknown>>>
 }
 
 // Execute a single SQL query and return the result table
@@ -98,6 +103,7 @@ export function useCellExecution({
   const [cellStates, setCellStates] = useState<Record<string, CellState>>({})
   const abortControllerRef = useRef<AbortController | null>(null)
   const cellResultsRef = useRef<Record<string, Table>>({})
+  const cellSelectionsRef = useRef<Record<string, Record<string, unknown>>>({})
 
   // Helper: update both the ref (for synchronous access) and React state atomically
   const completeCellExecution = useCallback((name: string, state: CellState) => {
@@ -125,6 +131,26 @@ export function useCellExecution({
         return true
       }
 
+      // Check for unresolved $cell.selected.column macros — if the SQL contains
+      // a selection reference but no row is selected, show a waiting placeholder
+      const cellSql = (cell as QueryCellConfig).sql
+      if (cellSql) {
+        const availableSels: Record<string, Record<string, unknown>> = {}
+        for (let i = 0; i < cellIndex; i++) {
+          const sel = cellSelectionsRef.current[cells[i].name]
+          if (sel) availableSels[cells[i].name] = sel
+        }
+        const unresolvedCell = findUnresolvedSelectionMacro(cellSql, availableSels)
+        if (unresolvedCell) {
+          completeCellExecution(cell.name, {
+            status: 'blocked',
+            data: [],
+            error: `Select a row in **${unresolvedCell}** to view results`,
+          })
+          return true // don't block downstream — they may not depend on selections
+        }
+      }
+
       // Mark cell as loading (preserve previous data for re-renders during loading)
       setCellStates((prev) => {
         const prevData = prev[cell.name]?.data ?? []
@@ -142,6 +168,7 @@ export function useCellExecution({
       // Gather variables from cells above (use ref for synchronous access during execution)
       const availableVariables: Record<string, VariableValue> = {}
       const availableCellResults: Record<string, Table> = {}
+      const availableCellSelections: Record<string, Record<string, unknown>> = {}
       for (let i = 0; i < cellIndex; i++) {
         const prevCell = cells[i]
         if (prevCell.type === 'variable' && variableValuesRef.current[prevCell.name] !== undefined) {
@@ -149,6 +176,8 @@ export function useCellExecution({
         }
         const table = cellResultsRef.current[prevCell.name]
         if (table) availableCellResults[prevCell.name] = table
+        const selection = cellSelectionsRef.current[prevCell.name]
+        if (selection) availableCellSelections[prevCell.name] = selection
       }
 
       // Create new abort controller for this execution
@@ -162,6 +191,7 @@ export function useCellExecution({
         const context: CellExecutionContext = {
           variables: availableVariables,
           cellResults: availableCellResults,
+          cellSelections: availableCellSelections,
           timeRange,
           registerTable: engine
             ? (ipcBytes: Uint8Array) => { engine.register_table(cell.name, ipcBytes) }
@@ -275,6 +305,10 @@ export function useCellExecution({
         engine.reset()
         cellResultsRef.current = {}
       }
+      // Reset selections for cells being re-executed
+      if (startIndex === 0) {
+        cellSelectionsRef.current = {}
+      }
       // Reset statuses to idle so useFadeOnIdle detects a change even for
       // fast cells where React would batch loading→success into one render.
       setCellStates((prev) => {
@@ -349,6 +383,25 @@ export function useCellExecution({
     prevEngineRef.current = engine
   }, [engine, executeFromCell])
 
+  // Update selection for a cell and re-execute downstream cells
+  const updateCellSelection = useCallback(
+    (cellName: string, selectedRow: Record<string, unknown> | null) => {
+      if (selectedRow) {
+        cellSelectionsRef.current = { ...cellSelectionsRef.current, [cellName]: selectedRow }
+      } else {
+        const next = { ...cellSelectionsRef.current }
+        delete next[cellName]
+        cellSelectionsRef.current = next
+      }
+      // Re-execute cells below the one that changed selection
+      const idx = cells.findIndex((c) => c.name === cellName)
+      if (idx !== -1 && idx + 1 < cells.length) {
+        executeFromCell(idx + 1)
+      }
+    },
+    [cells, executeFromCell]
+  )
+
   // Migrate cell state when a cell is renamed
   const migrateCellState = useCallback((oldName: string, newName: string) => {
     engine?.deregister_table(oldName)
@@ -357,6 +410,12 @@ export function useCellExecution({
       next[newName] = next[oldName]
       delete next[oldName]
       cellResultsRef.current = next
+    }
+    if (oldName in cellSelectionsRef.current) {
+      const next = { ...cellSelectionsRef.current }
+      next[newName] = next[oldName]
+      delete next[oldName]
+      cellSelectionsRef.current = next
     }
     setCellStates((prev) => {
       const next = { ...prev }
@@ -376,6 +435,11 @@ export function useCellExecution({
       delete next[cellName]
       cellResultsRef.current = next
     }
+    if (cellName in cellSelectionsRef.current) {
+      const next = { ...cellSelectionsRef.current }
+      delete next[cellName]
+      cellSelectionsRef.current = next
+    }
     setCellStates((prev) => {
       const next = { ...prev }
       delete next[cellName]
@@ -389,5 +453,7 @@ export function useCellExecution({
     executeFromCell,
     migrateCellState,
     removeCellState,
+    updateCellSelection,
+    cellSelectionsRef,
   }
 }

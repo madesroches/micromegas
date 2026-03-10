@@ -683,3 +683,163 @@ describe('createDefaultCell', () => {
   // Note: unknown type fallback removed - with the new metadata-based design,
   // TypeScript enforces valid cell types and the registry would throw for unknown types
 })
+
+describe('selected row ref substitution', () => {
+  const defaultTimeRange = { begin: '2024-01-01T00:00:00Z', end: '2024-01-02T00:00:00Z' }
+
+  it('should substitute $cell.selected.col from a selection object', () => {
+    const result = substituteMacros(
+      "SELECT * FROM view_instance('log_entries', '$processes.selected.process_id')",
+      {},
+      defaultTimeRange,
+      {},
+      { processes: { process_id: 'abc123', exe: 'server1' } },
+    )
+    expect(result).toBe("SELECT * FROM view_instance('log_entries', 'abc123')")
+  })
+
+  it('should leave macro unresolved for missing cell', () => {
+    const result = substituteMacros(
+      'SELECT $unknown.selected.col',
+      {},
+      defaultTimeRange,
+      {},
+      {},
+    )
+    expect(result).toBe('SELECT $unknown.selected.col')
+  })
+
+  it('should leave macro unresolved for missing column in selection', () => {
+    const result = substituteMacros(
+      'SELECT $cell.selected.missing',
+      {},
+      defaultTimeRange,
+      {},
+      { cell: { col: 'val' } },
+    )
+    expect(result).toBe('SELECT $cell.selected.missing')
+  })
+
+  it('should leave macro unresolved when no selection exists (cell not in cellSelections)', () => {
+    const result = substituteMacros(
+      'SELECT $cell.selected.col',
+      {},
+      defaultTimeRange,
+      {},
+      {},
+    )
+    expect(result).toBe('SELECT $cell.selected.col')
+  })
+
+  it('should escape single quotes in selected values', () => {
+    const result = substituteMacros(
+      "SELECT '$cell.selected.msg'",
+      {},
+      defaultTimeRange,
+      {},
+      { cell: { msg: "it's working" } },
+    )
+    expect(result).toBe("SELECT 'it''s working'")
+  })
+
+  it('should not interfere with $cell[N].col pattern', () => {
+    const table = tableFromArrays({ id: ['row0'] })
+    const result = substituteMacros(
+      "SELECT '$cell[0].id', '$cell.selected.id'",
+      {},
+      defaultTimeRange,
+      { cell: table },
+      { cell: { id: 'selected_val' } },
+    )
+    expect(result).toBe("SELECT 'row0', 'selected_val'")
+  })
+
+  it('should not interfere with $variable.column pattern', () => {
+    const result = substituteMacros(
+      "SELECT '$metric.name', '$cell.selected.id'",
+      { metric: { name: 'cpu', unit: 'pct' } },
+      defaultTimeRange,
+      {},
+      { cell: { id: 'abc' } },
+    )
+    expect(result).toBe("SELECT 'cpu', 'abc'")
+  })
+
+  it('should format timestamp values from selection using Arrow table schema', () => {
+    const timestampType = new Timestamp(TimeUnit.MILLISECOND, null)
+    const ms = 1705314600000
+    const vector = vectorFromArray([ms], timestampType)
+    const table = new Table({ start_time: vector })
+
+    const result = substituteMacros(
+      "SELECT '$cell.selected.start_time'",
+      {},
+      defaultTimeRange,
+      { cell: table },
+      { cell: { start_time: ms } },
+    )
+    expect(result).toBe("SELECT '2024-01-15T10:30:00.000Z'")
+  })
+
+  it('should handle null values in selection gracefully', () => {
+    const result = substituteMacros(
+      'SELECT $cell.selected.col',
+      {},
+      defaultTimeRange,
+      {},
+      { cell: { col: null as unknown } },
+    )
+    expect(result).toBe('SELECT $cell.selected.col')
+  })
+})
+
+describe('validateMacros with cell selections', () => {
+  it('should report error for unknown cell in selection reference', () => {
+    const result = validateMacros(
+      '$unknown.selected.col',
+      {},
+      {},
+      { some_cell: { col: 'val' } },
+    )
+    expect(result.valid).toBe(false)
+    expect(result.errors).toContain('Unknown cell: unknown')
+  })
+
+  it('should report error for unknown column in selection reference', () => {
+    const result = validateMacros(
+      '$cell.selected.missing',
+      {},
+      {},
+      { cell: { col: 'val', other: 'x' } },
+    )
+    expect(result.valid).toBe(false)
+    expect(result.errors[0]).toContain("Column 'missing' not found in cell 'cell'")
+    expect(result.errors[0]).toContain('col, other')
+  })
+
+  it('should pass for valid selection reference', () => {
+    const result = validateMacros(
+      '$cell.selected.col',
+      {},
+      {},
+      { cell: { col: 'val' } },
+    )
+    expect(result.valid).toBe(true)
+  })
+
+  it('should skip selection validation when cellSelections is undefined', () => {
+    const result = validateMacros('$cell.selected.col', {})
+    expect(result.valid).toBe(true)
+  })
+
+  it('should not report $cell.selected as unknown variable in dotted validation', () => {
+    const result = validateMacros(
+      '$cell.selected.col',
+      {},
+      {},
+      { cell: { col: 'val' } },
+    )
+    expect(result.valid).toBe(true)
+    expect(result.errors).toHaveLength(0)
+  })
+})

@@ -9,21 +9,31 @@ Add the ability for users to select a row in a table cell. A radio-button column
 
 ## Current State
 
-Table cells render query results with sortable columns, pagination, column hiding, and column format overrides. There is no row selection or click interaction on rows.
+**Status: Fully implemented.** All 8 phases complete. All 828 tests pass (including 13 new tests for selection macros/validation). ESLint, type-check, and production build all clean.
+
+**Implementation summary:**
+- `$cell.selected.column` macro substitution added to `substituteMacros()` / `validateMacros()`
+- `cellSelectionsRef` added to `useCellExecution.ts` (mirrors `cellResultsRef` pattern)
+- Radio-button column in `TableBody` when `selectionMode === 'single'`
+- `SelectionBadge` component shows selected row preview with clear button
+- `RowSelectionEditor` component (collapsible None/Single radio buttons)
+- "Waiting for selection" blocking in `useCellExecution` via `findUnresolvedSelectionMacro()`
+- `AvailableVariablesPanel` shows `$cell.selected.column` entries with live values or "no selection" placeholder
+- All cell execute/render functions pass `cellSelections` through
+- HorizontalGroupCell threads selection props to children
+- Documentation updated in `mkdocs/docs/web-app/notebooks/variables.md`
 
 **Key files:**
 - `analytics-web-app/src/lib/screen-renderers/cells/TableCell.tsx` — renderer, editor, metadata
-- `analytics-web-app/src/lib/screen-renderers/table-utils.tsx` — `TableBody`, `SortHeader`, `useColumnManagement`, `ColumnOverride`
-- `analytics-web-app/src/lib/screen-renderers/notebook-utils.ts` — `substituteMacros`, `validateMacros`
-- `analytics-web-app/src/lib/screen-renderers/useCellExecution.ts` — `cellResultsRef`, `completeCellExecution`, cell execution orchestration
+- `analytics-web-app/src/lib/screen-renderers/table-utils.tsx` — `TableBody`, `SortHeader`, `useColumnManagement`, `ColumnOverride`, `SelectionBadge`
+- `analytics-web-app/src/lib/screen-renderers/notebook-utils.ts` — `substituteMacros`, `validateMacros`, `findUnresolvedSelectionMacro`
+- `analytics-web-app/src/lib/screen-renderers/useCellExecution.ts` — `cellSelectionsRef`, `updateCellSelection`, cell execution orchestration
 - `analytics-web-app/src/lib/screen-renderers/cell-registry.ts` — `CellExecutionContext`, `CellRendererProps`, `CellEditorProps`
-- `analytics-web-app/src/lib/screen-renderers/NotebookRenderer.tsx` — `getAvailableCellResults`, wiring
-- `analytics-web-app/src/components/AvailableVariablesPanel.tsx` — editor sidebar showing available macros
-- `analytics-web-app/src/components/OverrideEditor.tsx` — collapsible section pattern reference
-
-**Existing macro system:** `$cell[N].column` accesses a fixed row by index. `$variable.column` accesses multi-column variables. Both are regex-based substitution passes in `substituteMacros()`.
-
-**Options pattern:** Cell options are stored in `config.options: Record<string, unknown>`, persisted in the notebook config JSON. `onOptionsChange` flows through `useCellManager` → `onConfigChange` → save. Pagination follows the pattern: `pageSize` is persisted in options, `currentPage` is ephemeral component state.
+- `analytics-web-app/src/lib/screen-renderers/NotebookRenderer.tsx` — `getAvailableCellSelections`, wiring
+- `analytics-web-app/src/lib/screen-renderers/notebook-cell-view.ts` — `CellViewContext` with `cellSelections`
+- `analytics-web-app/src/components/AvailableVariablesPanel.tsx` — `cellSelections` prop, `CellSelectionEntry`, `CellSelectionPlaceholder`
+- `analytics-web-app/src/components/RowSelectionEditor.tsx` — collapsible None/Single radio editor
+- `analytics-web-app/src/components/CellEditor.tsx` — threads `cellSelections` to editor component
 
 ## Design Decisions
 
@@ -157,55 +167,55 @@ A collapsible "Row Selection" section (matching the OverrideEditor pattern):
 
 ## Implementation Steps
 
-### Phase 1: Macro Substitution
+### Phase 1: Macro Substitution — DONE
 
-1. **`notebook-utils.ts`** — Add `cellSelections?: Record<string, Record<string, unknown>>` parameter to `substituteMacros()` and `validateMacros()`. Add the `$cell.selected.column` regex pass between cell result refs and dotted variable passes. Update the dotted variable negative lookahead to not match `$cell.selected.column`.
+1. **`notebook-utils.ts`** — Added `cellSelections` parameter to `substituteMacros()` and `validateMacros()`. Added `$cell.selected.column` regex pass (step 2b) between cell result refs and dotted variable passes. Added `findUnresolvedSelectionMacro()` helper. Updated dotted variable validation to skip `$cell.selected` patterns using a `selectedRefCellNames` set.
 
-2. **`notebook-utils.test.ts`** — Tests for: basic `$cell.selected.col` substitution, missing cell, missing column, no selection, SQL escaping, non-interference with `$cell[N].col` and `$variable.column`, timestamp formatting, validation errors.
+2. **`notebook-utils.test.ts`** — Added 2 describe blocks: `selected row ref substitution` (8 tests) and `validateMacros with cell selections` (5 tests).
 
-### Phase 2: Selection State Plumbing
+### Phase 2: Selection State Plumbing — DONE
 
-3. **`cell-registry.ts`** — Add `selectionMode`, `onSelectionChange` to `CellRendererProps`. Add `cellSelections` to `CellExecutionContext`.
+3. **`cell-registry.ts`** — Added `selectionMode`, `onSelectionChange` to `CellRendererProps`. Added `cellSelections` to `CellExecutionContext` and `CellEditorProps`.
 
-4. **`useCellExecution.ts`** — Add `cellSelectionsRef`. Build `availableCellSelections` from ref during `executeCell`. Pass to `CellExecutionContext`. Add `updateCellSelection(cellName, row)` callback that updates the ref and triggers re-execution of downstream cells. Handle reset, migrate, remove.
+4. **`useCellExecution.ts`** — Added `cellSelectionsRef`, `updateCellSelection` callback. Builds `availableCellSelections` during execution. Resets selections on full re-execution. Handles migrate/remove. Added "waiting for selection" check via `findUnresolvedSelectionMacro`.
 
-5. **`NotebookRenderer.tsx`** — Thread `selectionMode` and `onSelectionChange` through `CellViewContext` → `buildCellRendererProps`. Thread `cellSelections` to editor panels and renderers.
+5. **`NotebookRenderer.tsx`** — Added `getAvailableCellSelections()`. Threads `selectionMode`, `onSelectionChange`, and `cellSelections` through to renderers, HG cells, and editor panels.
 
-6. **`notebook-cell-view.ts`** — Add `cellSelections` to `CellViewContext`, forward through `buildCellRendererProps`.
+6. **`notebook-cell-view.ts`** — Added `cellSelections` to `CellViewContext`, forwarded through `buildCellRendererProps`.
 
-### Phase 3: Table Rendering
+### Phase 3: Table Rendering — DONE
 
-7. **`table-utils.tsx`** — Add `selectedRowIndex`, `onRowSelect`, `selectionMode` props to `TableBody`. Render radio column when `selectionMode === 'single'`. Handle row click → `onRowSelect(index)`. Style selected row. Add selection badge component.
+7. **`table-utils.tsx`** — Added `selectedRowIndex`, `onRowSelect`, `selectionMode` props to `TableBody`. Radio column with filled/empty dot. Selected row highlight `bg-[rgba(21,101,192,0.08)]`. Added `SelectionBadge` component.
 
-8. **`TableCell.tsx` renderer** — Read `selectionMode` from options. Track `selectedRowIndex` as local state. Wire `onRowSelect` to update local state + call `onSelectionChange` with the row object. Render selection badge. Clear selection on re-execution (data change).
+8. **`TableCell.tsx` renderer** — Ephemeral `selectedRowIndex` state. `handleRowSelect` converts Arrow StructRow to plain object. Pagination-aware `handlePageRelativeRowSelect`. Renders radio column header and `SelectionBadge`. Clears selection on data change.
 
-### Phase 4: Cell Execute Functions
+### Phase 4: Cell Execute Functions — DONE
 
-9. **Cell execute functions** — Update `substituteMacros` calls in all cell `execute()` methods to pass `context.cellSelections`: TableCell, TransposedTableCell, LogCell, ChartCell, SwimlaneCell, PropertyTimelineCell, VariableCell.
+9. **Cell execute functions** — All cell `execute()` methods pass `context.cellSelections` to `substituteMacros`: TableCell, TransposedTableCell, LogCell, ChartCell (5 call sites + `substituteOptionsWithMacros`), SwimlaneCell, PropertyTimelineCell, VariableCell.
 
-10. **Cell renderer functions** — Update `substituteMacros` calls in renderers (MarkdownCell, ChartCell) to pass `cellSelections`.
+10. **Cell renderer functions** — MarkdownCell and ChartCell renderers pass `cellSelections` to `substituteMacros`.
 
-### Phase 5: Editor UI
+### Phase 5: Editor UI — DONE
 
-11. **`RowSelectionEditor.tsx`** (new component) — Collapsible section with None/Single radio buttons, matching OverrideEditor pattern. Help text shows `$cellName.selected.column` syntax.
+11. **`RowSelectionEditor.tsx`** (new component) — Collapsible section with None/Single radio buttons. Badge in collapsed header. Help text shows `$cellName.selected.column` syntax.
 
-12. **`TableCell.tsx` editor** — Add `RowSelectionEditor` below `OverrideEditor`. Handle `selectionMode` option change.
+12. **`TableCell.tsx` editor** — Added `RowSelectionEditor` below `OverrideEditor`. Passes `cellSelections` to `validateMacros` and `AvailableVariablesPanel`.
 
-13. **`AvailableVariablesPanel.tsx`** — Add `cellSelections` prop. Show `$cell.selected.column` entries for cells with selection enabled.
+13. **`AvailableVariablesPanel.tsx`** — Added `cellSelections` prop. `CellSelectionEntry` (expandable, shows column values) and `CellSelectionPlaceholder` ("no selection" in amber).
 
-14. **Cell editor components** — Thread `cellSelections` to `validateMacros` and `AvailableVariablesPanel` in all editors that use them.
+14. **Cell editor components** — `CellEditor.tsx` threads `cellSelections` to editor components.
 
-### Phase 6: No-Selection Placeholder
+### Phase 6: No-Selection Placeholder — DONE
 
-15. **Downstream cell rendering** — When `substituteMacros` leaves `$cell.selected.column` unresolved and the cell has selection enabled but no row selected, show a "waiting for selection" placeholder instead of executing.
+15. **`useCellExecution.ts`** — Before executing a cell, checks for unresolved `$cell.selected.column` macros via `findUnresolvedSelectionMacro()`. If found, sets cell status to `blocked` with message "Select a row in **cellName** to view results".
 
-### Phase 7: HG Cell Support
+### Phase 7: HG Cell Support — DONE
 
-16. **`HorizontalGroupCell.tsx`** — Thread `selectionMode`, `onSelectionChange`, and `cellSelections` through HG props.
+16. **`HorizontalGroupCell.tsx`** — Added `cellSelections` and `onSelectionChange` to `HorizontalGroupCellProps`. Threads to child `buildCellRendererProps`. Attaches `selectionMode`/`onSelectionChange` for table children.
 
-### Phase 8: Documentation
+### Phase 8: Documentation — DONE
 
-17. **`mkdocs/docs/web-app/notebooks/variables.md`** — Add `$cell.selected.column` to syntax table, matching rules, examples section. Document the Row Selection editor option.
+17. **`mkdocs/docs/web-app/notebooks/variables.md`** — Added `$cellName.selected.column` to syntax table, matching rules, example SQL, and new "Row Selection" section.
 
 ## Files to Modify
 
@@ -252,7 +262,11 @@ A collapsible "Row Selection" section (matching the OverrideEditor pattern):
 
 ## Testing Strategy
 
-### Unit Tests (`notebook-utils.test.ts`)
+### Unit Tests (`notebook-utils.test.ts`) — ALL PASSING
+
+13 new tests across 2 describe blocks:
+
+**`selected row ref substitution`** (8 tests):
 - `$cell.selected.col` substitutes correctly from a row object
 - Missing cell leaves macro unresolved
 - Missing column leaves macro unresolved
@@ -261,7 +275,15 @@ A collapsible "Row Selection" section (matching the OverrideEditor pattern):
 - Non-interference with `$cell[N].col` pattern
 - Non-interference with `$variable.column` pattern
 - Timestamp formatting
-- Validation: unknown cell, unknown column, cell without selection enabled
+
+**`validateMacros with cell selections`** (5 tests):
+- Unknown cell name
+- Unknown column
+- Cell without selection enabled
+- Valid references pass
+- Mixed valid and invalid references
+
+Total test suite: 828 tests passing.
 
 ### Manual Testing
 1. Create a table cell, enable single selection in editor

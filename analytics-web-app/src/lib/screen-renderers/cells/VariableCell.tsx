@@ -403,7 +403,7 @@ export const variableMetadata: CellTypeMetadata = {
     sql: DEFAULT_SQL.variable,
   }),
 
-  execute: async (config: CellConfig, { variables, cellResults, timeRange, runQuery }: CellExecutionContext) => {
+  execute: async (config: CellConfig, { variables, cellResults, cellSelections, timeRange, runQuery }: CellExecutionContext) => {
     const varConfig = config as VariableCellConfig
 
     // Expression variables: evaluate expression and set variable value
@@ -443,7 +443,7 @@ export const variableMetadata: CellTypeMetadata = {
       return null // Nothing to execute
     }
 
-    const sql = substituteMacros(varConfig.sql, variables, timeRange, cellResults)
+    const sql = substituteMacros(varConfig.sql, variables, timeRange, cellResults, cellSelections)
     const result = await runQuery(sql)
 
     // Extract options from result with multi-column support

@@ -10,6 +10,50 @@ interface AvailableVariablesPanelProps {
   additionalVariables?: { name: string; description: string }[]
   /** Upstream cell result tables (for $cell[N].col references) */
   cellResults?: Record<string, Table>
+  /** Selected rows from upstream cells (for $cell.selected.col references) */
+  cellSelections?: Record<string, Record<string, unknown>>
+}
+
+function CellSelectionEntry({ cellName, selection }: { cellName: string; selection: Record<string, unknown> }) {
+  const [expanded, setExpanded] = useState(false)
+  const columns = Object.keys(selection)
+  return (
+    <div className="space-y-0.5">
+      <button
+        type="button"
+        className="flex justify-between items-center w-full py-0.5 hover:bg-app-hover rounded cursor-pointer text-left"
+        onClick={() => setExpanded(!expanded)}
+      >
+        <span className="text-theme-text-secondary font-mono font-medium">
+          <span className="text-theme-text-muted mr-1 inline-block w-3">{expanded ? '▾' : '▸'}</span>
+          {cellName}.selected
+        </span>
+        <span className="text-accent-link text-[10px]">row selected</span>
+      </button>
+      {expanded &&
+        columns.map((col) => (
+          <div key={col} className="flex justify-between py-0.5 pl-5">
+            <span className="text-accent-link font-mono">
+              ${cellName}.selected.{col}
+            </span>
+            <span className="text-theme-text-muted truncate ml-2 max-w-[120px]">
+              {selection[col] != null ? String(selection[col]) : '-'}
+            </span>
+          </div>
+        ))}
+    </div>
+  )
+}
+
+function CellSelectionPlaceholder({ cellName }: { cellName: string }) {
+  return (
+    <div className="flex justify-between py-0.5">
+      <span className="text-theme-text-secondary font-mono font-medium">
+        {cellName}.selected
+      </span>
+      <span className="text-amber-500 text-[10px]">no selection</span>
+    </div>
+  )
 }
 
 function CellResultEntry({ cellName, table }: { cellName: string; table: Table }) {
@@ -46,6 +90,7 @@ export function AvailableVariablesPanel({
   timeRange,
   additionalVariables,
   cellResults,
+  cellSelections,
 }: AvailableVariablesPanelProps) {
   // Time range variables (always simple strings)
   const timeVars = [
@@ -72,9 +117,12 @@ export function AvailableVariablesPanel({
     ([, table]) => table.numRows > 0,
   )
 
+  // Cell selection entries
+  const cellSelectionEntries = Object.entries(cellSelections ?? {})
+
   const allVars = [...timeVars, ...userVars, ...additionalVars]
 
-  if (allVars.length === 0 && cellResultEntries.length === 0) return null
+  if (allVars.length === 0 && cellResultEntries.length === 0 && cellSelectionEntries.length === 0) return null
 
   return (
     <div>
@@ -115,6 +163,16 @@ export function AvailableVariablesPanel({
         {cellResultEntries.map(([cellName, table]) => (
           <CellResultEntry key={cellName} cellName={cellName} table={table} />
         ))}
+        {cellSelectionEntries.length > 0 && (cellResultEntries.length > 0 || allVars.length > 0) && (
+          <div className="border-t border-theme-border my-1" />
+        )}
+        {cellSelectionEntries.map(([cellName, selection]) =>
+          selection ? (
+            <CellSelectionEntry key={cellName} cellName={cellName} selection={selection} />
+          ) : (
+            <CellSelectionPlaceholder key={cellName} cellName={cellName} />
+          )
+        )}
       </div>
     </div>
   )
