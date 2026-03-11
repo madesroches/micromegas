@@ -64,6 +64,8 @@ interface LaneIndex {
   maxDepth: number
   /** Row indices into the Arrow table belonging to this lane, sorted by begin time */
   rowIndices: Int32Array
+  /** Visual depth for each entry in rowIndices (greedy-packed to avoid overlap) */
+  visualDepths: Int32Array
 }
 
 interface FlameIndex {
@@ -126,7 +128,7 @@ function buildFlameIndex(table: Table): FlameIndex {
     if (end > globalMax) globalMax = end
   }
 
-  // Sort each lane's rows by begin time
+  // Sort each lane's rows by begin time, compute visual depths per lane
   const lanes: LaneIndex[] = laneOrder.map((name) => {
     const lane = laneMap.get(name)!
     const rowIndices = new Int32Array(lane.rows)
@@ -135,7 +137,51 @@ function buildFlameIndex(table: Table): FlameIndex {
       const bBegin = timestampToMs(beginCol.get(b), beginField?.type)
       return aBegin - bBegin
     })
-    return { id: name, name, maxDepth: lane.maxDepth, rowIndices }
+
+    const isAsync = name === 'async'
+
+    if (isAsync) {
+      // Async spans: greedy interval packing (depth is logical, not visual)
+      // rowEnds[d] = end time of the last span assigned to visual depth d
+      const rowEnds: number[] = []
+      const visualDepths = new Int32Array(rowIndices.length)
+      let maxVisualDepth = 0
+
+      for (let i = 0; i < rowIndices.length; i++) {
+        const row = rowIndices[i]
+        const begin = timestampToMs(beginCol.get(row), beginField?.type)
+        const end = timestampToMs(endCol.get(row), endField?.type)
+
+        let assigned = -1
+        for (let d = 0; d < rowEnds.length; d++) {
+          if (begin >= rowEnds[d]) {
+            assigned = d
+            break
+          }
+        }
+        if (assigned === -1) {
+          assigned = rowEnds.length
+          rowEnds.push(end)
+        } else {
+          rowEnds[assigned] = end
+        }
+
+        visualDepths[i] = assigned
+        if (assigned > maxVisualDepth) maxVisualDepth = assigned
+      }
+
+      return { id: name, name, maxDepth: maxVisualDepth, rowIndices, visualDepths }
+    } else {
+      // Thread spans: depth from data is the call-stack depth, use directly
+      const visualDepths = new Int32Array(rowIndices.length)
+      let maxDepth = 0
+      for (let i = 0; i < rowIndices.length; i++) {
+        const d = Number(depthCol.get(rowIndices[i]) ?? 0)
+        visualDepths[i] = d
+        if (d > maxDepth) maxDepth = d
+      }
+      return { id: name, name, maxDepth, rowIndices, visualDepths }
+    }
   })
 
   return {
@@ -179,7 +225,6 @@ function hitTest(
 ): HitResult | null {
   const beginCol = index.table.getChild('begin')!
   const endCol = index.table.getChild('end')!
-  const depthCol = index.table.getChild('depth')!
   const beginField = index.table.schema.fields.find((f) => f.name === 'begin')
   const endField = index.table.schema.fields.find((f) => f.name === 'end')
 
@@ -202,8 +247,7 @@ function hitTest(
         const begin = timestampToMs(beginCol.get(row), beginField?.type)
         if (begin > dataX) break // past cursor — no more candidates
         const end = timestampToMs(endCol.get(row), endField?.type)
-        const d = Number(depthCol.get(row) ?? 0)
-        if (d === depth && dataX >= begin && dataX <= end) {
+        if (lane.visualDepths[i] === depth && dataX >= begin && dataX <= end) {
           return { rowIndex: row, laneName: lane.name }
         }
       }
@@ -289,7 +333,6 @@ function FlameGraphView({ index, onTimeRangeSelect }: FlameGraphViewProps) {
     const beginCol = index.table.getChild('begin')!
     const endCol = index.table.getChild('end')!
     const nameCol = index.table.getChild('name')!
-    const depthCol = index.table.getChild('depth')!
     const beginField = index.table.schema.fields.find((f) => f.name === 'begin')
     const endField = index.table.schema.fields.find((f) => f.name === 'end')
 
@@ -329,7 +372,7 @@ function FlameGraphView({ index, onTimeRangeSelect }: FlameGraphViewProps) {
         const end = timestampToMs(endCol.get(row), endField?.type)
         if (end <= s.viewMinTime) continue // ends before viewport
 
-        const depth = Number(depthCol.get(row) ?? 0)
+        const depth = lane.visualDepths[i]
         const name = String(nameCol.get(row) ?? '')
 
         // Pixel coordinates
@@ -400,7 +443,7 @@ function FlameGraphView({ index, onTimeRangeSelect }: FlameGraphViewProps) {
         const end = timestampToMs(endCol.get(row), endField?.type)
         if (end < s.viewMinTime) continue
 
-        const depth = Number(depthCol.get(row) ?? 0)
+        const depth = lane.visualDepths[i]
         const name = String(nameCol.get(row) ?? '')
 
         const x1 = (begin - s.viewMinTime) * pxPerMs
