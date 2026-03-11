@@ -146,28 +146,6 @@ function buildFlameIndex(table: Table): FlameIndex {
 }
 
 // =============================================================================
-// Binary search helpers
-// =============================================================================
-
-/** Find first index in sorted rowIndices where begin >= targetTime */
-function lowerBound(
-  rowIndices: Int32Array,
-  beginCol: ReturnType<Table['getChild']>,
-  beginType: ReturnType<Table['schema']['fields'][0]['type'] | undefined>,
-  targetTime: number
-): number {
-  let lo = 0
-  let hi = rowIndices.length
-  while (lo < hi) {
-    const mid = (lo + hi) >>> 1
-    const begin = timestampToMs(beginCol!.get(rowIndices[mid]), beginType)
-    if (begin < targetTime) lo = mid + 1
-    else hi = mid
-  }
-  return lo
-}
-
-// =============================================================================
 // Layout helpers
 // =============================================================================
 
@@ -198,8 +176,6 @@ function hitTest(
   index: FlameIndex,
   dataX: number, // time in ms
   dataY: number, // vertical pixel offset (from top of content)
-  viewMinTime: number,
-  _viewMaxTime: number,
 ): HitResult | null {
   const beginCol = index.table.getChild('begin')!
   const endCol = index.table.getChild('end')!
@@ -221,9 +197,7 @@ function hitTest(
       const depth = Math.floor(relY / (SPAN_HEIGHT + SPAN_GAP))
       if (depth > lane.maxDepth) return null
 
-      // Binary search for candidate spans
-      const startIdx = Math.max(0, lowerBound(lane.rowIndices, beginCol, beginField?.type, viewMinTime) - 1)
-      for (let i = startIdx; i < lane.rowIndices.length; i++) {
+      for (let i = 0; i < lane.rowIndices.length; i++) {
         const row = lane.rowIndices[i]
         const begin = timestampToMs(beginCol.get(row), beginField?.type)
         if (begin > dataX) break // past cursor — no more candidates
@@ -348,18 +322,13 @@ function FlameGraphView({ index, onTimeRangeSelect }: FlameGraphViewProps) {
       const laneContentHeight = (lane.maxDepth + 1) * (SPAN_HEIGHT + SPAN_GAP)
       if (laneTop + laneContentHeight < 0 || laneTop > canvasHeight) continue
 
-      // Binary search for first visible span
-      const startIdx = lowerBound(lane.rowIndices, beginCol, beginField?.type, s.viewMinTime)
-      // Walk backward to catch spans that start before viewport but end inside it
-      const scanStart = Math.max(0, startIdx - 1)
-
-      for (let i = scanStart; i < lane.rowIndices.length; i++) {
+      for (let i = 0; i < lane.rowIndices.length; i++) {
         const row = lane.rowIndices[i]
         const begin = timestampToMs(beginCol.get(row), beginField?.type)
-        if (begin > s.viewMaxTime) break // past viewport
+        if (begin >= s.viewMaxTime) break // sorted by begin — nothing further can be visible
 
         const end = timestampToMs(endCol.get(row), endField?.type)
-        if (end < s.viewMinTime) continue // before viewport
+        if (end <= s.viewMinTime) continue // ends before viewport
 
         const depth = Number(depthCol.get(row) ?? 0)
         const name = String(nameCol.get(row) ?? '')
@@ -424,10 +393,7 @@ function FlameGraphView({ index, onTimeRangeSelect }: FlameGraphViewProps) {
       const laneContentHeight = (lane.maxDepth + 1) * (SPAN_HEIGHT + SPAN_GAP)
       if (laneTop + laneContentHeight < 0 || laneTop > canvasHeight) continue
 
-      const startIdx = lowerBound(lane.rowIndices, beginCol, beginField?.type, s.viewMinTime)
-      const scanStart = Math.max(0, startIdx - 1)
-
-      for (let i = scanStart; i < lane.rowIndices.length; i++) {
+      for (let i = 0; i < lane.rowIndices.length; i++) {
         const row = lane.rowIndices[i]
         const begin = timestampToMs(beginCol.get(row), beginField?.type)
         if (begin > s.viewMaxTime) break
@@ -713,7 +679,7 @@ function FlameGraphView({ index, onTimeRangeSelect }: FlameGraphViewProps) {
       const dataX = s.viewMinTime + x * timePerPx
       const dataY = y + s.scrollY
 
-      const hit = hitTest(index, dataX, dataY, s.viewMinTime, s.viewMaxTime)
+      const hit = hitTest(index, dataX, dataY)
       if (hit) {
         const nameCol = index.table.getChild('name')!
         const beginCol = index.table.getChild('begin')!
