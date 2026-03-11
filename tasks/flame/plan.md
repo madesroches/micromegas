@@ -11,8 +11,8 @@ Add a new `flamegraph` notebook cell type that renders Perfetto-style flame grap
 Trace visualization currently requires exporting to Perfetto UI via the `perfettoexport` cell — an external tool with no in-app interactivity. The `swimlane` cell shows block-level coverage (one bar per stream/thread) but not individual spans or call hierarchy.
 
 Relevant data sources already exist:
-- **`process_thread_spans(process_id)`** — aggregates spans from all CPU streams; returns `id`, `parent`, `depth`, `begin`, `end`, `name`, `target`, `filename`, `line`, `stream_id`, `thread_name` (`span_table.rs:50-84`, `process_thread_spans_table_function.rs`)
-- **`view_instance('async_events', process_id)`** — returns begin/end events with `span_id`, `parent_span_id`, `depth`, `name`, `time`, `event_type` (`async_events_table.rs:39-81`)
+- **`process_thread_spans(process_id)`** — aggregates spans from all CPU streams; returns `stream_id`, `thread_name`, `id`, `parent`, `depth`, `hash`, `begin`, `end`, `duration`, `name`, `target`, `filename`, `line` (`span_table.rs:50-84`, `process_thread_spans_table_function.rs`)
+- **`view_instance('async_events', process_id)`** — returns begin/end events with `stream_id`, `block_id`, `time`, `event_type`, `span_id`, `parent_span_id`, `depth`, `name`, `filename`, `target`, `line` (`async_events_table.rs:39-81`)
 
 ## Data Schema
 
@@ -132,21 +132,29 @@ CPU-side coordinate math (same approach as Perfetto — no GPU picking needed):
 
 ### Color Scheme
 
-Deterministic name → color mapping using a simple string hash into a warm palette (standard flame graph convention):
+Deterministic name → color mapping using a string hash into the brand tricolor palette. All three brand color families are used (~60% warm, ~40% cool), giving maximum span differentiation while staying on-brand. See `tasks/flame/flamegraph_mockup_B_tricolor.html` for the visual reference.
 
 ```typescript
+// Brand-derived tricolor palette: Rust family, Blue family, Gold family
 const FLAME_PALETTE = [
-  '#e25822', '#e8702a', '#ee8832', '#f4a03a', '#fab842',
-  '#d44e1a', '#da6622', '#e07e2a', '#e69632', '#ecae3a',
-  // ... 20-30 distinct warm tones
+  // Rust family (brand Rust #bf360c → #8d3a14)
+  '#8d3a14', '#a33c10', '#bf360c', '#c94e1a', '#d46628',
+  // Blue family (brand Blue #1565c0 → #0d47a1)
+  '#0d47a1', '#1565c0', '#1976d2', '#1e88e5', '#2196f3',
+  // Gold family (brand Gold #ffb300 → #e6a000)
+  '#e6a000', '#ecae1a', '#ffb300', '#ffc107', '#ffd54f',
 ]
 
-function spanColor(name: string): string {
+// Contrast-aware text color: light on blue spans, dark on warm spans
+const BLUE_INDICES = new Set([5, 6, 7, 8, 9])
+
+function spanColor(name: string): [color: string, textLight: boolean] {
   let hash = 0
   for (let i = 0; i < name.length; i++) {
     hash = ((hash << 5) - hash + name.charCodeAt(i)) | 0
   }
-  return FLAME_PALETTE[Math.abs(hash) % FLAME_PALETTE.length]
+  const idx = Math.abs(hash) % FLAME_PALETTE.length
+  return [FLAME_PALETTE[idx], BLUE_INDICES.has(idx)]
 }
 ```
 
@@ -206,7 +214,7 @@ No R3F or drei needed for the flame graph. The 3D heatmap cell will add those wh
 2. Add `'flamegraph'` to `QueryCellConfig.type` union in `notebook-types.ts`
 3. Add default SQL to `DEFAULT_SQL` in `notebook-utils.ts`
 4. Add `three` to `package.json` dependencies
-5. Create `FlameGraphCell.tsx` with skeleton renderer, editor, and metadata export
+5. Create `FlameGraphCell.tsx` with skeleton renderer, editor, `execute` method, and metadata export. The `execute` method follows the standard query cell pattern: substitute macros via `substituteMacros()`, call `context.runQuery(sql)`, return `{ data: [result] }` (see SwimlaneCell for reference)
 6. Import and register `flamegraphMetadata` in `cell-registry.ts`
 
 ### Phase 2: Data Indexing
@@ -249,7 +257,7 @@ No R3F or drei needed for the flame graph. The 3D heatmap cell will add those wh
 **Modify:**
 - `analytics-web-app/src/lib/screen-renderers/notebook-types.ts` — add `'flamegraph'` to type unions
 - `analytics-web-app/src/lib/screen-renderers/cell-registry.ts` — import and register metadata
-- `analytics-web-app/src/lib/screen-renderers/notebook-utils.ts` — add default SQL, add to `shouldShowDataSource`
+- `analytics-web-app/src/lib/screen-renderers/notebook-utils.ts` — add default SQL
 - `analytics-web-app/package.json` — add `three` dependency
 - `mkdocs/docs/web-app/notebooks/cell-types.md` — document new cell type
 

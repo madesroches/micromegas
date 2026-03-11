@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Flame Graph — Option B: Full Brand Tricolor</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #0a0a0f; color: #e7e9ea; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; padding: 32px; }
+
+  .design-label {
+    font-size: 13px; color: #9ca3af; margin-bottom: 6px; letter-spacing: 0.05em; text-transform: uppercase;
+  }
+  .design-label span { color: #1565c0; font-weight: 600; }
+  .design-subtitle { font-size: 12px; color: #6b7280; margin-bottom: 16px; }
+
+  .palette { display: flex; gap: 2px; margin-bottom: 20px; }
+  .swatch { width: 40px; height: 24px; border-radius: 3px; position: relative; }
+  .swatch::after {
+    content: attr(data-hex); position: absolute; bottom: -16px; left: 50%; transform: translateX(-50%);
+    font-size: 8px; color: #6b7280; font-family: monospace; white-space: nowrap;
+  }
+  .palette-group { display: flex; gap: 2px; }
+  .palette-sep { width: 12px; }
+
+  .cell {
+    background: #12121a; border: 1px solid #2a2a3e; border-radius: 8px;
+    width: 960px; overflow: hidden; margin-bottom: 40px;
+  }
+  .cell-header {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 16px; border-bottom: 1px solid #2a2a3e;
+    font-size: 13px; font-weight: 500;
+  }
+  .cell-header .badge {
+    background: #bf360c33; color: #bf360c; font-size: 10px; font-weight: 600;
+    padding: 2px 6px; border-radius: 4px; text-transform: uppercase; letter-spacing: 0.04em;
+  }
+  .cell-header .name { color: #e7e9ea; }
+  .cell-header .meta { color: #6b7280; font-size: 11px; margin-left: auto; }
+
+  .flamegraph-body { position: relative; padding: 0; }
+
+  .lane-labels {
+    position: absolute; top: 0; left: 0; bottom: 24px; width: 128px; z-index: 10;
+    background: #12121a; border-right: 1px solid #2a2a3e;
+  }
+  .lane-label {
+    height: var(--lane-height);
+    display: flex; align-items: center;
+    padding: 0 10px;
+    font-size: 11px; font-weight: 500; color: #9ca3af;
+    border-bottom: 1px solid rgba(42,42,62,0.5);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+
+  .canvas-area { margin-left: 128px; position: relative; overflow: hidden; }
+
+  .span-row {
+    position: absolute; height: 18px; border-radius: 2px;
+    font-size: 10px; line-height: 18px; font-weight: 500;
+    padding: 0 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    cursor: default; transition: filter 0.08s;
+  }
+  .span-row:hover { filter: brightness(1.25); }
+  /* Dark text on warm tones, light text on blue tones */
+  .span-row.warm { color: #0a0a0f; }
+  .span-row.cool { color: #e7e9ea; }
+
+  .lane-sep { position: absolute; left: 0; right: 0; height: 1px; background: #2a2a3e; }
+
+  .time-axis {
+    height: 24px; margin-left: 128px; display: flex; align-items: center;
+    border-top: 1px solid #2a2a3e; padding: 0 4px;
+    font-size: 10px; color: #6b7280; justify-content: space-between;
+  }
+
+  .tooltip {
+    position: absolute; z-index: 50; pointer-events: none;
+    background: #0a0a0f; border: 1px solid #2a2a3e; border-radius: 6px;
+    padding: 8px 12px; font-size: 12px; box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+    min-width: 220px;
+  }
+  .tooltip .tt-name { font-weight: 600; color: #e7e9ea; margin-bottom: 4px; }
+  .tooltip .tt-duration { color: #ffb300; font-weight: 500; font-size: 11px; margin-bottom: 6px; }
+  .tooltip .tt-row { display: flex; justify-content: space-between; font-size: 10px; color: #9ca3af; margin-top: 2px; }
+  .tooltip .tt-row .tt-val { color: #e7e9ea; }
+
+  .notes { max-width: 960px; margin-top: 24px; padding: 16px; background: #1a1a2e; border-radius: 8px; font-size: 13px; color: #9ca3af; line-height: 1.6; }
+  .notes h3 { color: #e7e9ea; font-size: 14px; margin-bottom: 8px; }
+  .notes ul { padding-left: 20px; }
+  .notes li { margin-bottom: 4px; }
+  .notes code { background: #2a2a3e; padding: 1px 5px; border-radius: 3px; font-size: 12px; color: #ffb300; }
+</style>
+</head>
+<body>
+
+<div class="design-label"><span>Option B</span> — Full Brand Tricolor</div>
+<div class="design-subtitle">All three brand colors used: Rust family, Blue family, Gold family. Hash distributes spans across the full brand palette.</div>
+
+<!-- Palette swatches — three groups -->
+<div class="palette" style="margin-bottom: 36px;">
+  <div class="palette-group">
+    <div class="swatch" style="background:#8d3a14;" data-hex="#8d3a14"></div>
+    <div class="swatch" style="background:#a33c10;" data-hex="Rust "></div>
+    <div class="swatch" style="background:#bf360c;" data-hex="#bf360c"></div>
+    <div class="swatch" style="background:#c94e1a;" data-hex="#c94e1a"></div>
+    <div class="swatch" style="background:#d46628;" data-hex="#d46628"></div>
+  </div>
+  <div class="palette-sep"></div>
+  <div class="palette-group">
+    <div class="swatch" style="background:#0d47a1;" data-hex="#0d47a1"></div>
+    <div class="swatch" style="background:#1565c0;" data-hex="#1565c0"></div>
+    <div class="swatch" style="background:#1976d2;" data-hex="Blue "></div>
+    <div class="swatch" style="background:#1e88e5;" data-hex="#1e88e5"></div>
+    <div class="swatch" style="background:#2196f3;" data-hex="#2196f3"></div>
+  </div>
+  <div class="palette-sep"></div>
+  <div class="palette-group">
+    <div class="swatch" style="background:#e6a000;" data-hex="#e6a000"></div>
+    <div class="swatch" style="background:#ecae1a;" data-hex="Gold "></div>
+    <div class="swatch" style="background:#ffb300;" data-hex="#ffb300"></div>
+    <div class="swatch" style="background:#ffc107;" data-hex="#ffc107"></div>
+    <div class="swatch" style="background:#ffd54f;" data-hex="#ffd54f"></div>
+  </div>
+</div>
+
+<div class="cell">
+  <div class="cell-header">
+    <span class="badge">Flame Graph</span>
+    <span class="name">cpu_trace</span>
+    <span class="meta">12,847 spans &middot; 2.3s range</span>
+  </div>
+
+  <div class="flamegraph-body" style="height: 320px; --lane-height: 148px;">
+    <div class="lane-labels">
+      <div class="lane-label">main-13471935…</div>
+      <div class="lane-label">TaskPool (0)-1…</div>
+    </div>
+
+    <div class="canvas-area" style="height: 296px;">
+
+      <!-- ── Lane 1: main thread ── -->
+      <!-- Hash distributes across all three brand families -->
+      <div class="span-row warm" style="top:4px; left:0; width:100%; background:#bf360c;">frame_update</div>
+
+      <div class="span-row warm" style="top:24px; left:2%; width:35%; background:#d46628;">physics_step</div>
+      <div class="span-row cool" style="top:24px; left:39%; width:28%; background:#1565c0;">render_scene</div>
+      <div class="span-row warm" style="top:24px; left:69%; width:18%; background:#ffb300;">audio_mix</div>
+      <div class="span-row warm" style="top:24px; left:89%; width:10%; background:#e6a000;">ui_layout</div>
+
+      <div class="span-row warm" style="top:44px; left:2%; width:15%; background:#ecae1a;">broadphase</div>
+      <div class="span-row cool" style="top:44px; left:18%; width:19%; background:#1976d2;">narrowphase</div>
+      <div class="span-row warm" style="top:44px; left:39%; width:12%; background:#8d3a14;">cull_objects</div>
+      <div class="span-row warm" style="top:44px; left:52%; width:15%; background:#c94e1a;">draw_batches</div>
+      <div class="span-row cool" style="top:44px; left:69%; width:10%; background:#0d47a1;">decode_ogg</div>
+
+      <div class="span-row warm" style="top:64px; left:2%; width:7%; background:#ffc107;">aabb_tree</div>
+      <div class="span-row warm" style="top:64px; left:10%; width:5%; background:#a33c10; color:transparent;">sm</div>
+      <div class="span-row cool" style="top:64px; left:18%; width:8%; background:#1e88e5;">gjk_epa</div>
+      <div class="span-row warm" style="top:64px; left:27%; width:10%; background:#d46628;">solve_constraints</div>
+      <div class="span-row warm" style="top:64px; left:39%; width:5%; background:#ffb300;">frustum</div>
+      <div class="span-row cool" style="top:64px; left:45%; width:6%; background:#2196f3;">occlusion</div>
+      <div class="span-row warm" style="top:64px; left:52%; width:7%; background:#e6a000;">gpu_submit</div>
+      <div class="span-row warm" style="top:64px; left:60%; width:7%; background:#e6a000;">gpu_submit</div>
+
+      <div class="span-row warm" style="top:84px; left:2%; width:3%; background:#c94e1a; color:transparent;">.</div>
+      <div class="span-row cool" style="top:84px; left:6%; width:1.5%; background:#1565c0; color:transparent;">.</div>
+      <div class="span-row warm" style="top:84px; left:18%; width:4%; background:#ffd54f; color:transparent;">.</div>
+      <div class="span-row warm" style="top:84px; left:23%; width:3%; background:#bf360c; color:transparent;">.</div>
+      <div class="span-row warm" style="top:84px; left:27%; width:2%; background:#ecae1a; color:transparent;">.</div>
+      <div class="span-row cool" style="top:84px; left:30%; width:4%; background:#0d47a1; color:transparent;">.</div>
+      <div class="span-row warm" style="top:84px; left:35%; width:2%; background:#8d3a14; color:transparent;">.</div>
+
+      <div class="span-row warm" style="top:104px; left:2%; width:1.2%; background:#d46628; color:transparent;">.</div>
+      <div class="span-row cool" style="top:104px; left:4%; width:0.8%; background:#1976d2; color:transparent;">.</div>
+      <div class="span-row warm" style="top:104px; left:18%; width:2%; background:#a33c10; color:transparent;">.</div>
+      <div class="span-row warm" style="top:104px; left:21%; width:1.5%; background:#ffb300; color:transparent;">.</div>
+
+      <div class="lane-sep" style="top: 148px;"></div>
+
+      <!-- ── Lane 2: TaskPool ── -->
+      <div class="span-row cool" style="top:156px; left:5%; width:25%; background:#1e88e5;">async_compute_system</div>
+      <div class="span-row warm" style="top:156px; left:33%; width:20%; background:#ffc107;">mesh_generation</div>
+      <div class="span-row warm" style="top:156px; left:56%; width:30%; background:#bf360c;">pathfinding_batch</div>
+
+      <div class="span-row warm" style="top:176px; left:5%; width:12%; background:#d46628;">transform_verts</div>
+      <div class="span-row warm" style="top:176px; left:18%; width:12%; background:#ecae1a;">skin_meshes</div>
+      <div class="span-row cool" style="top:176px; left:33%; width:9%; background:#1565c0;">gen_vertices</div>
+      <div class="span-row warm" style="top:176px; left:43%; width:10%; background:#8d3a14;">gen_indices</div>
+      <div class="span-row warm" style="top:176px; left:56%; width:14%; background:#c94e1a;">a_star</div>
+      <div class="span-row warm" style="top:176px; left:72%; width:14%; background:#ffb300;">smooth_path</div>
+
+      <div class="span-row cool" style="top:196px; left:5%; width:5%; background:#0d47a1;">simd_batch</div>
+      <div class="span-row warm" style="top:196px; left:11%; width:6%; background:#e6a000;">upload_buf</div>
+      <div class="span-row warm" style="top:196px; left:56%; width:6%; background:#a33c10;">heap_pop</div>
+      <div class="span-row cool" style="top:196px; left:63%; width:7%; background:#2196f3;">relax_edges</div>
+      <div class="span-row warm" style="top:196px; left:72%; width:5%; background:#d46628; color:transparent;">.</div>
+      <div class="span-row warm" style="top:196px; left:78%; width:4%; background:#ffd54f; color:transparent;">.</div>
+
+      <div class="span-row cool" style="top:216px; left:5%; width:2%; background:#1976d2; color:transparent;">.</div>
+      <div class="span-row warm" style="top:216px; left:8%; width:1.5%; background:#c94e1a; color:transparent;">.</div>
+      <div class="span-row warm" style="top:216px; left:56%; width:3%; background:#ecae1a; color:transparent;">.</div>
+      <div class="span-row warm" style="top:216px; left:60%; width:2%; background:#bf360c; color:transparent;">.</div>
+
+      <!-- Tooltip -->
+      <div class="tooltip" style="top: 32px; left: 360px;">
+        <div class="tt-name">render_scene</div>
+        <div class="tt-duration">645.2 ms</div>
+        <div class="tt-row"><span>target</span> <span class="tt-val">engine::render</span></div>
+        <div class="tt-row"><span>file</span> <span class="tt-val">render.rs:142</span></div>
+        <div class="tt-row"><span>depth</span> <span class="tt-val">1</span></div>
+      </div>
+    </div>
+
+    <div class="time-axis">
+      <span>09:24:31.000</span>
+      <span>09:24:31.460</span>
+      <span>09:24:31.920</span>
+      <span>09:24:32.380</span>
+      <span>09:24:32.840</span>
+      <span>09:24:33.300</span>
+    </div>
+  </div>
+</div>
+
+<div class="notes">
+  <h3>Option B: Full Brand Tricolor</h3>
+  <ul>
+    <li><strong>Palette</strong>: 15 tones across all three brand families — 5 rust (<code>#8d3a14</code>→<code>#d46628</code>), 5 blue (<code>#0d47a1</code>→<code>#2196f3</code>), 5 gold (<code>#e6a000</code>→<code>#ffd54f</code>)</li>
+    <li><strong>Text</strong>: Adaptive — dark on warm bars, light on blue bars (contrast-aware)</li>
+    <li><strong>Distribution</strong>: ~60% warm (rust+gold), ~40% cool (blue) — warm-dominant but with blue providing strong visual anchors for quick scan</li>
+    <li><strong>Pro</strong>: Maximum span differentiation. Uses full brand identity. Easy to spot the same function across lanes (e.g. <code>gpu_submit</code> is always gold).</li>
+    <li><strong>Con</strong>: Blue spans break the traditional "flame" metaphor. Needs contrast-aware text color logic. More visually complex.</li>
+  </ul>
+</div>
+
+</body>
+</html>
