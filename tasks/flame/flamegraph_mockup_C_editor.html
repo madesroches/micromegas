@@ -413,7 +413,7 @@
         <div class="sql-editor-wrapper">
           <div class="sql-editor-body" contenteditable="false"><span class="syn-kw">SELECT</span> name, begin, end, depth,
        thread_name <span class="syn-kw">AS</span> lane
-<span class="syn-kw">FROM</span> <span class="syn-fn">process_thread_spans</span>(<span class="syn-str">'<span class="syn-var">$process_id</span>'</span>)
+<span class="syn-kw">FROM</span> <span class="syn-fn">process_spans</span>(<span class="syn-str">'<span class="syn-var">$process_id</span>'</span>, <span class="syn-str">'both'</span>)
 <span class="syn-kw">WHERE</span> begin &gt;= <span class="syn-kw">TIMESTAMP</span> <span class="syn-str">'<span class="syn-var">$from</span>'</span>
   <span class="syn-kw">AND</span> end &lt;= <span class="syn-kw">TIMESTAMP</span> <span class="syn-str">'<span class="syn-var">$to</span>'</span>
 <span class="syn-kw">ORDER BY</span> lane, begin</div>

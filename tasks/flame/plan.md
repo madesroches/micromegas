@@ -11,7 +11,7 @@ Add a new `flamegraph` notebook cell type that renders Perfetto-style flame grap
 Trace visualization currently requires exporting to Perfetto UI via the `perfettoexport` cell — an external tool with no in-app interactivity. The `swimlane` cell shows block-level coverage (one bar per stream/thread) but not individual spans or call hierarchy.
 
 Relevant data sources already exist:
-- **`process_thread_spans(process_id)`** — aggregates spans from all CPU streams; returns `stream_id`, `thread_name`, `id`, `parent`, `depth`, `hash`, `begin`, `end`, `duration`, `name`, `target`, `filename`, `line` (`span_table.rs:50-84`, `process_thread_spans_table_function.rs`)
+- **`process_spans(process_id, types)`** — aggregates thread and/or async spans from all CPU streams; returns `stream_id`, `thread_name`, `id`, `parent`, `depth`, `hash`, `begin`, `end`, `duration`, `name`, `target`, `filename`, `line` (`span_table.rs:50-84`, `process_spans_table_function.rs`)
 - **`view_instance('async_events', process_id)`** — returns begin/end events with `stream_id`, `block_id`, `time`, `event_type`, `span_id`, `parent_span_id`, `depth`, `name`, `filename`, `target`, `line` (`async_events_table.rs:39-81`)
 
 ## Data Schema
@@ -163,7 +163,7 @@ function spanColor(name: string): [color: string, textLight: boolean] {
 **Thread spans** (default):
 ```sql
 SELECT name, begin, end, depth, thread_name as lane
-FROM process_thread_spans('$process_id')
+FROM process_spans('$process_id', 'both')
 WHERE begin >= TIMESTAMP '$from'
   AND end <= TIMESTAMP '$to'
 ORDER BY lane, begin

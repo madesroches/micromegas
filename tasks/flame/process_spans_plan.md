@@ -1,4 +1,4 @@
-# process_spans Table Function Plan
+# process_spans Table Function Plan — IMPLEMENTED
 
 ## Overview
 
@@ -181,7 +181,7 @@ Move the existing `SpanTypes` enum from `perfetto_trace_execution_plan.rs` to a 
 | `mkdocs/docs/query-guide/functions-reference.md` | Replace `process_thread_spans` with `process_spans(process_id, types)` |
 | `mkdocs/docs/query-guide/schema-reference.md` | Update `process_thread_spans` references |
 | `mkdocs/docs/query-guide/async-performance-analysis.md` | Replace manual async self-join examples with `process_spans(id, 'async')` |
-| `mkdocs/docs/query-guide/query-patterns.md` | Update span query examples |
+| `CHANGELOG.md` | Update `process_thread_spans` reference to `process_spans` |
 
 ## Testing
 

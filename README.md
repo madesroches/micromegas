@@ -72,7 +72,7 @@ To get started with Micromegas, please refer to the [Getting Started](https://mi
 ### Unreleased
 * JSONPath UDFs (`jsonb_path_query`, `jsonb_path_query_first`) for JSONB columns
 * Interactive row selection in table cells with `$cell.selected.column` macros
-* `process_thread_spans` table function for cross-thread span analysis
+* `process_spans` table function for cross-thread and async span analysis
 * Cell result row references (`$cell[N].column`) for chaining queries
 * Keyboard navigation (Alt+PageUp/PageDown) and Ctrl+S to save
 * Auto-refresh with configurable intervals

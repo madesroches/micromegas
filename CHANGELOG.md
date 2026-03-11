@@ -52,7 +52,7 @@ This file documents the historical progress of the Micromegas project. For curre
   * Add `jsonb_path_query_first` and `jsonb_path_query` UDFs for JSONPath traversal of JSONB columns (#920)
   * Extend `jsonb_each` to support array inputs (#920)
   * Bump jsonb dependency from 0.5.3 to 0.5.5 (#920)
-  * Add `process_thread_spans(process_id)` table function for cross-thread span analysis
+  * Add `process_spans(process_id, types)` table function for cross-thread and async span analysis
   * Extract `get_process_thread_list` as shared utility for process stream discovery
 * **Documentation:**
   * Migrate all documentation URLs from madesroches.github.io to micromegas.info

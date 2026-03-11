@@ -144,7 +144,7 @@ WHERE process_id = '$process_id'
 ORDER BY name, begin`,
   transposed: `SELECT 1 as value`,
   flamegraph: `SELECT name, begin, end, depth, thread_name as lane
-FROM process_thread_spans('$process_id')
+FROM process_spans('$process_id', 'both')
 ORDER BY lane, begin`,
 }
 

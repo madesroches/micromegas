@@ -12,6 +12,22 @@ The `depth` field in `async_events` represents the nesting level in the async ca
 
 This enables hierarchical performance analysis similar to synchronous call stack profiling.
 
+## Quick Start with `process_spans`
+
+The simplest way to query async spans is using the `process_spans` table function:
+
+```sql
+-- Async spans only
+SELECT * FROM process_spans('process-uuid', 'async')
+
+-- Both thread and async spans combined
+SELECT name, begin, end, depth, thread_name as lane
+FROM process_spans('process-uuid', 'both')
+ORDER BY lane, begin
+```
+
+The patterns below use `view_instance('async_events', ...)` directly for advanced analysis scenarios.
+
 ## Core Analysis Patterns
 
 ### 1. Top-Level Performance Overview

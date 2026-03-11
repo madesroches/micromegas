@@ -28,7 +28,7 @@ use uuid::Uuid;
 use super::async_events_block_processor::AsyncEventsBlockProcessor;
 
 const VIEW_SET_NAME: &str = "async_events";
-const SCHEMA_VERSION: u8 = 1; // Updated to version 1 to include depth field
+const SCHEMA_VERSION: u8 = 2; // Version 2: added hash field
 lazy_static::lazy_static! {
     static ref TIME_COLUMN: Arc<String> = Arc::new(String::from("time"));
 }

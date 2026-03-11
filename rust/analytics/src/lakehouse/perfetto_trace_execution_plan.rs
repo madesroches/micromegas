@@ -34,13 +34,7 @@ use std::{
     sync::Arc,
 };
 
-/// Span types to include in the trace
-#[derive(Debug, Clone, Copy)]
-pub enum SpanTypes {
-    Thread,
-    Async,
-    Both,
-}
+pub use super::process_spans_table_function::SpanTypes;
 
 /// Execution plan that generates Perfetto trace chunks
 pub struct PerfettoTraceExecutionPlan {
