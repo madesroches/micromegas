@@ -159,7 +159,7 @@ Alternative: just rename and update all call sites — there are only a few (`pr
 
 7. **Update perfetto code**: Change `perfetto_trace_execution_plan.rs` to import `SpanTypes` from the shared location instead of defining its own.
 
-8. **Update documentation**: `mkdocs/docs/query-guide/functions-reference.md` — document `process_spans(process_id, types)`, note `process_thread_spans` as deprecated alias.
+8. **Update documentation**: Update all mkdocs pages that reference `process_thread_spans` or async span queries to use `process_spans`. See files list below.
 
 ## Files to Modify
 
@@ -172,7 +172,13 @@ Alternative: just rename and update all call sites — there are only a few (`pr
 | `rust/analytics/src/lakehouse/perfetto_trace_table_function.rs` | Import `SpanTypes` from shared location |
 | `analytics-web-app/src/lib/screen-renderers/notebook-utils.ts` | Update default flamegraph SQL |
 | `tasks/flame/plan.md` | Update SQL examples |
-| `mkdocs/docs/query-guide/functions-reference.md` | Document new function |
+| `mkdocs/docs/query-guide/functions-reference.md` | Document `process_spans(process_id, types)`, note `process_thread_spans` as deprecated alias |
+| `mkdocs/docs/query-guide/schema-reference.md` | Update `process_thread_spans` references |
+| `mkdocs/docs/query-guide/async-performance-analysis.md` | Replace manual async self-join examples with `process_spans(id, 'async')` |
+| `mkdocs/docs/query-guide/query-patterns.md` | Update span query examples |
+| `mkdocs/docs/query-guide/quick-start.md` | Update span query examples |
+| `mkdocs/docs/query-guide/index.md` | Update function references |
+| `mkdocs/docs/web-app/notebooks/cell-types.md` | Update flame graph cell SQL examples |
 
 ## Testing
 
