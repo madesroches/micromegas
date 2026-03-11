@@ -316,7 +316,8 @@ mod native {
         fn populate_default_system_properties(&mut self) {
             let props = &mut self.process_properties;
             // Process identity (duplicates ProcessInfo fields into properties)
-            let defaults: Vec<(&str, Box<dyn FnOnce() -> String>)> = vec![
+            type DefaultProperties = Vec<(&'static str, Box<dyn FnOnce() -> String>)>;
+            let defaults: DefaultProperties = vec![
                 (
                     "exe",
                     Box::new(|| {
@@ -326,10 +327,10 @@ mod native {
                             .into_owned()
                     }),
                 ),
-                ("username", Box::new(|| whoami::username())),
-                ("realname", Box::new(|| whoami::realname())),
-                ("computer", Box::new(|| whoami::devicename())),
-                ("distro", Box::new(|| whoami::distro())),
+                ("username", Box::new(whoami::username)),
+                ("realname", Box::new(whoami::realname)),
+                ("computer", Box::new(whoami::devicename)),
+                ("distro", Box::new(whoami::distro)),
                 (
                     "cpu_brand",
                     Box::new(|| {
@@ -339,9 +340,9 @@ mod native {
                                 .get_processor_brand_string()
                                 .map_or_else(|| "unknown".to_owned(), |b| b.as_str().to_owned())
                         }
-                        #[cfg(target_arch = "aarch64")]
+                        #[cfg(not(target_arch = "x86_64"))]
                         {
-                            String::from("aarch64")
+                            String::from(std::env::consts::ARCH)
                         }
                     }),
                 ),
