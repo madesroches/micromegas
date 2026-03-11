@@ -1,0 +1,480 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Flame Graph — Cell Editor Mockup</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0a0a0f; color: #e7e9ea;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  }
+
+  /* ── Theme variables (mirroring analytics-web-app) ── */
+  :root {
+    --app-bg: #0a0a0f;
+    --app-panel: #12121a;
+    --app-card: #1a1a2e;
+    --app-hover: rgba(255,255,255,0.04);
+    --border: #2a2a3e;
+    --text-primary: #e7e9ea;
+    --text-secondary: #9ca3af;
+    --text-muted: #6b7280;
+    --accent-link: #1565c0;
+    --accent-error: #ef4444;
+    --syntax-keyword: #c792ea;
+    --syntax-string: #c3e88d;
+    --syntax-variable: #ffb300;
+    --syntax-comment: #546e7a;
+    --syntax-number: #f78c6c;
+  }
+
+  /* ── Layout: notebook with right editor panel ── */
+  .notebook-layout {
+    display: flex; height: 100vh; overflow: hidden;
+  }
+  .cells-area {
+    flex: 1; overflow-y: auto; padding: 24px 32px;
+  }
+  .editor-panel {
+    width: 420px; flex-shrink: 0;
+    background: var(--app-panel);
+    border-left: 1px solid var(--border);
+    display: flex; flex-direction: column;
+    height: 100vh;
+  }
+
+  /* ── Editor: header ── */
+  .editor-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+  }
+  .editor-header-left { display: flex; align-items: center; gap: 8px; }
+  .editor-type-badge {
+    font-size: 11px; padding: 2px 6px; border-radius: 4px;
+    background: var(--app-card); color: var(--text-secondary);
+    text-transform: uppercase; font-weight: 500;
+  }
+  .editor-cell-name {
+    font-size: 14px; font-weight: 500; color: var(--text-primary);
+  }
+  .editor-close {
+    background: none; border: none; color: var(--text-muted); cursor: pointer;
+    padding: 4px; border-radius: 4px; display: flex; align-items: center;
+  }
+  .editor-close:hover { color: var(--text-primary); background: var(--app-hover); }
+  .editor-close svg { width: 18px; height: 18px; }
+
+  /* ── Editor: scrollable content ── */
+  .editor-content {
+    flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 16px;
+  }
+
+  /* ── Editor: form fields ── */
+  .field-label {
+    display: block; font-size: 11px; font-weight: 500;
+    color: var(--text-secondary); text-transform: uppercase;
+    margin-bottom: 6px; letter-spacing: 0.03em;
+  }
+  .field-input {
+    width: 100%; padding: 8px 12px;
+    background: var(--app-card); border: 1px solid var(--border);
+    border-radius: 6px; color: var(--text-primary); font-size: 13px;
+    outline: none;
+  }
+  .field-input:focus { border-color: var(--accent-link); }
+  .field-input::placeholder { color: var(--text-muted); }
+
+  /* ── Data source selector ── */
+  .datasource-select {
+    width: 100%; padding: 8px 12px;
+    background: var(--app-card); border: 1px solid var(--border);
+    border-radius: 6px; color: var(--text-primary); font-size: 13px;
+    outline: none; appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+    background-repeat: no-repeat; background-position: right 10px center;
+    cursor: pointer;
+  }
+  .datasource-select:focus { border-color: var(--accent-link); }
+
+  /* ── SQL editor (simplified mockup of SyntaxEditor) ── */
+  .sql-editor-wrapper {
+    border: 1px solid var(--border); border-radius: 6px;
+    overflow: hidden; background: var(--app-bg);
+  }
+  .sql-editor-wrapper:focus-within { border-color: var(--accent-link); }
+  .sql-editor-body {
+    padding: 10px 12px; min-height: 180px; max-height: 260px;
+    overflow-y: auto; font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
+    font-size: 12px; line-height: 1.65; white-space: pre-wrap; word-break: break-all;
+    color: var(--text-primary); outline: none;
+  }
+  .sql-editor-toolbar {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 5px 10px; border-top: 1px solid var(--border);
+    background: var(--app-card);
+  }
+  .sql-format-btn {
+    display: flex; align-items: center; gap: 4px;
+    font-size: 11px; color: var(--text-secondary);
+    background: none; border: 1px solid transparent;
+    border-radius: 4px; padding: 2px 6px; cursor: pointer;
+  }
+  .sql-format-btn:hover {
+    color: var(--text-primary); border-color: var(--accent-link);
+    background: rgba(21,101,192,0.1);
+  }
+  .sql-format-btn svg { width: 12px; height: 12px; }
+  .sql-shortcut {
+    display: flex; align-items: center; gap: 4px;
+    font-size: 11px; color: var(--text-muted);
+  }
+  .sql-shortcut svg { width: 12px; height: 12px; }
+  .kbd {
+    display: inline-block; padding: 1px 4px;
+    font-size: 10px; font-family: inherit;
+    background: var(--app-panel); border: 1px solid var(--border);
+    border-radius: 3px; color: var(--text-muted);
+  }
+
+  /* Syntax highlighting spans */
+  .syn-kw { color: var(--syntax-keyword); }
+  .syn-str { color: var(--syntax-string); }
+  .syn-var { color: var(--syntax-variable); }
+  .syn-num { color: var(--syntax-number); }
+  .syn-fn { color: #82aaff; }
+  .syn-comment { color: var(--syntax-comment); font-style: italic; }
+
+  /* ── Available Variables Panel ── */
+  .vars-panel {
+    background: var(--app-card); border-radius: 6px; padding: 8px;
+    font-size: 12px;
+  }
+  .vars-row {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 3px 0;
+  }
+  .vars-name { font-family: monospace; color: var(--accent-link); font-size: 11px; }
+  .vars-value { color: var(--text-muted); font-size: 11px; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; }
+  .vars-divider { border-top: 1px solid var(--border); margin: 4px 0; }
+
+  /* ── Documentation link ── */
+  .doc-section h4 {
+    font-size: 11px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: 0.05em; color: var(--text-muted); margin-bottom: 6px;
+  }
+  .doc-link {
+    font-size: 12px; color: var(--accent-link); text-decoration: none;
+  }
+  .doc-link:hover { text-decoration: underline; }
+
+  /* ── Editor: footer ── */
+  .editor-footer {
+    padding: 12px 16px; border-top: 1px solid var(--border);
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .btn {
+    display: flex; align-items: center; justify-content: center; gap: 6px;
+    width: 100%; padding: 8px 16px;
+    border-radius: 6px; font-size: 13px; font-weight: 500;
+    cursor: pointer; border: 1px solid transparent;
+  }
+  .btn svg { width: 14px; height: 14px; }
+  .btn-primary {
+    background: var(--accent-link); color: #fff; border-color: var(--accent-link);
+  }
+  .btn-primary:hover { filter: brightness(1.15); }
+  .btn-delete {
+    background: transparent; color: var(--accent-error);
+    border-color: var(--accent-error);
+  }
+  .btn-delete:hover { background: rgba(239,68,68,0.1); }
+
+  /* ── Cell in the left panel (flame graph rendering) ── */
+  .cell {
+    background: var(--app-panel); border: 1px solid var(--border);
+    border-radius: 8px; overflow: hidden; margin-bottom: 16px;
+  }
+  .cell.selected { border-color: var(--accent-link); }
+  .cell-header {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 16px; border-bottom: 1px solid var(--border);
+    font-size: 13px; font-weight: 500;
+  }
+  .cell-header .badge {
+    background: #bf360c33; color: #bf360c; font-size: 10px; font-weight: 600;
+    padding: 2px 6px; border-radius: 4px; text-transform: uppercase; letter-spacing: 0.04em;
+  }
+  .cell-header .name { color: var(--text-primary); }
+  .cell-header .meta { color: var(--text-muted); font-size: 11px; margin-left: auto; }
+  .cell-header .edit-indicator {
+    width: 6px; height: 6px; border-radius: 50%; background: var(--accent-link);
+  }
+
+  /* Flame graph rendering area (simplified) */
+  .flamegraph-body { position: relative; padding: 0; }
+  .lane-labels {
+    position: absolute; top: 0; left: 0; bottom: 24px; width: 110px; z-index: 10;
+    background: var(--app-panel); border-right: 1px solid var(--border);
+  }
+  .lane-label {
+    height: var(--lane-height);
+    display: flex; align-items: center;
+    padding: 0 8px;
+    font-size: 10px; font-weight: 500; color: var(--text-secondary);
+    border-bottom: 1px solid rgba(42,42,62,0.5);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .canvas-area { margin-left: 110px; position: relative; overflow: hidden; }
+  .span-row {
+    position: absolute; height: 16px; border-radius: 2px;
+    font-size: 9px; line-height: 16px; font-weight: 500;
+    padding: 0 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    cursor: default;
+  }
+  .span-row.warm { color: #0a0a0f; }
+  .span-row.cool { color: #e7e9ea; }
+  .lane-sep { position: absolute; left: 0; right: 0; height: 1px; background: var(--border); }
+  .time-axis {
+    height: 22px; margin-left: 110px; display: flex; align-items: center;
+    border-top: 1px solid var(--border); padding: 0 4px;
+    font-size: 9px; color: var(--text-muted); justify-content: space-between;
+  }
+
+  /* Variable cell above (for context) */
+  .var-cell {
+    background: var(--app-panel); border: 1px solid var(--border);
+    border-radius: 8px; overflow: hidden; margin-bottom: 16px;
+    padding: 8px 16px; display: flex; align-items: center; gap: 10px;
+  }
+  .var-cell .badge {
+    background: rgba(21,101,192,0.2); color: var(--accent-link); font-size: 10px; font-weight: 600;
+    padding: 2px 6px; border-radius: 4px; text-transform: uppercase;
+  }
+  .var-cell .var-name { font-size: 13px; font-weight: 500; color: var(--text-primary); }
+  .var-cell .var-value {
+    margin-left: auto; font-family: monospace; font-size: 12px;
+    color: var(--text-muted); max-width: 360px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+
+  /* Design notes */
+  .notes {
+    max-width: 100%; margin-top: 24px; padding: 16px;
+    background: var(--app-card); border-radius: 8px;
+    font-size: 13px; color: var(--text-secondary); line-height: 1.6;
+  }
+  .notes h3 { color: var(--text-primary); font-size: 14px; margin-bottom: 8px; }
+  .notes ul { padding-left: 20px; }
+  .notes li { margin-bottom: 4px; }
+  .notes code {
+    background: var(--border); padding: 1px 5px; border-radius: 3px;
+    font-size: 12px; color: var(--syntax-variable);
+  }
+</style>
+</head>
+<body>
+
+<div class="notebook-layout">
+
+  <!-- ═══════════════════════════════════════════════════════════ -->
+  <!-- LEFT: Notebook cells                                       -->
+  <!-- ═══════════════════════════════════════════════════════════ -->
+  <div class="cells-area">
+
+    <!-- Variable cell: process_id -->
+    <div class="var-cell">
+      <span class="badge">Variable</span>
+      <span class="var-name">process_id</span>
+      <span class="var-value">a7e3f291-4b2c-4d8a-9f1e-83c5d72ab4e6</span>
+    </div>
+
+    <!-- Flame graph cell (selected — editor open) -->
+    <div class="cell selected">
+      <div class="cell-header">
+        <div class="edit-indicator"></div>
+        <span class="badge">Flame Graph</span>
+        <span class="name">cpu_trace</span>
+        <span class="meta">8,234 spans &middot; 1.8s range</span>
+      </div>
+      <div class="flamegraph-body" style="height: 240px; --lane-height: 108px;">
+        <div class="lane-labels">
+          <div class="lane-label">main-134719…</div>
+          <div class="lane-label">TaskPool (0)-…</div>
+        </div>
+        <div class="canvas-area" style="height: 218px;">
+          <!-- Lane 1: main thread -->
+          <div class="span-row warm" style="top:3px; left:0; width:100%; background:#bf360c;">frame_update</div>
+          <div class="span-row warm" style="top:21px; left:2%; width:35%; background:#d46628;">physics_step</div>
+          <div class="span-row cool" style="top:21px; left:39%; width:28%; background:#1565c0;">render_scene</div>
+          <div class="span-row warm" style="top:21px; left:69%; width:18%; background:#ffb300;">audio_mix</div>
+          <div class="span-row warm" style="top:21px; left:89%; width:10%; background:#e6a000;">ui_layout</div>
+          <div class="span-row warm" style="top:39px; left:2%; width:15%; background:#ecae1a;">broadphase</div>
+          <div class="span-row cool" style="top:39px; left:18%; width:19%; background:#1976d2;">narrowphase</div>
+          <div class="span-row warm" style="top:39px; left:39%; width:12%; background:#8d3a14;">cull_objects</div>
+          <div class="span-row warm" style="top:39px; left:52%; width:15%; background:#c94e1a;">draw_batches</div>
+          <div class="span-row cool" style="top:39px; left:69%; width:10%; background:#0d47a1;">decode_ogg</div>
+          <div class="span-row warm" style="top:57px; left:2%; width:7%; background:#ffc107;">aabb_tree</div>
+          <div class="span-row warm" style="top:57px; left:10%; width:5%; background:#a33c10; color:transparent;">s</div>
+          <div class="span-row cool" style="top:57px; left:18%; width:8%; background:#1e88e5;">gjk_epa</div>
+          <div class="span-row warm" style="top:57px; left:27%; width:10%; background:#d46628;">solve_constr…</div>
+          <div class="span-row warm" style="top:57px; left:39%; width:5%; background:#ffb300;">frust…</div>
+          <div class="span-row cool" style="top:57px; left:45%; width:6%; background:#2196f3;">occlusion</div>
+          <div class="span-row warm" style="top:57px; left:52%; width:7%; background:#e6a000;">gpu_submit</div>
+          <div class="span-row warm" style="top:75px; left:2%; width:3%; background:#c94e1a; color:transparent;">.</div>
+          <div class="span-row cool" style="top:75px; left:6%; width:1.5%; background:#1565c0; color:transparent;">.</div>
+          <div class="span-row warm" style="top:75px; left:18%; width:4%; background:#ffd54f; color:transparent;">.</div>
+          <div class="span-row warm" style="top:75px; left:23%; width:3%; background:#bf360c; color:transparent;">.</div>
+
+          <div class="lane-sep" style="top: 108px;"></div>
+
+          <!-- Lane 2: TaskPool -->
+          <div class="span-row cool" style="top:115px; left:5%; width:25%; background:#1e88e5;">async_compute_system</div>
+          <div class="span-row warm" style="top:115px; left:33%; width:20%; background:#ffc107;">mesh_generation</div>
+          <div class="span-row warm" style="top:115px; left:56%; width:30%; background:#bf360c;">pathfinding_batch</div>
+          <div class="span-row warm" style="top:133px; left:5%; width:12%; background:#d46628;">transform_verts</div>
+          <div class="span-row warm" style="top:133px; left:18%; width:12%; background:#ecae1a;">skin_meshes</div>
+          <div class="span-row cool" style="top:133px; left:33%; width:9%; background:#1565c0;">gen_vertices</div>
+          <div class="span-row warm" style="top:133px; left:43%; width:10%; background:#8d3a14;">gen_indices</div>
+          <div class="span-row warm" style="top:133px; left:56%; width:14%; background:#c94e1a;">a_star</div>
+          <div class="span-row warm" style="top:133px; left:72%; width:14%; background:#ffb300;">smooth_path</div>
+          <div class="span-row cool" style="top:151px; left:5%; width:5%; background:#0d47a1;">simd_batch</div>
+          <div class="span-row warm" style="top:151px; left:11%; width:6%; background:#e6a000;">upload_buf</div>
+          <div class="span-row warm" style="top:151px; left:56%; width:6%; background:#a33c10;">heap_pop</div>
+          <div class="span-row cool" style="top:151px; left:63%; width:7%; background:#2196f3;">relax_edges</div>
+        </div>
+        <div class="time-axis">
+          <span>09:24:31.000</span>
+          <span>09:24:31.360</span>
+          <span>09:24:31.720</span>
+          <span>09:24:32.080</span>
+          <span>09:24:32.440</span>
+          <span>09:24:32.800</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Design notes -->
+    <div class="notes">
+      <h3>Mockup C: Flame Graph Cell Editor</h3>
+      <ul>
+        <li><strong>Layout</strong>: Right panel editor opens when the flame graph cell is selected (blue border + blue dot indicator)</li>
+        <li><strong>Editor structure</strong>: Follows the standard <code>CellEditor</code> wrapper &mdash; header (type badge + cell name + close), scrollable body, footer (Run + Delete)</li>
+        <li><strong>Type-specific content</strong>: Matches <code>SwimlaneCellEditor</code> pattern &mdash; SQL editor with syntax highlighting, macro validation, variables panel, docs link</li>
+        <li><strong>SQL editor</strong>: Shows the default thread spans query with syntax-highlighted keywords (<code>SELECT</code>, <code>FROM</code>, <code>WHERE</code>, <code>ORDER BY</code>), variables (<code>$process_id</code>, <code>$from</code>, <code>$to</code>), and bottom toolbar with format button + Ctrl+Enter hint</li>
+        <li><strong>Data source</strong>: Shown above the SQL editor (flamegraph passes the <code>shouldShowDataSource</code> check)</li>
+        <li><strong>Variables panel</strong>: Shows <code>$from</code>, <code>$to</code> time range vars and the <code>$process_id</code> variable from the cell above</li>
+        <li><strong>No extra config</strong>: No options beyond SQL &mdash; uses <code>QueryCellConfig</code> with <code>options: {}</code></li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════════ -->
+  <!-- RIGHT: Editor Panel                                        -->
+  <!-- ═══════════════════════════════════════════════════════════ -->
+  <div class="editor-panel">
+
+    <!-- Header -->
+    <div class="editor-header">
+      <div class="editor-header-left">
+        <span class="editor-type-badge">Flame Graph</span>
+        <span class="editor-cell-name">cpu_trace</span>
+      </div>
+      <button class="editor-close">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+          <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+        </svg>
+      </button>
+    </div>
+
+    <!-- Scrollable content -->
+    <div class="editor-content">
+
+      <!-- Cell Name -->
+      <div>
+        <label class="field-label">Cell Name</label>
+        <input class="field-input" type="text" value="cpu_trace" />
+      </div>
+
+      <!-- Data Source -->
+      <div>
+        <label class="field-label">Data Source</label>
+        <select class="datasource-select">
+          <option>Default (flight-sql)</option>
+          <option>wasm (local)</option>
+        </select>
+      </div>
+
+      <!-- SQL Query (type-specific editor starts here) -->
+      <div>
+        <label class="field-label">SQL Query</label>
+        <div class="sql-editor-wrapper">
+          <div class="sql-editor-body" contenteditable="false"><span class="syn-kw">SELECT</span> name, begin, end, depth,
+       thread_name <span class="syn-kw">AS</span> lane
+<span class="syn-kw">FROM</span> <span class="syn-fn">process_thread_spans</span>(<span class="syn-str">'<span class="syn-var">$process_id</span>'</span>)
+<span class="syn-kw">WHERE</span> begin &gt;= <span class="syn-kw">TIMESTAMP</span> <span class="syn-str">'<span class="syn-var">$from</span>'</span>
+  <span class="syn-kw">AND</span> end &lt;= <span class="syn-kw">TIMESTAMP</span> <span class="syn-str">'<span class="syn-var">$to</span>'</span>
+<span class="syn-kw">ORDER BY</span> lane, begin</div>
+          <div class="sql-editor-toolbar">
+            <button class="sql-format-btn">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 10H3M21 6H3M21 14H3M21 18H3"/></svg>
+              Format
+            </button>
+            <span class="sql-shortcut">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M6 8h.01M10 8h.01M14 8h.01M6 12h8"/></svg>
+              <span class="kbd">Ctrl</span>+<span class="kbd">Enter</span>
+            </span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Available Variables Panel -->
+      <div>
+        <label class="field-label">Available Variables</label>
+        <div class="vars-panel">
+          <div class="vars-row">
+            <span class="vars-name">$from</span>
+            <span class="vars-value">2024-03-15T09:24:31.000Z</span>
+          </div>
+          <div class="vars-row">
+            <span class="vars-name">$to</span>
+            <span class="vars-value">2024-03-15T09:24:33.300Z</span>
+          </div>
+          <div class="vars-divider"></div>
+          <div class="vars-row">
+            <span class="vars-name">$process_id</span>
+            <span class="vars-value">a7e3f291-4b2c-4d8a…</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Documentation Link -->
+      <div class="doc-section">
+        <h4>Documentation</h4>
+        <a class="doc-link" href="#">Query Guide</a>
+      </div>
+
+    </div>
+
+    <!-- Footer -->
+    <div class="editor-footer">
+      <button class="btn btn-primary">
+        <svg viewBox="0 0 24 24" fill="currentColor"><polygon points="5,3 19,12 5,21"/></svg>
+        Run
+      </button>
+      <button class="btn btn-delete">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+          <polyline points="3,6 5,6 21,6"/><path d="M19,6v14a2,2,0,0,1-2,2H7a2,2,0,0,1-2-2V6m3,0V4a2,2,0,0,1,2-2h4a2,2,0,0,1,2,2v2"/>
+        </svg>
+        Delete Cell
+      </button>
+    </div>
+
+  </div>
+
+</div>
+
+</body>
+</html>
