@@ -86,7 +86,7 @@ Feature list: SQL cells, multiple cell types, drag-to-zoom, share by URL.
 Perfetto trace export showcase with real screenshot.
 
 ### Footer
-CTA section with "Read the Docs", "View on GitHub", "Cost Comparison" buttons. Apache 2.0 + MIT licensing. Minimal footer links.
+CTA section with "Read the Docs", "View on GitHub", "Cost Comparison" buttons. Apache 2.0 licensing. Minimal footer links.
 
 ### Polish
 - IntersectionObserver fade-in on scroll for all sections below Hero
