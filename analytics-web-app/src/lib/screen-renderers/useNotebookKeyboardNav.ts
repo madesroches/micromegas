@@ -71,6 +71,14 @@ export function useNotebookKeyboardNav({
     if (disabled) return
 
     const handler = (e: KeyboardEvent) => {
+      // ESC closes the cell editor
+      if (e.key === 'Escape' && selectedCellIndex !== null) {
+        e.preventDefault()
+        setSelectedCellIndex(null)
+        setSelectedChildName(null)
+        return
+      }
+
       if (!e.altKey) return
       if (e.key !== 'PageDown' && e.key !== 'PageUp') return
 
@@ -107,7 +115,7 @@ export function useNotebookKeyboardNav({
 
     document.addEventListener('keydown', handler)
     return () => document.removeEventListener('keydown', handler)
-  }, [disabled, navTargets, findCurrentIndex, setSelectedCellIndex, setSelectedChildName])
+  }, [disabled, navTargets, findCurrentIndex, selectedCellIndex, setSelectedCellIndex, setSelectedChildName])
 
   // Scroll into view on any selection change (benefits mouse selection too)
   useEffect(() => {
