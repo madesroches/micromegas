@@ -9,7 +9,7 @@ export default function Footer() {
           Get Started
         </h2>
         <p className="mx-auto mb-8 max-w-xl text-theme-text-secondary">
-          Open source. Apache 2.0 + MIT dual licensed.
+          Open source. Apache 2.0 licensed.
         </p>
 
         <div className="mb-16 flex flex-wrap items-center justify-center gap-4">
