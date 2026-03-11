@@ -67,7 +67,7 @@ For async spans, the columns map as follows:
 - `id` → `span_id` from async events
 - `parent` → `parent_span_id` from async events
 - `depth` → `depth` from async events
-- `hash` → `0` (no call site hash for async spans)
+- `hash` → `compute_scope_hash(name, filename, target, line)` — computed in the augment step using `scope.rs:compute_scope_hash`
 - `begin` → begin event `time`
 - `end` → end event `time`
 - `duration` → `end - begin`
@@ -112,10 +112,9 @@ SELECT
     b.span_id as id,
     b.parent_span_id as parent,
     b.depth,
-    CAST(0 AS INT) as hash,
     b.time as "begin",
     e.time as "end",
-    e.time - b.time as duration,
+    arrow_cast(e.time, 'Int64') - arrow_cast(b.time, 'Int64') as duration,
     b.name,
     b.target,
     b.filename,
@@ -128,6 +127,8 @@ ON b.span_id = e.span_id
 WHERE b.time < e.time
 ORDER BY b.time
 ```
+
+Note: the `hash` column is NOT in the SQL — it's computed in the augment step using `compute_scope_hash(name, filename, target, line)` from `scope.rs`, which gives the same xxh32 hash used for thread spans.
 
 The `WHERE b.time < e.time` filter mirrors the `begin_ns < end_ns` guard in the perfetto code (`perfetto_trace_execution_plan.rs:482`).
 
@@ -149,9 +150,9 @@ Alternative: just rename and update all call sites — there are only a few (`pr
 
 2. **Add SpanTypes to execution plan**: Store `span_types: SpanTypes` in `ProcessSpansExecutionPlan`, gate thread/async code paths with `matches!(span_types, SpanTypes::Thread | SpanTypes::Both)` / `matches!(span_types, SpanTypes::Async | SpanTypes::Both)` — same pattern as `perfetto_trace_execution_plan.rs:272-283`
 
-3. **Add async span streaming**: After the thread spans loop, if async is requested, execute the self-join SQL through `ctx.sql()`, iterate the result stream, augment each batch with `augment_batch(batch, schema, "", "async")`, yield
+3. **Add async span streaming**: After the thread spans loop, if async is requested, execute the self-join SQL through `ctx.sql()`, iterate the result stream. For each batch: compute `hash` column using `compute_scope_hash(name, filename, target, line)` from `scope.rs` (same xxh32 as thread spans), insert it at the right position, then augment with `augment_batch(batch, schema, "", "async")`, yield
 
-4. **Handle schema mismatch**: The async SQL returns columns in the thread_spans schema order but as non-dictionary types. Either cast in SQL (`CAST(b.name AS ...) `) or re-encode the batch columns to match the dictionary-encoded output schema. Simplest: let DataFusion handle it via the projection in `ProcessSpansTableProvider::scan`, or cast explicitly in the augment step.
+4. **Handle schema mismatch**: The async SQL uses `arrow_cast` for exact type matching on `hash` (UInt32) and `duration` (Int64). The string columns (`name`, `target`, `filename`) come from the `async_events` view which already stores them as `Dictionary(Int16, Utf8)`, so they should pass through the self-join as-is. If DataFusion decodes them to plain `Utf8` after the JOIN, re-encode them in the augment step using `StringDictionaryBuilder`.
 
 5. **Register the new function**: In `query.rs`, register `process_spans` as the new UDTF. Keep `process_thread_spans` registered pointing to a wrapper that injects `'thread'` as the types argument.
 
@@ -176,9 +177,6 @@ Alternative: just rename and update all call sites — there are only a few (`pr
 | `mkdocs/docs/query-guide/schema-reference.md` | Update `process_thread_spans` references |
 | `mkdocs/docs/query-guide/async-performance-analysis.md` | Replace manual async self-join examples with `process_spans(id, 'async')` |
 | `mkdocs/docs/query-guide/query-patterns.md` | Update span query examples |
-| `mkdocs/docs/query-guide/quick-start.md` | Update span query examples |
-| `mkdocs/docs/query-guide/index.md` | Update function references |
-| `mkdocs/docs/web-app/notebooks/cell-types.md` | Update flame graph cell SQL examples |
 
 ## Testing
 
