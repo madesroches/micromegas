@@ -71,8 +71,8 @@ export function useNotebookKeyboardNav({
     if (disabled) return
 
     const handler = (e: KeyboardEvent) => {
-      // ESC closes the cell editor
-      if (e.key === 'Escape' && selectedCellIndex !== null) {
+      // ESC closes the cell editor (skip if a child already handled it)
+      if (e.key === 'Escape' && selectedCellIndex !== null && !e.defaultPrevented) {
         e.preventDefault()
         setSelectedCellIndex(null)
         setSelectedChildName(null)
