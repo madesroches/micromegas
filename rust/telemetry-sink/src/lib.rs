@@ -92,6 +92,7 @@ mod native {
         telemetry_make_request_decorator: Box<dyn FnOnce() -> Arc<dyn RequestDecorator> + Send>,
         extra_sinks: HashMap<TypeId, (LevelFilter, BoxedEventSink)>,
         system_metrics_enabled: bool,
+        default_system_properties_enabled: bool,
         process_properties: HashMap<String, String>,
     }
 
@@ -118,6 +119,7 @@ mod native {
                 install_tracing_capture: true,
                 extra_sinks: HashMap::default(),
                 system_metrics_enabled: true,
+                default_system_properties_enabled: true,
                 process_properties: HashMap::default(),
             }
         }
@@ -270,6 +272,12 @@ mod native {
             self
         }
 
+        #[must_use]
+        pub fn with_default_system_properties_enabled(mut self, enabled: bool) -> Self {
+            self.default_system_properties_enabled = enabled;
+            self
+        }
+
         /// Set the URL of telemetry sink.
         ///
         /// If not explicitly set, the URL will be read from the `MICROMEGAS_TELEMETRY_URL` environment
@@ -305,7 +313,77 @@ mod native {
             self
         }
 
-        pub fn build(self) -> anyhow::Result<TelemetryGuard> {
+        fn populate_default_system_properties(&mut self) {
+            let props = &mut self.process_properties;
+            // Process identity (duplicates ProcessInfo fields into properties)
+            let defaults: Vec<(&str, Box<dyn FnOnce() -> String>)> = vec![
+                (
+                    "exe",
+                    Box::new(|| {
+                        std::env::current_exe()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                            .into_owned()
+                    }),
+                ),
+                ("username", Box::new(|| whoami::username())),
+                ("realname", Box::new(|| whoami::realname())),
+                ("computer", Box::new(|| whoami::devicename())),
+                ("distro", Box::new(|| whoami::distro())),
+                (
+                    "cpu_brand",
+                    Box::new(|| {
+                        #[cfg(target_arch = "x86_64")]
+                        {
+                            raw_cpuid::CpuId::new()
+                                .get_processor_brand_string()
+                                .map_or_else(|| "unknown".to_owned(), |b| b.as_str().to_owned())
+                        }
+                        #[cfg(target_arch = "aarch64")]
+                        {
+                            String::from("aarch64")
+                        }
+                    }),
+                ),
+                (
+                    "physical_core_count",
+                    Box::new(|| {
+                        sysinfo::System::physical_core_count()
+                            .map(|c: usize| c.to_string())
+                            .unwrap_or_default()
+                    }),
+                ),
+                (
+                    "logical_cpu_count",
+                    Box::new(|| {
+                        use sysinfo::{CpuRefreshKind, RefreshKind};
+                        let system = sysinfo::System::new_with_specifics(
+                            RefreshKind::nothing().with_cpu(CpuRefreshKind::nothing()),
+                        );
+                        system.cpus().len().to_string()
+                    }),
+                ),
+                (
+                    "total_memory",
+                    Box::new(|| {
+                        use sysinfo::{MemoryRefreshKind, RefreshKind};
+                        let system = sysinfo::System::new_with_specifics(
+                            RefreshKind::nothing()
+                                .with_memory(MemoryRefreshKind::nothing().with_ram()),
+                        );
+                        system.total_memory().to_string()
+                    }),
+                ),
+            ];
+            for (key, make_value) in defaults {
+                props.entry(key.to_string()).or_insert_with(make_value);
+            }
+        }
+
+        pub fn build(mut self) -> anyhow::Result<TelemetryGuard> {
+            if self.default_system_properties_enabled {
+                self.populate_default_system_properties();
+            }
             let target_max_level: Vec<_> = self
                 .target_max_levels
                 .into_iter()
