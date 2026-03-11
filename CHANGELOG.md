@@ -4,6 +4,8 @@ This file documents the historical progress of the Micromegas project. For curre
 
 ## Unreleased
 
+* **Telemetry:**
+  * Add default system properties (exe, username, hostname, CPU, memory, OS) to process metadata (#380)
 * **Database Migration (REQUIRED before upgrade):**
   * Run the following SQL on your database before deploying this version:
     ```sql
