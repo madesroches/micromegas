@@ -4,7 +4,7 @@
 
 Replace `process_thread_spans(process_id)` with `process_spans(process_id, types)` where `types` is `'thread'`, `'async'`, or `'both'`. This returns thread spans and/or async spans in a unified schema, enabling the flame chart cell to show both span types from a single query.
 
-The async span query reuses the begin/end self-join pattern already proven in `perfetto_trace_execution_plan.rs:423-449`.
+The async span query reuses the begin/end self-join pattern already proven in `perfetto_trace_execution_plan.rs:423-457`.
 
 ## Current State
 
@@ -18,7 +18,7 @@ The async span query reuses the begin/end self-join pattern already proven in `p
 |---------|------|-------|
 | Current thread-only table function | `process_thread_spans_table_function.rs` | Full file |
 | SpanTypes enum (Thread/Async/Both) | `perfetto_trace_execution_plan.rs` | 39-43 |
-| Async self-join SQL | `perfetto_trace_execution_plan.rs` | 423-457 |
+| Async self-join SQL | `perfetto_trace_execution_plan.rs` | 423–457 |
 | Thread list lookup | `process_streams.rs` | `get_process_thread_list` |
 | Thread spans schema | `span_table.rs` | `get_spans_schema` (50-84) |
 | UDTF registration | `query.rs` | 138-145 |
@@ -140,11 +140,9 @@ The result batches are augmented with `stream_id=""` and `thread_name="async"` t
 
 Move the existing `SpanTypes` enum from `perfetto_trace_execution_plan.rs` to a shared location (e.g., `process_spans_table_function.rs`) and reuse it from the perfetto code. Or duplicate it — it's 5 lines.
 
-### Backward compatibility
+### No backward compatibility needed
 
-Register the new function as `process_spans` and keep `process_thread_spans` as an alias that calls `process_spans(id, 'thread')` internally. This avoids breaking existing notebooks and the perfetto code path.
-
-Alternative: just rename and update all call sites — there are only a few (`process_thread_spans_table_function.rs`, `query.rs` registration, default SQL in `notebook-utils.ts`, and `plan.md` docs).
+`process_thread_spans` is a recent unreleased feature — just rename to `process_spans` and update all call sites.
 
 ## Implementation Steps
 
@@ -158,7 +156,7 @@ Alternative: just rename and update all call sites — there are only a few (`pr
 
 5. **Handle schema mismatch**: The async SQL uses `arrow_cast` for exact type matching on `duration` (Int64). The `hash` column is natively `UInt32` from the view. The string columns (`name`, `target`, `filename`) come from the `async_events` view which already stores them as `Dictionary(Int16, Utf8)`, so they should pass through the self-join as-is. If DataFusion decodes them to plain `Utf8` after the JOIN, re-encode them in the augment step using `StringDictionaryBuilder`.
 
-6. **Register the new function**: In `query.rs`, register `process_spans` as the new UDTF. Keep `process_thread_spans` registered pointing to a wrapper that injects `'thread'` as the types argument.
+6. **Register the new function**: In `query.rs`, replace the `process_thread_spans` registration with `process_spans`.
 
 7. **Update default SQL**: In `notebook-utils.ts`, change the flamegraph default query from `process_thread_spans('$process_id')` to `process_spans('$process_id', 'both')`.
 
@@ -175,12 +173,12 @@ Alternative: just rename and update all call sites — there are only a few (`pr
 | `rust/analytics/src/lakehouse/async_events_view.rs` | Bump `SCHEMA_VERSION` to `2` |
 | `rust/analytics/src/lakehouse/process_thread_spans_table_function.rs` | Rename to `process_spans_table_function.rs`, add types arg, add async streaming |
 | `rust/analytics/src/lakehouse/mod.rs` | Update module name |
-| `rust/analytics/src/lakehouse/query.rs` | Register `process_spans`, keep `process_thread_spans` alias |
+| `rust/analytics/src/lakehouse/query.rs` | Replace `process_thread_spans` registration with `process_spans` |
 | `rust/analytics/src/lakehouse/perfetto_trace_execution_plan.rs` | Import `SpanTypes` from shared location |
 | `rust/analytics/src/lakehouse/perfetto_trace_table_function.rs` | Import `SpanTypes` from shared location |
 | `analytics-web-app/src/lib/screen-renderers/notebook-utils.ts` | Update default flamegraph SQL |
 | `tasks/flame/plan.md` | Update SQL examples |
-| `mkdocs/docs/query-guide/functions-reference.md` | Document `process_spans(process_id, types)`, note `process_thread_spans` as deprecated alias |
+| `mkdocs/docs/query-guide/functions-reference.md` | Replace `process_thread_spans` with `process_spans(process_id, types)` |
 | `mkdocs/docs/query-guide/schema-reference.md` | Update `process_thread_spans` references |
 | `mkdocs/docs/query-guide/async-performance-analysis.md` | Replace manual async self-join examples with `process_spans(id, 'async')` |
 | `mkdocs/docs/query-guide/query-patterns.md` | Update span query examples |
@@ -191,8 +189,7 @@ Alternative: just rename and update all call sites — there are only a few (`pr
 2. `cargo clippy --workspace -- -D warnings` — no warnings
 3. `cargo fmt` — formatting
 4. `cargo test` — existing tests pass
-5. Manual: `SELECT * FROM process_spans('pid', 'thread') LIMIT 10` — same results as old `process_thread_spans`
+5. Manual: `SELECT * FROM process_spans('pid', 'thread') LIMIT 10` — thread spans only
 6. Manual: `SELECT * FROM process_spans('pid', 'async') LIMIT 10` — async spans with `thread_name='async'`
 7. Manual: `SELECT * FROM process_spans('pid', 'both') LIMIT 10` — both types present
-8. Manual: `SELECT * FROM process_thread_spans('pid') LIMIT 10` — backward-compatible alias still works
-9. Manual: flame chart cell renders both thread and async spans with `process_spans('$process_id', 'both')`
+8. Manual: flame chart cell renders both thread and async spans with `process_spans('$process_id', 'both')`
