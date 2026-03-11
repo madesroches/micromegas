@@ -22,6 +22,7 @@ This file documents the historical progress of the Micromegas project. For curre
   * Add row selection to table cells with `$cell.selected.column` macros for interactive drill-down (#915)
   * Add cell result row references in macros — `$cell[N].column` syntax for chaining queries (#898)
   * Add Alt+PageUp/PageDown keyboard navigation for notebook cells (#909)
+  * Close notebook cell editor on ESC key (#919)
   * Fix available variables showing orphaned URL params and unscoped variables
   * Fix timestamp values rendering as raw integers in macro expansion (#908, #910)
 * **Analytics Web App:**
