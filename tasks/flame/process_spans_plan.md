@@ -23,6 +23,9 @@ The async span query reuses the begin/end self-join pattern already proven in `p
 | Thread spans schema | `span_table.rs` | `get_spans_schema` (50-84) |
 | UDTF registration | `query.rs` | 138-145 |
 | Batch augmentation | `process_thread_spans_table_function.rs` | `augment_batch` (51-68) |
+| Async events schema & builder | `async_events_table.rs` | Full file |
+| Async events block processor | `async_events_block_processor.rs` | `on_begin_async_scope`, `on_end_async_scope` |
+| Scope hash computation | `scope.rs` | `compute_scope_hash` (32-37) |
 
 ## Design
 
@@ -67,7 +70,7 @@ For async spans, the columns map as follows:
 - `id` → `span_id` from async events
 - `parent` → `parent_span_id` from async events
 - `depth` → `depth` from async events
-- `hash` → `compute_scope_hash(name, filename, target, line)` — computed in the augment step using `scope.rs:compute_scope_hash`
+- `hash` → `hash` from async events (stored at materialization time)
 - `begin` → begin event `time`
 - `end` → end event `time`
 - `duration` → `end - begin`
@@ -112,6 +115,7 @@ SELECT
     b.span_id as id,
     b.parent_span_id as parent,
     b.depth,
+    b.hash,
     b.time as "begin",
     e.time as "end",
     arrow_cast(e.time, 'Int64') - arrow_cast(b.time, 'Int64') as duration,
@@ -127,8 +131,6 @@ ON b.span_id = e.span_id
 WHERE b.time < e.time
 ORDER BY b.time
 ```
-
-Note: the `hash` column is NOT in the SQL — it's computed in the augment step using `compute_scope_hash(name, filename, target, line)` from `scope.rs`, which gives the same xxh32 hash used for thread spans.
 
 The `WHERE b.time < e.time` filter mirrors the `begin_ns < end_ns` guard in the perfetto code (`perfetto_trace_execution_plan.rs:482`).
 
@@ -150,22 +152,27 @@ Alternative: just rename and update all call sites — there are only a few (`pr
 
 2. **Add SpanTypes to execution plan**: Store `span_types: SpanTypes` in `ProcessSpansExecutionPlan`, gate thread/async code paths with `matches!(span_types, SpanTypes::Thread | SpanTypes::Both)` / `matches!(span_types, SpanTypes::Async | SpanTypes::Both)` — same pattern as `perfetto_trace_execution_plan.rs:272-283`
 
-3. **Add async span streaming**: After the thread spans loop, if async is requested, execute the self-join SQL through `ctx.sql()`, iterate the result stream. For each batch: compute `hash` column using `compute_scope_hash(name, filename, target, line)` from `scope.rs` (same xxh32 as thread spans), insert it at the right position, then augment with `augment_batch(batch, schema, "", "async")`, yield
+3. **Add `hash` column to async events table**: Add `hash: u32` field to `AsyncEventRecord`, `async_events_table_schema()`, and `AsyncEventRecordBuilder`. Store `scope.hash` in the block processor (`on_begin_async_scope`/`on_end_async_scope`). Bump `SCHEMA_VERSION` to `2` in `async_events_view.rs`. The view is JIT-materialized so no migration needed — stale partitions will be rebuilt on next query.
 
-4. **Handle schema mismatch**: The async SQL uses `arrow_cast` for exact type matching on `hash` (UInt32) and `duration` (Int64). The string columns (`name`, `target`, `filename`) come from the `async_events` view which already stores them as `Dictionary(Int16, Utf8)`, so they should pass through the self-join as-is. If DataFusion decodes them to plain `Utf8` after the JOIN, re-encode them in the augment step using `StringDictionaryBuilder`.
+4. **Add async span streaming**: After the thread spans loop, if async is requested, execute the self-join SQL through `ctx.sql()`, iterate the result stream, augment each batch with `augment_batch(batch, schema, "", "async")`, yield
 
-5. **Register the new function**: In `query.rs`, register `process_spans` as the new UDTF. Keep `process_thread_spans` registered pointing to a wrapper that injects `'thread'` as the types argument.
+5. **Handle schema mismatch**: The async SQL uses `arrow_cast` for exact type matching on `duration` (Int64). The `hash` column is natively `UInt32` from the view. The string columns (`name`, `target`, `filename`) come from the `async_events` view which already stores them as `Dictionary(Int16, Utf8)`, so they should pass through the self-join as-is. If DataFusion decodes them to plain `Utf8` after the JOIN, re-encode them in the augment step using `StringDictionaryBuilder`.
 
-6. **Update default SQL**: In `notebook-utils.ts`, change the flamegraph default query from `process_thread_spans('$process_id')` to `process_spans('$process_id', 'both')`.
+6. **Register the new function**: In `query.rs`, register `process_spans` as the new UDTF. Keep `process_thread_spans` registered pointing to a wrapper that injects `'thread'` as the types argument.
 
-7. **Update perfetto code**: Change `perfetto_trace_execution_plan.rs` to import `SpanTypes` from the shared location instead of defining its own.
+7. **Update default SQL**: In `notebook-utils.ts`, change the flamegraph default query from `process_thread_spans('$process_id')` to `process_spans('$process_id', 'both')`.
 
-8. **Update documentation**: Update all mkdocs pages that reference `process_thread_spans` or async span queries to use `process_spans`. See files list below.
+8. **Update perfetto code**: Change `perfetto_trace_execution_plan.rs` to import `SpanTypes` from the shared location instead of defining its own.
+
+9. **Update documentation**: Update all mkdocs pages that reference `process_thread_spans` or async span queries to use `process_spans`. See files list below.
 
 ## Files to Modify
 
 | File | Change |
 |------|--------|
+| `rust/analytics/src/async_events_table.rs` | Add `hash: UInt32` field to record, schema, and builder |
+| `rust/analytics/src/lakehouse/async_events_block_processor.rs` | Store `scope.hash` in `AsyncEventRecord` |
+| `rust/analytics/src/lakehouse/async_events_view.rs` | Bump `SCHEMA_VERSION` to `2` |
 | `rust/analytics/src/lakehouse/process_thread_spans_table_function.rs` | Rename to `process_spans_table_function.rs`, add types arg, add async streaming |
 | `rust/analytics/src/lakehouse/mod.rs` | Update module name |
 | `rust/analytics/src/lakehouse/query.rs` | Register `process_spans`, keep `process_thread_spans` alias |
