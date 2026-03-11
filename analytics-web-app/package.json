@@ -41,6 +41,7 @@
     "sql-formatter": "^15.7.2",
     "tailwind-merge": "^2.0.0",
     "tailwindcss": "^3.3.0",
+    "three": "^0.170.0",
     "uplot": "^1.6.32"
   },
   "resolutions": {
@@ -60,6 +61,7 @@
     "@types/d3-dsv": "^3.0.7",
     "@types/jest": "^30.0.0",
     "@types/node": "^20.0.0",
+    "@types/three": "^0.170.0",
     "@types/react": "^18.3.0",
     "@types/react-dom": "^18.3.0",
     "@typescript-eslint/eslint-plugin": "^7.0.0",

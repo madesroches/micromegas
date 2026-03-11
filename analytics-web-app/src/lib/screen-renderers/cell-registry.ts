@@ -170,6 +170,7 @@ import { perfettoExportMetadata } from './cells/PerfettoExportCell'
 import { referenceTableMetadata } from './cells/ReferenceTableCell'
 import { hgMetadata } from './cells/HorizontalGroupCell'
 import { transposedTableMetadata } from './cells/TransposedTableCell'
+import { flamegraphMetadata } from './cells/FlameGraphCell'
 
 /**
  * Registry of all cell type metadata.
@@ -187,6 +188,7 @@ export const CELL_TYPE_METADATA: Record<CellType, CellTypeMetadata> = {
   referencetable: referenceTableMetadata,
   hg: hgMetadata,
   transposed: transposedTableMetadata,
+  flamegraph: flamegraphMetadata,
 }
 
 /**
