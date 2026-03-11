@@ -13,6 +13,7 @@ This file documents the historical progress of the Micromegas project. For curre
     ```
   * If you have existing duplicate rows, clean them up first using `delete_duplicate_blocks()`, `delete_duplicate_streams()`, `delete_duplicate_processes()` or manual deduplication
 * **Dependencies:**
+  * Update quinn-proto to 0.11.14 to fix unauthenticated DoS vulnerability
   * Update DataFusion to 52.2 and remove LimitPushdown workaround (#882)
 * **Notebook Enhancements:**
   * Rename $begin/$end macros to $from/$to and fix expansion in column overrides (#914)
