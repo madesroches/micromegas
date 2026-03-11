@@ -257,14 +257,13 @@ function FlameGraphView({ index, onTimeRangeSelect }: FlameGraphViewProps) {
     viewMinTime: index.timeRange.min,
     viewMaxTime: index.timeRange.max,
     scrollY: 0,
-    // Interaction state
+    // Mouse position (for cursor-anchored zoom)
+    mouseX: 0,
+    // Drag-to-zoom state
     isDragging: false,
     isPanning: false,
     dragStartX: 0,
-    dragStartY: 0,
     dragCurrentX: 0,
-    panStartTime: 0,
-    panStartScrollY: 0,
     // Dimensions
     width: 0,
     height: 0,
@@ -585,61 +584,66 @@ function FlameGraphView({ index, onTimeRangeSelect }: FlameGraphViewProps) {
   }, [index, requestRender])
 
   // -----------------------------------------------------------------------
-  // Interaction: wheel zoom, click-drag pan / selection, hover tooltip
+  // Interaction: WASD zoom/pan, wheel scroll, drag-to-zoom, hover tooltip
   // -----------------------------------------------------------------------
+
+  // WASD continuous key state
+  const keysRef = useRef(new Set<string>())
+  const keyAnimRef = useRef(0)
+
+  const keyTick = useCallback(() => {
+    const s = stateRef.current
+    const keys = keysRef.current
+    if (keys.size === 0) { keyAnimRef.current = 0; return }
+
+    const span = s.viewMaxTime - s.viewMinTime
+    const fullSpan = index.timeRange.max - index.timeRange.min
+    const panStep = span * 0.03 // 3% of visible range per frame
+    const zoomFactor = 1.15     // 15% zoom per frame
+
+    if (keys.has('a')) { s.viewMinTime -= panStep; s.viewMaxTime -= panStep }
+    if (keys.has('d')) { s.viewMinTime += panStep; s.viewMaxTime += panStep }
+    if (keys.has('w') || keys.has('s')) {
+      // Cursor-anchored zoom: the time under the mouse stays fixed
+      const ratio = s.width > 0 ? s.mouseX / s.width : 0.5
+      const cursorTime = s.viewMinTime + ratio * span
+      const newSpan = keys.has('w')
+        ? Math.max(1, span / zoomFactor)
+        : Math.min(fullSpan, span * zoomFactor)
+      s.viewMinTime = cursorTime - ratio * newSpan
+      s.viewMaxTime = cursorTime + (1 - ratio) * newSpan
+    }
+
+    requestRender()
+    keyAnimRef.current = requestAnimationFrame(keyTick)
+  }, [index, requestRender])
+
   const handleWheel = useCallback(
     (e: WheelEvent) => {
-      e.preventDefault()
+      // Vertical scroll only — no zoom (avoids conflict with browser zoom)
       const s = stateRef.current
-
-      if (e.ctrlKey || e.metaKey) {
-        // Zoom
-        const zoomFactor = e.deltaY > 0 ? 1.15 : 1 / 1.15
-        const rect = webglCanvasRef.current?.getBoundingClientRect()
-        if (!rect) return
-        const mouseX = e.clientX - rect.left
-        const ratio = mouseX / s.width
-        const cursorTime = s.viewMinTime + ratio * (s.viewMaxTime - s.viewMinTime)
-
-        const newSpan = (s.viewMaxTime - s.viewMinTime) * zoomFactor
-        // Clamp: don't zoom wider than full range, don't zoom tighter than 1ms
-        const clampedSpan = Math.max(1, Math.min(index.timeRange.max - index.timeRange.min, newSpan))
-
-        s.viewMinTime = cursorTime - ratio * clampedSpan
-        s.viewMaxTime = cursorTime + (1 - ratio) * clampedSpan
-      } else {
-        // Scroll vertically
-        const maxScroll = Math.max(0, s.contentHeight - (s.height - TIME_AXIS_HEIGHT))
-        s.scrollY = Math.max(0, Math.min(maxScroll, s.scrollY + e.deltaY))
-      }
+      const maxScroll = Math.max(0, s.contentHeight - (s.height - TIME_AXIS_HEIGHT))
+      s.scrollY = Math.max(0, Math.min(maxScroll, s.scrollY + e.deltaY))
       requestRender()
     },
-    [index, requestRender]
+    [requestRender]
   )
 
   const handleMouseDown = useCallback(
     (e: React.MouseEvent) => {
+      if (e.button !== 0) return
       const s = stateRef.current
-      const rect = webglCanvasRef.current?.getBoundingClientRect()
+      const rect = containerRef.current?.getBoundingClientRect()
       if (!rect) return
-      const x = e.clientX - rect.left
 
-      if (e.button === 1 || e.shiftKey) {
-        // Middle-click or shift: pan
-        s.isPanning = true
-        s.isDragging = true
-        s.dragStartX = x
-        s.dragStartY = e.clientY - rect.top
-        s.panStartTime = s.viewMinTime
-        s.panStartScrollY = s.scrollY
-      } else if (e.button === 0) {
-        // Left click: selection drag
-        s.isDragging = true
-        s.isPanning = false
-        s.dragStartX = x
-        s.dragCurrentX = x
-      }
+      // Left click: drag-to-zoom selection
+      s.isDragging = true
+      s.isPanning = false
+      s.dragStartX = e.clientX - rect.left
+      s.dragCurrentX = e.clientX - rect.left
       e.preventDefault()
+      // Focus container so WASD keys work
+      containerRef.current?.focus()
     },
     []
   )
@@ -647,26 +651,14 @@ function FlameGraphView({ index, onTimeRangeSelect }: FlameGraphViewProps) {
   const handleMouseMove = useCallback(
     (e: React.MouseEvent) => {
       const s = stateRef.current
-      const rect = webglCanvasRef.current?.getBoundingClientRect()
+      const rect = containerRef.current?.getBoundingClientRect()
       if (!rect) return
       const x = e.clientX - rect.left
       const y = e.clientY - rect.top
+      s.mouseX = x
 
       if (s.isDragging) {
-        if (s.isPanning) {
-          const dx = x - s.dragStartX
-          const dy = (e.clientY - rect.top) - s.dragStartY
-          const timePerPx = (s.viewMaxTime - s.viewMinTime) / s.width
-          const timeDelta = -dx * timePerPx
-          const span = s.viewMaxTime - s.viewMinTime
-          s.viewMinTime = s.panStartTime + timeDelta
-          s.viewMaxTime = s.viewMinTime + span
-
-          const maxScroll = Math.max(0, s.contentHeight - (s.height - TIME_AXIS_HEIGHT))
-          s.scrollY = Math.max(0, Math.min(maxScroll, s.panStartScrollY - dy))
-        } else {
-          s.dragCurrentX = x
-        }
+        s.dragCurrentX = x
         requestRender()
         return
       }
@@ -725,29 +717,25 @@ function FlameGraphView({ index, onTimeRangeSelect }: FlameGraphViewProps) {
       const s = stateRef.current
       if (!s.isDragging) return
 
-      if (!s.isPanning) {
-        // Selection complete
-        const minX = Math.min(s.dragStartX, s.dragCurrentX)
-        const maxX = Math.max(s.dragStartX, s.dragCurrentX)
+      const minX = Math.min(s.dragStartX, s.dragCurrentX)
+      const maxX = Math.max(s.dragStartX, s.dragCurrentX)
 
-        if (maxX - minX > 5) {
-          const timePerPx = (s.viewMaxTime - s.viewMinTime) / s.width
-          const fromTime = s.viewMinTime + minX * timePerPx
-          const toTime = s.viewMinTime + maxX * timePerPx
+      if (maxX - minX > 5) {
+        const timePerPx = (s.viewMaxTime - s.viewMinTime) / s.width
+        const fromTime = s.viewMinTime + minX * timePerPx
+        const toTime = s.viewMinTime + maxX * timePerPx
 
-          if (e.altKey && onTimeRangeSelect) {
-            // Alt+drag: propagate to notebook
-            onTimeRangeSelect(new Date(fromTime), new Date(toTime))
-          } else {
-            // Regular drag: zoom into selection
-            s.viewMinTime = fromTime
-            s.viewMaxTime = toTime
-          }
+        if (e.altKey && onTimeRangeSelect) {
+          // Alt+drag: propagate to notebook time range
+          onTimeRangeSelect(new Date(fromTime), new Date(toTime))
+        } else {
+          // Regular drag: zoom into selection
+          s.viewMinTime = fromTime
+          s.viewMaxTime = toTime
         }
       }
 
       s.isDragging = false
-      s.isPanning = false
       requestRender()
     },
     [onTimeRangeSelect, requestRender]
@@ -757,7 +745,6 @@ function FlameGraphView({ index, onTimeRangeSelect }: FlameGraphViewProps) {
     const s = stateRef.current
     if (s.isDragging) {
       s.isDragging = false
-      s.isPanning = false
       requestRender()
     }
     const tooltip = tooltipRef.current
@@ -772,19 +759,42 @@ function FlameGraphView({ index, onTimeRangeSelect }: FlameGraphViewProps) {
     requestRender()
   }, [index, requestRender])
 
-  // Attach wheel listener with { passive: false } for preventDefault
+  // WASD key listeners + wheel scroll
   useEffect(() => {
     const container = containerRef.current
     if (!container) return
-    container.addEventListener('wheel', handleWheel, { passive: false })
-    return () => container.removeEventListener('wheel', handleWheel)
-  }, [handleWheel])
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      const key = e.key.toLowerCase()
+      if ('wasd'.includes(key)) {
+        e.preventDefault()
+        keysRef.current.add(key)
+        if (!keyAnimRef.current) keyAnimRef.current = requestAnimationFrame(keyTick)
+      }
+    }
+    const onKeyUp = (e: KeyboardEvent) => {
+      keysRef.current.delete(e.key.toLowerCase())
+    }
+
+    container.addEventListener('keydown', onKeyDown)
+    container.addEventListener('keyup', onKeyUp)
+    container.addEventListener('wheel', handleWheel, { passive: true })
+    const keys = keysRef.current
+    return () => {
+      container.removeEventListener('keydown', onKeyDown)
+      container.removeEventListener('keyup', onKeyUp)
+      container.removeEventListener('wheel', handleWheel)
+      cancelAnimationFrame(keyAnimRef.current)
+      keys.clear()
+    }
+  }, [handleWheel, keyTick])
 
   return (
     <div
       ref={containerRef}
-      className="relative w-full h-full select-none"
-      style={{ cursor: stateRef.current.isPanning ? 'grabbing' : 'crosshair' }}
+      tabIndex={0}
+      className="relative w-full h-full select-none outline-none"
+      style={{ cursor: 'crosshair' }}
       onMouseDown={handleMouseDown}
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
