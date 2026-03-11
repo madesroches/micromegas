@@ -2377,6 +2377,7 @@ dependencies = [
  "micromegas-telemetry",
  "micromegas-tracing",
  "micromegas-transit",
+ "raw-cpuid",
  "reqwest",
  "serde",
  "sysinfo",
@@ -2387,6 +2388,7 @@ dependencies = [
  "tracing-subscriber",
  "uuid",
  "web-sys",
+ "whoami",
 ]
 
 [[package]]

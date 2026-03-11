@@ -1,10 +1,10 @@
-# Add Total System Memory to Process Properties by Default
+# Add Default System Properties to Process Metadata
 
 **Issue:** [#380](https://github.com/madesroches/micromegas/issues/380)
 
 ## Overview
 
-Add total system memory as a default process property so every process automatically reports how much RAM is available on its host. This is a static system characteristic that belongs in process metadata rather than being emitted only as a periodic metric.
+Add default system properties to every process so that host characteristics (CPU, memory, OS, user) are automatically captured as process metadata. These are static system characteristics that belong in process metadata rather than being emitted only as periodic metrics.
 
 ## Current State
 
@@ -29,47 +29,55 @@ TelemetryGuardBuilder.process_properties
 
 ## Design
 
-Add total system memory to `process_properties` inside `TelemetryGuardBuilder::build()`, just before passing properties to `TracingSystemGuard::new()`. This ensures:
+Add a `populate_default_system_properties()` method on `TelemetryGuardBuilder` that inserts system metadata into `process_properties`, called from `build()`. This ensures:
 
-- It's included by default without any user action
-- Users can still override it via `with_process_property("total_memory", ...)` before calling `build()` (their value would be overwritten — see Trade-offs)
-- It uses the existing `sysinfo` dependency already in the crate
+- Properties are included by default without any user action
+- Users can override any property via `with_process_property(key, value)` before calling `build()` — user values take precedence via `entry().or_insert_with()`
+- A `with_default_system_properties_enabled(false)` escape hatch disables all defaults
 - No changes needed to `ProcessInfo`, ingestion, or the database schema
 
-The property key will be `"total_memory"` with the value as bytes (string-encoded u64), matching the existing `imetric!("total_memory", "bytes", ...)` convention in `system_monitor.rs`.
+### Default Properties
 
-## Implementation Steps
+| Key | Source | Value |
+|-----|--------|-------|
+| `exe` | `std::env::current_exe()` | Executable path |
+| `username` | `whoami::username()` | OS username |
+| `realname` | `whoami::realname()` | User's display name |
+| `computer` | `whoami::devicename()` | Hostname |
+| `distro` | `whoami::distro()` | OS distribution |
+| `cpu_brand` | `raw_cpuid::CpuId` (x86_64) / `std::env::consts::ARCH` (other) | CPU brand string |
+| `physical_core_count` | `sysinfo::System::physical_core_count()` | Physical CPU cores |
+| `logical_cpu_count` | `sysinfo::System::cpus().len()` | Logical CPU count |
+| `total_memory` | `sysinfo::System::total_memory()` | Total RAM in bytes |
 
-1. **Modify `TelemetryGuardBuilder::build()`** in `rust/telemetry-sink/src/lib.rs`
-   - Change `build(self)` to `build(mut self)` to allow mutation
-   - Before the `TracingSystemGuard::new()` call (line 375), insert total memory:
-     ```rust
-     let system = sysinfo::System::new_with_specifics(
-         sysinfo::RefreshKind::nothing()
-             .with_memory(sysinfo::MemoryRefreshKind::nothing().with_ram()),
-     );
-     self.process_properties
-         .entry("total_memory".to_string())
-         .or_insert_with(|| system.total_memory().to_string());
-     ```
-   - Using `entry().or_insert_with()` preserves any user-specified override
+### New Dependencies
 
-2. **Remove redundant one-shot metric from `system_monitor.rs`** (optional)
-   - Line 14: `imetric!("total_memory", "bytes", system.total_memory());` could be removed since total memory is now a process property
-   - However, keeping it maintains backward compatibility for queries that look for the metric — defer this to a follow-up
+| Crate | Purpose | Platform |
+|-------|---------|----------|
+| `whoami` | Username, hostname, OS info | All |
+| `raw-cpuid` | CPU brand string | x86_64 only |
 
-## Files to Modify
+## Implementation (done)
+
+1. **Added `default_system_properties_enabled` field** to `TelemetryGuardBuilder` (defaults to `true`)
+2. **Added `with_default_system_properties_enabled()` builder method** for opting out
+3. **Added `populate_default_system_properties()`** method that inserts all defaults using `entry().or_insert_with()` to preserve user overrides
+4. **Modified `build()`** to `build(mut self)` and call `populate_default_system_properties()` when enabled
+5. **Gated `raw-cpuid`** to `target_arch = "x86_64"` with `std::env::consts::ARCH` fallback on other architectures
+
+## Files Modified
 
 | File | Change |
 |------|--------|
-| `rust/telemetry-sink/src/lib.rs` | Add total memory to properties in `build()` |
+| `rust/telemetry-sink/Cargo.toml` | Added `whoami` and `raw-cpuid` (x86_64) dependencies |
+| `rust/telemetry-sink/src/lib.rs` | Added builder field, method, and `populate_default_system_properties()` |
 
 ## Trade-offs
 
 **Approach chosen: Insert in `build()` with `entry().or_insert_with()`**
 - Allows user override if set before `build()`
-- Minimal code change (3-4 lines)
-- Uses existing `sysinfo` dependency
+- Lazy evaluation — property values only computed if not already set
+- Uses closures to defer expensive operations (sysinfo, whoami, cpuid)
 
 **Alternative: Add in `Default::default()`**
 - Rejected: would instantiate `sysinfo::System` eagerly even if the builder is never built
@@ -86,9 +94,6 @@ The property key will be `"total_memory"` with the value as bytes (string-encode
 
 - `cargo build` in `rust/` to verify compilation
 - `cargo test` in `rust/` for existing tests
-- Manual verification: start a service with telemetry, query `SELECT properties FROM processes` to confirm `total_memory` appears
-- Verify on both Linux and macOS (sysinfo is cross-platform)
-
-## Open Questions
-
-None — this is a straightforward addition using existing infrastructure.
+- Manual verification: start a service with telemetry, query `SELECT properties FROM processes` to confirm properties appear
+- Verify on both Linux and macOS (sysinfo and whoami are cross-platform)
+- Test on ARM to verify `cpu_brand` falls back to arch string
