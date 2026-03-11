@@ -332,7 +332,7 @@ function FlameGraphView({ index, onTimeRangeSelect }: FlameGraphViewProps) {
       s.scene.remove(s.mesh)
       s.mesh.dispose()
       const geo = new THREE.PlaneGeometry(1, 1)
-      const material = new THREE.MeshBasicMaterial({ vertexColors: true })
+      const material = new THREE.MeshBasicMaterial({ color: 0xffffff })
       s.mesh = new THREE.InstancedMesh(geo, material, estimatedMax)
       s.mesh.frustumCulled = false
       s.scene.add(s.mesh)
@@ -560,7 +560,10 @@ function FlameGraphView({ index, onTimeRangeSelect }: FlameGraphViewProps) {
 
     const initialCapacity = Math.max(index.table.numRows, 1024)
     const geo = new THREE.PlaneGeometry(1, 1)
-    const material = new THREE.MeshBasicMaterial({ vertexColors: true })
+    // White base color — instance colors from setColorAt() are multiplied with this.
+    // Do NOT use vertexColors:true — PlaneGeometry has no vertex color attribute,
+    // which zeroes out the color. InstancedMesh has its own USE_INSTANCING_COLOR path.
+    const material = new THREE.MeshBasicMaterial({ color: 0xffffff })
     const mesh = new THREE.InstancedMesh(geo, material, initialCapacity)
     mesh.frustumCulled = false
     scene.add(mesh)
