@@ -70,79 +70,35 @@ To get started with Micromegas, please refer to the [Getting Started](https://mi
 ## Current Status & Roadmap
 
 ### Unreleased
+* JSONPath UDFs (`jsonb_path_query`, `jsonb_path_query_first`) for JSONB columns
+* Interactive row selection in table cells with `$cell.selected.column` macros
+* `process_thread_spans` table function for cross-thread span analysis
+* Cell result row references (`$cell[N].column`) for chaining queries
+* Keyboard navigation (Alt+PageUp/PageDown) and Ctrl+S to save
+* Auto-refresh with configurable intervals
+* DataFusion 52.2
 
-### February 2026 - v0.21.0
-* **Notebook Cross-Cell Queries:**
-  * Cells with `dataSource: 'notebook'` execute SQL in-browser via WASM DataFusion against other cells' results
-  * Live download progress and execution time in cell title bars
-* **Horizontal Group Cell:**
-  * Side-by-side cell layout in notebooks with variable passing and drag-and-drop reordering
-* **Multi-Query Chart Cells:**
-  * Per-query data sources in chart cells; `CellState.data` is now `Table[]`
-* **Compact Notebook UI:**
-  * Borderless notebook with minimal chrome, fade-on-idle cell metadata, restyled tables and log cells
-* **WASM Tracing:**
-  * `micromegas-tracing` and `micromegas-telemetry-sink` now support WASM targets
-* **New Crate: `micromegas-datafusion-extensions`:**
-  * Shared WASM-compatible crate for JSONB and histogram UDFs; adds `jsonb_each` table function
-* **Python CLI:**
-  * `micromegas-query` and `micromegas-logout` as installed CLI entry points via `pip install micromegas`
-* **LZ4 Compression:**
-  * LZ4 Arrow IPC compression for dramatically smaller network transfers
-* **Security:**
-  * Bump rollup to 4.59.0, ajv to 6.14.0, fix minimatch ReDoS
+### v0.21.0 (February 2026)
+* Cross-cell notebook queries running DataFusion in the browser via WASM
+* Horizontal group cell with drag-and-drop reordering
+* WASM tracing support for `micromegas-tracing` and `micromegas-telemetry-sink`
+* `micromegas-datafusion-extensions` crate — shared WASM-compatible JSONB and histogram UDFs
+* Python CLI: `micromegas-query` and `micromegas-logout` via `pip install micromegas`
+* LZ4 Arrow IPC compression for smaller network transfers
 
-### February 2026 - v0.20.0
-* **Client-Side WASM Query Execution:**
-  * `local_query` screen type running DataFusion SQL in the browser via WebAssembly
-  * Progressive row count and byte size display during source query fetch
-  * Auto-run checkbox for local query execution on text changes
-* **Configurable Data Sources:**
-  * Per-screen and per-cell data source selection
-  * Datasource variable type for notebook data source selection
-* **Notebook Enhancements:**
-  * Perfetto export cell type
-  * Expression variable type for adaptive `time_bin_duration`
-  * Swimlane cell type for visualizing concurrent events
-  * Drag-to-zoom time range selection on charts
-  * Property timeline cell type
-  * Re-execute cells when time range changes
-  * Query guide links in SQL editor cells
-  * Move variable cell input and save buttons to title bar
-  * Config diff modal for reviewing changes before save
-* **Query & Data Features:**
-  * Multi-column query variables with `$variable.column` syntax
-  * Table URL support with column overrides
-  * Unit formatting system for charts
-  * Hide columns via right-click context menu
-* **Client-Side Perfetto Trace Generation:**
-  * Replace server-side trace generation with client-side fetching
-  * Gzip compression and abort signal support
-* **Performance Optimizations:**
-  * Parquet file content cache to reduce object storage reads
-  * Parallelized JIT and pipelined query planning for Perfetto traces
+### v0.20.0 (February 2026)
+* Client-side WASM query execution with DataFusion in the browser
+* Swimlane, property timeline, and Perfetto export cell types
+* Drag-to-zoom on charts, config diff modal, per-cell data sources
+* Client-side Perfetto trace generation with gzip compression
+* Parquet content cache and parallelized query planning
 
-### January 2026 - v0.19.0
-* **User-Defined Screens:**
-  * JSON-configured screen types for customizable dashboards
-  * Table screen with generic SQL viewer
-  * Notebook screen with multi-cell layout (SQL queries, charts, markdown)
-  * Syntax highlighting for notebook cell editors
-  * Admin section for exporting/importing screen definitions
-  * Delta-based URL handling and copy/paste support for time ranges
-* **Analytics Web App:**
-  * MVC view state refactor and XYChart generalization
-  * Dynamic page titles and API consolidation under `/api` prefix
-  * Dictionary encoding preservation for better performance
-  * Unified chart and property timeline queries
-* **Analytics & Query Features:**
-  * `expand_histogram` table function with bar chart toggle
-* **Data Integrity:**
-  * `delete_duplicate_streams` and `delete_duplicate_processes` UDFs
-* **Infrastructure:**
-  * Automatic `micromegas_app` database creation on service startup
+### v0.19.0 (January 2026)
+* User-defined screens — JSON-configured notebooks, tables, and dashboards
+* Analytics web app with syntax-highlighted SQL editors
+* `expand_histogram` table function
 
-For a detailed history of changes, please see the [CHANGELOG.md](./CHANGELOG.md) file.
+For the full history, see [CHANGELOG.md](./CHANGELOG.md).
 
 ## Contributing
 
