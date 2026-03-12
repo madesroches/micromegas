@@ -5,6 +5,7 @@ This file documents the historical progress of the Micromegas project. For curre
 ## Unreleased
 
 * **Tracing:**
+  * Fix async span depth across yield points and spawn boundaries with `SpanContextFuture` (#917)
   * Fix async span depth inconsistency by capturing depth at future creation time instead of poll time (#927)
 * **Telemetry:**
   * Add default system properties (exe, username, hostname, CPU, memory, OS) to process metadata (#380)
@@ -22,6 +23,7 @@ This file documents the historical progress of the Micromegas project. For curre
   * Update DataFusion to 52.3 (#907)
   * Update DataFusion to 52.2 and remove LimitPushdown workaround (#882)
 * **Notebook Enhancements:**
+  * Add flame graph cell type with Three.js WebGL rendering for Perfetto-style CPU trace visualization (#917)
   * Rename $begin/$end macros to $from/$to and fix expansion in column overrides (#914)
   * Add Insert cell above/below options to cell context menu
   * Add Download CSV menu option for notebook cells (#900)
@@ -52,7 +54,8 @@ This file documents the historical progress of the Micromegas project. For curre
   * Add `jsonb_path_query_first` and `jsonb_path_query` UDFs for JSONPath traversal of JSONB columns (#920)
   * Extend `jsonb_each` to support array inputs (#920)
   * Bump jsonb dependency from 0.5.3 to 0.5.5 (#920)
-  * Add `process_spans(process_id, types)` table function for cross-thread and async span analysis
+  * Add `process_spans(process_id, types)` table function for cross-thread and async span analysis (#917)
+  * Add `hash` column to `async_events` view for scope identification (#917)
   * Extract `get_process_thread_list` as shared utility for process stream discovery
 * **Documentation:**
   * Migrate all documentation URLs from madesroches.github.io to micromegas.info
