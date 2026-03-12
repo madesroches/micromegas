@@ -4,7 +4,7 @@
 
 ## Overview
 
-`CREATE UNIQUE INDEX CONCURRENTLY` can silently produce an `INVALID` index (e.g., due to duplicate rows or transient errors). The v2→v3 migration in `execute_migration` does not check for this, so it proceeds to bump the schema version to 3 and drop the old non-unique indexes. The `ON CONFLICT (block_id) DO NOTHING` queries then fail at runtime because there is no usable unique constraint.
+`CREATE UNIQUE INDEX CONCURRENTLY` raises an error when it fails (e.g., due to duplicate rows), but leaves behind an `INVALID` index. The v2→v3 migration in `execute_migration` propagates this error and stops, but on the next startup `IF NOT EXISTS` silently accepts the existing invalid index without error, allowing the migration to proceed — it bumps the schema version to 3 and drops the old non-unique indexes. The `ON CONFLICT (block_id) DO NOTHING` queries then fail at runtime because there is no usable unique constraint.
 
 ## Current State
 
