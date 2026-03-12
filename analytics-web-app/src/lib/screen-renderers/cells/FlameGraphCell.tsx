@@ -130,32 +130,15 @@ export function computeAsyncVisualDepths(spans: SpanData[]): number[] {
     trees.push({ members, minBegin, maxEnd })
   }
 
-  // Layout each subtree with recursive DFS so children are directly below
-  // their parent. Each node claims a visual row, then lays out its children
-  // starting at parentVd+1. The function returns the next free row after
-  // the entire sub-chain, so siblings are placed below each other's subtrees.
+  // Layout each subtree using DFS order + row-end tracking.
+  // DFS ensures children are processed right after their parent.
+  // Row-end tracking allows non-overlapping siblings to share visual rows.
   const globalRowEnds: number[] = []
   const visualDepths = new Array<number>(n).fill(0)
 
-  // Recursive layout: place node at nextFreeRow, then children below it.
-  // Returns the next free row after this node and all its descendants.
-  function layoutNode(idx: number, nextFreeRow: number, relVd: Map<number, number>): number {
-    relVd.set(idx, nextFreeRow)
-    let childRow = nextFreeRow + 1
-
-    const children = childrenOf.get(spans[idx].id)
-    if (children) {
-      const sorted = [...children].sort((a, b) => spans[a].begin - spans[b].begin)
-      for (const childIdx of sorted) {
-        childRow = layoutNode(childIdx, childRow, relVd)
-      }
-    }
-
-    return childRow
-  }
-
   for (const tree of trees) {
     const memberRelVd = new Map<number, number>()
+    let treeHeight = 0
 
     // Find roots within this subtree
     const treeRoots = tree.members.filter((idx) => {
@@ -163,11 +146,43 @@ export function computeAsyncVisualDepths(spans: SpanData[]): number[] {
       return parentIdx == null || parentIdx === idx
     })
 
-    let nextRow = 0
-    for (const rootIdx of treeRoots) {
-      nextRow = layoutNode(rootIdx, nextRow, memberRelVd)
+    // DFS stack: process each node, then its children immediately after
+    const dfsStack: { idx: number; parentVd: number }[] = []
+    for (let i = treeRoots.length - 1; i >= 0; i--) {
+      dfsStack.push({ idx: treeRoots[i], parentVd: -1 })
     }
-    const treeHeight = nextRow
+
+    // Track end time per visual row — non-overlapping spans reuse the same row
+    const vdRowEnds = new Map<number, number>()
+
+    while (dfsStack.length > 0) {
+      const { idx, parentVd } = dfsStack.pop()!
+      const s = spans[idx]
+      const baseVd = parentVd + 1
+
+      // Find first available visual row at baseVd or deeper
+      let vd = baseVd
+      for (;;) {
+        const endTime = vdRowEnds.get(vd)
+        if (endTime == null || s.begin >= endTime) {
+          vdRowEnds.set(vd, s.end)
+          break
+        }
+        vd++
+      }
+
+      memberRelVd.set(idx, vd)
+      if (vd + 1 > treeHeight) treeHeight = vd + 1
+
+      // Push children in reverse-begin order so earliest is popped first
+      const children = childrenOf.get(s.id)
+      if (children) {
+        const sorted = [...children].sort((a, b) => spans[b].begin - spans[a].begin)
+        for (const childIdx of sorted) {
+          dfsStack.push({ idx: childIdx, parentVd: vd })
+        }
+      }
+    }
 
     // Find lowest global base where the tree block fits
     let base = 0
