@@ -2,7 +2,7 @@
 name: branch-review
 description: Code review the current branch with verified issues only
 argument-hint: "[base-branch]"
-allowed-tools: Bash(git *), Bash(clip.exe *)
+allowed-tools: Bash(git *), Bash(clip.exe *), Edit, Read, Glob, Grep, Write
 ---
 
 # Code Review — Verified Issues Only
@@ -63,6 +63,9 @@ Output a concise list of **confirmed issues only**. For each:
 
 At the end, note how many candidates were dismissed as false positives (no need to list them individually unless the user asks).
 
-### Phase 5: Clipboard
+### Phase 5: Act on results
 
-Copy the confirmed issues list to clipboard using `clip.exe`. Keep it terse — one line per issue, no markdown formatting in the clipboard version.
+If there are confirmed issues, ask the user to choose:
+
+1. **Copy to clipboard** — copy the confirmed issues list to clipboard using `clip.exe`. Keep it terse — one line per issue, no markdown formatting in the clipboard version.
+2. **Fix them** — apply fixes for all confirmed issues directly in the code. For each fix, explain what you're changing and why before editing.

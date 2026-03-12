@@ -24,13 +24,11 @@ export function DateTimePicker({ value, onChange, label, placeholder }: DateTime
         // Clicking the same date deselects in DayPicker - treat as reset to 00:00
         if (value) {
           onChange(startOfDay(value))
-          setIsCalendarOpen(false)
         }
         return
       }
       // Default to start of day (00:00) when selecting a date
       onChange(startOfDay(date))
-      setIsCalendarOpen(false)
     },
     [onChange, value]
   )
@@ -92,8 +90,8 @@ export function DateTimePicker({ value, onChange, label, placeholder }: DateTime
 
         {isCalendarOpen && (
           <>
-            <div className="fixed inset-0 z-20" onClick={() => setIsCalendarOpen(false)} />
-            <div className="absolute left-0 top-full mt-1 z-30 bg-app-panel border border-theme-border rounded-md shadow-lg p-2">
+            <div className="fixed inset-0 z-30" onClick={() => setIsCalendarOpen(false)} />
+            <div className="absolute left-0 top-full mt-1 z-40 bg-app-panel border border-theme-border rounded-md shadow-lg p-2">
               <DayPicker
                 mode="single"
                 selected={value}
