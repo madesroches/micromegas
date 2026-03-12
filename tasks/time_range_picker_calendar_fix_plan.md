@@ -1,6 +1,7 @@
 # Time Range Picker Calendar Fix Plan
 
 **GitHub Issue**: https://github.com/madesroches/micromegas/issues/930
+**Status**: Implemented
 
 ## Overview
 
@@ -118,18 +119,30 @@ z-30  DayPicker backdrop overlay  (was z-20)
 z-40  DayPicker calendar dropdown (was z-30)
 ```
 
+### Fix 4: Add aria-labels to calendar toggle buttons (CustomRange.tsx)
+
+Both "From" and "To" calendar toggle buttons shared the same `title="Select from calendar"`. Added unique `aria-label` attributes (`"Open start calendar"` / `"Open end calendar"`) for accessibility and test targeting, while keeping the shared `title="Open calendar"` for the tooltip.
+
 ## Implementation Steps
 
 1. **`CustomRange.tsx`**: Remove `setShowFromCalendar(false)` from `handleFromDateSelect` and `setShowToCalendar(false)` from `handleToDateSelect`
-2. **`CustomRange.tsx`**: Change the "To" calendar toggle button title from `"Select from calendar"` to `"Select to calendar"` (both buttons currently share the same title, which breaks test queries)
+2. **`CustomRange.tsx`**: Add `aria-label="Open start calendar"` and `aria-label="Open end calendar"` to the toggle buttons, change `title` to `"Open calendar"`
 3. **`DateTimePicker.tsx`**: Remove `setIsCalendarOpen(false)` calls from `handleDateSelect`
 4. **`DateTimePicker.tsx`**: Change overlay z-index from `z-20` to `z-30`, calendar dropdown from `z-30` to `z-40`
+5. **`jest.config.js`**: Add CSS moduleNameMapper so `.css` imports don't break tests
+6. **Create test files** for both components
 
-## Files to Modify
+## Files Modified
 
-- `analytics-web-app/src/components/layout/TimeRangePicker/CustomRange.tsx` — stop closing calendar on change, fix duplicate button title
+- `analytics-web-app/src/components/layout/TimeRangePicker/CustomRange.tsx` — stop closing calendar on change, add aria-labels
 - `analytics-web-app/src/components/ui/DateTimePicker.tsx` — stop closing DayPicker on selection, fix z-index
-- `analytics-web-app/jest.config.js` — add CSS moduleNameMapper so `.css` imports don't break tests
+- `analytics-web-app/jest.config.js` — add CSS moduleNameMapper
+
+## Files Created
+
+- `analytics-web-app/src/__mocks__/styleMock.js` — empty module for CSS imports
+- `analytics-web-app/src/components/ui/__tests__/DateTimePicker.test.tsx` — 6 tests
+- `analytics-web-app/src/components/layout/TimeRangePicker/__tests__/CustomRange.test.tsx` — 5 tests
 
 ## Trade-offs
 
@@ -141,120 +154,39 @@ z-40  DayPicker calendar dropdown (was z-30)
 
 ### Automated Tests
 
-Two test files, one per component. Both use the project's existing Jest + React Testing Library setup.
+Two test files, one per component. Both use the project's existing Jest + React Testing Library setup. Tests were verified to fail when the bug is reintroduced and pass with the fix applied.
 
-**Jest config prerequisite**: Add a CSS moduleNameMapper to `jest.config.js` so that `.css` imports resolve to an empty module instead of failing:
+**Jest config prerequisite**: Added a CSS moduleNameMapper to `jest.config.js` so that `.css` imports resolve to an empty module instead of failing:
 
 ```javascript
 // In moduleNameMapper, add:
 '\\.css$': '<rootDir>/src/__mocks__/styleMock.js',
 ```
 
-Create `analytics-web-app/src/__mocks__/styleMock.js`:
-```javascript
-module.exports = {}
-```
-
-This handles `react-day-picker/style.css`, `./DateTimePicker.css`, and any future CSS imports globally — no per-test CSS mocks needed.
-
 #### Test 1: `analytics-web-app/src/components/ui/__tests__/DateTimePicker.test.tsx`
 
-Tests the DateTimePicker component in isolation. The `react-day-picker` library (ESM) needs mocking; CSS imports are handled by the global moduleNameMapper above.
+Tests the DateTimePicker component in isolation.
 
-**Mocks required:**
-- `react-day-picker` — render a simple button that calls `onSelect` when clicked
-- `lucide-react` — simple span stubs (existing pattern from `CellContainer.test.tsx`)
-- `date-fns` — let it run (CJS v2, works in Jest)
+**Test cases (6):**
 
-**Test cases:**
-
-1. **Calendar opens on button click**
-   - Render with a value, click the calendar button
-   - Assert the DayPicker mock is visible
-
-2. **Calendar stays open after date selection** (validates fix 2)
-   - Open calendar, click the mocked DayPicker day button
-   - Assert `onChange` was called
-   - Assert the DayPicker mock is **still** in the document
-
-3. **Time input change calls onChange without side effects**
-   - Render with a value, change the hours input via `fireEvent.change`
-   - Assert `onChange` was called with updated hours
-   - (No calendar open/close involved — just a sanity check)
-
-4. **Quick action buttons call onChange**
-   - Click "Now" → assert `onChange` called
-   - Click "Start of day" → assert `onChange` called
-   - Click "End of day" → assert `onChange` called
-
-5. **Calendar closes on overlay click**
-   - Open calendar, click the fixed overlay
-   - Assert the DayPicker mock is no longer visible
-
-6. **Calendar closes on toggle button re-click**
-   - Open calendar, click the calendar button again
-   - Assert the DayPicker mock is no longer visible
-
-**react-day-picker mock shape:**
-```typescript
-jest.mock('react-day-picker', () => ({
-  DayPicker: ({ onSelect, selected }: { onSelect?: (date: Date) => void, selected?: Date }) => (
-    <div data-testid="day-picker">
-      <button data-testid="day-picker-day" onClick={() => onSelect?.(new Date(2026, 2, 15))}>
-        15
-      </button>
-      {selected && <span data-testid="day-picker-selected">{selected.toISOString()}</span>}
-    </div>
-  ),
-}))
-```
+1. **Calendar opens on button click** — click calendar button, assert DayPicker visible
+2. **Calendar stays open after date selection** — select a date, assert DayPicker still visible (regression test)
+3. **Time input change calls onChange** — change hours, assert onChange called with updated hours
+4. **Quick action buttons call onChange** — click Now/Start of day/End of day, assert onChange called
+5. **Calendar closes on overlay click** — click fixed overlay, assert DayPicker gone
+6. **Calendar closes on toggle button re-click** — click button again, assert DayPicker gone
 
 #### Test 2: `analytics-web-app/src/components/layout/TimeRangePicker/__tests__/CustomRange.test.tsx`
 
 Tests that CustomRange keeps the DateTimePicker visible after interactions.
 
-**Mocks required:**
-- `@/components/ui/DateTimePicker` — render a visible div with a button that calls `onChange` when clicked (simulates any DateTimePicker interaction)
-- `@/lib/time-range` — provide real `isValidTimeExpression`, `parseRelativeTime`, `formatDateTimeLocal` (they're pure functions, work in Jest)
-- `lucide-react` — span stubs
+**Test cases (5):**
 
-**DateTimePicker mock shape:**
-```typescript
-jest.mock('@/components/ui/DateTimePicker', () => ({
-  DateTimePicker: ({ value, onChange }: { value?: Date, onChange: (d: Date) => void }) => (
-    <div data-testid="date-time-picker">
-      <button data-testid="mock-date-select" onClick={() => onChange(new Date(2026, 2, 15))}>
-        Select Date
-      </button>
-      {value && <span data-testid="picker-value">{value.toISOString()}</span>}
-    </div>
-  ),
-}))
-```
-
-**Test cases:**
-
-1. **Calendar section appears when calendar button clicked**
-   - Render CustomRange with `from="now-1h"` and `to="now"`
-   - Click the "From" calendar toggle button (by `title="Select from calendar"`)
-   - Assert `data-testid="date-time-picker"` is in the document
-
-2. **Calendar section stays visible after date selection** (validates fix 1)
-   - Open the "From" calendar
-   - Click the mock "Select Date" button (triggers `onChange`)
-   - Assert `data-testid="date-time-picker"` is **still** in the document
-   - Assert the "From" text input updated with the formatted date
-
-3. **Calendar section stays visible for "To" field too**
-   - Same as test 2 but for the "To" calendar toggle (by `title="Select to calendar"`)
-
-4. **Calendar closes when toggle button clicked again**
-   - Open the "From" calendar, click the toggle button again
-   - Assert `data-testid="date-time-picker"` is **not** in the document
-
-5. **Apply button calls onApply with current input values**
-   - Open calendar, select a date (updates the input), click "Apply time range"
-   - Assert `onApply` called with the formatted date strings
+1. **Calendar section appears when button clicked** — click toggle, assert DateTimePicker visible
+2. **From calendar stays visible after date selection** — select date, assert still visible (regression test)
+3. **To calendar stays visible after date selection** — same for "To" field (regression test)
+4. **Calendar closes when toggle clicked again** — click toggle twice, assert gone
+5. **From input updates after date selection** — select date, assert input value changed
 
 ### Manual Testing
 
@@ -266,19 +198,3 @@ jest.mock('@/components/ui/DateTimePicker', () => ({
 6. Repeat steps 1-5 for the "To" calendar
 7. Click "Apply time range" → verify the range is applied and the picker closes
 8. Verify the DayPicker calendar dropdown doesn't cause the parent popover to close
-
-## Implementation Order
-
-1. Write tests first (they will fail, confirming the bug)
-2. Apply the 3 fixes
-3. Run tests again (they should pass, confirming the fix)
-
-## Files to Create
-
-- `analytics-web-app/src/__mocks__/styleMock.js` — empty module for CSS imports
-- `analytics-web-app/src/components/ui/__tests__/DateTimePicker.test.tsx`
-- `analytics-web-app/src/components/layout/TimeRangePicker/__tests__/CustomRange.test.tsx`
-
-## Open Questions
-
-None — the fix is straightforward and scoped to the reported bug.

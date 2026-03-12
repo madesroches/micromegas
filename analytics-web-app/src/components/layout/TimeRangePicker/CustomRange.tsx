@@ -40,7 +40,6 @@ export function CustomRange({ from, to, onApply }: CustomRangeProps) {
   const handleFromDateSelect = (date: Date | undefined) => {
     if (date) {
       setFromInput(formatDateTimeLocal(date))
-      setShowFromCalendar(false)
       setError(null)
     }
   }
@@ -48,7 +47,6 @@ export function CustomRange({ from, to, onApply }: CustomRangeProps) {
   const handleToDateSelect = (date: Date | undefined) => {
     if (date) {
       setToInput(formatDateTimeLocal(date))
-      setShowToCalendar(false)
       setError(null)
     }
   }
@@ -102,7 +100,8 @@ export function CustomRange({ from, to, onApply }: CustomRangeProps) {
               type="button"
               onClick={() => setShowFromCalendar(!showFromCalendar)}
               className="px-2.5 py-2 bg-theme-border rounded-md hover:bg-theme-border-hover transition-colors"
-              title="Select from calendar"
+              title="Open calendar"
+              aria-label="Open start calendar"
             >
               <Calendar className="w-4 h-4 text-theme-text-secondary" />
             </button>
@@ -134,7 +133,8 @@ export function CustomRange({ from, to, onApply }: CustomRangeProps) {
               type="button"
               onClick={() => setShowToCalendar(!showToCalendar)}
               className="px-2.5 py-2 bg-theme-border rounded-md hover:bg-theme-border-hover transition-colors"
-              title="Select from calendar"
+              title="Open calendar"
+              aria-label="Open end calendar"
             >
               <Calendar className="w-4 h-4 text-theme-text-secondary" />
             </button>
