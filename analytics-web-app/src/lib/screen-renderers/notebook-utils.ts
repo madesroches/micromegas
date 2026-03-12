@@ -143,6 +143,9 @@ WHERE process_id = '$process_id'
   AND array_has("streams.tags", 'cpu')
 ORDER BY name, begin`,
   transposed: `SELECT 1 as value`,
+  flamegraph: `SELECT id, parent, name, begin, "end", depth, thread_name as lane
+FROM process_spans('$process_id', 'both')
+ORDER BY lane, begin`,
 }
 
 // ============================================================================

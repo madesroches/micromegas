@@ -259,3 +259,232 @@ fn test_named_depth_consistency_begin_end() {
         );
     }
 }
+
+/// Validates that spawn_with_context maintains correct depth across yield points.
+///
+/// Reproduces the bug where SpanScope (RAII guard) only pushed to the thread-local
+/// stack once at creation during the first poll, but never re-pushed on subsequent
+/// polls. This caused futures created after a yield point to see a shorter stack
+/// and report incorrect depth.
+///
+/// The fix replaces SpanScope with SpanContextFuture, which pushes/pops on every poll.
+#[test]
+#[serial]
+fn test_depth_across_spawn_with_context_and_yield() {
+    use micromegas_tracing::runtime::TracingRuntimeExt;
+
+    let guard = init_in_memory_tracing();
+
+    // Use multi-threaded runtime with tracing callbacks so worker threads flush
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .with_tracing_callbacks()
+        .build()
+        .expect("failed to create runtime");
+
+    rt.block_on(async {
+        static_span_desc!(PARENT_DESC, "parent_op");
+        static_span_desc!(CHILD_A_DESC, "child_a");
+        static_span_desc!(CHILD_B_DESC, "child_b");
+
+        async fn child_a() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+
+        async fn child_b() {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+
+        // Futures are created INSIDE the spawned async block (like CronTask::spawn does).
+        // This means their InstrumentedFuture::new() runs with SpanContextFuture's
+        // parent span on the stack, giving correct depth.
+        let handle = spawn_with_context(async {
+            // parent_op's InstrumentedFuture is created inside the spawn context
+            async {
+                // child_a is created during the first poll
+                child_a().instrument(&CHILD_A_DESC).await;
+                // child_b is created after child_a completes (after yield points) —
+                // with the old SpanScope bug, this would get a wrong (lower) depth
+                child_b().instrument(&CHILD_B_DESC).await;
+            }
+            .instrument(&PARENT_DESC)
+            .await;
+        });
+        handle.await.expect("spawned task panicked");
+    });
+
+    // Drop the runtime so worker threads stop and flush their buffers
+    drop(rt);
+
+    // Collect span events: (span_id) → (parent_span_id, depth, name)
+    struct SpanInfo {
+        #[allow(dead_code)]
+        parent_span_id: u64,
+        depth: u32,
+        name: String,
+    }
+    let mut spans: HashMap<u64, SpanInfo> = HashMap::new();
+
+    let state = guard.sink.state.lock().expect("failed to lock sink state");
+    for block in &state.thread_blocks {
+        for event in block.events.iter() {
+            if let ThreadEventQueueAny::BeginAsyncSpanEvent(evt) = event {
+                spans.insert(
+                    evt.span_id,
+                    SpanInfo {
+                        parent_span_id: evt.parent_span_id,
+                        depth: evt.depth,
+                        name: evt.span_desc.name.to_string(),
+                    },
+                );
+            }
+        }
+    }
+
+    // We should have 3 spans: parent_op, child_a, child_b
+    assert!(
+        spans.len() >= 3,
+        "Expected at least 3 spans (parent + 2 children), got {}",
+        spans.len()
+    );
+
+    // Find parent and children
+    let parent = spans
+        .values()
+        .find(|s| s.name == "parent_op")
+        .expect("missing parent_op span");
+    let child_a = spans
+        .values()
+        .find(|s| s.name == "child_a")
+        .expect("missing child_a span");
+    let child_b = spans
+        .values()
+        .find(|s| s.name == "child_b")
+        .expect("missing child_b span");
+
+    // Both children must have depth = parent.depth + 1
+    assert_eq!(
+        child_a.depth,
+        parent.depth + 1,
+        "child_a depth should be parent+1: child_a.depth={}, parent.depth={}",
+        child_a.depth,
+        parent.depth
+    );
+    assert_eq!(
+        child_b.depth,
+        parent.depth + 1,
+        "child_b depth should be parent+1 (created after yield): child_b.depth={}, parent.depth={}",
+        child_b.depth,
+        parent.depth
+    );
+
+    // child_a and child_b should have the same depth
+    assert_eq!(
+        child_a.depth, child_b.depth,
+        "child_a and child_b should have same depth: child_a={}, child_b={}",
+        child_a.depth, child_b.depth
+    );
+}
+
+/// Validates that spawn_with_context from a deep call stack preserves depth.
+///
+/// When spawn_with_context is called from inside a nested instrumented scope
+/// (e.g. depth 3), the spawned task's SpanContextFuture must pad the thread-local
+/// stack so that children inside the spawned task see the correct depth
+/// (parent_depth + 1), not depth 1.
+#[test]
+#[serial]
+fn test_depth_preserved_across_deep_spawn() {
+    use micromegas_tracing::runtime::TracingRuntimeExt;
+
+    let guard = init_in_memory_tracing();
+
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .with_tracing_callbacks()
+        .build()
+        .expect("failed to create runtime");
+
+    rt.block_on(async {
+        let _thread_guard = micromegas_tracing::guards::TracingThreadGuard::new();
+
+        static_span_desc!(OUTER_DESC, "deep_outer");
+        static_span_desc!(MIDDLE_DESC, "deep_middle");
+        static_span_desc!(SPAWNED_DESC, "deep_spawned");
+
+        async fn spawned_work() {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+
+        // Build a 3-level nesting: outer(depth=0) → middle(depth=1) → spawn_with_context
+        // The spawned child should get depth=2 (middle's depth + 1), not depth=1.
+        async {
+            async {
+                let handle = spawn_with_context(async {
+                    spawned_work().instrument(&SPAWNED_DESC).await;
+                });
+                handle.await.expect("spawned task panicked");
+            }
+            .instrument(&MIDDLE_DESC)
+            .await;
+        }
+        .instrument(&OUTER_DESC)
+        .await;
+
+        flush_thread_buffer();
+    });
+
+    drop(rt);
+
+    struct SpanInfo {
+        depth: u32,
+        name: String,
+    }
+    let mut spans: HashMap<u64, SpanInfo> = HashMap::new();
+
+    let state = guard.sink.state.lock().expect("failed to lock sink state");
+    for block in &state.thread_blocks {
+        for event in block.events.iter() {
+            if let ThreadEventQueueAny::BeginAsyncSpanEvent(evt) = event {
+                spans.insert(
+                    evt.span_id,
+                    SpanInfo {
+                        depth: evt.depth,
+                        name: evt.span_desc.name.to_string(),
+                    },
+                );
+            }
+        }
+    }
+
+    let outer = spans
+        .values()
+        .find(|s| s.name == "deep_outer")
+        .expect("missing deep_outer span");
+    let middle = spans
+        .values()
+        .find(|s| s.name == "deep_middle")
+        .expect("missing deep_middle span");
+    let spawned = spans
+        .values()
+        .find(|s| s.name == "deep_spawned")
+        .expect("missing deep_spawned span");
+
+    assert_eq!(
+        outer.depth, 0,
+        "outer should be at depth 0, got {}",
+        outer.depth
+    );
+    assert_eq!(
+        middle.depth, 1,
+        "middle should be at depth 1, got {}",
+        middle.depth
+    );
+    assert_eq!(
+        spawned.depth, 2,
+        "spawned child should be at depth 2 (middle+1), got {}",
+        spawned.depth
+    );
+}

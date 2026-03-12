@@ -31,6 +31,14 @@ use std::{
     sync::Arc,
 };
 
+/// Span types to include in the output
+#[derive(Debug, Clone, Copy)]
+pub enum SpanTypes {
+    Thread,
+    Async,
+    Both,
+}
+
 fn output_schema() -> SchemaRef {
     let mut fields = vec![
         Field::new(
@@ -70,14 +78,14 @@ fn augment_batch(
 // --- TableFunction ---
 
 #[derive(Debug)]
-pub struct ProcessThreadSpansTableFunction {
+pub struct ProcessSpansTableFunction {
     lakehouse: Arc<LakehouseContext>,
     view_factory: Arc<ViewFactory>,
     part_provider: Arc<dyn QueryPartitionProvider>,
     query_range: Option<TimeRange>,
 }
 
-impl ProcessThreadSpansTableFunction {
+impl ProcessSpansTableFunction {
     pub fn new(
         lakehouse: Arc<LakehouseContext>,
         view_factory: Arc<ViewFactory>,
@@ -93,36 +101,57 @@ impl ProcessThreadSpansTableFunction {
     }
 }
 
-impl TableFunctionImpl for ProcessThreadSpansTableFunction {
+impl TableFunctionImpl for ProcessSpansTableFunction {
     #[span_fn]
     fn call(&self, exprs: &[Expr]) -> datafusion::error::Result<Arc<dyn TableProvider>> {
         let arg1 = exprs.first().map(exp_to_string);
         let Some(Ok(process_id)) = arg1 else {
             return plan_err!(
-                "First argument to process_thread_spans must be a string (the process ID), given {:?}",
+                "First argument to process_spans must be a string (the process ID), given {:?}",
                 arg1
             );
         };
 
+        let arg2 = exprs.get(1).map(exp_to_string);
+        let Some(Ok(span_types_str)) = arg2 else {
+            return plan_err!(
+                "Second argument to process_spans must be a string ('thread', 'async', or 'both'), given {:?}",
+                arg2
+            );
+        };
+
+        let span_types = match span_types_str.as_str() {
+            "thread" => SpanTypes::Thread,
+            "async" => SpanTypes::Async,
+            "both" => SpanTypes::Both,
+            _ => {
+                return plan_err!(
+                    "span_types must be 'thread', 'async', or 'both', given: {span_types_str}"
+                );
+            }
+        };
+
         let schema = output_schema();
-        let execution_plan = Arc::new(ProcessThreadSpansExecutionPlan::new(
+        let execution_plan = Arc::new(ProcessSpansExecutionPlan::new(
             schema,
             process_id,
+            span_types,
             self.query_range,
             self.lakehouse.clone(),
             self.view_factory.clone(),
             self.part_provider.clone(),
         ));
 
-        Ok(Arc::new(ProcessThreadSpansTableProvider { execution_plan }))
+        Ok(Arc::new(ProcessSpansTableProvider { execution_plan }))
     }
 }
 
 // --- ExecutionPlan ---
 
-pub struct ProcessThreadSpansExecutionPlan {
+pub struct ProcessSpansExecutionPlan {
     schema: SchemaRef,
     process_id: String,
+    span_types: SpanTypes,
     query_range: Option<TimeRange>,
     lakehouse: Arc<LakehouseContext>,
     view_factory: Arc<ViewFactory>,
@@ -130,10 +159,11 @@ pub struct ProcessThreadSpansExecutionPlan {
     properties: PlanProperties,
 }
 
-impl ProcessThreadSpansExecutionPlan {
+impl ProcessSpansExecutionPlan {
     fn new(
         schema: SchemaRef,
         process_id: String,
+        span_types: SpanTypes,
         query_range: Option<TimeRange>,
         lakehouse: Arc<LakehouseContext>,
         view_factory: Arc<ViewFactory>,
@@ -148,6 +178,7 @@ impl ProcessThreadSpansExecutionPlan {
         Self {
             schema,
             process_id,
+            span_types,
             query_range,
             lakehouse,
             view_factory,
@@ -157,27 +188,28 @@ impl ProcessThreadSpansExecutionPlan {
     }
 }
 
-impl Debug for ProcessThreadSpansExecutionPlan {
+impl Debug for ProcessSpansExecutionPlan {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ProcessThreadSpansExecutionPlan")
+        f.debug_struct("ProcessSpansExecutionPlan")
             .field("process_id", &self.process_id)
+            .field("span_types", &self.span_types)
             .finish()
     }
 }
 
-impl DisplayAs for ProcessThreadSpansExecutionPlan {
+impl DisplayAs for ProcessSpansExecutionPlan {
     fn fmt_as(&self, _t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "ProcessThreadSpansExecutionPlan: process_id={}",
-            self.process_id
+            "ProcessSpansExecutionPlan: process_id={}, span_types={:?}",
+            self.process_id, self.span_types
         )
     }
 }
 
-impl ExecutionPlan for ProcessThreadSpansExecutionPlan {
+impl ExecutionPlan for ProcessSpansExecutionPlan {
     fn name(&self) -> &str {
-        "ProcessThreadSpansExecutionPlan"
+        "ProcessSpansExecutionPlan"
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -212,6 +244,7 @@ impl ExecutionPlan for ProcessThreadSpansExecutionPlan {
         let schema = self.schema.clone();
         let stream_schema = schema.clone();
         let process_id = self.process_id.clone();
+        let span_types = self.span_types;
         let query_range = self.query_range;
         let lakehouse = self.lakehouse.clone();
         let view_factory = self.view_factory.clone();
@@ -231,49 +264,91 @@ impl ExecutionPlan for ProcessThreadSpansExecutionPlan {
                 format!("Failed to create session context: {e}"),
             ))?;
 
-            let threads = get_process_thread_list(&process_id, &ctx)
-                .await
-                .map_err(|e| datafusion::error::DataFusionError::Execution(
-                    format!("Failed to get thread list: {e}"),
-                ))?;
-
-            let max_concurrent = std::thread::available_parallelism()
-                .map(|n| n.get())
-                .unwrap_or(4);
-
-            let queries: Vec<(String, String, String)> = threads
-                .iter()
-                .map(|(stream_id, _thread_id, display_name)| {
-                    let sql = format!(
-                        "SELECT * FROM view_instance('thread_spans', '{stream_id}')"
-                    );
-                    (stream_id.clone(), display_name.clone(), sql)
-                })
-                .collect();
-
-            let stream_results: Vec<(String, String, SendableRecordBatchStream)> =
-                futures::stream::iter(queries)
-                    .map(|(stream_id, thread_name, sql)| {
-                        let ctx = ctx.clone();
-                        async move {
-                            spawn_with_context(async move {
-                                let df = ctx.sql(&sql).await?;
-                                let s = df.execute_stream().await?;
-                                Ok::<_, anyhow::Error>((stream_id, thread_name, s))
-                            })
-                            .await?
-                        }
-                    })
-                    .buffered(max_concurrent)
-                    .try_collect()
+            // Thread spans
+            if matches!(span_types, SpanTypes::Thread | SpanTypes::Both) {
+                let threads = get_process_thread_list(&process_id, &ctx)
                     .await
                     .map_err(|e| datafusion::error::DataFusionError::Execution(
-                        format!("Failed to query thread spans: {e}"),
+                        format!("Failed to get thread list: {e}"),
                     ))?;
 
-            for (stream_id, thread_name, mut data_stream) in stream_results {
-                while let Some(batch) = data_stream.try_next().await? {
-                    let augmented = augment_batch(&batch, schema.clone(), &stream_id, &thread_name)?;
+                let max_concurrent = std::thread::available_parallelism()
+                    .map(|n| n.get())
+                    .unwrap_or(4);
+
+                let queries: Vec<(String, String, String)> = threads
+                    .iter()
+                    .map(|(stream_id, _thread_id, display_name)| {
+                        let sql = format!(
+                            "SELECT * FROM view_instance('thread_spans', '{stream_id}')"
+                        );
+                        (stream_id.clone(), display_name.clone(), sql)
+                    })
+                    .collect();
+
+                let stream_results: Vec<(String, String, SendableRecordBatchStream)> =
+                    futures::stream::iter(queries)
+                        .map(|(stream_id, thread_name, sql)| {
+                            let ctx = ctx.clone();
+                            async move {
+                                spawn_with_context(async move {
+                                    let df = ctx.sql(&sql).await?;
+                                    let s = df.execute_stream().await?;
+                                    Ok::<_, anyhow::Error>((stream_id, thread_name, s))
+                                })
+                                .await?
+                            }
+                        })
+                        .buffered(max_concurrent)
+                        .try_collect()
+                        .await
+                        .map_err(|e| datafusion::error::DataFusionError::Execution(
+                            format!("Failed to query thread spans: {e}"),
+                        ))?;
+
+                for (stream_id, thread_name, mut data_stream) in stream_results {
+                    while let Some(batch) = data_stream.try_next().await? {
+                        let augmented = augment_batch(&batch, schema.clone(), &stream_id, &thread_name)?;
+                        yield augmented;
+                    }
+                }
+            }
+
+            // Async spans
+            if matches!(span_types, SpanTypes::Async | SpanTypes::Both) {
+                let async_sql = format!(
+                    "SELECT \
+                        b.span_id as id, \
+                        b.parent_span_id as parent, \
+                        b.depth, \
+                        b.hash, \
+                        b.time as \"begin\", \
+                        e.time as \"end\", \
+                        arrow_cast(e.time, 'Int64') - arrow_cast(b.time, 'Int64') as duration, \
+                        b.name, \
+                        b.target, \
+                        b.filename, \
+                        b.line \
+                    FROM (SELECT * FROM view_instance('async_events', '{process_id}') \
+                          WHERE event_type = 'begin') b \
+                    INNER JOIN (SELECT * FROM view_instance('async_events', '{process_id}') \
+                          WHERE event_type = 'end') e \
+                    ON b.span_id = e.span_id \
+                    WHERE b.time < e.time \
+                    ORDER BY b.time"
+                );
+
+                let df = ctx.sql(&async_sql).await
+                    .map_err(|e| datafusion::error::DataFusionError::Execution(
+                        format!("Failed to query async spans: {e}"),
+                    ))?;
+                let mut async_stream = df.execute_stream().await
+                    .map_err(|e| datafusion::error::DataFusionError::Execution(
+                        format!("Failed to execute async spans stream: {e}"),
+                    ))?;
+
+                while let Some(batch) = async_stream.try_next().await? {
+                    let augmented = augment_batch(&batch, schema.clone(), "", "async")?;
                     yield augmented;
                 }
             }
@@ -289,12 +364,12 @@ impl ExecutionPlan for ProcessThreadSpansExecutionPlan {
 // --- TableProvider ---
 
 #[derive(Debug)]
-struct ProcessThreadSpansTableProvider {
-    execution_plan: Arc<ProcessThreadSpansExecutionPlan>,
+struct ProcessSpansTableProvider {
+    execution_plan: Arc<ProcessSpansExecutionPlan>,
 }
 
 #[async_trait::async_trait]
-impl TableProvider for ProcessThreadSpansTableProvider {
+impl TableProvider for ProcessSpansTableProvider {
     fn as_any(&self) -> &dyn Any {
         self
     }

@@ -74,10 +74,10 @@ pub mod partitioned_table_provider;
 pub mod perfetto_trace_execution_plan;
 /// Table function for generating Perfetto trace chunks
 pub mod perfetto_trace_table_function;
+/// Table function returning thread and/or async spans from all CPU streams of a process
+pub mod process_spans_table_function;
 /// Shared utilities for discovering CPU streams of a process
 pub mod process_streams;
-/// Table function returning thread spans from all CPU streams of a process
-pub mod process_thread_spans_table_function;
 /// Replicated view of the `processes` table of the postgresql metadata database.
 pub mod processes_view;
 /// property_get function support from SQL

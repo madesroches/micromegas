@@ -164,7 +164,8 @@ pub mod prelude {
     #[cfg(feature = "tokio")]
     pub use crate::spans::spawn_with_context;
     pub use crate::spans::{
-        InstrumentFuture, InstrumentedFuture, InstrumentedNamedFuture, SpanScope, current_span_id,
+        InstrumentFuture, InstrumentedFuture, InstrumentedNamedFuture, SpanContextFuture,
+        current_span_id,
     };
     pub use crate::time::*;
     pub use crate::{

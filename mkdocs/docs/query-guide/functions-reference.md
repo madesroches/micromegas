@@ -145,19 +145,28 @@ ORDER BY chunk_id;
 
 **Note:** The returned binary data is in Perfetto protobuf format and can be loaded directly into the [Perfetto UI](https://ui.perfetto.dev/) for visualization and analysis.
 
-#### `process_thread_spans(process_id)`
+#### `process_spans(process_id, types)`
 
-Returns thread spans from all CPU streams of a process, with `stream_id` and `thread_name` columns prepended. Enables cross-thread span analysis without requiring per-stream queries.
+Returns thread spans, async spans, or both from a process, with `stream_id` and `thread_name` columns prepended. For async spans, `stream_id` is empty and `thread_name` is `'async'`.
 
 **Syntax:**
 ```sql
-SELECT stream_id, thread_name, name, duration, ...
-FROM process_thread_spans('process-uuid')
+-- Thread spans only
+SELECT * FROM process_spans('process-uuid', 'thread')
+
+-- Async spans only
+SELECT * FROM process_spans('process-uuid', 'async')
+
+-- Both combined
+SELECT name, begin, end, depth, thread_name as lane
+FROM process_spans('process-uuid', 'both')
+ORDER BY lane, begin
 ```
 
 **Parameters:**
 
 - `process_id` (`Utf8`): Process UUID to query
+- `types` (`Utf8`): `'thread'`, `'async'`, or `'both'`
 
 **Note:** The time range is provided out of band via the query's begin/end parameters, not as function arguments.
 
@@ -165,8 +174,8 @@ FROM process_thread_spans('process-uuid')
 
 | Column | Type | Description |
 |--------|------|-------------|
-| stream_id | Dictionary(Int16, Utf8) | Stream identifier |
-| thread_name | Dictionary(Int16, Utf8) | Thread display name |
+| stream_id | Dictionary(Int16, Utf8) | Stream identifier (empty for async) |
+| thread_name | Dictionary(Int16, Utf8) | Thread display name (`'async'` for async spans) |
 | id | Int64 | Span identifier |
 | parent | Int64 | Parent span identifier |
 | depth | UInt32 | Nesting depth |
@@ -183,12 +192,12 @@ FROM process_thread_spans('process-uuid')
 ```sql
 -- Get all spans across threads for a process
 SELECT stream_id, thread_name, name, duration
-FROM process_thread_spans('process-uuid-123')
+FROM process_spans('process-uuid-123', 'thread')
 ORDER BY begin;
 
 -- Analyze frame time per thread
 SELECT thread_name, name, AVG(duration) / 1000000.0 as avg_ms
-FROM process_thread_spans('my-process-id')
+FROM process_spans('my-process-id', 'both')
 WHERE depth = 0
 GROUP BY thread_name, name
 ORDER BY avg_ms DESC;
