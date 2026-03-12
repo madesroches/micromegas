@@ -141,164 +141,52 @@ function buildFlameIndex(table: Table): FlameIndex {
     const isAsync = name === 'async'
 
     if (isAsync) {
-      // Async spans: tree layout with row-level packing.
-      // Each root (depth=0) and its descendants form a subtree.
-      // Subtrees are packed vertically, reusing rows when time ranges don't overlap.
-      const idCol = table.getChild('id')!
-      const parentCol = table.getChild('parent')!
-
-      // Build span_id → index-in-rowIndices lookup
-      const idToIdx = new Map<bigint, number>()
-      for (let i = 0; i < rowIndices.length; i++) {
-        const id = idCol.get(rowIndices[i])
-        if (id != null) idToIdx.set(BigInt(id), i)
-      }
-
-      // Build children map and find roots.
-      // A span is a sub-tree root if its parent is not in this lane's dataset.
-      const childrenOf = new Map<bigint, number[]>()
-      const roots: number[] = []
-
-      for (let i = 0; i < rowIndices.length; i++) {
-        const row = rowIndices[i]
-        const rawParent = parentCol.get(row)
-        const parentId = rawParent != null ? BigInt(rawParent) : null
-        const parentInLane = parentId != null && idToIdx.has(parentId)
-        if (parentInLane) {
-          if (!childrenOf.has(parentId)) childrenOf.set(parentId, [])
-          childrenOf.get(parentId)!.push(i)
-        } else {
-          roots.push(i)
-        }
-      }
-
-      // Pass 1: DFS to collect subtrees with tree-derived depth.
-      // Depth column is unreliable for async spans (computed at poll time, not creation).
-      // Compute depth from tree structure: root=0, child=parent+1.
-      interface TreeMember { idx: number; treeDepth: number }
-      interface SubTree {
-        members: TreeMember[]
-        minBegin: number
-        maxEnd: number
-      }
-      const visited = new Uint8Array(rowIndices.length)
-      const trees: SubTree[] = []
-
-      for (const rootIdx of roots) {
-        const members: TreeMember[] = []
-        let minBegin = Infinity
-        let maxEnd = -Infinity
-        const stack: [number, number][] = [[rootIdx, 0]] // [idx, treeDepth]
-
-        while (stack.length > 0) {
-          const [idx, treeDepth] = stack.pop()!
-          if (visited[idx]) continue
-          visited[idx] = 1
-          members.push({ idx, treeDepth })
-
-          const row = rowIndices[idx]
-          const b = timestampToMs(beginCol.get(row), beginField?.type)
-          const e = timestampToMs(endCol.get(row), endField?.type)
-          if (b < minBegin) minBegin = b
-          if (e > maxEnd) maxEnd = e
-
-          const id = idCol.get(row)
-          const children = id != null ? childrenOf.get(BigInt(id)) : undefined
-          if (children) {
-            for (let c = children.length - 1; c >= 0; c--) {
-              stack.push([children[c], treeDepth + 1])
-            }
-          }
-        }
-
-        trees.push({ members, minBegin, maxEnd })
-      }
-
-      // Pass 2: for each tree, compute internal layout then pack globally.
-      // Within a tree, group spans by tree depth, then greedy-pack each level
-      // so concurrent siblings don't overlap. Depth levels stack vertically.
-      const globalRowEnds: number[] = []
+      // Async spans: use depth column directly, greedy-pack within each depth
+      // level to handle concurrent siblings that share the same depth.
       const visualDepths = new Int32Array(rowIndices.length)
       let maxVisualDepth = 0
 
-      for (const tree of trees) {
-        // Group members by tree depth
-        const depthGroups = new Map<number, number[]>()
-        for (const { idx, treeDepth } of tree.members) {
-          if (!depthGroups.has(treeDepth)) depthGroups.set(treeDepth, [])
-          depthGroups.get(treeDepth)!.push(idx)
-        }
+      // Group indices by depth
+      const depthGroups = new Map<number, number[]>()
+      for (let i = 0; i < rowIndices.length; i++) {
+        const d = Number(depthCol.get(rowIndices[i]) ?? 0)
+        if (!depthGroups.has(d)) depthGroups.set(d, [])
+        depthGroups.get(d)!.push(i)
+      }
 
-        // Sort depth levels and pack each level with greedy interval packing
-        const sortedDepths = [...depthGroups.keys()].sort((a, b) => a - b)
-        const memberRelVd = new Map<number, number>() // idx → relative visual depth
-        let depthBase = 0
+      const sortedDepths = [...depthGroups.keys()].sort((a, b) => a - b)
+      let depthBase = 0
 
-        for (const relDepth of sortedDepths) {
-          const group = depthGroups.get(relDepth)!
-          group.sort((a, b) => {
-            const ab = timestampToMs(beginCol.get(rowIndices[a]), beginField?.type)
-            const bb = timestampToMs(beginCol.get(rowIndices[b]), beginField?.type)
-            return ab - bb
-          })
+      for (const depth of sortedDepths) {
+        const group = depthGroups.get(depth)!
+        // rowIndices is already sorted by begin, so group preserves that order
 
-          const levelRowEnds: number[] = []
-          let maxLocalRow = 0
+        const levelRowEnds: number[] = []
+        let maxLocalRow = 0
 
-          for (const idx of group) {
-            const row = rowIndices[idx]
-            const b = timestampToMs(beginCol.get(row), beginField?.type)
-            const e = timestampToMs(endCol.get(row), endField?.type)
+        for (const idx of group) {
+          const row = rowIndices[idx]
+          const b = timestampToMs(beginCol.get(row), beginField?.type)
+          const e = timestampToMs(endCol.get(row), endField?.type)
 
-            let localRow = -1
-            for (let r = 0; r < levelRowEnds.length; r++) {
-              if (b >= levelRowEnds[r]) { localRow = r; break }
-            }
-            if (localRow === -1) {
-              localRow = levelRowEnds.length
-              levelRowEnds.push(e)
-            } else {
-              levelRowEnds[localRow] = e
-            }
-
-            memberRelVd.set(idx, depthBase + localRow)
-            if (localRow > maxLocalRow) maxLocalRow = localRow
+          let localRow = -1
+          for (let r = 0; r < levelRowEnds.length; r++) {
+            if (b >= levelRowEnds[r]) { localRow = r; break }
+          }
+          if (localRow === -1) {
+            localRow = levelRowEnds.length
+            levelRowEnds.push(e)
+          } else {
+            levelRowEnds[localRow] = e
           }
 
-          depthBase += maxLocalRow + 1
-        }
-
-        const treeHeight = depthBase
-
-        // Find lowest global base where [base, base+treeHeight-1] are all free
-        let base = 0
-        let searching = true
-        while (searching) {
-          searching = false
-          for (let d = 0; d < treeHeight; d++) {
-            const r = base + d
-            if (r < globalRowEnds.length && globalRowEnds[r] > tree.minBegin) {
-              base = r + 1
-              searching = true
-              break
-            }
-          }
-        }
-
-        // Assign global visual depths
-        for (const { idx } of tree.members) {
-          const vd = base + memberRelVd.get(idx)!
+          const vd = depthBase + localRow
           visualDepths[idx] = vd
           if (vd > maxVisualDepth) maxVisualDepth = vd
+          if (localRow > maxLocalRow) maxLocalRow = localRow
         }
 
-        // Reserve the entire tree block for the tree's full time extent
-        // so other trees can't intrude between a parent and its children
-        for (let d = 0; d < treeHeight; d++) {
-          const r = base + d
-          while (globalRowEnds.length <= r) globalRowEnds.push(0)
-          if (tree.maxEnd > globalRowEnds[r]) globalRowEnds[r] = tree.maxEnd
-        }
+        depthBase += maxLocalRow + 1
       }
 
       return { id: name, name, maxDepth: maxVisualDepth, rowIndices, visualDepths }
