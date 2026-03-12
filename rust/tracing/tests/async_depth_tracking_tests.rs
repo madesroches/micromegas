@@ -386,3 +386,105 @@ fn test_depth_across_spawn_with_context_and_yield() {
         child_a.depth, child_b.depth
     );
 }
+
+/// Validates that spawn_with_context from a deep call stack preserves depth.
+///
+/// When spawn_with_context is called from inside a nested instrumented scope
+/// (e.g. depth 3), the spawned task's SpanContextFuture must pad the thread-local
+/// stack so that children inside the spawned task see the correct depth
+/// (parent_depth + 1), not depth 1.
+#[test]
+#[serial]
+fn test_depth_preserved_across_deep_spawn() {
+    use micromegas_tracing::runtime::TracingRuntimeExt;
+
+    let guard = init_in_memory_tracing();
+
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .with_tracing_callbacks()
+        .build()
+        .expect("failed to create runtime");
+
+    rt.block_on(async {
+        let _thread_guard = micromegas_tracing::guards::TracingThreadGuard::new();
+
+        static_span_desc!(OUTER_DESC, "deep_outer");
+        static_span_desc!(MIDDLE_DESC, "deep_middle");
+        static_span_desc!(SPAWNED_DESC, "deep_spawned");
+
+        async fn spawned_work() {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+
+        // Build a 3-level nesting: outer(depth=0) → middle(depth=1) → spawn_with_context
+        // The spawned child should get depth=2 (middle's depth + 1), not depth=1.
+        async {
+            async {
+                let handle = spawn_with_context(async {
+                    spawned_work().instrument(&SPAWNED_DESC).await;
+                });
+                handle.await.expect("spawned task panicked");
+            }
+            .instrument(&MIDDLE_DESC)
+            .await;
+        }
+        .instrument(&OUTER_DESC)
+        .await;
+
+        flush_thread_buffer();
+    });
+
+    drop(rt);
+
+    struct SpanInfo {
+        depth: u32,
+        name: String,
+    }
+    let mut spans: HashMap<u64, SpanInfo> = HashMap::new();
+
+    let state = guard.sink.state.lock().expect("failed to lock sink state");
+    for block in &state.thread_blocks {
+        for event in block.events.iter() {
+            if let ThreadEventQueueAny::BeginAsyncSpanEvent(evt) = event {
+                spans.insert(
+                    evt.span_id,
+                    SpanInfo {
+                        depth: evt.depth,
+                        name: evt.span_desc.name.to_string(),
+                    },
+                );
+            }
+        }
+    }
+
+    let outer = spans
+        .values()
+        .find(|s| s.name == "deep_outer")
+        .expect("missing deep_outer span");
+    let middle = spans
+        .values()
+        .find(|s| s.name == "deep_middle")
+        .expect("missing deep_middle span");
+    let spawned = spans
+        .values()
+        .find(|s| s.name == "deep_spawned")
+        .expect("missing deep_spawned span");
+
+    assert_eq!(
+        outer.depth, 0,
+        "outer should be at depth 0, got {}",
+        outer.depth
+    );
+    assert_eq!(
+        middle.depth, 1,
+        "middle should be at depth 1, got {}",
+        middle.depth
+    );
+    assert_eq!(
+        spawned.depth, 2,
+        "spawned child should be at depth 2 (middle+1), got {}",
+        spawned.depth
+    );
+}

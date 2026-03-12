@@ -29,11 +29,17 @@ pub fn current_span_id() -> u64 {
 /// Unlike an RAII guard, this pushes the parent span ID onto the
 /// thread-local async call stack before each poll and pops it after,
 /// which is correct across yield points and executor thread migration.
+///
+/// The stack is padded to match the parent's depth so that
+/// `InstrumentedFuture::new()` inside the spawned task computes
+/// `depth = stack.len() - 1 = parent_depth + 1`, preserving the
+/// logical nesting across spawn boundaries.
 #[pin_project]
 pub struct SpanContextFuture<F> {
     #[pin]
     future: F,
     parent_span: u64,
+    parent_depth: u32,
 }
 
 impl<F: Future> Future for SpanContextFuture<F> {
@@ -44,9 +50,17 @@ impl<F: Future> Future for SpanContextFuture<F> {
         let this = self.project();
         ASYNC_CALL_STACK.with(|stack_cell| {
             let stack = unsafe { &mut *stack_cell.get() };
+            let saved_len = stack.len();
+            // Pad stack so that children see depth = parent_depth.
+            // At the spawn point the stack had length parent_depth + 1;
+            // we recreate that, then push parent_span on top.
+            let target_len = *this.parent_depth as usize + 1;
+            while stack.len() < target_len.saturating_sub(1) {
+                stack.push(0);
+            }
             stack.push(*this.parent_span);
             let res = this.future.poll(cx);
-            stack.pop();
+            stack.truncate(saved_len);
             res
         })
     }
@@ -84,10 +98,17 @@ where
     F: Future + Send + 'static,
     F::Output: Send + 'static,
 {
-    let parent_span = current_span_id();
+    let (parent_span, parent_depth) = ASYNC_CALL_STACK.with(|stack_cell| {
+        let stack = unsafe { &*stack_cell.get() };
+        (
+            stack.last().copied().unwrap_or(0),
+            (stack.len().saturating_sub(1)) as u32,
+        )
+    });
     tokio::spawn(SpanContextFuture {
         future,
         parent_span,
+        parent_depth,
     })
 }
 
