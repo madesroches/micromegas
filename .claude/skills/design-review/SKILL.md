@@ -2,7 +2,7 @@
 name: design-review
 description: Review a design plan document with verified issues only
 argument-hint: "<path to plan file>"
-allowed-tools: Read, Glob, Grep, Bash(git log *), Bash(git diff *), Bash(git show *), Bash(ls *), Bash(clip.exe *), Task
+allowed-tools: Read, Glob, Grep, Bash(git log *), Bash(git diff *), Bash(git show *), Bash(ls *), Bash(clip.exe *), Edit, Write, Task
 ---
 
 # Design Review — Verified Issues Only
@@ -68,6 +68,9 @@ Output a concise list of **confirmed issues only**. For each:
 
 At the end, note how many candidates were dismissed as false positives (no need to list them individually unless the user asks).
 
-### Phase 5: Clipboard
+### Phase 5: Act on results
 
-Copy the confirmed issues list to clipboard using `clip.exe`. Keep it terse — one line per issue, no markdown formatting in the clipboard version.
+If there are confirmed issues, ask the user to choose:
+
+1. **Copy to clipboard** — copy the confirmed issues list to clipboard using `clip.exe`. Keep it terse — one line per issue, no markdown formatting in the clipboard version.
+2. **Fix them** — apply fixes directly in the plan file for all confirmed issues. For each fix, explain what you're changing and why before editing.
