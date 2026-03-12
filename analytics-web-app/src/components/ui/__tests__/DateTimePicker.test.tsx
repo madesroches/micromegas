@@ -2,10 +2,13 @@ import { render, screen, fireEvent } from '@testing-library/react'
 import { DateTimePicker } from '../DateTimePicker'
 
 jest.mock('react-day-picker', () => ({
-  DayPicker: ({ onSelect, selected }: { onSelect?: (date: Date) => void, selected?: Date }) => (
+  DayPicker: ({ onSelect, selected }: { onSelect?: (date: Date | undefined) => void, selected?: Date }) => (
     <div data-testid="day-picker">
       <button data-testid="day-picker-day" onClick={() => onSelect?.(new Date(2026, 2, 15))}>
         15
+      </button>
+      <button data-testid="day-picker-reselect" onClick={() => onSelect?.(undefined)}>
+        Reselect
       </button>
       {selected && <span data-testid="day-picker-selected">{selected.toISOString()}</span>}
     </div>
@@ -71,6 +74,34 @@ describe('DateTimePicker', () => {
     onChange.mockClear()
     fireEvent.click(screen.getByText('End of day'))
     expect(onChange).toHaveBeenCalledTimes(1)
+  })
+
+  it('should reset to start of day on same-date re-selection', () => {
+    const onChange = jest.fn()
+    render(<DateTimePicker value={baseDate} onChange={onChange} />)
+
+    const calendarButton = screen.getByRole('button', { name: /mar 10, 2026/i })
+    fireEvent.click(calendarButton)
+
+    fireEvent.click(screen.getByTestId('day-picker-reselect'))
+
+    expect(onChange).toHaveBeenCalledTimes(1)
+    const newDate = onChange.mock.calls[0][0] as Date
+    expect(newDate.getHours()).toBe(0)
+    expect(newDate.getMinutes()).toBe(0)
+    expect(screen.getByTestId('day-picker')).toBeInTheDocument()
+  })
+
+  it('should not call onChange on re-selection when no value', () => {
+    const onChange = jest.fn()
+    render(<DateTimePicker value={undefined} onChange={onChange} />)
+
+    const calendarButton = screen.getByRole('button', { name: /select date/i })
+    fireEvent.click(calendarButton)
+
+    fireEvent.click(screen.getByTestId('day-picker-reselect'))
+
+    expect(onChange).not.toHaveBeenCalled()
   })
 
   it('should close calendar on overlay click', () => {
