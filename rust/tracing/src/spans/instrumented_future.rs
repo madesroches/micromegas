@@ -24,42 +24,31 @@ pub fn current_span_id() -> u64 {
     })
 }
 
-/// A guard that establishes a span context for the duration of its lifetime.
-/// Used to propagate span context across spawn boundaries.
+/// A future wrapper that establishes a span context on every poll.
 ///
-/// # Example
-/// ```ignore
-/// let parent_span = current_span_id();
-/// tokio::spawn(async move {
-///     let _guard = SpanScope::new(parent_span);
-///     // work here will see parent_span as its parent
-/// });
-/// ```
-pub struct SpanScope {
-    _private: (), // prevent direct construction
+/// Unlike an RAII guard, this pushes the parent span ID onto the
+/// thread-local async call stack before each poll and pops it after,
+/// which is correct across yield points and executor thread migration.
+#[pin_project]
+pub struct SpanContextFuture<F> {
+    #[pin]
+    future: F,
+    parent_span: u64,
 }
 
-impl SpanScope {
-    /// Creates a new span scope, pushing the given span ID onto the async call stack.
-    #[inline]
-    pub fn new(span_id: u64) -> Self {
-        ASYNC_CALL_STACK.with(|stack_cell| {
-            let stack = unsafe { &mut *stack_cell.get() };
-            stack.push(span_id);
-        });
-        Self { _private: () }
-    }
-}
+impl<F: Future> Future for SpanContextFuture<F> {
+    type Output = F::Output;
 
-impl Drop for SpanScope {
     #[inline]
-    fn drop(&mut self) {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.project();
         ASYNC_CALL_STACK.with(|stack_cell| {
             let stack = unsafe { &mut *stack_cell.get() };
-            if stack.len() > 1 {
-                stack.pop();
-            }
-        });
+            stack.push(*this.parent_span);
+            let res = this.future.poll(cx);
+            stack.pop();
+            res
+        })
     }
 }
 
@@ -69,6 +58,10 @@ impl Drop for SpanScope {
 /// before spawning and establishes it as the parent context in the spawned task.
 /// This ensures that instrumented async functions called within the spawned task
 /// will correctly report the spawning context as their parent.
+///
+/// The parent span ID is pushed onto the thread-local async call stack before
+/// each poll and popped after, so it works correctly across yield points and
+/// executor thread migration.
 ///
 /// # Example
 /// ```ignore
@@ -92,9 +85,9 @@ where
     F::Output: Send + 'static,
 {
     let parent_span = current_span_id();
-    tokio::spawn(async move {
-        let _scope = SpanScope::new(parent_span);
-        future.await
+    tokio::spawn(SpanContextFuture {
+        future,
+        parent_span,
     })
 }
 
