@@ -121,13 +121,15 @@ z-40  DayPicker calendar dropdown (was z-30)
 ## Implementation Steps
 
 1. **`CustomRange.tsx`**: Remove `setShowFromCalendar(false)` from `handleFromDateSelect` and `setShowToCalendar(false)` from `handleToDateSelect`
-2. **`DateTimePicker.tsx`**: Remove `setIsCalendarOpen(false)` calls from `handleDateSelect`
-3. **`DateTimePicker.tsx`**: Change overlay z-index from `z-20` to `z-30`, calendar dropdown from `z-30` to `z-40`
+2. **`CustomRange.tsx`**: Change the "To" calendar toggle button title from `"Select from calendar"` to `"Select to calendar"` (both buttons currently share the same title, which breaks test queries)
+3. **`DateTimePicker.tsx`**: Remove `setIsCalendarOpen(false)` calls from `handleDateSelect`
+4. **`DateTimePicker.tsx`**: Change overlay z-index from `z-20` to `z-30`, calendar dropdown from `z-30` to `z-40`
 
 ## Files to Modify
 
-- `analytics-web-app/src/components/layout/TimeRangePicker/CustomRange.tsx` — stop closing calendar on change
+- `analytics-web-app/src/components/layout/TimeRangePicker/CustomRange.tsx` — stop closing calendar on change, fix duplicate button title
 - `analytics-web-app/src/components/ui/DateTimePicker.tsx` — stop closing DayPicker on selection, fix z-index
+- `analytics-web-app/jest.config.js` — add CSS moduleNameMapper so `.css` imports don't break tests
 
 ## Trade-offs
 
@@ -141,16 +143,28 @@ z-40  DayPicker calendar dropdown (was z-30)
 
 Two test files, one per component. Both use the project's existing Jest + React Testing Library setup.
 
+**Jest config prerequisite**: Add a CSS moduleNameMapper to `jest.config.js` so that `.css` imports resolve to an empty module instead of failing:
+
+```javascript
+// In moduleNameMapper, add:
+'\\.css$': '<rootDir>/src/__mocks__/styleMock.js',
+```
+
+Create `analytics-web-app/src/__mocks__/styleMock.js`:
+```javascript
+module.exports = {}
+```
+
+This handles `react-day-picker/style.css`, `./DateTimePicker.css`, and any future CSS imports globally — no per-test CSS mocks needed.
+
 #### Test 1: `analytics-web-app/src/components/ui/__tests__/DateTimePicker.test.tsx`
 
-Tests the DateTimePicker component in isolation. The `react-day-picker` library (ESM) and CSS imports need mocking.
+Tests the DateTimePicker component in isolation. The `react-day-picker` library (ESM) needs mocking; CSS imports are handled by the global moduleNameMapper above.
 
 **Mocks required:**
 - `react-day-picker` — render a simple button that calls `onSelect` when clicked
-- `react-day-picker/style.css` — no-op (CSS)
-- `./DateTimePicker.css` — no-op (CSS)
 - `lucide-react` — simple span stubs (existing pattern from `CellContainer.test.tsx`)
-- `date-fns` — let it run (CJS, works in Jest)
+- `date-fns` — let it run (CJS v2, works in Jest)
 
 **Test cases:**
 
@@ -222,7 +236,7 @@ jest.mock('@/components/ui/DateTimePicker', () => ({
 
 1. **Calendar section appears when calendar button clicked**
    - Render CustomRange with `from="now-1h"` and `to="now"`
-   - Click the "From" calendar toggle button (by title "Select from calendar")
+   - Click the "From" calendar toggle button (by `title="Select from calendar"`)
    - Assert `data-testid="date-time-picker"` is in the document
 
 2. **Calendar section stays visible after date selection** (validates fix 1)
@@ -232,7 +246,7 @@ jest.mock('@/components/ui/DateTimePicker', () => ({
    - Assert the "From" text input updated with the formatted date
 
 3. **Calendar section stays visible for "To" field too**
-   - Same as test 2 but for the "To" calendar toggle
+   - Same as test 2 but for the "To" calendar toggle (by `title="Select to calendar"`)
 
 4. **Calendar closes when toggle button clicked again**
    - Open the "From" calendar, click the toggle button again
@@ -261,6 +275,7 @@ jest.mock('@/components/ui/DateTimePicker', () => ({
 
 ## Files to Create
 
+- `analytics-web-app/src/__mocks__/styleMock.js` — empty module for CSS imports
 - `analytics-web-app/src/components/ui/__tests__/DateTimePicker.test.tsx`
 - `analytics-web-app/src/components/layout/TimeRangePicker/__tests__/CustomRange.test.tsx`
 
