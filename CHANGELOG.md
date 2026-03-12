@@ -4,6 +4,8 @@ This file documents the historical progress of the Micromegas project. For curre
 
 ## Unreleased
 
+* **Tracing:**
+  * Fix async span depth inconsistency by capturing depth at future creation time instead of poll time (#927)
 * **Telemetry:**
   * Add default system properties (exe, username, hostname, CPU, memory, OS) to process metadata (#380)
 * **Database Migration (REQUIRED before upgrade):**
