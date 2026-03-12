@@ -1,4 +1,4 @@
-# process_spans Table Function Plan — IMPLEMENTED
+# process_spans Table Function Plan — COMPLETE
 
 ## Overview
 
@@ -183,13 +183,21 @@ Move the existing `SpanTypes` enum from `perfetto_trace_execution_plan.rs` to a 
 | `mkdocs/docs/query-guide/async-performance-analysis.md` | Replace manual async self-join examples with `process_spans(id, 'async')` |
 | `CHANGELOG.md` | Update `process_thread_spans` reference to `process_spans` |
 
-## Testing
+## Testing — VERIFIED
 
-1. `cargo build` — verify compilation
-2. `cargo clippy --workspace -- -D warnings` — no warnings
-3. `cargo fmt` — formatting
-4. `cargo test` — existing tests pass
-5. Manual: `SELECT * FROM process_spans('pid', 'thread') LIMIT 10` — thread spans only
-6. Manual: `SELECT * FROM process_spans('pid', 'async') LIMIT 10` — async spans with `thread_name='async'`
-7. Manual: `SELECT * FROM process_spans('pid', 'both') LIMIT 10` — both types present
-8. Manual: flame chart cell renders both thread and async spans with `process_spans('$process_id', 'both')`
+1. `cargo build` — pass
+2. `cargo clippy --workspace -- -D warnings` — pass
+3. `cargo fmt` — pass
+4. `cargo test` — pass (including 9 async depth tracking tests)
+5. Manual: `process_spans('pid', 'thread')` — thread spans returned correctly
+6. Manual: `process_spans('pid', 'async')` — async spans with `thread_name='async'`, depth values verified correct (child.depth == parent.depth + 1)
+7. Manual: `process_spans('pid', 'both')` — both types present
+8. Manual: flame chart cell renders both thread and async spans correctly
+
+### Async depth verification
+
+Queried fresh data after the `SpanContextFuture` fix:
+```
+SELECT id, parent, depth, name FROM process_spans('842df815-...', 'async') ORDER BY "begin" LIMIT 30
+```
+All parent-child pairs showed `child.depth == parent.depth + 1`, including across `spawn_with_context` boundaries.

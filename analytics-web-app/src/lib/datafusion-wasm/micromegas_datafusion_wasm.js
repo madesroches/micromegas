@@ -133,7 +133,7 @@ function __wbg_get_imports() {
                     const a = state0.a;
                     state0.a = 0;
                     try {
-                        return wasm_bindgen__convert__closures_____invoke__h68aee7af6a5a44dc(a, state0.b, arg0, arg1);
+                        return wasm_bindgen__convert__closures_____invoke__h04fdd830bb54d5e4(a, state0.b, arg0, arg1);
                     } finally {
                         state0.a = a;
                     }
@@ -193,7 +193,7 @@ function __wbg_get_imports() {
         },
         __wbindgen_cast_0000000000000001: function(arg0, arg1) {
             // Cast intrinsic for `Closure(Closure { dtor_idx: 100, function: Function { arguments: [Externref], shim_idx: 101, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
-            const ret = makeMutClosure(arg0, arg1, wasm.wasm_bindgen__closure__destroy__hb68ae3098241167a, wasm_bindgen__convert__closures_____invoke__h157c52e499d8a1e8);
+            const ret = makeMutClosure(arg0, arg1, wasm.wasm_bindgen__closure__destroy__hbe28d9cc5661c8be, wasm_bindgen__convert__closures_____invoke__h738387317060838d);
             return ret;
         },
         __wbindgen_cast_0000000000000002: function(arg0, arg1) {
@@ -224,12 +224,12 @@ function __wbg_get_imports() {
     };
 }
 
-function wasm_bindgen__convert__closures_____invoke__h157c52e499d8a1e8(arg0, arg1, arg2) {
-    wasm.wasm_bindgen__convert__closures_____invoke__h157c52e499d8a1e8(arg0, arg1, arg2);
+function wasm_bindgen__convert__closures_____invoke__h738387317060838d(arg0, arg1, arg2) {
+    wasm.wasm_bindgen__convert__closures_____invoke__h738387317060838d(arg0, arg1, arg2);
 }
 
-function wasm_bindgen__convert__closures_____invoke__h68aee7af6a5a44dc(arg0, arg1, arg2, arg3) {
-    wasm.wasm_bindgen__convert__closures_____invoke__h68aee7af6a5a44dc(arg0, arg1, arg2, arg3);
+function wasm_bindgen__convert__closures_____invoke__h04fdd830bb54d5e4(arg0, arg1, arg2, arg3) {
+    wasm.wasm_bindgen__convert__closures_____invoke__h04fdd830bb54d5e4(arg0, arg1, arg2, arg3);
 }
 
 const WasmQueryEngineFinalization = (typeof FinalizationRegistry === 'undefined')

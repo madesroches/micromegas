@@ -6,13 +6,26 @@ Add a new `flamegraph` notebook cell type that renders Perfetto-style flame grap
 
 **GitHub Issue**: #917
 
+## Status: IMPLEMENTED
+
+All phases complete. The flame graph cell renders thread and async spans with interactive pan/zoom, tooltips, and drag-to-zoom selection.
+
+Key implementation decisions that diverged from the original plan:
+- **Async span layout uses DFS tree-walk** instead of simple depth-based stacking. Parent-child tree is built from `id`/`parent` columns, then laid out with DFS order + row-end tracking so children appear directly below their parent and non-overlapping sequential siblings share visual rows.
+- **`id` and `parent` columns are required** for async spans (used for tree-based layout and tooltip parent name resolution).
+- **WASD controls** for pan/zoom instead of wheel zoom (avoids conflict with browser zoom). W/S zoom cursor-anchored, A/D pan horizontally, wheel scrolls vertically.
+- **`overflow-hidden`** on container to prevent tooltip from triggering scrollbars.
+
 ## Current State
 
-Trace visualization currently requires exporting to Perfetto UI via the `perfettoexport` cell — an external tool with no in-app interactivity. The `swimlane` cell shows block-level coverage (one bar per stream/thread) but not individual spans or call hierarchy.
-
-Relevant data sources already exist:
-- **`process_spans(process_id, types)`** — aggregates thread and/or async spans from all CPU streams; returns `stream_id`, `thread_name`, `id`, `parent`, `depth`, `hash`, `begin`, `end`, `duration`, `name`, `target`, `filename`, `line` (`span_table.rs:50-84`, `process_spans_table_function.rs`)
-- **`view_instance('async_events', process_id)`** — returns begin/end events with `stream_id`, `block_id`, `time`, `event_type`, `span_id`, `parent_span_id`, `depth`, `name`, `filename`, `target`, `line` (`async_events_table.rs:39-81`)
+Fully functional flame graph cell with:
+- Three.js WebGL rendering via InstancedMesh for span rectangles
+- Canvas2D overlay for text labels and time axis
+- DOM tooltip with span name, duration, depth, parent info
+- DFS tree layout for async spans with row reuse for non-overlapping chains
+- Depth-based layout for thread spans
+- WASD pan/zoom, drag-to-zoom, double-click reset
+- `process_spans(process_id, types)` table function for unified span queries
 
 ## Data Schema
 
@@ -20,6 +33,8 @@ The cell expects query results with these columns:
 
 | Column | Type | Required | Description |
 |--------|------|----------|-------------|
+| `id` | integer | yes | Span ID (used for tree layout and tooltip) |
+| `parent` | integer | yes | Parent span ID (used for tree layout and tooltip) |
 | `name` | string | yes | Span/function name |
 | `begin` | timestamp | yes | Span start time |
 | `end` | timestamp | yes | Span end time |
@@ -78,9 +93,11 @@ interface FlameIndex {
 The Arrow column vectors (`table.getChild('begin')`, etc.) are accessed directly by row index during instance matrix updates, Canvas2D label rendering, and hit-testing. `timestampToMs()` is called per-access (cheap arithmetic).
 
 Index construction:
-1. Validate required columns (`name`, `begin`, `end`, `depth`)
+1. Validate required columns (`id`, `parent`, `name`, `begin`, `end`, `depth`)
 2. Single pass over rows: bucket row indices by `lane` value (or single default lane if column absent), track min/max timestamps, track max depth per lane
 3. Sort each lane's `rowIndices` by begin timestamp (for efficient culling and binary-search hit-testing)
+4. For async lanes: build parent-child tree, compute visual depths via DFS + row-end tracking (see `computeAsyncVisualDepths`)
+5. For thread lanes: use depth column directly as visual depth
 
 ### Three.js WebGL Layer (Rectangles)
 
@@ -206,60 +223,65 @@ No new config interface needed — `QueryCellConfig` with `options: {}` is suffi
 
 No R3F or drei needed for the flame graph. The 3D heatmap cell will add those when it's implemented.
 
-## Implementation Steps
+## Implementation Steps — ALL COMPLETE
 
-### Phase 1: Type System & Registry
+### Phase 1: Type System & Registry — DONE
 
-1. Add `'flamegraph'` to `CellType` union in `notebook-types.ts`
-2. Add `'flamegraph'` to `QueryCellConfig.type` union in `notebook-types.ts`
-3. Add default SQL to `DEFAULT_SQL` in `notebook-utils.ts`
-4. Add `three` to `package.json` dependencies
-5. Create `FlameGraphCell.tsx` with skeleton renderer, editor, `execute` method, and metadata export. The `execute` method follows the standard query cell pattern: substitute macros via `substituteMacros()`, call `context.runQuery(sql)`, return `{ data: [result] }` (see SwimlaneCell for reference)
-6. Import and register `flamegraphMetadata` in `cell-registry.ts`
+1. ~~Add `'flamegraph'` to `CellType` union in `notebook-types.ts`~~
+2. ~~Add `'flamegraph'` to `QueryCellConfig.type` union in `notebook-types.ts`~~
+3. ~~Add default SQL to `DEFAULT_SQL` in `notebook-utils.ts`~~
+4. ~~Add `three` to `package.json` dependencies~~
+5. ~~Create `FlameGraphCell.tsx` with renderer, editor, `execute` method, and metadata export~~
+6. ~~Import and register `flamegraphMetadata` in `cell-registry.ts`~~
 
-### Phase 2: Data Indexing
+### Phase 2: Data Indexing — DONE
 
-7. Implement `buildFlameIndex(table: Table): FlameIndex` — validate columns, single-pass bucketing by lane, sort row indices by begin time
+7. ~~Implement `buildFlameIndex(table: Table): FlameIndex`~~
+   - Thread lanes: depth column used directly
+   - Async lanes: DFS tree-walk via `computeAsyncVisualDepths()` (extracted, tested)
 
-### Phase 3: WebGL Renderer
+### Phase 3: WebGL Renderer — DONE
 
-8. Implement Three.js setup in `useEffect`:
-   - WebGLRenderer, OrthographicCamera, Scene, InstancedMesh
-   - Resize handling with devicePixelRatio
-   - Cleanup/disposal on unmount
-9. Implement instance update loop:
-   - Visible range culling via binary search
-   - Matrix/color updates from Arrow columns
-   - Deterministic color function
+8. ~~Three.js setup: WebGLRenderer, OrthographicCamera, InstancedMesh, resize handling~~
+9. ~~Instance update loop: visible range culling, matrix/color updates, deterministic color~~
 
-### Phase 4: Pan/Zoom
+### Phase 4: Pan/Zoom — DONE
 
-10. Implement wheel zoom (logarithmic, cursor-centered) and click-drag pan
-11. Implement drag-to-zoom selection overlay (Canvas2D layer)
-12. Wire `onTimeRangeSelect` callback for notebook integration
+10. ~~WASD controls: W/S cursor-anchored zoom, A/D horizontal pan~~
+11. ~~Drag-to-zoom selection overlay (Canvas2D layer)~~
+12. ~~`onTimeRangeSelect` callback (Alt+drag propagates to notebook)~~
+13. ~~Wheel vertical scroll, double-click zoom reset~~
 
-### Phase 5: Text & Interaction
+### Phase 5: Text & Interaction — DONE
 
-13. Implement Canvas2D overlay for span name labels and time axis
-14. Implement CPU-side hit-testing (binary search + depth band check)
-15. Implement DOM tooltip (positioned div, shows name/duration/target/file:line)
-16. Implement DOM lane name labels (fixed left column)
+14. ~~Canvas2D overlay for span name labels and time axis~~
+15. ~~CPU-side hit-testing (lane detection + depth band + time range check)~~
+16. ~~DOM tooltip: name, duration, depth, id, parent name, target, file:line~~
 
-### Phase 6: Editor
+### Phase 6: Editor — DONE
 
-17. Implement `FlameGraphCellEditor` — SQL editor with available variables panel (same as swimlane editor)
+17. ~~FlameGraphCellEditor with SQL editor, available variables panel, validation~~
 
-## Files to Modify
+### Phase 7: Async Depth Fix (added during implementation)
 
-**Create:**
-- `analytics-web-app/src/lib/screen-renderers/cells/FlameGraphCell.tsx` — renderer, editor, metadata
+18. ~~Fix `SpanContextFuture` to push/pop parent span on every poll (replaces broken `SpanScope` RAII guard)~~
+19. ~~Add stack depth padding in `SpanContextFuture` to preserve depth across spawn boundaries~~
+20. ~~Tests: 9 async depth tracking tests including cross-spawn and cross-yield scenarios~~
 
-**Modify:**
-- `analytics-web-app/src/lib/screen-renderers/notebook-types.ts` — add `'flamegraph'` to type unions
-- `analytics-web-app/src/lib/screen-renderers/cell-registry.ts` — import and register metadata
-- `analytics-web-app/src/lib/screen-renderers/notebook-utils.ts` — add default SQL
-- `analytics-web-app/package.json` — add `three` dependency
-- `mkdocs/docs/web-app/notebooks/cell-types.md` — document new cell type
+## Files Modified
+
+**Created:**
+- `analytics-web-app/src/lib/screen-renderers/cells/FlameGraphCell.tsx` — renderer, editor, metadata, `computeAsyncVisualDepths`
+- `analytics-web-app/src/lib/screen-renderers/cells/__tests__/FlameGraphLayout.test.ts` — 5 layout tests
+- `rust/tracing/src/spans/instrumented_future.rs` — `SpanContextFuture` (replaced `SpanScope`)
+
+**Modified:**
+- `analytics-web-app/src/lib/screen-renderers/notebook-types.ts` — added `'flamegraph'` to type unions
+- `analytics-web-app/src/lib/screen-renderers/cell-registry.ts` — registered `flamegraphMetadata`
+- `analytics-web-app/src/lib/screen-renderers/notebook-utils.ts` — added default SQL
+- `analytics-web-app/package.json` — added `three` dependency
+- `rust/tracing/src/lib.rs` — updated prelude exports (`SpanContextFuture` replaces `SpanScope`)
+- `rust/tracing/tests/async_depth_tracking_tests.rs` — added 3 tests for spawn/depth scenarios
 
 ## Trade-offs
 
@@ -273,7 +295,7 @@ No R3F or drei needed for the flame graph. The 3D heatmap cell will add those wh
 
 **d3.js**: d3-scale and d3-axis don't add value when Three.js handles coordinate transforms via camera. d3-zoom could be useful for pan/zoom behavior but Three.js camera manipulation achieves the same result. May reconsider d3-zoom if the custom pan/zoom implementation proves complex.
 
-**Fixed depth layout vs icicle chart**: Using depth from query data (top-down) rather than computing layout from parent-child relationships. This is simpler, matches the data the server already provides, and allows the user to control layout via SQL (e.g., filtering to specific depths).
+**Async span layout — DFS tree-walk vs flat depth-based**: Thread spans use the depth column directly (call-stack depth, no overlap possible). Async spans use a DFS tree-walk layout built from `id`/`parent` columns: children are placed directly below their parent, non-overlapping sequential siblings share visual rows (row-end tracking), and overlapping concurrent siblings get bumped to the next row. This was chosen over flat depth-based stacking which separated children from parents when intermediate depth levels had many concurrent spans. The layout algorithm is extracted into a tested `computeAsyncVisualDepths()` function.
 
 ## Documentation
 
