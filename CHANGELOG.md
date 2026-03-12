@@ -16,6 +16,7 @@ This file documents the historical progress of the Micromegas project. For curre
     CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS blocks_block_id_unique ON blocks(block_id);
     ```
   * If you have existing duplicate rows, clean them up first using `delete_duplicate_blocks()`, `delete_duplicate_streams()`, `delete_duplicate_processes()` or manual deduplication
+  * Validate concurrent indexes before completing v2→v3 migration to prevent invalid indexes from being silently accepted (#911)
 * **Dependencies:**
   * Update quinn-proto to 0.11.14 to fix unauthenticated DoS vulnerability
   * Update DataFusion to 52.3 (#907)

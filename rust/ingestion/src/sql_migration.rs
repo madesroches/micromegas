@@ -75,6 +75,63 @@ pub async fn upgrade_data_lake_schema_v3(
     Ok(())
 }
 
+/// Checks whether a specific index is valid in `pg_index`.
+/// If the index is invalid, drops it and returns `Ok(false)`.
+/// If valid, returns `Ok(true)`.
+/// Returns an error if the index does not exist.
+async fn check_index_is_valid(pool: &sqlx::Pool<sqlx::Postgres>, index_name: &str) -> Result<bool> {
+    let row = sqlx::query(
+        "SELECT i.indisvalid
+         FROM pg_class c
+         JOIN pg_index i ON i.indexrelid = c.oid
+         WHERE c.relname = $1;",
+    )
+    .bind(index_name)
+    .fetch_optional(pool)
+    .await
+    .with_context(|| format!("querying pg_index for {index_name}"))?;
+
+    let row = row.with_context(|| format!("index {index_name} not found in pg_class"))?;
+    let is_valid: bool = row.get("indisvalid");
+
+    if !is_valid {
+        info!("index {index_name} is INVALID, dropping it");
+        sqlx::query(&format!("DROP INDEX IF EXISTS {index_name}"))
+            .execute(pool)
+            .await
+            .with_context(|| format!("dropping invalid index {index_name}"))?;
+        return Ok(false);
+    }
+
+    Ok(true)
+}
+
+/// Validates that all three unique indexes created during the v2→v3 migration are valid.
+/// Drops any invalid indexes and returns an error so the migration can be retried.
+async fn validate_unique_indexes(pool: &sqlx::Pool<sqlx::Postgres>) -> Result<()> {
+    let index_names = [
+        "processes_process_id_unique",
+        "streams_stream_id_unique",
+        "blocks_block_id_unique",
+    ];
+
+    let mut invalid_indexes = Vec::new();
+    for name in &index_names {
+        if !check_index_is_valid(pool, name).await? {
+            invalid_indexes.push(*name);
+        }
+    }
+
+    if !invalid_indexes.is_empty() {
+        anyhow::bail!(
+            "invalid indexes detected and dropped: {}. The migration will be retried on next startup.",
+            invalid_indexes.join(", ")
+        );
+    }
+
+    Ok(())
+}
+
 /// Executes the database migration.
 pub async fn execute_migration(pool: sqlx::Pool<sqlx::Postgres>) -> Result<()> {
     let mut current_version = read_data_lake_schema_version(&mut pool.begin().await?).await;
@@ -109,6 +166,8 @@ pub async fn execute_migration(pool: sqlx::Pool<sqlx::Postgres>) -> Result<()> {
             .execute(&pool)
             .await
             .with_context(|| "creating unique index on blocks(block_id)")?;
+
+        validate_unique_indexes(&pool).await?;
 
         let mut tr = pool.begin().await?;
         upgrade_data_lake_schema_v3(&mut tr).await?;
