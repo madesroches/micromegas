@@ -55,6 +55,152 @@ function spanColor(name: string): [hex: string, textLight: boolean] {
 }
 
 // =============================================================================
+// Async span layout (exported for testing)
+// =============================================================================
+
+export interface SpanData {
+  id: number
+  parent: number
+  begin: number
+  end: number
+  depth: number
+}
+
+/**
+ * Compute visual depths for async spans using DFS tree-walk layout.
+ * Children are placed directly below their parent; concurrent siblings
+ * get bumped to the next visual row.
+ * Returns an array of visual depths, one per input span (in input order).
+ */
+export function computeAsyncVisualDepths(spans: SpanData[]): number[] {
+  const n = spans.length
+  if (n === 0) return []
+
+  // Build id → index lookup
+  const idToIdx = new Map<number, number>()
+  for (let i = 0; i < n; i++) {
+    idToIdx.set(spans[i].id, i)
+  }
+
+  // Build children map and find roots
+  const childrenOf = new Map<number, number[]>()
+  const roots: number[] = []
+  for (let i = 0; i < n; i++) {
+    const parentIdx = idToIdx.get(spans[i].parent)
+    if (parentIdx != null && parentIdx !== i) {
+      if (!childrenOf.has(spans[i].parent)) childrenOf.set(spans[i].parent, [])
+      childrenOf.get(spans[i].parent)!.push(i)
+    } else {
+      roots.push(i)
+    }
+  }
+
+  // Collect subtrees
+  interface SubTree {
+    members: number[]
+    minBegin: number
+    maxEnd: number
+  }
+  const visited = new Uint8Array(n)
+  const trees: SubTree[] = []
+
+  for (const rootIdx of roots) {
+    const members: number[] = []
+    let minBegin = Infinity
+    let maxEnd = -Infinity
+    const stack: number[] = [rootIdx]
+
+    while (stack.length > 0) {
+      const idx = stack.pop()!
+      if (visited[idx]) continue
+      visited[idx] = 1
+      members.push(idx)
+
+      if (spans[idx].begin < minBegin) minBegin = spans[idx].begin
+      if (spans[idx].end > maxEnd) maxEnd = spans[idx].end
+
+      const children = childrenOf.get(spans[idx].id)
+      if (children) {
+        for (let c = children.length - 1; c >= 0; c--) {
+          stack.push(children[c])
+        }
+      }
+    }
+
+    trees.push({ members, minBegin, maxEnd })
+  }
+
+  // Layout each subtree with recursive DFS so children are directly below
+  // their parent. Each node claims a visual row, then lays out its children
+  // starting at parentVd+1. The function returns the next free row after
+  // the entire sub-chain, so siblings are placed below each other's subtrees.
+  const globalRowEnds: number[] = []
+  const visualDepths = new Array<number>(n).fill(0)
+
+  // Recursive layout: place node at nextFreeRow, then children below it.
+  // Returns the next free row after this node and all its descendants.
+  function layoutNode(idx: number, nextFreeRow: number, relVd: Map<number, number>): number {
+    relVd.set(idx, nextFreeRow)
+    let childRow = nextFreeRow + 1
+
+    const children = childrenOf.get(spans[idx].id)
+    if (children) {
+      const sorted = [...children].sort((a, b) => spans[a].begin - spans[b].begin)
+      for (const childIdx of sorted) {
+        childRow = layoutNode(childIdx, childRow, relVd)
+      }
+    }
+
+    return childRow
+  }
+
+  for (const tree of trees) {
+    const memberRelVd = new Map<number, number>()
+
+    // Find roots within this subtree
+    const treeRoots = tree.members.filter((idx) => {
+      const parentIdx = idToIdx.get(spans[idx].parent)
+      return parentIdx == null || parentIdx === idx
+    })
+
+    let nextRow = 0
+    for (const rootIdx of treeRoots) {
+      nextRow = layoutNode(rootIdx, nextRow, memberRelVd)
+    }
+    const treeHeight = nextRow
+
+    // Find lowest global base where the tree block fits
+    let base = 0
+    let searching = true
+    while (searching) {
+      searching = false
+      for (let d = 0; d < treeHeight; d++) {
+        const r = base + d
+        if (r < globalRowEnds.length && globalRowEnds[r] > tree.minBegin) {
+          base = r + 1
+          searching = true
+          break
+        }
+      }
+    }
+
+    // Assign global visual depths
+    for (const idx of tree.members) {
+      visualDepths[idx] = base + memberRelVd.get(idx)!
+    }
+
+    // Reserve the tree block
+    for (let d = 0; d < treeHeight; d++) {
+      const r = base + d
+      while (globalRowEnds.length <= r) globalRowEnds.push(0)
+      if (tree.maxEnd > globalRowEnds[r]) globalRowEnds[r] = tree.maxEnd
+    }
+  }
+
+  return visualDepths
+}
+
+// =============================================================================
 // Data Model — FlameIndex
 // =============================================================================
 
@@ -141,158 +287,28 @@ function buildFlameIndex(table: Table): FlameIndex {
     const isAsync = name === 'async'
 
     if (isAsync) {
-      // Async spans: subtree-grouped layout using depth column.
-      // Build parent-child tree to identify subtrees, then use the depth
-      // column for nesting levels within each subtree. Subtrees are packed
-      // globally so children stay visually adjacent to their parent.
+      // Async spans: DFS tree layout via extracted function.
+      // Convert Arrow rows to SpanData[], compute layout, map back.
       const idCol = table.getChild('id')!
       const parentCol = table.getChild('parent')!
 
-      // Build span_id → index-in-rowIndices lookup
-      const idToIdx = new Map<bigint, number>()
-      for (let i = 0; i < rowIndices.length; i++) {
-        const id = idCol.get(rowIndices[i])
-        if (id != null) idToIdx.set(BigInt(id), i)
-      }
-
-      // Build children map and find roots
-      const childrenOf = new Map<bigint, number[]>()
-      const roots: number[] = []
-
+      const spanDataArr: SpanData[] = []
       for (let i = 0; i < rowIndices.length; i++) {
         const row = rowIndices[i]
-        const rawParent = parentCol.get(row)
-        const parentId = rawParent != null ? BigInt(rawParent) : null
-        if (parentId != null && idToIdx.has(parentId)) {
-          if (!childrenOf.has(parentId)) childrenOf.set(parentId, [])
-          childrenOf.get(parentId)!.push(i)
-        } else {
-          roots.push(i)
-        }
+        spanDataArr.push({
+          id: Number(idCol.get(row) ?? 0),
+          parent: Number(parentCol.get(row) ?? 0),
+          begin: timestampToMs(beginCol.get(row), beginField?.type),
+          end: timestampToMs(endCol.get(row), endField?.type),
+          depth: Number(depthCol.get(row) ?? 0),
+        })
       }
 
-      // Collect subtrees via DFS, using depth column for nesting level
-      interface SubTree {
-        members: { idx: number; depth: number }[]
-        minBegin: number
-        maxEnd: number
-      }
-      const visited = new Uint8Array(rowIndices.length)
-      const trees: SubTree[] = []
-
-      for (const rootIdx of roots) {
-        const members: { idx: number; depth: number }[] = []
-        let minBegin = Infinity
-        let maxEnd = -Infinity
-        const stack: number[] = [rootIdx]
-
-        while (stack.length > 0) {
-          const idx = stack.pop()!
-          if (visited[idx]) continue
-          visited[idx] = 1
-
-          const row = rowIndices[idx]
-          const depth = Number(depthCol.get(row) ?? 0)
-          members.push({ idx, depth })
-
-          const b = timestampToMs(beginCol.get(row), beginField?.type)
-          const e = timestampToMs(endCol.get(row), endField?.type)
-          if (b < minBegin) minBegin = b
-          if (e > maxEnd) maxEnd = e
-
-          const id = idCol.get(row)
-          const children = id != null ? childrenOf.get(BigInt(id)) : undefined
-          if (children) {
-            for (let c = children.length - 1; c >= 0; c--) {
-              stack.push(children[c])
-            }
-          }
-        }
-
-        trees.push({ members, minBegin, maxEnd })
-      }
-
-      // Pack each subtree internally by depth level, then pack globally
-      const globalRowEnds: number[] = []
-      const visualDepths = new Int32Array(rowIndices.length)
+      const vdArr = computeAsyncVisualDepths(spanDataArr)
+      const visualDepths = new Int32Array(vdArr)
       let maxVisualDepth = 0
-
-      for (const tree of trees) {
-        // Group by depth level
-        const depthGroups = new Map<number, number[]>()
-        for (const { idx, depth } of tree.members) {
-          if (!depthGroups.has(depth)) depthGroups.set(depth, [])
-          depthGroups.get(depth)!.push(idx)
-        }
-
-        const sortedDepths = [...depthGroups.keys()].sort((a, b) => a - b)
-        const memberRelVd = new Map<number, number>()
-        let depthBase = 0
-
-        for (const depth of sortedDepths) {
-          const group = depthGroups.get(depth)!
-          group.sort((a, b) => {
-            const ab = timestampToMs(beginCol.get(rowIndices[a]), beginField?.type)
-            const bb = timestampToMs(beginCol.get(rowIndices[b]), beginField?.type)
-            return ab - bb
-          })
-
-          const levelRowEnds: number[] = []
-          let maxLocalRow = 0
-
-          for (const idx of group) {
-            const row = rowIndices[idx]
-            const b = timestampToMs(beginCol.get(row), beginField?.type)
-            const e = timestampToMs(endCol.get(row), endField?.type)
-
-            let localRow = -1
-            for (let r = 0; r < levelRowEnds.length; r++) {
-              if (b >= levelRowEnds[r]) { localRow = r; break }
-            }
-            if (localRow === -1) {
-              localRow = levelRowEnds.length
-              levelRowEnds.push(e)
-            } else {
-              levelRowEnds[localRow] = e
-            }
-
-            memberRelVd.set(idx, depthBase + localRow)
-            if (localRow > maxLocalRow) maxLocalRow = localRow
-          }
-
-          depthBase += maxLocalRow + 1
-        }
-
-        const treeHeight = depthBase
-
-        // Find lowest global base where the tree block fits
-        let base = 0
-        let searching = true
-        while (searching) {
-          searching = false
-          for (let d = 0; d < treeHeight; d++) {
-            const r = base + d
-            if (r < globalRowEnds.length && globalRowEnds[r] > tree.minBegin) {
-              base = r + 1
-              searching = true
-              break
-            }
-          }
-        }
-
-        // Assign global visual depths
-        for (const { idx } of tree.members) {
-          const vd = base + memberRelVd.get(idx)!
-          visualDepths[idx] = vd
-          if (vd > maxVisualDepth) maxVisualDepth = vd
-        }
-
-        // Reserve the tree block
-        for (let d = 0; d < treeHeight; d++) {
-          const r = base + d
-          while (globalRowEnds.length <= r) globalRowEnds.push(0)
-          if (tree.maxEnd > globalRowEnds[r]) globalRowEnds[r] = tree.maxEnd
-        }
+      for (const vd of vdArr) {
+        if (vd > maxVisualDepth) maxVisualDepth = vd
       }
 
       return { id: name, name, maxDepth: maxVisualDepth, rowIndices, visualDepths }
@@ -872,32 +888,9 @@ function FlameGraphView({ index, onTimeRangeSelect }: FlameGraphViewProps) {
           }
         }
 
-        // Find visual depth for this span
-        const hitLane = index.lanes.find((l) => l.name === hit.laneName)
-        let visualDepthInfo = ''
-        if (hitLane) {
-          for (let ri = 0; ri < hitLane.rowIndices.length; ri++) {
-            if (hitLane.rowIndices[ri] === hit.rowIndex) {
-              visualDepthInfo = `, vd: ${hitLane.visualDepths[ri]}`
-              break
-            }
-          }
-        }
-
-        // Check if parent is in the same lane
-        let parentInLane = false
-        if (parentId != null && hitLane) {
-          const laneCol = index.table.getChild('lane')
-          for (let ri = 0; ri < hitLane.rowIndices.length; ri++) {
-            const r = hitLane.rowIndices[ri]
-            if (idCol.get(r) === parentId) { parentInLane = true; break }
-          }
-        }
-
         let info = `<b>${escapeHtml(name)}</b><br>Duration: ${formatDuration(duration)}`
-        info += `<br>id: ${spanId} (${typeof spanId}), depth: ${depth}${visualDepthInfo}`
-        info += `<br>parent: ${parentId} (${typeof parentId})${parentName ? ` (${escapeHtml(parentName)})` : ''}`
-        info += `<br>parent in lane: ${parentInLane}`
+        info += `<br>id: ${spanId}, depth: ${depth}`
+        info += `<br>parent: ${parentId}${parentName ? ` (${escapeHtml(parentName)})` : ''}`
         if (targetCol) {
           const target = targetCol.get(hit.rowIndex)
           if (target) info += `<br>Target: ${escapeHtml(String(target))}`
@@ -1003,7 +996,7 @@ function FlameGraphView({ index, onTimeRangeSelect }: FlameGraphViewProps) {
     <div
       ref={containerRef}
       tabIndex={0}
-      className="relative w-full h-full select-none outline-none"
+      className="relative w-full h-full select-none outline-none overflow-hidden"
       style={{ cursor: 'crosshair' }}
       onMouseDown={handleMouseDown}
       onMouseMove={handleMouseMove}
