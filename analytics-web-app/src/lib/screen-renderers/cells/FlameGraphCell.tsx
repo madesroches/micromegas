@@ -233,6 +233,8 @@ interface FlameIndex {
   table: Table
   lanes: LaneIndex[]
   timeRange: { min: number; max: number }
+  /** Pre-built id → name lookup for O(1) parent name resolution in tooltips */
+  idToName: Map<bigint, string>
   error?: string
 }
 
@@ -247,6 +249,7 @@ function buildFlameIndex(table: Table): FlameIndex {
       table,
       lanes: [],
       timeRange: { min: 0, max: 0 },
+      idToName: new Map(),
       error: `Missing required columns: ${missingColumns.join(', ')}. Query must return: name, begin, end, depth. Available: ${available}`,
     }
   }
@@ -340,10 +343,22 @@ function buildFlameIndex(table: Table): FlameIndex {
     }
   })
 
+  // Build id → name map for O(1) parent name resolution in tooltips
+  const idToName = new Map<bigint, string>()
+  const idCol = table.getChild('id')
+  const nameCol = table.getChild('name')
+  if (idCol && nameCol) {
+    for (let i = 0; i < table.numRows; i++) {
+      const id = idCol.get(i)
+      if (id != null) idToName.set(id, String(nameCol.get(i) ?? ''))
+    }
+  }
+
   return {
     table,
     lanes,
     timeRange: { min: globalMin === Infinity ? 0 : globalMin, max: globalMax === -Infinity ? 0 : globalMax },
+    idToName,
   }
 }
 
@@ -892,16 +907,8 @@ function FlameGraphView({ index, onTimeRangeSelect }: FlameGraphViewProps) {
         const parentId = parentCol.get(hit.rowIndex)
         const depth = depthCol.get(hit.rowIndex)
 
-        // Resolve parent name
-        let parentName = ''
-        if (parentId != null) {
-          for (let r = 0; r < index.table.numRows; r++) {
-            if (idCol.get(r) === parentId) {
-              parentName = String(nameCol.get(r) ?? '')
-              break
-            }
-          }
-        }
+        // Resolve parent name via pre-built map (O(1) instead of O(n) scan)
+        const parentName = (parentId != null && index.idToName.get(parentId)) || ''
 
         let info = `<b>${escapeHtml(name)}</b><br>Duration: ${formatDuration(duration)}`
         info += `<br>id: ${spanId}, depth: ${depth}`
