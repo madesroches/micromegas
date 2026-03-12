@@ -1,4 +1,10 @@
+use micromegas_tracing::dispatch::flush_thread_buffer;
 use micromegas_tracing::prelude::*;
+use micromegas_tracing::spans::ThreadEventQueueAny;
+use micromegas_tracing::test_utils::init_in_memory_tracing;
+use micromegas_transit::HeterogeneousQueue;
+use serial_test::serial;
+use std::collections::HashMap;
 use std::time::Duration;
 
 /// Simple test to validate that async instrumentation with depth tracking compiles and runs
@@ -101,4 +107,83 @@ fn test_error_handling_with_instrumentation() {
 
         recovery_operation().instrument(&RECOVERY_DESC).await;
     });
+}
+
+#[test]
+#[serial]
+fn test_depth_consistency_begin_end() {
+    let guard = init_in_memory_tracing();
+
+    let rt = tokio::runtime::Runtime::new().expect("failed to create runtime");
+    rt.block_on(async {
+        let _thread_guard = micromegas_tracing::guards::TracingThreadGuard::new();
+
+        static_span_desc!(OUTER_DESC, "depth_outer");
+        static_span_desc!(INNER_DESC, "depth_inner");
+
+        async fn inner_work() {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+
+        async fn outer_work() {
+            inner_work().instrument(&INNER_DESC).await;
+        }
+
+        outer_work().instrument(&OUTER_DESC).await;
+
+        flush_thread_buffer();
+    });
+
+    // Collect begin/end depths keyed by span_id
+    let mut begin_depths: HashMap<u64, u32> = HashMap::new();
+    let mut end_depths: HashMap<u64, u32> = HashMap::new();
+
+    let state = guard.sink.state.lock().expect("failed to lock sink state");
+    for block in &state.thread_blocks {
+        for event in block.events.iter() {
+            match event {
+                ThreadEventQueueAny::BeginAsyncSpanEvent(evt) => {
+                    begin_depths.insert(evt.span_id, evt.depth);
+                }
+                ThreadEventQueueAny::EndAsyncSpanEvent(evt) => {
+                    end_depths.insert(evt.span_id, evt.depth);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    // Verify we captured events
+    assert!(
+        begin_depths.len() >= 2,
+        "Expected at least 2 begin events (outer + inner), got {}",
+        begin_depths.len()
+    );
+
+    // Verify begin/end depths match for each span_id
+    for (span_id, begin_depth) in &begin_depths {
+        let end_depth = end_depths
+            .get(span_id)
+            .unwrap_or_else(|| panic!("missing end event for span_id {span_id}"));
+        assert_eq!(
+            begin_depth, end_depth,
+            "depth mismatch for span_id {span_id}: begin={begin_depth}, end={end_depth}"
+        );
+    }
+
+    // Verify nested spans have increasing depth
+    let mut depths: Vec<u32> = begin_depths.values().copied().collect();
+    depths.sort();
+    depths.dedup();
+    assert!(
+        depths.len() >= 2,
+        "Expected at least 2 distinct depth levels, got {depths:?}"
+    );
+    // Depths should be consecutive starting from 0
+    for (i, &d) in depths.iter().enumerate() {
+        assert_eq!(
+            d, i as u32,
+            "Expected depth {i} but got {d} in sorted depths {depths:?}"
+        );
+    }
 }

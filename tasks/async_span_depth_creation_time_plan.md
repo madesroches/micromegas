@@ -1,5 +1,7 @@
 # Capture Async Span Depth at Creation Time Plan
 
+Status: implemented
+
 ## Overview
 
 The `depth` field in async span events is computed at poll time from the thread-local `ASYNC_CALL_STACK`, but it should be captured once at future creation time. This causes begin/end events for the same span to report different depths depending on which thread/context polls them, making the depth field unreliable for flame graph rendering.
@@ -52,13 +54,14 @@ Compute `depth` from `(stack.len().saturating_sub(1)) as u32` in the same closur
 
 Replace `let depth = (stack.len().saturating_sub(1)) as u32;` on line 232 with `let depth = *this.depth;`.
 
-## Files to Modify
-
-- `rust/tracing/src/spans/instrumented_future.rs` — the only file that needs changes
-
 ### 7. Add depth consistency test to `rust/tracing/tests/async_depth_tracking_tests.rs`
 
 The existing tests are smoke tests that only verify instrumentation runs without panicking — they don't assert depth values. Add a test that uses an in-memory event sink to capture async span events and verifies that begin/end events for the same `span_id` report the same `depth` value, and that nested spans have increasing depth.
+
+## Files to Modify
+
+- `rust/tracing/src/spans/instrumented_future.rs` — add `depth` field and capture it in `new()`
+- `rust/tracing/tests/async_depth_tracking_tests.rs` — add depth consistency assertions
 
 ## Testing Strategy
 
