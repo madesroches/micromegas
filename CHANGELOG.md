@@ -19,6 +19,7 @@ This file documents the historical progress of the Micromegas project. For curre
   * If you have existing duplicate rows, clean them up first using `delete_duplicate_blocks()`, `delete_duplicate_streams()`, `delete_duplicate_processes()` or manual deduplication
   * Validate concurrent indexes before completing v2→v3 migration to prevent invalid indexes from being silently accepted (#911)
 * **Dependencies:**
+  * Fix CVE-2026-32141: upgrade flatted to 3.4.1 to fix unbounded recursion DoS
   * Update tower-http from 0.5 to 0.6
   * Update quinn-proto to 0.11.14 to fix unauthenticated DoS vulnerability
   * Update DataFusion to 52.3 (#907)
