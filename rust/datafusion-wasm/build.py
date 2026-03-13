@@ -133,14 +133,20 @@ TRACKED_BINDINGS = [
 ]
 
 
-def _normalize_closure_hashes(text: str) -> str:
-    """Replace compiler-generated closure hashes with a placeholder.
+def _normalize_symbol_hashes(text: str) -> str:
+    """Replace compiler-generated hashes with a placeholder.
 
-    Symbol names like ``__invoke__h04fdd830bb54d5e4`` change with every
-    Rust compiler version even when the source is identical.  Normalizing
-    them lets us detect *real* binding changes while ignoring hash churn.
+    Both Rust mangled symbols (``__invoke__h04fdd830bb54d5e4``) and
+    wasm-bindgen glue names (``__wbg_call_389efe28435a9388``) contain
+    hex hashes that change with compiler version even when the source is
+    identical.  Normalizing them lets us detect *real* binding changes
+    while ignoring hash churn.
     """
-    return re.sub(r"__h[0-9a-f]{16}\b", "__hXXXX", text)
+    # Rust symbol hashes: __h followed by 16 hex digits
+    text = re.sub(r"__h[0-9a-f]{16}\b", "__hXXXX", text)
+    # wasm-bindgen glue: trailing _<16 hex digits> on __wbg_ prefixed names
+    text = re.sub(r"(__wbg_\w+?)_[0-9a-f]{16}\b", r"\1_XXXX", text)
+    return text
 
 
 def check() -> None:
@@ -164,7 +170,7 @@ def check() -> None:
             continue
 
         current = path.read_text()
-        if _normalize_closure_hashes(committed.stdout) != _normalize_closure_hashes(current):
+        if _normalize_symbol_hashes(committed.stdout) != _normalize_symbol_hashes(current):
             print(f"  {path.name}: binding change detected (beyond closure hashes)")
             has_diff = True
 
