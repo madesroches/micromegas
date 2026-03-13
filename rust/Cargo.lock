@@ -54,7 +54,7 @@ checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 
 [[package]]
 name = "analytics-web-srv"
-version = "0.22.0"
+version = "0.23.0"
 dependencies = [
  "anyhow",
  "arrow-ipc",
@@ -116,9 +116,9 @@ dependencies = [
 
 [[package]]
 name = "anstyle"
-version = "1.0.13"
+version = "1.0.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5192cca8006f1fd4f7237516f40fa183bb07f8fbdfedaa0036de5ea9b0b45e78"
+checksum = "940b3a0ca603d1eade50a4846a2afffd5ef57a9feac2c0e2ec2e14f9ead76000"
 
 [[package]]
 name = "anstyle-parse"
@@ -944,9 +944,9 @@ checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 
 [[package]]
 name = "colorchoice"
-version = "1.0.4"
+version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b05b61dc5112cbb17e4b6cd61790d9845d13888356391624cbe7e41efeac1e75"
+checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
 
 [[package]]
 name = "colored"
@@ -2253,7 +2253,7 @@ dependencies = [
 
 [[package]]
 name = "flight-sql-srv"
-version = "0.22.0"
+version = "0.23.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -2633,7 +2633,7 @@ dependencies = [
 
 [[package]]
 name = "http-gateway"
-version = "0.22.0"
+version = "0.23.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -3313,7 +3313,7 @@ dependencies = [
 
 [[package]]
 name = "micromegas"
-version = "0.22.0"
+version = "0.23.0"
 dependencies = [
  "anyhow",
  "arrow-flight",
@@ -3349,7 +3349,7 @@ dependencies = [
 
 [[package]]
 name = "micromegas-analytics"
-version = "0.22.0"
+version = "0.23.0"
 dependencies = [
  "anyhow",
  "arrow-flight",
@@ -3386,7 +3386,7 @@ dependencies = [
 
 [[package]]
 name = "micromegas-auth"
-version = "0.22.0"
+version = "0.23.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3417,7 +3417,7 @@ dependencies = [
 
 [[package]]
 name = "micromegas-datafusion-extensions"
-version = "0.22.0"
+version = "0.23.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3429,7 +3429,7 @@ dependencies = [
 
 [[package]]
 name = "micromegas-derive-transit"
-version = "0.22.0"
+version = "0.23.0"
 dependencies = [
  "quote",
  "syn 1.0.109",
@@ -3437,7 +3437,7 @@ dependencies = [
 
 [[package]]
 name = "micromegas-ingestion"
-version = "0.22.0"
+version = "0.23.0"
 dependencies = [
  "anyhow",
  "bytes",
@@ -3450,7 +3450,7 @@ dependencies = [
 
 [[package]]
 name = "micromegas-perfetto"
-version = "0.22.0"
+version = "0.23.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3463,7 +3463,7 @@ dependencies = [
 
 [[package]]
 name = "micromegas-proc-macros"
-version = "0.22.0"
+version = "0.23.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3472,7 +3472,7 @@ dependencies = [
 
 [[package]]
 name = "micromegas-telemetry"
-version = "0.22.0"
+version = "0.23.0"
 dependencies = [
  "anyhow",
  "bytes",
@@ -3490,7 +3490,7 @@ dependencies = [
 
 [[package]]
 name = "micromegas-telemetry-sink"
-version = "0.22.0"
+version = "0.23.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3519,7 +3519,7 @@ dependencies = [
 
 [[package]]
 name = "micromegas-tracing"
-version = "0.22.0"
+version = "0.23.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3547,7 +3547,7 @@ dependencies = [
 
 [[package]]
 name = "micromegas-tracing-proc-macros"
-version = "0.22.0"
+version = "0.23.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3556,7 +3556,7 @@ dependencies = [
 
 [[package]]
 name = "micromegas-transit"
-version = "0.22.0"
+version = "0.23.0"
 dependencies = [
  "anyhow",
  "lazy_static",
@@ -5537,7 +5537,7 @@ checksum = "7b2093cf4c8eb1e67749a6762251bc9cd836b6fc171623bd0a9d324d37af2417"
 
 [[package]]
 name = "telemetry-admin"
-version = "0.22.0"
+version = "0.23.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -5547,7 +5547,7 @@ dependencies = [
 
 [[package]]
 name = "telemetry-ingestion-srv"
-version = "0.22.0"
+version = "0.23.0"
 dependencies = [
  "anyhow",
  "axum 0.8.8",
@@ -6034,7 +6034,7 @@ checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
 
 [[package]]
 name = "uri-handler"
-version = "0.22.0"
+version = "0.23.0"
 dependencies = [
  "anyhow",
  "micromegas",
@@ -6902,7 +6902,7 @@ dependencies = [
 
 [[package]]
 name = "write-perfetto"
-version = "0.22.0"
+version = "0.23.0"
 dependencies = [
  "anyhow",
  "chrono",

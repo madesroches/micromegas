@@ -2,7 +2,7 @@
 
 This file documents the historical progress of the Micromegas project. For current focus, please see the main [README.md](./README.md).
 
-## Unreleased
+## March 2026 - v0.22.0
 
 * **Tracing:**
   * Fix async span depth across yield points and spawn boundaries with `SpanContextFuture` (#917)
