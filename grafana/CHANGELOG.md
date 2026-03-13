@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.22.0 (2026-03-13)
+
+Version sync release. Security fix: upgrade flatted to 3.4.1 (CVE-2026-32141).
+
 ## 0.21.0 (2026-02-27)
 
 Version sync release - no plugin-specific changes.

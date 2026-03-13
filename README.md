@@ -69,14 +69,15 @@ To get started with Micromegas, please refer to the [Getting Started](https://mi
 
 ## Current Status & Roadmap
 
-### Unreleased
+### v0.22.0 (March 2026)
+* Flame graph cell type with Three.js WebGL rendering
+* Async span depth fixes with `SpanContextFuture`
+* Default system properties (exe, hostname, CPU, memory, OS) on process metadata
 * JSONPath UDFs (`jsonb_path_query`, `jsonb_path_query_first`) for JSONB columns
 * Interactive row selection in table cells with `$cell.selected.column` macros
 * `process_spans` table function for cross-thread and async span analysis
-* Cell result row references (`$cell[N].column`) for chaining queries
-* Keyboard navigation (Alt+PageUp/PageDown) and Ctrl+S to save
-* Auto-refresh with configurable intervals
-* DataFusion 52.2
+* Database migration: unique indexes on processes, streams, and blocks
+* DataFusion 52.3
 
 ### v0.21.0 (February 2026)
 * Cross-cell notebook queries running DataFusion in the browser via WASM
