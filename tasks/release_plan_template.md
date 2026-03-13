@@ -1,7 +1,7 @@
 # Release Plan Template for Micromegas
 
 This template is updated after each release with lessons learned.
-Last updated: v0.21.0 (2026-02-27)
+Last updated: v0.22.0 (2026-03-13)
 
 ---
 
@@ -149,7 +149,11 @@ gh release create vX.Y.0 \
 - Commit version bump
 - Push to release branch
 
-### Phase 5: Merge to Main
+### Phase 5: Cleanup
+
+- Move completed release plan from `tasks/` to `tasks/completed/`
+
+### Phase 6: Merge to Main
 
 - Create PR from release to main
 - Merge after review
