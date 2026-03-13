@@ -18,6 +18,7 @@ def run_native():
 
 def run_wasm():
     steps = [
+        ("WASM Dependency Version Check", "python3 build/check_wasm_deps.py", None),
         ("WASM Formatting Check", "cargo fmt --check", wasm_crate),
         ("WASM Clippy", "cargo clippy --target wasm32-unknown-unknown -- -D warnings", wasm_crate),
         ("WASM Tests", "python3 build.py --test", wasm_crate),
