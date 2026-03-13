@@ -3,7 +3,8 @@ import sys
 import pathlib
 from rust_command import run_command, show_disk_space
 
-wasm_crate = pathlib.Path(__file__).parent.parent.absolute() / "rust" / "datafusion-wasm"
+repo_root = pathlib.Path(__file__).parent.parent.absolute()
+wasm_crate = repo_root / "rust" / "datafusion-wasm"
 
 
 def run_native():
@@ -18,6 +19,7 @@ def run_native():
 
 def run_wasm():
     steps = [
+        ("WASM Dependency Version Check", "python3 build/check_wasm_deps.py", repo_root),
         ("WASM Formatting Check", "cargo fmt --check", wasm_crate),
         ("WASM Clippy", "cargo clippy --target wasm32-unknown-unknown -- -D warnings", wasm_crate),
         ("WASM Tests", "python3 build.py --test", wasm_crate),

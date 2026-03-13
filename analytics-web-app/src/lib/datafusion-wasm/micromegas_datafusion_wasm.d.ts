@@ -57,9 +57,9 @@ export interface InitOutput {
     readonly rust_zstd_wasm_shim_memmove: (a: number, b: number, c: number) => number;
     readonly rust_zstd_wasm_shim_memset: (a: number, b: number, c: number) => number;
     readonly rust_zstd_wasm_shim_qsort: (a: number, b: number, c: number, d: number) => void;
-    readonly wasm_bindgen__closure__destroy__hbe28d9cc5661c8be: (a: number, b: number) => void;
-    readonly wasm_bindgen__convert__closures_____invoke__h04fdd830bb54d5e4: (a: number, b: number, c: any, d: any) => void;
-    readonly wasm_bindgen__convert__closures_____invoke__h738387317060838d: (a: number, b: number, c: any) => void;
+    readonly wasm_bindgen__closure__destroy__h973cc31d7fb437d2: (a: number, b: number) => void;
+    readonly wasm_bindgen__convert__closures_____invoke__haf48848aa6f4ecee: (a: number, b: number, c: any) => [number, number];
+    readonly wasm_bindgen__convert__closures_____invoke__h41f8af0b13ef8fb0: (a: number, b: number, c: any, d: any) => void;
     readonly __wbindgen_exn_store: (a: number) => void;
     readonly __externref_table_alloc: () => number;
     readonly __wbindgen_externrefs: WebAssembly.Table;
