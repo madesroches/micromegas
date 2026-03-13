@@ -196,6 +196,19 @@ function computeDiffSections(
         lines: computeLineDiff(savedOrder.join('\n'), currentOrder.join('\n')),
       })
     }
+
+    // Diff non-cell, non-timeRange top-level properties (e.g. refreshIntervalMs)
+    const { cells: _sc, timeRangeFrom: _sf2, timeRangeTo: _st2, ...savedExtras } = savedConfig
+    const { cells: _cc, timeRangeFrom: _cf2, timeRangeTo: _ct2, ...currentExtras } = currentConfig
+    const savedExtrasJson = prettyJson(savedExtras)
+    const currentExtrasJson = prettyJson(currentExtras)
+    if (savedExtrasJson !== currentExtrasJson) {
+      sections.push({
+        title: 'Settings',
+        status: 'modified',
+        lines: computeLineDiff(savedExtrasJson, currentExtrasJson),
+      })
+    }
   } else {
     // Non-notebook config: diff the whole config (excluding timeRange which is handled below)
     const { timeRangeFrom: _sf, timeRangeTo: _st, ...savedRest } = savedConfig
