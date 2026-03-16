@@ -60,6 +60,9 @@ This file documents the historical progress of the Micromegas project. For curre
   * Add `process_spans(process_id, types)` table function for cross-thread and async span analysis (#917)
   * Add `hash` column to `async_events` view for scope identification (#917)
   * Extract `get_process_thread_list` as shared utility for process stream discovery
+* **Query CLI:**
+  * Require `--begin` flag and default `--end` to now to prevent accidental full-range queries
+  * Add `--all` flag to explicitly query the entire time range without time filtering
 * **Documentation:**
   * Migrate all documentation URLs from madesroches.github.io to micromegas.info
   * Remove dead troubleshooting link from Grafana plugin README

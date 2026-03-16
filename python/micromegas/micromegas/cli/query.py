@@ -51,7 +51,12 @@ def main():
     )
     parser.add_argument(
         "--end",
-        help="End timestamp (ISO format or relative like '1h', '30m', '7d')",
+        help="End timestamp (ISO format or relative like '1h', '30m', '7d', defaults to now)",
+    )
+    parser.add_argument(
+        "--all",
+        action="store_true",
+        help="Query the entire time range (no time filtering)",
     )
     parser.add_argument(
         "--format",
@@ -67,8 +72,19 @@ def main():
     )
     args = parser.parse_args()
 
+    if not args.begin and not args.all:
+        parser.error(
+            "--begin is required (or use --all to query the entire time range)"
+        )
+    if args.all and args.begin:
+        parser.error("--all and --begin are mutually exclusive")
+    if args.all and args.end:
+        parser.error("--all and --end are mutually exclusive")
+
     begin = parse_timestamp(args.begin)
     end = parse_timestamp(args.end)
+    if begin is not None and end is None:
+        end = datetime.datetime.now(datetime.timezone.utc)
 
     client = connection.connect()
     df = client.query(args.sql, begin, end)
