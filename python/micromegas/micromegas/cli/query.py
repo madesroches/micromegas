@@ -78,6 +78,8 @@ def main():
         )
     if args.all and args.begin:
         parser.error("--all and --begin are mutually exclusive")
+    if args.all and args.end:
+        parser.error("--all and --end are mutually exclusive")
 
     begin = parse_timestamp(args.begin)
     end = parse_timestamp(args.end)
