@@ -2,6 +2,11 @@
 
 This file documents the historical progress of the Micromegas project. For current focus, please see the main [README.md](./README.md).
 
+## Unreleased
+
+* **Claude Code Plugin:**
+  * Add shareable micromegas-query plugin for querying observability data via SQL
+
 ## March 2026 - v0.22.0
 
 * **Tracing:**
