@@ -24,7 +24,7 @@ use std::sync::Arc;
 /// # Returns
 ///
 /// Returns `Ok(())` if files exist, or an error if no files are found.
-async fn verify_files_exist(
+pub async fn verify_files_exist(
     object_store: &Arc<dyn ObjectStore>,
     prefix: &object_store::path::Path,
     url: &str,
