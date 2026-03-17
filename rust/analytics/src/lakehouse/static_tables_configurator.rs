@@ -1,17 +1,13 @@
 use anyhow::Result;
 use datafusion::catalog::TableProvider;
-use datafusion::datasource::file_format::csv::CsvFormat;
-use datafusion::datasource::file_format::json::JsonFormat;
-use datafusion::datasource::listing::{
-    ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
-};
 use datafusion::execution::context::SessionContext;
 use futures::StreamExt;
 use micromegas_tracing::prelude::*;
 use std::sync::Arc;
 
 use super::session_configurator::SessionConfigurator;
-use crate::dfext::json_table_provider::verify_files_exist;
+use crate::dfext::csv_table_provider::csv_table_provider;
+use crate::dfext::json_table_provider::json_table_provider;
 
 /// A SessionConfigurator that auto-discovers JSON and CSV files under an object store URL
 /// and registers each as a queryable DataFusion table.
@@ -40,24 +36,10 @@ pub struct StaticTablesConfigurator {
     tables: Vec<(String, Arc<dyn TableProvider>)>,
 }
 
-async fn make_listing_table(
-    ctx: &SessionContext,
-    url: &str,
-    listing_options: ListingOptions,
-) -> Result<Arc<dyn TableProvider>> {
-    let table_url = ListingTableUrl::parse(url)?;
-    let object_store = ctx.state().runtime_env().object_store(&table_url)?;
-    verify_files_exist(&object_store, table_url.prefix(), url).await?;
-    let mut config = ListingTableConfig::new(table_url).with_listing_options(listing_options);
-    config = config.infer_schema(&ctx.state()).await?;
-    let listing_table = ListingTable::try_new(config)?;
-    Ok(Arc::new(listing_table))
-}
-
 impl StaticTablesConfigurator {
     /// Discovers JSON and CSV files under the given URL and creates table providers for each.
     ///
-    /// Files with `.json` or `.jsonl` extensions are loaded as JSON tables.
+    /// Files with `.json` extensions are loaded as JSON tables.
     /// Files with `.csv` extensions are loaded as CSV tables.
     /// Other extensions are skipped with a warning.
     ///
@@ -101,18 +83,14 @@ impl StaticTablesConfigurator {
 
                     let table_name = stem.to_string();
 
-                    let listing_options = match ext.as_str() {
-                        "json" | "jsonl" => ListingOptions::new(Arc::new(JsonFormat::default()))
-                            .with_file_extension(format!(".{ext}")),
-                        "csv" => ListingOptions::new(Arc::new(CsvFormat::default()))
-                            .with_file_extension(".csv"),
+                    let provider_result = match ext.as_str() {
+                        "json" => json_table_provider(ctx, &file_url).await,
+                        "csv" => csv_table_provider(ctx, &file_url).await,
                         _ => {
                             warn!("skipping file with unsupported extension: {path_str}");
                             continue;
                         }
                     };
-
-                    let provider_result = make_listing_table(ctx, &file_url, listing_options).await;
 
                     match provider_result {
                         Ok(provider) => {

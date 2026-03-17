@@ -65,7 +65,7 @@ async fn test_table_names_from_filename_stems() -> Result<()> {
 
     write_file(
         &dir,
-        "event_schemas.jsonl",
+        "event_schemas.json",
         br#"{"event": "click", "version": 1}
 "#,
     )?;
