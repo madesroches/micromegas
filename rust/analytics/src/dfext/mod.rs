@@ -1,5 +1,7 @@
 /// Write log entries as a SendableRecordBatchStream
 pub mod async_log_stream;
+/// Helper to create CSV table providers
+pub mod csv_table_provider;
 /// Utilities to help deal with df expressions
 pub mod expressions;
 /// Helper to create JSON table providers

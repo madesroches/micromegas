@@ -99,6 +99,8 @@ pub mod session_configurator;
 pub mod sql_batch_view;
 /// Specification for a view partition backed by a SQL query on the lakehouse.
 pub mod sql_partition_spec;
+/// Auto-discovery configurator for static JSON/CSV tables
+pub mod static_tables_configurator;
 /// Replicated view of the `streams` table of the postgresql metadata database.
 pub mod streams_view;
 /// Rewrite table scans to take the query range into account

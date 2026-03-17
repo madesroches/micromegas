@@ -4,11 +4,15 @@ use micromegas::analytics::lakehouse::lakehouse_context::LakehouseContext;
 use micromegas::analytics::lakehouse::migration::migrate_lakehouse;
 use micromegas::analytics::lakehouse::partition_cache::LivePartitionProvider;
 use micromegas::analytics::lakehouse::runtime::make_runtime_env;
-use micromegas::analytics::lakehouse::session_configurator::NoOpSessionConfigurator;
+use micromegas::analytics::lakehouse::session_configurator::{
+    NoOpSessionConfigurator, SessionConfigurator,
+};
+use micromegas::analytics::lakehouse::static_tables_configurator::StaticTablesConfigurator;
 use micromegas::analytics::lakehouse::view_factory::default_view_factory;
 use micromegas::arrow_flight::flight_service_server::FlightServiceServer;
 use micromegas::auth::tower::AuthService;
 use micromegas::auth::types::AuthProvider;
+use micromegas::datafusion::execution::context::{SessionConfig, SessionContext};
 use micromegas::ingestion::data_lake_connection::connect_to_data_lake;
 use micromegas::micromegas_main;
 use micromegas::servers::connect_info_layer::ConnectedIncoming;
@@ -49,7 +53,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let view_factory =
         Arc::new(default_view_factory(lakehouse.runtime().clone(), data_lake).await?);
     let partition_provider = Arc::new(LivePartitionProvider::new(lakehouse.lake().db_pool.clone()));
-    let session_configurator = Arc::new(NoOpSessionConfigurator);
+    let session_configurator: Arc<dyn SessionConfigurator> = if let Ok(static_tables_url) =
+        std::env::var("MICROMEGAS_STATIC_TABLES_URL")
+    {
+        let ctx =
+            SessionContext::new_with_config_rt(SessionConfig::new(), lakehouse.runtime().clone());
+        Arc::new(
+            StaticTablesConfigurator::new(&ctx, &static_tables_url)
+                .await
+                .with_context(|| format!("loading static tables from {static_tables_url}"))?,
+        )
+    } else {
+        Arc::new(NoOpSessionConfigurator)
+    };
     let svc = FlightServiceServer::new(FlightSqlServiceImpl::new(
         lakehouse,
         partition_provider,

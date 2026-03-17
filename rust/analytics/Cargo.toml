@@ -34,6 +34,7 @@ parquet.workspace = true
 sqlx.workspace = true
 thrift.workspace = true
 tokio.workspace = true
+url.workspace = true
 uuid.workspace = true
 xxhash-rust.workspace = true
 
