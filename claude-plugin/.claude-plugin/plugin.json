@@ -1,0 +1,8 @@
+{
+  "name": "micromegas-query",
+  "version": "0.1.0",
+  "description": "Query micromegas observability data (logs, metrics, spans) using SQL",
+  "author": { "name": "Micromegas" },
+  "homepage": "https://micromegas.info",
+  "license": "MIT"
+}
