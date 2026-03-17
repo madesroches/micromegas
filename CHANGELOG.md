@@ -6,6 +6,8 @@ This file documents the historical progress of the Micromegas project. For curre
 
 * **Claude Code Plugin:**
   * Add shareable micromegas plugin with micromegas-query skill for querying observability data via SQL
+* **Dependencies:**
+  * Update lz4_flex to 0.12.1 to fix memory information leak vulnerability
 
 ## March 2026 - v0.22.0
 
