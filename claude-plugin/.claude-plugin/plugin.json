@@ -1,0 +1,8 @@
+{
+  "name": "micromegas",
+  "version": "0.1.0",
+  "description": "Micromegas observability platform tools for Claude Code",
+  "author": { "name": "Micromegas" },
+  "homepage": "https://micromegas.info",
+  "license": "MIT"
+}
