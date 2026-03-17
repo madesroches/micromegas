@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 import argparse
+import pathlib
+import sys
 from micromegas.cli import connection
 import datetime
 import micromegas
@@ -44,7 +46,13 @@ def main():
         description="Run arbitrary SQL queries on the analytics service",
         epilog="If you are in a corporate environment, you may need to set the MICROMEGAS_PYTHON_MODULE_WRAPPER environment variable to specify the python module responsible to authenticate your requests.",
     )
-    parser.add_argument("sql", help="SQL query to execute")
+    parser.add_argument(
+        "sql", nargs="?", default=None, help="SQL query to execute (or use --file)"
+    )
+    parser.add_argument(
+        "--file",
+        help="Read SQL from a file path (use '-' for stdin)",
+    )
     parser.add_argument(
         "--begin",
         help="Begin timestamp (ISO format or relative like '1h', '30m', '7d')",
@@ -72,6 +80,21 @@ def main():
     )
     args = parser.parse_args()
 
+    if args.file and args.sql:
+        parser.error("cannot use both positional SQL and --file")
+    if not args.file and not args.sql:
+        parser.error("must provide SQL as a positional argument or via --file")
+    if args.file:
+        if args.file == "-":
+            sql = sys.stdin.read().strip()
+        else:
+            try:
+                sql = pathlib.Path(args.file).read_text().strip()
+            except OSError as e:
+                parser.error(f"cannot read file '{args.file}': {e}")
+    else:
+        sql = args.sql
+
     if not args.begin and not args.all:
         parser.error(
             "--begin is required (or use --all to query the entire time range)"
@@ -87,7 +110,7 @@ def main():
         end = datetime.datetime.now(datetime.timezone.utc)
 
     client = connection.connect()
-    df = client.query(args.sql, begin, end)
+    df = client.query(sql, begin, end)
 
     if df.empty:
         print("no data")

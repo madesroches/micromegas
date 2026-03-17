@@ -54,10 +54,11 @@ micromegas-query "SELECT 1" --begin 1h
 ## CLI syntax
 
 ```
-micromegas-query "<SQL>" --begin <time> [--end <time>] [--format table|csv|json] [--max-colwidth N]
+micromegas-query [--file <path|->] ["<SQL>"] --begin <time> [--end <time>] [--format table|csv|json] [--max-colwidth N]
 ```
 
 - `--begin` is **always required** except when using `--all` for lightweight aggregate-only queries (see MANDATORY RULES).
+- `--file` accepts a `.sql` file path or `-` for stdin, as an alternative to the inline SQL positional argument. Using `--file` avoids awkward shell quoting when queries contain JSONPath expressions (e.g., `$[*].attributes[*]?(@.key=="Branch").value`).
 - Time formats: relative (`1h`, `30m`, `7d`) or RFC 3339
 - **ALWAYS use `--begin`/`--end` for time filtering, NEVER use `WHERE time >= ... AND time <= ...` in SQL.** The CLI flags enable server-side partition pruning, making queries much faster.
 - Use `--format csv` or `--format json` when processing results programmatically (csv for flat data, json when properties/nested fields matter)

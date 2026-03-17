@@ -56,6 +56,8 @@ Also support reading from stdin via `--file -`, which is a common CLI convention
 
 4. **Update documentation** in `mkdocs/docs/query-guide/python-api.md`:
    - In the "query.py - Run SQL Queries" section (~line 563), update the `sql` argument description to note it is optional when `--file` is used
+   - Fix the `--begin` option description: it is **required** (unless `--all` is used), not defaulted to "1 hour ago"
+   - Add `--all` to the **Options** list: queries the entire time range (mutually exclusive with `--begin`/`--end`)
    - Add `--file` to the **Options** list with description: accepts a file path or `-` for stdin
    - Add examples for file input and stdin piping to the **Examples** section
 
