@@ -560,18 +560,20 @@ micromegas-query "SELECT * FROM list_partitions() LIMIT 5"
 ```
 
 **Arguments:**
-- `sql` (positional): SQL query to execute
+- `sql` (positional, optional): SQL query to execute (omit when using `--file`)
 
 **Options:**
-- `--begin`: Begin timestamp (ISO format or relative like `1h`, `30m`, `7d`). Default: 1 hour ago
+- `--file`: Read SQL from a file path, or use `-` to read from stdin
+- `--begin`: Begin timestamp (ISO format or relative like `1h`, `30m`, `7d`). Required unless `--all` is used
 - `--end`: End timestamp (ISO format or relative like `1h`, `30m`, `7d`). Default: now
+- `--all`: Query the entire time range (mutually exclusive with `--begin`/`--end`)
 - `--format`: Output format - `table` (default), `csv`, or `json`
 - `--max-colwidth`: Maximum column width for table format (default: 50, use 0 for unlimited)
 
 **Examples:**
 ```bash
-# Query with default time range (last hour)
-micromegas-query "SELECT * FROM processes LIMIT 10"
+# Query with relative time range (last hour)
+micromegas-query "SELECT * FROM processes LIMIT 10" --begin 1h
 
 # Query with relative time range (last 24 hours)
 micromegas-query "SELECT * FROM log_entries LIMIT 100" --begin 24h
@@ -580,11 +582,17 @@ micromegas-query "SELECT * FROM log_entries LIMIT 100" --begin 24h
 micromegas-query "SELECT * FROM measures LIMIT 50" \
     --begin 2024-01-01T00:00:00 --end 2024-01-02T00:00:00
 
+# Read SQL from a file (avoids shell quoting issues with JSONPath)
+micromegas-query --file query.sql --begin 1h
+
+# Read SQL from stdin
+echo "SELECT 1" | micromegas-query --file - --all
+
 # Output as CSV for piping to other tools
-micromegas-query "SELECT * FROM list_partitions()" --format csv
+micromegas-query "SELECT * FROM list_partitions()" --all --format csv
 
 # Output as JSON
-micromegas-query "SELECT view_set_name, num_rows FROM list_partitions()" --format json
+micromegas-query "SELECT view_set_name, num_rows FROM list_partitions()" --all --format json
 ```
 
 **Environment Variables:**

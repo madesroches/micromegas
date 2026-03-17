@@ -4,6 +4,8 @@ This file documents the historical progress of the Micromegas project. For curre
 
 ## Unreleased
 
+* **CLI:**
+  * Add `--file` option to `micromegas-query` for reading SQL from a file or stdin (#941)
 * **Claude Code Plugin:**
   * Add shareable micromegas plugin with micromegas-query skill for querying observability data via SQL
 * **Dependencies:**
