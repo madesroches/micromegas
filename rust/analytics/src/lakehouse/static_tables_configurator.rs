@@ -74,7 +74,7 @@ impl StaticTablesConfigurator {
                     let (stem, ext) = match file_name.rsplit_once('.') {
                         Some((s, e)) => (s, e.to_lowercase()),
                         None => {
-                            warn!("skipping file without extension: {path_str}");
+                            debug!("skipping file without extension: {path_str}");
                             continue;
                         }
                     };
