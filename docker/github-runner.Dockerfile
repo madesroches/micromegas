@@ -40,6 +40,12 @@ RUN pip3 install --no-cache-dir poetry
 # Playwright system dependencies (for Grafana E2E tests)
 RUN npx playwright install-deps chromium
 
+# Firefox + geckodriver (for wasm-pack test --headless --firefox)
+RUN apt-get update && apt-get install -y --no-install-recommends firefox \
+    && GECKO_VERSION=$(curl -fsSL https://api.github.com/repos/mozilla/geckodriver/releases/latest | python3 -c "import sys,json; print(json.load(sys.stdin)['tag_name'])") \
+    && curl -fsSL "https://github.com/mozilla/geckodriver/releases/download/${GECKO_VERSION}/geckodriver-${GECKO_VERSION}-linux64.tar.gz" | tar -xz -C /usr/local/bin \
+    && rm -rf /var/lib/apt/lists/*
+
 # Create runner user with passwordless sudo
 RUN useradd -m -s /bin/bash runner \
     && echo "runner ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
