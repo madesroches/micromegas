@@ -278,6 +278,8 @@ def run_worker_loop(pat, cpus=None, memory=None, trigger_warming=False, rotate_h
             proc, token_path = start_container(pat, cpus=cpus, memory=memory)
         except Exception as e:
             if running:
+                # Remove stale container left behind by a daemon crash
+                subprocess.run(["docker", "rm", "-f", CONTAINER_NAME], capture_output=True)
                 print(f"Failed to start container: {e}")
                 print("Retrying in 10 seconds...")
                 time.sleep(10)
