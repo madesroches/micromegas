@@ -11,8 +11,7 @@ TOKEN=$(cat /run/secrets/registration-token)
   --name "${RUNNER_NAME}" \
   --labels "dev-worker,linux,${ARCH}" \
   --work _work \
-  --unattended \
-  --replace
+  --unattended
 
 # Run the runner agent. It stays online and processes jobs until stopped.
 # exec replaces the shell so signals are forwarded directly to the runner.
