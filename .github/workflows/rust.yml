@@ -127,6 +127,7 @@ jobs:
         if [ -z "$CARGO_TARGET_DIR" ]; then unset CARGO_TARGET_DIR; fi
         ./build/rust_ci.py wasm
       env:
+        CARGO_BUILD_JOBS: ${{ needs.check-runner.outputs.runner == 'dev-worker' && '0' || '2' }}
         # Override to WASM-specific cache dir on dev-worker (native and WASM targets conflict).
         # On GitHub-hosted this evaluates to '' which the shell guard above unsets.
         CARGO_TARGET_DIR: ${{ needs.check-runner.outputs.runner == 'dev-worker' && '/cache/target-wasm' || '' }}

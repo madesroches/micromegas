@@ -276,7 +276,6 @@ def run_worker_loop(pat, cpus=None, memory=None, trigger_warming=False, rotate_h
     print(f"Starting dev worker for {REPO}")
     print("Press Ctrl+C to stop\n")
 
-    first_run = True
     while running:
         # Check if nightly rotation was requested (between container runs)
         if rotation_event.is_set():
@@ -296,11 +295,10 @@ def run_worker_loop(pat, cpus=None, memory=None, trigger_warming=False, rotate_h
 
         try:
             # After rotate-cache or nightly rotation, trigger a warming build
-            if first_run and trigger_warming:
+            if trigger_warming:
                 if wait_for_runner_online(pat):
                     trigger_warming_build(pat)
                 trigger_warming = False
-            first_run = False
 
             proc.wait()
         finally:
