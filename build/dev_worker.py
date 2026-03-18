@@ -46,7 +46,7 @@ import uuid
 REPO = "madesroches/micromegas"
 IMAGE_NAME = "micromegas-github-runner"
 VOLUME_NAME = "micromegas-build-cache"
-CONTAINER_PREFIX = "micromegas-runner"
+CONTAINER_NAME = "micromegas-runner"
 PAT_FILE = os.path.expanduser("~/.config/micromegas/runner-pat")
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -122,10 +122,15 @@ def build_image():
 
 
 def start_container(pat, cpus=None, memory=None):
-    """Start a persistent runner container. Returns (Popen, token_path, container_name)."""
+    """Start a persistent runner container. Returns (Popen, token_path).
+
+    Uses a fixed container name to prevent multiple instances from
+    corrupting the shared build cache. The GitHub runner registration
+    uses a unique name to avoid stale session conflicts.
+    """
     token = get_registration_token(pat)
     arch = get_arch()
-    container_name = f"{CONTAINER_PREFIX}-{uuid.uuid4().hex[:8]}"
+    runner_name = f"{CONTAINER_NAME}-{uuid.uuid4().hex[:8]}"
 
     # Write token to a temp file (never pass via env var or CLI)
     fd, token_path = tempfile.mkstemp(prefix="runner-token-")
@@ -137,12 +142,12 @@ def start_container(pat, cpus=None, memory=None):
         "docker",
         "run",
         "--name",
-        container_name,
+        CONTAINER_NAME,
         "--rm",
         "-e",
         f"REPO={REPO}",
         "-e",
-        f"RUNNER_NAME={container_name}",
+        f"RUNNER_NAME={runner_name}",
         "-e",
         f"ARCH={arch}",
         "-v",
@@ -161,21 +166,12 @@ def start_container(pat, cpus=None, memory=None):
     except Exception:
         os.unlink(token_path)
         raise
-    return proc, token_path, container_name
+    return proc, token_path
 
 
-def stop_container(container_name=None):
+def stop_container():
     """Stop the running container if any."""
-    # Stop by name if given, otherwise stop any container matching the prefix
-    if container_name:
-        subprocess.run(["docker", "stop", container_name], capture_output=True)
-    else:
-        result = subprocess.run(
-            ["docker", "ps", "-q", "--filter", f"name={CONTAINER_PREFIX}"],
-            capture_output=True, text=True,
-        )
-        for cid in result.stdout.strip().splitlines():
-            subprocess.run(["docker", "stop", cid], capture_output=True)
+    subprocess.run(["docker", "stop", CONTAINER_NAME], capture_output=True)
 
 
 def delete_volume():
@@ -269,13 +265,11 @@ def run_worker_loop(pat, cpus=None, memory=None, trigger_warming=False, rotate_h
         )
         t.start()
 
-    current_container = None
-
     def handle_signal(sig, _frame):
         nonlocal running
         print("\nShutting down...")
         running = False
-        stop_container(current_container)
+        stop_container()
 
     signal.signal(signal.SIGINT, handle_signal)
     signal.signal(signal.SIGTERM, handle_signal)
@@ -288,13 +282,13 @@ def run_worker_loop(pat, cpus=None, memory=None, trigger_warming=False, rotate_h
         if rotation_event.is_set():
             rotation_event.clear()
             print("Performing nightly cache rotation...")
-            stop_container(current_container)
+            stop_container()
             time.sleep(2)
             delete_volume()
             trigger_warming = True
 
         try:
-            proc, token_path, current_container = start_container(pat, cpus=cpus, memory=memory)
+            proc, token_path = start_container(pat, cpus=cpus, memory=memory)
         except Exception as e:
             if running:
                 print(f"Failed to start container: {e}")
