@@ -23,3 +23,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - run: echo "No web/grafana changes, skipping build"
+
+  grafana_build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "No grafana changes, skipping grafana_build"
