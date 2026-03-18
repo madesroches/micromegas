@@ -22,34 +22,8 @@ env:
 
 jobs:
   check-runner:
-    runs-on: ubuntu-latest
-    outputs:
-      runner: ${{ steps.check.outputs.runner }}
-    steps:
-      - id: check
-        run: |
-          # Default to GitHub-hosted runner (fail-safe).
-          echo "runner=ubuntu-latest" >> $GITHUB_OUTPUT
-
-          # Only route to dev-worker for repo owner.
-          if [ "$BUILD_AUTHOR" != "madesroches" ]; then
-            echo "Not repo owner ($BUILD_AUTHOR), using GitHub-hosted runner"
-            exit 0
-          fi
-
-          # Check if any dev-worker runner is online.
-          ONLINE=$(gh api "repos/${REPO}/actions/runners" \
-            --jq '[.runners[] | select(.labels[].name == "dev-worker") | select(.status == "online")] | length' 2>/dev/null || echo "0")
-          if [ "$ONLINE" -gt "0" ]; then
-            echo "runner=dev-worker" >> $GITHUB_OUTPUT
-            echo "Dev worker online, routing build there"
-          else
-            echo "No dev worker online, using GitHub-hosted runner"
-          fi
-        env:
-          GH_TOKEN: ${{ secrets.RUNNER_PAT }}
-          REPO: ${{ github.repository }}
-          BUILD_AUTHOR: ${{ github.event.pull_request.user.login || github.event.pusher.name || github.actor }}
+    uses: ./.github/workflows/check-runner.yml
+    secrets: inherit
 
   native:
     needs: check-runner

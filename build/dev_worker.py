@@ -120,16 +120,6 @@ def build_image():
     print(f"Image {IMAGE_NAME} built successfully.")
 
 
-def ensure_image():
-    """Build the image if it doesn't exist."""
-    result = subprocess.run(
-        ["docker", "image", "inspect", IMAGE_NAME],
-        capture_output=True,
-    )
-    if result.returncode != 0:
-        build_image()
-
-
 def start_container(pat, cpus=None, memory=None):
     """Start an ephemeral runner container. Returns (Popen, token_path)."""
     token = get_registration_token(pat)
@@ -164,7 +154,11 @@ def start_container(pat, cpus=None, memory=None):
         cmd.extend(["--memory", str(memory)])
     cmd.append(IMAGE_NAME)
 
-    proc = subprocess.Popen(cmd)
+    try:
+        proc = subprocess.Popen(cmd)
+    except Exception:
+        os.unlink(token_path)
+        raise
     return proc, token_path
 
 
@@ -353,7 +347,7 @@ def main():
         clear_cache()
         trigger_warming = True
 
-    ensure_image()
+    build_image()
     run_worker_loop(
         pat,
         cpus=args.cpus,
