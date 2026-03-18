@@ -111,6 +111,34 @@ A Dockerfile (`docker/github-runner.Dockerfile`) that packages:
 
 The container runs the GitHub Actions runner in **ephemeral mode** (`--ephemeral`): it picks up one job, runs it, then exits. A management script restarts it for the next job, ensuring a clean environment every time.
 
+**Entrypoint script** (`docker/github-runner-entrypoint.sh`):
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+# 1. Read the registration token from the bind-mounted secret file.
+TOKEN=$(cat /run/secrets/registration-token)
+
+# 2. Configure the runner (ephemeral, labeled, non-interactive).
+./config.sh \
+  --url "https://github.com/${REPO}" \
+  --token "${TOKEN}" \
+  --name "${RUNNER_NAME}" \
+  --labels "dev-worker,linux,${ARCH}" \
+  --work _work \
+  --ephemeral \
+  --unattended \
+  --replace
+
+# 3. Remove the token inside the container — it is single-use and already consumed.
+rm -f /run/secrets/registration-token
+
+# 4. Run the runner agent. It picks up one job, executes it, then exits.
+./run.sh
+```
+
+Environment variables `REPO`, `RUNNER_NAME`, and `ARCH` are set by the management script via `docker run -e`.
+
 ### Component 2: Runner Management Script
 
 A Python script (`build/dev_worker.py`) that:
@@ -144,9 +172,12 @@ python3 build/dev_worker.py
 # With resource limits
 python3 build/dev_worker.py --cpus 8 --memory 16g
 
-# Clear the entire build cache — one command, hard to get wrong
+# Clear the entire build cache (stops runner, deletes volume, exits)
 python3 build/dev_worker.py --clear-cache
 # (equivalent to: docker volume rm micromegas-build-cache)
+
+# Rotate cache nightly: clear cache, restart worker, trigger warming build
+python3 build/dev_worker.py --rotate-cache
 
 # Stop gracefully
 Ctrl+C  (or kill with SIGTERM)
@@ -202,7 +233,7 @@ jobs:
           # not the commit author which can be freely set via git config).
           # Values are passed via env vars to avoid script injection — never
           # interpolate ${{ }} expressions directly inside run: shell scripts.
-          BUILD_AUTHOR: ${{ github.event.pull_request.user.login || github.event.pusher.name }}
+          BUILD_AUTHOR: ${{ github.event.pull_request.user.login || github.event.pusher.name || github.actor }}
 
   native:
     needs: check-runner
@@ -246,23 +277,18 @@ For the WASM job on dev-worker, the workflow overrides the target dir:
       - uses: actions/checkout@v4
 
       - name: Run WASM CI
-        run: ./build/rust_ci.py wasm
+        run: |
+          # GitHub Actions sets env vars to empty string rather than leaving them
+          # unset. On GitHub-hosted runners CARGO_TARGET_DIR must be truly unset
+          # because rust/datafusion-wasm/build.py checks
+          # `if "CARGO_TARGET_DIR" in os.environ` and Path('') would resolve to
+          # the current directory, breaking the build.
+          if [ -z "$CARGO_TARGET_DIR" ]; then unset CARGO_TARGET_DIR; fi
+          ./build/rust_ci.py wasm
         env:
           # Override to WASM-specific cache dir on dev-worker (native and WASM targets conflict).
-          # Only set on dev-worker — on GitHub-hosted the var must remain UNSET (not empty string)
-          # because rust/datafusion-wasm/build.py checks `if "CARGO_TARGET_DIR" in os.environ`
-          # and Path('') would resolve to the current directory, breaking the build.
+          # On GitHub-hosted this evaluates to '' which the shell guard above unsets.
           CARGO_TARGET_DIR: ${{ needs.check-runner.outputs.runner == 'dev-worker' && '/cache/target-wasm' || '' }}
-
-      # NOTE: GitHub Actions sets env vars to empty string rather than leaving them unset.
-      # To work around this, the WASM CI step must unset CARGO_TARGET_DIR when empty:
-      #   if [ -z "$CARGO_TARGET_DIR" ]; then unset CARGO_TARGET_DIR; fi
-      # Alternatively, wrap the run command:
-      #   run: |
-      #     if [ "${{ needs.check-runner.outputs.runner }}" != "dev-worker" ]; then
-      #       unset CARGO_TARGET_DIR
-      #     fi
-      #     ./build/rust_ci.py wasm
 ```
 
 Key workflow properties:
@@ -350,21 +376,25 @@ The build cache is wiped and rebuilt from scratch every night. This eliminates t
 
 **How it works:**
 
-A cron job on the workstation runs nightly outside working hours:
+The management script supports a `--rotate-cache` flag that combines cache wipe, worker restart, and build trigger into a single atomic operation:
 
-1. Wipe the cache: `dev_worker.py --clear-cache`
-2. Trigger a full CI build on main to re-warm the cache
-3. The cold build runs (~10 min), populating `cargo-home/`, `target-native/`, and `target-wasm/`
-4. By morning, all daytime builds hit warm cache — no developer ever waits on a cold build
+1. Stop the current runner container (if running)
+2. Delete the Docker volume (`micromegas-build-cache`)
+3. Start a fresh runner container (with a new empty volume)
+4. Trigger a full CI build on main via `gh workflow run rust.yml --ref main`
+5. The cold build routes to the now-online dev-worker (~10 min), populating `cargo-home/`, `target-native/`, and `target-wasm/`
+6. By morning, all daytime builds hit warm cache — no developer ever waits on a cold build
+
+The script waits for the new runner to register as online (polling `gh api` for up to 60 seconds) before triggering the workflow dispatch, so the warming build reliably routes to the dev-worker.
 
 **Cron setup (one-time):**
 ```bash
 # Add to the workstation's crontab (crontab -e):
-# Nightly at 03:00 — wipe cache and trigger a warming build
-0 3 * * * cd /home/madesroches/git/micromegas && python3 build/dev_worker.py --clear-cache && gh workflow run rust.yml --ref main
+# Nightly at 03:00 — wipe cache, restart worker, trigger warming build
+0 3 * * * cd /home/madesroches/git/micromegas && python3 build/dev_worker.py --rotate-cache
 ```
 
-The `gh workflow run` command requires `workflow_dispatch` to be added as a trigger to `rust.yml` (restricted to the default branch). This is safe — `workflow_dispatch` runs the workflow from the target branch (not from a PR), so it cannot be used to inject untrusted code.
+The `gh workflow run` command (called internally by `--rotate-cache`) requires `workflow_dispatch` to be added as a trigger to `rust.yml` (restricted to the default branch). This is safe — `workflow_dispatch` runs the workflow from the target branch (not from a PR), so it cannot be used to inject untrusted code.
 
 **Workflow change for cache warming:**
 ```yaml
@@ -400,19 +430,22 @@ on:
 9. Apply the same pattern to `grafana-plugin.yml`
 10. Apply the same pattern to `analytics-web-app.yml`
 11. Add a `check-runner` stub job to `build-skip.yml` (so PRs without Rust changes still satisfy the status check). Apply the same to `web-build-skip.yml` if its parent workflows get the `check-runner` pattern.
+12. **Not included:** `publish-docs.yml` — docs builds are lightweight (cargo doc + MkDocs) and don't benefit from the build cache, so they remain on GitHub-hosted runners only.
 
 ### Phase 5: Nightly Cache Rotation
-12. Add `workflow_dispatch` trigger to `rust.yml` (and other workflows as needed)
-13. Set up cron job on the workstation for nightly cache wipe + warming build
+13. Add `workflow_dispatch` trigger to `rust.yml` (and other workflows as needed)
+14. Implement `--rotate-cache` flag in `dev_worker.py` (clear cache → restart worker → wait for online → trigger warming build)
+15. Set up cron job on the workstation (`crontab -e`) for nightly rotation
 
 ### Phase 6: Documentation
-14. Add setup instructions to `mkdocs/docs/development/` or the docker README (include cron setup)
+16. Add setup instructions to `mkdocs/docs/development/` or the docker README (include cron setup)
 
 ## Files to Modify
 
 **New files:**
 - `.github/CODEOWNERS` — require owner approval for CI and runner infrastructure changes
 - `docker/github-runner.Dockerfile` — runner container image
+- `docker/github-runner-entrypoint.sh` — container entrypoint (token registration, runner lifecycle)
 - `build/dev_worker.py` — workstation management script
 
 **Modified files:**
