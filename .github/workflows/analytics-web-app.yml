@@ -21,7 +21,7 @@ jobs:
     uses: ./.github/workflows/check-runner.yml
     secrets: inherit
 
-  build:
+  build_analytics_web_app:
     needs: check-runner
     runs-on: ${{ needs.check-runner.outputs.runner }}
     timeout-minutes: 30
