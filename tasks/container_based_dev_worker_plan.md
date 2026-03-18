@@ -412,46 +412,76 @@ on:
 
 ## Implementation Steps
 
-### Phase 1: Security Baseline & Runner Container Image
-1. Add `.github/CODEOWNERS` requiring owner approval for `.github/`, `docker/github-runner.Dockerfile`, and `build/dev_worker.py`
-2. Create `docker/github-runner.Dockerfile` with all build dependencies (the `dev_worker.py` management script handles building this image locally)
+### Phase 1: Security Baseline & Runner Container Image — DONE
+1. ~~Add `.github/CODEOWNERS` requiring owner approval for `.github/`, `docker/github-runner.Dockerfile`, and `build/dev_worker.py`~~ — already existed
+2. ~~Create `docker/github-runner.Dockerfile` with all build dependencies~~ — done
+   - Also created `docker/github-runner-entrypoint.sh`
 
-### Phase 2: Management Script
-3. Create `build/dev_worker.py` — the main script to run on the workstation
-4. Handle registration token acquisition, container lifecycle, and clean shutdown
+### Phase 2: Management Script — DONE
+3. ~~Create `build/dev_worker.py`~~ — done
+4. ~~Handle registration token acquisition, container lifecycle, and clean shutdown~~ — done
+   - PAT from env var (`MICROMEGAS_RUNNER_PAT`) or file (`~/.config/micromegas/runner-pat`)
+   - Registration token via GitHub API, passed as bind-mounted secret file
+   - Ephemeral container loop with SIGINT/SIGTERM handling
+   - `--cpus` / `--memory` resource limits
+   - `--build-image` for pre-building the image
 
-### Phase 3: Workflow Changes
-5. Add `check-runner` job to `.github/workflows/rust.yml` — start with the heaviest workflow
-6. Make `native` and `wasm` jobs depend on `check-runner` and use dynamic `runs-on`
-7. Add conditional steps (skip disk cleanup and tool install on dev-worker)
-8. Adjust `CARGO_BUILD_JOBS` dynamically
+### Phase 3: Workflow Changes — DONE
+5. ~~Add `check-runner` job to `.github/workflows/rust.yml`~~ — done
+6. ~~Make `native` and `wasm` jobs depend on `check-runner` and use dynamic `runs-on`~~ — done
+7. ~~Add conditional steps (skip disk cleanup and tool install on dev-worker)~~ — done
+8. ~~Adjust `CARGO_BUILD_JOBS` dynamically~~ — done (`0` on dev-worker, `2` on GitHub-hosted)
 
-### Phase 4: Remaining Workflows
-9. Apply the same pattern to `grafana-plugin.yml`
-10. Apply the same pattern to `analytics-web-app.yml`
-11. Add a `check-runner` stub job to `build-skip.yml` (so PRs without Rust changes still satisfy the status check). Apply the same to `web-build-skip.yml` if its parent workflows get the `check-runner` pattern.
+### Phase 4: Remaining Workflows — DONE
+9. ~~Apply the same pattern to `grafana-plugin.yml`~~ — done (E2E tests skipped on dev-worker since they need Docker)
+10. ~~Apply the same pattern to `analytics-web-app.yml`~~ — done
+11. ~~Add a `check-runner` stub job to `build-skip.yml` and `web-build-skip.yml`~~ — done
 12. **Not included:** `publish-docs.yml` — docs builds are lightweight (cargo doc + MkDocs) and don't benefit from the build cache, so they remain on GitHub-hosted runners only.
 
-### Phase 5: Nightly Cache Rotation
-13. Add `workflow_dispatch` trigger to `rust.yml` (and other workflows as needed)
-14. Implement `--rotate-cache` flag in `dev_worker.py` (clear cache → restart worker → wait for online → trigger warming build)
-15. Set up cron job on the workstation (`crontab -e`) for nightly rotation
+### Phase 5: Nightly Cache Rotation — DONE
+13. ~~Add `workflow_dispatch` trigger to `rust.yml`~~ — done
+14. ~~Implement `--rotate-cache` flag in `dev_worker.py`~~ — done (clear cache → restart worker → wait for online → trigger warming build)
+15. Set up cron job on the workstation (`crontab -e`) for nightly rotation — **manual step, not yet done**
 
-### Phase 6: Documentation
-16. Add setup instructions to `mkdocs/docs/development/` or the docker README (include cron setup)
+### Phase 6: Documentation — DONE
+16. ~~Add github-runner image to `docker/README.md`~~ — done
+17. ~~Add setup instructions to `mkdocs/docs/development/build.md`~~ — done (added "Self-Hosted CI Runner" section)
 
-## Files to Modify
+### Remaining Manual Steps
+- ~~Create a fine-grained PAT with `Administration: Read and write` scoped to `madesroches/micromegas`~~ — done
+- ~~Add the PAT as repository secret `RUNNER_PAT`~~ — done (via `gh secret set`)
+- ~~Store the PAT locally for `dev_worker.py` at `~/.config/micromegas/runner-pat`~~ — done (chmod 600)
+- Optionally add nightly cron: `0 3 * * * cd /home/madesroches/git/micromegas && python3 build/dev_worker.py --rotate-cache`
+
+## Implementation Notes
+
+### Grafana E2E tests on dev-worker
+The Grafana E2E test step (`python3 build/grafana_e2e_tests.py`) uses `docker compose` to start a Grafana container, which requires Docker access. Since the dev-worker container doesn't have Docker-in-Docker (by design — no `--privileged`), the E2E test step is conditionally skipped on dev-worker. The CI validation step (`python3 build/grafana_ci.py`) still runs.
+
+### CARGO_HOME split
+During image build, Rust tools are installed to the default `~/.cargo/bin` (cargo-machete, wasm-pack, wasm-bindgen-cli). At runtime, `CARGO_HOME=/cache/cargo-home` redirects registry/git caches to the Docker volume. `PATH` includes both `~/.cargo/bin` (image-installed tools) and `/cache/cargo-home/bin` (any runtime-installed binaries).
+
+### WASM target directory
+On dev-worker, the WASM job overrides `CARGO_TARGET_DIR=/cache/target-wasm` to avoid conflicts with native artifacts. On GitHub-hosted runners, a shell guard unsets the empty `CARGO_TARGET_DIR` so `build.py` uses its default behavior.
+
+## Files Changed
 
 **New files:**
-- `.github/CODEOWNERS` — require owner approval for CI and runner infrastructure changes
 - `docker/github-runner.Dockerfile` — runner container image
 - `docker/github-runner-entrypoint.sh` — container entrypoint (token registration, runner lifecycle)
 - `build/dev_worker.py` — workstation management script
 
 **Modified files:**
-- `.github/workflows/rust.yml` — add check-runner job, conditional steps, `workflow_dispatch` trigger for cache warming
-- `.github/workflows/grafana-plugin.yml` — same pattern
-- `.github/workflows/analytics-web-app.yml` — same pattern
+- `.github/workflows/rust.yml` — added check-runner job, conditional steps, workflow_dispatch trigger, dynamic CARGO_BUILD_JOBS
+- `.github/workflows/grafana-plugin.yml` — added check-runner job, conditional setup steps, E2E skipped on dev-worker
+- `.github/workflows/analytics-web-app.yml` — added check-runner job, conditional setup steps
+- `.github/workflows/build-skip.yml` — added check-runner stub job
+- `.github/workflows/web-build-skip.yml` — added check-runner stub job
+- `docker/README.md` — added github-runner image to table
+- `mkdocs/docs/development/build.md` — added "Self-Hosted CI Runner" section
+
+**Already existed (unchanged):**
+- `.github/CODEOWNERS` — already had correct protection rules
 
 ## Trade-offs
 
@@ -481,8 +511,8 @@ on:
 
 ## Documentation
 
-- `mkdocs/docs/development/build.md` — add "Self-Hosted Runner" section with setup instructions
-- `docker/README.md` — add github-runner image to the service list
+- ~~`mkdocs/docs/development/build.md` — add "Self-Hosted Runner" section with setup instructions~~ — done
+- ~~`docker/README.md` — add github-runner image to the service list~~ — done
 
 ## Testing Strategy
 

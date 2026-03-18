@@ -17,12 +17,41 @@ on:
       - '.github/workflows/analytics-web-app.yml'
 
 jobs:
-  build:
+  check-runner:
     runs-on: ubuntu-latest
+    outputs:
+      runner: ${{ steps.check.outputs.runner }}
+    steps:
+      - id: check
+        run: |
+          echo "runner=ubuntu-latest" >> $GITHUB_OUTPUT
+
+          if [ "$BUILD_AUTHOR" != "madesroches" ]; then
+            echo "Not repo owner ($BUILD_AUTHOR), using GitHub-hosted runner"
+            exit 0
+          fi
+
+          ONLINE=$(gh api "repos/${REPO}/actions/runners" \
+            --jq '[.runners[] | select(.labels[].name == "dev-worker") | select(.status == "online")] | length' 2>/dev/null || echo "0")
+          if [ "$ONLINE" -gt "0" ]; then
+            echo "runner=dev-worker" >> $GITHUB_OUTPUT
+            echo "Dev worker online, routing build there"
+          else
+            echo "No dev worker online, using GitHub-hosted runner"
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.RUNNER_PAT }}
+          REPO: ${{ github.repository }}
+          BUILD_AUTHOR: ${{ github.event.pull_request.user.login || github.event.pusher.name || github.actor }}
+
+  build:
+    needs: check-runner
+    runs-on: ${{ needs.check-runner.outputs.runner }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Setup Node.js environment
+        if: needs.check-runner.outputs.runner == 'ubuntu-latest'
         uses: actions/setup-node@v4
         with:
           node-version-file: 'analytics-web-app/.nvmrc'
@@ -30,6 +59,7 @@ jobs:
           cache-dependency-path: 'analytics-web-app/yarn.lock'
 
       - name: Setup Python
+        if: needs.check-runner.outputs.runner == 'ubuntu-latest'
         uses: actions/setup-python@v5
         with:
           python-version: '3.x'

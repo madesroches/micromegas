@@ -15,23 +15,58 @@ on:
       - 'build/rust_ci.py'
       - 'build/rust_command.py'
       - '.github/workflows/rust.yml'
+  workflow_dispatch:  # For nightly cache warming via dev_worker.py --rotate-cache
 
 env:
   CARGO_TERM_COLOR: always
-  CARGO_BUILD_JOBS: 2  # Reduce parallel jobs to avoid OOM during linking
 
 jobs:
-  native:
+  check-runner:
     runs-on: ubuntu-latest
+    outputs:
+      runner: ${{ steps.check.outputs.runner }}
+    steps:
+      - id: check
+        run: |
+          # Default to GitHub-hosted runner (fail-safe).
+          echo "runner=ubuntu-latest" >> $GITHUB_OUTPUT
+
+          # Only route to dev-worker for repo owner.
+          if [ "$BUILD_AUTHOR" != "madesroches" ]; then
+            echo "Not repo owner ($BUILD_AUTHOR), using GitHub-hosted runner"
+            exit 0
+          fi
+
+          # Check if any dev-worker runner is online.
+          ONLINE=$(gh api "repos/${REPO}/actions/runners" \
+            --jq '[.runners[] | select(.labels[].name == "dev-worker") | select(.status == "online")] | length' 2>/dev/null || echo "0")
+          if [ "$ONLINE" -gt "0" ]; then
+            echo "runner=dev-worker" >> $GITHUB_OUTPUT
+            echo "Dev worker online, routing build there"
+          else
+            echo "No dev worker online, using GitHub-hosted runner"
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.RUNNER_PAT }}
+          REPO: ${{ github.repository }}
+          BUILD_AUTHOR: ${{ github.event.pull_request.user.login || github.event.pusher.name || github.actor }}
+
+  native:
+    needs: check-runner
+    runs-on: ${{ needs.check-runner.outputs.runner }}
+    env:
+      CARGO_BUILD_JOBS: ${{ needs.check-runner.outputs.runner == 'dev-worker' && '0' || '2' }}
     steps:
     - uses: actions/checkout@v3
 
     - name: Show initial disk space
+      if: needs.check-runner.outputs.runner == 'ubuntu-latest'
       run: |
         echo "Initial disk space:"
         df -h / | awk 'NR==1 || /\/$/'
 
     - name: Free up disk space
+      if: needs.check-runner.outputs.runner == 'ubuntu-latest'
       run: |
         sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost "$AGENT_TOOLSDIRECTORY" /usr/local/lib/android /usr/local/.ghcup /usr/share/swift /opt/hostedtoolcache /usr/share/az_* /opt/az /usr/local/share/powershell /usr/share/kotlinc
         sudo apt-get remove -y '^aspnetcore-.*' '^dotnet-.*' '^mongodb-.*' '^mysql-.*' '^php.*' azure-cli google-chrome-stable powershell mono-devel 2>/dev/null || true
@@ -40,33 +75,38 @@ jobs:
         docker rmi $(docker images -q) 2>/dev/null || true
 
     - name: Install mold linker
+      if: needs.check-runner.outputs.runner == 'ubuntu-latest'
       run: |
         sudo apt-get update -qq
         sudo apt-get install -y mold
 
     - name: Install cargo-machete
+      if: needs.check-runner.outputs.runner == 'ubuntu-latest'
       run: cargo install cargo-machete
 
     - name: Run native CI
       run: ./build/rust_ci.py native
 
     - name: Cleanup build artifacts
-      if: always()
+      if: always() && needs.check-runner.outputs.runner == 'ubuntu-latest'
       run: |
         rm -rf rust/target/debug/deps/*
         rm -rf rust/target/debug/incremental/*
 
   wasm:
-    runs-on: ubuntu-latest
+    needs: check-runner
+    runs-on: ${{ needs.check-runner.outputs.runner }}
     steps:
     - uses: actions/checkout@v3
 
     - name: Show initial disk space
+      if: needs.check-runner.outputs.runner == 'ubuntu-latest'
       run: |
         echo "Initial disk space:"
         df -h / | awk 'NR==1 || /\/$/'
 
     - name: Free up disk space
+      if: needs.check-runner.outputs.runner == 'ubuntu-latest'
       run: |
         sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost "$AGENT_TOOLSDIRECTORY" /usr/local/lib/android /usr/local/.ghcup /usr/share/swift /opt/hostedtoolcache /usr/share/az_* /opt/az /usr/local/share/powershell /usr/share/kotlinc
         sudo apt-get remove -y '^aspnetcore-.*' '^dotnet-.*' '^mongodb-.*' '^mysql-.*' '^php.*' azure-cli google-chrome-stable powershell mono-devel 2>/dev/null || true
@@ -75,6 +115,7 @@ jobs:
         docker rmi $(docker images -q) 2>/dev/null || true
 
     - name: Install wasm tooling
+      if: needs.check-runner.outputs.runner == 'ubuntu-latest'
       run: |
         rustup target add wasm32-unknown-unknown
         cargo install wasm-pack
@@ -82,9 +123,15 @@ jobs:
         cargo install wasm-bindgen-cli --version "$WASM_BINDGEN_VERSION"
 
     - name: Run WASM CI
-      run: ./build/rust_ci.py wasm
+      run: |
+        if [ -z "$CARGO_TARGET_DIR" ]; then unset CARGO_TARGET_DIR; fi
+        ./build/rust_ci.py wasm
+      env:
+        # Override to WASM-specific cache dir on dev-worker (native and WASM targets conflict).
+        # On GitHub-hosted this evaluates to '' which the shell guard above unsets.
+        CARGO_TARGET_DIR: ${{ needs.check-runner.outputs.runner == 'dev-worker' && '/cache/target-wasm' || '' }}
 
     - name: Cleanup build artifacts
-      if: always()
+      if: always() && needs.check-runner.outputs.runner == 'ubuntu-latest'
       run: |
         rm -rf rust/datafusion-wasm/target/*
