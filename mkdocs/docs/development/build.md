@@ -172,7 +172,7 @@ Use `--rotate-at` to automatically wipe and warm the cache each night:
 python3 build/dev_worker.py --rotate-at 3
 ```
 
-Between container runs, the worker clears the cache volume and triggers a full build on main so daytime builds hit a warm cache. No cron job needed.
+Between container runs, the worker restarts the container (clearing the cache) and triggers a full build on main so daytime builds hit a warm cache. No cron job needed.
 
 ### How It Works
 
@@ -181,7 +181,7 @@ Each workflow has a `check-runner` job that runs on `ubuntu-latest` and decides 
 1. If the build author is the repo owner **and** a dev worker is online, jobs route to `dev-worker`
 2. Otherwise, jobs run on `ubuntu-latest` (existing behavior)
 
-The runner container is ephemeral (one job per container) and uses a Docker volume (`micromegas-build-cache`) to persist cargo registry and target directories across builds.
+The runner container is persistent and handles multiple jobs back-to-back. The build cache (cargo registry, target directories) lives on the container filesystem and stays warm as long as the container is running.
 
 See `tasks/container_based_dev_worker_plan.md` for the full design.
 

@@ -45,7 +45,6 @@ import uuid
 
 REPO = "madesroches/micromegas"
 IMAGE_NAME = "micromegas-github-runner"
-VOLUME_NAME = "micromegas-build-cache"
 CONTAINER_NAME = "micromegas-runner"
 PAT_FILE = os.path.expanduser("~/.config/micromegas/runner-pat")
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -150,8 +149,6 @@ def start_container(pat, cpus=None, memory=None):
         f"RUNNER_NAME={runner_name}",
         "-e",
         f"ARCH={arch}",
-        "-v",
-        f"{VOLUME_NAME}:/cache",
         "--mount",
         f"type=bind,source={token_path},target=/run/secrets/registration-token,readonly",
     ]
@@ -174,23 +171,12 @@ def stop_container():
     subprocess.run(["docker", "stop", CONTAINER_NAME], capture_output=True)
 
 
-def delete_volume():
-    """Delete the build cache volume."""
-    result = subprocess.run(
-        ["docker", "volume", "rm", VOLUME_NAME], capture_output=True
-    )
-    if result.returncode == 0:
-        print(f"Cache volume {VOLUME_NAME} removed.")
-    else:
-        print(f"Volume {VOLUME_NAME} not found or already removed.")
-
-
 def clear_cache():
-    """Stop runner and delete the build cache volume."""
+    """Stop runner, clearing the build cache (cache lives on the container filesystem)."""
     stop_container()
     # Give container time to exit
     time.sleep(2)
-    delete_volume()
+    print("Container stopped — build cache cleared.")
 
 
 def is_runner_online(pat):
@@ -243,13 +229,14 @@ def seconds_until(hour, minute=0):
 
 
 def nightly_rotation_thread(rotation_event, rotate_hour):
-    """Sleep until rotate_hour:00 each night, then signal the main loop to rotate."""
+    """Sleep until rotate_hour:00 each night, then stop the container to trigger rotation."""
     while True:
         wait = seconds_until(rotate_hour)
         print(f"Nightly cache rotation scheduled in {wait / 3600:.1f}h (at {rotate_hour:02d}:00)")
         time.sleep(wait)
         print("Nightly cache rotation triggered.")
         rotation_event.set()
+        stop_container()
 
 
 def run_worker_loop(pat, cpus=None, memory=None, trigger_warming=False, rotate_hour=None):
@@ -282,9 +269,9 @@ def run_worker_loop(pat, cpus=None, memory=None, trigger_warming=False, rotate_h
         if rotation_event.is_set():
             rotation_event.clear()
             print("Performing nightly cache rotation...")
-            stop_container()
+            # Container was already stopped by the rotation thread;
+            # --rm ensures the filesystem (and cache) is gone.
             time.sleep(2)
-            delete_volume()
             trigger_warming = True
 
         try:
@@ -337,6 +324,7 @@ def main():
         "--rotate-at",
         type=int,
         metavar="HOUR",
+        choices=range(24),
         help="Nightly cache rotation hour in local time (0-23, e.g., 3 for 03:00)",
     )
     args = parser.parse_args()

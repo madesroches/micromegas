@@ -39,8 +39,8 @@ Self-hosted GitHub Actions runner infrastructure that lets developer workstation
 │  │  │  - wasm-pack + wasm-bindgen-cli    │      │     │
 │  │  │  - Firefox + geckodriver           │      │     │
 │  │  │                                    │      │     │
-│  │  │  Build cache lives on container    │      │     │
-│  │  │  filesystem (no Docker volume)     │      │     │
+│  │  │  Build cache on container FS       │      │     │
+│  │  │  (warm while container is up)      │      │     │
 │  │  └────────────────────────────────────┘      │     │
 │  └──────────────────────────────────────────────┘     │
 └──────────────────────────────────────────────────────┘
@@ -49,7 +49,7 @@ Self-hosted GitHub Actions runner infrastructure that lets developer workstation
 ### Key design decisions
 
 - **Persistent container** — the runner stays online and handles multiple jobs back-to-back. No re-registration between jobs, no session conflicts.
-- **Container filesystem as cache** — build artifacts live on the container's filesystem. No Docker volume needed. The container is not started with `--rm`, so it survives `docker stop` / `docker start`.
+- **Container filesystem as cache** — build artifacts live on the container's filesystem at `/cache`. The cache stays warm as long as the container is running. Stopping the container (`--rm`) clears the cache; `--rotate-cache` / `--rotate-at` restart with a warming build.
 - **Fixed container name** (`micromegas-runner`) — Docker refuses to start a second container with the same name, preventing concurrent instances from corrupting the shared cache.
 - **Unique runner registration name** (`micromegas-runner-<uuid>`) — each `docker run` registers a fresh runner with GitHub, avoiding stale session conflicts from previous registrations.
 - **Trusted authors only** — `check-runner` gates routing via a `case` statement matching `madesroches` and `madesroches-ubi`. Fork PRs always use GitHub-hosted runners.
@@ -96,7 +96,7 @@ Skip workflows (`build-skip.yml`, `web-build-skip.yml`) include a stub `check-ru
 
 ### Nightly cache rotation
 
-`--rotate-cache` or `--rotate-at HOUR` stops the container, removes it (clearing the cache), starts a fresh one, and triggers a warming build on main via `workflow_dispatch`.
+`--rotate-cache` or `--rotate-at HOUR` stops the container (clearing the cache since `--rm` removes the filesystem), starts a fresh one, and triggers a warming build on main via `workflow_dispatch`.
 
 ## Files
 
@@ -147,7 +147,7 @@ python3 build/dev_worker.py --rotate-cache
 | Decision | Chosen | Rejected |
 |----------|--------|----------|
 | Runner mode | Persistent container — handles jobs back-to-back | Ephemeral per-job — clean but fragile re-registration gaps |
-| Cache strategy | Container filesystem — simple, no volume management | Docker volume — survives image rebuilds but adds complexity |
+| Cache strategy | Container filesystem — simple, cache warm while container is up | Docker volume — survives restarts but adds management complexity |
 | Runner routing | API check from ubuntu-latest (~30s overhead) | Timeout-based fallback — `timeout-minutes` doesn't apply to queue wait |
 | Trust model | Trusted authors only (madesroches, madesroches-ubi) | All PRs — unacceptable security risk |
 | Orchestration | Python script + Docker | ARC/Kubernetes — overkill for one machine |

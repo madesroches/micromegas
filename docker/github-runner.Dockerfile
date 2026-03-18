@@ -79,13 +79,13 @@ RUN WASM_BINDGEN_VERSION=$(python3 -c "import re; t=open('/tmp/wasm-cargo.lock')
 # Mage (for Grafana plugin builds)
 RUN go install github.com/magefile/mage@latest
 
-# Set up cache directory (volume mount point)
+# Set up cache directory (container filesystem — warm while container is running)
 USER root
 RUN mkdir -p /cache/cargo-home /cache/target-native /cache/target-wasm \
     && chown -R runner:runner /cache
 USER runner
 
-# Runtime env — cargo registry/git cached on volume, image-installed tools on PATH
+# Runtime env — cargo registry/git cached on container FS, image-installed tools on PATH
 ENV CARGO_HOME=/cache/cargo-home
 ENV CARGO_TARGET_DIR=/cache/target-native
 ENV PATH="/home/runner/.cargo/bin:/cache/cargo-home/bin:/home/runner/go/bin:/usr/local/go/bin:${PATH}"
