@@ -12,6 +12,7 @@ This directory contains Dockerfiles for building micromegas services.
 | `http-gateway.Dockerfile` | `micromegas-http-gateway` | HTTP gateway server |
 | `analytics-web.Dockerfile` | `micromegas-analytics-web` | Analytics web app (frontend + backend) |
 | `all-in-one.Dockerfile` | `micromegas-all` | All services in one image |
+| `github-runner.Dockerfile` | `micromegas-github-runner` | Self-hosted GitHub Actions runner (see `build/dev_worker.py`) |
 
 ## Building
 

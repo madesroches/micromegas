@@ -4,6 +4,10 @@ This file documents the historical progress of the Micromegas project. For curre
 
 ## Unreleased
 
+* **CI:**
+  * Add container-based self-hosted runner infrastructure for faster CI builds on developer workstations
+  * Add check-runner workflow to dynamically route builds between dev-worker and GitHub-hosted runners
+  * Add nightly cache rotation with `--rotate-at` flag for built-in scheduling
 * **Analytics:**
   * Add CSV table provider and `StaticTablesConfigurator` for auto-discovery of CSV/JSON tables via `MICROMEGAS_STATIC_TABLES_URL` (#946)
 * **Object Storage:**

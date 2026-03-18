@@ -21,32 +21,43 @@ on:
       - '.github/workflows/grafana-plugin.yml'
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
+  check-runner:
+    uses: ./.github/workflows/check-runner.yml
+    secrets: inherit
+
+  grafana_build:
+    needs: check-runner
+    runs-on: ${{ needs.check-runner.outputs.runner }}
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
       - name: Setup Node.js environment
+        if: needs.check-runner.outputs.runner == 'ubuntu-latest'
         uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'yarn'
 
       - name: Setup Go environment
+        if: needs.check-runner.outputs.runner == 'ubuntu-latest'
         uses: actions/setup-go@v5
         with:
           go-version: '1.21'
 
       - name: Setup Python
+        if: needs.check-runner.outputs.runner == 'ubuntu-latest'
         uses: actions/setup-python@v5
         with:
           python-version: '3.x'
 
       - name: Install Mage
+        if: needs.check-runner.outputs.runner == 'ubuntu-latest'
         run: go install github.com/magefile/mage@latest
 
       - name: Run Grafana CI validation
         run: python3 build/grafana_ci.py
 
       - name: Run Grafana E2E tests
+        if: needs.check-runner.outputs.runner == 'ubuntu-latest'
         run: python3 build/grafana_e2e_tests.py

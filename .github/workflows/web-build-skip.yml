@@ -14,7 +14,17 @@ on:
       - '.github/workflows/grafana-plugin.yml'
 
 jobs:
-  build:
+  check-runner:
     runs-on: ubuntu-latest
     steps:
-      - run: echo "No web/grafana changes, skipping build"
+      - run: echo "No web/grafana changes, skipping check-runner"
+
+  build_analytics_web_app:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "No web/grafana changes, skipping build_analytics_web_app"
+
+  grafana_build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "No grafana changes, skipping grafana_build"

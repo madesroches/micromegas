@@ -10,6 +10,11 @@ on:
       - '.github/workflows/rust.yml'
 
 jobs:
+  check-runner:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "No Rust changes, skipping check-runner"
+
   native:
     runs-on: ubuntu-latest
     steps:

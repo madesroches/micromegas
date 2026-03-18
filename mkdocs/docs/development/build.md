@@ -115,6 +115,76 @@ mkdocs serve
 mkdocs build
 ```
 
+## Self-Hosted CI Runner
+
+Developer workstations can contribute to CI builds using a Docker-based self-hosted GitHub Actions runner. Builds from the repo owner route to the dev worker when it's online, falling back to GitHub-hosted runners when it's not.
+
+### Prerequisites
+
+- Docker
+- A fine-grained GitHub PAT with `Administration: Read and write` scoped to `madesroches/micromegas`
+
+### Setup
+
+Store the PAT locally (choose one):
+
+```bash
+# Option 1: environment variable
+export MICROMEGAS_RUNNER_PAT=ghp_xxx
+
+# Option 2: file (recommended for persistent use)
+mkdir -p ~/.config/micromegas
+echo "ghp_xxx" > ~/.config/micromegas/runner-pat
+chmod 600 ~/.config/micromegas/runner-pat
+```
+
+The same PAT must be stored as the repository secret `RUNNER_PAT`:
+
+```bash
+gh secret set RUNNER_PAT
+```
+
+### Usage
+
+```bash
+# Start the worker (runs until Ctrl+C)
+python3 build/dev_worker.py
+
+# With resource limits
+python3 build/dev_worker.py --cpus 8 --memory 16g
+
+# Build the container image without starting the worker
+python3 build/dev_worker.py --build-image
+
+# Clear the build cache
+python3 build/dev_worker.py --clear-cache
+
+# Rotate cache: clear, restart, trigger a warming build on main
+python3 build/dev_worker.py --rotate-cache
+```
+
+### Nightly Cache Rotation
+
+Use `--rotate-at` to automatically wipe and warm the cache each night:
+
+```bash
+# Start with nightly rotation at 03:00 local time
+python3 build/dev_worker.py --rotate-at 3
+```
+
+Between container runs, the worker restarts the container (clearing the cache) and triggers a full build on main so daytime builds hit a warm cache. No cron job needed.
+
+### How It Works
+
+Each workflow has a `check-runner` job that runs on `ubuntu-latest` and decides where the real jobs run:
+
+1. If the build author is the repo owner **and** a dev worker is online, jobs route to `dev-worker`
+2. Otherwise, jobs run on `ubuntu-latest` (existing behavior)
+
+The runner container is persistent and handles multiple jobs back-to-back. The build cache (cargo registry, target directories) lives on the container filesystem and stays warm as long as the container is running.
+
+See `tasks/container_based_dev_worker_plan.md` for the full design.
+
 ## Next Steps
 
 - **[Contributing Guide](../contributing.md)** - How to contribute to the project
