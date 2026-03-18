@@ -12,6 +12,7 @@ This file documents the historical progress of the Micromegas project. For curre
   * Add CSV table provider and `StaticTablesConfigurator` for auto-discovery of CSV/JSON tables via `MICROMEGAS_STATIC_TABLES_URL` (#946)
 * **Object Storage:**
   * Use `parse_url_opts` to honor environment variable credentials for S3/GCS/Azure (#948)
+  * Fix env var credential parsing by lowercasing keys for `object_store` case sensitivity bug (#951)
 * **CLI:**
   * Add `--file` option to `micromegas-query` for reading SQL from a file or stdin (#941)
 * **Claude Code Plugin:**
