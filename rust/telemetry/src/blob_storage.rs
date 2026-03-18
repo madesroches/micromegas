@@ -24,8 +24,10 @@ impl BlobStorage {
 
     /// Connects to a blob storage service using the provided URL.
     pub fn connect(object_store_url: &str) -> Result<Self> {
-        let (blob_store, blob_store_root) =
-            object_store::parse_url_opts(&url::Url::parse(object_store_url)?, std::env::vars())?;
+        let (blob_store, blob_store_root) = object_store::parse_url_opts(
+            &url::Url::parse(object_store_url)?,
+            std::env::vars().map(|(k, v)| (k.to_lowercase(), v)),
+        )?;
         Ok(Self {
             blob_store: Arc::new(PrefixStore::new(blob_store, blob_store_root)),
         })

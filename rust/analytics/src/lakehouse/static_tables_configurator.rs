@@ -46,7 +46,10 @@ impl StaticTablesConfigurator {
     /// Errors loading individual files are logged but do not prevent other files from loading.
     pub async fn new(ctx: &SessionContext, url: &str) -> Result<Self> {
         let parsed_url = url::Url::parse(url)?;
-        let (object_store, prefix) = object_store::parse_url_opts(&parsed_url, std::env::vars())?;
+        let (object_store, prefix) = object_store::parse_url_opts(
+            &parsed_url,
+            std::env::vars().map(|(k, v)| (k.to_lowercase(), v)),
+        )?;
         let object_store = Arc::new(object_store);
 
         // Register the object store so table providers can access it
