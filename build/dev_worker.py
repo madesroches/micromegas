@@ -346,6 +346,11 @@ def main():
         "--build-image", action="store_true", help="Build the container image and exit"
     )
     parser.add_argument(
+        "--cleanup",
+        action="store_true",
+        help="Remove offline dev-worker runners from GitHub and exit",
+    )
+    parser.add_argument(
         "--rotate-at",
         type=int,
         metavar="HOUR",
@@ -359,6 +364,10 @@ def main():
         return
 
     pat = get_pat()
+
+    if args.cleanup:
+        cleanup_offline_runners(pat)
+        return
 
     if args.clear_cache:
         clear_cache()
