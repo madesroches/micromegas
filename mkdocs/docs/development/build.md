@@ -165,14 +165,14 @@ python3 build/dev_worker.py --rotate-cache
 
 ### Nightly Cache Rotation
 
-To keep the build cache fresh, add a cron job:
+Use `--rotate-at` to automatically wipe and warm the cache each night:
 
 ```bash
-# crontab -e
-0 3 * * * cd /home/madesroches/git/micromegas && python3 build/dev_worker.py --rotate-cache
+# Start with nightly rotation at 03:00 local time
+python3 build/dev_worker.py --rotate-at 3
 ```
 
-This wipes the cache, restarts the worker, and triggers a full build on main so daytime builds hit a warm cache.
+Between container runs, the worker clears the cache volume and triggers a full build on main so daytime builds hit a warm cache. No cron job needed.
 
 ### How It Works
 

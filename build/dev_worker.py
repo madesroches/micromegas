@@ -19,6 +19,9 @@ Usage:
     # Build the container image only
     python3 build/dev_worker.py --build-image
 
+    # Start with nightly cache rotation at 03:00 local time
+    python3 build/dev_worker.py --rotate-at 3
+
 PAT setup (choose one):
     export MICROMEGAS_RUNNER_PAT=ghp_xxx
     # or
@@ -26,6 +29,7 @@ PAT setup (choose one):
 """
 
 import argparse
+import datetime
 import json
 import os
 import platform
@@ -33,6 +37,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -227,9 +232,37 @@ def trigger_warming_build(pat):
         print(f"Failed to trigger warming build: {e}")
 
 
-def run_worker_loop(pat, cpus=None, memory=None, trigger_warming=False):
+def seconds_until(hour, minute=0):
+    """Return seconds from now until the next occurrence of hour:minute local time."""
+    now = datetime.datetime.now()
+    target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if target <= now:
+        target += datetime.timedelta(days=1)
+    return (target - now).total_seconds()
+
+
+def nightly_rotation_thread(rotation_event, rotate_hour):
+    """Sleep until rotate_hour:00 each night, then signal the main loop to rotate."""
+    while True:
+        wait = seconds_until(rotate_hour)
+        print(f"Nightly cache rotation scheduled in {wait / 3600:.1f}h (at {rotate_hour:02d}:00)")
+        time.sleep(wait)
+        print("Nightly cache rotation triggered.")
+        rotation_event.set()
+
+
+def run_worker_loop(pat, cpus=None, memory=None, trigger_warming=False, rotate_hour=None):
     """Main loop: start ephemeral containers, restart when they exit."""
     running = True
+    rotation_event = threading.Event()
+
+    if rotate_hour is not None:
+        t = threading.Thread(
+            target=nightly_rotation_thread,
+            args=(rotation_event, rotate_hour),
+            daemon=True,
+        )
+        t.start()
 
     def handle_signal(sig, _frame):
         nonlocal running
@@ -245,6 +278,13 @@ def run_worker_loop(pat, cpus=None, memory=None, trigger_warming=False):
 
     first_run = True
     while running:
+        # Check if nightly rotation was requested (between container runs)
+        if rotation_event.is_set():
+            rotation_event.clear()
+            print("Performing nightly cache rotation...")
+            clear_cache()
+            trigger_warming = True
+
         try:
             proc, token_path = start_container(pat, cpus=cpus, memory=memory)
         except Exception as e:
@@ -255,10 +295,11 @@ def run_worker_loop(pat, cpus=None, memory=None, trigger_warming=False):
             continue
 
         try:
-            # On first run after --rotate-cache, trigger a warming build
+            # After rotate-cache or nightly rotation, trigger a warming build
             if first_run and trigger_warming:
                 if wait_for_runner_online(pat):
                     trigger_warming_build(pat)
+                trigger_warming = False
             first_run = False
 
             proc.wait()
@@ -290,6 +331,12 @@ def main():
     parser.add_argument(
         "--build-image", action="store_true", help="Build the container image and exit"
     )
+    parser.add_argument(
+        "--rotate-at",
+        type=int,
+        metavar="HOUR",
+        help="Nightly cache rotation hour in local time (0-23, e.g., 3 for 03:00)",
+    )
     args = parser.parse_args()
 
     if args.build_image:
@@ -309,7 +356,13 @@ def main():
         trigger_warming = True
 
     ensure_image()
-    run_worker_loop(pat, cpus=args.cpus, memory=args.memory, trigger_warming=trigger_warming)
+    run_worker_loop(
+        pat,
+        cpus=args.cpus,
+        memory=args.memory,
+        trigger_warming=trigger_warming,
+        rotate_hour=args.rotate_at,
+    )
 
 
 if __name__ == "__main__":

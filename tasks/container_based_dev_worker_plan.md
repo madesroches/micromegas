@@ -441,7 +441,7 @@ on:
 ### Phase 5: Nightly Cache Rotation — DONE
 13. ~~Add `workflow_dispatch` trigger to `rust.yml`~~ — done
 14. ~~Implement `--rotate-cache` flag in `dev_worker.py`~~ — done (clear cache → restart worker → wait for online → trigger warming build)
-15. Set up cron job on the workstation (`crontab -e`) for nightly rotation — **manual step, not yet done**
+15. ~~Set up nightly cache rotation~~ — done (built-in `--rotate-at HOUR` flag, no cron needed)
 
 ### Phase 6: Documentation — DONE
 16. ~~Add github-runner image to `docker/README.md`~~ — done
@@ -451,7 +451,7 @@ on:
 - ~~Create a fine-grained PAT with `Administration: Read and write` scoped to `madesroches/micromegas`~~ — done
 - ~~Add the PAT as repository secret `RUNNER_PAT`~~ — done (via `gh secret set`)
 - ~~Store the PAT locally for `dev_worker.py` at `~/.config/micromegas/runner-pat`~~ — done (chmod 600)
-- Optionally add nightly cron: `0 3 * * * cd /home/madesroches/git/micromegas && python3 build/dev_worker.py --rotate-cache`
+- ~~Nightly cache rotation~~ — done (use `--rotate-at 3` instead of cron)
 
 ## Implementation Notes
 
