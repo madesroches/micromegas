@@ -1,0 +1,7 @@
+# Workflow files and CI configuration — owner review required to prevent
+# collaborators from modifying the self-hosted runner trust boundary.
+/.github/ @madesroches
+
+# Runner infrastructure
+/docker/github-runner.Dockerfile @madesroches
+/build/dev_worker.py @madesroches
