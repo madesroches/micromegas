@@ -121,7 +121,7 @@ def build_image():
 
 
 def start_container(pat, cpus=None, memory=None):
-    """Start an ephemeral runner container. Returns (Popen, token_path)."""
+    """Start a persistent runner container. Returns (Popen, token_path)."""
     token = get_registration_token(pat)
     arch = get_arch()
 
@@ -246,7 +246,7 @@ def nightly_rotation_thread(rotation_event, rotate_hour):
 
 
 def run_worker_loop(pat, cpus=None, memory=None, trigger_warming=False, rotate_hour=None):
-    """Main loop: start ephemeral containers, restart when they exit."""
+    """Main loop: start persistent container, restart on exit or rotation."""
     running = True
     rotation_event = threading.Event()
 
@@ -271,11 +271,13 @@ def run_worker_loop(pat, cpus=None, memory=None, trigger_warming=False, rotate_h
     print("Press Ctrl+C to stop\n")
 
     while running:
-        # Check if nightly rotation was requested (between container runs)
+        # Check if nightly rotation was requested
         if rotation_event.is_set():
             rotation_event.clear()
             print("Performing nightly cache rotation...")
-            clear_cache()
+            stop_container()
+            time.sleep(2)
+            delete_volume()
             trigger_warming = True
 
         try:
@@ -303,7 +305,7 @@ def run_worker_loop(pat, cpus=None, memory=None, trigger_warming=False, rotate_h
                 pass
 
         if running:
-            print("Container exited, starting next ephemeral runner...\n")
+            print("Container exited unexpectedly, restarting runner...\n")
 
 
 def main():

@@ -28,6 +28,7 @@ jobs:
   native:
     needs: check-runner
     runs-on: ${{ needs.check-runner.outputs.runner }}
+    timeout-minutes: 30
     env:
       # On dev-worker: empty string → unset by shell guard → cargo uses all CPUs.
       # On GitHub-hosted: '2' to avoid OOM during linking on 2-core runners.
@@ -74,6 +75,7 @@ jobs:
   wasm:
     needs: check-runner
     runs-on: ${{ needs.check-runner.outputs.runner }}
+    timeout-minutes: 30
     steps:
     - uses: actions/checkout@v3
 
