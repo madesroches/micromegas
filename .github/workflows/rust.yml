@@ -29,7 +29,9 @@ jobs:
     needs: check-runner
     runs-on: ${{ needs.check-runner.outputs.runner }}
     env:
-      CARGO_BUILD_JOBS: ${{ needs.check-runner.outputs.runner == 'dev-worker' && '0' || '2' }}
+      # On dev-worker: empty string → unset by shell guard → cargo uses all CPUs.
+      # On GitHub-hosted: '2' to avoid OOM during linking on 2-core runners.
+      CARGO_BUILD_JOBS: ${{ needs.check-runner.outputs.runner == 'ubuntu-latest' && '2' || '' }}
     steps:
     - uses: actions/checkout@v3
 
@@ -59,7 +61,9 @@ jobs:
       run: cargo install cargo-machete
 
     - name: Run native CI
-      run: ./build/rust_ci.py native
+      run: |
+        if [ -z "$CARGO_BUILD_JOBS" ]; then unset CARGO_BUILD_JOBS; fi
+        ./build/rust_ci.py native
 
     - name: Cleanup build artifacts
       if: always() && needs.check-runner.outputs.runner == 'ubuntu-latest'
@@ -98,10 +102,11 @@ jobs:
 
     - name: Run WASM CI
       run: |
+        if [ -z "$CARGO_BUILD_JOBS" ]; then unset CARGO_BUILD_JOBS; fi
         if [ -z "$CARGO_TARGET_DIR" ]; then unset CARGO_TARGET_DIR; fi
         ./build/rust_ci.py wasm
       env:
-        CARGO_BUILD_JOBS: ${{ needs.check-runner.outputs.runner == 'dev-worker' && '0' || '2' }}
+        CARGO_BUILD_JOBS: ${{ needs.check-runner.outputs.runner == 'ubuntu-latest' && '2' || '' }}
         # Override to WASM-specific cache dir on dev-worker (native and WASM targets conflict).
         # On GitHub-hosted this evaluates to '' which the shell guard above unsets.
         CARGO_TARGET_DIR: ${{ needs.check-runner.outputs.runner == 'dev-worker' && '/cache/target-wasm' || '' }}
