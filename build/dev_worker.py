@@ -308,7 +308,8 @@ def run_worker_loop(pat, cpus=None, memory=None, trigger_warming=False, rotate_h
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Manage the self-hosted GitHub Actions runner container"
+        description="Manage the self-hosted GitHub Actions runner container",
+        epilog="Full documentation: https://micromegas.info/development/build/#self-hosted-ci-runner",
     )
     parser.add_argument("--cpus", help="CPU limit for container (e.g., 8)")
     parser.add_argument("--memory", help="Memory limit for container (e.g., 16g)")

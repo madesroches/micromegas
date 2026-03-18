@@ -18,11 +18,14 @@ jobs:
           # Default to GitHub-hosted runner (fail-safe).
           echo "runner=ubuntu-latest" >> $GITHUB_OUTPUT
 
-          # Only route to dev-worker for repo owner.
-          if [ "$BUILD_AUTHOR" != "madesroches" ]; then
-            echo "Not repo owner ($BUILD_AUTHOR), using GitHub-hosted runner"
-            exit 0
-          fi
+          # Only route to dev-worker for trusted authors.
+          case "$BUILD_AUTHOR" in
+            madesroches|madesroches-ubi) ;;
+            *)
+              echo "Not a trusted author ($BUILD_AUTHOR), using GitHub-hosted runner"
+              exit 0
+              ;;
+          esac
 
           # Check if any dev-worker runner is online.
           ONLINE=$(gh api "repos/${REPO}/actions/runners" \
