@@ -80,7 +80,8 @@ def github_api(path, pat, method="GET", data=None):
     body = json.dumps(data).encode() if data else None
     req = urllib.request.Request(url, data=body, headers=headers, method=method)
     with urllib.request.urlopen(req) as resp:
-        return json.loads(resp.read())
+        body = resp.read()
+        return json.loads(body) if body else None
 
 
 def get_registration_token(pat):
@@ -177,6 +178,28 @@ def clear_cache():
     # Give container time to exit
     time.sleep(2)
     print("Container stopped — build cache cleared.")
+
+
+def cleanup_offline_runners(pat):
+    """Remove any offline dev-worker runners from the repository."""
+    try:
+        result = github_api(f"repos/{REPO}/actions/runners", pat)
+        for runner in result.get("runners", []):
+            labels = [label["name"] for label in runner.get("labels", [])]
+            if "dev-worker" in labels and runner.get("status") == "offline":
+                runner_id = runner["id"]
+                runner_name = runner.get("name", runner_id)
+                try:
+                    github_api(
+                        f"repos/{REPO}/actions/runners/{runner_id}",
+                        pat,
+                        method="DELETE",
+                    )
+                    print(f"Removed offline runner: {runner_name}")
+                except Exception as e:
+                    print(f"Failed to remove runner {runner_name}: {e}")
+    except Exception as e:
+        print(f"Failed to list runners for cleanup: {e}")
 
 
 def is_runner_online(pat):
@@ -347,6 +370,7 @@ def main():
         clear_cache()
         trigger_warming = True
 
+    cleanup_offline_runners(pat)
     build_image()
     run_worker_loop(
         pat,
