@@ -63,11 +63,6 @@ def write_screen_file(path, screen_dict):
         f.write("\n")
 
 
-def screen_name_from_path(path):
-    """Extract screen name from filename."""
-    return Path(path).stem
-
-
 def list_local_screens():
     """Scan current directory for screen JSON files (excluding config file)."""
     screens = {}
@@ -231,33 +226,26 @@ def cmd_import(args):
 
         try:
             screen = client.get_screen(name)
-        except RuntimeError as e:
-            print(f"Error fetching '{name}': {e}", file=sys.stderr)
-            continue
 
-        # Check if managed by another repo
-        existing_owner = screen.get("managed_by")
-        if existing_owner and existing_owner != managed_by:
-            print(f'Warning: "{name}" is currently managed by:')
-            print(f"  {existing_owner}")
-            answer = input("Transfer ownership to this repo? [y/N]: ").strip().lower()
-            if answer != "y":
-                print(f"Skipped '{name}'.")
-                continue
+            # Check if managed by another repo
+            existing_owner = screen.get("managed_by")
+            if existing_owner and existing_owner != managed_by:
+                print(f'Warning: "{name}" is currently managed by:')
+                print(f"  {existing_owner}")
+                answer = (
+                    input("Transfer ownership to this repo? [y/N]: ").strip().lower()
+                )
+                if answer != "y":
+                    print(f"Skipped '{name}'.")
+                    continue
 
-        # Write local file
-        write_screen_file(local_path, server_screen_to_file(screen))
-
-        # Set managed_by on server
-        try:
+            # Set managed_by on server, then download the screen
             client.update_screen(name, screen["config"], managed_by=managed_by)
+            screen = client.get_screen(name)
+            write_screen_file(local_path, server_screen_to_file(screen))
+            print(f"Imported: {name}")
         except RuntimeError as e:
-            print(
-                f"Warning: imported '{name}' locally but failed to set managed_by on server: {e}",
-                file=sys.stderr,
-            )
-
-        print(f"Imported: {name}")
+            print(f"Error importing '{name}': {e}", file=sys.stderr)
 
 
 def cmd_pull(args):
@@ -569,7 +557,11 @@ def main():
     p_list.set_defaults(func=cmd_list)
 
     args = parser.parse_args()
-    args.func(args)
+    try:
+        args.func(args)
+    except RuntimeError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":
