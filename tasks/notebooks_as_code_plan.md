@@ -1,14 +1,14 @@
-# Notebooks as Code Plan
+# Screens as Code Plan
 
 ## Overview
 
-Add CLI tooling to manage micromegas web notebooks (screens) as files in git repositories. PostgreSQL remains the default and only runtime storage — this is a purely client-side sync tool. Users opt in per-notebook by pulling it to disk, editing it, and pushing it back.
+Add CLI tooling to manage micromegas web screens as files in git repositories. PostgreSQL remains the default and only runtime storage — this is a purely client-side sync tool. Users opt in per-screen by pulling it to disk, editing it, and pushing it back.
 
 ## Current State
 
 ### Storage
-- Notebooks live in the `screens` PG table: `name` (PK), `screen_type`, `config` (JSONB), `created_by`, `updated_by`, `created_at`, `updated_at`
-- `config` is an opaque JSONB blob containing cells, time range, and notebook-specific fields
+- Screens live in the `screens` PG table: `name` (PK), `screen_type`, `config` (JSONB), `created_by`, `updated_by`, `created_at`, `updated_at`
+- `config` is an opaque JSONB blob containing type-specific fields (e.g., cells and time range for notebooks)
 - Names are normalized: lowercase, hyphens, 3-100 chars (`rust/analytics-web-srv/src/app_db/models.rs:119-144`)
 
 ### REST API
@@ -61,9 +61,9 @@ This enables CLI tools and CI pipelines to authenticate using the same OIDC toke
 
 ## Design
 
-### File Format: JSON, One File Per Notebook
+### File Format: JSON, One File Per Screen
 
-Each notebook is a single `.json` file containing:
+Each screen is a single `.json` file containing:
 
 ```json
 {
@@ -90,43 +90,43 @@ Each notebook is a single `.json` file containing:
 - Trailing newline
 
 **What's excluded from the file:**
-- `created_by`, `updated_by`, `created_at`, `updated_at` — these are server-side metadata, not part of the notebook content. They'd create noisy diffs on every pull.
+- `created_by`, `updated_by`, `created_at`, `updated_at` — these are server-side metadata, not part of the screen content. They'd create noisy diffs on every pull.
 
 ### Directory Structure
 
 ```
-notebooks/                        # any directory in the repo
-  micromegas-notebooks.json       # config file — identifies the managing repo
+screens/                          # any directory in the repo
+  micromegas-screens.json         # config file — identifies the managing repo
   my-notebook.json
   performance-dashboard.json
   ...
 ```
 
-- Filename = notebook name + `.json` (the name field inside must match)
-- Flat structure — no subdirectories (notebook names are already unique, flat identifiers)
+- Filename = screen name + `.json` (the name field inside must match)
+- Flat structure — no subdirectories (screen names are already unique, flat identifiers)
 - The directory can live anywhere in the repo; it's just a convention
-- The set of git-managed notebooks is simply "whatever `.json` files are in the directory" (excluding `micromegas-notebooks.json`)
-- All commands operate on the current working directory — `cd` into the notebooks directory before running them
+- The set of git-managed screens is simply "whatever `.json` files are in the directory" (excluding `micromegas-screens.json`)
+- All commands operate on the current working directory — `cd` into the screens directory before running them
 
-**Config file: `micromegas-notebooks.json`**
+**Config file: `micromegas-screens.json`**
 
-Created by `init`, checked into git alongside the notebooks. All commands read it from the current directory.
+Created by `init`, checked into git alongside the screen files. All commands read it from the current directory.
 
 ```json
 {
-  "managed_by": "https://github.com/org/repo/tree/main/notebooks",
+  "managed_by": "https://github.com/org/repo/tree/main/screens",
   "server": "https://micromegas.example.com"
 }
 ```
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `managed_by` | Yes | Repo+folder URL identifying the managing repo. Stored on each notebook on the server. |
+| `managed_by` | Yes | Repo+folder URL identifying the managing repo. Stored on each screen on the server. |
 | `server` | Yes | analytics-web-srv URL. |
 
 ### Source-Control Tracking
 
-When a notebook is managed via git, users editing it in the web UI need to know their changes may be overwritten on the next CI apply. This requires the server to know which notebooks are tracked.
+When a screen is managed via git, users editing it in the web UI need to know their changes may be overwritten on the next CI apply. This requires the server to know which screens are tracked.
 
 **Approach:** Add a `managed_by` column to the `screens` table:
 
@@ -134,21 +134,21 @@ When a notebook is managed via git, users editing it in the web UI need to know 
 ALTER TABLE screens ADD COLUMN managed_by VARCHAR(1024) DEFAULT NULL;
 ```
 
-- `NULL` = not tracked, normal web-editable notebook (default — preserves current behavior)
-- A URL = managed by source control, pointing to the repo folder (e.g., `https://github.com/org/repo/tree/main/notebooks`)
+- `NULL` = not tracked, normal web-editable screen (default — preserves current behavior)
+- A URL = managed by source control, pointing to the repo folder (e.g., `https://github.com/org/repo/tree/main/screens`)
 
-The same value is stored for every notebook managed by a given repo+folder. The file name always matches the notebook name, so a per-file link can be derived: for GitHub, replace `/tree/` with `/blob/` and append `/{name}.json`.
+The same value is stored for every screen managed by a given repo+folder. The file name always matches the screen name, so a per-file link can be derived: for GitHub, replace `/tree/` with `/blob/` and append `/{name}.json`.
 
-Both `managed_by` and `server` are read from `micromegas-notebooks.json` in the current directory. This is the single source of truth — no CLI flags or env vars needed for normal operation.
+Both `managed_by` and `server` are read from `micromegas-screens.json` in the current directory. This is the single source of truth — no CLI flags or env vars needed for normal operation.
 
 **When is it set?**
-- `apply` sets `managed_by` on every notebook it creates or updates
+- `apply` sets `managed_by` on every screen it creates or updates
 - `pull` does NOT change it (pull is read-only from the server's perspective)
 - Manual edits via the web UI do NOT clear it (the flag reflects the intended management mode, not the last editor)
 
 **Web UI behavior when `managed_by` is set:**
-- Show a persistent banner at the top of the notebook: *"This notebook is managed by source control. Edits made here may be overwritten on the next deployment."* with a link: *"View source →"* pointing to the derived file URL
-- The notebook remains fully editable (users may need to make quick fixes)
+- Show a warning banner only when the user is editing the screen (not in read-only view): *"This screen is managed by source control. Edits made here may be overwritten on the next deployment."* with a link: *"View source →"* pointing to the derived file URL
+- The screen remains fully editable (users may need to make quick fixes)
 - The banner uses a warning style (yellow/amber) — informational, not blocking
 
 **API changes:**
@@ -156,119 +156,119 @@ Both `managed_by` and `server` are read from `micromegas-notebooks.json` in the 
 - `PUT /api/screens/{name}` accepts an optional `managed_by` field in the request body
 - The CLI sets `managed_by` when applying; the web UI does not send it (so it stays unchanged)
 
-**Multi-repo support:** Multiple git repos can each manage a different subset of notebooks. Each repo has a different `managed_by` value in its config file — ownership is scoped by exact string match.
+**Multi-repo support:** Multiple git repos can each manage a different subset of screens. Each repo has a different `managed_by` value in its config file — ownership is scoped by exact string match.
 
-**Delete safety:** When `apply` runs, it only deletes server notebooks whose `managed_by` exactly matches the value from the config file AND that don't have a corresponding local file. Notebooks managed by a different repo (different `managed_by` value) or with `managed_by = NULL` are never touched.
+**Delete safety:** When `apply` runs, it only deletes server screens whose `managed_by` exactly matches the value from the config file AND that don't have a corresponding local file. Screens managed by a different repo (different `managed_by` value) or with `managed_by = NULL` are never touched.
 
 ### CLI Commands
 
-Add a new entry point `micromegas-notebooks` with subcommands:
+Add a new entry point `micromegas-screens` with subcommands:
 
 ```
-micromegas-notebooks init SERVER_URL [--remote REMOTE] [--branch BRANCH]
-micromegas-notebooks import NAMES...
-micromegas-notebooks pull [NAMES...]
-micromegas-notebooks plan [NAMES...]
-micromegas-notebooks apply [NAMES...] [--auto-approve]
-micromegas-notebooks list
+micromegas-screens init SERVER_URL [--remote REMOTE] [--branch BRANCH]
+micromegas-screens import NAMES...
+micromegas-screens pull [NAMES...]
+micromegas-screens plan [NAMES...]
+micromegas-screens apply [NAMES...] [--auto-approve]
+micromegas-screens list
 ```
 
-All commands run in the current directory, which must contain `micromegas-notebooks.json` (except `init`, which creates it).
+All commands run in the current directory, which must contain `micromegas-screens.json` (except `init`, which creates it).
 
-With no names specified, `pull`, `plan`, and `apply` operate on all `.json` files in the current directory — the directory is the scope, like `.tf` files in a Terraform directory. Named args narrow the scope to specific notebooks.
+With no names specified, `pull`, `plan`, and `apply` operate on all `.json` files in the current directory — the directory is the scope, like `.tf` files in a Terraform directory. Named args narrow the scope to specific screens.
 
-#### `init` — Initialize the notebooks directory and config file
+#### `init` — Initialize the screens directory and config file
 
 ```
-cd notebooks
-micromegas-notebooks init https://micromegas.example.com
+cd screens
+micromegas-screens init https://micromegas.example.com
 ```
 
 - Must be run inside a git repository
 - Reads the git remote URL (`origin` by default, override with `--remote`)
 - Reads the current branch (`main`/`HEAD` by default, override with `--branch`)
 - Computes the current directory's path relative to the repo root
-- Constructs `managed_by` from these: e.g., `https://github.com/org/repo/tree/main/notebooks`
-- Writes `micromegas-notebooks.json` in the current directory
+- Constructs `managed_by` from these: e.g., `https://github.com/org/repo/tree/main/screens`
+- Writes `micromegas-screens.json` in the current directory
 - Supports GitHub and GitLab remote URL formats (HTTPS and SSH)
-- Refuses if `micromegas-notebooks.json` already exists
+- Refuses if `micromegas-screens.json` already exists
 - Prints the generated config for review
 
 Example output:
 ```
-Created micromegas-notebooks.json:
+Created micromegas-screens.json:
 {
-  "managed_by": "https://github.com/org/repo/tree/main/notebooks",
+  "managed_by": "https://github.com/org/repo/tree/main/screens",
   "server": "https://micromegas.example.com"
 }
 ```
 
-#### `import` — Start tracking an existing server notebook (like `terraform import`)
+#### `import` — Start tracking an existing server screen (like `terraform import`)
 
 ```
-micromegas-notebooks import my-notebook
-micromegas-notebooks import my-notebook other-notebook
+micromegas-screens import my-notebook
+micromegas-screens import my-notebook other-notebook
 ```
 
-- Fetches the notebook from the server, writes it to `NAME.json`, and sets `managed_by` on the server immediately — this repo takes ownership on import
-- If the notebook is **untracked** (`managed_by = NULL`): imports silently, no confirmation needed
-- If the notebook is **tracked by another repo** (`managed_by` is set to a different value): warns and prompts for confirmation before taking ownership
+- Fetches the screen from the server, writes it to `NAME.json`, and sets `managed_by` on the server immediately — this repo takes ownership on import
+- If the screen is **untracked** (`managed_by = NULL`): imports silently, no confirmation needed
+- If the screen is **tracked by another repo** (`managed_by` is set to a different value): warns and prompts for confirmation before taking ownership
   ```
   Warning: "my-notebook" is currently managed by:
-    https://github.com/other-org/other-repo/tree/main/notebooks
+    https://github.com/other-org/other-repo/tree/main/screens
   Transfer ownership to this repo? [y/N]:
   ```
 - Refuses if a local file already exists for that name (already imported)
-- This is the only way to adopt an existing server notebook into a repo
+- This is the only way to adopt an existing server screen into a repo
 
-#### `pull` — Refresh tracked notebooks from server to disk
+#### `pull` — Refresh tracked screens from server to disk
 
 ```
-micromegas-notebooks pull
-micromegas-notebooks pull my-notebook performance-dashboard
+micromegas-screens pull
+micromegas-screens pull my-notebook performance-dashboard
 ```
 
 - Fetches from REST API, writes pretty-printed JSON to `NAME.json` in the current directory
-- No args: refreshes every locally-tracked notebook (every `.json` file in the directory) — does not pull untracked server notebooks, use `import` for that
-- Named args: pull only the specified notebooks (must already exist locally)
+- No args: refreshes every locally-tracked screen (every `.json` file in the directory) — does not pull untracked server screens, use `import` for that
+- Named args: pull only the specified screens (must already exist locally)
 - If file already exists, overwrites it (this is intentional — you can use `git diff` to see what changed)
 - Prints a summary: updated/unchanged counts
 
 #### `plan` — Preview what apply would change (like `terraform plan`)
 
 ```
-micromegas-notebooks plan
-micromegas-notebooks plan my-notebook
+micromegas-screens plan
+micromegas-screens plan my-notebook
 ```
 
 - Fetches current server state, compares with local files
-- Local files with no server counterpart are marked `+ create` (new notebook)
-- Server notebooks tracked by this repo (matching `managed_by` value) with no local file are marked `- delete`
+- Local files with no server counterpart are marked `+ create` (new screen)
+- Server screens tracked by this repo (matching `managed_by` value) with no local file are marked `- delete`
 - Shows a Terraform-style execution plan:
   ```
-  micromegas-notebooks will perform the following actions:
+  micromegas-screens will perform the following actions:
 
     + create: new-notebook
     ~ update: performance-dashboard (3 cells changed)
     - delete: old-notebook (tracked, removed from local)
-    = unchanged: 12 notebooks
+    = unchanged: 12 screens
 
   Plan: 1 to create, 1 to update, 1 to delete, 12 unchanged.
 
-  Untracked notebooks on server (use 'import' to start tracking):
+  Untracked screens on server (use 'import' to start tracking):
     ? recently-created-dashboard
   ```
-- For modified notebooks, shows a unified diff of the JSON
-- Untracked server notebooks (no `managed_by` or `managed_by` from a different repo) are listed as informational — they require `import` to adopt
+- For modified screens, shows a unified diff of the JSON
+- Untracked server screens (no `managed_by` or `managed_by` from a different repo) are listed as informational — they require `import` to adopt
 - Pure read-only operation — no server mutations
 - Useful before `apply` to preview what would change, or in CI to verify expected state
 
-#### `apply` — Apply local notebook state to server (like `terraform apply`)
+#### `apply` — Apply local screen state to server (like `terraform apply`)
 
 ```
-micromegas-notebooks apply
-micromegas-notebooks apply my-notebook
-micromegas-notebooks apply --auto-approve
+micromegas-screens apply
+micromegas-screens apply my-notebook
+micromegas-screens apply --auto-approve
 ```
 
 - Runs `plan` first, displays the execution plan, then prompts for confirmation:
@@ -279,19 +279,19 @@ micromegas-notebooks apply --auto-approve
   Apply complete! 1 created, 1 updated, 1 deleted.
   ```
 - `--auto-approve`: skip the confirmation prompt (for CI pipelines)
-- No args: applies all `.json` files in the directory and **deletes** server notebooks that are tracked by this repo but no longer have a local file (see Tracking below)
+- No args: applies all `.json` files in the directory and **deletes** server screens that are tracked by this repo but no longer have a local file (see Tracking below)
 - Reads `NAME.json` from the current directory, calls PUT (update) or POST (create) on the server
-- Sets `managed_by` from the config file on every notebook it creates or updates
+- Sets `managed_by` from the config file on every screen it creates or updates
 - Validates the JSON structure before applying
 - Exits with non-zero status if the user declines or if any operation fails
 
-#### `list` — Show notebook inventory
+#### `list` — Show screen inventory
 
 ```
-micromegas-notebooks list
+micromegas-screens list
 ```
 
-- Lists notebooks from server and local directory side by side
+- Lists screens from server and local directory side by side
 - Shows sync status: `synced`, `local-only`, `server-only`, `modified`
 
 #### Common Options
@@ -332,48 +332,48 @@ This tool does NOT attempt automatic conflict resolution. The workflow is:
 2. `apply` always overwrites server state (local wins)
 3. `plan` shows what would change before you apply
 
-**Why no automatic merge:** Notebook configs are structured JSON with ordered arrays (cells). Merging cell arrays automatically is error-prone. Git handles text-level conflicts well enough. The intended workflow is:
+**Why no automatic merge:** Screen configs are structured JSON with ordered arrays (e.g., cells). Merging these automatically is error-prone. Git handles text-level conflicts well enough. The intended workflow is:
 
 ```
 # Initial setup — init creates the config file from git metadata
-mkdir notebooks && cd notebooks
-micromegas-notebooks init https://micromegas.example.com
-micromegas-notebooks import my-notebook performance-dashboard
+mkdir screens && cd screens
+micromegas-screens init https://micromegas.example.com
+micromegas-screens import my-notebook performance-dashboard
 cd ..
-git add notebooks/
-git commit -m "import notebooks"
+git add screens/
+git commit -m "import screens"
 
 # Take ownership — first apply sets managed_by on the server
-micromegas-notebooks apply
+micromegas-screens apply
 
-# Adopt a new notebook created in the web UI
-micromegas-notebooks import new-dashboard
-git add notebooks/new-dashboard.json
+# Adopt a screen created in the web UI
+micromegas-screens import new-dashboard
+git add screens/new-dashboard.json
 git commit -m "track new-dashboard"
 
-# Create a brand new notebook from scratch
+# Create a brand new screen from scratch
 # Just create the .json file locally — plan/apply will create it on the server
-echo '{"name": "my-new-notebook", "screen_type": "notebook", "config": {...}}' > notebooks/my-new-notebook.json
+echo '{"name": "my-new-notebook", "screen_type": "notebook", "config": {...}}' > screens/my-new-notebook.json
 
 # Edit cycle
 # 1. Edit in web UI or in text editor
 # 2. Pull latest from server
-micromegas-notebooks pull my-notebook
+micromegas-screens pull my-notebook
 # 3. Review changes
-git diff notebooks/my-notebook.json
+git diff screens/my-notebook.json
 # 4. Commit
 git commit -am "update my-notebook"
 
 # Deploy / restore cycle (e.g., in CI)
 # 1. Preview changes
-micromegas-notebooks plan
-# 2. Apply — creates/updates local notebooks, deletes tracked notebooks removed from git
-micromegas-notebooks apply --auto-approve
+micromegas-screens plan
+# 2. Apply — creates/updates local screens, deletes tracked screens removed from git
+micromegas-screens apply --auto-approve
 ```
 
 ### Environment Variables
 
-Reuses existing auth env vars: `MICROMEGAS_OIDC_ISSUER`, `MICROMEGAS_OIDC_CLIENT_ID`, etc. The `server` and `managed_by` values come from `micromegas-notebooks.json`.
+Reuses existing auth env vars: `MICROMEGAS_OIDC_ISSUER`, `MICROMEGAS_OIDC_CLIENT_ID`, etc. The `server` and `managed_by` values come from `micromegas-screens.json`.
 
 ## Implementation Steps
 
@@ -386,7 +386,7 @@ Reuses existing auth env vars: `MICROMEGAS_OIDC_ISSUER`, `MICROMEGAS_OIDC_CLIENT
 4. Add `managed_by` field to the `Screen` struct in `rust/analytics-web-srv/src/app_db/models.rs`
 5. Update `UpdateScreenRequest` and `CreateScreenRequest` to accept optional `managed_by` field
 6. Update screen handlers to read/write `managed_by`
-7. Add source-control banner with link to `NotebookRenderer.tsx` — shown when `managed_by` is set; derive per-file link by appending `/{name}.json` to `managed_by` URL
+7. Add source-control banner to `analytics-web-app/src/routes/ScreenPage.tsx` — shown only when editing a screen with `managed_by` set; derive per-file link by appending `/{name}.json` to `managed_by` URL. This goes in `ScreenPage` (not a renderer) because the `screen` object with `managed_by` is available there, and the banner applies to all screen types.
 8. Update `Screen` type in `analytics-web-app/src/lib/screens-api.ts`
 
 ### Phase 3: Python HTTP Client
@@ -396,24 +396,24 @@ Reuses existing auth env vars: `MICROMEGAS_OIDC_ISSUER`, `MICROMEGAS_OIDC_CLIENT
    - Methods: `list_screens`, `get_screen`, `create_screen`, `update_screen`, `delete_screen`
 
 ### Phase 4: File I/O Helpers
-10. Create `python/micromegas/micromegas/cli/notebooks.py` with:
-    - `read_config() -> dict` — read and validate `micromegas-notebooks.json` from the current directory
-    - `read_notebook_file(path) -> dict` — read and validate a notebook JSON file
-    - `write_notebook_file(path, screen_dict)` — write pretty-printed JSON with stable key order
-    - `notebook_name_from_path(path) -> str` — extract name from filename
-    - `list_local_notebooks() -> dict[str, dict]` — scan current directory (excluding `micromegas-notebooks.json`)
+10. Create `python/micromegas/micromegas/cli/screens.py` with:
+    - `read_config() -> dict` — read and validate `micromegas-screens.json` from the current directory
+    - `read_screen_file(path) -> dict` — read and validate a screen JSON file
+    - `write_screen_file(path, screen_dict)` — write pretty-printed JSON with stable key order
+    - `screen_name_from_path(path) -> str` — extract name from filename
+    - `list_local_screens() -> dict[str, dict]` — scan current directory (excluding `micromegas-screens.json`)
 
 ### Phase 5: CLI Commands
-11. Implement subcommands in `python/micromegas/micromegas/cli/notebooks.py`:
+11. Implement subcommands in `python/micromegas/micromegas/cli/screens.py`:
     - `init` subcommand (reads git remote/branch, constructs `managed_by`, writes config file)
     - `import` subcommand (fetches from server, refuses if `managed_by` already set by another repo)
-    - `pull` subcommand (refreshes locally-tracked notebooks from server)
-    - `plan` subcommand (computes execution plan: creates/updates/deletes; shows untracked server notebooks as informational)
-    - `apply` subcommand (runs plan, prompts for confirmation, executes; sets `managed_by`, deletes tracked notebooks missing locally; `--auto-approve` for CI)
+    - `pull` subcommand (refreshes locally-tracked screens from server)
+    - `plan` subcommand (computes execution plan: creates/updates/deletes; shows untracked server screens as informational)
+    - `apply` subcommand (runs plan, prompts for confirmation, executes; sets `managed_by`, deletes tracked screens missing locally; `--auto-approve` for CI)
     - `list` subcommand
 12. Register entry point in `python/micromegas/pyproject.toml`:
     ```toml
-    micromegas-notebooks = "micromegas.cli.notebooks:main"
+    micromegas-screens = "micromegas.cli.screens:main"
     ```
 
 ### Phase 6: Testing
@@ -422,7 +422,7 @@ Reuses existing auth env vars: `MICROMEGAS_OIDC_ISSUER`, `MICROMEGAS_OIDC_CLIENT
 15. Integration test against a running analytics-web-srv (manual / CI with services)
 
 ### Phase 7: Documentation
-16. Add `mkdocs/docs/web-app/notebooks/notebooks-as-code.md` documenting the workflow
+16. Add `mkdocs/docs/web-app/notebooks/screens-as-code.md` documenting the workflow
 17. Update `mkdocs/docs/web-app/notebooks/index.md` to link to it
 
 ## Files to Modify
@@ -434,18 +434,18 @@ Reuses existing auth env vars: `MICROMEGAS_OIDC_ISSUER`, `MICROMEGAS_OIDC_CLIENT
 | `rust/analytics-web-srv/src/app_db/models.rs` | Add `managed_by` to `Screen`, `CreateScreenRequest`, and `UpdateScreenRequest` |
 | `rust/analytics-web-srv/src/screens.rs` | Include `managed_by` in queries and update handler |
 | `analytics-web-app/src/lib/screens-api.ts` | Add `managed_by` to `Screen` type |
-| `analytics-web-app/src/lib/screen-renderers/NotebookRenderer.tsx` | Add source-control warning banner |
+| `analytics-web-app/src/routes/ScreenPage.tsx` | Add source-control warning banner |
 | `python/micromegas/micromegas/web_client.py` | **New** — HTTP client for REST API |
-| `python/micromegas/micromegas/cli/notebooks.py` | **New** — CLI subcommands |
-| `python/micromegas/pyproject.toml` | Add `micromegas-notebooks` entry point (`requests` is already a dependency) |
-| `python/micromegas/tests/test_notebook_files.py` | **New** — unit tests |
-| `mkdocs/docs/web-app/notebooks/notebooks-as-code.md` | **New** — documentation |
+| `python/micromegas/micromegas/cli/screens.py` | **New** — CLI subcommands |
+| `python/micromegas/pyproject.toml` | Add `micromegas-screens` entry point (`requests` is already a dependency) |
+| `python/micromegas/tests/test_screen_files.py` | **New** — unit tests |
+| `mkdocs/docs/web-app/notebooks/screens-as-code.md` | **New** — documentation |
 | `mkdocs/docs/web-app/notebooks/index.md` | Add link to new doc page |
 
 ## Trade-offs
 
-### One file per notebook vs. single export file
-**Chosen: one file per notebook.** A single export file (like the web UI produces) doesn't diff well — changing one notebook changes the whole file. One file per notebook gives clean git history per notebook.
+### One file per screen vs. single export file
+**Chosen: one file per screen.** A single export file (like the web UI produces) doesn't diff well — changing one screen changes the whole file. One file per screen gives clean git history per screen.
 
 ### JSON vs. YAML
 **Chosen: JSON.** Zero round-trip risk, matches existing format, no new dependency. YAML would be slightly more readable for hand-editing but introduces parsing edge cases (anchors, multiline strings, type coercion).
@@ -454,7 +454,7 @@ Reuses existing auth env vars: `MICROMEGAS_OIDC_ISSUER`, `MICROMEGAS_OIDC_CLIENT
 **Chosen: CLI tool.** The server doesn't need to know about git. This keeps the architecture simple: PG is the runtime store, git is for version control and deployment. A server-side approach (e.g., server watches a git repo) would add complexity, require git credentials on the server, and couple the server to a specific git workflow.
 
 ### Manifest file vs. directory scan
-**Chosen: directory scan.** A manifest would let you track notebooks that don't exist locally yet, but it's another file to keep in sync. The directory itself is the manifest — simpler mental model.
+**Chosen: directory scan.** A manifest would let you track screens that don't exist locally yet, but it's another file to keep in sync. The directory itself is the manifest — simpler mental model.
 
 ### `requests` vs. `httpx` vs. `urllib`
 **Chosen: `requests`.** Already widely used, synchronous (matches the CLI usage pattern), well-understood. `httpx` would be fine too but adds less value for a CLI tool.
@@ -463,30 +463,30 @@ Reuses existing auth env vars: `MICROMEGAS_OIDC_ISSUER`, `MICROMEGAS_OIDC_CLIENT
 
 | Page | Action |
 |------|--------|
-| `mkdocs/docs/web-app/notebooks/notebooks-as-code.md` | **Create** — full guide with workflow examples |
-| `mkdocs/docs/web-app/notebooks/index.md` | **Update** — add link to notebooks-as-code page |
+| `mkdocs/docs/web-app/notebooks/screens-as-code.md` | **Create** — full guide with workflow examples |
+| `mkdocs/docs/web-app/notebooks/index.md` | **Update** — add link to screens-as-code page |
 
 ## Testing Strategy
 
-1. **Unit tests** (`test_notebook_files.py`):
+1. **Unit tests** (`test_screen_files.py`):
    - Round-trip: write then read produces identical dict
    - Key ordering in output JSON is stable
    - Validation rejects malformed files (missing name, wrong structure)
-   - Plan logic correctly identifies added/removed/modified notebooks
+   - Plan logic correctly identifies added/removed/modified screens
 
 2. **Manual integration test**:
    - Start local services (`python3 local_test_env/ai_scripts/start_services.py`)
-   - Create a notebook in the web UI
-   - `micromegas-notebooks import my-notebook` → verify file on disk
+   - Create a screen in the web UI
+   - `micromegas-screens import my-notebook` → verify file on disk
    - Edit the file
-   - `micromegas-notebooks plan` → verify execution plan shown
-   - `micromegas-notebooks apply --auto-approve` → verify update in web UI
-   - `micromegas-notebooks import` on a notebook with `managed_by` set → verify refusal
+   - `micromegas-screens plan` → verify execution plan shown
+   - `micromegas-screens apply --auto-approve` → verify update in web UI
+   - `micromegas-screens import` on a screen with `managed_by` set → verify refusal
 
 ## Resolved Questions
 
 1. **Auth for the web server REST API**: The web server does NOT currently accept Bearer tokens — only session cookies. This is a prerequisite (Phase 1). The auth infrastructure (`micromegas_auth::types::HttpRequestParts`) already supports it; we just need to add the header check to `cookie_auth_middleware`.
 
-2. **Should `apply` delete notebooks from the server?** Yes — when `apply` runs, notebooks whose `managed_by` matches the config file value but have no corresponding local file are deleted. This ensures that deleting a notebook file from git and applying results in it being removed from the server. Notebooks with a different `managed_by` or `managed_by = NULL` are never touched.
+2. **Should `apply` delete screens from the server?** Yes — when `apply` runs, screens whose `managed_by` matches the config file value but have no corresponding local file are deleted. This ensures that deleting a screen file from git and applying results in it being removed from the server. Screens with a different `managed_by` or `managed_by = NULL` are never touched.
 
 3. **CI/CD usage**: `OidcClientCredentialsProvider` returns an *access token*, not an ID token — the analytics-web-srv validates JWT ID tokens, so this path only works if the OIDC provider issues JWT access tokens (e.g., Auth0 with a custom API audience). For CI, the safest approach is to use `OidcAuthProvider` with client credentials and confirm `id_token` is included in the token response. Document provider requirements in the setup guide.
