@@ -386,7 +386,7 @@ Reuses existing auth env vars: `MICROMEGAS_OIDC_ISSUER`, `MICROMEGAS_OIDC_CLIENT
 4. Add `managed_by` field to the `Screen` struct in `rust/analytics-web-srv/src/app_db/models.rs`
 5. Update `UpdateScreenRequest` and `CreateScreenRequest` to accept optional `managed_by` field
 6. Update screen handlers to read/write `managed_by`. The web UI already receives `managed_by` from the GET response and must include it in the PUT request so it round-trips unchanged
-7. Update `Screen` type in `analytics-web-app/src/lib/screens-api.ts` to include optional `managed_by` field
+7. Update `analytics-web-app/src/lib/screens-api.ts`: add optional `managed_by` to the `Screen` type and to `UpdateScreenRequest`; update the `updateScreen` call in `ScreenPage.tsx` to pass `screen.managed_by` through so it round-trips unchanged
 8. Add source-control banner to `analytics-web-app/src/routes/ScreenPage.tsx` — shown only when editing a screen with `managed_by` set; derive per-file link by appending `/{name}.json` to `managed_by` URL. This goes in `ScreenPage` (not a renderer) because the `screen` object with `managed_by` is available there, and the banner applies to all screen types.
 
 ### Phase 3: Python HTTP Client

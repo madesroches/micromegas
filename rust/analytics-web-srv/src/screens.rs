@@ -116,7 +116,7 @@ pub async fn get_default_config(
 #[span_fn]
 pub async fn list_screens(Extension(pool): Extension<PgPool>) -> ScreenResult<Json<Vec<Screen>>> {
     let screens = sqlx::query_as::<_, Screen>(
-        "SELECT name, screen_type, config, created_by, updated_by, created_at, updated_at
+        "SELECT name, screen_type, config, created_by, updated_by, created_at, updated_at, managed_by
          FROM screens
          ORDER BY name",
     )
@@ -133,7 +133,7 @@ pub async fn get_screen(
     Path(name): Path<String>,
 ) -> ScreenResult<Json<Screen>> {
     let screen = sqlx::query_as::<_, Screen>(
-        "SELECT name, screen_type, config, created_by, updated_by, created_at, updated_at
+        "SELECT name, screen_type, config, created_by, updated_by, created_at, updated_at, managed_by
          FROM screens
          WHERE name = $1",
     )
@@ -183,14 +183,15 @@ pub async fn create_screen(
 
     // Insert screen
     let screen = sqlx::query_as::<_, Screen>(
-        "INSERT INTO screens (name, screen_type, config, created_by, updated_by)
-         VALUES ($1, $2, $3, $4, $4)
-         RETURNING name, screen_type, config, created_by, updated_by, created_at, updated_at",
+        "INSERT INTO screens (name, screen_type, config, created_by, updated_by, managed_by)
+         VALUES ($1, $2, $3, $4, $4, $5)
+         RETURNING name, screen_type, config, created_by, updated_by, created_at, updated_at, managed_by",
     )
     .bind(&name)
     .bind(&request.screen_type)
     .bind(&request.config)
     .bind(user_id)
+    .bind(&request.managed_by)
     .fetch_one(&pool)
     .await?;
 
@@ -209,17 +210,32 @@ pub async fn update_screen(
     // Use email if available, otherwise fall back to subject
     let user_id = user.email.as_deref().unwrap_or(&user.subject);
 
-    let screen = sqlx::query_as::<_, Screen>(
-        "UPDATE screens
-         SET config = $1, updated_by = $2, updated_at = NOW()
-         WHERE name = $3
-         RETURNING name, screen_type, config, created_by, updated_by, created_at, updated_at",
-    )
-    .bind(&request.config)
-    .bind(user_id)
-    .bind(&name)
-    .fetch_optional(&pool)
-    .await?
+    let screen = if request.managed_by.is_some() {
+        sqlx::query_as::<_, Screen>(
+            "UPDATE screens
+             SET config = $1, updated_by = $2, updated_at = NOW(), managed_by = $4
+             WHERE name = $3
+             RETURNING name, screen_type, config, created_by, updated_by, created_at, updated_at, managed_by",
+        )
+        .bind(&request.config)
+        .bind(user_id)
+        .bind(&name)
+        .bind(&request.managed_by)
+        .fetch_optional(&pool)
+        .await?
+    } else {
+        sqlx::query_as::<_, Screen>(
+            "UPDATE screens
+             SET config = $1, updated_by = $2, updated_at = NOW()
+             WHERE name = $3
+             RETURNING name, screen_type, config, created_by, updated_by, created_at, updated_at, managed_by",
+        )
+        .bind(&request.config)
+        .bind(user_id)
+        .bind(&name)
+        .fetch_optional(&pool)
+        .await?
+    }
     .ok_or_else(|| ScreenError::NotFound(name.clone()))?;
 
     info!("Updated screen: {} by {}", name, user_id);

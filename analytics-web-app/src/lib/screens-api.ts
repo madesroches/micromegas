@@ -30,6 +30,7 @@ export interface Screen {
   updated_by?: string
   created_at: string
   updated_at: string
+  managed_by?: string | null
 }
 
 export type ScreenTypeName = 'process_list' | 'metrics' | 'log' | 'table' | 'notebook'
@@ -49,6 +50,7 @@ export interface CreateScreenRequest {
 
 export interface UpdateScreenRequest {
   config: ScreenConfig
+  managed_by?: string | null
 }
 
 export interface ApiErrorResponse {

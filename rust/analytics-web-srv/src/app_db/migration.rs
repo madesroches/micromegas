@@ -1,10 +1,10 @@
-use crate::app_db::schema::{create_data_sources_table, create_tables};
+use crate::app_db::schema::{add_screens_managed_by, create_data_sources_table, create_tables};
 use anyhow::{Context, Result};
 use micromegas::tracing::prelude::*;
 use sqlx::Row;
 
 /// The latest schema version for the micromegas_app database.
-pub const LATEST_APP_SCHEMA_VERSION: i32 = 2;
+pub const LATEST_APP_SCHEMA_VERSION: i32 = 3;
 
 /// Reads the current schema version from the database.
 async fn read_schema_version(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> i32 {
@@ -57,6 +57,16 @@ pub async fn execute_migration(pool: sqlx::Pool<sqlx::Postgres>) -> Result<()> {
             .await
             .with_context(|| "creating data_sources table")?;
         update_schema_version(&mut tr, 2).await?;
+        current_version = read_schema_version(&mut tr).await;
+        tr.commit().await?;
+    }
+    if current_version == 2 {
+        info!("migrating app schema v2 -> v3: adding managed_by column to screens");
+        let mut tr = pool.begin().await?;
+        add_screens_managed_by(&mut tr)
+            .await
+            .with_context(|| "adding managed_by column to screens")?;
+        update_schema_version(&mut tr, 3).await?;
         current_version = read_schema_version(&mut tr).await;
         tr.commit().await?;
     }

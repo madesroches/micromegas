@@ -2,7 +2,7 @@ import { Suspense, useState, useCallback, useMemo, useEffect, useRef } from 'rea
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import { usePageTitle } from '@/hooks/usePageTitle'
 import { useRefreshInterval } from '@/hooks/useRefreshInterval'
-import { AlertCircle, Save, GitCompareArrows } from 'lucide-react'
+import { AlertCircle, Save, GitCompareArrows, ExternalLink } from 'lucide-react'
 import { PageLayout } from '@/components/layout'
 import { AuthGuard } from '@/components/AuthGuard'
 import { AppLink } from '@/components/AppLink'
@@ -234,7 +234,10 @@ function ScreenPageContent() {
     }
 
     try {
-      const updated = await updateScreen(screen.name, { config: configToSave })
+      const updated = await updateScreen(screen.name, {
+        config: configToSave,
+        managed_by: screen.managed_by,
+      })
       setScreen(updated)
       setScreenConfig(configToSave) // Keep local state in sync
       setBaselineConfig(configToSave)
@@ -428,6 +431,20 @@ function ScreenPageContent() {
                 <p className="text-sm text-theme-text-secondary mt-1 ml-11">
                   {screenTypeInfo?.display_name ?? screenType}
                 </p>
+              )}
+              {screen?.managed_by && (
+                <div className="mt-2 ml-11 flex items-center gap-2 rounded-md border px-3 py-2 text-sm"
+                  style={{ borderColor: 'var(--accent-warning)', backgroundColor: 'color-mix(in srgb, var(--accent-warning) 10%, transparent)' }}>
+                  <span style={{ color: 'var(--accent-warning)' }}>This screen is managed by source control. Edits made here may be overwritten on the next deployment.</span>
+                  <a
+                    href={`${screen.managed_by.replace('/tree/', '/blob/')}/${screen.name}.json`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 whitespace-nowrap text-accent-link hover:underline"
+                  >
+                    View source <ExternalLink className="w-3 h-3" />
+                  </a>
+                </div>
               )}
               {saveError && (
                 <p className="text-xs text-accent-error mt-2 ml-11">{saveError}</p>

@@ -766,7 +766,8 @@ impl IntoResponse for AuthApiError {
 
 /// Cookie-based authentication middleware with full JWT signature validation
 ///
-/// Reads the ID token from httpOnly cookie, validates the signature using JWKS,
+/// Reads the ID token from the Authorization: Bearer header (preferred) or
+/// httpOnly cookie (fallback), validates the signature using JWKS,
 /// and injects validated user info into request extensions.
 ///
 /// Security: This middleware performs full JWT validation including:
@@ -787,18 +788,25 @@ pub async fn cookie_auth_middleware(
     req: Request,
     next: Next,
 ) -> Result<Response, AuthApiError> {
-    // Extract cookies from request
-    let jar = CookieJar::from_headers(req.headers());
-
-    // Get ID token from cookie (JWT format for FlightSQL API calls)
-    let id_token = jar
-        .get(ID_TOKEN_COOKIE)
-        .ok_or_else(|| {
-            debug!("id_token cookie not found");
-            AuthApiError::Unauthorized
-        })?
-        .value()
-        .to_string();
+    // Check Authorization: Bearer header first, then fall back to cookie
+    let id_token = if let Some(bearer) = req
+        .headers()
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|h| h.to_str().ok())
+        .and_then(|h| h.strip_prefix("Bearer "))
+    {
+        bearer.to_string()
+    } else {
+        // Fall back to cookie
+        let jar = CookieJar::from_headers(req.headers());
+        jar.get(ID_TOKEN_COOKIE)
+            .ok_or_else(|| {
+                debug!("no Authorization header or id_token cookie found");
+                AuthApiError::Unauthorized
+            })?
+            .value()
+            .to_string()
+    };
 
     // Get the OIDC auth provider (lazy initialized with JWKS caching)
     let auth_provider = state.get_auth_provider().await.map_err(|e| {
