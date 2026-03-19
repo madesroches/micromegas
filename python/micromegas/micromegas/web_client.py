@@ -9,9 +9,12 @@ class WebClient:
     Uses Bearer token authentication via an OIDC auth provider.
     """
 
-    def __init__(self, base_url, auth_provider=None):
+    DEFAULT_TIMEOUT = 30
+
+    def __init__(self, base_url, auth_provider=None, timeout=None):
         self.base_url = base_url.rstrip("/")
         self.auth_provider = auth_provider
+        self.timeout = timeout or self.DEFAULT_TIMEOUT
         self.session = requests.Session()
 
     def _headers(self):
@@ -34,7 +37,7 @@ class WebClient:
             raise RuntimeError(f"HTTP {resp.status_code}: {msg}")
 
     def list_screens(self):
-        resp = self.session.get(self._api_url("screens"), headers=self._headers())
+        resp = self.session.get(self._api_url("screens"), headers=self._headers(), timeout=self.timeout)
         self._check_response(resp)
         return resp.json()
 
@@ -42,6 +45,7 @@ class WebClient:
         resp = self.session.get(
             self._api_url(f"screens/{requests.utils.quote(name, safe='')}"),
             headers=self._headers(),
+            timeout=self.timeout,
         )
         self._check_response(resp)
         return resp.json()
@@ -58,6 +62,7 @@ class WebClient:
             self._api_url("screens"),
             headers=self._headers(),
             json=payload,
+            timeout=self.timeout,
         )
         self._check_response(resp)
         return resp.json()
@@ -70,6 +75,7 @@ class WebClient:
             self._api_url(f"screens/{requests.utils.quote(name, safe='')}"),
             headers=self._headers(),
             json=payload,
+            timeout=self.timeout,
         )
         self._check_response(resp)
         return resp.json()
@@ -78,5 +84,6 @@ class WebClient:
         resp = self.session.delete(
             self._api_url(f"screens/{requests.utils.quote(name, safe='')}"),
             headers=self._headers(),
+            timeout=self.timeout,
         )
         self._check_response(resp)

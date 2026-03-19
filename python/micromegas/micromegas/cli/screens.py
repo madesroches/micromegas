@@ -188,20 +188,10 @@ def cmd_init(args):
         sys.exit(1)
 
     # Parse remote URL to browsable HTTPS URL
-    try:
-        import giturlparse
+    import giturlparse
 
-        parsed = giturlparse.parse(remote_url)
-        base_url = f"https://{parsed.resource}/{parsed.owner}/{parsed.repo}"
-    except ImportError:
-        # Fallback: basic SSH to HTTPS conversion
-        if remote_url.startswith("git@"):
-            # git@github.com:org/repo.git -> https://github.com/org/repo
-            base_url = remote_url.replace(":", "/").replace("git@", "https://")
-        else:
-            base_url = remote_url
-        if base_url.endswith(".git"):
-            base_url = base_url[:-4]
+    parsed = giturlparse.parse(remote_url)
+    base_url = f"https://{parsed.resource}/{parsed.owner}/{parsed.repo}"
 
     # Compute relative path from repo root to current directory
     cwd = os.path.abspath(".")
