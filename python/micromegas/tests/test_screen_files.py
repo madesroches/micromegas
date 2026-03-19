@@ -105,7 +105,7 @@ class TestServerScreenToFile:
             "managed_by": "https://github.com/org/repo/tree/main/screens",
         }
         result = server_screen_to_file(server)
-        assert set(result.keys()) == {"name", "screen_type", "config"}
+        assert set(result.keys()) == {"name", "screen_type", "config", "managed_by"}
 
 
 class TestListLocalScreens:
@@ -226,14 +226,16 @@ class TestComputePlan:
 
     def test_unchanged(self, tmp_path):
         os.chdir(tmp_path)
+        managed_by = "https://github.com/org/repo/tree/main/screens"
         screen_data = {
             "name": "stable-screen",
             "screen_type": "notebook",
             "config": {"cells": []},
+            "managed_by": managed_by,
         }
         write_screen_file("stable-screen.json", screen_data)
         config = {
-            "managed_by": "https://github.com/org/repo/tree/main/screens",
+            "managed_by": managed_by,
             "server": "http://localhost",
         }
         server_screens = [
@@ -241,7 +243,7 @@ class TestComputePlan:
                 "name": "stable-screen",
                 "screen_type": "notebook",
                 "config": {"cells": []},
-                "managed_by": "https://github.com/org/repo/tree/main/screens",
+                "managed_by": managed_by,
             }
         ]
         client = self._make_client(server_screens)

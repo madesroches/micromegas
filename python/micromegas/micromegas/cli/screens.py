@@ -55,7 +55,7 @@ def read_screen_file(path):
 def write_screen_file(path, screen_dict):
     """Write pretty-printed JSON with stable key order."""
     ordered = {}
-    for key in ("name", "screen_type", "config"):
+    for key in ("name", "screen_type", "config", "managed_by"):
         if key in screen_dict:
             ordered[key] = screen_dict[key]
     with open(path, "w") as f:
@@ -82,13 +82,29 @@ def list_local_screens():
     return screens
 
 
+VOLATILE_KEYS = {"created_by", "updated_by", "created_at", "updated_at"}
+
+
+def strip_volatile_keys(screen_dict):
+    """Remove server-managed volatile keys that change on every save."""
+    return {k: v for k, v in screen_dict.items() if k not in VOLATILE_KEYS}
+
+
+def screens_equal(a, b):
+    """Compare two screen dicts ignoring volatile server metadata."""
+    return strip_volatile_keys(a) == strip_volatile_keys(b)
+
+
 def server_screen_to_file(server_screen):
     """Convert a server screen response to file format (strip metadata)."""
-    return {
+    result = {
         "name": server_screen["name"],
         "screen_type": server_screen["screen_type"],
         "config": server_screen["config"],
     }
+    if server_screen.get("managed_by"):
+        result["managed_by"] = server_screen["managed_by"]
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -328,8 +344,7 @@ def compute_plan(config, client, names=None):
             creates.append(name)
         else:
             server = server_by_name[name]
-            server_file = server_screen_to_file(server)
-            if local_data == server_file:
+            if screens_equal(local_data, server):
                 unchanged.append(name)
             else:
                 updates.append(name)
@@ -481,8 +496,7 @@ def cmd_list(args):
             in_local = name in local
             in_server = name in server_by_name
             if in_local and in_server:
-                server_file = server_screen_to_file(server_by_name[name])
-                status = "synced" if local[name] == server_file else "modified"
+                status = "synced" if screens_equal(local[name], server_by_name[name]) else "modified"
             elif in_local:
                 status = "local-only"
             else:
@@ -498,8 +512,7 @@ def cmd_list(args):
         in_local = name in local
         in_server = name in server_by_name
         if in_local and in_server:
-            server_file = server_screen_to_file(server_by_name[name])
-            status = "synced" if local[name] == server_file else "modified"
+            status = "synced" if screens_equal(local[name], server_by_name[name]) else "modified"
         elif in_local:
             status = "local-only"
         else:
