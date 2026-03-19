@@ -413,6 +413,11 @@ def cmd_apply(args):
     deleted = 0
     errors = 0
 
+    def ensure_local_managed_by(name, screen):
+        if not screen.get("managed_by"):
+            screen["managed_by"] = managed_by
+            write_screen_file(Path(f"{name}.json"), screen)
+
     for name in creates:
         screen = local[name]
         try:
@@ -422,6 +427,7 @@ def cmd_apply(args):
                 config=screen["config"],
                 managed_by=managed_by,
             )
+            ensure_local_managed_by(name, screen)
             created += 1
         except RuntimeError as e:
             print(f"Error creating '{name}': {e}", file=sys.stderr)
@@ -435,6 +441,7 @@ def cmd_apply(args):
                 config=screen["config"],
                 managed_by=managed_by,
             )
+            ensure_local_managed_by(name, screen)
             updated_count += 1
         except RuntimeError as e:
             print(f"Error updating '{name}': {e}", file=sys.stderr)
@@ -468,18 +475,17 @@ def cmd_list(args):
 
     all_names = sorted(set(local.keys()) | set(server_by_name.keys()))
 
+    def screen_status(name):
+        in_local = name in local
+        in_server = name in server_by_name
+        if in_local and in_server:
+            return "synced" if screens_equal(local[name], server_by_name[name]) else "modified"
+        if in_local:
+            return "local-only"
+        return "server-only"
+
     if args.format == "json":
-        result = []
-        for name in all_names:
-            in_local = name in local
-            in_server = name in server_by_name
-            if in_local and in_server:
-                status = "synced" if screens_equal(local[name], server_by_name[name]) else "modified"
-            elif in_local:
-                status = "local-only"
-            else:
-                status = "server-only"
-            result.append({"name": name, "status": status})
+        result = [{"name": name, "status": screen_status(name)} for name in all_names]
         print(json.dumps(result, indent=2))
         return
 
@@ -487,22 +493,13 @@ def cmd_list(args):
     print(f"{'Name':<40} {'Status':<15} {'Managed By'}")
     print("-" * 80)
     for name in all_names:
-        in_local = name in local
-        in_server = name in server_by_name
-        if in_local and in_server:
-            status = "synced" if screens_equal(local[name], server_by_name[name]) else "modified"
-        elif in_local:
-            status = "local-only"
-        else:
-            status = "server-only"
-
         srv_managed = server_by_name.get(name, {}).get("managed_by", "")
         owner = ""
         if srv_managed == managed_by:
             owner = "this repo"
         elif srv_managed:
             owner = srv_managed
-        print(f"{name:<40} {status:<15} {owner}")
+        print(f"{name:<40} {screen_status(name):<15} {owner}")
 
 
 # ---------------------------------------------------------------------------
