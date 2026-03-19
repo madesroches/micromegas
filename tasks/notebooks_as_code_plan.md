@@ -189,8 +189,8 @@ micromegas-screens init https://micromegas.example.com
 - Reads the current branch (`main`/`HEAD` by default, override with `--branch`)
 - Computes the current directory's path relative to the repo root
 - Constructs `managed_by` from these: e.g., `https://github.com/org/repo/tree/main/screens`
+- Uses `giturlparse` to parse and convert remote URLs (SSH, HTTPS, git protocol) to browsable HTTPS URLs — supports GitHub, GitLab, Bitbucket, and self-hosted instances
 - Writes `micromegas-screens.json` in the current directory
-- Supports GitHub and GitLab remote URL formats (HTTPS and SSH)
 - Refuses if `micromegas-screens.json` already exists
 - Prints the generated config for review
 
@@ -405,7 +405,7 @@ Reuses existing auth env vars: `MICROMEGAS_OIDC_ISSUER`, `MICROMEGAS_OIDC_CLIENT
 
 ### Phase 5: CLI Commands
 11. Implement subcommands in `python/micromegas/micromegas/cli/screens.py`:
-    - `init` subcommand (reads git remote/branch, constructs `managed_by`, writes config file)
+    - `init` subcommand (uses `giturlparse` to parse remote URL, reads branch via `git branch --show-current`, computes relative path via `git rev-parse --show-toplevel`, constructs `managed_by`, writes config file)
     - `import` subcommand (fetches from server, refuses if `managed_by` already set by another repo)
     - `pull` subcommand (refreshes locally-tracked screens from server)
     - `plan` subcommand (computes execution plan: creates/updates/deletes; shows untracked server screens as informational)
@@ -439,7 +439,7 @@ Reuses existing auth env vars: `MICROMEGAS_OIDC_ISSUER`, `MICROMEGAS_OIDC_CLIENT
 | `mkdocs/mkdocs.yml` | Add screens-as-code page to Notebooks nav section |
 | `python/micromegas/micromegas/web_client.py` | **New** — HTTP client for REST API |
 | `python/micromegas/micromegas/cli/screens.py` | **New** — CLI subcommands |
-| `python/micromegas/pyproject.toml` | Add `micromegas-screens` entry point (`requests` is already a dependency) |
+| `python/micromegas/pyproject.toml` | Add `micromegas-screens` entry point and `giturlparse` dependency (`requests` is already a dependency) |
 | `python/micromegas/tests/test_screen_files.py` | **New** — unit tests |
 | `mkdocs/docs/web-app/notebooks/screens-as-code.md` | **New** — documentation |
 | `mkdocs/docs/web-app/notebooks/index.md` | Add link to new doc page |
