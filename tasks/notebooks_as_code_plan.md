@@ -79,7 +79,7 @@ Each notebook is a single `.json` file containing:
 
 **Why JSON over YAML:**
 - The config is already JSON in PG and in the existing export format
-- No lossy round-trip — what you pull is what you push
+- No lossy round-trip — what you pull is what you apply
 - The web app's "Source View" (`NotebookSourceView.tsx`) already shows raw JSON
 - JSON diffs well enough when pretty-printed with sorted keys
 - No new dependency (YAML parser) needed
@@ -95,7 +95,8 @@ Each notebook is a single `.json` file containing:
 ### Directory Structure
 
 ```
-notebooks/           # default directory, configurable
+notebooks/                        # any directory in the repo
+  micromegas-notebooks.json       # config file — identifies the managing repo
   my-notebook.json
   performance-dashboard.json
   ...
@@ -104,103 +105,190 @@ notebooks/           # default directory, configurable
 - Filename = notebook name + `.json` (the name field inside must match)
 - Flat structure — no subdirectories (notebook names are already unique, flat identifiers)
 - The directory can live anywhere in the repo; it's just a convention
+- The set of git-managed notebooks is simply "whatever `.json` files are in the directory" (excluding `micromegas-notebooks.json`)
+- All commands operate on the current working directory — `cd` into the notebooks directory before running them
 
-**No manifest file.** The set of git-managed notebooks is simply "whatever `.json` files are in the directory." This keeps things simple and avoids sync issues between a manifest and the actual files.
+**Config file: `micromegas-notebooks.json`**
+
+Created by `init`, checked into git alongside the notebooks. All commands read it from the current directory.
+
+```json
+{
+  "managed_by": "https://github.com/org/repo/tree/main/notebooks",
+  "server": "https://micromegas.example.com"
+}
+```
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `managed_by` | Yes | Repo+folder URL identifying the managing repo. Stored on each notebook on the server. |
+| `server` | Yes | analytics-web-srv URL. |
 
 ### Source-Control Tracking
 
-When a notebook is managed via git, users editing it in the web UI need to know their changes may be overwritten on the next CI push. This requires the server to know which notebooks are tracked.
+When a notebook is managed via git, users editing it in the web UI need to know their changes may be overwritten on the next CI apply. This requires the server to know which notebooks are tracked.
 
-**Approach:** Add a `source_url` column to the `screens` table:
+**Approach:** Add a `managed_by` column to the `screens` table:
 
 ```sql
-ALTER TABLE screens ADD COLUMN source_url VARCHAR(1024) DEFAULT NULL;
+ALTER TABLE screens ADD COLUMN managed_by VARCHAR(1024) DEFAULT NULL;
 ```
 
 - `NULL` = not tracked, normal web-editable notebook (default — preserves current behavior)
-- A URL = managed by source control, pointing to the file in the repo's web interface (e.g., `https://github.com/org/repo/blob/main/notebooks/my-notebook.json`)
+- A URL = managed by source control, pointing to the repo folder (e.g., `https://github.com/org/repo/tree/main/notebooks`)
 
-This is more useful than a boolean flag — the user can click through to see the canonical version, file history, and who changed it.
+The same value is stored for every notebook managed by a given repo+folder. The file name always matches the notebook name, so a per-file link can be derived: for GitHub, replace `/tree/` with `/blob/` and append `/{name}.json`.
 
-**CLI flag:**
-```
-micromegas-notebooks push --all --source-url-template "https://github.com/org/repo/blob/main/notebooks/{name}.json"
-```
-
-The `{name}` placeholder is replaced with the notebook name. This can also be set via `MICROMEGAS_NOTEBOOKS_SOURCE_URL_TEMPLATE` env var so CI pipelines set it once.
+Both `managed_by` and `server` are read from `micromegas-notebooks.json` in the current directory. This is the single source of truth — no CLI flags or env vars needed for normal operation.
 
 **When is it set?**
-- `push` sets `source_url` on every notebook it creates or updates
+- `apply` sets `managed_by` on every notebook it creates or updates
 - `pull` does NOT change it (pull is read-only from the server's perspective)
 - Manual edits via the web UI do NOT clear it (the flag reflects the intended management mode, not the last editor)
 
-**Web UI behavior when `source_url` is set:**
-- Show a persistent banner at the top of the notebook: *"This notebook is managed by source control. Edits made here may be overwritten on the next deployment."* with a link: *"View source →"* pointing to `source_url`
+**Web UI behavior when `managed_by` is set:**
+- Show a persistent banner at the top of the notebook: *"This notebook is managed by source control. Edits made here may be overwritten on the next deployment."* with a link: *"View source →"* pointing to the derived file URL
 - The notebook remains fully editable (users may need to make quick fixes)
 - The banner uses a warning style (yellow/amber) — informational, not blocking
 
 **API changes:**
-- `GET /api/screens` and `GET /api/screens/{name}` include `source_url` in the response
-- `PUT /api/screens/{name}` accepts an optional `source_url` field in the request body
-- The CLI sets `source_url` when pushing; the web UI does not send it (so it stays unchanged)
+- `GET /api/screens` and `GET /api/screens/{name}` include `managed_by` in the response
+- `PUT /api/screens/{name}` accepts an optional `managed_by` field in the request body
+- The CLI sets `managed_by` when applying; the web UI does not send it (so it stays unchanged)
 
-**Multi-repo support:** Multiple git repos can each manage a different subset of notebooks. The `source_url` template naturally scopes ownership — each repo pushes a distinct URL pattern.
+**Multi-repo support:** Multiple git repos can each manage a different subset of notebooks. Each repo has a different `managed_by` value in its config file — ownership is scoped by exact string match.
 
-**Delete safety:** When `push --all` runs, it only deletes server notebooks whose `source_url` matches the current `--source-url-template` pattern AND that don't have a corresponding local file. Notebooks managed by a different repo (different URL pattern) or with `source_url = NULL` are never touched. Matching is done by checking if the notebook's `source_url` starts with the template's prefix (everything before `{name}`).
+**Delete safety:** When `apply` runs, it only deletes server notebooks whose `managed_by` exactly matches the value from the config file AND that don't have a corresponding local file. Notebooks managed by a different repo (different `managed_by` value) or with `managed_by = NULL` are never touched.
 
 ### CLI Commands
 
 Add a new entry point `micromegas-notebooks` with subcommands:
 
 ```
-micromegas-notebooks pull [--all | NAMES...] [--dir DIR] [--server URL]
-micromegas-notebooks push [--all | NAMES...] [--dir DIR] [--server URL] [--create-missing]
-micromegas-notebooks diff [NAMES...] [--dir DIR] [--server URL]
-micromegas-notebooks list [--dir DIR] [--server URL]
+micromegas-notebooks init SERVER_URL [--remote REMOTE] [--branch BRANCH]
+micromegas-notebooks import NAMES...
+micromegas-notebooks pull [NAMES...]
+micromegas-notebooks plan [NAMES...]
+micromegas-notebooks apply [NAMES...] [--auto-approve]
+micromegas-notebooks list
 ```
 
-#### `pull` — Download notebooks from server to disk
+All commands run in the current directory, which must contain `micromegas-notebooks.json` (except `init`, which creates it).
+
+With no names specified, `pull`, `plan`, and `apply` operate on all `.json` files in the current directory — the directory is the scope, like `.tf` files in a Terraform directory. Named args narrow the scope to specific notebooks.
+
+#### `init` — Initialize the notebooks directory and config file
 
 ```
-micromegas-notebooks pull my-notebook performance-dashboard --dir ./notebooks
-micromegas-notebooks pull --all --dir ./notebooks
+cd notebooks
+micromegas-notebooks init https://micromegas.example.com
 ```
 
-- Fetches from REST API, writes pretty-printed JSON to `DIR/NAME.json`
-- `--all`: pull every notebook from the server
-- Named args: pull only the specified notebooks
+- Must be run inside a git repository
+- Reads the git remote URL (`origin` by default, override with `--remote`)
+- Reads the current branch (`main`/`HEAD` by default, override with `--branch`)
+- Computes the current directory's path relative to the repo root
+- Constructs `managed_by` from these: e.g., `https://github.com/org/repo/tree/main/notebooks`
+- Writes `micromegas-notebooks.json` in the current directory
+- Supports GitHub and GitLab remote URL formats (HTTPS and SSH)
+- Refuses if `micromegas-notebooks.json` already exists
+- Prints the generated config for review
+
+Example output:
+```
+Created micromegas-notebooks.json:
+{
+  "managed_by": "https://github.com/org/repo/tree/main/notebooks",
+  "server": "https://micromegas.example.com"
+}
+```
+
+#### `import` — Start tracking an existing server notebook (like `terraform import`)
+
+```
+micromegas-notebooks import my-notebook
+micromegas-notebooks import my-notebook other-notebook
+```
+
+- Fetches the notebook from the server, writes it to `NAME.json`, and sets `managed_by` on the server immediately — this repo takes ownership on import
+- If the notebook is **untracked** (`managed_by = NULL`): imports silently, no confirmation needed
+- If the notebook is **tracked by another repo** (`managed_by` is set to a different value): warns and prompts for confirmation before taking ownership
+  ```
+  Warning: "my-notebook" is currently managed by:
+    https://github.com/other-org/other-repo/tree/main/notebooks
+  Transfer ownership to this repo? [y/N]:
+  ```
+- Refuses if a local file already exists for that name (already imported)
+- This is the only way to adopt an existing server notebook into a repo
+
+#### `pull` — Refresh tracked notebooks from server to disk
+
+```
+micromegas-notebooks pull
+micromegas-notebooks pull my-notebook performance-dashboard
+```
+
+- Fetches from REST API, writes pretty-printed JSON to `NAME.json` in the current directory
+- No args: refreshes every locally-tracked notebook (every `.json` file in the directory) — does not pull untracked server notebooks, use `import` for that
+- Named args: pull only the specified notebooks (must already exist locally)
 - If file already exists, overwrites it (this is intentional — you can use `git diff` to see what changed)
-- Prints a summary: created/updated/unchanged counts
+- Prints a summary: updated/unchanged counts
 
-#### `push` — Sync notebooks from disk to server
-
-```
-micromegas-notebooks push my-notebook --dir ./notebooks
-micromegas-notebooks push --all --dir ./notebooks
-```
-
-- Reads `DIR/NAME.json`, calls PUT (update) or POST (create) on the server
-- `--all`: push every `.json` file in the directory, and **delete** server notebooks that are tracked but no longer have a local file (see Tracking below)
-- Creates notebooks that exist locally but not on the server
-- Validates the JSON structure before pushing
-- Prints a summary: created/updated/deleted/unchanged/error counts
-
-#### `diff` — Show differences between disk and server
+#### `plan` — Preview what apply would change (like `terraform plan`)
 
 ```
-micromegas-notebooks diff --dir ./notebooks
-micromegas-notebooks diff my-notebook --dir ./notebooks
+micromegas-notebooks plan
+micromegas-notebooks plan my-notebook
 ```
 
 - Fetches current server state, compares with local files
-- Shows: notebooks only on disk, only on server, or modified
+- Local files with no server counterpart are marked `+ create` (new notebook)
+- Server notebooks tracked by this repo (matching `managed_by` value) with no local file are marked `- delete`
+- Shows a Terraform-style execution plan:
+  ```
+  micromegas-notebooks will perform the following actions:
+
+    + create: new-notebook
+    ~ update: performance-dashboard (3 cells changed)
+    - delete: old-notebook (tracked, removed from local)
+    = unchanged: 12 notebooks
+
+  Plan: 1 to create, 1 to update, 1 to delete, 12 unchanged.
+
+  Untracked notebooks on server (use 'import' to start tracking):
+    ? recently-created-dashboard
+  ```
 - For modified notebooks, shows a unified diff of the JSON
-- Useful before push to preview what would change
+- Untracked server notebooks (no `managed_by` or `managed_by` from a different repo) are listed as informational — they require `import` to adopt
+- Pure read-only operation — no server mutations
+- Useful before `apply` to preview what would change, or in CI to verify expected state
+
+#### `apply` — Apply local notebook state to server (like `terraform apply`)
+
+```
+micromegas-notebooks apply
+micromegas-notebooks apply my-notebook
+micromegas-notebooks apply --auto-approve
+```
+
+- Runs `plan` first, displays the execution plan, then prompts for confirmation:
+  ```
+  Do you want to apply these changes? [y/N]: y
+  Applying...
+
+  Apply complete! 1 created, 1 updated, 1 deleted.
+  ```
+- `--auto-approve`: skip the confirmation prompt (for CI pipelines)
+- No args: applies all `.json` files in the directory and **deletes** server notebooks that are tracked by this repo but no longer have a local file (see Tracking below)
+- Reads `NAME.json` from the current directory, calls PUT (update) or POST (create) on the server
+- Sets `managed_by` from the config file on every notebook it creates or updates
+- Validates the JSON structure before applying
+- Exits with non-zero status if the user declines or if any operation fails
 
 #### `list` — Show notebook inventory
 
 ```
-micromegas-notebooks list --dir ./notebooks
+micromegas-notebooks list
 ```
 
 - Lists notebooks from server and local directory side by side
@@ -208,12 +296,10 @@ micromegas-notebooks list --dir ./notebooks
 
 #### Common Options
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--dir` | `./notebooks` | Local directory for notebook files |
-| `--server` | `$MICROMEGAS_WEB_URL` or `http://localhost:8000` | analytics-web-srv URL |
-| `--source-url-template` | `$MICROMEGAS_NOTEBOOKS_SOURCE_URL_TEMPLATE` | URL template with `{name}` placeholder (push only) |
-| `--format` | `table` | Output format: `table`, `json` |
+| Flag | Description |
+|------|-------------|
+| `--auto-approve` | Skip confirmation prompt (apply only, for CI) |
+| `--format` | Output format: `table` (default), `json` |
 
 ### HTTP Client for analytics-web-srv
 
@@ -231,28 +317,43 @@ class WebClient:
 
     def list_screens(self) -> list[dict]: ...
     def get_screen(self, name: str) -> dict: ...
-    def create_screen(self, name: str, screen_type: str, config: dict, source_url: str | None = None) -> dict: ...
-    def update_screen(self, name: str, config: dict, source_url: str | None = None) -> dict: ...
+    def create_screen(self, name: str, screen_type: str, config: dict, managed_by: str | None = None) -> dict: ...
+    def update_screen(self, name: str, config: dict, managed_by: str | None = None) -> dict: ...
     def delete_screen(self, name: str) -> None: ...
 ```
 
-**Auth:** Reuses the existing OIDC auth provider (`micromegas/auth/oidc.py`). The `get_token()` method returns an ID token that can be sent as `Authorization: Bearer <token>` header. This requires the bearer token auth prerequisite (see above).
+**Auth:** Reuses the existing OIDC auth provider (`micromegas/auth/oidc.py`). `OidcAuthProvider.get_token()` returns an ID token suitable for `Authorization: Bearer <token>`. Note: `OidcClientCredentialsProvider.get_token()` returns an *access token* (not an ID token) — whether this passes the server's JWT validation depends on the OIDC provider issuing JWT access tokens. For CI, prefer `OidcAuthProvider` with client credentials configured to include `id_token` in the response, or verify your provider issues JWT access tokens. This requires the bearer token auth prerequisite (see above).
 
 ### Conflict Handling: Keep It Simple
 
 This tool does NOT attempt automatic conflict resolution. The workflow is:
 
 1. `pull` always overwrites local files (server wins)
-2. `push` always overwrites server state (local wins)
-3. `diff` shows what would change before you push
+2. `apply` always overwrites server state (local wins)
+3. `plan` shows what would change before you apply
 
 **Why no automatic merge:** Notebook configs are structured JSON with ordered arrays (cells). Merging cell arrays automatically is error-prone. Git handles text-level conflicts well enough. The intended workflow is:
 
 ```
-# Initial setup
-micromegas-notebooks pull --all --dir ./notebooks
+# Initial setup — init creates the config file from git metadata
+mkdir notebooks && cd notebooks
+micromegas-notebooks init https://micromegas.example.com
+micromegas-notebooks import my-notebook performance-dashboard
+cd ..
 git add notebooks/
 git commit -m "import notebooks"
+
+# Take ownership — first apply sets managed_by on the server
+micromegas-notebooks apply
+
+# Adopt a new notebook created in the web UI
+micromegas-notebooks import new-dashboard
+git add notebooks/new-dashboard.json
+git commit -m "track new-dashboard"
+
+# Create a brand new notebook from scratch
+# Just create the .json file locally — plan/apply will create it on the server
+echo '{"name": "my-new-notebook", "screen_type": "notebook", "config": {...}}' > notebooks/my-new-notebook.json
 
 # Edit cycle
 # 1. Edit in web UI or in text editor
@@ -263,19 +364,16 @@ git diff notebooks/my-notebook.json
 # 4. Commit
 git commit -am "update my-notebook"
 
-# Deploy / restore cycle
-# 1. Push from git to server (e.g., in CI)
-# Creates/updates all local notebooks, deletes tracked notebooks removed from git
-micromegas-notebooks push --all
+# Deploy / restore cycle (e.g., in CI)
+# 1. Preview changes
+micromegas-notebooks plan
+# 2. Apply — creates/updates local notebooks, deletes tracked notebooks removed from git
+micromegas-notebooks apply --auto-approve
 ```
 
 ### Environment Variables
 
-| Variable | Purpose |
-|----------|---------|
-| `MICROMEGAS_WEB_URL` | analytics-web-srv base URL (e.g., `https://micromegas.example.com`) |
-
-Reuses existing auth env vars: `MICROMEGAS_OIDC_ISSUER`, `MICROMEGAS_OIDC_CLIENT_ID`, etc.
+Reuses existing auth env vars: `MICROMEGAS_OIDC_ISSUER`, `MICROMEGAS_OIDC_CLIENT_ID`, etc. The `server` and `managed_by` values come from `micromegas-notebooks.json`.
 
 ## Implementation Steps
 
@@ -283,32 +381,35 @@ Reuses existing auth env vars: `MICROMEGAS_OIDC_ISSUER`, `MICROMEGAS_OIDC_CLIENT
 1. Modify `cookie_auth_middleware` in `rust/analytics-web-srv/src/auth.rs` to check `Authorization: Bearer` header before falling back to cookies
 2. Test with `curl -H "Authorization: Bearer <token>"` against a local server
 
-### Phase 2: `source_url` Column (Rust + DB + Frontend)
-3. Add migration v3: `ALTER TABLE screens ADD COLUMN source_url VARCHAR(1024) DEFAULT NULL`; bump `LATEST_APP_SCHEMA_VERSION` to 3 and add the `current_version == 2` migration block in `rust/analytics-web-srv/src/app_db/migration.rs`
-4. Add `source_url` field to the `Screen` struct in `rust/analytics-web-srv/src/app_db/models.rs`
-5. Update `UpdateScreenRequest` and `CreateScreenRequest` to accept optional `source_url` field
-6. Update screen handlers to read/write `source_url`
-7. Add source-control banner with link to `NotebookRenderer.tsx` — shown when `source_url` is set
+### Phase 2: `managed_by` Column (Rust + DB + Frontend)
+3. Add migration v3: `ALTER TABLE screens ADD COLUMN managed_by VARCHAR(1024) DEFAULT NULL`; bump `LATEST_APP_SCHEMA_VERSION` to 3 and add the `current_version == 2` migration block in `rust/analytics-web-srv/src/app_db/migration.rs`
+4. Add `managed_by` field to the `Screen` struct in `rust/analytics-web-srv/src/app_db/models.rs`
+5. Update `UpdateScreenRequest` and `CreateScreenRequest` to accept optional `managed_by` field
+6. Update screen handlers to read/write `managed_by`
+7. Add source-control banner with link to `NotebookRenderer.tsx` — shown when `managed_by` is set; derive per-file link by appending `/{name}.json` to `managed_by` URL
 8. Update `Screen` type in `analytics-web-app/src/lib/screens-api.ts`
 
 ### Phase 3: Python HTTP Client
 9. Create `python/micromegas/micromegas/web_client.py` with `WebClient` class
-   - Uses `requests` library (add to pyproject.toml dependencies)
+   - Uses `requests` library (already in pyproject.toml)
    - Auth via bearer token from existing OIDC provider
    - Methods: `list_screens`, `get_screen`, `create_screen`, `update_screen`, `delete_screen`
 
 ### Phase 4: File I/O Helpers
 10. Create `python/micromegas/micromegas/cli/notebooks.py` with:
+    - `read_config() -> dict` — read and validate `micromegas-notebooks.json` from the current directory
     - `read_notebook_file(path) -> dict` — read and validate a notebook JSON file
     - `write_notebook_file(path, screen_dict)` — write pretty-printed JSON with stable key order
     - `notebook_name_from_path(path) -> str` — extract name from filename
-    - `list_local_notebooks(dir) -> dict[str, dict]` — scan directory
+    - `list_local_notebooks() -> dict[str, dict]` — scan current directory (excluding `micromegas-notebooks.json`)
 
 ### Phase 5: CLI Commands
 11. Implement subcommands in `python/micromegas/micromegas/cli/notebooks.py`:
-    - `pull` subcommand
-    - `push` subcommand (sets `source_url` from template, deletes tracked notebooks missing locally)
-    - `diff` subcommand
+    - `init` subcommand (reads git remote/branch, constructs `managed_by`, writes config file)
+    - `import` subcommand (fetches from server, refuses if `managed_by` already set by another repo)
+    - `pull` subcommand (refreshes locally-tracked notebooks from server)
+    - `plan` subcommand (computes execution plan: creates/updates/deletes; shows untracked server notebooks as informational)
+    - `apply` subcommand (runs plan, prompts for confirmation, executes; sets `managed_by`, deletes tracked notebooks missing locally; `--auto-approve` for CI)
     - `list` subcommand
 12. Register entry point in `python/micromegas/pyproject.toml`:
     ```toml
@@ -329,14 +430,14 @@ Reuses existing auth env vars: `MICROMEGAS_OIDC_ISSUER`, `MICROMEGAS_OIDC_CLIENT
 | File | Change |
 |------|--------|
 | `rust/analytics-web-srv/src/auth.rs` | Add Bearer token fallback in `cookie_auth_middleware` |
-| `rust/analytics-web-srv/src/app_db/migration.rs` | Add v3 migration for `source_url` column; bump `LATEST_APP_SCHEMA_VERSION` to 3 |
-| `rust/analytics-web-srv/src/app_db/models.rs` | Add `source_url` to `Screen`, `CreateScreenRequest`, and `UpdateScreenRequest` |
-| `rust/analytics-web-srv/src/screens.rs` | Include `source_url` in queries and update handler |
-| `analytics-web-app/src/lib/screens-api.ts` | Add `source_url` to `Screen` type |
+| `rust/analytics-web-srv/src/app_db/migration.rs` | Add v3 migration for `managed_by` column; bump `LATEST_APP_SCHEMA_VERSION` to 3 |
+| `rust/analytics-web-srv/src/app_db/models.rs` | Add `managed_by` to `Screen`, `CreateScreenRequest`, and `UpdateScreenRequest` |
+| `rust/analytics-web-srv/src/screens.rs` | Include `managed_by` in queries and update handler |
+| `analytics-web-app/src/lib/screens-api.ts` | Add `managed_by` to `Screen` type |
 | `analytics-web-app/src/lib/screen-renderers/NotebookRenderer.tsx` | Add source-control warning banner |
 | `python/micromegas/micromegas/web_client.py` | **New** — HTTP client for REST API |
 | `python/micromegas/micromegas/cli/notebooks.py` | **New** — CLI subcommands |
-| `python/micromegas/pyproject.toml` | Add `requests` dependency, add `micromegas-notebooks` entry point |
+| `python/micromegas/pyproject.toml` | Add `micromegas-notebooks` entry point (`requests` is already a dependency) |
 | `python/micromegas/tests/test_notebook_files.py` | **New** — unit tests |
 | `mkdocs/docs/web-app/notebooks/notebooks-as-code.md` | **New** — documentation |
 | `mkdocs/docs/web-app/notebooks/index.md` | Add link to new doc page |
@@ -371,20 +472,21 @@ Reuses existing auth env vars: `MICROMEGAS_OIDC_ISSUER`, `MICROMEGAS_OIDC_CLIENT
    - Round-trip: write then read produces identical dict
    - Key ordering in output JSON is stable
    - Validation rejects malformed files (missing name, wrong structure)
-   - Diff logic correctly identifies added/removed/modified notebooks
+   - Plan logic correctly identifies added/removed/modified notebooks
 
 2. **Manual integration test**:
    - Start local services (`python3 local_test_env/ai_scripts/start_services.py`)
    - Create a notebook in the web UI
-   - `micromegas-notebooks pull --all` → verify file on disk
+   - `micromegas-notebooks import my-notebook` → verify file on disk
    - Edit the file
-   - `micromegas-notebooks diff` → verify diff shown
-   - `micromegas-notebooks push` → verify update in web UI
+   - `micromegas-notebooks plan` → verify execution plan shown
+   - `micromegas-notebooks apply --auto-approve` → verify update in web UI
+   - `micromegas-notebooks import` on a notebook with `managed_by` set → verify refusal
 
 ## Resolved Questions
 
 1. **Auth for the web server REST API**: The web server does NOT currently accept Bearer tokens — only session cookies. This is a prerequisite (Phase 1). The auth infrastructure (`micromegas_auth::types::HttpRequestParts`) already supports it; we just need to add the header check to `cookie_auth_middleware`.
 
-2. **Should `push` delete notebooks from the server?** Yes — when `push --all` runs, notebooks that have a `source_url` set on the server but no corresponding local file are deleted. This ensures that deleting a notebook file from git and pushing results in it being removed from the server. Notebooks without `source_url` are never touched.
+2. **Should `apply` delete notebooks from the server?** Yes — when `apply` runs, notebooks whose `managed_by` matches the config file value but have no corresponding local file are deleted. This ensures that deleting a notebook file from git and applying results in it being removed from the server. Notebooks with a different `managed_by` or `managed_by = NULL` are never touched.
 
-3. **CI/CD usage**: OIDC client credentials flow (`MICROMEGAS_OIDC_CLIENT_SECRET`) already works for service accounts — document this as the recommended approach for CI pipelines.
+3. **CI/CD usage**: `OidcClientCredentialsProvider` returns an *access token*, not an ID token — the analytics-web-srv validates JWT ID tokens, so this path only works if the OIDC provider issues JWT access tokens (e.g., Auth0 with a custom API audience). For CI, the safest approach is to use `OidcAuthProvider` with client credentials and confirm `id_token` is included in the token response. Document provider requirements in the setup guide.
