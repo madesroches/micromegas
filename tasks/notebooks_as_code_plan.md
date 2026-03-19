@@ -385,7 +385,7 @@ Reuses existing auth env vars: `MICROMEGAS_OIDC_ISSUER`, `MICROMEGAS_OIDC_CLIENT
 3. Add migration v3: `ALTER TABLE screens ADD COLUMN managed_by VARCHAR(1024) DEFAULT NULL`; bump `LATEST_APP_SCHEMA_VERSION` to 3 and add the `current_version == 2` migration block in `rust/analytics-web-srv/src/app_db/migration.rs`
 4. Add `managed_by` field to the `Screen` struct in `rust/analytics-web-srv/src/app_db/models.rs`
 5. Update `UpdateScreenRequest` and `CreateScreenRequest` to accept optional `managed_by` field
-6. Update screen handlers to read/write `managed_by`
+6. Update screen handlers to read/write `managed_by`. The web UI already receives `managed_by` from the GET response and must include it in the PUT request so it round-trips unchanged
 7. Update `Screen` type in `analytics-web-app/src/lib/screens-api.ts` to include optional `managed_by` field
 8. Add source-control banner to `analytics-web-app/src/routes/ScreenPage.tsx` — shown only when editing a screen with `managed_by` set; derive per-file link by appending `/{name}.json` to `managed_by` URL. This goes in `ScreenPage` (not a renderer) because the `screen` object with `managed_by` is available there, and the banner applies to all screen types.
 
@@ -406,7 +406,7 @@ Reuses existing auth env vars: `MICROMEGAS_OIDC_ISSUER`, `MICROMEGAS_OIDC_CLIENT
 ### Phase 5: CLI Commands
 11. Implement subcommands in `python/micromegas/micromegas/cli/screens.py`:
     - `init` subcommand (uses `giturlparse` to parse remote URL, reads branch via `git branch --show-current`, computes relative path via `git rev-parse --show-toplevel`, constructs `managed_by`, writes config file)
-    - `import` subcommand (fetches from server, refuses if `managed_by` already set by another repo)
+    - `import` subcommand (fetches from server, writes to local file, sets `managed_by` on server; checks if screen has an existing owner — if `managed_by` is set by another repo, prompts for confirmation before taking ownership; refuses if local file already exists)
     - `pull` subcommand (refreshes locally-tracked screens from server)
     - `plan` subcommand (computes execution plan: creates/updates/deletes; shows untracked server screens as informational)
     - `apply` subcommand (runs plan, prompts for confirmation, executes; sets `managed_by`, deletes tracked screens missing locally; `--auto-approve` for CI)
