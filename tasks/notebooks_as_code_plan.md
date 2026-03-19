@@ -386,8 +386,8 @@ Reuses existing auth env vars: `MICROMEGAS_OIDC_ISSUER`, `MICROMEGAS_OIDC_CLIENT
 4. Add `managed_by` field to the `Screen` struct in `rust/analytics-web-srv/src/app_db/models.rs`
 5. Update `UpdateScreenRequest` and `CreateScreenRequest` to accept optional `managed_by` field
 6. Update screen handlers to read/write `managed_by`
-7. Add source-control banner to `analytics-web-app/src/routes/ScreenPage.tsx` — shown only when editing a screen with `managed_by` set; derive per-file link by appending `/{name}.json` to `managed_by` URL. This goes in `ScreenPage` (not a renderer) because the `screen` object with `managed_by` is available there, and the banner applies to all screen types.
-8. Update `Screen` type in `analytics-web-app/src/lib/screens-api.ts`
+7. Update `Screen` type in `analytics-web-app/src/lib/screens-api.ts` to include optional `managed_by` field
+8. Add source-control banner to `analytics-web-app/src/routes/ScreenPage.tsx` — shown only when editing a screen with `managed_by` set; derive per-file link by appending `/{name}.json` to `managed_by` URL. This goes in `ScreenPage` (not a renderer) because the `screen` object with `managed_by` is available there, and the banner applies to all screen types.
 
 ### Phase 3: Python HTTP Client
 9. Create `python/micromegas/micromegas/web_client.py` with `WebClient` class
@@ -424,6 +424,7 @@ Reuses existing auth env vars: `MICROMEGAS_OIDC_ISSUER`, `MICROMEGAS_OIDC_CLIENT
 ### Phase 7: Documentation
 16. Add `mkdocs/docs/web-app/notebooks/screens-as-code.md` documenting the workflow
 17. Update `mkdocs/docs/web-app/notebooks/index.md` to link to it
+18. Add `- Screens as Code: web-app/notebooks/screens-as-code.md` to the Notebooks nav section in `mkdocs/mkdocs.yml`
 
 ## Files to Modify
 
@@ -435,6 +436,7 @@ Reuses existing auth env vars: `MICROMEGAS_OIDC_ISSUER`, `MICROMEGAS_OIDC_CLIENT
 | `rust/analytics-web-srv/src/screens.rs` | Include `managed_by` in queries and update handler |
 | `analytics-web-app/src/lib/screens-api.ts` | Add `managed_by` to `Screen` type |
 | `analytics-web-app/src/routes/ScreenPage.tsx` | Add source-control warning banner |
+| `mkdocs/mkdocs.yml` | Add screens-as-code page to Notebooks nav section |
 | `python/micromegas/micromegas/web_client.py` | **New** — HTTP client for REST API |
 | `python/micromegas/micromegas/cli/screens.py` | **New** — CLI subcommands |
 | `python/micromegas/pyproject.toml` | Add `micromegas-screens` entry point (`requests` is already a dependency) |
@@ -465,6 +467,7 @@ Reuses existing auth env vars: `MICROMEGAS_OIDC_ISSUER`, `MICROMEGAS_OIDC_CLIENT
 |------|--------|
 | `mkdocs/docs/web-app/notebooks/screens-as-code.md` | **Create** — full guide with workflow examples |
 | `mkdocs/docs/web-app/notebooks/index.md` | **Update** — add link to screens-as-code page |
+| `mkdocs/mkdocs.yml` | **Update** — add nav entry under Notebooks section |
 
 ## Testing Strategy
 
