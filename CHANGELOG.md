@@ -20,6 +20,7 @@ This file documents the historical progress of the Micromegas project. For curre
 * **Dependencies:**
   * Update lz4_flex to 0.12.1 to fix memory information leak vulnerability
   * Fix 6 dependabot security alerts: flatted 3.4.2, rustls-webpki 0.103.10, grpc-go 1.79.3
+  * Fix rustls-webpki alert in datafusion-wasm Cargo.lock
 
 ## March 2026 - v0.22.0
 
