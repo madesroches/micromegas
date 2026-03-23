@@ -2255,12 +2255,9 @@ dependencies = [
 name = "flight-sql-srv"
 version = "0.23.0"
 dependencies = [
- "anyhow",
  "clap",
  "micromegas",
  "tokio",
- "tonic",
- "tower",
 ]
 
 [[package]]

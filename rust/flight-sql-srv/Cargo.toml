@@ -12,11 +12,8 @@ authors.workspace = true
 [dependencies]
 micromegas = { workspace = true, features = ["server"] }
 
-anyhow.workspace = true
 clap.workspace = true
 tokio.workspace = true
-tonic.workspace = true
-tower.workspace = true
 
 [package.metadata.cargo-machete]
 ignored = ["tokio"]  # Required by micromegas_main macro
