@@ -119,9 +119,9 @@ def make_client(config):
 
             auth_provider = OidcClientCredentialsProvider.from_env()
         else:
-            from micromegas.auth.oidc import OidcAuthProvider
+            from micromegas.oidc_connection import load_or_login
 
-            auth_provider = OidcAuthProvider.from_file(
+            auth_provider = load_or_login(
                 issuer=issuer,
                 client_id=client_id,
             )
