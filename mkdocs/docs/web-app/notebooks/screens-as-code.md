@@ -96,7 +96,7 @@ Each screen is a single `.json` file:
 ### `init`
 
 ```bash
-micromegas-screens init SERVER_URL [--remote REMOTE] [--branch BRANCH]
+micromegas-screens init SERVER_URL [--remote REMOTE]
 ```
 
 Initialize the screens directory. Must be run inside a git repository. Reads the git remote to construct the `managed_by` URL.

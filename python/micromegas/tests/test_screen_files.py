@@ -1,7 +1,6 @@
 """Unit tests for screen file I/O and plan logic."""
 
 import json
-import os
 import tempfile
 
 import pytest
@@ -109,8 +108,8 @@ class TestServerScreenToFile:
 
 
 class TestListLocalScreens:
-    def test_lists_screens(self, tmp_path):
-        os.chdir(tmp_path)
+    def test_lists_screens(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
         # Write config file (should be excluded)
         with open("micromegas-screens.json", "w") as f:
             json.dump({"managed_by": "test", "server": "http://localhost"}, f)
@@ -143,8 +142,8 @@ class TestComputePlan:
 
         return FakeClient()
 
-    def test_create(self, tmp_path):
-        os.chdir(tmp_path)
+    def test_create(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
         write_screen_file(
             "new-screen.json",
             {
@@ -163,8 +162,8 @@ class TestComputePlan:
         assert updates == []
         assert deletes == []
 
-    def test_delete_tracked(self, tmp_path):
-        os.chdir(tmp_path)
+    def test_delete_tracked(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
         managed_by = "https://github.com/org/repo/tree/main/screens"
         config = {"managed_by": managed_by, "server": "http://localhost"}
         server_screens = [
@@ -179,8 +178,8 @@ class TestComputePlan:
         creates, updates, deletes, unchanged, untracked = compute_plan(config, client)
         assert deletes == ["old-screen"]
 
-    def test_no_delete_different_owner(self, tmp_path):
-        os.chdir(tmp_path)
+    def test_no_delete_different_owner(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
         config = {
             "managed_by": "https://github.com/org/repo/tree/main/screens",
             "server": "http://localhost",
@@ -198,8 +197,8 @@ class TestComputePlan:
         assert deletes == []
         assert "other-screen" in untracked
 
-    def test_update_modified(self, tmp_path):
-        os.chdir(tmp_path)
+    def test_update_modified(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
         write_screen_file(
             "my-screen.json",
             {
@@ -224,8 +223,8 @@ class TestComputePlan:
         creates, updates, deletes, unchanged, untracked = compute_plan(config, client)
         assert updates == ["my-screen"]
 
-    def test_unchanged(self, tmp_path):
-        os.chdir(tmp_path)
+    def test_unchanged(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
         managed_by = "https://github.com/org/repo/tree/main/screens"
         screen_data = {
             "name": "stable-screen",
