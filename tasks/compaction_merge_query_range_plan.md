@@ -191,6 +191,7 @@ let mut merged_stream = view
 - `rust/analytics/src/lakehouse/batch_partition_merger.rs` — add import, accept and use `insert_range`
 - `rust/analytics/src/lakehouse/view.rs` — `View::merge_partitions` signature and default impl
 - `rust/analytics/src/lakehouse/sql_batch_view.rs` — `SqlBatchView::merge_partitions` override
+- `rust/analytics/tests/sql_view_test.rs` — `LogSummaryMerger::execute_merge_query` must accept `insert_range: TimeRange` (can ignore the value since it doesn't call `make_session_context`)
 
 ## Trade-offs
 
@@ -201,5 +202,5 @@ let mut merged_stream = view
 ## Testing Strategy
 
 - Run existing tests: `cargo test` from `rust/` directory
-- The existing merge tests exercise both merger implementations — they will need to pass the new `insert_range` parameter
+- The existing merge tests exercise both merger implementations — `LogSummaryMerger` in `sql_view_test.rs` implements `PartitionMerger` and must update its `execute_merge_query` signature to accept `insert_range: TimeRange`
 - Memory impact can be validated in production by observing peak RSS during daily merges (should drop from ~6.5 GB to ~2.2 GB for the scenario described in the issue)
