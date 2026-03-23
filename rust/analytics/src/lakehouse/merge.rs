@@ -31,6 +31,7 @@ pub trait PartitionMerger: Send + Sync + Debug {
         lakehouse: Arc<LakehouseContext>,
         partitions_to_merge: Arc<Vec<Partition>>,
         partitions_all_views: Arc<PartitionCache>,
+        insert_range: TimeRange,
     ) -> Result<SendableRecordBatchStream>;
 }
 
@@ -66,12 +67,13 @@ impl PartitionMerger for QueryMerger {
         lakehouse: Arc<LakehouseContext>,
         partitions_to_merge: Arc<Vec<Partition>>,
         partitions_all_views: Arc<PartitionCache>,
+        insert_range: TimeRange,
     ) -> Result<SendableRecordBatchStream> {
         let reader_factory = lakehouse.reader_factory().clone();
         let ctx = make_session_context(
             lakehouse.clone(),
             partitions_all_views,
-            None,
+            Some(insert_range),
             self.view_factory.clone(),
             self.session_configurator.clone(),
         )
@@ -172,6 +174,7 @@ pub async fn create_merged_partition(
             lakehouse.clone(),
             Arc::new(filtered_partitions),
             partitions_all_views,
+            insert_range,
         )
         .await
         .with_context(|| "view.merge_partitions")?;

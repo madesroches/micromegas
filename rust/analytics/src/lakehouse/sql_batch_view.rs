@@ -251,10 +251,16 @@ impl View for SqlBatchView {
         lakehouse: Arc<LakehouseContext>,
         partitions_to_merge: Arc<Vec<Partition>>,
         partitions_all_views: Arc<PartitionCache>,
+        insert_range: TimeRange,
     ) -> Result<SendableRecordBatchStream> {
         let res = self
             .merger
-            .execute_merge_query(lakehouse, partitions_to_merge, partitions_all_views)
+            .execute_merge_query(
+                lakehouse,
+                partitions_to_merge,
+                partitions_all_views,
+                insert_range,
+            )
             .await;
         if let Err(e) = &res {
             error!("{e:?}");

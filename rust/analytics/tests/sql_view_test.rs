@@ -118,6 +118,7 @@ impl PartitionMerger for LogSummaryMerger {
         lakehouse: Arc<LakehouseContext>,
         partitions: Arc<Vec<Partition>>,
         _partitions_all_views: Arc<PartitionCache>,
+        _insert_range: TimeRange,
     ) -> Result<SendableRecordBatchStream> {
         let reader_factory = lakehouse.reader_factory().clone();
         let processes_df = query_partitions(

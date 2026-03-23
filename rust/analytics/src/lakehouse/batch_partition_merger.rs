@@ -7,7 +7,7 @@ use crate::{
     lakehouse::{
         partitioned_table_provider::PartitionedTableProvider, query::make_session_context,
     },
-    time::datetime_to_scalar,
+    time::{TimeRange, datetime_to_scalar},
 };
 use anyhow::Result;
 use async_trait::async_trait;
@@ -106,6 +106,7 @@ impl PartitionMerger for BatchPartitionMerger {
         lakehouse: Arc<LakehouseContext>,
         partitions_to_merge: Arc<Vec<Partition>>,
         partitions_all_views: Arc<PartitionCache>,
+        insert_range: TimeRange,
     ) -> Result<SendableRecordBatchStream> {
         info!("execute_merge_query");
 
@@ -126,7 +127,7 @@ impl PartitionMerger for BatchPartitionMerger {
         let ctx = make_session_context(
             lakehouse.clone(),
             partitions_all_views,
-            None,
+            Some(insert_range),
             self.view_factory.clone(),
             self.session_configurator.clone(),
         )
