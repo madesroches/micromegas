@@ -15,6 +15,13 @@ This file documents the historical progress of the Micromegas project. For curre
   * Fix env var credential parsing by lowercasing keys for `object_store` case sensitivity bug (#951)
 * **CLI:**
   * Add `--file` option to `micromegas-query` for reading SQL from a file or stdin (#941)
+* **Web App:**
+  * Add `managed_by` column to screens table for source-control tracking
+  * Show warning banner when editing a source-controlled screen
+  * Add Bearer token authentication to analytics-web-srv (alongside cookie auth)
+* **CLI:**
+  * Add `micromegas-screens` tool for managing screens as code with Terraform-inspired workflow (init, import, pull, plan, apply, list)
+  * Add HTTP client (`WebClient`) for analytics-web-srv REST API
 * **Claude Code Plugin:**
   * Add shareable micromegas plugin with micromegas-query skill for querying observability data via SQL
 * **Dependencies:**
