@@ -119,9 +119,7 @@ const SCREEN_COLUMNS: &str =
 #[span_fn]
 pub async fn list_screens(Extension(pool): Extension<PgPool>) -> ScreenResult<Json<Vec<Screen>>> {
     let query = format!("SELECT {SCREEN_COLUMNS} FROM screens ORDER BY name");
-    let screens = sqlx::query_as::<_, Screen>(&query)
-        .fetch_all(&pool)
-        .await?;
+    let screens = sqlx::query_as::<_, Screen>(&query).fetch_all(&pool).await?;
 
     Ok(Json(screens))
 }
@@ -185,13 +183,13 @@ pub async fn create_screen(
          RETURNING {SCREEN_COLUMNS}"
     );
     let screen = sqlx::query_as::<_, Screen>(&query)
-    .bind(&name)
-    .bind(&request.screen_type)
-    .bind(&request.config)
-    .bind(user_id)
-    .bind(&request.managed_by)
-    .fetch_one(&pool)
-    .await?;
+        .bind(&name)
+        .bind(&request.screen_type)
+        .bind(&request.config)
+        .bind(user_id)
+        .bind(&request.managed_by)
+        .fetch_one(&pool)
+        .await?;
 
     info!("Created screen: {} by {}", name, user_id);
     Ok((StatusCode::CREATED, Json(screen)))
@@ -210,18 +208,18 @@ pub async fn update_screen(
 
     let query = format!(
         "UPDATE screens
-         SET config = $1, updated_by = $2, updated_at = NOW(), managed_by = $4
+         SET config = $1, updated_by = $2, updated_at = NOW(), managed_by = COALESCE($4, managed_by)
          WHERE name = $3
          RETURNING {SCREEN_COLUMNS}"
     );
     let screen = sqlx::query_as::<_, Screen>(&query)
-    .bind(&request.config)
-    .bind(user_id)
-    .bind(&name)
-    .bind(&request.managed_by)
-    .fetch_optional(&pool)
-    .await?
-    .ok_or_else(|| ScreenError::NotFound(name.clone()))?;
+        .bind(&request.config)
+        .bind(user_id)
+        .bind(&name)
+        .bind(&request.managed_by)
+        .fetch_optional(&pool)
+        .await?
+        .ok_or_else(|| ScreenError::NotFound(name.clone()))?;
 
     info!("Updated screen: {} by {}", name, user_id);
     Ok(Json(screen))
