@@ -47,27 +47,25 @@ Add a convenience constructor to `StaticTablesConfigurator`:
 
 ```rust
 impl StaticTablesConfigurator {
-    /// Load static tables from the URL in `env_var`, falling back to
-    /// `NoOpSessionConfigurator` when the variable is unset or loading fails.
+    /// Load static tables from the URL in `env_var`.
+    /// Returns `NoOpSessionConfigurator` when the variable is unset.
+    /// Errors if the variable is set but loading fails (preserves fail-fast behavior).
     pub async fn from_env(
         env_var: &str,
         runtime: Arc<RuntimeEnv>,
-    ) -> Arc<dyn SessionConfigurator> {
+    ) -> Result<Arc<dyn SessionConfigurator>> {
         let url = match std::env::var(env_var) {
             Ok(url) => url,
             Err(_) => {
                 warn!("{env_var} not set, static tables will not be available");
-                return Arc::new(NoOpSessionConfigurator);
+                return Ok(Arc::new(NoOpSessionConfigurator));
             }
         };
         let ctx = SessionContext::new_with_config_rt(SessionConfig::default(), runtime);
-        match Self::new(&ctx, &url).await {
-            Ok(configurator) => Arc::new(configurator),
-            Err(e) => {
-                warn!("failed to load static tables from {url}: {e:#}");
-                Arc::new(NoOpSessionConfigurator)
-            }
-        }
+        let configurator = Self::new(&ctx, &url)
+            .await
+            .with_context(|| format!("loading static tables from {url}"))?;
+        Ok(Arc::new(configurator))
     }
 }
 ```
@@ -79,8 +77,10 @@ This replaces the 15-line pattern shown in the issue and used in `flight_sql_srv
 Add a new module `rust/public/src/servers/flight_sql_server.rs` with a builder that encapsulates the entire setup from env vars to serving:
 
 ```rust
+type ViewFactoryFn = Box<dyn FnOnce(Arc<RuntimeEnv>, Arc<DataLakeConnection>) -> BoxFuture<Result<ViewFactory>>>;
+
 pub struct FlightSqlServerBuilder {
-    view_factory: Option<Arc<ViewFactory>>,
+    view_factory_fn: Option<ViewFactoryFn>,
     session_configurator: Option<Arc<dyn SessionConfigurator>>,
     auth_provider: Option<Arc<dyn AuthProvider>>,
     use_default_auth: bool,
@@ -92,11 +92,11 @@ pub struct FlightSqlServerBuilder {
 
 **Builder methods:**
 
-- `with_view_factory(factory: Arc<ViewFactory>)` — optional, overrides the default `default_view_factory()`. Use when registering custom views.
+- `with_view_factory_fn(f: impl FnOnce(Arc<RuntimeEnv>, Arc<DataLakeConnection>) -> ... + 'static)` — optional, overrides the default `default_view_factory()`. The closure receives the runtime and data lake created by the builder, so custom factories can use them. Use when registering custom views.
 - `with_session_configurator(cfg: Arc<dyn SessionConfigurator>)` — optional, defaults to `NoOpSessionConfigurator`
 - `with_static_tables_env_var(var: &str)` — optional, uses `StaticTablesConfigurator::from_env` during build. Mutually exclusive with `with_session_configurator` (last call wins).
 - `with_auth_provider(provider: Arc<dyn AuthProvider>)` — optional, no auth if omitted
-- `with_default_auth()` — optional, calls `micromegas::auth::default_provider::provider()` during build
+- `with_default_auth()` — optional, calls `micromegas::auth::default_provider::provider()` during build. **Errors if no providers are configured** (preserves the current fail-fast behavior when auth is expected but `MICROMEGAS_API_KEYS` / `MICROMEGAS_OIDC_*` env vars are missing).
 - `with_max_decoding_message_size(bytes: usize)` — optional, defaults to 100 MB
 - `with_listen_addr(addr: SocketAddr)` — optional, defaults to `0.0.0.0:50051`
 - `build_and_serve() -> Result<()>` — async, does everything:
@@ -107,10 +107,10 @@ pub struct FlightSqlServerBuilder {
 3. `migrate_lakehouse(pool)`
 4. `make_runtime_env()` → `Arc<RuntimeEnv>`
 5. `LakehouseContext::new(lake, runtime)` → `Arc<LakehouseContext>`
-6. Use provided `view_factory` or fall back to `default_view_factory(runtime, lake)` → `Arc<ViewFactory>`
+6. Call provided `view_factory_fn(runtime, lake)` or fall back to `default_view_factory(runtime, lake)` → `Arc<ViewFactory>`
 7. `LivePartitionProvider::new(pool)` → `Arc<LivePartitionProvider>`
 8. Resolve session configurator (from `static_tables_env_var` or explicit, or no-op)
-9. Resolve auth provider (from `with_default_auth` or explicit, or none)
+9. Resolve auth provider (from `with_default_auth` or explicit, or none). If `use_default_auth` is set and `provider()` returns `None`, return error: "Authentication required but no auth providers configured"
 10. `FlightServiceServer::new(FlightSqlServiceImpl::new(...))` with max decoding size
 11. Tower layer stack: `GrpcHealthService` → `LogUriService` → `AuthService`
 12. TCP listener → `ConnectedIncoming` → `Server::builder().layer().add_service().serve_with_incoming()`
@@ -156,22 +156,23 @@ Callers who need non-standard setup (custom data lake connection, custom view fa
 ### Phase 1: `StaticTablesConfigurator::from_env`
 
 1. Add `from_env` method to `StaticTablesConfigurator` in `rust/analytics/src/lakehouse/static_tables_configurator.rs`
-2. Add necessary imports (`SessionConfig`, `SessionContext`, `NoOpSessionConfigurator`)
+2. Add necessary imports (`SessionConfig`, `NoOpSessionConfigurator`, `anyhow::Context`)
 3. Add unit tests in `rust/analytics/tests/` for:
-   - Missing env var returns `NoOpSessionConfigurator`
-   - Invalid URL returns `NoOpSessionConfigurator`
+   - Missing env var returns `Ok(NoOpSessionConfigurator)`
+   - Invalid URL returns an error
 
 ### Phase 2: `FlightSqlServer` builder
 
 4. Create `rust/public/src/servers/flight_sql_server.rs` with `FlightSqlServerBuilder` and `FlightSqlServer`
 5. Register the module in `rust/public/src/servers/mod.rs`
 6. Refactor `rust/flight-sql-srv/src/flight_sql_srv.rs` to use the new builder
+7. Remove unused direct dependencies (`anyhow`, `tonic`, `tower`) from `rust/flight-sql-srv/Cargo.toml`
 
 ### Phase 3: Verify
 
-7. Run `cargo build` from `rust/`
-8. Run `cargo test` from `rust/`
-9. Run `cargo clippy --workspace -- -D warnings`
+8. Run `cargo build` from `rust/`
+9. Run `cargo test` from `rust/`
+10. Run `cargo clippy --workspace -- -D warnings`
 
 ## Files to Modify
 
@@ -179,6 +180,7 @@ Callers who need non-standard setup (custom data lake connection, custom view fa
 - `rust/public/src/servers/mod.rs` — add `flight_sql_server` module
 - **New**: `rust/public/src/servers/flight_sql_server.rs` — builder implementation
 - `rust/flight-sql-srv/src/flight_sql_srv.rs` — refactor to use builder
+- `rust/flight-sql-srv/Cargo.toml` — remove unused direct dependencies (`anyhow`, `tonic`, `tower`)
 
 ## Trade-offs
 
@@ -196,9 +198,11 @@ A method on the type is more discoverable than a free function. It also keeps th
 
 ## Testing Strategy
 
-- **`from_env` with missing var**: set no env var, verify it returns a type that implements `SessionConfigurator` (the no-op)
-- **`from_env` with invalid URL**: set env var to garbage, verify graceful fallback
+- **`from_env` with missing var**: set no env var, verify it returns `Ok(NoOpSessionConfigurator)`
+- **`from_env` with invalid URL**: set env var to garbage, verify it returns an error
 - **Builder defaults**: verify `build_and_serve` works with no optional fields set (uses default view factory, no auth, no-op session configurator)
+- **`with_default_auth` without providers**: verify `build_and_serve` returns error when `with_default_auth()` is called but no auth env vars are set
+- **`with_view_factory_fn`**: verify the closure receives the runtime and lake created by the builder
 - **Integration**: refactor `flight-sql-srv` to use the builder, verify it compiles and passes existing tests
 - **Manual**: start the refactored server against a local test environment and verify FlightSQL queries still work
 
