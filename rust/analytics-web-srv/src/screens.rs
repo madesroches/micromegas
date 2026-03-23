@@ -112,16 +112,14 @@ pub async fn get_default_config(
 // Screens CRUD
 // ============================================================================
 
+const SCREEN_COLUMNS: &str =
+    "name, screen_type, config, created_by, updated_by, created_at, updated_at, managed_by";
+
 /// List all screens.
 #[span_fn]
 pub async fn list_screens(Extension(pool): Extension<PgPool>) -> ScreenResult<Json<Vec<Screen>>> {
-    let screens = sqlx::query_as::<_, Screen>(
-        "SELECT name, screen_type, config, created_by, updated_by, created_at, updated_at
-         FROM screens
-         ORDER BY name",
-    )
-    .fetch_all(&pool)
-    .await?;
+    let query = format!("SELECT {SCREEN_COLUMNS} FROM screens ORDER BY name");
+    let screens = sqlx::query_as::<_, Screen>(&query).fetch_all(&pool).await?;
 
     Ok(Json(screens))
 }
@@ -132,15 +130,12 @@ pub async fn get_screen(
     Extension(pool): Extension<PgPool>,
     Path(name): Path<String>,
 ) -> ScreenResult<Json<Screen>> {
-    let screen = sqlx::query_as::<_, Screen>(
-        "SELECT name, screen_type, config, created_by, updated_by, created_at, updated_at
-         FROM screens
-         WHERE name = $1",
-    )
-    .bind(&name)
-    .fetch_optional(&pool)
-    .await?
-    .ok_or_else(|| ScreenError::NotFound(name))?;
+    let query = format!("SELECT {SCREEN_COLUMNS} FROM screens WHERE name = $1");
+    let screen = sqlx::query_as::<_, Screen>(&query)
+        .bind(&name)
+        .fetch_optional(&pool)
+        .await?
+        .ok_or_else(|| ScreenError::NotFound(name))?;
 
     Ok(Json(screen))
 }
@@ -182,17 +177,19 @@ pub async fn create_screen(
     let user_id = user.email.as_deref().unwrap_or(&user.subject);
 
     // Insert screen
-    let screen = sqlx::query_as::<_, Screen>(
-        "INSERT INTO screens (name, screen_type, config, created_by, updated_by)
-         VALUES ($1, $2, $3, $4, $4)
-         RETURNING name, screen_type, config, created_by, updated_by, created_at, updated_at",
-    )
-    .bind(&name)
-    .bind(&request.screen_type)
-    .bind(&request.config)
-    .bind(user_id)
-    .fetch_one(&pool)
-    .await?;
+    let query = format!(
+        "INSERT INTO screens (name, screen_type, config, created_by, updated_by, managed_by)
+         VALUES ($1, $2, $3, $4, $4, $5)
+         RETURNING {SCREEN_COLUMNS}"
+    );
+    let screen = sqlx::query_as::<_, Screen>(&query)
+        .bind(&name)
+        .bind(&request.screen_type)
+        .bind(&request.config)
+        .bind(user_id)
+        .bind(&request.managed_by)
+        .fetch_one(&pool)
+        .await?;
 
     info!("Created screen: {} by {}", name, user_id);
     Ok((StatusCode::CREATED, Json(screen)))
@@ -209,18 +206,20 @@ pub async fn update_screen(
     // Use email if available, otherwise fall back to subject
     let user_id = user.email.as_deref().unwrap_or(&user.subject);
 
-    let screen = sqlx::query_as::<_, Screen>(
+    let query = format!(
         "UPDATE screens
-         SET config = $1, updated_by = $2, updated_at = NOW()
+         SET config = $1, updated_by = $2, updated_at = NOW(), managed_by = COALESCE($4, managed_by)
          WHERE name = $3
-         RETURNING name, screen_type, config, created_by, updated_by, created_at, updated_at",
-    )
-    .bind(&request.config)
-    .bind(user_id)
-    .bind(&name)
-    .fetch_optional(&pool)
-    .await?
-    .ok_or_else(|| ScreenError::NotFound(name.clone()))?;
+         RETURNING {SCREEN_COLUMNS}"
+    );
+    let screen = sqlx::query_as::<_, Screen>(&query)
+        .bind(&request.config)
+        .bind(user_id)
+        .bind(&name)
+        .bind(&request.managed_by)
+        .fetch_optional(&pool)
+        .await?
+        .ok_or_else(|| ScreenError::NotFound(name.clone()))?;
 
     info!("Updated screen: {} by {}", name, user_id);
     Ok(Json(screen))

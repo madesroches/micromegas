@@ -103,6 +103,7 @@ nav:
         - Cell Types: web-app/notebooks/cell-types.md
         - Variables: web-app/notebooks/variables.md
         - Execution & Auto-Run: web-app/notebooks/execution.md
+        - Screens as Code: web-app/notebooks/screens-as-code.md
     - Deployment: admin/web-app.md
   - Integrations:
     - Unreal Engine:

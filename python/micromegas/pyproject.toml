@@ -11,6 +11,7 @@ readme = "README.md"
 [tool.poetry.dependencies]
 authlib = "^1.6.7"
 certifi = "^2025.4.26"
+giturlparse = "^0.12.0"
 grpcio = "^1.69.0"
 numpy = "^2.2.6"
 pandas = "^2.2.2"
@@ -32,6 +33,7 @@ tabulate = "^0.9.0"
 [tool.poetry.scripts]
 micromegas-logout = "micromegas.cli.logout:main"
 micromegas-query = "micromegas.cli.query:main"
+micromegas-screens = "micromegas.cli.screens:main"
 
 [build-system]
 requires = ["poetry-core"]

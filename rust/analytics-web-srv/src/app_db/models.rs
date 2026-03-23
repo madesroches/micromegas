@@ -15,6 +15,7 @@ pub struct Screen {
     pub updated_by: Option<String>,
     pub created_at: Option<DateTime<Utc>>,
     pub updated_at: Option<DateTime<Utc>>,
+    pub managed_by: Option<String>,
 }
 
 /// Request to create a new screen.
@@ -23,12 +24,14 @@ pub struct CreateScreenRequest {
     pub name: String,
     pub screen_type: String,
     pub config: serde_json::Value,
+    pub managed_by: Option<String>,
 }
 
 /// Request to update an existing screen.
 #[derive(Debug, Clone, Deserialize)]
 pub struct UpdateScreenRequest {
     pub config: serde_json::Value,
+    pub managed_by: Option<String>,
 }
 
 /// Validation error for screen names.

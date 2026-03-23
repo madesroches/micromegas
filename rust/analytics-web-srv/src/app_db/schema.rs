@@ -55,6 +55,14 @@ pub async fn create_data_sources_table(
     Ok(())
 }
 
+pub async fn add_screens_managed_by(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Result<()> {
+    sqlx::query("ALTER TABLE screens ADD COLUMN managed_by VARCHAR(1024) DEFAULT NULL;")
+        .execute(&mut **tr)
+        .await
+        .with_context(|| "Adding managed_by column to screens table")?;
+    Ok(())
+}
+
 /// Creates the tables for the micromegas_app database.
 pub async fn create_tables(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Result<()> {
     create_screens_table(tr).await?;

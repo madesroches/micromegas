@@ -89,3 +89,4 @@ When you have unsaved changes, the **Config Diff** modal shows a side-by-side co
 - [Cell Types](cell-types.md) — reference for all 11 cell types
 - [Variables](variables.md) — the variable system, expressions, and URL parameter sync
 - [Execution & Auto-Run](execution.md) — execution model, WASM engine, and auto-run behavior
+- [Screens as Code](screens-as-code.md) — manage screens as JSON files in git
