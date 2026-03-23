@@ -141,32 +141,12 @@ def cmd_init(args):
 
     # Must be inside a git repo
     try:
-        repo_root = (
-            subprocess.check_output(
-                ["git", "rev-parse", "--show-toplevel"], stderr=subprocess.DEVNULL
-            )
-            .decode()
-            .strip()
+        subprocess.check_output(
+            ["git", "rev-parse", "--show-toplevel"], stderr=subprocess.DEVNULL
         )
     except (subprocess.CalledProcessError, FileNotFoundError):
         print("Error: not inside a git repository.", file=sys.stderr)
         sys.exit(1)
-
-    # Get current branch
-    branch = args.branch
-    if not branch:
-        try:
-            branch = (
-                subprocess.check_output(
-                    ["git", "branch", "--show-current"], stderr=subprocess.DEVNULL
-                )
-                .decode()
-                .strip()
-            )
-        except subprocess.CalledProcessError:
-            branch = "main"
-    if not branch:
-        branch = "main"
 
     # Get remote URL
     remote = args.remote or "origin"
@@ -186,15 +166,10 @@ def cmd_init(args):
     import giturlparse
 
     parsed = giturlparse.parse(remote_url)
-    base_url = f"https://{parsed.resource}/{parsed.owner}/{parsed.repo}"
-
-    # Compute relative path from repo root to current directory
-    cwd = os.path.abspath(".")
-    rel_path = os.path.relpath(cwd, repo_root)
-    if rel_path == ".":
-        managed_by = f"{base_url}/tree/{branch}"
-    else:
-        managed_by = f"{base_url}/tree/{branch}/{rel_path}"
+    # Use pathname for the full path (owner/repo may drop nested groups)
+    repo_path = parsed.pathname.strip("/").removesuffix(".git")
+    base_url = f"https://{parsed.resource}/{repo_path}"
+    managed_by = base_url
 
     config_data = {
         "managed_by": managed_by,
@@ -520,7 +495,6 @@ def main():
     p_init.add_argument(
         "--remote", default=None, help="Git remote name (default: origin)"
     )
-    p_init.add_argument("--branch", default=None, help="Git branch (default: current)")
     p_init.set_defaults(func=cmd_init)
 
     # import

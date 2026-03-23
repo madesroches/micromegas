@@ -432,12 +432,12 @@ function ScreenPageContent() {
                   {screenTypeInfo?.display_name ?? screenType}
                 </p>
               )}
-              {screen?.managed_by && (
+              {screen?.managed_by && hasUnsavedChanges && (
                 <div className="mt-2 ml-11 flex items-center gap-2 rounded-md border px-3 py-2 text-sm"
                   style={{ borderColor: 'var(--accent-warning)', backgroundColor: 'color-mix(in srgb, var(--accent-warning) 10%, transparent)' }}>
                   <span style={{ color: 'var(--accent-warning)' }}>This screen is managed by source control. Edits made here may be overwritten on the next deployment.</span>
                   <a
-                    href={`${screen.managed_by.replace('/tree/', '/blob/')}/${screen.name}.json`}
+                    href={screen.managed_by}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="inline-flex items-center gap-1 whitespace-nowrap text-accent-link hover:underline"
