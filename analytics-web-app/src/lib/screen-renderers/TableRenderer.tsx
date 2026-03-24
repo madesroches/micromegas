@@ -401,7 +401,7 @@ export function TableRenderer({
               ))}
             </tr>
           </thead>
-          <TableBody data={table} columns={visibleColumns} allColumns={allColumns} overrides={tableConfig.overrides} timeRange={timeRange} />
+          <TableBody data={table} columns={visibleColumns} allColumns={allColumns} overrides={tableConfig.overrides} timeRange={timeRange} cellSelections={{}} cellResults={{}} />
         </table>
       </div>
     )

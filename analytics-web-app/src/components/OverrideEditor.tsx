@@ -7,6 +7,8 @@ interface OverrideEditorProps {
   availableColumns: string[]
   /** Variable names available for macro substitution (e.g., from notebook cells) */
   availableVariables?: string[]
+  /** Cell names that support $cell.selected.column syntax */
+  cellSelectionNames?: string[]
   onChange: (overrides: ColumnOverride[]) => void
 }
 
@@ -14,6 +16,7 @@ export function OverrideEditor({
   overrides,
   availableColumns,
   availableVariables = [],
+  cellSelectionNames = [],
   onChange,
 }: OverrideEditorProps) {
   const [isExpanded, setIsExpanded] = useState(overrides.length > 0)
@@ -27,9 +30,9 @@ export function OverrideEditor({
       return overrides.map(() => ({ missingColumns: [], unknownMacros: [] }))
     }
     return overrides.map((override) =>
-      validateFormatMacros(override.format, availableColumns, availableVariables)
+      validateFormatMacros(override.format, availableColumns, availableVariables, cellSelectionNames)
     )
-  }, [overrides, availableColumns, availableVariables, hasResults])
+  }, [overrides, availableColumns, availableVariables, cellSelectionNames, hasResults])
 
   // Check which overrides target columns not in the query results
   const availableColumnsSet = useMemo(() => new Set(availableColumns), [availableColumns])
@@ -199,6 +202,11 @@ export function OverrideEditor({
               Row data: <code className="px-1 py-0.5 bg-theme-border rounded">$row.name</code> or{' '}
               <code className="px-1 py-0.5 bg-theme-border rounded">$row["column-name"]</code>
             </div>
+            {cellSelectionNames.length > 0 && (
+              <div>
+                Selection: <code className="px-1 py-0.5 bg-theme-border rounded">$cell.selected.column</code>
+              </div>
+            )}
           </div>
         </div>
       )}
