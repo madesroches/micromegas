@@ -1,4 +1,4 @@
-import { useRef, useEffect, useCallback, useMemo } from 'react'
+import { useRef, useEffect, useCallback, useMemo, useState } from 'react'
 import { Table } from 'apache-arrow'
 import * as THREE from 'three'
 import type {
@@ -7,13 +7,14 @@ import type {
   CellEditorProps,
   CellExecutionContext,
 } from '../cell-registry'
-import type { QueryCellConfig, CellConfig, CellState } from '../notebook-types'
+import type { QueryCellConfig, CellConfig, CellState, VariableValue } from '../notebook-types'
 import { AvailableVariablesPanel } from '@/components/AvailableVariablesPanel'
 import { DocumentationLink, QUERY_GUIDE_URL } from '@/components/DocumentationLink'
 import { SyntaxEditor } from '@/components/SyntaxEditor'
 import { substituteMacros, validateMacros, DEFAULT_SQL } from '../notebook-utils'
 import { timestampToMs } from '@/lib/arrow-utils'
-import { Flame } from 'lucide-react'
+import { parseRelativeTime } from '@/lib/time-range'
+import { Flame, ChevronDown, ChevronRight } from 'lucide-react'
 
 // =============================================================================
 // Constants
@@ -454,9 +455,10 @@ const TIME_AXIS_FORMAT = new Intl.DateTimeFormat(undefined, {
 interface FlameGraphViewProps {
   index: FlameIndex
   onTimeRangeSelect?: (from: Date, to: Date) => void
+  initialTimeRange?: { min: number; max: number }
 }
 
-function FlameGraphView({ index, onTimeRangeSelect }: FlameGraphViewProps) {
+function FlameGraphView({ index, onTimeRangeSelect, initialTimeRange }: FlameGraphViewProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const webglCanvasRef = useRef<HTMLCanvasElement>(null)
   const textCanvasRef = useRef<HTMLCanvasElement>(null)
@@ -798,6 +800,17 @@ function FlameGraphView({ index, onTimeRangeSelect }: FlameGraphViewProps) {
   }, [index, requestRender])
 
   // -----------------------------------------------------------------------
+  // Apply initial time range (separate from main setup to avoid re-creating Three.js resources)
+  // -----------------------------------------------------------------------
+  useEffect(() => {
+    if (!initialTimeRange) return
+    const s = stateRef.current
+    s.viewMinTime = initialTimeRange.min
+    s.viewMaxTime = initialTimeRange.max
+    requestRender()
+  }, [initialTimeRange, requestRender])
+
+  // -----------------------------------------------------------------------
   // Interaction: WASD zoom/pan, wheel scroll, drag-to-zoom, hover tooltip
   // -----------------------------------------------------------------------
 
@@ -1054,12 +1067,74 @@ function escapeHtml(str: string): string {
 }
 
 // =============================================================================
+// Initial time range resolution
+// =============================================================================
+
+interface ResolvedInitialTimeRange {
+  range?: { min: number; max: number }
+  error?: string
+}
+
+function resolveInitialTimeRange(
+  options: Record<string, unknown> | undefined,
+  variables: Record<string, VariableValue>,
+  timeRange: { begin: string; end: string },
+  cellResults: Record<string, Table>,
+  cellSelections: Record<string, Record<string, unknown>>,
+): ResolvedInitialTimeRange {
+  const rawFrom = options?.initialFrom
+  const rawTo = options?.initialTo
+  const fromStr = typeof rawFrom === 'string' && rawFrom.trim() !== '' ? rawFrom.trim() : null
+  const toStr = typeof rawTo === 'string' && rawTo.trim() !== '' ? rawTo.trim() : null
+
+  if (!fromStr && !toStr) return {}
+
+  const errors: string[] = []
+  let min: number | undefined
+  let max: number | undefined
+
+  if (fromStr) {
+    try {
+      const resolved = substituteMacros(fromStr, variables, timeRange, cellResults, cellSelections)
+      min = parseRelativeTime(resolved).getTime()
+    } catch (e) {
+      errors.push(`Invalid initial from: ${e instanceof Error ? e.message : String(e)}`)
+    }
+  }
+
+  if (toStr) {
+    try {
+      const resolved = substituteMacros(toStr, variables, timeRange, cellResults, cellSelections)
+      max = parseRelativeTime(resolved).getTime()
+    } catch (e) {
+      errors.push(`Invalid initial to: ${e instanceof Error ? e.message : String(e)}`)
+    }
+  }
+
+  if (errors.length > 0) {
+    return { error: errors.join('; ') }
+  }
+
+  // At least one bound was resolved — return partial range (caller fills missing bound from data)
+  if (min != null || max != null) {
+    return { range: { min: min ?? -Infinity, max: max ?? Infinity } }
+  }
+
+  return {}
+}
+
+// =============================================================================
 // Renderer Component
 // =============================================================================
 
 export function FlameGraphCell({
   data,
   status,
+  options,
+  variables,
+  timeRange,
+  cellResults,
+  cellSelections,
   onTimeRangeSelect,
 }: CellRendererProps) {
   const table = data[0]
@@ -1068,6 +1143,21 @@ export function FlameGraphCell({
     if (!table || table.numRows === 0) return null
     return buildFlameIndex(table)
   }, [table])
+
+  const initialTimeRangeResult = useMemo(
+    () => resolveInitialTimeRange(options, variables, timeRange, cellResults, cellSelections),
+    [options, variables, timeRange, cellResults, cellSelections],
+  )
+
+  // Fill missing bounds from data range
+  const initialTimeRange = useMemo(() => {
+    if (!initialTimeRangeResult.range || !index) return initialTimeRangeResult.range
+    const r = initialTimeRangeResult.range
+    return {
+      min: r.min === -Infinity ? index.timeRange.min : r.min,
+      max: r.max === Infinity ? index.timeRange.max : r.max,
+    }
+  }, [initialTimeRangeResult.range, index])
 
   if (status === 'loading') {
     return (
@@ -1095,8 +1185,15 @@ export function FlameGraphCell({
   }
 
   return (
-    <div className="flex-1 min-h-0 h-full">
-      <FlameGraphView index={index} onTimeRangeSelect={onTimeRangeSelect} />
+    <div className="flex-1 min-h-0 h-full flex flex-col">
+      {initialTimeRangeResult.error && (
+        <div className="px-3 py-2 bg-red-500/10 border border-red-500/30 rounded text-red-400 text-xs">
+          {initialTimeRangeResult.error}
+        </div>
+      )}
+      <div className="flex-1 min-h-0">
+        <FlameGraphView index={index} onTimeRangeSelect={onTimeRangeSelect} initialTimeRange={initialTimeRange} />
+      </div>
     </div>
   )
 }
@@ -1107,10 +1204,20 @@ export function FlameGraphCell({
 
 function FlameGraphCellEditor({ config, onChange, variables, timeRange, onRun, cellResults, cellSelections }: CellEditorProps) {
   const fgConfig = config as QueryCellConfig
+  const [viewOptionsOpen, setViewOptionsOpen] = useState(
+    Boolean((fgConfig.options?.initialFrom as string)?.trim() || (fgConfig.options?.initialTo as string)?.trim()),
+  )
 
   const validationErrors = useMemo(() => {
     return validateMacros(fgConfig.sql, variables, cellResults, cellSelections).errors
   }, [fgConfig.sql, variables, cellResults, cellSelections])
+
+  const handleOptionChange = useCallback(
+    (key: string, value: string) => {
+      onChange({ ...fgConfig, options: { ...fgConfig.options, [key]: value } })
+    },
+    [fgConfig, onChange],
+  )
 
   return (
     <>
@@ -1134,6 +1241,40 @@ function FlameGraphCellEditor({ config, onChange, variables, timeRange, onRun, c
           ))}
         </div>
       )}
+      <div>
+        <button
+          type="button"
+          className="flex items-center gap-1 text-xs font-medium text-theme-text-secondary uppercase hover:text-theme-text-primary"
+          onClick={() => setViewOptionsOpen((o) => !o)}
+        >
+          {viewOptionsOpen ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+          View Options
+        </button>
+        {viewOptionsOpen && (
+          <div className="mt-2 space-y-2 pl-1">
+            <div className="flex items-center gap-2">
+              <label className="text-xs text-theme-text-secondary w-20 shrink-0">Initial From</label>
+              <input
+                type="text"
+                className="flex-1 bg-app-input border border-theme-border rounded px-2 py-1 text-sm text-theme-text-primary placeholder:text-theme-text-muted"
+                placeholder="$from, now-1h, or variable"
+                value={(fgConfig.options?.initialFrom as string) ?? ''}
+                onChange={(e) => handleOptionChange('initialFrom', e.target.value)}
+              />
+            </div>
+            <div className="flex items-center gap-2">
+              <label className="text-xs text-theme-text-secondary w-20 shrink-0">Initial To</label>
+              <input
+                type="text"
+                className="flex-1 bg-app-input border border-theme-border rounded px-2 py-1 text-sm text-theme-text-primary placeholder:text-theme-text-muted"
+                placeholder="$to, now, or variable"
+                value={(fgConfig.options?.initialTo as string) ?? ''}
+                onChange={(e) => handleOptionChange('initialTo', e.target.value)}
+              />
+            </div>
+          </div>
+        )}
+      </div>
       <AvailableVariablesPanel variables={variables} timeRange={timeRange} cellResults={cellResults} cellSelections={cellSelections} />
       <DocumentationLink url={QUERY_GUIDE_URL} label="Query Guide" />
     </>
