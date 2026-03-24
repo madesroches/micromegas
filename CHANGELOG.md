@@ -27,6 +27,8 @@ This file documents the historical progress of the Micromegas project. For curre
   * Show warning banner when editing a source-controlled screen
   * Add Bearer token authentication to analytics-web-srv (alongside cookie auth)
   * Resolve `$cell.selected.column` macros in table column overrides (#975)
+  * Format timestamps in cell selection display panel
+  * Show actual cell names in override editor help text
 * **CLI:**
   * Add `micromegas-screens` tool for managing screens as code with Terraform-inspired workflow (init, import, pull, plan, apply, list)
   * Add HTTP client (`WebClient`) for analytics-web-srv REST API
