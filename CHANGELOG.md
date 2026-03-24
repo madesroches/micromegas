@@ -12,6 +12,7 @@ This file documents the historical progress of the Micromegas project. For curre
   * Add CSV table provider and `StaticTablesConfigurator` for auto-discovery of CSV/JSON tables via `MICROMEGAS_STATIC_TABLES_URL` (#946)
   * Scope merge session context to insert time range to reduce memory during compaction (#963)
   * Add `FlightSqlServer` builder to eliminate boilerplate when assembling a FlightSQL server (#955)
+  * Add `LakehouseContext::from_env()` convenience constructor to deduplicate initialization (#969)
 * **Object Storage:**
   * Use `parse_url_opts` to honor environment variable credentials for S3/GCS/Azure (#948)
   * Fix env var credential parsing by lowercasing keys for `object_store` case sensitivity bug (#951)
