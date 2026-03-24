@@ -6,9 +6,7 @@ use clap::{Parser, Subcommand};
 use micromegas::analytics::delete::delete_old_data;
 use micromegas::analytics::lakehouse::batch_update::materialize_partition_range;
 use micromegas::analytics::lakehouse::lakehouse_context::LakehouseContext;
-use micromegas::analytics::lakehouse::migration::migrate_lakehouse;
 use micromegas::analytics::lakehouse::partition_cache::PartitionCache;
-use micromegas::analytics::lakehouse::runtime::make_runtime_env;
 use micromegas::analytics::lakehouse::temp::delete_expired_temporary_files;
 use micromegas::analytics::lakehouse::view_factory::default_view_factory;
 use micromegas::analytics::lakehouse::write_partition::retire_partitions;
@@ -17,7 +15,6 @@ use micromegas::analytics::time::TimeRange;
 use micromegas::chrono::DateTime;
 use micromegas::chrono::TimeDelta;
 use micromegas::chrono::Utc;
-use micromegas::ingestion::data_lake_connection::connect_to_data_lake;
 use micromegas::micromegas_main;
 use micromegas::servers::maintenance::get_global_views_with_update_group;
 use std::sync::Arc;
@@ -65,17 +62,9 @@ enum Commands {
 async fn main() -> Result<()> {
     let args = Cli::parse();
 
-    let connection_string = std::env::var("MICROMEGAS_SQL_CONNECTION_STRING")
-        .with_context(|| "reading MICROMEGAS_SQL_CONNECTION_STRING")?;
-    let object_store_uri = std::env::var("MICROMEGAS_OBJECT_STORE_URI")
-        .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
-    let data_lake = Arc::new(connect_to_data_lake(&connection_string, &object_store_uri).await?);
-    migrate_lakehouse(data_lake.db_pool.clone())
-        .await
-        .with_context(|| "migrate_lakehouse")?;
-    let runtime = Arc::new(make_runtime_env()?);
-    let lakehouse = Arc::new(LakehouseContext::new(data_lake.clone(), runtime.clone()));
-    let view_factory = default_view_factory(runtime, data_lake.clone()).await?;
+    let lakehouse = LakehouseContext::from_env().await?;
+    let data_lake = lakehouse.lake().clone();
+    let view_factory = default_view_factory(lakehouse.runtime().clone(), data_lake.clone()).await?;
     let null_response_writer = Arc::new(ResponseWriter::new(None));
     match args.command {
         Commands::DeleteOldData { min_days_old } => {

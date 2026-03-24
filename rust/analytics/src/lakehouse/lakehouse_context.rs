@@ -1,8 +1,12 @@
 use super::file_cache::FileCache;
 use super::metadata_cache::MetadataCache;
+use super::migration::migrate_lakehouse;
 use super::reader_factory::ReaderFactory;
+use super::runtime::make_runtime_env;
+use anyhow::Context;
+use anyhow::Result;
 use datafusion::execution::runtime_env::RuntimeEnv;
-use micromegas_ingestion::data_lake_connection::DataLakeConnection;
+use micromegas_ingestion::data_lake_connection::{DataLakeConnection, connect_to_data_lake};
 use micromegas_tracing::prelude::*;
 use std::sync::Arc;
 
@@ -29,6 +33,23 @@ pub struct LakehouseContext {
 }
 
 impl LakehouseContext {
+    /// Reads MICROMEGAS_SQL_CONNECTION_STRING and MICROMEGAS_OBJECT_STORE_URI,
+    /// connects to the data lake, runs lakehouse migrations, and creates the
+    /// runtime environment.
+    pub async fn from_env() -> Result<Arc<Self>> {
+        let connection_string = std::env::var("MICROMEGAS_SQL_CONNECTION_STRING")
+            .with_context(|| "reading MICROMEGAS_SQL_CONNECTION_STRING")?;
+        let object_store_uri = std::env::var("MICROMEGAS_OBJECT_STORE_URI")
+            .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
+        let data_lake =
+            Arc::new(connect_to_data_lake(&connection_string, &object_store_uri).await?);
+        migrate_lakehouse(data_lake.db_pool.clone())
+            .await
+            .with_context(|| "migrate_lakehouse")?;
+        let runtime = Arc::new(make_runtime_env()?);
+        Ok(Arc::new(Self::new(data_lake, runtime)))
+    }
+
     /// Creates a new lakehouse context with default-sized metadata and file caches.
     pub fn new(lake: Arc<DataLakeConnection>, runtime: Arc<RuntimeEnv>) -> Self {
         let metadata_cache_mb = match std::env::var("MICROMEGAS_METADATA_CACHE_MB") {

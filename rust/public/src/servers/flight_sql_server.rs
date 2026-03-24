@@ -1,14 +1,12 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use micromegas_analytics::lakehouse::lakehouse_context::LakehouseContext;
-use micromegas_analytics::lakehouse::migration::migrate_lakehouse;
 use micromegas_analytics::lakehouse::partition_cache::LivePartitionProvider;
-use micromegas_analytics::lakehouse::runtime::make_runtime_env;
 use micromegas_analytics::lakehouse::session_configurator::SessionConfigurator;
 use micromegas_analytics::lakehouse::static_tables_configurator::StaticTablesConfigurator;
 use micromegas_analytics::lakehouse::view_factory::{ViewFactory, default_view_factory};
 use micromegas_auth::tower::AuthService;
 use micromegas_auth::types::AuthProvider;
-use micromegas_ingestion::data_lake_connection::{DataLakeConnection, connect_to_data_lake};
+use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_tracing::prelude::*;
 use std::future::Future;
 use std::net::SocketAddr;
@@ -139,19 +137,8 @@ impl FlightSqlServerBuilder {
     ///
     /// Runs the full setup sequence and blocks until the server shuts down.
     pub async fn build_and_serve(self) -> Result<()> {
-        let connection_string = std::env::var("MICROMEGAS_SQL_CONNECTION_STRING")
-            .with_context(|| "reading MICROMEGAS_SQL_CONNECTION_STRING")?;
-        let object_store_uri = std::env::var("MICROMEGAS_OBJECT_STORE_URI")
-            .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
-
-        let data_lake =
-            Arc::new(connect_to_data_lake(&connection_string, &object_store_uri).await?);
-        migrate_lakehouse(data_lake.db_pool.clone())
-            .await
-            .with_context(|| "migrate_lakehouse")?;
-
-        let runtime = Arc::new(make_runtime_env()?);
-        let lakehouse = Arc::new(LakehouseContext::new(data_lake.clone(), runtime));
+        let lakehouse = LakehouseContext::from_env().await?;
+        let data_lake = lakehouse.lake().clone();
         info!(
             "created lakehouse context with metadata cache: {:?}",
             lakehouse.metadata_cache()
