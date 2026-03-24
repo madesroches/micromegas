@@ -32,7 +32,8 @@ use std::hash::Hasher;
 use std::{hash::DefaultHasher, sync::Arc};
 
 /// A type alias for a function that creates a `PartitionMerger`.
-pub type MergerMaker = dyn Fn(Arc<RuntimeEnv>, Arc<Schema>) -> Arc<dyn PartitionMerger>;
+pub type MergerMaker =
+    dyn Fn(Arc<RuntimeEnv>, Arc<Schema>) -> Arc<dyn PartitionMerger> + Send + Sync;
 
 /// SQL-defined view updated in batch
 #[derive(Debug)]
