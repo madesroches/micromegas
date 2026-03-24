@@ -1,11 +1,12 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use datafusion::catalog::TableProvider;
-use datafusion::execution::context::SessionContext;
+use datafusion::execution::context::{SessionConfig, SessionContext};
+use datafusion::execution::runtime_env::RuntimeEnv;
 use futures::StreamExt;
 use micromegas_tracing::prelude::*;
 use std::sync::Arc;
 
-use super::session_configurator::SessionConfigurator;
+use super::session_configurator::{NoOpSessionConfigurator, SessionConfigurator};
 use crate::dfext::csv_table_provider::csv_table_provider;
 use crate::dfext::json_table_provider::json_table_provider;
 
@@ -37,6 +38,28 @@ pub struct StaticTablesConfigurator {
 }
 
 impl StaticTablesConfigurator {
+    /// Load static tables from the URL in the given environment variable.
+    ///
+    /// Returns `NoOpSessionConfigurator` when the variable is unset.
+    /// Errors if the variable is set but loading fails (preserves fail-fast behavior).
+    pub async fn from_env(
+        env_var: &str,
+        runtime: Arc<RuntimeEnv>,
+    ) -> Result<Arc<dyn SessionConfigurator>> {
+        let url = match std::env::var(env_var) {
+            Ok(url) => url,
+            Err(_) => {
+                warn!("{env_var} not set, static tables will not be available");
+                return Ok(Arc::new(NoOpSessionConfigurator));
+            }
+        };
+        let ctx = SessionContext::new_with_config_rt(SessionConfig::default(), runtime);
+        let configurator = Self::new(&ctx, &url)
+            .await
+            .with_context(|| format!("loading static tables from {url}"))?;
+        Ok(Arc::new(configurator))
+    }
+
     /// Discovers JSON and CSV files under the given URL and creates table providers for each.
     ///
     /// Files with `.json` extensions are loaded as JSON tables.

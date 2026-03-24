@@ -18,6 +18,9 @@ pub mod maintenance;
 /// minimal FlightSQL protocol implementation
 pub mod flight_sql_service_impl;
 
+/// FlightSQL server builder
+pub mod flight_sql_server;
+
 /// web server for perfetto traces
 pub mod perfetto;
 
