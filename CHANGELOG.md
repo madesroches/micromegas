@@ -10,9 +10,13 @@ This file documents the historical progress of the Micromegas project. For curre
   * Add nightly cache rotation with `--rotate-at` flag for built-in scheduling
 * **Analytics:**
   * Add CSV table provider and `StaticTablesConfigurator` for auto-discovery of CSV/JSON tables via `MICROMEGAS_STATIC_TABLES_URL` (#946)
+  * Downgrade extensionless file warning to debug in `StaticTablesConfigurator` (#954)
   * Scope merge session context to insert time range to reduce memory during compaction (#963)
   * Add `FlightSqlServer` builder to eliminate boilerplate when assembling a FlightSQL server (#955)
+  * Add `Send + Sync` bounds to `MergerMaker` type alias for async view factories (#972)
   * Add `LakehouseContext::from_env()` convenience constructor to deduplicate initialization (#969)
+* **Ingestion:**
+  * Add `WebIngestionService::from_env()` convenience constructor to deduplicate initialization (#973)
 * **Object Storage:**
   * Use `parse_url_opts` to honor environment variable credentials for S3/GCS/Azure (#948)
   * Fix env var credential parsing by lowercasing keys for `object_store` case sensitivity bug (#951)
@@ -27,6 +31,9 @@ This file documents the historical progress of the Micromegas project. For curre
   * Add HTTP client (`WebClient`) for analytics-web-srv REST API
 * **Claude Code Plugin:**
   * Add shareable micromegas plugin with micromegas-query skill for querying observability data via SQL
+  * Extract pr, design, design-review, and branch-review skills to standalone dev-skills plugin (#960)
+* **Repo:**
+  * Add `.gitattributes` for LF line endings, ignore `.claude/settings.local.json` (#962)
 * **Dependencies:**
   * Update lz4_flex to 0.12.1 to fix memory information leak vulnerability
   * Fix 6 dependabot security alerts: flatted 3.4.2, rustls-webpki 0.103.10, grpc-go 1.79.3
