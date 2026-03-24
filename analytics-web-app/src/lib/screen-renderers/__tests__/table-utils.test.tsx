@@ -1,9 +1,10 @@
 import { render, screen, fireEvent } from '@testing-library/react'
-import { DataType, Timestamp, TimeUnit } from 'apache-arrow'
+import { DataType, Timestamp, TimeUnit, vectorFromArray, Table } from 'apache-arrow'
 import { renderHook, act } from '@testing-library/react'
 import {
   expandRowMacros,
   expandVariableMacros,
+  expandCellSelectionMacros,
   extractMacroColumns,
   findUnknownMacros,
   validateFormatMacros,
@@ -169,6 +170,96 @@ describe('expandVariableMacros', () => {
   })
 })
 
+describe('expandCellSelectionMacros', () => {
+  it('should expand $cell.selected.column macro', () => {
+    const template = '/details?from=$upstream.selected.start_time'
+    const cellSelections = { upstream: { start_time: '2024-01-01T00:00:00Z', name: 'test' } }
+    expect(expandCellSelectionMacros(template, cellSelections, {})).toBe(
+      '/details?from=2024-01-01T00:00:00Z'
+    )
+  })
+
+  it('should expand multiple cell selection macros', () => {
+    const template = '/details?from=$upstream.selected.start_time&to=$upstream.selected.end_time'
+    const cellSelections = {
+      upstream: { start_time: '2024-01-01T00:00:00Z', end_time: '2024-01-02T00:00:00Z' },
+    }
+    expect(expandCellSelectionMacros(template, cellSelections, {})).toBe(
+      '/details?from=2024-01-01T00:00:00Z&to=2024-01-02T00:00:00Z'
+    )
+  })
+
+  it('should expand macros from different cells', () => {
+    const template = '/details?id=$cell_a.selected.id&name=$cell_b.selected.name'
+    const cellSelections = {
+      cell_a: { id: '123' },
+      cell_b: { name: 'test' },
+    }
+    expect(expandCellSelectionMacros(template, cellSelections, {})).toBe(
+      '/details?id=123&name=test'
+    )
+  })
+
+  it('should resolve to empty string when cell has no selection', () => {
+    const template = '/details?from=$upstream.selected.start_time'
+    expect(expandCellSelectionMacros(template, {}, {})).toBe('/details?from=')
+  })
+
+  it('should resolve to empty string when column is null', () => {
+    const template = '/details?from=$upstream.selected.start_time'
+    const cellSelections = { upstream: { start_time: null } }
+    expect(expandCellSelectionMacros(template, cellSelections, {})).toBe('/details?from=')
+  })
+
+  it('should handle numeric values', () => {
+    const template = '/details?count=$upstream.selected.count'
+    const cellSelections = { upstream: { count: 42 } }
+    expect(expandCellSelectionMacros(template, cellSelections, {})).toBe('/details?count=42')
+  })
+
+  it('should not modify template without cell selection macros', () => {
+    const template = '/details?id=$row.id&var=$search'
+    expect(expandCellSelectionMacros(template, {}, {})).toBe(template)
+  })
+
+  it('should format timestamp values as RFC3339 when cellResults provides type info', () => {
+    const timestampType = new Timestamp(TimeUnit.MILLISECOND, null)
+    // 2024-01-15T10:30:00.000Z in milliseconds
+    const ms = 1705314600000
+    const vector = vectorFromArray([ms], timestampType)
+    const table = new Table({ frame_begin: vector })
+
+    const template = '/details?from=$upstream.selected.frame_begin'
+    const cellSelections = { upstream: { frame_begin: ms } }
+    expect(expandCellSelectionMacros(template, cellSelections, { upstream: table })).toBe(
+      '/details?from=2024-01-15T10:30:00.000Z'
+    )
+  })
+
+  it('should format nanosecond timestamp values as RFC3339', () => {
+    const timestampType = new Timestamp(TimeUnit.NANOSECOND, '+00:00')
+    // Arrow JS converts nanosecond timestamps to millisecond Numbers
+    // 2024-01-15T10:30:00.000Z as milliseconds (what Arrow JS gives us)
+    const msValue = 1705314600000
+    const vector = vectorFromArray([msValue], timestampType)
+    const table = new Table({ frame_begin: vector })
+
+    const template = '/details?from=$upstream.selected.frame_begin'
+    const cellSelections = { upstream: { frame_begin: msValue } }
+    expect(expandCellSelectionMacros(template, cellSelections, { upstream: table })).toBe(
+      '/details?from=2024-01-15T10:30:00.000Z'
+    )
+  })
+
+  it('should fall back to String() when cellResults has no type info', () => {
+    const template = '/details?from=$upstream.selected.frame_begin'
+    const cellSelections = { upstream: { frame_begin: 1705314600000 } }
+    expect(expandCellSelectionMacros(template, cellSelections, {})).toBe(
+      '/details?from=1705314600000'
+    )
+  })
+})
+
 describe('extractMacroColumns', () => {
   it('should extract dot notation columns', () => {
     const template = '[View](/process?id=$row.process_id&name=$row.name)'
@@ -237,6 +328,16 @@ describe('findUnknownMacros', () => {
   it('should handle mixed known and unknown macros', () => {
     const template = '[View](/process?id=$known&other=$missing)'
     expect(findUnknownMacros(template, ['known'])).toEqual(['$missing'])
+  })
+
+  it('should not flag cell selection names as unknown', () => {
+    const template = '[View](/process?from=$upstream.selected.start_time)'
+    expect(findUnknownMacros(template, [], ['upstream'])).toEqual([])
+  })
+
+  it('should flag unknown names even with cell selections provided', () => {
+    const template = '[View](/process?from=$unknown.selected.start_time)'
+    expect(findUnknownMacros(template, [], ['upstream'])).toEqual(['$unknown'])
   })
 })
 
@@ -326,8 +427,11 @@ describe('OverrideCell', () => {
     { name: 'process-id', type: new DataType() },
   ]
 
+  // Required props with sensible defaults for tests that don't need cell context
+  const noCells = { cellSelections: {}, cellResults: {} }
+
   it('should render a simple link with expanded macros', () => {
-    render(<OverrideCell format="[View](/process?id=$row.id)" row={{ id: '123' }} columns={stringColumns} />)
+    render(<OverrideCell format="[View](/process?id=$row.id)" row={{ id: '123' }} columns={stringColumns} {...noCells} />)
     const link = screen.getByRole('link', { name: 'View' })
     expect(link).toHaveAttribute('href', '/process?id=123')
   })
@@ -338,6 +442,7 @@ describe('OverrideCell', () => {
         format="[$row.name](/process?id=$row.id)"
         row={{ id: '123', name: 'MyApp' }}
         columns={stringColumns}
+        {...noCells}
       />
     )
     const link = screen.getByRole('link', { name: 'MyApp' })
@@ -350,6 +455,7 @@ describe('OverrideCell', () => {
         format="[View](/view?id=$row.id) | [Edit](/edit?id=$row.id)"
         row={{ id: '456' }}
         columns={stringColumns}
+        {...noCells}
       />
     )
     const links = screen.getAllByRole('link')
@@ -360,14 +466,14 @@ describe('OverrideCell', () => {
 
   it('should handle missing columns gracefully', () => {
     render(
-      <OverrideCell format="[View](/process?id=$row.missing)" row={{ other: 'value' }} columns={stringColumns} />
+      <OverrideCell format="[View](/process?id=$row.missing)" row={{ other: 'value' }} columns={stringColumns} {...noCells} />
     )
     const link = screen.getByRole('link', { name: 'View' })
     expect(link).toHaveAttribute('href', '/process?id=')
   })
 
   it('should render plain text when no markdown link', () => {
-    render(<OverrideCell format="ID: $row.id" row={{ id: '789' }} columns={stringColumns} />)
+    render(<OverrideCell format="ID: $row.id" row={{ id: '789' }} columns={stringColumns} {...noCells} />)
     expect(screen.getByText('ID: 789')).toBeInTheDocument()
   })
 
@@ -377,6 +483,7 @@ describe('OverrideCell', () => {
         format='[View](/details?id=$row["process-id"])'
         row={{ 'process-id': 'abc' }}
         columns={stringColumns}
+        {...noCells}
       />
     )
     const link = screen.getByRole('link', { name: 'View' })
@@ -390,6 +497,7 @@ describe('OverrideCell', () => {
         row={{ id: '123' }}
         columns={stringColumns}
         variables={{ search: 'test query' }}
+        {...noCells}
       />
     )
     const link = screen.getByRole('link', { name: 'Search: test query' })
@@ -403,6 +511,7 @@ describe('OverrideCell', () => {
         row={{ name: 'server1' }}
         columns={stringColumns}
         variables={{ metric: 'cpu_usage' }}
+        {...noCells}
       />
     )
     const link = screen.getByRole('link', { name: 'cpu_usage on server1' })
@@ -416,10 +525,39 @@ describe('OverrideCell', () => {
         row={{ id: '123' }}
         columns={stringColumns}
         timeRange={{ begin: '2024-01-01T00:00:00Z', end: '2024-01-02T00:00:00Z' }}
+        {...noCells}
       />
     )
     const link = screen.getByRole('link', { name: 'View' })
     expect(link).toHaveAttribute('href', '/details?from=2024-01-01T00:00:00Z&to=2024-01-02T00:00:00Z&id=123')
+  })
+
+  it('should expand $cell.selected.column macros', () => {
+    render(
+      <OverrideCell
+        format="[View](/details?id=$row.id&from=$upstream.selected.start_time&to=$upstream.selected.end_time)"
+        row={{ id: '123' }}
+        columns={stringColumns}
+        cellSelections={{ upstream: { start_time: '2024-01-01T00:00:00Z', end_time: '2024-01-02T00:00:00Z' } }}
+        cellResults={{}}
+      />
+    )
+    const link = screen.getByRole('link', { name: 'View' })
+    expect(link).toHaveAttribute('href', '/details?id=123&from=2024-01-01T00:00:00Z&to=2024-01-02T00:00:00Z')
+  })
+
+  it('should resolve cell selection macros to empty when no selection', () => {
+    render(
+      <OverrideCell
+        format="[View](/details?id=$row.id&from=$upstream.selected.start_time)"
+        row={{ id: '123' }}
+        columns={stringColumns}
+        cellSelections={{}}
+        cellResults={{}}
+      />
+    )
+    const link = screen.getByRole('link', { name: 'View' })
+    expect(link).toHaveAttribute('href', '/details?id=123&from=')
   })
 })
 
@@ -444,6 +582,8 @@ describe('OverrideCell with hidden timestamp column', () => {
         row={{ name: 'server1', start_time: microsSinceEpoch }}
         columns={visibleColumns}
         allColumns={allColumns}
+        cellSelections={{}}
+        cellResults={{}}
       />
     )
     expect(screen.getByText('Started: 2024-01-15T10:30:00.000Z')).toBeInTheDocument()
@@ -461,6 +601,8 @@ describe('OverrideCell with hidden timestamp column', () => {
         format="Started: $row.start_time"
         row={{ name: 'server1', start_time: microsSinceEpoch }}
         columns={visibleColumns}
+        cellSelections={{}}
+        cellResults={{}}
       />
     )
     // Without allColumns, the timestamp type is unknown, so it renders as a raw bigint

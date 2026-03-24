@@ -2,6 +2,7 @@ import { useState } from 'react'
 import type { Table } from 'apache-arrow'
 import type { VariableValue } from '@/lib/screen-renderers/notebook-types'
 import { isMultiColumnValue } from '@/lib/screen-renderers/notebook-types'
+import { isTimeType, timestampToDate } from '@/lib/arrow-utils'
 
 interface AvailableVariablesPanelProps {
   variables: Record<string, VariableValue>
@@ -14,7 +15,20 @@ interface AvailableVariablesPanelProps {
   cellSelections: Record<string, Record<string, unknown>>
 }
 
-function CellSelectionEntry({ cellName, selection }: { cellName: string; selection: Record<string, unknown> }) {
+function formatSelectionValue(value: unknown, cellName: string, colName: string, cellResults: Record<string, Table>): string {
+  if (value == null) return '-'
+  const table = cellResults[cellName]
+  if (table) {
+    const field = table.schema.fields.find((f) => f.name === colName)
+    if (field && isTimeType(field.type)) {
+      const date = timestampToDate(value, field.type)
+      if (date) return date.toISOString()
+    }
+  }
+  return String(value)
+}
+
+function CellSelectionEntry({ cellName, selection, cellResults }: { cellName: string; selection: Record<string, unknown>; cellResults: Record<string, Table> }) {
   const [expanded, setExpanded] = useState(false)
   const columns = Object.keys(selection)
   return (
@@ -37,7 +51,7 @@ function CellSelectionEntry({ cellName, selection }: { cellName: string; selecti
               ${cellName}.selected.{col}
             </span>
             <span className="text-theme-text-muted truncate ml-2 max-w-[120px]">
-              {selection[col] != null ? String(selection[col]) : '-'}
+              {formatSelectionValue(selection[col], cellName, col, cellResults)}
             </span>
           </div>
         ))}
@@ -156,7 +170,7 @@ export function AvailableVariablesPanel({
           <div className="border-t border-theme-border my-1" />
         )}
         {cellSelectionEntries.map(([cellName, selection]) => (
-          <CellSelectionEntry key={cellName} cellName={cellName} selection={selection} />
+          <CellSelectionEntry key={cellName} cellName={cellName} selection={selection} cellResults={cellResults} />
         ))}
       </div>
     </div>

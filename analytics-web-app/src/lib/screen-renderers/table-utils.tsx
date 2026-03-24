@@ -7,7 +7,7 @@
 import { useCallback, useMemo } from 'react'
 import * as ContextMenu from '@radix-ui/react-context-menu'
 import { ChevronUp, ChevronDown, EyeOff, ArrowUpNarrowWide, ArrowDownNarrowWide, X } from 'lucide-react'
-import { DataType } from 'apache-arrow'
+import { DataType, Table } from 'apache-arrow'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { formatTimestamp, formatDurationMs } from '@/lib/time-range'
@@ -96,18 +96,24 @@ const BUILTIN_MACROS = new Set(['row', 'from', 'to'])
  *
  * @param template - The format template to check
  * @param availableVariables - Known variable names (without $)
+ * @param cellSelectionNames - Known cell names that support .selected.column syntax
  */
-export function findUnknownMacros(template: string, availableVariables: string[]): string[] {
+export function findUnknownMacros(
+  template: string,
+  availableVariables: string[],
+  cellSelectionNames: string[] = [],
+): string[] {
   const unknown: string[] = []
   const knownVars = new Set(availableVariables)
+  const knownCells = new Set(cellSelectionNames)
 
   // Match $ followed by a word
   const macroRegex = /\$(\w+)/g
   let match: RegExpExecArray | null
   while ((match = macroRegex.exec(template)) !== null) {
     const name = match[1]
-    // Skip if it's a built-in macro or a known variable
-    if (!BUILTIN_MACROS.has(name) && !knownVars.has(name)) {
+    // Skip if it's a built-in macro, a known variable, or a known cell name
+    if (!BUILTIN_MACROS.has(name) && !knownVars.has(name) && !knownCells.has(name)) {
       unknown.push(match[0]) // Include the $ in the result (e.g., "$missing")
     }
   }
@@ -130,16 +136,18 @@ export interface FormatValidation {
  * @param template - The format template to validate
  * @param availableColumns - Column names from the query result
  * @param availableVariables - Variable names from notebook (optional)
+ * @param cellSelectionNames - Cell names that support .selected.column syntax (optional)
  */
 export function validateFormatMacros(
   template: string,
   availableColumns: string[],
-  availableVariables: string[] = []
+  availableVariables: string[] = [],
+  cellSelectionNames: string[] = [],
 ): FormatValidation {
   const referenced = extractMacroColumns(template)
   const available = new Set(availableColumns)
   const missingColumns = referenced.filter((col) => !available.has(col))
-  const unknownMacros = findUnknownMacros(template, availableVariables)
+  const unknownMacros = findUnknownMacros(template, availableVariables, cellSelectionNames)
 
   return { missingColumns, unknownMacros }
 }
@@ -193,6 +201,36 @@ export function expandRowMacros(
   return result
 }
 
+/**
+ * Expand $cell.selected.column macros using selected row data from upstream cells.
+ * When no selection exists for a cell, resolves to empty string.
+ * Timestamps are formatted as RFC3339 when cell result types are available.
+ */
+export function expandCellSelectionMacros(
+  template: string,
+  cellSelections: Record<string, Record<string, unknown>>,
+  cellResults: Record<string, Table>,
+): string {
+  return template.replace(
+    /\$([a-zA-Z_][a-zA-Z0-9_]*)\.selected\.([a-zA-Z_][a-zA-Z0-9_]*)\b/g,
+    (_match, cellName: string, colName: string) => {
+      const selection = cellSelections[cellName]
+      if (!selection) return ''
+      const value = selection[colName]
+      if (value === undefined || value === null) return ''
+      const table = cellResults[cellName]
+      if (table) {
+        const field = table.schema.fields.find((f) => f.name === colName)
+        if (field && isTimeType(field.type)) {
+          const date = timestampToDate(value, field.type)
+          if (date) return date.toISOString()
+        }
+      }
+      return String(value)
+    },
+  )
+}
+
 // =============================================================================
 // Override Cell Component
 // =============================================================================
@@ -207,14 +245,19 @@ interface OverrideCellProps {
   variables?: Record<string, VariableValue>
   /** Time range for $from/$to macro expansion */
   timeRange?: { begin: string; end: string }
+  /** Selected rows from upstream cells for $cell.selected.column expansion */
+  cellSelections: Record<string, Record<string, unknown>>
+  /** Upstream cell result tables for type resolution in cell selection macros */
+  cellResults: Record<string, Table>
 }
 
 /**
  * Render a column override: expand macros, then render markdown.
- * Expands both notebook variables ($name) and row data ($row.column).
+ * Expands notebook variables ($name), cell selections ($cell.selected.column),
+ * and row data ($row.column).
  * Timestamps are automatically formatted as RFC3339 for URL compatibility.
  */
-export function OverrideCell({ format, row, columns, allColumns, variables = {}, timeRange }: OverrideCellProps) {
+export function OverrideCell({ format, row, columns, allColumns, variables = {}, timeRange, cellSelections, cellResults }: OverrideCellProps) {
   // Build column type map for proper value formatting (use allColumns for type resolution when available)
   const columnTypes = useMemo(() => {
     const map = new Map<string, DataType>()
@@ -230,9 +273,10 @@ export function OverrideCell({ format, row, columns, allColumns, variables = {},
     return { ...variables, from: timeRange.begin, to: timeRange.end }
   }, [variables, timeRange])
 
-  // First expand notebook variables (including $from/$to), then row macros
+  // Expand in order: variables, cell selections, then row macros
   const withVariables = expandVariableMacros(format, allVariables)
-  const expanded = expandRowMacros(withVariables, row, columnTypes)
+  const withSelections = expandCellSelectionMacros(withVariables, cellSelections, cellResults)
+  const expanded = expandRowMacros(withSelections, row, columnTypes)
 
   return (
     <div className="prose prose-invert prose-sm max-w-none prose-headings:text-theme-text-primary prose-headings:my-0 prose-p:text-theme-text-secondary prose-p:my-0 prose-a:text-accent-link prose-strong:text-theme-text-primary prose-code:text-accent-highlight prose-code:bg-app-card prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-code:before:content-none prose-code:after:content-none prose-li:text-theme-text-secondary">
@@ -393,6 +437,10 @@ export interface TableBodyProps {
   variables?: Record<string, VariableValue>
   /** Time range for $from/$to macro expansion in overrides */
   timeRange?: { begin: string; end: string }
+  /** Selected rows from upstream cells for $cell.selected.column expansion in overrides */
+  cellSelections: Record<string, Record<string, unknown>>
+  /** Upstream cell result tables for type resolution in cell selection macros */
+  cellResults: Record<string, Table>
   /** Row selection mode */
   selectionMode?: 'none' | 'single'
   /** Currently selected row index */
@@ -401,7 +449,7 @@ export interface TableBodyProps {
   onRowSelect?: (rowIndex: number | null) => void
 }
 
-export function TableBody({ data, columns, allColumns, compact = false, overrides = [], variables = {}, timeRange, selectionMode, selectedRowIndex, onRowSelect }: TableBodyProps) {
+export function TableBody({ data, columns, allColumns, compact = false, overrides = [], variables = {}, timeRange, cellSelections, cellResults, selectionMode, selectedRowIndex, onRowSelect }: TableBodyProps) {
   const baseRowClass = compact
     ? 'even:bg-app-card/30 hover:bg-app-card/50 transition-colors'
     : 'border-b border-theme-border hover:bg-app-card transition-colors'
@@ -459,7 +507,7 @@ export function TableBody({ data, columns, allColumns, compact = false, override
               if (override) {
                 return (
                   <td key={col.name} className={cellClass}>
-                    <OverrideCell format={override} row={row} columns={columns} allColumns={allColumns} variables={variables} timeRange={timeRange} />
+                    <OverrideCell format={override} row={row} columns={columns} allColumns={allColumns} variables={variables} timeRange={timeRange} cellSelections={cellSelections} cellResults={cellResults} />
                   </td>
                 )
               }

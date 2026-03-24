@@ -27,7 +27,7 @@ import { usePagination, PaginationBar, DEFAULT_PAGE_SIZE } from '../pagination'
 // Renderer Component
 // =============================================================================
 
-export function TableCell({ data, status, options, onOptionsChange, variables, timeRange, selectionMode, onSelectionChange }: CellRendererProps) {
+export function TableCell({ data, status, options, onOptionsChange, variables, timeRange, selectionMode, onSelectionChange, cellSelections, cellResults }: CellRendererProps) {
   const table = data[0]
 
   // Extract overrides from options
@@ -172,6 +172,8 @@ export function TableCell({ data, status, options, onOptionsChange, variables, t
             overrides={overrides}
             variables={variables}
             timeRange={timeRange}
+            cellSelections={cellSelections}
+            cellResults={cellResults}
             selectionMode={selectionMode}
             selectedRowIndex={pageRelativeSelectedIndex}
             onRowSelect={handlePageRelativeRowSelect}
@@ -267,6 +269,7 @@ function TableCellEditor({ config, onChange, variables, timeRange, availableColu
           overrides={overrides}
           availableColumns={availableColumns || []}
           availableVariables={Object.keys(variables)}
+          cellSelectionNames={Object.keys(cellSelections)}
           onChange={handleOverridesChange}
         />
       </div>

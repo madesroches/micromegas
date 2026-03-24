@@ -28,7 +28,7 @@ import {
 
 const EMPTY_OPTIONS: Record<string, unknown> = {}
 
-export function TransposedTableCell({ data, status, options, onOptionsChange, variables, timeRange }: CellRendererProps) {
+export function TransposedTableCell({ data, status, options, onOptionsChange, variables, timeRange, cellSelections, cellResults }: CellRendererProps) {
   const table = data[0]
 
   const { hiddenRows, handleHideRow, handleRestoreRow, handleRestoreAll } = useRowManagement(
@@ -115,6 +115,8 @@ export function TransposedTableCell({ data, status, options, onOptionsChange, va
                         columns={columns}
                         variables={variables}
                         timeRange={timeRange}
+                        cellSelections={cellSelections}
+                        cellResults={cellResults}
                       />
                     ) : (
                       formatCell(value, row.type)
@@ -174,6 +176,7 @@ function TransposedTableCellEditor({ config, onChange, variables, timeRange, ava
           overrides={overrides}
           availableColumns={availableColumns || []}
           availableVariables={Object.keys(variables)}
+          cellSelectionNames={Object.keys(cellSelections)}
           onChange={handleOverridesChange}
         />
       </div>

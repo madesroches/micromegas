@@ -129,7 +129,7 @@ function ReferenceTableCell({ data, status, options, onOptionsChange, variables,
               ))}
             </tr>
           </thead>
-          <TableBody data={slicedData} columns={visibleColumns} compact variables={variables} timeRange={timeRange} />
+          <TableBody data={slicedData} columns={visibleColumns} compact variables={variables} timeRange={timeRange} cellSelections={{}} cellResults={{}} />
         </table>
       </div>
       <PaginationBar pagination={pagination} />
