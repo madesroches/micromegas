@@ -204,7 +204,13 @@ export function OverrideEditor({
             </div>
             {cellSelectionNames.length > 0 && (
               <div>
-                Selection: <code className="px-1 py-0.5 bg-theme-border rounded">$cell.selected.column</code>
+                Selection:{' '}
+                {cellSelectionNames.map((name, i) => (
+                  <span key={name}>
+                    {i > 0 && ', '}
+                    <code className="px-1 py-0.5 bg-theme-border rounded">${name}.selected.column</code>
+                  </span>
+                ))}
               </div>
             )}
           </div>
