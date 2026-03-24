@@ -1,5 +1,5 @@
 import { render, screen, fireEvent } from '@testing-library/react'
-import { DataType, Timestamp, TimeUnit } from 'apache-arrow'
+import { DataType, Timestamp, TimeUnit, vectorFromArray, Table } from 'apache-arrow'
 import { renderHook, act } from '@testing-library/react'
 import {
   expandRowMacros,
@@ -220,6 +220,43 @@ describe('expandCellSelectionMacros', () => {
   it('should not modify template without cell selection macros', () => {
     const template = '/details?id=$row.id&var=$search'
     expect(expandCellSelectionMacros(template, {}, {})).toBe(template)
+  })
+
+  it('should format timestamp values as RFC3339 when cellResults provides type info', () => {
+    const timestampType = new Timestamp(TimeUnit.MILLISECOND, null)
+    // 2024-01-15T10:30:00.000Z in milliseconds
+    const ms = 1705314600000
+    const vector = vectorFromArray([ms], timestampType)
+    const table = new Table({ frame_begin: vector })
+
+    const template = '/details?from=$upstream.selected.frame_begin'
+    const cellSelections = { upstream: { frame_begin: ms } }
+    expect(expandCellSelectionMacros(template, cellSelections, { upstream: table })).toBe(
+      '/details?from=2024-01-15T10:30:00.000Z'
+    )
+  })
+
+  it('should format nanosecond timestamp values as RFC3339', () => {
+    const timestampType = new Timestamp(TimeUnit.NANOSECOND, '+00:00')
+    // Arrow JS converts nanosecond timestamps to millisecond Numbers
+    // 2024-01-15T10:30:00.000Z as milliseconds (what Arrow JS gives us)
+    const msValue = 1705314600000
+    const vector = vectorFromArray([msValue], timestampType)
+    const table = new Table({ frame_begin: vector })
+
+    const template = '/details?from=$upstream.selected.frame_begin'
+    const cellSelections = { upstream: { frame_begin: msValue } }
+    expect(expandCellSelectionMacros(template, cellSelections, { upstream: table })).toBe(
+      '/details?from=2024-01-15T10:30:00.000Z'
+    )
+  })
+
+  it('should fall back to String() when cellResults has no type info', () => {
+    const template = '/details?from=$upstream.selected.frame_begin'
+    const cellSelections = { upstream: { frame_begin: 1705314600000 } }
+    expect(expandCellSelectionMacros(template, cellSelections, {})).toBe(
+      '/details?from=1705314600000'
+    )
   })
 })
 
