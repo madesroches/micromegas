@@ -7,7 +7,7 @@ import type {
   CellEditorProps,
   CellExecutionContext,
 } from '../cell-registry'
-import type { QueryCellConfig, CellConfig, CellState, VariableValue } from '../notebook-types'
+import type { QueryCellConfig, CellConfig, CellState } from '../notebook-types'
 import { AvailableVariablesPanel } from '@/components/AvailableVariablesPanel'
 import { DocumentationLink, QUERY_GUIDE_URL } from '@/components/DocumentationLink'
 import { SyntaxEditor } from '@/components/SyntaxEditor'
@@ -1077,10 +1077,7 @@ interface ResolvedInitialTimeRange {
 
 function resolveInitialTimeRange(
   options: Record<string, unknown> | undefined,
-  variables: Record<string, VariableValue>,
-  timeRange: { begin: string; end: string },
-  cellResults: Record<string, Table>,
-  cellSelections: Record<string, Record<string, unknown>>,
+  context: CellExecutionContext,
 ): ResolvedInitialTimeRange {
   const rawFrom = options?.initialFrom
   const rawTo = options?.initialTo
@@ -1095,7 +1092,7 @@ function resolveInitialTimeRange(
 
   if (fromStr) {
     try {
-      const resolved = substituteMacros(fromStr, variables, timeRange, cellResults, cellSelections)
+      const resolved = substituteMacros(fromStr, context.variables, context.timeRange, context.cellResults, context.cellSelections)
       min = parseRelativeTime(resolved).getTime()
     } catch (e) {
       errors.push(`Invalid initial from: ${e instanceof Error ? e.message : String(e)}`)
@@ -1104,7 +1101,7 @@ function resolveInitialTimeRange(
 
   if (toStr) {
     try {
-      const resolved = substituteMacros(toStr, variables, timeRange, cellResults, cellSelections)
+      const resolved = substituteMacros(toStr, context.variables, context.timeRange, context.cellResults, context.cellSelections)
       max = parseRelativeTime(resolved).getTime()
     } catch (e) {
       errors.push(`Invalid initial to: ${e instanceof Error ? e.message : String(e)}`)
@@ -1131,10 +1128,6 @@ export function FlameGraphCell({
   data,
   status,
   options,
-  variables,
-  timeRange,
-  cellResults,
-  cellSelections,
   onTimeRangeSelect,
 }: CellRendererProps) {
   const table = data[0]
@@ -1144,27 +1137,18 @@ export function FlameGraphCell({
     return buildFlameIndex(table)
   }, [table])
 
-  const initialTimeRangeResult = useMemo(
-    () => resolveInitialTimeRange(options, variables, timeRange, cellResults, cellSelections),
-    [options, variables, timeRange, cellResults, cellSelections],
-  )
+  // Read pre-resolved initial time range from execute (stored in options by getRendererProps)
+  const resolvedMin = typeof options?.resolvedInitialMin === 'number' ? options.resolvedInitialMin : undefined
+  const resolvedMax = typeof options?.resolvedInitialMax === 'number' ? options.resolvedInitialMax : undefined
+  const initialTimeRangeError = typeof options?.initialTimeRangeError === 'string' ? options.initialTimeRangeError : undefined
 
-  // Fill missing bounds from data range, then extract primitives for stable memoization
-  const resolvedMin = initialTimeRangeResult.range
-    ? initialTimeRangeResult.range.min === -Infinity && index
-      ? index.timeRange.min
-      : initialTimeRangeResult.range.min
-    : undefined
-  const resolvedMax = initialTimeRangeResult.range
-    ? initialTimeRangeResult.range.max === Infinity && index
-      ? index.timeRange.max
-      : initialTimeRangeResult.range.max
-    : undefined
+  // Fill missing bounds from data range
+  const filledMin = resolvedMin === -Infinity && index ? index.timeRange.min : resolvedMin
+  const filledMax = resolvedMax === Infinity && index ? index.timeRange.max : resolvedMax
 
-  // Memoize on primitive values so the object reference only changes when the numbers change
   const initialTimeRange = useMemo(
-    () => (resolvedMin != null && resolvedMax != null ? { min: resolvedMin, max: resolvedMax } : undefined),
-    [resolvedMin, resolvedMax],
+    () => (filledMin != null && filledMax != null ? { min: filledMin, max: filledMax } : undefined),
+    [filledMin, filledMax],
   )
 
   if (status === 'loading') {
@@ -1194,9 +1178,9 @@ export function FlameGraphCell({
 
   return (
     <div className="flex-1 min-h-0 h-full flex flex-col">
-      {initialTimeRangeResult.error && (
+      {initialTimeRangeError && (
         <div className="px-3 py-2 bg-red-500/10 border border-red-500/30 rounded text-red-400 text-xs">
-          {initialTimeRangeResult.error}
+          {initialTimeRangeError}
         </div>
       )}
       <div className="flex-1 min-h-0">
@@ -1312,15 +1296,25 @@ export const flamegraphMetadata: CellTypeMetadata = {
     options: {},
   }),
 
-  execute: async (config: CellConfig, { variables, cellResults, cellSelections, timeRange, runQuery }: CellExecutionContext) => {
-    const sql = substituteMacros((config as QueryCellConfig).sql, variables, timeRange, cellResults, cellSelections)
-    const data = await runQuery(sql)
-    return { data: [data] }
+  execute: async (config: CellConfig, context: CellExecutionContext) => {
+    const fgConfig = config as QueryCellConfig
+    const sql = substituteMacros(fgConfig.sql, context.variables, context.timeRange, context.cellResults, context.cellSelections)
+    const data = await context.runQuery(sql)
+    const initialRange = resolveInitialTimeRange(fgConfig.options, context)
+    const meta: Record<string, unknown> = {}
+    if (initialRange.range) {
+      meta.resolvedInitialMin = initialRange.range.min
+      meta.resolvedInitialMax = initialRange.range.max
+    }
+    if (initialRange.error) {
+      meta.initialTimeRangeError = initialRange.error
+    }
+    return { data: [data], meta }
   },
 
   getRendererProps: (config: CellConfig, state: CellState) => ({
     data: state.data,
     status: state.status,
-    options: (config as QueryCellConfig).options,
+    options: { ...(config as QueryCellConfig).options, ...state.meta },
   }),
 }

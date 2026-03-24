@@ -164,6 +164,8 @@ export interface CellState {
   elapsedMs?: number
   /** Live download progress during fetch */
   fetchProgress?: { bytes: number; rows: number }
+  /** Cell-type-specific metadata produced by execute (e.g., resolved view options) */
+  meta?: Record<string, unknown>
 }
 
 // ============================================================================

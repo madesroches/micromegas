@@ -36,14 +36,15 @@ Add two optional string fields to the flamegraph options:
 
 ### Macro Resolution Flow
 
-Resolve macros in the `FlameGraphCell` renderer component (not in `execute` or `getRendererProps`) since the renderer already receives all macro context via `CellRendererProps`:
+Resolve macros in the cell's `execute` function (not in the renderer) so that the resolved values are stable primitives stored in `CellState.meta`. This avoids referential instability in the renderer — `cellResults` and `cellSelections` create new object references on every parent render, which would cascade through `useMemo` chains and trigger unwanted `useEffect` re-fires.
 
-1. Read `initialFrom`/`initialTo` from `options`
+1. In `execute`: read `initialFrom`/`initialTo` from `config.options`
 2. If empty or absent, treat as unset (no initial range for that bound)
 3. Run each through `substituteMacros()` to resolve `$from`, `$to`, variables, cell references
 4. Parse the resolved string via `parseRelativeTime()` wrapped in try-catch — if it throws, surface the error to the user (see error handling below)
 5. Convert to milliseconds via `Date.getTime()`
-6. Pass to `FlameGraphView` as optional prop
+6. Store resolved min/max and any error in `CellState.meta`
+7. `getRendererProps` merges `state.meta` into `options` so the renderer reads stable primitives
 
 **Error handling:** `parseRelativeTime()` throws on invalid values. The `resolveInitialTimeRange` helper must catch these exceptions. Invalid values are user errors (typo, wrong macro) and should be surfaced — return an error string alongside the resolved range so the renderer can display it. Empty/absent values are not errors and produce no range constraint.
 
@@ -87,20 +88,21 @@ Show the `AvailableVariablesPanel` below to remind users of available macros.
 
 ## Implementation Steps
 
-### Step 1: Add initial time range resolution in FlameGraphCell renderer
+### Step 1: Resolve initial time range in execute
 
-**File:** `analytics-web-app/src/lib/screen-renderers/cells/FlameGraphCell.tsx`
+**Files:** `analytics-web-app/src/lib/screen-renderers/cells/FlameGraphCell.tsx`, `analytics-web-app/src/lib/screen-renderers/notebook-types.ts`
 
-- Destructure `options`, `variables`, `timeRange`, `cellResults`, `cellSelections` from props in `FlameGraphCell`
-- Add a helper function `resolveInitialTimeRange` that:
+- Add `meta?: Record<string, unknown>` to `CellState` for cell-specific execution metadata
+- Add a helper function `resolveInitialTimeRange` that takes `options` and `CellExecutionContext`:
   - Reads `options?.initialFrom` and `options?.initialTo` (if non-empty strings)
-  - Runs each through `substituteMacros(value, variables, timeRange, cellResults, cellSelections)`
+  - Runs each through `substituteMacros()` using the execution context
   - Wraps `parseRelativeTime()` in try-catch — on failure, collect error message
   - On success, converts to ms via `Date.getTime()`
   - Returns `{ range?: { min: number; max: number }; error?: string }`
-- If error is returned, render it as an error banner above the flame graph (same red style as schema validation errors)
-- Wrap the call in `useMemo` keyed on `[options, variables, timeRange, cellResults, cellSelections]` so `initialTimeRange` has a stable object reference (avoids re-triggering effects in FlameGraphView)
-- Pass the resolved range to `FlameGraphView` as `initialTimeRange`
+- Call `resolveInitialTimeRange` in `execute`, store resolved min/max and error in `state.meta`
+- In `getRendererProps`, merge `state.meta` into `options` so the renderer reads stable primitives
+- In the renderer, read `resolvedInitialMin`, `resolvedInitialMax`, `initialTimeRangeError` from `options`
+- If error present, render as error banner above the flame graph
 
 ### Step 2: Update FlameGraphView to accept initial time range
 
@@ -138,12 +140,13 @@ Show the `AvailableVariablesPanel` below to remind users of available macros.
 
 ## Files to Modify
 
-- `analytics-web-app/src/lib/screen-renderers/cells/FlameGraphCell.tsx` — all changes are in this one file
+- `analytics-web-app/src/lib/screen-renderers/cells/FlameGraphCell.tsx` — main implementation
+- `analytics-web-app/src/lib/screen-renderers/notebook-types.ts` — add `meta` field to `CellState`
 
 ## Trade-offs
 
-**Resolve in renderer vs. in execute:**
-Resolving macros in the renderer is simpler (no CellState changes, no new pipeline) and the renderer already has all the context. The downside is a small amount of work on each render, but `substituteMacros` is cheap and only runs when `options` change (via `useMemo`).
+**Resolve in execute vs. in renderer:**
+Resolving macros in `execute` produces stable primitives in `CellState.meta`, avoiding referential instability in the renderer. `cellResults` and `cellSelections` create new object references on every parent render, which would cascade through `useMemo` chains and re-trigger effects (snapping the view back and losing user zoom/pan). Resolving once at execution time eliminates this class of bugs.
 
 **Separate fields vs. single expression:**
 Two separate fields (`initialFrom`/`initialTo`) are clearer for the user and match the `$from`/`$to` pattern. A single expression would be more flexible but harder to validate.
