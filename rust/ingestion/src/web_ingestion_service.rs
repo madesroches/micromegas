@@ -1,4 +1,6 @@
-use crate::data_lake_connection::DataLakeConnection;
+use crate::data_lake_connection::{DataLakeConnection, connect_to_data_lake};
+use crate::remote_data_lake::migrate_db;
+use anyhow::Context;
 use bytes::Buf;
 use micromegas_telemetry::block_wire_format;
 use micromegas_telemetry::property::make_properties;
@@ -6,6 +8,7 @@ use micromegas_telemetry::stream_info::StreamInfo;
 use micromegas_telemetry::wire_format::encode_cbor;
 use micromegas_tracing::prelude::*;
 use micromegas_tracing::property_set;
+use std::sync::Arc;
 use thiserror::Error;
 
 /// Error type for ingestion service operations.
@@ -33,6 +36,21 @@ pub struct WebIngestionService {
 impl WebIngestionService {
     pub fn new(lake: DataLakeConnection) -> Self {
         Self { lake }
+    }
+
+    /// Reads MICROMEGAS_SQL_CONNECTION_STRING and MICROMEGAS_OBJECT_STORE_URI,
+    /// connects to the data lake, runs ingestion migrations, and returns
+    /// a ready-to-use service.
+    pub async fn from_env() -> anyhow::Result<Arc<Self>> {
+        let connection_string = std::env::var("MICROMEGAS_SQL_CONNECTION_STRING")
+            .with_context(|| "reading MICROMEGAS_SQL_CONNECTION_STRING")?;
+        let object_store_uri = std::env::var("MICROMEGAS_OBJECT_STORE_URI")
+            .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
+        let lake = connect_to_data_lake(&connection_string, &object_store_uri).await?;
+        migrate_db(lake.db_pool.clone())
+            .await
+            .with_context(|| "migrate_db")?;
+        Ok(Arc::new(Self::new(lake)))
     }
 
     #[span_fn]
