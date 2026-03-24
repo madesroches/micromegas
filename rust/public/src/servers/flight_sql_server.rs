@@ -3,9 +3,7 @@ use micromegas_analytics::lakehouse::lakehouse_context::LakehouseContext;
 use micromegas_analytics::lakehouse::migration::migrate_lakehouse;
 use micromegas_analytics::lakehouse::partition_cache::LivePartitionProvider;
 use micromegas_analytics::lakehouse::runtime::make_runtime_env;
-use micromegas_analytics::lakehouse::session_configurator::{
-    NoOpSessionConfigurator, SessionConfigurator,
-};
+use micromegas_analytics::lakehouse::session_configurator::SessionConfigurator;
 use micromegas_analytics::lakehouse::static_tables_configurator::StaticTablesConfigurator;
 use micromegas_analytics::lakehouse::view_factory::{ViewFactory, default_view_factory};
 use micromegas_auth::tower::AuthService;
@@ -49,7 +47,6 @@ type ViewFactoryFn = Box<
 ///
 /// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
 /// FlightSqlServer::builder()
-///     .with_static_tables_env_var("MICROMEGAS_STATIC_TABLES_URL")
 ///     .with_default_auth()
 ///     .build_and_serve()
 ///     .await?;
@@ -71,7 +68,6 @@ pub struct FlightSqlServerBuilder {
     use_default_auth: bool,
     max_decoding_message_size: usize,
     listen_addr: SocketAddr,
-    static_tables_env_var: Option<String>,
 }
 
 impl Default for FlightSqlServerBuilder {
@@ -85,7 +81,6 @@ impl Default for FlightSqlServerBuilder {
             listen_addr: "0.0.0.0:50051"
                 .parse()
                 .expect("valid default listen address"),
-            static_tables_env_var: None,
         }
     }
 }
@@ -103,21 +98,12 @@ impl FlightSqlServerBuilder {
         self
     }
 
-    /// Set an explicit session configurator.
+    /// Override the default session configurator.
     ///
-    /// Mutually exclusive with `with_static_tables_env_var` (last call wins).
+    /// By default the builder loads static tables from `MICROMEGAS_STATIC_TABLES_URL`.
+    /// Use this to replace that behavior entirely.
     pub fn with_session_configurator(mut self, cfg: Arc<dyn SessionConfigurator>) -> Self {
         self.session_configurator = Some(cfg);
-        self.static_tables_env_var = None;
-        self
-    }
-
-    /// Use `StaticTablesConfigurator::from_env` during build.
-    ///
-    /// Mutually exclusive with `with_session_configurator` (last call wins).
-    pub fn with_static_tables_env_var(mut self, var: &str) -> Self {
-        self.static_tables_env_var = Some(var.to_string());
-        self.session_configurator = None;
         self
     }
 
@@ -181,12 +167,14 @@ impl FlightSqlServerBuilder {
             Arc::new(LivePartitionProvider::new(lakehouse.lake().db_pool.clone()));
 
         let session_configurator: Arc<dyn SessionConfigurator> =
-            if let Some(env_var) = &self.static_tables_env_var {
-                StaticTablesConfigurator::from_env(env_var, lakehouse.runtime().clone()).await?
-            } else if let Some(cfg) = self.session_configurator {
+            if let Some(cfg) = self.session_configurator {
                 cfg
             } else {
-                Arc::new(NoOpSessionConfigurator)
+                StaticTablesConfigurator::from_env(
+                    "MICROMEGAS_STATIC_TABLES_URL",
+                    lakehouse.runtime().clone(),
+                )
+                .await?
             };
 
         let svc = FlightServiceServer::new(FlightSqlServiceImpl::new(

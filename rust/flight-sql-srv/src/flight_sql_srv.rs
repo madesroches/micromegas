@@ -14,8 +14,7 @@ struct Cli {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Cli::parse();
 
-    let mut builder =
-        FlightSqlServer::builder().with_static_tables_env_var("MICROMEGAS_STATIC_TABLES_URL");
+    let mut builder = FlightSqlServer::builder();
 
     if !args.disable_auth {
         builder = builder.with_default_auth();
