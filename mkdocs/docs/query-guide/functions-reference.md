@@ -547,10 +547,10 @@ FROM jsonb_array_elements(jsonb_parse('[1, 2, 3]'))
 SELECT jsonb_as_string(jsonb_get(value, 'name')) as name
 FROM jsonb_array_elements(jsonb_parse('[{"name": "Alice"}, {"name": "Bob"}]'))
 
--- Compose with jsonb_path_query for lateral join patterns
-SELECT jsonb_as_string(jsonb_get(player.value, 'profile_id')) as profile_id
-FROM events, jsonb_array_elements(jsonb_path_query(msg_jsonb, '$.teams[*].players[*]')) as player
-WHERE jsonb_as_string(jsonb_get(player.value, 'type')) = 'human'
+-- Unnest from a subquery
+SELECT jsonb_as_string(jsonb_get(value, 'profile_id')) as profile_id
+FROM jsonb_array_elements((SELECT jsonb_path_query(msg_jsonb, '$.teams[*].players[*]') FROM events LIMIT 1))
+WHERE jsonb_as_string(jsonb_get(value, 'type')) = 'human'
 ```
 
 #### Data Access Functions

@@ -296,6 +296,31 @@ async fn test_multiple_rows_concatenated() {
     assert_eq!(result_batch.num_rows(), 4);
 }
 
+#[tokio::test]
+async fn test_empty_subquery_returns_empty_result() {
+    let ctx = SessionContext::new();
+    micromegas_datafusion_extensions::register_extension_udfs(&ctx);
+
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "data",
+        DataType::Binary,
+        false,
+    )]));
+    let array: Arc<BinaryArray> = Arc::new(BinaryArray::from(Vec::<&[u8]>::new()));
+    let batch = RecordBatch::try_new(schema, vec![array]).expect("failed to create batch");
+    ctx.register_batch("empty_table", batch)
+        .expect("failed to register batch");
+
+    let df = ctx
+        .sql("SELECT value FROM jsonb_array_elements((SELECT data FROM empty_table))")
+        .await
+        .expect("SQL query failed");
+
+    let results = df.collect().await.expect("failed to collect results");
+    let total_rows: usize = results.iter().map(|b| b.num_rows()).sum();
+    assert_eq!(total_rows, 0, "empty subquery should return 0 rows");
+}
+
 #[test]
 fn test_call_accepts_cast_expression() {
     let func = JsonbArrayElementsTableFunction::new();

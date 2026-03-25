@@ -88,6 +88,16 @@ fn extract_elements_from_jsonb(jsonb_bytes: &[u8]) -> Result<Vec<Vec<u8>>, DataF
     }
 }
 
+fn empty_exec(projection: Option<&Vec<usize>>) -> Result<Arc<dyn ExecutionPlan>, DataFusionError> {
+    let batch = RecordBatch::new_empty(output_schema());
+    let source = MemorySourceConfig::try_new(
+        &[vec![batch]],
+        output_schema(),
+        projection.map(|v| v.to_owned()),
+    )?;
+    Ok(DataSourceExec::from_data_source(source))
+}
+
 fn elements_to_batch(elements: &[Vec<u8>]) -> Result<RecordBatch, DataFusionError> {
     if elements.is_empty() {
         return Ok(RecordBatch::new_empty(output_schema()));
@@ -207,13 +217,10 @@ impl TableProvider for JsonbArrayElementsTableProvider {
                 let task_ctx = state.task_ctx();
                 let batches = datafusion::physical_plan::collect(physical_plan, task_ctx).await?;
 
-                if batches.is_empty() || batches.iter().all(|b| b.num_rows() == 0) {
-                    return Err(DataFusionError::Execution(
-                        "jsonb_array_elements subquery returned no rows".into(),
-                    ));
-                }
-
                 let mut all_elements = Vec::new();
+                if batches.is_empty() || batches.iter().all(|b| b.num_rows() == 0) {
+                    return Ok(empty_exec(projection)?);
+                }
                 for batch in &batches {
                     if batch.num_columns() != 1 {
                         return Err(DataFusionError::Execution(format!(
