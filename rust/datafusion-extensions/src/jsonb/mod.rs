@@ -1,3 +1,5 @@
+/// expand array into value rows
+pub mod array_elements;
 /// type conversions
 pub mod cast;
 /// expand object into key-value rows
