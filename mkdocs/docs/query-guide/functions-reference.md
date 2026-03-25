@@ -515,6 +515,44 @@ FROM jsonb_each(
 -- Returns: ("0", 10), ("1", 20), ("2", 30)
 ```
 
+##### `jsonb_array_elements(jsonb_value)`
+
+Expands a JSONB array into a set of rows, one per element. This is a table-returning function (UDTF) that produces one row per array element with a single `value` column.
+
+Unlike `jsonb_each`, this function only accepts arrays (not objects) and does not produce a `key` column, making it more natural for array unnesting.
+
+**Syntax:**
+```sql
+SELECT value
+FROM jsonb_array_elements(jsonb_array)
+```
+
+**Parameters:**
+
+- `jsonb_value` (Binary/JSONB): A JSONB array value, provided as a literal, subquery, or expression (e.g., `jsonb_path_query(...)`). If a subquery returns multiple rows, the elements from all arrays are concatenated. Returns an error if the input is not a JSONB array.
+
+**Returns:**
+
+| Column | Type | Description |
+|--------|------|-------------|
+| value | Binary (JSONB) | Array element as JSONB bytes, composable with `jsonb_as_string`, `jsonb_get`, `jsonb_format_json`, etc. |
+
+**Examples:**
+```sql
+-- Unnest a simple array
+SELECT jsonb_as_string(value) as val
+FROM jsonb_array_elements(jsonb_parse('[1, 2, 3]'))
+
+-- Unnest array of objects and extract a field
+SELECT jsonb_as_string(jsonb_get(value, 'name')) as name
+FROM jsonb_array_elements(jsonb_parse('[{"name": "Alice"}, {"name": "Bob"}]'))
+
+-- Compose with jsonb_path_query for lateral join patterns
+SELECT jsonb_as_string(jsonb_get(player.value, 'profile_id')) as profile_id
+FROM events, jsonb_array_elements(jsonb_path_query(msg_jsonb, '$.teams[*].players[*]')) as player
+WHERE jsonb_as_string(jsonb_get(player.value, 'type')) = 'human'
+```
+
 #### Data Access Functions
 
 ##### `get_payload(process_id, stream_id, block_id)`
