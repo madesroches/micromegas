@@ -1,10 +1,13 @@
 use datafusion::arrow::array::{Array, BinaryArray, RecordBatch, StringArray};
+use datafusion::arrow::compute;
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::catalog::{TableFunctionImpl, TableProvider};
 use datafusion::logical_expr::Cast;
 use datafusion::prelude::{Expr, SessionContext};
 use datafusion::scalar::ScalarValue;
-use micromegas_datafusion_extensions::jsonb::each::{JsonbEachTableFunction, JsonbEachTableProvider};
+use micromegas_datafusion_extensions::jsonb::each::{
+    JsonbEachTableFunction, JsonbEachTableProvider,
+};
 use std::sync::Arc;
 
 fn parse_json_to_jsonb(json_str: &str) -> Vec<u8> {
@@ -298,11 +301,12 @@ async fn test_jsonb_each_with_jsonb_parse_composability() {
         .as_any()
         .downcast_ref::<StringArray>()
         .expect("key column should be StringArray");
-    let vals = batch
-        .column(1)
+    let val_col =
+        compute::cast(batch.column(1), &DataType::Utf8).expect("failed to cast val column to Utf8");
+    let vals = val_col
         .as_any()
         .downcast_ref::<StringArray>()
-        .expect("val column should be StringArray");
+        .expect("val column should be castable to StringArray");
 
     let mut rows: Vec<(String, String)> = (0..keys.len())
         .map(|i| (keys.value(i).to_string(), vals.value(i).to_string()))

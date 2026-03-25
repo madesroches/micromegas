@@ -69,7 +69,7 @@ Added three tests that demonstrate the current limitation. All fail as expected:
 - `test_jsonb_each_with_jsonb_parse_composability` — SQL: same with `jsonb_as_string(value)`, same failure
 - `test_call_accepts_cast_expression` — unit test: `call()` with `Expr::Cast`, fails with catch-all error arm
 
-### 2. Update `scalar_to_entries()` to handle Dictionary scalars in `rust/datafusion-extensions/src/jsonb/each.rs`
+### 2. ~~Update `scalar_to_entries()` to handle Dictionary scalars in `rust/datafusion-extensions/src/jsonb/each.rs`~~ DONE
 
 DataFusion's `ExprSimplifier` constant-folds expressions like `jsonb_parse('...')` into `ScalarValue::Dictionary(Int32, Binary)` before `call()` sees them. These arrive as `Expr::Literal` but `scalar_to_entries()` only handles `ScalarValue::Binary`. Add a match arm to unwrap dictionary-encoded binary values:
 
@@ -87,7 +87,7 @@ fn scalar_to_entries(scalar: &ScalarValue) -> Result<Vec<(String, Vec<u8>)>, Dat
 }
 ```
 
-### 3. Modify `call()` in `rust/datafusion-extensions/src/jsonb/each.rs`
+### 3. ~~Modify `call()` in `rust/datafusion-extensions/src/jsonb/each.rs`~~ DONE
 
 Replace the catch-all error arm:
 

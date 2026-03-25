@@ -8,7 +8,7 @@ use datafusion::catalog::TableProvider;
 use datafusion::datasource::TableType;
 use datafusion::datasource::memory::{DataSourceExec, MemorySourceConfig};
 use datafusion::error::DataFusionError;
-use datafusion::logical_expr::LogicalPlan;
+use datafusion::logical_expr::{LogicalPlan, LogicalPlanBuilder};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::Expr;
 use datafusion::scalar::ScalarValue;
@@ -61,9 +61,10 @@ impl TableFunctionImpl for JsonbEachTableFunction {
             Expr::Literal(scalar, _metadata) => JsonbSource::Literal(scalar.clone()),
             Expr::ScalarSubquery(subquery) => JsonbSource::Subquery(subquery.subquery.clone()),
             other => {
-                return Err(DataFusionError::Plan(format!(
-                    "jsonb_each argument must be a JSONB literal or subquery, got: {other:?}"
-                )));
+                let plan = LogicalPlanBuilder::empty(true)
+                    .project(vec![other.clone()])?
+                    .build()?;
+                JsonbSource::Subquery(Arc::new(plan))
             }
         };
 
@@ -128,6 +129,7 @@ fn scalar_to_entries(scalar: &ScalarValue) -> Result<Vec<(String, Vec<u8>)>, Dat
     match scalar {
         ScalarValue::Binary(Some(bytes)) => extract_entries_from_jsonb(bytes),
         ScalarValue::Binary(None) => Ok(vec![]),
+        ScalarValue::Dictionary(_, inner) => scalar_to_entries(inner.as_ref()),
         _ => Err(DataFusionError::Plan(format!(
             "jsonb_each argument must be Binary (JSONB), got: {:?}",
             scalar.data_type()
