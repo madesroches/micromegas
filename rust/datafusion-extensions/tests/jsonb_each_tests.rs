@@ -1,9 +1,10 @@
 use datafusion::arrow::array::{Array, BinaryArray, RecordBatch, StringArray};
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
-use datafusion::catalog::TableProvider;
-use datafusion::prelude::SessionContext;
+use datafusion::catalog::{TableFunctionImpl, TableProvider};
+use datafusion::logical_expr::Cast;
+use datafusion::prelude::{Expr, SessionContext};
 use datafusion::scalar::ScalarValue;
-use micromegas_datafusion_extensions::jsonb::each::JsonbEachTableProvider;
+use micromegas_datafusion_extensions::jsonb::each::{JsonbEachTableFunction, JsonbEachTableProvider};
 use std::sync::Arc;
 
 fn parse_json_to_jsonb(json_str: &str) -> Vec<u8> {
@@ -250,4 +251,81 @@ async fn test_multiple_rows_concatenated() {
     let mut key_list: Vec<String> = (0..keys.len()).map(|i| keys.value(i).to_string()).collect();
     key_list.sort();
     assert_eq!(key_list, vec!["a", "b"]);
+}
+
+#[tokio::test]
+async fn test_jsonb_each_with_jsonb_parse_expression() {
+    let ctx = SessionContext::new();
+    micromegas_datafusion_extensions::register_extension_udfs(&ctx);
+
+    let df = ctx
+        .sql("SELECT key, value FROM jsonb_each(jsonb_parse('{\"a\": 1, \"b\": 2}'))")
+        .await
+        .expect("SQL query failed");
+
+    let results = df.collect().await.expect("failed to collect results");
+    assert_eq!(results.len(), 1);
+    let batch = &results[0];
+    assert_eq!(batch.num_rows(), 2);
+
+    let keys = batch
+        .column(0)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .expect("key column should be StringArray");
+    let mut key_list: Vec<String> = (0..keys.len()).map(|i| keys.value(i).to_string()).collect();
+    key_list.sort();
+    assert_eq!(key_list, vec!["a", "b"]);
+}
+
+#[tokio::test]
+async fn test_jsonb_each_with_jsonb_parse_composability() {
+    let ctx = SessionContext::new();
+    micromegas_datafusion_extensions::register_extension_udfs(&ctx);
+
+    let df = ctx
+        .sql("SELECT key, jsonb_as_string(value) as val FROM jsonb_each(jsonb_parse('{\"x\": \"hello\", \"y\": \"world\"}'))")
+        .await
+        .expect("SQL query failed");
+
+    let results = df.collect().await.expect("failed to collect results");
+    assert_eq!(results.len(), 1);
+    let batch = &results[0];
+    assert_eq!(batch.num_rows(), 2);
+
+    let keys = batch
+        .column(0)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .expect("key column should be StringArray");
+    let vals = batch
+        .column(1)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .expect("val column should be StringArray");
+
+    let mut rows: Vec<(String, String)> = (0..keys.len())
+        .map(|i| (keys.value(i).to_string(), vals.value(i).to_string()))
+        .collect();
+    rows.sort();
+    assert_eq!(
+        rows,
+        vec![
+            ("x".to_string(), "hello".to_string()),
+            ("y".to_string(), "world".to_string()),
+        ]
+    );
+}
+
+#[test]
+fn test_call_accepts_cast_expression() {
+    let func = JsonbEachTableFunction::new();
+    // Construct a Cast expression — neither Literal nor ScalarSubquery
+    let inner = Expr::Literal(ScalarValue::Binary(Some(vec![])), None);
+    let cast_expr = Expr::Cast(Cast::new(Box::new(inner), DataType::Binary));
+    let result = func.call(&[cast_expr]);
+    assert!(
+        result.is_ok(),
+        "call() should accept Cast expression, got: {result:?}"
+    );
 }
