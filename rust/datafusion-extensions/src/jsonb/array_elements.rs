@@ -219,7 +219,7 @@ impl TableProvider for JsonbArrayElementsTableProvider {
 
                 let mut all_elements = Vec::new();
                 if batches.is_empty() || batches.iter().all(|b| b.num_rows() == 0) {
-                    return Ok(empty_exec(projection)?);
+                    return empty_exec(projection);
                 }
                 for batch in &batches {
                     if batch.num_columns() != 1 {
