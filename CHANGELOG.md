@@ -16,6 +16,7 @@ This file documents the historical progress of the Micromegas project. For curre
   * Add `Send + Sync` bounds to `MergerMaker` type alias for async view factories (#972)
   * Add `LakehouseContext::from_env()` convenience constructor to deduplicate initialization (#969)
   * Allow `jsonb_each` to accept arbitrary expression arguments like `jsonb_parse(...)` (#978)
+  * Add `jsonb_array_elements` UDTF to unnest JSONB arrays into rows (#977)
 * **Ingestion:**
   * Add `WebIngestionService::from_env()` convenience constructor to deduplicate initialization (#973)
 * **Object Storage:**
