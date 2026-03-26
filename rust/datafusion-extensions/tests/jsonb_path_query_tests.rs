@@ -410,3 +410,120 @@ async fn test_path_query_first_per_row_path() {
         ]
     );
 }
+
+// --- filter predicate tests (SQL/JSON path syntax from docs) ---
+
+#[tokio::test]
+async fn test_path_query_filter_by_string_field() {
+    let ctx = setup_ctx();
+    create_binary_table(
+        &ctx,
+        "t",
+        &[r#"{"items": [{"type": "active", "id": 1}, {"type": "inactive", "id": 2}]}"#],
+    );
+    let results = query_first_result(
+        &ctx,
+        r#"SELECT jsonb_path_query(data, '$.items[*] ? (@.type == "active")') FROM t"#,
+    )
+    .await;
+    assert_eq!(
+        results,
+        vec![Some(r#"[{"id":1,"type":"active"}]"#.to_string())]
+    );
+}
+
+#[tokio::test]
+async fn test_path_query_filter_numeric_comparison() {
+    let ctx = setup_ctx();
+    create_binary_table(
+        &ctx,
+        "t",
+        &[r#"{"scores": [{"name": "Alice", "val": 85}, {"name": "Bob", "val": 42}]}"#],
+    );
+    let results = query_first_result(
+        &ctx,
+        r#"SELECT jsonb_path_query(data, '$.scores[*] ? (@.val > 50)') FROM t"#,
+    )
+    .await;
+    assert_eq!(
+        results,
+        vec![Some(r#"[{"name":"Alice","val":85}]"#.to_string())]
+    );
+}
+
+#[tokio::test]
+async fn test_path_query_first_filter_returns_first_match() {
+    let ctx = setup_ctx();
+    create_binary_table(
+        &ctx,
+        "t",
+        &[r#"{"users": [{"role": "admin", "name": "Alice"}, {"role": "user", "name": "Bob"}]}"#],
+    );
+    let results = query_first_result(
+        &ctx,
+        r#"SELECT jsonb_path_query_first(data, '$.users[*] ? (@.role == "admin")') FROM t"#,
+    )
+    .await;
+    assert_eq!(
+        results,
+        vec![Some(r#"{"name":"Alice","role":"admin"}"#.to_string())]
+    );
+}
+
+#[tokio::test]
+async fn test_path_query_filter_multiple_matches() {
+    let ctx = setup_ctx();
+    create_binary_table(
+        &ctx,
+        "t",
+        &[
+            r#"{"items": [{"type": "active", "id": 1}, {"type": "inactive", "id": 2}, {"type": "active", "id": 3}]}"#,
+        ],
+    );
+    let results = query_first_result(
+        &ctx,
+        r#"SELECT jsonb_path_query(data, '$.items[*] ? (@.type == "active")') FROM t"#,
+    )
+    .await;
+    assert_eq!(
+        results,
+        vec![Some(
+            r#"[{"id":1,"type":"active"},{"id":3,"type":"active"}]"#.to_string()
+        )]
+    );
+}
+
+#[tokio::test]
+async fn test_path_query_filter_no_match_returns_empty() {
+    let ctx = setup_ctx();
+    create_binary_table(&ctx, "t", &[r#"{"items": [{"type": "active", "id": 1}]}"#]);
+    let results = query_first_result(
+        &ctx,
+        r#"SELECT jsonb_path_query(data, '$.items[*] ? (@.type == "deleted")') FROM t"#,
+    )
+    .await;
+    assert_eq!(results, vec![Some("[]".to_string())]);
+}
+
+#[tokio::test]
+async fn test_path_query_filter_nested_path() {
+    let ctx = setup_ctx();
+    create_binary_table(
+        &ctx,
+        "t",
+        &[
+            r#"{"teams": [{"players": [{"type": "human", "name": "Alice"}, {"type": "bot", "name": "Bot1"}]}, {"players": [{"type": "human", "name": "Bob"}]}]}"#,
+        ],
+    );
+    let results = query_first_result(
+        &ctx,
+        r#"SELECT jsonb_path_query(data, '$.teams[*].players[*] ? (@.type == "human")') FROM t"#,
+    )
+    .await;
+    assert_eq!(
+        results,
+        vec![Some(
+            r#"[{"name":"Alice","type":"human"},{"name":"Bob","type":"human"}]"#.to_string()
+        )]
+    );
+}

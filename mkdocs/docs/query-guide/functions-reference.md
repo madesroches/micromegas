@@ -304,6 +304,51 @@ SELECT jsonb_path_query(jsonb_parse('{"a": 1}'), '$.missing') as result;
 -- Returns: []
 ```
 
+##### Filter Predicates in JSONPath
+
+`jsonb_path_query` and `jsonb_path_query_first` support **SQL/JSON path syntax** for filter predicates. This differs from the JavaScript-style JSONPath syntax commonly found in online tutorials.
+
+**Key difference:** Filters use `? ()` after a wildcard step, not `[?()]` inside brackets.
+
+| Feature | JavaScript JSONPath (NOT supported) | SQL/JSON path (supported) |
+|---------|--------------------------------------|--------------------------|
+| Filter in brackets | `$.items[?(@.price < 10)]` | `$.items[*] ? (@.price < 10)` |
+| String equality | `[?(@.type=="human")]` | `[*] ? (@.type == "human")` |
+| Logical AND | `[?(@.a > 1 && @.b < 5)]` | `[*] ? (@.a > 1 && @.b < 5)` |
+
+**Examples:**
+```sql
+-- Filter array elements by field value
+SELECT jsonb_path_query(
+  jsonb_parse('{"items": [{"type": "active", "id": 1}, {"type": "inactive", "id": 2}]}'),
+  '$.items[*] ? (@.type == "active")'
+) as active_items;
+-- Returns: [{"id": 1, "type": "active"}]
+
+-- Numeric comparison
+SELECT jsonb_path_query(
+  jsonb_parse('{"scores": [{"name": "Alice", "val": 85}, {"name": "Bob", "val": 42}]}'),
+  '$.scores[*] ? (@.val > 50)'
+) as high_scores;
+-- Returns: [{"name": "Alice", "val": 85}]
+
+-- Get first match with filter
+SELECT jsonb_path_query_first(
+  jsonb_parse('{"users": [{"role": "admin", "name": "Alice"}, {"role": "user", "name": "Bob"}]}'),
+  '$.users[*] ? (@.role == "admin")'
+) as first_admin;
+-- Returns: {"name": "Alice", "role": "admin"}
+
+-- Combined with jsonb_array_elements for row expansion
+SELECT jsonb_as_string(jsonb_get(value, 'name')) as player_name
+FROM jsonb_array_elements(
+  jsonb_path_query(msg_jsonb, '$.teams[*].players[*] ? (@.type == "human")')
+)
+```
+
+!!! warning "Common mistake"
+    Using JavaScript-style filter syntax like `$.items[?(@.type=="active")]` will result in a parse error. Always use the SQL/JSON style: `$.items[*] ? (@.type == "active")`.
+
 ##### `jsonb_get(jsonb, key)`
 
 Extracts a value from a JSONB object by key name.

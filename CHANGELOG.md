@@ -8,6 +8,8 @@ This file documents the historical progress of the Micromegas project. For curre
   * Add container-based self-hosted runner infrastructure for faster CI builds on developer workstations
   * Add check-runner workflow to dynamically route builds between dev-worker and GitHub-hosted runners
   * Add nightly cache rotation with `--rotate-at` flag for built-in scheduling
+* **Docs:**
+  * Document JSONPath filter predicate syntax (SQL/JSON path) in query guide (#979)
 * **Analytics:**
   * Add CSV table provider and `StaticTablesConfigurator` for auto-discovery of CSV/JSON tables via `MICROMEGAS_STATIC_TABLES_URL` (#946)
   * Downgrade extensionless file warning to debug in `StaticTablesConfigurator` (#954)
