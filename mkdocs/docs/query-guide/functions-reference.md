@@ -323,7 +323,7 @@ SELECT jsonb_path_query(
   jsonb_parse('{"items": [{"type": "active", "id": 1}, {"type": "inactive", "id": 2}]}'),
   '$.items[*] ? (@.type == "active")'
 ) as active_items;
--- Returns: [{"type": "active", "id": 1}]
+-- Returns: [{"id": 1, "type": "active"}]
 
 -- Numeric comparison
 SELECT jsonb_path_query(
@@ -337,7 +337,7 @@ SELECT jsonb_path_query_first(
   jsonb_parse('{"users": [{"role": "admin", "name": "Alice"}, {"role": "user", "name": "Bob"}]}'),
   '$.users[*] ? (@.role == "admin")'
 ) as first_admin;
--- Returns: {"role": "admin", "name": "Alice"}
+-- Returns: {"name": "Alice", "role": "admin"}
 
 -- Combined with jsonb_array_elements for row expansion
 SELECT jsonb_as_string(jsonb_get(value, 'name')) as player_name
