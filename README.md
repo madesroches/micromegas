@@ -69,6 +69,16 @@ To get started with Micromegas, please refer to the [Getting Started](https://mi
 
 ## Current Status & Roadmap
 
+### v0.23.0 (March 2026)
+* JSONB array UDFs: `jsonb_array_elements` (UDTF) and `jsonb_array_length` (scalar)
+* CSV table provider with auto-discovery via `MICROMEGAS_STATIC_TABLES_URL`
+* `FlightSqlServer` builder and `LakehouseContext::from_env()` convenience APIs
+* Screens-as-code CLI (`micromegas-screens`) with Terraform-inspired workflow
+* Object store env var credential support for S3/GCS/Azure
+* Bearer token auth for analytics-web-srv
+* Notebook cell selection macros in table column overrides
+* DataFusion 52.4.0
+
 ### v0.22.0 (March 2026)
 * Flame graph cell type with Three.js WebGL rendering
 * Async span depth fixes with `SpanContextFuture`

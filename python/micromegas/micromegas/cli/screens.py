@@ -454,7 +454,11 @@ def cmd_list(args):
         in_local = name in local
         in_server = name in server_by_name
         if in_local and in_server:
-            return "synced" if screens_equal(local[name], server_by_name[name]) else "modified"
+            return (
+                "synced"
+                if screens_equal(local[name], server_by_name[name])
+                else "modified"
+            )
         if in_local:
             return "local-only"
         return "server-only"
