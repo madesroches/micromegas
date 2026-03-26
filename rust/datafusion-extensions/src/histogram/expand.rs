@@ -9,7 +9,7 @@ use datafusion::catalog::TableProvider;
 use datafusion::datasource::TableType;
 use datafusion::datasource::memory::{DataSourceExec, MemorySourceConfig};
 use datafusion::error::DataFusionError;
-use datafusion::logical_expr::LogicalPlan;
+use datafusion::logical_expr::{LogicalPlan, LogicalPlanBuilder};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::Expr;
 use datafusion::scalar::ScalarValue;
@@ -61,9 +61,10 @@ impl TableFunctionImpl for ExpandHistogramTableFunction {
             Expr::Literal(scalar, _metadata) => HistogramSource::Literal(scalar.clone()),
             Expr::ScalarSubquery(subquery) => HistogramSource::Subquery(subquery.subquery.clone()),
             other => {
-                return Err(DataFusionError::Plan(format!(
-                    "expand_histogram argument must be a histogram literal or subquery, got: {other:?}"
-                )));
+                let plan = LogicalPlanBuilder::empty(true)
+                    .project(vec![other.clone()])?
+                    .build()?;
+                HistogramSource::Subquery(Arc::new(plan))
             }
         };
 
@@ -125,13 +126,13 @@ fn extract_histogram_from_struct(
 }
 
 fn scalar_to_batch(scalar: &ScalarValue) -> Result<RecordBatch, DataFusionError> {
-    if let ScalarValue::Struct(struct_array) = scalar {
-        extract_histogram_from_struct(struct_array)
-    } else {
-        Err(DataFusionError::Plan(format!(
+    match scalar {
+        ScalarValue::Struct(struct_array) => extract_histogram_from_struct(struct_array),
+        ScalarValue::Dictionary(_, inner) => scalar_to_batch(inner.as_ref()),
+        _ => Err(DataFusionError::Plan(format!(
             "expand_histogram argument must be a struct (histogram), got: {:?}",
             scalar.data_type()
-        )))
+        ))),
     }
 }
 

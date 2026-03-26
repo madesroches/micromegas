@@ -20,6 +20,7 @@ This file documents the historical progress of the Micromegas project. For curre
   * Allow `jsonb_each` to accept arbitrary expression arguments like `jsonb_parse(...)` (#978)
   * Add `jsonb_array_elements` UDTF to unnest JSONB arrays into rows (#977)
   * Add `jsonb_array_length` scalar UDF for counting JSONB array elements (#976)
+  * Allow `expand_histogram` to accept expression arguments and Dictionary-wrapped scalars (#983)
 * **Ingestion:**
   * Add `WebIngestionService::from_env()` convenience constructor to deduplicate initialization (#973)
 * **Object Storage:**
