@@ -24,25 +24,25 @@ None. No new published crates added since v0.22.0.
 ### 1. Code Quality & Testing
 
 #### Rust Workspace (from `rust/` directory)
-- [ ] Run full CI pipeline: `python3 ../build/rust_ci.py`
-- [ ] WASM: `cd rust/datafusion-wasm && python3 build.py --test`
+- [x] Run full CI pipeline: `python3 ../build/rust_ci.py`
+- [x] WASM: `cd rust/datafusion-wasm && python3 build.py --test`
 
 #### Python Package (from `python/micromegas/` directory)
-- [ ] `poetry run black . --check`
-- [ ] `poetry run pytest` (server-dependent failures expected)
+- [x] `poetry run black . --check` (formatted 2 files: web_client.py, cli/screens.py)
+- [x] `poetry run pytest` (91 passed, 6 server-dependent failures as expected)
 
 #### Grafana Plugin (from `grafana/` directory)
-- [ ] `yarn install`
-- [ ] `yarn lint:fix`
-- [ ] `yarn test:ci`
-- [ ] `yarn build`
+- [x] `yarn install`
+- [x] `yarn lint:fix`
+- [x] `yarn test:ci` (47 tests passed)
+- [x] `yarn build`
 
 #### Analytics Web App (from `analytics-web-app/` directory)
-- [ ] `yarn install`
-- [ ] `yarn lint`
-- [ ] `yarn type-check`
-- [ ] `yarn test`
-- [ ] `yarn build`
+- [x] `yarn install`
+- [x] `yarn lint`
+- [x] `yarn type-check`
+- [x] `yarn test` (865 tests passed)
+- [x] `yarn build`
 
 ### 2. Version Verification
 
@@ -54,20 +54,20 @@ None. No new published crates added since v0.22.0.
 
 ### 3. Documentation Updates
 
-- [ ] Update `CHANGELOG.md` — move Unreleased to `## March 2026 - v0.23.0`
-- [ ] Update `grafana/CHANGELOG.md` with version sync entry
-- [ ] Update `README.md` roadmap if needed
+- [x] Update `CHANGELOG.md` — move Unreleased to `## March 2026 - v0.23.0`
+- [x] Update `grafana/CHANGELOG.md` with version sync entry
+- [x] Update `README.md` roadmap with v0.23.0 highlights
 
 ### 4. Grafana Plugin Preparation
 
-- [ ] Build plugin archive: `./build-plugin.sh` (from `grafana/`)
+- [x] Build plugin archive: `./build-plugin.sh` (from `grafana/`)
 
 ### 5. Git Preparation
 
-- [ ] Commit changelog and doc updates
-- [ ] Create release tag: `git tag v0.23.0`
-- [ ] Create grafana tag: `git tag grafana-v0.23.0`
-- [ ] Push: `git push origin release && git push origin v0.23.0 grafana-v0.23.0`
+- [x] Commit changelog and doc updates
+- [x] Create release tag: `git tag v0.23.0`
+- [x] Create grafana tag: `git tag grafana-v0.23.0`
+- [x] Push: `git push origin release && git push origin v0.23.0 grafana-v0.23.0`
 
 ## Release Process
 
@@ -114,10 +114,10 @@ gh release create v0.23.0 \
 - `yarn install` (from `analytics-web-app/`)
 - `cd rust/datafusion-wasm && python3 build.py --test`
 
-- [ ] Commit version bump
-- [ ] Push to release branch
+- [x] Commit version bump
+- [x] Push to release branch
 
 ### Phase 5: Merge to Main
 
-- [ ] Create PR from release to main
+- [x] Create PR from release to main: #992
 - [ ] Merge after CI passes
