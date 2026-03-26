@@ -476,7 +476,9 @@ async fn test_path_query_filter_multiple_matches() {
     create_binary_table(
         &ctx,
         "t",
-        &[r#"{"items": [{"type": "active", "id": 1}, {"type": "inactive", "id": 2}, {"type": "active", "id": 3}]}"#],
+        &[
+            r#"{"items": [{"type": "active", "id": 1}, {"type": "inactive", "id": 2}, {"type": "active", "id": 3}]}"#,
+        ],
     );
     let results = query_first_result(
         &ctx,
@@ -494,11 +496,7 @@ async fn test_path_query_filter_multiple_matches() {
 #[tokio::test]
 async fn test_path_query_filter_no_match_returns_empty() {
     let ctx = setup_ctx();
-    create_binary_table(
-        &ctx,
-        "t",
-        &[r#"{"items": [{"type": "active", "id": 1}]}"#],
-    );
+    create_binary_table(&ctx, "t", &[r#"{"items": [{"type": "active", "id": 1}]}"#]);
     let results = query_first_result(
         &ctx,
         r#"SELECT jsonb_path_query(data, '$.items[*] ? (@.type == "deleted")') FROM t"#,
@@ -513,7 +511,9 @@ async fn test_path_query_filter_nested_path() {
     create_binary_table(
         &ctx,
         "t",
-        &[r#"{"teams": [{"players": [{"type": "human", "name": "Alice"}, {"type": "bot", "name": "Bot1"}]}, {"players": [{"type": "human", "name": "Bob"}]}]}"#],
+        &[
+            r#"{"teams": [{"players": [{"type": "human", "name": "Alice"}, {"type": "bot", "name": "Bot1"}]}, {"players": [{"type": "human", "name": "Bob"}]}]}"#,
+        ],
     );
     let results = query_first_result(
         &ctx,
