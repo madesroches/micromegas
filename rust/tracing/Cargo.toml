@@ -14,7 +14,7 @@ authors.workspace = true
 anyhow.workspace = true
 chrono = { workspace = true, features = ["wasmbind"] }
 lazy_static.workspace = true
-micromegas-tracing-proc-macros = { path = "./proc-macros", version = "^0.23" }
+micromegas-tracing-proc-macros = { path = "./proc-macros", version = "^0.24" }
 pin-project.workspace = true
 serde.workspace = true
 thiserror.workspace = true

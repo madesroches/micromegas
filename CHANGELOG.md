@@ -2,7 +2,7 @@
 
 This file documents the historical progress of the Micromegas project. For current focus, please see the main [README.md](./README.md).
 
-## Unreleased
+## March 2026 - v0.23.0
 
 * **CI:**
   * Add container-based self-hosted runner infrastructure for faster CI builds on developer workstations
