@@ -158,7 +158,7 @@ export function useCellExecution({
             data: [],
             error: `Select a row in "${unresolvedCell}" to view results`,
           })
-          return true // don't block downstream — they may not depend on selections
+          return false // halt execution — downstream cells should wait for selection
         }
       }
 

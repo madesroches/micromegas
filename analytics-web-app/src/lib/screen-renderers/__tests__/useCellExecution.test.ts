@@ -600,6 +600,39 @@ describe('useCellExecution', () => {
       // Markdown cells are never blocked - they just execute independently
       expect(result.current.cellStates['Notes']).toBeUndefined()
     })
+
+    it('should halt execution and block downstream cells when a cell has an unresolved selection', async () => {
+      mockStreamQuery.mockReturnValue(createSuccessResults())
+
+      const cells: CellConfig[] = [
+        { type: 'table', name: 'Processes', sql: 'SELECT process_id FROM processes', layout: { height: 'auto' } },
+        { type: 'table', name: 'Details', sql: "SELECT * FROM logs WHERE process_id = '$Processes.selected.process_id'", layout: { height: 'auto' } },
+        { type: 'table', name: 'Summary', sql: 'SELECT count(*) FROM logs', layout: { height: 'auto' } },
+      ]
+      const variableValuesRef = createVariableValuesRef()
+
+      const { result } = renderHook(() =>
+        useCellExecution({
+          cells,
+          rawTimeRange: defaultRawTimeRange,
+          variableValuesRef,
+          setVariableValue: jest.fn(),
+          refreshTrigger: 0,
+        })
+      )
+
+      // Wait for initial auto-execution to settle
+      await waitFor(() => {
+        expect(result.current.cellStates['Processes']?.status).toBe('success')
+      })
+
+      // Details should be blocked (references $Processes.selected.process_id but no row selected)
+      expect(result.current.cellStates['Details'].status).toBe('blocked')
+      expect(result.current.cellStates['Details'].error).toContain('Processes')
+
+      // Summary should also be blocked because execution halted at Details
+      expect(result.current.cellStates['Summary'].status).toBe('blocked')
+    })
   })
 
   describe('migrateCellState', () => {
