@@ -21,6 +21,7 @@ use histogram::{
 };
 use jsonb::{
     array_elements::JsonbArrayElementsTableFunction,
+    array_length::make_jsonb_array_length_udf,
     cast::{make_jsonb_as_f64_udf, make_jsonb_as_i64_udf, make_jsonb_as_string_udf},
     each::JsonbEachTableFunction,
     format_json::make_jsonb_format_json_udf,
@@ -53,6 +54,7 @@ pub fn register_extension_udfs(ctx: &SessionContext) {
     ctx.register_udf(make_jsonb_as_string_udf());
     ctx.register_udf(make_jsonb_as_f64_udf());
     ctx.register_udf(make_jsonb_as_i64_udf());
+    ctx.register_udf(make_jsonb_array_length_udf());
     ctx.register_udf(make_jsonb_object_keys_udf());
     ctx.register_udf(make_jsonb_path_query_first_udf());
     ctx.register_udf(make_jsonb_path_query_udf());

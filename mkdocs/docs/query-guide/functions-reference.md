@@ -515,6 +515,44 @@ FROM processes
 LIMIT 5;
 ```
 
+##### `jsonb_array_length(jsonb)`
+
+Returns the number of elements in a JSONB array.
+
+**Syntax:**
+```sql
+jsonb_array_length(jsonb)
+```
+
+**Parameters:**
+
+- `jsonb` (Multiple formats supported): JSONB value:
+
+   * `Binary` - Plain JSONB binary
+   * `Dictionary<Int32, Binary>` - Dictionary-encoded JSONB
+
+**Returns:** `Int64` - The number of elements in the array, or NULL if the input is not an array
+
+**Examples:**
+```sql
+-- Count elements in an array
+SELECT jsonb_array_length(jsonb_parse('[1, 2, 3]')) as len;
+-- Returns: 3
+
+-- Empty array returns 0
+SELECT jsonb_array_length(jsonb_parse('[]')) as len;
+-- Returns: 0
+
+-- Non-array input returns NULL
+SELECT jsonb_array_length(jsonb_parse('{"key": "value"}')) as len;
+-- Returns: NULL
+
+-- Filter by array size
+SELECT *
+FROM events
+WHERE jsonb_array_length(jsonb_get(msg_jsonb, 'items')) > 5;
+```
+
 ##### `jsonb_each(jsonb_value)`
 
 Expands a JSONB object or array into rows of key-value pairs. This is a table-returning function (UDTF) that produces one row per entry.
