@@ -480,6 +480,33 @@ async fn test_jsonb_object_keys() {
     assert!(!col.is_null(0));
 }
 
+/// jsonb_array_length returns the number of elements in a JSONB array.
+#[wasm_bindgen_test]
+async fn test_jsonb_array_length() {
+    let engine = WasmQueryEngine::new();
+    let ipc = create_json_ipc(&[r#"[1, 2, 3]"#, r#"{"a": 1}"#, r#"[]"#]);
+    engine
+        .register_table("data", &ipc)
+        .expect("register_table should succeed");
+
+    let batch = execute_and_first_batch(
+        &engine,
+        "SELECT jsonb_array_length(jsonb_parse(json_col)) AS len FROM data",
+    )
+    .await;
+
+    assert_eq!(batch.num_rows(), 3);
+    let len_col = batch
+        .column_by_name("len")
+        .expect("len column")
+        .as_any()
+        .downcast_ref::<arrow::array::Int64Array>()
+        .expect("len should be Int64");
+    assert_eq!(len_col.value(0), 3); // [1, 2, 3]
+    assert!(batch.column_by_name("len").expect("len column").is_null(1)); // object -> NULL
+    assert_eq!(len_col.value(2), 0); // []
+}
+
 /// make_histogram + count_from_histogram + sum_from_histogram.
 #[wasm_bindgen_test]
 async fn test_histogram_create_and_query() {
