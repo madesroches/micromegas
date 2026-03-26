@@ -124,10 +124,7 @@ async fn test_scalar_to_batch_dictionary_wrapped() {
     // Simulate what DataFusion's constant-folding produces: Dictionary(Int32, Struct)
     let func = ExpandHistogramTableFunction::new();
     let inner_scalar = make_test_histogram(0.0, 10.0, 2, &[3.0, 7.0]);
-    let dict_scalar = ScalarValue::Dictionary(
-        Box::new(DataType::Int32),
-        Box::new(inner_scalar),
-    );
+    let dict_scalar = ScalarValue::Dictionary(Box::new(DataType::Int32), Box::new(inner_scalar));
     let provider = func
         .call(&[Expr::Literal(dict_scalar, None)])
         .expect("call should accept dictionary-wrapped histogram");
