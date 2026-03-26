@@ -2,6 +2,11 @@
 
 This file documents the historical progress of the Micromegas project. For current focus, please see the main [README.md](./README.md).
 
+## Unreleased
+
+* **Security:**
+  * Bump picomatch, brace-expansion, yaml, and requests to fix Dependabot alerts
+
 ## March 2026 - v0.23.0
 
 * **CI:**
