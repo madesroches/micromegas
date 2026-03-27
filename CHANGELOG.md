@@ -4,6 +4,11 @@ This file documents the historical progress of the Micromegas project. For curre
 
 ## Unreleased
 
+* **Security:**
+  * Bump picomatch, brace-expansion, yaml, and requests to fix Dependabot alerts
+
+## March 2026 - v0.23.0
+
 * **CI:**
   * Add container-based self-hosted runner infrastructure for faster CI builds on developer workstations
   * Add check-runner workflow to dynamically route builds between dev-worker and GitHub-hosted runners
@@ -36,6 +41,7 @@ This file documents the historical progress of the Micromegas project. For curre
   * Resolve `$cell.selected.column` macros in table column overrides (#975)
   * Format timestamps in cell selection display panel
   * Show actual cell names in override editor help text
+  * Halt notebook execution when a cell is blocked on a missing selection
 * **CLI:**
   * Add `micromegas-screens` tool for managing screens as code with Terraform-inspired workflow (init, import, pull, plan, apply, list)
   * Add HTTP client (`WebClient`) for analytics-web-srv REST API

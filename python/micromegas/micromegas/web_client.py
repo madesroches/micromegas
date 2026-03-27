@@ -37,7 +37,9 @@ class WebClient:
             raise RuntimeError(f"HTTP {resp.status_code}: {msg}")
 
     def list_screens(self):
-        resp = self.session.get(self._api_url("screens"), headers=self._headers(), timeout=self.timeout)
+        resp = self.session.get(
+            self._api_url("screens"), headers=self._headers(), timeout=self.timeout
+        )
         self._check_response(resp)
         return resp.json()
 
