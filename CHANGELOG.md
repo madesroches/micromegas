@@ -4,6 +4,8 @@ This file documents the historical progress of the Micromegas project. For curre
 
 ## Unreleased
 
+* **CLI:**
+  * Add unified diff output to `micromegas-screens plan` and `apply` for updated screens
 * **Security:**
   * Bump picomatch, brace-expansion, yaml, and requests to fix Dependabot alerts
 

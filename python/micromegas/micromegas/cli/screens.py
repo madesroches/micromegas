@@ -4,6 +4,7 @@ Provides Terraform-inspired workflow: init, import, pull, plan, apply, list.
 """
 
 import argparse
+import difflib
 import json
 import os
 import subprocess
@@ -300,7 +301,9 @@ def compute_plan(config, client, names=None):
             if screens_equal(local_data, server):
                 unchanged.append(name)
             else:
-                updates.append(name)
+                updates.append(
+                    (name, strip_volatile_keys(local_data), strip_volatile_keys(server))
+                )
 
     # Check for deletions: server screens tracked by this repo but missing locally
     if not names:
@@ -318,15 +321,42 @@ def compute_plan(config, client, names=None):
     return creates, updates, deletes, unchanged, untracked
 
 
-def format_plan(creates, updates, deletes, unchanged, untracked):
+def format_screen_diff(local_dict, server_dict, use_color):
+    """Produce a unified diff between server and local screen JSON."""
+    server_json = json.dumps(server_dict, indent=2, sort_keys=True).splitlines()
+    local_json = json.dumps(local_dict, indent=2, sort_keys=True).splitlines()
+    diff_lines = list(
+        difflib.unified_diff(server_json, local_json, fromfile="server", tofile="local")
+    )
+    if not diff_lines:
+        return ""
+    result = []
+    for line in diff_lines:
+        if use_color:
+            if line.startswith("---") or line.startswith("+++"):
+                line = f"\033[1m{line}\033[0m"
+            elif line.startswith("@@"):
+                line = f"\033[36m{line}\033[0m"
+            elif line.startswith("-"):
+                line = f"\033[31m{line}\033[0m"
+            elif line.startswith("+"):
+                line = f"\033[32m{line}\033[0m"
+        result.append(f"    {line}")
+    return "\n".join(result)
+
+
+def format_plan(creates, updates, deletes, unchanged, untracked, use_color=False):
     """Format an execution plan for display."""
     lines = []
     if creates or updates or deletes:
         lines.append("micromegas-screens will perform the following actions:\n")
         for name in creates:
             lines.append(f"  + create: {name}")
-        for name in updates:
+        for name, local_dict, server_dict in updates:
             lines.append(f"  ~ update: {name}")
+            diff = format_screen_diff(local_dict, server_dict, use_color)
+            if diff:
+                lines.append(diff)
         for name in deletes:
             lines.append(f"  - delete: {name} (tracked, removed from local)")
         lines.append(
@@ -349,11 +379,12 @@ def cmd_plan(args):
     config = read_config()
     client = make_client(config)
     names = args.names if args.names else None
+    use_color = sys.stdout.isatty() and args.color
 
     creates, updates, deletes, unchanged, untracked = compute_plan(
         config, client, names
     )
-    print(format_plan(creates, updates, deletes, unchanged, untracked))
+    print(format_plan(creates, updates, deletes, unchanged, untracked, use_color))
 
 
 def cmd_apply(args):
@@ -371,7 +402,8 @@ def cmd_apply(args):
         print(f"No changes. {len(unchanged)} screens unchanged.")
         return
 
-    print(format_plan(creates, updates, deletes, unchanged, untracked))
+    use_color = sys.stdout.isatty() and args.color
+    print(format_plan(creates, updates, deletes, unchanged, untracked, use_color))
     print()
 
     if not args.auto_approve:
@@ -408,7 +440,7 @@ def cmd_apply(args):
             print(f"Error creating '{name}': {e}", file=sys.stderr)
             errors += 1
 
-    for name in updates:
+    for name, _, _ in updates:
         screen = local[name]
         try:
             client.update_screen(
@@ -514,6 +546,12 @@ def main():
     # plan
     p_plan = subparsers.add_parser("plan", help="Preview changes")
     p_plan.add_argument("names", nargs="*", help="Screen names (default: all)")
+    p_plan.add_argument(
+        "--color",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Colored diff output",
+    )
     p_plan.set_defaults(func=cmd_plan)
 
     # apply
@@ -521,6 +559,12 @@ def main():
     p_apply.add_argument("names", nargs="*", help="Screen names (default: all)")
     p_apply.add_argument(
         "--auto-approve", action="store_true", help="Skip confirmation prompt"
+    )
+    p_apply.add_argument(
+        "--color",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Colored diff output",
     )
     p_apply.set_defaults(func=cmd_apply)
 
