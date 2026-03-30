@@ -323,8 +323,8 @@ def compute_plan(config, client, names=None):
 
 def format_screen_diff(local_dict, server_dict, use_color):
     """Produce a unified diff between server and local screen JSON."""
-    server_json = json.dumps(server_dict, indent=2).splitlines()
-    local_json = json.dumps(local_dict, indent=2).splitlines()
+    server_json = json.dumps(server_dict, indent=2, sort_keys=True).splitlines()
+    local_json = json.dumps(local_dict, indent=2, sort_keys=True).splitlines()
     diff_lines = list(
         difflib.unified_diff(server_json, local_json, fromfile="server", tofile="local")
     )
