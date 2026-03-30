@@ -7,9 +7,11 @@ import pytest
 
 from micromegas.cli.screens import (
     compute_plan,
+    format_screen_diff,
     list_local_screens,
     read_screen_file,
     server_screen_to_file,
+    strip_volatile_keys,
     write_screen_file,
 )
 
@@ -221,7 +223,11 @@ class TestComputePlan:
         ]
         client = self._make_client(server_screens)
         creates, updates, deletes, unchanged, untracked = compute_plan(config, client)
-        assert updates == ["my-screen"]
+        assert len(updates) == 1
+        name, local_dict, server_dict = updates[0]
+        assert name == "my-screen"
+        assert local_dict["config"]["cells"][0]["content"] == "updated"
+        assert server_dict["config"]["cells"][0]["content"] == "old"
 
     def test_unchanged(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
@@ -248,3 +254,41 @@ class TestComputePlan:
         client = self._make_client(server_screens)
         creates, updates, deletes, unchanged, untracked = compute_plan(config, client)
         assert unchanged == ["stable-screen"]
+
+
+class TestFormatScreenDiff:
+    def test_produces_unified_diff(self):
+        server = {
+            "name": "test",
+            "screen_type": "notebook",
+            "config": {"cells": [{"content": "old"}]},
+        }
+        local = {
+            "name": "test",
+            "screen_type": "notebook",
+            "config": {"cells": [{"content": "new"}]},
+        }
+        result = format_screen_diff("test", local, server, use_color=False)
+        assert "--- server" in result
+        assert "+++ local" in result
+        assert '-        "content": "old"' in result
+        assert '+        "content": "new"' in result
+
+    def test_no_color(self):
+        server = {"name": "a", "screen_type": "notebook", "config": {"x": 1}}
+        local = {"name": "a", "screen_type": "notebook", "config": {"x": 2}}
+        result = format_screen_diff("a", local, server, use_color=False)
+        assert "\033[" not in result
+
+    def test_with_color(self):
+        server = {"name": "a", "screen_type": "notebook", "config": {"x": 1}}
+        local = {"name": "a", "screen_type": "notebook", "config": {"x": 2}}
+        result = format_screen_diff("a", local, server, use_color=True)
+        assert "\033[31m" in result  # red for removals
+        assert "\033[32m" in result  # green for additions
+        assert "\033[36m" in result  # cyan for @@ headers
+
+    def test_identical_returns_empty(self):
+        data = {"name": "a", "screen_type": "notebook", "config": {}}
+        result = format_screen_diff("a", data, data, use_color=False)
+        assert result == ""
