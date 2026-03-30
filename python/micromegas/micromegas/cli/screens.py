@@ -321,7 +321,7 @@ def compute_plan(config, client, names=None):
     return creates, updates, deletes, unchanged, untracked
 
 
-def format_screen_diff(name, local_dict, server_dict, use_color=False):
+def format_screen_diff(local_dict, server_dict, use_color):
     """Produce a unified diff between server and local screen JSON."""
     server_json = json.dumps(server_dict, indent=2).splitlines()
     local_json = json.dumps(local_dict, indent=2).splitlines()
@@ -354,7 +354,7 @@ def format_plan(creates, updates, deletes, unchanged, untracked, use_color=False
             lines.append(f"  + create: {name}")
         for name, local_dict, server_dict in updates:
             lines.append(f"  ~ update: {name}")
-            diff = format_screen_diff(name, local_dict, server_dict, use_color)
+            diff = format_screen_diff(local_dict, server_dict, use_color)
             if diff:
                 lines.append(diff)
         for name in deletes:

@@ -268,7 +268,7 @@ class TestFormatScreenDiff:
             "screen_type": "notebook",
             "config": {"cells": [{"content": "new"}]},
         }
-        result = format_screen_diff("test", local, server, use_color=False)
+        result = format_screen_diff(local, server, use_color=False)
         assert "--- server" in result
         assert "+++ local" in result
         assert '-        "content": "old"' in result
@@ -277,18 +277,18 @@ class TestFormatScreenDiff:
     def test_no_color(self):
         server = {"name": "a", "screen_type": "notebook", "config": {"x": 1}}
         local = {"name": "a", "screen_type": "notebook", "config": {"x": 2}}
-        result = format_screen_diff("a", local, server, use_color=False)
+        result = format_screen_diff(local, server, use_color=False)
         assert "\033[" not in result
 
     def test_with_color(self):
         server = {"name": "a", "screen_type": "notebook", "config": {"x": 1}}
         local = {"name": "a", "screen_type": "notebook", "config": {"x": 2}}
-        result = format_screen_diff("a", local, server, use_color=True)
+        result = format_screen_diff(local, server, use_color=True)
         assert "\033[31m" in result  # red for removals
         assert "\033[32m" in result  # green for additions
         assert "\033[36m" in result  # cyan for @@ headers
 
     def test_identical_returns_empty(self):
         data = {"name": "a", "screen_type": "notebook", "config": {}}
-        result = format_screen_diff("a", data, data, use_color=False)
+        result = format_screen_diff(data, data, use_color=False)
         assert result == ""
