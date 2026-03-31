@@ -8,6 +8,7 @@ This file documents the historical progress of the Micromegas project. For curre
   * Add unified diff output to `micromegas-screens plan` and `apply` for updated screens
 * **Security:**
   * Bump picomatch, brace-expansion, yaml, and requests to fix Dependabot alerts
+  * Bump serialize-javascript, handlebars, cryptography, and Pygments to fix Dependabot alerts
 
 ## March 2026 - v0.23.0
 
