@@ -6,6 +6,8 @@ This file documents the historical progress of the Micromegas project. For curre
 
 * **CLI:**
   * Add unified diff output to `micromegas-screens plan` and `apply` for updated screens
+* **Bug Fixes:**
+  * Fix byteLength crash on 0-row Arrow tables in notebook status text
 * **Security:**
   * Bump picomatch, brace-expansion, yaml, and requests to fix Dependabot alerts
   * Bump serialize-javascript, handlebars, cryptography, and Pygments to fix Dependabot alerts

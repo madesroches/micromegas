@@ -4,6 +4,7 @@ import type { CellViewContext, CellViewCallbacks } from '../notebook-cell-view'
 import {
   formatBytes,
   formatElapsedMs,
+  safeTableByteLength,
   buildStatusText,
   buildHgStatusText,
   buildCellRendererProps,
@@ -62,6 +63,33 @@ function makeCallbacks(overrides: Partial<CellViewCallbacks> = {}): CellViewCall
     ...overrides,
   }
 }
+
+// =============================================================================
+// safeTableByteLength
+// =============================================================================
+
+describe('safeTableByteLength', () => {
+  it('returns 0 for a table with 0 rows', () => {
+    const table = { numRows: 0, batches: [{ data: { byteLength: 100 } }] } as unknown as Table
+    expect(safeTableByteLength(table)).toBe(0)
+  })
+
+  it('returns byteLength for a table with rows', () => {
+    const table = makeTable(10, 2048)
+    expect(safeTableByteLength(table)).toBe(2048)
+  })
+
+  it('sums byteLength across multiple batches', () => {
+    const table = {
+      numRows: 10,
+      batches: [
+        { data: { byteLength: 1024 } },
+        { data: { byteLength: 2048 } },
+      ],
+    } as unknown as Table
+    expect(safeTableByteLength(table)).toBe(3072)
+  })
+})
 
 // =============================================================================
 // formatBytes
@@ -167,6 +195,22 @@ describe('buildStatusText', () => {
     const state = makeState({ data: [] })
     expect(buildStatusText(cell, state)).toBeUndefined()
   })
+
+  it('does not crash for 0-row table with malformed batch data', () => {
+    const cell = makeCell()
+    const badTable = {
+      numRows: 0,
+      batches: [{
+        data: {
+          get byteLength(): number {
+            throw new TypeError('Cannot read properties of undefined')
+          },
+        },
+      }],
+    } as unknown as Table
+    const state = makeState({ data: [badTable] })
+    expect(buildStatusText(cell, state)).toBe('0 rows (0 B)')
+  })
 })
 
 // =============================================================================
@@ -220,6 +264,24 @@ describe('buildHgStatusText', () => {
       b: makeState({ data: [makeTable(50, 1024)] }), // no elapsedMs
     }
     expect(buildHgStatusText(children, states)).toBe('150 rows (3.0 KB)')
+  })
+
+  it('does not crash for 0-row child table with malformed batch data', () => {
+    const badTable = {
+      numRows: 0,
+      batches: [{
+        data: {
+          get byteLength(): number {
+            throw new TypeError('Cannot read properties of undefined')
+          },
+        },
+      }],
+    } as unknown as Table
+    const children = [makeCell({ name: 'a' })]
+    const states = {
+      a: makeState({ data: [badTable], elapsedMs: 100 }),
+    }
+    expect(buildHgStatusText(children, states)).toBe('0 rows (0 B) in 100ms')
   })
 })
 
