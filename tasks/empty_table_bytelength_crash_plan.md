@@ -59,20 +59,11 @@ Add a helper function that safely computes byte size for an Arrow Table, guardin
 ```typescript
 function safeTableByteLength(table: Table): number {
   if (table.numRows === 0) return 0
-  return table.batches.reduce(
-    (sum, batch) => {
-      try {
-        return sum + batch.data.byteLength
-      } catch {
-        return sum
-      }
-    },
-    0,
-  )
+  return table.batches.reduce((sum, batch) => sum + batch.data.byteLength, 0)
 }
 ```
 
-The `numRows === 0` early return is the primary guard — if there are no rows, byte size is functionally meaningless (it's only displayed for user context). The `try/catch` fallback handles any remaining edge cases in the Arrow library's `Data.byteLength` getter.
+The `numRows === 0` early return is the primary guard — if there are no rows, byte size is functionally meaningless (it's only displayed for user context). The crash only affects 0-row tables where the WASM/JS Arrow version mismatch produces uninitialized buffers, so no try/catch fallback is needed for tables with rows.
 
 ## Implementation Steps
 
