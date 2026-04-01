@@ -4,6 +4,7 @@ import type { CellViewContext, CellViewCallbacks } from '../notebook-cell-view'
 import {
   formatBytes,
   formatElapsedMs,
+  safeTableByteLength,
   buildStatusText,
   buildHgStatusText,
   buildCellRendererProps,
@@ -62,6 +63,36 @@ function makeCallbacks(overrides: Partial<CellViewCallbacks> = {}): CellViewCall
     ...overrides,
   }
 }
+
+// =============================================================================
+// safeTableByteLength
+// =============================================================================
+
+describe('safeTableByteLength', () => {
+  it('returns 0 for a table with 0 rows', () => {
+    const table = { numRows: 0, batches: [{ data: { byteLength: 100 } }] } as unknown as Table
+    expect(safeTableByteLength(table)).toBe(0)
+  })
+
+  it('returns byteLength for a table with rows', () => {
+    const table = makeTable(10, 2048)
+    expect(safeTableByteLength(table)).toBe(2048)
+  })
+
+  it('does not crash when batch.data.byteLength throws', () => {
+    const table = {
+      numRows: 5,
+      batches: [{
+        data: {
+          get byteLength(): number {
+            throw new TypeError('Cannot read properties of undefined')
+          },
+        },
+      }],
+    } as unknown as Table
+    expect(safeTableByteLength(table)).toBe(0)
+  })
+})
 
 // =============================================================================
 // formatBytes
@@ -166,6 +197,22 @@ describe('buildStatusText', () => {
     const cell = makeCell()
     const state = makeState({ data: [] })
     expect(buildStatusText(cell, state)).toBeUndefined()
+  })
+
+  it('does not crash for 0-row table with malformed batch data', () => {
+    const cell = makeCell()
+    const badTable = {
+      numRows: 0,
+      batches: [{
+        data: {
+          get byteLength(): number {
+            throw new TypeError('Cannot read properties of undefined')
+          },
+        },
+      }],
+    } as unknown as Table
+    const state = makeState({ data: [badTable] })
+    expect(buildStatusText(cell, state)).toBe('0 rows (0 B)')
   })
 })
 

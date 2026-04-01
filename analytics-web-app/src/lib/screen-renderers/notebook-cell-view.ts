@@ -45,6 +45,23 @@ export function formatElapsedMs(ms: number): string {
   return `${(ms / 1000).toFixed(2)}s`
 }
 
+/**
+ * Safely compute the total byte size of an Arrow Table's batches.
+ * Guards against undefined buffers in Data objects that can occur when
+ * the WASM Arrow IPC writer produces 0-row results deserialized by the
+ * JS Arrow library.
+ */
+export function safeTableByteLength(table: Table): number {
+  if (table.numRows === 0) return 0
+  return table.batches.reduce((sum, batch) => {
+    try {
+      return sum + batch.data.byteLength
+    } catch {
+      return sum
+    }
+  }, 0)
+}
+
 // =============================================================================
 // Status text builders
 // =============================================================================
@@ -70,8 +87,7 @@ export function buildStatusText(
   if (state.data && state.data.length > 0) {
     const totalRows = state.data.reduce((sum, t) => sum + t.numRows, 0)
     const totalBytes = state.data.reduce(
-      (sum, t) =>
-        sum + t.batches.reduce((s: number, b) => s + b.data.byteLength, 0),
+      (sum, t) => sum + safeTableByteLength(t),
       0,
     )
     const rowText = `${totalRows.toLocaleString()} rows (${formatBytes(totalBytes)})`
@@ -162,8 +178,7 @@ export function buildHgStatusText(
     hasData = true
     totalRows += state.data.reduce((sum, t) => sum + t.numRows, 0)
     totalBytes += state.data.reduce(
-      (sum, t) =>
-        sum + t.batches.reduce((s: number, b) => s + b.data.byteLength, 0),
+      (sum, t) => sum + safeTableByteLength(t),
       0,
     )
     if (state.elapsedMs != null) {
