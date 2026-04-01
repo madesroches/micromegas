@@ -203,6 +203,58 @@ GROUP BY thread_name, name
 ORDER BY avg_ms DESC;
 ```
 
+#### `parse_block(block_id)`
+
+Parses transit-serialized objects from a block's payload and returns each object as a row with its type name and full content as JSONB. This provides a generic block inspection tool, independent of any specific view (logs, metrics, spans).
+
+**Syntax:**
+```sql
+SELECT object_index, type_name, jsonb_format_json(value)
+FROM parse_block(block_id)
+```
+
+**Parameters:**
+
+- `block_id` (`Utf8`): UUID of the block to parse. Block IDs can be found in the `blocks` view.
+
+**Returns:**
+
+| Column | Type | Description |
+|--------|------|-------------|
+| object_index | Int64 | Ordinal position within the block (global, starting from the block's object_offset) |
+| type_name | Utf8 | Transit type name (e.g., `"LogStringEvent"`, `"BeginThreadSpanEvent"`) |
+| value | Binary | Full object content as JSONB binary data |
+
+**Examples:**
+```sql
+-- Find a block to inspect
+SELECT block_id, nb_objects, "streams.tags"
+FROM blocks
+LIMIT 5;
+
+-- Parse all objects in a block
+SELECT object_index, type_name, jsonb_format_json(value)
+FROM parse_block('550e8400-e29b-41d4-a716-446655440000');
+
+-- Filter by object type
+SELECT object_index, jsonb_format_json(value)
+FROM parse_block('550e8400-e29b-41d4-a716-446655440000')
+WHERE type_name LIKE 'Log%';
+
+-- Extract a specific field from objects
+SELECT object_index, type_name,
+       jsonb_as_string(jsonb_get(value, 'msg')) as msg
+FROM parse_block('550e8400-e29b-41d4-a716-446655440000')
+WHERE type_name = 'LogStringInteropEvent'
+LIMIT 10;
+```
+
+**Notes:**
+
+- The `value` column contains JSONB-encoded objects. Each object includes a `__type` field with the transit type name, which is especially useful for inspecting nested objects.
+- When a `LIMIT` is used without filters, the function stops parsing early for efficiency. When filters are present, all objects are materialized first so DataFusion can apply the filter.
+- Use with JSONB functions like `jsonb_get`, `jsonb_format_json`, and `jsonb_as_string` to extract and display object contents.
+
 ### Scalar Functions
 
 #### JSON/JSONB Functions
