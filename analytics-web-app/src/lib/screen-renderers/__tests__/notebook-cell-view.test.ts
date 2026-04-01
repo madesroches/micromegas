@@ -79,18 +79,15 @@ describe('safeTableByteLength', () => {
     expect(safeTableByteLength(table)).toBe(2048)
   })
 
-  it('does not crash when batch.data.byteLength throws', () => {
+  it('sums byteLength across multiple batches', () => {
     const table = {
-      numRows: 5,
-      batches: [{
-        data: {
-          get byteLength(): number {
-            throw new TypeError('Cannot read properties of undefined')
-          },
-        },
-      }],
+      numRows: 10,
+      batches: [
+        { data: { byteLength: 1024 } },
+        { data: { byteLength: 2048 } },
+      ],
     } as unknown as Table
-    expect(safeTableByteLength(table)).toBe(0)
+    expect(safeTableByteLength(table)).toBe(3072)
   })
 })
 

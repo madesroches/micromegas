@@ -53,13 +53,7 @@ export function formatElapsedMs(ms: number): string {
  */
 export function safeTableByteLength(table: Table): number {
   if (table.numRows === 0) return 0
-  return table.batches.reduce((sum, batch) => {
-    try {
-      return sum + batch.data.byteLength
-    } catch {
-      return sum
-    }
-  }, 0)
+  return table.batches.reduce((sum, batch) => sum + batch.data.byteLength, 0)
 }
 
 // =============================================================================
