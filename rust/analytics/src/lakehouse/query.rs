@@ -3,8 +3,8 @@ use super::{
     list_partitions_table_function::ListPartitionsTableFunction,
     list_view_sets_table_function::ListViewSetsTableFunction,
     materialize_partitions_table_function::MaterializePartitionsTableFunction,
-    partition::Partition, partition_cache::QueryPartitionProvider,
-    partitioned_table_provider::PartitionedTableProvider,
+    parse_block_table_function::ParseBlockTableFunction, partition::Partition,
+    partition_cache::QueryPartitionProvider, partitioned_table_provider::PartitionedTableProvider,
     perfetto_trace_table_function::PerfettoTraceTableFunction,
     process_spans_table_function::ProcessSpansTableFunction, reader_factory::ReaderFactory,
     retire_partition_by_file_udf::make_retire_partition_by_file_udf,
@@ -133,6 +133,15 @@ pub fn register_lakehouse_functions(
         Arc::new(MaterializePartitionsTableFunction::new(
             lakehouse.clone(),
             view_factory.clone(),
+        )),
+    );
+    ctx.register_udtf(
+        "parse_block",
+        Arc::new(ParseBlockTableFunction::new(
+            lakehouse.clone(),
+            view_factory.clone(),
+            part_provider.clone(),
+            query_range,
         )),
     );
     ctx.register_udtf(

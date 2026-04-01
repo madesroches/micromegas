@@ -4,6 +4,8 @@ This file documents the historical progress of the Micromegas project. For curre
 
 ## Unreleased
 
+* **Analytics:**
+  * Add `parse_block` table UDF for generic block inspection with transit-to-JSONB conversion
 * **CLI:**
   * Add unified diff output to `micromegas-screens plan` and `apply` for updated screens
 * **Bug Fixes:**

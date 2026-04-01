@@ -58,6 +58,8 @@ pub mod metrics_block_processor;
 pub mod metrics_view;
 /// Maintenance of the postgresql tables and indices use to track the parquet files used to implement the views
 pub mod migration;
+/// Table function to parse all transit objects in a block and return them as JSONB
+pub mod parse_block_table_function;
 /// Write & delete sections of views
 pub mod partition;
 /// In-memory copy of a subnet of the list of the partitions in the db
