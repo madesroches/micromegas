@@ -265,6 +265,24 @@ describe('buildHgStatusText', () => {
     }
     expect(buildHgStatusText(children, states)).toBe('150 rows (3.0 KB)')
   })
+
+  it('does not crash for 0-row child table with malformed batch data', () => {
+    const badTable = {
+      numRows: 0,
+      batches: [{
+        data: {
+          get byteLength(): number {
+            throw new TypeError('Cannot read properties of undefined')
+          },
+        },
+      }],
+    } as unknown as Table
+    const children = [makeCell({ name: 'a' })]
+    const states = {
+      a: makeState({ data: [badTable], elapsedMs: 100 }),
+    }
+    expect(buildHgStatusText(children, states)).toBe('0 rows (0 B) in 100ms')
+  })
 })
 
 // =============================================================================
