@@ -65,6 +65,131 @@ pub fn transit_value_to_jsonb(value: &TransitValue) -> JsonbValue<'_> {
     }
 }
 
+/// Queries the global blocks view for a block's metadata and constructs a `StreamMetadata`.
+/// Returns `None` if the block is not found.
+async fn fetch_block_metadata(
+    lakehouse: Arc<LakehouseContext>,
+    part_provider: Arc<dyn QueryPartitionProvider>,
+    query_range: Option<TimeRange>,
+    view_factory: Arc<ViewFactory>,
+    block_id_str: &str,
+) -> anyhow::Result<Option<(Uuid, i64, StreamMetadata)>> {
+    let ctx = super::query::make_session_context(
+        lakehouse,
+        part_provider,
+        query_range,
+        view_factory,
+        Arc::new(NoOpSessionConfigurator),
+    )
+    .await?;
+
+    let sql = format!(
+        "SELECT block_id, stream_id, process_id, object_offset,
+                \"streams.dependencies_metadata\", \"streams.objects_metadata\"
+         FROM blocks
+         WHERE block_id = '{block_id_str}'"
+    );
+    let df = ctx.sql(&sql).await?;
+    let batches = df.collect().await?;
+
+    if batches.is_empty() || batches[0].num_rows() == 0 {
+        return Ok(None);
+    }
+
+    let batch = &batches[0];
+
+    let block_id_col = string_column_by_name(batch, "block_id")?;
+    let stream_id_col = string_column_by_name(batch, "stream_id")?;
+    let process_id_col = string_column_by_name(batch, "process_id")?;
+    let object_offset_col: &Int64Array = typed_column_by_name(batch, "object_offset")?;
+
+    let block_id = Uuid::parse_str(block_id_col.value(0)?)?;
+    let stream_id = Uuid::parse_str(stream_id_col.value(0)?)?;
+    let process_id = Uuid::parse_str(process_id_col.value(0)?)?;
+    let object_offset = object_offset_col.value(0);
+
+    let deps_col = batch
+        .column_by_name("streams.dependencies_metadata")
+        .context("streams.dependencies_metadata column not found")?;
+    let deps_binary: &datafusion::arrow::array::BinaryArray = deps_col
+        .as_any()
+        .downcast_ref()
+        .context("failed to cast dependencies_metadata to BinaryArray")?;
+    let deps_bytes = deps_binary.value(0);
+    let dependencies_metadata: Vec<UserDefinedType> =
+        ciborium::from_reader(deps_bytes).context("decoding dependencies_metadata")?;
+
+    let objs_col = batch
+        .column_by_name("streams.objects_metadata")
+        .context("streams.objects_metadata column not found")?;
+    let objs_binary: &datafusion::arrow::array::BinaryArray = objs_col
+        .as_any()
+        .downcast_ref()
+        .context("failed to cast objects_metadata to BinaryArray")?;
+    let objs_bytes = objs_binary.value(0);
+    let objects_metadata: Vec<UserDefinedType> =
+        ciborium::from_reader(objs_bytes).context("decoding objects_metadata")?;
+
+    let stream_metadata = StreamMetadata {
+        process_id,
+        stream_id,
+        dependencies_metadata,
+        objects_metadata,
+        tags: vec![],
+        properties: Arc::new(vec![]),
+    };
+
+    Ok(Some((block_id, object_offset, stream_metadata)))
+}
+
+/// Parses transit objects from a block payload and returns them as a RecordBatch.
+fn parse_block_objects(
+    stream_metadata: &StreamMetadata,
+    payload: &micromegas_telemetry::block_wire_format::BlockPayload,
+    object_offset: i64,
+    early_limit: Option<usize>,
+) -> anyhow::Result<RecordBatch> {
+    let mut index_builder = Int64Builder::new();
+    let mut name_builder = StringBuilder::new();
+    let mut value_builder = BinaryBuilder::new();
+    let mut local_index: i64 = 0;
+    let mut nb_objects: usize = 0;
+
+    parse_block(stream_metadata, payload, |value| {
+        if let TransitValue::Object(obj) = &value {
+            let jsonb_val = transit_value_to_jsonb(&value);
+            let mut buf = Vec::new();
+            jsonb_val.write_to_vec(&mut buf);
+
+            index_builder.append_value(object_offset + local_index);
+            name_builder.append_value(obj.type_name.as_ref());
+            value_builder.append_value(&buf);
+            nb_objects += 1;
+        } else {
+            warn!(
+                "parse_block: skipping non-Object value at index {}",
+                object_offset + local_index
+            );
+        }
+        local_index += 1;
+
+        if let Some(lim) = early_limit {
+            Ok(nb_objects < lim)
+        } else {
+            Ok(true)
+        }
+    })?;
+
+    Ok(RecordBatch::try_new(
+        output_schema(),
+        vec![
+            Arc::new(index_builder.finish()),
+            Arc::new(name_builder.finish()),
+            Arc::new(value_builder.finish()),
+        ],
+    )?)
+}
+
 /// A DataFusion `TableFunctionImpl` that parses a block's transit-serialized objects
 /// and returns each object as a row with its type name and full content as JSONB.
 #[derive(Debug)]
@@ -142,184 +267,40 @@ impl TableProvider for ParseBlockProvider {
     ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
         let block_id_str = &self.block_id;
 
-        // 1. Query the global blocks view for metadata
-        let ctx = super::query::make_session_context(
+        let Some((block_id, object_offset, stream_metadata)) = fetch_block_metadata(
             self.lakehouse.clone(),
             self.part_provider.clone(),
             self.query_range,
             self.view_factory.clone(),
-            Arc::new(NoOpSessionConfigurator),
+            block_id_str,
         )
         .await
-        .map_err(|e| DataFusionError::External(e.into()))?;
-
-        let sql = format!(
-            "SELECT block_id, stream_id, process_id, object_offset,
-                    \"streams.dependencies_metadata\", \"streams.objects_metadata\"
-             FROM blocks
-             WHERE block_id = '{block_id_str}'"
-        );
-        let df = ctx
-            .sql(&sql)
-            .await
-            .map_err(|e| DataFusionError::External(e.into()))?;
-        let batches = df
-            .collect()
-            .await
-            .map_err(|e| DataFusionError::External(e.into()))?;
-
-        if batches.is_empty() || batches[0].num_rows() == 0 {
-            // Block not found — return empty result
+        .map_err(|e| DataFusionError::External(e.into()))?
+        else {
             let source = MemorySourceConfig::try_new(
                 &[vec![]],
                 self.schema(),
                 projection.map(|v| v.to_owned()),
             )?;
             return Ok(DataSourceExec::from_data_source(source));
-        }
-
-        let batch = &batches[0];
-
-        // 2. Extract metadata from the result row
-        let block_id_col = string_column_by_name(batch, "block_id")
-            .map_err(|e| DataFusionError::External(e.into()))?;
-        let stream_id_col = string_column_by_name(batch, "stream_id")
-            .map_err(|e| DataFusionError::External(e.into()))?;
-        let process_id_col = string_column_by_name(batch, "process_id")
-            .map_err(|e| DataFusionError::External(e.into()))?;
-        let object_offset_col: &Int64Array = typed_column_by_name(batch, "object_offset")
-            .map_err(|e| DataFusionError::External(e.into()))?;
-
-        let block_id = Uuid::parse_str(
-            block_id_col
-                .value(0)
-                .map_err(|e| DataFusionError::External(e.into()))?,
-        )
-        .map_err(|e| DataFusionError::External(e.into()))?;
-        let stream_id = Uuid::parse_str(
-            stream_id_col
-                .value(0)
-                .map_err(|e| DataFusionError::External(e.into()))?,
-        )
-        .map_err(|e| DataFusionError::External(e.into()))?;
-        let process_id = Uuid::parse_str(
-            process_id_col
-                .value(0)
-                .map_err(|e| DataFusionError::External(e.into()))?,
-        )
-        .map_err(|e| DataFusionError::External(e.into()))?;
-        let object_offset = object_offset_col.value(0);
-
-        // CBOR-decode dependencies_metadata and objects_metadata
-        let deps_col = batch
-            .column_by_name("streams.dependencies_metadata")
-            .ok_or_else(|| {
-                DataFusionError::Execution("streams.dependencies_metadata column not found".into())
-            })?;
-        let deps_binary: &datafusion::arrow::array::BinaryArray =
-            deps_col.as_any().downcast_ref().ok_or_else(|| {
-                DataFusionError::Execution(
-                    "failed to cast dependencies_metadata to BinaryArray".into(),
-                )
-            })?;
-        let deps_bytes = deps_binary.value(0);
-        let dependencies_metadata: Vec<UserDefinedType> = ciborium::from_reader(deps_bytes)
-            .map_err(|e| {
-                DataFusionError::External(
-                    anyhow::anyhow!("decoding dependencies_metadata: {e}").into(),
-                )
-            })?;
-
-        let objs_col = batch
-            .column_by_name("streams.objects_metadata")
-            .ok_or_else(|| {
-                DataFusionError::Execution("streams.objects_metadata column not found".into())
-            })?;
-        let objs_binary: &datafusion::arrow::array::BinaryArray =
-            objs_col.as_any().downcast_ref().ok_or_else(|| {
-                DataFusionError::Execution("failed to cast objects_metadata to BinaryArray".into())
-            })?;
-        let objs_bytes = objs_binary.value(0);
-        let objects_metadata: Vec<UserDefinedType> =
-            ciborium::from_reader(objs_bytes).map_err(|e| {
-                DataFusionError::External(anyhow::anyhow!("decoding objects_metadata: {e}").into())
-            })?;
-
-        let stream_metadata = StreamMetadata {
-            process_id,
-            stream_id,
-            dependencies_metadata,
-            objects_metadata,
-            tags: vec![],
-            properties: Arc::new(vec![]),
         };
 
-        // 3. Fetch and parse the block payload
+        // Fetch and parse the block payload
         let blob_storage = self.lakehouse.lake().blob_storage.clone();
         let payload = fetch_block_payload(
             blob_storage,
-            sqlx::types::Uuid::from_bytes(*process_id.as_bytes()),
-            sqlx::types::Uuid::from_bytes(*stream_id.as_bytes()),
+            sqlx::types::Uuid::from_bytes(*stream_metadata.process_id.as_bytes()),
+            sqlx::types::Uuid::from_bytes(*stream_metadata.stream_id.as_bytes()),
             sqlx::types::Uuid::from_bytes(*block_id.as_bytes()),
         )
         .await
         .map_err(|e| DataFusionError::External(e.into()))?;
 
-        // 4. Parse transit objects and convert to JSONB
-        let mut indices: Vec<i64> = Vec::new();
-        let mut type_names: Vec<String> = Vec::new();
-        let mut jsonb_values: Vec<Vec<u8>> = Vec::new();
-        let mut local_index: i64 = 0;
-
-        // Only apply early limit when there are no filters
+        // Parse transit objects and convert to JSONB
         let early_limit = if filters.is_empty() { limit } else { None };
-
-        parse_block(&stream_metadata, &payload, |value| {
-            if let TransitValue::Object(obj) = &value {
-                let jsonb_val = transit_value_to_jsonb(&value);
-                let mut buf = Vec::new();
-                jsonb_val.write_to_vec(&mut buf);
-
-                indices.push(object_offset + local_index);
-                type_names.push(obj.type_name.as_ref().clone());
-                jsonb_values.push(buf);
-            } else {
-                warn!(
-                    "parse_block: skipping non-Object value at index {}",
-                    object_offset + local_index
-                );
-            }
-            local_index += 1;
-
-            if let Some(lim) = early_limit {
-                Ok(indices.len() < lim)
-            } else {
-                Ok(true)
-            }
-        })
-        .with_context(|| format!("parsing block {block_id_str}"))
-        .map_err(|e| DataFusionError::External(e.into()))?;
-
-        // 5. Build RecordBatch
-        let mut index_builder = Int64Builder::with_capacity(indices.len());
-        let mut name_builder = StringBuilder::with_capacity(type_names.len(), 0);
-        let mut value_builder = BinaryBuilder::with_capacity(jsonb_values.len(), 0);
-
-        for (i, idx) in indices.iter().enumerate() {
-            index_builder.append_value(*idx);
-            name_builder.append_value(&type_names[i]);
-            value_builder.append_value(&jsonb_values[i]);
-        }
-
-        let rb = RecordBatch::try_new(
-            self.schema(),
-            vec![
-                Arc::new(index_builder.finish()),
-                Arc::new(name_builder.finish()),
-                Arc::new(value_builder.finish()),
-            ],
-        )
-        .map_err(|e| DataFusionError::External(e.into()))?;
+        let rb = parse_block_objects(&stream_metadata, &payload, object_offset, early_limit)
+            .with_context(|| format!("parsing block {block_id_str}"))
+            .map_err(|e| DataFusionError::External(e.into()))?;
 
         let source = MemorySourceConfig::try_new(
             &[vec![rb]],
