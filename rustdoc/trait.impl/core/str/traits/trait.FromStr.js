@@ -1,0 +1,9 @@
+(function() {
+    const implementors = Object.fromEntries([["analytics_web_srv",[["impl <a class=\"trait\" href=\"https://doc.rust-lang.org/1.94.0/core/str/traits/trait.FromStr.html\" title=\"trait core::str::traits::FromStr\">FromStr</a> for <a class=\"enum\" href=\"analytics_web_srv/screen_types/enum.ScreenType.html\" title=\"enum analytics_web_srv::screen_types::ScreenType\">ScreenType</a>",0]]],["micromegas_tracing",[["impl <a class=\"trait\" href=\"https://doc.rust-lang.org/1.94.0/core/str/traits/trait.FromStr.html\" title=\"trait core::str::traits::FromStr\">FromStr</a> for <a class=\"enum\" href=\"micromegas_tracing/levels/enum.Level.html\" title=\"enum micromegas_tracing::levels::Level\">Level</a>",0],["impl <a class=\"trait\" href=\"https://doc.rust-lang.org/1.94.0/core/str/traits/trait.FromStr.html\" title=\"trait core::str::traits::FromStr\">FromStr</a> for <a class=\"enum\" href=\"micromegas_tracing/levels/enum.LevelFilter.html\" title=\"enum micromegas_tracing::levels::LevelFilter\">LevelFilter</a>",0],["impl <a class=\"trait\" href=\"https://doc.rust-lang.org/1.94.0/core/str/traits/trait.FromStr.html\" title=\"trait core::str::traits::FromStr\">FromStr</a> for <a class=\"enum\" href=\"micromegas_tracing/levels/enum.LodFilter.html\" title=\"enum micromegas_tracing::levels::LodFilter\">LodFilter</a>",0],["impl <a class=\"trait\" href=\"https://doc.rust-lang.org/1.94.0/core/str/traits/trait.FromStr.html\" title=\"trait core::str::traits::FromStr\">FromStr</a> for <a class=\"enum\" href=\"micromegas_tracing/levels/enum.Verbosity.html\" title=\"enum micromegas_tracing::levels::Verbosity\">Verbosity</a>",0]]]]);
+    if (window.register_implementors) {
+        window.register_implementors(implementors);
+    } else {
+        window.pending_implementors = implementors;
+    }
+})()
+//{"start":59,"fragment_lengths":[342,1243]}

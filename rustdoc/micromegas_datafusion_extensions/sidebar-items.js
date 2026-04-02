@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["register_extension_udfs"],"mod":["binary_column_accessor","histogram","jsonb","properties"]};
