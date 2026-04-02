@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { RESERVED_URL_PARAMS } from '@/lib/url-cleanup-utils'
 import {
@@ -157,41 +157,46 @@ export function useNotebookVariables(
   prevCellKeysRef.current = cellKeys
   prevSavedDefaultsRef.current = savedDefaultsByName
 
-  // Write URL param (fire-and-forget side effect for bookmarkability)
-  const writeUrlParam = useCallback(
-    (cellName: string, value: VariableValue, baseline: VariableValue | undefined) => {
-      setSearchParams(prev => {
-        const next = new URLSearchParams(prev)
-        if (baseline !== undefined && variableValuesEqual(value, baseline)) {
-          next.delete(cellName)
-        } else {
-          next.set(cellName, serializeVariableValue(value))
+  // Sync local state → URL for bookmarkability (complete snapshot on each change).
+  // Writes all variable params at once, avoiding stale-closure issues with
+  // incremental setSearchParams calls during rapid updates.
+  // Also cleans up URL params for variables removed by cell-sync.
+  useEffect(() => {
+    const allCells = flattenCellsForExecution(cells)
+    setSearchParams(prev => {
+      const next = new URLSearchParams(prev)
+      // Clear all non-reserved params (variable params)
+      const keysToDelete: string[] = []
+      next.forEach((_, key) => {
+        if (!RESERVED_URL_PARAMS.has(key)) {
+          keysToDelete.push(key)
         }
-        return next
-      }, { replace: true })
-    },
-    [setSearchParams]
-  )
+      })
+      keysToDelete.forEach(key => next.delete(key))
+      // Write deltas from saved defaults
+      for (const [name, value] of Object.entries(variableValues)) {
+        const savedDefault = savedDefaultsByName.get(name)
+        const currentCell = allCells.find(c => c.type === 'variable' && c.name === name) as
+          | VariableCellConfig
+          | undefined
+        const baseline = savedDefault ?? currentCell?.defaultValue
+        if (baseline === undefined || !variableValuesEqual(value, baseline)) {
+          next.set(name, serializeVariableValue(value))
+        }
+      }
+      return next
+    }, { replace: true })
+  }, [variableValues, cells, savedDefaultsByName, setSearchParams])
 
-  // Set a variable value: updates local state + ref, then syncs URL
+  // Set a variable value: updates local state + ref (URL synced by effect above)
   const setVariableValue = useCallback(
     (cellName: string, value: VariableValue) => {
       // Update ref immediately for synchronous access during execution
       variableValuesRef.current = { ...variableValuesRef.current, [cellName]: value }
       // Update React state for re-render
       setVariableValues(prev => ({ ...prev, [cellName]: value }))
-
-      // Determine baseline for URL delta logic
-      const savedDefault = savedDefaultsByName.get(cellName)
-      const allCells = flattenCellsForExecution(cells)
-      const currentCell = allCells.find((c) => c.type === 'variable' && c.name === cellName) as
-        | VariableCellConfig
-        | undefined
-      const baseline = savedDefault ?? currentCell?.defaultValue
-
-      writeUrlParam(cellName, value, baseline)
     },
-    [cells, savedDefaultsByName, writeUrlParam]
+    []
   )
 
   // Migrate variable from old name to new name when cell is renamed
@@ -199,40 +204,25 @@ export function useNotebookVariables(
     (oldName: string, newName: string) => {
       const oldValue = variableValuesRef.current[oldName]
       if (oldValue !== undefined) {
-        // Update ref + state
         const nextValues = { ...variableValuesRef.current }
         nextValues[newName] = oldValue
         delete nextValues[oldName]
         variableValuesRef.current = nextValues
         setVariableValues(nextValues)
-        // Update URL
-        setSearchParams(prev => {
-          const next = new URLSearchParams(prev)
-          next.set(newName, serializeVariableValue(oldValue))
-          next.delete(oldName)
-          return next
-        }, { replace: true })
       }
     },
-    [setSearchParams]
+    []
   )
 
-  // Remove variable from URL when cell is deleted
+  // Remove variable when cell is deleted
   const removeVariable = useCallback(
     (cellName: string) => {
-      // Update ref + state
       const nextValues = { ...variableValuesRef.current }
       delete nextValues[cellName]
       variableValuesRef.current = nextValues
       setVariableValues(nextValues)
-      // Update URL
-      setSearchParams(prev => {
-        const next = new URLSearchParams(prev)
-        next.delete(cellName)
-        return next
-      }, { replace: true })
     },
-    [setSearchParams]
+    []
   )
 
   return {
