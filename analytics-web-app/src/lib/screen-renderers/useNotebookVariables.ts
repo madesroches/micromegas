@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useEffect } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { RESERVED_URL_PARAMS } from '@/lib/url-cleanup-utils'
 import {
@@ -25,18 +25,54 @@ export interface UseNotebookVariablesResult {
 }
 
 /**
+ * Compute variable values from cells + URL overrides.
+ * Used once at mount to seed state from the URL.
+ */
+function computeVariableValues(
+  cells: CellConfig[],
+  savedDefaultsByName: Map<string, VariableValue>,
+  searchParams: URLSearchParams,
+): Record<string, VariableValue> {
+  const values: Record<string, VariableValue> = {}
+  const allCells = flattenCellsForExecution(cells)
+
+  // Start with baseline values for all known variables
+  for (const cell of allCells) {
+    if (cell.type === 'variable') {
+      const varCell = cell as VariableCellConfig
+      const savedDefault = savedDefaultsByName.get(cell.name)
+      const baseline = savedDefault ?? varCell.defaultValue
+      if (baseline !== undefined) {
+        values[cell.name] = baseline
+      } else if (varCell.variableType === 'text') {
+        values[cell.name] = ''
+      }
+    }
+  }
+
+  // Override with URL values (these are deltas from saved state)
+  const knownVariableNames = new Set(
+    allCells.filter((c) => c.type === 'variable').map((c) => c.name)
+  )
+  searchParams.forEach((value, key) => {
+    if (!RESERVED_URL_PARAMS.has(key) && knownVariableNames.has(key)) {
+      values[key] = deserializeVariableValue(value)
+    }
+  })
+
+  return values
+}
+
+/**
  * Manages variable values for notebook cells.
  *
- * Variables are collected from variable cells and can be referenced in SQL queries
- * of cells below them. This hook:
- * - Owns URL access for variables via useSearchParams
- * - Computes effective values from saved defaults + URL overrides (delta from saved)
- * - Provides synchronous ref access for sequential execution
- * - Uses delta-based URL updates: URL only contains values different from saved baseline
+ * URL parameters are read once at mount to seed state, then only written to.
+ * After mount, variableValues is local React state — not derived from the URL.
+ * This avoids stale-closure bugs when multiple setVariableValue calls happen
+ * in the same tick (e.g. user changes datasource → auto-run evaluates expression).
  *
- * The URL contains deltas from saved values. Effective values are computed by:
- * 1. Starting with saved defaults (or current cell defaults for unsaved variables)
- * 2. Overriding with URL values (which represent user changes from saved state)
+ * The URL reflects local state for bookmarkability and sharing. It stores deltas
+ * from saved defaults so that URLs stay short.
  */
 export function useNotebookVariables(
   cells: CellConfig[],
@@ -44,20 +80,7 @@ export function useNotebookVariables(
 ): UseNotebookVariablesResult {
   const [searchParams, setSearchParams] = useSearchParams()
 
-  // Extract variable values from URL (non-reserved params)
-  // Values are deserialized: JSON objects become Record<string, string>, others stay as strings
-  const configVariables = useMemo(() => {
-    const vars: Record<string, VariableValue> = {}
-    searchParams.forEach((value, key) => {
-      if (!RESERVED_URL_PARAMS.has(key)) {
-        vars[key] = deserializeVariableValue(value)
-      }
-    })
-    return vars
-  }, [searchParams])
-
   // Build a lookup map for saved defaults (O(1) access)
-  // Scans into hg children as well
   const savedDefaultsByName = useMemo(() => {
     const map = new Map<string, VariableValue>()
     if (savedCells) {
@@ -74,59 +97,91 @@ export function useNotebookVariables(
     return map
   }, [savedCells])
 
-  // Compute effective values: saved default → current default → URL override
-  // URL values represent deltas from saved baseline
-  // Scans into hg children as well
-  const variableValues = useMemo(() => {
-    const values: Record<string, VariableValue> = {}
+  // Local state: seeded from URL + defaults on mount, then only updated locally.
+  // URL is written to as a side effect but never read back.
+  const [variableValues, setVariableValues] = useState(() =>
+    computeVariableValues(cells, savedDefaultsByName, searchParams)
+  )
 
-    // Flatten to get all cells including hg children
+  // Ref for synchronous access during sequential cell execution
+  const variableValuesRef = useRef<Record<string, VariableValue>>(variableValues)
+
+  // Sync cell list changes into state: when cells are added/removed in the
+  // editor, ensure new variables get their defaults and removed ones are pruned.
+  // Also handles baseline shifts after save (savedDefaultsByName changes).
+  const prevCellKeysRef = useRef<string | null>(null)
+  const prevSavedDefaultsRef = useRef(savedDefaultsByName)
+  const cellKeys = useMemo(() => {
     const allCells = flattenCellsForExecution(cells)
+    return allCells
+      .filter((c) => c.type === 'variable')
+      .map((c) => `${c.name}:${(c as VariableCellConfig).defaultValue ?? ''}`)
+      .join('|')
+  }, [cells])
 
-    // Start with baseline values for all known variables
-    // Priority: saved default → current cell default
+  if (prevCellKeysRef.current !== null &&
+      (prevCellKeysRef.current !== cellKeys || prevSavedDefaultsRef.current !== savedDefaultsByName)) {
+    // Recompute: add new variables with defaults, prune removed ones,
+    // but preserve user-set values for existing variables.
+    const allCells = flattenCellsForExecution(cells)
+    const knownNames = new Set(
+      allCells.filter((c) => c.type === 'variable').map((c) => c.name)
+    )
+    const next: Record<string, VariableValue> = {}
     for (const cell of allCells) {
       if (cell.type === 'variable') {
         const varCell = cell as VariableCellConfig
-        const savedDefault = savedDefaultsByName.get(cell.name)
-        const baseline = savedDefault ?? varCell.defaultValue
-        if (baseline !== undefined) {
-          values[cell.name] = baseline
-        } else if (varCell.variableType === 'text') {
-          values[cell.name] = ''
+        const existing = variableValuesRef.current[cell.name]
+        if (existing !== undefined) {
+          next[cell.name] = existing
+        } else {
+          const savedDefault = savedDefaultsByName.get(cell.name)
+          const baseline = savedDefault ?? varCell.defaultValue
+          if (baseline !== undefined) {
+            next[cell.name] = baseline
+          } else if (varCell.variableType === 'text') {
+            next[cell.name] = ''
+          }
         }
       }
     }
-
-    // Override with URL values (these are the deltas from saved state)
-    // Only apply overrides for variables that correspond to actual variable cells
-    const knownVariableNames = new Set(
-      allCells.filter((c) => c.type === 'variable').map((c) => c.name)
-    )
-    for (const [name, value] of Object.entries(configVariables)) {
-      if (knownVariableNames.has(name)) {
-        values[name] = value
+    // Prune variables that no longer have cells
+    for (const name of Object.keys(variableValuesRef.current)) {
+      if (!knownNames.has(name)) {
+        delete next[name]
       }
     }
+    variableValuesRef.current = next
+    setVariableValues(next)
+  }
+  prevCellKeysRef.current = cellKeys
+  prevSavedDefaultsRef.current = savedDefaultsByName
 
-    return values
-  }, [cells, configVariables, savedDefaultsByName])
+  // Write URL param (fire-and-forget side effect for bookmarkability)
+  const writeUrlParam = useCallback(
+    (cellName: string, value: VariableValue, baseline: VariableValue | undefined) => {
+      setSearchParams(prev => {
+        const next = new URLSearchParams(prev)
+        if (baseline !== undefined && variableValuesEqual(value, baseline)) {
+          next.delete(cellName)
+        } else {
+          next.set(cellName, serializeVariableValue(value))
+        }
+        return next
+      }, { replace: true })
+    },
+    [setSearchParams]
+  )
 
-  // Ref for synchronous access during sequential execution
-  const variableValuesRef = useRef<Record<string, VariableValue>>(variableValues)
-
-  // Keep ref in sync with computed values
-  useEffect(() => {
-    variableValuesRef.current = variableValues
-  }, [variableValues])
-
-  // Set a variable value - uses delta logic against saved baseline
+  // Set a variable value: updates local state + ref, then syncs URL
   const setVariableValue = useCallback(
     (cellName: string, value: VariableValue) => {
       // Update ref immediately for synchronous access during execution
       variableValuesRef.current = { ...variableValuesRef.current, [cellName]: value }
+      // Update React state for re-render
+      setVariableValues(prev => ({ ...prev, [cellName]: value }))
 
-      // Determine baseline: saved default → current cell default
+      // Determine baseline for URL delta logic
       const savedDefault = savedDefaultsByName.get(cellName)
       const allCells = flattenCellsForExecution(cells)
       const currentCell = allCells.find((c) => c.type === 'variable' && c.name === cellName) as
@@ -134,24 +189,9 @@ export function useNotebookVariables(
         | undefined
       const baseline = savedDefault ?? currentCell?.defaultValue
 
-      // Delta logic: only add to URL if different from baseline
-      if (baseline !== undefined && variableValuesEqual(value, baseline)) {
-        // Value matches baseline - remove from URL
-        setSearchParams(prev => {
-          const next = new URLSearchParams(prev)
-          next.delete(cellName)
-          return next
-        }, { replace: true })
-      } else {
-        // Value differs from baseline - add to URL (serialized)
-        setSearchParams(prev => {
-          const next = new URLSearchParams(prev)
-          next.set(cellName, serializeVariableValue(value))
-          return next
-        }, { replace: true })
-      }
+      writeUrlParam(cellName, value, baseline)
     },
-    [cells, savedDefaultsByName, setSearchParams]
+    [cells, savedDefaultsByName, writeUrlParam]
   )
 
   // Migrate variable from old name to new name when cell is renamed
@@ -159,16 +199,16 @@ export function useNotebookVariables(
     (oldName: string, newName: string) => {
       const oldValue = variableValuesRef.current[oldName]
       if (oldValue !== undefined) {
-        // Update ref
-        const nextRef = { ...variableValuesRef.current }
-        nextRef[newName] = oldValue
-        delete nextRef[oldName]
-        variableValuesRef.current = nextRef
-        // Update URL: set new name, remove old name (serialize for URL storage)
-        const serialized = serializeVariableValue(oldValue)
+        // Update ref + state
+        const nextValues = { ...variableValuesRef.current }
+        nextValues[newName] = oldValue
+        delete nextValues[oldName]
+        variableValuesRef.current = nextValues
+        setVariableValues(nextValues)
+        // Update URL
         setSearchParams(prev => {
           const next = new URLSearchParams(prev)
-          next.set(newName, serialized)
+          next.set(newName, serializeVariableValue(oldValue))
           next.delete(oldName)
           return next
         }, { replace: true })
@@ -180,10 +220,11 @@ export function useNotebookVariables(
   // Remove variable from URL when cell is deleted
   const removeVariable = useCallback(
     (cellName: string) => {
-      // Remove from ref immediately
-      const nextRef = { ...variableValuesRef.current }
-      delete nextRef[cellName]
-      variableValuesRef.current = nextRef
+      // Update ref + state
+      const nextValues = { ...variableValuesRef.current }
+      delete nextValues[cellName]
+      variableValuesRef.current = nextValues
+      setVariableValues(nextValues)
       // Update URL
       setSearchParams(prev => {
         const next = new URLSearchParams(prev)
