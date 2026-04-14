@@ -61,7 +61,7 @@ parquet = "57.2"
 pin-project = "1.1"
 proc-macro2 = "1.0"
 prost = { version = "0.14" }
-rand = "0.8"
+rand = "0.9"
 quote = "1.0"
 raw-cpuid = "11.3.0"
 reqwest = { version = "0.12.23", default-features = false, features = ["charset", "http2", "json", "macos-system-configuration", "rustls-tls"] }

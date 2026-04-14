@@ -32,7 +32,7 @@ pub struct TestKeyPair {
 impl TestKeyPair {
     /// Generate a new RSA key pair for testing
     pub fn generate() -> Self {
-        let mut rng = rand::thread_rng();
+        let mut rng = rsa::rand_core::OsRng;
         let private_key =
             RsaPrivateKey::new(&mut rng, 2048).expect("failed to generate RSA private key");
         let public_key = private_key.to_public_key();
