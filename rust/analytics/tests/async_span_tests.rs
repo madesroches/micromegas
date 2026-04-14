@@ -9,7 +9,7 @@ use std::time::Duration;
 use tokio::time::sleep;
 
 async fn manual_inner() {
-    let ms = rand::thread_rng().gen_range(0..=1000);
+    let ms = rand::rng().random_range(0..=1000);
     eprintln!("wainting for {ms} ms");
     sleep(Duration::from_millis(ms)).await;
 }
@@ -23,7 +23,7 @@ async fn manual_outer() {
 
 #[span_fn]
 async fn macro_inner() {
-    let ms = rand::thread_rng().gen_range(0..=1000);
+    let ms = rand::rng().random_range(0..=1000);
     eprintln!("waiting for {ms} ms");
     sleep(Duration::from_millis(ms)).await;
 }
@@ -146,7 +146,7 @@ fn sync_span_macro() {
 }
 
 async fn named_inner_work(operation: &'static str) {
-    let ms = rand::thread_rng().gen_range(0..=500);
+    let ms = rand::rng().random_range(0..=500);
     eprintln!("doing {} for {} ms", operation, ms);
     sleep(Duration::from_millis(ms)).await;
 }

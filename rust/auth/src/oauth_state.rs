@@ -67,8 +67,8 @@ pub struct OAuthState {
 /// assert_eq!(nonce.len(), 43); // 32 bytes base64url = 43 chars
 /// ```
 pub fn generate_nonce() -> String {
-    let mut rng = rand::thread_rng();
-    let bytes: [u8; 32] = rng.r#gen();
+    let mut rng = rand::rng();
+    let bytes: [u8; 32] = rng.random();
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
 }
 
