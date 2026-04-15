@@ -3,15 +3,15 @@ import { Canvas, useThree, useFrame, ThreeEvent } from '@react-three/fiber'
 import { useGLTF, Html, Grid, PerspectiveCamera } from '@react-three/drei'
 import * as THREE from 'three'
 
-export interface DeathEvent {
+export interface MapEvent {
   id: string
   time: Date
   processId: string
   x: number
   y: number
   z: number
-  playerName?: string
-  deathCause?: string
+  /** Generic key-value properties from query result columns beyond x/y/z/time/process_id */
+  properties: Record<string, string>
 }
 
 export interface MapBounds {
@@ -21,9 +21,9 @@ export interface MapBounds {
 
 interface MapViewerProps {
   mapUrl?: string
-  deathEvents: DeathEvent[]
+  events: MapEvent[]
   selectedEventId?: string
-  onSelectEvent: (event: DeathEvent | null) => void
+  onSelectEvent: (event: MapEvent | null) => void
   showHeatmap: boolean
   heatmapRadius: number
   heatmapIntensity: number
@@ -73,10 +73,10 @@ function MapModel({ url, onBoundsCalculated, onSceneReady }: MapModelProps) {
   return <primitive object={clonedScene} />
 }
 
-interface InstancedDeathMarkersProps {
-  events: DeathEvent[]
+interface InstancedMarkersProps {
+  events: MapEvent[]
   selectedId?: string
-  onSelect: (event: DeathEvent | null) => void
+  onSelect: (event: MapEvent | null) => void
   markerColor?: string
   markerSize?: number
   mapScene?: THREE.Object3D | null
@@ -92,7 +92,7 @@ const DEFAULT_MARKER_SIZE = 10
 
 const DEFAULT_GROUND_SNAP_OFFSET = 5
 
-function InstancedDeathMarkers({
+function InstancedMarkers({
   events,
   selectedId,
   onSelect,
@@ -101,7 +101,7 @@ function InstancedDeathMarkers({
   mapScene = null,
   groundSnap = false,
   groundSnapOffset = DEFAULT_GROUND_SNAP_OFFSET
-}: InstancedDeathMarkersProps) {
+}: InstancedMarkersProps) {
   const meshRef = useRef<THREE.InstancedMesh>(null)
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null)
 
@@ -252,7 +252,7 @@ function InstancedDeathMarkers({
 }
 
 interface HeatmapLayerProps {
-  events: DeathEvent[]
+  events: MapEvent[]
   radius: number
   intensity: number
 }
@@ -330,7 +330,7 @@ interface UnrealCameraControllerProps {
   mapBounds: THREE.Box3 | null
   fitToMapTrigger: number
   fitToDataTrigger: number
-  events: DeathEvent[]
+  events: MapEvent[]
   onSpeedChange?: (speed: number) => void
   resetViewTrigger: number
 }
@@ -674,7 +674,7 @@ function PlaceholderGrid() {
 
 export function MapViewer({
   mapUrl,
-  deathEvents,
+  events,
   selectedEventId,
   onSelectEvent,
   showHeatmap,
@@ -736,7 +736,7 @@ export function MapViewer({
           mapBounds={mapBounds}
           fitToMapTrigger={fitToMapTrigger}
           fitToDataTrigger={fitToDataTrigger}
-          events={deathEvents}
+          events={events}
           onSpeedChange={handleSpeedChange}
           resetViewTrigger={resetViewTrigger}
         />
@@ -760,12 +760,12 @@ export function MapViewer({
         </Suspense>
 
         {showHeatmap && (
-          <HeatmapLayer events={deathEvents} radius={heatmapRadius} intensity={heatmapIntensity} />
+          <HeatmapLayer events={events} radius={heatmapRadius} intensity={heatmapIntensity} />
         )}
 
-        <InstancedDeathMarkers
+        <InstancedMarkers
           key={`markers-${markerColor}-${markerSize}-${groundSnap}`}
-          events={deathEvents}
+          events={events}
           selectedId={selectedEventId}
           onSelect={onSelectEvent}
           markerColor={markerColor}

@@ -4,8 +4,8 @@ import { PageLayout } from '@/components/layout'
 import { AuthGuard } from '@/components/AuthGuard'
 import { QueryEditor } from '@/components/QueryEditor'
 import { ErrorBanner } from '@/components/ErrorBanner'
-import { MapViewer, DeathEvent, MapBounds } from '@/components/map/MapViewer'
-import { DeathDetailPanel } from '@/components/map/DeathDetailPanel'
+import { MapViewer, MapEvent, MapBounds } from '@/components/map/MapViewer'
+import { EventDetailPanel } from '@/components/map/EventDetailPanel'
 import { useMapData, MAP_VARIABLES } from '@/hooks/useMapData'
 import { useScreenConfig } from '@/hooks/useScreenConfig'
 import { parseTimeRange, getTimeRangeForApi } from '@/lib/time-range'
@@ -37,14 +37,14 @@ const MOCK_DEATH_CAUSES = [
   'Unknown',
 ]
 
-function generateMockEvents(count: number, seed: number = 42, mapBounds: MapBounds | null = null): DeathEvent[] {
+function generateMockEvents(count: number, seed: number = 42, mapBounds: MapBounds | null = null): MapEvent[] {
   // Simple seeded random for reproducible results
   const seededRandom = (s: number) => {
     const x = Math.sin(s) * 10000
     return x - Math.floor(x)
   }
 
-  const events: DeathEvent[] = []
+  const events: MapEvent[] = []
   const now = new Date()
 
   // Derive hotspots and spread from map bounds if available
@@ -86,8 +86,10 @@ function generateMockEvents(count: number, seed: number = 42, mapBounds: MapBoun
       x: hotspot.x + (r1 - 0.5) * spread,
       y: hotspot.y + (r2 - 0.5) * spread,
       z: boundsMinZ + r3 * (boundsMaxZ - boundsMinZ),
-      playerName: MOCK_PLAYER_NAMES[Math.floor(r4 * MOCK_PLAYER_NAMES.length)],
-      deathCause: MOCK_DEATH_CAUSES[Math.floor(r5 * MOCK_DEATH_CAUSES.length)],
+      properties: {
+        player_name: MOCK_PLAYER_NAMES[Math.floor(r4 * MOCK_PLAYER_NAMES.length)],
+        death_cause: MOCK_DEATH_CAUSES[Math.floor(r5 * MOCK_DEATH_CAUSES.length)],
+      },
     })
   }
 
@@ -157,7 +159,7 @@ function MapPageContent() {
 
   const mapData = useMapData({ apiTimeRange })
 
-  const [selectedEvent, setSelectedEvent] = useState<DeathEvent | null>(null)
+  const [selectedEvent, setSelectedEvent] = useState<MapEvent | null>(null)
   const [mapUrl, setMapUrl] = useState<string | undefined>(undefined)
   const [showHeatmap, setShowHeatmap] = useState(true)
   const [showMarkers, setShowMarkers] = useState(true)
@@ -227,7 +229,7 @@ function MapPageContent() {
     loadData(DEFAULT_SQL)
   }, [loadData])
 
-  const handleSelectEvent = useCallback((event: DeathEvent | null) => {
+  const handleSelectEvent = useCallback((event: MapEvent | null) => {
     setSelectedEvent(event)
   }, [])
 
@@ -477,7 +479,7 @@ function MapPageContent() {
             ) : (
               <MapViewer
                 mapUrl={mapUrl}
-                deathEvents={showMarkers ? displayEvents : []}
+                events={showMarkers ? displayEvents : []}
                 selectedEventId={selectedEvent?.id}
                 onSelectEvent={handleSelectEvent}
                 showHeatmap={showHeatmap}
@@ -493,7 +495,7 @@ function MapPageContent() {
             )}
 
             {selectedEvent && (
-              <DeathDetailPanel event={selectedEvent} onClose={() => setSelectedEvent(null)} />
+              <EventDetailPanel event={selectedEvent} onClose={() => setSelectedEvent(null)} />
             )}
           </div>
         </div>

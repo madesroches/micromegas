@@ -171,6 +171,7 @@ import { referenceTableMetadata } from './cells/ReferenceTableCell'
 import { hgMetadata } from './cells/HorizontalGroupCell'
 import { transposedTableMetadata } from './cells/TransposedTableCell'
 import { flamegraphMetadata } from './cells/FlameGraphCell'
+import { mapMetadata } from './cells/MapCell'
 
 /**
  * Registry of all cell type metadata.
@@ -189,6 +190,7 @@ export const CELL_TYPE_METADATA: Record<CellType, CellTypeMetadata> = {
   hg: hgMetadata,
   transposed: transposedTableMetadata,
   flamegraph: flamegraphMetadata,
+  map: mapMetadata,
 }
 
 /**

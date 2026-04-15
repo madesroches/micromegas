@@ -1,7 +1,7 @@
 import { useCallback, useMemo } from 'react'
 import { useStreamQuery } from './useStreamQuery'
 import { timestampToDate } from '@/lib/arrow-utils'
-import type { DeathEvent } from '@/components/map/MapViewer'
+import type { MapEvent } from '@/components/map/MapViewer'
 
 const DEFAULT_SQL = `SELECT
   time,
@@ -23,7 +23,7 @@ export const MAP_VARIABLES = [
 ]
 
 export interface UseMapDataReturn {
-  events: DeathEvent[]
+  events: MapEvent[]
   isLoading: boolean
   error: string | null
   execute: (sql?: string) => void
@@ -52,11 +52,11 @@ export function useMapData({ apiTimeRange }: UseMapDataParams): UseMapDataReturn
     [streamQuery, apiTimeRange]
   )
 
-  const events = useMemo((): DeathEvent[] => {
+  const events = useMemo((): MapEvent[] => {
     const table = streamQuery.getTable()
     if (!table) return []
 
-    const result: DeathEvent[] = []
+    const result: MapEvent[] = []
     for (let i = 0; i < table.numRows; i++) {
       const row = table.get(i)
       if (!row) continue
@@ -68,6 +68,16 @@ export function useMapData({ apiTimeRange }: UseMapDataParams): UseMapDataReturn
 
       if (isNaN(x) || isNaN(y) || isNaN(z)) continue
 
+      // Collect all extra columns as generic properties
+      const properties: Record<string, string> = {}
+      const skipKeys = new Set(['time', 'process_id', 'x', 'y', 'z'])
+      const rowObj = row.toJSON?.() ?? row
+      for (const [key, value] of Object.entries(rowObj)) {
+        if (!skipKeys.has(key) && value != null && String(value).trim() !== '') {
+          properties[key] = String(value)
+        }
+      }
+
       result.push({
         id: `${row.process_id}-${i}`,
         time: time ?? new Date(),
@@ -75,8 +85,7 @@ export function useMapData({ apiTimeRange }: UseMapDataParams): UseMapDataReturn
         x,
         y,
         z,
-        playerName: row.player_name ? String(row.player_name) : undefined,
-        deathCause: row.death_cause ? String(row.death_cause) : undefined,
+        properties,
       })
     }
 
