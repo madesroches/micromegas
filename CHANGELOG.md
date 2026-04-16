@@ -12,6 +12,7 @@ This file documents the historical progress of the Micromegas project. For curre
   * Fix byteLength crash on 0-row Arrow tables in notebook status text
   * Fix notebook variable URL desync on rapid updates and datasource reverting to default on change
 * **Security:**
+  * Bump dompurify to 3.4.0 to fix Dependabot alerts (#203, #204)
   * Bump vite, lodash, and lodash-es to fix Dependabot alerts
   * Bump picomatch, brace-expansion, yaml, and requests to fix Dependabot alerts
   * Bump serialize-javascript, handlebars, cryptography, and Pygments to fix Dependabot alerts
