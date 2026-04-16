@@ -4,7 +4,14 @@
       "Bash(xargs dirname *)",
       "Bash(psql *)",
       "Bash(docker exec *)",
-      "Bash(sudo apt *)"
+      "Bash(sudo apt *)",
+      "Bash(python3 *)",
+      "Bash(cargo build *)",
+      "Bash(pkill -f analytics-web-srv)",
+      "Bash(pkill -f vite)",
+      "Bash(cargo run *)",
+      "Bash(curl -v http://localhost:8000/mmlocal/api/health)",
+      "Bash(kill %1)"
     ]
   }
 }

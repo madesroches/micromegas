@@ -198,6 +198,13 @@ def setup_environment():
         sys.exit(1)
     app_db_conn_string = f"postgres://{db_username}:{db_passwd}@127.0.0.1:{db_port}/micromegas_app"
 
+    # Ensure localhost traffic bypasses any corporate proxy
+    no_proxy = os.environ.get("no_proxy", "")
+    if "localhost" not in no_proxy:
+        no_proxy = "localhost,127.0.0.1" + (f",{no_proxy}" if no_proxy else "")
+        os.environ["no_proxy"] = no_proxy
+        os.environ["NO_PROXY"] = no_proxy
+
     env_vars = {
         "MICROMEGAS_AUTH_TOKEN": "",  # Empty for no-auth mode
         "MICROMEGAS_WEB_CORS_ORIGIN": f"http://localhost:{frontend_port}",  # Frontend origin for CORS
@@ -330,7 +337,7 @@ def main():
         # Wait for backend to start with health check polling
         print_status("Waiting for backend to start...", "info")
         backend_ready = False
-        max_attempts = 90  # 90 seconds max (allows for slow builds)
+        max_attempts = 360  # 6 minutes max (allows for cargo rebuild on WSL)
 
         for attempt in range(max_attempts):
             # Check if backend process died
@@ -368,7 +375,7 @@ def main():
             time.sleep(1)
 
         if not backend_ready:
-            print_status("Backend server health check timed out after 90 seconds", "error")
+            print_status(f"Backend server health check timed out after {max_attempts} seconds", "error")
             print()
             print_status("The backend process is running but not responding to health checks", "error")
             return 1
