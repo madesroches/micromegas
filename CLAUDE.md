@@ -4,6 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Critical Rules
 - **NEVER COMMIT UNLESS EXPLICITLY ASKED**
+- **NEVER dismiss Dependabot alerts** — leave them open until fixed by code/dependency changes
 - follow @AI_GUIDELINES.md
 - **Project Structure**: Run cargo commands from `rust/` directory (main workspace at `rust/Cargo.toml`)
 
