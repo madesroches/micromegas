@@ -115,6 +115,26 @@ def kill_existing_frontend():
     except Exception:
         return False
 
+def seed_data_source(app_db_conn_string, name, url):
+    """Seed a data source in the app database via direct SQL insert.
+
+    Uses ON CONFLICT to upsert — safe to call repeatedly.
+    """
+    sql = (
+        f"INSERT INTO data_sources (name, config, is_default, created_by, updated_by) "
+        f"VALUES ('{name}', '{{\"url\": \"{url}\"}}', true, 'seed-script', 'seed-script') "
+        f"ON CONFLICT (name) DO UPDATE SET config = EXCLUDED.config, "
+        f"updated_by = 'seed-script', updated_at = NOW()"
+    )
+    result = subprocess.run(
+        ["psql", app_db_conn_string, "-c", sql],
+        capture_output=True, text=True
+    )
+    if result.returncode != 0 and result.stderr:
+        print_status(f"psql error: {result.stderr.strip()}", "warning")
+    return result.returncode == 0
+
+
 def normalize_base_path(path):
     """Normalize base path to have leading slash and no trailing slash.
 
@@ -137,11 +157,12 @@ def setup_environment():
     """Set up environment variables
 
     Returns:
-        tuple: (auth_enabled: bool, base_path: str, backend_port: int, frontend_port: int)
+        tuple: (auth_enabled, base_path, backend_port, frontend_port, app_db_conn_string)
             - auth_enabled: True if OIDC auth is configured, False if running without auth
             - base_path: Normalized base path (e.g., '/mm' or '')
             - backend_port: Port for the backend server
             - frontend_port: Port for the frontend dev server
+            - app_db_conn_string: PostgreSQL connection string for the app database
     """
     # Generate a random secret for development if not set
     import secrets
@@ -209,13 +230,15 @@ def setup_environment():
     else:
         print_status("MICROMEGAS_OIDC_CONFIG not set - will run with --disable-auth", "warning")
 
-    return oidc_configured, base_path, backend_port, frontend_port
+    return oidc_configured, base_path, backend_port, frontend_port, app_db_conn_string
 
 def main():
     parser = argparse.ArgumentParser(description="Start Analytics Web App Development Environment")
     parser.add_argument("--disable-auth", action="store_true", help="Disable authentication even if OIDC config is present")
     parser.add_argument("--build-wasm", action="store_true", help="Force rebuild of the micromegas-datafusion-wasm engine")
     parser.add_argument("--debug", action="store_true", help="Skip wasm-opt optimization (faster WASM builds)")
+    parser.add_argument("--remote-backend", metavar="FLIGHTSQL_URL",
+                        help="Use a remote FlightSQL backend (skips local service check and seeds a data source)")
     args = parser.parse_args()
 
     print_status("Starting Analytics Web App Development Environment", "info")
@@ -235,15 +258,17 @@ def main():
         return 1
 
     # Setup environment first to get port configuration
-    auth_enabled, base_path, backend_port, frontend_port = setup_environment()
+    auth_enabled, base_path, backend_port, frontend_port, app_db_conn_string = setup_environment()
 
-    # Check FlightSQL server
-    flightsql_port = int(os.environ.get("MICROMEGAS_FLIGHTSQL_PORT", "50051"))
-    if not check_flightsql_server(flightsql_port):
-        print_status(f"FlightSQL server not detected on port {flightsql_port}", "warning")
-        print_status("Make sure to start your micromegas services first:", "info")
-        print_status("python3 local_test_env/ai_scripts/start_services.py", "info")
-        print()
+    # Check FlightSQL server (skip when using remote backend)
+    if args.remote_backend:
+        print_status(f"Using remote FlightSQL backend: {args.remote_backend}", "info")
+    else:
+        flightsql_port = int(os.environ.get("MICROMEGAS_FLIGHTSQL_PORT", "50051"))
+        if not check_flightsql_server(flightsql_port):
+            print_status(f"FlightSQL server not detected on port {flightsql_port}", "warning")
+            print_status("Start local services or use --remote-backend <url>", "info")
+            print()
 
     # Override auth if --disable-auth flag is passed
     if args.disable_auth:
@@ -347,6 +372,13 @@ def main():
             print()
             print_status("The backend process is running but not responding to health checks", "error")
             return 1
+
+        # Seed remote data source if --remote-backend was provided
+        if args.remote_backend:
+            if seed_data_source(app_db_conn_string, "remote", args.remote_backend):
+                print_status(f"Data source 'remote' seeded: {args.remote_backend}", "success")
+            else:
+                print_status("Failed to seed data source (check psql and DB connection)", "warning")
 
         # Build WASM engine if not already built or if --build-wasm is passed
         wasm_binary = Path("analytics-web-app/src/lib/datafusion-wasm/micromegas_datafusion_wasm_bg.wasm")
