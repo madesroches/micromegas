@@ -1,14 +1,10 @@
 {
   "permissions": {
     "allow": [
-      "Bash(yarn add:*)",
-      "Bash(where:*)",
-      "Bash(yarn type-check:*)",
-      "Bash(npx tsc:*)",
-      "Bash(npx eslint:*)",
-      "Bash(cd:*)",
-      "Bash(node:*)",
-      "Bash(tail:*)"
+      "Bash(xargs dirname *)",
+      "Bash(psql *)",
+      "Bash(docker exec *)",
+      "Bash(sudo apt *)"
     ]
   }
 }
