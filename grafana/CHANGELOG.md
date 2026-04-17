@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.24.0 (2026-04-17)
+
+Version sync release. Security fixes: upgrade opentelemetry-go SDK v1.43.0 (#198), protobufjs ^7.5.5 (#209), protocol-buffers-schema ^3.6.1 (#205), rustls-webpki 0.103.12 (#206, #207), dompurify 3.4.0 (#203, #204), vite, lodash, lodash-es, serialize-javascript, handlebars, picomatch.
+
 ## 0.23.0 (2026-03-26)
 
 Version sync release - no plugin-specific changes.
