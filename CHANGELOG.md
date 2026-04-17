@@ -11,6 +11,9 @@ This file documents the historical progress of the Micromegas project. For curre
 * **Bug Fixes:**
   * Fix byteLength crash on 0-row Arrow tables in notebook status text
   * Fix notebook variable URL desync on rapid updates and datasource reverting to default on change
+  * Fix flamechart WASD zoom continuing after key release in Chrome (#1012)
+* **Web App:**
+  * Show flamechart span duration in nanoseconds when below 1 microsecond
 * **Security:**
   * Bump dompurify to 3.4.0 to fix Dependabot alerts (#203, #204)
   * Bump vite, lodash, and lodash-es to fix Dependabot alerts
