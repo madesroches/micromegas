@@ -997,33 +997,71 @@ function FlameGraphView({ index, onTimeRangeSelect, initialTimeRange }: FlameGra
     requestRender()
   }, [index, requestRender])
 
-  // WASD key listeners + wheel scroll
+  // WASD key listeners + wheel scroll.
+  //
+  // Identify the held key by `e.code` (`"KeyW"`/`"KeyA"`/`"KeyS"`/`"KeyD"`)
+  // rather than `e.key`. On some Chrome/OS combinations `e.key` comes back as
+  // `"Unidentified"` on keyup even though `e.code` is correct, which would
+  // leave the key stuck in the set and `keyTick` running forever.
+  //
+  // `keyup` listens on `window` and we also clear on container blur / window
+  // blur / `visibilitychange` (hidden) as a safety net for cases where the
+  // OS-level release is delivered while focus has moved away.
   useEffect(() => {
     const container = containerRef.current
     if (!container) return
 
+    const keys = keysRef.current
+
+    const clearAllKeys = () => {
+      keys.clear()
+      if (keyAnimRef.current) {
+        cancelAnimationFrame(keyAnimRef.current)
+        keyAnimRef.current = 0
+      }
+    }
+
+    const codeToKey = (code: string): string | null => {
+      switch (code) {
+        case 'KeyW': return 'w'
+        case 'KeyA': return 'a'
+        case 'KeyS': return 's'
+        case 'KeyD': return 'd'
+        default: return null
+      }
+    }
+
     const onKeyDown = (e: KeyboardEvent) => {
-      const key = e.key.toLowerCase()
-      if ('wasd'.includes(key)) {
+      const key = codeToKey(e.code)
+      if (key) {
         e.preventDefault()
-        keysRef.current.add(key)
+        keys.add(key)
         if (!keyAnimRef.current) keyAnimRef.current = requestAnimationFrame(keyTick)
       }
     }
     const onKeyUp = (e: KeyboardEvent) => {
-      keysRef.current.delete(e.key.toLowerCase())
+      const key = codeToKey(e.code)
+      if (key) keys.delete(key)
+    }
+    const onVisibilityChange = () => {
+      if (document.hidden) clearAllKeys()
     }
 
     container.addEventListener('keydown', onKeyDown)
-    container.addEventListener('keyup', onKeyUp)
+    container.addEventListener('blur', clearAllKeys)
     container.addEventListener('wheel', handleWheel, { passive: true })
-    const keys = keysRef.current
+    window.addEventListener('keyup', onKeyUp)
+    window.addEventListener('blur', clearAllKeys)
+    document.addEventListener('visibilitychange', onVisibilityChange)
+
     return () => {
       container.removeEventListener('keydown', onKeyDown)
-      container.removeEventListener('keyup', onKeyUp)
+      container.removeEventListener('blur', clearAllKeys)
       container.removeEventListener('wheel', handleWheel)
-      cancelAnimationFrame(keyAnimRef.current)
-      keys.clear()
+      window.removeEventListener('keyup', onKeyUp)
+      window.removeEventListener('blur', clearAllKeys)
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+      clearAllKeys()
     }
   }, [handleWheel, keyTick])
 
