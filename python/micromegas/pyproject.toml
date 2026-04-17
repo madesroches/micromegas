@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "micromegas"
-version = "0.24.0"
+version = "0.25.0"
 description = "Python analytics client for the Micromegas observability platform"
 authors = ["Marc-Antoine Desroches <madesroches@gmail.com>"]
 homepage = "https://micromegas.info/"

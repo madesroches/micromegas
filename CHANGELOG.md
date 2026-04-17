@@ -2,24 +2,34 @@
 
 This file documents the historical progress of the Micromegas project. For current focus, please see the main [README.md](./README.md).
 
-## Unreleased
+## April 2026 - v0.24.0
 
 * **Analytics:**
-  * Add `parse_block` table UDF for generic block inspection with transit-to-JSONB conversion
+  * Add `parse_block` table UDF for generic block inspection with transit-to-JSONB conversion (#1001)
 * **CLI:**
-  * Add unified diff output to `micromegas-screens plan` and `apply` for updated screens
+  * Add unified diff output to `micromegas-screens plan` and `apply` for updated screens (#998)
 * **Bug Fixes:**
-  * Fix byteLength crash on 0-row Arrow tables in notebook status text
-  * Fix notebook variable URL desync on rapid updates and datasource reverting to default on change
-  * Fix flamechart WASD zoom continuing after key release in Chrome (#1012)
+  * Fix byteLength crash on 0-row Arrow tables in notebook status text (#1000)
+  * Fix notebook variable URL desync on rapid updates and datasource reverting to default on change (#1003)
+  * Fix flamechart WASD zoom continuing after key release in Chrome (#1013)
 * **Web App:**
   * Show flamechart span duration in nanoseconds when below 1 microsecond
+* **Docs:**
+  * Add `parse_block` to functions reference (#1002)
+  * Blog post: From Observability to Candor (#996)
+* **Repo:**
+  * Normalize line endings to LF for existing files (#997)
+* **Dependencies:**
+  * Update DataFusion to 52.5 (#1009)
+  * Update pyarrow to ^23.0.0 (#1006)
 * **Security:**
+  * Update `rand` to 0.9 to fix unsoundness in `rand::rng()` (Dependabot #201, #202)
+  * Bump protobufjs, protocol-buffers-schema, authlib, and rustls-webpki to fix Dependabot alerts (#205-209)
   * Bump dompurify to 3.4.0 to fix Dependabot alerts (#203, #204)
+  * Bump pytest, cryptography, and opentelemetry-go SDK to fix Dependabot alerts (#198, #199, #200)
   * Bump vite, lodash, and lodash-es to fix Dependabot alerts
-  * Bump picomatch, brace-expansion, yaml, and requests to fix Dependabot alerts
   * Bump serialize-javascript, handlebars, cryptography, and Pygments to fix Dependabot alerts
-  * Bump pytest, cryptography, and opentelemetry-go SDK to fix Dependabot alerts
+  * Bump picomatch, brace-expansion, yaml, and requests to fix Dependabot alerts
 
 ## March 2026 - v0.23.0
 

@@ -69,6 +69,15 @@ To get started with Micromegas, please refer to the [Getting Started](https://mi
 
 ## Current Status & Roadmap
 
+### v0.24.0 (April 2026)
+* `parse_block` table UDF for generic block inspection with transit-to-JSONB conversion
+* Unified diff output in `micromegas-screens plan`/`apply`
+* Flamechart WASD zoom fix for Chrome key-release edge cases
+* Sub-microsecond flamechart span durations in nanoseconds
+* Notebook variable URL desync and datasource revert fixes
+* DataFusion 52.5, `rand` 0.9 migration, pyarrow ^23
+* 20+ Dependabot security updates across Rust, Python, and JS dependencies
+
 ### v0.23.0 (March 2026)
 * JSONB array UDFs: `jsonb_array_elements` (UDTF) and `jsonb_array_length` (scalar)
 * CSV table provider with auto-discovery via `MICROMEGAS_STATIC_TABLES_URL`
