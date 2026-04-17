@@ -435,6 +435,7 @@ function hitTest(
 // =============================================================================
 
 function formatDuration(ms: number): string {
+  if (ms < 0.001) return `${(ms * 1_000_000).toFixed(0)}ns`
   if (ms < 1) return `${(ms * 1000).toFixed(0)}us`
   if (ms < 1000) return `${ms.toFixed(1)}ms`
   return `${(ms / 1000).toFixed(2)}s`
