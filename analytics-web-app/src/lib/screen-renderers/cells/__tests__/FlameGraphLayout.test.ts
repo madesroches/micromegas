@@ -1,4 +1,4 @@
-import { computeAsyncVisualDepths, type SpanData } from '../FlameGraphCell'
+import { computeAsyncVisualDepths, type SpanData } from '../FlameGraphLayout'
 
 describe('computeAsyncVisualDepths', () => {
   it('places children directly below their parent in a chain', () => {
