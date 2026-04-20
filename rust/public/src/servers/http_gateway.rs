@@ -5,7 +5,7 @@ use axum::{
     extract::ConnectInfo,
     http::{Response, StatusCode},
     response::IntoResponse,
-    routing::post,
+    routing::{get, post},
 };
 use chrono::{DateTime, Utc};
 use datafusion::arrow::{
@@ -15,7 +15,7 @@ use datafusion::arrow::{
 use http::{HeaderMap, Uri};
 use micromegas_analytics::time::TimeRange;
 use micromegas_tracing::info;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use thiserror::Error;
@@ -377,6 +377,21 @@ pub async fn handle_query(
         .map_err(|e| GatewayError::Internal(format!("Invalid UTF-8 in results: {e}")))
 }
 
+#[derive(Debug, Serialize)]
+pub struct HealthResponse {
+    pub status: &'static str,
+    pub timestamp: DateTime<Utc>,
+}
+
+pub async fn handle_health() -> Json<HealthResponse> {
+    Json(HealthResponse {
+        status: "healthy",
+        timestamp: Utc::now(),
+    })
+}
+
 pub fn register_routes(router: Router) -> Router {
-    router.route("/gateway/query", post(handle_query))
+    router
+        .route("/gateway/query", post(handle_query))
+        .route("/gateway/health", get(handle_health))
 }
