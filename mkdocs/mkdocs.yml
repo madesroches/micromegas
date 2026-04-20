@@ -110,6 +110,7 @@ nav:
         - Overview: unreal/index.md
         - Installation: unreal/installation.md
         - Instrumentation API: unreal/instrumentation-api.md
+        - Network Tracing: unreal/network-tracing.md
         - Examples: unreal/examples.md
     - Grafana Plugin:
         - Overview: grafana/index.md

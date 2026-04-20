@@ -274,6 +274,244 @@ void RenderFrame(bool bDetailedProfiling)
 }
 ```
 
+## Network Tracing
+
+!!! note "Audience"
+    This section is written to be readable by both human integrators and coding-agent LLMs (e.g. Claude Code). Each macro entry follows a fixed shape — **signature**, **parameters**, **semantics**, **bit-source expression**, **example** — so an agent can apply each site without ambiguity.
+
+For the engine-side recipe — which UE files to modify and where — see [Network Tracing](network-tracing.md).
+
+Net-trace macros capture per-connection replication traffic with bit-size attribution. They live in the same header as logs/metrics/spans:
+
+```cpp
+#include "MicromegasTracing/Macros.h"
+```
+
+All macros are RAII where applicable; early returns close scopes automatically. When `MICROMEGAS_NET_TRACE_ENABLED` is `0`, every macro expands to nothing — **zero overhead**.
+
+### Bit-source cheat sheet
+
+Every scope macro that takes a `getBitsExpr` parameter captures the position at entry and measures the delta at exit. The expression must refer to a bit stream that's being written to (send) or read from (receive) inside the scope.
+
+| Situation | Expression |
+|-----------|-----------|
+| Classic send (outgoing bunch) | `Bunch.GetNumBits()` |
+| Classic receive (incoming reader) | `Reader.GetPosBits()` |
+| Classic RPC send (`TempWriter`) | `TempWriter.GetNumBits()` |
+| Classic fast-array property writer | `TempBitWriter.GetNumBits()` |
+| Iris send | `Context.GetBitStreamWriter()->GetPosBits()` |
+| Iris receive | `Context.GetBitStreamReader()->GetPosBits()` |
+
+Flat property calls (`MICROMEGAS_NET_PROPERTY`) pass the pre-computed bit size directly — no bit stream expression needed.
+
+### MICROMEGAS_NET_CONNECTION_SCOPE
+
+Opens a per-connection scope. All object/property/RPC events emitted inside are attributed to this connection.
+
+```cpp
+MICROMEGAS_NET_CONNECTION_SCOPE(ConnectionName, bIsOutgoing)
+```
+
+**Parameters:**
+
+- `ConnectionName` (FName): stable connection identifier (use `Connection->GetPlayerOnlinePlatformName()` with `GetFName()` fallback)
+- `bIsOutgoing` (bool): `true` for send paths, `false` for receive paths
+
+**Semantics:**
+
+- RAII; closes on scope exit
+- Connection scopes **do not nest** — only the outermost emits, inner ones are absorbed as no-ops and logged once via `LogMicromegasNet`
+- Snapshots the current runtime verbosity at the outermost Begin; CVar changes take effect at the next outer scope
+
+**Emits:** `NetConnectionBeginEvent` on entry, `NetConnectionEndEvent` (with `bit_size` = sum of root object/RPC bits) on exit.
+
+**Example:**
+
+```cpp
+void UNetConnection::ReceivedPacket(FBitReader& Reader)
+{
+    FName MmConnectionName = GetPlayerOnlinePlatformName();
+    if (MmConnectionName == NAME_None) { MmConnectionName = GetFName(); }
+    MICROMEGAS_NET_CONNECTION_SCOPE(MmConnectionName, /*bIsOutgoing=*/ false);
+    // ... packet processing ...
+}
+```
+
+### MICROMEGAS_NET_OBJECT_SCOPE
+
+Opens a per-object scope (root actor or subobject). Measures bit-stream delta from entry to exit.
+
+```cpp
+MICROMEGAS_NET_OBJECT_SCOPE(ObjectName, getBitsExpr)
+```
+
+**Parameters:**
+
+- `ObjectName`: `FName` or `const TCHAR*` (anything acceptable to `StaticStringRef`)
+- `getBitsExpr`: expression returning the current bit-stream position (see cheat sheet above)
+
+**Semantics:**
+
+- RAII; on destruction emits `NetObjectEndEvent` with `bit_size = GetBits() - StartBits`
+- Depth 0 (root) requires verbosity ≥ `RootObjects`; depth 1+ requires ≥ `Objects`
+- Classic emits subobjects as peers at depth 0; Iris emits them nested at depth 1+
+
+**Emits:** `NetObjectBeginEvent` on entry, `NetObjectEndEvent` on exit.
+
+**Example (classic send):**
+
+```cpp
+MICROMEGAS_NET_OBJECT_SCOPE(Actor->GetFName(), Bunch.GetNumBits());
+```
+
+**Example (Iris send, with null guard):**
+
+```cpp
+MICROMEGAS_NET_OBJECT_SCOPE(
+    (ObjectData.Protocol && ObjectData.Protocol->DebugName) ? ObjectData.Protocol->DebugName->Name : TEXT("Unknown"),
+    Context.GetBitStreamWriter()->GetPosBits());
+```
+
+### MICROMEGAS_NET_RPC_SCOPE
+
+Opens a per-RPC scope. Same shape as object scope but emits `NetRPCBeginEvent` / `NetRPCEndEvent`.
+
+```cpp
+MICROMEGAS_NET_RPC_SCOPE(FunctionName, getBitsExpr)
+```
+
+**Parameters:**
+
+- `FunctionName`: `FName` or `const TCHAR*`
+- `getBitsExpr`: expression returning the current bit-stream position
+
+**Semantics:**
+
+- RAII; `EndRPC` applies an `ObjectDepth == 0` gate that prevents double-counting when an RPC fires inside an object scope (nested RPC bits roll into the outer object, not double-attributed to the connection)
+
+**Example (classic send):**
+
+```cpp
+MICROMEGAS_NET_RPC_SCOPE(Function->GetFName(), TempWriter.GetNumBits());
+```
+
+**Example (Iris receive, post-resolve):**
+
+```cpp
+MICROMEGAS_NET_RPC_SCOPE(BlobDescriptor->DebugName->Name,
+                        Context.GetBitStreamReader()->GetPosBits());
+```
+
+### MICROMEGAS_NET_PROPERTY
+
+Flat property leaf — emits a single `NetPropertyEvent` with the pre-computed bit size. No Begin/End pair.
+
+```cpp
+MICROMEGAS_NET_PROPERTY(PropertyName, bitSize)
+```
+
+**Parameters:**
+
+- `PropertyName`: `FName` or `const TCHAR*`
+- `bitSize` (uint32): pre-computed bit length
+
+**Semantics:**
+
+- Gated at verbosity ≥ `Properties`
+- Use when the bit size is already known (e.g. `SharedPropInfo->PropBitLength`, or a `NumEndBits - NumStartBits` delta captured for `NETWORK_PROFILER`)
+
+**Example:**
+
+```cpp
+MICROMEGAS_NET_PROPERTY(Cmd.Property->GetFName(), NumEndBits - NumStartBits);
+```
+
+### MICROMEGAS_NET_PROPERTY_SCOPE
+
+Scope-form property — measures the bit-stream delta across the wrapped serialize/deserialize call and emits a single `NetPropertyEvent` on destruction (still a leaf, no Begin/End pair).
+
+```cpp
+MICROMEGAS_NET_PROPERTY_SCOPE(PropertyName, getBitsExpr)
+```
+
+**Parameters:**
+
+- `PropertyName`: `FName` or `const TCHAR*`
+- `getBitsExpr`: bit-stream position expression (see cheat sheet)
+
+**Semantics:**
+
+- Use when no pre-computed bit size is available (Iris properties, classic receive paths)
+- The scope only emits on destruction, after the wrapped serializer call has run
+
+**Example (classic receive):**
+
+```cpp
+MICROMEGAS_NET_PROPERTY_SCOPE(Cmd.Property->GetFName(), Params.Bunch.GetPosBits());
+```
+
+**Example (Iris receive):**
+
+```cpp
+MICROMEGAS_NET_PROPERTY_SCOPE(MemberDebugDescriptors[MemberIt].DebugName->Name,
+                              Context.GetBitStreamReader()->GetPosBits());
+```
+
+### MICROMEGAS_NET_SUSPEND_SCOPE
+
+Zeroes out every `MICROMEGAS_NET_*` call inside its lifetime without touching depth counters. Safe to nest under an active live scope.
+
+```cpp
+MICROMEGAS_NET_SUSPEND_SCOPE()
+```
+
+**Parameters:** none.
+
+**Semantics:**
+
+- RAII; `Dispatch::NetSuspend()` on entry, `NetResume()` on exit
+- Use for code paths that process packets/bunches but **shouldn't** contribute to attribution: demo recording, replay scrubbing, server-side simulation
+
+**Example:**
+
+```cpp
+void UDemoNetDriver::ProcessRemoteFunction(...)
+{
+    MICROMEGAS_NET_SUSPEND_SCOPE();
+    InternalProcessRemoteFunction(...);
+}
+```
+
+### Verbosity Levels
+
+Runtime verbosity is a 0–4 enum. Depth-based gating inside `NetTraceWriter`:
+
+| Level | Name | Emits |
+|-------|------|-------|
+| 0 | `Off` | Nothing |
+| 1 | `Packets` | Connection scopes only |
+| 2 | `RootObjects` | + root object / root RPC scopes (depth 0) |
+| 3 | `Objects` | + nested object scopes (depth 1+) |
+| 4 | `Properties` | + per-property leaf events |
+
+**Default:** level 2 (`RootObjects`) — production setting.
+
+**Snapshot invariant:** the writer captures `EffectiveVerbosity` at the outermost `BeginConnection` and uses that snapshot for every gating decision in the scope. CVar-driven changes take effect at the **next** outer scope, never mid-scope.
+
+### Console & Command Line
+
+- **CVar:** `telemetry.net.verbosity <0-4>` — sets runtime verbosity. Effective at the next outer connection scope.
+- **Command-line flag:** `-MicromegasNetTrace=N` — sets initial verbosity at process start.
+
+### Physical packet metrics
+
+Two integer metrics are emitted via `MICROMEGAS_IMETRIC` from the instrumented engine code (see [Network Tracing § 3.1, § 3.2](network-tracing.md#31-incoming-packet-scope)):
+
+- `net.packet_sent_bits` (unit `bits`) — `SendBuffer.GetNumBits()` in `FlushNet`
+- `net.packet_received_bits` (unit `bits`) — `Reader.GetNumBits()` in `ReceivedPacket`
+
+These are **wire bits** including packet headers, bunch headers, NetGUID exports, control bunches, and voice. Compare against `sum(NetConnectionEndEvent.bit_size)` for content-vs-wire reconciliation — the gap is framing overhead.
+
 ## Default Context API
 
 The Default Context allows setting global properties that are automatically attached to all telemetry.
