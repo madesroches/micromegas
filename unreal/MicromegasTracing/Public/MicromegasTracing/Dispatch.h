@@ -9,6 +9,8 @@
 #include "MicromegasTracing/Fwd.h"
 #include "MicromegasTracing/LogEvents.h"
 #include "Templates/SharedPointer.h"
+#include "Templates/UniquePtr.h"
+#include <atomic>
 class FScopeLock;
 
 namespace MicromegasTracing
@@ -24,13 +26,17 @@ namespace MicromegasTracing
 			const TSharedPtr<EventSink, ESPMode::ThreadSafe>& Sink,
 			size_t LogBufferSize,
 			size_t MetricBufferSize,
-			size_t ThreadBufferSize);
+			size_t ThreadBufferSize,
+			size_t NetBufferSize,
+			ENetTraceVerbosity NetVerbosity);
 		~Dispatch();
 
 		static void InitCurrentThreadStream();
 		static void Shutdown();
 		static void FlushLogStream();
 		static void FlushMetricStream();
+		static void FlushNetStream();
+		static void ShutdownNetStream();
 		static void FlushCurrentThreadStream();
 		static void LogInterop(uint64 Timestamp, LogLevel::Type InLevel, const StaticStringRef& InTarget, const DynamicString& Msg);
 		static void Log(const LogMetadata* Desc, uint64 Timestamp, const DynamicString& Msg);
@@ -43,6 +49,19 @@ namespace MicromegasTracing
 		static void EndScope(const EndThreadSpanEvent& Event);
 		static void BeginNamedSpan(const BeginThreadNamedSpanEvent& Event);
 		static void EndNamedSpan(const EndThreadNamedSpanEvent& Event);
+
+		// Net trace API — delegates to NetTraceWriter
+		static void SetNetTraceVerbosity(ENetTraceVerbosity Level);
+		static ENetTraceVerbosity GetNetTraceVerbosity();
+		static void NetSuspend();
+		static void NetResume();
+		static void NetBeginConnection(FName ConnectionName, bool bIsOutgoing);
+		static void NetEndConnection();
+		static void NetBeginObject(StaticStringRef ObjectName);
+		static void NetEndObject(uint32 BitSize);
+		static void NetProperty(StaticStringRef PropertyName, uint32 BitSize);
+		static void NetBeginRPC(StaticStringRef FunctionName);
+		static void NetEndRPC(uint32 BitSize);
 
 		static void ForEachThreadStream(ThreadStreamCallback Callback);
 
@@ -71,7 +90,9 @@ namespace MicromegasTracing
 			const TSharedPtr<EventSink, ESPMode::ThreadSafe>& Sink,
 			size_t LogBufferSize,
 			size_t MetricBufferSize,
-			size_t ThreadBufferSize);
+			size_t ThreadBufferSize,
+			size_t NetBufferSize,
+			ENetTraceVerbosity NetVerbosity);
 
 		void FlushLogStreamImpl(UE::FMutex& Mutex);
 		void FlushMetricStreamImpl(UE::FMutex& Mutex);
@@ -95,6 +116,8 @@ namespace MicromegasTracing
 		UE::FMutex ThreadStreamsMutex;
 		TArray<ThreadStream*> ThreadStreams;
 		size_t ThreadBufferSize;
+
+		TUniquePtr<NetTraceWriter> NetWriter;
 
 		PropertySetStore* PropertySets;
 		DefaultContext* Ctx;

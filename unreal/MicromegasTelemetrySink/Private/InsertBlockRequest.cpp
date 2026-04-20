@@ -43,3 +43,11 @@ TUniquePtr<ExtractThreadDependencies> ExtractBlockDependencies(const MicromegasT
 	block.GetEvents().ForEach(*extractDependencies);
 	return extractDependencies;
 }
+
+TUniquePtr<ExtractNetDependencies> ExtractBlockDependencies(const MicromegasTracing::NetBlock& block)
+{
+	MICROMEGAS_SPAN_FUNCTION("MicromegasTelemetrySink");
+	TUniquePtr<ExtractNetDependencies> extractDependencies(new ExtractNetDependencies());
+	block.GetEvents().ForEach(*extractDependencies);
+	return extractDependencies;
+}

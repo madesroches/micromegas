@@ -5,11 +5,13 @@
 #include "CborUtils.h"
 #include "LogDependencies.h"
 #include "MetricDependencies.h"
+#include "NetDependencies.h"
 #include "MicromegasTelemetrySink/Log.h"
 #include "MicromegasTracing/EventBlock.h"
 #include "MicromegasTracing/EventStream.h"
 #include "MicromegasTracing/LogMetadata.h"
 #include "MicromegasTracing/MetricMetadata.h"
+#include "MicromegasTracing/NetMetadata.h"
 #include "MicromegasTracing/QueueMetadata.h"
 #include "MicromegasTracing/StringsMetadata.h"
 #include "ThreadDependencies.h"
@@ -119,4 +121,9 @@ TArray<uint8> FormatInsertMetricStreamRequest(const MicromegasTracing::MetricStr
 TArray<uint8> FormatInsertThreadStreamRequest(const MicromegasTracing::ThreadStream& stream)
 {
 	return FormatInsertStreamRequest<ThreadDependenciesQueue>(stream);
+}
+
+TArray<uint8> FormatInsertNetStreamRequest(const MicromegasTracing::NetStream& stream)
+{
+	return FormatInsertStreamRequest<NetDependenciesQueue>(stream);
 }

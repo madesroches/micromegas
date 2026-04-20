@@ -4,6 +4,7 @@
 #include "Containers/RingBuffer.h"
 #include "HAL/IConsoleManager.h"
 #include "MicromegasTelemetrySink/FlushMonitor.h"
+#include "MicromegasTracing/Dispatch.h"
 #include "MicromegasTracing/Fwd.h"
 #include "Misc/DateTime.h"
 #include "RunningAverage.h"
@@ -22,8 +23,13 @@ public:
 	bool ShouldSampleBlock(const MicromegasTracing::LogBlockPtr& Block) const;
 	bool ShouldSampleBlock(const MicromegasTracing::MetricsBlockPtr& Block) const;
 	bool ShouldSampleBlock(const MicromegasTracing::ThreadBlockPtr& Block) const;
+	bool ShouldSampleBlock(const MicromegasTracing::NetBlockPtr& Block) const;
+
+	MicromegasTracing::ENetTraceVerbosity GetNetVerbosity() const;
 
 private:
+	void OnNetVerbosityChanged(IConsoleVariable* Var);
+
 	SharedFlushMonitor FlushMonitor;
 	FRunningAverage FrameTimeRunningAvg;
 	FDateTime LastFrameDateTime;
@@ -32,11 +38,11 @@ private:
 	mutable UE::FMutex SampledTimeRangesMutex;
 	TRingBuffer<TimeRange> SampledTimeRanges;
 	
-
 	TUniquePtr<TAutoConsoleVariable<bool>> CVarLogEnable;
 	TUniquePtr<TAutoConsoleVariable<bool>> CVarMetricsEnable;
 	TUniquePtr<TAutoConsoleVariable<bool>> CVarSpansEnable;
 	TUniquePtr<TAutoConsoleVariable<bool>> CVarSpansAll;
+	TUniquePtr<TAutoConsoleVariable<int32>> CVarNetVerbosity;
 };
 
 typedef TSharedPtr<FSamplingController, ESPMode::ThreadSafe> SharedSamplingController;

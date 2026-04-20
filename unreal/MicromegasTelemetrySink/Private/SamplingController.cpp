@@ -3,8 +3,10 @@
 #include "MicromegasTelemetrySink/Log.h"
 #include "MicromegasTracing/EventBlock.h"
 #include "MicromegasTracing/Macros.h"
+#include "MicromegasTracing/NetTraceWriter.h"
 #include "Misc/App.h"
 #include "Misc/CoreDelegates.h"
+#include "Misc/Parse.h"
 
 #if WITH_EDITOR
 constexpr bool SPANS_SAMPLING_ENABLED_BY_DEFAULT = false;
@@ -51,12 +53,31 @@ FSamplingController::FSamplingController(const SharedFlushMonitor& InFlushMonito
 		  TEXT("telemetry.spans.all"),
 		  false,
 		  TEXT("Always send all spans - uses significant bandwidth")))
+	, CVarNetVerbosity(new TAutoConsoleVariable<int32>(
+		  TEXT("telemetry.net.verbosity"),
+		  2,
+		  TEXT("Net trace verbosity: 0=off, 1=packets, 2=+root objects, 3=+all objects, 4=+properties/RPCs")))
 {
+	// Command-line override for net verbosity
+	int32 NetVerbosityOverride = -1;
+	if (FParse::Value(FCommandLine::Get(), TEXT("-MicromegasNetTrace="), NetVerbosityOverride))
+	{
+		CVarNetVerbosity->AsVariable()->Set(NetVerbosityOverride);
+	}
+
+	// Register callback for runtime changes
+	CVarNetVerbosity->AsVariable()->SetOnChangedCallback(
+		FConsoleVariableDelegate::CreateRaw(this, &FSamplingController::OnNetVerbosityChanged));
+
 	FCoreDelegates::OnBeginFrame.AddRaw(this, &FSamplingController::Tick);
 }
 
 FSamplingController::~FSamplingController()
 {
+	// Clear cvar callback before TUniquePtr destroys CVarNetVerbosity — the cvar object's
+	// destructor unregisters from the console manager but does not clear callbacks already
+	// attached, so a delayed change notification could otherwise fire on a dead `this`.
+	CVarNetVerbosity->AsVariable()->SetOnChangedCallback(FConsoleVariableDelegate());
 	FCoreDelegates::OnBeginFrame.RemoveAll(this);
 }
 
@@ -124,4 +145,21 @@ bool FSamplingController::ShouldSampleBlock(const MicromegasTracing::ThreadBlock
 		}
 	}
 	return false;
+}
+
+bool FSamplingController::ShouldSampleBlock(const MicromegasTracing::NetBlockPtr& Block) const
+{
+	return MicromegasTracing::Dispatch::GetNetTraceVerbosity() != MicromegasTracing::ENetTraceVerbosity::Off;
+}
+
+MicromegasTracing::ENetTraceVerbosity FSamplingController::GetNetVerbosity() const
+{
+	return static_cast<MicromegasTracing::ENetTraceVerbosity>(
+		CVarNetVerbosity->GetValueOnAnyThread());
+}
+
+void FSamplingController::OnNetVerbosityChanged(IConsoleVariable* Var)
+{
+	MicromegasTracing::Dispatch::SetNetTraceVerbosity(
+		static_cast<MicromegasTracing::ENetTraceVerbosity>(Var->GetInt()));
 }

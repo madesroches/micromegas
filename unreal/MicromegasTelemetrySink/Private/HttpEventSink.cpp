@@ -155,7 +155,6 @@ void HttpEventSink::OnStartup(const MicromegasTracing::ProcessInfoPtr& ProcessIn
 
 void HttpEventSink::OnShutdown()
 {
-	MICROMEGAS_LOG("MicromegasTelemetrySink", MicromegasTracing::LogLevel::Info, TEXT("Shutting down"));
 	RequestShutdown = true;
 	WakeupThread->Trigger();
 	Thread->WaitForCompletion();
@@ -238,6 +237,35 @@ void HttpEventSink::OnProcessMetricBlock(const MicromegasTracing::MetricsBlockPt
 }
 
 void HttpEventSink::OnProcessThreadBlock(const MicromegasTracing::ThreadBlockPtr& Block)
+{
+	MICROMEGAS_SPAN_FUNCTION("MicromegasTelemetrySink");
+	if (!Sampling->ShouldSampleBlock(Block))
+	{
+		return;
+	}
+	IncrementQueueSize();
+	Queue.Enqueue([this, Block]()
+		{
+			const TArray<uint8> Content = FormatBlockRequest(*Process, *Block);
+			constexpr float TimeoutSeconds = 2.0f;
+			SendBinaryRequest(TEXT("insert_block"), Content, TimeoutSeconds);
+		});
+	WakeupThread->Trigger();
+}
+
+void HttpEventSink::OnInitNetStream(const MicromegasTracing::NetStreamPtr& Stream)
+{
+	IncrementQueueSize();
+	Queue.Enqueue([this, Stream]()
+		{
+			const TArray<uint8> Body = FormatInsertNetStreamRequest(*Stream);
+			constexpr float TimeoutSeconds = 30.0f;
+			SendBinaryRequest(TEXT("insert_stream"), Body, TimeoutSeconds);
+		});
+	WakeupThread->Trigger();
+}
+
+void HttpEventSink::OnProcessNetBlock(const MicromegasTracing::NetBlockPtr& Block)
 {
 	MICROMEGAS_SPAN_FUNCTION("MicromegasTelemetrySink");
 	if (!Sampling->ShouldSampleBlock(Block))
@@ -400,8 +428,9 @@ TSharedPtr<MicromegasTracing::EventSink> InitHttpEventSink(
 	constexpr size_t LogBufferSize = 10 * 1024 * 1024;
 	constexpr size_t MetricsBufferSize = 10 * 1024 * 1024;
 	constexpr size_t ThreadBufferSize = 10 * 1024 * 1024;
+	constexpr size_t NetBufferSize = 8 * 1024 * 1024;
 
-	Dispatch::Init(&CreateGuid, Process, Sink, LogBufferSize, MetricsBufferSize, ThreadBufferSize);
+	Dispatch::Init(&CreateGuid, Process, Sink, LogBufferSize, MetricsBufferSize, ThreadBufferSize, NetBufferSize, Sampling->GetNetVerbosity());
 	UE_LOG(LogMicromegasTelemetrySink, Log, TEXT("Initializing Micromegas Telemetry process_id=%s"), *Process->ProcessId);
 	return Sink;
 }

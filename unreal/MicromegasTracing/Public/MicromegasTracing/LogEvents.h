@@ -7,6 +7,8 @@
 
 namespace MicromegasTracing
 {
+	class PropertySet;
+
 	namespace LogLevel
 	{
 		enum Type : uint8

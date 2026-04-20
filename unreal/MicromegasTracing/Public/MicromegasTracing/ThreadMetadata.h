@@ -3,6 +3,7 @@
 //  MicromegasTracing/ThreadMetadata.h
 //
 #include "MicromegasTracing/QueueMetadata.h"
+#include "MicromegasTracing/SpanEvents.h"
 
 namespace MicromegasTracing
 {

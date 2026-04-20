@@ -101,3 +101,150 @@ namespace MicromegasTracing
 #endif
 
 #define MICROMEGAS_SPAN_FUNCTION(target) MICROMEGAS_SPAN_SCOPE(target, MICROMEGAS_FUNCTION_NAME)
+
+// --- Net trace macros ---
+
+#if !defined(MICROMEGAS_NET_TRACE_ENABLED)
+	#if !UE_BUILD_SHIPPING && !WITH_EDITOR
+		#define MICROMEGAS_NET_TRACE_ENABLED 1
+	#else
+		#define MICROMEGAS_NET_TRACE_ENABLED 0
+	#endif
+#endif
+
+#if MICROMEGAS_NET_TRACE_ENABLED
+
+	#define MICROMEGAS_NET_CONNECTION_SCOPE(ConnectionName, bIsOutgoing) \
+		MicromegasTracing::FNetConnectionScope ANONYMOUS_VARIABLE(NetConnScope_)((ConnectionName), (bIsOutgoing))
+	#define MICROMEGAS_NET_PROPERTY(PropertyName, BitSize) \
+		MicromegasTracing::Dispatch::NetProperty(MicromegasTracing::StaticStringRef((PropertyName)), BitSize)
+	#define MICROMEGAS_NET_PROPERTY_SCOPE(PropertyName, GetBitsExpr)             \
+		MicromegasTracing::TNetPropertyScope ANONYMOUS_VARIABLE(NetPropScope_)( \
+			MicromegasTracing::StaticStringRef((PropertyName)),                  \
+			[&]() -> uint32 { return static_cast<uint32>(GetBitsExpr); })
+	#define MICROMEGAS_NET_OBJECT_SCOPE(ObjectName, GetBitsExpr)             \
+		MicromegasTracing::TNetObjectScope ANONYMOUS_VARIABLE(NetObjScope_)( \
+			MicromegasTracing::StaticStringRef((ObjectName)),                \
+			[&]() -> uint32 { return static_cast<uint32>(GetBitsExpr); })
+	#define MICROMEGAS_NET_RPC_SCOPE(FunctionName, GetBitsExpr)           \
+		MicromegasTracing::TNetRPCScope ANONYMOUS_VARIABLE(NetRpcScope_)( \
+			MicromegasTracing::StaticStringRef((FunctionName)),           \
+			[&]() -> uint32 { return static_cast<uint32>(GetBitsExpr); })
+	#define MICROMEGAS_NET_SUSPEND_SCOPE() \
+		MicromegasTracing::FNetSuspendScope ANONYMOUS_VARIABLE(NetSuspend_)
+
+namespace MicromegasTracing
+{
+	template <typename GetBitsFunc>
+	struct TNetObjectScope
+	{
+		GetBitsFunc GetBits;
+		uint32 StartBits;
+
+		TNetObjectScope(StaticStringRef Name, GetBitsFunc&& InGetBits)
+			: GetBits(MoveTemp(InGetBits))
+			, StartBits(GetBits())
+		{
+			Dispatch::NetBeginObject(Name);
+		}
+
+		~TNetObjectScope()
+		{
+			Dispatch::NetEndObject(GetBits() - StartBits);
+		}
+
+		TNetObjectScope(const TNetObjectScope&) = delete;
+		TNetObjectScope& operator=(const TNetObjectScope&) = delete;
+	};
+
+	template <typename GetBitsFunc>
+	struct TNetRPCScope
+	{
+		GetBitsFunc GetBits;
+		uint32 StartBits;
+
+		TNetRPCScope(StaticStringRef Name, GetBitsFunc&& InGetBits)
+			: GetBits(MoveTemp(InGetBits))
+			, StartBits(GetBits())
+		{
+			Dispatch::NetBeginRPC(Name);
+		}
+
+		~TNetRPCScope()
+		{
+			Dispatch::NetEndRPC(GetBits() - StartBits);
+		}
+
+		TNetRPCScope(const TNetRPCScope&) = delete;
+		TNetRPCScope& operator=(const TNetRPCScope&) = delete;
+	};
+
+	// Unlike TNetObjectScope / TNetRPCScope, property events are leaves (no Begin/End pair).
+	// The scope only emits on destruction, after the wrapped Serialize/Deserialize call has run.
+	template <typename GetBitsFunc>
+	struct TNetPropertyScope
+	{
+		StaticStringRef Name;
+		GetBitsFunc GetBits;
+		uint32 StartBits;
+
+		TNetPropertyScope(StaticStringRef InName, GetBitsFunc&& InGetBits)
+			: Name(InName)
+			, GetBits(MoveTemp(InGetBits))
+			, StartBits(GetBits())
+		{
+		}
+
+		~TNetPropertyScope()
+		{
+			Dispatch::NetProperty(Name, GetBits() - StartBits);
+		}
+
+		TNetPropertyScope(const TNetPropertyScope&) = delete;
+		TNetPropertyScope& operator=(const TNetPropertyScope&) = delete;
+	};
+
+	struct FNetSuspendScope
+	{
+		FNetSuspendScope()
+		{
+			Dispatch::NetSuspend();
+		}
+		
+		~FNetSuspendScope()
+		{
+			Dispatch::NetResume();
+		}
+
+		FNetSuspendScope(const FNetSuspendScope&) = delete;
+		FNetSuspendScope& operator=(const FNetSuspendScope&) = delete;
+	};
+
+	struct FNetConnectionScope
+	{
+		FNetConnectionScope(FName ConnectionName, bool bIsOutgoing)
+		{
+			Dispatch::NetBeginConnection(ConnectionName, bIsOutgoing);
+		}
+
+		~FNetConnectionScope()
+		{
+			Dispatch::NetEndConnection();
+		}
+
+		FNetConnectionScope(const FNetConnectionScope&) = delete;
+		FNetConnectionScope& operator=(const FNetConnectionScope&) = delete;
+	};
+
+} // namespace MicromegasTracing
+
+#else
+
+	#define MICROMEGAS_NET_CONNECTION_SCOPE(...)
+	#define MICROMEGAS_NET_PROPERTY(...)
+	#define MICROMEGAS_NET_PROPERTY_SCOPE(...)
+	#define MICROMEGAS_NET_OBJECT_SCOPE(...)
+	#define MICROMEGAS_NET_RPC_SCOPE(...)
+	#define MICROMEGAS_NET_SUSPEND_SCOPE(...)
+
+#endif

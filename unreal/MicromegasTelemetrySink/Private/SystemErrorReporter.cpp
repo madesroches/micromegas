@@ -1,5 +1,6 @@
 #include "SystemErrorReporter.h"
 #include "HAL/PlatformStackWalk.h"
+#include "HAL/PlatformMallocCrash.h"
 #include "HttpManager.h"
 #include "HttpModule.h"
 #include "MicromegasTracing/Macros.h"
@@ -17,6 +18,17 @@ FSystemErrorReporter::~FSystemErrorReporter()
 
 void FSystemErrorReporter::OnSystemError()
 {
+	if (FPlatformMallocCrash::IsActive())
+	{
+		// For now if the PlatformCrash is active, we don't flush because it will cause problems.
+		// 1. Cannot allocate memory (2MB limit on pre-allocated mem)
+		// 2. Deadlocks if using `FGenericPlatformMallocCrash`.
+		//   - FGenericPlatformMallocCrash will spin any non-crashing threads forever on Malloc calls
+		//     This causes deadlocks with Micromegas sink threads on flush 
+		//     -- LogMutex acquired in sink thread (which spins forever on allocation) and deadlocks on FlushLogStream which tries to acquire the lock.
+		return;
+	}
+	
 	const size_t MessageMaxSize = 65535;
 	ANSICHAR* Message = (ANSICHAR*)FMemory::SystemMalloc(MessageMaxSize);
 	if (Message == nullptr)
