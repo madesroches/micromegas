@@ -490,11 +490,13 @@ Runtime verbosity is a 0–4 enum. Depth-based gating inside `NetTraceWriter`:
 |-------|------|-------|
 | 0 | `Off` | Nothing |
 | 1 | `Packets` | Connection scopes only |
-| 2 | `RootObjects` | + root object / root RPC scopes (depth 0) |
+| 2 | `RootObjects` | + root object scopes (depth 0) |
 | 3 | `Objects` | + nested object scopes (depth 1+) |
-| 4 | `Properties` | + per-property leaf events |
+| 4 | `Properties` | + per-property leaf events, + RPC scopes |
 
 **Default:** level 2 (`RootObjects`) — production setting.
+
+Root RPC bits (`ObjectDepth == 0`) still contribute to `NetConnectionEndEvent.bit_size` at every verbosity ≥ `Packets`, even though `NetRPCBeginEvent` / `NetRPCEndEvent` records are only emitted at level 4.
 
 **Snapshot invariant:** the writer captures `EffectiveVerbosity` at the outermost `BeginConnection` and uses that snapshot for every gating decision in the scope. CVar-driven changes take effect at the **next** outer scope, never mid-scope.
 

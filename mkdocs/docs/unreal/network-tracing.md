@@ -76,17 +76,19 @@ Runtime verbosity is a 0–4 enum:
 |-------|------|-------|
 | 0 | `Off` | Nothing |
 | 1 | `Packets` | Connection scopes only |
-| 2 | `RootObjects` | + root object and root RPC scopes (depth 0) |
+| 2 | `RootObjects` | + root object scopes (depth 0) |
 | 3 | `Objects` | + nested object scopes (depth 1+) |
-| 4 | `Properties` | + per-property leaf events |
+| 4 | `Properties` | + per-property leaf events, + RPC scopes (root and nested) |
 
 **Depth-based gating rule.** Inside `NetTraceWriter`:
 
-- Depth 0 = at least level `RootObjects`
-- Depth 1+ = at least level `Objects`
+- Object scopes: depth 0 = at least level `RootObjects`; depth 1+ = at least level `Objects`
 - Property leaves = level `Properties`
+- RPC scopes (Begin/End events) = level `Properties`
 
 **Default:** level 2 (`RootObjects`) — production setting, cheap enough to run continuously.
+
+Note that root RPC bit_size (`ObjectDepth == 0` at `EndRPC`) still accumulates into `NetConnectionEndEvent.bit_size` at every verbosity ≥ `Packets`, regardless of whether the `NetRPC*` events themselves are emitted. Only the per-RPC event records require level 4.
 
 **Snapshot invariant (Decision 6).** The writer captures `EffectiveVerbosity` at the **outermost** `BeginConnection` and uses that snapshot for every gating decision in the scope. CVar-driven changes take effect at the **next** outer connection scope, never mid-scope. This eliminates orphaned Begin/End pairs and partially-gated subtrees.
 
