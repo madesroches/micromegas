@@ -9,6 +9,8 @@ This file documents the historical progress of the Micromegas project. For curre
 * **Unreal Engine:**
   * Add net trace support with connection/object/property/RPC scopes, runtime verbosity gating, and empty-scope elision
   * Enable crash reporting on Linux and skip telemetry flush during malloc-crash to avoid deadlock
+* **Docs:**
+  * Add Unreal net trace instrumentation guide and engine recipe
 
 ## April 2026 - v0.24.0
 
