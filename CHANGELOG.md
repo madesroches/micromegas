@@ -2,6 +2,11 @@
 
 This file documents the historical progress of the Micromegas project. For current focus, please see the main [README.md](./README.md).
 
+## Unreleased
+
+* **HTTP Gateway:**
+  * Add `GET /gateway/health` liveness endpoint for load balancer probes (#994)
+
 ## April 2026 - v0.24.0
 
 * **Analytics:**

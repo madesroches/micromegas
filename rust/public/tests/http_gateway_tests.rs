@@ -1,5 +1,7 @@
 use http::HeaderMap;
-use micromegas::servers::http_gateway::{HeaderForwardingConfig, build_origin_metadata};
+use micromegas::servers::http_gateway::{
+    HeaderForwardingConfig, build_origin_metadata, handle_health,
+};
 use std::net::SocketAddr;
 
 #[test]
@@ -128,6 +130,18 @@ fn test_build_origin_metadata_forwards_request_id() {
         .and_then(|v| v.to_str().ok())
         .unwrap();
     assert_eq!(request_id, "req-12345");
+}
+
+#[tokio::test]
+async fn test_handle_health() {
+    let response = handle_health().await;
+    let body = response.0;
+
+    assert_eq!(body.status, "healthy");
+
+    let now = chrono::Utc::now();
+    let delta = (now - body.timestamp).num_seconds().abs();
+    assert!(delta < 5, "timestamp should be recent, delta={delta}s");
 }
 
 #[test]

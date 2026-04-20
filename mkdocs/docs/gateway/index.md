@@ -57,6 +57,24 @@ Response:
 ]
 ```
 
+## Health Check
+
+The gateway exposes an unauthenticated liveness endpoint for load balancer probes (e.g. AWS ALB):
+
+```bash
+curl http://localhost:3000/gateway/health
+```
+
+Response:
+```json
+{
+  "status": "healthy",
+  "timestamp": "2026-04-20T12:34:56.789Z"
+}
+```
+
+The endpoint returns `200 OK` whenever the server process is accepting HTTP traffic. It does not probe the FlightSQL backend.
+
 ## Features
 
 ### Time Range Filtering
