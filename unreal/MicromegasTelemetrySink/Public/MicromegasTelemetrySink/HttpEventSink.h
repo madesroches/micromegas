@@ -35,9 +35,11 @@ public:
 	virtual void OnInitLogStream(const MicromegasTracing::LogStreamPtr& Stream) override;
 	virtual void OnInitMetricStream(const MicromegasTracing::MetricStreamPtr& Stream) override;
 	virtual void OnInitThreadStream(MicromegasTracing::ThreadStream* Stream) override;
+	virtual void OnInitNetStream(const MicromegasTracing::NetStreamPtr& Stream) override;
 	virtual void OnProcessLogBlock(const MicromegasTracing::LogBlockPtr& Block) override;
 	virtual void OnProcessMetricBlock(const MicromegasTracing::MetricsBlockPtr& Block) override;
 	virtual void OnProcessThreadBlock(const MicromegasTracing::ThreadBlockPtr& Block) override;
+	virtual void OnProcessNetBlock(const MicromegasTracing::NetBlockPtr& Block) override;
 	virtual bool IsBusy() override;
 	virtual void OnAuthUpdated() override;
 

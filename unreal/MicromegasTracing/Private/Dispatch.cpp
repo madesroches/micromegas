@@ -6,6 +6,7 @@
 #include "HAL/PlatformProcess.h"
 #include "MicromegasTracing/DefaultContext.h"
 #include "MicromegasTracing/EventSink.h"
+#include "MicromegasTracing/NetTraceWriter.h"
 #include "MicromegasTracing/EventStream.h"
 #include "MicromegasTracing/LogBlock.h"
 #include "MicromegasTracing/Macros.h"
@@ -25,13 +26,16 @@ namespace MicromegasTracing
 		const TSharedPtr<EventSink, ESPMode::ThreadSafe>& InSink,
 		size_t InLogBufferSize,
 		size_t InMetricBufferSize,
-		size_t InThreadBufferSize)
+		size_t InThreadBufferSize,
+		size_t InNetBufferSize,
+		ENetTraceVerbosity InNetVerbosity)
 		: AllocNewGuid(InAllocNewGuid)
 		, Sink(InSink)
 		, CurrentProcessInfo(ProcessInfo)
 		, LogBufferSize(InLogBufferSize)
 		, MetricBufferSize(InMetricBufferSize)
 		, ThreadBufferSize(InThreadBufferSize)
+		, NetWriter(MakeUnique<NetTraceWriter>(InSink, InNetBufferSize, InNetVerbosity))
 		, PropertySets(new PropertySetStore())
 		, Ctx(new DefaultContext(PropertySets))
 	{
@@ -65,16 +69,21 @@ namespace MicromegasTracing
 		const TSharedPtr<EventSink, ESPMode::ThreadSafe>& Sink,
 		size_t LogBufferSize,
 		size_t MetricBufferSize,
-		size_t ThreadBufferSize)
+		size_t ThreadBufferSize,
+		size_t NetBufferSize,
+		ENetTraceVerbosity NetVerbosity)
 	{
 		if (GDispatch)
 		{
 			return;
 		}
-		GDispatch = new Dispatch(AllocNewGuid, ProcessInfo, Sink, LogBufferSize, MetricBufferSize, ThreadBufferSize);
+		GDispatch = new Dispatch(AllocNewGuid, ProcessInfo, Sink, LogBufferSize, MetricBufferSize, ThreadBufferSize, NetBufferSize, NetVerbosity);
+		GDispatch->NetWriter->InitStream(ProcessInfo->ProcessId, AllocNewGuid(), ProcessInfo->StartTime);
+
 		Sink->OnStartup(ProcessInfo);
 		Sink->OnInitLogStream(GDispatch->LogEntries);
 		Sink->OnInitMetricStream(GDispatch->Metrics);
+		Sink->OnInitNetStream(GDispatch->NetWriter->GetStream());
 	}
 
 	void Dispatch::FlushLogStreamImpl(UE::FMutex& Mutex)
@@ -201,6 +210,7 @@ namespace MicromegasTracing
 		{
 			return;
 		}
+		ShutdownNetStream();
 		Dispatch->Sink->OnShutdown();
 		GDispatch = nullptr;
 	}
@@ -428,6 +438,97 @@ namespace MicromegasTracing
 			return nullptr;
 		}
 		return Dispatch->CurrentProcessInfo;
+	}
+
+	// --- Dispatch net trace delegation ---
+
+	void Dispatch::FlushNetStream()
+	{
+		Dispatch* D = GDispatch;
+		if (!D) { return; }
+		D->NetWriter->Flush();
+	}
+
+	void Dispatch::ShutdownNetStream()
+	{
+		FlushNetStream();
+	}
+
+	void Dispatch::SetNetTraceVerbosity(ENetTraceVerbosity Level)
+	{
+		Dispatch* D = GDispatch;
+		if (!D) { return; }
+		D->NetWriter->SetVerbosity(Level);
+	}
+
+	ENetTraceVerbosity Dispatch::GetNetTraceVerbosity()
+	{
+		Dispatch* D = GDispatch;
+		if (!D) { return ENetTraceVerbosity::Off; }
+		return D->NetWriter->GetVerbosity();
+	}
+
+	void Dispatch::NetBeginConnection(FName ConnectionName, bool bIsOutgoing)
+	{
+		Dispatch* D = GDispatch;
+		if (!D) { return; }
+		D->NetWriter->BeginConnection(ConnectionName, bIsOutgoing);
+	}
+
+	void Dispatch::NetEndConnection()
+	{
+		Dispatch* D = GDispatch;
+		if (!D) { return; }
+		D->NetWriter->EndConnection();
+	}
+
+	void Dispatch::NetSuspend()
+	{
+		Dispatch* D = GDispatch;
+		if (!D) { return; }
+		D->NetWriter->Suspend();
+	}
+
+	void Dispatch::NetResume()
+	{
+		Dispatch* D = GDispatch;
+		if (!D) { return; }
+		D->NetWriter->Resume();
+	}
+
+	void Dispatch::NetBeginObject(StaticStringRef ObjectName)
+	{
+		Dispatch* D = GDispatch;
+		if (!D) { return; }
+		D->NetWriter->BeginObject(ObjectName);
+	}
+
+	void Dispatch::NetEndObject(uint32 BitSize)
+	{
+		Dispatch* D = GDispatch;
+		if (!D) { return; }
+		D->NetWriter->EndObject(BitSize);
+	}
+
+	void Dispatch::NetProperty(StaticStringRef PropertyName, uint32 BitSize)
+	{
+		Dispatch* D = GDispatch;
+		if (!D) { return; }
+		D->NetWriter->Property(PropertyName, BitSize);
+	}
+
+	void Dispatch::NetBeginRPC(StaticStringRef FunctionName)
+	{
+		Dispatch* D = GDispatch;
+		if (!D) { return; }
+		D->NetWriter->BeginRPC(FunctionName);
+	}
+
+	void Dispatch::NetEndRPC(uint32 BitSize)
+	{
+		Dispatch* D = GDispatch;
+		if (!D) { return; }
+		D->NetWriter->EndRPC(BitSize);
 	}
 
 } // namespace MicromegasTracing

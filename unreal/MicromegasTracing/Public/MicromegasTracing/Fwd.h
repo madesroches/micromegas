@@ -17,6 +17,13 @@ namespace MicromegasTracing
 	struct EndThreadSpanEvent;
 	struct BeginThreadNamedSpanEvent;
 	struct EndThreadNamedSpanEvent;
+	struct NetConnectionBeginEvent;
+	struct NetConnectionEndEvent;
+	struct NetObjectBeginEvent;
+	struct NetObjectEndEvent;
+	struct NetPropertyEvent;
+	struct NetRPCBeginEvent;
+	struct NetRPCEndEvent;
 	struct DualTime;
 	template <typename EventBlockT, size_t BUFFER_PADDING>
 	class EventStreamImpl;
@@ -42,6 +49,13 @@ namespace MicromegasTracing
 	typedef EventBlock<ThreadEventQueue> ThreadBlock;
 	typedef TSharedPtr<ThreadBlock, ESPMode::ThreadSafe> ThreadBlockPtr;
 	typedef EventStreamImpl<ThreadBlock, 128> ThreadStream;
+	typedef HeterogeneousQueue<NetConnectionBeginEvent, NetConnectionEndEvent, NetObjectBeginEvent, NetObjectEndEvent, NetPropertyEvent, NetRPCBeginEvent, NetRPCEndEvent> NetEventQueue;
+	typedef EventBlock<NetEventQueue> NetBlock;
+	typedef TSharedPtr<NetBlock, ESPMode::ThreadSafe> NetBlockPtr;
+	typedef EventStreamImpl<NetBlock, 256> NetStream;
+	typedef TSharedPtr<NetStream, ESPMode::ThreadSafe> NetStreamPtr;
+	class NetTraceWriter;
+	enum class ENetTraceVerbosity : uint8;
 	class PropertySetStore;
 	class PropertySet;
 	struct Property;

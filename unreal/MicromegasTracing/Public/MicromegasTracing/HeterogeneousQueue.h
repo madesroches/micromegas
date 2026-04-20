@@ -3,7 +3,6 @@
 //  MicromegasTracing/HeterogeneousQueue.h
 //
 #include "Containers/Array.h"
-#include "MicromegasTracing/Macros.h"
 
 namespace MicromegasTracing
 {
@@ -70,8 +69,24 @@ namespace MicromegasTracing
 	class HeterogeneousQueue
 	{
 	public:
+		// Lightweight value type that captures the queue's position at a point in
+		// time. Used by NetTraceWriter to rewind empty root-object scopes.
+		struct CheckPoint
+		{
+			const HeterogeneousQueue* Queue = nullptr; // identity tag (not owning)
+			uint64 Generation = 0;                     // invalidated by Reset()
+			size_t ByteSize = 0;
+			size_t EventCount = 0;
+
+			bool IsValidFor(const HeterogeneousQueue& Current) const
+			{
+				return Queue == &Current && Generation == Current.GetGeneration();
+			}
+		};
+
 		explicit HeterogeneousQueue(size_t bufferSize)
 			: NbEvents(0)
+			, Generation(0)
 		{
 			Buffer.Reserve(bufferSize);
 		}
@@ -97,7 +112,6 @@ namespace MicromegasTracing
 		template <typename Visitor>
 		void ForEach(Visitor& v) const
 		{
-			MICROMEGAS_SPAN_FUNCTION("MicromegasTracing");
 			size_t cursor = 0;
 			while (cursor < GetSizeBytes())
 			{
@@ -115,6 +129,32 @@ namespace MicromegasTracing
 		{
 			return &Buffer[0];
 		}
+
+		CheckPoint Snapshot() const
+		{
+			return { this, Generation, static_cast<size_t>(Buffer.Num()), NbEvents };
+		}
+
+		void RewindTo(const CheckPoint& Cp)
+		{
+			check(Cp.Queue == this && Cp.Generation == Generation);
+			Buffer.SetNum(static_cast<int32>(Cp.ByteSize), EAllowShrinking::No);
+			NbEvents = Cp.EventCount;
+			// Rewind does NOT bump Generation — it is a structural undo of recent
+			// appends, leaving the queue observably identical to its snapshot state.
+		}
+
+		// Clear the queue in place, reusing the underlying storage. Any call site
+		// that resets the queue without constructing a fresh instance MUST go
+		// through this path so outstanding CheckPoints are invalidated.
+		void Reset()
+		{
+			Buffer.Reset();
+			NbEvents = 0;
+			++Generation;
+		}
+
+		uint64 GetGeneration() const { return Generation; }
 
 	private:
 		template <typename Visitor, typename HEAD, typename... REST>
@@ -143,6 +183,7 @@ namespace MicromegasTracing
 
 		TArray<uint8> Buffer;
 		size_t NbEvents;
+		uint64 Generation;
 	};
 
 } // namespace MicromegasTracing

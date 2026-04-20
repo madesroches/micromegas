@@ -5,10 +5,13 @@
 #include "CborUtils.h"
 #include "FormatTime.h"
 #include "LogDependencies.h"
+#include "MicromegasTracing/Macros.h"
 #include "MetricDependencies.h"
+#include "NetDependencies.h"
 #include "MicromegasTelemetrySink/Log.h"
 #include "MicromegasTracing/LogBlock.h"
 #include "MicromegasTracing/MetricBlock.h"
+#include "MicromegasTracing/NetBlock.h"
 #include "MicromegasTracing/ProcessInfo.h"
 #include "Misc/Guid.h"
 #include "ThreadDependencies.h"
@@ -18,6 +21,7 @@ std::vector<uint8> CompressBuffer(const void* src, size_t size);
 TUniquePtr<ExtractLogDependencies> ExtractBlockDependencies(const MicromegasTracing::LogBlock& block);
 TUniquePtr<ExtractMetricDependencies> ExtractBlockDependencies(const MicromegasTracing::MetricBlock& block);
 TUniquePtr<ExtractThreadDependencies> ExtractBlockDependencies(const MicromegasTracing::ThreadBlock& block);
+TUniquePtr<ExtractNetDependencies> ExtractBlockDependencies(const MicromegasTracing::NetBlock& block);
 
 template <typename BlockT>
 inline TArray<uint8> FormatBlockRequest(const MicromegasTracing::ProcessInfo& processInfo, const BlockT& block)
