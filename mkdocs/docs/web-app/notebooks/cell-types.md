@@ -1,6 +1,6 @@
 # Cell Types Reference
 
-Notebooks support 11 cell types. Each cell has a `name` (unique within the notebook), a `type`, and a `layout` controlling its display height and collapsed state.
+Notebooks support 12 cell types. Each cell has a `name` (unique within the notebook), a `type`, and a `layout` controlling its display height and collapsed state.
 
 Data cells (table, chart, log, etc.) execute SQL queries and register their results in the [local WASM query engine](execution.md#local-wasm-query-engine), making them available for downstream cells to query.
 
@@ -381,6 +381,60 @@ ORDER BY name, begin
 ```
 
 ![Swimlane showing thread activity across a task pool](../../assets/images/notebooks/swimlane.png){ .screenshot }
+
+---
+
+## ![Flame Graph](../../assets/images/cell-icons/flame.svg){ .cell-icon } Flame Graph
+
+Interactive span visualization rendered with WebGL. Spans are grouped into lanes (one per thread or async scope) and stacked by call depth, with drag-to-zoom and WASD navigation.
+
+**Configuration:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `sql` | string | SQL query returning span data |
+| `dataSource` | string | Data source override |
+
+**Options:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `initialFrom` | string | Initial zoomed-in start time (accepts `$variable`, relative like `now-1h`, or absolute) |
+| `initialTo` | string | Initial zoomed-in end time |
+
+**Required columns:**
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | integer | Unique span identifier |
+| `parent` | integer | Parent span id (0 or null for roots) |
+| `name` | string | Span name (used for label and color hash) |
+| `begin` | timestamp | Span start time |
+| `end` | timestamp | Span end time |
+| `depth` | integer | Call depth within the lane |
+| `lane` | string | Lane name — one lane per distinct value (e.g., thread name, `async`) |
+
+**Features:**
+
+- WebGL-rendered spans with Canvas2D label and time-axis overlay — handles millions of rows
+- Color-coded by span name using a brand-derived rust/blue/gold palette
+- Drag horizontally to zoom into a time range; WASD keys pan and zoom (cursor-anchored)
+- Mouse wheel scrolls vertically across lanes
+- Hover tooltip shows span name, duration, id, depth, and parent name
+- Async lanes use greedy packing to avoid overlap; thread lanes use raw `depth`
+- Results registered in the [local WASM query engine](execution.md#local-wasm-query-engine) under the cell name for downstream queries
+
+**Example SQL:**
+
+```sql
+SELECT id, parent, name, begin, "end", depth, thread_name AS lane
+FROM process_spans('$process_id', 'both')
+ORDER BY lane, begin
+```
+
+The `process_spans(process_id, types)` table function returns thread spans, async spans, or `'both'`.
+
+![Flame graph showing nested async spans with a hover tooltip](../../assets/images/notebooks/flame_graph.png){ .screenshot }
 
 ---
 

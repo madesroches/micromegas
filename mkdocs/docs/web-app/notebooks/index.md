@@ -25,7 +25,7 @@ A notebook has two panels:
 
 ### Adding Cells
 
-Click the **Add Cell** button below the cell list to add a new cell. Choose from the [11 available cell types](cell-types.md).
+Click the **Add Cell** button below the cell list to add a new cell. Choose from the [12 available cell types](cell-types.md).
 
 ### Selecting and Editing
 
@@ -86,7 +86,7 @@ When you have unsaved changes, the **Config Diff** modal shows a side-by-side co
 
 ## Further Reading
 
-- [Cell Types](cell-types.md) — reference for all 11 cell types
+- [Cell Types](cell-types.md) — reference for all 12 cell types
 - [Variables](variables.md) — the variable system, expressions, and URL parameter sync
 - [Execution & Auto-Run](execution.md) — execution model, WASM engine, and auto-run behavior
 - [Screens as Code](screens-as-code.md) — manage screens as JSON files in git

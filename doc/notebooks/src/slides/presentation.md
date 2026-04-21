@@ -74,7 +74,7 @@ What if we took those **same components** â€” tables, charts, logs, timelines â€
 An ordered list of cells that execute top-to-bottom.
 
 <ul>
-<li class="fragment"><strong>11 cell types</strong>: tables, charts, logs, timelines, markdown, variables...</li>
+<li class="fragment"><strong>12 cell types</strong>: tables, charts, logs, timelines, flame graphs, markdown, variables...</li>
 <li class="fragment"><strong>Local query engine</strong>: cell results become queryable tables (DataFusion in WASM)</li>
 <li class="fragment"><strong>Variables</strong>: parameterize queries, share state via URL</li>
 <li class="fragment"><strong>Auto-run</strong>: change a variable, everything updates</li>
