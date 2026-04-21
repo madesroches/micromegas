@@ -36,7 +36,6 @@ There is **no** Rust-side analytics scaffolding for net events: no block process
 |---|---|---|
 | `process_id` | Dictionary(Int16, Utf8) | the parameter; useful when joining downstream |
 | `stream_id` | Dictionary(Int16, Utf8) | source stream (always one per process for net) |
-| `block_id` | Dictionary(Int16, Utf8) | source block (for traceability) |
 | `span_id` | Int64 | unique within materialization |
 | `parent_span_id` | Int64 | 0 for root (Connection) |
 | `depth` | UInt32 | 0 for Connection, 1+ inside |
@@ -60,13 +59,15 @@ Net spans follow `thread_spans_view`'s pattern, **not** `async_events_view`'s `B
 
 Mirror that for net:
 
-1. Define `NetSpanTreeBuilder` (analogous to `CallTreeBuilder` in `rust/analytics/src/call_tree.rs`) that implements `NetBlockProcessor`. It owns a `Vec<OpenSpan>` stack and a `NetSpanRecordBuilder`. Each `OpenSpan` carries `{span_id, parent_span_id, depth, kind, name, begin_time, child_bits_consumed, connection_name, is_outgoing}`.
-2. **`NetConnectionBeginEvent`**: allocate `span_id`, push `OpenSpan { kind: connection, depth: 0, parent_span_id: 0, connection_name: name, is_outgoing, begin_time: event.time }`.
-3. **`NetObjectBeginEvent`** / **`NetRPCBeginEvent`**: allocate `span_id`, parent = stack top, push with `begin_time = event.time`. Inherit `connection_name` / `is_outgoing` from the stack root.
-4. **`NetPropertyEvent`** (leaf): allocate `span_id`, parent = stack top. `bit_size` from event. `begin_bits` = parent's `child_bits_consumed`. `end_bits` = `begin_bits + bit_size`. `begin_time = end_time = event.time` (point-in-time). Emit row. Then `parent.child_bits_consumed += bit_size`.
-5. **End events** (`NetConnectionEndEvent` / `NetObjectEndEvent` / `NetRPCEndEvent`): pop the matching open span. `bit_size` from event. `begin_bits` = parent's `child_bits_consumed` (or 0 for root). `end_bits` = `begin_bits + bit_size`. `begin_time` from the popped open span; `end_time = event.time`. Emit row. Then `parent.child_bits_consumed += bit_size` (no-op for root).
+**`span_id` allocation.** `span_id` is the per-event `event_id` (= `block.object_offset` + zero-based index within the block) — same scheme as thread spans (see `rust/analytics/src/call_tree.rs:145` and `rust/analytics/src/thread_block_processor.rs:57,110`). This is globally unique within the stream, so it stays unique across blocks, across groups within a partition, and across partitions, with no per-builder counter required. For Begin/End pairs the Begin event's `event_id` is the span's `span_id`; the End event's `event_id` is discarded. For `NetPropertyEvent` leaves the property event's own `event_id` is the `span_id`. `parent_span_id` is the stack top's `span_id` (or 0 for root). This requires `parse_net_block_payload` to pass `event_id` into the trait callbacks (mirroring `parse_thread_block_payload`).
+
+1. Define `NetSpanTreeBuilder` (analogous to `CallTreeBuilder` in `rust/analytics/src/call_tree.rs`) that implements `NetBlockProcessor`. It owns a `Vec<OpenSpan>` stack and writes rows into a borrowed `&mut NetSpanRecordBuilder` (the record builder lives at the partition level — see View section below — so rows from multiple groups land in the same builder). Each `OpenSpan` carries `{span_id, parent_span_id, depth, kind, name, begin_time, child_bits_consumed, connection_name, is_outgoing}`.
+2. **`NetConnectionBeginEvent`**: push `OpenSpan { span_id: event_id, kind: connection, depth: 0, parent_span_id: 0, connection_name: name, is_outgoing, begin_time: event.time }`.
+3. **`NetObjectBeginEvent`** / **`NetRPCBeginEvent`**: parent = stack top, push `OpenSpan { span_id: event_id, parent_span_id: parent.span_id, ..., begin_time: event.time }`. Inherit `connection_name` / `is_outgoing` from the stack root.
+4. **`NetPropertyEvent`** (leaf): parent = stack top. `span_id = event_id`. `parent_span_id = parent.span_id`. `depth = parent.depth + 1`. `connection_name` / `is_outgoing` inherited from the stack root (same rule as step 3). `bit_size` from event. `begin_bits` = parent's `child_bits_consumed`. `end_bits` = `begin_bits + bit_size`. `begin_time = end_time = event.time` (point-in-time). Emit row. Then `parent.child_bits_consumed += bit_size`.
+5. **End events** (`NetConnectionEndEvent` / `NetObjectEndEvent` / `NetRPCEndEvent`): pop the matching open span. `bit_size` from event. `begin_bits` = parent's `child_bits_consumed` (or 0 for root). `end_bits` = `begin_bits + bit_size`. `begin_time` and `span_id` from the popped open span; `end_time = event.time`. Emit row. Then `parent.child_bits_consumed += bit_size` (no-op for root).
 6. The view drives the builder one block at a time across a contiguous group; state persists across `parse_net_block` calls within the group (this is what gives us cross-block stitching for free).
-7. At group boundary (gap detected, or last block in partition), call `builder.finish()`. Unlike `CallTreeBuilder::finish()` (`call_tree.rs:80-98`), which only restructures the in-memory stack into a tree without touching timestamps, `NetSpanTreeBuilder::finish()` must explicitly drain the stack: for each still-open span, emit a row with `end_time = group.end_time` and `bit_size = child_bits_consumed`. This is new logic — do not copy `CallTreeBuilder::finish()` verbatim.
+7. At group boundary (gap detected, or last block in partition), call `builder.finish()`. If the stack is non-empty, discard the open spans without emitting synthetic rows and log at debug level (not warn — group boundaries cannot distinguish partial data from malformed data, and partial is the common case). Bit attribution for unclosed spans is unrecoverable, same rationale as the symmetric "End with no matching Begin" case.
 
 Both classic (peer subobjects at depth 0) and Iris (nested subobjects at depth 1+) hierarchies fall out naturally — the algorithm just follows the event order.
 
@@ -74,7 +75,7 @@ Both classic (peer subobjects at depth 0) and Iris (nested subobjects at depth 1
 
 - **Block boundary inside a Connection scope**: handled implicitly by stack persistence across the block group. The Begin in block N and End in block N+1 stitch automatically. No special code needed.
 - **Partition boundary inside a Connection scope**: `generate_process_jit_partitions_segment` (`rust/analytics/src/lakehouse/jit_partitions.rs:337-361`) splits a stream's blocks into multiple `SourceDataBlocksInMemory` when cumulative `nb_objects` exceeds `max_nb_objects` (default 20M). The `NetSpanTreeBuilder` stack only persists within one `SourceDataBlocksInMemory`, so a Connection straddling a partition split degrades to the "truly unclosed" case below on both sides. Accepted as a rare edge case — net streams are low-volume relative to the 20M-event cap, so connections crossing this boundary should be exceptional.
-- **Truly unclosed spans at group end** (gap in block sequence, or the End event genuinely never came): best-effort emit per step 7 above. Silent. Connection scopes are designed to fit within block boundaries in practice, so this should be rare.
+- **Truly unclosed spans at group end** (gap in block sequence, or the End event genuinely never came): drop the open spans, log at debug level. Bit attribution is unrecoverable. Connection scopes are designed to fit within block boundaries in practice, so this should be rare.
 - **End with no matching Begin** (per mkdocs §4 "EndConnection events with no preceding BeginConnection"): silently skip. Unlike thread spans where `CallTreeBuilder` synthesizes a root span at `begin_range_ns`, a net End with no Begin means the bit attribution is unrecoverable — skipping is safer than emitting a row with fabricated offsets.
 - **Decision-6 absorption** (the `LogMicromegasNet` warning case in mkdocs §4): from analytics' point of view this is just an extra Begin/End pair; treat each End as authoritative for its Begin.
 - **Sum of children < parent bit_size**: that is the framing/overhead gap (mkdocs §2 "content-vs-wire"). Don't synthesize a filler span; aggregation queries can compute it directly (`bit_size - sum(child.bit_size)`).
@@ -102,6 +103,8 @@ Specifics:
 - Replace direct `timestampToMs(beginRaw, beginField?.type)` with a small adapter: if `xAxisMode === 'time'` use the existing helper; if `'bits'` cast to `Number(beginRaw)` directly.
 - Tick formatter (around lines 494–513): branch on `xAxisMode`. New helper `formatBits(n: number): string` returning `"123 b"` / `"4.5 Kb"` / `"2.1 Mb"`.
 - Tooltip (around lines 759–778): replace `formatDuration(end - begin)` with `formatBits(end - begin)` in bits mode. Add `bit_size`, `kind`, `connection_name`, `is_outgoing` to the tooltip when those columns are present (they are, for net spans; harmless to check `if (col)` for time-mode usage).
+- **Drag-to-zoom selection callback** (`onTimeRangeSelect`, `FlameGraphCell.tsx:298,809`): only fire in `xAxisMode === 'time'`. In bits mode the X-axis is bit counts, not timestamps — feeding them through `new Date(...)` would propagate nonsense to downstream notebook cells. Drag-to-zoom for the local view is still wanted; only the cross-cell time-range broadcast is suppressed.
+- **`initialFrom` / `initialTo` editor options** (`FlameGraphCell.tsx:1127–1144`, parser at `:957–1000`): in bits mode these are ignored — `resolveInitialTimeRange` short-circuits to `{}` when `xAxisMode === 'bits'` and the camera fits to the data range derived from the query. Rationale: in time mode these knobs exist because low-frequency threads (e.g. a once-per-minute logger) can stretch spans across the whole process lifetime, making fit-to-data show mostly empty space; the bits axis doesn't have that pathology — spans are bounded by an outer Connection scope (typically one packet's worth of bits) and users already filter by `connection_name`/`is_outgoing` in their SQL. If a comparable bit-range preset need surfaces later, add a `parseBits` adapter then. Editor UI for these inputs stays visible; behavior is silent no-op in bits mode.
 - The `lane` column already lets users group by `kind` (`SELECT ..., kind AS lane FROM view_instance('net_spans', '<pid>')`). No new lane logic needed.
 - Editor placeholder (line 1103) and description: extend to mention "or a network trace by bits".
 
@@ -132,24 +135,30 @@ Alternative: if the user adds `kind AS lane`, they get four independent horizont
 
 1. **`rust/analytics/src/net_block_processing.rs`** (new) — define `NetBlockProcessor` trait, `parse_net_block_payload()`, `parse_net_block()` (the latter is the `parse_thread_block` analog that fetches payload + calls the parser). The trait has one method per event kind: `on_connection_begin`, `on_connection_end`, `on_object_begin`, `on_object_end`, `on_property`, `on_rpc_begin`, `on_rpc_end`. Field extraction uses the serialized (snake_case) names registered in `NetMetadata.h`: `obj.get::<i64>("time")`, `obj.get::<Arc<String>>("connection_name" | "object_name" | "property_name" | "function_name")`, `obj.get::<u8>("is_outgoing")`, `obj.get::<u32>("bit_size")`. The trait methods convert at the boundary: `is_outgoing: bool` = `raw_u8 != 0`, `bit_size: i64` = `raw_u32 as i64`. No Rust-side type defs needed — transit decodes from the stream's metadata.
 2. **`rust/analytics/src/net_spans_table.rs`** (new) — `NetSpanRecord`, `NetSpanRecordBuilder`, `net_spans_table_schema()`. Pattern: copy `async_events_table.rs`, swap field set per the schema table above. Use `StringDictionaryBuilder<Int16Type>` for all dict columns. The builder tracks min `begin_time` and max `end_time` across all rows for `get_time_range()`.
-3. **`rust/analytics/src/net_span_tree.rs`** (new) — `NetSpanTreeBuilder` (analogous to `CallTreeBuilder` in `call_tree.rs`) that implements `NetBlockProcessor`, owns the open-span stack, allocates `span_id`s monotonically across all blocks in a group, and emits rows directly into a `NetSpanRecordBuilder`. Plus `make_net_span_tree(blocks, ...)` helper analogous to `make_call_tree` — iterates a block slice and runs the builder across them with persistent state.
+3. **`rust/analytics/src/net_span_tree.rs`** (new) — `NetSpanTreeBuilder` (analogous to `CallTreeBuilder` in `call_tree.rs`) that implements `NetBlockProcessor`, owns the open-span stack, derives `span_id` from the per-event `event_id` (`block.object_offset` + index, globally unique within the stream — see span_id allocation note in **Design → Block processing algorithm**), and writes rows into a `&mut NetSpanRecordBuilder` borrowed from the caller. Plus `make_net_span_tree(blocks, record_builder, ...)` helper analogous to `make_call_tree` — iterates a block slice and runs the builder across them with persistent stack state.
 4. **`rust/analytics/src/lakehouse/net_spans_view.rs`** (new) — `NetSpansView` and `NetSpansViewMaker`. Compose:
-   - process-id discovery (constructor pattern from `async_events_view.rs:74-89`) + `generate_process_jit_partitions(..., "net")` call pattern from `async_events_view.rs:150-161` (the stream-tag filter itself lives in `jit_partitions.rs`, keyed off the `stream_tag` parameter)
-   - block grouping (consecutive `begin_ticks == prev.end_ticks`) + `write_partition_from_rows` channel pattern from `thread_spans_view.rs:104-198` — replace `append_call_tree` with `append_net_span_tree` driving `make_net_span_tree`
-   - time filter / time bounds per **Design → View** above.
+   - process-id constructor (parsing `view_instance_id` as UUID; reject `"global"`) from `async_events_view.rs:74-89`. The `Arc<ViewFactory>` field is required because the JIT update step calls `find_process_with_latest_timing(lakehouse, view_factory, process_id, query_range)`.
+   - JIT update flow: follow `AsyncEventsView::jit_update` (`async_events_view.rs:120-184`) — `find_process_with_latest_timing` then `make_time_converter_from_latest_timing(process, last_block_end_ticks, last_block_end_time)`. Do **not** use `ThreadSpansView`'s `find_process` + `make_time_converter_from_db` flow; the latter doesn't account for processes whose latest timing diverges from the DB-recorded TSC frequency reference.
+   - Stream/partition discovery: `generate_process_jit_partitions(..., "net")` call pattern from `async_events_view.rs:150-161` (the stream-tag filter lives in `jit_partitions.rs`, keyed off the `stream_tag` parameter).
+   - Partition write: block grouping (consecutive `begin_ticks == prev.end_ticks`) + `write_partition_from_rows` channel pattern from `thread_spans_view.rs:104-198` — replace `append_call_tree` with `append_net_span_tree` driving `make_net_span_tree`. The single `NetSpanRecordBuilder` is created at the top of `write_partition` and reused across all groups in the partition.
+   - Time filter / time bounds per **Design → View** above.
 5. **`rust/analytics/src/lib.rs`** — add `pub mod net_block_processing;`, `pub mod net_spans_table;`, `pub mod net_span_tree;`.
 6. **`rust/analytics/src/lakehouse/mod.rs`** — add `pub mod net_spans_view;`.
 7. **`rust/analytics/src/lakehouse/view_factory.rs`** — register `net_spans` in the `updated_factory` block alongside `async_events` (the `async_events` registration is at ~line 295-298, *after* `updated_factory` is cloned from `factory_arc`; line 279 is where `thread_spans` is registered). Because `NetSpansView` follows the `AsyncEventsView` pattern (process-id-parameterized), `NetSpansViewMaker::new` takes an `Arc<ViewFactory>` and must be instantiated via `Arc::new(updated_factory.clone())` — same shape as the `AsyncEventsViewMaker::new(...)` call. Add a docstring block in the module-level comment at the top of the file documenting the `net_spans` schema (matches the existing `async_events` docstring block in style).
 
 ### Phase 2 — Tests
 
-8. **`rust/analytics/tests/net_spans_test.rs`** (new) — fixture-style tests building `BlockPayload`s in-memory (pattern: reuse helpers used by existing analytics integration tests). Cover:
+8. **`rust/analytics/tests/net_spans_test.rs`** (new) — unit tests that drive `NetSpanTreeBuilder` **directly through the `NetBlockProcessor` trait**, bypassing transit decode and `BlockPayload` construction.
+
+   Rationale: `rust/analytics/tests/` has no in-memory `BlockPayload` synthesis helpers (only `test_helpers.rs::make_process_metadata()`). Existing analytics tests (`async_span_tests.rs`, `span_tests.rs`) exercise the full encode→decode round-trip via the live tracing primitives, which is heavier than needed here. For the algorithmic correctness checks below, calling builder methods directly (`builder.on_connection_begin(event_id, time, name, is_outgoing)` etc.) is sufficient and keeps the tests focused on the per-event state machine. End-to-end transit-format coverage is provided by the Phase 4 Python integration test.
+
+   Cover:
    - **Classic shape**: Connection → Object(A) → Property × 2 → ObjectEnd → Object(B) → ObjectEnd → ConnectionEnd. Assert depth-1 sibling structure and `begin_bits` / `end_bits` reflect cumulative-offset-within-parent correctly.
    - **Iris shape**: Connection → Object(A) → Object(child of A) → ObjectEnd → ObjectEnd → ConnectionEnd. Assert depth-2 nesting.
    - **RPC at root**: Connection → RPC → RPCEnd → ConnectionEnd.
    - **Property leaf bit accounting**: properties under an object stack their `begin_bits` correctly; final object `bit_size` may exceed sum of properties (framing gap is allowed).
-   - **Cross-block stitching**: a Connection whose Begin is in block N and whose End is in block N+1 (with `block_N+1.begin_ticks == block_N.end_ticks`) produces a single row with `begin_time` from block N's Begin and `end_time` from block N+1's End — verifies that stack state persists across `parse_net_block` calls within a group.
-   - **Truly unclosed at group end**: a Connection Begin with no matching End anywhere in the partition is emitted with `end_time = group.end_time` and `bit_size = child_bits_consumed`; no row leaks, no log spam.
+   - **Cross-block stitching**: simulate two blocks by calling builder methods continuously without resetting state between the simulated block boundaries — the Connection Begin from "block N" and ConnectionEnd from "block N+1" produce one row; assert `span_id` of the emitted row equals the Begin event's `event_id` (proving global uniqueness via `object_offset` indexing).
+   - **Truly unclosed at group end**: a Connection Begin with no matching End — call `builder.finish()` and assert no row is emitted for the open span (it's dropped with a debug-level log).
 
 ### Phase 3 — Frontend
 
@@ -163,7 +172,7 @@ Alternative: if the user adds `kind AS lane`, they get four independent horizont
 ### Phase 5 — Docs
 
 12. **`mkdocs/docs/unreal/network-tracing.md`** §5 — replace the "view has not yet been added" paragraph with a reference to `view_instance('net_spans', '<pid>')` and shorter example queries that use it. Keep the `parse_block` example for low-level inspection.
-13. **`mkdocs/docs/query-guide/`** — add a `net_spans` entry to the views/functions reference if there's a single view-listing page (verify location during implementation).
+13. **`mkdocs/docs/query-guide/schema-reference.md`** — add `net_spans` to the Views Overview table (~lines 5–18) and add a new `### net_spans` section (modeled on the `### async_events` section at ~line 339) with the full schema table, a one-paragraph note on JIT-only / process-id parameterization, and the example flame-chart-friendly query from **Design → Notebook usage**.
 
 ## Files to Modify
 
@@ -188,7 +197,7 @@ Alternative: if the user adds `kind AS lane`, they get four independent horizont
 
 **Modify (docs):**
 - `mkdocs/docs/unreal/network-tracing.md`
-- `mkdocs/docs/query-guide/*` (single file once located)
+- `mkdocs/docs/query-guide/schema-reference.md`
 
 ## Trade-offs
 
@@ -229,5 +238,4 @@ End-to-end:
 
 ## Open Questions
 
-- **Span ID stability across materializations**: should `span_id` be stable (deterministic from event position in the block) or just unique? The async_events view treats them as opaque-but-unique, which is enough for self-joins. We adopt the same.
 - **Should the frontend tooltip show parent's `connection_name` for object-kind rows even though `connection_name` is denormalized onto every row?** Probably yes — keeps the tooltip self-contained. (Implementation already covers this.)

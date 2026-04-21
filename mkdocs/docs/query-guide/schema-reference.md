@@ -16,6 +16,7 @@ Micromegas organizes telemetry data into several views that can be queried using
 | [`measures`](#measures) | Numeric metrics and performance data | Performance monitoring, alerting |
 | [`thread_spans`](#thread_spans) | Synchronous execution spans and timing | Performance profiling, call tracing |
 | [`async_events`](#async_events) | Asynchronous event lifecycle tracking | Async operation monitoring |
+| [`net_spans`](#net_spans) | Network bandwidth spans (Connection / Object / Property / RPC) | Replication bandwidth attribution, bit-axis flame charts |
 
 ## Core Views
 
@@ -443,6 +444,62 @@ SELECT time, event_type, name, span_id, parent_span_id, depth
 FROM view_instance('async_events', 'my_process_123')
 WHERE span_id = 12345
 ORDER BY time;
+```
+
+### `net_spans`
+
+Pre-paired network bandwidth spans materialized from a process's `net`-tagged stream. The X-axis in these rows is **bits on the wire** (`begin_bits` / `end_bits`), not time — each span's width represents its bit contribution to the parent scope. A Connection span wraps the bunch/packet, Object spans nest replicated actors/subobjects, RPC spans cover remote calls, and Property rows are point-in-time leaves.
+
+The view is **JIT-only** and **parameterized by `process_id`** (there is no `global` instance). Partitions are built on demand when the view is first queried.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `process_id` | `Dictionary(Int16, Utf8)` | Process id (the view parameter) |
+| `stream_id` | `Dictionary(Int16, Utf8)` | Source net stream (one per process) |
+| `span_id` | `Int64` | Unique span id within the stream |
+| `parent_span_id` | `Int64` | Span id of the enclosing span (`0` at the Connection root) |
+| `depth` | `UInt32` | Tree depth (`0` for Connection, `1+` inside) |
+| `kind` | `Dictionary(Int16, Utf8)` | `connection`, `object`, `property`, or `rpc` |
+| `name` | `Dictionary(Int16, Utf8)` | Connection / object / property / function name |
+| `connection_name` | `Dictionary(Int16, Utf8)` | Enclosing connection name (denormalized onto every row) |
+| `is_outgoing` | `Boolean` | Direction of the enclosing connection |
+| `begin_bits` | `Int64` | Cumulative bit offset within the parent span (`0` at the Connection root) |
+| `end_bits` | `Int64` | `begin_bits + bit_size` |
+| `bit_size` | `Int64` | Inclusive bit size attributed to this span |
+| `begin_time` | `Timestamp(Nanosecond)` | Timestamp of the span's Begin event |
+| `end_time` | `Timestamp(Nanosecond)` | Timestamp of the span's End event (equals `begin_time` for properties) |
+
+**Example queries:**
+
+```sql
+-- Flame-chart-friendly query: feeds the Flame Graph cell with X=bits.
+SELECT span_id         AS id,
+       parent_span_id  AS parent,
+       name,
+       depth,
+       begin_bits      AS begin,
+       end_bits        AS end,
+       bit_size,
+       kind,
+       connection_name,
+       is_outgoing
+FROM view_instance('net_spans', '<process_id>')
+WHERE connection_name = '127.0.0.1:7777' AND is_outgoing = false;
+
+-- Top 10 properties by bandwidth across the whole capture
+SELECT name, connection_name, SUM(bit_size) AS total_bits
+FROM view_instance('net_spans', '<process_id>')
+WHERE kind = 'property'
+GROUP BY name, connection_name
+ORDER BY total_bits DESC
+LIMIT 10;
+
+-- Per-connection outgoing bandwidth
+SELECT connection_name, SUM(bit_size) AS bits
+FROM view_instance('net_spans', '<process_id>')
+WHERE kind = 'connection' AND is_outgoing = true
+GROUP BY connection_name
+ORDER BY bits DESC;
 ```
 
 ## Data Types

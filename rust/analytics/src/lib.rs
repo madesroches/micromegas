@@ -35,6 +35,12 @@ pub mod measure;
 pub mod metadata;
 /// In-memory metrics in arrow format
 pub mod metrics_table;
+/// Parsing of network tracing event streams
+pub mod net_block_processing;
+/// Transforms net events into pre-paired bandwidth spans
+pub mod net_span_tree;
+/// In-memory net spans in arrow format
+pub mod net_spans_table;
 /// Access to the raw binary telemetry payload
 pub mod payload;
 /// UDF to convert properties to dictionary-encoded arrays

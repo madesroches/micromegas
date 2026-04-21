@@ -1,5 +1,5 @@
 import { useRef, useEffect, useCallback, useMemo, useState } from 'react'
-import { Table } from 'apache-arrow'
+import { DataType, Table } from 'apache-arrow'
 import * as THREE from 'three'
 import type {
   CellTypeMetadata,
@@ -16,6 +16,26 @@ import { timestampToMs } from '@/lib/arrow-utils'
 import { parseRelativeTime } from '@/lib/time-range'
 import { Flame, ChevronDown, ChevronRight } from 'lucide-react'
 import { computeAsyncVisualDepths, type SpanData } from './FlameGraphLayout'
+
+// X-axis mode: 'time' uses timestamp columns; 'bits' uses numeric (Int64/Float64)
+// columns where each unit represents bits on the wire (see `net_spans` view).
+type XAxisMode = 'time' | 'bits'
+
+function axisValue(raw: unknown, dataType: DataType | undefined, mode: XAxisMode): number {
+  if (mode === 'bits') {
+    if (raw == null) return NaN
+    if (typeof raw === 'number') return raw
+    if (typeof raw === 'bigint') return Number(raw)
+    const n = Number(raw)
+    return Number.isFinite(n) ? n : NaN
+  }
+  return timestampToMs(raw, dataType)
+}
+
+function detectXAxisMode(dataType: DataType | undefined): XAxisMode {
+  if (dataType && DataType.isTimestamp(dataType)) return 'time'
+  return 'bits'
+}
 
 // =============================================================================
 // Constants
@@ -76,12 +96,15 @@ interface FlameIndex {
   timeRange: { min: number; max: number }
   /** Pre-built id → name lookup for O(1) parent name resolution in tooltips */
   idToName: Map<bigint, string>
+  /** Whether the X axis represents wall-clock time or bits on the wire. */
+  xAxisMode: XAxisMode
   error?: string
 }
 
 const REQUIRED_COLUMNS = ['id', 'parent', 'name', 'begin', 'end', 'depth'] as const
 
-function buildFlameIndex(table: Table): FlameIndex {
+// eslint-disable-next-line react-refresh/only-export-components
+export function buildFlameIndex(table: Table): FlameIndex {
   // Validate required columns
   const missingColumns = REQUIRED_COLUMNS.filter((col) => !table.getChild(col))
   if (missingColumns.length > 0) {
@@ -91,6 +114,7 @@ function buildFlameIndex(table: Table): FlameIndex {
       lanes: [],
       timeRange: { min: 0, max: 0 },
       idToName: new Map(),
+      xAxisMode: 'time',
       error: `Missing required columns: ${missingColumns.join(', ')}. Query must return: name, begin, end, depth. Available: ${available}`,
     }
   }
@@ -102,6 +126,7 @@ function buildFlameIndex(table: Table): FlameIndex {
 
   const beginField = table.schema.fields.find((f) => f.name === 'begin')
   const endField = table.schema.fields.find((f) => f.name === 'end')
+  const xAxisMode = detectXAxisMode(beginField?.type)
 
   // Single pass: bucket by lane, track min/max time and max depth per lane
   const laneMap = new Map<string, { rows: number[]; maxDepth: number }>()
@@ -114,8 +139,8 @@ function buildFlameIndex(table: Table): FlameIndex {
     const endRaw = endCol.get(i)
     if (beginRaw == null || endRaw == null) continue
 
-    const begin = timestampToMs(beginRaw, beginField?.type)
-    const end = timestampToMs(endRaw, endField?.type)
+    const begin = axisValue(beginRaw, beginField?.type, xAxisMode)
+    const end = axisValue(endRaw, endField?.type, xAxisMode)
     if (isNaN(begin) || isNaN(end)) continue
 
     const depth = Number(depthCol.get(i) ?? 0)
@@ -138,8 +163,8 @@ function buildFlameIndex(table: Table): FlameIndex {
     const lane = laneMap.get(name)!
     const rowIndices = new Int32Array(lane.rows)
     rowIndices.sort((a, b) => {
-      const aBegin = timestampToMs(beginCol.get(a), beginField?.type)
-      const bBegin = timestampToMs(beginCol.get(b), beginField?.type)
+      const aBegin = axisValue(beginCol.get(a), beginField?.type, xAxisMode)
+      const bBegin = axisValue(beginCol.get(b), beginField?.type, xAxisMode)
       return aBegin - bBegin
     })
 
@@ -157,8 +182,8 @@ function buildFlameIndex(table: Table): FlameIndex {
         spanDataArr.push({
           id: Number(idCol.get(row) ?? 0),
           parent: Number(parentCol.get(row) ?? 0),
-          begin: timestampToMs(beginCol.get(row), beginField?.type),
-          end: timestampToMs(endCol.get(row), endField?.type),
+          begin: axisValue(beginCol.get(row), beginField?.type, xAxisMode),
+          end: axisValue(endCol.get(row), endField?.type, xAxisMode),
           depth: Number(depthCol.get(row) ?? 0),
         })
       }
@@ -200,6 +225,7 @@ function buildFlameIndex(table: Table): FlameIndex {
     lanes,
     timeRange: { min: globalMin === Infinity ? 0 : globalMin, max: globalMax === -Infinity ? 0 : globalMax },
     idToName,
+    xAxisMode,
   }
 }
 
@@ -232,7 +258,7 @@ interface HitResult {
 
 function hitTest(
   index: FlameIndex,
-  dataX: number, // time in ms
+  dataX: number, // time in ms or bits (depends on xAxisMode)
   dataY: number, // vertical pixel offset (from top of content)
 ): HitResult | null {
   const beginCol = index.table.getChild('begin')!
@@ -256,9 +282,9 @@ function hitTest(
 
       for (let i = 0; i < lane.rowIndices.length; i++) {
         const row = lane.rowIndices[i]
-        const begin = timestampToMs(beginCol.get(row), beginField?.type)
+        const begin = axisValue(beginCol.get(row), beginField?.type, index.xAxisMode)
         if (begin > dataX) break // past cursor — no more candidates
-        const end = timestampToMs(endCol.get(row), endField?.type)
+        const end = axisValue(endCol.get(row), endField?.type, index.xAxisMode)
         if (lane.visualDepths[i] === depth && dataX >= begin && dataX <= end) {
           return { rowIndex: row, laneName: lane.name }
         }
@@ -281,6 +307,15 @@ function formatDuration(ms: number): string {
   return `${(ms / 1000).toFixed(2)}s`
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
+export function formatBits(n: number): string {
+  const abs = Math.abs(n)
+  if (abs < 1_000) return `${n.toFixed(0)} b`
+  if (abs < 1_000_000) return `${(n / 1_000).toFixed(1)} Kb`
+  if (abs < 1_000_000_000) return `${(n / 1_000_000).toFixed(1)} Mb`
+  return `${(n / 1_000_000_000).toFixed(1)} Gb`
+}
+
 const TIME_AXIS_FORMAT = new Intl.DateTimeFormat(undefined, {
   hour: '2-digit',
   minute: '2-digit',
@@ -288,6 +323,10 @@ const TIME_AXIS_FORMAT = new Intl.DateTimeFormat(undefined, {
   fractionalSecondDigits: 3,
   hour12: false,
 } as Intl.DateTimeFormatOptions)
+
+function formatAxisTick(value: number, mode: XAxisMode): string {
+  return mode === 'bits' ? formatBits(value) : TIME_AXIS_FORMAT.format(value)
+}
 
 // =============================================================================
 // FlameGraph Renderer (Three.js + Canvas2D + DOM)
@@ -349,6 +388,7 @@ function FlameGraphView({ index, onTimeRangeSelect, initialTimeRange }: FlameGra
     const nameCol = index.table.getChild('name')!
     const beginField = index.table.schema.fields.find((f) => f.name === 'begin')
     const endField = index.table.schema.fields.find((f) => f.name === 'end')
+    const xAxisMode = index.xAxisMode
 
     const pxPerMs = s.width / timeSpan
     const mat = new THREE.Matrix4()
@@ -380,10 +420,10 @@ function FlameGraphView({ index, onTimeRangeSelect, initialTimeRange }: FlameGra
 
       for (let i = 0; i < lane.rowIndices.length; i++) {
         const row = lane.rowIndices[i]
-        const begin = timestampToMs(beginCol.get(row), beginField?.type)
+        const begin = axisValue(beginCol.get(row), beginField?.type, xAxisMode)
         if (begin >= s.viewMaxTime) break // sorted by begin — nothing further can be visible
 
-        const end = timestampToMs(endCol.get(row), endField?.type)
+        const end = axisValue(endCol.get(row), endField?.type, xAxisMode)
         if (end <= s.viewMinTime) continue // ends before viewport
 
         const depth = lane.visualDepths[i]
@@ -451,10 +491,10 @@ function FlameGraphView({ index, onTimeRangeSelect, initialTimeRange }: FlameGra
 
       for (let i = 0; i < lane.rowIndices.length; i++) {
         const row = lane.rowIndices[i]
-        const begin = timestampToMs(beginCol.get(row), beginField?.type)
+        const begin = axisValue(beginCol.get(row), beginField?.type, xAxisMode)
         if (begin > s.viewMaxTime) break
 
-        const end = timestampToMs(endCol.get(row), endField?.type)
+        const end = axisValue(endCol.get(row), endField?.type, xAxisMode)
         if (end < s.viewMinTime) continue
 
         const depth = lane.visualDepths[i]
@@ -502,9 +542,9 @@ function FlameGraphView({ index, onTimeRangeSelect, initialTimeRange }: FlameGra
     const tickCount = Math.max(2, Math.floor(s.width / 120))
     const tickStep = timeSpan / (tickCount - 1)
     for (let t = 0; t < tickCount; t++) {
-      const time = s.viewMinTime + t * tickStep
+      const tickValue = s.viewMinTime + t * tickStep
       const x = t * (s.width / (tickCount - 1))
-      ctx.fillText(TIME_AXIS_FORMAT.format(time), t === tickCount - 1 ? Math.max(0, x - 80) : x + 2, axisY + 4)
+      ctx.fillText(formatAxisTick(tickValue, xAxisMode), t === tickCount - 1 ? Math.max(0, x - 80) : x + 2, axisY + 4)
       ctx.strokeStyle = '#374151'
       ctx.beginPath()
       ctx.moveTo(x, axisY)
@@ -752,11 +792,14 @@ function FlameGraphView({ index, onTimeRangeSelect, initialTimeRange }: FlameGra
         const targetCol = index.table.getChild('target')
         const filenameCol = index.table.getChild('filename')
         const lineCol = index.table.getChild('line')
+        const kindCol = index.table.getChild('kind')
+        const bitSizeCol = index.table.getChild('bit_size')
+        const connectionNameCol = index.table.getChild('connection_name')
+        const isOutgoingCol = index.table.getChild('is_outgoing')
 
         const name = String(nameCol.get(hit.rowIndex) ?? '')
-        const begin = timestampToMs(beginCol.get(hit.rowIndex), beginField?.type)
-        const end = timestampToMs(endCol.get(hit.rowIndex), endField?.type)
-        const duration = end - begin
+        const begin = axisValue(beginCol.get(hit.rowIndex), beginField?.type, index.xAxisMode)
+        const end = axisValue(endCol.get(hit.rowIndex), endField?.type, index.xAxisMode)
         const spanId = idCol.get(hit.rowIndex)
         const parentId = parentCol.get(hit.rowIndex)
         const depth = depthCol.get(hit.rowIndex)
@@ -764,7 +807,28 @@ function FlameGraphView({ index, onTimeRangeSelect, initialTimeRange }: FlameGra
         // Resolve parent name via pre-built map (O(1) instead of O(n) scan)
         const parentName = (parentId != null && index.idToName.get(parentId)) || ''
 
-        let info = `<b>${escapeHtml(name)}</b><br>Duration: ${formatDuration(duration)}`
+        let info = `<b>${escapeHtml(name)}</b>`
+        if (index.xAxisMode === 'bits') {
+          info += `<br>Size: ${formatBits(end - begin)}`
+          if (bitSizeCol) {
+            const bs = bitSizeCol.get(hit.rowIndex)
+            if (bs != null) info += ` (bit_size: ${formatBits(Number(bs))})`
+          }
+        } else {
+          info += `<br>Duration: ${formatDuration(end - begin)}`
+        }
+        if (kindCol) {
+          const kind = kindCol.get(hit.rowIndex)
+          if (kind) info += `<br>Kind: ${escapeHtml(String(kind))}`
+        }
+        if (connectionNameCol) {
+          const conn = connectionNameCol.get(hit.rowIndex)
+          if (conn) info += `<br>Connection: ${escapeHtml(String(conn))}`
+        }
+        if (isOutgoingCol) {
+          const out = isOutgoingCol.get(hit.rowIndex)
+          if (out != null) info += `<br>Direction: ${out ? 'outgoing' : 'incoming'}`
+        }
         info += `<br>id: ${spanId}, depth: ${depth}`
         info += `<br>parent: ${parentId}${parentName ? ` (${escapeHtml(parentName)})` : ''}`
         if (targetCol) {
@@ -804,11 +868,13 @@ function FlameGraphView({ index, onTimeRangeSelect, initialTimeRange }: FlameGra
         const fromTime = s.viewMinTime + minX * timePerPx
         const toTime = s.viewMinTime + maxX * timePerPx
 
-        if (e.altKey && onTimeRangeSelect) {
-          // Alt+drag: propagate to notebook time range
+        // Alt+drag broadcasts the selection as a time range to downstream cells.
+        // In bits mode the X-axis is bit counts, so feeding them through `new Date(...)`
+        // would propagate meaningless timestamps. Only zoom locally in that case.
+        if (e.altKey && onTimeRangeSelect && index.xAxisMode === 'time') {
           onTimeRangeSelect(new Date(fromTime), new Date(toTime))
         } else {
-          // Regular drag: zoom into selection
+          // Regular drag (or bits mode): zoom into selection locally.
           s.viewMinTime = fromTime
           s.viewMaxTime = toTime
         }
@@ -817,7 +883,7 @@ function FlameGraphView({ index, onTimeRangeSelect, initialTimeRange }: FlameGra
       s.isDragging = false
       requestRender()
     },
-    [onTimeRangeSelect, requestRender]
+    [index, onTimeRangeSelect, requestRender]
   )
 
   const handleMouseLeave = useCallback(() => {
@@ -1016,10 +1082,13 @@ export function FlameGraphCell({
     return buildFlameIndex(table)
   }, [table])
 
-  // Read pre-resolved initial time range from execute (stored in options by getRendererProps)
-  const resolvedMin = typeof options?.resolvedInitialMin === 'number' ? options.resolvedInitialMin : undefined
-  const resolvedMax = typeof options?.resolvedInitialMax === 'number' ? options.resolvedInitialMax : undefined
-  const initialTimeRangeError = typeof options?.initialTimeRangeError === 'string' ? options.initialTimeRangeError : undefined
+  // Read pre-resolved initial time range from execute (stored in options by getRendererProps).
+  // In bits mode the initialFrom/initialTo knobs are silently ignored — those parse as time,
+  // while the X-axis is a bit count. Fit-to-data is the right default for bits.
+  const isBitsMode = index?.xAxisMode === 'bits'
+  const resolvedMin = !isBitsMode && typeof options?.resolvedInitialMin === 'number' ? options.resolvedInitialMin : undefined
+  const resolvedMax = !isBitsMode && typeof options?.resolvedInitialMax === 'number' ? options.resolvedInitialMax : undefined
+  const initialTimeRangeError = !isBitsMode && typeof options?.initialTimeRangeError === 'string' ? options.initialTimeRangeError : undefined
 
   // Fill missing bounds from data range
   const filledMin = resolvedMin === -Infinity && index ? index.timeRange.min : resolvedMin
@@ -1100,7 +1169,7 @@ function FlameGraphCellEditor({ config, onChange, variables, timeRange, onRun, c
           value={fgConfig.sql}
           onChange={(sql) => onChange({ ...fgConfig, sql })}
           language="sql"
-          placeholder="SELECT name, begin, end, depth, lane FROM ..."
+          placeholder="SELECT name, begin, end, depth, lane FROM ... (begin/end are timestamps for CPU traces, or bit offsets for net_spans)"
           minHeight="150px"
           onRunShortcut={onRun}
         />
@@ -1163,7 +1232,7 @@ export const flamegraphMetadata: CellTypeMetadata = {
 
   label: 'Flame Graph',
   icon: <Flame />,
-  description: 'Perfetto-style flame graph visualization of CPU traces',
+  description: 'Flame chart visualization of CPU traces (X = time) or network traces (X = bits on the wire)',
   showTypeBadge: true,
   defaultHeight: 400,
 
