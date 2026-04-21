@@ -11,6 +11,7 @@ This file documents the historical progress of the Micromegas project. For curre
   * Enable crash reporting on Linux and skip telemetry flush during malloc-crash to avoid deadlock
 * **Docs:**
   * Add Unreal net trace instrumentation guide and engine recipe
+  * Document flame graph notebook cell type
 
 ## April 2026 - v0.24.0
 
