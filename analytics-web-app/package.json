@@ -22,8 +22,8 @@
     "@radix-ui/react-dropdown-menu": "^2.1.16",
     "@radix-ui/react-progress": "^1.0.0",
     "@radix-ui/react-toast": "^1.1.0",
-    "@react-three/drei": "^10.7.7",
-    "@react-three/fiber": "^9.5.0",
+    "@react-three/drei": "~9.122.0",
+    "@react-three/fiber": "~8.18.0",
     "@tanstack/react-query": "^5.8.0",
     "apache-arrow": "^21.1.0",
     "class-variance-authority": "^0.7.0",
@@ -52,6 +52,7 @@
     "flatted": "^3.4.2",
     "handlebars": "^4.7.9",
     "minimatch": "^10.2.1",
+    "react-reconciler": "0.29.2",
     "rollup": "^4.59.0"
   },
   "devDependencies": {
