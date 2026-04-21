@@ -1,5 +1,29 @@
 # Net Spans View Plan
 
+## Status
+
+**Implemented** (commit `4e8536870` on `net_trace`). All five phases shipped:
+
+- ✅ **Phase 1 — Rust analytics core**: `net_block_processing.rs`, `net_spans_table.rs`, `net_span_tree.rs`, `lakehouse/net_spans_view.rs`; `lib.rs` / `lakehouse/mod.rs` / `lakehouse/view_factory.rs` wired up with the `net_spans` schema docstring block.
+- ✅ **Phase 2 — Rust unit tests**: `tests/net_spans_test.rs` — 6 tests covering classic / Iris / RPC / cross-block stitching / unclosed-at-finish / end-without-begin. All pass.
+- ✅ **Phase 3 — Frontend**: `FlameGraphCell.tsx` extended with `xAxisMode: 'time' | 'bits'` detection (Timestamp → time, anything else → bits), `formatBits` / `formatAxisTick` helpers, bits-mode tooltip showing `bit_size` / `kind` / `connection_name` / `is_outgoing`, alt-drag time-range broadcast suppressed in bits mode, `initialFrom` / `initialTo` silently ignored in bits mode. Test file `__tests__/FlameGraphCell.test.tsx` added (5 tests).
+- ✅ **Phase 4 — Python integration test**: `tests/test_net_spans.py` — basic query + inclusive-size invariant + global rejection. Skips gracefully when no `net`-tagged stream is in the lake.
+- ✅ **Phase 5 — Docs**: `mkdocs/docs/unreal/network-tracing.md` §5 rewritten to reference `net_spans`; `mkdocs/docs/query-guide/schema-reference.md` adds the view to the overview table and a full `### net_spans` section.
+
+**CI status:** `python3 build/rust_ci.py` (native + WASM, exit 0), `yarn lint`, `yarn type-check`, `yarn test` (884 tests including 5 new), `cargo machete` — all green.
+
+**Live integration — verified against imported prod data.** Added `local_test_env/ai_scripts/import_net_blocks_from_prod.py`, which pulls a bounded window of net-tagged blocks from the prod FlightSQL endpoint (OIDC via `python/micromegas/micromegas/cli/connection.py`), widens the selection to all blocks belonging to the scoping processes (so log / metric / cpu streams ride along), downloads raw payload bytes with the existing `get_payload(process_id, stream_id, block_id)` scalar UDF, and replays everything into the local lake via `CommandStatementIngest` (`processes` → `streams` → `blocks` → `payloads`). First seeded run: 4 processes (2× server, 2× client), 97 streams, 360 blocks (21 net / 27 log / 32 metrics / 280 cpu), ~393 MiB of payload. `SELECT kind, count(*), sum(bit_size) FROM view_instance('net_spans', '<pid>')` returns matching connection/object bit sums on the imported data — JIT path is exercised end-to-end. Flags: `--begin` / `--end` to retarget the window, `--block-id` (repeatable) for surgical imports, `--net-only` to skip the log/metric/cpu companions.
+
+**Outstanding:** notebook visual check (Testing Strategy §5) — confirm the flame graph cell actually renders bit-axis spans with the imported data in `analytics-web-app`.
+
+### Notable deviations from the original plan
+
+- **`finish()` semantics changed.** The plan called for `NetSpanTreeBuilder::finish()` to drain the open stack by emitting synthetic rows with `end_time = group.end_time` and `bit_size = child_bits_consumed`. The implementation drops unclosed open spans at debug level instead. Reason: bit attribution for an unclosed Connection scope is unrecoverable (the same rationale the plan's "End with no matching Begin" bullet already used for the symmetric case), and the synthetic-row approach would attribute `child_bits_consumed` to the Connection while ignoring the framing overhead the missing End event was supposed to report — silently inventing data. The plan text was updated to match.
+- **`block_id` column dropped** from the schema before implementation. Pre-paired spans don't need block traceability the way raw events do, and adding it would have inflated row size for no observed query benefit. Updated in the schema table.
+- **Frontend test coverage.** Added a small `formatBits` test suite alongside the `buildFlameIndex` Int64 test asked for by the plan.
+
+---
+
 ## Overview
 
 Add a JIT view `net_spans` to the analytics lakehouse that materializes the per-process Network Tracing event stream into a tree of bandwidth-attribution spans (Connection / Object / Property / RPC). The view is parameterized by `process_id` and is intended to drive a flame-chart cell in the analytics web app where the **width of each span represents the number of bits on the wire**, not time.
@@ -238,4 +262,4 @@ End-to-end:
 
 ## Open Questions
 
-- **Should the frontend tooltip show parent's `connection_name` for object-kind rows even though `connection_name` is denormalized onto every row?** Probably yes — keeps the tooltip self-contained. (Implementation already covers this.)
+- ~~**Should the frontend tooltip show parent's `connection_name` for object-kind rows even though `connection_name` is denormalized onto every row?**~~ **Resolved during implementation.** The tooltip now shows `Connection:` for every row that has the column populated (which `net_spans` rows always do), keeping it self-contained without a parent lookup.
