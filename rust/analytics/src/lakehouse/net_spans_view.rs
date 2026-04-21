@@ -12,7 +12,7 @@ use super::{
 };
 use crate::{
     lakehouse::write_partition::{PartitionRowSet, write_partition_from_rows},
-    metadata::find_process_with_latest_timing,
+    metadata::{StreamMetadata, find_process_with_latest_timing},
     net_span_tree::make_net_span_tree,
     net_spans_table::{NetSpanRecordBuilder, net_spans_table_schema},
     response_writer::ResponseWriter,
@@ -97,7 +97,7 @@ async fn append_net_span_tree(
     convert_ticks: &ConvertTicks,
     blocks: &[BlockMetadata],
     blob_storage: Arc<BlobStorage>,
-    stream: &crate::metadata::StreamMetadata,
+    stream: &StreamMetadata,
     process_id: Arc<String>,
 ) -> Result<()> {
     make_net_span_tree(
@@ -125,8 +125,6 @@ async fn write_partition(
     let nb_events = hash_to_object_count(&spec.block_ids_hash)? as usize;
     info!("nb_events: {nb_events}");
     let mut record_builder = NetSpanRecordBuilder::with_capacity(nb_events / 2);
-    let mut blocks_to_process: Vec<BlockMetadata> = vec![];
-    let mut last_end: Option<i64> = None;
     if spec.blocks.is_empty() {
         anyhow::bail!("empty partition spec");
     }
@@ -145,9 +143,24 @@ async fn write_partition(
         null_response_writer,
     ));
 
+    // Batch blocks by (stream_id, contiguity). `generate_process_jit_partitions` can
+    // interleave blocks from multiple net-tagged streams in one partition, so the
+    // pending batch must flush whenever the stream changes — not just on time gaps —
+    // otherwise the flushed rows would be tagged with the wrong stream_id and payload
+    // fetches would key off the wrong stream.
+    let mut blocks_to_process: Vec<BlockMetadata> = vec![];
+    let mut pending_stream: Option<Arc<StreamMetadata>> = None;
+    let mut last_end: Option<i64> = None;
+
     for block in &spec.blocks {
-        if block.block.begin_ticks == last_end.unwrap_or(block.block.begin_ticks) {
-            last_end = Some(block.block.end_ticks);
+        let contiguous = last_end
+            .map(|e| block.block.begin_ticks == e)
+            .unwrap_or(true);
+        let same_stream = pending_stream
+            .as_ref()
+            .map(|s| s.stream_id == block.stream.stream_id)
+            .unwrap_or(true);
+        if contiguous && same_stream {
             blocks_to_process.push(block.block.clone());
         } else {
             append_net_span_tree(
@@ -155,13 +168,16 @@ async fn write_partition(
                 convert_ticks,
                 &blocks_to_process,
                 lake.blob_storage.clone(),
-                &block.stream,
+                pending_stream
+                    .as_ref()
+                    .expect("pending_stream set whenever blocks_to_process is non-empty"),
                 process_id.clone(),
             )
             .await?;
-            last_end = Some(block.block.end_ticks);
             blocks_to_process = vec![block.block.clone()];
         }
+        pending_stream = Some(block.stream.clone());
+        last_end = Some(block.block.end_ticks);
     }
     if !blocks_to_process.is_empty() {
         append_net_span_tree(
@@ -169,7 +185,9 @@ async fn write_partition(
             convert_ticks,
             &blocks_to_process,
             lake.blob_storage.clone(),
-            &spec.blocks[0].stream,
+            pending_stream
+                .as_ref()
+                .expect("pending_stream set whenever blocks_to_process is non-empty"),
             process_id.clone(),
         )
         .await?;

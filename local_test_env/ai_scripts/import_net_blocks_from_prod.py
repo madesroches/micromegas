@@ -40,7 +40,9 @@ DEFAULT_BEGIN = dt.datetime(2026, 4, 21, 19, 7, 0, tzinfo=dt.timezone.utc)
 DEFAULT_END = dt.datetime(2026, 4, 21, 19, 14, 0, tzinfo=dt.timezone.utc)
 
 
-def _do_put_table(fl_client: flight.FlightClient, table_name: str, table: pyarrow.Table) -> int:
+def _do_put_table(
+    fl_client: flight.FlightClient, table_name: str, table: pyarrow.Table
+) -> int:
     """Push an Arrow table through CommandStatementIngest. Returns row count."""
     desc = make_ingest_flight_desc(table_name)
     writer, reader = fl_client.do_put(desc, table.schema)
@@ -110,7 +112,7 @@ def _project(table: pyarrow.Table, columns):
     return pyarrow.Table.from_arrays(out_columns, names=out_names)
 
 
-def _build_processes_table(blocks: pyarrow.Table, src) -> pyarrow.Table:
+def _build_processes_table(blocks: pyarrow.Table) -> pyarrow.Table:
     """The blocks view already carries every processes.* field we need."""
     projected = _project(
         blocks,
@@ -169,8 +171,6 @@ def _build_blocks_table(blocks: pyarrow.Table) -> pyarrow.Table:
 
 
 def _unique_by(table: pyarrow.Table, key: str) -> pyarrow.Table:
-    import pyarrow.compute as pc
-
     key_col = table.column(key)
     # drop_null would hide bad data; we want to notice it instead.
     if key_col.null_count:
@@ -196,10 +196,10 @@ def _fetch_payloads(src, begin, end, blocks: pyarrow.Table) -> pyarrow.Table:
     chunk = 8
     tables = []
     for i in range(0, len(bids), chunk):
-        triples = list(zip(pids[i : i + chunk], sids[i : i + chunk], bids[i : i + chunk]))
-        values_clause = ", ".join(
-            f"('{p}', '{s}', '{b}')" for (p, s, b) in triples
+        triples = list(
+            zip(pids[i : i + chunk], sids[i : i + chunk], bids[i : i + chunk])
         )
+        values_clause = ", ".join(f"('{p}', '{s}', '{b}')" for (p, s, b) in triples)
         sql = (
             "SELECT process_id, stream_id, block_id, "
             "get_payload(process_id, stream_id, block_id) AS payload "
@@ -218,16 +218,20 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument(
         "--begin",
-        type=lambda s: dt.datetime.fromisoformat(s).replace(tzinfo=dt.timezone.utc)
-        if dt.datetime.fromisoformat(s).tzinfo is None
-        else dt.datetime.fromisoformat(s),
+        type=lambda s: (
+            dt.datetime.fromisoformat(s).replace(tzinfo=dt.timezone.utc)
+            if dt.datetime.fromisoformat(s).tzinfo is None
+            else dt.datetime.fromisoformat(s)
+        ),
         default=DEFAULT_BEGIN,
     )
     ap.add_argument(
         "--end",
-        type=lambda s: dt.datetime.fromisoformat(s).replace(tzinfo=dt.timezone.utc)
-        if dt.datetime.fromisoformat(s).tzinfo is None
-        else dt.datetime.fromisoformat(s),
+        type=lambda s: (
+            dt.datetime.fromisoformat(s).replace(tzinfo=dt.timezone.utc)
+            if dt.datetime.fromisoformat(s).tzinfo is None
+            else dt.datetime.fromisoformat(s)
+        ),
         default=DEFAULT_END,
     )
     ap.add_argument(
@@ -238,7 +242,9 @@ def main():
     )
     ap.add_argument(
         "--target-uri",
-        default=os.environ.get("MICROMEGAS_LOCAL_FLIGHTSQL_URL", "grpc://localhost:50051"),
+        default=os.environ.get(
+            "MICROMEGAS_LOCAL_FLIGHTSQL_URL", "grpc://localhost:50051"
+        ),
     )
     ap.add_argument(
         "--net-only",
@@ -267,24 +273,17 @@ def main():
         blocks = net_blocks
     else:
         blocks = _select_blocks_for_processes(src, args.begin, args.end, process_ids)
-    print(
-        f"selected {blocks.num_rows} blocks total in {time.time() - t0:.1f}s"
-    )
+    print(f"selected {blocks.num_rows} blocks total in {time.time() - t0:.1f}s")
 
     # Summarize tag breakdown so the user can verify logs/metrics came along.
-    import pyarrow.compute as pc
-    tags_col = blocks.column("streams.tags")
-    stream_ids = blocks.column("stream_id").to_pylist()
-    tags_list = tags_col.to_pylist()
+    tags_list = blocks.column("streams.tags").to_pylist()
     tag_counter = {}
-    per_stream_tag = {}
-    for sid, t in zip(stream_ids, tags_list):
+    for t in tags_list:
         primary = (t or ["(untagged)"])[0] if t else "(untagged)"
         tag_counter[primary] = tag_counter.get(primary, 0) + 1
-        per_stream_tag[sid] = primary
     print("blocks per primary tag:", sorted(tag_counter.items()))
 
-    processes = _build_processes_table(blocks, src)
+    processes = _build_processes_table(blocks)
     streams = _build_streams_table(blocks)
     blocks_out = _build_blocks_table(blocks)
 

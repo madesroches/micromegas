@@ -16,6 +16,11 @@ lazy_static::lazy_static! {
     static ref EMPTY_NAME: Arc<String> = Arc::new(String::new());
 }
 
+/// Sentinel `parent_span_id` used for Connection roots and for any span whose
+/// parent is missing. Set to `-1` so it can never collide with a real `span_id`
+/// (which is the per-event `event_id`, a non-negative offset within the stream).
+pub const ROOT_PARENT_SPAN_ID: i64 = -1;
+
 #[derive(Debug)]
 struct OpenSpan {
     span_id: i64,
@@ -73,36 +78,43 @@ impl<'a> NetSpanTreeBuilder<'a> {
         if let Some(top) = self.stack.last() {
             (top.span_id, top.depth + 1, top.child_bits_consumed)
         } else {
-            // No parent on stack — use root sentinel (0) and zero offsets.
-            (0, 0, 0)
+            // No parent on stack — use root sentinel and zero offsets.
+            (ROOT_PARENT_SPAN_ID, 0, 0)
         }
     }
 
     /// Ends an open span (Connection / Object / RPC) at `event_time_ns` with `bit_size`.
-    /// Pops the matching stack top and emits a row. Silently skips if the stack is empty.
+    /// Pops the matching stack top and emits a row. Silently skips if the stack is empty,
+    /// or if the top span's kind does not match `expected_kind` — popping a mismatched
+    /// span would emit a row with the wrong `bit_size` and strand the real parent.
     fn close_span(
         &mut self,
         expected_kind: &Arc<String>,
         event_time_ns: i64,
         bit_size: i64,
     ) -> Result<bool> {
-        let open = match self.stack.pop() {
-            Some(o) => o,
+        match self.stack.last() {
             None => {
-                // "End with no matching Begin" — bit attribution is unrecoverable; skip silently.
+                // "End with no matching Begin" — bit attribution is unrecoverable; skip.
                 debug!(
                     "net span end event with no matching begin (expected kind={})",
                     expected_kind
                 );
                 return Ok(true);
             }
-        };
-        if !Arc::ptr_eq(&open.kind, expected_kind) && *open.kind != **expected_kind {
-            debug!(
-                "net span stack mismatch: expected {}, got {}",
-                expected_kind, open.kind
-            );
+            Some(top) if !Arc::ptr_eq(&top.kind, expected_kind) && *top.kind != **expected_kind => {
+                // Stack top is a different kind than the End event expects. Popping would
+                // emit a row with the wrong bit_size and leave the real parent open.
+                // Skip instead — the matching End (if any) will close it correctly.
+                debug!(
+                    "net span stack mismatch: expected {}, got {}; skipping end event",
+                    expected_kind, top.kind
+                );
+                return Ok(true);
+            }
+            Some(_) => {}
         }
+        let open = self.stack.pop().expect("peeked above");
         let begin_bits = if let Some(parent) = self.stack.last() {
             parent.child_bits_consumed
         } else {
@@ -165,7 +177,7 @@ impl<'a> NetBlockProcessor for NetSpanTreeBuilder<'a> {
         let begin_time_ns = self.convert_ticks.ticks_to_nanoseconds(time);
         self.stack.push(OpenSpan {
             span_id: event_id,
-            parent_span_id: 0,
+            parent_span_id: ROOT_PARENT_SPAN_ID,
             depth: 0,
             kind: KIND_CONNECTION.clone(),
             name: connection_name.clone(),

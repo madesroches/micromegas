@@ -105,7 +105,7 @@
 //! |process_id        |Dictionary(Int16, Utf8)      | process unique id                                                       |
 //! |stream_id         |Dictionary(Int16, Utf8)      | net stream unique id                                                    |
 //! |span_id           |Int64                        | unique span id within the stream                                        |
-//! |parent_span_id    |Int64                        | span id of the enclosing span (0 for Connection roots)                  |
+//! |parent_span_id    |Int64                        | span id of the enclosing span (-1 sentinel at Connection roots)         |
 //! |depth             |UInt32                       | tree depth (0 = Connection)                                             |
 //! |kind              |Dictionary(Int16, Utf8)      | one of `connection` / `object` / `property` / `rpc`                     |
 //! |name              |Dictionary(Int16, Utf8)      | span name (connection / object / property / function name)              |

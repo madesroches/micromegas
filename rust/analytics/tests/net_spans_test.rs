@@ -1,5 +1,5 @@
 use micromegas_analytics::net_block_processing::NetBlockProcessor;
-use micromegas_analytics::net_span_tree::NetSpanTreeBuilder;
+use micromegas_analytics::net_span_tree::{NetSpanTreeBuilder, ROOT_PARENT_SPAN_ID};
 use micromegas_analytics::net_spans_table::NetSpanRecordBuilder;
 use micromegas_analytics::time::ConvertTicks;
 use std::sync::Arc;
@@ -216,7 +216,7 @@ fn classic_hierarchy_builds_flat_tree() {
     assert_eq!(obj_b.bit_size, 6);
 
     let conn = row_by_kind_name(&rows, "connection", "127.0.0.1:7777");
-    assert_eq!(conn.parent_span_id, 0);
+    assert_eq!(conn.parent_span_id, ROOT_PARENT_SPAN_ID);
     assert_eq!(conn.depth, 0);
     assert_eq!(conn.begin_bits, 0);
     assert_eq!(conn.end_bits, 40);
@@ -317,6 +317,65 @@ fn unclosed_connection_is_dropped() {
         rows.is_empty(),
         "unclosed spans should be dropped, got {:?}",
         rows
+    );
+}
+
+#[test]
+fn mismatched_end_does_not_pop_stack() {
+    // If a NetConnectionEndEvent arrives while an Object is on top (malformed
+    // stream), popping the Object and emitting it with the Connection's bit_size
+    // would corrupt attribution and strand the real Connection. close_span must
+    // skip the mismatched End, leaving the Object free to be closed normally.
+    let (mut rb, pid, sid, conv) = make_builder_ctx();
+    {
+        let mut b = NetSpanTreeBuilder::new(&mut rb, pid, sid, conv);
+        b.on_connection_begin(1, 10, s("conn"), false).unwrap();
+        b.on_object_begin(2, 11, s("Obj")).unwrap();
+        // Mismatched: ConnectionEnd while Object is on top. Must be skipped.
+        b.on_connection_end(99, 12, 9999).unwrap();
+        // Now close normally; outputs should be correct.
+        b.on_object_end(3, 13, 16).unwrap();
+        b.on_connection_end(4, 14, 24).unwrap();
+        b.finish();
+    }
+    let rows = collect_rows(rb);
+    let obj = row_by_kind_name(&rows, "object", "Obj");
+    assert_eq!(
+        obj.bit_size, 16,
+        "Object must close with its own End's bit_size, not the mismatched 9999"
+    );
+    let conn = row_by_kind_name(&rows, "connection", "conn");
+    assert_eq!(conn.bit_size, 24);
+    assert_eq!(rows.len(), 2, "expected exactly two rows, got {:?}", rows);
+}
+
+#[test]
+fn connection_at_event_id_zero_does_not_self_reference() {
+    // The first block of a stream has object_offset = 0, so the very first event
+    // legitimately has event_id = 0. The root sentinel must not collide with it.
+    let (mut rb, pid, sid, conv) = make_builder_ctx();
+    {
+        let mut b = NetSpanTreeBuilder::new(&mut rb, pid, sid, conv);
+        b.on_connection_begin(0, 10, s("conn"), false).unwrap();
+        b.on_property(1, 11, s("p"), 8).unwrap();
+        b.on_connection_end(2, 12, 8).unwrap();
+        b.finish();
+    }
+    let rows = collect_rows(rb);
+    let conn = row_by_kind_name(&rows, "connection", "conn");
+    assert_eq!(conn.span_id, 0);
+    assert_eq!(
+        conn.parent_span_id, ROOT_PARENT_SPAN_ID,
+        "root Connection with event_id 0 must not self-reference; parent must be the sentinel"
+    );
+    let prop = row_by_kind_name(&rows, "property", "p");
+    assert_eq!(
+        prop.parent_span_id, 0,
+        "the property's parent is the Connection with span_id 0"
+    );
+    assert_ne!(
+        prop.parent_span_id, conn.parent_span_id,
+        "property parent and root sentinel must be distinguishable"
     );
 }
 

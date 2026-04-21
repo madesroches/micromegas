@@ -278,8 +278,9 @@ export function XYChart({
     return getAdaptiveBitUnit(stats.p99, primaryUnit)
   }, [primaryUnit, stats.p99])
 
-  // Display unit for the header (adaptive for time/size/bits, original for others)
-  const displayUnit = adaptiveTimeUnit?.unit ?? adaptiveSizeUnit?.unit ?? adaptiveBitUnit?.abbrev ?? primaryUnit
+  // Display unit for the header (adaptive abbreviation for time/size/bits, original for others).
+  // Using `.abbrev` across all three keeps the header consistent with the y-axis label below.
+  const displayUnit = adaptiveTimeUnit?.abbrev ?? adaptiveSizeUnit?.abbrev ?? adaptiveBitUnit?.abbrev ?? primaryUnit
 
   // Use ref for onWidthChange to avoid effect re-runs when callback identity changes
   const onWidthChangeRef = useRef(onWidthChange)

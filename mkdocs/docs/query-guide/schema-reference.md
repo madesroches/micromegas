@@ -457,7 +457,7 @@ The view is **JIT-only** and **parameterized by `process_id`** (there is no `glo
 | `process_id` | `Dictionary(Int16, Utf8)` | Process id (the view parameter) |
 | `stream_id` | `Dictionary(Int16, Utf8)` | Source net stream (one per process) |
 | `span_id` | `Int64` | Unique span id within the stream |
-| `parent_span_id` | `Int64` | Span id of the enclosing span (`0` at the Connection root) |
+| `parent_span_id` | `Int64` | Span id of the enclosing span (`-1` sentinel at the Connection root) |
 | `depth` | `UInt32` | Tree depth (`0` for Connection, `1+` inside) |
 | `kind` | `Dictionary(Int16, Utf8)` | `connection`, `object`, `property`, or `rpc` |
 | `name` | `Dictionary(Int16, Utf8)` | Connection / object / property / function name |
