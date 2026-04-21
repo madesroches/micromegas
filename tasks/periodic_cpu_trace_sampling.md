@@ -8,12 +8,12 @@ Goals:
 1. **Gate all CPU trace sampling on user activity** — no spans sent (spike or periodic) unless the user was recently active
 2. **Add periodic sampling** — capture a CPU trace snapshot every 2 minutes when the user is active, providing baseline performance data alongside spike-triggered samples
 
-`ScoutTelemetryPlayerControllerComponent::UpdateLastInputTime()` already has robust gameplay input detection (movement vectors, rotation input, key presses) covering all controller input including analog sticks.
+The game's telemetry player-controller component's `UpdateLastInputTime()` already has robust gameplay input detection (movement vectors, rotation input, key presses) covering all controller input including analog sticks.
 
 ## Approach
 
 1. Expose a `ReportUserActivity()` method on the `IMicromegasTelemetrySinkModule` public API
-2. Have `ScoutTelemetryPlayerControllerComponent` call it when input is detected
+2. Have the game's telemetry player-controller component call it when input is detected
 3. `SamplingController` uses the last reported activity time to:
    - Skip spike detection entirely when user is idle
    - Trigger periodic sampling every N seconds when user is active
@@ -75,7 +75,7 @@ In `Tick()`:
 
 Note: periodic capture uses `Max(last sample time, last activity resume time)` as its reference, so both spike triggers and idle→active transitions reset the periodic interval. A spike resets the periodic interval; resuming from idle resets it too (ensuring the first post-idle sample captures steady-state gameplay, not a context-switch frame). Periodic and spike samples look identical from the downstream pipeline's perspective.
 
-### 5. `UE/Scout/Source/ScoutGame/Telemetry/ScoutTelemetryPlayerControllerComponent.cpp`
+### 5. Game-side telemetry player-controller component (consumer project)
 
 In `UpdateLastInputTime()`, after setting `LastUserInputTime`:
 - Call `ReportUserActivity()` with a null guard on the module pointer:
@@ -109,7 +109,7 @@ In `UpdateLastInputTime()`, after setting `LastUserInputTime`:
 
 ## Verification
 
-1. Build the UE project containing the plugin and ScoutGame
+1. Build the UE project containing the plugin and the consuming game module
 2. **Defaults (threshold 0, periodic 0)**: confirm spike detection works exactly as before, no periodic sampling
 3. **Periodic only (threshold 0, periodic 120)**: confirm periodic samples fire every 2min unconditionally, spike detection works as before
 4. **Spike resets periodic interval**: with periodic 120, trigger a spike at T=60s — confirm the next periodic sample fires at T=180s (120s after the spike), not T=120s

@@ -84,9 +84,9 @@ MICROMEGAS_FMETRIC("Frame", MicromegasTracing::Verbosity::Med, TEXT("DeltaTime")
  * MICROMEGAS_SPAN_NAME : specify an expression that returns a **statically allocated** string for a name
    * works with FNames too :)
    * ```c++
-      // SCOUT_BEGIN - SCOUT-25618 - [DIVERGENCE] engine instrumentation
+      // DIVERGENCE_BEGIN - engine instrumentation
       MICROMEGAS_SPAN_NAME("Engine::FActorTickFunction::ExecuteTick", Target->GetFName());
-      // SCOUT_END```
+      // DIVERGENCE_END```
 
 ---
 # Instrumentation: How to emit span events
