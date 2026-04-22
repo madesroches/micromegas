@@ -474,7 +474,7 @@ async fn serve_rsc_payload_internal(state: &IndexState, path: &str) -> Result<Re
 
 **Persistent issue**: CSS 404s during client-side navigation
 ```
-GET https://telemetry.dev.scout.ubisoft.com/_next/static/css/06c2882df2f27f6d.css 404
+GET https://telemetry.dev.example.com/_next/static/css/06c2882df2f27f6d.css 404
 ```
 
 Stack trace points to React DOM stylesheet loading code (`sQ`, `oq`, `ik` in `4bd1b696-*.js`), not RSC. The CSS path is being constructed from an unknown source that we haven't identified.

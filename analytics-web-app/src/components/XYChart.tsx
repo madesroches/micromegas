@@ -8,7 +8,7 @@ import {
   formatTimeValue,
   type AdaptiveTimeUnit,
 } from '@/lib/time-units'
-import { normalizeUnit, isSizeUnit, getAdaptiveSizeUnit } from '@/lib/units'
+import { normalizeUnit, isSizeUnit, getAdaptiveSizeUnit, isBitUnit, getAdaptiveBitUnit } from '@/lib/units'
 import type { ChartSeriesData } from '@/lib/arrow-utils'
 
 import { SERIES_COLORS } from './chart-constants'
@@ -80,6 +80,22 @@ function formatValue(
     const adaptive = getAdaptiveSizeUnit(value, 'bytes')
     const displayValue = value * adaptive.conversionFactor
     const decimals = adaptive.unit === 'bytes' ? 0 : 1
+    return displayValue.toFixed(decimals) + ' ' + adaptive.abbrev + '/s'
+  }
+
+  // Bit units - networking, decimal scaling
+  if (isBitUnit(unit)) {
+    const adaptive = getAdaptiveBitUnit(value, unit)
+    const displayValue = value * adaptive.conversionFactor
+    const decimals = adaptive.unit === 'bits' ? 0 : 1
+    return displayValue.toFixed(decimals) + ' ' + adaptive.abbrev
+  }
+
+  // Rate units - bits per second
+  if (unit === 'bits/s') {
+    const adaptive = getAdaptiveBitUnit(value, 'bits')
+    const displayValue = value * adaptive.conversionFactor
+    const decimals = adaptive.unit === 'bits' ? 0 : 1
     return displayValue.toFixed(decimals) + ' ' + adaptive.abbrev + '/s'
   }
 
@@ -256,8 +272,15 @@ export function XYChart({
     return getAdaptiveSizeUnit(stats.p99, primaryUnit)
   }, [primaryUnit, stats.p99])
 
-  // Display unit for the header (adaptive for time/size, original for others)
-  const displayUnit = adaptiveTimeUnit?.unit ?? adaptiveSizeUnit?.unit ?? primaryUnit
+  // Calculate adaptive bit unit based on p99 value
+  const adaptiveBitUnit = useMemo(() => {
+    if (!isBitUnit(primaryUnit) || stats.p99 === 0) return undefined
+    return getAdaptiveBitUnit(stats.p99, primaryUnit)
+  }, [primaryUnit, stats.p99])
+
+  // Display unit for the header (adaptive abbreviation for time/size/bits, original for others).
+  // Using `.abbrev` across all three keeps the header consistent with the y-axis label below.
+  const displayUnit = adaptiveTimeUnit?.abbrev ?? adaptiveSizeUnit?.abbrev ?? adaptiveBitUnit?.abbrev ?? primaryUnit
 
   // Use ref for onWidthChange to avoid effect re-runs when callback identity changes
   const onWidthChangeRef = useRef(onWidthChange)
@@ -582,6 +605,9 @@ export function XYChart({
         } else if (isSizeUnit(normalizedUnit) && scaleInfo.p99 > 0) {
           const adaptive = getAdaptiveSizeUnit(scaleInfo.p99, normalizedUnit)
           unitAdaptiveMap.set(scaleInfo.unitName, { conversionFactor: adaptive.conversionFactor, abbrev: adaptive.abbrev })
+        } else if (isBitUnit(normalizedUnit) && scaleInfo.p99 > 0) {
+          const adaptive = getAdaptiveBitUnit(scaleInfo.p99, normalizedUnit)
+          unitAdaptiveMap.set(scaleInfo.unitName, { conversionFactor: adaptive.conversionFactor, abbrev: adaptive.abbrev })
         }
       }
 
@@ -711,7 +737,7 @@ export function XYChart({
       const singleData = normalizedSeries[0]?.data ?? data ?? []
       if (singleData.length === 0) return
 
-      const conversionFactor = adaptiveTimeUnit?.conversionFactor ?? adaptiveSizeUnit?.conversionFactor ?? 1
+      const conversionFactor = adaptiveTimeUnit?.conversionFactor ?? adaptiveSizeUnit?.conversionFactor ?? adaptiveBitUnit?.conversionFactor ?? 1
 
       const xValues = xAxisMode === 'time'
         ? singleData.map((d) => d.x / 1000)
@@ -721,7 +747,7 @@ export function XYChart({
       const displayP99 = stats.p99 * conversionFactor
       const displayMax = stats.max * conversionFactor
 
-      const yAxisUnit = adaptiveTimeUnit?.abbrev ?? adaptiveSizeUnit?.abbrev ?? (primaryUnit === 'percent' ? '%' : primaryUnit)
+      const yAxisUnit = adaptiveTimeUnit?.abbrev ?? adaptiveSizeUnit?.abbrev ?? adaptiveBitUnit?.abbrev ?? (primaryUnit === 'percent' ? '%' : primaryUnit)
 
       const opts: uPlot.Options = {
         width: dimensions.width,
@@ -829,7 +855,7 @@ export function XYChart({
     }
     // Note: dimensions intentionally excluded - handled by separate resize effect
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data, normalizedSeries, title, unit, primaryUnit, createTooltipPlugin, createMultiSeriesTooltipPlugin, stats, adaptiveTimeUnit, adaptiveSizeUnit, scaleMode, chartType, xAxisMode, xLabels, yColumnName, isMultiSeries, unitScaleInfo, seriesVisibility])
+  }, [data, normalizedSeries, title, unit, primaryUnit, createTooltipPlugin, createMultiSeriesTooltipPlugin, stats, adaptiveTimeUnit, adaptiveSizeUnit, adaptiveBitUnit, scaleMode, chartType, xAxisMode, xLabels, yColumnName, isMultiSeries, unitScaleInfo, seriesVisibility])
 
   // Resize chart without recreating when dimensions change
   useEffect(() => {

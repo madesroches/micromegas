@@ -661,7 +661,20 @@ Each entry below gives a **symptom** you'd see in the lakehouse or the log, the 
 ## 5. Verifying instrumentation
 
 !!! note "Scope"
-    A dedicated `net_events` view has **not yet been added** to `rust/analytics/src/lakehouse/`. For now, per-event inspection goes through the generic [`parse_block(block_id)`](../query-guide/functions-reference.md#parse_blockblock_id) table function, which returns `(object_index, type_name, value as JSONB)` rows. For net blocks the `type_name` values are `NetConnectionBeginEvent`, `NetConnectionEndEvent`, `NetObjectBeginEvent`, `NetObjectEndEvent`, `NetPropertyEvent`, `NetRPCBeginEvent`, `NetRPCEndEvent`. Once a first-class `net_events` view ships, these queries shorten; the verification shape stays the same.
+    The `net_spans` JIT view — available via `view_instance('net_spans', '<process_id>')` — decodes each block into pre-paired Connection/Object/Property/RPC spans with cumulative `begin_bits` / `end_bits` offsets. See the [`net_spans` schema](../query-guide/schema-reference.md#net_spans) for the full column list. For raw per-event inspection (debugging a suspect block, building custom aggregations), the generic [`parse_block(block_id)`](../query-guide/functions-reference.md#parse_blockblock_id) table function still works and returns `(object_index, type_name, value as JSONB)` rows where `type_name` is one of `NetConnectionBeginEvent`, `NetConnectionEndEvent`, `NetObjectBeginEvent`, `NetObjectEndEvent`, `NetPropertyEvent`, `NetRPCBeginEvent`, `NetRPCEndEvent`.
+
+### Top bandwidth spans via `net_spans`
+
+For routine inspection prefer the `net_spans` view — it handles Begin/End pairing, cross-block stitching, and bit-offset math so queries stay one-liners.
+
+```sql
+SELECT kind, name, connection_name, is_outgoing, bit_size
+FROM view_instance('net_spans', '<process_id>')
+ORDER BY bit_size DESC
+LIMIT 20;
+```
+
+Feed the same query to a Flame Graph cell (with `span_id AS id`, `parent_span_id AS parent`, `begin_bits AS begin`, `end_bits AS end`) to get a bandwidth-weighted flame chart of the process's replication traffic.
 
 ### Stream registration
 
@@ -742,7 +755,7 @@ ORDER BY object_index;
 
 ### Content-vs-wire reconciliation
 
-Pick one connection and one time window. Sum `NetConnectionEndEvent.bit_size` from `parse_block` across that connection's net blocks, and sum `net.packet_sent_bits` from `measures` for the same connection over the same window. Content should be 0.7–0.95× wire. Wild divergence indicates a missing `OBJECT_SCOPE` somewhere in the replication path. This query is verbose against `parse_block` — once a first-class `net_events` view lands, it collapses to a single JOIN.
+Pick one connection and one time window. Sum the `bit_size` of `connection`-kind rows from `net_spans` (or equivalently `NetConnectionEndEvent.bit_size` from `parse_block`) across the matching blocks, and sum `net.packet_sent_bits` from `measures` for the same connection over the same window. Content should be 0.7–0.95× wire. Wild divergence indicates a missing `OBJECT_SCOPE` somewhere in the replication path.
 
 ### No orphaned ends
 

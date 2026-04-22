@@ -58,6 +58,8 @@ pub mod metrics_block_processor;
 pub mod metrics_view;
 /// Maintenance of the postgresql tables and indices use to track the parquet files used to implement the views
 pub mod migration;
+/// Jit view of pre-paired network bandwidth spans (Connection / Object / Property / RPC)
+pub mod net_spans_view;
 /// Table function to parse all transit objects in a block and return them as JSONB
 pub mod parse_block_table_function;
 /// Write & delete sections of views

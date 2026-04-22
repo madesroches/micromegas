@@ -45,11 +45,34 @@ export const UNIT_ALIASES: Record<string, string> = {
   'terabytes': 'terabytes',
   'Terabytes': 'terabytes',
   'TB': 'terabytes',
+  // Bits (networking, decimal scaling)
+  'bit': 'bits',
+  'bits': 'bits',
+  'Bits': 'bits',
+  'kbit': 'kilobits',
+  'kbits': 'kilobits',
+  'kilobits': 'kilobits',
+  'Kilobits': 'kilobits',
+  'Mbit': 'megabits',
+  'Mbits': 'megabits',
+  'megabits': 'megabits',
+  'Megabits': 'megabits',
+  'Gbit': 'gigabits',
+  'Gbits': 'gigabits',
+  'gigabits': 'gigabits',
+  'Gigabits': 'gigabits',
+  'Tbit': 'terabits',
+  'Tbits': 'terabits',
+  'terabits': 'terabits',
+  'Terabits': 'terabits',
   // Rate
   'BytesPerSecond': 'bytes/s',
   'BytesPerSeconds': 'bytes/s',
   'B/s': 'bytes/s',
   'bytes/s': 'bytes/s',
+  'bit/s': 'bits/s',
+  'bits/s': 'bits/s',
+  'bps': 'bits/s',
   // Other
   '%': 'percent',
   'percent': 'percent',
@@ -95,6 +118,24 @@ export const SIZE_UNIT_NAMES = new Set([
  */
 export function isSizeUnit(unit: string): boolean {
   return SIZE_UNIT_NAMES.has(normalizeUnit(unit))
+}
+
+/**
+ * Set of canonical bit unit names (networking, decimal scaling)
+ */
+export const BIT_UNIT_NAMES = new Set([
+  'bits',
+  'kilobits',
+  'megabits',
+  'gigabits',
+  'terabits',
+])
+
+/**
+ * Check if a unit (or its alias) is a bit-based unit
+ */
+export function isBitUnit(unit: string): boolean {
+  return BIT_UNIT_NAMES.has(normalizeUnit(unit))
 }
 
 export type SizeUnit = 'bytes' | 'kilobytes' | 'megabytes' | 'gigabytes' | 'terabytes'
@@ -170,6 +211,74 @@ export function getAdaptiveSizeUnit(
   const originalFactor = getSizeUnitFactor(normalizedUnit)
   const bestFactor = bestUnit.factor
   const conversionFactor = originalFactor / bestFactor
+
+  return {
+    unit: bestUnit.unit,
+    abbrev: bestUnit.abbrev,
+    conversionFactor,
+  }
+}
+
+export type BitUnit = 'bits' | 'kilobits' | 'megabits' | 'gigabits' | 'terabits'
+
+interface BitUnitInfo {
+  unit: BitUnit
+  abbrev: string
+  factor: number // multiplier to convert to bits
+}
+
+// Decimal bit units (power of 10, networking convention)
+const KBIT = 1000
+const MBIT = KBIT * 1000
+const GBIT = MBIT * 1000
+const TBIT = GBIT * 1000
+
+const BIT_UNITS: BitUnitInfo[] = [
+  { unit: 'bits', abbrev: 'bit', factor: 1 },
+  { unit: 'kilobits', abbrev: 'kbit', factor: KBIT },
+  { unit: 'megabits', abbrev: 'Mbit', factor: MBIT },
+  { unit: 'gigabits', abbrev: 'Gbit', factor: GBIT },
+  { unit: 'terabits', abbrev: 'Tbit', factor: TBIT },
+]
+
+export interface AdaptiveBitUnit {
+  unit: BitUnit
+  abbrev: string
+  conversionFactor: number
+}
+
+function getBitUnitFactor(unit: BitUnit): number {
+  const info = BIT_UNITS.find((u) => u.unit === unit)
+  return info?.factor ?? 1
+}
+
+function toBits(value: number, unit: BitUnit): number {
+  return value * getBitUnitFactor(unit)
+}
+
+/**
+ * Determine the best bit unit to display a reference value.
+ * Uses decimal scaling (1 kbit = 1000 bits) per networking convention.
+ */
+export function getAdaptiveBitUnit(
+  referenceValue: number,
+  originalUnit: BitUnit | string
+): AdaptiveBitUnit {
+  const normalizedUnit = normalizeUnit(originalUnit) as BitUnit
+  const refBits = toBits(referenceValue, normalizedUnit)
+
+  let bestUnit = BIT_UNITS[0]
+  for (let i = BIT_UNITS.length - 1; i >= 0; i--) {
+    const u = BIT_UNITS[i]
+    const valueInUnit = refBits / u.factor
+    if (valueInUnit >= 1) {
+      bestUnit = u
+      break
+    }
+  }
+
+  const originalFactor = getBitUnitFactor(normalizedUnit)
+  const conversionFactor = originalFactor / bestUnit.factor
 
   return {
     unit: bestUnit.unit,

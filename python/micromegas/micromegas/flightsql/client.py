@@ -530,8 +530,8 @@ class FlightSQLClient:
         # because we are not serializing the logical plan in the prepared statement, we can just execute the query normally
         return self.query_stream(statement.query)
 
-    def bulk_ingest(self, table_name, df):
-        """Bulk ingest a pandas DataFrame into a Micromegas metadata table.
+    def bulk_ingest(self, table_name, table):
+        """Bulk ingest a pyarrow.Table into a Micromegas metadata table.
 
         This method efficiently loads metadata or replication data into Micromegas
         tables using Arrow's columnar format. Primarily used for ingesting:
@@ -543,8 +543,9 @@ class FlightSQLClient:
         Args:
             table_name (str): The name of the target table. Supported tables:
                 'processes', 'streams', 'blocks', 'payloads'.
-            df (pandas.DataFrame): The DataFrame to ingest. Column names and types
-                must exactly match the target table schema.
+            table (pyarrow.Table): The Arrow table to ingest. Column names and
+                types must exactly match the target table schema. Complex types
+                (struct, list, binary) are passed through natively.
 
         Returns:
             DoPutUpdateResult or None: Server response containing ingestion statistics
@@ -555,11 +556,11 @@ class FlightSQLClient:
                 or invalid data.
 
         Example:
-            >>> import pandas as pd
+            >>> import pyarrow as pa
             >>> from datetime import datetime, timezone
             >>>
             >>> # Example: Replicate process metadata
-            >>> processes_df = pd.DataFrame({
+            >>> processes = pa.table({
             ...     'process_id': ['550e8400-e29b-41d4-a716-446655440000'],
             ...     'exe': ['/usr/bin/myapp'],
             ...     'username': ['user'],
@@ -572,11 +573,11 @@ class FlightSQLClient:
             ...     'start_ticks': [1234567890],
             ...     'insert_time': [datetime.now(timezone.utc)],
             ...     'parent_process_id': [''],
-            ...     'properties': [[]]
+            ...     'properties': [[]],
             ... })
             >>>
             >>> # Bulk ingest process metadata
-            >>> result = client.bulk_ingest('processes', processes_df)
+            >>> result = client.bulk_ingest('processes', processes)
             >>> if result:
             ...     print(f"Ingested {result.record_count} process records")
 
@@ -585,13 +586,17 @@ class FlightSQLClient:
             administrative tasks. For normal telemetry data ingestion, use
             the telemetry ingestion service HTTP API instead.
         """
+        if not isinstance(table, pyarrow.Table):
+            raise TypeError(
+                f"bulk_ingest expects a pyarrow.Table, got {type(table).__name__}"
+            )
         desc = make_ingest_flight_desc(table_name)
-        table = pyarrow.Table.from_pandas(df)
         writer, reader = self.__flight_client.do_put(desc, table.schema)
-        for rb in table.to_batches():
-            writer.write(rb)
-        writer.done_writing()
-        result = reader.read()
+        with writer:
+            for rb in table.to_batches():
+                writer.write_batch(rb)
+            writer.done_writing()
+            result = reader.read()
         if result is not None:
             update_result = FlightSql_pb2.DoPutUpdateResult()
             update_result.ParseFromString(result.to_pybytes())

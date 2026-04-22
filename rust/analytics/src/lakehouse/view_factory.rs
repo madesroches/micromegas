@@ -98,6 +98,31 @@
 //! JOIN processes p ON s.process_id = p.process_id
 //! ```
 //!
+//! ## net_spans
+//!
+//! | field            | type                        | description                                                             |
+//! |------------------|-----------------------------|-------------------------------------------------------------------------|
+//! |process_id        |Dictionary(Int16, Utf8)      | process unique id                                                       |
+//! |stream_id         |Dictionary(Int16, Utf8)      | net stream unique id                                                    |
+//! |span_id           |Int64                        | unique span id within the stream                                        |
+//! |parent_span_id    |Int64                        | span id of the enclosing span (-1 sentinel at Connection roots)         |
+//! |depth             |UInt32                       | tree depth (0 = Connection)                                             |
+//! |kind              |Dictionary(Int16, Utf8)      | one of `connection` / `object` / `property` / `rpc`                     |
+//! |name              |Dictionary(Int16, Utf8)      | span name (connection / object / property / function name)              |
+//! |connection_name   |Dictionary(Int16, Utf8)      | enclosing connection name (denormalized onto every row)                 |
+//! |is_outgoing       |Boolean                      | direction inherited from the enclosing connection                       |
+//! |begin_bits        |Int64                        | cumulative bit offset within the parent span (0 at the Connection root) |
+//! |end_bits          |Int64                        | `begin_bits + bit_size`                                                 |
+//! |bit_size          |Int64                        | inclusive number of bits attributed to this span                        |
+//! |begin_time        |UTC Timestamp (nanoseconds)  | timestamp of the span's Begin event                                     |
+//! |end_time          |UTC Timestamp (nanoseconds)  | timestamp of the span's End event (equals `begin_time` for properties)  |
+//!
+//! ### net_spans view instances
+//!
+//! There is no 'global' instance in the 'net_spans' view set. Users call
+//! `view_instance('net_spans', process_id)` to query the network bandwidth spans emitted by a
+//! given process's net stream. Partitions are materialized just-in-time.
+//!
 //! ## processes
 //!
 //! | field        | type                        | description                                                |
@@ -171,7 +196,8 @@ use super::processes_view::make_processes_view;
 use super::streams_view::make_streams_view;
 use super::{
     async_events_view::AsyncEventsViewMaker, log_view::LogViewMaker,
-    metrics_view::MetricsViewMaker, thread_spans_view::ThreadSpansViewMaker, view::View,
+    metrics_view::MetricsViewMaker, net_spans_view::NetSpansViewMaker,
+    thread_spans_view::ThreadSpansViewMaker, view::View,
 };
 use anyhow::Result;
 use datafusion::arrow::datatypes::Schema;
@@ -295,6 +321,12 @@ pub async fn default_view_factory(
     updated_factory.add_view_set(
         String::from("async_events"),
         Arc::new(AsyncEventsViewMaker::new(Arc::new(updated_factory.clone()))),
+    );
+
+    // Add net_spans view maker
+    updated_factory.add_view_set(
+        String::from("net_spans"),
+        Arc::new(NetSpansViewMaker::new(Arc::new(updated_factory.clone()))),
     );
 
     Ok(updated_factory)

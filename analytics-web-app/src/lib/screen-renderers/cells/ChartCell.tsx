@@ -184,9 +184,10 @@ export function ChartCell({ data, status, options, onOptionsChange, variables, t
       )
     }
 
-    // Resolve macros in per-series units
+    // Resolve macros in per-series units and labels
     const resolvedSeries: ChartSeriesData[] = multiResult.series.map(s => ({
       ...s,
+      label: s.label ? substituteMacros(s.label, variables, timeRange, cellResults, cellSelections) : s.label,
       unit: s.unit ? substituteMacros(s.unit, variables, timeRange, cellResults, cellSelections) : '',
     }))
 
@@ -232,7 +233,9 @@ export function ChartCell({ data, status, options, onOptionsChange, variables, t
   const chartUnit = singleQueryMeta?.[0]?.unit
     ? substituteMacros(singleQueryMeta[0].unit, variables, timeRange, cellResults, cellSelections)
     : (resolvedOptions?.unit as string) ?? undefined
-  const chartTitle = singleQueryMeta?.[0]?.label || undefined
+  const chartTitle = singleQueryMeta?.[0]?.label
+    ? substituteMacros(singleQueryMeta[0].label, variables, timeRange, cellResults, cellSelections)
+    : undefined
 
   return (
     <div className="h-full">
@@ -296,6 +299,10 @@ function ChartCellEditor({ config, onChange, variables, timeRange, datasourceVar
       if (q.unit) {
         const unitValidation = validateMacros(q.unit, variables, cellResults, cellSelections)
         unitValidation.errors.forEach(e => errors.push(`Query ${i + 1} unit: ${e}`))
+      }
+      if (q.label) {
+        const labelValidation = validateMacros(q.label, variables, cellResults, cellSelections)
+        labelValidation.errors.forEach(e => errors.push(`Query ${i + 1} label: ${e}`))
       }
     }
     return errors
