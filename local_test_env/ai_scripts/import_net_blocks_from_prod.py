@@ -12,9 +12,8 @@ For each selected block we pull:
   - blocks    row          (                    -> replication.ingest_blocks)
   - raw payload bytes      (via get_payload() UDF; ingested as payload blob)
 
-Default selection: consecutive net-tagged blocks around 2026-04-21 15:07..15:13
-UTC. Override with --begin/--end to pick a different window, or --block-id
-(repeatable) to import specific blocks.
+Pass --begin/--end to pick the window, or --block-id (repeatable) to import
+specific blocks.
 """
 
 import argparse
@@ -24,7 +23,6 @@ import sys
 import time
 
 import pyarrow
-import pyarrow.flight as flight
 
 # Make sure we pick up the repo's micromegas package (same process running this script).
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -33,31 +31,6 @@ sys.path.insert(0, os.path.join(REPO, "python", "micromegas"))
 
 import micromegas  # noqa: E402
 from micromegas.cli import connection as src_connection  # noqa: E402
-from micromegas.flightsql.client import make_ingest_flight_desc  # noqa: E402
-
-
-DEFAULT_BEGIN = dt.datetime(2026, 4, 21, 19, 7, 0, tzinfo=dt.timezone.utc)
-DEFAULT_END = dt.datetime(2026, 4, 21, 19, 14, 0, tzinfo=dt.timezone.utc)
-
-
-def _do_put_table(
-    fl_client: flight.FlightClient, table_name: str, table: pyarrow.Table
-) -> int:
-    """Push an Arrow table through CommandStatementIngest. Returns row count."""
-    desc = make_ingest_flight_desc(table_name)
-    writer, reader = fl_client.do_put(desc, table.schema)
-    total = 0
-    with writer:
-        for rb in table.to_batches():
-            writer.write_batch(rb)
-            total += rb.num_rows
-        writer.done_writing()
-        # Drain the server ack; we don't need its contents.
-        try:
-            reader.read()
-        except StopIteration:
-            pass
-    return total
 
 
 def _select_net_blocks(src, begin: dt.datetime, end: dt.datetime, explicit_block_ids):
@@ -218,21 +191,21 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument(
         "--begin",
+        required=True,
         type=lambda s: (
             dt.datetime.fromisoformat(s).replace(tzinfo=dt.timezone.utc)
             if dt.datetime.fromisoformat(s).tzinfo is None
             else dt.datetime.fromisoformat(s)
         ),
-        default=DEFAULT_BEGIN,
     )
     ap.add_argument(
         "--end",
+        required=True,
         type=lambda s: (
             dt.datetime.fromisoformat(s).replace(tzinfo=dt.timezone.utc)
             if dt.datetime.fromisoformat(s).tzinfo is None
             else dt.datetime.fromisoformat(s)
         ),
-        default=DEFAULT_END,
     )
     ap.add_argument(
         "--block-id",
@@ -259,7 +232,6 @@ def main():
 
     src = src_connection.connect()
     target = micromegas.flightsql.client.FlightSQLClient(args.target_uri)
-    target_flight = target._FlightSQLClient__flight_client  # noqa: SLF001
 
     t0 = time.time()
     net_blocks = _select_net_blocks(src, args.begin, args.end, args.block_id)
@@ -302,7 +274,8 @@ def main():
         ("blocks", blocks_out),
         ("payloads", payloads),
     ]:
-        n = _do_put_table(target_flight, label, table)
+        result = target.bulk_ingest(label, table)
+        n = result.record_count if result is not None else table.num_rows
         print(f"ingested {n} rows into {label}")
 
     print("done.")

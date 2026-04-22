@@ -435,15 +435,17 @@ print(f"Found {len(root_spans)} root operations")
 
 ## Data Management
 
-### `bulk_ingest(table_name, df)`
+### `bulk_ingest(table_name, table)`
 
-Bulk ingest metadata for replication or administrative tasks:
+Bulk ingest metadata for replication or administrative tasks. `table` is a
+`pyarrow.Table` whose schema matches the target table exactly; complex
+columns (struct, list, binary) are passed through natively.
 
 ```python
-import pandas as pd
+import pyarrow as pa
 
 # Example: Replicate process metadata
-processes_df = pd.DataFrame({
+processes = pa.table({
     'process_id': ['550e8400-e29b-41d4-a716-446655440000'],
     'exe': ['/usr/bin/myapp'],
     'username': ['user'],
@@ -456,11 +458,11 @@ processes_df = pd.DataFrame({
     'start_ticks': [1234567890],
     'insert_time': [datetime.datetime.now(datetime.timezone.utc)],
     'parent_process_id': [''],
-    'properties': [[]]
+    'properties': [[]],
 })
 
 # Ingest process metadata
-result = client.bulk_ingest('processes', processes_df)
+result = client.bulk_ingest('processes', processes)
 if result:
     print(f"Ingested {result.record_count} process records")
 ```
