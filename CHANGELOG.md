@@ -6,12 +6,20 @@ This file documents the historical progress of the Micromegas project. For curre
 
 * **HTTP Gateway:**
   * Add `GET /gateway/health` liveness endpoint for load balancer probes (#994)
+* **Analytics:**
+  * Add `net_spans` JIT view materializing Connection/Object/Property/RPC bandwidth spans with cumulative bit offsets
+* **Web App:**
+  * Extend flame graph cell to render bit-axis spans for `net_spans` and add bit-unit support to XYChart
+  * Resolve macros in chart series labels and chart cell titles
+* **Python:**
+  * Switch `bulk_ingest` to accept `pyarrow.Table` directly for native pass-through of struct/list/binary columns
 * **Unreal Engine:**
   * Add net trace support with connection/object/property/RPC scopes, runtime verbosity gating, and empty-scope elision
   * Enable crash reporting on Linux and skip telemetry flush during malloc-crash to avoid deadlock
 * **Docs:**
   * Add Unreal net trace instrumentation guide and engine recipe
   * Document flame graph notebook cell type
+  * Document `net_spans` view in schema reference and network-tracing guide
 
 ## April 2026 - v0.24.0
 
