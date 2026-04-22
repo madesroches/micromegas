@@ -21,7 +21,7 @@ import { computeAsyncVisualDepths, type SpanData } from './FlameGraphLayout'
 // columns where each unit represents bits on the wire (see `net_spans` view).
 type XAxisMode = 'time' | 'bits'
 
-function axisValue(raw: unknown, dataType: DataType | undefined, mode: XAxisMode): number {
+function axisValue(raw: unknown, dataType: DataType, mode: XAxisMode): number {
   if (mode === 'bits') {
     if (raw == null) return NaN
     if (typeof raw === 'number') return raw
@@ -32,8 +32,8 @@ function axisValue(raw: unknown, dataType: DataType | undefined, mode: XAxisMode
   return timestampToMs(raw, dataType)
 }
 
-function detectXAxisMode(dataType: DataType | undefined): XAxisMode {
-  if (dataType && DataType.isTimestamp(dataType)) return 'time'
+function detectXAxisMode(dataType: DataType): XAxisMode {
+  if (DataType.isTimestamp(dataType)) return 'time'
   return 'bits'
 }
 
@@ -124,9 +124,9 @@ export function buildFlameIndex(table: Table): FlameIndex {
   const depthCol = table.getChild('depth')!
   const laneCol = table.getChild('lane')
 
-  const beginField = table.schema.fields.find((f) => f.name === 'begin')
-  const endField = table.schema.fields.find((f) => f.name === 'end')
-  const xAxisMode = detectXAxisMode(beginField?.type)
+  const beginType = beginCol.type
+  const endType = endCol.type
+  const xAxisMode = detectXAxisMode(beginType)
 
   // Single pass: bucket by lane, track min/max time and max depth per lane
   const laneMap = new Map<string, { rows: number[]; maxDepth: number }>()
@@ -139,8 +139,8 @@ export function buildFlameIndex(table: Table): FlameIndex {
     const endRaw = endCol.get(i)
     if (beginRaw == null || endRaw == null) continue
 
-    const begin = axisValue(beginRaw, beginField?.type, xAxisMode)
-    const end = axisValue(endRaw, endField?.type, xAxisMode)
+    const begin = axisValue(beginRaw, beginType, xAxisMode)
+    const end = axisValue(endRaw, endType, xAxisMode)
     if (isNaN(begin) || isNaN(end)) continue
 
     const depth = Number(depthCol.get(i) ?? 0)
@@ -163,8 +163,8 @@ export function buildFlameIndex(table: Table): FlameIndex {
     const lane = laneMap.get(name)!
     const rowIndices = new Int32Array(lane.rows)
     rowIndices.sort((a, b) => {
-      const aBegin = axisValue(beginCol.get(a), beginField?.type, xAxisMode)
-      const bBegin = axisValue(beginCol.get(b), beginField?.type, xAxisMode)
+      const aBegin = axisValue(beginCol.get(a), beginType, xAxisMode)
+      const bBegin = axisValue(beginCol.get(b), beginType, xAxisMode)
       return aBegin - bBegin
     })
 
@@ -182,8 +182,8 @@ export function buildFlameIndex(table: Table): FlameIndex {
         spanDataArr.push({
           id: Number(idCol.get(row) ?? 0),
           parent: Number(parentCol.get(row) ?? 0),
-          begin: axisValue(beginCol.get(row), beginField?.type, xAxisMode),
-          end: axisValue(endCol.get(row), endField?.type, xAxisMode),
+          begin: axisValue(beginCol.get(row), beginType, xAxisMode),
+          end: axisValue(endCol.get(row), endType, xAxisMode),
           depth: Number(depthCol.get(row) ?? 0),
         })
       }
@@ -263,8 +263,8 @@ function hitTest(
 ): HitResult | null {
   const beginCol = index.table.getChild('begin')!
   const endCol = index.table.getChild('end')!
-  const beginField = index.table.schema.fields.find((f) => f.name === 'begin')
-  const endField = index.table.schema.fields.find((f) => f.name === 'end')
+  const beginType = beginCol.type
+  const endType = endCol.type
 
   // Find which lane the Y falls in
   let yAccum = 0
@@ -282,9 +282,9 @@ function hitTest(
 
       for (let i = 0; i < lane.rowIndices.length; i++) {
         const row = lane.rowIndices[i]
-        const begin = axisValue(beginCol.get(row), beginField?.type, index.xAxisMode)
+        const begin = axisValue(beginCol.get(row), beginType, index.xAxisMode)
         if (begin > dataX) break // past cursor — no more candidates
-        const end = axisValue(endCol.get(row), endField?.type, index.xAxisMode)
+        const end = axisValue(endCol.get(row), endType, index.xAxisMode)
         if (lane.visualDepths[i] === depth && dataX >= begin && dataX <= end) {
           return { rowIndex: row, laneName: lane.name }
         }
@@ -386,8 +386,8 @@ function FlameGraphView({ index, onTimeRangeSelect, initialTimeRange }: FlameGra
     const beginCol = index.table.getChild('begin')!
     const endCol = index.table.getChild('end')!
     const nameCol = index.table.getChild('name')!
-    const beginField = index.table.schema.fields.find((f) => f.name === 'begin')
-    const endField = index.table.schema.fields.find((f) => f.name === 'end')
+    const beginType = beginCol.type
+    const endType = endCol.type
     const xAxisMode = index.xAxisMode
 
     const pxPerMs = s.width / timeSpan
@@ -420,10 +420,10 @@ function FlameGraphView({ index, onTimeRangeSelect, initialTimeRange }: FlameGra
 
       for (let i = 0; i < lane.rowIndices.length; i++) {
         const row = lane.rowIndices[i]
-        const begin = axisValue(beginCol.get(row), beginField?.type, xAxisMode)
+        const begin = axisValue(beginCol.get(row), beginType, xAxisMode)
         if (begin >= s.viewMaxTime) break // sorted by begin — nothing further can be visible
 
-        const end = axisValue(endCol.get(row), endField?.type, xAxisMode)
+        const end = axisValue(endCol.get(row), endType, xAxisMode)
         if (end <= s.viewMinTime) continue // ends before viewport
 
         const depth = lane.visualDepths[i]
@@ -491,10 +491,10 @@ function FlameGraphView({ index, onTimeRangeSelect, initialTimeRange }: FlameGra
 
       for (let i = 0; i < lane.rowIndices.length; i++) {
         const row = lane.rowIndices[i]
-        const begin = axisValue(beginCol.get(row), beginField?.type, xAxisMode)
+        const begin = axisValue(beginCol.get(row), beginType, xAxisMode)
         if (begin > s.viewMaxTime) break
 
-        const end = axisValue(endCol.get(row), endField?.type, xAxisMode)
+        const end = axisValue(endCol.get(row), endType, xAxisMode)
         if (end < s.viewMinTime) continue
 
         const depth = lane.visualDepths[i]
@@ -787,8 +787,6 @@ function FlameGraphView({ index, onTimeRangeSelect, initialTimeRange }: FlameGra
         const idCol = index.table.getChild('id')!
         const parentCol = index.table.getChild('parent')!
         const depthCol = index.table.getChild('depth')!
-        const beginField = index.table.schema.fields.find((f) => f.name === 'begin')
-        const endField = index.table.schema.fields.find((f) => f.name === 'end')
         const targetCol = index.table.getChild('target')
         const filenameCol = index.table.getChild('filename')
         const lineCol = index.table.getChild('line')
@@ -798,8 +796,8 @@ function FlameGraphView({ index, onTimeRangeSelect, initialTimeRange }: FlameGra
         const isOutgoingCol = index.table.getChild('is_outgoing')
 
         const name = String(nameCol.get(hit.rowIndex) ?? '')
-        const begin = axisValue(beginCol.get(hit.rowIndex), beginField?.type, index.xAxisMode)
-        const end = axisValue(endCol.get(hit.rowIndex), endField?.type, index.xAxisMode)
+        const begin = axisValue(beginCol.get(hit.rowIndex), beginCol.type, index.xAxisMode)
+        const end = axisValue(endCol.get(hit.rowIndex), endCol.type, index.xAxisMode)
         const spanId = idCol.get(hit.rowIndex)
         const parentId = parentCol.get(hit.rowIndex)
         const depth = depthCol.get(hit.rowIndex)
