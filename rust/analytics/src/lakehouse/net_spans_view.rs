@@ -143,40 +143,42 @@ async fn write_partition(
         null_response_writer,
     ));
 
-    // Batch blocks by (stream_id, contiguity). `generate_process_jit_partitions` can
-    // interleave blocks from multiple net-tagged streams in one partition, so the
-    // pending batch must flush whenever the stream changes — not just on time gaps —
-    // otherwise the flushed rows would be tagged with the wrong stream_id and payload
-    // fetches would key off the wrong stream.
-    let mut blocks_to_process: Vec<BlockMetadata> = vec![];
-    let mut pending_stream: Option<Arc<StreamMetadata>> = None;
-    let mut last_end: Option<i64> = None;
+    // A process has exactly one net stream (the Unreal NetTraceWriter creates a
+    // single NetStream tagged "net"), so all blocks here share the same stream.
+    // Validate the invariant so a future regression surfaces early instead of
+    // silently tagging rows with the wrong stream_id.
+    let stream = spec.blocks[0].stream.clone();
+    for b in &spec.blocks {
+        anyhow::ensure!(
+            b.stream.stream_id == stream.stream_id,
+            "net_spans partition contains multiple streams ({} and {}); expected one per process",
+            stream.stream_id,
+            b.stream.stream_id,
+        );
+    }
 
+    // Split on time gaps: blocks are contiguous in ticks by construction (the
+    // flush point's `Now` is shared between the closing and new block), so a
+    // gap means a block was lost — don't stitch the span stack across it.
+    let mut blocks_to_process: Vec<BlockMetadata> = vec![];
+    let mut last_end: Option<i64> = None;
     for block in &spec.blocks {
         let contiguous = last_end
             .map(|e| block.block.begin_ticks == e)
             .unwrap_or(true);
-        let same_stream = pending_stream
-            .as_ref()
-            .map(|s| s.stream_id == block.stream.stream_id)
-            .unwrap_or(true);
-        if contiguous && same_stream {
-            blocks_to_process.push(block.block.clone());
-        } else {
+        if !contiguous {
             append_net_span_tree(
                 &mut record_builder,
                 convert_ticks,
                 &blocks_to_process,
                 lake.blob_storage.clone(),
-                pending_stream
-                    .as_ref()
-                    .expect("pending_stream set whenever blocks_to_process is non-empty"),
+                &stream,
                 process_id.clone(),
             )
             .await?;
-            blocks_to_process = vec![block.block.clone()];
+            blocks_to_process = vec![];
         }
-        pending_stream = Some(block.stream.clone());
+        blocks_to_process.push(block.block.clone());
         last_end = Some(block.block.end_ticks);
     }
     if !blocks_to_process.is_empty() {
@@ -185,9 +187,7 @@ async fn write_partition(
             convert_ticks,
             &blocks_to_process,
             lake.blob_storage.clone(),
-            pending_stream
-                .as_ref()
-                .expect("pending_stream set whenever blocks_to_process is non-empty"),
+            &stream,
             process_id.clone(),
         )
         .await?;
