@@ -146,6 +146,15 @@ ORDER BY name, begin`,
   flamegraph: `SELECT id, parent, name, begin, "end", depth, thread_name as lane
 FROM process_spans('$process_id', 'both')
 ORDER BY lane, begin`,
+  map: `SELECT
+  time,
+  process_id,
+  properties->>'x' as x,
+  properties->>'y' as y,
+  properties->>'z' as z
+FROM spans
+ORDER BY time DESC
+LIMIT 10000`,
 }
 
 // ============================================================================
