@@ -1,6 +1,6 @@
 [
   {
-    "name": "Main Map",
-    "file": "/maps/main.glb"
+    "name": "Example Map",
+    "file": "/maps/example.glb"
   }
 ]
