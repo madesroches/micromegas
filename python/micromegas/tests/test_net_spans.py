@@ -134,12 +134,14 @@ def test_net_spans_global_rejection():
     test_begin = now - datetime.timedelta(minutes=1)
     test_end = now
 
+    sql = "SELECT COUNT(*) FROM view_instance('net_spans', 'global');"
+    rejected = False
     try:
-        sql = "SELECT COUNT(*) FROM view_instance('net_spans', 'global');"
         client.query(sql, test_begin, test_end)
-        assert False, "Global net_spans query should have been rejected"
     except Exception as e:
+        rejected = True
         print(f"✅ Global net_spans query correctly rejected: {e}")
+    assert rejected, "Global net_spans query should have been rejected"
 
 
 if __name__ == "__main__":
