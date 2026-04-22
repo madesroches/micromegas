@@ -12,9 +12,15 @@ All instrumentation macros are available by including:
 
 ## Logging API
 
+### Choosing between UE_LOG and MICROMEGAS_LOG
+
+- **`UE_LOG`** — convenient, zero code changes. All existing statements are captured automatically by the log interop. Use this by default for low-frequency entries.
+- **`MICROMEGAS_LOG`** — prefer this on hot paths. `UE_LOG` carries significant per-call overhead (category checks, formatting, printing to the Unreal log sinks) that `MICROMEGAS_LOG` avoids — it only pushes the entry onto the telemetry stream. Also useful when you want to log under a custom target without adding a `DECLARE_LOG_CATEGORY_EXTERN` or polluting the Unreal log.
+- **`MICROMEGAS_LOG_PROPERTIES`** — same as `MICROMEGAS_LOG` but attaches a set of tag properties to the entry for filtering/grouping in analytics.
+
 ### MICROMEGAS_LOG
 
-Records a log entry with dynamic string content.
+Records a log entry under a custom target, bypassing Unreal's log pipeline.
 
 ```cpp
 MICROMEGAS_LOG(target, level, message)
@@ -59,13 +65,18 @@ MICROMEGAS_LOG_PROPERTIES(target, level, properties, message)
 - `properties` (PropertySet*): Additional key-value properties
 - `message` (FString): The log message
 
+`PropertySet` instances are interned by `Dispatch::GetPropertySet` — the same context map always returns the same pointer, so repeated calls with the same tags are cheap and safe to keep alive.
+
 **Example:**
 ```cpp
-PropertySet* Props = CreatePropertySet();
-Props->Add("player_id", "12345");
-Props->Add("action", "login");
+TMap<FName, FName> Context;
+Context.Add(TEXT("player_id"), TEXT("12345"));
+Context.Add(TEXT("action"), TEXT("login"));
 
-MICROMEGAS_LOG_PROPERTIES("Game", MicromegasTracing::LogLevel::Info, 
+const MicromegasTracing::PropertySet* Props =
+    MicromegasTracing::Dispatch::GetPropertySet(Context);
+
+MICROMEGAS_LOG_PROPERTIES("Game", MicromegasTracing::LogLevel::Info,
                          Props, TEXT("Player action recorded"));
 ```
 
