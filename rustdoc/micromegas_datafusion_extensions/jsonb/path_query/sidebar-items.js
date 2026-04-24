@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["make_jsonb_path_query_first_udf","make_jsonb_path_query_udf"],"struct":["JsonbPathQuery","JsonbPathQueryFirst"]};

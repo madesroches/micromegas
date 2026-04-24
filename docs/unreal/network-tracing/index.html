@@ -1,0 +1,4978 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Unified observability platform with high-performance telemetry collection and analytics">
+      
+      
+      
+        <link rel="canonical" href="https://micromegas.info/unreal/network-tracing/">
+      
+      
+        <link rel="prev" href="../instrumentation-api/">
+      
+      
+        <link rel="next" href="../examples/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/micromegas-icon-transparent.svg">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>Network Tracing - Micromegas Documentation</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/_mkdocstrings.css">
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  
+  <script data-goatcounter="https://madesroches.goatcounter.com/count"
+      async src="//gc.zgo.at/count.js"></script>
+
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="custom" data-md-color-accent="custom">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#network-tracing" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="Micromegas Documentation" class="md-header__button md-logo" aria-label="Micromegas Documentation" data-md-component="logo">
+      
+  <img src="../../assets/images/micromegas-icon-transparent.svg" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Micromegas Documentation
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Network Tracing
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="custom" data-md-color-accent="custom"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="custom" data-md-color-accent="custom"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/madesroches/micromegas" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    madesroches/micromegas
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../blog/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Blog
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../getting-started/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Getting Started
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../query-guide/" class="md-tabs__link">
+          
+  
+  
+  Query Guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../web-app/" class="md-tabs__link">
+          
+  
+  
+  Analytics Web App
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../" class="md-tabs__link">
+          
+  
+  
+  Integrations
+
+        </a>
+      </li>
+    
+  
+
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../architecture/" class="md-tabs__link">
+          
+  
+  
+  Operations
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="Micromegas Documentation" class="md-nav__button md-logo" aria-label="Micromegas Documentation" data-md-component="logo">
+      
+  <img src="../../assets/images/micromegas-icon-transparent.svg" alt="logo">
+
+    </a>
+    Micromegas Documentation
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/madesroches/micromegas" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    madesroches/micromegas
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+    
+  
+  
+    <li class="md-nav__item">
+      <a href="../../blog/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Blog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Query Guide
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Query Guide
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../query-guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../query-guide/quick-start/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quick Start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../query-guide/python-api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Python API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../query-guide/python-api-advanced/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Python API Advanced
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../query-guide/schema-reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Schema Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../query-guide/functions-reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Functions Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../query-guide/query-patterns/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Query Patterns
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../query-guide/async-performance-analysis/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Async Performance Analysis
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../query-guide/performance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Performance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../query-guide/advanced-features/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Advanced Features
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Analytics Web App
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Analytics Web App
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../web-app/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_5_2" id="__nav_5_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Notebooks
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_5_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Notebooks
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../web-app/notebooks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../web-app/notebooks/cell-types/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cell Types
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../web-app/notebooks/variables/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Variables
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../web-app/notebooks/execution/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Execution & Auto-Run
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../web-app/notebooks/screens-as-code/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Screens as Code
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/web-app/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Deployment
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Integrations
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Integrations
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+          
+          
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6_1" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_6_1" id="__nav_6_1_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Unreal Engine
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_6_1_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_6_1">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Unreal Engine
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../installation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Installation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../instrumentation-api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Instrumentation API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Network Tracing
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Network Tracing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#1-overview" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Overview
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-architecture" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. Architecture
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="2. Architecture">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#data-flow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Data flow
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#verbosity-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Verbosity model
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#content-attribution-vs-wire-bit-semantics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Content-attribution vs wire-bit semantics
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#classic-vs-iris-hierarchy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Classic vs Iris hierarchy
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#non-nesting-invariant-decision-6" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Non-nesting invariant (Decision 6)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#suspend-mechanism" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Suspend mechanism
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#raii-everywhere" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        RAII everywhere
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-engine-instrumentation-recipe" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Engine instrumentation recipe
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="3. Engine instrumentation recipe">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#31-incoming-packet-scope" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.1 Incoming packet scope
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#32-outgoing-packet-metric" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.2 Outgoing packet metric
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#33-classic-server-replication-scope" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.3 Classic server replication scope
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#34-repgraph-server-replication-scope" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.4 RepGraph server replication scope
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#35-iris-outgoing-scope" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.5 Iris outgoing scope
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#36-queued-bunch-deferred-flush-scope" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.6 Queued-bunch deferred-flush scope
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#37-classic-object-scopes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.7 Classic object scopes
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="3.7 Classic object scopes">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#371-uactorchannelreplicateactor-root-actor-send" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.7.1 UActorChannel::ReplicateActor (root actor, send)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#372-uactorchannelwritesubobjectinbunch-subobject-send" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.7.2 UActorChannel::WriteSubObjectInBunch (subobject, send)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#373-uactorchannelprocessbunch-content-block-receive-loop" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.7.3 UActorChannel::ProcessBunch content-block receive loop
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#374-fobjectreplicatorreplicatecustomdeltaproperties-fast-arrays-custom-delta" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.7.4 FObjectReplicator::ReplicateCustomDeltaProperties (fast arrays / custom delta)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#38-classic-property-scopes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.8 Classic property scopes
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="3.8 Classic property scopes">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#381-sendproperties_r-shared-property-branch" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.8.1 SendProperties_r, shared-property branch
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#382-sendproperties_r-regular-property-branch" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.8.2 SendProperties_r, regular-property branch
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#383-sendproperties_backwardscompatible_r" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.8.3 SendProperties_BackwardsCompatible_r
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#384-receiveproperties_r" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.8.4 ReceiveProperties_r
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#385-receiveproperties_backwardscompatible_r" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.8.5 ReceiveProperties_BackwardsCompatible_r
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#39-classic-rpcs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.9 Classic RPCs
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="3.9 Classic RPCs">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#391-processremotefunctionforchannelprivate-send-side" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.9.1 ProcessRemoteFunctionForChannelPrivate, send-side
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#392-processremotefunctionforchannelprivate-rpc-forced-replicateactor-block" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.9.2 ProcessRemoteFunctionForChannelPrivate, RPC-forced ReplicateActor block
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#393-fobjectreplicatorreceivedrpc" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.9.3 FObjectReplicator::ReceivedRPC
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#310-iris-properties" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.10 Iris properties
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#311-iris-objects" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.11 Iris objects
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="3.11 Iris objects">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#3111-freplicationwriterserializeobjectstatedelta" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.11.1 FReplicationWriter::SerializeObjectStateDelta
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#3112-freplicationreaderdeserializeobjectstatedelta" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.11.2 FReplicationReader::DeserializeObjectStateDelta
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#312-iris-rpcs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.12 Iris RPCs
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="3.12 Iris RPCs">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#3121-fnetrpcserializewithobject" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.12.1 FNetRPC::SerializeWithObject
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#3122-fnetrpcserialize" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.12.2 FNetRPC::Serialize
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#3123-fnetrpcdeserializewithobject" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.12.3 FNetRPC::DeserializeWithObject
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#3124-fnetrpcdeserialize" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.12.4 FNetRPC::Deserialize
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#313-demo-recording-suspend" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.13 Demo recording suspend
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="3.13 Demo recording suspend">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#3131-udemonetdriverprocessremotefunction" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.13.1 UDemoNetDriver::ProcessRemoteFunction
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#3132-udemonetdrivertickdemorecordframe" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.13.2 UDemoNetDriver::TickDemoRecordFrame
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#3133-udemonetdrivernotifyactortornoff" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.13.3 UDemoNetDriver::NotifyActorTornOff
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-pitfalls" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. Pitfalls
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="4. Pitfalls">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#object-events-orphan-outside-any-connection-scope-server-traces" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Object events orphan outside any connection scope (server traces)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#multi-kilobit-objects-appear-1-s-after-their-packet-client-traces-initial-state" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Multi-kilobit objects appear ~1 s after their packet (client traces, initial state)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#logmicromegasnet-fires-repeatedly-with-the-same-inner-outer-pair" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        LogMicromegasNet fires repeatedly with the same (inner, outer) pair
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#netconnectionendeventbit_size-much-smaller-than-sumnetpacket__bits" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        NetConnectionEndEvent.bit_size much smaller than sum(net.packet_*_bits)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#demo-recording-bits-show-up-as-live-network-bandwidth" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Demo recording bits show up as live network bandwidth
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#endconnection-events-with-no-preceding-beginconnection" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        EndConnection events with no preceding BeginConnection
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#rpc-bits-double-count-into-netconnectionendeventbit_size" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        RPC bits double-count into NetConnectionEndEvent.bit_size
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#subobject-hierarchy-differs-between-classic-and-iris" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Subobject hierarchy differs between classic and Iris
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-verifying-instrumentation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. Verifying instrumentation
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="5. Verifying instrumentation">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#top-bandwidth-spans-via-net_spans" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Top bandwidth spans via net_spans
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#stream-registration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Stream registration
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#wire-bit-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Wire-bit metrics
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#find-a-net-block-to-inspect" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Find a net block to inspect
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#decode-events-in-a-block" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Decode events in a block
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#connection-names-and-bit-sizes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Connection names and bit sizes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#content-vs-wire-reconciliation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Content-vs-wire reconciliation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#no-orphaned-ends" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        No orphaned ends
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cvar-runtime-change" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CVar runtime change
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-build-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. Build configuration
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../examples/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Examples
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+          
+          
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_6_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_6_2" id="__nav_6_2_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Grafana Plugin
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_6_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Grafana Plugin
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../grafana/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../grafana/installation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Installation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../grafana/configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../grafana/authentication/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Authentication
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../grafana/usage/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Usage
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+          
+          
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_6_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_6_3" id="__nav_6_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    HTTP Gateway
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_6_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    HTTP Gateway
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../gateway/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../gateway/configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../gateway/examples/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Examples
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operations
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Operations
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_7_2" id="__nav_7_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Administration
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_7_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Administration
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/authentication/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Authentication
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/web-app/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Deployment
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/functions-reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Admin SQL Functions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_7_3" id="__nav_7_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Development
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_7_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Development
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../contributing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contributing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../development/build/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Build Guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_7_4" id="__nav_7_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cost Effectiveness
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_7_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Cost Effectiveness
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cost-effectiveness/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cost-comparisons/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Comparison Methodology
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cost-comparisons/datadog/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    vs. Datadog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cost-comparisons/dynatrace/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    vs. Dynatrace
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cost-comparisons/elastic/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    vs. Elastic
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cost-comparisons/grafana/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    vs. Grafana Cloud
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cost-comparisons/newrelic/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    vs. New Relic
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cost-comparisons/splunk/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    vs. Splunk
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#1-overview" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Overview
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-architecture" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. Architecture
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="2. Architecture">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#data-flow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Data flow
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#verbosity-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Verbosity model
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#content-attribution-vs-wire-bit-semantics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Content-attribution vs wire-bit semantics
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#classic-vs-iris-hierarchy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Classic vs Iris hierarchy
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#non-nesting-invariant-decision-6" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Non-nesting invariant (Decision 6)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#suspend-mechanism" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Suspend mechanism
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#raii-everywhere" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        RAII everywhere
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-engine-instrumentation-recipe" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Engine instrumentation recipe
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="3. Engine instrumentation recipe">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#31-incoming-packet-scope" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.1 Incoming packet scope
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#32-outgoing-packet-metric" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.2 Outgoing packet metric
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#33-classic-server-replication-scope" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.3 Classic server replication scope
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#34-repgraph-server-replication-scope" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.4 RepGraph server replication scope
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#35-iris-outgoing-scope" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.5 Iris outgoing scope
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#36-queued-bunch-deferred-flush-scope" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.6 Queued-bunch deferred-flush scope
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#37-classic-object-scopes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.7 Classic object scopes
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="3.7 Classic object scopes">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#371-uactorchannelreplicateactor-root-actor-send" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.7.1 UActorChannel::ReplicateActor (root actor, send)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#372-uactorchannelwritesubobjectinbunch-subobject-send" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.7.2 UActorChannel::WriteSubObjectInBunch (subobject, send)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#373-uactorchannelprocessbunch-content-block-receive-loop" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.7.3 UActorChannel::ProcessBunch content-block receive loop
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#374-fobjectreplicatorreplicatecustomdeltaproperties-fast-arrays-custom-delta" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.7.4 FObjectReplicator::ReplicateCustomDeltaProperties (fast arrays / custom delta)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#38-classic-property-scopes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.8 Classic property scopes
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="3.8 Classic property scopes">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#381-sendproperties_r-shared-property-branch" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.8.1 SendProperties_r, shared-property branch
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#382-sendproperties_r-regular-property-branch" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.8.2 SendProperties_r, regular-property branch
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#383-sendproperties_backwardscompatible_r" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.8.3 SendProperties_BackwardsCompatible_r
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#384-receiveproperties_r" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.8.4 ReceiveProperties_r
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#385-receiveproperties_backwardscompatible_r" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.8.5 ReceiveProperties_BackwardsCompatible_r
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#39-classic-rpcs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.9 Classic RPCs
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="3.9 Classic RPCs">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#391-processremotefunctionforchannelprivate-send-side" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.9.1 ProcessRemoteFunctionForChannelPrivate, send-side
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#392-processremotefunctionforchannelprivate-rpc-forced-replicateactor-block" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.9.2 ProcessRemoteFunctionForChannelPrivate, RPC-forced ReplicateActor block
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#393-fobjectreplicatorreceivedrpc" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.9.3 FObjectReplicator::ReceivedRPC
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#310-iris-properties" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.10 Iris properties
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#311-iris-objects" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.11 Iris objects
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="3.11 Iris objects">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#3111-freplicationwriterserializeobjectstatedelta" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.11.1 FReplicationWriter::SerializeObjectStateDelta
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#3112-freplicationreaderdeserializeobjectstatedelta" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.11.2 FReplicationReader::DeserializeObjectStateDelta
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#312-iris-rpcs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.12 Iris RPCs
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="3.12 Iris RPCs">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#3121-fnetrpcserializewithobject" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.12.1 FNetRPC::SerializeWithObject
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#3122-fnetrpcserialize" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.12.2 FNetRPC::Serialize
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#3123-fnetrpcdeserializewithobject" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.12.3 FNetRPC::DeserializeWithObject
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#3124-fnetrpcdeserialize" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.12.4 FNetRPC::Deserialize
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#313-demo-recording-suspend" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.13 Demo recording suspend
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="3.13 Demo recording suspend">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#3131-udemonetdriverprocessremotefunction" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.13.1 UDemoNetDriver::ProcessRemoteFunction
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#3132-udemonetdrivertickdemorecordframe" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.13.2 UDemoNetDriver::TickDemoRecordFrame
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#3133-udemonetdrivernotifyactortornoff" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.13.3 UDemoNetDriver::NotifyActorTornOff
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-pitfalls" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. Pitfalls
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="4. Pitfalls">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#object-events-orphan-outside-any-connection-scope-server-traces" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Object events orphan outside any connection scope (server traces)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#multi-kilobit-objects-appear-1-s-after-their-packet-client-traces-initial-state" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Multi-kilobit objects appear ~1 s after their packet (client traces, initial state)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#logmicromegasnet-fires-repeatedly-with-the-same-inner-outer-pair" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        LogMicromegasNet fires repeatedly with the same (inner, outer) pair
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#netconnectionendeventbit_size-much-smaller-than-sumnetpacket__bits" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        NetConnectionEndEvent.bit_size much smaller than sum(net.packet_*_bits)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#demo-recording-bits-show-up-as-live-network-bandwidth" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Demo recording bits show up as live network bandwidth
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#endconnection-events-with-no-preceding-beginconnection" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        EndConnection events with no preceding BeginConnection
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#rpc-bits-double-count-into-netconnectionendeventbit_size" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        RPC bits double-count into NetConnectionEndEvent.bit_size
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#subobject-hierarchy-differs-between-classic-and-iris" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Subobject hierarchy differs between classic and Iris
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-verifying-instrumentation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. Verifying instrumentation
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="5. Verifying instrumentation">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#top-bandwidth-spans-via-net_spans" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Top bandwidth spans via net_spans
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#stream-registration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Stream registration
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#wire-bit-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Wire-bit metrics
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#find-a-net-block-to-inspect" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Find a net block to inspect
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#decode-events-in-a-block" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Decode events in a block
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#connection-names-and-bit-sizes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Connection names and bit sizes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#content-vs-wire-reconciliation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Content-vs-wire reconciliation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#no-orphaned-ends" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        No orphaned ends
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cvar-runtime-change" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CVar runtime change
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-build-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. Build configuration
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+                
+
+
+
+  
+
+
+  <nav class="md-path" aria-label="Navigation" >
+    <ol class="md-path__list">
+      
+        
+  
+  
+    <li class="md-path__item">
+      <a href="../.." class="md-path__link">
+        
+  <span class="md-ellipsis">
+    Home
+  </span>
+
+      </a>
+    </li>
+  
+
+      
+      
+        
+  
+  
+    
+    
+      
+  
+  
+    
+    
+      <li class="md-path__item">
+        <a href="../" class="md-path__link">
+          
+  <span class="md-ellipsis">
+    Integrations
+  </span>
+
+        </a>
+      </li>
+    
+  
+
+    
+  
+
+      
+        
+  
+  
+    
+    
+      <li class="md-path__item">
+        <a href="../" class="md-path__link">
+          
+  <span class="md-ellipsis">
+    Unreal Engine
+  </span>
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ol>
+  </nav>
+
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="network-tracing">Network Tracing<a class="headerlink" href="#network-tracing" title="Permanent link">&para;</a></h1>
+<div class="admonition note">
+<p class="admonition-title">Audience</p>
+<p>This document is written to be readable by both human integrators and coding-agent LLMs (e.g. Claude Code). The recipe sections follow a fixed shape — <strong>file</strong>, <strong>function</strong>, <strong>insertion point</strong>, <strong>literal macro line</strong>, <strong>why</strong> — so an agent can apply each site without ambiguity. Human readers can safely skim subsections that don't apply to their engine configuration.</p>
+</div>
+<div class="admonition info">
+<p class="admonition-title">Engine version</p>
+<p>This recipe was authored from a <strong>UE 5.7</strong> codebase but is expected to apply across UE 5.x releases. Function names referenced below have been stable across recent 5.x versions, but <strong>line numbers and surrounding code will differ in your fork</strong> — anchor on the function name and landmark statement, not on line numbers. The rest of the page refers to the target as "UE 5".</p>
+</div>
+<p>For macro signatures, parameters, and semantics, see <a href="../instrumentation-api/#network-tracing">Instrumentation API → Network Tracing</a>.</p>
+<h2 id="1-overview">1. Overview<a class="headerlink" href="#1-overview" title="Permanent link">&para;</a></h2>
+<p>Micromegas net tracing captures per-connection replication traffic at the UE engine layer and lands it in the lakehouse as a structured event stream. Unlike generic spans or logs, net events carry a <strong>bit-size attribution model</strong>: each root object or RPC records how many bits of content it contributed to a connection, letting you answer "which actors/properties dominate per-connection bandwidth?" directly in SQL.</p>
+<p>Net tracing is separate from spans/logs/metrics because:</p>
+<ul>
+<li>It needs tight coupling to replication internals (bit stream positions, bunch writers, content blocks) that generic spans can't observe.</li>
+<li>It has its own verbosity ladder (packets / root objects / objects / properties) independent of span sampling.</li>
+<li>It produces a nested event hierarchy — <code>Connection → Object → Subobject → Property</code> or <code>Connection → RPC → Property</code> — that mirrors the wire format rather than call stacks.</li>
+</ul>
+<p><strong>Event hierarchy.</strong> Net events stream into a dedicated <code>net</code> tagged stream. The wire shape depends on whether the project uses classic replication or Iris.</p>
+<p><strong>Classic incoming example (<code>ProcessBunch</code> path):</strong></p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>NetConnectionBeginEvent       connection=&quot;127.0.0.1:7777&quot;  is_outgoing=false
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>  NetObjectBeginEvent         name=&quot;PlayerPawn_C_0&quot;
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>  NetPropertyEvent            name=&quot;Health&quot;            bit_size=16
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>  NetPropertyEvent            name=&quot;ReplicatedMovement&quot; bit_size=112
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>  NetObjectEndEvent           bit_size=512
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>  NetObjectBeginEvent         name=&quot;InventoryComponent&quot;   # peer, not nested
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>  NetPropertyEvent            name=&quot;GoldCount&quot;         bit_size=24
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>  NetObjectEndEvent           bit_size=88
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>  NetRPCBeginEvent            name=&quot;ClientNotifyHit&quot;
+</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>  NetPropertyEvent            name=&quot;HitLocation&quot;       bit_size=96
+</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>  NetRPCEndEvent              bit_size=160
+</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>NetConnectionEndEvent         bit_size=760             # sum of root Object/RPC bits
+</span></code></pre></div>
+<p><strong>Iris outgoing example (<code>WriteObjectAndSubObjects</code> path):</strong></p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>NetConnectionBeginEvent       connection=&quot;127.0.0.1:7777&quot;  is_outgoing=true
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>  NetObjectBeginEvent         name=&quot;PlayerPawn_C_0&quot;
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>    NetPropertyEvent          name=&quot;Health&quot;            bit_size=16
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>    NetObjectBeginEvent       name=&quot;WeaponComponent&quot;   # nested inside parent
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>      NetPropertyEvent        name=&quot;AmmoCount&quot;         bit_size=24
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>    NetObjectEndEvent         bit_size=88
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>  NetObjectEndEvent           bit_size=520
+</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>NetConnectionEndEvent         bit_size=520
+</span></code></pre></div>
+<p>The classic shape emits subobjects as <strong>peers</strong> at depth 0; Iris emits them <strong>nested</strong> at depth 1+. Both are correct — they mirror the actual replication traversal order in each system. See <a href="#classic-vs-iris-hierarchy">Architecture → Classic vs Iris hierarchy</a>.</p>
+<h2 id="2-architecture">2. Architecture<a class="headerlink" href="#2-architecture" title="Permanent link">&para;</a></h2>
+<p>This section is load-bearing: the recipe in §3 makes judgment calls (which macro form, which bit source, when to suspend) that only make sense once the architecture is understood. When the implementer faces a novel call site or a renamed function, this section is the fallback.</p>
+<h3 id="data-flow">Data flow<a class="headerlink" href="#data-flow" title="Permanent link">&para;</a></h3>
+<pre class="mermaid"><code>flowchart LR
+    A[Engine code&lt;br/&gt;replication path] --&gt;|MICROMEGAS_NET_* macros| B[Dispatch]
+    B --&gt; C[NetTraceWriter&lt;br/&gt;depth counters,&lt;br/&gt;verbosity gate]
+    C --&gt; D[NetStream&lt;br/&gt;tagged 'net']
+    D --&gt; E[HttpEventSink]
+    E --&gt; F[Telemetry ingestion&lt;br/&gt;→ object store]
+    F --&gt; G[Lakehouse&lt;br/&gt;parse_block, views]</code></pre>
+<h3 id="verbosity-model">Verbosity model<a class="headerlink" href="#verbosity-model" title="Permanent link">&para;</a></h3>
+<p>Runtime verbosity is a 0–4 enum:</p>
+<table>
+<thead>
+<tr>
+<th>Level</th>
+<th>Name</th>
+<th>Emits</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0</td>
+<td><code>Off</code></td>
+<td>Nothing</td>
+</tr>
+<tr>
+<td>1</td>
+<td><code>Packets</code></td>
+<td>Connection scopes only</td>
+</tr>
+<tr>
+<td>2</td>
+<td><code>RootObjects</code></td>
+<td>+ root object scopes (depth 0)</td>
+</tr>
+<tr>
+<td>3</td>
+<td><code>Objects</code></td>
+<td>+ nested object scopes (depth 1+)</td>
+</tr>
+<tr>
+<td>4</td>
+<td><code>Properties</code></td>
+<td>+ per-property leaf events, + RPC scopes (root and nested)</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Depth-based gating rule.</strong> Inside <code>NetTraceWriter</code>:</p>
+<ul>
+<li>Object scopes: depth 0 = at least level <code>RootObjects</code>; depth 1+ = at least level <code>Objects</code></li>
+<li>Property leaves = level <code>Properties</code></li>
+<li>RPC scopes (Begin/End events) = level <code>Properties</code></li>
+</ul>
+<p><strong>Default:</strong> level 2 (<code>RootObjects</code>) — production setting, cheap enough to run continuously.</p>
+<p>Note that root RPC bit_size (<code>ObjectDepth == 0</code> at <code>EndRPC</code>) still accumulates into <code>NetConnectionEndEvent.bit_size</code> at every verbosity ≥ <code>Packets</code>, regardless of whether the <code>NetRPC*</code> events themselves are emitted. Only the per-RPC event records require level 4.</p>
+<p><strong>Snapshot invariant (Decision 6).</strong> The writer captures <code>EffectiveVerbosity</code> at the <strong>outermost</strong> <code>BeginConnection</code> and uses that snapshot for every gating decision in the scope. CVar-driven changes take effect at the <strong>next</strong> outer connection scope, never mid-scope. This eliminates orphaned Begin/End pairs and partially-gated subtrees.</p>
+<h3 id="content-attribution-vs-wire-bit-semantics">Content-attribution vs wire-bit semantics<a class="headerlink" href="#content-attribution-vs-wire-bit-semantics" title="Permanent link">&para;</a></h3>
+<p>Net tracing emits two distinct families of data. Pick the right one for your question:</p>
+<table>
+<thead>
+<tr>
+<th>Question</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Which actors/properties dominate per-connection bandwidth?</td>
+<td><code>NetObjectEndEvent.bit_size</code> / <code>NetPropertyEvent.bit_size</code></td>
+</tr>
+<tr>
+<td>What's the connection's true bandwidth on the wire?</td>
+<td><code>sum(net.packet_sent_bits)</code> filtered by <code>connection_name</code></td>
+</tr>
+<tr>
+<td>What fraction is framing/overhead?</td>
+<td><code>1 − sum(NetConnectionEndEvent.bit_size) / sum(net.packet_*_bits)</code></td>
+</tr>
+</tbody>
+</table>
+<p><code>bit_size</code> on the <code>NetConnectionEndEvent</code> is the <strong>content sum</strong>: root-level <code>NetObjectEndEvent.bit_size</code> + root-level <code>NetRPCEndEvent.bit_size</code>. It deliberately excludes packet headers, bunch headers, control bunches, NetGUID exports, voice, and anything outside an <code>OBJECT_SCOPE</code> or <code>RPC_SCOPE</code>.</p>
+<p>The <code>ObjectDepth == 0</code> gate in <code>EndObject</code> / <code>EndRPC</code> prevents nested-scope double-counting: a receive RPC inside a subobject scope measures the same <code>Reader</code> delta as the outer object, so only the outer contribution is accumulated. Don't try to defeat this — see <a href="#rpc-bits-double-count-into-netconnectionendeventbit_size">Pitfalls → RPC bits double-count</a>.</p>
+<h3 id="classic-vs-iris-hierarchy">Classic vs Iris hierarchy<a class="headerlink" href="#classic-vs-iris-hierarchy" title="Permanent link">&para;</a></h3>
+<p><strong>Classic</strong> — <code>UActorChannel::ReplicateActor</code> opens a root-actor scope, replicates the actor, <strong>closes</strong> the scope, then calls <code>DoSubObjectReplication</code>, which opens a <strong>peer</strong> scope at depth 0 for each subobject. The two scopes are siblings in the event stream.</p>
+<p>Why: classic's actor/subobject split is serialized into separate scopes because they run sequentially in different bunches.</p>
+<p><strong>Iris</strong> — <code>FReplicationWriter::WriteObjectAndSubObjects</code> is recursive: the parent scope stays open while child scopes run inside it, producing a nested tree in the event stream.</p>
+<p>Why: Iris serializes an object and all its subobjects into a single batch, so the scope structure follows the recursion.</p>
+<p><strong>Consequence for queries.</strong> Queries that walk hierarchy must handle both shapes — or filter on a per-process flag that identifies Iris vs classic processes.</p>
+<h3 id="non-nesting-invariant-decision-6">Non-nesting invariant (Decision 6)<a class="headerlink" href="#non-nesting-invariant-decision-6" title="Permanent link">&para;</a></h3>
+<p><strong>Connection scopes do not nest.</strong> Only the outermost <code>BeginConnection</code> emits and resets writer state; nested ones are absorbed as no-ops and logged once via <code>LogMicromegasNet</code> with the inner/outer <code>(name, direction)</code> pair.</p>
+<p>Consequence:</p>
+<ul>
+<li>If a nested scope closes while <code>ObjectDepth == 0</code>, its <code>AccumulatedBits</code> roll into the outer's total.</li>
+<li>If it closes while inside an outer object scope, the bits are dropped.</li>
+</ul>
+<p>Don't try to defeat this by changing the writer. Instead:</p>
+<ul>
+<li>Instrument so scopes don't overlap naturally (one per replication entry point).</li>
+<li>For paths that process packets/bunches but <strong>shouldn't</strong> contribute to attribution (demo, replay), use <code>MICROMEGAS_NET_SUSPEND_SCOPE()</code> instead.</li>
+</ul>
+<h3 id="suspend-mechanism">Suspend mechanism<a class="headerlink" href="#suspend-mechanism" title="Permanent link">&para;</a></h3>
+<p><code>MICROMEGAS_NET_SUSPEND_SCOPE()</code> zeroes out every <code>MICROMEGAS_NET_*</code> call inside its lifetime without touching depth counters. Safe to nest under an active live scope — the live scope resumes unchanged when the suspend scope exits.</p>
+<p>Use it for:</p>
+<ul>
+<li>Demo recording / replay scrubbing</li>
+<li>Server-side simulation that re-runs replication</li>
+<li>Any synchronous engine callback that can fire from inside a live packet/replication scope and shouldn't be attributed</li>
+</ul>
+<h3 id="raii-everywhere">RAII everywhere<a class="headerlink" href="#raii-everywhere" title="Permanent link">&para;</a></h3>
+<p>Every <code>MICROMEGAS_NET_*</code> macro is RAII. There are no public <code>BEGIN_*</code> / <code>END_*</code> macros. Do not call <code>Dispatch::NetEndConnection</code> / <code>NetEndObject</code> / <code>NetEndRPC</code> directly — only the scope guard destructors are authorized callers.</p>
+<p>Early returns are safe: the destructors close scopes automatically when the enclosing block exits.</p>
+<h2 id="3-engine-instrumentation-recipe">3. Engine instrumentation recipe<a class="headerlink" href="#3-engine-instrumentation-recipe" title="Permanent link">&para;</a></h2>
+<p>Every site below follows the same shape:</p>
+<ul>
+<li><strong>File</strong> — UE 5 path (<code>Engine/Source/...</code> or <code>Engine/Plugins/...</code>).</li>
+<li><strong>Function</strong> — qualified signature.</li>
+<li><strong>Insertion point</strong> — a named landmark statement in the existing code.</li>
+<li><strong>Insert</strong> — the literal macro line (copy-pasteable C++).</li>
+<li><strong>Why</strong> — one sentence on what breaks or is misattributed if skipped.</li>
+</ul>
+<p>Line numbers will differ in your fork. Anchor on the function name and landmark statement.</p>
+<p><strong>Connection-name resolution snippet.</strong> Every connection-scope site uses the same two-liner to pick a stable <code>FName</code> for the connection. Defined once here, referenced by <code>&lt;conn-name&gt;</code> below:</p>
+<div class="language-cpp highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">FName</span><span class="w"> </span><span class="n">MmConnectionName</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Connection</span><span class="o">-&gt;</span><span class="n">GetPlayerOnlinePlatformName</span><span class="p">();</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">MmConnectionName</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="n">NAME_None</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">MmConnectionName</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Connection</span><span class="o">-&gt;</span><span class="n">GetFName</span><span class="p">();</span><span class="w"> </span><span class="p">}</span>
+</span></code></pre></div>
+<p>Adjust <code>Connection-&gt;</code> if the local handle is named differently (e.g. <code>Params.Connection</code>, <code>NetConnection</code>).</p>
+<h3 id="31-incoming-packet-scope">3.1 Incoming packet scope<a class="headerlink" href="#31-incoming-packet-scope" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>File:</strong> <code>Engine/Source/Runtime/Engine/Private/NetConnection.cpp</code></li>
+<li><strong>Function:</strong> <code>UNetConnection::ReceivedPacket</code></li>
+<li><strong>Insertion point:</strong> after the <code>if (PacketNotify.ReadHeader(Reader))</code> success branch, before <code>InTraceCollector</code> setup.</li>
+<li>
+<p><strong>Insert:</strong></p>
+<div class="language-cpp highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="c1">// micromegas net trace</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="n">FName</span><span class="w"> </span><span class="n">MmConnectionName</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">GetPlayerOnlinePlatformName</span><span class="p">();</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">MmConnectionName</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="n">NAME_None</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">MmConnectionName</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">GetFName</span><span class="p">();</span><span class="w"> </span><span class="p">}</span>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="n">MICROMEGAS_NET_CONNECTION_SCOPE</span><span class="p">(</span><span class="n">MmConnectionName</span><span class="p">,</span><span class="w"> </span><span class="cm">/*bIsOutgoing=*/</span><span class="w"> </span><span class="nb">false</span><span class="p">);</span>
+</span></code></pre></div>
+</li>
+<li>
+<p><strong>Why:</strong> natural function-scoped boundary for one received UDP packet; RAII closes the scope on every early-return path.</p>
+</li>
+</ul>
+<p>Then, near the existing <code>UE_NET_TRACE_PACKET_RECV(...)</code> line at the end of the function, add the wire-bit metric:</p>
+<ul>
+<li>
+<p><strong>Insert:</strong></p>
+<div class="language-cpp highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="c1">// micromegas net trace — physical wire bits</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="n">MICROMEGAS_IMETRIC</span><span class="p">(</span><span class="s">&quot;net&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">MicromegasTracing</span><span class="o">::</span><span class="n">Verbosity</span><span class="o">::</span><span class="n">Med</span><span class="p">,</span>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">                   </span><span class="n">TEXT</span><span class="p">(</span><span class="s">&quot;net.packet_received_bits&quot;</span><span class="p">),</span><span class="w"> </span><span class="n">TEXT</span><span class="p">(</span><span class="s">&quot;bits&quot;</span><span class="p">),</span>
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">                   </span><span class="n">Reader</span><span class="p">.</span><span class="n">GetNumBits</span><span class="p">());</span>
+</span></code></pre></div>
+</li>
+</ul>
+<h3 id="32-outgoing-packet-metric">3.2 Outgoing packet metric<a class="headerlink" href="#32-outgoing-packet-metric" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>File:</strong> <code>Engine/Source/Runtime/Engine/Private/NetConnection.cpp</code></li>
+<li><strong>Function:</strong> <code>UNetConnection::FlushNet</code></li>
+<li><strong>Insertion point:</strong> immediately after the <code>UE_NET_TRACE_PACKET_SEND(...)</code> line, before the <code>LowLevelSend</code> call.</li>
+<li>
+<p><strong>Insert:</strong></p>
+<div class="language-cpp highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="c1">// micromegas net trace — physical wire bits</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="n">MICROMEGAS_IMETRIC</span><span class="p">(</span><span class="s">&quot;net&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">MicromegasTracing</span><span class="o">::</span><span class="n">Verbosity</span><span class="o">::</span><span class="n">Med</span><span class="p">,</span>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">                   </span><span class="n">TEXT</span><span class="p">(</span><span class="s">&quot;net.packet_sent_bits&quot;</span><span class="p">),</span><span class="w"> </span><span class="n">TEXT</span><span class="p">(</span><span class="s">&quot;bits&quot;</span><span class="p">),</span>
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">                   </span><span class="n">SendBuffer</span><span class="p">.</span><span class="n">GetNumBits</span><span class="p">());</span>
+</span></code></pre></div>
+</li>
+<li>
+<p><strong>Why:</strong> physical wire-bit counter. <strong>Do not</strong> open a <code>MICROMEGAS_NET_CONNECTION_SCOPE</code> here — outgoing scopes live at higher-level replication entry points (§3.3, §3.4, §3.5).</p>
+</li>
+</ul>
+<h3 id="33-classic-server-replication-scope">3.3 Classic server replication scope<a class="headerlink" href="#33-classic-server-replication-scope" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>File:</strong> <code>Engine/Source/Runtime/Engine/Private/NetDriver.cpp</code></li>
+<li><strong>Function:</strong> <code>UNetDriver::ServerReplicateActors_ForConnection</code></li>
+<li><strong>Insertion point:</strong> first executable line of the function body, inside the <code>#if WITH_SERVER_CODE</code> guard.</li>
+<li>
+<p><strong>Insert:</strong></p>
+<div class="language-cpp highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="c1">// micromegas net trace</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="n">FName</span><span class="w"> </span><span class="n">MmConnectionName</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Params</span><span class="p">.</span><span class="n">Connection</span><span class="o">-&gt;</span><span class="n">GetPlayerOnlinePlatformName</span><span class="p">();</span>
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">MmConnectionName</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="n">NAME_None</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">MmConnectionName</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Params</span><span class="p">.</span><span class="n">Connection</span><span class="o">-&gt;</span><span class="n">GetFName</span><span class="p">();</span><span class="w"> </span><span class="p">}</span>
+</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="n">MICROMEGAS_NET_CONNECTION_SCOPE</span><span class="p">(</span><span class="n">MmConnectionName</span><span class="p">,</span><span class="w"> </span><span class="cm">/*bIsOutgoing=*/</span><span class="w"> </span><span class="nb">true</span><span class="p">);</span>
+</span></code></pre></div>
+</li>
+<li>
+<p><strong>Why:</strong> wraps the per-connection actor-replication walk on a vanilla server (no RepGraph). <strong>Skipped entirely</strong> when <code>UReplicationDriver</code> is set — that path needs §3.4 instead.</p>
+</li>
+</ul>
+<h3 id="34-repgraph-server-replication-scope">3.4 RepGraph server replication scope<a class="headerlink" href="#34-repgraph-server-replication-scope" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>File:</strong> <code>Engine/Plugins/Runtime/ReplicationGraph/Source/Private/ReplicationGraph.cpp</code></li>
+<li><strong>Function:</strong> <code>UReplicationGraph::ServerReplicateActors</code></li>
+<li><strong>Insertion point:</strong> inside the <code>for (UNetReplicationGraphConnection* ConnectionManager : Connections)</code> loop, after the early-<code>continue</code> checks (saturation, invalid connection) and before the gather phase.</li>
+<li>
+<p><strong>Insert:</strong></p>
+<div class="language-cpp highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="c1">// micromegas net trace</span>
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="n">FName</span><span class="w"> </span><span class="n">MmConnectionName</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">NetConnection</span><span class="o">-&gt;</span><span class="n">GetPlayerOnlinePlatformName</span><span class="p">();</span>
+</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">MmConnectionName</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="n">NAME_None</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">MmConnectionName</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">NetConnection</span><span class="o">-&gt;</span><span class="n">GetFName</span><span class="p">();</span><span class="w"> </span><span class="p">}</span>
+</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="n">MICROMEGAS_NET_CONNECTION_SCOPE</span><span class="p">(</span><span class="n">MmConnectionName</span><span class="p">,</span><span class="w"> </span><span class="cm">/*bIsOutgoing=*/</span><span class="w"> </span><span class="nb">true</span><span class="p">);</span>
+</span></code></pre></div>
+</li>
+<li>
+<p><strong>Why:</strong> RepGraph short-circuits <code>UNetDriver::ServerReplicateActors</code>, so the §3.3 scope never opens for RepGraph traffic. Symptom of missing this site: object/property events appear outside any <code>BeginConnection</code> event — especially ~120 actors per tick with <code>bit_size:0</code> from the relevancy walk.</p>
+</li>
+</ul>
+<h3 id="35-iris-outgoing-scope">3.5 Iris outgoing scope<a class="headerlink" href="#35-iris-outgoing-scope" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>File:</strong> <code>Engine/Source/Runtime/Engine/Private/Net/Experimental/Iris/DataStreamChannel.cpp</code></li>
+<li><strong>Function:</strong> <code>UDataStreamChannel::WriteData</code></li>
+<li><strong>Insertion point:</strong> after the <code>if (Result == EWriteResult::NoData) return;</code> early return, before the main write loop.</li>
+<li>
+<p><strong>Insert:</strong></p>
+<div class="language-cpp highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="c1">// micromegas net trace</span>
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="n">FName</span><span class="w"> </span><span class="n">MmConnectionName</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Connection</span><span class="o">-&gt;</span><span class="n">GetPlayerOnlinePlatformName</span><span class="p">();</span>
+</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">MmConnectionName</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="n">NAME_None</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">MmConnectionName</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Connection</span><span class="o">-&gt;</span><span class="n">GetFName</span><span class="p">();</span><span class="w"> </span><span class="p">}</span>
+</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="n">MICROMEGAS_NET_CONNECTION_SCOPE</span><span class="p">(</span><span class="n">MmConnectionName</span><span class="p">,</span><span class="w"> </span><span class="cm">/*bIsOutgoing=*/</span><span class="w"> </span><span class="nb">true</span><span class="p">);</span>
+</span></code></pre></div>
+</li>
+<li>
+<p><strong>Why:</strong> opens only when there's actual work — empty ticks don't produce empty scopes. Iris bypasses both classic scopes (§3.3, §3.4).</p>
+</li>
+</ul>
+<h3 id="36-queued-bunch-deferred-flush-scope">3.6 Queued-bunch deferred-flush scope<a class="headerlink" href="#36-queued-bunch-deferred-flush-scope" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>File:</strong> <code>Engine/Source/Runtime/Engine/Private/DataChannel.cpp</code></li>
+<li><strong>Function:</strong> <code>UActorChannel::ProcessQueuedBunches</code></li>
+<li><strong>Insertion point:</strong> inside the <code>bHasTimeToProcess &amp;&amp; PendingGuidResolves.Num() == 0</code> branch, immediately before the <code>while ((BunchIndex &lt; QueuedBunches.Num()) &amp;&amp; ...)</code> drain loop.</li>
+<li>
+<p><strong>Insert:</strong></p>
+<div class="language-cpp highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="c1">// micromegas net trace</span>
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="n">FName</span><span class="w"> </span><span class="n">MmConnectionName</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Connection</span><span class="o">-&gt;</span><span class="n">GetPlayerOnlinePlatformName</span><span class="p">();</span>
+</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">MmConnectionName</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="n">NAME_None</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">MmConnectionName</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Connection</span><span class="o">-&gt;</span><span class="n">GetFName</span><span class="p">();</span><span class="w"> </span><span class="p">}</span>
+</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="n">MICROMEGAS_NET_CONNECTION_SCOPE</span><span class="p">(</span><span class="n">MmConnectionName</span><span class="p">,</span><span class="w"> </span><span class="cm">/*bIsOutgoing=*/</span><span class="w"> </span><span class="nb">false</span><span class="p">);</span>
+</span></code></pre></div>
+</li>
+<li>
+<p><strong>Why:</strong> queued bunches (parked waiting for NetGUID resolution) are flushed from <code>UActorChannel::Tick()</code>, <strong>outside</strong> the §3.1 <code>ReceivedPacket</code> scope. Without this, multi-kilobit <code>InventoryManagerComponent</code> and similar large initial-state objects orphan ~1 s after the packet arrives.</p>
+</li>
+</ul>
+<h3 id="37-classic-object-scopes">3.7 Classic object scopes<a class="headerlink" href="#37-classic-object-scopes" title="Permanent link">&para;</a></h3>
+<p>Four sites.</p>
+<h4 id="371-uactorchannelreplicateactor-root-actor-send">3.7.1 <code>UActorChannel::ReplicateActor</code> (root actor, send)<a class="headerlink" href="#371-uactorchannelreplicateactor-root-actor-send" title="Permanent link">&para;</a></h4>
+<ul>
+<li><strong>File:</strong> <code>Engine/Source/Runtime/Engine/Private/DataChannel.cpp</code></li>
+<li><strong>Insertion point:</strong> inside the <code>// The Actor</code> block, immediately after the existing <code>UE_NET_TRACE_OBJECT_SCOPE(ActorReplicator-&gt;ObjectNetGUID, Bunch, ...)</code> line.</li>
+<li>
+<p><strong>Insert:</strong></p>
+<div class="language-cpp highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="c1">// micromegas net trace</span>
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="n">MICROMEGAS_NET_OBJECT_SCOPE</span><span class="p">(</span><span class="n">Actor</span><span class="o">-&gt;</span><span class="n">GetFName</span><span class="p">(),</span><span class="w"> </span><span class="n">Bunch</span><span class="p">.</span><span class="n">GetNumBits</span><span class="p">());</span>
+</span></code></pre></div>
+</li>
+<li>
+<p><strong>Why:</strong> root actor body. Bit source is the bunch writer because that's the wire stream the actor's bits land in.</p>
+</li>
+</ul>
+<h4 id="372-uactorchannelwritesubobjectinbunch-subobject-send">3.7.2 <code>UActorChannel::WriteSubObjectInBunch</code> (subobject, send)<a class="headerlink" href="#372-uactorchannelwritesubobjectinbunch-subobject-send" title="Permanent link">&para;</a></h4>
+<ul>
+<li><strong>File:</strong> <code>Engine/Source/Runtime/Engine/Private/DataChannel.cpp</code></li>
+<li><strong>Insertion point:</strong> immediately after the existing <code>UE_NET_TRACE_OBJECT_SCOPE(ObjectReplicator-&gt;ObjectNetGUID, Bunch, ...)</code> line, before the <code>bWroteSomething = ObjectReplicator.Get().ReplicateProperties(Bunch, ObjRepFlags);</code> call.</li>
+<li>
+<p><strong>Insert:</strong></p>
+<div class="language-cpp highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="c1">// micromegas net trace</span>
+</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="n">MICROMEGAS_NET_OBJECT_SCOPE</span><span class="p">(</span><span class="n">Obj</span><span class="o">-&gt;</span><span class="n">GetFName</span><span class="p">(),</span><span class="w"> </span><span class="n">Bunch</span><span class="p">.</span><span class="n">GetNumBits</span><span class="p">());</span>
+</span></code></pre></div>
+</li>
+<li>
+<p><strong>Why:</strong> subobject body. In classic, this opens at depth 0 (peer to the root actor's scope, <strong>not nested</strong>) — the §3.7.1 scope already closed by the time <code>WriteSubObjectInBunch</code> is called from <code>DoSubObjectReplication</code>.</p>
+</li>
+</ul>
+<h4 id="373-uactorchannelprocessbunch-content-block-receive-loop">3.7.3 <code>UActorChannel::ProcessBunch</code> content-block receive loop<a class="headerlink" href="#373-uactorchannelprocessbunch-content-block-receive-loop" title="Permanent link">&para;</a></h4>
+<ul>
+<li><strong>File:</strong> <code>Engine/Source/Runtime/Engine/Private/DataChannel.cpp</code></li>
+<li><strong>Insertion point:</strong> immediately after <code>TSharedRef&lt;FObjectReplicator&gt;&amp; Replicator = FindOrCreateReplicator(RepObj);</code>, before <code>bool bHasUnmapped = false;</code>.</li>
+<li>
+<p><strong>Insert:</strong></p>
+<div class="language-cpp highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="c1">// micromegas net trace</span>
+</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="n">MICROMEGAS_NET_OBJECT_SCOPE</span><span class="p">(</span><span class="n">RepObj</span><span class="o">-&gt;</span><span class="n">GetFName</span><span class="p">(),</span><span class="w"> </span><span class="n">Reader</span><span class="p">.</span><span class="n">GetPosBits</span><span class="p">());</span>
+</span></code></pre></div>
+</li>
+<li>
+<p><strong>Why:</strong> covers both root actors and subobjects on receive — <code>ProcessBunch</code>'s loop body handles both. Bit source is <code>Reader</code> (the local <code>FNetBitReader</code> containing the content-block payload), <strong>not</strong> <code>Bunch</code> (the outer packet reader — using <code>Bunch</code> here would measure the wrong delta).</p>
+</li>
+</ul>
+<h4 id="374-fobjectreplicatorreplicatecustomdeltaproperties-fast-arrays-custom-delta">3.7.4 <code>FObjectReplicator::ReplicateCustomDeltaProperties</code> (fast arrays / custom delta)<a class="headerlink" href="#374-fobjectreplicatorreplicatecustomdeltaproperties-fast-arrays-custom-delta" title="Permanent link">&para;</a></h4>
+<ul>
+<li><strong>File:</strong> <code>Engine/Source/Runtime/Engine/Private/DataReplication.cpp</code></li>
+<li><strong>Insertion point:</strong> inside the per-property loop, after the trace-collection reset block, before the <code>TSharedPtr&lt;INetDeltaBaseState&gt;&amp; OldState = ...</code> assignment.</li>
+<li>
+<p><strong>Insert:</strong></p>
+<div class="language-cpp highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="c1">// micromegas net trace</span>
+</span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="n">MICROMEGAS_NET_OBJECT_SCOPE</span><span class="p">(</span><span class="n">Property</span><span class="o">-&gt;</span><span class="n">GetFName</span><span class="p">(),</span><span class="w"> </span><span class="n">TempBitWriter</span><span class="p">.</span><span class="n">GetNumBits</span><span class="p">());</span>
+</span></code></pre></div>
+</li>
+<li>
+<p><strong>Why:</strong> outer container for fast-array / custom-delta properties. Opens at depth 1 (nested inside the root-actor scope, since <code>ReplicateCustomDeltaProperties</code> is called from <code>ReplicateProperties_r</code> inside <code>ReplicateActor</code>'s scope) — the <strong>one classic exception</strong> to the peer-not-nested rule.</p>
+</li>
+</ul>
+<h3 id="38-classic-property-scopes">3.8 Classic property scopes<a class="headerlink" href="#38-classic-property-scopes" title="Permanent link">&para;</a></h3>
+<p>Five sites in <code>Engine/Source/Runtime/Engine/Private/RepLayout.cpp</code>. The macro form (flat vs scope) is dictated by what's already available; pick wrong and you create unnecessary divergence.</p>
+<h4 id="381-sendproperties_r-shared-property-branch">3.8.1 <code>SendProperties_r</code>, shared-property branch<a class="headerlink" href="#381-sendproperties_r-shared-property-branch" title="Permanent link">&para;</a></h4>
+<ul>
+<li><strong>Insertion point:</strong> immediately after <code>NETWORK_PROFILER(GNetworkProfiler.TrackReplicateProperty(ParentCmd.Property, SharedPropInfo-&gt;PropBitLength, nullptr));</code>.</li>
+<li>
+<p><strong>Insert:</strong></p>
+<div class="language-cpp highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="c1">// micromegas net trace</span>
+</span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a><span class="n">MICROMEGAS_NET_PROPERTY</span><span class="p">(</span><span class="n">Cmd</span><span class="p">.</span><span class="n">Property</span><span class="o">-&gt;</span><span class="n">GetFName</span><span class="p">(),</span><span class="w"> </span><span class="n">SharedPropInfo</span><span class="o">-&gt;</span><span class="n">PropBitLength</span><span class="p">);</span>
+</span></code></pre></div>
+</li>
+<li>
+<p><strong>Why flat:</strong> <code>SharedPropInfo-&gt;PropBitLength</code> is pre-computed, no delta needed.</p>
+</li>
+</ul>
+<h4 id="382-sendproperties_r-regular-property-branch">3.8.2 <code>SendProperties_r</code>, regular-property branch<a class="headerlink" href="#382-sendproperties_r-regular-property-branch" title="Permanent link">&para;</a></h4>
+<ul>
+<li><strong>Insertion point:</strong> immediately after <code>NETWORK_PROFILER(GNetworkProfiler.TrackReplicateProperty(ParentCmd.Property, NumEndBits - NumStartBits, nullptr));</code>.</li>
+<li>
+<p><strong>Insert:</strong></p>
+<div class="language-cpp highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="c1">// micromegas net trace</span>
+</span><span id="__span-15-2"><a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a><span class="n">MICROMEGAS_NET_PROPERTY</span><span class="p">(</span><span class="n">Cmd</span><span class="p">.</span><span class="n">Property</span><span class="o">-&gt;</span><span class="n">GetFName</span><span class="p">(),</span><span class="w"> </span><span class="n">NumEndBits</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="n">NumStartBits</span><span class="p">);</span>
+</span></code></pre></div>
+</li>
+<li>
+<p><strong>Why flat:</strong> <code>NumStartBits</code> / <code>NumEndBits</code> are pre-existing engine locals captured for <code>NETWORK_PROFILER</code> — reuse them in a single line. Switching to the scope form would require wrapping <code>NetSerializeItem</code> in a new brace-bounded block to avoid measuring the trailing <code>ENABLE_PROPERTY_CHECKSUMS</code> code, <strong>increasing</strong> divergence.</p>
+</li>
+</ul>
+<h4 id="383-sendproperties_backwardscompatible_r">3.8.3 <code>SendProperties_BackwardsCompatible_r</code><a class="headerlink" href="#383-sendproperties_backwardscompatible_r" title="Permanent link">&para;</a></h4>
+<ul>
+<li><strong>Insertion point:</strong> immediately after <code>NETWORK_PROFILER(GNetworkProfiler.TrackReplicateProperty(Cmd.Property, NumEndBits - NumStartBits, nullptr));</code>.</li>
+<li>
+<p><strong>Insert:</strong></p>
+<div class="language-cpp highlight"><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="c1">// micromegas net trace</span>
+</span><span id="__span-16-2"><a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a><span class="n">MICROMEGAS_NET_PROPERTY</span><span class="p">(</span><span class="n">Cmd</span><span class="p">.</span><span class="n">Property</span><span class="o">-&gt;</span><span class="n">GetFName</span><span class="p">(),</span><span class="w"> </span><span class="n">NumEndBits</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="n">NumStartBits</span><span class="p">);</span>
+</span></code></pre></div>
+</li>
+<li>
+<p><strong>Why flat:</strong> same reasoning as §3.8.2.</p>
+</li>
+</ul>
+<h4 id="384-receiveproperties_r">3.8.4 <code>ReceiveProperties_r</code><a class="headerlink" href="#384-receiveproperties_r" title="Permanent link">&para;</a></h4>
+<ul>
+<li><strong>Insertion point:</strong> inside the per-property block, immediately after the existing <code>UE_NET_TRACE_DYNAMIC_NAME_SCOPE(Cmd.Property-&gt;GetFName(), Params.Bunch, ...)</code> line, before the <code>if (ReceivePropertyHelper(...))</code> call.</li>
+<li>
+<p><strong>Insert:</strong></p>
+<div class="language-cpp highlight"><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="c1">// micromegas net trace</span>
+</span><span id="__span-17-2"><a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a><span class="n">MICROMEGAS_NET_PROPERTY_SCOPE</span><span class="p">(</span><span class="n">Cmd</span><span class="p">.</span><span class="n">Property</span><span class="o">-&gt;</span><span class="n">GetFName</span><span class="p">(),</span><span class="w"> </span><span class="n">Params</span><span class="p">.</span><span class="n">Bunch</span><span class="p">.</span><span class="n">GetPosBits</span><span class="p">());</span>
+</span></code></pre></div>
+</li>
+<li>
+<p><strong>Why scope:</strong> there's no pre-existing bit capture here, and the scope form absorbs what would otherwise be a dedicated <code>MmStartBits</code> capture — one line instead of three.</p>
+</li>
+</ul>
+<h4 id="385-receiveproperties_backwardscompatible_r">3.8.5 <code>ReceiveProperties_BackwardsCompatible_r</code><a class="headerlink" href="#385-receiveproperties_backwardscompatible_r" title="Permanent link">&para;</a></h4>
+<ul>
+<li><strong>Insertion point:</strong> after the <code>TempReader.ResetData(Reader, NumBits)</code> and error-check block, before <code>if (NetFieldExportGroup-&gt;NetFieldExports[NetFieldExportHandle].bIncompatible) continue;</code>.</li>
+<li>
+<p><strong>Insert:</strong></p>
+<div class="language-cpp highlight"><pre><span></span><code><span id="__span-18-1"><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a><span class="c1">// micromegas net trace</span>
+</span><span id="__span-18-2"><a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a><span class="n">MICROMEGAS_NET_PROPERTY</span><span class="p">(</span><span class="n">NetFieldExportGroup</span><span class="o">-&gt;</span><span class="n">NetFieldExports</span><span class="p">[</span><span class="n">NetFieldExportHandle</span><span class="p">].</span><span class="n">ExportName</span><span class="p">,</span><span class="w"> </span><span class="n">NumBits</span><span class="p">);</span>
+</span></code></pre></div>
+</li>
+<li>
+<p><strong>Why flat:</strong> <code>NumBits</code> is read directly from the stream as a packed int — no delta needed.</p>
+</li>
+</ul>
+<h3 id="39-classic-rpcs">3.9 Classic RPCs<a class="headerlink" href="#39-classic-rpcs" title="Permanent link">&para;</a></h3>
+<p>Three sites.</p>
+<h4 id="391-processremotefunctionforchannelprivate-send-side">3.9.1 <code>ProcessRemoteFunctionForChannelPrivate</code>, send-side<a class="headerlink" href="#391-processremotefunctionforchannelprivate-send-side" title="Permanent link">&para;</a></h4>
+<ul>
+<li><strong>File:</strong> <code>Engine/Source/Runtime/Engine/Private/NetDriver.cpp</code></li>
+<li><strong>Function:</strong> <code>UNetDriver::ProcessRemoteFunctionForChannelPrivate</code></li>
+<li><strong>Insertion point:</strong> after <code>TSharedPtr&lt;FRepLayout&gt; RepLayout = GetFunctionRepLayout(Function);</code>, immediately before <code>RepLayout-&gt;SendPropertiesForRPC(Function, Ch, TempWriter, Parms);</code>.</li>
+<li>
+<p><strong>Insert:</strong></p>
+<div class="language-cpp highlight"><pre><span></span><code><span id="__span-19-1"><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a><span class="c1">// micromegas net trace</span>
+</span><span id="__span-19-2"><a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a><span class="n">MICROMEGAS_NET_RPC_SCOPE</span><span class="p">(</span><span class="n">Function</span><span class="o">-&gt;</span><span class="n">GetFName</span><span class="p">(),</span><span class="w"> </span><span class="n">TempWriter</span><span class="p">.</span><span class="n">GetNumBits</span><span class="p">());</span>
+</span></code></pre></div>
+</li>
+<li>
+<p><strong>Why:</strong> <code>TempWriter</code> is fresh per-RPC, so <code>GetNumBits()</code> gives the full payload size via the destructor delta after <code>SendPropertiesForRPC</code> returns.</p>
+</li>
+</ul>
+<h4 id="392-processremotefunctionforchannelprivate-rpc-forced-replicateactor-block">3.9.2 <code>ProcessRemoteFunctionForChannelPrivate</code>, RPC-forced ReplicateActor block<a class="headerlink" href="#392-processremotefunctionforchannelprivate-rpc-forced-replicateactor-block" title="Permanent link">&para;</a></h4>
+<ul>
+<li><strong>File:</strong> <code>Engine/Source/Runtime/Engine/Private/NetDriver.cpp</code></li>
+<li><strong>Function:</strong> <code>UNetDriver::ProcessRemoteFunctionForChannelPrivate</code></li>
+<li><strong>Insertion point:</strong> earlier in the same function — the <code>Ch-&gt;SetForcedSerializeFromRPC(true); Ch-&gt;ReplicateActor(); Ch-&gt;SetForcedSerializeFromRPC(false);</code> triple. Wrap it in a brace-bounded block with a connection scope:</li>
+<li>
+<p><strong>Insert (replaces the triple):</strong></p>
+<div class="language-cpp highlight"><pre><span></span><code><span id="__span-20-1"><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a><span class="c1">// micromegas net trace</span>
+</span><span id="__span-20-2"><a id="__codelineno-20-2" name="__codelineno-20-2" href="#__codelineno-20-2"></a><span class="p">{</span>
+</span><span id="__span-20-3"><a id="__codelineno-20-3" name="__codelineno-20-3" href="#__codelineno-20-3"></a><span class="w">    </span><span class="n">FName</span><span class="w"> </span><span class="n">MmConnectionName</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Connection</span><span class="o">-&gt;</span><span class="n">GetPlayerOnlinePlatformName</span><span class="p">();</span>
+</span><span id="__span-20-4"><a id="__codelineno-20-4" name="__codelineno-20-4" href="#__codelineno-20-4"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">MmConnectionName</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="n">NAME_None</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">MmConnectionName</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Connection</span><span class="o">-&gt;</span><span class="n">GetFName</span><span class="p">();</span><span class="w"> </span><span class="p">}</span>
+</span><span id="__span-20-5"><a id="__codelineno-20-5" name="__codelineno-20-5" href="#__codelineno-20-5"></a><span class="w">    </span><span class="n">MICROMEGAS_NET_CONNECTION_SCOPE</span><span class="p">(</span><span class="n">MmConnectionName</span><span class="p">,</span><span class="w"> </span><span class="cm">/*bIsOutgoing=*/</span><span class="w"> </span><span class="nb">true</span><span class="p">);</span>
+</span><span id="__span-20-6"><a id="__codelineno-20-6" name="__codelineno-20-6" href="#__codelineno-20-6"></a>
+</span><span id="__span-20-7"><a id="__codelineno-20-7" name="__codelineno-20-7" href="#__codelineno-20-7"></a><span class="w">    </span><span class="n">Ch</span><span class="o">-&gt;</span><span class="n">SetForcedSerializeFromRPC</span><span class="p">(</span><span class="nb">true</span><span class="p">);</span>
+</span><span id="__span-20-8"><a id="__codelineno-20-8" name="__codelineno-20-8" href="#__codelineno-20-8"></a><span class="w">    </span><span class="n">Ch</span><span class="o">-&gt;</span><span class="n">ReplicateActor</span><span class="p">();</span>
+</span><span id="__span-20-9"><a id="__codelineno-20-9" name="__codelineno-20-9" href="#__codelineno-20-9"></a><span class="w">    </span><span class="n">Ch</span><span class="o">-&gt;</span><span class="n">SetForcedSerializeFromRPC</span><span class="p">(</span><span class="nb">false</span><span class="p">);</span>
+</span><span id="__span-20-10"><a id="__codelineno-20-10" name="__codelineno-20-10" href="#__codelineno-20-10"></a><span class="p">}</span>
+</span></code></pre></div>
+</li>
+<li>
+<p><strong>Why:</strong> when an RPC fires for an actor whose channel isn't up to date, <code>ReplicateActor</code> is forced — emitting a full actor + subobject + fast-array walk that needs connection attribution. The brace bounds the RAII lifetime so <code>EndConnection</code> fires immediately after <code>SetForcedSerializeFromRPC(false)</code>. If reached while another scope is open (e.g. inside §3.3), Decision-6 absorbs the nested Begin/End as no-ops.</p>
+</li>
+</ul>
+<h4 id="393-fobjectreplicatorreceivedrpc">3.9.3 <code>FObjectReplicator::ReceivedRPC</code><a class="headerlink" href="#393-fobjectreplicatorreceivedrpc" title="Permanent link">&para;</a></h4>
+<ul>
+<li><strong>File:</strong> <code>Engine/Source/Runtime/Engine/Private/DataReplication.cpp</code></li>
+<li><strong>Insertion point:</strong> immediately before <code>FuncRepLayout-&gt;ReceivePropertiesForRPC(Object, LayoutFunction, OwningChannel, Reader, Parms, UnmappedGuids);</code>.</li>
+<li>
+<p><strong>Insert:</strong></p>
+<div class="language-cpp highlight"><pre><span></span><code><span id="__span-21-1"><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a><span class="c1">// micromegas net trace — FunctionName is already in scope from earlier FieldCache-&gt;Field.GetFName()</span>
+</span><span id="__span-21-2"><a id="__codelineno-21-2" name="__codelineno-21-2" href="#__codelineno-21-2"></a><span class="n">MICROMEGAS_NET_RPC_SCOPE</span><span class="p">(</span><span class="n">FunctionName</span><span class="p">,</span><span class="w"> </span><span class="n">Reader</span><span class="p">.</span><span class="n">GetPosBits</span><span class="p">());</span>
+</span></code></pre></div>
+</li>
+<li>
+<p><strong>Why:</strong> receive-side RPC body. <code>Reader</code> is the bit reader the RPC parameters are deserialized from.</p>
+</li>
+</ul>
+<h3 id="310-iris-properties">3.10 Iris properties<a class="headerlink" href="#310-iris-properties" title="Permanent link">&para;</a></h3>
+<p>Eight sites in <code>Engine/Source/Runtime/Net/Iris/Private/Iris/ReplicationSystem/ReplicationOperations.cpp</code> — one per <code>Serialize</code> / <code>Deserialize</code> variant.</p>
+<p><strong>Pattern (identical at every site):</strong> inside the <code>for (uint32 MemberIt = 0; MemberIt &lt; MemberCount; ++MemberIt)</code> loop, immediately before the <code>MemberSerializerDescriptor.Serializer-&gt;{Serialize,Deserialize,SerializeDelta,DeserializeDelta}(Context, Args);</code> call. The macro line is:</p>
+<div class="language-cpp highlight"><pre><span></span><code><span id="__span-22-1"><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a><span class="c1">// micromegas net trace — Serialize variants</span>
+</span><span id="__span-22-2"><a id="__codelineno-22-2" name="__codelineno-22-2" href="#__codelineno-22-2"></a><span class="n">MICROMEGAS_NET_PROPERTY_SCOPE</span><span class="p">(</span><span class="n">MemberDebugDescriptors</span><span class="p">[</span><span class="n">MemberIt</span><span class="p">].</span><span class="n">DebugName</span><span class="o">-&gt;</span><span class="n">Name</span><span class="p">,</span>
+</span><span id="__span-22-3"><a id="__codelineno-22-3" name="__codelineno-22-3" href="#__codelineno-22-3"></a><span class="w">                              </span><span class="n">Context</span><span class="p">.</span><span class="n">GetBitStreamWriter</span><span class="p">()</span><span class="o">-&gt;</span><span class="n">GetPosBits</span><span class="p">());</span>
+</span></code></pre></div>
+<p>with <code>GetBitStreamWriter()</code> for <code>Serialize*</code> variants, <code>GetBitStreamReader()</code> for <code>Deserialize*</code> variants.</p>
+<p>The eight functions:</p>
+<table>
+<thead>
+<tr>
+<th>Function</th>
+<th>Bit stream</th>
+<th>Serializer call</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Serialize</code></td>
+<td><code>GetBitStreamWriter()</code></td>
+<td><code>Serializer-&gt;Serialize</code></td>
+</tr>
+<tr>
+<td><code>Deserialize</code></td>
+<td><code>GetBitStreamReader()</code></td>
+<td><code>Serializer-&gt;Deserialize</code></td>
+</tr>
+<tr>
+<td><code>SerializeDelta</code></td>
+<td><code>GetBitStreamWriter()</code></td>
+<td><code>Serializer-&gt;SerializeDelta</code></td>
+</tr>
+<tr>
+<td><code>DeserializeDelta</code></td>
+<td><code>GetBitStreamReader()</code></td>
+<td><code>Serializer-&gt;DeserializeDelta</code></td>
+</tr>
+<tr>
+<td><code>SerializeWithMask</code></td>
+<td><code>GetBitStreamWriter()</code></td>
+<td><code>Serializer-&gt;Serialize</code></td>
+</tr>
+<tr>
+<td><code>DeserializeWithMask</code></td>
+<td><code>GetBitStreamReader()</code></td>
+<td><code>Serializer-&gt;Deserialize</code></td>
+</tr>
+<tr>
+<td><code>SerializeDeltaWithMask</code></td>
+<td><code>GetBitStreamWriter()</code></td>
+<td><code>Serializer-&gt;SerializeDelta</code></td>
+</tr>
+<tr>
+<td><code>DeserializeDeltaWithMask</code></td>
+<td><code>GetBitStreamReader()</code></td>
+<td><code>Serializer-&gt;DeserializeDelta</code></td>
+</tr>
+</tbody>
+</table>
+<p><strong>For the four <code>WithMask</code> variants</strong>, the macro lives <strong>inside</strong> the <code>if (ChangeMask.IsAnyBitSet(...))</code> (or equivalent changemask-check) block so only dirty properties trace.</p>
+<p><strong>Why:</strong> Iris has no <code>NETWORK_PROFILER</code> capture to reuse, and the bit position is a <code>GetPosBits</code> delta across the serializer call — the scope form is the right tool. <code>DebugName-&gt;Name</code> is <code>const TCHAR*</code> (process-lifetime stable, allocated by <code>CreatePersistentNetDebugName</code>) — pass directly; the macro wraps it in <code>StaticStringRef</code> internally.</p>
+<h3 id="311-iris-objects">3.11 Iris objects<a class="headerlink" href="#311-iris-objects" title="Permanent link">&para;</a></h3>
+<p>Two sites.</p>
+<h4 id="3111-freplicationwriterserializeobjectstatedelta">3.11.1 <code>FReplicationWriter::SerializeObjectStateDelta</code><a class="headerlink" href="#3111-freplicationwriterserializeobjectstatedelta" title="Permanent link">&para;</a></h4>
+<ul>
+<li><strong>File:</strong> <code>Engine/Source/Runtime/Net/Iris/Private/Iris/ReplicationSystem/ReplicationWriter.cpp</code></li>
+<li><strong>Insertion point:</strong> first executable line of the function body.</li>
+<li>
+<p><strong>Insert:</strong></p>
+<div class="language-cpp highlight"><pre><span></span><code><span id="__span-23-1"><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a><span class="c1">// micromegas net trace</span>
+</span><span id="__span-23-2"><a id="__codelineno-23-2" name="__codelineno-23-2" href="#__codelineno-23-2"></a><span class="n">MICROMEGAS_NET_OBJECT_SCOPE</span><span class="p">(</span>
+</span><span id="__span-23-3"><a id="__codelineno-23-3" name="__codelineno-23-3" href="#__codelineno-23-3"></a><span class="w">    </span><span class="p">(</span><span class="n">ObjectData</span><span class="p">.</span><span class="n">Protocol</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="n">ObjectData</span><span class="p">.</span><span class="n">Protocol</span><span class="o">-&gt;</span><span class="n">DebugName</span><span class="p">)</span><span class="w"> </span><span class="o">?</span><span class="w"> </span><span class="n">ObjectData</span><span class="p">.</span><span class="n">Protocol</span><span class="o">-&gt;</span><span class="n">DebugName</span><span class="o">-&gt;</span><span class="n">Name</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="n">TEXT</span><span class="p">(</span><span class="s">&quot;Unknown&quot;</span><span class="p">),</span>
+</span><span id="__span-23-4"><a id="__codelineno-23-4" name="__codelineno-23-4" href="#__codelineno-23-4"></a><span class="w">    </span><span class="n">Context</span><span class="p">.</span><span class="n">GetBitStreamWriter</span><span class="p">()</span><span class="o">-&gt;</span><span class="n">GetPosBits</span><span class="p">());</span>
+</span></code></pre></div>
+</li>
+<li>
+<p><strong>Why:</strong> per-object Iris send entry point, called for both root objects and subobjects within a batch. Null-guard on <code>Protocol</code> / <code>DebugName</code> falls back to the literal <code>TEXT("Unknown")</code> (also process-lifetime stable). Depth-based gating in <code>NetTraceWriter</code> decides which level emits.</p>
+</li>
+</ul>
+<h4 id="3112-freplicationreaderdeserializeobjectstatedelta">3.11.2 <code>FReplicationReader::DeserializeObjectStateDelta</code><a class="headerlink" href="#3112-freplicationreaderdeserializeobjectstatedelta" title="Permanent link">&para;</a></h4>
+<ul>
+<li><strong>File:</strong> <code>Engine/Source/Runtime/Net/Iris/Private/Iris/ReplicationSystem/ReplicationReader.cpp</code></li>
+<li><strong>Insertion point:</strong> first executable line of the function body.</li>
+<li>
+<p><strong>Insert:</strong></p>
+<div class="language-cpp highlight"><pre><span></span><code><span id="__span-24-1"><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a><span class="c1">// micromegas net trace</span>
+</span><span id="__span-24-2"><a id="__codelineno-24-2" name="__codelineno-24-2" href="#__codelineno-24-2"></a><span class="n">MICROMEGAS_NET_OBJECT_SCOPE</span><span class="p">(</span>
+</span><span id="__span-24-3"><a id="__codelineno-24-3" name="__codelineno-24-3" href="#__codelineno-24-3"></a><span class="w">    </span><span class="p">(</span><span class="n">ObjectData</span><span class="p">.</span><span class="n">Protocol</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="n">ObjectData</span><span class="p">.</span><span class="n">Protocol</span><span class="o">-&gt;</span><span class="n">DebugName</span><span class="p">)</span><span class="w"> </span><span class="o">?</span><span class="w"> </span><span class="n">ObjectData</span><span class="p">.</span><span class="n">Protocol</span><span class="o">-&gt;</span><span class="n">DebugName</span><span class="o">-&gt;</span><span class="n">Name</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="n">TEXT</span><span class="p">(</span><span class="s">&quot;Unknown&quot;</span><span class="p">),</span>
+</span><span id="__span-24-4"><a id="__codelineno-24-4" name="__codelineno-24-4" href="#__codelineno-24-4"></a><span class="w">    </span><span class="n">Context</span><span class="p">.</span><span class="n">GetBitStreamReader</span><span class="p">()</span><span class="o">-&gt;</span><span class="n">GetPosBits</span><span class="p">());</span>
+</span></code></pre></div>
+</li>
+<li>
+<p><strong>Why:</strong> symmetric receive path with the same null-guard pattern.</p>
+</li>
+</ul>
+<h3 id="312-iris-rpcs">3.12 Iris RPCs<a class="headerlink" href="#312-iris-rpcs" title="Permanent link">&para;</a></h3>
+<p>Four sites in <code>Engine/Source/Runtime/Net/Iris/Private/Iris/ReplicationSystem/NetBlob/NetRPC.cpp</code>.</p>
+<h4 id="3121-fnetrpcserializewithobject">3.12.1 <code>FNetRPC::SerializeWithObject</code><a class="headerlink" href="#3121-fnetrpcserializewithobject" title="Permanent link">&para;</a></h4>
+<ul>
+<li><strong>Insertion point:</strong> after <code>FNetBitStreamWriter&amp; Writer = *Context.GetBitStreamWriter();</code>, before <code>const uint32 HeaderPos = Writer.GetPosBits();</code>.</li>
+<li>
+<p><strong>Insert:</strong></p>
+<div class="language-cpp highlight"><pre><span></span><code><span id="__span-25-1"><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a><span class="c1">// micromegas net trace</span>
+</span><span id="__span-25-2"><a id="__codelineno-25-2" name="__codelineno-25-2" href="#__codelineno-25-2"></a><span class="n">MICROMEGAS_NET_RPC_SCOPE</span><span class="p">(</span><span class="n">BlobDescriptor</span><span class="o">-&gt;</span><span class="n">DebugName</span><span class="o">-&gt;</span><span class="n">Name</span><span class="p">,</span><span class="w"> </span><span class="n">Writer</span><span class="p">.</span><span class="n">GetPosBits</span><span class="p">());</span>
+</span></code></pre></div>
+</li>
+<li>
+<p><strong>Why:</strong> <code>BlobDescriptor</code> is a member field, valid at function entry — open the scope as early as possible to capture the full RPC including header.</p>
+</li>
+</ul>
+<h4 id="3122-fnetrpcserialize">3.12.2 <code>FNetRPC::Serialize</code><a class="headerlink" href="#3122-fnetrpcserialize" title="Permanent link">&para;</a></h4>
+<ul>
+<li><strong>Insertion point:</strong> same shape — after the <code>FNetBitStreamWriter&amp; Writer = ...</code> line, before the <code>HeaderPos</code> capture.</li>
+<li>
+<p><strong>Insert:</strong></p>
+<div class="language-cpp highlight"><pre><span></span><code><span id="__span-26-1"><a id="__codelineno-26-1" name="__codelineno-26-1" href="#__codelineno-26-1"></a><span class="c1">// micromegas net trace</span>
+</span><span id="__span-26-2"><a id="__codelineno-26-2" name="__codelineno-26-2" href="#__codelineno-26-2"></a><span class="n">MICROMEGAS_NET_RPC_SCOPE</span><span class="p">(</span><span class="n">BlobDescriptor</span><span class="o">-&gt;</span><span class="n">DebugName</span><span class="o">-&gt;</span><span class="n">Name</span><span class="p">,</span><span class="w"> </span><span class="n">Writer</span><span class="p">.</span><span class="n">GetPosBits</span><span class="p">());</span>
+</span></code></pre></div>
+</li>
+</ul>
+<h4 id="3123-fnetrpcdeserializewithobject">3.12.3 <code>FNetRPC::DeserializeWithObject</code><a class="headerlink" href="#3123-fnetrpcdeserializewithobject" title="Permanent link">&para;</a></h4>
+<ul>
+<li><strong>Insertion point:</strong> <strong>after</strong> <code>ResolveFunctionAndObject(...)</code> succeeds and <code>UE_NET_TRACE_SET_SCOPE_NAME(TraceScope, BlobDescriptor-&gt;DebugName);</code> runs, immediately before <code>InternalDeserializeBlob(Context);</code>.</li>
+<li>
+<p><strong>Insert:</strong></p>
+<div class="language-cpp highlight"><pre><span></span><code><span id="__span-27-1"><a id="__codelineno-27-1" name="__codelineno-27-1" href="#__codelineno-27-1"></a><span class="c1">// micromegas net trace</span>
+</span><span id="__span-27-2"><a id="__codelineno-27-2" name="__codelineno-27-2" href="#__codelineno-27-2"></a><span class="n">MICROMEGAS_NET_RPC_SCOPE</span><span class="p">(</span><span class="n">BlobDescriptor</span><span class="o">-&gt;</span><span class="n">DebugName</span><span class="o">-&gt;</span><span class="n">Name</span><span class="p">,</span><span class="w"> </span><span class="n">Context</span><span class="p">.</span><span class="n">GetBitStreamReader</span><span class="p">()</span><span class="o">-&gt;</span><span class="n">GetPosBits</span><span class="p">());</span>
+</span></code></pre></div>
+</li>
+<li>
+<p><strong>Why:</strong> the RPC name isn't valid until after <code>ResolveFunctionAndObject</code> — opening the scope earlier would dereference an invalid <code>BlobDescriptor</code>.</p>
+</li>
+</ul>
+<h4 id="3124-fnetrpcdeserialize">3.12.4 <code>FNetRPC::Deserialize</code><a class="headerlink" href="#3124-fnetrpcdeserialize" title="Permanent link">&para;</a></h4>
+<ul>
+<li><strong>Insertion point:</strong> same post-resolve placement as §3.12.3.</li>
+<li>
+<p><strong>Insert:</strong></p>
+<div class="language-cpp highlight"><pre><span></span><code><span id="__span-28-1"><a id="__codelineno-28-1" name="__codelineno-28-1" href="#__codelineno-28-1"></a><span class="c1">// micromegas net trace</span>
+</span><span id="__span-28-2"><a id="__codelineno-28-2" name="__codelineno-28-2" href="#__codelineno-28-2"></a><span class="n">MICROMEGAS_NET_RPC_SCOPE</span><span class="p">(</span><span class="n">BlobDescriptor</span><span class="o">-&gt;</span><span class="n">DebugName</span><span class="o">-&gt;</span><span class="n">Name</span><span class="p">,</span><span class="w"> </span><span class="n">Context</span><span class="p">.</span><span class="n">GetBitStreamReader</span><span class="p">()</span><span class="o">-&gt;</span><span class="n">GetPosBits</span><span class="p">());</span>
+</span></code></pre></div>
+</li>
+</ul>
+<h3 id="313-demo-recording-suspend">3.13 Demo recording suspend<a class="headerlink" href="#313-demo-recording-suspend" title="Permanent link">&para;</a></h3>
+<p>Three sites in <code>Engine/Source/Runtime/Engine/Private/DemoNetDriver.cpp</code>, all using <code>MICROMEGAS_NET_SUSPEND_SCOPE();</code> (no arguments) immediately before the demo operation.</p>
+<h4 id="3131-udemonetdriverprocessremotefunction">3.13.1 <code>UDemoNetDriver::ProcessRemoteFunction</code><a class="headerlink" href="#3131-udemonetdriverprocessremotefunction" title="Permanent link">&para;</a></h4>
+<ul>
+<li><strong>Insertion point:</strong> immediately before <code>InternalProcessRemoteFunction(Actor, SubObject, ClientConnections[0], Function, Parameters, OutParms, Stack, IsServer());</code>.</li>
+<li>
+<p><strong>Insert:</strong></p>
+<div class="language-cpp highlight"><pre><span></span><code><span id="__span-29-1"><a id="__codelineno-29-1" name="__codelineno-29-1" href="#__codelineno-29-1"></a><span class="c1">// micromegas net trace</span>
+</span><span id="__span-29-2"><a id="__codelineno-29-2" name="__codelineno-29-2" href="#__codelineno-29-2"></a><span class="n">MICROMEGAS_NET_SUSPEND_SCOPE</span><span class="p">();</span>
+</span></code></pre></div>
+</li>
+<li>
+<p><strong>Why:</strong> a multicast RPC processed by <code>DemoNetDriver</code> during live-game <code>ReceivedPacket</code> would otherwise call <code>BeginConnection</code> / <code>EndConnection</code> and clobber the live packet's depth counters and <code>AccumulatedBits</code>.</p>
+</li>
+</ul>
+<h4 id="3132-udemonetdrivertickdemorecordframe">3.13.2 <code>UDemoNetDriver::TickDemoRecordFrame</code><a class="headerlink" href="#3132-udemonetdrivertickdemorecordframe" title="Permanent link">&para;</a></h4>
+<ul>
+<li><strong>Insertion point:</strong> immediately before the demo actor-replication block (around the <code>STAT_ReplayReplicateActors</code> cycle counter / <code>Replay actor replication time</code> scope).</li>
+<li>
+<p><strong>Insert:</strong></p>
+<div class="language-cpp highlight"><pre><span></span><code><span id="__span-30-1"><a id="__codelineno-30-1" name="__codelineno-30-1" href="#__codelineno-30-1"></a><span class="c1">// micromegas net trace</span>
+</span><span id="__span-30-2"><a id="__codelineno-30-2" name="__codelineno-30-2" href="#__codelineno-30-2"></a><span class="n">MICROMEGAS_NET_SUSPEND_SCOPE</span><span class="p">();</span>
+</span></code></pre></div>
+</li>
+<li>
+<p><strong>Why:</strong> demo recording isn't real network bandwidth — including its 1-bit "no changes" fast-array markers and 0-dirty-bits objects would be misleading.</p>
+</li>
+</ul>
+<h4 id="3133-udemonetdrivernotifyactortornoff">3.13.3 <code>UDemoNetDriver::NotifyActorTornOff</code><a class="headerlink" href="#3133-udemonetdrivernotifyactortornoff" title="Permanent link">&para;</a></h4>
+<ul>
+<li><strong>Insertion point:</strong> immediately before <code>ReplayHelper.ReplicateActor(Actor, ClientConnections[0], true);</code>.</li>
+<li>
+<p><strong>Insert:</strong></p>
+<div class="language-cpp highlight"><pre><span></span><code><span id="__span-31-1"><a id="__codelineno-31-1" name="__codelineno-31-1" href="#__codelineno-31-1"></a><span class="c1">// micromegas net trace</span>
+</span><span id="__span-31-2"><a id="__codelineno-31-2" name="__codelineno-31-2" href="#__codelineno-31-2"></a><span class="n">MICROMEGAS_NET_SUSPEND_SCOPE</span><span class="p">();</span>
+</span></code></pre></div>
+</li>
+<li>
+<p><strong>Why:</strong> event-driven, same re-entrancy risk as <code>ProcessRemoteFunction</code>.</p>
+</li>
+</ul>
+<h2 id="4-pitfalls">4. Pitfalls<a class="headerlink" href="#4-pitfalls" title="Permanent link">&para;</a></h2>
+<p>Each entry below gives a <strong>symptom</strong> you'd see in the lakehouse or the log, the underlying <strong>cause</strong>, and the structural <strong>fix</strong>. Together these encode the rules an implementer needs to extrapolate to call sites the recipe doesn't explicitly cover.</p>
+<h3 id="object-events-orphan-outside-any-connection-scope-server-traces">Object events orphan outside any connection scope (server traces)<a class="headerlink" href="#object-events-orphan-outside-any-connection-scope-server-traces" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Symptom:</strong> root <code>NetObjectBeginEvent</code> events appear in the stream with no preceding <code>NetConnectionBeginEvent</code>, often ~120 actors per tick with <code>bit_size:0</code>.</li>
+<li><strong>Cause:</strong> the project sets a <code>UReplicationDriver</code> (typically <code>UReplicationGraph</code>), which makes <code>UNetDriver::ServerReplicateActors</code> short-circuit into the driver — the §3.3 scope never opens.</li>
+<li><strong>Fix:</strong> add the §3.4 RepGraph scope.</li>
+<li><strong>Generalization:</strong> any custom replication driver needs its own per-connection scope at its top-level per-connection loop.</li>
+</ul>
+<h3 id="multi-kilobit-objects-appear-1-s-after-their-packet-client-traces-initial-state">Multi-kilobit objects appear ~1 s after their packet (client traces, initial state)<a class="headerlink" href="#multi-kilobit-objects-appear-1-s-after-their-packet-client-traces-initial-state" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Symptom:</strong> large initial-state subobjects (e.g. <code>InventoryManagerComponent</code>) orphan outside a <code>ReceivedPacket</code> scope, ~1 s late.</li>
+<li><strong>Cause:</strong> bunches blocked on unresolved NetGUIDs are parked in <code>UActorChannel::QueuedBunches</code> and flushed later from <code>Tick()</code>, outside <code>ReceivedPacket</code>.</li>
+<li><strong>Fix:</strong> add the §3.6 <code>ProcessQueuedBunches</code> scope.</li>
+<li><strong>Generalization:</strong> any code path that calls <code>ProcessBunch</code> from outside <code>ReceivedPacket</code> needs its own incoming connection scope.</li>
+</ul>
+<h3 id="logmicromegasnet-fires-repeatedly-with-the-same-inner-outer-pair"><code>LogMicromegasNet</code> fires repeatedly with the same <code>(inner, outer)</code> pair<a class="headerlink" href="#logmicromegasnet-fires-repeatedly-with-the-same-inner-outer-pair" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Symptom:</strong> a diagnostic log line repeats at runtime with the same inner/outer connection name+direction.</li>
+<li><strong>Cause:</strong> a real re-entry path — the inner scope opens while the outer is still active.</li>
+<li><strong>Fix:</strong> identify the call path. If the inner work shouldn't be attributed (demo, replay), add <code>MICROMEGAS_NET_SUSPEND_SCOPE()</code> at the inner call site instead of a connection scope. If it <strong>should</strong> be attributed, accept the Decision-6 absorption: inner bits roll into the outer's <code>AccumulatedBits</code> if they close at root depth, or are dropped if they close inside an outer object scope.</li>
+<li><strong>Generalization:</strong> any synchronous engine callback that can fire from inside a packet/replication scope (e.g. <code>PostLogin</code>, <code>OnRep_*</code> calling into game code) is a re-entry candidate.</li>
+</ul>
+<h3 id="netconnectionendeventbit_size-much-smaller-than-sumnetpacket__bits"><code>NetConnectionEndEvent.bit_size</code> much smaller than <code>sum(net.packet_*_bits)</code><a class="headerlink" href="#netconnectionendeventbit_size-much-smaller-than-sumnetpacket__bits" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Symptom:</strong> content bits look way off from wire bits for the same connection and window.</li>
+<li><strong>Cause:</strong> expected — <code>bit_size</code> is content attribution (sum of root <code>NetObjectEndEvent.bit_size</code> and root <code>NetRPCEndEvent.bit_size</code> only); the metric is wire bits including bunch headers, packet headers, NetGUID exports, control bunches, and voice.</li>
+<li><strong>Fix:</strong> use <code>net.packet_*_bits</code> for wire totals, <code>NetConnectionEndEvent.bit_size</code> for content attribution. <strong>The gap is the framing overhead</strong> — that's a feature, not a bug.</li>
+</ul>
+<h3 id="demo-recording-bits-show-up-as-live-network-bandwidth">Demo recording bits show up as live network bandwidth<a class="headerlink" href="#demo-recording-bits-show-up-as-live-network-bandwidth" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Symptom:</strong> unusual spikes in content attribution during replay recording; depth counters behave oddly in live packets near demo events.</li>
+<li><strong>Cause:</strong> missing <code>SUSPEND_SCOPE</code> on one of the §3.13 <code>DemoNetDriver</code> sites — the demo's <code>BeginConnection</code> clobbered the live packet's depth counters.</li>
+<li><strong>Fix:</strong> add the missing suspend.</li>
+<li><strong>Generalization:</strong> any system that does its own packet/bunch processing while the live game is also doing so (replay, server-side simulation, ghost recording) should suspend.</li>
+</ul>
+<h3 id="endconnection-events-with-no-preceding-beginconnection"><code>EndConnection</code> events with no preceding <code>BeginConnection</code><a class="headerlink" href="#endconnection-events-with-no-preceding-beginconnection" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Symptom:</strong> unbalanced Begin/End in the event stream.</li>
+<li><strong>Cause:</strong> a removed-then-reintroduced manual Begin/End pair, or a scope opened in one frame's block and closed after a flush boundary.</li>
+<li><strong>Fix:</strong> only use <code>MICROMEGAS_NET_CONNECTION_SCOPE</code> (RAII) at function-scoped boundaries — there are no public Begin/End macros. If this surfaces in a fresh integration, confirm no helper is calling <code>Dispatch::NetEndConnection()</code> directly (<code>FNetConnectionScope</code> is the only authorized caller).</li>
+</ul>
+<h3 id="rpc-bits-double-count-into-netconnectionendeventbit_size">RPC bits double-count into <code>NetConnectionEndEvent.bit_size</code><a class="headerlink" href="#rpc-bits-double-count-into-netconnectionendeventbit_size" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Symptom:</strong> content bits appear inflated when RPCs are involved.</li>
+<li><strong>Cause:</strong> an RPC scope nested inside an object scope on the receive path (an RPC fires inside <code>ReceivedBunch</code> which is inside §3.7.3's <code>ProcessBunch</code> <code>OBJECT_SCOPE</code>). Both scopes would measure deltas of the same <code>Reader</code>.</li>
+<li><strong>Fix:</strong> already gated automatically by <code>if (ObjectDepth == 0)</code> in <code>EndRPC</code> — nested RPC bits are silently absorbed into the parent object's measurement, not double-counted. Don't try to "unfix" the gate.</li>
+</ul>
+<h3 id="subobject-hierarchy-differs-between-classic-and-iris">Subobject hierarchy differs between classic and Iris<a class="headerlink" href="#subobject-hierarchy-differs-between-classic-and-iris" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Symptom:</strong> queries that walk <code>NetObject*</code> nesting return different shapes from classic vs Iris processes.</li>
+<li><strong>Cause:</strong> classic emits subobjects as <strong>peers</strong> at depth 0 (because <code>WriteSubObjectInBunch</code> is called from <code>DoSubObjectReplication</code> <strong>after</strong> the root actor's scope closed). Iris emits them <strong>nested</strong> at depth 1+ (because <code>WriteObjectAndSubObjects</code> recurses inside the parent scope).</li>
+<li><strong>Fix:</strong> both shapes are correct — they reflect how each system actually replicates. Queries that traverse hierarchy must handle both, or filter on a per-process Iris/classic flag.</li>
+</ul>
+<h2 id="5-verifying-instrumentation">5. Verifying instrumentation<a class="headerlink" href="#5-verifying-instrumentation" title="Permanent link">&para;</a></h2>
+<div class="admonition note">
+<p class="admonition-title">Scope</p>
+<p>The <code>net_spans</code> JIT view — available via <code>view_instance('net_spans', '&lt;process_id&gt;')</code> — decodes each block into pre-paired Connection/Object/Property/RPC spans with cumulative <code>begin_bits</code> / <code>end_bits</code> offsets. See the <a href="../../query-guide/schema-reference/#net_spans"><code>net_spans</code> schema</a> for the full column list. For raw per-event inspection (debugging a suspect block, building custom aggregations), the generic <a href="../../query-guide/functions-reference/#parse_blockblock_id"><code>parse_block(block_id)</code></a> table function still works and returns <code>(object_index, type_name, value as JSONB)</code> rows where <code>type_name</code> is one of <code>NetConnectionBeginEvent</code>, <code>NetConnectionEndEvent</code>, <code>NetObjectBeginEvent</code>, <code>NetObjectEndEvent</code>, <code>NetPropertyEvent</code>, <code>NetRPCBeginEvent</code>, <code>NetRPCEndEvent</code>.</p>
+</div>
+<h3 id="top-bandwidth-spans-via-net_spans">Top bandwidth spans via <code>net_spans</code><a class="headerlink" href="#top-bandwidth-spans-via-net_spans" title="Permanent link">&para;</a></h3>
+<p>For routine inspection prefer the <code>net_spans</code> view — it handles Begin/End pairing, cross-block stitching, and bit-offset math so queries stay one-liners.</p>
+<div class="language-sql highlight"><pre><span></span><code><span id="__span-32-1"><a id="__codelineno-32-1" name="__codelineno-32-1" href="#__codelineno-32-1"></a><span class="k">SELECT</span><span class="w"> </span><span class="n">kind</span><span class="p">,</span><span class="w"> </span><span class="n">name</span><span class="p">,</span><span class="w"> </span><span class="k">connection_name</span><span class="p">,</span><span class="w"> </span><span class="n">is_outgoing</span><span class="p">,</span><span class="w"> </span><span class="n">bit_size</span>
+</span><span id="__span-32-2"><a id="__codelineno-32-2" name="__codelineno-32-2" href="#__codelineno-32-2"></a><span class="k">FROM</span><span class="w"> </span><span class="n">view_instance</span><span class="p">(</span><span class="s1">&#39;net_spans&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;&lt;process_id&gt;&#39;</span><span class="p">)</span>
+</span><span id="__span-32-3"><a id="__codelineno-32-3" name="__codelineno-32-3" href="#__codelineno-32-3"></a><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">bit_size</span><span class="w"> </span><span class="k">DESC</span>
+</span><span id="__span-32-4"><a id="__codelineno-32-4" name="__codelineno-32-4" href="#__codelineno-32-4"></a><span class="k">LIMIT</span><span class="w"> </span><span class="mi">20</span><span class="p">;</span>
+</span></code></pre></div>
+<p>Feed the same query to a Flame Graph cell (with <code>span_id AS id</code>, <code>parent_span_id AS parent</code>, <code>begin_bits AS begin</code>, <code>end_bits AS end</code>) to get a bandwidth-weighted flame chart of the process's replication traffic.</p>
+<h3 id="stream-registration">Stream registration<a class="headerlink" href="#stream-registration" title="Permanent link">&para;</a></h3>
+<p>Confirms the net stream is created and tagged.</p>
+<div class="language-sql highlight"><pre><span></span><code><span id="__span-33-1"><a id="__codelineno-33-1" name="__codelineno-33-1" href="#__codelineno-33-1"></a><span class="k">SELECT</span><span class="w"> </span><span class="n">process_id</span><span class="p">,</span><span class="w"> </span><span class="n">tags</span><span class="p">,</span><span class="w"> </span><span class="n">properties</span>
+</span><span id="__span-33-2"><a id="__codelineno-33-2" name="__codelineno-33-2" href="#__codelineno-33-2"></a><span class="k">FROM</span><span class="w"> </span><span class="n">streams</span>
+</span><span id="__span-33-3"><a id="__codelineno-33-3" name="__codelineno-33-3" href="#__codelineno-33-3"></a><span class="k">WHERE</span><span class="w"> </span><span class="n">array_has</span><span class="p">(</span><span class="n">tags</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;net&#39;</span><span class="p">)</span>
+</span><span id="__span-33-4"><a id="__codelineno-33-4" name="__codelineno-33-4" href="#__codelineno-33-4"></a><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">insert_time</span><span class="w"> </span><span class="k">DESC</span>
+</span><span id="__span-33-5"><a id="__codelineno-33-5" name="__codelineno-33-5" href="#__codelineno-33-5"></a><span class="k">LIMIT</span><span class="w"> </span><span class="mi">5</span><span class="p">;</span>
+</span></code></pre></div>
+<p>If this returns zero rows, the writer isn't initializing or the sink isn't uploading — no point checking anything else.</p>
+<h3 id="wire-bit-metrics">Wire-bit metrics<a class="headerlink" href="#wire-bit-metrics" title="Permanent link">&para;</a></h3>
+<p>Confirms §3.1 and §3.2 are firing. Independent of any net-events view — these go through the standard metric pipeline.</p>
+<div class="language-sql highlight"><pre><span></span><code><span id="__span-34-1"><a id="__codelineno-34-1" name="__codelineno-34-1" href="#__codelineno-34-1"></a><span class="k">SELECT</span><span class="w"> </span><span class="k">time</span><span class="p">,</span><span class="w"> </span><span class="n">name</span><span class="p">,</span><span class="w"> </span><span class="n">value</span><span class="p">,</span><span class="w"> </span><span class="n">properties</span>
+</span><span id="__span-34-2"><a id="__codelineno-34-2" name="__codelineno-34-2" href="#__codelineno-34-2"></a><span class="k">FROM</span><span class="w"> </span><span class="n">measures</span>
+</span><span id="__span-34-3"><a id="__codelineno-34-3" name="__codelineno-34-3" href="#__codelineno-34-3"></a><span class="k">WHERE</span><span class="w"> </span><span class="n">name</span><span class="w"> </span><span class="k">IN</span><span class="w"> </span><span class="p">(</span><span class="s1">&#39;net.packet_sent_bits&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;net.packet_received_bits&#39;</span><span class="p">)</span>
+</span><span id="__span-34-4"><a id="__codelineno-34-4" name="__codelineno-34-4" href="#__codelineno-34-4"></a><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="k">time</span><span class="w"> </span><span class="k">DESC</span>
+</span><span id="__span-34-5"><a id="__codelineno-34-5" name="__codelineno-34-5" href="#__codelineno-34-5"></a><span class="k">LIMIT</span><span class="w"> </span><span class="mi">20</span><span class="p">;</span>
+</span></code></pre></div>
+<h3 id="find-a-net-block-to-inspect">Find a net block to inspect<a class="headerlink" href="#find-a-net-block-to-inspect" title="Permanent link">&para;</a></h3>
+<p>The <code>blocks</code> view joins stream tags under <code>"streams.tags"</code>; filter with <code>array_has</code>:</p>
+<div class="language-sql highlight"><pre><span></span><code><span id="__span-35-1"><a id="__codelineno-35-1" name="__codelineno-35-1" href="#__codelineno-35-1"></a><span class="k">SELECT</span><span class="w"> </span><span class="n">block_id</span><span class="p">,</span><span class="w"> </span><span class="n">stream_id</span><span class="p">,</span><span class="w"> </span><span class="ss">&quot;processes.exe&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">begin_time</span><span class="p">,</span><span class="w"> </span><span class="n">end_time</span><span class="p">,</span>
+</span><span id="__span-35-2"><a id="__codelineno-35-2" name="__codelineno-35-2" href="#__codelineno-35-2"></a><span class="w">       </span><span class="n">nb_objects</span><span class="p">,</span><span class="w"> </span><span class="n">payload_size</span><span class="p">,</span><span class="w"> </span><span class="ss">&quot;streams.tags&quot;</span>
+</span><span id="__span-35-3"><a id="__codelineno-35-3" name="__codelineno-35-3" href="#__codelineno-35-3"></a><span class="k">FROM</span><span class="w"> </span><span class="n">blocks</span>
+</span><span id="__span-35-4"><a id="__codelineno-35-4" name="__codelineno-35-4" href="#__codelineno-35-4"></a><span class="k">WHERE</span><span class="w"> </span><span class="n">array_has</span><span class="p">(</span><span class="ss">&quot;streams.tags&quot;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;net&#39;</span><span class="p">)</span>
+</span><span id="__span-35-5"><a id="__codelineno-35-5" name="__codelineno-35-5" href="#__codelineno-35-5"></a><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">end_time</span><span class="w"> </span><span class="k">DESC</span>
+</span><span id="__span-35-6"><a id="__codelineno-35-6" name="__codelineno-35-6" href="#__codelineno-35-6"></a><span class="k">LIMIT</span><span class="w"> </span><span class="mi">5</span><span class="p">;</span>
+</span></code></pre></div>
+<h3 id="decode-events-in-a-block">Decode events in a block<a class="headerlink" href="#decode-events-in-a-block" title="Permanent link">&para;</a></h3>
+<p>Pick a <code>block_id</code> from the query above and pass it to <code>parse_block</code>:</p>
+<div class="language-sql highlight"><pre><span></span><code><span id="__span-36-1"><a id="__codelineno-36-1" name="__codelineno-36-1" href="#__codelineno-36-1"></a><span class="k">SELECT</span><span class="w"> </span><span class="n">object_index</span><span class="p">,</span><span class="w"> </span><span class="n">type_name</span><span class="p">,</span><span class="w"> </span><span class="n">jsonb_format_json</span><span class="p">(</span><span class="n">value</span><span class="p">)</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">event</span>
+</span><span id="__span-36-2"><a id="__codelineno-36-2" name="__codelineno-36-2" href="#__codelineno-36-2"></a><span class="k">FROM</span><span class="w"> </span><span class="n">parse_block</span><span class="p">(</span><span class="s1">&#39;&lt;block_id&gt;&#39;</span><span class="p">)</span>
+</span><span id="__span-36-3"><a id="__codelineno-36-3" name="__codelineno-36-3" href="#__codelineno-36-3"></a><span class="k">LIMIT</span><span class="w"> </span><span class="mi">1000</span><span class="p">;</span>
+</span></code></pre></div>
+<p>Or summarize what event types a block contains:</p>
+<div class="language-sql highlight"><pre><span></span><code><span id="__span-37-1"><a id="__codelineno-37-1" name="__codelineno-37-1" href="#__codelineno-37-1"></a><span class="k">SELECT</span><span class="w"> </span><span class="k">DISTINCT</span><span class="w"> </span><span class="n">type_name</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">parse_block</span><span class="p">(</span><span class="s1">&#39;&lt;block_id&gt;&#39;</span><span class="p">);</span>
+</span></code></pre></div>
+<p>A <code>NetConnectionBeginEvent</code> without a matching <code>EndEvent</code> in the same block signals unbalanced instrumentation.</p>
+<div class="admonition tip">
+<p class="admonition-title">Notebook-friendly</p>
+<p>In the Analytics Web App, the three queries above compose naturally into a notebook: a net-blocks table with a row selection → two <code>parse_block</code> cells bound to <code>$blocks.selected.block_id</code>. Ready-made inspection workflow.</p>
+</div>
+<h3 id="connection-names-and-bit-sizes">Connection names and bit sizes<a class="headerlink" href="#connection-names-and-bit-sizes" title="Permanent link">&para;</a></h3>
+<p>Extract specific fields with <code>jsonb_get</code> / <code>jsonb_as_string</code>:</p>
+<div class="language-sql highlight"><pre><span></span><code><span id="__span-38-1"><a id="__codelineno-38-1" name="__codelineno-38-1" href="#__codelineno-38-1"></a><span class="k">SELECT</span><span class="w"> </span><span class="n">object_index</span><span class="p">,</span>
+</span><span id="__span-38-2"><a id="__codelineno-38-2" name="__codelineno-38-2" href="#__codelineno-38-2"></a><span class="w">       </span><span class="n">type_name</span><span class="p">,</span>
+</span><span id="__span-38-3"><a id="__codelineno-38-3" name="__codelineno-38-3" href="#__codelineno-38-3"></a><span class="w">       </span><span class="n">jsonb_as_string</span><span class="p">(</span><span class="n">jsonb_get</span><span class="p">(</span><span class="n">value</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;connection_name&#39;</span><span class="p">))</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="k">connection_name</span><span class="p">,</span>
+</span><span id="__span-38-4"><a id="__codelineno-38-4" name="__codelineno-38-4" href="#__codelineno-38-4"></a><span class="w">       </span><span class="n">jsonb_as_string</span><span class="p">(</span><span class="n">jsonb_get</span><span class="p">(</span><span class="n">value</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;is_outgoing&#39;</span><span class="p">))</span><span class="w">     </span><span class="k">AS</span><span class="w"> </span><span class="n">is_outgoing</span><span class="p">,</span>
+</span><span id="__span-38-5"><a id="__codelineno-38-5" name="__codelineno-38-5" href="#__codelineno-38-5"></a><span class="w">       </span><span class="n">jsonb_as_string</span><span class="p">(</span><span class="n">jsonb_get</span><span class="p">(</span><span class="n">value</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;bit_size&#39;</span><span class="p">))</span><span class="w">        </span><span class="k">AS</span><span class="w"> </span><span class="n">bit_size</span>
+</span><span id="__span-38-6"><a id="__codelineno-38-6" name="__codelineno-38-6" href="#__codelineno-38-6"></a><span class="k">FROM</span><span class="w"> </span><span class="n">parse_block</span><span class="p">(</span><span class="s1">&#39;&lt;block_id&gt;&#39;</span><span class="p">)</span>
+</span><span id="__span-38-7"><a id="__codelineno-38-7" name="__codelineno-38-7" href="#__codelineno-38-7"></a><span class="k">WHERE</span><span class="w"> </span><span class="n">type_name</span><span class="w"> </span><span class="k">IN</span><span class="w"> </span><span class="p">(</span><span class="s1">&#39;NetConnectionBeginEvent&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;NetConnectionEndEvent&#39;</span><span class="p">)</span>
+</span><span id="__span-38-8"><a id="__codelineno-38-8" name="__codelineno-38-8" href="#__codelineno-38-8"></a><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">object_index</span><span class="p">;</span>
+</span></code></pre></div>
+<p><code>connection_name</code> should be a non-empty <code>FName</code>-backed string. <code>bit_size</code> on the End event should be a plausible content-bit total.</p>
+<h3 id="content-vs-wire-reconciliation">Content-vs-wire reconciliation<a class="headerlink" href="#content-vs-wire-reconciliation" title="Permanent link">&para;</a></h3>
+<p>Pick one connection and one time window. Sum the <code>bit_size</code> of <code>connection</code>-kind rows from <code>net_spans</code> (or equivalently <code>NetConnectionEndEvent.bit_size</code> from <code>parse_block</code>) across the matching blocks, and sum <code>net.packet_sent_bits</code> from <code>measures</code> for the same connection over the same window. Content should be 0.7–0.95× wire. Wild divergence indicates a missing <code>OBJECT_SCOPE</code> somewhere in the replication path.</p>
+<h3 id="no-orphaned-ends">No orphaned ends<a class="headerlink" href="#no-orphaned-ends" title="Permanent link">&para;</a></h3>
+<p>Over a single block, every <code>NetConnectionEndEvent</code> should follow a preceding <code>NetConnectionBeginEvent</code> (same for <code>NetObject*</code> and <code>NetRPC*</code>). Walk the <code>parse_block</code> output and maintain a depth counter per event family — it must never go negative.</p>
+<h3 id="cvar-runtime-change">CVar runtime change<a class="headerlink" href="#cvar-runtime-change" title="Permanent link">&para;</a></h3>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-39-1"><a id="__codelineno-39-1" name="__codelineno-39-1" href="#__codelineno-39-1"></a>telemetry.net.verbosity 4
+</span><span id="__span-39-2"><a id="__codelineno-39-2" name="__codelineno-39-2" href="#__codelineno-39-2"></a>telemetry.net.verbosity 2
+</span></code></pre></div>
+<p>Confirm net-block insertion rate scales with verbosity by re-running the <code>blocks</code> filter query at each level. The change takes effect at the <strong>next outermost <code>BeginConnection</code></strong> (verbosity is snapshotted per scope), <strong>not mid-scope</strong>.</p>
+<h2 id="6-build-configuration">6. Build configuration<a class="headerlink" href="#6-build-configuration" title="Permanent link">&para;</a></h2>
+<p><code>MICROMEGAS_NET_TRACE_ENABLED</code> defaults to <code>!UE_BUILD_SHIPPING &amp;&amp; !WITH_EDITOR</code>:</p>
+<ul>
+<li><strong>Editor</strong> → off</li>
+<li><strong>Development / Test</strong> → on</li>
+<li><strong>Shipping</strong> → off</li>
+</ul>
+<p>To enable in shipping for a focused investigation, add to your <code>Target.cs</code>:</p>
+<div class="language-csharp highlight"><pre><span></span><code><span id="__span-40-1"><a id="__codelineno-40-1" name="__codelineno-40-1" href="#__codelineno-40-1"></a><span class="n">GlobalDefinitions</span><span class="p">.</span><span class="n">Add</span><span class="p">(</span><span class="s">&quot;MICROMEGAS_NET_TRACE_ENABLED=1&quot;</span><span class="p">);</span>
+</span></code></pre></div>
+<p>To force-off in non-shipping for a perf bake-off:</p>
+<div class="language-csharp highlight"><pre><span></span><code><span id="__span-41-1"><a id="__codelineno-41-1" name="__codelineno-41-1" href="#__codelineno-41-1"></a><span class="n">GlobalDefinitions</span><span class="p">.</span><span class="n">Add</span><span class="p">(</span><span class="s">&quot;MICROMEGAS_NET_TRACE_ENABLED=0&quot;</span><span class="p">);</span>
+</span></code></pre></div>
+<p>When the macro is <code>0</code>, every <code>MICROMEGAS_NET_*</code> call expands to nothing — <strong>zero overhead</strong>, zero divergence cost beyond the insertion lines themselves.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.path", "navigation.top", "search.highlight", "search.suggest", "toc.follow", "content.code.copy", "content.code.annotate"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+        <script src="https://unpkg.com/mermaid@10.6.1/dist/mermaid.min.js"></script>
+      
+    
+  </body>
+</html>

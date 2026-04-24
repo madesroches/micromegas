@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["net_spans_table_schema"],"struct":["NetSpanRecord","NetSpanRecordBuilder"]};

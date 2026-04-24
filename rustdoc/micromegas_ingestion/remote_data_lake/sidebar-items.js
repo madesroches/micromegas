@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["acquire_lock","connect_to_remote_data_lake","migrate_db"]};
