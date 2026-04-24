@@ -1,54 +1,32 @@
 import importlib
-import os
-from pathlib import Path
 
-
-def _connect_with_oidc():
-    """Create FlightSQL client with OIDC authentication from environment variables."""
-    from micromegas import oidc_connection
-
-    issuer = os.environ.get("MICROMEGAS_OIDC_ISSUER")
-    client_id = os.environ.get("MICROMEGAS_OIDC_CLIENT_ID")
-    client_secret = os.environ.get("MICROMEGAS_OIDC_CLIENT_SECRET")
-    audience = os.environ.get("MICROMEGAS_OIDC_AUDIENCE")
-    scope = os.environ.get("MICROMEGAS_OIDC_SCOPE")  # Optional custom scopes
-    token_file = os.environ.get(
-        "MICROMEGAS_TOKEN_FILE", str(Path.home() / ".micromegas" / "tokens.json")
-    )
-    uri = os.environ.get("MICROMEGAS_ANALYTICS_URI", "grpc://localhost:50051")
-
-    return oidc_connection.connect(
-        uri=uri,
-        issuer=issuer,
-        client_id=client_id,
-        client_secret=client_secret,
-        token_file=token_file,
-        audience=audience,
-        scope=scope,
-    )
-
-
-def _connect_with_wrapper():
-    """Create client using corporate authentication wrapper."""
-    wrapper_module_name = os.environ.get("MICROMEGAS_PYTHON_MODULE_WRAPPER")
-    wrapper_module = importlib.import_module(wrapper_module_name)
-    return wrapper_module.connect()
+from micromegas.cli.config import resolve_connection
 
 
 def connect():
-    """Create FlightSQL client with authentication support.
+    """Create FlightSQL client using resolved configuration.
 
-    Uses MICROMEGAS_PYTHON_MODULE_WRAPPER if set (corporate auth),
-    otherwise uses OIDC if configured, or falls back to simple connect().
+    Priority: env vars > config file (~/.micromegas_oidc_config.json) > defaults.
     """
-    if os.environ.get("MICROMEGAS_PYTHON_MODULE_WRAPPER"):
-        return _connect_with_wrapper()
+    cfg = resolve_connection()
 
-    if os.environ.get("MICROMEGAS_OIDC_ISSUER") and os.environ.get(
-        "MICROMEGAS_OIDC_CLIENT_ID"
-    ):
-        return _connect_with_oidc()
+    if cfg.python_module_wrapper:
+        wrapper_module = importlib.import_module(cfg.python_module_wrapper)
+        return wrapper_module.connect()
 
-    import micromegas
+    if cfg.oidc_issuer and cfg.oidc_client_id:
+        from micromegas import oidc_connection
 
-    return micromegas.connect()
+        return oidc_connection.connect(
+            uri=cfg.uri,
+            issuer=cfg.oidc_issuer,
+            client_id=cfg.oidc_client_id,
+            client_secret=cfg.oidc_client_secret,
+            token_file=cfg.token_file,
+            audience=cfg.oidc_audience,
+            scope=cfg.oidc_scope,
+        )
+
+    from micromegas.flightsql.client import FlightSQLClient
+
+    return FlightSQLClient(cfg.uri)
