@@ -12,12 +12,14 @@ import { FileText } from 'lucide-react'
 // Renderer Component
 // =============================================================================
 
-export function MarkdownCell({ content, variables, timeRange, cellResults, cellSelections }: CellRendererProps) {
-  // Apply macro substitution to markdown content
+export function MarkdownCell({ content, status, variables, timeRange, cellResults, cellSelections }: CellRendererProps) {
+  // Defer rendering until the cell has executed in sequence — otherwise macros
+  // like $variable, $cell.col, or $begin/$end would resolve against uninitialized
+  // upstream state and flash stale data or broken links on first paint.
   const markdownContent = useMemo(() => {
-    if (!content) return ''
+    if (status !== 'success' || !content) return ''
     return substituteMacros(content, variables, timeRange, cellResults, cellSelections)
-  }, [content, variables, timeRange, cellResults, cellSelections])
+  }, [status, content, variables, timeRange, cellResults, cellSelections])
 
   return (
     <div className="prose prose-invert max-w-none prose-headings:text-theme-text-primary prose-p:text-theme-text-secondary prose-a:text-accent-link prose-strong:text-theme-text-primary prose-code:text-accent-highlight prose-code:bg-app-card prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-code:before:content-none prose-code:after:content-none prose-pre:bg-app-card prose-li:text-theme-text-secondary">

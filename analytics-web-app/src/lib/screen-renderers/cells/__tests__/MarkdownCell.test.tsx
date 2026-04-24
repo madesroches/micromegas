@@ -144,6 +144,59 @@ describe('MarkdownCell', () => {
     })
   })
 
+  describe('deferred render', () => {
+    it('should not render content when status is idle', () => {
+      render(
+        <MarkdownCell
+          {...createMockProps({
+            content: '# Heading\n\nBody text.',
+            status: 'idle',
+          })}
+        />
+      )
+      expect(screen.queryByRole('heading')).not.toBeInTheDocument()
+      expect(screen.queryByText('Body text.')).not.toBeInTheDocument()
+    })
+
+    it('should not render content when status is loading', () => {
+      render(
+        <MarkdownCell
+          {...createMockProps({
+            content: '# Heading',
+            status: 'loading',
+          })}
+        />
+      )
+      expect(screen.queryByRole('heading')).not.toBeInTheDocument()
+    })
+
+    it('should not render content when status is blocked', () => {
+      render(
+        <MarkdownCell
+          {...createMockProps({
+            content: '# Heading',
+            status: 'blocked',
+          })}
+        />
+      )
+      expect(screen.queryByRole('heading')).not.toBeInTheDocument()
+    })
+
+    it('should not substitute macros when status is idle', () => {
+      render(
+        <MarkdownCell
+          {...createMockProps({
+            content: 'value: $var',
+            variables: { var: 'resolved' },
+            status: 'idle',
+          })}
+        />
+      )
+      expect(screen.queryByText(/resolved/)).not.toBeInTheDocument()
+      expect(screen.queryByText(/\$var/)).not.toBeInTheDocument()
+    })
+  })
+
   describe('variable substitution', () => {
     it('should substitute simple string variables', () => {
       render(
