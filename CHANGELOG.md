@@ -20,6 +20,8 @@ This file documents the historical progress of the Micromegas project. For curre
   * Add Unreal net trace instrumentation guide and engine recipe
   * Document flame graph notebook cell type
   * Document `net_spans` view in schema reference and network-tracing guide
+* **Security:**
+  * Bump rustls-webpki, rand, and uuid to fix Dependabot alerts (#210-213)
 
 ## April 2026 - v0.24.0
 
