@@ -22,6 +22,7 @@ Static text and documentation using GitHub Flavored Markdown.
 - Supports [variable substitution](variables.md#sql-macro-substitution): `$variable`, `$variable.column`, `$begin`, `$end`
 - Validates macro references during editing — warns about undefined variables
 - Does not execute queries or block downstream cells
+- Rendered output appears only after the cell's turn in sequential execution — the body stays blank until upstream variables and cell results are resolved, so macros never display stale or broken values on first paint
 
 **Example content:**
 

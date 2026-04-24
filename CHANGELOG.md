@@ -11,6 +11,7 @@ This file documents the historical progress of the Micromegas project. For curre
 * **Web App:**
   * Extend flame graph cell to render bit-axis spans for `net_spans` and add bit-unit support to XYChart
   * Resolve macros in chart series labels and chart cell titles
+  * Defer notebook markdown cell render until sequential execution reaches it, preventing stale macro output on first paint (#1023)
 * **Python:**
   * Switch `bulk_ingest` to accept `pyarrow.Table` directly for native pass-through of struct/list/binary columns
 * **Unreal Engine:**
