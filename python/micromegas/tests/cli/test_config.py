@@ -71,7 +71,7 @@ def test_resolve_reads_config_file(tmp_path, monkeypatch):
     assert cfg.uri == "grpc+tls://analytics.example.com:50051"
     assert cfg.oidc_issuer == "https://idp.example.com"
     assert cfg.oidc_client_id == "app-client-id"
-    assert cfg.oidc_audience == "aud-123"
+    assert cfg.oidc_audience is None
 
 
 def test_env_vars_override_config(tmp_path, monkeypatch):

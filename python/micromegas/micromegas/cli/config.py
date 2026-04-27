@@ -50,7 +50,7 @@ def resolve_connection(config_path=None) -> ConnectionConfig:
         oidc_client_id=os.environ.get("MICROMEGAS_OIDC_CLIENT_ID")
         or config.get("client_id"),
         oidc_client_secret=os.environ.get("MICROMEGAS_OIDC_CLIENT_SECRET"),
-        oidc_audience=os.environ.get("MICROMEGAS_OIDC_AUDIENCE") or audience,
+        oidc_audience=os.environ.get("MICROMEGAS_OIDC_AUDIENCE"),
         oidc_scope=os.environ.get("MICROMEGAS_OIDC_SCOPE"),
         token_file=os.environ.get("MICROMEGAS_TOKEN_FILE") or token_file_default,
         python_module_wrapper=os.environ.get("MICROMEGAS_PYTHON_MODULE_WRAPPER"),
