@@ -69,3 +69,7 @@ analytics-web-app/src/lib/datafusion-wasm/micromegas_datafusion_wasm_bg.wasm.d.t
 **/.claude/settings.local.json
 **/.claude/settings.local.json~
 **/.claude/scheduled_tasks.lock
+tmpclaude-*-cwd
+
+# 3D models
+*.glb
