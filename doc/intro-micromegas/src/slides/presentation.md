@@ -201,25 +201,19 @@ graph LR
 
 <div style="font-size: 0.65em;">
 
-Modern observability stacks share an unstated assumption:
+Modern observability stacks share an unstated assumption — events are <strong>expensive</strong>:
 
 <ul>
-<li class="fragment">Events are <strong>expensive</strong> — pay per event, allocate/format/serialize per event, sampling mandatory at scale</li>
-<li class="fragment">Tuned for <strong>service-level</strong> telemetry at ~1k events/sec/process</li>
-<li class="fragment">Always-on detail tracing is <strong>infeasible</strong> in production</li>
+<li class="fragment">Allocate, format, serialize per event</li>
+<li class="fragment">Sampling is mandatory at scale</li>
+<li class="fragment">Tuned for service-level telemetry, not high-frequency capture</li>
 </ul>
 
-<p class="fragment" style="margin-top: 1em;">Micromegas was built on the opposite assumption:</p>
-
-<ul>
-<li class="fragment">Events should be <strong>cheap enough to never sample by default</strong></li>
-<li class="fragment">Designed for <strong>60k–200k events/sec/process</strong>, sub-microsecond spans</li>
-<li class="fragment">Always-on tracing in production is the <strong>default</strong>, not a special mode</li>
-</ul>
+<p class="fragment" style="margin-top: 1em;">Micromegas was built on the opposite assumption — events should be <strong>cheap</strong>.</p>
 
 </div>
 
-<p class="fragment" style="margin-top: 1em; font-size: 0.8em;">Same goals. Very different cost model. Everything else follows from that.</p>
+<p class="fragment" style="margin-top: 1.5em; font-size: 0.8em;">Same goals. Very different cost model. Everything else follows from that.</p>
 
 ---
 
@@ -242,9 +236,9 @@ Modern observability stacks share an unstated assumption:
 ## What This Unlocks
 
 <ul>
-<li class="fragment"><strong>100k events/second per process</strong> without breaking the host app</li>
+<li class="fragment"><strong>60k–200k events/second per process</strong> without breaking the host app</li>
 <li class="fragment"><strong>Always-on tracing</strong> in production — not just in dev or under flag</li>
-<li class="fragment">Sub-microsecond span durations are visible — you can see what your inner loop is doing</li>
+<li class="fragment">Sub-microsecond spans are visible — you can see what your inner loop is doing</li>
 </ul>
 
 --
