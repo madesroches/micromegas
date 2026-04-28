@@ -116,6 +116,15 @@ jobs:
         mkdir -p public_docs/notebooks
         cp doc/notebooks/dist/presentation-inline.html public_docs/notebooks/index.html
         cp -r doc/notebooks/dist/*.{png,svg} public_docs/notebooks/ 2>/dev/null || echo "No media files to copy (already inlined)"
+
+        # Build intro to Micromegas presentation
+        cd doc/intro-micromegas
+        yarn install
+        yarn build:standalone
+        cd ../..
+        mkdir -p public_docs/intro-micromegas
+        cp doc/intro-micromegas/dist/presentation-inline.html public_docs/intro-micromegas/index.html
+        cp -r doc/intro-micromegas/dist/*.{png,svg} public_docs/intro-micromegas/ 2>/dev/null || echo "No media files to copy (already inlined)"
         
         # Copy welcome page build output as the root index
         cp -r welcome/dist/* public_docs/
