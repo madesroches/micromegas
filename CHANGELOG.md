@@ -24,6 +24,7 @@ This file documents the historical progress of the Micromegas project. For curre
   * Add "An Introduction to Micromegas" presentation
 * **Security:**
   * Bump rustls-webpki, rand, and uuid to fix Dependabot alerts (#210-213)
+  * Bump postcss and uuid to fix Dependabot alerts (#214-221)
 
 ## April 2026 - v0.24.0
 
