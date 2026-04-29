@@ -103,7 +103,6 @@ namespace MicromegasTracing
 #define MICROMEGAS_SPAN_FUNCTION(target) MICROMEGAS_SPAN_SCOPE(target, MICROMEGAS_FUNCTION_NAME)
 
 // --- Net trace macros ---
-
 #if !defined(MICROMEGAS_NET_TRACE_ENABLED)
 	#if !UE_BUILD_SHIPPING && !WITH_EDITOR
 		#define MICROMEGAS_NET_TRACE_ENABLED 1
@@ -118,14 +117,44 @@ namespace MicromegasTracing
 		MicromegasTracing::FNetConnectionScope ANONYMOUS_VARIABLE(NetConnScope_)((ConnectionName), (bIsOutgoing))
 	#define MICROMEGAS_NET_PROPERTY(PropertyName, BitSize) \
 		MicromegasTracing::Dispatch::NetProperty(MicromegasTracing::StaticStringRef((PropertyName)), BitSize)
-	#define MICROMEGAS_NET_PROPERTY_SCOPE(PropertyName, GetBitsExpr)             \
+	#define MICROMEGAS_NET_PROPERTY_SCOPE(PropertyName, GetBitsExpr)            \
 		MicromegasTracing::TNetPropertyScope ANONYMOUS_VARIABLE(NetPropScope_)( \
-			MicromegasTracing::StaticStringRef((PropertyName)),                  \
+			MicromegasTracing::StaticStringRef((PropertyName)),                 \
 			[&]() -> uint32 { return static_cast<uint32>(GetBitsExpr); })
 	#define MICROMEGAS_NET_OBJECT_SCOPE(ObjectName, GetBitsExpr)             \
 		MicromegasTracing::TNetObjectScope ANONYMOUS_VARIABLE(NetObjScope_)( \
 			MicromegasTracing::StaticStringRef((ObjectName)),                \
 			[&]() -> uint32 { return static_cast<uint32>(GetBitsExpr); })
+
+// Fire-and-forget object event for already-constructed bunches where the bit count is known
+// up front and no mutation happens during the scope (e.g., retransmits, separate export
+// bunches where SendRawBunch only serializes the bunch into the packet buffer without
+// changing Bunch->GetNumBits()). Emits a Begin/End pair immediately with the supplied bit
+// count. Prefer MICROMEGAS_NET_OBJECT_SCOPE when bits are produced by code running inside
+// the scope. Zero-bit calls are suppressed — the root-scope elision path in the writer
+// already drops them, and nested zero-bit events add noise without attribution value.
+	#define MICROMEGAS_NET_OBJECT_EVENT(ObjectName, Bits)                        \
+		do                                                                       \
+		{                                                                        \
+			const uint32 MmNetObjectEventBits = static_cast<uint32>(Bits);       \
+			if (MmNetObjectEventBits > 0)                                        \
+			{                                                                    \
+				MicromegasTracing::Dispatch::NetBeginObject(                     \
+					MicromegasTracing::StaticStringRef((ObjectName)));           \
+				MicromegasTracing::Dispatch::NetEndObject(MmNetObjectEventBits); \
+			}                                                                    \
+		}                                                                        \
+		while (0)
+
+// Like MICROMEGAS_NET_OBJECT_SCOPE, but the lambda returns the object's size
+// directly instead of a position to diff against the construction-time snapshot.
+// Use when the wrapped call consumes a pre-built bunch without mutating its bit
+// count (e.g. SendRawBunch on a retransmit), where the diff form would read 0
+// and elide.
+	#define MICROMEGAS_NET_OBJECT_SIZE_SCOPE(ObjectName, GetSizeExpr)                \
+		MicromegasTracing::TNetObjectSizeScope ANONYMOUS_VARIABLE(NetObjSizeScope_)( \
+			MicromegasTracing::StaticStringRef((ObjectName)),                        \
+			[&]() -> uint32 { return static_cast<uint32>(GetSizeExpr); })
 	#define MICROMEGAS_NET_RPC_SCOPE(FunctionName, GetBitsExpr)           \
 		MicromegasTracing::TNetRPCScope ANONYMOUS_VARIABLE(NetRpcScope_)( \
 			MicromegasTracing::StaticStringRef((FunctionName)),           \
@@ -155,6 +184,26 @@ namespace MicromegasTracing
 
 		TNetObjectScope(const TNetObjectScope&) = delete;
 		TNetObjectScope& operator=(const TNetObjectScope&) = delete;
+	};
+
+	template <typename GetSizeFunc>
+	struct TNetObjectSizeScope
+	{
+		GetSizeFunc GetSize;
+
+		TNetObjectSizeScope(StaticStringRef Name, GetSizeFunc&& InGetSize)
+			: GetSize(MoveTemp(InGetSize))
+		{
+			Dispatch::NetBeginObject(Name);
+		}
+
+		~TNetObjectSizeScope()
+		{
+			Dispatch::NetEndObject(GetSize());
+		}
+
+		TNetObjectSizeScope(const TNetObjectSizeScope&) = delete;
+		TNetObjectSizeScope& operator=(const TNetObjectSizeScope&) = delete;
 	};
 
 	template <typename GetBitsFunc>
@@ -244,6 +293,8 @@ namespace MicromegasTracing
 	#define MICROMEGAS_NET_PROPERTY(...)
 	#define MICROMEGAS_NET_PROPERTY_SCOPE(...)
 	#define MICROMEGAS_NET_OBJECT_SCOPE(...)
+	#define MICROMEGAS_NET_OBJECT_EVENT(...)
+	#define MICROMEGAS_NET_OBJECT_SIZE_SCOPE(...)
 	#define MICROMEGAS_NET_RPC_SCOPE(...)
 	#define MICROMEGAS_NET_SUSPEND_SCOPE(...)
 
