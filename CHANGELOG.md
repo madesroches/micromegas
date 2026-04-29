@@ -10,6 +10,8 @@ This file documents the historical progress of the Micromegas project. For curre
   * Add `net_spans` JIT view materializing Connection/Object/Property/RPC bandwidth spans with cumulative bit offsets
 * **Web App:**
   * Extend flame graph cell to render bit-axis spans for `net_spans` and add bit-unit support to XYChart
+  * Apply adaptive scaling to `bits/s` and `bytes/s` chart axes
+  * Fix multi-series line chart rendering only points when series have sparsely-aligned X values
   * Resolve macros in chart series labels and chart cell titles
   * Defer notebook markdown cell render until sequential execution reaches it, preventing stale macro output on first paint (#1023)
 * **Python:**
