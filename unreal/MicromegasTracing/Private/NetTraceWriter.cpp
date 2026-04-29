@@ -102,23 +102,55 @@ namespace MicromegasTracing
 	void NetTraceWriter::BeginConnection(FName ConnectionName, bool bIsOutgoing)
 	{
 		MICROMEGAS_SPAN_FUNCTION("MicromegasTracing");
-		if (SuspendDepth > 0) return;
+
+		// Outer SuspendScope wins. Push a marker so the matching End is a no-op too,
+		// preserving Begin/End symmetry without touching ConnectionDepth or emission.
+		if (SuspendDepth > 0)
+		{
+			ScopeKindStack.Push(EScopeKind::OuterSuspendedOut);
+			return;
+		}
 
 		// Connection scopes do not nest: only the outermost emits, nested calls are
 		// absorbed so an inner scope can't destroy the outer's AccumulatedBits.
-		// Re-entry happens on known-normal UE paths (e.g. Client RPC during PostLogin
-		// synchronously opens an outgoing scope inside an incoming packet handler),
-		// so we surface it with a log line — counting the inner bits is unreliable
-		// (they either roll into the outer's AccumulatedBits or are dropped entirely
-		// if they close while ObjectDepth > 0).
+		// Re-entry happens on known-normal UE paths (e.g. RPC dispatch from inside
+		// FlushNet, RPC during ReceivedRawPacket). Same name + same direction is a
+		// pure structural absorb — silent, no log noise. Different name or direction
+		// gets logged. Direction mismatch additionally auto-suspends the writer for
+		// the inner scope's lifetime so its OBJECT_EVENTs don't emit nested under
+		// the outer's wrong-direction parent (children would measure on the inner's
+		// bit stream while the parent measured the outer's, breaking
+		// sum(children) <= parent).
 		if (ConnectionDepth++ > 0)
 		{
-			UE_LOG(LogMicromegasNet, Log,
-				TEXT("Nested net scope: '%s' (%s) inside outer '%s' (%s) — bits absorbed or dropped"),
+			const bool bSameName = (ConnectionName == OuterConnectionName);
+			const bool bSameDirection = (bIsOutgoing == bOuterIsOutgoing);
+
+			if (bSameName && bSameDirection)
+			{
+				ScopeKindStack.Push(EScopeKind::Absorbed);
+				return;
+			}
+
+			const bool bDirectionMismatch = !bSameDirection;
+			if (bDirectionMismatch)
+			{
+				++SuspendDepth;
+				ScopeKindStack.Push(EScopeKind::Suspended);
+			}
+			else
+			{
+				ScopeKindStack.Push(EScopeKind::Absorbed);
+			}
+			UE_LOG(LogMicromegasNet, VeryVerbose,
+				TEXT("Nested net scope: '%s' (%s) inside outer '%s' (%s) — %s"),
 				*ConnectionName.ToString(), bIsOutgoing ? TEXT("outgoing") : TEXT("incoming"),
-				*OuterConnectionName.ToString(), bOuterIsOutgoing ? TEXT("outgoing") : TEXT("incoming"));
+				*OuterConnectionName.ToString(), bOuterIsOutgoing ? TEXT("outgoing") : TEXT("incoming"),
+				bDirectionMismatch ? TEXT("suspended (direction mismatch)") : TEXT("absorbed (different name)"));
 			return;
 		}
+
+		ScopeKindStack.Push(EScopeKind::Outermost);
 
 		// Reset depth / accumulator at the outermost scope boundary (safety net
 		// for any imbalance carried over from the previous scope).
@@ -151,11 +183,26 @@ namespace MicromegasTracing
 	void NetTraceWriter::EndConnection()
 	{
 		MICROMEGAS_SPAN_FUNCTION("MicromegasTracing");
-		if (SuspendDepth > 0) return;
 
-		// Pair with the outermost Begin. Nested Ends are no-ops.
-		if (ConnectionDepth == 0) return; // stray End without matching Begin — ignore
-		if (--ConnectionDepth > 0) return;
+		if (ScopeKindStack.Num() == 0) return; // stray End without matching Begin — ignore
+		const EScopeKind Kind = ScopeKindStack.Pop(EAllowShrinking::No);
+
+		switch (Kind)
+		{
+		case EScopeKind::OuterSuspendedOut:
+			return;
+		case EScopeKind::Absorbed:
+			--ConnectionDepth;
+			return;
+		case EScopeKind::Suspended:
+			ensureMsgf(SuspendDepth > 0, TEXT("MicromegasTracing: Suspended scope kind without matching SuspendDepth"));
+			--SuspendDepth;
+			--ConnectionDepth;
+			return;
+		case EScopeKind::Outermost:
+			--ConnectionDepth;
+			break;
+		}
 
 		if (EffectiveVerbosity >= ENetTraceVerbosity::Packets)
 		{
@@ -221,11 +268,14 @@ namespace MicromegasTracing
 		}
 		--ObjectDepth;
 
-		if (EmittedDepth > 0 && EmittedDepth > ObjectDepth)
+		const bool bWasEmitted = (EmittedDepth > 0 && EmittedDepth > ObjectDepth);
+		const bool bRootClose = (ObjectDepth == 0);
+
+		if (bWasEmitted)
 		{
 			--EmittedDepth;
 
-			if (ObjectDepth == 0)
+			if (bRootClose)
 			{
 				// Root scope closing — elide the entire subtree (BeginObject +
 				// all nested events) if BitSize == 0, meaning nothing reached
@@ -252,7 +302,7 @@ namespace MicromegasTracing
 			}
 		}
 
-		if (ObjectDepth == 0)
+		if (bRootClose)
 		{
 			AccumulatedBits += BitSize;
 		}

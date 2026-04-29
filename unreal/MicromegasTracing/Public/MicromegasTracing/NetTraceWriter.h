@@ -3,6 +3,7 @@
 //  MicromegasTracing/NetTraceWriter.h
 //
 #include "Async/Mutex.h"
+#include "Containers/Array.h"
 #include "HAL/Platform.h"
 #include "Logging/LogMacros.h"
 #include "MicromegasTracing/Fwd.h"
@@ -14,7 +15,7 @@
 // Diagnostic log category for net trace state events (re-entry, etc.). Kept in
 // Core so the writer can log without depending on the sink module. Quiet on the
 // hot path — only fires when nested connection scopes are detected.
-DECLARE_LOG_CATEGORY_EXTERN(LogMicromegasNet, Log, All);
+CORE_API DECLARE_LOG_CATEGORY_EXTERN(LogMicromegasNet, Log, All);
 
 namespace MicromegasTracing
 {
@@ -85,6 +86,19 @@ namespace MicromegasTracing
 		// names match, only direction differs.
 		FName OuterConnectionName;
 		bool bOuterIsOutgoing = false;
+		// Per-Begin record so the matching End knows what bookkeeping it owns.
+		// Strict LIFO; one entry per BeginConnection call. Resolves the reply-RPC /
+		// Nak-retransmit data-shape bug where inner-scope events emitted under a
+		// wrong-direction parent (children measured outgoing-wire bits while the
+		// parent measured incoming-reader bits, breaking sum(children) <= parent).
+		enum class EScopeKind : uint8
+		{
+			OuterSuspendedOut, // Begin saw SuspendDepth>0; End is a no-op.
+			Absorbed,          // Nested, no SuspendDepth change; End just decrements ConnectionDepth.
+			Suspended,         // Nested with direction mismatch; Begin bumped SuspendDepth, End must --SuspendDepth + --ConnectionDepth.
+			Outermost,         // First Begin in this stack; End decrements ConnectionDepth and runs emission/elision.
+		};
+		TArray<EScopeKind, TInlineAllocator<4>> ScopeKindStack;
 		NetEventQueue::CheckPoint ConnectionScopeCheckPoint; // valid only inside an emitted connection scope
 		NetEventQueue::CheckPoint RootScopeCheckPoint; // valid only inside an emitted root object scope
 	};

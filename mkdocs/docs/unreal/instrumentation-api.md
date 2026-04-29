@@ -325,7 +325,7 @@ MICROMEGAS_NET_CONNECTION_SCOPE(ConnectionName, bIsOutgoing)
 
 **Parameters:**
 
-- `ConnectionName` (FName): stable connection identifier (use `Connection->GetPlayerOnlinePlatformName()` with `GetFName()` fallback)
+- `ConnectionName` (FName): stable connection identifier — read from a cached `MmDisplayName` member on `UNetConnection` populated at lifecycle hooks (see [Network Tracing § 3](network-tracing.md#3-engine-instrumentation-recipe))
 - `bIsOutgoing` (bool): `true` for send paths, `false` for receive paths
 
 **Semantics:**
@@ -341,12 +341,12 @@ MICROMEGAS_NET_CONNECTION_SCOPE(ConnectionName, bIsOutgoing)
 ```cpp
 void UNetConnection::ReceivedPacket(FBitReader& Reader)
 {
-    FName MmConnectionName = GetPlayerOnlinePlatformName();
-    if (MmConnectionName == NAME_None) { MmConnectionName = GetFName(); }
-    MICROMEGAS_NET_CONNECTION_SCOPE(MmConnectionName, /*bIsOutgoing=*/ false);
+    MICROMEGAS_NET_CONNECTION_SCOPE(MmDisplayName, /*bIsOutgoing=*/ false);
     // ... packet processing ...
 }
 ```
+
+`MmDisplayName` is a cached `FName` member added to `UNetConnection`, refreshed at lifecycle hooks (handshake complete, `OnRep_PlayerState`, `OnRep_PlayerName`, etc.) — see [Network Tracing § 3 — Connection name strategy](network-tracing.md#3-engine-instrumentation-recipe) for the resolution chain and refresh sites.
 
 ### MICROMEGAS_NET_OBJECT_SCOPE
 
@@ -381,6 +381,58 @@ MICROMEGAS_NET_OBJECT_SCOPE(Actor->GetFName(), Bunch.GetNumBits());
 MICROMEGAS_NET_OBJECT_SCOPE(
     (ObjectData.Protocol && ObjectData.Protocol->DebugName) ? ObjectData.Protocol->DebugName->Name : TEXT("Unknown"),
     Context.GetBitStreamWriter()->GetPosBits());
+```
+
+### MICROMEGAS_NET_OBJECT_EVENT
+
+Fire-and-forget object event. Emits a `NetObjectBeginEvent` / `NetObjectEndEvent` pair immediately with the supplied bit count — no scope, no diff capture. Zero-bit calls are suppressed.
+
+```cpp
+MICROMEGAS_NET_OBJECT_EVENT(ObjectName, Bits)
+```
+
+**Parameters:**
+
+- `ObjectName`: `FName` or `const TCHAR*`
+- `Bits` (uint32): the object's bit size, known up front
+
+**Semantics:**
+
+- No RAII scope; both events fire at the call site
+- Use when the bit count is already known and the wrapped code does not mutate it (wire-framing classes like packet headers, bunch headers, padding, NetGUID exports)
+- Prefer `MICROMEGAS_NET_OBJECT_SCOPE` when bits are produced by code running inside the scope — the diff form picks them up automatically
+
+**Example (per-bunch header overhead):**
+
+```cpp
+const uint32 PreHeaderBits = SendBuffer.GetNumBits();
+SerializeBunchHeader(SendBuffer, Bunch);
+MICROMEGAS_NET_OBJECT_EVENT(TEXT("BunchHeader"), SendBuffer.GetNumBits() - PreHeaderBits);
+```
+
+### MICROMEGAS_NET_OBJECT_SIZE_SCOPE
+
+RAII scope that emits `NetObjectEndEvent` with the value returned by `GetSizeExpr` at destruction — not a delta against a captured start position. Use when a wrapped call consumes a pre-built bunch without mutating its bit count, where the standard `MICROMEGAS_NET_OBJECT_SCOPE` diff would observe 0 and elide.
+
+```cpp
+MICROMEGAS_NET_OBJECT_SIZE_SCOPE(ObjectName, GetSizeExpr)
+```
+
+**Parameters:**
+
+- `ObjectName`: `FName` or `const TCHAR*`
+- `GetSizeExpr`: expression returning the object's full bit size on scope exit
+
+**Semantics:**
+
+- RAII; emits Begin on entry, End with `GetSize()` (not a diff) on destruction
+- The canonical use is retransmits: `SendRawBunch(Bunch)` does not change `Bunch->GetNumBits()`, so a diff scope reads 0 and the writer's elision path drops the event
+
+**Example (NAK retransmit):**
+
+```cpp
+MICROMEGAS_NET_OBJECT_SIZE_SCOPE(TEXT("Retransmit"), Bunch->GetNumBits());
+SendRawBunch(*Bunch, /*bMustBeReliable=*/ false);
 ```
 
 ### MICROMEGAS_NET_RPC_SCOPE
