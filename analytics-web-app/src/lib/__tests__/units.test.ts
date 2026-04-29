@@ -1,4 +1,4 @@
-import { normalizeUnit, UNIT_ALIASES, TIME_UNIT_NAMES, SIZE_UNIT_NAMES, isSizeUnit, getAdaptiveSizeUnit } from '../units'
+import { normalizeUnit, UNIT_ALIASES, TIME_UNIT_NAMES, SIZE_UNIT_NAMES, isSizeUnit, getAdaptiveSizeUnit, isBitUnit, getAdaptiveBitUnit } from '../units'
 
 describe('normalizeUnit', () => {
   describe('time units', () => {
@@ -260,6 +260,91 @@ describe('getAdaptiveSizeUnit', () => {
       const result = getAdaptiveSizeUnit(5 * GB, 'Bytes')
       expect(result.unit).toBe('gigabytes')
       expect(result.abbrev).toBe('GB')
+    })
+  })
+
+  describe('bytes/s rate', () => {
+    it('scales bytes/s and appends /s suffix', () => {
+      const result = getAdaptiveSizeUnit(5 * MB, 'bytes/s')
+      expect(result.unit).toBe('megabytes')
+      expect(result.abbrev).toBe('MB/s')
+      expect(result.conversionFactor).toBe(1 / MB)
+    })
+
+    it('stays in B/s for small rates', () => {
+      const result = getAdaptiveSizeUnit(500, 'bytes/s')
+      expect(result.abbrev).toBe('B/s')
+      expect(result.conversionFactor).toBe(1)
+    })
+  })
+})
+
+describe('isBitUnit', () => {
+  it('recognizes canonical bit units', () => {
+    expect(isBitUnit('bits')).toBe(true)
+    expect(isBitUnit('kilobits')).toBe(true)
+    expect(isBitUnit('megabits')).toBe(true)
+    expect(isBitUnit('gigabits')).toBe(true)
+    expect(isBitUnit('terabits')).toBe(true)
+  })
+
+  it('recognizes the bits/s rate variant', () => {
+    expect(isBitUnit('bits/s')).toBe(true)
+    expect(isBitUnit('bps')).toBe(true)
+    expect(isBitUnit('bit/s')).toBe(true)
+  })
+
+  it('rejects non-bit units', () => {
+    expect(isBitUnit('bytes')).toBe(false)
+    expect(isBitUnit('seconds')).toBe(false)
+  })
+})
+
+describe('isSizeUnit bytes/s', () => {
+  it('recognizes the bytes/s rate variant', () => {
+    expect(isSizeUnit('bytes/s')).toBe(true)
+    expect(isSizeUnit('B/s')).toBe(true)
+    expect(isSizeUnit('BytesPerSecond')).toBe(true)
+  })
+})
+
+describe('getAdaptiveBitUnit', () => {
+  const KBIT = 1000
+  const MBIT = KBIT * 1000
+  const GBIT = MBIT * 1000
+
+  it('stays in bits for small values', () => {
+    const result = getAdaptiveBitUnit(500, 'bits')
+    expect(result.unit).toBe('bits')
+    expect(result.abbrev).toBe('bit')
+    expect(result.conversionFactor).toBe(1)
+  })
+
+  it('scales to Mbit for values around 5,000,000 bits', () => {
+    const result = getAdaptiveBitUnit(5 * MBIT, 'bits')
+    expect(result.unit).toBe('megabits')
+    expect(result.abbrev).toBe('Mbit')
+    expect(result.conversionFactor).toBe(1 / MBIT)
+  })
+
+  it('scales to Gbit for values >= 1 Gbit', () => {
+    const result = getAdaptiveBitUnit(2 * GBIT, 'bits')
+    expect(result.unit).toBe('gigabits')
+    expect(result.abbrev).toBe('Gbit')
+  })
+
+  describe('bits/s rate', () => {
+    it('scales bits/s and appends /s suffix', () => {
+      const result = getAdaptiveBitUnit(5 * MBIT, 'bits/s')
+      expect(result.unit).toBe('megabits')
+      expect(result.abbrev).toBe('Mbit/s')
+      expect(result.conversionFactor).toBe(1 / MBIT)
+    })
+
+    it('uses kbit/s for kilobit-range rates', () => {
+      const result = getAdaptiveBitUnit(50 * KBIT, 'bits/s')
+      expect(result.abbrev).toBe('kbit/s')
+      expect(result.conversionFactor).toBe(1 / KBIT)
     })
   })
 })
