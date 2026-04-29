@@ -24,6 +24,7 @@
   },
   "resolutions": {
     "lodash-es": "^4.17.23",
-    "rollup": "^4.59.0"
+    "rollup": "^4.59.0",
+    "uuid": "^14.0.0"
   }
 }
