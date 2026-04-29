@@ -114,10 +114,12 @@ export const SIZE_UNIT_NAMES = new Set([
 ])
 
 /**
- * Check if a unit (or its alias) is a size-based unit
+ * Check if a unit (or its alias) is a size-based unit.
+ * Includes the `bytes/s` rate variant so adaptive scaling works on bandwidth axes.
  */
 export function isSizeUnit(unit: string): boolean {
-  return SIZE_UNIT_NAMES.has(normalizeUnit(unit))
+  const normalized = normalizeUnit(unit)
+  return SIZE_UNIT_NAMES.has(normalized) || normalized === 'bytes/s'
 }
 
 /**
@@ -132,10 +134,12 @@ export const BIT_UNIT_NAMES = new Set([
 ])
 
 /**
- * Check if a unit (or its alias) is a bit-based unit
+ * Check if a unit (or its alias) is a bit-based unit.
+ * Includes the `bits/s` rate variant so adaptive scaling works on bandwidth axes.
  */
 export function isBitUnit(unit: string): boolean {
-  return BIT_UNIT_NAMES.has(normalizeUnit(unit))
+  const normalized = normalizeUnit(unit)
+  return BIT_UNIT_NAMES.has(normalized) || normalized === 'bits/s'
 }
 
 export type SizeUnit = 'bytes' | 'kilobytes' | 'megabytes' | 'gigabytes' | 'terabytes'
@@ -193,8 +197,10 @@ export function getAdaptiveSizeUnit(
   referenceValue: number,
   originalUnit: SizeUnit | string
 ): AdaptiveSizeUnit {
-  const normalizedUnit = normalizeUnit(originalUnit) as SizeUnit
-  const refBytes = toBytes(referenceValue, normalizedUnit)
+  const normalized = normalizeUnit(originalUnit)
+  const isRate = normalized === 'bytes/s'
+  const baseUnit = (isRate ? 'bytes' : normalized) as SizeUnit
+  const refBytes = toBytes(referenceValue, baseUnit)
 
   // Find the best unit where the value is >= 1 (prefer larger units)
   let bestUnit = SIZE_UNITS[0]
@@ -208,13 +214,13 @@ export function getAdaptiveSizeUnit(
   }
 
   // Calculate the conversion factor from original unit to best unit
-  const originalFactor = getSizeUnitFactor(normalizedUnit)
+  const originalFactor = getSizeUnitFactor(baseUnit)
   const bestFactor = bestUnit.factor
   const conversionFactor = originalFactor / bestFactor
 
   return {
     unit: bestUnit.unit,
-    abbrev: bestUnit.abbrev,
+    abbrev: isRate ? bestUnit.abbrev + '/s' : bestUnit.abbrev,
     conversionFactor,
   }
 }
@@ -264,8 +270,10 @@ export function getAdaptiveBitUnit(
   referenceValue: number,
   originalUnit: BitUnit | string
 ): AdaptiveBitUnit {
-  const normalizedUnit = normalizeUnit(originalUnit) as BitUnit
-  const refBits = toBits(referenceValue, normalizedUnit)
+  const normalized = normalizeUnit(originalUnit)
+  const isRate = normalized === 'bits/s'
+  const baseUnit = (isRate ? 'bits' : normalized) as BitUnit
+  const refBits = toBits(referenceValue, baseUnit)
 
   let bestUnit = BIT_UNITS[0]
   for (let i = BIT_UNITS.length - 1; i >= 0; i--) {
@@ -277,12 +285,12 @@ export function getAdaptiveBitUnit(
     }
   }
 
-  const originalFactor = getBitUnitFactor(normalizedUnit)
+  const originalFactor = getBitUnitFactor(baseUnit)
   const conversionFactor = originalFactor / bestUnit.factor
 
   return {
     unit: bestUnit.unit,
-    abbrev: bestUnit.abbrev,
+    abbrev: isRate ? bestUnit.abbrev + '/s' : bestUnit.abbrev,
     conversionFactor,
   }
 }

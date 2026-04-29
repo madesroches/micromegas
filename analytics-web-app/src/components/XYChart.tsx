@@ -67,7 +67,7 @@ function formatValue(
     return formatAdaptiveTime(value, adaptiveTimeUnit, abbreviated)
   }
 
-  // Size units - use adaptive formatting
+  // Size units (incl. bytes/s) - use adaptive formatting
   if (isSizeUnit(unit)) {
     const adaptive = getAdaptiveSizeUnit(value, unit)
     const displayValue = value * adaptive.conversionFactor
@@ -75,28 +75,12 @@ function formatValue(
     return displayValue.toFixed(decimals) + ' ' + adaptive.abbrev
   }
 
-  // Rate units - bytes per second (uses same adaptive logic)
-  if (unit === 'bytes/s') {
-    const adaptive = getAdaptiveSizeUnit(value, 'bytes')
-    const displayValue = value * adaptive.conversionFactor
-    const decimals = adaptive.unit === 'bytes' ? 0 : 1
-    return displayValue.toFixed(decimals) + ' ' + adaptive.abbrev + '/s'
-  }
-
-  // Bit units - networking, decimal scaling
+  // Bit units (incl. bits/s) - networking, decimal scaling
   if (isBitUnit(unit)) {
     const adaptive = getAdaptiveBitUnit(value, unit)
     const displayValue = value * adaptive.conversionFactor
     const decimals = adaptive.unit === 'bits' ? 0 : 1
     return displayValue.toFixed(decimals) + ' ' + adaptive.abbrev
-  }
-
-  // Rate units - bits per second
-  if (unit === 'bits/s') {
-    const adaptive = getAdaptiveBitUnit(value, 'bits')
-    const displayValue = value * adaptive.conversionFactor
-    const decimals = adaptive.unit === 'bits' ? 0 : 1
-    return displayValue.toFixed(decimals) + ' ' + adaptive.abbrev + '/s'
   }
 
   // Other units
