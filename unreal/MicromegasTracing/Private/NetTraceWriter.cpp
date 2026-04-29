@@ -118,8 +118,9 @@ namespace MicromegasTracing
 		// pure structural absorb — silent, no log noise. Different name or direction
 		// gets logged. Direction mismatch additionally auto-suspends the writer for
 		// the inner scope's lifetime so its OBJECT_EVENTs don't emit nested under
-		// the outer's wrong-direction parent — see
-		// tasks/net_spans_child_exceeds_parent_reply_rpc.md.
+		// the outer's wrong-direction parent (children would measure on the inner's
+		// bit stream while the parent measured the outer's, breaking
+		// sum(children) <= parent).
 		if (ConnectionDepth++ > 0)
 		{
 			const bool bSameName = (ConnectionName == OuterConnectionName);

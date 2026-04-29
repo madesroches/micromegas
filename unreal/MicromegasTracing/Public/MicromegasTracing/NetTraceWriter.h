@@ -91,7 +91,6 @@ namespace MicromegasTracing
 		// Nak-retransmit data-shape bug where inner-scope events emitted under a
 		// wrong-direction parent (children measured outgoing-wire bits while the
 		// parent measured incoming-reader bits, breaking sum(children) <= parent).
-		// See tasks/net_spans_child_exceeds_parent_reply_rpc.md.
 		enum class EScopeKind : uint8
 		{
 			OuterSuspendedOut, // Begin saw SuspendDepth>0; End is a no-op.
