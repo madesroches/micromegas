@@ -98,11 +98,14 @@ Net tracing emits two distinct families of data. Pick the right one for your que
 
 | Question | Use |
 |----------|-----|
-| Which actors/properties dominate per-connection bandwidth? | `NetObjectEndEvent.bit_size` / `NetPropertyEvent.bit_size` |
+| Which actors/properties dominate per-connection bandwidth? | `net_spans` rows where `kind = 'object'` and `name` matches an actor / `kind = 'rpc'` / `kind = 'property'` |
+| Which framing class (header, padding, exports) dominates? | `net_spans` rows where `kind = 'object'` and `name` is one of `PacketHeader`, `BunchHeader`, `BitPadding`, `PacketHandler`, `NetGUIDExport`, `Retransmit` |
 | What's the connection's true bandwidth on the wire? | `sum(net.packet_sent_bits)` filtered by `connection_name` |
-| What fraction is framing/overhead? | `1 − sum(NetConnectionEndEvent.bit_size) / sum(net.packet_*_bits)` |
+| What fraction is unattributed (control bunches, voice, etc.)? | `1 − sum(net_spans.bit_size where depth = 1) / sum(net.packet_*_bits)` |
 
-`bit_size` on the `NetConnectionEndEvent` is the **content sum**: root-level `NetObjectEndEvent.bit_size` + root-level `NetRPCEndEvent.bit_size`. It deliberately excludes packet headers, bunch headers, control bunches, NetGUID exports, voice, and anything outside an `OBJECT_SCOPE` or `RPC_SCOPE`.
+`bit_size` on the `NetConnectionEndEvent` is the sum of **all** root-level (depth 1) Object and RPC bits inside the connection scope — content scopes (§3.7 / §3.10 / §3.11) **and** the named wire-framing events from §3.14. With both kinds instrumented, that sum closes to within a few percent of the wire metric. Pre-§3.14, it only contained content and was deliberately a lower bound — leaving the residual to identify framing overhead.
+
+The depth-based separation is what makes this clean: actor/RPC events at depth 1 sit alongside framing events at depth 1, both peers to each other. Nested scopes (Iris subobjects, classic fast-array) sit at depth 2+ and roll into their parent's `bit_size` rather than into the connection total — preventing double-count.
 
 The `ObjectDepth == 0` gate in `EndObject` / `EndRPC` prevents nested-scope double-counting: a receive RPC inside a subobject scope measures the same `Reader` delta as the outer object, so only the outer contribution is accumulated. Don't try to defeat this — see [Pitfalls → RPC bits double-count](#rpc-bits-double-count-into-netconnectionendeventbit_size).
 
@@ -120,17 +123,22 @@ Why: Iris serializes an object and all its subobjects into a single batch, so th
 
 ### Non-nesting invariant (Decision 6)
 
-**Connection scopes do not nest.** Only the outermost `BeginConnection` emits and resets writer state; nested ones are absorbed as no-ops and logged once via `LogMicromegasNet` with the inner/outer `(name, direction)` pair.
+**Connection scopes do not nest.** Only the outermost `BeginConnection` emits and resets writer state; nested ones are classified at Begin time and recorded on a per-scope `EScopeKind` stack so the matching End knows exactly what bookkeeping it owns. The classification:
 
-Consequence:
+| Inner vs outer | Classification | Behavior |
+|----------------|----------------|----------|
+| `SuspendDepth > 0` at Begin | `OuterSuspendedOut` | Begin/End are both no-ops (same as a top-level scope under suspend). |
+| Same name, same direction | `Absorbed` (silent) | Inner is a structural duplicate (e.g. RPC-forced ReplicateActor inside §3.3). No log. |
+| Different name, same direction | `Absorbed` (logged at `VeryVerbose`) | Inner bits roll into outer's `AccumulatedBits` if they close at root depth, or are dropped if they close inside an outer object scope. |
+| Direction mismatch | `Suspended` (logged at `VeryVerbose`) | The writer auto-suspends for the inner scope's lifetime so its `OBJECT_EVENT`s do not emit nested under a wrong-direction parent. |
 
-- If a nested scope closes while `ObjectDepth == 0`, its `AccumulatedBits` roll into the outer's total.
-- If it closes while inside an outer object scope, the bits are dropped.
+The direction-mismatch auto-suspend matters because direction changes the bit source — children measured against an outgoing writer would be reported under an incoming-reader parent, and `sum(children) > parent` would surface in queries. Auto-suspending eliminates the bad data outright instead of trying to reconcile it downstream.
 
-Don't try to defeat this by changing the writer. Instead:
+Practical guidance:
 
-- Instrument so scopes don't overlap naturally (one per replication entry point).
-- For paths that process packets/bunches but **shouldn't** contribute to attribution (demo, replay), use `MICROMEGAS_NET_SUSPEND_SCOPE()` instead.
+- Instrument so scopes don't overlap naturally (one per replication entry point) — this remains the goal.
+- For paths that process packets/bunches but **shouldn't** contribute to attribution (demo, replay), use `MICROMEGAS_NET_SUSPEND_SCOPE()` at the entry point.
+- A repeating `LogMicromegasNet` with the same `(inner, outer)` pair points to a real re-entry path you may want to investigate.
 
 ### Suspend mechanism
 
@@ -160,11 +168,20 @@ Every site below follows the same shape:
 
 Line numbers will differ in your fork. Anchor on the function name and landmark statement.
 
-**Connection-name resolution snippet.** Every connection-scope site uses the same two-liner to pick a stable `FName` for the connection. Defined once here, referenced by `<conn-name>` below:
+**Connection name strategy.** Every connection-scope site reads a cached `FName MmDisplayName` member added to `UNetConnection`. Caching matters because (a) the resolution chain is non-trivial — `PlayerName|PlayerId` → `PlayerId` → `addr:port` → `GetFName()` — and (b) the same name appears in dozens of trace events per tick on a busy server. Recomputing on every site would defeat the verbosity-2 "always on" budget.
+
+Refresh `MmDisplayName` at the lifecycle points where its inputs become valid or change:
+
+- `UNetConnection::HandleClientPlayer` / `OnHandshakeComplete` — once the connection is associated with a player controller
+- `APlayerController::OnRep_PlayerState` and `APlayerState::OnRep_PlayerName` / `OnRep_UniqueId` — when player identity arrives or changes
+- Any custom hook your project uses for "player identity finalized"
+
+The refresh function picks the first non-empty value from the priority chain above and assigns it to `MmDisplayName`. Until the first refresh fires, the field falls back to `Connection->GetFName()` so trace events still carry a usable identifier.
+
+Sites then read it directly:
 
 ```cpp
-FName MmConnectionName = Connection->GetPlayerOnlinePlatformName();
-if (MmConnectionName == NAME_None) { MmConnectionName = Connection->GetFName(); }
+MICROMEGAS_NET_CONNECTION_SCOPE(Connection->MmDisplayName, /*bIsOutgoing=*/ false);
 ```
 
 Adjust `Connection->` if the local handle is named differently (e.g. `Params.Connection`, `NetConnection`).
@@ -178,12 +195,10 @@ Adjust `Connection->` if the local handle is named differently (e.g. `Params.Con
 
     ```cpp
     // micromegas net trace
-    FName MmConnectionName = GetPlayerOnlinePlatformName();
-    if (MmConnectionName == NAME_None) { MmConnectionName = GetFName(); }
-    MICROMEGAS_NET_CONNECTION_SCOPE(MmConnectionName, /*bIsOutgoing=*/ false);
+    MICROMEGAS_NET_CONNECTION_SCOPE(MmDisplayName, /*bIsOutgoing=*/ false);
     ```
 
-- **Why:** natural function-scoped boundary for one received UDP packet; RAII closes the scope on every early-return path.
+- **Why:** natural function-scoped boundary for one received UDP packet; RAII closes the scope on every early-return path. `MmDisplayName` is the cached connection identifier described above.
 
 Then, near the existing `UE_NET_TRACE_PACKET_RECV(...)` line at the end of the function, add the wire-bit metric:
 
@@ -221,9 +236,7 @@ Then, near the existing `UE_NET_TRACE_PACKET_RECV(...)` line at the end of the f
 
     ```cpp
     // micromegas net trace
-    FName MmConnectionName = Params.Connection->GetPlayerOnlinePlatformName();
-    if (MmConnectionName == NAME_None) { MmConnectionName = Params.Connection->GetFName(); }
-    MICROMEGAS_NET_CONNECTION_SCOPE(MmConnectionName, /*bIsOutgoing=*/ true);
+    MICROMEGAS_NET_CONNECTION_SCOPE(Params.Connection->MmDisplayName, /*bIsOutgoing=*/ true);
     ```
 
 - **Why:** wraps the per-connection actor-replication walk on a vanilla server (no RepGraph). **Skipped entirely** when `UReplicationDriver` is set — that path needs §3.4 instead.
@@ -237,9 +250,7 @@ Then, near the existing `UE_NET_TRACE_PACKET_RECV(...)` line at the end of the f
 
     ```cpp
     // micromegas net trace
-    FName MmConnectionName = NetConnection->GetPlayerOnlinePlatformName();
-    if (MmConnectionName == NAME_None) { MmConnectionName = NetConnection->GetFName(); }
-    MICROMEGAS_NET_CONNECTION_SCOPE(MmConnectionName, /*bIsOutgoing=*/ true);
+    MICROMEGAS_NET_CONNECTION_SCOPE(NetConnection->MmDisplayName, /*bIsOutgoing=*/ true);
     ```
 
 - **Why:** RepGraph short-circuits `UNetDriver::ServerReplicateActors`, so the §3.3 scope never opens for RepGraph traffic. Symptom of missing this site: object/property events appear outside any `BeginConnection` event — especially ~120 actors per tick with `bit_size:0` from the relevancy walk.
@@ -253,9 +264,7 @@ Then, near the existing `UE_NET_TRACE_PACKET_RECV(...)` line at the end of the f
 
     ```cpp
     // micromegas net trace
-    FName MmConnectionName = Connection->GetPlayerOnlinePlatformName();
-    if (MmConnectionName == NAME_None) { MmConnectionName = Connection->GetFName(); }
-    MICROMEGAS_NET_CONNECTION_SCOPE(MmConnectionName, /*bIsOutgoing=*/ true);
+    MICROMEGAS_NET_CONNECTION_SCOPE(Connection->MmDisplayName, /*bIsOutgoing=*/ true);
     ```
 
 - **Why:** opens only when there's actual work — empty ticks don't produce empty scopes. Iris bypasses both classic scopes (§3.3, §3.4).
@@ -269,9 +278,7 @@ Then, near the existing `UE_NET_TRACE_PACKET_RECV(...)` line at the end of the f
 
     ```cpp
     // micromegas net trace
-    FName MmConnectionName = Connection->GetPlayerOnlinePlatformName();
-    if (MmConnectionName == NAME_None) { MmConnectionName = Connection->GetFName(); }
-    MICROMEGAS_NET_CONNECTION_SCOPE(MmConnectionName, /*bIsOutgoing=*/ false);
+    MICROMEGAS_NET_CONNECTION_SCOPE(Connection->MmDisplayName, /*bIsOutgoing=*/ false);
     ```
 
 - **Why:** queued bunches (parked waiting for NetGUID resolution) are flushed from `UActorChannel::Tick()`, **outside** the §3.1 `ReceivedPacket` scope. Without this, multi-kilobit `InventoryManagerComponent` and similar large initial-state objects orphan ~1 s after the packet arrives.
@@ -424,9 +431,7 @@ Three sites.
     ```cpp
     // micromegas net trace
     {
-        FName MmConnectionName = Connection->GetPlayerOnlinePlatformName();
-        if (MmConnectionName == NAME_None) { MmConnectionName = Connection->GetFName(); }
-        MICROMEGAS_NET_CONNECTION_SCOPE(MmConnectionName, /*bIsOutgoing=*/ true);
+        MICROMEGAS_NET_CONNECTION_SCOPE(Connection->MmDisplayName, /*bIsOutgoing=*/ true);
 
         Ch->SetForcedSerializeFromRPC(true);
         Ch->ReplicateActor();
@@ -564,7 +569,9 @@ Four sites in `Engine/Source/Runtime/Net/Iris/Private/Iris/ReplicationSystem/Net
 
 ### 3.13 Demo recording suspend
 
-Three sites in `Engine/Source/Runtime/Engine/Private/DemoNetDriver.cpp`, all using `MICROMEGAS_NET_SUSPEND_SCOPE();` (no arguments) immediately before the demo operation.
+Sites in `Engine/Source/Runtime/Engine/Private/DemoNetDriver.cpp`, all using `MICROMEGAS_NET_SUSPEND_SCOPE();` (no arguments) immediately before the demo operation.
+
+The demo connection is, mechanically, a `UNetConnection` — its packet flush goes through the same `LowLevelSend` / `FlushNet` paths that emit `net.packet_sent_bits` and that wire-framing `OBJECT_EVENT`s (§3.14) attach to. Without suspending, all of that traffic gets attributed against the demo connection's name and inflates totals that are supposed to represent real network bandwidth. Cover both the per-frame replication entry points **and** any path that drives the demo connection through the standard packet pipeline.
 
 #### 3.13.1 `UDemoNetDriver::ProcessRemoteFunction`
 
@@ -602,6 +609,120 @@ Three sites in `Engine/Source/Runtime/Engine/Private/DemoNetDriver.cpp`, all usi
 
 - **Why:** event-driven, same re-entrancy risk as `ProcessRemoteFunction`.
 
+#### 3.13.4 Demo connection packet pipeline (TickFlush / TickDispatch)
+
+- **Insertion point:** the per-tick entry that drives the demo `UNetConnection` through its packet flush — typically `UDemoNetDriver::TickFlush` (recording) and `UDemoNetDriver::TickDispatch` (playback). Wrap each in a brace-bounded suspend so the underlying `FlushNet` / `ReceivedPacket` calls inherit it.
+- **Insert (per site):**
+
+    ```cpp
+    // micromegas net trace
+    MICROMEGAS_NET_SUSPEND_SCOPE();
+    ```
+
+- **Why:** the §3.1 `ReceivedPacket` and §3.2 `net.packet_sent_bits` instrumentation are unconditional — they fire on every `UNetConnection`, including the demo connection. Without suspending here, the demo connection's flush emits packet metrics, wire-framing object events, and (during playback) a full incoming-packet attribution stream against the demo connection's display name. Suspending at the tick boundary silences all of that in one place.
+
+### 3.14 Wire-framing instrumentation
+
+The §3.7 / §3.10 / §3.11 object scopes only attribute the **content** of replicated objects and RPCs. The per-packet wire bits (`net.packet_*_bits`) include a substantial fraction of framing overhead that those scopes never see — handshake/encryption components, byte-alignment padding, the packet header and ack record, per-bunch headers, NetGUID export bunches, and bunches resent in response to NAKs. Without instrumenting these, `sum(net_spans content) / sum(net.packet_sent_bits)` settles around 0.5–0.7 even on a clean integration, leaving a large unattributed mass when investigators try to explain bandwidth.
+
+This section adds named `MICROMEGAS_NET_OBJECT_EVENT` (and `MICROMEGAS_NET_OBJECT_SIZE_SCOPE` for retransmits) emissions that label each framing class so it appears in the same `net_spans` view as content. Each event opens at depth 0 inside the active connection scope (peer to actor scopes), so a query like `SELECT name, sum(bit_size) FROM net_spans GROUP BY name` partitions the connection's wire bits into content and named-framing buckets.
+
+All sites assume an active `MICROMEGAS_NET_CONNECTION_SCOPE` from §3.1–§3.5; outside one, the events are dropped by the writer's depth gate. The macro forms:
+
+- **`MICROMEGAS_NET_OBJECT_EVENT(Name, Bits)`** — fire-and-forget. Use when the bit count is known up front and the wrapped code does not mutate it. Zero-bit calls are suppressed.
+- **`MICROMEGAS_NET_OBJECT_SIZE_SCOPE(Name, GetSizeExpr)`** — RAII scope that reads the size at destruction. Use for retransmits where `SendRawBunch` does not mutate the bunch, so a `GetNumBits`-diff scope would read 0 and the writer's elision path would drop it.
+
+#### 3.14.1 PacketHandler chain bits (outgoing)
+
+- **File:** `Engine/Plugins/Online/OnlineSubsystemUtils/Source/OnlineSubsystemUtils/Private/IpConnection.cpp` (or your `LowLevelSend` override).
+- **Function:** `UIpConnection::LowLevelSend`.
+- **Insertion point:** immediately after the `Handler->Outgoing(...)` call, where `Traits.NumberOfBits` (or your equivalent) reflects the post-handler bit count. Compute the delta against the pre-handler bit count.
+- **Insert:**
+
+    ```cpp
+    // micromegas net trace — handler-added bits (handshake, encryption, checksum)
+    MICROMEGAS_NET_OBJECT_EVENT(TEXT("PacketHandler"), PostHandlerBits - PreHandlerBits);
+    ```
+
+- **Why:** the `PacketHandler` chain — `StatelessConnectHandler`, encryption, checksums, etc. — inflates every outgoing packet between `FlushNet` writing the buffer and `LowLevelSend` putting it on the socket. The delta is per-packet but typically small (tens of bits); aggregated, it explains a meaningful slice of the wire/content gap.
+
+#### 3.14.2 BitPadding (outgoing byte alignment)
+
+- **File:** `Engine/Source/Runtime/Engine/Private/NetConnection.cpp`
+- **Function:** `UNetConnection::FlushNet`
+- **Insertion point:** at the byte-alignment step that pads `SendBuffer` up to a byte boundary before `LowLevelSend`. Capture the pre-pad bit count, run the existing alignment code, then emit the difference.
+- **Insert:**
+
+    ```cpp
+    // micromegas net trace — trailing pad bits
+    MICROMEGAS_NET_OBJECT_EVENT(TEXT("BitPadding"), SendBuffer.GetNumBits() - PrePadBits);
+    ```
+
+- **Why:** every packet pads up to 0–7 bits at the end. Per packet it's nothing; multiplied by hundreds of packets per second it's a few percent of bandwidth that would otherwise vanish.
+
+#### 3.14.3 PacketHeader / Ack
+
+- **File:** `Engine/Source/Runtime/Engine/Private/NetConnection.cpp`
+- **Function:** `UNetConnection::FlushNet`
+- **Insertion point:** around the `PacketNotify.WriteHeader(...)` call (and any `WriteFinalPacketInfo` your fork has). Capture pre/post bit positions on `SendBuffer`.
+- **Insert:**
+
+    ```cpp
+    // micromegas net trace — packet ID + ack record
+    MICROMEGAS_NET_OBJECT_EVENT(TEXT("PacketHeader"), PostHeaderBits - PreHeaderBits);
+    ```
+
+- **Why:** the packet header carries packet sequence ID and the ack history bitfield. It is fixed-cost per packet and the largest single framing line item on most connections.
+
+#### 3.14.4 BunchHeader
+
+- **File:** `Engine/Source/Runtime/Engine/Private/DataChannel.cpp`
+- **Function:** `UChannel::SendRawBunch` (or wherever your fork serializes the bunch header onto the outgoing buffer — look for the `SerializeBits`/`WriteBit` sequence that emits `bReliable`, `ChIndex`, `bClose`, `BunchDataBits`, etc.).
+- **Insertion point:** capture pre-serialize bit position, run the existing header-serialize block, then emit the difference. (The existing `Bunch.GetNumBits()` body bits are attributed by the §3.7 object scopes, so this only needs to cover the header itself.)
+- **Insert:**
+
+    ```cpp
+    // micromegas net trace — per-bunch header
+    MICROMEGAS_NET_OBJECT_EVENT(TEXT("BunchHeader"), PostHeaderBits - PreHeaderBits);
+    ```
+
+- **Why:** every bunch carries a header (channel index, reliability flag, sequence, payload length). Bunch headers add up fast on a busy server — typically the second-largest framing class after `PacketHeader`.
+
+#### 3.14.5 Retransmits (NAK resend)
+
+- **File:** `Engine/Source/Runtime/Engine/Private/NetConnection.cpp`
+- **Function:** the NAK-handling path that walks `OutBunch` chains and re-queues bunches via `SendRawBunch` (typically `UNetConnection::ReceivedNak` / `WriteBitsToSendBuffer` follow-up).
+- **Insertion point:** wrap the resend call so the bunch's existing bit count is read on scope exit.
+- **Insert:**
+
+    ```cpp
+    // micromegas net trace — bunch resent in response to NAK
+    MICROMEGAS_NET_OBJECT_SIZE_SCOPE(TEXT("Retransmit"), Bunch->GetNumBits());
+    ```
+
+- **Why:** retransmits are real bandwidth that no §3.7 scope sees — `SendRawBunch` consumes a pre-built bunch without re-running the actor write path, so a `GetNumBits()`-diff scope would observe 0 and the writer's elision path would drop the event. The `SIZE_SCOPE` form reads the size directly.
+
+#### 3.14.6 NetGUID exports
+
+- **File:** `Engine/Source/Runtime/Engine/Private/DataChannel.cpp` (or wherever your fork emits export bunches — `WritePackageMapAck` / `WriteContentBlockHeader` export-bunch path).
+- **Insertion point:** when the export bunch is built and known to be sent, before the `SendRawBunch`.
+- **Insert:**
+
+    ```cpp
+    // micromegas net trace — NetGUID export bunch
+    MICROMEGAS_NET_OBJECT_EVENT(TEXT("NetGUIDExport"), ExportBunch.GetNumBits());
+    ```
+
+- **Why:** NetGUID exports are sent in their own bunches (separate from the actor body that referenced them) so they don't show up under any actor's content attribution. Initial-state-heavy connections (join spikes, level streaming) lean heavily on exports; without this, those spikes look like unattributable bandwidth.
+
+#### 3.14.7 Picking sites in your fork
+
+The exact landmark in each function above moves between UE versions. Anchor on the existing wire-bit telemetry:
+
+- For each site, find where `UE_NET_TRACE_*` already brackets the same code — those macros already chose the right pre/post boundary.
+- Reuse the same captured `StartPos` / `EndPos` locals when present; add a private capture only when the existing trace points don't expose one.
+- Run `parse_block` over a recorded session and confirm the new event names appear at depth 0 with non-trivial `bit_size`. If a wire-framing event consistently emits 0 bits, the boundaries are wrong — recheck which buffer you're measuring against.
+
 ## 4. Pitfalls
 
 Each entry below gives a **symptom** you'd see in the lakehouse or the log, the underlying **cause**, and the structural **fix**. Together these encode the rules an implementer needs to extrapolate to call sites the recipe doesn't explicitly cover.
@@ -622,35 +743,49 @@ Each entry below gives a **symptom** you'd see in the lakehouse or the log, the 
 
 ### `LogMicromegasNet` fires repeatedly with the same `(inner, outer)` pair
 
-- **Symptom:** a diagnostic log line repeats at runtime with the same inner/outer connection name+direction.
-- **Cause:** a real re-entry path — the inner scope opens while the outer is still active.
-- **Fix:** identify the call path. If the inner work shouldn't be attributed (demo, replay), add `MICROMEGAS_NET_SUSPEND_SCOPE()` at the inner call site instead of a connection scope. If it **should** be attributed, accept the Decision-6 absorption: inner bits roll into the outer's `AccumulatedBits` if they close at root depth, or are dropped if they close inside an outer object scope.
-- **Generalization:** any synchronous engine callback that can fire from inside a packet/replication scope (e.g. `PostLogin`, `OnRep_*` calling into game code) is a re-entry candidate.
+- **Symptom:** a diagnostic log line repeats at runtime with the same inner/outer connection name+direction (visible at `VeryVerbose`).
+- **Cause:** a real re-entry path — the inner scope opens while the outer is still active. Same name + same direction is silently absorbed (no log); the log fires only when the names differ or the directions disagree.
+- **Fix:** identify the call path. If the inner work shouldn't be attributed (demo, replay, server-side simulation), add `MICROMEGAS_NET_SUSPEND_SCOPE()` at the inner call site instead of a connection scope. If it **should** be attributed and shares the outer's direction, accept the Decision-6 absorption. If the directions disagree (reply RPC, NAK echo), the writer auto-suspends the inner scope so its `OBJECT_EVENT`s don't emit nested under a wrong-direction parent — see "Children measure on a different bit stream than parent" below.
+- **Generalization:** any synchronous engine callback that can fire from inside a packet/replication scope (e.g. `PostLogin`, `OnRep_*` calling into game code, RPC dispatch from inside `FlushNet`, NAK handling from inside `ReceivedRawPacket`) is a re-entry candidate.
+
+### Children measure on a different bit stream than parent (reply RPC / NAK)
+
+- **Symptom (pre-auto-suspend):** `sum(child bit_size) > parent bit_size` for a connection scope where an outgoing reply RPC fires inside an incoming packet handler (or vice versa for a NAK echo). Children would be measuring bytes against an outgoing writer while the parent measured against an incoming reader.
+- **Cause:** the outer connection scope's direction and the inner scope's direction disagree, so each measures a different bit source. The writer cannot meaningfully aggregate children into a parent that's tracking the wrong stream.
+- **Fix:** automatic — the `EScopeKind::Suspended` classification at Begin time auto-suspends the inner scope so its `OBJECT_EVENT`s and `OBJECT_SCOPE`s don't emit. Aggregate sums recover the `sum(children) <= parent` invariant. No call-site change required; documented here so the silent suppression doesn't surprise investigators looking for the missing inner spans.
 
 ### `NetConnectionEndEvent.bit_size` much smaller than `sum(net.packet_*_bits)`
 
 - **Symptom:** content bits look way off from wire bits for the same connection and window.
-- **Cause:** expected — `bit_size` is content attribution (sum of root `NetObjectEndEvent.bit_size` and root `NetRPCEndEvent.bit_size` only); the metric is wire bits including bunch headers, packet headers, NetGUID exports, control bunches, and voice.
-- **Fix:** use `net.packet_*_bits` for wire totals, `NetConnectionEndEvent.bit_size` for content attribution. **The gap is the framing overhead** — that's a feature, not a bug.
+- **Cause:** `NetConnectionEndEvent.bit_size` is the content sum — root `NetObject*` and root `NetRPC*` `bit_size` totals only. The wire metric also includes packet headers, byte-alignment padding, per-bunch headers, NetGUID exports, retransmits, the `PacketHandler` chain, control bunches, and voice.
+- **Fix:** with §3.14 wire-framing instrumentation in place, the named framing classes (`PacketHeader`, `BunchHeader`, `BitPadding`, `PacketHandler`, `NetGUIDExport`, `Retransmit`) appear in `net_spans` alongside content, and `sum(net_spans bit_size) / sum(net.packet_*_bits)` should land within a few percent of 1.0 over a steady window. A persistent residual is normal — it represents control bunches, voice, and other sources not yet labeled.
+- **Generalization:** if a residual grows without explanation, group `net_spans` by `name` at `depth = 1` (root-level peers) and look for an unfamiliar dominant name — or for content names that have inflated past their wire share (likely a missing `SUSPEND_SCOPE`).
 
 ### Demo recording bits show up as live network bandwidth
 
-- **Symptom:** unusual spikes in content attribution during replay recording; depth counters behave oddly in live packets near demo events.
-- **Cause:** missing `SUSPEND_SCOPE` on one of the §3.13 `DemoNetDriver` sites — the demo's `BeginConnection` clobbered the live packet's depth counters.
-- **Fix:** add the missing suspend.
-- **Generalization:** any system that does its own packet/bunch processing while the live game is also doing so (replay, server-side simulation, ghost recording) should suspend.
+- **Symptom:** unexpected attribution under the demo connection's `MmDisplayName`, or `net.packet_sent_bits` totals significantly higher than the sum of live connections' wire bits.
+- **Cause:** missing `SUSPEND_SCOPE` somewhere in §3.13 — most often the demo connection's tick/flush pipeline (§3.13.4), which is easy to forget because §3.13.1–.3 only cover replication entry points, not the packet-flush path that emits `net.packet_*_bits` and §3.14 framing events.
+- **Fix:** add the missing suspend. Verify with `SELECT connection_name, sum(bit_size) FROM net_spans GROUP BY 1` — the demo connection should report 0 (or be absent) once all sites are suspended.
+- **Generalization:** any system that drives a `UNetConnection` while the live game is also doing so (replay, server-side simulation, ghost recording, late-join cinematic scrubbers) needs to suspend at every entry point that walks its connection through `FlushNet` / `ReceivedPacket` / `ReplicateActor`.
 
 ### `EndConnection` events with no preceding `BeginConnection`
 
 - **Symptom:** unbalanced Begin/End in the event stream.
-- **Cause:** a removed-then-reintroduced manual Begin/End pair, or a scope opened in one frame's block and closed after a flush boundary.
-- **Fix:** only use `MICROMEGAS_NET_CONNECTION_SCOPE` (RAII) at function-scoped boundaries — there are no public Begin/End macros. If this surfaces in a fresh integration, confirm no helper is calling `Dispatch::NetEndConnection()` directly (`FNetConnectionScope` is the only authorized caller).
+- **Cause:** since the writer keys End behavior on a per-Begin `EScopeKind` stack push, every End is paired with the kind its Begin pushed — a stray End cannot reach the emission path. The realistic source is now (a) a helper calling `Dispatch::NetEndConnection()` directly, bypassing `FNetConnectionScope`; or (b) a scope crossing a block-boundary buffer flush so its Begin and End land in different blocks (this is normal cross-block stitching, handled by the `net_spans` view — only flag it if the same block contains an unbalanced End).
+- **Fix:** only use `MICROMEGAS_NET_CONNECTION_SCOPE` (RAII) at function-scoped boundaries — there are no public Begin/End macros. If this surfaces, confirm no helper is calling `Dispatch::NetEndConnection()` directly (`FNetConnectionScope` is the only authorized caller).
 
 ### RPC bits double-count into `NetConnectionEndEvent.bit_size`
 
 - **Symptom:** content bits appear inflated when RPCs are involved.
 - **Cause:** an RPC scope nested inside an object scope on the receive path (an RPC fires inside `ReceivedBunch` which is inside §3.7.3's `ProcessBunch` `OBJECT_SCOPE`). Both scopes would measure deltas of the same `Reader`.
 - **Fix:** already gated automatically by `if (ObjectDepth == 0)` in `EndRPC` — nested RPC bits are silently absorbed into the parent object's measurement, not double-counted. Don't try to "unfix" the gate.
+
+### Connection name shows as `NetConnection_0`, an opaque GUID, or an `addr:port` you can't recognize
+
+- **Symptom:** `NetConnectionBeginEvent.connection_name` is a generic `FName` (e.g. `NetConnection_0`), an internal player ID, or a raw `addr:port` instead of a player-facing handle.
+- **Cause:** `MmDisplayName` was never refreshed for that connection — the cached `FName` is still the early-fallback value from before player identity was available.
+- **Fix:** confirm the refresh function runs at every lifecycle hook listed in §3 (handshake complete, `OnRep_PlayerState`, `OnRep_PlayerName`, `OnRep_UniqueId`, custom "identity finalized" hooks). The `NetConnection_0` form means the function never ran for that connection; the `addr:port` or internal-ID form means it ran but the higher-priority inputs were unavailable at the time.
+- **Generalization:** the resolution chain is `PlayerName|PlayerId` → `PlayerId` → `addr:port` → `GetFName()`. Anytime you see a low-priority value, the higher-priority sources weren't populated yet — refresh again at the lifecycle event that populates them.
 
 ### Subobject hierarchy differs between classic and Iris
 
@@ -755,7 +890,24 @@ ORDER BY object_index;
 
 ### Content-vs-wire reconciliation
 
-Pick one connection and one time window. Sum the `bit_size` of `connection`-kind rows from `net_spans` (or equivalently `NetConnectionEndEvent.bit_size` from `parse_block`) across the matching blocks, and sum `net.packet_sent_bits` from `measures` for the same connection over the same window. Content should be 0.7–0.95× wire. Wild divergence indicates a missing `OBJECT_SCOPE` somewhere in the replication path.
+Pick one connection and one time window. Sum the `bit_size` of all root-level `net_spans` rows for that connection (content + named framing classes from §3.14), and sum `net.packet_sent_bits` from `measures` for the same connection over the same window. With §3.14 instrumentation in place, the ratio should land within a few percent of 1.0 over a steady window — a persistent shortfall points to a missing framing site, and an excess points to a missing `SUSPEND_SCOPE` somewhere.
+
+Without §3.14, content alone typically lands at 0.5–0.7× wire — that gap is unattributed framing, not instrumentation error.
+
+### Framing class breakdown
+
+After §3.14, slice `net_spans` by name to see which classes dominate:
+
+```sql
+SELECT name, sum(bit_size) AS bits
+FROM view_instance('net_spans', '<process_id>')
+WHERE kind = 'object' AND depth = 1
+GROUP BY name
+ORDER BY bits DESC
+LIMIT 20;
+```
+
+`depth = 1` filters to objects immediately under a Connection (root-level peers — actor scopes and §3.14 framing events), excluding nested Iris subobjects whose bits are already counted in their parent. Expect content names (actor classes) at the top followed by `PacketHeader`, `BunchHeader`, then the smaller framing classes. An unfamiliar dominant name often points to a missing `SUSPEND_SCOPE` (the demo connection most commonly).
 
 ### No orphaned ends
 
