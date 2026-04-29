@@ -670,6 +670,7 @@ export function XYChart({
             : undefined,
           points: { show: chartType !== 'bar' },
           show: seriesVisibility ? seriesVisibility[i] : true,
+          spanGaps: chartType === 'line',
         })
 
         seriesInfoForTooltip.push({ label: s.label, unit: s.unit, color })
