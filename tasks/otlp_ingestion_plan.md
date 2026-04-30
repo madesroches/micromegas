@@ -108,38 +108,48 @@ HTTP/protobuf (port 4318) is implemented with axum routes that decode the same p
 
 ### Identity: synthesizing process and stream
 
-OTel's data model has no "process" object; it has a `Resource` (key/value attributes) attached to each batch of spans/metrics/logs. We synthesize:
+OTel has no "process" object; it has a `Resource` (key/value attributes) attached to each batch. We derive a stable `process_id` by hashing the OS-honest identifying tuple together with the OTel service identity:
 
-**Process identity** (deterministic UUIDv5 from resource attributes):
 ```
-process_id = uuid_v5(NS_OTEL_PROCESS,
-    service.namespace + "/" +
-    service.name + "/" +
-    service.instance.id)
-```
-- If `service.instance.id` is absent, fall back to `host.name` + `host.id`.
-- If both are absent, generate a process per (service.name, ingestion-pod) and tag the process as `synthetic=true`.
+key = trim_lower(host.id)                  + "\x1F"
+    + trim_lower(host.name)                + "\x1F"
+    + str(process.pid)                     + "\x1F"
+    + str(process.creation.time as ns)     + "\x1F"
+    + trim_lower(service.namespace)        + "\x1F"
+    + trim_lower(service.name)             + "\x1F"
+    + trim_lower(service.instance.id)
 
-The first time a `process_id` is seen, we INSERT into `processes` (idempotent — existing `ON CONFLICT DO NOTHING`) with:
-- `exe` ← `service.name` (or `service.namespace + "/" + service.name`)
+process_id = uuid_v5(NS_OTEL_PROCESS_V1, key)
+```
+
+Rules:
+- Missing fields → empty string. Stability across batches relies on OTel's Resource-immutability contract.
+- Field order is the contract; changing it requires a new namespace UUID (`_V2`).
+- `\x1F` (unit separator) cannot legitimately appear inside attribute values per OTel spec.
+- If all of `host.id`, `host.name`, `process.pid`, `service.instance.id` are empty, log a degenerate-resource warning so we notice — produces a single collapsed `process_id` per `(service.namespace, service.name)`.
+
+The first time a `process_id` is seen, INSERT into `processes` (idempotent — existing `ON CONFLICT DO NOTHING`) with:
+- `exe` ← `service.name` (or `service.namespace + "/" + service.name` if namespace present)
 - `username` ← `user.name` if present, else empty
 - `computer` ← `host.name` if present, else empty
 - `distro` ← `os.description` if present
 - `cpu_brand` ← `host.cpu.model.name` if present, else empty
-- `tsc_frequency` ← `0` (OTel timestamps are nanoseconds, no calibration needed)
-- `start_time` / `start_ticks` ← first observed event time
-- `properties` ← every other resource attribute, prefixed `otel.resource.*`
+- `tsc_frequency` ← `1_000_000_000` (OTel timestamps are nanoseconds; ticks = ns)
+- `start_time` / `start_ticks` ← `process.creation.time` if present, else first observed event time
+- `properties` ← every other resource attribute, prefixed `otel.resource.*`. Includes `service.instance.id`, `process.pid`, `process.creation.time`, etc. (queryable, not in identity formula contract beyond the hash).
+
+**Claude Code mapping**: each `claude` OS invocation = one `process_id`. `--continue` starts a new OS process (new pid, new creation.time, new SDK-generated `service.instance.id`) → new `process_id`. Cross-invocation correlation via `session.id` (an event attribute, not a resource attribute) is a query-time concern.
+
+**Known limitation**: in FaaS environments where the OS process is reused across cold invocations, the OTel Lambda layer sets `service.instance.id = invocation_id` to disambiguate. Our formula respects that. If a poorly-instrumented FaaS app omits `service.instance.id`, multiple invocations collapse — documented limitation, not a v1 blocker.
 
 **Stream identity** (one stream per signal type per process per instrumentation scope):
 ```
-stream_id = uuid_v5(NS_OTEL_STREAM,
-    process_id + "/" + signal + "/" + scope.name + "/" + scope.version)
+stream_id = uuid_v5(NS_OTEL_STREAM_V1,
+    process_id + "\x1F" + signal + "\x1F" + scope.name + "\x1F" + scope.version)
 ```
-where `signal ∈ {traces, metrics, logs}`. Tags: `["otel", signal, "scope:<scope.name>"]`. Properties: scope attributes.
+where `signal ∈ {logs, metrics, traces}`. Stream tags: `["otel", signal]`. Stream properties: scope attributes.
 
-This gives clean per-library separation in the lakehouse — queries can filter `tags @> ARRAY['scope:claude-code']` without joining to instrumentation scope.
-
-**Block identity**: one block per gRPC call per (process_id, stream_id), with begin_time/end_time = min/max event timestamp in the batch, ticks in nanoseconds.
+**Block identity**: one block per (process_id, stream_id) per OTLP request. `block_id = uuid_v5(NS_OTEL_BLOCK_V1, hash(payload bytes))` for idempotent retry.
 
 ### Schema mapping: OTLP → parquet rows
 
