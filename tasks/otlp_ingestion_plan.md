@@ -73,8 +73,12 @@ OTel-specific decode lives in `analytics/`, where the parquet schema is the natu
        │       POST /ingestion/{insert_process,           │
        │             insert_stream, insert_block}        │
        │   ─ NEW routes (shared auth + ingestion lib):   │
-       │       POST /ingestion/otlp/v1/{logs,metrics,    │
-       │              traces}                             │
+       │       POST /ingestion/otlp/v1/logs              │
+       │            ↳ ExportLogsServiceRequest proto     │
+       │       POST /ingestion/otlp/v1/metrics           │
+       │            ↳ ExportMetricsServiceRequest proto  │
+       │       POST /ingestion/otlp/v1/traces            │
+       │            ↳ ExportTraceServiceRequest proto    │
        │     (same listener, /ingestion/ prefix)         │
        │   ─ derive process_id from resource attrs       │
        │   ─ write raw OTLP proto to object store        │
