@@ -6,6 +6,14 @@ Add native support for the OpenTelemetry Protocol (OTLP) as a first-class wire f
 
 The driving use case is observability for AI coding agents: Claude Code emits a rich OTel surface (token splits by cache type, tool-call spans, compaction events, hook timings). Once those land in the lakehouse, DataFusion queries can find inefficiencies (cache thrash, redundant `Read` calls, exploration without edits).
 
+## Terminology
+
+**Signal**: an OTel telemetry data type. The three core signals — `logs`, `metrics`, `traces` — are independent end-to-end: separate proto message types (`ResourceLogs`, `ResourceMetrics`, `ResourceSpans`), separate gRPC services (`LogsService`, `MetricsService`, `TraceService`), separate HTTP endpoints (`/v1/logs`, `/v1/metrics`, `/v1/traces`), separate SDK exporter pipelines. We use `signal ∈ {logs, metrics, traces}` throughout this doc. Profiles (newly stabilized in 2025) is out of scope for v1 but would extend cleanly via a new `format = "otlp/v1/profiles"`.
+
+**Resource**: OTel's "who produced this data" — a `Resource` proto carrying `repeated KeyValue attributes`. One Resource = one logical producing entity (process, container, lambda invocation). Conventionally identified by `service.name`, `service.instance.id`, and host/k8s attributes. We synthesize a `process_id` from these.
+
+**Instrumentation Scope** (often shortened to "scope"): identifies the library/module producing a record — `"opentelemetry.instrumentation.requests"`, `"@opentelemetry/instrumentation-pg"`, `"claude-code"`, etc. A single process loads many scopes. Scope is sub-process metadata; lives on per-row properties, not in identity formulas.
+
 ## Current State
 
 The ingestion service speaks one wire format: a custom CBOR-framed binary protocol over HTTP.
