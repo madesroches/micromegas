@@ -490,3 +490,83 @@ The cost: two parsers (transit and OTLP proto) — but that's true of any design
 - Claude Code monitoring: https://code.claude.com/docs/en/monitoring-usage
 - Anthropic monitoring guide: https://github.com/anthropics/claude-code-monitoring-guide
 - `opentelemetry-proto` crate: https://crates.io/crates/opentelemetry-proto
+
+## Appendix: Claude Code OTel client configuration
+
+Typical env vars an operator sets to make Claude Code emit OTel data into a Micromegas server. Set these in the shell that launches `claude` (e.g., `~/.bashrc`, `~/.zshrc`, or a wrapper script).
+
+```bash
+# ── Required: enable Claude Code's OTel emission ─────────────────────────────
+export CLAUDE_CODE_ENABLE_TELEMETRY=1
+
+# ── Required: where to send the data ─────────────────────────────────────────
+export OTEL_EXPORTER_OTLP_ENDPOINT="https://micromegas.example.com"
+export OTEL_EXPORTER_OTLP_PROTOCOL="http/protobuf"   # gRPC not supported in v1
+
+# ── Required: which signals to export ────────────────────────────────────────
+export OTEL_METRICS_EXPORTER=otlp
+export OTEL_LOGS_EXPORTER=otlp
+
+# ── Required: auth ───────────────────────────────────────────────────────────
+# The bearer token comes from the MICROMEGAS_API_KEYS keyring on the server.
+# OTel does not expand ${VAR}; the shell does at export time.
+export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer mm_abc123def456..."
+
+# ── Optional: distributed tracing (Claude Code beta) ─────────────────────────
+# Required for the interaction → llm_request → tool span hierarchy and for
+# OTEL_LOG_TOOL_CONTENT below.
+export CLAUDE_CODE_ENHANCED_TELEMETRY_BETA=1
+export OTEL_TRACES_EXPORTER=otlp
+
+# ── Optional: tool-level visibility (privacy-sensitive) ──────────────────────
+# Tool name + args/result summaries on every tool span/event.
+export OTEL_LOG_TOOL_DETAILS=1
+# Full tool content (file paths, bash output, edit diffs). Spans only;
+# requires CLAUDE_CODE_ENHANCED_TELEMETRY_BETA=1.
+export OTEL_LOG_TOOL_CONTENT=1
+
+# ── Optional: full Messages API request/response bodies ──────────────────────
+# Recommended sink is a file (not the OTLP exporter) due to size.
+export OTEL_LOG_RAW_API_BODIES="file:/var/log/claude-code-bodies"
+
+# ── Optional: tag the data for multi-team rollups ────────────────────────────
+# Lands on the Process row's properties (and via process_properties on every
+# row). The trailing service.namespace=... can be omitted if the server's
+# MICROMEGAS_OTLP_NAMESPACE_MAP defaults it from the API-key name.
+export OTEL_RESOURCE_ATTRIBUTES="team.id=platform,cost_center=eng-123,deployment.environment=prod"
+
+# ── Launch ───────────────────────────────────────────────────────────────────
+claude
+```
+
+### Server-side counterpart
+
+```bash
+# Same JSON keyring as telemetry-ingestion-srv already uses
+export MICROMEGAS_API_KEYS='[{"name":"team-platform","key":"mm_abc123def456..."}]'
+
+# Optional: default service.namespace per API key when the client omits it
+export MICROMEGAS_OTLP_NAMESPACE_MAP='{"team-platform":"platform"}'
+
+# OTLP-specific body limit (existing /ingestion/insert_block stays at 100MB)
+export MICROMEGAS_OTLP_MAX_RECV_BYTES=10000000
+
+# Existing ingestion env vars unchanged
+export MICROMEGAS_SQL_CONNECTION_STRING="postgres://..."
+export MICROMEGAS_OBJECT_STORE_URI="s3://..."
+```
+
+### Verifying it works
+
+After Claude runs once with the above env, on the server:
+
+```sql
+SELECT process_id, exe, computer, properties->>'service.instance.id'
+FROM processes
+WHERE properties->>'otel.resource.service.name' = 'claude-code'
+ORDER BY start_time DESC LIMIT 5;
+
+SELECT count(*) FROM log_entries
+WHERE process_id IN (SELECT process_id FROM processes
+                      WHERE properties->>'otel.resource.service.name' = 'claude-code');
+```
