@@ -73,7 +73,8 @@ OTel-specific decode lives in `analytics/`, where the parquet schema is the natu
        │       POST /ingestion/{insert_process,           │
        │             insert_stream, insert_block}        │
        │   ─ NEW routes (shared auth + ingestion lib):   │
-       │       POST /v1/{logs,metrics,traces} :4318      │
+       │       POST /v1/{logs,metrics,traces}            │
+       │     (same listener as existing /ingestion/*)    │
        │   ─ derive process_id from resource attrs       │
        │   ─ write raw OTLP proto to object store        │
        │   ─ INSERT block + stream + process metadata    │
@@ -135,7 +136,7 @@ The existing `objects_metadata BYTEA` field stays as-is. Its interpretation is n
 
 Use the `opentelemetry-proto` crate **without** the `gen-tonic` feature — we only need the prost-generated message types (`ResourceLogs`, `ResourceMetrics`, `ResourceSpans`, `ExportLogsServiceRequest`, etc.), not the gRPC service stubs.
 
-We serve OTLP/HTTP only on `:4318` (`POST /v1/{logs,metrics,traces}`). gRPC (`:4317`) is intentionally not supported in v1 — see Trade-offs.
+We serve OTLP/HTTP only via `POST /v1/{logs,metrics,traces}` on the **same listener** as the existing `/ingestion/*` routes — no new port. gRPC is intentionally not supported in v1 — see Trade-offs.
 
 ### Identity: synthesizing process and stream
 
@@ -302,7 +303,7 @@ OTel SDKs read `OTEL_EXPORTER_OTLP_HEADERS` and propagate the parsed headers on 
 export MICROMEGAS_API_KEYS='[{"name":"team-platform","key":"mm_abc123def..."}]'
 
 # Client side — Claude Code, Goose, any OTel SDK
-export OTEL_EXPORTER_OTLP_ENDPOINT="https://micromegas.example.com:4318"
+export OTEL_EXPORTER_OTLP_ENDPOINT="https://micromegas.example.com"
 export OTEL_EXPORTER_OTLP_PROTOCOL="http/protobuf"
 export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer mm_abc123def..."
 export CLAUDE_CODE_ENABLE_TELEMETRY=1
@@ -342,10 +343,11 @@ The `AuthContext.subject` field is set to the matched API-key `name` (e.g. `"tea
 
 ### Configuration
 
-New env vars for the new binary:
-- `MICROMEGAS_OTLP_LISTEN_ADDR` (default `0.0.0.0:4318`)
-- `MICROMEGAS_OTLP_MAX_RECV_BYTES` (default `10_000_000`)
-- `MICROMEGAS_OTLP_NAMESPACE_MAP` (optional, JSON `{"key-name":"namespace"}`)
+OTLP routes share the existing `telemetry-ingestion-srv` listen address (configured via the existing `--listen-endpoint-http` flag, default `127.0.0.1:8081`). No new listener-related env var.
+
+New env vars on `telemetry-ingestion-srv`:
+- `MICROMEGAS_OTLP_MAX_RECV_BYTES` (default `10_000_000`) — applied as a per-route body limit on the OTLP routes; the existing 100MB limit on `/ingestion/insert_block` is unchanged.
+- `MICROMEGAS_OTLP_NAMESPACE_MAP` (optional, JSON `{"key-name":"namespace"}`) — per-API-key default `service.namespace`.
 
 Existing env vars reused: `MICROMEGAS_SQL_CONNECTION_STRING`, `MICROMEGAS_OBJECT_STORE_URI`, `MICROMEGAS_API_KEYS`, `MICROMEGAS_OIDC_CONFIG`.
 
@@ -356,9 +358,8 @@ Existing env vars reused: `MICROMEGAS_SQL_CONNECTION_STRING`, `MICROMEGAS_OBJECT
 2. Update `ingestion::WebIngestionService::insert_stream` to accept and persist `format` (default `'micromegas-transit'` if caller doesn't specify, preserving backwards compatibility).
 3. Add `opentelemetry-proto = "0.31"` to workspace deps **without** the `gen-tonic` feature (we only need the prost message types).
 4. Create `rust/otel-ingestion/` library crate: `identity.rs` (resource → process_id/stream_id), `proto.rs` (re-exports), `error.rs`, `block.rs` (split ExportRequest into per-resource blocks). All translation logic lives here; the server only wires axum routes.
-5. Add OTLP routes to `rust/telemetry-ingestion-srv/src/main.rs`: a new `Router` for `POST /v1/{logs,metrics,traces}` with a 10MB body limit (separate from the existing 100MB limit on `/ingestion/insert_block`), routed through the existing `auth_middleware`. Each route reads the protobuf body, calls into `otel-ingestion` to split + register + write blocks via the shared `WebIngestionService`. Stream registration sets `format = "otlp/v1/<signal>"`.
-6. Add a separate listen-port option (`--otel-listen-endpoint`, default `0.0.0.0:4318`) — the OTLP routes run on a different `axum::serve` so the existing service's port stays untouched. Auth and `WebIngestionService` are shared via `Arc`.
-7. End-to-end smoke test: Python OTel SDK with `OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf` pointed at `:4318`; verify rows land in PG `processes`/`streams`/`blocks` (with `format = "otlp/v1/..."` on streams) and bytes land in object store.
+5. Add OTLP routes to `rust/telemetry-ingestion-srv/src/main.rs`: extend the protected `Router` with `POST /v1/{logs,metrics,traces}`, applying a per-route 10MB `RequestBodyLimitLayer` (the existing 100MB limit on `/ingestion/insert_block` stays untouched). Routes share the existing axum listener and the existing `auth_middleware`. Each route reads the protobuf body, calls into `otel-ingestion` to split + register + write blocks via the shared `WebIngestionService`. Stream registration sets `format = "otlp/v1/<signal>"`.
+6. End-to-end smoke test: Python OTel SDK with `OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf` pointed at the existing ingestion endpoint; verify rows land in PG `processes`/`streams`/`blocks` (with `format = "otlp/v1/..."` on streams) and bytes land in object store.
 
 ### Phase 2: logs block processor → log_entries
 1. Add `analytics/src/lakehouse/otel_logs_block_processor.rs`. Uses `prost` to decode `ResourceLogs` from the block payload bytes.
@@ -412,7 +413,7 @@ Existing env vars reused: `MICROMEGAS_SQL_CONNECTION_STRING`, `MICROMEGAS_OBJECT
 - `rust/ingestion/src/sql_telemetry_db.rs` (include `format` in fresh `CREATE TABLE streams`)
 - `rust/ingestion/src/web_ingestion_service.rs` (persist `format` on stream insert)
 - `rust/telemetry-ingestion-srv/Cargo.toml` (add `otel-ingestion`, `opentelemetry-proto`, `prost`)
-- `rust/telemetry-ingestion-srv/src/main.rs` (add OTLP routes + second axum listener on `:4318`)
+- `rust/telemetry-ingestion-srv/src/main.rs` (add OTLP routes to the existing axum router; per-route body limit)
 - `rust/public/src/servers/` (new module for OTLP route registration alongside `ingestion.rs`)
 - `rust/analytics/src/lakehouse/mod.rs` (register OTel views + processor dispatch by `streams.format`)
 - `README.md`
