@@ -42,11 +42,11 @@ All views use Arrow Dictionary encoding for low-cardinality strings.
 
 **Auth** (`rust/auth/`): API-key bearer tokens (`MICROMEGAS_API_KEYS`) and OIDC (JWKS, token cache). Multi-provider chain. Axum middleware applied in `telemetry-ingestion-srv/src/main.rs`.
 
-**Existing OTel code**: none. `grep -r 'opentelemetry\|otlp\|otel' rust/ python/` is empty. Workspace already has compatible deps for the receiver: `tonic = "0.14"`, `prost = "0.14"`, `arrow-flight = "57.2"`.
+**Existing OTel code**: none. `grep -r 'opentelemetry\|otlp\|otel' rust/ python/` is empty. Workspace already has `prost = "0.14"` available; we only need to add `opentelemetry-proto`.
 
 ## Design
 
-### Architecture: store OTLP as-is, parse at the analytics layer
+### Architecture: extend the existing ingestion service; store OTLP as-is, parse at the analytics layer
 
 The micromegas data flow is symmetric on either side of object storage:
 
@@ -62,13 +62,18 @@ For native producers the block payload is transit/POD. For OTel producers, we st
 
 This avoids translating at ingest. Ingest becomes nearly trivial: derive `process_id` from resource attributes, write the proto bytes to object storage, INSERT one row in PG. No deps queue construction, no synthetic event types, no transit serialization round-trip. The `tracing/` crate is untouched — it's a library for in-process instrumentation, not a target for foreign data models.
 
+Since OTLP is now HTTP-only, we add the three OTLP routes to the existing `telemetry-ingestion-srv` rather than creating a new binary. Shared auth middleware, shared `WebIngestionService` instance, one deployment unit. A new `rust/otel-ingestion/` library hosts the proto decode + identity synthesis + block-builder logic; the server crate just wires axum routes to it.
+
 OTel-specific decode lives in `analytics/`, where the parquet schema is the natural translation target anyway. New block processors (one per signal) prost-decode the payload via `opentelemetry-proto` and emit rows.
 
 ```
        ┌─────────────────────────────────────────────────┐
-       │  otlp-ingestion-srv (NEW binary)                │
-       │   ─ tonic gRPC :4317  /  axum HTTP :4318        │
-       │   ─ auth middleware (existing)                  │
+       │  telemetry-ingestion-srv (EXISTING, EXTENDED)   │
+       │   ─ existing routes:                            │
+       │       POST /ingestion/{insert_process,           │
+       │             insert_stream, insert_block}        │
+       │   ─ NEW routes (shared auth + ingestion lib):   │
+       │       POST /v1/{logs,metrics,traces} :4318      │
        │   ─ derive process_id from resource attrs       │
        │   ─ write raw OTLP proto to object store        │
        │   ─ INSERT block + stream + process metadata    │
@@ -128,9 +133,9 @@ The existing `objects_metadata BYTEA` field stays as-is. Its interpretation is n
 
 ### Wire-level: protocol crate
 
-Use the `opentelemetry-proto` crate with the `gen-tonic` feature. It provides generated `tonic` services for all three signals (`TraceService`, `MetricsService`, `LogsService`) and matching prost types. If version alignment with our `tonic 0.14` is awkward at the time of implementation, fall back to checking in the canonical `.proto` files and using `tonic-build` ourselves (the .proto files live in `open-telemetry/opentelemetry-proto`, MIT-equivalent license, ~10 files).
+Use the `opentelemetry-proto` crate **without** the `gen-tonic` feature — we only need the prost-generated message types (`ResourceLogs`, `ResourceMetrics`, `ResourceSpans`, `ExportLogsServiceRequest`, etc.), not the gRPC service stubs.
 
-HTTP/protobuf (port 4318) is implemented with axum routes that decode the same prost types — the message shapes are identical between transports.
+We serve OTLP/HTTP only on `:4318` (`POST /v1/{logs,metrics,traces}`). gRPC (`:4317`) is intentionally not supported in v1 — see Trade-offs.
 
 ### Identity: synthesizing process and stream
 
@@ -253,7 +258,7 @@ links  (List<Struct{trace_id, span_id, attributes}>)
 
 ### Ingest path (per OTLP request)
 
-1. Auth (tonic interceptor / axum middleware — existing chain).
+1. Auth (existing axum middleware — `auth_middleware` from `rust/auth/src/axum.rs`).
 2. Decode the outer `ExportRequest` proto (just to walk Resource boundaries; we don't decode further).
 3. For each `ResourceLogs` / `ResourceMetrics` / `ResourceSpans`:
    1. Derive `process_id` from resource attributes (UUIDv5; see Identity).
@@ -270,47 +275,90 @@ There's no event-by-event translation at ingest. The hot path serializes one pro
 
 Native blocks carry `tsc_frequency` and `(begin_ticks, end_ticks)` so timestamps can be rebuilt at query time. OTel timestamps are already absolute nanoseconds. We set `tsc_frequency = 1_000_000_000` and `begin_ticks = begin_time_unix_nano` (and same for end), so existing tick→time math passes through cleanly.
 
-### Backpressure and gRPC semantics
+### Backpressure and HTTP semantics
 
-OTLP gRPC uses unary RPCs (`Export`) — one request, one response. The response carries:
-- `partial_success`: `rejected_*_count` and `error_message` for partial accepts.
+OTLP/HTTP uses one POST per export call (one request, one response). The proto response body carries `partial_success { rejected_*_count, error_message }` for batch-level reporting.
 
 Implementation:
-- Tonic server with default concurrency limits; tower middleware for rate limiting using the existing patterns from `flight-sql-srv`.
-- On any DB or object-store error, return gRPC status `RESOURCE_EXHAUSTED` (retryable per OTLP spec) for transient failures (PG connection errors, S3 5xx) and `INVALID_ARGUMENT` (non-retryable) for parse errors.
-- No partial-success accounting in v1: either the whole batch is accepted or the whole batch is rejected. OTel SDKs handle this fine.
-- Body size limit: 10 MB compressed (matches OTel collector default).
+- Axum routes with `RequestBodyLimitLayer` (10 MB default — matches the OTel Collector default).
+- Tower rate limiter per `subject` (the API-key name from the auth context), reusing patterns from `telemetry-ingestion-srv`.
+- HTTP status mapping:
+  - DB/object-store transient failures → `503 Service Unavailable` (retryable per OTLP/HTTP spec).
+  - Parse errors / unknown content-type → `400 Bad Request` (non-retryable).
+  - Auth failures → `401 Unauthorized`.
+- No partial-success accounting in v1: whole-batch accept/reject. SDKs handle this fine.
+- Standard HTTP load balancers (ALB, GCLB, nginx, HAProxy) work without special config — all traffic is HTTP/1.1 or HTTP/2 POST with `application/x-protobuf` body.
 
 ### Auth
 
-OTLP authenticates via headers, configured client-side as `OTEL_EXPORTER_OTLP_HEADERS=Authorization=Bearer ...`.
+The existing API-key + OIDC chain works unchanged. OTLP authenticates via standard HTTP headers, which axum sees natively — no new auth code, no changes to the `auth` crate.
 
-Mapping:
-- gRPC: tonic interceptor reads `authorization` from request metadata, calls into the existing `auth::AuthValidator`.
-- HTTP: axum middleware (the same one `telemetry-ingestion-srv` uses) — no change needed to the auth crate.
+#### Wire mechanism
 
-The existing API-key + OIDC chain works unchanged. We add one wrinkle: an **operator-defined map from API-key name to default `service.namespace`**, so that a key issued to a team automatically tags their data. Configured via a new env var `MICROMEGAS_OTLP_NAMESPACE_MAP` (JSON `{"key-name": "namespace"}`); applied as a fallback when the OTel client doesn't set `service.namespace`.
+OTel SDKs read `OTEL_EXPORTER_OTLP_HEADERS` and propagate the parsed headers on every export request. Format: `key=value` pairs, comma-separated.
+
+```bash
+# Server side — same keyring as telemetry-ingestion-srv
+export MICROMEGAS_API_KEYS='[{"name":"team-platform","key":"mm_abc123def..."}]'
+
+# Client side — Claude Code, Goose, any OTel SDK
+export OTEL_EXPORTER_OTLP_ENDPOINT="https://micromegas.example.com:4318"
+export OTEL_EXPORTER_OTLP_PROTOCOL="http/protobuf"
+export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer mm_abc123def..."
+export CLAUDE_CODE_ENABLE_TELEMETRY=1
+claude
+```
+
+The OTel SDK attaches the `Authorization` header to every POST. Our axum middleware (`auth::axum::auth_middleware`) parses the bearer token, looks it up in the `MICROMEGAS_API_KEYS` keyring via `ApiKeyAuthProvider`, and inserts the resulting `AuthContext` into request extensions. Same code path the existing `telemetry-ingestion-srv` uses.
+
+#### Per-signal headers (advanced)
+
+If an operator wants different keys for different signals (rare), OTel supports:
+```bash
+export OTEL_EXPORTER_OTLP_LOGS_HEADERS="Authorization=Bearer key-for-logs"
+export OTEL_EXPORTER_OTLP_TRACES_HEADERS="Authorization=Bearer key-for-traces"
+```
+Per-signal headers override the catch-all. We don't need to do anything special — each POST carries whatever the SDK attached.
+
+#### Three caveats worth documenting
+
+1. **TLS is mandatory in production.** Bearer tokens over plaintext = leaked tokens. The HTTP listener should sit behind an HTTPS-terminating load balancer (or run TLS directly via `axum_server::tls_rustls`). Local dev to localhost is fine plaintext.
+2. **No `${VAR}` expansion in OTel SDKs.** The SDK reads `OTEL_EXPORTER_OTLP_HEADERS` literally; the shell expands `${VAR}` at `export` time. Config-file deployments (where headers come from a JSON/YAML file) need pre-substituted values or wrapper scripts.
+3. **Comma in a token value would break parsing.** OTLP header parsing splits on `,`. Bearer tokens that are UUIDs/JWTs/base64 don't contain commas; if anyone ever introduces a custom token format that does, it must be URL-encoded.
+
+#### Multi-tenancy hook
+
+The `AuthContext.subject` field is set to the matched API-key `name` (e.g. `"team-platform"`). We use this two ways:
+
+- **Audit / observability**: every block insert log line and the existing `subject` extension are tagged with which key authored the data.
+- **Optional namespace defaulting**: an env var `MICROMEGAS_OTLP_NAMESPACE_MAP` (JSON `{"key-name":"service.namespace"}`) lets operators force a `service.namespace` per key when the OTel client doesn't set it. So a key issued to `team-platform` automatically tags its data with `service.namespace=platform` regardless of how the SDK is configured. Cheap multi-tenancy on top of existing auth.
+
+#### What we are NOT doing in v1
+
+- **mTLS / client certs**. The existing auth crate doesn't support it; the axum middleware would need a separate code path. Skip until someone asks.
+- **OAuth/OIDC for OTel clients**. The existing OIDC provider is for human/SSO flows, not machine credentials. Coding agents and services use API keys. If we ever need machine OIDC (workload identity, IAM-roles-anywhere), it's a separate workstream.
+- **Rate-limiting at fine granularity**. Per-`subject` rate limit is a nice-to-have; deferred to Phase 5 (production hardening).
+- **Per-route auth requirements**. Every OTLP route requires auth; no public health endpoint on the OTel listener (health goes on a separate unauthenticated port).
 
 ### Configuration
 
 New env vars for the new binary:
-- `MICROMEGAS_OTLP_GRPC_LISTEN_ADDR` (default `0.0.0.0:4317`)
-- `MICROMEGAS_OTLP_HTTP_LISTEN_ADDR` (default `0.0.0.0:4318`)
+- `MICROMEGAS_OTLP_LISTEN_ADDR` (default `0.0.0.0:4318`)
 - `MICROMEGAS_OTLP_MAX_RECV_BYTES` (default `10_000_000`)
-- `MICROMEGAS_OTLP_NAMESPACE_MAP` (optional, see above)
+- `MICROMEGAS_OTLP_NAMESPACE_MAP` (optional, JSON `{"key-name":"namespace"}`)
 
 Existing env vars reused: `MICROMEGAS_SQL_CONNECTION_STRING`, `MICROMEGAS_OBJECT_STORE_URI`, `MICROMEGAS_API_KEYS`, `MICROMEGAS_OIDC_CONFIG`.
 
 ## Implementation Steps
 
-### Phase 1: schema + ingest service (gRPC + HTTP, raw payload to lake)
+### Phase 1: schema + OTLP routes on telemetry-ingestion-srv
 1. Add migration: `ALTER TABLE streams ADD COLUMN format TEXT NOT NULL DEFAULT 'micromegas-transit';` in a new step in `rust/ingestion/src/sql_migration.rs`. Update `create_streams_table` in `sql_telemetry_db.rs` to include the column for fresh installs.
 2. Update `ingestion::WebIngestionService::insert_stream` to accept and persist `format` (default `'micromegas-transit'` if caller doesn't specify, preserving backwards compatibility).
-3. Add `opentelemetry-proto = "0.31"` (workspace dep) — confirmed compatible with our `tonic 0.14.5`, `prost 0.14.3`.
-4. Create `rust/otel-ingestion/` library crate: `identity.rs` (resource → process_id/stream_id), `proto.rs` (re-exports), `error.rs`, `block.rs` (split ExportRequest into per-resource blocks).
-5. Create `rust/otlp-ingestion-srv/` binary: tonic gRPC :4317, axum HTTP :4318 (`/v1/traces|metrics|logs`). Both transports share the same handler that calls `otel-ingestion` to split + register + write blocks via `WebIngestionService`. Stream registration sets `format = "otlp/v1/<signal>"`.
-6. Wire existing auth as tonic interceptor + axum middleware.
-7. End-to-end smoke test: Python OTel SDK pointed at the service; verify rows land in PG `processes`/`streams`/`blocks` (with `format = "otlp/v1/..."` on streams) and bytes land in object store.
+3. Add `opentelemetry-proto = "0.31"` to workspace deps **without** the `gen-tonic` feature (we only need the prost message types).
+4. Create `rust/otel-ingestion/` library crate: `identity.rs` (resource → process_id/stream_id), `proto.rs` (re-exports), `error.rs`, `block.rs` (split ExportRequest into per-resource blocks). All translation logic lives here; the server only wires axum routes.
+5. Add OTLP routes to `rust/telemetry-ingestion-srv/src/main.rs`: a new `Router` for `POST /v1/{logs,metrics,traces}` with a 10MB body limit (separate from the existing 100MB limit on `/ingestion/insert_block`), routed through the existing `auth_middleware`. Each route reads the protobuf body, calls into `otel-ingestion` to split + register + write blocks via the shared `WebIngestionService`. Stream registration sets `format = "otlp/v1/<signal>"`.
+6. Add a separate listen-port option (`--otel-listen-endpoint`, default `0.0.0.0:4318`) — the OTLP routes run on a different `axum::serve` so the existing service's port stays untouched. Auth and `WebIngestionService` are shared via `Arc`.
+7. End-to-end smoke test: Python OTel SDK with `OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf` pointed at `:4318`; verify rows land in PG `processes`/`streams`/`blocks` (with `format = "otlp/v1/..."` on streams) and bytes land in object store.
 
 ### Phase 2: logs block processor → log_entries
 1. Add `analytics/src/lakehouse/otel_logs_block_processor.rs`. Uses `prost` to decode `ResourceLogs` from the block payload bytes.
@@ -330,7 +378,7 @@ Existing env vars reused: `MICROMEGAS_SQL_CONNECTION_STRING`, `MICROMEGAS_OBJECT
 4. End-to-end test: emit a multi-span trace; verify trace traversal via `SELECT * FROM otel_spans WHERE trace_id = ...`.
 
 ### Phase 5: production hardening
-1. Backpressure: tonic concurrency limits + tower rate limiter (per-subject if straightforward).
+1. Backpressure: tower rate limiter (per-subject if straightforward) on the OTLP routes.
 2. Body size limit (10 MB compressed default).
 3. Partial-success: not implemented in v1 (whole-batch accept/reject).
 4. Optional `MICROMEGAS_OTLP_NAMESPACE_MAP` to default `service.namespace` per API key.
@@ -347,9 +395,8 @@ Existing env vars reused: `MICROMEGAS_SQL_CONNECTION_STRING`, `MICROMEGAS_OBJECT
 
 ## Files to Modify
 
-**New crates**:
+**New crate**:
 - `rust/otel-ingestion/Cargo.toml` + `src/{lib,proto,identity,block,error}.rs`
-- `rust/otlp-ingestion-srv/Cargo.toml` + `src/{main,grpc,http}.rs`
 
 **New modules in `analytics/`**:
 - `rust/analytics/src/lakehouse/otel_logs_block_processor.rs`
@@ -360,15 +407,17 @@ Existing env vars reused: `MICROMEGAS_SQL_CONNECTION_STRING`, `MICROMEGAS_OBJECT
 - `rust/analytics/src/lakehouse/otel_metrics_histograms_*.rs` (Phase 6)
 
 **Modified**:
-- `rust/Cargo.toml` (add `opentelemetry-proto = "0.31"`; new workspace members)
+- `rust/Cargo.toml` (add `opentelemetry-proto = "0.31"`; new `otel-ingestion` member)
 - `rust/ingestion/src/sql_migration.rs` (ADD COLUMN streams.format)
 - `rust/ingestion/src/sql_telemetry_db.rs` (include `format` in fresh `CREATE TABLE streams`)
 - `rust/ingestion/src/web_ingestion_service.rs` (persist `format` on stream insert)
+- `rust/telemetry-ingestion-srv/Cargo.toml` (add `otel-ingestion`, `opentelemetry-proto`, `prost`)
+- `rust/telemetry-ingestion-srv/src/main.rs` (add OTLP routes + second axum listener on `:4318`)
+- `rust/public/src/servers/` (new module for OTLP route registration alongside `ingestion.rs`)
 - `rust/analytics/src/lakehouse/mod.rs` (register OTel views + processor dispatch by `streams.format`)
-- `local_test_env/ai_scripts/start_services.py` (start otlp-ingestion-srv)
 - `README.md`
 
-**`rust/tracing/` is not touched.** OTel is an analytics-layer concern.
+**No new binary** — OTLP routes live in `telemetry-ingestion-srv`. `rust/tracing/` is also not touched. OTel is an analytics-layer concern; the ingest side is just a thin protobuf-to-block-bytes adapter.
 
 ## Trade-offs
 
@@ -382,7 +431,9 @@ The wins of as-is storage:
 
 The cost: two parsers (transit and OTLP proto) — but that's true of any design here; the question is just where they live.
 
-**Separate binary vs extending telemetry-ingestion-srv**: chose separate. tonic gRPC + the conventional 4317/4318 ports + OTel-specific auth-header semantics don't mix cleanly into the existing axum app. The new binary calls `WebIngestionService` as a library, so the underlying PG/object-store path is shared.
+**Extend telemetry-ingestion-srv vs separate binary**: chose extend. An earlier draft proposed a separate `otlp-ingestion-srv` binary on the assumption we needed tonic for gRPC alongside axum. Once we decided OTLP/HTTP is sufficient (see "HTTP-only" below), there's no transport-stack mismatch and no reason to fork the binary. One process, shared auth, shared `WebIngestionService`, simpler ops. The new `otel-ingestion` library still exists as the home for proto decode + identity + block builder logic, so the wire-format complexity stays out of the server crate.
+
+**HTTP/protobuf only, no gRPC**: the OTLP spec mandates HTTP/protobuf support in every compliant SDK. Some SDKs default to gRPC (Go, older Java auto-instrumentation) but accept the HTTP fallback when `OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf` is set. Going HTTP-only means standard HTTP load balancers (ALB, GCLB, nginx, HAProxy) just work — no gRPC/HTTP-2 LB compatibility matrix — and no `tonic` dep in the OTel ingest path. If a v2 user genuinely needs gRPC, adding tonic to the same binary later is a contained change.
 
 **One block per Resource (not per ExportRequest)**: chose per-Resource. An `ExportRequest` may carry multiple resources (different services); splitting at Resource boundaries means each block has an unambiguous `process_id` and is independently re-decodable. Block_id derived from a hash of the bytes for idempotency.
 
@@ -412,7 +463,7 @@ The cost: two parsers (transit and OTLP proto) — but that's true of any design
 - Use `opentelemetry_sdk` in test code to construct realistic protobuf payloads; round-trip through translate → block_builder → block processor → in-memory Arrow recordbatch; assert the final shape.
 
 **End-to-end** (via `local_test_env`):
-- Start otlp-ingestion-srv. Run a Python OTel SDK script emitting ~100 spans/logs/metrics. Query `log_entries`, `async_events`, `measures` via FlightSQL; assert counts match.
+- Start `telemetry-ingestion-srv` with the OTLP routes enabled. Run a Python OTel SDK script (with `OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf`) emitting ~100 spans/logs/metrics. Query `log_entries`, `otel_spans`, `measures` via FlightSQL; assert counts match.
 - Run Claude Code with `CLAUDE_CODE_ENABLE_TELEMETRY=1` pointed at the local server; assert at least the documented metrics (`claude_code.token.usage`, `claude_code.session.count`) land.
 
 **Performance smoke**:
@@ -420,7 +471,7 @@ The cost: two parsers (transit and OTLP proto) — but that's true of any design
 
 ## Open Questions
 
-1. **`opentelemetry-proto` version pinning**: confirm a published version compatible with `tonic 0.14` + `prost 0.14`, otherwise vendor the .proto files. Resolve at the start of Phase 1.
+1. **`opentelemetry-proto` version pinning**: 0.31 confirmed compatible with `prost 0.14.3` (verified during research). Lock at first use.
 2. **`trace_id` representation in `otel_spans`**: `FixedSizeBinary[16]` (compact, exact lookups by bytes), `Utf8` hex string (human-friendly in `WHERE`), or both via a generated column. Affects query ergonomics and storage size.
 3. **Stream lifecycle**: OTel processes run for days; the stream's `objects_metadata` (format descriptor) is stored once at registration. Is stream rotation needed, or does time-based lakehouse partitioning handle it?
 4. **Per-tenant rate limiting**: the auth context exposes `subject` but no rate-limit hook. Add per-subject limits at the tower layer in v1, or defer until we hit a problem?
