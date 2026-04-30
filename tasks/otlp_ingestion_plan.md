@@ -94,9 +94,26 @@ OTel-specific decode lives in `analytics/`, where the parquet schema is the natu
        └─────────────────────────────────────────────────┘
 ```
 
-**Block payload shape for OTel streams**: `BlockPayload { dependencies: [], objects: <ExportRequest proto bytes> }`. The existing `Vec<u8>` payload field is opaque — no struct change needed. Stream tags discriminate the format at the analytics layer.
+**Block payload shape for OTel streams**: `BlockPayload { dependencies: [], objects: <ResourceSpans|ResourceMetrics|ResourceLogs proto bytes> }`. The existing `Vec<u8>` payload field is opaque — no struct change needed.
 
-**Stream `objects_metadata`** stores a small format descriptor (e.g. JSON `{"format":"otlp","version":"1.1.0","signal":"traces"}`) so block processors can route to the right decoder. This replaces the role transit type-definitions play for native streams.
+**Format discrimination**: a new `format TEXT NOT NULL` column on the `streams` table. `objects_metadata BYTEA` is typeless and unreliable as a format discriminator — adding `format` makes the wire-format choice explicit and schema-enforced.
+
+```sql
+ALTER TABLE streams
+  ADD COLUMN format TEXT NOT NULL DEFAULT 'micromegas-transit';
+```
+
+Values:
+- `micromegas-transit` — current default for native streams; backfill applies via `DEFAULT`.
+- `otlp/v1/traces` — OTel traces (payload is one `ResourceSpans` proto).
+- `otlp/v1/metrics` — OTel metrics (payload is one `ResourceMetrics` proto).
+- `otlp/v1/logs` — OTel logs (payload is one `ResourceLogs` proto).
+
+The `/v1` segment leaves room to evolve per-format envelope structure without colliding with prior data. Block-processor dispatch matches on `streams.format`; tags stay free for queryable/operational metadata.
+
+The existing `objects_metadata BYTEA` field stays as-is. Its interpretation is now defined by `format`:
+- For `micromegas-transit`: CBOR-encoded transit type definitions (current behavior).
+- For `otlp/v1/*`: empty (or reserved for future per-format extensions like a schema URL pin).
 
 **One block per OTLP request per resource**. An incoming `ExportTraceServiceRequest` may carry multiple `ResourceSpans` (different services). We split into one block per resource so `process_id` is unambiguous on the metadata row. Each block's payload is the protobuf encoding of *one* `ResourceSpans` (or `ResourceMetrics` / `ResourceLogs`) — small, self-contained, and re-decodable in isolation.
 
@@ -209,7 +226,7 @@ links  (List<Struct{trace_id, span_id, attributes}>)
 3. For each `ResourceLogs` / `ResourceMetrics` / `ResourceSpans`:
    1. Derive `process_id` from resource attributes (UUIDv5; see Identity).
    2. Derive `stream_id` from `(process_id, signal, scope.name, scope.version)`.
-   3. Idempotent register process + stream (in-memory dedup cache + `ON CONFLICT DO NOTHING` PG inserts).
+   3. Idempotent register process + stream (in-memory dedup cache + `ON CONFLICT DO NOTHING` PG inserts). Stream registration sets `format = "otlp/v1/<signal>"`.
    4. Re-encode this Resource sub-message as protobuf bytes — the block payload.
    5. Build `block_wire_format::Block` with `payload.dependencies = []`, `payload.objects = <proto bytes>`.
    6. Call existing `WebIngestionService::insert_block`.
@@ -254,19 +271,19 @@ Existing env vars reused: `MICROMEGAS_SQL_CONNECTION_STRING`, `MICROMEGAS_OBJECT
 
 ## Implementation Steps
 
-### Phase 1: ingest service (gRPC + HTTP, raw payload to lake)
-1. Add `opentelemetry-proto = { version = "0.x", features = ["gen-tonic","trace","metrics","logs"] }` to workspace Cargo.toml. If version-incompatible with `tonic 0.14` / `prost 0.14`, vendor the canonical .proto files under `rust/otel-ingestion/proto/` and use `tonic-build`.
-2. Create `rust/otel-ingestion/` library crate: `identity.rs` (resource → process_id/stream_id), `proto.rs` (re-exports), `error.rs`, `block.rs` (split ExportRequest into per-resource blocks).
-3. Create `rust/otlp-ingestion-srv/` binary: tonic gRPC :4317, axum HTTP :4318 (`/v1/traces|metrics|logs`). Both transports share the same handler that calls `otel-ingestion` to split + register + write blocks via `WebIngestionService`.
-4. Wire existing auth as tonic interceptor + axum middleware.
-5. Stream `objects_metadata` carries a small JSON descriptor `{"format":"otlp","version":"1.1.0","signal":"<traces|metrics|logs>"}`.
-6. Stream tags: `["otel","logs"]`, `["otel","metrics"]`, `["otel","traces"]`.
-7. End-to-end smoke test: Python OTel SDK pointed at the service; verify rows land in PG `processes`/`streams`/`blocks` and bytes land in object store.
+### Phase 1: schema + ingest service (gRPC + HTTP, raw payload to lake)
+1. Add migration: `ALTER TABLE streams ADD COLUMN format TEXT NOT NULL DEFAULT 'micromegas-transit';` in a new step in `rust/ingestion/src/sql_migration.rs`. Update `create_streams_table` in `sql_telemetry_db.rs` to include the column for fresh installs.
+2. Update `ingestion::WebIngestionService::insert_stream` to accept and persist `format` (default `'micromegas-transit'` if caller doesn't specify, preserving backwards compatibility).
+3. Add `opentelemetry-proto = "0.31"` (workspace dep) — confirmed compatible with our `tonic 0.14.5`, `prost 0.14.3`.
+4. Create `rust/otel-ingestion/` library crate: `identity.rs` (resource → process_id/stream_id), `proto.rs` (re-exports), `error.rs`, `block.rs` (split ExportRequest into per-resource blocks).
+5. Create `rust/otlp-ingestion-srv/` binary: tonic gRPC :4317, axum HTTP :4318 (`/v1/traces|metrics|logs`). Both transports share the same handler that calls `otel-ingestion` to split + register + write blocks via `WebIngestionService`. Stream registration sets `format = "otlp/v1/<signal>"`.
+6. Wire existing auth as tonic interceptor + axum middleware.
+7. End-to-end smoke test: Python OTel SDK pointed at the service; verify rows land in PG `processes`/`streams`/`blocks` (with `format = "otlp/v1/..."` on streams) and bytes land in object store.
 
 ### Phase 2: logs block processor → log_entries
 1. Add `analytics/src/lakehouse/otel_logs_block_processor.rs`. Uses `prost` to decode `ResourceLogs` from the block payload bytes.
 2. Walks scope/log records and emits `log_entries` rows (level collapse from `severity_number`, fold trace_id/span_id/severity_text into properties).
-3. Register the processor for streams matching `"otel"+"logs"` in tags.
+3. Register the processor for streams matching `format = "otlp/v1/logs"`.
 4. End-to-end test: emit OTel logs from Python; query `log_entries`.
 
 ### Phase 3: metrics block processor → measures
@@ -311,8 +328,11 @@ Existing env vars reused: `MICROMEGAS_SQL_CONNECTION_STRING`, `MICROMEGAS_OBJECT
 - `rust/analytics/src/lakehouse/otel_metrics_histograms_*.rs` (Phase 6)
 
 **Modified**:
-- `rust/Cargo.toml` (add `opentelemetry-proto`; add new workspace members)
-- `rust/analytics/src/lakehouse/mod.rs` (register OTel views + processor dispatch by stream tags)
+- `rust/Cargo.toml` (add `opentelemetry-proto = "0.31"`; new workspace members)
+- `rust/ingestion/src/sql_migration.rs` (ADD COLUMN streams.format)
+- `rust/ingestion/src/sql_telemetry_db.rs` (include `format` in fresh `CREATE TABLE streams`)
+- `rust/ingestion/src/web_ingestion_service.rs` (persist `format` on stream insert)
+- `rust/analytics/src/lakehouse/mod.rs` (register OTel views + processor dispatch by `streams.format`)
 - `local_test_env/ai_scripts/start_services.py` (start otlp-ingestion-srv)
 - `README.md`
 
