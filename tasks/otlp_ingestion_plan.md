@@ -75,7 +75,8 @@ OTel-specific decode lives in `analytics/`, where the parquet schema is the natu
        └─────────────────┬───────────────────────────────┘
                          │ block_wire_format::Block
                          │   payload.objects = OTLP proto bytes
-                         │   stream.tags = ["otel","logs"|"metrics"|"traces"]
+                         │   stream.tags   = ["log" | "metrics" | "trace"]
+                         │   stream.format = "otlp/v1/<signal>"
                          ▼
        ┌─────────────────────────────────────────────────┐
        │  ingestion::WebIngestionService (EXISTING,      │
@@ -172,7 +173,17 @@ The first time a `process_id` is seen, INSERT into `processes` (idempotent — e
 stream_id = uuid_v5(NS_OTEL_STREAM_V1,
     process_id + "\x1F" + signal)
 ```
-where `signal ∈ {logs, metrics, traces}`. Stream tags: `["otel", signal]`. Stream `format`: `otlp/v1/<signal>`.
+where `signal ∈ {logs, metrics, traces}`.
+
+Stream tags reuse the existing micromegas vocabulary so views naturally load native + OTel streams uniformly:
+
+| Signal | Stream tag | Stream format |
+|---|---|---|
+| logs | `"log"` (existing — native producers also use this) | `otlp/v1/logs` |
+| metrics | `"metrics"` (existing) | `otlp/v1/metrics` |
+| traces | `"trace"` (new — native async spans live in `"cpu"` streams alongside other thread events) | `otlp/v1/traces` |
+
+**Tags and format are orthogonal axes**: tags say *what* the stream contains (signal/purpose); format says *how* the bytes are encoded (wire-format). The `log_entries` view loads any stream tagged `"log"` regardless of format; per-block dispatch reads `format` to pick the right block processor. Same for `measures`. The new `otel_spans` view loads streams tagged `"trace"`.
 
 Scope is intentionally **not** in stream identity. A single process loads many instrumentation libraries (HTTP framework, DB driver, app code, OTel SDK internals, ...), all sharing one process and emitting into the per-signal stream. Putting scope in the formula would multiply stream count by the number of loaded libraries (often 5–20) for no structural gain.
 
