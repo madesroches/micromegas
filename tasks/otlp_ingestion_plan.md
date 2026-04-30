@@ -159,14 +159,27 @@ The first time a `process_id` is seen, INSERT into `processes` (idempotent — e
 
 **Known limitation**: in FaaS environments where the OS process is reused across cold invocations, the OTel Lambda layer sets `service.instance.id = invocation_id` to disambiguate. Our formula respects that. If a poorly-instrumented FaaS app omits `service.instance.id`, multiple invocations collapse — documented limitation, not a v1 blocker.
 
-**Stream identity** (one stream per signal type per process per instrumentation scope):
+**Stream identity** (one stream per signal per process — max 3 streams per process):
 ```
 stream_id = uuid_v5(NS_OTEL_STREAM_V1,
-    process_id + "\x1F" + signal + "\x1F" + scope.name + "\x1F" + scope.version)
+    process_id + "\x1F" + signal)
 ```
-where `signal ∈ {logs, metrics, traces}`. Stream tags: `["otel", signal]`. Stream properties: scope attributes.
+where `signal ∈ {logs, metrics, traces}`. Stream tags: `["otel", signal]`. Stream `format`: `otlp/v1/<signal>`.
 
-**Block identity**: one block per (process_id, stream_id) per OTLP request. `block_id = uuid_v5(NS_OTEL_BLOCK_V1, hash(payload bytes))` for idempotent retry.
+Scope is intentionally **not** in stream identity. A single process loads many instrumentation libraries (HTTP framework, DB driver, app code, OTel SDK internals, ...), all sharing one process and emitting into the per-signal stream. Putting scope in the formula would multiply stream count by the number of loaded libraries (often 5–20) for no structural gain.
+
+**Scope as row-level metadata.** Scope info lives on per-row JSONB properties at materialization time:
+- `otel.scope.name`
+- `otel.scope.version`
+- `otel.scope.schema_url`
+- scope attributes (each prefixed `otel.scope.attr.<key>`)
+
+Queries that filter by library work via these properties:
+```sql
+WHERE properties->>'otel.scope.name' = 'opentelemetry.instrumentation.requests'
+```
+
+**Block identity**: one block per (process_id, signal) per OTLP request per Resource. A multi-Resource request fans out to N blocks across N processes' streams. `block_id = uuid_v5(NS_OTEL_BLOCK_V1, hash(payload bytes))` for idempotent retry.
 
 ### Schema mapping: OTLP → parquet rows
 
@@ -216,8 +229,8 @@ links  (List<Struct{trace_id, span_id, attributes}>)
 | OTel level | Lands on |
 |---|---|
 | Resource attributes | `Process` — `service.name` → `exe`, `host.name` → `computer`, `user.name` → `username`, everything else → `process.properties.otel.resource.*` |
-| Scope attributes | `Stream` properties |
-| DataPoint / Span / LogRecord attributes | per-event `properties` |
+| Scope identity (`name`, `version`, `schema_url`) and scope attributes | per-row `properties.otel.scope.*` (not on the stream — see Stream identity) |
+| DataPoint / Span / LogRecord attributes | per-row `properties` |
 
 ### Ingest path (per OTLP request)
 
@@ -225,7 +238,7 @@ links  (List<Struct{trace_id, span_id, attributes}>)
 2. Decode the outer `ExportRequest` proto (just to walk Resource boundaries; we don't decode further).
 3. For each `ResourceLogs` / `ResourceMetrics` / `ResourceSpans`:
    1. Derive `process_id` from resource attributes (UUIDv5; see Identity).
-   2. Derive `stream_id` from `(process_id, signal, scope.name, scope.version)`.
+   2. Derive `stream_id` from `(process_id, signal)` — max 3 streams per process. Scope info travels in row properties, not in stream identity.
    3. Idempotent register process + stream (in-memory dedup cache + `ON CONFLICT DO NOTHING` PG inserts). Stream registration sets `format = "otlp/v1/<signal>"`.
    4. Re-encode this Resource sub-message as protobuf bytes — the block payload.
    5. Build `block_wire_format::Block` with `payload.dependencies = []`, `payload.objects = <proto bytes>`.
