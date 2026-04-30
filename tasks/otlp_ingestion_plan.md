@@ -73,8 +73,9 @@ OTel-specific decode lives in `analytics/`, where the parquet schema is the natu
        │       POST /ingestion/{insert_process,           │
        │             insert_stream, insert_block}        │
        │   ─ NEW routes (shared auth + ingestion lib):   │
-       │       POST /v1/{logs,metrics,traces}            │
-       │     (same listener as existing /ingestion/*)    │
+       │       POST /ingestion/otlp/v1/{logs,metrics,    │
+       │              traces}                             │
+       │     (same listener, /ingestion/ prefix)         │
        │   ─ derive process_id from resource attrs       │
        │   ─ write raw OTLP proto to object store        │
        │   ─ INSERT block + stream + process metadata    │
@@ -136,7 +137,9 @@ The existing `objects_metadata BYTEA` field stays as-is. Its interpretation is n
 
 Use the `opentelemetry-proto` crate **without** the `gen-tonic` feature — we only need the prost-generated message types (`ResourceLogs`, `ResourceMetrics`, `ResourceSpans`, `ExportLogsServiceRequest`, etc.), not the gRPC service stubs.
 
-We serve OTLP/HTTP only via `POST /v1/{logs,metrics,traces}` on the **same listener** as the existing `/ingestion/*` routes — no new port. gRPC is intentionally not supported in v1 — see Trade-offs.
+We serve OTLP/HTTP only via `POST /ingestion/otlp/v1/{logs,metrics,traces}` on the **same listener** as the existing `/ingestion/insert_*` routes — no new port, all ingestion endpoints under one path prefix. gRPC is intentionally not supported in v1 — see Trade-offs.
+
+Per the OTLP/HTTP spec, `OTEL_EXPORTER_OTLP_ENDPOINT` is a base URL and the SDK appends `/v1/{signal}`. So clients set `OTEL_EXPORTER_OTLP_ENDPOINT=https://host.example.com/ingestion/otlp` and the SDK POSTs to `.../ingestion/otlp/v1/traces` etc. Per-signal endpoint vars (`OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`) are full URLs by spec — operators using them need to write the full path.
 
 ### Identity: synthesizing process and stream
 
@@ -303,7 +306,7 @@ OTel SDKs read `OTEL_EXPORTER_OTLP_HEADERS` and propagate the parsed headers on 
 export MICROMEGAS_API_KEYS='[{"name":"team-platform","key":"mm_abc123def..."}]'
 
 # Client side — Claude Code, Goose, any OTel SDK
-export OTEL_EXPORTER_OTLP_ENDPOINT="https://micromegas.example.com"
+export OTEL_EXPORTER_OTLP_ENDPOINT="https://micromegas.example.com/ingestion/otlp"
 export OTEL_EXPORTER_OTLP_PROTOCOL="http/protobuf"
 export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer mm_abc123def..."
 export CLAUDE_CODE_ENABLE_TELEMETRY=1
@@ -358,7 +361,7 @@ Existing env vars reused: `MICROMEGAS_SQL_CONNECTION_STRING`, `MICROMEGAS_OBJECT
 2. Update `ingestion::WebIngestionService::insert_stream` to accept and persist `format` (default `'micromegas-transit'` if caller doesn't specify, preserving backwards compatibility).
 3. Add `opentelemetry-proto = "0.31"` to workspace deps **without** the `gen-tonic` feature (we only need the prost message types).
 4. Create `rust/otel-ingestion/` library crate: `identity.rs` (resource → process_id/stream_id), `proto.rs` (re-exports), `error.rs`, `block.rs` (split ExportRequest into per-resource blocks). All translation logic lives here; the server only wires axum routes.
-5. Add OTLP routes to `rust/telemetry-ingestion-srv/src/main.rs`: extend the protected `Router` with `POST /v1/{logs,metrics,traces}`, applying a per-route 10MB `RequestBodyLimitLayer` (the existing 100MB limit on `/ingestion/insert_block` stays untouched). Routes share the existing axum listener and the existing `auth_middleware`. Each route reads the protobuf body, calls into `otel-ingestion` to split + register + write blocks via the shared `WebIngestionService`. Stream registration sets `format = "otlp/v1/<signal>"`.
+5. Add OTLP routes to `rust/telemetry-ingestion-srv/src/main.rs`: extend the protected `Router` with `POST /ingestion/otlp/v1/{logs,metrics,traces}`, applying a per-route 10MB `RequestBodyLimitLayer` (the existing 100MB limit on `/ingestion/insert_block` stays untouched). Routes share the existing axum listener and the existing `auth_middleware`. Each route reads the protobuf body, calls into `otel-ingestion` to split + register + write blocks via the shared `WebIngestionService`. Stream registration sets `format = "otlp/v1/<signal>"`.
 6. End-to-end smoke test: Python OTel SDK with `OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf` pointed at the existing ingestion endpoint; verify rows land in PG `processes`/`streams`/`blocks` (with `format = "otlp/v1/..."` on streams) and bytes land in object store.
 
 ### Phase 2: logs block processor → log_entries
@@ -500,7 +503,9 @@ Typical env vars an operator sets to make Claude Code emit OTel data into a Micr
 export CLAUDE_CODE_ENABLE_TELEMETRY=1
 
 # ── Required: where to send the data ─────────────────────────────────────────
-export OTEL_EXPORTER_OTLP_ENDPOINT="https://micromegas.example.com"
+# Base URL only — the SDK appends /v1/{signal} per OTLP spec, so this points
+# at /ingestion/otlp and the SDK POSTs to /ingestion/otlp/v1/{logs,metrics,traces}.
+export OTEL_EXPORTER_OTLP_ENDPOINT="https://micromegas.example.com/ingestion/otlp"
 export OTEL_EXPORTER_OTLP_PROTOCOL="http/protobuf"   # gRPC not supported in v1
 
 # ── Required: which signals to export ────────────────────────────────────────
