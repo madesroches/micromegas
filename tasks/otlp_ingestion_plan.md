@@ -282,7 +282,7 @@ OTLP/HTTP uses one POST per export call (one request, one response). The proto r
 
 Implementation:
 - Axum routes with `RequestBodyLimitLayer` (10 MB default — matches the OTel Collector default).
-- Tower rate limiter per `subject` (the API-key name from the auth context), reusing patterns from `telemetry-ingestion-srv`.
+- No rate limiting in v1 — out of scope (single global axum listener, no per-tenant accounting).
 - HTTP status mapping:
   - DB/object-store transient failures → `503 Service Unavailable` (retryable per OTLP/HTTP spec).
   - Parse errors / unknown content-type → `400 Bad Request` (non-retryable).
@@ -338,7 +338,7 @@ The `AuthContext.subject` field is set to the matched API-key `name` (e.g. `"tea
 
 - **mTLS / client certs**. The existing auth crate doesn't support it; the axum middleware would need a separate code path. Skip until someone asks.
 - **OAuth/OIDC for OTel clients**. The existing OIDC provider is for human/SSO flows, not machine credentials. Coding agents and services use API keys. If we ever need machine OIDC (workload identity, IAM-roles-anywhere), it's a separate workstream.
-- **Rate-limiting at fine granularity**. Per-`subject` rate limit is a nice-to-have; deferred to Phase 5 (production hardening).
+- **Per-tenant rate limiting**. Out of scope for v1. The auth context exposes `subject` (API-key name) which is enough to add it later as a tower layer; we'll do it when we have a real noisy-neighbor problem.
 - **Per-route auth requirements**. Every OTLP route requires auth; no public health endpoint on the OTel listener (health goes on a separate unauthenticated port).
 
 ### Configuration
@@ -379,7 +379,7 @@ Existing env vars reused: `MICROMEGAS_SQL_CONNECTION_STRING`, `MICROMEGAS_OBJECT
 4. End-to-end test: emit a multi-span trace; verify trace traversal via `SELECT * FROM otel_spans WHERE trace_id = ...`.
 
 ### Phase 5: production hardening
-1. Backpressure: tower rate limiter (per-subject if straightforward) on the OTLP routes.
+1. Backpressure: monitoring + alerts on ingest latency / queue depth. Rate limiting is explicitly out of scope for v1.
 2. Body size limit (10 MB compressed default).
 3. Partial-success: not implemented in v1 (whole-batch accept/reject).
 4. Optional `MICROMEGAS_OTLP_NAMESPACE_MAP` to default `service.namespace` per API key.
@@ -475,7 +475,7 @@ The cost: two parsers (transit and OTLP proto) — but that's true of any design
 1. **`opentelemetry-proto` version pinning**: 0.31 confirmed compatible with `prost 0.14.3` (verified during research). Lock at first use.
 2. **`trace_id` representation in `otel_spans`**: `FixedSizeBinary[16]` (compact, exact lookups by bytes), `Utf8` hex string (human-friendly in `WHERE`), or both via a generated column. Affects query ergonomics and storage size.
 3. **Stream lifecycle**: OTel processes run for days; the stream's `objects_metadata` (format descriptor) is stored once at registration. Is stream rotation needed, or does time-based lakehouse partitioning handle it?
-4. **Per-tenant rate limiting**: the auth context exposes `subject` but no rate-limit hook. Add per-subject limits at the tower layer in v1, or defer until we hit a problem?
+4. ~~**Per-tenant rate limiting**~~ — decided: out of scope for v1. Add when there's a real noisy-neighbor problem.
 5. **`otel_spans` vs unified `spans` view**: want a single `spans` view (with a `source` discriminator) that unifies native async-spans and OTel spans for cross-source trace queries? Cost: schema-design complexity — the two sources have non-overlapping identity (pointer-id vs span_id) and partially overlapping columns. Could ship as a DataFusion view (UNION) without changing storage.
 6. **Block payload re-encoding**: when we split an `ExportRequest` into per-Resource blocks, we re-encode each `Resource*` submessage. Alternative: store the entire `ExportRequest` once and have the block reference an offset/length within it — saves re-encoding cost but makes blocks non-self-contained. Likely not worth the complexity, but worth noting.
 7. **OpenTelemetry Collector sample config**: ship one that fans out to Micromegas + a file exporter for production safety? Natural follow-up, not core.
