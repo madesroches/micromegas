@@ -446,6 +446,8 @@ The cost: two parsers (transit and OTLP proto) — but that's true of any design
 
 **Span events and links as columns vs JSONB**: first-class `List<Struct{...}>` columns on `otel_spans`. Exemplars on metric data points → deferred (land in row properties when surfaced).
 
+**OTel path is allowed to be less efficient than native**: explicit non-goal to match the per-event overhead of `micromegas-tracing`. Producers that want minimum overhead use the native SDK; OTel is for compatibility and ecosystem reach. This frees us from optimizations like proto envelope sharing across resources, zero-copy splitting, etc. — re-encoding per Resource is fine.
+
 ## Documentation
 
 - New: `mkdocs/docs/operating/otlp.md` — ports, env, client snippets, troubleshooting.
@@ -477,7 +479,7 @@ The cost: two parsers (transit and OTLP proto) — but that's true of any design
 3. **Stream lifecycle**: OTel processes run for days; the stream's `objects_metadata` (format descriptor) is stored once at registration. Is stream rotation needed, or does time-based lakehouse partitioning handle it?
 4. ~~**Per-tenant rate limiting**~~ — decided: out of scope for v1. Add when there's a real noisy-neighbor problem.
 5. **`otel_spans` vs unified `spans` view**: want a single `spans` view (with a `source` discriminator) that unifies native async-spans and OTel spans for cross-source trace queries? Cost: schema-design complexity — the two sources have non-overlapping identity (pointer-id vs span_id) and partially overlapping columns. Could ship as a DataFusion view (UNION) without changing storage.
-6. **Block payload re-encoding**: when we split an `ExportRequest` into per-Resource blocks, we re-encode each `Resource*` submessage. Alternative: store the entire `ExportRequest` once and have the block reference an offset/length within it — saves re-encoding cost but makes blocks non-self-contained. Likely not worth the complexity, but worth noting.
+6. ~~**Block payload re-encoding**~~ — decided: accept the cost. Splitting an `ExportRequest` into per-Resource blocks re-encodes each submessage; an offset/length scheme into a shared envelope would save the re-encoding but make blocks non-self-contained. OTel ingestion is allowed to be less efficient than the native micromegas-tracing path; producers that want minimum overhead use the native SDK.
 7. **OpenTelemetry Collector sample config**: ship one that fans out to Micromegas + a file exporter for production safety? Natural follow-up, not core.
 8. **Compaction interaction**: OTLP payloads tend to be small per-call. Does the existing lakehouse compaction strategy handle the influx well, or do we need a hint to coalesce more aggressively for OTel streams?
 
