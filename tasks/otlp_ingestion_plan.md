@@ -62,7 +62,7 @@ For native producers the block payload is transit/POD. For OTel producers, we st
 
 This avoids translating at ingest. Ingest becomes nearly trivial: derive `process_id` from resource attributes, write the proto bytes to object storage, INSERT one row in PG. No deps queue construction, no synthetic event types, no transit serialization round-trip. The `tracing/` crate is untouched — it's a library for in-process instrumentation, not a target for foreign data models.
 
-Since OTLP is now HTTP-only, we add the three OTLP routes to the existing `telemetry-ingestion-srv` rather than creating a new binary. Shared auth middleware, shared `WebIngestionService` instance, one deployment unit. A new `rust/otel-ingestion/` library hosts the proto decode + identity synthesis + block-builder logic; the server crate just wires axum routes to it.
+Since we're scoping v1 to OTLP/HTTP only (see Trade-offs for the gRPC/JSON discussion), we add the three OTLP routes to the existing `telemetry-ingestion-srv` rather than creating a new binary. Shared auth middleware, shared `WebIngestionService` instance, one deployment unit. A new `rust/otel-ingestion/` library hosts the proto decode + identity synthesis + block-builder logic; the server crate just wires axum routes to it.
 
 OTel-specific decode lives in `analytics/`, where the parquet schema is the natural translation target anyway. New block processors (one per signal) prost-decode the payload via `opentelemetry-proto` and emit rows.
 
@@ -110,7 +110,8 @@ OTel-specific decode lives in `analytics/`, where the parquet schema is the natu
        │  Lakehouse parquet views                        │
        │   ─ log_entries  (existing, +OTel rows)         │
        │   ─ measures     (existing, +OTel rows)         │
-       │   ─ otel_spans   (NEW — first-class trace_id)   │
+       │   ─ otel_spans   (NEW — JIT-only per-process,   │
+       │                  first-class trace_id)          │
        └─────────────────────────────────────────────────┘
 ```
 
@@ -131,19 +132,19 @@ Values:
 
 The `/v1` segment leaves room to evolve per-format envelope structure without colliding with prior data. Block-processor dispatch matches on `streams.format`; tags stay free for queryable/operational metadata.
 
-The existing `objects_metadata BYTEA` field stays as-is. Its interpretation is now defined by `format`:
-- For `micromegas-transit`: CBOR-encoded transit type definitions (current behavior).
-- For `otlp/v1/*`: empty (or reserved for future per-format extensions like a schema URL pin).
+The existing `dependencies_metadata BYTEA` and `objects_metadata BYTEA` fields stay as-is. Their interpretation is now defined by `format`:
+- For `micromegas-transit`: CBOR-encoded `Vec<UserDefinedType>` (current behavior).
+- For `otlp/v1/*`: **both** fields contain a CBOR-encoded **empty** `Vec<UserDefinedType>` — the single byte `0x80`, NOT a zero-length BYTEA.
+
+Why a single byte and not empty: each field is decoded via `ciborium::from_reader::<Vec<UserDefinedType>>(...)` in four places (`analytics/src/metadata.rs:127-131`, `analytics/src/lakehouse/partition_source_data.rs:188-190`, `analytics/src/lakehouse/jit_partitions.rs:329-331`, `analytics/src/lakehouse/parse_block_table_function.rs:120,131`). An empty BYTEA would fail those decodes; a CBOR-encoded empty array decodes to `Vec::new()` and every existing code path (which then iterates the empty Vec) becomes a no-op without any code change. Future per-format extensions (e.g., schema URL pin) can encode richer structures here, gated on `format`.
 
 **One block per OTLP request per resource**. An incoming `ExportTraceServiceRequest` may carry multiple `ResourceSpans` (different services). We split into one block per resource so `process_id` is unambiguous on the metadata row. Each block's payload is the protobuf encoding of *one* `ResourceSpans` (or `ResourceMetrics` / `ResourceLogs`) — small, self-contained, and re-decodable in isolation.
 
 ### Wire-level: protocol crate
 
-Use the `opentelemetry-proto` crate **without** the `gen-tonic` feature — we only need the prost-generated message types (`ResourceLogs`, `ResourceMetrics`, `ResourceSpans`, `ExportLogsServiceRequest`, etc.), not the gRPC service stubs.
+Use `opentelemetry-proto` **without** the `gen-tonic` feature — we only need the prost-generated message types (`ResourceLogs`, `ResourceMetrics`, `ResourceSpans`, `ExportLogsServiceRequest`, etc.), not the gRPC service stubs.
 
-We serve OTLP/HTTP only via `POST /ingestion/otlp/v1/{logs,metrics,traces}` on the **same listener** as the existing `/ingestion/insert_*` routes — no new port, all ingestion endpoints under one path prefix. gRPC is intentionally not supported in v1 — see Trade-offs.
-
-Per the OTLP/HTTP spec, `OTEL_EXPORTER_OTLP_ENDPOINT` is a base URL and the SDK appends `/v1/{signal}`. So clients set `OTEL_EXPORTER_OTLP_ENDPOINT=https://host.example.com/ingestion/otlp` and the SDK POSTs to `.../ingestion/otlp/v1/traces` etc. Per-signal endpoint vars (`OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`) are full URLs by spec — operators using them need to write the full path.
+Per the OTLP/HTTP spec, `OTEL_EXPORTER_OTLP_ENDPOINT` is a base URL and the SDK appends `/v1/{signal}`, so clients set `OTEL_EXPORTER_OTLP_ENDPOINT=https://host.example.com/ingestion/otlp` and the SDK POSTs to `.../ingestion/otlp/v1/{logs,metrics,traces}`. Per-signal endpoint vars (`OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`) are full URLs — operators using them write the full path.
 
 ### Identity: synthesizing process and stream
 
@@ -164,17 +165,20 @@ process_id = uuid_v5(NS_OTEL_PROCESS_V1, key)
 Rules:
 - Missing fields → empty string. Stability across batches relies on OTel's Resource-immutability contract.
 - Field order is the contract; changing it requires a new namespace UUID (`_V2`).
-- `\x1F` (unit separator) cannot legitimately appear inside attribute values per OTel spec.
+- `\x1F` separates concatenated string fields to prevent tuple-boundary collisions (e.g. `("abc", "")` vs `("ab", "c")`). OTel allows any UTF-8 in attribute values, but a real-world resource attribute containing `\x1F` is negligible in practice; we accept the residual collision risk rather than escaping.
 - If all of `host.id`, `host.name`, `process.pid`, `service.instance.id` are empty, log a degenerate-resource warning so we notice — produces a single collapsed `process_id` per `(service.namespace, service.name)`.
 
 The first time a `process_id` is seen, INSERT into `processes` (idempotent — existing `ON CONFLICT DO NOTHING`) with:
 - `exe` ← `service.name` (or `service.namespace + "/" + service.name` if namespace present)
 - `username` ← `user.name` if present, else empty
+- `realname` ← same as `username` (OTel has no analogue for a separate "real name"; reuse `user.name`)
 - `computer` ← `host.name` if present, else empty
 - `distro` ← `os.description` if present
 - `cpu_brand` ← `host.cpu.model.name` if present, else empty
 - `tsc_frequency` ← `1_000_000_000` (OTel timestamps are nanoseconds; ticks = ns)
-- `start_time` / `start_ticks` ← `process.creation.time` if present, else first observed event time
+- `start_time` ← `process.creation.time` if present, else first observed event time
+- `start_ticks` ← `start_time` converted to nanoseconds since the Unix epoch (consistent with `tsc_frequency = 1_000_000_000`, so `time = start_time + (ticks - start_ticks) / tsc_frequency` collapses to identity for OTel data)
+- `parent_process_id` ← always `NULL` for OTel-derived processes (OTel has no parent-process concept; reserved for native producers)
 - `properties` ← every other resource attribute, prefixed `otel.resource.*`. Includes `service.instance.id`, `process.pid`, `process.creation.time`, etc. (queryable, not in identity formula contract beyond the hash).
 
 **Claude Code mapping**: each `claude` OS invocation = one `process_id`. `--continue` starts a new OS process (new pid, new creation.time, new SDK-generated `service.instance.id`) → new `process_id`. Cross-invocation correlation via `session.id` (an event attribute, not a resource attribute) is a query-time concern.
@@ -197,6 +201,18 @@ Stream tags reuse the existing micromegas vocabulary so views naturally load nat
 | traces | `"trace"` (new — native async spans live in `"cpu"` streams alongside other thread events) | `otlp/v1/traces` |
 
 **Tags and format are orthogonal axes**: tags say *what* the stream contains (signal/purpose); format says *how* the bytes are encoded (wire-format). The `log_entries` view loads any stream tagged `"log"` regardless of format; per-block dispatch reads `format` to pick the right block processor. Same for `measures`. The new `otel_spans` view loads streams tagged `"trace"`.
+
+**Per-block processor dispatch (architectural change).** The current architecture binds a single `BlockProcessor` to a view: `LogView::make_batch_partition_spec` constructs `BlockPartitionSpec { block_processor: Arc::new(LogBlockProcessor {}) }` (`analytics/src/lakehouse/log_view.rs:117,178`), and `fetch_partition_source_data` filters streams by tag only (`WHERE array_has("streams.tags", '{tag}')` in `analytics/src/lakehouse/partition_source_data.rs:254`). A naive add-only approach would route OTLP-encoded blocks (tagged `"log"`) into `LogBlockProcessor`, which decodes them as transit/POD payloads and fails.
+
+Resolution: introduce per-block format dispatch by changing two pieces:
+
+1. **Source data carries `format`.** Extend `fetch_partition_source_data` to `SELECT "streams.format"` alongside the existing columns and propagate it into `PartitionSourceBlock` (alongside `block`, `stream`, `process`). Update `blocks_view`, `streams_view`, and `partition_source_data` row decoding to surface the new column. This is non-trivial because `streams_view` (an `SqlBatchView`) materializes its own parquet, so its schema needs the new column too.
+
+2. **`BlockPartitionSpec` dispatches by format.** Replace the single `block_processor: Arc<dyn BlockProcessor>` field with a `block_processors: HashMap<&'static str, Arc<dyn BlockProcessor>>` keyed by format string. The spec selects the processor per source block. `LogView` registers `{"micromegas-transit": LogBlockProcessor, "otlp/v1/logs": OtelLogsBlockProcessor}`; `MetricsView` does the analogous thing. `OtelSpansView` does **not** participate in batch dispatch — it is a JIT-only per-process view in v1 (see Phase 4).
+
+3. **JIT path takes the same map.** Per-process JIT views (used by `LogView::jit_update`, `MetricsView::jit_update`, `AsyncEventsView::jit_update`, and the new `OtelSpansView::jit_update`) call `write_partition_from_blocks(... block_processor: Arc<dyn BlockProcessor>)` directly (`jit_partitions.rs`). Change that signature to `block_processors: HashMap<&'static str, Arc<dyn BlockProcessor>>` and dispatch per source block the same way `BlockPartitionSpec::write` does. All four call sites must be updated; `AsyncEventsView` only registers `{"micromegas-transit": AsyncEventsBlockProcessor}` since OTel spans go to the new `otel_spans` view, not async_events. `OtelSpansView` registers only `{"otlp/v1/traces": OtelSpansBlockProcessor}` (no native source for OTel spans). Without this, OTel JIT views can't dispatch by format — only the global batch path would work.
+
+Trade-off considered: an alternative is to keep dispatch view-bound and split into sibling views (`otel_log_entries`, `otel_measures`). That keeps the block-processing hot path unchanged but breaks the "native + OTel queryable from one view" promise and forces user queries to `UNION`. We chose dispatch-by-format because logs/metrics genuinely *are* the same tabular shape and forcing two views is a leaky abstraction.
 
 Scope is intentionally **not** in stream identity. A single process loads many instrumentation libraries (HTTP framework, DB driver, app code, OTel SDK internals, ...), all sharing one process and emitting into the per-signal stream. Putting scope in the formula would multiply stream count by the number of loaded libraries (often 5–20) for no structural gain.
 
@@ -222,7 +238,7 @@ All mappings happen in the analytics-layer block processor, which prost-decodes 
 | OTel field | parquet column |
 |---|---|
 | `time_unix_nano` | `time` |
-| `severity_number` 1–24 | collapsed `level` (1–4=Trace, 5–8=Debug, 9–12=Info, 13–16=Warn, 17–20=Error, 21–24=Fatal) |
+| `severity_number` 1–24 | `level` Int32, mapped to the Micromegas `Level` enum (`Fatal=1, Error=2, Warn=3, Info=4, Debug=5, Trace=6`): OTel TRACE 1–4 → `6`, DEBUG 5–8 → `5`, INFO 9–12 → `4`, WARN 13–16 → `3`, ERROR 17–20 → `2`, FATAL 21–24 → `1` |
 | `body.string_value` | `msg` |
 | `body.kvlist_value` / `array_value` | JSON-stringified into `msg` (structured-body parsing deferred) |
 | `attributes.*` | `properties` JSONB |
@@ -237,22 +253,22 @@ New parquet view columns:
 ```
 process_id, stream_id, block_id, insert_time,
 exe, username, computer, process_properties,   -- joined from process
-trace_id (FixedSizeBinary[16] or hex Utf8),
-span_id  (FixedSizeBinary[8]  or UInt64),
-parent_span_id,
+trace_id (FixedSizeBinary[16]),
+span_id  (FixedSizeBinary[8]),
+parent_span_id (FixedSizeBinary[8], nullable),
 start_time, end_time, duration,
 name, scope, kind, status, status_message,
 properties (JSONB),
-events (List<Struct{time, name, attributes}>),  -- span events
-links  (List<Struct{trace_id, span_id, attributes}>)
+events (JSONB — array of {time, name, attributes}),
+links  (JSONB — array of {trace_id, span_id, attributes})
 ```
 
-`SpanKind`, status code, and span events/links are first-class on the row (not stuffed in JSONB) because they are the load-bearing fields for trace analysis.
+`SpanKind`, status code are first-class on the row because they are load-bearing for filtering (kind, status). Span events and links go in plain `Binary` columns carrying JSONB bytes: predicates over them rarely push into nested-Struct parquet readers anyway, and JSONB absorbs schema evolution (e.g. OTel adding `dropped_attributes_count` to events) without bumping the parquet schema. Access at query time goes through the same `jsonb_*` UDFs already used for `properties`. We deliberately do **not** use `Dictionary(Int32, Binary)` here (the encoding `properties` uses): the `properties` blob repeats across many rows in a partition (it carries process/stream-wide attributes), but per-span `events`/`links` arrays are essentially unique per row, so a dictionary would have cardinality ≈ row count and pure indirection overhead with no compression payoff.
 
 #### Metrics
 
 - **Sum / Gauge** → `measures` rows directly. `name`, `unit`, `value` (int widened to f64), `time`. `aggregation_temporality` and `is_monotonic` go into row properties.
-- **Histogram, ExponentialHistogram** → new view `otel_metrics_histograms` (Phase 6). Bucket arrays as native columns.
+- **Histogram, ExponentialHistogram** → deferred (out of scope for v1). The block processor logs and skips them.
 - **Summary** (deprecated in OTel) → drop with a debug log.
 - **Exemplars** → deferred (land in row properties when we surface them).
 
@@ -274,7 +290,7 @@ links  (List<Struct{trace_id, span_id, attributes}>)
    3. Idempotent register process + stream (in-memory dedup cache + `ON CONFLICT DO NOTHING` PG inserts). Stream registration sets `format = "otlp/v1/<signal>"`.
    4. Re-encode this Resource sub-message as protobuf bytes — the block payload.
    5. Build `block_wire_format::Block` with `payload.dependencies = []`, `payload.objects = <proto bytes>`.
-   6. Call existing `WebIngestionService::insert_block`.
+   6. Call `WebIngestionService::insert_block_typed(block)` (typed entry point added for the OTel path; see Phase 1 step 5).
 4. Return OTLP success (or RESOURCE_EXHAUSTED on PG/object-store failure, INVALID_ARGUMENT on parse error).
 
 There's no event-by-event translation at ingest. The hot path serializes one protobuf submessage and writes it.
@@ -285,17 +301,14 @@ Native blocks carry `tsc_frequency` and `(begin_ticks, end_ticks)` so timestamps
 
 ### Backpressure and HTTP semantics
 
-OTLP/HTTP uses one POST per export call (one request, one response). The proto response body carries `partial_success { rejected_*_count, error_message }` for batch-level reporting.
+OTLP/HTTP is one POST per export call. The proto response body carries `partial_success { rejected_*_count, error_message }` for batch-level reporting; in v1 we use whole-batch accept/reject (SDKs handle that fine) and don't fill in partial counts.
 
-Implementation:
-- Axum routes with `RequestBodyLimitLayer` (10 MB default — matches the OTel Collector default).
-- No rate limiting in v1 — out of scope (single global axum listener, no per-tenant accounting).
+- 20 MiB body limit on OTLP routes (matches the OTel Collector's `confighttp.max_request_body_size` default, so anything an SDK is willing to send under the conventional Collector cap will go through here too; sub-Router mechanics in Phase 1 step 6).
 - HTTP status mapping:
   - DB/object-store transient failures → `503 Service Unavailable` (retryable per OTLP/HTTP spec).
   - Parse errors / unknown content-type → `400 Bad Request` (non-retryable).
   - Auth failures → `401 Unauthorized`.
-- No partial-success accounting in v1: whole-batch accept/reject. SDKs handle this fine.
-- Standard HTTP load balancers (ALB, GCLB, nginx, HAProxy) work without special config — all traffic is HTTP/1.1 or HTTP/2 POST with `application/x-protobuf` body.
+- No rate limiting in v1.
 
 ### Auth
 
@@ -334,72 +347,74 @@ Per-signal headers override the catch-all. We don't need to do anything special 
 2. **No `${VAR}` expansion in OTel SDKs.** The SDK reads `OTEL_EXPORTER_OTLP_HEADERS` literally; the shell expands `${VAR}` at `export` time. Config-file deployments (where headers come from a JSON/YAML file) need pre-substituted values or wrapper scripts.
 3. **Comma in a token value would break parsing.** OTLP header parsing splits on `,`. Bearer tokens that are UUIDs/JWTs/base64 don't contain commas; if anyone ever introduces a custom token format that does, it must be URL-encoded.
 
-#### Multi-tenancy hook
-
-The `AuthContext.subject` field is set to the matched API-key `name` (e.g. `"team-platform"`). We use this two ways:
-
-- **Audit / observability**: every block insert log line and the existing `subject` extension are tagged with which key authored the data.
-- **Optional namespace defaulting**: an env var `MICROMEGAS_OTLP_NAMESPACE_MAP` (JSON `{"key-name":"service.namespace"}`) lets operators force a `service.namespace` per key when the OTel client doesn't set it. So a key issued to `team-platform` automatically tags its data with `service.namespace=platform` regardless of how the SDK is configured. Cheap multi-tenancy on top of existing auth.
-
 #### What we are NOT doing in v1
 
 - **mTLS / client certs**. The existing auth crate doesn't support it; the axum middleware would need a separate code path. Skip until someone asks.
-- **OAuth/OIDC for OTel clients**. The existing OIDC provider is for human/SSO flows, not machine credentials. Coding agents and services use API keys. If we ever need machine OIDC (workload identity, IAM-roles-anywhere), it's a separate workstream.
 - **Per-tenant rate limiting**. Out of scope for v1. The auth context exposes `subject` (API-key name) which is enough to add it later as a tower layer; we'll do it when we have a real noisy-neighbor problem.
 - **Per-route auth requirements**. Every OTLP route requires auth; no public health endpoint on the OTel listener (health goes on a separate unauthenticated port).
 
 ### Configuration
 
-OTLP routes share the existing `telemetry-ingestion-srv` listen address (configured via the existing `--listen-endpoint-http` flag, default `127.0.0.1:8081`). No new listener-related env var.
+OTLP routes share the existing `--listen-endpoint-http` listener (default `127.0.0.1:8081`) and the existing env vars (`MICROMEGAS_SQL_CONNECTION_STRING`, `MICROMEGAS_OBJECT_STORE_URI`, `MICROMEGAS_API_KEYS`, `MICROMEGAS_OIDC_CONFIG`). No new env vars in v1.
 
-New env vars on `telemetry-ingestion-srv`:
-- `MICROMEGAS_OTLP_MAX_RECV_BYTES` (default `10_000_000`) — applied as a per-route body limit on the OTLP routes; the existing 100MB limit on `/ingestion/insert_block` is unchanged.
-- `MICROMEGAS_OTLP_NAMESPACE_MAP` (optional, JSON `{"key-name":"namespace"}`) — per-API-key default `service.namespace`.
-
-Existing env vars reused: `MICROMEGAS_SQL_CONNECTION_STRING`, `MICROMEGAS_OBJECT_STORE_URI`, `MICROMEGAS_API_KEYS`, `MICROMEGAS_OIDC_CONFIG`.
+The OTLP body limit is a compile-time constant (20 MiB, matching the OTel Collector's `confighttp.max_request_body_size` default), separate from the 100MB limit on `/ingestion/insert_block` — see Phase 1 step 6 for the layering. Promoting it to a runtime knob is straightforward later if an operator needs it.
 
 ## Implementation Steps
 
 ### Phase 1: schema + OTLP routes on telemetry-ingestion-srv
-1. Add migration: `ALTER TABLE streams ADD COLUMN format TEXT NOT NULL DEFAULT 'micromegas-transit';` in a new step in `rust/ingestion/src/sql_migration.rs`. Update `create_streams_table` in `sql_telemetry_db.rs` to include the column for fresh installs.
-2. Update `ingestion::WebIngestionService::insert_stream` to accept and persist `format` (default `'micromegas-transit'` if caller doesn't specify, preserving backwards compatibility).
+1. Schema migration in `rust/ingestion/src/sql_migration.rs`:
+   - Bump `LATEST_DATA_LAKE_SCHEMA_VERSION` from `3` to `4`.
+   - Add `upgrade_data_lake_schema_v4(tr)` running `ALTER TABLE streams ADD COLUMN format TEXT NOT NULL DEFAULT 'micromegas-transit';` and `UPDATE migration SET version=4;`.
+   - Wire it into `execute_migration` with an `if 3 == current_version { ... }` block, mirroring the v2/v3 dispatch pattern.
+   - Do **not** alter `create_streams_table` in `sql_telemetry_db.rs`. The codebase convention (e.g. `insert_time` on `blocks` was added in v2 without touching `create_blocks_table`) is that `create_tables()` always creates the v1 schema and migrations bring it forward. Fresh installs go `create_tables` (v1) → v2 → v3 → v4; touching `create_streams_table` would make the v4 `ALTER TABLE ... ADD COLUMN format` fail with "column already exists".
+2. Add `format` to the streams write path. Two callers write to the streams table — both need updating because PostgreSQL's positional `INSERT INTO streams VALUES($1,...)` breaks when a column is added without specifying names:
+   - `ingestion/src/web_ingestion_service.rs:146` — switch to a named-column `INSERT INTO streams (stream_id, process_id, ...) VALUES (...)` and bind a hard-coded `'micromegas-transit'` for `format` (the CBOR `StreamInfo` wire struct is unchanged — native producers don't know about format).
+   - `analytics/src/replication.rs:54` — same change (also reads/writes the streams table).
+   - The OTel ingest path does NOT use `WebIngestionService::insert_stream(body: bytes::Bytes)` (that decodes CBOR `StreamInfo`); instead, the new `otel-ingestion` crate calls a new typed method `WebIngestionService::register_otel_stream(stream_id, process_id, tags, properties, format) -> Result<...>` that writes directly via SQL with the named-column INSERT. The method hard-codes both `dependencies_metadata` and `objects_metadata` to the single byte `0x80` (CBOR-encoded empty `Vec<UserDefinedType>`) so the four ciborium decode sites continue to work uniformly across formats. This keeps native producers' wire protocol untouched.
 3. Add `opentelemetry-proto = "0.31"` to workspace deps **without** the `gen-tonic` feature (we only need the prost message types).
 4. Create `rust/otel-ingestion/` library crate: `identity.rs` (resource → process_id/stream_id), `proto.rs` (re-exports), `error.rs`, `block.rs` (split ExportRequest into per-resource blocks). All translation logic lives here; the server only wires axum routes.
-5. Add OTLP routes to `rust/telemetry-ingestion-srv/src/main.rs`: extend the protected `Router` with `POST /ingestion/otlp/v1/{logs,metrics,traces}`, applying a per-route 10MB `RequestBodyLimitLayer` (the existing 100MB limit on `/ingestion/insert_block` stays untouched). Routes share the existing axum listener and the existing `auth_middleware`. Each route reads the protobuf body, calls into `otel-ingestion` to split + register + write blocks via the shared `WebIngestionService`. Stream registration sets `format = "otlp/v1/<signal>"`.
-6. End-to-end smoke test: Python OTel SDK with `OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf` pointed at the existing ingestion endpoint; verify rows land in PG `processes`/`streams`/`blocks` (with `format = "otlp/v1/..."` on streams) and bytes land in object store.
+5. Add typed entry points on `WebIngestionService` so the OTel adapter doesn't pay a CBOR encode/decode round-trip on the hot path:
+   - `insert_block_typed(block: block_wire_format::Block) -> Result<...>` — takes a `Block` directly, CBOR-encodes the payload once, writes to object storage, and runs the same PG INSERT. Refactor the existing `insert_block(body: bytes::Bytes)` to be a thin wrapper that ciborium-decodes and delegates.
+   - `register_otel_process(process_id, exe, username, realname, computer, distro, cpu_brand, tsc_frequency, start_time, start_ticks, properties) -> Result<...>` — writes a row to `processes` via SQL with the named columns, binding `parent_process_id = NULL` and matching the existing `ON CONFLICT (process_id) DO NOTHING` idempotency. (Companion to `register_otel_stream` from step 2.) The `processes` table has 13 columns including `realname`; the OTel adapter passes the same value as `username` (OTel has no separate "real name" attribute).
+   - Rationale: the OTel adapter already has typed `Block`/process structs in hand. Making it CBOR-encode just so `insert_block`/`insert_process` can immediately CBOR-decode and re-encode is pure waste, and the existing `insert_process(body: Bytes)` would force the OTel path to construct a CBOR `ProcessInfo` only to have it decoded again.
+6. Add OTLP routes to `telemetry-ingestion-srv/src/main.rs`. The existing 100MB body limit is applied globally to the protected router (`main.rs:62`); to scope the new 20 MiB limit to OTLP only without weakening the 100MB on `/ingestion/insert_block`:
+   - Build OTLP routes as a separate sub-Router with its own `DefaultBodyLimit::disable()` + `RequestBodyLimitLayer::new(20 * 1024 * 1024)`.
+   - `.merge()` it into the protected app **before** the existing 100MB layer; axum applies per-Router body-limit layers to routes within that sub-Router, and the outer 100MB layer doesn't override the tighter inner one. Verify with an integration test (>20 MiB POST to OTLP → 413; >20 MiB POST to `/ingestion/insert_block` → still accepted).
+   - Routes share the existing listener and `auth_middleware`. Each handler reads the protobuf body, calls into `otel-ingestion` to split + register + write blocks via the shared `WebIngestionService`. Stream registration sets `format = "otlp/v1/<signal>"`.
+7. End-to-end smoke test: Python OTel SDK with `OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf` pointed at the existing ingestion endpoint; verify rows land in PG `processes`/`streams`/`blocks` (with `format = "otlp/v1/..."` on streams) and bytes land in object store.
 
-### Phase 2: logs block processor → log_entries
-1. Add `analytics/src/lakehouse/otel_logs_block_processor.rs`. Uses `prost` to decode `ResourceLogs` from the block payload bytes.
-2. Walks scope/log records and emits `log_entries` rows (level collapse from `severity_number`, fold trace_id/span_id/severity_text into properties).
-3. Register the processor for streams matching `format = "otlp/v1/logs"`.
-4. End-to-end test: emit OTel logs from Python; query `log_entries`.
+### Phase 2: per-block format dispatch + logs block processor → log_entries
+1. Plumb `format` through the block-source pipeline (see "Per-block processor dispatch" in Design for the why): `blocks_view.rs`, `streams_view.rs` (transform+merge queries), `partition_source_data.rs` (SELECT + `PartitionSourceBlock` field), `jit_partitions.rs`, `replication.rs` row decoding, `parse_block_table_function.rs` (SELECT `"streams.format"` + post-read format check, see Files to Modify for details).
+2. Convert `BlockPartitionSpec`: replace the single `block_processor` field with `block_processors: HashMap<&'static str, Arc<dyn BlockProcessor>>`. Per-block selection in `BlockPartitionSpec::write`. Unknown formats → `warn!` and skip.
+3. Update the JIT path's `write_partition_from_blocks` (`jit_partitions.rs`) to take `block_processors: HashMap<&'static str, Arc<dyn BlockProcessor>>` instead of a single `Arc<dyn BlockProcessor>`, dispatching per source block. Update **all three** call sites — `LogView::jit_update`, `MetricsView::jit_update`, and `AsyncEventsView::jit_update` — to pass the map. (Without this, JIT views — used for per-process queries — can't dispatch OTel blocks; missing the async-events caller would also break compilation.)
+4. Add `OtelLogsBlockProcessor` (`analytics/src/lakehouse/otel_logs_block_processor.rs`): prost-decodes `ResourceLogs`, walks scope/log records, emits `log_entries` rows (level collapse from `severity_number`, fold trace_id/span_id/severity_text into properties).
+5. Register both processors in `LogView::make_batch_partition_spec` and `LogView::jit_update`: `"micromegas-transit"` → `LogBlockProcessor`, `"otlp/v1/logs"` → `OtelLogsBlockProcessor`.
+6. End-to-end test: emit OTel logs from Python AND native logs from a Rust producer in the same test; verify both populate `log_entries` cleanly.
 
 ### Phase 3: metrics block processor → measures
 1. Add `analytics/src/lakehouse/otel_metrics_block_processor.rs`. Decodes `ResourceMetrics`.
-2. Materializes Sum + Gauge data points into `measures`. Adds `aggregation_temporality` and `is_monotonic` to row properties. Emits `warn!` for Histogram/ExponentialHistogram/Summary (handled in Phase 6).
-3. End-to-end test using Claude Code's emission: `claude_code.token.usage`, `claude_code.cost.usage`, `claude_code.session.count`.
+2. Materializes Sum + Gauge data points into `measures`. Adds `aggregation_temporality` and `is_monotonic` to row properties. Logs and skips Histogram/ExponentialHistogram/Summary (deferred — see Trade-offs).
+3. Register `OtelMetricsBlockProcessor` for `"otlp/v1/metrics"` in `MetricsView`'s `block_processors` map alongside the existing native processor.
+4. End-to-end test using Claude Code's emission: `claude_code.token.usage`, `claude_code.cost.usage`, `claude_code.session.count`.
 
-### Phase 4: spans block processor → new otel_spans view
-1. Add `analytics/src/lakehouse/otel_spans_table.rs` (Arrow schema) and `otel_spans_view.rs` (view definition + time-based partitioning).
-2. Add `otel_spans_block_processor.rs`. Decodes `ResourceSpans` and materializes one row per span. Span events and links become `List<Struct{...}>` columns.
-3. Register the view in the view factory.
-4. End-to-end test: emit a multi-span trace; verify trace traversal via `SELECT * FROM otel_spans WHERE trace_id = ...`.
+### Phase 4: spans block processor → new otel_spans view (JIT-only, per-process)
+
+`otel_spans` is a JIT-only per-process view in v1 — mirrors the `AsyncEventsView` pattern. There is no global batch path. Users query it as `view_instance('otel_spans', '<process_id>')`. Cross-process trace traversal (querying `WHERE trace_id = X` across all services) is a documented v1 limitation; it requires the user to know which `process_id`s participate in the trace, or to UNION across multiple `view_instance` calls. Re-evaluate when production volume justifies the storage cost of a global table or trace-skeleton index.
+
+1. Add `analytics/src/lakehouse/otel_spans_table.rs` (Arrow schema) and `otel_spans_view.rs`. The view mirrors `AsyncEventsView`: `make_batch_partition_spec` returns `bail!("not supported")`; `jit_update` calls `generate_process_jit_partitions(... stream_tag = "trace")` and `write_partition_from_blocks(...)` with `block_processors = {"otlp/v1/traces": OtelSpansBlockProcessor}`. View instance id is the `process_id` (UUID string); `"global"` is rejected.
+2. Add `otel_spans_block_processor.rs`. Decodes `ResourceSpans` and materializes one row per span. Span events and links serialize to JSONB and land in dictionary-encoded `Binary` columns, same encoding as `properties`.
+3. Register the view in the view factory (the `OtelSpansViewMaker` follows the same pattern as `LogViewMaker` for per-process instances).
+4. End-to-end test: emit a multi-span trace from one process; verify trace traversal via `SELECT * FROM view_instance('otel_spans', '<process_id>') WHERE trace_id = ...`.
 
 ### Phase 5: production hardening
-1. Backpressure: monitoring + alerts on ingest latency / queue depth. Rate limiting is explicitly out of scope for v1.
-2. Body size limit (10 MB compressed default).
-3. Partial-success: not implemented in v1 (whole-batch accept/reject).
-4. Optional `MICROMEGAS_OTLP_NAMESPACE_MAP` to default `service.namespace` per API key.
+1. Monitoring + alerts on ingest latency / queue depth. (Body size limit, partial-success policy, rate limiting all decided elsewhere — see Backpressure and "What we are NOT doing in v1".)
 
-### Phase 6: histograms (separate PR)
-1. Add `analytics/src/lakehouse/otel_metrics_histograms_table.rs` (count, sum, bounds, bucket_counts; exp variant adds scale, zero_count, positive/negative offsets+buckets).
-2. Add `otel_metrics_histograms_view.rs` and `otel_metrics_histograms_block_processor.rs` (same payload bytes — different decode path that picks the histogram variants out of the proto).
-
-### Phase 7: docs + ops
-1. `mkdocs/docs/operating/otlp.md` — ports, env, client config snippets (Claude Code, Goose, Python OTel SDK), auth header format.
+### Phase 6: docs + ops
+1. `mkdocs/docs/operating/otlp.md` — ports, env, client config snippets (Claude Code, Goose, Python OTel SDK), auth header format, troubleshooting.
 2. `mkdocs/docs/guides/coding-agents.md` — Claude Code OTel config + starter DataFusion queries (cache hit ratio, redundant tool calls, time-in-tool ratio).
-3. Update `README.md` roadmap.
-4. Add example Claude Code env to `local_test_env/`.
+3. Mention OTLP as a supported wire format in `mkdocs/docs/architecture/`.
+4. Update `README.md` feature list and roadmap.
+5. Add example Claude Code env to `local_test_env/`.
 
 ## Files to Modify
 
@@ -410,57 +425,49 @@ Existing env vars reused: `MICROMEGAS_SQL_CONNECTION_STRING`, `MICROMEGAS_OBJECT
 - `rust/analytics/src/lakehouse/otel_logs_block_processor.rs`
 - `rust/analytics/src/lakehouse/otel_metrics_block_processor.rs`
 - `rust/analytics/src/lakehouse/otel_spans_table.rs` (Arrow schema)
-- `rust/analytics/src/lakehouse/otel_spans_view.rs` (view + partitioning)
+- `rust/analytics/src/lakehouse/otel_spans_view.rs` (per-process JIT view, mirrors `AsyncEventsView`)
 - `rust/analytics/src/lakehouse/otel_spans_block_processor.rs`
-- `rust/analytics/src/lakehouse/otel_metrics_histograms_*.rs` (Phase 6)
 
 **Modified**:
 - `rust/Cargo.toml` (add `opentelemetry-proto = "0.31"`; new `otel-ingestion` member)
-- `rust/ingestion/src/sql_migration.rs` (ADD COLUMN streams.format)
-- `rust/ingestion/src/sql_telemetry_db.rs` (include `format` in fresh `CREATE TABLE streams`)
-- `rust/ingestion/src/web_ingestion_service.rs` (persist `format` on stream insert)
+- `rust/ingestion/src/sql_migration.rs` (bump `LATEST_DATA_LAKE_SCHEMA_VERSION` to 4; add `upgrade_data_lake_schema_v4` and dispatch)
+- `rust/ingestion/src/web_ingestion_service.rs` (named-column `INSERT INTO streams` with `format`; new `register_otel_stream`; new `register_otel_process`; new `insert_block_typed` typed entry point used by the OTel adapter; refactor existing `insert_block(body)` to ciborium-decode and call `insert_block_typed`)
+- `rust/analytics/src/replication.rs` (named-column `INSERT INTO streams` with `format`; surface `format` from row reads if used by callers)
+- `rust/analytics/src/lakehouse/blocks_view.rs` (project `streams.format` in SQL + Arrow schema; bump `blocks_file_schema_hash()` from `vec![2]` to `vec![3]` so cached partitions built against the old schema are invalidated — same precedent as the JSONB migration that bumped it from `[1]` to `[2]`)
+- `rust/analytics/src/lakehouse/streams_view.rs` (carry `format` through `transform_query`/`merge_query`)
+- `rust/analytics/src/lakehouse/partition_source_data.rs` (add `format` to source query + `PartitionSourceBlock`)
+- `rust/analytics/src/lakehouse/jit_partitions.rs` (carry `format` on `PartitionSourceBlock`; change `write_partition_from_blocks` to take `block_processors: HashMap<&'static str, Arc<dyn BlockProcessor>>` and dispatch per source block)
+- `rust/analytics/src/lakehouse/parse_block_table_function.rs` (this SQL table function calls `parse_block(...)` which decompresses `payload.dependencies/objects` as transit bytes — fails on OTel proto payloads. Extend the SELECT at line 86-91 to project `"streams.format"` alongside the existing columns, read it from the resulting RecordBatch, and return a clean `unsupported format` error for `format != "micromegas-transit"`. Decoding OTel payloads here would require routing to the OTel proto walker; defer that to v2 unless a user surfaces the need.)
+- `rust/analytics/src/lakehouse/block_partition_spec.rs` (replace single `block_processor` with `block_processors: HashMap<&'static str, Arc<dyn BlockProcessor>>`; per-block dispatch)
+- `rust/analytics/src/lakehouse/log_view.rs`, `metrics_view.rs`, and `async_events_view.rs` (register processors in the new map; log/metrics get both native + OTel, async_events gets only the native processor)
 - `rust/telemetry-ingestion-srv/Cargo.toml` (add `otel-ingestion`, `opentelemetry-proto`, `prost`)
-- `rust/telemetry-ingestion-srv/src/main.rs` (add OTLP routes to the existing axum router; per-route body limit)
+- `rust/telemetry-ingestion-srv/src/main.rs` (add OTLP routes via a separate sub-Router with its own 20 MiB `RequestBodyLimitLayer`, merged into the protected app)
 - `rust/public/src/servers/` (new module for OTLP route registration alongside `ingestion.rs`)
-- `rust/analytics/src/lakehouse/mod.rs` (register OTel views + processor dispatch by `streams.format`)
+- `rust/analytics/src/lakehouse/mod.rs` (declare new modules: `otel_logs_block_processor`, `otel_metrics_block_processor`, `otel_spans_block_processor`, `otel_spans_view`, `otel_spans_table`)
+- `rust/analytics/src/lakehouse/view_factory.rs` (register `otel_spans` view set in `default_view_factory` via `add_view_set`, mirroring the existing `async_events` registration; per-block processor dispatch is configured inside `LogView`/`MetricsView` themselves, not here)
 - `README.md`
 
 **No new binary** — OTLP routes live in `telemetry-ingestion-srv`. `rust/tracing/` is also not touched. OTel is an analytics-layer concern; the ingest side is just a thin protobuf-to-block-bytes adapter.
 
 ## Trade-offs
 
-**Store OTLP as-is vs translate at ingest**: chose store-as-is. Two earlier drafts of this plan (a) invented a parallel CBOR record format and (b) added OTel interop event types to the `tracing/` crate. Both bend the architecture around OTel. The clean version is symmetric with native: native blocks store opaque transit bytes parsed at the analytics layer; OTel blocks store opaque OTLP bytes parsed at the analytics layer. Same envelope, different decoder.
+**Store OTLP as-is vs translate at ingest** (see Architecture for the full picture): chose store-as-is. Two earlier drafts (a) invented a parallel CBOR record format and (b) added OTel interop event types to the `tracing/` crate. Both bend the architecture around OTel. As-is keeps ingest at auth+write, leaves `tracing/` focused on in-process instrumentation, and is lossless — every attribute, exemplar, link is preserved for later column derivation. The cost: two parsers (transit and OTLP proto), but that's unavoidable in any design.
 
-The wins of as-is storage:
-- Ingest path is auth + write — no translation, no event-type dispatch, no synthesized POD records.
-- `tracing/` crate stays focused on in-process instrumentation.
-- Lossless: every OTel attribute, exemplar, link preserved verbatim. New parquet column can be derived from raw payloads later.
-- OTel evolution is decoupled. New OTel field → only the materialization changes.
-
-The cost: two parsers (transit and OTLP proto) — but that's true of any design here; the question is just where they live.
-
-**Extend telemetry-ingestion-srv vs separate binary**: chose extend. An earlier draft proposed a separate `otlp-ingestion-srv` binary on the assumption we needed tonic for gRPC alongside axum. Once we decided OTLP/HTTP is sufficient (see "HTTP-only" below), there's no transport-stack mismatch and no reason to fork the binary. One process, shared auth, shared `WebIngestionService`, simpler ops. The new `otel-ingestion` library still exists as the home for proto decode + identity + block builder logic, so the wire-format complexity stays out of the server crate.
-
-**HTTP/protobuf only, no gRPC**: the OTLP spec mandates HTTP/protobuf support in every compliant SDK. Some SDKs default to gRPC (Go, older Java auto-instrumentation) but accept the HTTP fallback when `OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf` is set. Going HTTP-only means standard HTTP load balancers (ALB, GCLB, nginx, HAProxy) just work — no gRPC/HTTP-2 LB compatibility matrix — and no `tonic` dep in the OTel ingest path. If a v2 user genuinely needs gRPC, adding tonic to the same binary later is a contained change.
+**HTTP/protobuf only, no gRPC, no JSON**: OTLP/HTTP allows protobuf or JSON encoding per spec, but every SDK we care about supports the protobuf wire form (some default to gRPC — Go, older Java auto-instrumentation — but accept the protobuf-over-HTTP fallback when `OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf` is set). We deliberately scope v1 to `http/protobuf` and skip JSON. HTTP-only means standard HTTP load balancers (ALB, GCLB, nginx, HAProxy) just work — no gRPC/HTTP-2 LB compatibility matrix — and no `tonic` dep. Critically, no transport-stack mismatch with axum, which is why the OTLP routes ride in the existing `telemetry-ingestion-srv` rather than a separate binary. Adding tonic later for v2 gRPC, or a JSON decoder, are contained changes.
 
 **One block per Resource (not per ExportRequest)**: chose per-Resource. An `ExportRequest` may carry multiple resources (different services); splitting at Resource boundaries means each block has an unambiguous `process_id` and is independently re-decodable. Block_id derived from a hash of the bytes for idempotency.
 
 **OTel spans get their own view, not async_events**: chose new `otel_spans` view. The existing `async_events` view is derived from thread-event blocks where parent is inferred from begin/end ordering on a thread; OTel spans carry explicit `parent_span_id` and have no thread-of-origin concept. Forcing OTel into the `async_events` processor would either lie about parent inference or require a pseudo-thread per trace. Native and OTel span data live in sibling views; cross-source queries can `UNION` if needed (open question #5).
 
-**`trace_id` and `span_id` as first-class columns**: chose first-class on `otel_spans` (the load-bearing trace-analytics columns). On `log_entries` they go into JSONB until profiling shows they're hot.
+**`otel_spans` is JIT-only, per-process in v1**: mirrors `async_events` / `thread_spans`. Spans are the highest-volume signal once auto-instrumentation is on, and a global materialized table would dominate storage cost for a feature whose driving v1 use case (Claude Code) is low volume. Cost: cross-service trace-by-id queries (`WHERE trace_id = X`) need to be issued per process — the user supplies the `process_id` to `view_instance('otel_spans', ...)`. We accept that for v1; if a real cross-process trace-traversal use case shows up, a follow-up adds either a global skeleton index (`time, trace_id, span_id, parent_span_id, process_id, name`) or a full global table.
 
-**Histograms in v1 vs deferred**: deferred. Claude Code doesn't emit histograms; bundling the new view+processor would block the driving use case.
+**`trace_id` and `span_id` as first-class columns**: chose first-class on `otel_spans` (the load-bearing trace-analytics columns), stored as `FixedSizeBinary[16]` and `FixedSizeBinary[8]` — the lengths are fixed by the W3C Trace Context standard, so we save the variable-`Binary` offsets overhead. Half the size of hex `Utf8`, exact-match lookups are byte comparisons; a small `hex(...)` UDF or query-time `encode(trace_id, 'hex')` covers human-readable display. On `log_entries` they go into JSONB until profiling shows they're hot.
 
-**Span events and links as columns vs JSONB**: first-class `List<Struct{...}>` columns on `otel_spans`. Exemplars on metric data points → deferred (land in row properties when surfaced).
+**Span events and links as `List<Struct>` vs JSONB**: chose JSONB (matches the existing `properties`-column pattern across the lakehouse). DataFusion filter pushdown into nested-Struct parquet columns is unreliable, so predicates over event/link fields would scan whole row groups and filter in memory anyway; JSONB makes that cost honest and routes through the same `jsonb_*` UDFs already in use. JSONB also tolerates OTel schema evolution (e.g. new `dropped_*` counters) without parquet schema bumps. The argument for `List<Struct>` would be cheap exact-shape access ("the 3rd event's name"), but real trace queries are predicate ("any event where X") or render-the-whole-list — both well-served by JSONB. Exemplars on metric data points → deferred (land in row properties when surfaced).
+
+**Histograms deferred**: Claude Code doesn't emit histograms; the new view + bucket schema is a non-trivial design exercise and would block the driving use case. Sum/Gauge cover the v1 demand.
 
 **OTel path is allowed to be less efficient than native**: explicit non-goal to match the per-event overhead of `micromegas-tracing`. Producers that want minimum overhead use the native SDK; OTel is for compatibility and ecosystem reach. This frees us from optimizations like proto envelope sharing across resources, zero-copy splitting, etc. — re-encoding per Resource is fine.
-
-## Documentation
-
-- New: `mkdocs/docs/operating/otlp.md` — ports, env, client snippets, troubleshooting.
-- Update `mkdocs/docs/architecture/` (or equivalent) to mention OTLP as a supported wire format.
-- Update `README.md` feature list and roadmap.
-- Add a `mkdocs/docs/guides/coding-agents.md` walkthrough showing the Claude Code OTel config + a starter set of DataFusion queries (cache hit ratio, redundant tool calls, time-in-tool ratio) — leverages the driving use case to demonstrate value.
 
 ## Testing Strategy
 
@@ -482,10 +489,10 @@ The cost: two parsers (transit and OTLP proto) — but that's true of any design
 ## Open Questions
 
 1. **`opentelemetry-proto` version pinning**: 0.31 confirmed compatible with `prost 0.14.3` (verified during research). Lock at first use.
-2. **`trace_id` representation in `otel_spans`**: `FixedSizeBinary[16]` (compact, exact lookups by bytes), `Utf8` hex string (human-friendly in `WHERE`), or both via a generated column. Affects query ergonomics and storage size.
+2. ~~**`trace_id` representation in `otel_spans`**~~ — decided: `FixedSizeBinary[16]` for `trace_id`, `FixedSizeBinary[8]` for `span_id` / `parent_span_id`. Lengths are fixed by W3C Trace Context, so the offsets array of variable `Binary` would be pure overhead. A `hex(...)` UDF (or query-time `encode`) handles human-readable display.
 3. **Stream lifecycle**: OTel processes run for days; the stream's `objects_metadata` (format descriptor) is stored once at registration. Is stream rotation needed, or does time-based lakehouse partitioning handle it?
 4. ~~**Per-tenant rate limiting**~~ — decided: out of scope for v1. Add when there's a real noisy-neighbor problem.
-5. **`otel_spans` vs unified `spans` view**: want a single `spans` view (with a `source` discriminator) that unifies native async-spans and OTel spans for cross-source trace queries? Cost: schema-design complexity — the two sources have non-overlapping identity (pointer-id vs span_id) and partially overlapping columns. Could ship as a DataFusion view (UNION) without changing storage.
+5. **`otel_spans` vs unified `spans` view**: want a single `spans` view (with a `source` discriminator) that unifies native async-spans and OTel spans for cross-source trace queries? Cost: schema-design complexity — the two sources have non-overlapping identity (pointer-id vs span_id) and partially overlapping columns. Could ship as a DataFusion view (UNION) without changing storage. Tied to the v1 JIT-only decision: a unified view would also be per-process in v1 unless we add a cross-process trace index.
 6. ~~**Block payload re-encoding**~~ — decided: accept the cost. Splitting an `ExportRequest` into per-Resource blocks re-encodes each submessage; an offset/length scheme into a shared envelope would save the re-encoding but make blocks non-self-contained. OTel ingestion is allowed to be less efficient than the native micromegas-tracing path; producers that want minimum overhead use the native SDK.
 7. **OpenTelemetry Collector sample config**: ship one that fans out to Micromegas + a file exporter for production safety? Natural follow-up, not core.
 8. ~~**Compaction interaction**~~ — decided: nothing to do. The existing lakehouse compaction handles small-block influxes the same way it does for native streams.
@@ -540,8 +547,7 @@ export OTEL_LOG_RAW_API_BODIES="file:/var/log/claude-code-bodies"
 
 # ── Optional: tag the data for multi-team rollups ────────────────────────────
 # Lands on the Process row's properties (and via process_properties on every
-# row). The trailing service.namespace=... can be omitted if the server's
-# MICROMEGAS_OTLP_NAMESPACE_MAP defaults it from the API-key name.
+# row).
 export OTEL_RESOURCE_ATTRIBUTES="team.id=platform,cost_center=eng-123,deployment.environment=prod"
 
 # ── Launch ───────────────────────────────────────────────────────────────────
@@ -553,12 +559,6 @@ claude
 ```bash
 # Same JSON keyring as telemetry-ingestion-srv already uses
 export MICROMEGAS_API_KEYS='[{"name":"team-platform","key":"mm_abc123def456..."}]'
-
-# Optional: default service.namespace per API key when the client omits it
-export MICROMEGAS_OTLP_NAMESPACE_MAP='{"team-platform":"platform"}'
-
-# OTLP-specific body limit (existing /ingestion/insert_block stays at 100MB)
-export MICROMEGAS_OTLP_MAX_RECV_BYTES=10000000
 
 # Existing ingestion env vars unchanged
 export MICROMEGAS_SQL_CONNECTION_STRING="postgres://..."
