@@ -199,6 +199,12 @@ impl BlockProcessor for OtelLogsBlockProcessor {
                         JsonbValue::String(Cow::Owned(record.severity_text.clone())),
                     ));
                 }
+                if !record.event_name.is_empty() {
+                    extras.push((
+                        "otel.event_name".to_string(),
+                        JsonbValue::String(Cow::Owned(record.event_name.clone())),
+                    ));
+                }
 
                 let props_jsonb = attrs_to_jsonb(&record.attributes, &extras);
 
