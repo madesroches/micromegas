@@ -278,7 +278,7 @@ Then use `otlptracehttp.New(ctx)` (or the equivalent for logs/metrics) — it pi
 
 **`process_id` looks identical across very different services** — `host.id`, `host.name`, `process.pid`, and `service.instance.id` all came back empty. Check the resource detector configuration on the SDK side; the server logs a degenerate-resource warning when this happens.
 
-**Logs appear with `level = 6` (Trace) when you expected `level = 4` (Info)** — `severity_number = 0` (UNSPECIFIED) collapses to Trace by default so unspecified records aren't filtered out by `WHERE level <= 4` queries. Set `severity_number` explicitly on the SDK side if you want INFO-level mapping.
+**Logs without an explicit severity appear with `level = 4` (Info)** — `severity_number = 0` (UNSPECIFIED) maps to Info so unspecified records pass the default `WHERE level <= 4` filter (lower number = more severe in micromegas; `level <= 4` keeps Info-and-more-severe). Set `severity_number` explicitly on the SDK side if you want a different mapping.
 
 **Trace queries return nothing** — `otel_spans` is a JIT view and only materializes when queried with a specific `process_id`. Use `view_instance('otel_spans', '<process_id>')`, not `FROM otel_spans`. Find the right `process_id` via the `processes` view first.
 
