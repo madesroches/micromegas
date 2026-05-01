@@ -1,26 +1,33 @@
-use crate::{
-    lakehouse::blocks_view::BlocksView,
-    metadata::find_process,
-    metrics_table::metrics_table_schema,
-    time::{TimeRange, datetime_to_scalar},
-};
+//! Per-process JIT view of OTel spans.
+//!
+//! `otel_spans` mirrors the `AsyncEventsView` pattern (no batch path; JIT-only;
+//! materialized per-process) but the time-conversion plumbing is simpler: OTLP
+//! timestamps are absolute nanoseconds (`tsc_frequency = 1_000_000_000`), so we
+//! use the plain `find_process` flow instead of the latest-timing variant.
+//!
+//! Cross-process trace traversal (`WHERE trace_id = X` across services) is a
+//! documented v1 limitation — users supply the `process_id` to
+//! `view_instance('otel_spans', '<uuid>')` or UNION across multiple instances.
 
 use super::{
     batch_update::PartitionCreationStrategy,
-    block_partition_spec::{BlockPartitionSpec, BlockProcessor, BlockProcessorMap},
+    block_partition_spec::{BlockProcessor, BlockProcessorMap},
+    blocks_view::BlocksView,
     dataframe_time_bounds::{DataFrameTimeBounds, NamedColumnsTimeBounds},
-    format::{FORMAT_OTLP_METRICS, FORMAT_TRANSIT},
     jit_partitions::{
         JitPartitionConfig, generate_process_jit_partitions, is_jit_partition_up_to_date,
         write_partition_from_blocks,
     },
     lakehouse_context::LakehouseContext,
-    metrics_block_processor::MetricsBlockProcessor,
-    otel_metrics_block_processor::OtelMetricsBlockProcessor,
+    otel_spans_block_processor::OtelSpansBlockProcessor,
+    otel_spans_table::otel_spans_table_schema,
     partition_cache::PartitionCache,
-    partition_source_data::fetch_partition_source_data,
     view::{PartitionSpec, View, ViewMetadata},
     view_factory::ViewMaker,
+};
+use crate::{
+    metadata::find_process,
+    time::{TimeRange, datetime_to_scalar},
 };
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -29,38 +36,25 @@ use datafusion::{
     arrow::datatypes::Schema,
     logical_expr::{Between, Expr, col},
 };
-use micromegas_tracing::info;
 use micromegas_tracing::prelude::*;
 use std::collections::HashMap;
 use std::sync::Arc;
 use uuid::Uuid;
 
-const VIEW_SET_NAME: &str = "measures";
-const SCHEMA_VERSION: u8 = 5;
+const VIEW_SET_NAME: &str = "otel_spans";
+const SCHEMA_VERSION: u8 = 1;
 lazy_static::lazy_static! {
-    static ref TIME_COLUMN: Arc<String> = Arc::new( String::from("time"));
+    static ref TIME_COLUMN: Arc<String> = Arc::new(String::from("start_time"));
+    static ref END_TIME_COLUMN: Arc<String> = Arc::new(String::from("end_time"));
 }
 
-/// Block-processor map covering native transit + OTel Sum/Gauge metric blocks.
-fn metrics_processors() -> BlockProcessorMap {
-    let mut m: BlockProcessorMap = HashMap::new();
-    m.insert(
-        FORMAT_TRANSIT,
-        Arc::new(MetricsBlockProcessor {}) as Arc<dyn BlockProcessor>,
-    );
-    m.insert(
-        FORMAT_OTLP_METRICS,
-        Arc::new(OtelMetricsBlockProcessor {}) as Arc<dyn BlockProcessor>,
-    );
-    m
-}
-
+/// `ViewMaker` for `OtelSpansView`. Per-process only — `"global"` is rejected.
 #[derive(Debug)]
-pub struct MetricsViewMaker {}
+pub struct OtelSpansViewMaker {}
 
-impl ViewMaker for MetricsViewMaker {
+impl ViewMaker for OtelSpansViewMaker {
     fn make_view(&self, view_instance_id: &str) -> Result<Arc<dyn View>> {
-        Ok(Arc::new(MetricsView::new(view_instance_id)?))
+        Ok(Arc::new(OtelSpansView::new(view_instance_id)?))
     }
 
     fn get_schema_hash(&self) -> Vec<u8> {
@@ -68,24 +62,23 @@ impl ViewMaker for MetricsViewMaker {
     }
 
     fn get_schema(&self) -> Arc<Schema> {
-        Arc::new(metrics_table_schema())
+        Arc::new(otel_spans_table_schema())
     }
 }
 
 #[derive(Debug)]
-pub struct MetricsView {
+pub struct OtelSpansView {
     view_set_name: Arc<String>,
     view_instance_id: Arc<String>,
-    process_id: Option<sqlx::types::Uuid>,
+    process_id: sqlx::types::Uuid,
 }
 
-impl MetricsView {
+impl OtelSpansView {
     pub fn new(view_instance_id: &str) -> Result<Self> {
-        let process_id = if view_instance_id == "global" {
-            None
-        } else {
-            Some(Uuid::parse_str(view_instance_id).with_context(|| "Uuid::parse_str")?)
-        };
+        if view_instance_id == "global" {
+            anyhow::bail!("OtelSpansView does not support global view access");
+        }
+        let process_id = Uuid::parse_str(view_instance_id).with_context(|| "Uuid::parse_str")?;
         Ok(Self {
             view_set_name: Arc::new(String::from(VIEW_SET_NAME)),
             view_instance_id: Arc::new(view_instance_id.into()),
@@ -95,7 +88,7 @@ impl MetricsView {
 }
 
 #[async_trait]
-impl View for MetricsView {
+impl View for OtelSpansView {
     fn get_view_set_name(&self) -> Arc<String> {
         self.view_set_name.clone()
     }
@@ -106,34 +99,11 @@ impl View for MetricsView {
 
     async fn make_batch_partition_spec(
         &self,
-        lakehouse: Arc<LakehouseContext>,
-        existing_partitions: Arc<PartitionCache>,
-        insert_range: TimeRange,
+        _lakehouse: Arc<LakehouseContext>,
+        _existing_partitions: Arc<PartitionCache>,
+        _insert_range: TimeRange,
     ) -> Result<Arc<dyn PartitionSpec>> {
-        if *self.view_instance_id != "global" {
-            anyhow::bail!("not supported for jit queries... should it?");
-        }
-        let source_data = Arc::new(
-            fetch_partition_source_data(
-                lakehouse.clone(),
-                existing_partitions,
-                insert_range,
-                "metrics",
-            )
-            .await
-            .with_context(|| "fetch_partition_source_data")?,
-        );
-        Ok(Arc::new(BlockPartitionSpec {
-            view_metadata: ViewMetadata {
-                view_set_name: self.view_set_name.clone(),
-                view_instance_id: self.view_instance_id.clone(),
-                file_schema_hash: self.get_file_schema_hash(),
-            },
-            schema: self.get_file_schema(),
-            insert_range,
-            source_data,
-            block_processors: metrics_processors(),
-        }))
+        anyhow::bail!("OtelSpansView does not support batch partition specs");
     }
 
     fn get_file_schema_hash(&self) -> Vec<u8> {
@@ -141,7 +111,7 @@ impl View for MetricsView {
     }
 
     fn get_file_schema(&self) -> Arc<Schema> {
-        Arc::new(metrics_table_schema())
+        Arc::new(otel_spans_table_schema())
     }
 
     #[span_fn]
@@ -150,23 +120,11 @@ impl View for MetricsView {
         lakehouse: Arc<LakehouseContext>,
         query_range: Option<TimeRange>,
     ) -> Result<()> {
-        if *self.view_instance_id == "global" {
-            // this view instance is updated using the deamon
-            return Ok(());
-        }
-        info!("find_process");
         let process = Arc::new(
-            find_process(
-                &lakehouse.lake().db_pool,
-                &self
-                    .process_id
-                    .with_context(|| "getting a view's process_id")?,
-            )
-            .await
-            .with_context(|| "find_process")?,
+            find_process(&lakehouse.lake().db_pool, &self.process_id)
+                .await
+                .with_context(|| "find_process")?,
         );
-
-        //todo: use last_update_time in process
         let query_range =
             query_range.unwrap_or_else(|| TimeRange::new(process.start_time, chrono::Utc::now()));
 
@@ -177,7 +135,7 @@ impl View for MetricsView {
             &blocks_view,
             &query_range,
             process.clone(),
-            "metrics",
+            "trace",
         )
         .await
         .with_context(|| "generate_process_jit_partitions")?;
@@ -186,6 +144,12 @@ impl View for MetricsView {
             view_instance_id: self.get_view_instance_id(),
             file_schema_hash: self.get_file_schema_hash(),
         };
+
+        let mut block_processors: BlockProcessorMap = HashMap::new();
+        block_processors.insert(
+            crate::lakehouse::format::FORMAT_OTLP_TRACES,
+            Arc::new(OtelSpansBlockProcessor {}) as Arc<dyn BlockProcessor>,
+        );
 
         for part in all_partitions {
             if !is_jit_partition_up_to_date(&lakehouse.lake().db_pool, view_meta.clone(), &part)
@@ -196,7 +160,7 @@ impl View for MetricsView {
                     view_meta.clone(),
                     self.get_file_schema(),
                     part,
-                    metrics_processors(),
+                    block_processors.clone(),
                 )
                 .await
                 .with_context(|| "write_partition_from_blocks")?;
@@ -207,7 +171,7 @@ impl View for MetricsView {
 
     fn make_time_filter(&self, begin: DateTime<Utc>, end: DateTime<Utc>) -> Result<Vec<Expr>> {
         Ok(vec![Expr::Between(Between::new(
-            col("time").into(),
+            col("start_time").into(),
             false,
             Expr::Literal(datetime_to_scalar(begin), None).into(),
             Expr::Literal(datetime_to_scalar(end), None).into(),
@@ -217,16 +181,12 @@ impl View for MetricsView {
     fn get_time_bounds(&self) -> Arc<dyn DataFrameTimeBounds> {
         Arc::new(NamedColumnsTimeBounds::new(
             TIME_COLUMN.clone(),
-            TIME_COLUMN.clone(),
+            END_TIME_COLUMN.clone(),
         ))
     }
 
     fn get_update_group(&self) -> Option<i32> {
-        if *(self.get_view_instance_id()) == "global" {
-            Some(2000)
-        } else {
-            None
-        }
+        None // process-specific JIT view; no scheduled updates
     }
 
     fn get_max_partition_time_delta(&self, _strategy: &PartitionCreationStrategy) -> TimeDelta {

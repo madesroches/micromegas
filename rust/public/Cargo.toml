@@ -25,6 +25,7 @@ server = [
     "dep:micromegas-analytics",
     "dep:micromegas-auth",
     "dep:micromegas-ingestion",
+    "dep:micromegas-otel-ingestion",
     "dep:micromegas-perfetto",
     "dep:object_store",
     "dep:once_cell",
@@ -35,6 +36,7 @@ server = [
     "dep:tokio",
     "dep:tonic",
     "dep:tower",
+    "dep:tower-http",
     "micromegas-telemetry/server",
 ]
 
@@ -61,6 +63,7 @@ http = { workspace = true, optional = true }
 micromegas-analytics = { workspace = true, optional = true }
 micromegas-auth = { workspace = true, optional = true }
 micromegas-ingestion = { workspace = true, optional = true }
+micromegas-otel-ingestion = { workspace = true, optional = true }
 micromegas-perfetto = { workspace = true, optional = true }
 object_store = { workspace = true, optional = true }
 once_cell = { workspace = true, optional = true }
@@ -71,6 +74,7 @@ thiserror = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true }
 tonic = { workspace = true, optional = true }
 tower = { workspace = true, optional = true }
+tower-http = { workspace = true, optional = true }
 
 [dev-dependencies]
 wiremock = "0.6"

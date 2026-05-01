@@ -1,6 +1,6 @@
 [package]
-name = "micromegas-ingestion"
-description = "telemetry ingestion module of micromegas"
+name = "micromegas-otel-ingestion"
+description = "OTLP/HTTP ingestion adapter for micromegas"
 keywords.workspace = true
 version.workspace = true
 edition.workspace = true
@@ -10,13 +10,14 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
+micromegas-ingestion.workspace = true
 micromegas-telemetry = { workspace = true, features = ["server"] }
 micromegas-tracing.workspace = true
 
 anyhow.workspace = true
 bytes.workspace = true
-ciborium.workspace = true
-sqlx.workspace = true
+chrono.workspace = true
+opentelemetry-proto.workspace = true
+prost.workspace = true
 thiserror.workspace = true
 uuid.workspace = true
-

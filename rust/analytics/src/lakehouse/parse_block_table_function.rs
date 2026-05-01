@@ -85,7 +85,7 @@ async fn fetch_block_metadata(
 
     let sql = format!(
         "SELECT block_id, stream_id, process_id, object_offset,
-                \"streams.dependencies_metadata\", \"streams.objects_metadata\"
+                \"streams.dependencies_metadata\", \"streams.objects_metadata\", \"streams.format\"
          FROM blocks
          WHERE block_id = '{block_id_str}'"
     );
@@ -102,6 +102,14 @@ async fn fetch_block_metadata(
     let stream_id_col = string_column_by_name(batch, "stream_id")?;
     let process_id_col = string_column_by_name(batch, "process_id")?;
     let object_offset_col: &Int64Array = typed_column_by_name(batch, "object_offset")?;
+    let format_col = string_column_by_name(batch, "streams.format")?;
+    let format = format_col.value(0)?;
+    if format != "micromegas-transit" {
+        anyhow::bail!(
+            "parse_block does not support format={format} (only micromegas-transit). \
+             Use the OTel-aware path or query `log_entries`/`measures`/`otel_spans` instead."
+        );
+    }
 
     let block_id = Uuid::parse_str(block_id_col.value(0)?)?;
     let stream_id = Uuid::parse_str(stream_id_col.value(0)?)?;

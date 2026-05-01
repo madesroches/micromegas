@@ -35,6 +35,10 @@ pub struct PartitionSourceBlock {
     pub block: BlockMetadata,
     pub stream: Arc<StreamMetadata>,
     pub process: Arc<ProcessMetadata>,
+    /// Wire-format identifier for the block payload — keys per-block dispatch
+    /// in `BlockPartitionSpec` and `write_partition_from_blocks`. Examples:
+    /// `"micromegas-transit"`, `"otlp/v1/logs"`, `"otlp/v1/metrics"`, `"otlp/v1/traces"`.
+    pub format: String,
 }
 
 /// A trait for providing blocks of source data for partitions.
@@ -138,6 +142,7 @@ impl PartitionBlocksSource for SourceDataBlocks {
                     typed_column_by_name(&b, "streams.objects_metadata")?;
                 let stream_tags_column: &GenericListArray<i32> = typed_column_by_name(&b, "streams.tags")?;
                 let stream_properties_accessor = properties_column_by_name(&b, "streams.properties")?;
+                let stream_format_column = string_column_by_name(&b, "streams.format")?;
 
                 let process_start_time_column: &TimestampNanosecondArray =
                     typed_column_by_name(&b, "processes.start_time")?;
@@ -214,10 +219,12 @@ impl PartitionBlocksSource for SourceDataBlocks {
                         parent_process_id,
                         properties: Arc::new(process_properties_jsonb),
                     };
+                    let format = stream_format_column.value(ir)?.to_string();
                     yield Arc::new(PartitionSourceBlock {
                         block,
                         stream: Arc::new(stream),
                         process: Arc::new(process),
+                        format,
                     });
                 }
             }
@@ -246,7 +253,7 @@ pub async fn fetch_partition_source_data(
         r#"
           SELECT block_id, stream_id, process_id, begin_time, begin_ticks, end_time, end_ticks, nb_objects,
               object_offset, payload_size, insert_time,
-              "streams.dependencies_metadata", "streams.objects_metadata", "streams.tags", "streams.properties",
+              "streams.dependencies_metadata", "streams.objects_metadata", "streams.tags", "streams.properties", "streams.format",
               "processes.start_time", "processes.start_ticks", "processes.tsc_frequency", "processes.exe",
               "processes.username", "processes.realname", "processes.computer", "processes.distro", "processes.cpu_brand",
               "processes.parent_process_id", "processes.properties"

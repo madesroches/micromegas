@@ -57,7 +57,13 @@ async fn serve_http(
         Router::new().route("/health", get(|| async { axum::http::StatusCode::OK }));
 
     // Protected routes (require auth)
+    //
+    // OTLP routes ride on a separate sub-Router that carries its own 20 MiB body limit
+    // plus gzip request decompression. We `.merge()` it BEFORE applying the outer
+    // 100 MiB limit so per-route layers stay scoped — the outer limit applies to
+    // `/ingestion/insert_block` and friends; OTLP routes keep the tighter cap.
     let mut protected_app = servers::ingestion::register_routes(Router::new())
+        .merge(servers::otlp::otlp_router())
         .layer(DefaultBodyLimit::disable())
         .layer(RequestBodyLimitLayer::new(100 * 1024 * 1024))
         .layer(Extension(service));

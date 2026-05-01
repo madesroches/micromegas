@@ -197,7 +197,7 @@ use super::streams_view::make_streams_view;
 use super::{
     async_events_view::AsyncEventsViewMaker, log_view::LogViewMaker,
     metrics_view::MetricsViewMaker, net_spans_view::NetSpansViewMaker,
-    thread_spans_view::ThreadSpansViewMaker, view::View,
+    otel_spans_view::OtelSpansViewMaker, thread_spans_view::ThreadSpansViewMaker, view::View,
 };
 use anyhow::Result;
 use datafusion::arrow::datatypes::Schema;
@@ -328,6 +328,9 @@ pub async fn default_view_factory(
         String::from("net_spans"),
         Arc::new(NetSpansViewMaker::new(Arc::new(updated_factory.clone()))),
     );
+
+    // Add otel_spans view maker (per-process JIT only — no global instance)
+    updated_factory.add_view_set(String::from("otel_spans"), Arc::new(OtelSpansViewMaker {}));
 
     Ok(updated_factory)
 }

@@ -448,8 +448,8 @@ The OTLP body limit is a compile-time constant (20 MiB, matching the OTel Collec
    - `ingestion/src/web_ingestion_service.rs:146` — switch to a named-column `INSERT INTO streams (stream_id, process_id, ...) VALUES (...)` and bind a hard-coded `'micromegas-transit'` for `format` (the CBOR `StreamInfo` wire struct is unchanged — native producers don't know about format).
    - `analytics/src/replication.rs:54` — same change (also reads/writes the streams table).
    - The OTel ingest path does NOT use `WebIngestionService::insert_stream(body: bytes::Bytes)` (that decodes CBOR `StreamInfo`); instead, the new `otel-ingestion` crate calls a new typed method `WebIngestionService::register_otel_stream(stream_id, process_id, tags, properties, format) -> Result<...>` that writes directly via SQL with the named-column INSERT. The method hard-codes both `dependencies_metadata` and `objects_metadata` to the single byte `0x80` (CBOR-encoded empty `Vec<UserDefinedType>`) so the four ciborium decode sites continue to work uniformly across formats. This keeps native producers' wire protocol untouched.
-3. Add `opentelemetry-proto = "0.31"` to workspace deps **without** the `gen-tonic` feature (we only need the prost message types).
-4. Create `rust/otel-ingestion/` library crate: `identity.rs` (resource → process_id/stream_id), `proto.rs` (re-exports), `error.rs`, `block.rs` (split ExportRequest into per-resource blocks). All translation logic lives here; the server only wires axum routes.
+3. Add `opentelemetry-proto = "0.31"` to workspace deps with `default-features = false, features = ["gen-tonic-messages", "logs", "metrics", "trace"]`. The `gen-tonic-messages` feature gates the prost message types in `opentelemetry_proto::tonic::*` (despite the misleading name, this feature does NOT pull in tonic transport — that's `gen-tonic` which adds `tonic/channel` and a `Channel` dep on top). We deliberately stay off `gen-tonic` so the gRPC stack stays out of the dependency graph.
+4. Create `rust/otel-ingestion/` library crate: `identity.rs` (resource → process_id/stream_id), `proto.rs` (re-exports + hand-rolled `Status` proto), `error.rs` (HTTP-status-aware `OtelError`), `block.rs` (split ExportRequest into per-resource blocks), `handler.rs` (top-level `ingest_logs/metrics/traces` entry points used by axum). All translation logic lives here; the server only wires axum routes.
 5. Add typed entry points on `WebIngestionService` so the OTel adapter doesn't pay a CBOR encode/decode round-trip on the hot path:
    - `insert_block_typed(block: block_wire_format::Block) -> Result<...>` — takes a `Block` directly, CBOR-encodes the payload once, writes to object storage, and runs the same PG INSERT. Refactor the existing `insert_block(body: bytes::Bytes)` to be a thin wrapper that ciborium-decodes and delegates.
    - `register_otel_process(process_id, exe, username, computer, distro, cpu_brand, tsc_frequency, start_time, start_ticks, properties) -> Result<...>` — writes a row to `processes` via SQL with named columns, matching the existing `ON CONFLICT (process_id) DO NOTHING` idempotency. (Companion to `register_otel_stream` from step 2.) The `processes` table has 13 columns; the three not in the parameter list are filled in by the function: `insert_time = Utc::now()` (server-side wall clock, mirroring the existing `insert_process` at `web_ingestion_service.rs:189`), `parent_process_id = NULL` (OTel has no parent-process concept), and `realname = username` (OTel has no separate "real name" attribute, so we don't burden the caller with passing the same value twice).
@@ -458,7 +458,7 @@ The OTLP body limit is a compile-time constant (20 MiB, matching the OTel Collec
    - Build OTLP routes as a separate sub-Router with its own `DefaultBodyLimit::disable()` + `RequestBodyLimitLayer::new(20 * 1024 * 1024)` + `tower_http::decompression::RequestDecompressionLayer::new().gzip(true)` (the layer order matters: `RequestBodyLimitLayer` is outer so it caps wire-bytes, decompression is inner so the handler always sees plain proto). Add `tower-http`'s `decompression-gzip` feature to the workspace `tower-http` dependency entry (currently `features = ["compression-gzip", "cors", "limit", "timeout"]` — add `"decompression-gzip"`).
    - `.merge()` it into the protected app **before** the existing 100MB layer; axum applies per-Router body-limit layers to routes within that sub-Router, and the outer 100MB layer doesn't override the tighter inner one. Verify with an integration test (>20 MiB POST to OTLP → 413; >20 MiB POST to `/ingestion/insert_block` → still accepted; gzip-encoded OTLP POST decompresses correctly).
    - Each handler validates `Content-Type: application/x-protobuf` (415 on mismatch), reads the (already-decompressed) protobuf body, calls into `otel-ingestion` to split + register + write blocks via the shared `WebIngestionService`, and returns a proto-encoded `Export*ServiceResponse` body with `Content-Type: application/x-protobuf`. Routes share the existing listener and `auth_middleware`. Stream registration sets `format = "otlp/v1/<signal>"`.
-7. End-to-end smoke test: Python OTel SDK with `OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf` pointed at the existing ingestion endpoint; verify rows land in PG `processes`/`streams`/`blocks` (with `format = "otlp/v1/..."` on streams) and bytes land in object store.
+7. ~~End-to-end smoke test~~ — superseded by Phase 5 (`python/micromegas/tests/test_otlp_e2e.py`).
 
 ### Phase 2: per-block format dispatch + logs block processor → log_entries
 1. Plumb `format` through the block-source pipeline (see "Per-block processor dispatch" in Design for the why): `blocks_view.rs` (project `streams.format`, bump file_schema_hash), `streams_view.rs` (add `first_value("streams.format") as format` to transform_query, `first_value(format) as format` to merge_query), `partition_source_data.rs` (add `"streams.format"` to the SELECT at line 247-252; add `format: String` field to `PartitionSourceBlock`; read it via `string_column_by_name(&b, "streams.format")?` in the row-decoding loop), `jit_partitions.rs` (add `"streams.format"` to the SELECT at line 257-258 in `generate_process_jit_partitions_segment` and read it into the per-row `PartitionSourceBlock`), `replication.rs` row decoding, `parse_block_table_function.rs` (SELECT `"streams.format"` + post-read format check, see Files to Modify for details).
@@ -466,13 +466,13 @@ The OTLP body limit is a compile-time constant (20 MiB, matching the OTel Collec
 3. Update the JIT path's `write_partition_from_blocks` (`jit_partitions.rs`) to take `block_processors: HashMap<&'static str, Arc<dyn BlockProcessor>>` instead of a single `Arc<dyn BlockProcessor>`, dispatching per source block. Update **all three** call sites — `LogView::jit_update`, `MetricsView::jit_update`, and `AsyncEventsView::jit_update` — to pass the map. (Without this, JIT views — used for per-process queries — can't dispatch OTel blocks; missing the async-events caller would also break compilation.)
 4. Add `OtelLogsBlockProcessor` (`analytics/src/lakehouse/otel_logs_block_processor.rs`): prost-decodes `ResourceLogs`, walks scope/log records, emits `log_entries` rows (level collapse from `severity_number`, fold trace_id/span_id/severity_text into properties).
 5. Register both processors in `LogView::make_batch_partition_spec` and `LogView::jit_update`: `"micromegas-transit"` → `LogBlockProcessor`, `"otlp/v1/logs"` → `OtelLogsBlockProcessor`.
-6. End-to-end test: emit OTel logs from Python AND native logs from a Rust producer in the same test; verify both populate `log_entries` cleanly.
+6. ~~End-to-end test~~ — folded into Phase 5's `test_otlp_logs_e2e` (the cross-format mixing — native + OTel under one query — is a Phase 5 follow-up; the Phase 5 v1 covers OTel-only).
 
 ### Phase 3: metrics block processor → measures
 1. Add `analytics/src/lakehouse/otel_metrics_block_processor.rs`. Decodes `ResourceMetrics`.
 2. Materializes Sum + Gauge data points into `measures`. Adds `aggregation_temporality` and `is_monotonic` to row properties. Logs and skips Histogram/ExponentialHistogram/Summary (deferred — see Trade-offs).
 3. Register `OtelMetricsBlockProcessor` for `"otlp/v1/metrics"` in `MetricsView`'s `block_processors` map alongside the existing native processor.
-4. End-to-end test using Claude Code's emission: `claude_code.token.usage`, `claude_code.cost.usage`, `claude_code.session.count`.
+4. ~~End-to-end test using Claude Code's emission~~ — superseded by Phase 5's `test_otlp_metrics_e2e`. Live Claude Code metric collection is a smoke test in Phase 7 (docs / ops).
 
 ### Phase 4: spans block processor → new otel_spans view (JIT-only, per-process)
 
@@ -481,12 +481,64 @@ The OTLP body limit is a compile-time constant (20 MiB, matching the OTel Collec
 1. Add `analytics/src/lakehouse/otel_spans_table.rs` (Arrow schema) and `otel_spans_view.rs`. The view mirrors `AsyncEventsView` for the JIT-only/per-process *structure* — `make_batch_partition_spec` returns `bail!("not supported")`; `jit_update` calls `generate_process_jit_partitions(... stream_tag = "trace")` and `write_partition_from_blocks(...)` with `block_processors = {"otlp/v1/traces": OtelSpansBlockProcessor}`. View instance id is the `process_id` (UUID string); `"global"` is rejected. **Time conversion path differs from `AsyncEventsView`**: OTel timestamps are absolute nanoseconds (`tsc_frequency = 1_000_000_000`), so `OtelSpansView::jit_update` uses the simpler `find_process` flow (like `LogView::jit_update` at log_view.rs:139-148) rather than `find_process_with_latest_timing` + `make_time_converter_from_latest_timing`. `OtelSpansBlockProcessor` does NOT take a `ConvertTicks` constructor argument — it reads `time_unix_nano` fields directly off the proto.
 2. Add `otel_spans_block_processor.rs`. Decodes `ResourceSpans` and materializes one row per span. Span events and links serialize to JSONB and land in dictionary-encoded `Binary` columns, same encoding as `properties`.
 3. Register the view in the view factory. `OtelSpansViewMaker` follows `AsyncEventsViewMaker`'s per-process-only pattern: `make_view` rejects `"global"` and constructs an `OtelSpansView` for any other instance id. (Not `LogViewMaker`, which permits both global and per-process — `OtelSpansView` is JIT-only per Phase 4 step 1.) Unlike `AsyncEventsViewMaker`, `OtelSpansViewMaker` is a unit-like struct (no `view_factory: Arc<ViewFactory>` field) — that field on `AsyncEventsViewMaker` exists only to feed `find_process_with_latest_timing`, which `OtelSpansView` doesn't use (see Phase 4 step 1).
-4. End-to-end test: emit a multi-span trace from one process; verify trace traversal via `SELECT * FROM view_instance('otel_spans', '<process_id>') WHERE trace_id = ...`.
+4. ~~End-to-end test~~ — superseded by Phase 5's `test_otlp_traces_e2e` (a 3-span trace, parent-id assertions, kind/status checks).
 
-### Phase 5: production hardening
+### Phase 5: end-to-end integration test
+
+A small Python harness that emits OTLP payloads to a running `telemetry-ingestion-srv` and asserts the data lands queryable via FlightSQL. Goal: catch any wiring issue between OTLP request ↔ HTTP route ↔ block writer ↔ JIT view that the unit/integration tests in `otel-ingestion/` miss.
+
+**Coverage requirement (load-bearing): all three signals must be tested.** One test per signal — logs, metrics, and traces — exercising the full path through `WebIngestionService` → object store → `log_entries` / `measures` / `otel_spans` views. Skipping any one of them leaves a wiring class untested (per-block format dispatch + view-specific JIT pipelines diverge per signal).
+
+**Test harness shape** — mirrors the existing `python/micromegas/tests/` pattern:
+- New file `python/micromegas/tests/test_otlp_e2e.py`. Driven by `poetry run pytest`. Assumes services are already running (start via `python3 local_test_env/ai_scripts/start_services.py`) — same convention as `test_log.py`/`test_metrics.py`. The test does **not** spawn services itself; CI scripts that want full automation wrap the existing `start_services.py` + `pytest` + `stop_services.py`.
+
+**Test app** — small inline emitter rather than a separate binary, to keep the test self-contained:
+```python
+# Build OTLP proto requests directly with `protobuf` (already a project dep
+# via opentelemetry-proto-py — pulled in for free with `opentelemetry-sdk`).
+# Avoids the OTel SDK's exporter machinery, batching, and retry logic — those
+# add nondeterministic delays that pytest doesn't need.
+from opentelemetry.proto.collector.logs.v1 import logs_service_pb2
+# ... build an ExportLogsServiceRequest with a deterministic resource +
+# 5 log records spread across 3 severity levels.
+import requests
+resp = requests.post(
+    "http://127.0.0.1:9000/ingestion/otlp/v1/logs",
+    data=req.SerializeToString(),
+    headers={"Content-Type": "application/x-protobuf"},
+)
+assert resp.status_code == 200
+assert resp.headers["content-type"] == "application/x-protobuf"
+```
+
+The reason for hand-built protos rather than the full SDK: SDK exporters batch on a background thread and we'd need to call `force_flush()` then sleep — flaky in CI. Hand-built proto + `requests.post` makes timing deterministic.
+
+**Assertions** (one test function per signal, plus one cross-cutting):
+- `test_otlp_logs_e2e`: emit 5 logs with a known `service.name` + `host.name` + `process.pid`. Compute the expected `process_id` client-side using the same UUIDv5 formula (helper in `tests/otlp_helpers.py`). Query `SELECT count(*) FROM log_entries WHERE process_id = '<uuid>'` until `>= 5` (poll with `assert_eventually` up to 30s — JIT materialization may take a beat). Then `SELECT level, msg, properties->>'otel.scope.name' FROM log_entries WHERE process_id = '<uuid>' ORDER BY time` and assert level mapping (severity 9 → 4, 17 → 2, 22 → 1) plus the scope name comes through as expected.
+- `test_otlp_metrics_e2e`: emit one Sum + one Gauge under the same resource. Assert `SELECT name, unit, value, properties->>'otel.metric.kind' FROM measures WHERE process_id = '<uuid>'` returns 2 rows with the right `otel.metric.kind` values.
+- `test_otlp_traces_e2e`: emit a 3-span trace (root + 2 children). Query `SELECT * FROM view_instance('otel_spans', '<uuid>') WHERE trace_id = '<bytes>'` and assert: 3 rows; one row with `parent_span_id IS NULL`; durations match what was sent; `kind` and `status` columns are populated.
+- `test_otlp_idempotency_e2e`: POST the same `ExportLogsServiceRequest` twice. Assert `SELECT count(*)` doesn't double — `block_id` is content-addressed so the second insert hits `ON CONFLICT (block_id) DO NOTHING` and the partition retains 5 rows.
+- `test_otlp_content_type_rejection`: POST with `Content-Type: application/json`. Assert `415` and that the body decodes as a `google.rpc.Status` with `code=3` (INVALID_ARGUMENT).
+
+**Helper module** `python/micromegas/tests/otlp_helpers.py`:
+- `compute_otel_process_id(host_name, host_id, pid, start_time, service_namespace, service_name, instance_id) -> uuid.UUID` — Python port of the Rust `process_id_from_resource` formula. Uses `\x1F` separator and `uuid.uuid5(NS_OTEL_PROCESS_V1, key.encode())`. **Test-side responsibility:** if the Rust formula ever changes (which would require bumping to `_V2`), this helper has to change in lockstep — flag this in the docstring.
+- `assert_eventually(query_fn, predicate, timeout_s=30, interval_s=0.5)` — polls `query_fn()` until `predicate(result)` returns truthy or the deadline passes. JIT views can take a moment to materialize after the first query against a process_id.
+
+**Pre-test data isolation:** every test generates a fresh `service.instance.id` (UUID4) so process_id differs per test run. Avoids cross-run interference without needing a database wipe.
+
+**Wiring into the existing service-startup script:** add `--with-otlp-test-data` flag to `local_test_env/ai_scripts/start_services.py` that, after services come up, invokes a small bootstrap that emits one of each signal (logs/metrics/traces) so devs can run the manual smoke test without writing client code each time. Optional — the pytest harness already covers this.
+
+**Out of scope for v1:**
+- A genuine OTel SDK round-trip (BatchSpanProcessor + OTLPSpanExporter). Adds value but the deterministic-proto path is sufficient for catching wiring breaks; a follow-up PR can add an "SDK e2e" suite that uses the real SDK against the same endpoints.
+- Auth coverage. The current `start_services.py` uses `--disable-auth`. A separate test variant with `MICROMEGAS_API_KEYS` set + the SDK's `OTEL_EXPORTER_OTLP_HEADERS` is a follow-up.
+- gzip request encoding. The decompression layer is wired but tests would need to gzip the body manually; defer until we have a failure that motivates it.
+
+**CI integration (deferred):** the existing CI harness doesn't spin up Postgres + the services, so this test runs locally only in v1. A follow-up adds a GitHub Actions job that wraps `start_services.py` → `pytest test_otlp_e2e.py` → `stop_services.py`.
+
+### Phase 6: production hardening
 1. Monitoring + alerts on ingest latency / queue depth. (Body size limit, partial-success policy, rate limiting all decided elsewhere — see Backpressure and "What we are NOT doing in v1".)
 
-### Phase 6: docs + ops
+### Phase 7: docs + ops
 1. `mkdocs/docs/operating/otlp.md` — ports, env, client config snippets (Claude Code, Goose, Python OTel SDK), auth header format, troubleshooting.
 2. `mkdocs/docs/guides/coding-agents.md` — Claude Code OTel config + starter DataFusion queries (cache hit ratio, redundant tool calls, time-in-tool ratio).
 3. Mention OTLP as a supported wire format in `mkdocs/docs/architecture/`.
@@ -496,33 +548,41 @@ The OTLP body limit is a compile-time constant (20 MiB, matching the OTel Collec
 ## Files to Modify
 
 **New crate**:
-- `rust/otel-ingestion/Cargo.toml` + `src/{lib,proto,identity,block,error}.rs`
+- `rust/otel-ingestion/Cargo.toml` + `src/{lib,proto,identity,block,error,handler}.rs`
+- `rust/otel-ingestion/tests/{fixtures,split_tests}.rs` (integration tests)
 
 **New modules in `analytics/`**:
+- `rust/analytics/src/lakehouse/format.rs` (format-string constants used as HashMap keys for per-block dispatch)
+- `rust/analytics/src/lakehouse/otel_attrs.rs` (`AnyValue` → JSONB conversion + `severity_number` → `Level` mapping; shared by all three OTel block processors)
 - `rust/analytics/src/lakehouse/otel_logs_block_processor.rs`
 - `rust/analytics/src/lakehouse/otel_metrics_block_processor.rs`
 - `rust/analytics/src/lakehouse/otel_spans_table.rs` (Arrow schema)
 - `rust/analytics/src/lakehouse/otel_spans_view.rs` (per-process JIT view, mirrors `AsyncEventsView`)
 - `rust/analytics/src/lakehouse/otel_spans_block_processor.rs`
 
+**New file in `public/`**:
+- `rust/public/src/servers/otlp.rs` (axum sub-router with the three OTLP/HTTP routes; 20 MiB body limit + gzip decompression layers; `Content-Type` validation; `google.rpc.Status` response body for 4xx/5xx)
+
 **Modified**:
-- `rust/Cargo.toml` (add `opentelemetry-proto = "0.31"`; add `"decompression-gzip"` to the `tower-http` features list — currently `["compression-gzip", "cors", "limit", "timeout"]`. The new `otel-ingestion` crate is auto-discovered by the existing `members = ["*", ...]` glob — no manifest member entry needed beyond creating the directory.)
+- `rust/Cargo.toml` (add `opentelemetry-proto` workspace dep; add `micromegas-otel-ingestion = { path = "otel-ingestion", ... }` alongside the other workspace path deps; add `"v5"` to the `uuid` workspace features; add `"decompression-gzip"` to `tower-http` features. The `otel-ingestion` crate is auto-discovered by the existing `members = ["*", ...]` glob — no manifest member entry needed beyond creating the directory.)
+- `rust/ingestion/Cargo.toml` (add `uuid` to deps so `register_otel_stream`/`register_otel_process` can take `Uuid` parameters)
 - `rust/ingestion/src/sql_migration.rs` (bump `LATEST_DATA_LAKE_SCHEMA_VERSION` to 4; add `upgrade_data_lake_schema_v4` and dispatch)
-- `rust/ingestion/src/web_ingestion_service.rs` (named-column `INSERT INTO streams` with `format`; new `register_otel_stream`; new `register_otel_process`; new `insert_block_typed` typed entry point used by the OTel adapter; refactor existing `insert_block(body)` to ciborium-decode and call `insert_block_typed`)
+- `rust/ingestion/src/web_ingestion_service.rs` (named-column `INSERT INTO streams` with `format`; new `register_otel_stream`; new `register_otel_process`; new `insert_block_typed` typed entry point used by the OTel adapter; refactor existing `insert_block(body)` to ciborium-decode and call `insert_block_typed`; add public constants `EMPTY_TRANSIT_METADATA_CBOR` and `FORMAT_TRANSIT`)
+- `rust/analytics/Cargo.toml` (add `base64`, `opentelemetry-proto`, `prost` deps for the OTel block processors)
 - `rust/analytics/src/replication.rs` (named-column `INSERT INTO streams` with `format`; the streams ingest path at `replication.rs:20-71` reads source columns by name from a `FlightRecordBatchStream`, so it must add `string_column_by_name(&b, "format")?` and bind it to the new column. **Source-schema requirement**: this means the source data lake must also be on schema v4+ — replicating from a v3 source will fail at the column lookup. Document this in the replication operator docs alongside the v4 migration note. We chose hard failure over a silent `'micromegas-transit'` fallback because replication is an admin-driven coordinated operation and a silent default would mask genuine schema-version mismatches.)
 - `rust/analytics/src/lakehouse/blocks_view.rs` (project `streams.format` in SQL + Arrow schema; bump `blocks_file_schema_hash()` from `vec![2]` to `vec![3]` so cached partitions built against the old schema are invalidated — same precedent as the JSONB migration that bumped it from `[1]` to `[2]`)
 - `rust/analytics/src/lakehouse/streams_view.rs` (carry `format` through `transform_query`/`merge_query`)
 - `rust/analytics/src/lakehouse/partition_source_data.rs` (add `format` to source query + `PartitionSourceBlock`)
 - `rust/analytics/src/lakehouse/jit_partitions.rs` (carry `format` on `PartitionSourceBlock`; change `write_partition_from_blocks` to take `block_processors: HashMap<&'static str, Arc<dyn BlockProcessor>>` and dispatch per source block)
-- `rust/analytics/src/lakehouse/parse_block_table_function.rs` (this SQL table function calls `parse_block(...)` which decompresses `payload.dependencies/objects` as transit bytes — fails on OTel proto payloads. Extend the SELECT at line 86-91 to project `"streams.format"` alongside the existing columns, read it from the resulting RecordBatch, and return a clean `unsupported format` error for `format != "micromegas-transit"`. Decoding OTel payloads here would require routing to the OTel proto walker; defer that to v2 unless a user surfaces the need.)
-- `rust/analytics/src/lakehouse/block_partition_spec.rs` (replace single `block_processor` with `block_processors: HashMap<&'static str, Arc<dyn BlockProcessor>>`; per-block dispatch)
-- `rust/analytics/src/lakehouse/log_view.rs`, `metrics_view.rs`, and `async_events_view.rs` (register processors in the new map; log/metrics get both native + OTel, async_events gets only the native processor)
-- `rust/telemetry-ingestion-srv/Cargo.toml` (add `otel-ingestion`, `opentelemetry-proto`, `prost`)
-- `rust/telemetry-ingestion-srv/src/main.rs` (add OTLP routes via a separate sub-Router with its own 20 MiB `RequestBodyLimitLayer`, merged into the protected app)
-- `rust/public/src/servers/` (new module for OTLP route registration alongside `ingestion.rs`)
-- `rust/analytics/src/lakehouse/mod.rs` (declare new modules: `otel_logs_block_processor`, `otel_metrics_block_processor`, `otel_spans_block_processor`, `otel_spans_view`, `otel_spans_table`)
+- `rust/analytics/src/lakehouse/parse_block_table_function.rs` (project `"streams.format"` and bail with a clean error for `format != "micromegas-transit"`. Decoding OTel payloads here would require routing to the OTel proto walker; defer that to v2 unless a user surfaces the need.)
+- `rust/analytics/src/lakehouse/block_partition_spec.rs` (replace single `block_processor` with `block_processors: BlockProcessorMap` (a `HashMap<&'static str, Arc<dyn BlockProcessor>>` type alias); per-block dispatch with `warn!`+skip on unknown formats)
+- `rust/analytics/src/lakehouse/log_view.rs`, `metrics_view.rs`, and `async_events_view.rs` (register processors in the new map; log/metrics get both native + OTel via private `*_processors()` helpers; async_events gets only the native processor)
+- `rust/public/Cargo.toml` (add `dep:micromegas-otel-ingestion` and `dep:tower-http` to the `server` feature)
+- `rust/public/src/servers/mod.rs` (declare the new `otlp` module)
+- `rust/telemetry-ingestion-srv/src/main.rs` (`.merge(servers::otlp::otlp_router())` into the protected sub-Router BEFORE the outer 100 MiB layer so the OTLP-scoped 20 MiB cap stays in effect for OTLP routes only). The crate's `Cargo.toml` is **not** modified — it depends on `micromegas` with the `server` feature, which transitively pulls in the new deps.
+- `rust/analytics/src/lakehouse/mod.rs` (declare new modules: `format`, `otel_attrs`, `otel_logs_block_processor`, `otel_metrics_block_processor`, `otel_spans_block_processor`, `otel_spans_view`, `otel_spans_table`)
 - `rust/analytics/src/lakehouse/view_factory.rs` (register `otel_spans` view set in `default_view_factory` via `add_view_set`, mirroring the existing `async_events` registration; per-block processor dispatch is configured inside `LogView`/`MetricsView` themselves, not here)
-- `README.md`
+- `README.md` (deferred — see Phase 7)
 
 **No new binary** — OTLP routes live in `telemetry-ingestion-srv`. `rust/tracing/` is also not touched. OTel is an analytics-layer concern; the ingest side is just a thin protobuf-to-block-bytes adapter.
 
@@ -548,25 +608,26 @@ The OTLP body limit is a compile-time constant (20 MiB, matching the OTel Collec
 
 ## Testing Strategy
 
-**Unit**:
-- ID derivation stability (`identity` module).
-- Translation of representative `ResourceLogs` / `ResourceSpans` / `ResourceMetrics` payloads — assert produced row records match expected.
-- Sentinel dispatch in each block processor — fed both legacy transit blocks and v1 OTel blocks, expect both to land correctly.
+**Unit** (status as of implementation):
+- ID derivation stability (`identity` module) — **done** (7 tests).
+- Per-resource block split shape (`block` module) — **done** (3 unit + 7 integration).
+- Translation of representative `ResourceLogs` / `ResourceSpans` / `ResourceMetrics` payloads to row batches — covered end-to-end by Phase 5 rather than at the Rust unit level (would need a fixture object store + DB pool to exercise `BlockProcessor::process`; cheaper to pay it once at the e2e tier).
+- Sentinel dispatch in each block processor — implicit: an unknown format produces a `warn!` + zero rows (no panic). Explicit dispatch test against a mixed transit + OTLP block stream is deferred to a later "regression suite" PR.
 
-**Integration** (in `tests/` of `otel-ingestion`):
-- Construct test payloads by building the prost-generated message types directly (`ResourceLogs`, `ResourceSpans`, `ResourceMetrics`, `KeyValue`, etc.) — `opentelemetry-proto` alone is sufficient. Pulling in the full `opentelemetry-sdk` and `opentelemetry-otlp` exporter just to materialize bytes adds tokio/tower/reqwest transitively for no test-coverage gain. A small fixtures module (`tests/fixtures.rs`) with helpers like `make_resource_logs(service_name, &[(time, level, msg)])` keeps the tests readable without an SDK round-trip.
-- Round-trip: build `ExportLogsServiceRequest` proto → serialize with prost → POST to the route via `axum::Router` in-process (no socket) → query the Arrow record batches that the block processor would emit; assert the final shape.
+**Integration** (in `tests/` of `otel-ingestion`) — **done** for the splitter; deferred for the in-process axum round-trip:
+- Construct test payloads by building the prost-generated message types directly (`ResourceLogs`, `ResourceSpans`, `ResourceMetrics`, `KeyValue`, etc.) — `opentelemetry-proto` alone is sufficient. Pulling in the full `opentelemetry-sdk` and `opentelemetry-otlp` exporter just to materialize bytes adds tokio/tower/reqwest transitively for no test-coverage gain. `tests/fixtures.rs` provides helpers like `make_logs_request(service, host, pid, records)` to keep tests readable without an SDK round-trip.
+- Round-trip: build `ExportLogsServiceRequest` proto → serialize with prost → POST to the route via `axum::Router` in-process (no socket) → query the Arrow record batches the block processor would emit. **Deferred to Phase 5**: the in-process variant needs a mock or in-memory `WebIngestionService` (PG + object store) to exercise the write side, which is roughly the same plumbing as the live-server path Phase 5 already covers. We chose to pay the integration cost once at Phase 5 rather than build two harnesses.
 
-**End-to-end** (via `local_test_env`):
-- Start `telemetry-ingestion-srv` with the OTLP routes enabled. Run a Python OTel SDK script (with `OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf`) emitting ~100 spans/logs/metrics. Query `log_entries`, `otel_spans`, `measures` via FlightSQL; assert counts match.
-- Run Claude Code with `CLAUDE_CODE_ENABLE_TELEMETRY=1` pointed at the local server; assert at least the documented metrics (`claude_code.token.usage`, `claude_code.session.count`) land.
+**End-to-end** (via `local_test_env`) — see Phase 5 for the concrete plan:
+- Start `telemetry-ingestion-srv` via `start_services.py`. Drive `pytest python/micromegas/tests/test_otlp_e2e.py`, which POSTs hand-built OTLP proto requests via `requests.post` (no full OTel SDK — avoids batching/retry nondeterminism) covering all three signals + idempotency + content-type rejection. Query `log_entries`, `otel_spans`, `measures` via FlightSQL; assert counts and column shape match.
+- Smoke (manual, Phase 7): run Claude Code with `CLAUDE_CODE_ENABLE_TELEMETRY=1` pointed at the local server; assert at least the documented metrics (`claude_code.token.usage`, `claude_code.session.count`) land. This validates the full SDK round-trip; pytest e2e is the primary regression net.
 
 **Performance smoke**:
 - Throughput target: 10k spans/sec on a single ingest pod (matches the existing CBOR pathway). The translation cost is dominated by JSON-encoding properties; if it's too slow, fall back to a tighter binary attribute encoding.
 
 ## Open Questions
 
-1. **`opentelemetry-proto` version pinning**: 0.31 confirmed compatible with `prost 0.14.3` (verified during research). Lock at first use.
+1. ~~**`opentelemetry-proto` version pinning**~~ — decided: locked at `0.31` (with `gen-tonic-messages` feature, NOT `gen-tonic`) in the workspace `Cargo.toml`. Confirmed compatible with `prost 0.14.x` during implementation.
 2. ~~**`trace_id` representation in `otel_spans`**~~ — decided: `FixedSizeBinary[16]` for `trace_id`, `FixedSizeBinary[8]` for `span_id` / `parent_span_id`. Lengths are fixed by W3C Trace Context, so the offsets array of variable `Binary` would be pure overhead. A `hex(...)` UDF (or query-time `encode`) handles human-readable display.
 3. **Stream lifecycle**: OTel processes run for days; the stream's `objects_metadata` (format descriptor) is stored once at registration. Is stream rotation needed, or does time-based lakehouse partitioning handle it?
 4. ~~**Per-tenant rate limiting**~~ — decided: out of scope for v1. Add when there's a real noisy-neighbor problem.
@@ -581,6 +642,84 @@ The OTLP body limit is a compile-time constant (20 MiB, matching the OTel Collec
     - **Fixed**: full retryable-code list (`429`, `502`, `503`, `504`) called out; we only emit `503` in v1.
     - **Deferred**: response gzip-encoding (spec MAY; tiny response bodies, no win) — added to "What we are NOT doing in v1".
     - **Confirmed correct**: 200 + empty `Export*ServiceResponse` on success; empty top-level request → 200; gzip-only request decompression; `415` for wrong Content-Type.
+
+## Implementation Notes
+
+(Filled in as the plan is built.)
+
+### Phase 1 (schema, otel-ingestion, OTLP routes)
+
+**Done:**
+- `rust/ingestion/src/sql_migration.rs` — bumped `LATEST_DATA_LAKE_SCHEMA_VERSION` to 4 and added `upgrade_data_lake_schema_v4`.
+- `rust/ingestion/src/web_ingestion_service.rs` — switched `insert_stream` to a named-column INSERT with `format`. Added `register_otel_stream`, `register_otel_process`, `insert_block_typed`. Exported `EMPTY_TRANSIT_METADATA_CBOR` (the single byte `0x80` — CBOR-encoded empty `Vec<UserDefinedType>`) and `FORMAT_TRANSIT`.
+  - Subtle: `register_otel_process` issues `INSERT INTO processes (...) VALUES ($1,...,$3,$4,...)` and binds `username` twice to fill `username` and `realname`. Earlier draft used `$3,$3` which sqlx rejects as "ambiguous" in some configurations — bind separately.
+- `rust/analytics/src/replication.rs` — switched to a named-column INSERT and reads the `format` column. Hard fails if the source data lake doesn't have v4 schema (matches the plan's "no silent fallback" decision).
+- `rust/otel-ingestion/` — new crate. Modules:
+  - `identity.rs` — `process_id_from_resource`, `stream_id_from_process_signal`, `block_id_from_payload`. Namespace UUIDs were generated 2026-05-01 via `uuidgen`. 10 unit tests cover stability across attribute reordering, host case-folding, pid difference, missing-attribute fallback, signal-discrimination, content-addressing, degenerate detection.
+  - `block.rs` — `split_logs/metrics/traces` produce `PreparedBlock` per Resource. Walks each Resource for min/max timestamps; falls back to wall clock only if every record has zero timestamps.
+  - `proto.rs` — re-exports prost message types from `opentelemetry-proto` (with `gen-tonic-messages` feature, NOT `gen-tonic` — the latter pulls in tonic transport which we don't need). Hand-rolled 3-field `Status` message for OTLP/HTTP error responses.
+  - `error.rs` — `OtelError` with HTTP status mapping + retryable flag. `Signal` implements `Display` so `thiserror`'s `#[error]` template can use it.
+  - `handler.rs` — top-level `ingest_logs`/`metrics`/`traces` that decode the proto, register process/stream, and write blocks. Empty top-level requests short-circuit to a 200 with empty response per spec.
+- `rust/Cargo.toml` — added `opentelemetry-proto = "0.31"` (with `gen-tonic-messages,logs,metrics,trace` features), enabled `v5` on the `uuid` workspace dep, added `decompression-gzip` to `tower-http` features, registered `micromegas-otel-ingestion` workspace member.
+- `rust/public/src/servers/otlp.rs` — three POST handlers, `Content-Type` validated via media-type prefix (so `application/x-protobuf; charset=utf-8` works). 4xx/5xx responses carry a `google.rpc.Status` proto body; 503 responses include `Retry-After: 30`. Sub-router applies `RequestBodyLimitLayer(20 MiB)` + `RequestDecompressionLayer.gzip(true)` before merging into the protected app, scoping the OTLP limit independently of the parent's 100 MiB cap.
+- `rust/telemetry-ingestion-srv/src/main.rs` — `.merge(otlp_router())` BEFORE the outer 100 MiB layer so per-route layers stay scoped.
+- `rust/public/Cargo.toml` — added `dep:micromegas-otel-ingestion` and `dep:tower-http` to the `server` feature.
+
+**Deviations from plan:**
+- The plan said "OtelError variants `Database`/`Storage` map to 503". They do — but the gRPC code embedded in the `Status` proto body is `UNAVAILABLE=14` (not `RESOURCE_EXHAUSTED=8` as the plan suggested). UNAVAILABLE is the canonical gRPC mapping for transient backend failures.
+- Plan said `WebIngestionService::insert_block(body: bytes::Bytes)` should be a "thin wrapper" delegating to `insert_block_typed`. Implementation: `insert_block` ciborium-decodes once and forwards the typed `Block` to `insert_block_typed`, which does all the actual work. Same effect, slightly different function-call structure.
+
+### Phase 2 (per-block dispatch + OTel logs processor)
+
+**Done:**
+- `partition_source_data.rs` — `PartitionSourceBlock` carries a new `format: String` field.
+- `blocks_view.rs`, `streams_view.rs`, `partition_source_data.rs`, `jit_partitions.rs` — project `streams.format` end-to-end. Bumped `blocks_file_schema_hash` to `vec![3]`.
+- `block_partition_spec.rs` — replaced the single `block_processor` field with `block_processors: HashMap<&'static str, Arc<dyn BlockProcessor>>`. The `BlockPartitionSpec::write` loop looks up the processor by `src_block.format` per block; missing format → `warn!` + skip rather than error.
+- `jit_partitions.rs` — `write_partition_from_blocks` takes the same map. All four call sites updated (`LogView`, `MetricsView`, `AsyncEventsView`, `OtelSpansView`).
+- `parse_block_table_function.rs` — projects `streams.format` and bails with a clear message on non-transit formats. Decoding OTel payloads here would require routing to the OTel proto walker — deferred to v2.
+- `format.rs` (new) — central `FORMAT_TRANSIT` / `FORMAT_OTLP_LOGS` / `FORMAT_OTLP_METRICS` / `FORMAT_OTLP_TRACES` constants used as HashMap keys.
+- `otel_attrs.rs` (new) — `AnyValue` → JSONB conversion (recursive for arrays/kvlists, base64 for bytes), `severity_number` → `Level` mapping table.
+- `otel_logs_block_processor.rs` (new) — prost-decodes `ResourceLogs`, walks each scope and record, emits one `log_entries` row per record. Folds trace/span ids, severity_text, scope info into JSONB properties under `otel.*` prefixes. Uses observed_time fallback when `time_unix_nano == 0`. Records with no timestamp at all are dropped with a warning.
+- `log_view.rs` / `metrics_view.rs` — register both native and OTel processors via small private `log_processors()` / `metrics_processors()` helpers that build the HashMap on each call (cheap — two entries with `Arc::clone`-ed processors).
+
+**Deviations from plan:**
+- Plan said tests should "feed transit blocks and OTLP blocks to a sentinel-dispatch test". That test is deferred to Phase 9 (the integration tests bundle) — the unit-level test that an unknown format prints `warn!` and skips is implicit (no panic; the partition just emits zero rows for unrecognized blocks).
+
+### Phase 3 (OTel metrics processor)
+
+**Done:**
+- `otel_metrics_block_processor.rs` — Sum + Gauge data points → `measures` rows. Histogram / ExponentialHistogram / Summary skipped with per-kind `debug!` logs that include the metric name, unit, and point count. `aggregation_temporality`, `is_monotonic`, and `otel.metric.kind` ("sum"/"gauge") fold into per-row properties so queries can filter by metric kind without adding columns.
+- Number-data-point handling supports both `as_double` and `as_int` value variants.
+- Registered for `"otlp/v1/metrics"` in `MetricsView` via `metrics_processors()`.
+
+### Phase 4 (otel_spans view)
+
+**Done:**
+- `otel_spans_table.rs` — Arrow schema. `trace_id` is `FixedSizeBinary[16]`, `span_id` / `parent_span_id` are `FixedSizeBinary[8]` (latter nullable for root spans). `events` and `links` are plain `Binary` columns carrying JSONB arrays.
+- `otel_spans_block_processor.rs` — emits one row per span. Skips spans with `start_time == 0`, `end_time == 0`, or wrong-length trace_id/span_id with `debug!`.
+- `otel_spans_view.rs` — JIT-only per-process view, mirrors `AsyncEventsView` structure but uses the simpler `find_process` flow (OTel's `tsc_frequency = 1ns` makes `make_time_converter_from_latest_timing` unnecessary). Rejects `"global"`. Registers only `"otlp/v1/traces"` in its block-processor map (no native source).
+- `view_factory.rs` — registered `OtelSpansViewMaker` (unit struct, no `view_factory: Arc<ViewFactory>` field — different from `AsyncEventsViewMaker` because we don't use `find_process_with_latest_timing`).
+
+### Style cleanup
+- Comments throughout switched from "CBOR streams" to "transit streams" / "native streams". CBOR is only the envelope — the actual stream wire format is transit. (Per user feedback during implementation.)
+
+### Tests added (17 total)
+- `rust/otel-ingestion/src/identity.rs` (7 unit tests) — process_id stability across attribute reordering, host case-folding, pid difference, missing-attribute fallback (`process.start_time` ↔ `process.creation.time`), signal-discrimination (logs ≠ metrics ≠ traces), content-addressing of block_id, degenerate-resource detection.
+- `rust/otel-ingestion/src/block.rs` (3 unit tests) — split_logs produces one block per resource, skips resources with empty scope_logs, block_id changes when payload changes.
+- `rust/otel-ingestion/tests/split_tests.rs` (7 integration tests) — log bounds derivation from min/max time_unix_nano, idempotent block_id with content-addressed payload, mixed-kind metrics emit one block per resource, traces payload round-trips through prost decode, empty top-level request yields no blocks, distinct resources split into distinct processes, format constants align with signal keys.
+- `rust/otel-ingestion/tests/fixtures.rs` — helper module that builds `ExportLogsServiceRequest` / `ExportMetricsServiceRequest` / `ExportTraceServiceRequest` from prost-generated message types directly. Per the plan's testing strategy, this avoids pulling in `opentelemetry-sdk` + `opentelemetry-otlp` (which would drag tokio/tower/reqwest in transitively).
+
+### CI status (post-implementation)
+- `cargo fmt --check`: passes.
+- `cargo clippy --workspace -- -D warnings`: passes.
+- `cargo machete`: no unused dependencies.
+- `cargo test`: all tests pass (otel-ingestion: 17, analytics + everything else: ~150+).
+- `python3 build/rust_ci.py native`: green.
+
+### Phase 5 / 6 / 7 (e2e tests + hardening + docs) — NOT DONE
+- **Phase 5 (e2e integration test)** — `python/micromegas/tests/test_otlp_e2e.py` + `otlp_helpers.py`. Hand-built proto requests via `requests.post` against a running stack from `start_services.py`; one test per signal + idempotency + wrong-content-type. See Phase 5 in Implementation Steps for the full design.
+- **Phase 6 (production hardening)** — monitoring + alerts (deferred — needs production traffic to size correctly).
+- **Phase 7 (docs)** — `mkdocs/docs/operating/otlp.md`, `mkdocs/docs/guides/coding-agents.md`, `README.md` feature-list update, `local_test_env/` example Claude Code env.
 
 ## References
 

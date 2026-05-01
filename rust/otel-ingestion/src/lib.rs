@@ -1,0 +1,30 @@
+//! OTLP/HTTP ingestion adapter for the micromegas data lake.
+//!
+//! This crate accepts OTLP `Export*ServiceRequest` proto messages and writes them as
+//! micromegas blocks. Translation from proto to parquet rows happens at the analytics
+//! layer; this crate's job is just identity synthesis (resource → process_id /
+//! stream_id), per-resource block splitting, and idempotent SQL inserts.
+
+#![allow(missing_docs, clippy::missing_errors_doc)]
+
+pub mod block;
+pub mod error;
+pub mod handler;
+pub mod identity;
+pub mod proto;
+
+pub use error::{OtelError, Signal};
+
+/// Stream tag for OTel logs (shared with native log producers — `log_entries` view loads both).
+pub const TAG_LOGS: &str = "log";
+/// Stream tag for OTel metrics (shared with native metrics producers).
+pub const TAG_METRICS: &str = "metrics";
+/// Stream tag for OTel traces (new — native async spans use the `cpu` tag).
+pub const TAG_TRACES: &str = "trace";
+
+/// Stream `format` value for OTel logs (one `ResourceLogs` proto per block payload).
+pub const FORMAT_OTLP_LOGS: &str = "otlp/v1/logs";
+/// Stream `format` value for OTel metrics (one `ResourceMetrics` proto per block payload).
+pub const FORMAT_OTLP_METRICS: &str = "otlp/v1/metrics";
+/// Stream `format` value for OTel traces (one `ResourceSpans` proto per block payload).
+pub const FORMAT_OTLP_TRACES: &str = "otlp/v1/traces";
