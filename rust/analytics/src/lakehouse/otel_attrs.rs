@@ -113,17 +113,18 @@ pub fn any_value_to_string(v: &AnyValue) -> String {
 ///
 /// `severity_number = 0` (UNSPECIFIED) → 4 (Info), so the default
 /// `WHERE level <= 4` filter keeps them visible — the SDK didn't tell us they were
-/// low-priority, so we don't bury them. Out-of-range (negative or `> 24`) → 1 (Fatal).
+/// low-priority, so we don't bury them. Out-of-range (negative or `> 24`) → 4 (Info)
+/// as well; promoting an unknown severity to Fatal would silently pollute alerting
+/// when a buggy SDK is off-by-one on the FATAL range.
 pub fn severity_number_to_level(sev: i32) -> i32 {
     match sev {
-        0 => 4,       // UNSPECIFIED → Info (visible under default `level <= 4`)
         1..=4 => 6,   // TRACE
         5..=8 => 5,   // DEBUG
         9..=12 => 4,  // INFO
         13..=16 => 3, // WARN
         17..=20 => 2, // ERROR
         21..=24 => 1, // FATAL
-        _ => 1,       // out of range → Fatal
+        _ => 4,       // UNSPECIFIED (0) or out-of-range → Info (don't fake-Fatal-alert)
     }
 }
 

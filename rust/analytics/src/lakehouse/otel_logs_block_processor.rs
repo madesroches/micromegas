@@ -93,6 +93,7 @@ impl BlockProcessor for OtelLogsBlockProcessor {
         let mut max_time = i64::MIN;
         let mut nb_appended = 0usize;
         let mut nb_dropped_no_timestamp = 0usize;
+        let mut nb_severity_out_of_range = 0usize;
 
         for scope_logs in &resource_logs.scope_logs {
             let scope = scope_logs.scope.as_ref();
@@ -116,10 +117,7 @@ impl BlockProcessor for OtelLogsBlockProcessor {
 
                 let level = severity_number_to_level(record.severity_number);
                 if !(0..=24).contains(&record.severity_number) {
-                    debug!(
-                        "OTel severity_number {} out of spec range, clamped to Fatal",
-                        record.severity_number
-                    );
+                    nb_severity_out_of_range += 1;
                 }
 
                 // Body → msg. String body lands directly; structured body gets stringified
@@ -163,19 +161,37 @@ impl BlockProcessor for OtelLogsBlockProcessor {
                         JsonbValue::String(Cow::Owned(scope_logs.schema_url.clone())),
                     ));
                 }
+                // W3C Trace Context: trace_id is 16 bytes, span_id is 8 bytes.
+                // `otel_spans` enforces these lengths and skips bad rows; we mirror
+                // that here so a buggy SDK can't write half-size hex strings that
+                // silently fail correlation joins against the spans view.
                 if !record.trace_id.is_empty() {
-                    let hex = hex_encode(&record.trace_id);
-                    extras.push((
-                        "otel.trace_id".to_string(),
-                        JsonbValue::String(Cow::Owned(hex)),
-                    ));
+                    if record.trace_id.len() == 16 {
+                        let hex = hex_encode(&record.trace_id);
+                        extras.push((
+                            "otel.trace_id".to_string(),
+                            JsonbValue::String(Cow::Owned(hex)),
+                        ));
+                    } else {
+                        debug!(
+                            "OTel log record with bad trace_id ({}b), dropping property",
+                            record.trace_id.len()
+                        );
+                    }
                 }
                 if !record.span_id.is_empty() {
-                    let hex = hex_encode(&record.span_id);
-                    extras.push((
-                        "otel.span_id".to_string(),
-                        JsonbValue::String(Cow::Owned(hex)),
-                    ));
+                    if record.span_id.len() == 8 {
+                        let hex = hex_encode(&record.span_id);
+                        extras.push((
+                            "otel.span_id".to_string(),
+                            JsonbValue::String(Cow::Owned(hex)),
+                        ));
+                    } else {
+                        debug!(
+                            "OTel log record with bad span_id ({}b), dropping property",
+                            record.span_id.len()
+                        );
+                    }
                 }
                 if !record.severity_text.is_empty() {
                     extras.push((
@@ -207,6 +223,11 @@ impl BlockProcessor for OtelLogsBlockProcessor {
         if nb_dropped_no_timestamp > 0 {
             warn!(
                 "OTel log records without timestamp dropped (block_id={block_id_str}, count={nb_dropped_no_timestamp})"
+            );
+        }
+        if nb_severity_out_of_range > 0 {
+            warn!(
+                "OTel log records with out-of-range severity_number treated as Info (block_id={block_id_str}, count={nb_severity_out_of_range})"
             );
         }
 

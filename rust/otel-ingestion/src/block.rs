@@ -324,6 +324,20 @@ pub struct ProcessFromResource {
     pub properties: Vec<Property>,
 }
 
+/// `processes` columns are declared `VARCHAR(255)`. OTel attributes have no length
+/// contract — `os.description` in particular can carry a full kernel banner well past
+/// 255 chars. Truncate by character (not byte) so we never split a multi-byte codepoint.
+/// Untruncated values would cause a Postgres "value too long" error → 503 → SDK retry loop.
+const PROCESS_FIELD_MAX_CHARS: usize = 255;
+
+fn truncate_for_db(s: String) -> String {
+    if s.chars().count() <= PROCESS_FIELD_MAX_CHARS {
+        s
+    } else {
+        s.chars().take(PROCESS_FIELD_MAX_CHARS).collect()
+    }
+}
+
 impl ProcessFromResource {
     pub fn build(attrs: &[KeyValue], fallback_start: DateTime<Utc>) -> Self {
         let svc_name = crate::identity::attr(attrs, "service.name")
@@ -337,19 +351,28 @@ impl ProcessFromResource {
         } else {
             format!("{svc_ns}/{svc_name}")
         };
+        let exe = truncate_for_db(exe);
 
-        let username = crate::identity::attr(attrs, "user.name")
-            .map(crate::identity::attr_to_string)
-            .unwrap_or_default();
-        let computer = crate::identity::attr(attrs, "host.name")
-            .map(crate::identity::attr_to_string)
-            .unwrap_or_default();
-        let distro = crate::identity::attr(attrs, "os.description")
-            .map(crate::identity::attr_to_string)
-            .unwrap_or_default();
-        let cpu_brand = crate::identity::attr(attrs, "host.cpu.model.name")
-            .map(crate::identity::attr_to_string)
-            .unwrap_or_default();
+        let username = truncate_for_db(
+            crate::identity::attr(attrs, "user.name")
+                .map(crate::identity::attr_to_string)
+                .unwrap_or_default(),
+        );
+        let computer = truncate_for_db(
+            crate::identity::attr(attrs, "host.name")
+                .map(crate::identity::attr_to_string)
+                .unwrap_or_default(),
+        );
+        let distro = truncate_for_db(
+            crate::identity::attr(attrs, "os.description")
+                .map(crate::identity::attr_to_string)
+                .unwrap_or_default(),
+        );
+        let cpu_brand = truncate_for_db(
+            crate::identity::attr(attrs, "host.cpu.model.name")
+                .map(crate::identity::attr_to_string)
+                .unwrap_or_default(),
+        );
 
         // Prefer the OTel-stable `process.creation.time`; accept legacy `process.start_time` as a fallback.
         let start_time = crate::identity::attr(attrs, "process.creation.time")
@@ -511,5 +534,21 @@ mod tests {
         })
         .unwrap();
         assert_ne!(a[0].block.block_id, b[0].block.block_id);
+    }
+
+    #[test]
+    fn process_field_truncation_caps_at_255_chars_without_splitting_codepoints() {
+        // 300 ASCII chars → truncated to 255.
+        let long_ascii = "a".repeat(300);
+        let svc = s_kv("os.description", &long_ascii);
+        let p = ProcessFromResource::build(&[svc], Utc::now());
+        assert_eq!(p.distro.chars().count(), 255);
+
+        // 300 multi-byte chars (3 bytes each) — never panic on a codepoint boundary
+        // and never produce more than 255 chars even though byte length differs.
+        let long_emoji = "は".repeat(300);
+        let svc = s_kv("host.name", &long_emoji);
+        let p = ProcessFromResource::build(&[svc], Utc::now());
+        assert_eq!(p.computer.chars().count(), 255);
     }
 }
