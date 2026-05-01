@@ -26,6 +26,15 @@ pub const EMPTY_TRANSIT_METADATA_CBOR: &[u8] = &[0x80];
 /// Format string for native streams (transit-encoded payload, CBOR envelope).
 pub const FORMAT_TRANSIT: &str = "micromegas-transit";
 
+/// Stream `format` value for OTel logs (one `ResourceLogs` proto per block payload).
+pub const FORMAT_OTLP_LOGS: &str = "otlp/v1/logs";
+
+/// Stream `format` value for OTel metrics (one `ResourceMetrics` proto per block payload).
+pub const FORMAT_OTLP_METRICS: &str = "otlp/v1/metrics";
+
+/// Stream `format` value for OTel traces (one `ResourceSpans` proto per block payload).
+pub const FORMAT_OTLP_TRACES: &str = "otlp/v1/traces";
+
 /// Error type for ingestion service operations.
 /// Categorizes errors to enable proper HTTP status code mapping.
 #[derive(Error, Debug)]

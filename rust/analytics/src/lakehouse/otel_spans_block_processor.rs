@@ -8,7 +8,7 @@ use super::{
     block_partition_spec::BlockProcessor, otel_attrs::any_value_to_jsonb,
     partition_source_data::PartitionSourceBlock, write_partition::PartitionRowSet,
 };
-use crate::lakehouse::otel_attrs::attrs_to_jsonb;
+use crate::lakehouse::otel_attrs::{attrs_to_jsonb, hex_encode};
 use crate::payload::fetch_block_payload;
 use crate::time::TimeRange;
 use anyhow::{Context, Result};
@@ -301,14 +301,4 @@ fn proto_status_code_str(code: i32) -> &'static str {
         ProtoStatusCode::Ok => "OK",
         ProtoStatusCode::Error => "ERROR",
     }
-}
-
-fn hex_encode(bytes: &[u8]) -> String {
-    static HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        out.push(HEX[(b >> 4) as usize] as char);
-        out.push(HEX[(b & 0x0f) as usize] as char);
-    }
-    out
 }

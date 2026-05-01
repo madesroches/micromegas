@@ -126,3 +126,16 @@ pub fn severity_number_to_level(sev: i32) -> i32 {
         _ => 1,       // out of range → Fatal
     }
 }
+
+/// Lower-case hex without separators. Used to render `trace_id` (16 bytes per
+/// W3C Trace Context) and `span_id` (8 bytes) for the `properties` JSONB.
+/// Length is not validated here — callers that need to enforce it do so before calling.
+pub fn hex_encode(bytes: &[u8]) -> String {
+    static HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        out.push(HEX[(b >> 4) as usize] as char);
+        out.push(HEX[(b & 0x0f) as usize] as char);
+    }
+    out
+}

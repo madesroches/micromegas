@@ -22,9 +22,8 @@ pub const TAG_METRICS: &str = "metrics";
 /// Stream tag for OTel traces (new — native async spans use the `cpu` tag).
 pub const TAG_TRACES: &str = "trace";
 
-/// Stream `format` value for OTel logs (one `ResourceLogs` proto per block payload).
-pub const FORMAT_OTLP_LOGS: &str = "otlp/v1/logs";
-/// Stream `format` value for OTel metrics (one `ResourceMetrics` proto per block payload).
-pub const FORMAT_OTLP_METRICS: &str = "otlp/v1/metrics";
-/// Stream `format` value for OTel traces (one `ResourceSpans` proto per block payload).
-pub const FORMAT_OTLP_TRACES: &str = "otlp/v1/traces";
+// Format constants live in `micromegas-ingestion` so writer-side (this crate) and
+// reader-side (`micromegas-analytics`) read from a single source of truth.
+pub use micromegas_ingestion::web_ingestion_service::{
+    FORMAT_OTLP_LOGS, FORMAT_OTLP_METRICS, FORMAT_OTLP_TRACES,
+};

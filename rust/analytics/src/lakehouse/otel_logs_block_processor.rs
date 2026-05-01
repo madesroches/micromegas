@@ -9,7 +9,7 @@ use super::{
     write_partition::PartitionRowSet,
 };
 use crate::lakehouse::otel_attrs::{
-    any_value_to_jsonb, any_value_to_string, attrs_to_jsonb, severity_number_to_level,
+    any_value_to_jsonb, any_value_to_string, attrs_to_jsonb, hex_encode, severity_number_to_level,
 };
 use crate::payload::fetch_block_payload;
 use crate::time::TimeRange;
@@ -239,17 +239,4 @@ impl BlockProcessor for OtelLogsBlockProcessor {
             batch,
         )))
     }
-}
-
-/// Lower-case hex without separators. `trace_id` is 16 bytes per W3C Trace Context;
-/// `span_id` is 8 bytes. Length is not validated here (we just render whatever the
-/// SDK sent — bad lengths surface during query rather than ingest).
-fn hex_encode(bytes: &[u8]) -> String {
-    static HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        out.push(HEX[(b >> 4) as usize] as char);
-        out.push(HEX[(b & 0x0f) as usize] as char);
-    }
-    out
 }

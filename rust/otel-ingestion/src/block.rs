@@ -34,6 +34,10 @@ pub struct PreparedBlock {
 
 /// Walks `ResourceLogs` to find min/max `time_unix_nano`. Falls back to
 /// `observed_time_unix_nano` when the per-record `time` is 0.
+///
+/// Records with no usable timestamp still count toward `count` even though the
+/// downstream processor drops them — keeps `block.nb_objects` consistent with
+/// the proto payload bytes (matching the metrics-side trade-off).
 fn logs_bounds(rl: &ResourceLogs) -> Option<(i64, i64, i32)> {
     let mut min = i64::MAX;
     let mut max = i64::MIN;
@@ -65,6 +69,11 @@ fn logs_bounds(rl: &ResourceLogs) -> Option<(i64, i64, i32)> {
 }
 
 /// Walks `ResourceSpans` for min(start_time) / max(end_time).
+///
+/// Spans with `start/end_time_unix_nano == 0` or wrong-sized `trace_id`/`span_id`
+/// still count toward `count` even though the downstream processor drops them —
+/// keeps `block.nb_objects` consistent with the proto payload bytes (matching
+/// the metrics-side trade-off).
 fn spans_bounds(rs: &ResourceSpans) -> Option<(i64, i64, i32)> {
     let mut min = i64::MAX;
     let mut max = i64::MIN;
