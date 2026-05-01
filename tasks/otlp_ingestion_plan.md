@@ -334,7 +334,7 @@ Nested arrays/kvlists are preserved as nested JSON — no flattening. Query-time
    4. Re-encode this Resource sub-message as protobuf bytes — the block payload.
    5. Build `block_wire_format::Block` with `payload.dependencies = []`, `payload.objects = <proto bytes>`.
    6. Call `WebIngestionService::insert_block_typed(block)` (typed entry point added for the OTel path; see Phase 1 step 5).
-7. **Return** `200 OK` with `Content-Type: application/x-protobuf` and an empty `Export{Logs,Metrics,Trace}ServiceResponse` proto body (i.e., the proto-encoded zero-value of the response message — for whole-batch acceptance this is just an unset `partial_success` field, which serializes to zero bytes). On error: see HTTP status mapping below; the response body is the same proto type with `partial_success.error_message` populated where applicable.
+7. **Return** `200 OK` with `Content-Type: application/x-protobuf` and an empty `Export{Logs,Metrics,Trace}ServiceResponse` proto body (the proto-encoded zero-value of the response message — for whole-batch acceptance this is just an unset `partial_success` field, which serializes to zero bytes). On error: per the HTTP status mapping below, return the appropriate 4xx/5xx code and a `google.rpc.Status` proto body (NOT `Export*ServiceResponse` — see "Response body" in Backpressure).
 
 There's no event-by-event translation at ingest. The hot path serializes one protobuf submessage and writes it.
 
@@ -361,13 +361,26 @@ Edge cases:
 OTLP/HTTP is one POST per export call. The proto response body carries `partial_success { rejected_*_count, error_message }` for batch-level reporting; in v1 we use whole-batch accept/reject (SDKs handle that fine) and don't fill in partial counts.
 
 - 20 MiB **decompressed** body limit on OTLP routes (matches the OTel Collector's `confighttp.max_request_body_size` default, so anything an SDK is willing to send under the conventional Collector cap will go through here too; sub-Router mechanics in Phase 1 step 6). The 20 MiB applies to the body axum sees. With `RequestDecompressionLayer` the layer order is: `RequestBodyLimitLayer` (outer, on the wire bytes) → `RequestDecompressionLayer` (inner, expands gzip) → handler. We size the limit for compressed bytes since that's what the wire carries; gzip on text-heavy proto typically expands 5–10×, so ~100–200 MiB of decoded payload fits under a 20 MiB compressed cap. If observed payloads grow past this, bump or split the limit per-route. (Alternative: limit decompressed bytes via `tower-http`'s `Limited<R>`; deferred unless needed.)
+- **Content-Type matching is media-type-aware, not string-equality**. Parse the header and accept anything whose media type is `application/x-protobuf` (so `application/x-protobuf; charset=utf-8` and `application/x-protobuf ` with trailing whitespace both pass). Use `mime::Mime` parsing or `axum::http::header::CONTENT_TYPE` extractor with a starts-with check; do NOT `header::exact_ignore_case` since SDKs are allowed to add parameters.
 - HTTP status mapping:
-  - DB/object-store transient failures → `503 Service Unavailable` (retryable per OTLP/HTTP spec).
+  - DB/object-store transient failures → `503 Service Unavailable` (retryable per spec) **with a `Retry-After: 30` response header** (spec: "If the request is retryable, the server SHOULD include Retry-After header"). 30s is a conservative default; tune based on observed recovery times.
   - Parse errors (malformed protobuf, malformed gzip) → `400 Bad Request` (non-retryable).
   - Wrong `Content-Type` (not `application/x-protobuf`) or unsupported `Content-Encoding` (not gzip / not absent) → `415 Unsupported Media Type`.
   - Body exceeds 20 MiB → `413 Payload Too Large`.
   - Auth failures → `401 Unauthorized`.
-- **Response body**: every response — success or error — is `Content-Type: application/x-protobuf` and contains an `Export{Logs,Metrics,Trace}ServiceResponse` proto. On 2xx success: empty proto (zero bytes is the valid wire form for the all-defaults message). On 4xx/5xx: same proto with `partial_success.error_message` populated. SDK clients ignore the body on non-2xx but a strict client may still try to parse it.
+  - **Full retryable code list per spec**: `429`, `502`, `503`, `504`. We only emit `503` in v1 (no rate limiting → no `429`; no upstream proxy → no `502`/`504`); when rate limiting lands as a tower layer, it returns `429` + `Retry-After`.
+- **Response body** (per OTLP/HTTP spec — verified against the spec text and Vector's `vector/src/sources/opentelemetry/reply.rs`):
+  - **2xx success** → `Content-Type: application/x-protobuf`, body is an `Export{Logs,Metrics,Trace}ServiceResponse` proto (empty on whole-batch acceptance — zero bytes is the valid wire form; `partial_success` populated only if we ever do per-record acceptance, deferred to v2).
+  - **4xx / 5xx error** → `Content-Type: application/x-protobuf`, body is a **`google.rpc.Status` proto** (NOT `Export*ServiceResponse`). Spec quote: *"The response body for all HTTP 4xx and HTTP 5xx responses MUST be a Protobuf-encoded Status message that describes the problem."* Status fields we populate: `code` (gRPC canonical code — e.g., `INVALID_ARGUMENT=3` for parse errors, `UNAUTHENTICATED=16` for 401, `RESOURCE_EXHAUSTED=8` for 413/503), `message` (human-readable). `details` is left empty in v1.
+  - **Sourcing the `Status` proto type**: define it locally in `rust/otel-ingestion/src/proto.rs` as a hand-rolled prost message — three fields, no external dep. Pulling in `tonic-types` would drag tonic into the dependency graph, contradicting the "no gRPC stack" decision. Sketch:
+    ```rust
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct Status {
+        #[prost(int32, tag = "1")] pub code: i32,
+        #[prost(string, tag = "2")] pub message: String,
+        // tag = "3" is `repeated google.protobuf.Any details` — omitted in v1.
+    }
+    ```
 - No rate limiting in v1.
 
 ### Auth
@@ -412,6 +425,8 @@ Per-signal headers override the catch-all. We don't need to do anything special 
 - **mTLS / client certs**. The existing auth crate doesn't support it; the axum middleware would need a separate code path. Skip until someone asks.
 - **Per-tenant rate limiting**. Out of scope for v1. The auth context exposes `subject` (API-key name) which is enough to add it later as a tower layer; we'll do it when we have a real noisy-neighbor problem.
 - **Per-route auth requirements**. Every OTLP route requires auth; no public health endpoint on the OTel listener (health goes on a separate unauthenticated port).
+- **Response gzip-encoding**. Spec says the server MAY gzip-encode the response when the client sends `Accept-Encoding: gzip`. Our responses are tiny (empty `Export*ServiceResponse` proto, or a `Status` proto with a short `message`), so compression saves nothing. Add later only if a client complains.
+- **Per-record `partial_success`**. v1 is whole-batch accept/reject; no path emits 200 + populated `partial_success`. The infrastructure is wired (response is already an `Export*ServiceResponse` proto), so adding it later is additive.
 
 ### Configuration
 
@@ -557,7 +572,13 @@ The OTLP body limit is a compile-time constant (20 MiB, matching the OTel Collec
 6. ~~**Block payload re-encoding**~~ — decided: accept the cost. Splitting an `ExportRequest` into per-Resource blocks re-encodes each submessage; an offset/length scheme into a shared envelope would save the re-encoding but make blocks non-self-contained. OTel ingestion is allowed to be less efficient than the native micromegas-tracing path; producers that want minimum overhead use the native SDK.
 7. **OpenTelemetry Collector sample config**: ship one that fans out to Micromegas + a file exporter for production safety? Natural follow-up, not core.
 8. ~~**Compaction interaction**~~ — decided: nothing to do. The existing lakehouse compaction handles small-block influxes the same way it does for native streams.
-9. **Reference-implementation cross-check (TODO before coding)**: find a simple Rust OTLP/HTTP receiver and diff this plan against it, looking for things we missed or got wrong. Candidates to read: the OTel Collector's `receiver/otlpreceiver` (Go, but the canonical reference for spec-conformant behavior), `tracing-opentelemetry`'s test harnesses, the `opentelemetry-rust` repo's `examples/`, and any small Rust-native receivers on crates.io (search `otlp receiver`, `otlp http`). Diff axes: gzip handling specifics, response body shape on partial-success/error, retry-after semantics, content-type strict vs lax parsing, edge cases for empty/malformed `ExportRequest`, span-status nullability. Output: a short "deltas vs. canonical receiver" section appended here, then either incorporate or explicitly defer each delta.
+9. ~~**Reference-implementation cross-check**~~ — done. Diffed the plan against the OTLP/HTTP spec text and Vector's `vector/src/sources/opentelemetry/{http,reply}.rs`. Findings incorporated into the plan:
+    - **Fixed**: error-response body is `google.rpc.Status` proto, not `Export*ServiceResponse` — corrected in "Response body" bullet of Backpressure, with sourcing strategy (hand-roll a 3-field prost message in `otel-ingestion/src/proto.rs` rather than pull in `tonic-types`).
+    - **Fixed**: added `Retry-After: 30` header on 503 responses (spec SHOULD).
+    - **Fixed**: Content-Type matching is media-type-aware (parse, then check); accepts `application/x-protobuf; charset=...`. Not exact-string-equality.
+    - **Fixed**: full retryable-code list (`429`, `502`, `503`, `504`) called out; we only emit `503` in v1.
+    - **Deferred**: response gzip-encoding (spec MAY; tiny response bodies, no win) — added to "What we are NOT doing in v1".
+    - **Confirmed correct**: 200 + empty `Export*ServiceResponse` on success; empty top-level request → 200; gzip-only request decompression; `415` for wrong Content-Type.
 
 ## References
 
