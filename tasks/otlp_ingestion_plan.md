@@ -514,8 +514,8 @@ assert resp.headers["content-type"] == "application/x-protobuf"
 The reason for hand-built protos rather than the full SDK: SDK exporters batch on a background thread and we'd need to call `force_flush()` then sleep — flaky in CI. Hand-built proto + `requests.post` makes timing deterministic.
 
 **Assertions** (one test function per signal, plus one cross-cutting):
-- `test_otlp_logs_e2e`: emit 5 logs with a known `service.name` + `host.name` + `process.pid`. Compute the expected `process_id` client-side using the same UUIDv5 formula (helper in `tests/otlp_helpers.py`). Query `SELECT count(*) FROM log_entries WHERE process_id = '<uuid>'` until `>= 5` (poll with `assert_eventually` up to 30s — JIT materialization may take a beat). Then `SELECT level, msg, properties->>'otel.scope.name' FROM log_entries WHERE process_id = '<uuid>' ORDER BY time` and assert level mapping (severity 9 → 4, 17 → 2, 22 → 1) plus the scope name comes through as expected.
-- `test_otlp_metrics_e2e`: emit one Sum + one Gauge under the same resource. Assert `SELECT name, unit, value, properties->>'otel.metric.kind' FROM measures WHERE process_id = '<uuid>'` returns 2 rows with the right `otel.metric.kind` values.
+- `test_otlp_logs_e2e`: emit 5 logs with a known `service.name` + `host.name` + `process.pid`. Compute the expected `process_id` client-side using the same UUIDv5 formula (helper in `tests/otlp_helpers.py`). Query `SELECT count(*) FROM log_entries WHERE process_id = '<uuid>'` until `>= 5` (poll with `assert_eventually` up to 30s — JIT materialization may take a beat). Then read `level, msg, jsonb_as_string(jsonb_get(properties, 'otel.scope.name')) FROM log_entries WHERE process_id = '<uuid>' ORDER BY time` and assert level mapping (severity 9 → 4, 17 → 2, 22 → 1) plus the scope name comes through. (The lakehouse exposes JSONB through `jsonb_get` + `jsonb_as_string` UDFs, not a Postgres-style `->>` operator — see `rust/datafusion-extensions/src/lib.rs` for the registered surface.)
+- `test_otlp_metrics_e2e`: emit one Sum + one Gauge under the same resource. Assert `SELECT name, unit, value, jsonb_as_string(jsonb_get(properties, 'otel.metric.kind')) FROM measures WHERE process_id = '<uuid>'` returns 2 rows with the right `otel.metric.kind` values.
 - `test_otlp_traces_e2e`: emit a 3-span trace (root + 2 children). Query `SELECT * FROM view_instance('otel_spans', '<uuid>') WHERE trace_id = '<bytes>'` and assert: 3 rows; one row with `parent_span_id IS NULL`; durations match what was sent; `kind` and `status` columns are populated.
 - `test_otlp_idempotency_e2e`: POST the same `ExportLogsServiceRequest` twice. Assert `SELECT count(*)` doesn't double — `block_id` is content-addressed so the second insert hits `ON CONFLICT (block_id) DO NOTHING` and the partition retains 5 rows.
 - `test_otlp_content_type_rejection`: POST with `Content-Type: application/json`. Assert `415` and that the body decodes as a `google.rpc.Status` with `code=3` (INVALID_ARGUMENT).
@@ -582,6 +582,9 @@ The reason for hand-built protos rather than the full SDK: SDK exporters batch o
 - `rust/telemetry-ingestion-srv/src/main.rs` (`.merge(servers::otlp::otlp_router())` into the protected sub-Router BEFORE the outer 100 MiB layer so the OTLP-scoped 20 MiB cap stays in effect for OTLP routes only). The crate's `Cargo.toml` is **not** modified — it depends on `micromegas` with the `server` feature, which transitively pulls in the new deps.
 - `rust/analytics/src/lakehouse/mod.rs` (declare new modules: `format`, `otel_attrs`, `otel_logs_block_processor`, `otel_metrics_block_processor`, `otel_spans_block_processor`, `otel_spans_view`, `otel_spans_table`)
 - `rust/analytics/src/lakehouse/view_factory.rs` (register `otel_spans` view set in `default_view_factory` via `add_view_set`, mirroring the existing `async_events` registration; per-block processor dispatch is configured inside `LogView`/`MetricsView` themselves, not here)
+- `rust/analytics/src/sql_arrow_bridge.rs` (extend `make_column_reader` to accept Postgres `TEXT` alongside `VARCHAR` — both map to Arrow `Utf8`. Required because the new `streams.format` column is `TEXT NOT NULL` and it's projected by `blocks/global` materialization SQL. Without this, the first OTLP block makes the global blocks view permanently un-materializable, which would also break native producers.)
+- `python/micromegas/pyproject.toml` (add `opentelemetry-proto` to the test dep group, used by the e2e harness to build OTLP proto messages)
+- `python/micromegas/tests/test_otlp_e2e.py` + `python/micromegas/tests/otlp_helpers.py` (new — Phase 5 harness)
 - `README.md` (deferred — see Phase 7)
 
 **No new binary** — OTLP routes live in `telemetry-ingestion-srv`. `rust/tracing/` is also not touched. OTel is an analytics-layer concern; the ingest side is just a thin protobuf-to-block-bytes adapter.
@@ -703,7 +706,7 @@ The reason for hand-built protos rather than the full SDK: SDK exporters batch o
 ### Style cleanup
 - Comments throughout switched from "CBOR streams" to "transit streams" / "native streams". CBOR is only the envelope — the actual stream wire format is transit. (Per user feedback during implementation.)
 
-### Tests added (17 total)
+### Tests added (Rust unit/integration: 17, Python e2e: 5)
 - `rust/otel-ingestion/src/identity.rs` (7 unit tests) — process_id stability across attribute reordering, host case-folding, pid difference, missing-attribute fallback (`process.start_time` ↔ `process.creation.time`), signal-discrimination (logs ≠ metrics ≠ traces), content-addressing of block_id, degenerate-resource detection.
 - `rust/otel-ingestion/src/block.rs` (3 unit tests) — split_logs produces one block per resource, skips resources with empty scope_logs, block_id changes when payload changes.
 - `rust/otel-ingestion/tests/split_tests.rs` (7 integration tests) — log bounds derivation from min/max time_unix_nano, idempotent block_id with content-addressed payload, mixed-kind metrics emit one block per resource, traces payload round-trips through prost decode, empty top-level request yields no blocks, distinct resources split into distinct processes, format constants align with signal keys.
@@ -716,8 +719,26 @@ The reason for hand-built protos rather than the full SDK: SDK exporters batch o
 - `cargo test`: all tests pass (otel-ingestion: 17, analytics + everything else: ~150+).
 - `python3 build/rust_ci.py native`: green.
 
-### Phase 5 / 6 / 7 (e2e tests + hardening + docs) — NOT DONE
-- **Phase 5 (e2e integration test)** — `python/micromegas/tests/test_otlp_e2e.py` + `otlp_helpers.py`. Hand-built proto requests via `requests.post` against a running stack from `start_services.py`; one test per signal + idempotency + wrong-content-type. See Phase 5 in Implementation Steps for the full design.
+### Phase 5 (e2e integration test)
+
+**Done:**
+- `python/micromegas/tests/otlp_helpers.py` — Python port of the Rust identity formula (`compute_otel_process_id`, `compute_otel_stream_id`) with the namespace UUIDs pinned to match `rust/otel-ingestion/src/identity.rs` byte-for-byte. Cross-checked once against a Rust probe — same input → same UUID. Plus `assert_eventually` for JIT-materialization polling and small `string_kv` / `make_resource` proto builders. Pure proto + `requests.post`; no OTel SDK exporter (its background batching + retries make tests flaky).
+- `python/micromegas/tests/test_otlp_e2e.py` — five tests covering all three signals plus idempotency and content-type rejection:
+  - `test_otlp_logs_e2e` — 5 log records spanning severity 9/17/22, asserts level collapse to 4/4/2/2/1 and `otel.scope.name`/`otel.severity_text` round-trip through `properties`.
+  - `test_otlp_metrics_e2e` — one Sum + one Gauge under a shared resource, asserts `name`/`unit`/`value` and `otel.metric.kind` lands as "sum"/"gauge".
+  - `test_otlp_traces_e2e` — 3-span trace (root + 2 children), asserts ordering by start_time, kind/status mapping, `parent_span_id` linking, and `duration = end_time - start_time`.
+  - `test_otlp_idempotency_e2e` — POSTs the same logs payload twice; assert the count stays at exactly 5 (`block_id` is content-addressed, second insert hits `ON CONFLICT DO NOTHING`).
+  - `test_otlp_content_type_rejection` — POST with `Content-Type: application/json` → 415, body decodes as `google.rpc.Status` with `code = INVALID_ARGUMENT (3)`.
+- Test isolation: every test generates a fresh `service.instance.id` UUID4 → distinct `process_id` per run, no DB wipe needed.
+- `python/micromegas/pyproject.toml` — added `opentelemetry-proto = "^1.40.0"` to the test dep group (used only for the prost-generated proto message types; we still don't pull in the SDK exporter).
+
+**Bugs found and fixed during e2e:**
+- **Postgres `TEXT` columns not handled by `sql_arrow_bridge::make_column_reader`.** The new `streams.format` column landed as `TEXT NOT NULL` and broke `blocks/global` materialization with `error building column reader: unknown type TEXT`. The reader only had a `VARCHAR` arm — extended to `"VARCHAR" | "TEXT"`, both map to Arrow `Utf8`. Without this fix, the first OTLP block makes the global blocks view permanently un-materializable, which would also break native producers from that point on; this is a **load-bearing fix** for the v4 schema migration, not just an e2e-test convenience. (`rust/analytics/src/sql_arrow_bridge.rs:322`.)
+
+**Followup:**
+- CI integration deferred — the GitHub Actions harness doesn't spin up Postgres + the services. A follow-up adds a job wrapping `start_services.py` → `pytest test_otlp_e2e.py` → `stop_services.py`.
+
+### Phase 6 / 7 (hardening + docs) — NOT DONE
 - **Phase 6 (production hardening)** — monitoring + alerts (deferred — needs production traffic to size correctly).
 - **Phase 7 (docs)** — `mkdocs/docs/operating/otlp.md`, `mkdocs/docs/guides/coding-agents.md`, `README.md` feature-list update, `local_test_env/` example Claude Code env.
 
