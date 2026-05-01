@@ -136,7 +136,7 @@ The existing `dependencies_metadata BYTEA` and `objects_metadata BYTEA` fields s
 - For `micromegas-transit`: CBOR-encoded `Vec<UserDefinedType>` (current behavior).
 - For `otlp/v1/*`: **both** fields contain a CBOR-encoded **empty** `Vec<UserDefinedType>` — the single byte `0x80`, NOT a zero-length BYTEA.
 
-Why a single byte and not empty: each field is decoded via `ciborium::from_reader::<Vec<UserDefinedType>>(...)` in four places (`analytics/src/metadata.rs:127-131`, `analytics/src/lakehouse/partition_source_data.rs:188-190`, `analytics/src/lakehouse/jit_partitions.rs:329-331`, `analytics/src/lakehouse/parse_block_table_function.rs:120,131`). An empty BYTEA would fail those decodes; a CBOR-encoded empty array decodes to `Vec::new()` and every existing code path (which then iterates the empty Vec) becomes a no-op without any code change. Future per-format extensions (e.g., schema URL pin) can encode richer structures here, gated on `format`.
+Why a single byte and not empty: each field is decoded via `ciborium::from_reader::<Vec<UserDefinedType>>(...)` in four places (`analytics/src/metadata.rs:127-133` — two adjacent decodes for dependencies/objects, `analytics/src/lakehouse/partition_source_data.rs:188-190`, `analytics/src/lakehouse/jit_partitions.rs:329-331`, `analytics/src/lakehouse/parse_block_table_function.rs:120,131`). An empty BYTEA would fail those decodes; a CBOR-encoded empty array decodes to `Vec::new()` and every existing code path (which then iterates the empty Vec) becomes a no-op without any code change. Future per-format extensions (e.g., schema URL pin) can encode richer structures here, gated on `format`.
 
 **One block per OTLP request per resource**. An incoming `ExportTraceServiceRequest` may carry multiple `ResourceSpans` (different services). We split into one block per resource so `process_id` is unambiguous on the metadata row. Each block's payload is the protobuf encoding of *one* `ResourceSpans` (or `ResourceMetrics` / `ResourceLogs`) — small, self-contained, and re-decodable in isolation.
 
@@ -154,13 +154,15 @@ OTel has no "process" object; it has a `Resource` (key/value attributes) attache
 key = trim_lower(host.id)                  + "\x1F"
     + trim_lower(host.name)                + "\x1F"
     + str(process.pid)                     + "\x1F"
-    + str(process.creation.time as ns)     + "\x1F"
+    + process_start_string                 + "\x1F"
     + trim_lower(service.namespace)        + "\x1F"
     + trim_lower(service.name)             + "\x1F"
     + trim_lower(service.instance.id)
 
 process_id = uuid_v5(NS_OTEL_PROCESS_V1, key)
 ```
+
+`process_start_string` resolves the OTel attribute rename: take `process.start_time` if present (the newer name, OTel semconv ≥ 1.27), else fall back to the deprecated `process.creation.time`, else empty string. Use the attribute's raw `string_value` **verbatim** — no parse/normalize step. Two reasons: (a) the value is opaque to the hash, so any deterministic encoding works as long as it's stable across retries from the same SDK, and (b) parsing risks mismatched output across SDKs that emit subtly different ISO 8601 forms (`...:00Z` vs `...:00.000Z`). If the SDK emits an `int_value` instead of `string_value` (some implementations encode timestamps as int nanos), stringify the int. The pid case follows the same rule.
 
 **Namespace UUID constants** (mint once, pin in `rust/otel-ingestion/src/identity.rs`; the `_V1` suffix is part of the contract — any formula change ships a `_V2` namespace):
 
@@ -504,7 +506,7 @@ The OTLP body limit is a compile-time constant (20 MiB, matching the OTel Collec
 - `rust/analytics/src/lakehouse/otel_spans_block_processor.rs`
 
 **Modified**:
-- `rust/Cargo.toml` (add `opentelemetry-proto = "0.31"`; new `otel-ingestion` member)
+- `rust/Cargo.toml` (add `opentelemetry-proto = "0.31"`; add `"decompression-gzip"` to the `tower-http` features list — currently `["compression-gzip", "cors", "limit", "timeout"]`. The new `otel-ingestion` crate is auto-discovered by the existing `members = ["*", ...]` glob — no manifest member entry needed beyond creating the directory.)
 - `rust/ingestion/src/sql_migration.rs` (bump `LATEST_DATA_LAKE_SCHEMA_VERSION` to 4; add `upgrade_data_lake_schema_v4` and dispatch)
 - `rust/ingestion/src/web_ingestion_service.rs` (named-column `INSERT INTO streams` with `format`; new `register_otel_stream`; new `register_otel_process`; new `insert_block_typed` typed entry point used by the OTel adapter; refactor existing `insert_block(body)` to ciborium-decode and call `insert_block_typed`)
 - `rust/analytics/src/replication.rs` (named-column `INSERT INTO streams` with `format`; the streams ingest path at `replication.rs:20-71` reads source columns by name from a `FlightRecordBatchStream`, so it must add `string_column_by_name(&b, "format")?` and bind it to the new column. **Source-schema requirement**: this means the source data lake must also be on schema v4+ — replicating from a v3 source will fail at the column lookup. Document this in the replication operator docs alongside the v4 migration note. We chose hard failure over a silent `'micromegas-transit'` fallback because replication is an admin-driven coordinated operation and a silent default would mask genuine schema-version mismatches.)
