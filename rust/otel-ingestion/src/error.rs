@@ -96,38 +96,19 @@ impl OtelError {
     }
 }
 
-impl From<micromegas_ingestion::web_ingestion_service::IngestionServiceError> for OtelError {
-    fn from(err: micromegas_ingestion::web_ingestion_service::IngestionServiceError) -> Self {
-        use micromegas_ingestion::web_ingestion_service::IngestionServiceError as Inner;
-        // Signal is not known here — the handler attaches the right context when it bubbles up.
-        // We default to Logs and let the surrounding code rewrite via `with_signal`.
-        match err {
-            Inner::ParseError(m) => OtelError::Parse {
-                signal: Signal::Logs,
-                message: m,
-            },
-            Inner::DatabaseError(m) => OtelError::Database {
-                signal: Signal::Logs,
-                message: m,
-            },
-            Inner::StorageError(m) => OtelError::Storage {
-                signal: Signal::Logs,
-                message: m,
-            },
-        }
-    }
-}
-
 impl OtelError {
-    /// Rewrites the embedded signal label (used at the layer boundary where we know the route).
-    pub fn with_signal(mut self, sig: Signal) -> Self {
-        match &mut self {
-            Self::Parse { signal, .. }
-            | Self::Database { signal, .. }
-            | Self::Storage { signal, .. } => {
-                *signal = sig;
-            }
+    /// Wraps an `IngestionServiceError` with the OTLP signal of the request that
+    /// triggered it. Forces the caller to supply the signal at the conversion
+    /// site so the resulting label can't be mismatched against the route.
+    pub fn from_ingestion(
+        err: micromegas_ingestion::web_ingestion_service::IngestionServiceError,
+        signal: Signal,
+    ) -> Self {
+        use micromegas_ingestion::web_ingestion_service::IngestionServiceError as Inner;
+        match err {
+            Inner::ParseError(m) => OtelError::Parse { signal, message: m },
+            Inner::DatabaseError(m) => OtelError::Database { signal, message: m },
+            Inner::StorageError(m) => OtelError::Storage { signal, message: m },
         }
-        self
     }
 }

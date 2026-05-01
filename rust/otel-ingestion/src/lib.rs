@@ -15,6 +15,10 @@ pub mod proto;
 
 pub use error::{OtelError, Signal};
 
+/// `tsc_frequency` value recorded on processes synthesized from OTLP resources.
+/// OTLP timestamps are absolute nanoseconds, so 1 tick = 1 ns.
+pub const OTLP_TICKS_PER_SECOND: i64 = 1_000_000_000;
+
 /// Stream tag for OTel logs (shared with native log producers — `log_entries` view loads both).
 pub const TAG_LOGS: &str = "log";
 /// Stream tag for OTel metrics (shared with native metrics producers).

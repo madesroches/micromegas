@@ -1,6 +1,7 @@
 use super::{
-    lakehouse_context::LakehouseContext, partition_cache::QueryPartitionProvider,
-    session_configurator::NoOpSessionConfigurator, view_factory::ViewFactory,
+    format::FORMAT_TRANSIT, lakehouse_context::LakehouseContext,
+    partition_cache::QueryPartitionProvider, session_configurator::NoOpSessionConfigurator,
+    view_factory::ViewFactory,
 };
 use crate::{
     dfext::{string_column_accessor::string_column_by_name, typed_column::typed_column_by_name},
@@ -104,10 +105,10 @@ async fn fetch_block_metadata(
     let object_offset_col: &Int64Array = typed_column_by_name(batch, "object_offset")?;
     let format_col = string_column_by_name(batch, "streams.format")?;
     let format = format_col.value(0)?;
-    if format != "micromegas-transit" {
+    if format != FORMAT_TRANSIT {
         anyhow::bail!(
-            "parse_block does not support format={format} (only micromegas-transit). \
-             Use the OTel-aware path or query `log_entries`/`measures`/`otel_spans` instead."
+            "parse_block does not support format={format} (only {FORMAT_TRANSIT}). \
+             Query `log_entries`/`measures`/`otel_spans` instead for OTel data."
         );
     }
 

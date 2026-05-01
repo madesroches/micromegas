@@ -11,7 +11,8 @@ use crate::proto::{
     ExportMetricsServiceResponse, ExportTraceServiceRequest, ExportTraceServiceResponse,
 };
 use crate::{
-    FORMAT_OTLP_LOGS, FORMAT_OTLP_METRICS, FORMAT_OTLP_TRACES, TAG_LOGS, TAG_METRICS, TAG_TRACES,
+    FORMAT_OTLP_LOGS, FORMAT_OTLP_METRICS, FORMAT_OTLP_TRACES, OTLP_TICKS_PER_SECOND, TAG_LOGS,
+    TAG_METRICS, TAG_TRACES,
 };
 use micromegas_ingestion::web_ingestion_service::WebIngestionService;
 use micromegas_tracing::prelude::*;
@@ -67,13 +68,13 @@ where
                 proc_attrs.computer,
                 proc_attrs.distro,
                 proc_attrs.cpu_brand,
-                1_000_000_000,
+                OTLP_TICKS_PER_SECOND,
                 proc_attrs.start_time,
                 proc_attrs.start_ticks,
                 proc_attrs.properties,
             )
             .await
-            .map_err(|e| OtelError::from(e).with_signal(signal))?;
+            .map_err(|e| OtelError::from_ingestion(e, signal))?;
 
         // Register the stream row (idempotent). Empty properties — scope and per-event
         // attrs live on individual rows during materialization, not on the stream.
@@ -86,13 +87,13 @@ where
                 format,
             )
             .await
-            .map_err(|e| OtelError::from(e).with_signal(signal))?;
+            .map_err(|e| OtelError::from_ingestion(e, signal))?;
 
         // Write the block.
         service
             .insert_block_typed(prepared.block)
             .await
-            .map_err(|e| OtelError::from(e).with_signal(signal))?;
+            .map_err(|e| OtelError::from_ingestion(e, signal))?;
 
         count += 1;
     }

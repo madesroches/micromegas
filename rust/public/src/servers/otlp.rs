@@ -21,7 +21,7 @@ use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::Response;
 use axum::routing::post;
 use micromegas_ingestion::web_ingestion_service::WebIngestionService;
-use micromegas_otel_ingestion::error::{OtelError, Signal};
+use micromegas_otel_ingestion::error::OtelError;
 use micromegas_otel_ingestion::handler;
 use micromegas_tracing::prelude::*;
 use prost::Message;
@@ -149,7 +149,7 @@ async fn logs_handler(
     }
     match handler::ingest_logs(service, body).await {
         Ok(resp) => proto_response(resp),
-        Err(e) => OtlpHttpError::Otel(e.with_signal(Signal::Logs)).into_otlp_response(),
+        Err(e) => OtlpHttpError::Otel(e).into_otlp_response(),
     }
 }
 
@@ -163,7 +163,7 @@ async fn metrics_handler(
     }
     match handler::ingest_metrics(service, body).await {
         Ok(resp) => proto_response(resp),
-        Err(e) => OtlpHttpError::Otel(e.with_signal(Signal::Metrics)).into_otlp_response(),
+        Err(e) => OtlpHttpError::Otel(e).into_otlp_response(),
     }
 }
 
@@ -177,7 +177,7 @@ async fn traces_handler(
     }
     match handler::ingest_traces(service, body).await {
         Ok(resp) => proto_response(resp),
-        Err(e) => OtlpHttpError::Otel(e.with_signal(Signal::Traces)).into_otlp_response(),
+        Err(e) => OtlpHttpError::Otel(e).into_otlp_response(),
     }
 }
 

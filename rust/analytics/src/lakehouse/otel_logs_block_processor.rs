@@ -115,9 +115,9 @@ impl BlockProcessor for OtelLogsBlockProcessor {
                 max_time = max_time.max(time_nanos);
 
                 let level = severity_number_to_level(record.severity_number);
-                if record.severity_number > 24 {
+                if !(0..=24).contains(&record.severity_number) {
                     debug!(
-                        "OTel severity_number {} clamped to Fatal",
+                        "OTel severity_number {} out of spec range, clamped to Fatal",
                         record.severity_number
                     );
                 }
