@@ -92,6 +92,7 @@ impl BlockProcessor for OtelLogsBlockProcessor {
         let mut min_time = i64::MAX;
         let mut max_time = i64::MIN;
         let mut nb_appended = 0usize;
+        let mut nb_dropped_no_timestamp = 0usize;
 
         for scope_logs in &resource_logs.scope_logs {
             let scope = scope_logs.scope.as_ref();
@@ -105,12 +106,9 @@ impl BlockProcessor for OtelLogsBlockProcessor {
                 } else if record.observed_time_unix_nano != 0 {
                     record.observed_time_unix_nano as i64
                 } else {
-                    // No timestamp at all — skip this record so it doesn't anchor the
-                    // partition at 1970-01-01. (Block-level fallback handled elsewhere.)
-                    warn!(
-                        "OTel log record without timestamp dropped (block_id={})",
-                        block_id_str
-                    );
+                    // No timestamp at all — skip so it doesn't anchor the partition
+                    // at 1970-01-01. Aggregated below to one log line per block.
+                    nb_dropped_no_timestamp += 1;
                     continue;
                 };
                 min_time = min_time.min(time_nanos);
@@ -204,6 +202,12 @@ impl BlockProcessor for OtelLogsBlockProcessor {
 
                 nb_appended += 1;
             }
+        }
+
+        if nb_dropped_no_timestamp > 0 {
+            warn!(
+                "OTel log records without timestamp dropped (block_id={block_id_str}, count={nb_dropped_no_timestamp})"
+            );
         }
 
         if nb_appended == 0 {

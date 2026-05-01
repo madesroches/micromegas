@@ -4,7 +4,6 @@
 //!  - `Parse`        → 400 (malformed protobuf, malformed gzip)
 //!  - `Database`     → 503 (transient — client should retry per OTLP/HTTP spec)
 //!  - `Storage`      → 503 (transient)
-//!  - `Internal`     → 500
 //!
 //! 415 (Content-Type / Content-Encoding) and 413 (body limit) are enforced upstream
 //! in the axum layer stack before the request reaches the OtelError surface.
@@ -49,10 +48,6 @@ pub enum OtelError {
     /// Object-store transient failure. Maps to 503 + Retry-After.
     #[error("OTLP storage error ({signal}): {message}")]
     Storage { signal: Signal, message: String },
-
-    /// Unexpected internal failure (programming error, broken invariant).
-    #[error("OTLP internal error ({signal}): {message}")]
-    Internal { signal: Signal, message: String },
 }
 
 impl OtelError {
@@ -60,8 +55,7 @@ impl OtelError {
         match self {
             Self::Parse { signal, .. }
             | Self::Database { signal, .. }
-            | Self::Storage { signal, .. }
-            | Self::Internal { signal, .. } => *signal,
+            | Self::Storage { signal, .. } => *signal,
         }
     }
 
@@ -72,8 +66,6 @@ impl OtelError {
             Self::Parse { .. } => 3,
             // UNAVAILABLE = 14
             Self::Database { .. } | Self::Storage { .. } => 14,
-            // INTERNAL = 13
-            Self::Internal { .. } => 13,
         }
     }
 
@@ -82,13 +74,25 @@ impl OtelError {
         match self {
             Self::Parse { .. } => 400,
             Self::Database { .. } | Self::Storage { .. } => 503,
-            Self::Internal { .. } => 500,
         }
     }
 
     /// True when the OTLP/HTTP spec marks this status retryable.
     pub fn is_retryable(&self) -> bool {
         matches!(self, Self::Database { .. } | Self::Storage { .. })
+    }
+
+    /// Client-facing message for the `google.rpc.Status` body. Strips internal
+    /// detail (raw sqlx errors, object-store messages) that the full `Display`
+    /// form would otherwise leak — those still get logged server-side via
+    /// `error!`. `Parse` keeps its detail so clients can debug malformed
+    /// payloads, since prost / decoder messages don't reference server state.
+    pub fn public_message(&self) -> String {
+        match self {
+            Self::Parse { signal, message } => format!("OTLP parse error ({signal}): {message}"),
+            Self::Database { signal, .. } => format!("OTLP database error ({signal})"),
+            Self::Storage { signal, .. } => format!("OTLP storage error ({signal})"),
+        }
     }
 }
 
@@ -120,8 +124,7 @@ impl OtelError {
         match &mut self {
             Self::Parse { signal, .. }
             | Self::Database { signal, .. }
-            | Self::Storage { signal, .. }
-            | Self::Internal { signal, .. } => {
+            | Self::Storage { signal, .. } => {
                 *signal = sig;
             }
         }

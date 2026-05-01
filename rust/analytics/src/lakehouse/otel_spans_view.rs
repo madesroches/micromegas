@@ -34,7 +34,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, TimeDelta, Utc};
 use datafusion::{
     arrow::datatypes::Schema,
-    logical_expr::{Between, Expr, col},
+    logical_expr::{BinaryExpr, Expr, Operator, col},
 };
 use micromegas_tracing::prelude::*;
 use std::collections::HashMap;
@@ -170,12 +170,22 @@ impl View for OtelSpansView {
     }
 
     fn make_time_filter(&self, begin: DateTime<Utc>, end: DateTime<Utc>) -> Result<Vec<Expr>> {
-        Ok(vec![Expr::Between(Between::new(
-            col("start_time").into(),
-            false,
-            Expr::Literal(datetime_to_scalar(begin), None).into(),
-            Expr::Literal(datetime_to_scalar(end), None).into(),
-        ))])
+        // Dual-bound (start_time <= end AND end_time >= begin) so spans whose
+        // duration crosses the query window — i.e. start before `begin` or end
+        // after `end` — are still included. A `start_time BETWEEN begin AND end`
+        // filter would silently drop long-running spans that overlap the window.
+        Ok(vec![
+            Expr::BinaryExpr(BinaryExpr::new(
+                col("start_time").into(),
+                Operator::LtEq,
+                Expr::Literal(datetime_to_scalar(end), None).into(),
+            )),
+            Expr::BinaryExpr(BinaryExpr::new(
+                col("end_time").into(),
+                Operator::GtEq,
+                Expr::Literal(datetime_to_scalar(begin), None).into(),
+            )),
+        ])
     }
 
     fn get_time_bounds(&self) -> Arc<dyn DataFrameTimeBounds> {

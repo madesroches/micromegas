@@ -82,19 +82,17 @@ impl OtlpHttpError {
                 let retryable = err.is_retryable();
                 let status = match err.http_status() {
                     400 => StatusCode::BAD_REQUEST,
-                    401 => StatusCode::UNAUTHORIZED,
-                    413 => StatusCode::PAYLOAD_TOO_LARGE,
-                    415 => StatusCode::UNSUPPORTED_MEDIA_TYPE,
-                    500 => StatusCode::INTERNAL_SERVER_ERROR,
                     503 => StatusCode::SERVICE_UNAVAILABLE,
                     other => {
                         StatusCode::from_u16(other).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)
                     }
                 };
                 let code = err.grpc_code();
-                let message = err.to_string();
-                error!("OTLP error: {message}");
-                build_error_response(status, code, &message, retryable)
+                // Detailed error (includes raw sqlx / object-store messages) is
+                // logged server-side; only the sanitized public form goes to the
+                // client to avoid leaking backend internals.
+                error!("OTLP error: {}", err);
+                build_error_response(status, code, &err.public_message(), retryable)
             }
         }
     }
