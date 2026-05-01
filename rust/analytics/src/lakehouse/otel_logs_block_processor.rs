@@ -226,7 +226,7 @@ impl BlockProcessor for OtelLogsBlockProcessor {
             );
         }
         if nb_severity_out_of_range > 0 {
-            warn!(
+            debug!(
                 "OTel log records with out-of-range severity_number treated as Info (block_id={block_id_str}, count={nb_severity_out_of_range})"
             );
         }
