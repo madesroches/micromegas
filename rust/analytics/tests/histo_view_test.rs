@@ -96,7 +96,6 @@ async fn retire_existing_partitions(
     Ok(())
 }
 
-#[expect(clippy::too_many_arguments)]
 pub async fn materialize_range(
     lakehouse: Arc<LakehouseContext>,
     view_factory: Arc<ViewFactory>,

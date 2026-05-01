@@ -322,8 +322,8 @@ fn test_async_events_high_frequency_performance() {
             } else {
                 "end".to_string()
             }),
-            span_id: (i / 2) as i64,
-            parent_span_id: if i > 0 { (i / 4) as i64 } else { 0 },
+            span_id: i / 2,
+            parent_span_id: if i > 0 { i / 4 } else { 0 },
             depth: (i % 5) as u32, // Test different depth levels
             hash: 0,
             name: Arc::new(format!("async_fn_{}", i % 5)),
@@ -333,7 +333,7 @@ fn test_async_events_high_frequency_performance() {
         };
         builder
             .append(&record)
-            .expect(&format!("Failed to append record {}", i));
+            .unwrap_or_else(|_| panic!("Failed to append record {}", i));
     }
 
     // Verify all records were added

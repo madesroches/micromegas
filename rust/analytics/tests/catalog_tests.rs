@@ -50,11 +50,11 @@ async fn test_list_view_sets_catalog() -> Result<()> {
         .collect();
 
     assert!(
-        view_set_names.iter().any(|&name| name == "log_entries"),
+        view_set_names.contains(&"log_entries"),
         "Should have log_entries view set"
     );
     assert!(
-        view_set_names.iter().any(|&name| name == "measures"),
+        view_set_names.contains(&"measures"),
         "Should have measures view set"
     );
 
