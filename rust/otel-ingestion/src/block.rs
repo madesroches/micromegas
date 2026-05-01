@@ -342,9 +342,9 @@ impl ProcessFromResource {
             .map(crate::identity::attr_to_string)
             .unwrap_or_default();
 
-        // Try `process.start_time` (or its older alias) parsed as RFC3339.
-        let start_time = crate::identity::attr(attrs, "process.start_time")
-            .or_else(|| crate::identity::attr(attrs, "process.creation.time"))
+        // Prefer the OTel-stable `process.creation.time`; accept legacy `process.start_time` as a fallback.
+        let start_time = crate::identity::attr(attrs, "process.creation.time")
+            .or_else(|| crate::identity::attr(attrs, "process.start_time"))
             .and_then(|v| DateTime::parse_from_rfc3339(&attr_to_string(v)).ok())
             .map(|dt| dt.with_timezone(&Utc))
             .unwrap_or(fallback_start);

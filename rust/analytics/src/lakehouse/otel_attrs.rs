@@ -111,11 +111,12 @@ pub fn any_value_to_string(v: &AnyValue) -> String {
 ///  - ERROR   17–20 → 2
 ///  - FATAL   21–24 → 1
 ///
-/// `severity_number = 0` (UNSPECIFIED) → 6 (least-severe so default `WHERE level <= 4`
-/// queries don't drop them). `> 24` → clamp to 1.
+/// `severity_number = 0` (UNSPECIFIED) → 4 (Info), so the default
+/// `WHERE level <= 4` filter keeps them visible — the SDK didn't tell us they were
+/// low-priority, so we don't bury them. Out-of-range (negative or `> 24`) → 1 (Fatal).
 pub fn severity_number_to_level(sev: i32) -> i32 {
     match sev {
-        0 => 6,       // UNSPECIFIED → Trace
+        0 => 4,       // UNSPECIFIED → Info (visible under default `level <= 4`)
         1..=4 => 6,   // TRACE
         5..=8 => 5,   // DEBUG
         9..=12 => 4,  // INFO

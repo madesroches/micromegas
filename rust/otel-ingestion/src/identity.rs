@@ -90,13 +90,17 @@ fn attr_raw(attrs: &[KeyValue], key: &str) -> String {
     attr(attrs, key).map(attr_to_string).unwrap_or_default()
 }
 
-/// Resolves the `process.start_time` attribute (or its deprecated `process.creation.time` alias).
+/// Resolves the OTel process-creation timestamp.
+///
+/// `process.creation.time` is the stable OTel semantic-conventions attribute and is
+/// what real SDKs emit; `process.start_time` is accepted as a fallback for any
+/// non-standard producer that still uses the older name.
 pub fn process_start_string(attrs: &[KeyValue]) -> String {
-    let s = attr_raw(attrs, "process.start_time");
+    let s = attr_raw(attrs, "process.creation.time");
     if !s.is_empty() {
         return s;
     }
-    attr_raw(attrs, "process.creation.time")
+    attr_raw(attrs, "process.start_time")
 }
 
 /// Returns true when none of the four identifying fields are populated. Caller may want
@@ -204,11 +208,20 @@ mod tests {
     }
 
     #[test]
-    fn process_start_falls_back_to_creation_time() {
-        let with_new = resource_with(&[("process.start_time", "abc")]);
-        let with_old = resource_with(&[("process.creation.time", "abc")]);
-        assert_eq!(process_start_string(&with_new.attributes), "abc");
-        assert_eq!(process_start_string(&with_old.attributes), "abc");
+    fn process_start_resolves_either_attribute() {
+        let canonical = resource_with(&[("process.creation.time", "abc")]);
+        let legacy = resource_with(&[("process.start_time", "abc")]);
+        assert_eq!(process_start_string(&canonical.attributes), "abc");
+        assert_eq!(process_start_string(&legacy.attributes), "abc");
+    }
+
+    #[test]
+    fn process_start_prefers_creation_time_when_both_present() {
+        let both = resource_with(&[
+            ("process.creation.time", "canonical"),
+            ("process.start_time", "legacy"),
+        ]);
+        assert_eq!(process_start_string(&both.attributes), "canonical");
     }
 
     #[test]

@@ -8,7 +8,7 @@ use super::{
     block_partition_spec::BlockProcessor, partition_source_data::PartitionSourceBlock,
     write_partition::PartitionRowSet,
 };
-use crate::lakehouse::otel_attrs::{any_value_to_jsonb, attrs_to_jsonb};
+use crate::lakehouse::otel_attrs::attrs_to_jsonb;
 use crate::payload::fetch_block_payload;
 use crate::time::TimeRange;
 use anyhow::{Context, Result};
@@ -200,7 +200,6 @@ impl BlockProcessor for OtelMetricsBlockProcessor {
                     }
                     None => {}
                 }
-                let _ = any_value_to_jsonb; // keep helper visible to future exemplar extraction
             }
         }
 

@@ -6,7 +6,6 @@
 
 use crate::block::{ProcessFromResource, split_logs, split_metrics, split_traces};
 use crate::error::{OtelError, Signal};
-use crate::identity::SignalKey;
 use crate::proto::{
     ExportLogsServiceRequest, ExportLogsServiceResponse, ExportMetricsServiceRequest,
     ExportMetricsServiceResponse, ExportTraceServiceRequest, ExportTraceServiceResponse,
@@ -24,14 +23,6 @@ fn parse<M: Message + Default>(body: &[u8], signal: Signal) -> Result<M, OtelErr
         signal,
         message: format!("decoding {}: {}", signal.as_str(), e),
     })
-}
-
-fn signal_key(signal: Signal) -> SignalKey {
-    match signal {
-        Signal::Logs => SignalKey::Logs,
-        Signal::Metrics => SignalKey::Metrics,
-        Signal::Traces => SignalKey::Traces,
-    }
 }
 
 fn signal_tag(signal: Signal) -> &'static str {
@@ -107,7 +98,6 @@ where
     }
 
     debug!("wrote {count} OTel {} blocks", signal.as_str());
-    let _ = signal_key; // keep import tied to module for future use
     Ok(count)
 }
 
