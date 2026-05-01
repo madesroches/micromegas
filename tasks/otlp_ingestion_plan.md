@@ -162,6 +162,17 @@ key = trim_lower(host.id)                  + "\x1F"
 process_id = uuid_v5(NS_OTEL_PROCESS_V1, key)
 ```
 
+**Namespace UUID constants** (mint once, pin in `rust/otel-ingestion/src/identity.rs`; the `_V1` suffix is part of the contract — any formula change ships a `_V2` namespace):
+
+```rust
+// Generated 2026-05-01 via uuidgen; load-bearing — DO NOT change without bumping to _V2.
+pub const NS_OTEL_PROCESS_V1: Uuid = uuid!("8b7d8a3e-3f9c-4f5d-9b3a-1e7c2d4f6a01");
+pub const NS_OTEL_STREAM_V1:  Uuid = uuid!("8b7d8a3e-3f9c-4f5d-9b3a-1e7c2d4f6a02");
+pub const NS_OTEL_BLOCK_V1:   Uuid = uuid!("8b7d8a3e-3f9c-4f5d-9b3a-1e7c2d4f6a03");
+```
+
+(The exact byte values are arbitrary — what matters is they're stable forever once shipped. Implementer should regenerate via `uuidgen` before merging if the placeholders here haven't been finalized; once shipped, never change.)
+
 Rules:
 - Missing fields → empty string. Stability across batches relies on OTel's Resource-immutability contract.
 - Field order is the contract; changing it requires a new namespace UUID (`_V2`).
@@ -227,7 +238,7 @@ Queries that filter by library work via these properties:
 WHERE properties->>'otel.scope.name' = 'opentelemetry.instrumentation.requests'
 ```
 
-**Block identity**: one block per (process_id, signal) per OTLP request per Resource. A multi-Resource request fans out to N blocks across N processes' streams. `block_id = uuid_v5(NS_OTEL_BLOCK_V1, hash(payload bytes))` for idempotent retry.
+**Block identity**: one block per (process_id, signal) per OTLP request per Resource. A multi-Resource request fans out to N blocks across N processes' streams. `block_id = uuid_v5(NS_OTEL_BLOCK_V1, payload_bytes)` — the re-encoded protobuf bytes of this Resource submessage, fed directly to `uuid_v5` (which already SHA-1s its input; an extra hash step would be redundant). This makes block_id deterministic from payload content alone, so a retried POST collides on `ON CONFLICT (block_id) DO NOTHING`.
 
 ### Schema mapping: OTLP → parquet rows
 
@@ -238,7 +249,7 @@ All mappings happen in the analytics-layer block processor, which prost-decodes 
 | OTel field | parquet column |
 |---|---|
 | `time_unix_nano` | `time` |
-| `severity_number` 1–24 | `level` Int32, mapped to the Micromegas `Level` enum (`Fatal=1, Error=2, Warn=3, Info=4, Debug=5, Trace=6`): OTel TRACE 1–4 → `6`, DEBUG 5–8 → `5`, INFO 9–12 → `4`, WARN 13–16 → `3`, ERROR 17–20 → `2`, FATAL 21–24 → `1` |
+| `severity_number` 1–24 | `level` Int32, mapped to the Micromegas `Level` enum (`Fatal=1, Error=2, Warn=3, Info=4, Debug=5, Trace=6`): OTel TRACE 1–4 → `6`, DEBUG 5–8 → `5`, INFO 9–12 → `4`, WARN 13–16 → `3`, ERROR 17–20 → `2`, FATAL 21–24 → `1`. Out-of-range: `severity_number = 0` (UNSPECIFIED) → `Trace=6` (default to least-severe so unspecified logs aren't filtered out by default `WHERE level <= 4` queries); `severity_number > 24` → clamp to `Fatal=1` and emit a debug log. |
 | `body.string_value` | `msg` |
 | `body.kvlist_value` / `array_value` | JSON-stringified into `msg` (structured-body parsing deferred) |
 | `attributes.*` | `properties` JSONB |
@@ -251,19 +262,32 @@ All mappings happen in the analytics-layer block processor, which prost-decodes 
 New parquet view columns:
 
 ```
-process_id, stream_id, block_id, insert_time,
-exe, username, computer, process_properties,   -- joined from process
-trace_id (FixedSizeBinary[16]),
-span_id  (FixedSizeBinary[8]),
-parent_span_id (FixedSizeBinary[8], nullable),
-start_time, end_time, duration,
-name, scope, kind, status, status_message,
-properties (JSONB),
-events (JSONB — array of {time, name, attributes}),
-links  (JSONB — array of {trace_id, span_id, attributes})
+process_id          Dictionary(Int32, Utf8),
+stream_id           Dictionary(Int32, Utf8),
+block_id            Dictionary(Int32, Utf8),
+insert_time         Timestamp(Nanosecond, +00:00),
+exe                 Utf8,                        -- joined from process
+username            Utf8,                        -- joined from process
+computer            Utf8,                        -- joined from process
+process_properties  Dictionary(Int32, Binary),   -- JSONB, joined from process
+trace_id            FixedSizeBinary[16],
+span_id             FixedSizeBinary[8],
+parent_span_id      FixedSizeBinary[8] (nullable),
+start_time          Timestamp(Nanosecond, +00:00),
+end_time            Timestamp(Nanosecond, +00:00),
+duration            Int64,                       -- end_time - start_time, nanoseconds
+name                Dictionary(Int32, Utf8),
+kind                Dictionary(Int32, Utf8),     -- "INTERNAL"|"SERVER"|"CLIENT"|"PRODUCER"|"CONSUMER"|"UNSPECIFIED"
+status              Dictionary(Int32, Utf8),     -- "OK"|"ERROR"|"UNSET"
+status_message      Utf8 (nullable),
+properties          Dictionary(Int32, Binary),   -- JSONB; carries scope info as otel.scope.* keys (see below)
+events              Binary,                      -- JSONB array: [{time, name, attributes}]
+links               Binary                       -- JSONB array: [{trace_id, span_id, attributes}]
 ```
 
-`SpanKind`, status code are first-class on the row because they are load-bearing for filtering (kind, status). Span events and links go in plain `Binary` columns carrying JSONB bytes: predicates over them rarely push into nested-Struct parquet readers anyway, and JSONB absorbs schema evolution (e.g. OTel adding `dropped_attributes_count` to events) without bumping the parquet schema. Access at query time goes through the same `jsonb_*` UDFs already used for `properties`. We deliberately do **not** use `Dictionary(Int32, Binary)` here (the encoding `properties` uses): the `properties` blob repeats across many rows in a partition (it carries process/stream-wide attributes), but per-span `events`/`links` arrays are essentially unique per row, so a dictionary would have cardinality ≈ row count and pure indirection overhead with no compression payoff.
+**No top-level `scope` column** — instrumentation scope (`name`, `version`, `schema_url`, scope attributes) lives inside `properties` under the `otel.scope.*` prefix, consistent with the "Resource and Scope attributes" table below and with the rationale in the Stream identity section (one stream per signal per process, scope is sub-stream metadata). Earlier drafts of this doc listed `scope` as a column; that's resolved — scope is JSONB-only.
+
+`SpanKind`, status code are first-class on the row because they are load-bearing for filtering (kind, status); they're materialized as small dictionaries (cardinality ≤ 6 for kind, ≤ 3 for status). Span events and links go in plain `Binary` columns carrying JSONB bytes: predicates over them rarely push into nested-Struct parquet readers anyway, and JSONB absorbs schema evolution (e.g. OTel adding `dropped_attributes_count` to events) without bumping the parquet schema. Access at query time goes through the same `jsonb_*` UDFs already used for `properties`. We deliberately do **not** use `Dictionary(Int32, Binary)` for `events`/`links` (the encoding `properties` uses): the `properties` blob repeats across many rows in a partition (it carries process/stream-wide attributes), but per-span `events`/`links` arrays are essentially unique per row, so a dictionary would have cardinality ≈ row count and pure indirection overhead with no compression payoff.
 
 #### Metrics
 
@@ -280,18 +304,37 @@ links  (JSONB — array of {trace_id, span_id, attributes})
 | Scope identity (`name`, `version`, `schema_url`) and scope attributes | per-row `properties.otel.scope.*` (not on the stream — see Stream identity) |
 | DataPoint / Span / LogRecord attributes | per-row `properties` |
 
+#### Attribute value encoding
+
+OTel `KeyValue.value` is an `AnyValue` oneof: `string`, `bool`, `int`, `double`, `bytes`, `array`, or `kvlist`. Micromegas `properties` is a JSONB blob `{key → value}`. Mapping:
+
+| OTel `AnyValue` variant | JSONB representation |
+|---|---|
+| `string_value` | JSON string |
+| `bool_value` | JSON bool |
+| `int_value` (i64) | JSON number (i64; jsonb supports it natively) |
+| `double_value` | JSON number (f64) |
+| `bytes_value` | base64-encoded JSON string (existing `properties` consumers expect text) |
+| `array_value` | JSON array of values, recursively encoded |
+| `kvlist_value` | JSON object `{key → value}`, recursively encoded |
+
+Nested arrays/kvlists are preserved as nested JSON — no flattening. Query-time access uses the existing `jsonb_*` UDFs (`jsonb_extract_path`, etc.), which traverse nesting natively. This is the same path taken for `body.kvlist_value` / `array_value` in log records (whose top-level `body` field is JSON-stringified into `msg`, but if it's structured we still serialize inner attributes the same way for consistency).
+
 ### Ingest path (per OTLP request)
 
 1. Auth (existing axum middleware — `auth_middleware` from `rust/auth/src/axum.rs`).
-2. Decode the outer `ExportRequest` proto (just to walk Resource boundaries; we don't decode further).
-3. For each `ResourceLogs` / `ResourceMetrics` / `ResourceSpans`:
+2. **Validate `Content-Type`**: must be `application/x-protobuf`. Anything else → `415 Unsupported Media Type` (we deliberately do not implement the JSON variant in v1; see Trade-offs).
+3. **Decompress body if `Content-Encoding: gzip`** (OTel SDKs default to gzip — Python, Go, JS, .NET all set `OTEL_EXPORTER_OTLP_COMPRESSION=gzip` by default; without this, real-world OTel traffic is rejected). Wrap the request body in a `flate2::read::GzDecoder` (or use `tower-http::decompression::RequestDecompressionLayer` on the OTLP sub-router) and feed the decompressed bytes to prost. Other compression codecs (`Content-Encoding: deflate`, `zstd`) → 415 in v1; gzip is the only codec the spec mandates SDKs offer.
+4. Decode the outer `ExportRequest` proto (just to walk Resource boundaries; we don't decode further).
+5. **Empty top-level request** (`resource_logs`/`resource_metrics`/`resource_spans` is empty): per OTLP spec this is valid — return 200 with an empty `Export*ServiceResponse` and do nothing else. Don't insert any rows.
+6. For each `ResourceLogs` / `ResourceMetrics` / `ResourceSpans`:
    1. Derive `process_id` from resource attributes (UUIDv5; see Identity).
    2. Derive `stream_id` from `(process_id, signal)` — max 3 streams per process. Scope info travels in row properties, not in stream identity.
-   3. Idempotent register process + stream (in-memory dedup cache + `ON CONFLICT DO NOTHING` PG inserts). Stream registration sets `format = "otlp/v1/<signal>"`.
+   3. Idempotent register process + stream via `INSERT ... ON CONFLICT DO NOTHING`. No in-memory dedup cache — we let PG be the source of truth. Redundant inserts on hot paths are cheap (one round-trip, no table change, no WAL write) and avoid every cross-pod consistency concern. Stream registration sets `format = "otlp/v1/<signal>"`.
    4. Re-encode this Resource sub-message as protobuf bytes — the block payload.
    5. Build `block_wire_format::Block` with `payload.dependencies = []`, `payload.objects = <proto bytes>`.
    6. Call `WebIngestionService::insert_block_typed(block)` (typed entry point added for the OTel path; see Phase 1 step 5).
-4. Return OTLP success (or RESOURCE_EXHAUSTED on PG/object-store failure, INVALID_ARGUMENT on parse error).
+7. **Return** `200 OK` with `Content-Type: application/x-protobuf` and an empty `Export{Logs,Metrics,Trace}ServiceResponse` proto body (i.e., the proto-encoded zero-value of the response message — for whole-batch acceptance this is just an unset `partial_success` field, which serializes to zero bytes). On error: see HTTP status mapping below; the response body is the same proto type with `partial_success.error_message` populated where applicable.
 
 There's no event-by-event translation at ingest. The hot path serializes one protobuf submessage and writes it.
 
@@ -317,11 +360,14 @@ Edge cases:
 
 OTLP/HTTP is one POST per export call. The proto response body carries `partial_success { rejected_*_count, error_message }` for batch-level reporting; in v1 we use whole-batch accept/reject (SDKs handle that fine) and don't fill in partial counts.
 
-- 20 MiB body limit on OTLP routes (matches the OTel Collector's `confighttp.max_request_body_size` default, so anything an SDK is willing to send under the conventional Collector cap will go through here too; sub-Router mechanics in Phase 1 step 6).
+- 20 MiB **decompressed** body limit on OTLP routes (matches the OTel Collector's `confighttp.max_request_body_size` default, so anything an SDK is willing to send under the conventional Collector cap will go through here too; sub-Router mechanics in Phase 1 step 6). The 20 MiB applies to the body axum sees. With `RequestDecompressionLayer` the layer order is: `RequestBodyLimitLayer` (outer, on the wire bytes) → `RequestDecompressionLayer` (inner, expands gzip) → handler. We size the limit for compressed bytes since that's what the wire carries; gzip on text-heavy proto typically expands 5–10×, so ~100–200 MiB of decoded payload fits under a 20 MiB compressed cap. If observed payloads grow past this, bump or split the limit per-route. (Alternative: limit decompressed bytes via `tower-http`'s `Limited<R>`; deferred unless needed.)
 - HTTP status mapping:
   - DB/object-store transient failures → `503 Service Unavailable` (retryable per OTLP/HTTP spec).
-  - Parse errors / unknown content-type → `400 Bad Request` (non-retryable).
+  - Parse errors (malformed protobuf, malformed gzip) → `400 Bad Request` (non-retryable).
+  - Wrong `Content-Type` (not `application/x-protobuf`) or unsupported `Content-Encoding` (not gzip / not absent) → `415 Unsupported Media Type`.
+  - Body exceeds 20 MiB → `413 Payload Too Large`.
   - Auth failures → `401 Unauthorized`.
+- **Response body**: every response — success or error — is `Content-Type: application/x-protobuf` and contains an `Export{Logs,Metrics,Trace}ServiceResponse` proto. On 2xx success: empty proto (zero bytes is the valid wire form for the all-defaults message). On 4xx/5xx: same proto with `partial_success.error_message` populated. SDK clients ignore the body on non-2xx but a strict client may still try to parse it.
 - No rate limiting in v1.
 
 ### Auth
@@ -392,9 +438,9 @@ The OTLP body limit is a compile-time constant (20 MiB, matching the OTel Collec
    - `register_otel_process(process_id, exe, username, computer, distro, cpu_brand, tsc_frequency, start_time, start_ticks, properties) -> Result<...>` — writes a row to `processes` via SQL with named columns, matching the existing `ON CONFLICT (process_id) DO NOTHING` idempotency. (Companion to `register_otel_stream` from step 2.) The `processes` table has 13 columns; the three not in the parameter list are filled in by the function: `insert_time = Utc::now()` (server-side wall clock, mirroring the existing `insert_process` at `web_ingestion_service.rs:189`), `parent_process_id = NULL` (OTel has no parent-process concept), and `realname = username` (OTel has no separate "real name" attribute, so we don't burden the caller with passing the same value twice).
    - Rationale: the OTel adapter already has typed `Block`/process structs in hand. Making it CBOR-encode just so `insert_block`/`insert_process` can immediately CBOR-decode and re-encode is pure waste, and the existing `insert_process(body: Bytes)` would force the OTel path to construct a CBOR `ProcessInfo` only to have it decoded again.
 6. Add OTLP routes to `telemetry-ingestion-srv/src/main.rs`. The existing 100MB body limit is applied globally to the protected router (`main.rs:62`); to scope the new 20 MiB limit to OTLP only without weakening the 100MB on `/ingestion/insert_block`:
-   - Build OTLP routes as a separate sub-Router with its own `DefaultBodyLimit::disable()` + `RequestBodyLimitLayer::new(20 * 1024 * 1024)`.
-   - `.merge()` it into the protected app **before** the existing 100MB layer; axum applies per-Router body-limit layers to routes within that sub-Router, and the outer 100MB layer doesn't override the tighter inner one. Verify with an integration test (>20 MiB POST to OTLP → 413; >20 MiB POST to `/ingestion/insert_block` → still accepted).
-   - Routes share the existing listener and `auth_middleware`. Each handler reads the protobuf body, calls into `otel-ingestion` to split + register + write blocks via the shared `WebIngestionService`. Stream registration sets `format = "otlp/v1/<signal>"`.
+   - Build OTLP routes as a separate sub-Router with its own `DefaultBodyLimit::disable()` + `RequestBodyLimitLayer::new(20 * 1024 * 1024)` + `tower_http::decompression::RequestDecompressionLayer::new().gzip(true)` (the layer order matters: `RequestBodyLimitLayer` is outer so it caps wire-bytes, decompression is inner so the handler always sees plain proto). Add `tower-http`'s `decompression-gzip` feature to the workspace `tower-http` dependency entry (currently `features = ["compression-gzip", "cors", "limit", "timeout"]` — add `"decompression-gzip"`).
+   - `.merge()` it into the protected app **before** the existing 100MB layer; axum applies per-Router body-limit layers to routes within that sub-Router, and the outer 100MB layer doesn't override the tighter inner one. Verify with an integration test (>20 MiB POST to OTLP → 413; >20 MiB POST to `/ingestion/insert_block` → still accepted; gzip-encoded OTLP POST decompresses correctly).
+   - Each handler validates `Content-Type: application/x-protobuf` (415 on mismatch), reads the (already-decompressed) protobuf body, calls into `otel-ingestion` to split + register + write blocks via the shared `WebIngestionService`, and returns a proto-encoded `Export*ServiceResponse` body with `Content-Type: application/x-protobuf`. Routes share the existing listener and `auth_middleware`. Stream registration sets `format = "otlp/v1/<signal>"`.
 7. End-to-end smoke test: Python OTel SDK with `OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf` pointed at the existing ingestion endpoint; verify rows land in PG `processes`/`streams`/`blocks` (with `format = "otlp/v1/..."` on streams) and bytes land in object store.
 
 ### Phase 2: per-block format dispatch + logs block processor → log_entries
@@ -491,7 +537,8 @@ The OTLP body limit is a compile-time constant (20 MiB, matching the OTel Collec
 - Sentinel dispatch in each block processor — fed both legacy transit blocks and v1 OTel blocks, expect both to land correctly.
 
 **Integration** (in `tests/` of `otel-ingestion`):
-- Use `opentelemetry_sdk` in test code to construct realistic protobuf payloads; round-trip through translate → block_builder → block processor → in-memory Arrow recordbatch; assert the final shape.
+- Construct test payloads by building the prost-generated message types directly (`ResourceLogs`, `ResourceSpans`, `ResourceMetrics`, `KeyValue`, etc.) — `opentelemetry-proto` alone is sufficient. Pulling in the full `opentelemetry-sdk` and `opentelemetry-otlp` exporter just to materialize bytes adds tokio/tower/reqwest transitively for no test-coverage gain. A small fixtures module (`tests/fixtures.rs`) with helpers like `make_resource_logs(service_name, &[(time, level, msg)])` keeps the tests readable without an SDK round-trip.
+- Round-trip: build `ExportLogsServiceRequest` proto → serialize with prost → POST to the route via `axum::Router` in-process (no socket) → query the Arrow record batches that the block processor would emit; assert the final shape.
 
 **End-to-end** (via `local_test_env`):
 - Start `telemetry-ingestion-srv` with the OTLP routes enabled. Run a Python OTel SDK script (with `OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf`) emitting ~100 spans/logs/metrics. Query `log_entries`, `otel_spans`, `measures` via FlightSQL; assert counts match.
@@ -510,6 +557,7 @@ The OTLP body limit is a compile-time constant (20 MiB, matching the OTel Collec
 6. ~~**Block payload re-encoding**~~ — decided: accept the cost. Splitting an `ExportRequest` into per-Resource blocks re-encodes each submessage; an offset/length scheme into a shared envelope would save the re-encoding but make blocks non-self-contained. OTel ingestion is allowed to be less efficient than the native micromegas-tracing path; producers that want minimum overhead use the native SDK.
 7. **OpenTelemetry Collector sample config**: ship one that fans out to Micromegas + a file exporter for production safety? Natural follow-up, not core.
 8. ~~**Compaction interaction**~~ — decided: nothing to do. The existing lakehouse compaction handles small-block influxes the same way it does for native streams.
+9. **Reference-implementation cross-check (TODO before coding)**: find a simple Rust OTLP/HTTP receiver and diff this plan against it, looking for things we missed or got wrong. Candidates to read: the OTel Collector's `receiver/otlpreceiver` (Go, but the canonical reference for spec-conformant behavior), `tracing-opentelemetry`'s test harnesses, the `opentelemetry-rust` repo's `examples/`, and any small Rust-native receivers on crates.io (search `otlp receiver`, `otlp http`). Diff axes: gzip handling specifics, response body shape on partial-success/error, retry-after semantics, content-type strict vs lax parsing, edge cases for empty/malformed `ExportRequest`, span-status nullability. Output: a short "deltas vs. canonical receiver" section appended here, then either incorporate or explicitly defer each delta.
 
 ## References
 
