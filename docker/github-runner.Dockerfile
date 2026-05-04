@@ -2,6 +2,9 @@
 FROM ubuntu:22.04
 
 ARG RUNNER_VERSION=2.332.0
+# Default to Azure mirror — archive.ubuntu.com has been intermittent.
+# Override with --build-arg UBUNTU_MIRROR=<host> to pick a different mirror.
+ARG UBUNTU_MIRROR=azure.archive.ubuntu.com
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -10,6 +13,12 @@ ENV DEBIAN_FRONTEND=noninteractive
 # hook deletes them after every apt-get run).
 RUN rm -f /etc/apt/apt.conf.d/docker-clean \
     && echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/keep-cache
+
+# Redirect archive + security to UBUNTU_MIRROR (Azure carries both pockets).
+RUN sed -i \
+    -e "s|http://archive\.ubuntu\.com/ubuntu|http://${UBUNTU_MIRROR}/ubuntu|g" \
+    -e "s|http://security\.ubuntu\.com/ubuntu|http://${UBUNTU_MIRROR}/ubuntu|g" \
+    /etc/apt/sources.list
 
 # System dependencies
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
@@ -51,14 +60,15 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     npx playwright install-deps chromium
 
-# Firefox from Mozilla PPA (the apt "firefox" package on 22.04 is a snap shim that
-# doesn't work inside containers) + geckodriver
+# Firefox from Mozilla's official apt repo (the apt "firefox" on 22.04 is a snap
+# shim, and PPAs have no mirror network so ppa:mozillateam is a single point of
+# failure). Mozilla's repo is CDN-hosted and independent of Canonical.
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
-    apt-get update \
-    && apt-get install -y --no-install-recommends software-properties-common \
-    && add-apt-repository -y ppa:mozillateam/ppa \
-    && printf 'Package: *\nPin: release o=LP-PPA-mozillateam\nPin-Priority: 1001\n' > /etc/apt/preferences.d/mozilla-firefox \
+    install -d -m 0755 /etc/apt/keyrings \
+    && wget -qO /etc/apt/keyrings/packages.mozilla.org.asc https://packages.mozilla.org/apt/repo-signing-key.gpg \
+    && echo "deb [signed-by=/etc/apt/keyrings/packages.mozilla.org.asc] https://packages.mozilla.org/apt mozilla main" > /etc/apt/sources.list.d/mozilla.list \
+    && printf 'Package: *\nPin: origin packages.mozilla.org\nPin-Priority: 1000\n' > /etc/apt/preferences.d/mozilla \
     && apt-get update && apt-get install -y --no-install-recommends firefox \
     && GECKO_VERSION=$(curl -fsSL https://api.github.com/repos/mozilla/geckodriver/releases/latest | python3 -c "import sys,json; print(json.load(sys.stdin)['tag_name'])") \
     && curl -fsSL "https://github.com/mozilla/geckodriver/releases/download/${GECKO_VERSION}/geckodriver-${GECKO_VERSION}-linux64.tar.gz" | tar -xz -C /usr/local/bin
