@@ -106,6 +106,7 @@ nav:
         - Screens as Code: web-app/notebooks/screens-as-code.md
     - Deployment: admin/web-app.md
   - Integrations:
+    - OpenTelemetry (OTLP): otlp/index.md
     - Unreal Engine:
         - Overview: unreal/index.md
         - Installation: unreal/installation.md

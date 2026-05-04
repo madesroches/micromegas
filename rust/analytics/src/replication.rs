@@ -35,6 +35,9 @@ async fn ingest_streams(
         let properties_accessor = properties_column_by_name(&b, "properties")?;
         let insert_time_column: &TimestampNanosecondArray =
             typed_column_by_name(&b, "insert_time")?;
+        // Hard failure (rather than a silent default) on missing `format` so a
+        // v3 source replicating into a v4 target surfaces the schema mismatch loudly.
+        let format_column = string_column_by_name(&b, "format")?;
 
         for row in 0..b.num_rows() {
             let stream_id = Uuid::parse_str(stream_id_column.value(row)?)?;
@@ -51,7 +54,11 @@ async fn ingest_streams(
                 extract_properties_from_properties_column(properties_accessor.as_ref(), row)?;
             let properties = micromegas_telemetry::property::make_properties(&properties_map);
 
-            sqlx::query("INSERT INTO streams VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (stream_id) DO NOTHING;")
+            sqlx::query(
+                "INSERT INTO streams (stream_id, process_id, dependencies_metadata, objects_metadata, tags, properties, insert_time, format)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+                 ON CONFLICT (stream_id) DO NOTHING;",
+            )
                 .bind(stream_id)
                 .bind(process_id)
                 .bind(dependencies_metadata_column.value(row))
@@ -61,6 +68,7 @@ async fn ingest_streams(
                 .bind(DateTime::from_timestamp_nanos(
                     insert_time_column.value(row),
                 ))
+                .bind(format_column.value(row)?)
                 .execute(&mut *tr)
                 .await
                 .with_context(|| "inserting into streams")?;

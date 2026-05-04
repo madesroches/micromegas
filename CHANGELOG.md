@@ -6,6 +6,10 @@ This file documents the historical progress of the Micromegas project. For curre
 
 * **HTTP Gateway:**
   * Add `GET /gateway/health` liveness endpoint for load balancer probes (#994)
+* **OTLP Ingestion:**
+  * Add native OTLP/HTTP ingestion for logs, metrics, and traces at `/ingestion/otlp/v1/{logs,metrics,traces}`; resource → `process_id` synthesis via stable UUIDv5; per-block format dispatch on a new `streams.format` column (schema v4)
+  * Add `otel_logs_block_processor` (→ `log_entries`) and `otel_metrics_block_processor` (Sum/Gauge → `measures`)
+  * Add `otel_spans` JIT view (per-process) materializing OTel spans with `trace_id`/`span_id` as `FixedSizeBinary`
 * **Analytics:**
   * Add `net_spans` JIT view materializing Connection/Object/Property/RPC bandwidth spans with cumulative bit offsets
 * **Web App:**

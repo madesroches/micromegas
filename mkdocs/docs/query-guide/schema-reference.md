@@ -17,6 +17,7 @@ Micromegas organizes telemetry data into several views that can be queried using
 | [`thread_spans`](#thread_spans) | Synchronous execution spans and timing | Performance profiling, call tracing |
 | [`async_events`](#async_events) | Asynchronous event lifecycle tracking | Async operation monitoring |
 | [`net_spans`](#net_spans) | Network bandwidth spans (Connection / Object / Property / RPC) | Replication bandwidth attribution, bit-axis flame charts |
+| [`otel_spans`](#otel_spans) | OpenTelemetry spans materialized from OTLP-ingested traces | Distributed tracing, OTel SDK interop |
 
 ## Core Views
 
@@ -500,6 +501,72 @@ FROM view_instance('net_spans', '<process_id>')
 WHERE kind = 'connection' AND is_outgoing = true
 GROUP BY connection_name
 ORDER BY bits DESC;
+```
+
+### `otel_spans`
+
+OpenTelemetry spans materialized from OTLP-ingested trace payloads. See [OTLP Ingestion](../otlp/index.md) for how trace data lands in this view.
+
+The view is **JIT-only** and **parameterized by `process_id`** — there is no `global` instance. Cross-process trace traversal (`WHERE trace_id = X` across services) requires UNION-ing across each participating process.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `process_id` | `Dictionary(Int32, Utf8)` | Process id (the view parameter) |
+| `stream_id` | `Dictionary(Int32, Utf8)` | Trace stream identifier |
+| `block_id` | `Dictionary(Int32, Utf8)` | Block identifier |
+| `insert_time` | `Timestamp(Nanosecond)` | When the block was inserted |
+| `exe` | `Utf8` | Executable name (joined from `processes`) |
+| `username` | `Utf8` | User who ran the process (joined) |
+| `computer` | `Utf8` | Computer/hostname (joined) |
+| `process_properties` | `Dictionary(Int32, Binary)` | Process-wide attributes (joined) |
+| `trace_id` | `FixedSizeBinary[16]` | W3C Trace Context trace id |
+| `span_id` | `FixedSizeBinary[8]` | W3C Trace Context span id |
+| `parent_span_id` | `FixedSizeBinary[8]` (nullable) | Parent span id (`NULL` for root spans) |
+| `start_time` | `Timestamp(Nanosecond)` | Span start time |
+| `end_time` | `Timestamp(Nanosecond)` | Span end time |
+| `duration` | `Int64` | `end_time − start_time`, nanoseconds |
+| `name` | `Dictionary(Int32, Utf8)` | Span name |
+| `kind` | `Dictionary(Int32, Utf8)` | `INTERNAL` / `SERVER` / `CLIENT` / `PRODUCER` / `CONSUMER` / `UNSPECIFIED` |
+| `status` | `Dictionary(Int32, Utf8)` | `OK` / `ERROR` / `UNSET` |
+| `status_message` | `Utf8` (nullable) | Human-readable status message |
+| `properties` | `Dictionary(Int32, Binary)` | Span attributes + scope info under `otel.scope.*` keys (JSONB) |
+| `events` | `Binary` | Span events as a JSONB array (`[{time, name, attributes}, …]`) |
+| `links` | `Binary` | Span links as a JSONB array (`[{trace_id, span_id, attributes}, …]`) |
+
+`trace_id` and `span_id` are `FixedSizeBinary` (lengths fixed by W3C Trace Context). For human-readable display, render with `encode(trace_id, 'hex')` or an equivalent UDF at query time.
+
+**Example queries:**
+
+```sql
+-- All spans in a single trace, ordered chronologically
+SELECT name, kind, status, duration,
+       encode(span_id, 'hex') AS span,
+       encode(parent_span_id, 'hex') AS parent
+FROM view_instance('otel_spans', '<process_id>')
+WHERE trace_id = decode('0123456789abcdef0123456789abcdef', 'hex')
+ORDER BY start_time;
+
+-- Top 10 slowest server spans
+SELECT name, AVG(duration) AS avg_ns, COUNT(*) AS calls
+FROM view_instance('otel_spans', '<process_id>')
+WHERE kind = 'SERVER'
+GROUP BY name
+ORDER BY avg_ns DESC
+LIMIT 10;
+
+-- Error spans with their scope library
+SELECT name,
+       jsonb_as_string(jsonb_get(properties, 'otel.scope.name')) AS library,
+       status_message
+FROM view_instance('otel_spans', '<process_id>')
+WHERE status = 'ERROR'
+ORDER BY start_time DESC;
+
+-- Filter by instrumentation library
+SELECT COUNT(*) AS span_count
+FROM view_instance('otel_spans', '<process_id>')
+WHERE jsonb_as_string(jsonb_get(properties, 'otel.scope.name'))
+      = 'opentelemetry.instrumentation.requests';
 ```
 
 ## Data Types

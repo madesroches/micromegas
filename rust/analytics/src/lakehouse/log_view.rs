@@ -1,11 +1,12 @@
 use super::{
     batch_update::PartitionCreationStrategy,
-    block_partition_spec::BlockPartitionSpec,
+    block_partition_spec::{BlockPartitionSpec, BlockProcessor, BlockProcessorMap},
     blocks_view::BlocksView,
     dataframe_time_bounds::{DataFrameTimeBounds, NamedColumnsTimeBounds},
     jit_partitions::{JitPartitionConfig, write_partition_from_blocks},
     lakehouse_context::LakehouseContext,
     log_block_processor::LogBlockProcessor,
+    otel::logs_block_processor::OtelLogsBlockProcessor,
     partition_cache::PartitionCache,
     partition_source_data::fetch_partition_source_data,
     view::{PartitionSpec, View, ViewMetadata},
@@ -24,7 +25,9 @@ use datafusion::{
     arrow::datatypes::Schema,
     logical_expr::{Between, Expr, col},
 };
+use micromegas_ingestion::web_ingestion_service::{FORMAT_OTLP_LOGS, FORMAT_TRANSIT};
 use micromegas_tracing::prelude::*;
+use std::collections::HashMap;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -32,6 +35,20 @@ const VIEW_SET_NAME: &str = "log_entries";
 const SCHEMA_VERSION: u8 = 5;
 lazy_static::lazy_static! {
     static ref TIME_COLUMN: Arc<String> = Arc::new( String::from("time"));
+}
+
+/// Block-processor map covering native transit + OTel log blocks.
+fn log_processors() -> Arc<BlockProcessorMap> {
+    let mut m: BlockProcessorMap = HashMap::new();
+    m.insert(
+        FORMAT_TRANSIT,
+        Arc::new(LogBlockProcessor {}) as Arc<dyn BlockProcessor>,
+    );
+    m.insert(
+        FORMAT_OTLP_LOGS,
+        Arc::new(OtelLogsBlockProcessor {}) as Arc<dyn BlockProcessor>,
+    );
+    Arc::new(m)
 }
 
 /// A `ViewMaker` for creating `LogView` instances.
@@ -114,7 +131,7 @@ impl View for LogView {
             schema: self.get_file_schema(),
             insert_range,
             source_data,
-            block_processor: Arc::new(LogBlockProcessor {}),
+            block_processors: log_processors(),
         }))
     }
 
@@ -165,6 +182,7 @@ impl View for LogView {
             view_instance_id: self.get_view_instance_id(),
             file_schema_hash: self.get_file_schema_hash(),
         };
+        let block_processors = log_processors();
 
         for part in all_partitions {
             if !is_jit_partition_up_to_date(&lakehouse.lake().db_pool, view_meta.clone(), &part)
@@ -175,7 +193,7 @@ impl View for LogView {
                     view_meta.clone(),
                     self.get_file_schema(),
                     part,
-                    Arc::new(LogBlockProcessor {}),
+                    block_processors.clone(),
                 )
                 .await
                 .with_context(|| "write_partition_from_blocks")?;

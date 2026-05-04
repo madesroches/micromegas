@@ -272,6 +272,8 @@ telemetry-ingestion-srv
 telemetry-ingestion-srv --disable-auth
 ```
 
+The OTLP/HTTP routes (`/ingestion/otlp/v1/{logs,metrics,traces}`) share this authentication chain. OTel SDKs attach the bearer token via `OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer <key>"`. See [OTLP Ingestion](../otlp/index.md#authentication) for SDK-side configuration.
+
 ### Rust Client Authentication
 
 Rust applications sending telemetry can use either API keys or OIDC client credentials.

@@ -1,5 +1,6 @@
 use super::{
     batch_update::PartitionCreationStrategy,
+    block_partition_spec::{BlockProcessor, BlockProcessorMap},
     blocks_view::BlocksView,
     dataframe_time_bounds::{DataFrameTimeBounds, NamedColumnsTimeBounds},
     jit_partitions::{JitPartitionConfig, write_partition_from_blocks},
@@ -21,7 +22,9 @@ use datafusion::{
     arrow::datatypes::Schema,
     logical_expr::{Between, Expr, col},
 };
+use micromegas_ingestion::web_ingestion_service::FORMAT_TRANSIT;
 use micromegas_tracing::prelude::*;
+use std::collections::HashMap;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -165,6 +168,16 @@ impl View for AsyncEventsView {
             file_schema_hash: self.get_file_schema_hash(),
         };
 
+        // async_events only sources native transit streams (tagged "cpu");
+        // OTel spans go to the dedicated otel_spans view.
+        let mut block_processors: BlockProcessorMap = HashMap::new();
+        block_processors.insert(
+            FORMAT_TRANSIT,
+            Arc::new(AsyncEventsBlockProcessor::new(convert_ticks.clone()))
+                as Arc<dyn BlockProcessor>,
+        );
+        let block_processors = Arc::new(block_processors);
+
         for part in all_partitions {
             if !is_jit_partition_up_to_date(&lakehouse.lake().db_pool, view_meta.clone(), &part)
                 .await?
@@ -174,7 +187,7 @@ impl View for AsyncEventsView {
                     view_meta.clone(),
                     self.get_file_schema(),
                     part,
-                    Arc::new(AsyncEventsBlockProcessor::new(convert_ticks.clone())),
+                    block_processors.clone(),
                 )
                 .await
                 .with_context(|| "write_partition_from_blocks")?;

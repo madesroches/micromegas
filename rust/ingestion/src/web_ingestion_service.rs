@@ -3,13 +3,42 @@ use crate::remote_data_lake::migrate_db;
 use anyhow::Context;
 use bytes::Buf;
 use micromegas_telemetry::block_wire_format;
+use micromegas_telemetry::property::Property;
 use micromegas_telemetry::property::make_properties;
 use micromegas_telemetry::stream_info::StreamInfo;
 use micromegas_telemetry::wire_format::encode_cbor;
 use micromegas_tracing::prelude::*;
 use micromegas_tracing::property_set;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use thiserror::Error;
+use uuid::Uuid;
+
+static EMPTY_TRANSIT_METADATA_CBOR_BYTES: LazyLock<Vec<u8>> = LazyLock::new(|| {
+    let mut buf = Vec::new();
+    ciborium::ser::into_writer(&Vec::<()>::new(), &mut buf)
+        .expect("encoding an empty Vec to CBOR is infallible");
+    buf
+});
+
+/// Sentinel for `dependencies_metadata` / `objects_metadata` on streams that
+/// don't use the transit/POD wire format (e.g. OTLP). Existing readers decode
+/// these BYTEA columns as `Vec<UserDefinedType>` and iterate; an empty Vec
+/// makes those loops no-ops without touching consumer code.
+pub fn empty_transit_metadata_cbor() -> &'static [u8] {
+    &EMPTY_TRANSIT_METADATA_CBOR_BYTES
+}
+
+/// Format string for native streams (transit-encoded payload, CBOR envelope).
+pub const FORMAT_TRANSIT: &str = "micromegas-transit";
+
+/// Stream `format` value for OTel logs (one `ResourceLogs` proto per block payload).
+pub const FORMAT_OTLP_LOGS: &str = "otlp/v1/logs";
+
+/// Stream `format` value for OTel metrics (one `ResourceMetrics` proto per block payload).
+pub const FORMAT_OTLP_METRICS: &str = "otlp/v1/metrics";
+
+/// Stream `format` value for OTel traces (one `ResourceSpans` proto per block payload).
+pub const FORMAT_OTLP_TRACES: &str = "otlp/v1/traces";
 
 /// Error type for ingestion service operations.
 /// Categorizes errors to enable proper HTTP status code mapping.
@@ -57,6 +86,20 @@ impl WebIngestionService {
     pub async fn insert_block(&self, body: bytes::Bytes) -> Result<(), IngestionServiceError> {
         let block: block_wire_format::Block = ciborium::from_reader(body.reader())
             .map_err(|e| IngestionServiceError::ParseError(format!("parsing block: {e}")))?;
+        self.insert_block_typed(block).await
+    }
+
+    /// Inserts a block whose payload is already typed (no envelope round-trip on the caller side).
+    ///
+    /// The caller hands us a fully-built `Block`; we CBOR-encode the payload envelope once,
+    /// write it to object storage, and INSERT the row. Used by the OTLP adapter where
+    /// constructing the CBOR `Block` envelope just so `insert_block` could decode it
+    /// would be wasted work.
+    #[span_fn]
+    pub async fn insert_block_typed(
+        &self,
+        block: block_wire_format::Block,
+    ) -> Result<(), IngestionServiceError> {
         let encoded_payload = encode_cbor(&block.payload)
             .map_err(|e| IngestionServiceError::ParseError(format!("encoding payload: {e}")))?;
         let payload_size = encoded_payload.len();
@@ -127,6 +170,7 @@ impl WebIngestionService {
         Ok(())
     }
 
+    /// Registers a stream whose blocks will be ingested in the transit format.
     #[span_fn]
     pub async fn insert_stream(&self, body: bytes::Bytes) -> Result<(), IngestionServiceError> {
         let stream_info: StreamInfo = ciborium::from_reader(body.reader())
@@ -143,7 +187,9 @@ impl WebIngestionService {
             IngestionServiceError::ParseError(format!("encoding objects_metadata: {e}"))
         })?;
         let result = sqlx::query(
-            "INSERT INTO streams VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (stream_id) DO NOTHING;",
+            "INSERT INTO streams (stream_id, process_id, dependencies_metadata, objects_metadata, tags, properties, insert_time, format)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+             ON CONFLICT (stream_id) DO NOTHING;",
         )
         .bind(stream_info.stream_id)
         .bind(stream_info.process_id)
@@ -152,6 +198,7 @@ impl WebIngestionService {
         .bind(&stream_info.tags)
         .bind(make_properties(&stream_info.properties))
         .bind(sqlx::types::chrono::Utc::now())
+        .bind(FORMAT_TRANSIT)
         .execute(&self.lake.db_pool)
         .await
         .map_err(|e| {
@@ -163,6 +210,51 @@ impl WebIngestionService {
                 "duplicate stream_id={} skipped (already exists)",
                 stream_info.stream_id
             );
+        }
+        Ok(())
+    }
+
+    /// Registers a stream produced by an OTLP ingestion path.
+    ///
+    /// `dependencies_metadata` and `objects_metadata` are filled with the CBOR sentinel
+    /// for an empty `Vec<UserDefinedType>` so legacy decode sites continue to work.
+    /// `format` distinguishes per-block dispatch downstream (e.g. `"otlp/v1/logs"`).
+    /// Stream `properties` are always empty for OTel — scope and per-event attrs
+    /// live on individual rows during materialization, not on the stream.
+    ///
+    /// Hack: piggybacking OTLP onto the transit-shaped `streams` row (with empty
+    /// metadata sentinels) is expedient for two formats but won't scale. To support
+    /// more formats cleanly, `dependencies_metadata`, `objects_metadata`, and `format`
+    /// should be merged into a single per-format payload column.
+    #[span_fn]
+    pub async fn register_otel_stream(
+        &self,
+        stream_id: Uuid,
+        process_id: Uuid,
+        tags: Vec<String>,
+        format: &str,
+    ) -> Result<(), IngestionServiceError> {
+        let result = sqlx::query(
+            "INSERT INTO streams (stream_id, process_id, dependencies_metadata, objects_metadata, tags, properties, insert_time, format)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+             ON CONFLICT (stream_id) DO NOTHING;",
+        )
+        .bind(stream_id)
+        .bind(process_id)
+        .bind(empty_transit_metadata_cbor())
+        .bind(empty_transit_metadata_cbor())
+        .bind(tags)
+        .bind(Vec::<Property>::new())
+        .bind(sqlx::types::chrono::Utc::now())
+        .bind(format)
+        .execute(&self.lake.db_pool)
+        .await
+        .map_err(|e| {
+            IngestionServiceError::DatabaseError(format!("inserting otel stream: {e}"))
+        })?;
+
+        if result.rows_affected() == 0 {
+            debug!("duplicate otel stream_id={stream_id} skipped (already exists)");
         }
         Ok(())
     }
@@ -200,6 +292,58 @@ impl WebIngestionService {
                 "duplicate process_id={} skipped (already exists)",
                 process_info.process_id
             );
+        }
+        Ok(())
+    }
+
+    /// Registers a process originating from OTLP. Idempotent via `ON CONFLICT DO NOTHING`.
+    ///
+    /// `realname` is set equal to `username` (OTel has no separate "real name" concept).
+    /// `parent_process_id` is always NULL — OTel has no parent-process model.
+    /// `insert_time` is the server wall clock, matching the existing `insert_process` path.
+    #[span_fn]
+    #[expect(clippy::too_many_arguments, reason = "OTel process identity fields")]
+    pub async fn register_otel_process(
+        &self,
+        process_id: Uuid,
+        exe: String,
+        username: String,
+        computer: String,
+        distro: String,
+        cpu_brand: String,
+        tsc_frequency: i64,
+        start_time: sqlx::types::chrono::DateTime<sqlx::types::chrono::Utc>,
+        start_ticks: i64,
+        properties: Vec<Property>,
+    ) -> Result<(), IngestionServiceError> {
+        let insert_time = sqlx::types::chrono::Utc::now();
+        let result = sqlx::query(
+            "INSERT INTO processes
+             (process_id, exe, username, realname, computer, distro, cpu_brand,
+              tsc_frequency, start_time, start_ticks, insert_time, parent_process_id, properties)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,NULL,$12)
+             ON CONFLICT (process_id) DO NOTHING;",
+        )
+        .bind(process_id)
+        .bind(exe)
+        .bind(&username)
+        .bind(&username)
+        .bind(computer)
+        .bind(distro)
+        .bind(cpu_brand)
+        .bind(tsc_frequency)
+        .bind(start_time)
+        .bind(start_ticks)
+        .bind(insert_time)
+        .bind(properties)
+        .execute(&self.lake.db_pool)
+        .await
+        .map_err(|e| {
+            IngestionServiceError::DatabaseError(format!("inserting otel process: {e}"))
+        })?;
+
+        if result.rows_affected() == 0 {
+            debug!("duplicate otel process_id={process_id} skipped (already exists)");
         }
         Ok(())
     }

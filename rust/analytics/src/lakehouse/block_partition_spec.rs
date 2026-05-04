@@ -11,6 +11,7 @@ use futures::StreamExt;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_telemetry::blob_storage::BlobStorage;
 use micromegas_tracing::prelude::*;
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -25,15 +26,24 @@ pub trait BlockProcessor: Send + Sync + Debug {
     ) -> Result<Option<PartitionRowSet>>;
 }
 
+/// Map from `streams.format` to the processor that handles that wire format.
+/// Views register one entry per format they understand (e.g. log entries register
+/// both `"micromegas-transit"` and `"otlp/v1/logs"`).
+pub type BlockProcessorMap = HashMap<&'static str, Arc<dyn BlockProcessor>>;
+
 /// BlockPartitionSpec processes blocks individually and out of order
-/// which works fine for measures & log entries
+/// which works fine for measures & log entries.
+///
+/// Per-block dispatch keys on `PartitionSourceBlock::format` so a single view can
+/// materialize blocks coming from heterogeneous wire formats (native CBOR + OTLP).
+/// Unknown formats are warned and skipped.
 #[derive(Debug)]
 pub struct BlockPartitionSpec {
     pub view_metadata: ViewMetadata,
     pub schema: Arc<Schema>,
     pub insert_range: TimeRange,
     pub source_data: Arc<dyn PartitionBlocksSource>,
-    pub block_processor: Arc<dyn BlockProcessor>,
+    pub block_processors: Arc<BlockProcessorMap>,
 }
 
 #[async_trait]
@@ -94,7 +104,24 @@ impl PartitionSpec for BlockPartitionSpec {
             .await
             .map(|src_block_res| async {
                 let src_block = src_block_res.with_context(|| "get_blocks_stream")?;
-                let block_processor = self.block_processor.clone();
+                // Per-block dispatch on `streams.format`. A view that doesn't register
+                // a processor for some format silently skips matching blocks instead of
+                // erroring — keeps the partition build moving when an unknown format
+                // shows up alongside known ones.
+                let Some(block_processor) = self
+                    .block_processors
+                    .get(src_block.format.as_str())
+                    .cloned()
+                else {
+                    warn!(
+                        "no block processor for format={} (view={}/{}); skipping block_id={}",
+                        src_block.format,
+                        self.view_metadata.view_set_name,
+                        self.view_metadata.view_instance_id,
+                        src_block.block.block_id
+                    );
+                    return Ok::<Option<PartitionRowSet>, anyhow::Error>(None);
+                };
                 let blob_storage = lake.blob_storage.clone();
                 let handle = spawn_with_context(async move {
                     block_processor

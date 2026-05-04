@@ -54,11 +54,11 @@ fn test_transit_i64_to_jsonb() {
 
 #[test]
 fn test_transit_f64_to_jsonb() {
-    let val = TransitValue::F64(3.14);
+    let val = TransitValue::F64(std::f64::consts::PI);
     let jsonb = transit_value_to_jsonb(&val);
     match jsonb {
         JsonbValue::Number(jsonb::Number::Float64(v)) => {
-            assert!((v - 3.14).abs() < f64::EPSILON);
+            assert!((v - std::f64::consts::PI).abs() < f64::EPSILON);
         }
         _ => panic!("expected Float64"),
     }

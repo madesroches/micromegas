@@ -3340,6 +3340,7 @@ dependencies = [
  "micromegas-analytics",
  "micromegas-auth",
  "micromegas-ingestion",
+ "micromegas-otel-ingestion",
  "micromegas-perfetto",
  "micromegas-proc-macros",
  "micromegas-telemetry",
@@ -3355,6 +3356,7 @@ dependencies = [
  "tokio",
  "tonic",
  "tower",
+ "tower-http",
  "uuid",
  "wiremock",
 ]
@@ -3367,12 +3369,14 @@ dependencies = [
  "arrow-flight",
  "async-stream",
  "async-trait",
+ "base64 0.22.1",
  "bytes",
  "chrono",
  "ciborium",
  "criterion",
  "datafusion",
  "futures",
+ "hex",
  "jsonb",
  "lazy_static",
  "micromegas-datafusion-extensions",
@@ -3384,8 +3388,10 @@ dependencies = [
  "micromegas-transit",
  "moka",
  "object_store",
+ "opentelemetry-proto",
  "parquet",
  "pin-project",
+ "prost 0.14.3",
  "rand 0.9.4",
  "serial_test",
  "sqlx",
@@ -3459,6 +3465,23 @@ dependencies = [
  "micromegas-tracing",
  "sqlx",
  "thiserror 2.0.18",
+ "uuid",
+]
+
+[[package]]
+name = "micromegas-otel-ingestion"
+version = "0.25.0"
+dependencies = [
+ "anyhow",
+ "bytes",
+ "chrono",
+ "micromegas-ingestion",
+ "micromegas-telemetry",
+ "micromegas-tracing",
+ "opentelemetry-proto",
+ "prost 0.14.3",
+ "thiserror 2.0.18",
+ "uuid",
 ]
 
 [[package]]
@@ -3536,6 +3559,7 @@ version = "0.25.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "criterion",
  "futures",
  "getrandom 0.3.4",
  "internment",
@@ -3916,6 +3940,47 @@ name = "openssl-probe"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7c87def4c32ab89d880effc9e097653c8da5d6ef28e6b539d313baaacfbafcbe"
+
+[[package]]
+name = "opentelemetry"
+version = "0.31.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b84bcd6ae87133e903af7ef497404dda70c60d0ea14895fc8a5e6722754fc2a0"
+dependencies = [
+ "futures-core",
+ "futures-sink",
+ "js-sys",
+ "pin-project-lite",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "opentelemetry-proto"
+version = "0.31.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a7175df06de5eaee9909d4805a3d07e28bb752c34cab57fa9cff549da596b30f"
+dependencies = [
+ "opentelemetry",
+ "opentelemetry_sdk",
+ "prost 0.14.3",
+ "tonic",
+ "tonic-prost",
+]
+
+[[package]]
+name = "opentelemetry_sdk"
+version = "0.31.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e14ae4f5991976fd48df6d843de219ca6d31b01daaab2dad5af2badeded372bd"
+dependencies = [
+ "futures-channel",
+ "futures-executor",
+ "futures-util",
+ "opentelemetry",
+ "percent-encoding",
+ "rand 0.9.4",
+ "thiserror 2.0.18",
+]
 
 [[package]]
 name = "ordered-float"
@@ -5084,6 +5149,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "sha1_smol"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbfa15b3dddfee50a0fff136974b3e1bde555604ba463834a7eb7deb6417705d"
+
+[[package]]
 name = "sha2"
 version = "0.10.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6084,6 +6155,7 @@ dependencies = [
  "getrandom 0.4.2",
  "js-sys",
  "serde_core",
+ "sha1_smol",
  "wasm-bindgen",
 ]
 

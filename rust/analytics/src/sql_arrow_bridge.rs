@@ -319,7 +319,7 @@ impl ColumnReader for PropertiesColumnReader {
 /// Creates a `ColumnReader` for a given database column.
 pub fn make_column_reader(column: &PgColumn) -> Result<Arc<dyn ColumnReader>> {
     match column.type_info().name() {
-        "VARCHAR" => Ok(Arc::new(StringColumnReader {
+        "VARCHAR" | "TEXT" => Ok(Arc::new(StringColumnReader {
             field: Field::new(column.name(), DataType::Utf8, true),
             column_ordinal: column.ordinal(),
         })),

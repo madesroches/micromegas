@@ -10,6 +10,7 @@ graph TD
         App1[Your Application]
         App2[Another Service]
         App3[Third Service]
+        Otel[OTel-Instrumented App<br/>Claude Code, Goose, ...]
     end
     
     subgraph "Micromegas Tracing"
@@ -22,7 +23,7 @@ graph TD
     end
     
     subgraph "Ingestion Layer"
-        Ingestion[telemetry-ingestion-srv<br/>:9000 HTTP]
+        Ingestion[telemetry-ingestion-srv<br/>:9000 HTTP<br/>transit/CBOR + OTLP/HTTP]
     end
     
     subgraph "Storage Layer"
@@ -58,6 +59,7 @@ graph TD
     Sink1 --> Ingestion
     Sink2 --> Ingestion
     Sink3 --> Ingestion
+    Otel -->|OTLP/HTTP| Ingestion
     
     Ingestion --> PG
     Ingestion --> S3
@@ -83,7 +85,7 @@ graph TD
     classDef storage fill:#e1f5fe
     classDef client fill:#fce4ec
     
-    class App1,App2,App3 app
+    class App1,App2,App3,Otel app
     class Lib1,Lib2,Lib3,Sink1,Sink2,Sink3 tracing
     class Ingestion,FlightSQL,DataFusion,Admin,WebApp service
     class PG,S3,Parquet storage
@@ -95,7 +97,7 @@ graph TD
 #### Data Collection
 - **Tracing Library**: Ultra-low overhead (20ns per event) instrumentation embedded in applications
 - **Telemetry Sink**: Batches events and handles transmission to ingestion service
-- **Ingestion Service**: HTTP endpoint for receiving telemetry data from sinks
+- **Ingestion Service**: HTTP endpoint accepting two wire formats — the native transit/CBOR protocol from `micromegas-tracing`, and OTLP/HTTP from any OpenTelemetry-instrumented producer (see [OTLP Ingestion](../otlp/index.md))
 
 #### Data Storage
 - **PostgreSQL**: Stores metadata, process information, and stream definitions

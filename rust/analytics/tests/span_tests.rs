@@ -69,5 +69,5 @@ fn test_parse_span_interops() {
 
     let state = guard.sink.state.lock().unwrap();
     assert!(state.process_info.is_some());
-    assert!(state.thread_blocks.len() > 0);
+    assert!(!state.thread_blocks.is_empty());
 }

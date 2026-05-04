@@ -18,4 +18,5 @@ bytes.workspace = true
 ciborium.workspace = true
 sqlx.workspace = true
 thiserror.workspace = true
+uuid.workspace = true
 

@@ -70,7 +70,7 @@ fn test_static_metrics() {
 
     let guard = init_in_memory_tracing();
     imetric!("test_metric", "units", 42);
-    fmetric!("test_metric_float", "units", 3.14);
+    fmetric!("test_metric_float", "units", std::f64::consts::PI);
     micromegas_tracing::dispatch::flush_metrics_buffer();
 
     let state = guard.sink.state.lock().unwrap();

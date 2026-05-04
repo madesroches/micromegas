@@ -39,7 +39,7 @@ fn create_nullable_binary_table(
 ) {
     let jsonb_values: Vec<Option<Vec<u8>>> = json_strings
         .iter()
-        .map(|s| s.map(|s| parse_json_to_jsonb(s)))
+        .map(|s| s.map(parse_json_to_jsonb))
         .collect();
     let refs: Vec<Option<&[u8]>> = jsonb_values.iter().map(|v| v.as_deref()).collect();
     let schema = Arc::new(Schema::new(vec![Field::new(
@@ -244,13 +244,10 @@ async fn test_invalid_path_returns_error() {
     let result = ctx
         .sql("SELECT jsonb_path_query_first(data, '$[invalid') FROM t")
         .await;
-    // The error might happen at plan or execution time
-    match result {
-        Ok(df) => {
-            let collect_result = df.collect().await;
-            assert!(collect_result.is_err(), "expected error for invalid path");
-        }
-        Err(_) => {} // Error at plan time is also acceptable
+    // The error might happen at plan or execution time. Plan-time error is also acceptable.
+    if let Ok(df) = result {
+        let collect_result = df.collect().await;
+        assert!(collect_result.is_err(), "expected error for invalid path");
     }
 }
 

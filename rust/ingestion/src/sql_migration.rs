@@ -5,7 +5,7 @@ use sqlx::Executor;
 use sqlx::Row;
 
 /// The latest schema version for the data lake.
-pub const LATEST_DATA_LAKE_SCHEMA_VERSION: i32 = 3;
+pub const LATEST_DATA_LAKE_SCHEMA_VERSION: i32 = 4;
 
 /// Reads the current schema version from the database.
 pub async fn read_data_lake_schema_version(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> i32 {
@@ -72,6 +72,20 @@ pub async fn upgrade_data_lake_schema_v3(
     tr.execute("UPDATE migration SET version=3;")
         .await
         .with_context(|| "updating data lake schema version to 3")?;
+    Ok(())
+}
+
+/// Upgrades the data lake schema to version 4.
+/// Adds the `format` column to `streams` so OTLP and native blocks can be distinguished.
+pub async fn upgrade_data_lake_schema_v4(
+    tr: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+) -> Result<()> {
+    tr.execute("ALTER TABLE streams ADD COLUMN format TEXT NOT NULL DEFAULT 'micromegas-transit';")
+        .await
+        .with_context(|| "adding column format to streams table")?;
+    tr.execute("UPDATE migration SET version=4;")
+        .await
+        .with_context(|| "updating data lake schema version to 4")?;
     Ok(())
 }
 
@@ -171,6 +185,13 @@ pub async fn execute_migration(pool: sqlx::Pool<sqlx::Postgres>) -> Result<()> {
 
         let mut tr = pool.begin().await?;
         upgrade_data_lake_schema_v3(&mut tr).await?;
+        current_version = read_data_lake_schema_version(&mut tr).await;
+        tr.commit().await?;
+    }
+    if 3 == current_version {
+        info!("upgrading data_lake_schema to v4");
+        let mut tr = pool.begin().await?;
+        upgrade_data_lake_schema_v4(&mut tr).await?;
         current_version = read_data_lake_schema_version(&mut tr).await;
         tr.commit().await?;
     }

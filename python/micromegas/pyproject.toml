@@ -24,6 +24,7 @@ tqdm = "^4.66.0"
 
 
 [tool.poetry.group.test.dependencies]
+opentelemetry-proto = "^1.40.0"
 pytest = "^9.0.3"
 
 

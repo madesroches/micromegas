@@ -235,8 +235,8 @@ async fn test_jsonb_as_string_non_string_returns_null() {
 
 #[tokio::test]
 async fn test_jsonb_as_f64_with_binary_input() {
-    let jsonb1 = create_jsonb_number(3.14);
-    let jsonb2 = create_jsonb_number(2.71);
+    let jsonb1 = create_jsonb_number(std::f64::consts::PI);
+    let jsonb2 = create_jsonb_number(std::f64::consts::E);
 
     let input = create_jsonb_binary_array(vec![jsonb1, jsonb2]);
     let batch = create_record_batch(input);
@@ -260,8 +260,8 @@ async fn test_jsonb_as_f64_with_binary_input() {
         .expect("Expected Float64Array");
 
     assert_eq!(result_array.len(), 2);
-    assert!((result_array.value(0) - 3.14).abs() < 0.001);
-    assert!((result_array.value(1) - 2.71).abs() < 0.001);
+    assert!((result_array.value(0) - std::f64::consts::PI).abs() < 0.001);
+    assert!((result_array.value(1) - std::f64::consts::E).abs() < 0.001);
 }
 
 #[tokio::test]

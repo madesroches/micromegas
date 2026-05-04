@@ -12,6 +12,9 @@ pub mod cron_task;
 /// routes for ingestion server based on axum
 pub mod ingestion;
 
+/// OTLP/HTTP routes (logs, metrics, traces) for the ingestion server
+pub mod otlp;
+
 /// implementation of maintenance daemon keeping the lakehouse updated
 pub mod maintenance;
 

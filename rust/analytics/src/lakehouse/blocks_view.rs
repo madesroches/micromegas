@@ -36,7 +36,7 @@ impl BlocksView {
     pub fn new() -> Result<Self> {
         let data_sql = Arc::new(String::from(
             r#"SELECT block_id, streams.stream_id, processes.process_id, blocks.begin_time, blocks.begin_ticks, blocks.end_time, blocks.end_ticks, blocks.nb_objects, blocks.object_offset, blocks.payload_size, blocks.insert_time,
-           streams.dependencies_metadata, streams.objects_metadata, streams.tags, streams.properties, streams.insert_time as stream_insert_time,
+           streams.dependencies_metadata, streams.objects_metadata, streams.tags, streams.properties, streams.insert_time as stream_insert_time, streams.format,
            processes.start_time, processes.start_ticks, processes.tsc_frequency, processes.exe, processes.username, processes.realname, processes.computer, processes.distro, processes.cpu_brand, processes.insert_time as process_insert_time, processes.parent_process_id, processes.properties as process_properties
          FROM blocks, streams, processes
          WHERE blocks.stream_id = streams.stream_id
@@ -190,6 +190,7 @@ pub fn blocks_view_schema() -> Schema {
             DataType::Timestamp(TimeUnit::Nanosecond, Some("+00:00".into())),
             false,
         ),
+        Field::new("streams.format", DataType::Utf8, false),
         Field::new(
             "processes.start_time",
             DataType::Timestamp(TimeUnit::Nanosecond, Some("+00:00".into())),
@@ -219,5 +220,5 @@ pub fn blocks_view_schema() -> Schema {
 
 /// Returns the file schema hash for the blocks view.
 pub fn blocks_file_schema_hash() -> Vec<u8> {
-    vec![2] // Bumped from vec![1] for JSONB migration
+    vec![3] // Bumped from vec![2] for streams.format column (OTLP support)
 }

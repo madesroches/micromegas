@@ -528,7 +528,7 @@ fn test_property_get_with_dictionary_encoded_jsonb() {
                 .expect("Dictionary values should be strings");
 
             // Check all three values
-            let expected = vec!["myapp", "prod", "us-west"];
+            let expected = ["myapp", "prod", "us-west"];
             for (i, expected_val) in expected.iter().enumerate() {
                 if !dict_array.is_null(i) {
                     let key_index = dict_array.keys().value(i) as usize;
@@ -755,7 +755,7 @@ fn test_property_get_with_escaped_jsonb_strings() {
                 .expect("Dictionary values should be strings");
 
             // Verify each escaped character is properly unescaped
-            let expected_values = vec![
+            let expected_values = [
                 r#"He said "hello""#,       // quotes
                 "line1\nline2",             // newline
                 "col1\tcol2",               // tab

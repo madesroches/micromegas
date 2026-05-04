@@ -1,0 +1,171 @@
+//! Converts OTel `KeyValue` arrays + scalar `AnyValue` instances to JSONB bytes.
+//!
+//! Mapping follows the plan's "Attribute value encoding" table:
+//!  - string → JSON string
+//!  - int / double / bool → JSON number / bool
+//!  - bytes → base64-encoded string (existing properties consumers expect text)
+//!  - array / kvlist → recursive JSON
+//!
+//! The output is a JSONB-encoded `{key → value}` blob suitable for the
+//! `properties` columns across `log_entries`, `measures`, and `otel_spans`.
+
+use base64::Engine;
+use jsonb::{Number as JsonbNumber, Value as JsonbValue};
+use opentelemetry_proto::tonic::common::v1::{
+    AnyValue, InstrumentationScope, KeyValue, any_value::Value as Av,
+};
+use std::borrow::Cow;
+use std::collections::BTreeMap;
+
+/// Converts an `AnyValue` to a `jsonb::Value`. Recursively handles arrays and kvlists.
+pub fn any_value_to_jsonb(v: &AnyValue) -> JsonbValue<'static> {
+    match v.value.as_ref() {
+        Some(Av::StringValue(s)) => JsonbValue::String(Cow::Owned(s.clone())),
+        Some(Av::BoolValue(b)) => JsonbValue::Bool(*b),
+        Some(Av::IntValue(i)) => JsonbValue::Number(JsonbNumber::Int64(*i)),
+        Some(Av::DoubleValue(d)) => JsonbValue::Number(JsonbNumber::Float64(*d)),
+        Some(Av::BytesValue(b)) => {
+            // existing JSONB readers (`jsonb_extract_path`, etc.) expect strings,
+            // so we base64-encode bytes rather than emitting a JSON binary type.
+            let encoded = base64::engine::general_purpose::STANDARD.encode(b);
+            JsonbValue::String(Cow::Owned(encoded))
+        }
+        Some(Av::ArrayValue(arr)) => {
+            JsonbValue::Array(arr.values.iter().map(any_value_to_jsonb).collect())
+        }
+        Some(Av::KvlistValue(kvs)) => {
+            let mut map: BTreeMap<String, JsonbValue<'static>> = BTreeMap::new();
+            for kv in &kvs.values {
+                let value = kv
+                    .value
+                    .as_ref()
+                    .map(any_value_to_jsonb)
+                    .unwrap_or(JsonbValue::Null);
+                map.insert(kv.key.clone(), value);
+            }
+            JsonbValue::Object(map)
+        }
+        None => JsonbValue::Null,
+    }
+}
+
+/// Encodes a `JsonbValue` to its on-wire JSONB bytes.
+pub fn to_jsonb_bytes(value: JsonbValue<'_>) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    value.write_to_vec(&mut bytes);
+    bytes
+}
+
+/// Serializes a flat `(key → value)` map (with optional extra entries layered on top)
+/// to JSONB bytes. Output ordering is alphabetical, matching `serialize_properties_to_jsonb`.
+pub fn attrs_to_jsonb(attrs: &[KeyValue], extras: &[(String, JsonbValue<'static>)]) -> Vec<u8> {
+    let mut map: BTreeMap<String, JsonbValue<'static>> = BTreeMap::new();
+    for kv in attrs {
+        let value = kv
+            .value
+            .as_ref()
+            .map(any_value_to_jsonb)
+            .unwrap_or(JsonbValue::Null);
+        map.insert(kv.key.clone(), value);
+    }
+    for (k, v) in extras {
+        map.insert(k.clone(), v.clone());
+    }
+    to_jsonb_bytes(JsonbValue::Object(map))
+}
+
+/// Renders `AnyValue` to a flat string for fields that need a textual form
+/// (e.g., the `msg` column when an OTel log body is structured).
+pub fn any_value_to_string(v: &AnyValue) -> String {
+    match v.value.as_ref() {
+        Some(Av::StringValue(s)) => s.clone(),
+        Some(Av::IntValue(i)) => i.to_string(),
+        Some(Av::DoubleValue(d)) => d.to_string(),
+        Some(Av::BoolValue(b)) => b.to_string(),
+        Some(Av::BytesValue(b)) => base64::engine::general_purpose::STANDARD.encode(b),
+        Some(Av::ArrayValue(arr)) => {
+            // Render via JSONB to keep round-trippable representations.
+            let bytes = to_jsonb_bytes(JsonbValue::Array(
+                arr.values.iter().map(any_value_to_jsonb).collect(),
+            ));
+            jsonb::RawJsonb::new(&bytes).to_string()
+        }
+        Some(Av::KvlistValue(kvs)) => {
+            let mut map: BTreeMap<String, JsonbValue<'static>> = BTreeMap::new();
+            for kv in &kvs.values {
+                let value = kv
+                    .value
+                    .as_ref()
+                    .map(any_value_to_jsonb)
+                    .unwrap_or(JsonbValue::Null);
+                map.insert(kv.key.clone(), value);
+            }
+            let bytes = to_jsonb_bytes(JsonbValue::Object(map));
+            jsonb::RawJsonb::new(&bytes).to_string()
+        }
+        None => String::new(),
+    }
+}
+
+/// Maps OTel `severity_number` (1–24) to micromegas `Level` (1–6).
+///
+/// Per the plan:
+///  - TRACE   1–4   → 6
+///  - DEBUG   5–8   → 5
+///  - INFO    9–12  → 4
+///  - WARN    13–16 → 3
+///  - ERROR   17–20 → 2
+///  - FATAL   21–24 → 1
+///
+/// `severity_number = 0` (UNSPECIFIED) → 4 (Info), so the default
+/// `WHERE level <= 4` filter keeps them visible — the SDK didn't tell us they were
+/// low-priority, so we don't bury them. Out-of-range (negative or `> 24`) → 4 (Info)
+/// as well; promoting an unknown severity to Fatal would silently pollute alerting
+/// when a buggy SDK is off-by-one on the FATAL range.
+pub fn severity_number_to_level(sev: i32) -> i32 {
+    match sev {
+        1..=4 => 6,   // TRACE
+        5..=8 => 5,   // DEBUG
+        9..=12 => 4,  // INFO
+        13..=16 => 3, // WARN
+        17..=20 => 2, // ERROR
+        21..=24 => 1, // FATAL
+        _ => 4,       // UNSPECIFIED (0) or out-of-range → Info (don't fake-Fatal-alert)
+    }
+}
+
+/// Builds the per-row `otel.scope.*` properties (`name`, `version`, `attr.*`,
+/// `schema_url`) that ride alongside row attributes in the JSONB `properties`
+/// column. Skips empty fields so absent scopes don't pollute the output.
+pub fn scope_extras(
+    scope: Option<&InstrumentationScope>,
+    schema_url: &str,
+) -> Vec<(String, JsonbValue<'static>)> {
+    let mut extras: Vec<(String, JsonbValue<'static>)> = Vec::new();
+    if let Some(s) = scope {
+        if !s.name.is_empty() {
+            extras.push((
+                "otel.scope.name".to_string(),
+                JsonbValue::String(Cow::Owned(s.name.clone())),
+            ));
+        }
+        if !s.version.is_empty() {
+            extras.push((
+                "otel.scope.version".to_string(),
+                JsonbValue::String(Cow::Owned(s.version.clone())),
+            ));
+        }
+        for kv in &s.attributes {
+            if let Some(v) = kv.value.as_ref() {
+                extras.push((format!("otel.scope.attr.{}", kv.key), any_value_to_jsonb(v)));
+            }
+        }
+    }
+    if !schema_url.is_empty() {
+        extras.push((
+            "otel.scope.schema_url".to_string(),
+            JsonbValue::String(Cow::Owned(schema_url.to_string())),
+        ));
+    }
+    extras
+}

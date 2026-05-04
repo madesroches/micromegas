@@ -1,5 +1,5 @@
 use super::{
-    block_partition_spec::{BlockPartitionSpec, BlockProcessor},
+    block_partition_spec::{BlockPartitionSpec, BlockProcessorMap},
     blocks_view::BlocksView,
     lakehouse_context::LakehouseContext,
     partition_cache::{LivePartitionProvider, QueryPartitionProvider},
@@ -7,23 +7,29 @@ use super::{
     view::{View, ViewMetadata},
 };
 use crate::{
-    dfext::typed_column::get_single_row_primitive_value,
-    lakehouse::{partition_cache::PartitionCache, view::PartitionSpec},
+    dfext::{
+        string_column_accessor::string_column_by_name,
+        typed_column::{get_single_row_primitive_value, typed_column_by_name},
+    },
+    lakehouse::{
+        partition_cache::PartitionCache, partition_source_data::hash_to_object_count,
+        query::query_partitions, view::PartitionSpec,
+    },
     metadata::{ProcessMetadata, StreamMetadata, block_from_batch_row},
-    time::TimeRange,
-};
-use crate::{
-    lakehouse::{partition_source_data::hash_to_object_count, query::query_partitions},
+    properties::properties_column_accessor::properties_column_by_name,
     response_writer::ResponseWriter,
+    time::TimeRange,
 };
 use anyhow::{Context, Result};
 use chrono::DurationRound;
 use chrono::{DateTime, TimeDelta, Utc};
+use datafusion::arrow::array::{BinaryArray, GenericListArray, StringArray};
 use datafusion::arrow::datatypes::{Schema, TimestampNanosecondType};
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_tracing::prelude::*;
 use sqlx::Row;
 use std::sync::Arc;
+use uuid::Uuid;
 
 /// Configuration for Just-In-Time (JIT) partition generation.
 pub struct JitPartitionConfig {
@@ -114,7 +120,7 @@ pub async fn generate_stream_jit_partitions_segment(
     let begin_range_iso = insert_time_range.begin.to_rfc3339();
     let end_range_iso = insert_time_range.end.to_rfc3339();
     let sql = format!(
-        r#"SELECT block_id, stream_id, process_id, begin_time, end_time, begin_ticks, end_ticks, nb_objects, object_offset, payload_size, insert_time
+        r#"SELECT block_id, stream_id, process_id, begin_time, end_time, begin_ticks, end_ticks, nb_objects, object_offset, payload_size, insert_time, "streams.format"
              FROM source
              WHERE stream_id = '{stream_id}'
              AND insert_time >= '{begin_range_iso}'
@@ -139,9 +145,11 @@ pub async fn generate_stream_jit_partitions_segment(
     let mut partition_blocks = vec![];
     let mut partition_nb_objects: i64 = 0;
     for rb in rbs {
+        let format_column = string_column_by_name(&rb, "streams.format")?;
         for ir in 0..rb.num_rows() {
             let block = block_from_batch_row(&rb, ir).with_context(|| "block_from_batch_row")?;
             let block_nb_objects = block.nb_objects as i64;
+            let format = format_column.value(ir)?.to_string();
 
             // Check if adding this block would exceed the limit
             if partition_nb_objects + block_nb_objects > config.max_nb_objects
@@ -157,6 +165,7 @@ pub async fn generate_stream_jit_partitions_segment(
                     block,
                     stream: stream.clone(),
                     process: process.clone(),
+                    format,
                 })];
                 partition_nb_objects = block_nb_objects;
             } else {
@@ -166,6 +175,7 @@ pub async fn generate_stream_jit_partitions_segment(
                     block,
                     stream: stream.clone(),
                     process: process.clone(),
+                    format,
                 }));
             }
         }
@@ -255,7 +265,7 @@ pub async fn generate_process_jit_partitions_segment(
     let end_range_iso = insert_time_range.end.to_rfc3339();
     let sql = format!(
         r#"SELECT block_id, stream_id, process_id, begin_time, end_time, begin_ticks, end_ticks, nb_objects, object_offset, payload_size, insert_time,
-             "streams.dependencies_metadata", "streams.objects_metadata", "streams.tags", "streams.properties"
+             "streams.dependencies_metadata", "streams.objects_metadata", "streams.tags", "streams.properties", "streams.format"
              FROM source
              WHERE process_id = '{process_id}'
              AND array_has( "streams.tags", '{stream_tag}' )
@@ -287,13 +297,6 @@ pub async fn generate_process_jit_partitions_segment(
             let block_nb_objects = block.nb_objects as i64;
 
             // Build StreamMetadata from the query results
-            use crate::dfext::{
-                string_column_accessor::string_column_by_name, typed_column::typed_column_by_name,
-            };
-            use crate::properties::properties_column_accessor::properties_column_by_name;
-            use datafusion::arrow::array::{BinaryArray, GenericListArray, StringArray};
-            use uuid::Uuid;
-
             let stream_id_column = string_column_by_name(&rb, "stream_id")?;
             let stream_process_id_column = string_column_by_name(&rb, "process_id")?;
             let dependencies_metadata_column: &BinaryArray =
@@ -303,6 +306,7 @@ pub async fn generate_process_jit_partitions_segment(
             let stream_tags_column: &GenericListArray<i32> =
                 typed_column_by_name(&rb, "streams.tags")?;
             let stream_properties_accessor = properties_column_by_name(&rb, "streams.properties")?;
+            let stream_format_column = string_column_by_name(&rb, "streams.format")?;
 
             let stream_id = Uuid::parse_str(stream_id_column.value(ir)?)
                 .with_context(|| "parsing stream_id")?;
@@ -334,6 +338,8 @@ pub async fn generate_process_jit_partitions_segment(
                 properties: Arc::new(stream_properties_jsonb),
             });
 
+            let format = stream_format_column.value(ir)?.to_string();
+
             // Check if adding this block would exceed the limit
             if partition_nb_objects + block_nb_objects > config.max_nb_objects
                 && !partition_blocks.is_empty()
@@ -348,6 +354,7 @@ pub async fn generate_process_jit_partitions_segment(
                     block,
                     stream: stream.clone(),
                     process: process.clone(),
+                    format,
                 })];
                 partition_nb_objects = block_nb_objects;
             } else {
@@ -357,6 +364,7 @@ pub async fn generate_process_jit_partitions_segment(
                     block,
                     stream: stream.clone(),
                     process: process.clone(),
+                    format,
                 }));
             }
         }
@@ -564,13 +572,16 @@ fn get_part_insert_time_range(
 }
 
 /// Writes a partition from a set of blocks.
+///
+/// `block_processors` keys per-block dispatch on the source block's `format`;
+/// see `BlockPartitionSpec::write` for the unknown-format behavior.
 #[span_fn]
 pub async fn write_partition_from_blocks(
     lake: Arc<DataLakeConnection>,
     view_metadata: ViewMetadata,
     schema: Arc<Schema>,
     source_data: SourceDataBlocksInMemory,
-    block_processor: Arc<dyn BlockProcessor>,
+    block_processors: Arc<BlockProcessorMap>,
 ) -> Result<()> {
     if source_data.blocks.is_empty() {
         anyhow::bail!("empty partition spec");
@@ -585,7 +596,7 @@ pub async fn write_partition_from_blocks(
         schema,
         insert_range: TimeRange::new(min_insert_time, max_insert_time),
         source_data: Arc::new(source_data),
-        block_processor,
+        block_processors,
     };
     let null_response_writer = Arc::new(ResponseWriter::new(None));
     block_spec

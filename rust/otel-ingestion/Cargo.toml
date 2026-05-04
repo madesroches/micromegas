@@ -1,0 +1,23 @@
+[package]
+name = "micromegas-otel-ingestion"
+description = "OTLP/HTTP ingestion adapter for micromegas"
+keywords.workspace = true
+version.workspace = true
+edition.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+micromegas-ingestion.workspace = true
+micromegas-telemetry = { workspace = true, features = ["server"] }
+micromegas-tracing.workspace = true
+
+anyhow.workspace = true
+bytes.workspace = true
+chrono.workspace = true
+opentelemetry-proto.workspace = true
+prost.workspace = true
+thiserror.workspace = true
+uuid.workspace = true

@@ -7,7 +7,7 @@ use crate::{
 
 use super::{
     batch_update::PartitionCreationStrategy,
-    block_partition_spec::BlockPartitionSpec,
+    block_partition_spec::{BlockPartitionSpec, BlockProcessor, BlockProcessorMap},
     dataframe_time_bounds::{DataFrameTimeBounds, NamedColumnsTimeBounds},
     jit_partitions::{
         JitPartitionConfig, generate_process_jit_partitions, is_jit_partition_up_to_date,
@@ -15,6 +15,7 @@ use super::{
     },
     lakehouse_context::LakehouseContext,
     metrics_block_processor::MetricsBlockProcessor,
+    otel::metrics_block_processor::OtelMetricsBlockProcessor,
     partition_cache::PartitionCache,
     partition_source_data::fetch_partition_source_data,
     view::{PartitionSpec, View, ViewMetadata},
@@ -27,8 +28,10 @@ use datafusion::{
     arrow::datatypes::Schema,
     logical_expr::{Between, Expr, col},
 };
+use micromegas_ingestion::web_ingestion_service::{FORMAT_OTLP_METRICS, FORMAT_TRANSIT};
 use micromegas_tracing::info;
 use micromegas_tracing::prelude::*;
+use std::collections::HashMap;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -36,6 +39,20 @@ const VIEW_SET_NAME: &str = "measures";
 const SCHEMA_VERSION: u8 = 5;
 lazy_static::lazy_static! {
     static ref TIME_COLUMN: Arc<String> = Arc::new( String::from("time"));
+}
+
+/// Block-processor map covering native transit + OTel Sum/Gauge metric blocks.
+fn metrics_processors() -> Arc<BlockProcessorMap> {
+    let mut m: BlockProcessorMap = HashMap::new();
+    m.insert(
+        FORMAT_TRANSIT,
+        Arc::new(MetricsBlockProcessor {}) as Arc<dyn BlockProcessor>,
+    );
+    m.insert(
+        FORMAT_OTLP_METRICS,
+        Arc::new(OtelMetricsBlockProcessor {}) as Arc<dyn BlockProcessor>,
+    );
+    Arc::new(m)
 }
 
 #[derive(Debug)]
@@ -115,7 +132,7 @@ impl View for MetricsView {
             schema: self.get_file_schema(),
             insert_range,
             source_data,
-            block_processor: Arc::new(MetricsBlockProcessor {}),
+            block_processors: metrics_processors(),
         }))
     }
 
@@ -169,6 +186,7 @@ impl View for MetricsView {
             view_instance_id: self.get_view_instance_id(),
             file_schema_hash: self.get_file_schema_hash(),
         };
+        let block_processors = metrics_processors();
 
         for part in all_partitions {
             if !is_jit_partition_up_to_date(&lakehouse.lake().db_pool, view_meta.clone(), &part)
@@ -179,7 +197,7 @@ impl View for MetricsView {
                     view_meta.clone(),
                     self.get_file_schema(),
                     part,
-                    Arc::new(MetricsBlockProcessor {}),
+                    block_processors.clone(),
                 )
                 .await
                 .with_context(|| "write_partition_from_blocks")?;

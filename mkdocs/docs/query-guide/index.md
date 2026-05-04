@@ -44,6 +44,8 @@ Micromegas organizes telemetry data into several queryable views:
 | `measures` | Numeric metrics and performance measurements |
 | `thread_spans` | Synchronous execution spans and timing |
 | `async_events` | Asynchronous event lifecycle tracking |
+| `net_spans` | Network bandwidth spans (Connection / Object / Property / RPC) |
+| `otel_spans` | OpenTelemetry spans materialized from OTLP-ingested traces |
 
 ## Query Capabilities
 
