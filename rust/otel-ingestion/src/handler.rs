@@ -45,14 +45,11 @@ fn signal_format(signal: Signal) -> &'static str {
 /// Generic per-resource block writer. Registers the process + stream (idempotent)
 /// then writes one block per resource. All errors carry the signal label so the
 /// HTTP response includes useful context.
-async fn write_blocks<I>(
+async fn write_blocks(
     service: &WebIngestionService,
     signal: Signal,
-    blocks: I,
-) -> Result<usize, OtelError>
-where
-    I: IntoIterator<Item = crate::block::PreparedBlock>,
-{
+    blocks: Vec<crate::block::PreparedBlock>,
+) -> Result<usize, OtelError> {
     let tag = signal_tag(signal).to_string();
     let format = signal_format(signal);
     let mut count = 0usize;
