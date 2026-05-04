@@ -11,7 +11,9 @@
 
 use base64::Engine;
 use jsonb::{Number as JsonbNumber, Value as JsonbValue};
-use opentelemetry_proto::tonic::common::v1::{AnyValue, KeyValue, any_value::Value as Av};
+use opentelemetry_proto::tonic::common::v1::{
+    AnyValue, InstrumentationScope, KeyValue, any_value::Value as Av,
+};
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 
@@ -126,4 +128,40 @@ pub fn severity_number_to_level(sev: i32) -> i32 {
         21..=24 => 1, // FATAL
         _ => 4,       // UNSPECIFIED (0) or out-of-range → Info (don't fake-Fatal-alert)
     }
+}
+
+/// Builds the per-row `otel.scope.*` properties (`name`, `version`, `attr.*`,
+/// `schema_url`) that ride alongside row attributes in the JSONB `properties`
+/// column. Skips empty fields so absent scopes don't pollute the output.
+pub fn scope_extras(
+    scope: Option<&InstrumentationScope>,
+    schema_url: &str,
+) -> Vec<(String, JsonbValue<'static>)> {
+    let mut extras: Vec<(String, JsonbValue<'static>)> = Vec::new();
+    if let Some(s) = scope {
+        if !s.name.is_empty() {
+            extras.push((
+                "otel.scope.name".to_string(),
+                JsonbValue::String(Cow::Owned(s.name.clone())),
+            ));
+        }
+        if !s.version.is_empty() {
+            extras.push((
+                "otel.scope.version".to_string(),
+                JsonbValue::String(Cow::Owned(s.version.clone())),
+            ));
+        }
+        for kv in &s.attributes {
+            if let Some(v) = kv.value.as_ref() {
+                extras.push((format!("otel.scope.attr.{}", kv.key), any_value_to_jsonb(v)));
+            }
+        }
+    }
+    if !schema_url.is_empty() {
+        extras.push((
+            "otel.scope.schema_url".to_string(),
+            JsonbValue::String(Cow::Owned(schema_url.to_string())),
+        ));
+    }
+    extras
 }

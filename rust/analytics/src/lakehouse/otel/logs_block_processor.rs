@@ -4,9 +4,7 @@
 //! see Plan §"One block per Resource"). We prost-decode it, walk each scope and log
 //! record, emit one row per `LogRecord`.
 
-use super::attrs::{
-    any_value_to_jsonb, any_value_to_string, attrs_to_jsonb, severity_number_to_level,
-};
+use super::attrs::{any_value_to_string, attrs_to_jsonb, scope_extras, severity_number_to_level};
 use crate::lakehouse::{
     block_partition_spec::BlockProcessor, partition_source_data::PartitionSourceBlock,
     write_partition::PartitionRowSet,
@@ -132,35 +130,7 @@ impl BlockProcessor for OtelLogsBlockProcessor {
                 // optional trace correlation + raw severity_text. Built per-row because
                 // OTel attributes vary record-to-record; dictionary dedup happens inside
                 // BinaryDictionaryBuilder by content hash.
-                let mut extras: Vec<(String, JsonbValue<'static>)> = Vec::new();
-                if let Some(s) = scope {
-                    if !s.name.is_empty() {
-                        extras.push((
-                            "otel.scope.name".to_string(),
-                            JsonbValue::String(Cow::Owned(s.name.clone())),
-                        ));
-                    }
-                    if !s.version.is_empty() {
-                        extras.push((
-                            "otel.scope.version".to_string(),
-                            JsonbValue::String(Cow::Owned(s.version.clone())),
-                        ));
-                    }
-                    for kv in &s.attributes {
-                        if let Some(v) = kv.value.as_ref() {
-                            extras.push((
-                                format!("otel.scope.attr.{}", kv.key),
-                                any_value_to_jsonb(v),
-                            ));
-                        }
-                    }
-                }
-                if !scope_logs.schema_url.is_empty() {
-                    extras.push((
-                        "otel.scope.schema_url".to_string(),
-                        JsonbValue::String(Cow::Owned(scope_logs.schema_url.clone())),
-                    ));
-                }
+                let mut extras = scope_extras(scope, &scope_logs.schema_url);
                 // W3C Trace Context: trace_id is 16 bytes, span_id is 8 bytes.
                 // `otel_spans` enforces these lengths and skips bad rows; we mirror
                 // that here so a buggy SDK can't write half-size hex strings that

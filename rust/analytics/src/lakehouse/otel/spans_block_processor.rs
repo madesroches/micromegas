@@ -4,7 +4,7 @@
 //! carrying JSONB bytes — see plan §"Span events and links as `List<Struct>` vs JSONB"
 //! for the rationale.
 
-use super::attrs::{any_value_to_jsonb, attrs_to_jsonb};
+use super::attrs::{any_value_to_jsonb, attrs_to_jsonb, scope_extras};
 use crate::lakehouse::{
     block_partition_spec::BlockProcessor, partition_source_data::PartitionSourceBlock,
     write_partition::PartitionRowSet,
@@ -220,33 +220,7 @@ impl OtelSpansRowBuilder {
             _ => self.status_messages.append_null(),
         }
 
-        // Properties: span attributes + scope info.
-        let mut extras: Vec<(String, JsonbValue<'static>)> = Vec::new();
-        if let Some(s) = scope {
-            if !s.name.is_empty() {
-                extras.push((
-                    "otel.scope.name".into(),
-                    JsonbValue::String(Cow::Owned(s.name.clone())),
-                ));
-            }
-            if !s.version.is_empty() {
-                extras.push((
-                    "otel.scope.version".into(),
-                    JsonbValue::String(Cow::Owned(s.version.clone())),
-                ));
-            }
-            for kv in &s.attributes {
-                if let Some(v) = kv.value.as_ref() {
-                    extras.push((format!("otel.scope.attr.{}", kv.key), any_value_to_jsonb(v)));
-                }
-            }
-        }
-        if !schema_url.is_empty() {
-            extras.push((
-                "otel.scope.schema_url".into(),
-                JsonbValue::String(Cow::Owned(schema_url.to_string())),
-            ));
-        }
+        let extras = scope_extras(scope, schema_url);
         let props_jsonb = attrs_to_jsonb(&span.attributes, &extras);
         self.properties.append_value(&props_jsonb);
 
