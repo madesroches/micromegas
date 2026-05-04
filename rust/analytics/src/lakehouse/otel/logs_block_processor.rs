@@ -5,7 +5,7 @@
 //! record, emit one row per `LogRecord`.
 
 use super::attrs::{
-    any_value_to_jsonb, any_value_to_string, attrs_to_jsonb, hex_encode, severity_number_to_level,
+    any_value_to_jsonb, any_value_to_string, attrs_to_jsonb, severity_number_to_level,
 };
 use crate::lakehouse::{
     block_partition_spec::BlockProcessor, partition_source_data::PartitionSourceBlock,
@@ -167,7 +167,7 @@ impl BlockProcessor for OtelLogsBlockProcessor {
                 // silently fail correlation joins against the spans view.
                 if !record.trace_id.is_empty() {
                     if record.trace_id.len() == 16 {
-                        let hex = hex_encode(&record.trace_id);
+                        let hex = hex::encode(&record.trace_id);
                         extras.push((
                             "otel.trace_id".to_string(),
                             JsonbValue::String(Cow::Owned(hex)),
@@ -181,7 +181,7 @@ impl BlockProcessor for OtelLogsBlockProcessor {
                 }
                 if !record.span_id.is_empty() {
                     if record.span_id.len() == 8 {
-                        let hex = hex_encode(&record.span_id);
+                        let hex = hex::encode(&record.span_id);
                         extras.push((
                             "otel.span_id".to_string(),
                             JsonbValue::String(Cow::Owned(hex)),

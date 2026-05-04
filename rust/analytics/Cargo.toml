@@ -27,6 +27,7 @@ chrono.workspace = true
 ciborium.workspace = true
 datafusion.workspace = true
 futures.workspace = true
+hex.workspace = true
 jsonb.workspace = true
 lazy_static.workspace = true
 moka.workspace = true

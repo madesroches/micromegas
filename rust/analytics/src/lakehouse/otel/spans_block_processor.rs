@@ -4,7 +4,7 @@
 //! carrying JSONB bytes — see plan §"Span events and links as `List<Struct>` vs JSONB"
 //! for the rationale.
 
-use super::attrs::{any_value_to_jsonb, attrs_to_jsonb, hex_encode};
+use super::attrs::{any_value_to_jsonb, attrs_to_jsonb};
 use crate::lakehouse::{
     block_partition_spec::BlockProcessor, partition_source_data::PartitionSourceBlock,
     write_partition::PartitionRowSet,
@@ -217,11 +217,11 @@ impl BlockProcessor for OtelSpansBlockProcessor {
                         let mut map: BTreeMap<String, JsonbValue<'static>> = BTreeMap::new();
                         map.insert(
                             "trace_id".into(),
-                            JsonbValue::String(Cow::Owned(hex_encode(&link.trace_id))),
+                            JsonbValue::String(Cow::Owned(hex::encode(&link.trace_id))),
                         );
                         map.insert(
                             "span_id".into(),
-                            JsonbValue::String(Cow::Owned(hex_encode(&link.span_id))),
+                            JsonbValue::String(Cow::Owned(hex::encode(&link.span_id))),
                         );
                         let mut attrs_map: BTreeMap<String, JsonbValue<'static>> = BTreeMap::new();
                         for kv in &link.attributes {
