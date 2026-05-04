@@ -49,6 +49,13 @@ pub fn any_value_to_jsonb(v: &AnyValue) -> JsonbValue<'static> {
     }
 }
 
+/// Encodes a `JsonbValue` to its on-wire JSONB bytes.
+pub fn to_jsonb_bytes(value: JsonbValue<'_>) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    value.write_to_vec(&mut bytes);
+    bytes
+}
+
 /// Serializes a flat `(key → value)` map (with optional extra entries layered on top)
 /// to JSONB bytes. Output ordering is alphabetical, matching `serialize_properties_to_jsonb`.
 pub fn attrs_to_jsonb(attrs: &[KeyValue], extras: &[(String, JsonbValue<'static>)]) -> Vec<u8> {
@@ -64,9 +71,7 @@ pub fn attrs_to_jsonb(attrs: &[KeyValue], extras: &[(String, JsonbValue<'static>
     for (k, v) in extras {
         map.insert(k.clone(), v.clone());
     }
-    let mut bytes = Vec::new();
-    JsonbValue::Object(map).write_to_vec(&mut bytes);
-    bytes
+    to_jsonb_bytes(JsonbValue::Object(map))
 }
 
 /// Renders `AnyValue` to a flat string for fields that need a textual form
@@ -80,9 +85,9 @@ pub fn any_value_to_string(v: &AnyValue) -> String {
         Some(Av::BytesValue(b)) => base64::engine::general_purpose::STANDARD.encode(b),
         Some(Av::ArrayValue(arr)) => {
             // Render via JSONB to keep round-trippable representations.
-            let v = JsonbValue::Array(arr.values.iter().map(any_value_to_jsonb).collect());
-            let mut bytes = Vec::new();
-            v.write_to_vec(&mut bytes);
+            let bytes = to_jsonb_bytes(JsonbValue::Array(
+                arr.values.iter().map(any_value_to_jsonb).collect(),
+            ));
             jsonb::RawJsonb::new(&bytes).to_string()
         }
         Some(Av::KvlistValue(kvs)) => {
@@ -95,8 +100,7 @@ pub fn any_value_to_string(v: &AnyValue) -> String {
                     .unwrap_or(JsonbValue::Null);
                 map.insert(kv.key.clone(), value);
             }
-            let mut bytes = Vec::new();
-            JsonbValue::Object(map).write_to_vec(&mut bytes);
+            let bytes = to_jsonb_bytes(JsonbValue::Object(map));
             jsonb::RawJsonb::new(&bytes).to_string()
         }
         None => String::new(),

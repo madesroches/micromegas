@@ -4,7 +4,7 @@
 //! carrying JSONB bytes — see plan §"Span events and links as `List<Struct>` vs JSONB"
 //! for the rationale.
 
-use super::attrs::{any_value_to_jsonb, attrs_to_jsonb, scope_extras};
+use super::attrs::{any_value_to_jsonb, attrs_to_jsonb, scope_extras, to_jsonb_bytes};
 use crate::lakehouse::{
     block_partition_spec::BlockProcessor, partition_source_data::PartitionSourceBlock,
     write_partition::PartitionRowSet,
@@ -248,9 +248,8 @@ impl OtelSpansRowBuilder {
                 JsonbValue::Object(map)
             })
             .collect();
-        let mut events_bytes = Vec::new();
-        JsonbValue::Array(events_array).write_to_vec(&mut events_bytes);
-        self.events.append_value(&events_bytes);
+        self.events
+            .append_value(to_jsonb_bytes(JsonbValue::Array(events_array)));
 
         // Links as JSONB array.
         let links_array: Vec<JsonbValue<'static>> = span
@@ -276,9 +275,8 @@ impl OtelSpansRowBuilder {
                 JsonbValue::Object(map)
             })
             .collect();
-        let mut links_bytes = Vec::new();
-        JsonbValue::Array(links_array).write_to_vec(&mut links_bytes);
-        self.links.append_value(&links_bytes);
+        self.links
+            .append_value(to_jsonb_bytes(JsonbValue::Array(links_array)));
 
         self.nb_appended += 1;
         Ok(())
