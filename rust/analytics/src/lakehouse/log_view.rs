@@ -38,7 +38,7 @@ lazy_static::lazy_static! {
 }
 
 /// Block-processor map covering native transit + OTel log blocks.
-fn log_processors() -> BlockProcessorMap {
+fn log_processors() -> Arc<BlockProcessorMap> {
     let mut m: BlockProcessorMap = HashMap::new();
     m.insert(
         FORMAT_TRANSIT,
@@ -48,7 +48,7 @@ fn log_processors() -> BlockProcessorMap {
         FORMAT_OTLP_LOGS,
         Arc::new(OtelLogsBlockProcessor {}) as Arc<dyn BlockProcessor>,
     );
-    m
+    Arc::new(m)
 }
 
 /// A `ViewMaker` for creating `LogView` instances.

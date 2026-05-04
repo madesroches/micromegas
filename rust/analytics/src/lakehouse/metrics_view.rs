@@ -42,7 +42,7 @@ lazy_static::lazy_static! {
 }
 
 /// Block-processor map covering native transit + OTel Sum/Gauge metric blocks.
-fn metrics_processors() -> BlockProcessorMap {
+fn metrics_processors() -> Arc<BlockProcessorMap> {
     let mut m: BlockProcessorMap = HashMap::new();
     m.insert(
         FORMAT_TRANSIT,
@@ -52,7 +52,7 @@ fn metrics_processors() -> BlockProcessorMap {
         FORMAT_OTLP_METRICS,
         Arc::new(OtelMetricsBlockProcessor {}) as Arc<dyn BlockProcessor>,
     );
-    m
+    Arc::new(m)
 }
 
 #[derive(Debug)]

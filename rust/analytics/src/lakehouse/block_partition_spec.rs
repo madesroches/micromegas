@@ -43,7 +43,7 @@ pub struct BlockPartitionSpec {
     pub schema: Arc<Schema>,
     pub insert_range: TimeRange,
     pub source_data: Arc<dyn PartitionBlocksSource>,
-    pub block_processors: BlockProcessorMap,
+    pub block_processors: Arc<BlockProcessorMap>,
 }
 
 #[async_trait]

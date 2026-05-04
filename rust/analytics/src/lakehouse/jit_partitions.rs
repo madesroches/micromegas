@@ -581,7 +581,7 @@ pub async fn write_partition_from_blocks(
     view_metadata: ViewMetadata,
     schema: Arc<Schema>,
     source_data: SourceDataBlocksInMemory,
-    block_processors: BlockProcessorMap,
+    block_processors: Arc<BlockProcessorMap>,
 ) -> Result<()> {
     if source_data.blocks.is_empty() {
         anyhow::bail!("empty partition spec");

@@ -150,6 +150,7 @@ impl View for OtelSpansView {
             crate::lakehouse::format::FORMAT_OTLP_TRACES,
             Arc::new(OtelSpansBlockProcessor {}) as Arc<dyn BlockProcessor>,
         );
+        let block_processors = Arc::new(block_processors);
 
         for part in all_partitions {
             if !is_jit_partition_up_to_date(&lakehouse.lake().db_pool, view_meta.clone(), &part)
