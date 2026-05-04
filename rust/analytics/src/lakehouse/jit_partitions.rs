@@ -7,23 +7,29 @@ use super::{
     view::{View, ViewMetadata},
 };
 use crate::{
-    dfext::typed_column::get_single_row_primitive_value,
-    lakehouse::{partition_cache::PartitionCache, view::PartitionSpec},
+    dfext::{
+        string_column_accessor::string_column_by_name,
+        typed_column::{get_single_row_primitive_value, typed_column_by_name},
+    },
+    lakehouse::{
+        partition_cache::PartitionCache, partition_source_data::hash_to_object_count,
+        query::query_partitions, view::PartitionSpec,
+    },
     metadata::{ProcessMetadata, StreamMetadata, block_from_batch_row},
-    time::TimeRange,
-};
-use crate::{
-    lakehouse::{partition_source_data::hash_to_object_count, query::query_partitions},
+    properties::properties_column_accessor::properties_column_by_name,
     response_writer::ResponseWriter,
+    time::TimeRange,
 };
 use anyhow::{Context, Result};
 use chrono::DurationRound;
 use chrono::{DateTime, TimeDelta, Utc};
+use datafusion::arrow::array::{BinaryArray, GenericListArray, StringArray};
 use datafusion::arrow::datatypes::{Schema, TimestampNanosecondType};
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_tracing::prelude::*;
 use sqlx::Row;
 use std::sync::Arc;
+use uuid::Uuid;
 
 /// Configuration for Just-In-Time (JIT) partition generation.
 pub struct JitPartitionConfig {
@@ -139,7 +145,6 @@ pub async fn generate_stream_jit_partitions_segment(
     let mut partition_blocks = vec![];
     let mut partition_nb_objects: i64 = 0;
     for rb in rbs {
-        use crate::dfext::string_column_accessor::string_column_by_name;
         let format_column = string_column_by_name(&rb, "streams.format")?;
         for ir in 0..rb.num_rows() {
             let block = block_from_batch_row(&rb, ir).with_context(|| "block_from_batch_row")?;
@@ -292,13 +297,6 @@ pub async fn generate_process_jit_partitions_segment(
             let block_nb_objects = block.nb_objects as i64;
 
             // Build StreamMetadata from the query results
-            use crate::dfext::{
-                string_column_accessor::string_column_by_name, typed_column::typed_column_by_name,
-            };
-            use crate::properties::properties_column_accessor::properties_column_by_name;
-            use datafusion::arrow::array::{BinaryArray, GenericListArray, StringArray};
-            use uuid::Uuid;
-
             let stream_id_column = string_column_by_name(&rb, "stream_id")?;
             let stream_process_id_column = string_column_by_name(&rb, "process_id")?;
             let dependencies_metadata_column: &BinaryArray =
