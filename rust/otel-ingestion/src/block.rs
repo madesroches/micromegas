@@ -202,7 +202,10 @@ fn build_prepared_block(
     let block_id = block_id_from_payload(&payload_bytes);
 
     if is_degenerate_resource(&resource_attrs) {
-        warn!(
+        // debug! rather than warn! — fires per resource per request, so a misconfigured
+        // client would otherwise log-flood. Operators chasing collapsed-identity bugs
+        // can switch the level on demand.
+        debug!(
             "OTLP resource without host.id/host.name/process.pid/service.instance.id — \
              multiple processes may collapse onto process_id={}",
             process_id

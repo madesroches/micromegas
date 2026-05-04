@@ -73,14 +73,12 @@ async fn write_blocks(
             .await
             .map_err(|e| OtelError::from_ingestion(e, signal))?;
 
-        // Register the stream row (idempotent). Empty properties — scope and per-event
-        // attrs live on individual rows during materialization, not on the stream.
+        // Register the stream row (idempotent).
         service
             .register_otel_stream(
                 prepared.stream_id,
                 prepared.process_id,
                 vec![tag.clone()],
-                Vec::new(),
                 format,
             )
             .await

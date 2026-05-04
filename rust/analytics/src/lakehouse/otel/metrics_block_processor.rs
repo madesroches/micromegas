@@ -206,7 +206,7 @@ impl MeasuresRowBuilder {
     ) {
         let time_nanos = dp.time_unix_nano as i64;
         if time_nanos == 0 {
-            debug!("OTel metric data point for {metric_name} dropped (time_unix_nano=0)",);
+            debug!("OTel metric data point for {metric_name} dropped (time_unix_nano=0)");
             return;
         }
 

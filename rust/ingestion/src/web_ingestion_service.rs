@@ -219,6 +219,8 @@ impl WebIngestionService {
     /// `dependencies_metadata` and `objects_metadata` are filled with the CBOR sentinel
     /// for an empty `Vec<UserDefinedType>` so legacy decode sites continue to work.
     /// `format` distinguishes per-block dispatch downstream (e.g. `"otlp/v1/logs"`).
+    /// Stream `properties` are always empty for OTel — scope and per-event attrs
+    /// live on individual rows during materialization, not on the stream.
     ///
     /// Hack: piggybacking OTLP onto the transit-shaped `streams` row (with empty
     /// metadata sentinels) is expedient for two formats but won't scale. To support
@@ -230,7 +232,6 @@ impl WebIngestionService {
         stream_id: Uuid,
         process_id: Uuid,
         tags: Vec<String>,
-        properties: Vec<Property>,
         format: &str,
     ) -> Result<(), IngestionServiceError> {
         let result = sqlx::query(
@@ -243,7 +244,7 @@ impl WebIngestionService {
         .bind(empty_transit_metadata_cbor())
         .bind(empty_transit_metadata_cbor())
         .bind(tags)
-        .bind(properties)
+        .bind(Vec::<Property>::new())
         .bind(sqlx::types::chrono::Utc::now())
         .bind(format)
         .execute(&self.lake.db_pool)
