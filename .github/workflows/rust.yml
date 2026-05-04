@@ -109,10 +109,8 @@ jobs:
       # a few other system libraries to load XPCOM.
       run: |
         set -e
-        if [ "${{ needs.check-runner.outputs.runner }}" = "ubuntu-latest" ]; then
-          sudo apt-get update -qq
-          sudo apt-get install -y libgtk-3-0 libdbus-glib-1-2 libasound2 libxt6
-        fi
+        sudo apt-get update -qq
+        sudo apt-get install -y libgtk-3-0 libdbus-glib-1-2 libasound2 libxt6
         FIREFOX_DIR="$HOME/firefox-bin"
         rm -rf "$FIREFOX_DIR"
         mkdir -p "$FIREFOX_DIR"
