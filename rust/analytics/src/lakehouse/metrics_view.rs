@@ -9,7 +9,6 @@ use super::{
     batch_update::PartitionCreationStrategy,
     block_partition_spec::{BlockPartitionSpec, BlockProcessor, BlockProcessorMap},
     dataframe_time_bounds::{DataFrameTimeBounds, NamedColumnsTimeBounds},
-    format::{FORMAT_OTLP_METRICS, FORMAT_TRANSIT},
     jit_partitions::{
         JitPartitionConfig, generate_process_jit_partitions, is_jit_partition_up_to_date,
         write_partition_from_blocks,
@@ -29,6 +28,7 @@ use datafusion::{
     arrow::datatypes::Schema,
     logical_expr::{Between, Expr, col},
 };
+use micromegas_ingestion::web_ingestion_service::{FORMAT_OTLP_METRICS, FORMAT_TRANSIT};
 use micromegas_tracing::info;
 use micromegas_tracing::prelude::*;
 use std::collections::HashMap;

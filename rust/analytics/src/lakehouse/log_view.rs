@@ -3,7 +3,6 @@ use super::{
     block_partition_spec::{BlockPartitionSpec, BlockProcessor, BlockProcessorMap},
     blocks_view::BlocksView,
     dataframe_time_bounds::{DataFrameTimeBounds, NamedColumnsTimeBounds},
-    format::{FORMAT_OTLP_LOGS, FORMAT_TRANSIT},
     jit_partitions::{JitPartitionConfig, write_partition_from_blocks},
     lakehouse_context::LakehouseContext,
     log_block_processor::LogBlockProcessor,
@@ -26,6 +25,7 @@ use datafusion::{
     arrow::datatypes::Schema,
     logical_expr::{Between, Expr, col},
 };
+use micromegas_ingestion::web_ingestion_service::{FORMAT_OTLP_LOGS, FORMAT_TRANSIT};
 use micromegas_tracing::prelude::*;
 use std::collections::HashMap;
 use std::sync::Arc;

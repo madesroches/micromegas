@@ -36,6 +36,7 @@ use datafusion::{
     arrow::datatypes::Schema,
     logical_expr::{BinaryExpr, Expr, Operator, col},
 };
+use micromegas_ingestion::web_ingestion_service::FORMAT_OTLP_TRACES;
 use micromegas_tracing::prelude::*;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -147,7 +148,7 @@ impl View for OtelSpansView {
 
         let mut block_processors: BlockProcessorMap = HashMap::new();
         block_processors.insert(
-            crate::lakehouse::format::FORMAT_OTLP_TRACES,
+            FORMAT_OTLP_TRACES,
             Arc::new(OtelSpansBlockProcessor {}) as Arc<dyn BlockProcessor>,
         );
         let block_processors = Arc::new(block_processors);

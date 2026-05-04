@@ -1,7 +1,6 @@
 use super::{
-    format::FORMAT_TRANSIT, lakehouse_context::LakehouseContext,
-    partition_cache::QueryPartitionProvider, session_configurator::NoOpSessionConfigurator,
-    view_factory::ViewFactory,
+    lakehouse_context::LakehouseContext, partition_cache::QueryPartitionProvider,
+    session_configurator::NoOpSessionConfigurator, view_factory::ViewFactory,
 };
 use crate::{
     dfext::{string_column_accessor::string_column_by_name, typed_column::typed_column_by_name},
@@ -27,6 +26,7 @@ use datafusion::{
     prelude::Expr,
 };
 use jsonb::Value as JsonbValue;
+use micromegas_ingestion::web_ingestion_service::FORMAT_TRANSIT;
 use micromegas_tracing::prelude::*;
 use micromegas_transit::{UserDefinedType, value::Value as TransitValue};
 use std::{any::Any, borrow::Cow, collections::BTreeMap, sync::Arc};

@@ -24,8 +24,6 @@ pub mod dataframe_time_bounds;
 pub mod export_log_view;
 /// Global LRU cache for parquet file contents
 pub mod file_cache;
-/// Format-string constants for `streams.format` (per-block dispatch keys)
-pub mod format;
 /// Fetch payload from the object store using SQL
 pub mod get_payload_function;
 /// Management of process-specific partitions built on demand
