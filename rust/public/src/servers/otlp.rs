@@ -184,10 +184,14 @@ async fn traces_handler(
 /// Builds a sub-Router carrying the three OTLP routes plus the body-limit and
 /// gzip-decompression layers scoped to those routes.
 ///
-/// Layer order: `RequestBodyLimitLayer` (outer, wire bytes) →
-/// `RequestDecompressionLayer` (inner, gzip expansion) → handler. The handler's
-/// `Bytes` extractor consults `DefaultBodyLimit` to cap the post-decompression
-/// payload, defending against gzip-bomb expansion that the wire-byte limit can't see.
+/// Layer order, outermost → innermost (request travels through them top to bottom):
+///  1. `DefaultBodyLimit::max(300 MiB)` — caps the post-decompression bytes the
+///     handler's `Bytes` extractor will materialize, defending against gzip-bomb
+///     expansion that the wire-byte limit can't see.
+///  2. `RequestBodyLimitLayer(20 MiB)` — caps the *compressed* wire bytes;
+///     enforced before decompression, returning 413 on oversize.
+///  3. `RequestDecompressionLayer` — gzip-decodes the body before the handler.
+///  4. handler.
 pub fn otlp_router() -> Router {
     Router::new()
         .route("/ingestion/otlp/v1/logs", post(logs_handler))

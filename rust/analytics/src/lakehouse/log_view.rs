@@ -182,6 +182,7 @@ impl View for LogView {
             view_instance_id: self.get_view_instance_id(),
             file_schema_hash: self.get_file_schema_hash(),
         };
+        let block_processors = log_processors();
 
         for part in all_partitions {
             if !is_jit_partition_up_to_date(&lakehouse.lake().db_pool, view_meta.clone(), &part)
@@ -192,7 +193,7 @@ impl View for LogView {
                     view_meta.clone(),
                     self.get_file_schema(),
                     part,
-                    log_processors(),
+                    block_processors.clone(),
                 )
                 .await
                 .with_context(|| "write_partition_from_blocks")?;
