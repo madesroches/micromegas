@@ -168,24 +168,25 @@ impl View for AsyncEventsView {
             file_schema_hash: self.get_file_schema_hash(),
         };
 
+        // async_events only sources native transit streams (tagged "cpu");
+        // OTel spans go to the dedicated otel_spans view.
+        let mut block_processors: BlockProcessorMap = HashMap::new();
+        block_processors.insert(
+            FORMAT_TRANSIT,
+            Arc::new(AsyncEventsBlockProcessor::new(convert_ticks.clone()))
+                as Arc<dyn BlockProcessor>,
+        );
+
         for part in all_partitions {
             if !is_jit_partition_up_to_date(&lakehouse.lake().db_pool, view_meta.clone(), &part)
                 .await?
             {
-                let mut block_processors: BlockProcessorMap = HashMap::new();
-                // async_events only sources native transit streams (tagged "cpu");
-                // OTel spans go to the dedicated otel_spans view.
-                block_processors.insert(
-                    FORMAT_TRANSIT,
-                    Arc::new(AsyncEventsBlockProcessor::new(convert_ticks.clone()))
-                        as Arc<dyn BlockProcessor>,
-                );
                 write_partition_from_blocks(
                     lakehouse.lake().clone(),
                     view_meta.clone(),
                     self.get_file_schema(),
                     part,
-                    block_processors,
+                    block_processors.clone(),
                 )
                 .await
                 .with_context(|| "write_partition_from_blocks")?;
