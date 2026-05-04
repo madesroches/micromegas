@@ -102,6 +102,21 @@ jobs:
         WASM_BINDGEN_VERSION=$(python3 -c "import re; t=open('rust/datafusion-wasm/Cargo.lock').read(); m=re.search(r'\[\[package\]\]\s*name\s*=\s*\"wasm-bindgen\"\s*version\s*=\s*\"([^\"]+)\"', t); print(m.group(1))")
         cargo install wasm-bindgen-cli --version "$WASM_BINDGEN_VERSION"
 
+    - name: Install Firefox for headless tests
+      # On Ubuntu 22.04+, /usr/bin/firefox is a snap stub. Both runners may also lack
+      # a working snap install, so download Firefox ESR directly from Mozilla and
+      # prepend it to PATH. No sudo required — extracted under $HOME.
+      run: |
+        set -e
+        FIREFOX_DIR="$HOME/firefox-bin"
+        rm -rf "$FIREFOX_DIR"
+        mkdir -p "$FIREFOX_DIR"
+        curl -sSL -o /tmp/firefox.tar.xz "https://download.mozilla.org/?product=firefox-esr-latest-ssl&os=linux64&lang=en-US"
+        tar -xJf /tmp/firefox.tar.xz -C "$FIREFOX_DIR" --strip-components=1
+        rm /tmp/firefox.tar.xz
+        echo "$FIREFOX_DIR" >> $GITHUB_PATH
+        "$FIREFOX_DIR/firefox" --version
+
     - name: Run WASM CI
       run: |
         if [ -z "$CARGO_BUILD_JOBS" ]; then unset CARGO_BUILD_JOBS; fi
