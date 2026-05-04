@@ -8,6 +8,7 @@
 //! 415 (Content-Type / Content-Encoding) and 413 (body limit) are enforced upstream
 //! in the axum layer stack before the request reaches the OtelError surface.
 
+use micromegas_ingestion::web_ingestion_service::IngestionServiceError;
 use thiserror::Error;
 
 /// OTLP signal name (used purely for diagnostic messages).
@@ -60,6 +61,8 @@ impl OtelError {
     }
 
     /// gRPC canonical `Code` for the embedded `google.rpc.Status` proto on error responses.
+    /// Despite the name, this travels over OTLP/HTTP — the spec just reuses `google.rpc.Status`
+    /// (and its gRPC code enum) as the error body format.
     pub fn grpc_code(&self) -> i32 {
         match self {
             // INVALID_ARGUMENT = 3
@@ -100,15 +103,11 @@ impl OtelError {
     /// Wraps an `IngestionServiceError` with the OTLP signal of the request that
     /// triggered it. Forces the caller to supply the signal at the conversion
     /// site so the resulting label can't be mismatched against the route.
-    pub fn from_ingestion(
-        err: micromegas_ingestion::web_ingestion_service::IngestionServiceError,
-        signal: Signal,
-    ) -> Self {
-        use micromegas_ingestion::web_ingestion_service::IngestionServiceError as Inner;
+    pub fn from_ingestion(err: IngestionServiceError, signal: Signal) -> Self {
         match err {
-            Inner::ParseError(m) => OtelError::Parse { signal, message: m },
-            Inner::DatabaseError(m) => OtelError::Database { signal, message: m },
-            Inner::StorageError(m) => OtelError::Storage { signal, message: m },
+            IngestionServiceError::ParseError(m) => OtelError::Parse { signal, message: m },
+            IngestionServiceError::DatabaseError(m) => OtelError::Database { signal, message: m },
+            IngestionServiceError::StorageError(m) => OtelError::Storage { signal, message: m },
         }
     }
 }
