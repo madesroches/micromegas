@@ -197,7 +197,7 @@ use super::streams_view::make_streams_view;
 use super::{
     async_events_view::AsyncEventsViewMaker, log_view::LogViewMaker,
     metrics_view::MetricsViewMaker, net_spans_view::NetSpansViewMaker,
-    otel_spans_view::OtelSpansViewMaker, thread_spans_view::ThreadSpansViewMaker, view::View,
+    otel::spans_view::OtelSpansViewMaker, thread_spans_view::ThreadSpansViewMaker, view::View,
 };
 use anyhow::Result;
 use datafusion::arrow::datatypes::Schema;

@@ -4,11 +4,11 @@
 //! and Summary (deferred to v2 — see plan §"Histograms deferred"). Aggregation
 //! temporality and `is_monotonic` ride along on per-row properties.
 
-use super::{
+use super::attrs::attrs_to_jsonb;
+use crate::lakehouse::{
     block_partition_spec::BlockProcessor, partition_source_data::PartitionSourceBlock,
     write_partition::PartitionRowSet,
 };
-use crate::lakehouse::otel_attrs::attrs_to_jsonb;
 use crate::payload::fetch_block_payload;
 use crate::time::TimeRange;
 use anyhow::{Context, Result};

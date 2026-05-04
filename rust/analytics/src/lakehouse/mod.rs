@@ -60,18 +60,8 @@ pub mod metrics_view;
 pub mod migration;
 /// Jit view of pre-paired network bandwidth spans (Connection / Object / Property / RPC)
 pub mod net_spans_view;
-/// Helpers for OTel attribute / `AnyValue` → JSONB translation
-pub mod otel_attrs;
-/// Implementation of `BlockProcessor` for OTel logs
-pub mod otel_logs_block_processor;
-/// Implementation of `BlockProcessor` for OTel metrics (Sum / Gauge → measures)
-pub mod otel_metrics_block_processor;
-/// Implementation of `BlockProcessor` for OTel spans
-pub mod otel_spans_block_processor;
-/// Arrow schema for the otel_spans view
-pub mod otel_spans_table;
-/// JIT-only per-process view of OTel spans
-pub mod otel_spans_view;
+/// OTLP reader path: attribute helpers, block processors, and the otel_spans view.
+pub mod otel;
 /// Table function to parse all transit objects in a block and return them as JSONB
 pub mod parse_block_table_function;
 /// Write & delete sections of views

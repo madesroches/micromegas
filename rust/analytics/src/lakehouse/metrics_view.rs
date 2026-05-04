@@ -15,7 +15,7 @@ use super::{
     },
     lakehouse_context::LakehouseContext,
     metrics_block_processor::MetricsBlockProcessor,
-    otel_metrics_block_processor::OtelMetricsBlockProcessor,
+    otel::metrics_block_processor::OtelMetricsBlockProcessor,
     partition_cache::PartitionCache,
     partition_source_data::fetch_partition_source_data,
     view::{PartitionSpec, View, ViewMetadata},

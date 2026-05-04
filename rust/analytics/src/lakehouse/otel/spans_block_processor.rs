@@ -4,11 +4,11 @@
 //! carrying JSONB bytes — see plan §"Span events and links as `List<Struct>` vs JSONB"
 //! for the rationale.
 
-use super::{
-    block_partition_spec::BlockProcessor, otel_attrs::any_value_to_jsonb,
-    partition_source_data::PartitionSourceBlock, write_partition::PartitionRowSet,
+use super::attrs::{any_value_to_jsonb, attrs_to_jsonb, hex_encode};
+use crate::lakehouse::{
+    block_partition_spec::BlockProcessor, partition_source_data::PartitionSourceBlock,
+    write_partition::PartitionRowSet,
 };
-use crate::lakehouse::otel_attrs::{attrs_to_jsonb, hex_encode};
 use crate::payload::fetch_block_payload;
 use crate::time::TimeRange;
 use anyhow::{Context, Result};
@@ -245,7 +245,7 @@ impl BlockProcessor for OtelSpansBlockProcessor {
             return Ok(None);
         }
 
-        let schema = Arc::new(crate::lakehouse::otel_spans_table::otel_spans_table_schema());
+        let schema = Arc::new(crate::lakehouse::otel::spans_table::otel_spans_table_schema());
         let batch = RecordBatch::try_new(
             schema,
             vec![

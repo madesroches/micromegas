@@ -4,12 +4,12 @@
 //! see Plan §"One block per Resource"). We prost-decode it, walk each scope and log
 //! record, emit one row per `LogRecord`.
 
-use super::{
+use super::attrs::{
+    any_value_to_jsonb, any_value_to_string, attrs_to_jsonb, hex_encode, severity_number_to_level,
+};
+use crate::lakehouse::{
     block_partition_spec::BlockProcessor, partition_source_data::PartitionSourceBlock,
     write_partition::PartitionRowSet,
-};
-use crate::lakehouse::otel_attrs::{
-    any_value_to_jsonb, any_value_to_string, attrs_to_jsonb, hex_encode, severity_number_to_level,
 };
 use crate::payload::fetch_block_payload;
 use crate::time::TimeRange;

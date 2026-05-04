@@ -6,7 +6,7 @@ use super::{
     jit_partitions::{JitPartitionConfig, write_partition_from_blocks},
     lakehouse_context::LakehouseContext,
     log_block_processor::LogBlockProcessor,
-    otel_logs_block_processor::OtelLogsBlockProcessor,
+    otel::logs_block_processor::OtelLogsBlockProcessor,
     partition_cache::PartitionCache,
     partition_source_data::fetch_partition_source_data,
     view::{PartitionSpec, View, ViewMetadata},

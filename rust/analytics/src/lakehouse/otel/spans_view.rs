@@ -9,7 +9,9 @@
 //! documented v1 limitation — users supply the `process_id` to
 //! `view_instance('otel_spans', '<uuid>')` or UNION across multiple instances.
 
-use super::{
+use super::spans_block_processor::OtelSpansBlockProcessor;
+use super::spans_table::otel_spans_table_schema;
+use crate::lakehouse::{
     batch_update::PartitionCreationStrategy,
     block_partition_spec::{BlockProcessor, BlockProcessorMap},
     blocks_view::BlocksView,
@@ -19,8 +21,6 @@ use super::{
         write_partition_from_blocks,
     },
     lakehouse_context::LakehouseContext,
-    otel_spans_block_processor::OtelSpansBlockProcessor,
-    otel_spans_table::otel_spans_table_schema,
     partition_cache::PartitionCache,
     view::{PartitionSpec, View, ViewMetadata},
     view_factory::ViewMaker,
