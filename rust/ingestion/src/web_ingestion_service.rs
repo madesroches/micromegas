@@ -214,7 +214,6 @@ impl WebIngestionService {
     /// for an empty `Vec<UserDefinedType>` so legacy decode sites continue to work.
     /// `format` distinguishes per-block dispatch downstream (e.g. `"otlp/v1/logs"`).
     #[span_fn]
-    #[allow(clippy::too_many_arguments)]
     pub async fn register_otel_stream(
         &self,
         stream_id: Uuid,
@@ -291,7 +290,7 @@ impl WebIngestionService {
     /// `parent_process_id` is always NULL — OTel has no parent-process model.
     /// `insert_time` is the server wall clock, matching the existing `insert_process` path.
     #[span_fn]
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments, reason = "OTel process identity fields")]
     pub async fn register_otel_process(
         &self,
         process_id: Uuid,

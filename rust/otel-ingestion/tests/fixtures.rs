@@ -32,15 +32,6 @@ pub fn i_kv(k: &str, v: i64) -> KeyValue {
     }
 }
 
-#[allow(dead_code)] // referenced by future tests; keep for ergonomic resource construction
-pub fn resource_with(pairs: &[(&str, &str)]) -> Resource {
-    Resource {
-        attributes: pairs.iter().map(|(k, v)| s_kv(k, v)).collect(),
-        dropped_attributes_count: 0,
-        entity_refs: vec![],
-    }
-}
-
 pub fn scope(name: &str) -> InstrumentationScope {
     InstrumentationScope {
         name: name.into(),
