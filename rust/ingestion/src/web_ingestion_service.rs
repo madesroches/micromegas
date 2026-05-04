@@ -170,6 +170,7 @@ impl WebIngestionService {
         Ok(())
     }
 
+    /// Registers a stream whose blocks will be ingested in the transit format.
     #[span_fn]
     pub async fn insert_stream(&self, body: bytes::Bytes) -> Result<(), IngestionServiceError> {
         let stream_info: StreamInfo = ciborium::from_reader(body.reader())
@@ -218,6 +219,11 @@ impl WebIngestionService {
     /// `dependencies_metadata` and `objects_metadata` are filled with the CBOR sentinel
     /// for an empty `Vec<UserDefinedType>` so legacy decode sites continue to work.
     /// `format` distinguishes per-block dispatch downstream (e.g. `"otlp/v1/logs"`).
+    ///
+    /// Hack: piggybacking OTLP onto the transit-shaped `streams` row (with empty
+    /// metadata sentinels) is expedient for two formats but won't scale. To support
+    /// more formats cleanly, `dependencies_metadata`, `objects_metadata`, and `format`
+    /// should be merged into a single per-format payload column.
     #[span_fn]
     pub async fn register_otel_stream(
         &self,
