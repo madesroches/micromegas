@@ -103,10 +103,12 @@ jobs:
         cargo install wasm-bindgen-cli --version "$WASM_BINDGEN_VERSION"
 
     - name: Install Firefox for headless tests
-      # On Ubuntu 22.04+, /usr/bin/firefox is a snap stub. Both runners may also lack
-      # a working snap install, so download Firefox ESR directly from Mozilla and
-      # prepend it to PATH. The tarball ships its own libs but still needs GTK and
-      # a few other system libraries to load XPCOM.
+      # On ubuntu-latest, /usr/bin/firefox is a snap stub and snap may not work in
+      # CI, so download Firefox ESR from Mozilla and prepend it to PATH. The tarball
+      # ships its own libs but still needs GTK and a few system libraries to load
+      # XPCOM. Skipped on dev-worker — the image bakes in Firefox + geckodriver
+      # via Mozilla's apt repo.
+      if: needs.check-runner.outputs.runner == 'ubuntu-latest'
       run: |
         set -e
         sudo apt-get update -qq
