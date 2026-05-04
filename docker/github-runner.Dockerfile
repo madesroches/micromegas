@@ -1,11 +1,20 @@
+# syntax=docker/dockerfile:1.7
 FROM ubuntu:22.04
 
 ARG RUNNER_VERSION=2.332.0
 
 ENV DEBIAN_FRONTEND=noninteractive
 
+# Keep .deb files and apt lists so the BuildKit cache mounts below
+# survive between builds (the default ubuntu image's docker-clean
+# hook deletes them after every apt-get run).
+RUN rm -f /etc/apt/apt.conf.d/docker-clean \
+    && echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/keep-cache
+
 # System dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     ca-certificates \
     clang \
@@ -20,14 +29,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-pip \
     sudo \
     unzip \
-    wget \
-    && rm -rf /var/lib/apt/lists/*
+    wget
 
 # Node.js 20 + Yarn
-RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
-    && npm install -g yarn \
-    && rm -rf /var/lib/apt/lists/*
+    && npm install -g yarn
 
 # Go 1.21
 RUN GOARCH=$([ "$(uname -m)" = "x86_64" ] && echo "amd64" || echo "arm64") \
@@ -38,18 +47,21 @@ ENV PATH="/usr/local/go/bin:${PATH}"
 RUN pip3 install --no-cache-dir poetry
 
 # Playwright system dependencies (for Grafana E2E tests)
-RUN npx playwright install-deps chromium
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    npx playwright install-deps chromium
 
 # Firefox from Mozilla PPA (the apt "firefox" package on 22.04 is a snap shim that
 # doesn't work inside containers) + geckodriver
-RUN apt-get update \
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update \
     && apt-get install -y --no-install-recommends software-properties-common \
     && add-apt-repository -y ppa:mozillateam/ppa \
     && printf 'Package: *\nPin: release o=LP-PPA-mozillateam\nPin-Priority: 1001\n' > /etc/apt/preferences.d/mozilla-firefox \
     && apt-get update && apt-get install -y --no-install-recommends firefox \
     && GECKO_VERSION=$(curl -fsSL https://api.github.com/repos/mozilla/geckodriver/releases/latest | python3 -c "import sys,json; print(json.load(sys.stdin)['tag_name'])") \
-    && curl -fsSL "https://github.com/mozilla/geckodriver/releases/download/${GECKO_VERSION}/geckodriver-${GECKO_VERSION}-linux64.tar.gz" | tar -xz -C /usr/local/bin \
-    && rm -rf /var/lib/apt/lists/*
+    && curl -fsSL "https://github.com/mozilla/geckodriver/releases/download/${GECKO_VERSION}/geckodriver-${GECKO_VERSION}-linux64.tar.gz" | tar -xz -C /usr/local/bin
 
 # Create runner user with passwordless sudo
 RUN useradd -m -s /bin/bash runner \
@@ -63,7 +75,9 @@ RUN ARCH=$([ "$(uname -m)" = "x86_64" ] && echo "x64" || echo "arm64") \
 
 # Install runner system dependencies
 USER root
-RUN /home/runner/bin/installdependencies.sh && rm -rf /var/lib/apt/lists/*
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    /home/runner/bin/installdependencies.sh
 
 # Install Rust for runner user (default CARGO_HOME=~/.cargo during build)
 USER runner
