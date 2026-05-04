@@ -102,22 +102,35 @@ def get_arch():
     return machine
 
 
+def get_latest_runner_version():
+    """Query the actions/runner repo for the latest release tag (e.g. '2.334.0').
+
+    Returns None on failure so the Dockerfile's default RUNNER_VERSION is used.
+    """
+    try:
+        req = urllib.request.Request(
+            "https://api.github.com/repos/actions/runner/releases/latest",
+            headers={"Accept": "application/vnd.github+json"},
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            result = json.loads(resp.read())
+    except Exception as e:
+        print(f"Failed to fetch latest runner version: {e}")
+        return None
+    tag = result.get("tag_name", "") if result else ""
+    return tag.lstrip("v") or None
+
+
 def build_image():
     """Build the runner container image from the repo root."""
     print(f"Building {IMAGE_NAME} image...")
-    subprocess.run(
-        [
-            "docker",
-            "build",
-            "-f",
-            "docker/github-runner.Dockerfile",
-            "-t",
-            IMAGE_NAME,
-            ".",
-        ],
-        cwd=REPO_ROOT,
-        check=True,
-    )
+    cmd = ["docker", "build", "-f", "docker/github-runner.Dockerfile", "-t", IMAGE_NAME]
+    runner_version = get_latest_runner_version()
+    if runner_version:
+        print(f"Pinning RUNNER_VERSION={runner_version}")
+        cmd.extend(["--build-arg", f"RUNNER_VERSION={runner_version}"])
+    cmd.append(".")
+    subprocess.run(cmd, cwd=REPO_ROOT, check=True)
     print(f"Image {IMAGE_NAME} built successfully.")
 
 
