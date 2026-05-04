@@ -197,7 +197,7 @@ impl BlockProcessor for OtelLogsBlockProcessor {
         }
 
         if nb_dropped_no_timestamp > 0 {
-            warn!(
+            debug!(
                 "OTel log records without timestamp dropped (block_id={block_id_str}, count={nb_dropped_no_timestamp})"
             );
         }
