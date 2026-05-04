@@ -9,19 +9,24 @@ use micromegas_telemetry::stream_info::StreamInfo;
 use micromegas_telemetry::wire_format::encode_cbor;
 use micromegas_tracing::prelude::*;
 use micromegas_tracing::property_set;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use thiserror::Error;
 use uuid::Uuid;
 
-/// Sentinel value for `dependencies_metadata` / `objects_metadata` on streams that
-/// do not use the transit/POD wire format (e.g. OTLP).
-///
-/// The single byte 0x80 is the CBOR encoding of an empty array. Every existing
-/// codepath that reads these BYTEA columns runs them through
-/// `ciborium::from_reader::<Vec<UserDefinedType>>(...)` and iterates the result;
-/// decoding 0x80 yields an empty Vec, so those iterations become no-ops without
-/// touching any of the consumer code.
-pub const EMPTY_TRANSIT_METADATA_CBOR: &[u8] = &[0x80];
+static EMPTY_TRANSIT_METADATA_CBOR_BYTES: LazyLock<Vec<u8>> = LazyLock::new(|| {
+    let mut buf = Vec::new();
+    ciborium::ser::into_writer(&Vec::<()>::new(), &mut buf)
+        .expect("encoding an empty Vec to CBOR is infallible");
+    buf
+});
+
+/// Sentinel for `dependencies_metadata` / `objects_metadata` on streams that
+/// don't use the transit/POD wire format (e.g. OTLP). Existing readers decode
+/// these BYTEA columns as `Vec<UserDefinedType>` and iterate; an empty Vec
+/// makes those loops no-ops without touching consumer code.
+pub fn empty_transit_metadata_cbor() -> &'static [u8] {
+    &EMPTY_TRANSIT_METADATA_CBOR_BYTES
+}
 
 /// Format string for native streams (transit-encoded payload, CBOR envelope).
 pub const FORMAT_TRANSIT: &str = "micromegas-transit";
@@ -229,8 +234,8 @@ impl WebIngestionService {
         )
         .bind(stream_id)
         .bind(process_id)
-        .bind(EMPTY_TRANSIT_METADATA_CBOR)
-        .bind(EMPTY_TRANSIT_METADATA_CBOR)
+        .bind(empty_transit_metadata_cbor())
+        .bind(empty_transit_metadata_cbor())
         .bind(tags)
         .bind(properties)
         .bind(sqlx::types::chrono::Utc::now())
