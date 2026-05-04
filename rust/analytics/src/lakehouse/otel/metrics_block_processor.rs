@@ -9,6 +9,7 @@ use crate::lakehouse::{
     block_partition_spec::BlockProcessor, partition_source_data::PartitionSourceBlock,
     write_partition::PartitionRowSet,
 };
+use crate::metadata::ProcessMetadata;
 use crate::payload::fetch_block_payload;
 use crate::time::TimeRange;
 use anyhow::{Context, Result};
@@ -22,7 +23,9 @@ use datafusion::arrow::record_batch::RecordBatch;
 use jsonb::Value as JsonbValue;
 use micromegas_telemetry::blob_storage::BlobStorage;
 use micromegas_tracing::prelude::*;
-use opentelemetry_proto::tonic::metrics::v1::{ResourceMetrics, metric::Data, number_data_point};
+use opentelemetry_proto::tonic::metrics::v1::{
+    NumberDataPoint, ResourceMetrics, metric::Data, number_data_point,
+};
 use prost::Message;
 use std::borrow::Cow;
 use std::sync::Arc;
@@ -50,18 +53,17 @@ impl BlockProcessor for OtelMetricsBlockProcessor {
         let resource_metrics = ResourceMetrics::decode(payload.objects.as_slice())
             .with_context(|| "decoding ResourceMetrics proto")?;
 
-        let process = &src_block.process;
         let insert_time_nanos = src_block
             .block
             .insert_time
             .timestamp_nanos_opt()
             .with_context(|| "block.insert_time → nanos")?;
         let mut builder = MeasuresRowBuilder::new(
-            process.process_id.to_string(),
+            src_block.process.process_id.to_string(),
             src_block.block.stream_id.to_string(),
             src_block.block.block_id.to_string(),
             insert_time_nanos,
-            process,
+            src_block.process.clone(),
         );
 
         for scope_metrics in &resource_metrics.scope_metrics {
@@ -135,7 +137,7 @@ impl BlockProcessor for OtelMetricsBlockProcessor {
 
 /// Per-block accumulator for `measures` rows: owns the column builders, time
 /// bounds, and per-block constants so `append` only takes per-data-point inputs.
-struct MeasuresRowBuilder<'a> {
+struct MeasuresRowBuilder {
     process_ids: StringDictionaryBuilder<Int16Type>,
     stream_ids: StringDictionaryBuilder<Int16Type>,
     block_ids: StringDictionaryBuilder<Int16Type>,
@@ -157,16 +159,16 @@ struct MeasuresRowBuilder<'a> {
     stream_id_str: String,
     block_id_str: String,
     insert_time_nanos: i64,
-    process: &'a crate::metadata::ProcessMetadata,
+    process: Arc<ProcessMetadata>,
 }
 
-impl<'a> MeasuresRowBuilder<'a> {
+impl MeasuresRowBuilder {
     fn new(
         process_id_str: String,
         stream_id_str: String,
         block_id_str: String,
         insert_time_nanos: i64,
-        process: &'a crate::metadata::ProcessMetadata,
+        process: Arc<ProcessMetadata>,
     ) -> Self {
         Self {
             process_ids: StringDictionaryBuilder::new(),
@@ -199,7 +201,7 @@ impl<'a> MeasuresRowBuilder<'a> {
         scope_name: &str,
         metric_name: &str,
         unit: &str,
-        dp: &opentelemetry_proto::tonic::metrics::v1::NumberDataPoint,
+        dp: &NumberDataPoint,
         extras: &[(String, JsonbValue<'static>)],
     ) {
         let time_nanos = dp.time_unix_nano as i64;
