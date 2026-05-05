@@ -6,7 +6,7 @@ from micromegas.cli.config import resolve_connection
 def connect():
     """Create FlightSQL client using resolved configuration.
 
-    Priority: env vars > config file (~/.micromegas_oidc_config.json) > defaults.
+    Priority: env vars > config file (~/.micromegas/config.json) > defaults.
     """
     cfg = resolve_connection()
 

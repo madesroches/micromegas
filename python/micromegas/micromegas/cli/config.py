@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-CONFIG_PATH = Path.home() / ".micromegas_oidc_config.json"
+CONFIG_PATH = Path.home() / ".micromegas" / "config.json"
 DEFAULT_URI = "grpc://localhost:50051"
 DEFAULT_TOKEN_FILE = str(Path.home() / ".micromegas" / "tokens.json")
 
@@ -22,7 +22,7 @@ class ConnectionConfig:
 
 
 def load_config(config_path=None):
-    """Load ~/.micromegas_oidc_config.json, returning empty dict if absent.
+    """Load ~/.micromegas/config.json, returning empty dict if absent.
 
     Raises ValueError with the offending path if the file exists but is not valid JSON.
     """
