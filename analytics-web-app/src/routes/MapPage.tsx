@@ -233,11 +233,23 @@ function MapPageContent() {
     setSelectedEvent(event)
   }, [])
 
+  const mapUrlRef = useRef<string | undefined>(undefined)
+  mapUrlRef.current = mapUrl
+
   const handleMapFileUpload = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (file) {
       const url = URL.createObjectURL(file)
-      setMapUrl(url)
+      setMapUrl((prev) => {
+        if (prev) URL.revokeObjectURL(prev)
+        return url
+      })
+    }
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      if (mapUrlRef.current) URL.revokeObjectURL(mapUrlRef.current)
     }
   }, [])
 

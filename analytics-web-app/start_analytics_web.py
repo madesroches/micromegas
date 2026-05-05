@@ -2,6 +2,7 @@
 """Analytics Web App Development Start Script"""
 
 import argparse
+import json
 import subprocess
 import sys
 import time
@@ -119,16 +120,24 @@ def seed_data_source(app_db_conn_string, name, url):
     """Seed a data source in the app database via direct SQL insert.
 
     Uses ON CONFLICT to upsert — safe to call repeatedly.
+    Values are passed through psql's :'var' parameterization so quotes
+    in the URL or name can't break the SQL or inject statements.
     """
+    config_json = json.dumps({"url": url})
     sql = (
-        f"INSERT INTO data_sources (name, config, is_default, created_by, updated_by) "
-        f"VALUES ('{name}', '{{\"url\": \"{url}\"}}', true, 'seed-script', 'seed-script') "
-        f"ON CONFLICT (name) DO UPDATE SET config = EXCLUDED.config, "
-        f"updated_by = 'seed-script', updated_at = NOW()"
+        "INSERT INTO data_sources (name, config, is_default, created_by, updated_by) "
+        "VALUES (:'name', :'config'::jsonb, true, 'seed-script', 'seed-script') "
+        "ON CONFLICT (name) DO UPDATE SET config = EXCLUDED.config, "
+        "updated_by = 'seed-script', updated_at = NOW()"
     )
     result = subprocess.run(
-        ["psql", app_db_conn_string, "-c", sql],
-        capture_output=True, text=True
+        [
+            "psql", app_db_conn_string,
+            "-v", f"name={name}",
+            "-v", f"config={config_json}",
+            "-c", sql,
+        ],
+        capture_output=True, text=True,
     )
     if result.returncode != 0 and result.stderr:
         print_status(f"psql error: {result.stderr.strip()}", "warning")
