@@ -1,6 +1,6 @@
 # Cell Types Reference
 
-Notebooks support 12 cell types. Each cell has a `name` (unique within the notebook), a `type`, and a `layout` controlling its display height and collapsed state.
+Notebooks support 13 cell types. Each cell has a `name` (unique within the notebook), a `type`, and a `layout` controlling its display height and collapsed state.
 
 Data cells (table, chart, log, etc.) execute SQL queries and register their results in the [local WASM query engine](execution.md#local-wasm-query-engine), making them available for downstream cells to query.
 
@@ -505,6 +505,118 @@ SELECT m.name, m.value, t.warn_threshold, t.error_threshold
 FROM raw_metrics m
 JOIN thresholds t ON m.name = t.metric
 WHERE m.value > t.warn_threshold
+```
+
+---
+
+## ![Map](../../assets/images/cell-icons/map.svg){ .cell-icon } Map
+
+3D map visualization that plots spatial events on a GLB model with optional heatmap overlay. Events are rendered as instanced sphere markers with ground-snap raycasting for accurate surface placement.
+
+**Configuration:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `sql` | string | SQL query returning spatial data |
+| `dataSource` | string | Data source override |
+
+**Required columns:**
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `time` | timestamp | Event timestamp |
+| `x` | number | X coordinate (Unreal Engine world units) |
+| `y` | number | Y coordinate (Unreal Engine world units) |
+| `z` | number | Z coordinate (Unreal Engine world units) |
+
+**Optional columns:**
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `process_id` | string | Process identifier (links to process page) |
+| *(any other)* | string | Displayed as properties in the event detail panel |
+
+All columns beyond the reserved names (`time`, `x`, `y`, `z`, `process_id`) are collected as key-value properties and shown when clicking a marker.
+
+**Options:**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `mapUrl` | string | none | GLB model URL — select from the map catalog or enter a custom path |
+| `showHeatmap` | boolean | `false` | Show 2D heatmap overlay |
+| `heatmapRadius` | number | `50` | Heatmap point radius (20–100) |
+| `heatmapIntensity` | number | `0.5` | Heatmap opacity (0.1–1.0) |
+| `markerColor` | string | `#bf360c` | Marker color (hex) |
+| `markerSize` | number | `10` | Marker size — scaled proportionally to the map extent |
+| `groundSnap` | boolean | `false` | Raycast markers onto the map mesh surface |
+| `heightOffset` | number | `0.5` | Vertical offset above the surface (-5 to 10) — scaled proportionally to the map extent |
+
+**Map catalog:**
+
+Maps are registered in `public/maps/maps.json`. Each entry defines a GLB model available in the map dropdown:
+
+```json
+[
+  {
+    "name": "Level Overview",
+    "file": "/maps/level_topdown.glb",
+    "type": "topdown",
+    "worldBounds": {
+      "ueMinX": -46596,
+      "ueMaxX": 168007,
+      "ueMinY": -149004,
+      "ueMaxY": 65600
+    }
+  },
+  {
+    "name": "Main Map",
+    "file": "/maps/main.glb",
+    "type": "3d"
+  }
+]
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | string | Display name in the dropdown |
+| `file` | string | Path to the GLB file under `public/` |
+| `type` | `'topdown'` \| `'3d'` | Coordinate transform mode |
+| `worldBounds` | object | Unreal Engine world extents for topdown maps (required when `type` is `topdown`) |
+
+**Coordinate transform modes:**
+
+- **`topdown`** — UE coordinates are mapped onto a flat textured plane using `worldBounds`. Requires `ueMinX`, `ueMaxX`, `ueMinY`, `ueMaxY`. Marker size and height offset scale proportionally to the model extent.
+- **`3d`** — UE coordinates are converted to glTF space: `UE(x,y,z) → glTF(y×0.01, z×0.01, -x×0.01)`.
+- **No type** — coordinates are used as-is in Three.js world space.
+
+When a coordinate transform is applied, the event detail panel shows the original UE coordinates rather than the converted model-space values.
+
+**Features:**
+
+- Instanced rendering — handles thousands of markers efficiently
+- Ground snap — raycasts each marker onto the mesh surface for accurate placement
+- Heatmap overlay — 2D canvas-based density visualization
+- Interactive markers — click to select, hover to highlight
+- Camera controls — left-drag to pan, right-drag to orbit, scroll to zoom, WASD to fly
+- Fit to Data / Reset View toolbar buttons
+- Event detail panel with properties and link to process logs
+- Results registered in the [local WASM query engine](execution.md#local-wasm-query-engine) under the cell name for downstream queries
+
+**Example SQL (spatial events from a JSONB-encoded payload):**
+
+```sql
+SELECT
+  time,
+  process_id,
+  jsonb_as_f64(jsonb_path_query_first(msg_jsonb, '$.position[0]')) as x,
+  jsonb_as_f64(jsonb_path_query_first(msg_jsonb, '$.position[1]')) as y,
+  jsonb_as_f64(jsonb_path_query_first(msg_jsonb, '$.position[2]')) as z,
+  jsonb_as_string(jsonb_path_query_first(msg_jsonb, '$.actor_id')) as actor_id,
+  jsonb_as_string(jsonb_path_query_first(msg_jsonb, '$.event_type')) as event_type
+FROM events
+WHERE name = 'spatial_event'
+ORDER BY time DESC
+LIMIT 10000
 ```
 
 ---

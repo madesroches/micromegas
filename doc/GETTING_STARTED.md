@@ -1,14 +1,27 @@
 ## Getting Started
 
-For testing purposes, you can run the entire Micromegas stack on your local workstation. This guide will walk you through setting up the backend services and running a simple query.
+For testing purposes, you can run the Micromegas stack on your local workstation. This guide covers two setup modes:
+
+*   **Full Local Stack** — all backend services running locally, ideal for end-to-end development.
+*   **Hybrid Setup** — local frontend with a remote production backend, ideal for frontend development or when you only need to query existing data.
 
 ### Prerequisites
 
 *   [Docker](https://www.docker.com/get-started/) (for PostgreSQL)
 *   [Python](https://www.python.org/downloads/) (for database setup script)
 *   [Rust](https://www.rust-lang.org/tools/install) and Cargo (for building Micromegas services)
+*   [Node.js](https://nodejs.org/) 18+
+*   [Yarn](https://yarnpkg.com/) (`npm install -g yarn`)
+*   wasm32 Rust target: `rustup target add wasm32-unknown-unknown`
+*   [wasm-bindgen CLI](https://rustwasm.github.io/wasm-bindgen/) (version must match `rust/datafusion-wasm/Cargo.lock`)
 
-### Environment Variables
+---
+
+### Full Local Stack
+
+Run all services locally: PostgreSQL, ingestion, FlightSQL, admin daemon, and optionally the web app.
+
+#### Environment Variables
 
 Before starting, set the following environment variables:
 
@@ -17,7 +30,7 @@ Before starting, set the following environment variables:
 *   `export MICROMEGAS_SQL_CONNECTION_STRING=postgres://{uname}:{passwd}@localhost:5432`
 *   `export MICROMEGAS_OBJECT_STORE_URI=file:///some/local/path` (Replace `/some/local/path` with a directory on your system for object storage)
 
-### Steps
+#### Steps
 
 1.  **Clone the repository:**
 
@@ -85,3 +98,47 @@ Before starting, set the following environment variables:
     df = client.query(sql, begin, end)
     print(df) # Dataframe containing the result of the query
     ```
+
+---
+
+### Hybrid Setup: Local Frontend + Remote Backend
+
+This mode runs the analytics web app locally but queries data from a remote FlightSQL server. You skip the local ingestion server, FlightSQL server, and admin daemon. You still need a local PostgreSQL instance for the app database.
+
+#### Environment Variables
+
+Set the same database variables as the full local stack (`MICROMEGAS_DB_USERNAME`, `MICROMEGAS_DB_PASSWD`, `MICROMEGAS_SQL_CONNECTION_STRING`, `MICROMEGAS_OBJECT_STORE_URI`). You do **not** need `MICROMEGAS_TELEMETRY_URL`.
+
+#### Steps
+
+1.  **Clone the repository** (same as Full Local Stack step 1).
+
+2.  **Start a local PostgreSQL instance** (same as Full Local Stack step 2).
+
+3.  **Build the WASM engine:**
+
+    The WASM binary is not committed to git and must be built locally.
+
+    ```bash
+    rustup target add wasm32-unknown-unknown
+
+    # Check the required wasm-bindgen version
+    grep -A2 'name = "wasm-bindgen"' rust/datafusion-wasm/Cargo.lock | grep version
+
+    # Install the matching version
+    cargo install wasm-bindgen-cli --version <VERSION_FROM_ABOVE>
+
+    # Build the WASM binary
+    python3 rust/datafusion-wasm/build.py
+    ```
+
+4.  **Start the Analytics Web App with remote backend:**
+
+    ```bash
+    cd analytics-web-app
+    python3 start_analytics_web.py --remote-backend <FLIGHTSQL_URL>
+    ```
+
+    Replace `<FLIGHTSQL_URL>` with the URL of the remote FlightSQL server. This command starts the Rust backend on port 8000, seeds a remote data source in the local app database, builds the WASM engine if needed, and starts the Vite dev server on port 3000.
+
+5.  **Open the app** at [http://localhost:3000/mmlocal/](http://localhost:3000/mmlocal/).

@@ -7,14 +7,17 @@ from . import perfetto
 from . import time
 
 
-def connect(preserve_dictionary=False):
-    """Connect to the analytics service using default values.
+def connect(uri=None, preserve_dictionary=False):
+    """Connect to the analytics service.
 
     Args:
+        uri (str, optional): FlightSQL server URI. Defaults to "grpc://localhost:50051".
         preserve_dictionary (bool, optional): When True, preserve dictionary encoding in
             Arrow arrays for memory efficiency. Useful when using dictionary-encoded UDFs.
             Defaults to False for backward compatibility.
     """
+    if uri is None:
+        uri = "grpc://localhost:50051"
     return flightsql.client.FlightSQLClient(
-        "grpc://localhost:50051", preserve_dictionary=preserve_dictionary
+        uri, preserve_dictionary=preserve_dictionary
     )

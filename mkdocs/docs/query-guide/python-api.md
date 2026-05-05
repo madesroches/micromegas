@@ -597,11 +597,54 @@ micromegas-query "SELECT * FROM list_partitions()" --all --format csv
 micromegas-query "SELECT view_set_name, num_rows FROM list_partitions()" --all --format json
 ```
 
+**Configuration:**
+
+The CLI resolves connection settings from three sources, in this order:
+
+1. **Environment variables** (highest priority)
+2. **Config file**: `~/.micromegas/config.json`
+3. **Built-in defaults** (e.g., `grpc://localhost:50051`)
+
+Each setting is resolved independently, so you can put stable values in the config file and override individual settings via env vars (e.g., for CI or for switching environments).
+
 **Environment Variables:**
-- `MICROMEGAS_ANALYTICS_URI`: Analytics server URI (default: `grpc://localhost:50051`)
-- `MICROMEGAS_OIDC_ISSUER`: OIDC issuer URL for authentication
-- `MICROMEGAS_OIDC_CLIENT_ID`: OIDC client ID
-- `MICROMEGAS_PYTHON_MODULE_WRAPPER`: Custom authentication module for corporate environments
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `MICROMEGAS_ANALYTICS_URI` | FlightSQL server URI | `grpc://localhost:50051` |
+| `MICROMEGAS_OIDC_ISSUER` | OIDC issuer URL (enables OIDC auth when set with `_CLIENT_ID`) | — |
+| `MICROMEGAS_OIDC_CLIENT_ID` | OAuth client ID | — |
+| `MICROMEGAS_OIDC_CLIENT_SECRET` | OAuth client secret (optional; required by some IdPs) | — |
+| `MICROMEGAS_OIDC_AUDIENCE` | API audience/identifier (e.g., for Auth0, Azure) | — |
+| `MICROMEGAS_OIDC_SCOPE` | Custom OAuth scopes | `openid email profile offline_access` |
+| `MICROMEGAS_TOKEN_FILE` | Where to cache OIDC tokens | `~/.micromegas/tokens.json` |
+| `MICROMEGAS_PYTHON_MODULE_WRAPPER` | Python module providing `connect()` for corporate auth (takes precedence over OIDC) | — |
+
+**Config file (`~/.micromegas/config.json`):**
+
+A small JSON file you can drop in your home directory to avoid setting env vars. Every key is optional, and any env var with the same role overrides it.
+
+```json
+{
+  "uri": "grpc+tls://analytics.example.com:50051",
+  "client_id": "your-app-client-id",
+  "issuers": [
+    {
+      "issuer": "https://accounts.example.com",
+      "audience": "your-api-audience"
+    }
+  ]
+}
+```
+
+| Key | Maps to | Notes |
+|-----|---------|-------|
+| `uri` | `MICROMEGAS_ANALYTICS_URI` | FlightSQL server URI |
+| `client_id` | `MICROMEGAS_OIDC_CLIENT_ID` | OAuth client ID |
+| `issuers[0].issuer` | `MICROMEGAS_OIDC_ISSUER` | First issuer entry is used |
+| `issuers[0].audience` | `MICROMEGAS_OIDC_AUDIENCE` | First issuer entry is used |
+
+OIDC authentication is activated when both an issuer and a client ID are resolved (from any source). Otherwise the CLI connects without auth.
 
 ### micromegas-logout
 

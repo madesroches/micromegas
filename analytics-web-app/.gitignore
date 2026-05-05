@@ -22,6 +22,9 @@ build/
 *.swp
 *.swo
 
+# Local map catalog (per-developer, not checked in)
+public/maps/maps.json
+
 # OS generated files
 .DS_Store
 .DS_Store?

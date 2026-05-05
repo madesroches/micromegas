@@ -93,6 +93,14 @@ const BASE_METADATA = {
     defaultHeight: 300,
     canBlockDownstream: true,
   },
+  map: {
+    label: 'Map',
+    icon: 'M',
+    description: '3D map visualization with heatmap overlay',
+    showTypeBadge: true,
+    defaultHeight: 500,
+    canBlockDownstream: true,
+  },
 } as const
 
 type CellType = keyof typeof BASE_METADATA & string
@@ -222,6 +230,9 @@ export function createCellRegistryMock(options: MockOptions = {}) {
       case 'transposed':
         meta.createDefaultConfig = () => ({ type: 'transposed', sql: DEFAULT_SQL.transposed })
         break
+      case 'map':
+        meta.createDefaultConfig = () => ({ type: 'map', sql: DEFAULT_SQL.map })
+        break
     }
 
     // Add execute method (except markdown and hg which don't execute)
@@ -249,6 +260,7 @@ export function createCellRegistryMock(options: MockOptions = {}) {
     variable: buildMetadata('variable'),
     hg: buildMetadata('hg'),
     transposed: buildMetadata('transposed'),
+    map: buildMetadata('map'),
   }
 
   const mock: Record<string, unknown> = {
