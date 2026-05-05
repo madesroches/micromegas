@@ -18,8 +18,11 @@ This file documents the historical progress of the Micromegas project. For curre
   * Fix multi-series line chart rendering only points when series have sparsely-aligned X values
   * Resolve macros in chart series labels and chart cell titles
   * Defer notebook markdown cell render until sequential execution reaches it, preventing stale macro output on first paint (#1023)
+  * Add map notebook cell rendering spatial events on a GLB model with optional heatmap overlay (#1033)
+  * Add `--remote-backend` flag to `start_analytics_web.py` for hybrid local-frontend + remote-backend setup (#1033)
 * **Python:**
   * Switch `bulk_ingest` to accept `pyarrow.Table` directly for native pass-through of struct/list/binary columns
+  * Resolve CLI connection settings from `~/.micromegas/config.json` with env-var override (#1033)
 * **Unreal Engine:**
   * Add net trace support with connection/object/property/RPC scopes, runtime verbosity gating, and empty-scope elision
   * Enable crash reporting on Linux and skip telemetry flush during malloc-crash to avoid deadlock
@@ -28,6 +31,8 @@ This file documents the historical progress of the Micromegas project. For curre
   * Document flame graph notebook cell type
   * Document `net_spans` view in schema reference and network-tracing guide
   * Add "An Introduction to Micromegas" presentation
+  * Document map notebook cell type and hybrid local-frontend setup (#1033)
+  * Document CLI configuration file and authentication settings (#1033)
 * **Security:**
   * Bump rustls-webpki, rand, and uuid to fix Dependabot alerts (#210-213)
   * Bump postcss and uuid to fix Dependabot alerts (#214-221)
