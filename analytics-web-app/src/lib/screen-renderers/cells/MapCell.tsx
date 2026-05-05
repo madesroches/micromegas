@@ -10,7 +10,6 @@ import type { QueryCellConfig, CellConfig, CellState } from '../notebook-types'
 import { AvailableVariablesPanel } from '@/components/AvailableVariablesPanel'
 import { DocumentationLink, QUERY_GUIDE_URL } from '@/components/DocumentationLink'
 import { SyntaxEditor } from '@/components/SyntaxEditor'
-import { DataSourceSelector } from '@/components/DataSourceSelector'
 import { substituteMacros, validateMacros, DEFAULT_SQL } from '../notebook-utils'
 import { timestampToDate } from '@/lib/arrow-utils'
 import { MapViewer, type MapEvent, type MapType, type WorldBounds } from '@/components/map/MapViewer'
@@ -222,8 +221,6 @@ function MapCellEditor({
   onChange,
   variables,
   timeRange,
-  datasourceVariables,
-  defaultDataSource,
   onRun,
   cellResults,
   cellSelections,
@@ -251,19 +248,6 @@ function MapCellEditor({
 
   return (
     <>
-      {/* Data Source */}
-      <div>
-        <label className="block text-xs font-medium text-theme-text-secondary uppercase mb-1.5">
-          Data Source
-        </label>
-        <DataSourceSelector
-          value={mapConfig.dataSource || defaultDataSource || ''}
-          onChange={(ds) => onChange({ ...mapConfig, dataSource: ds })}
-          datasourceVariables={datasourceVariables}
-          showNotebookOption={true}
-        />
-      </div>
-
       {/* SQL */}
       <div>
         <label className="block text-xs font-medium text-theme-text-secondary uppercase mb-1.5">
