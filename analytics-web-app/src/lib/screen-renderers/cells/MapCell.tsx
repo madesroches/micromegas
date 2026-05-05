@@ -308,25 +308,8 @@ function MapCellEditor({
                   {entry.name}
                 </option>
               ))}
-              <option value="__custom__">Custom URL...</option>
             </select>
           </div>
-          {(mapConfig.options?.mapUrl as string) === '__custom__' || (
-            mapConfig.options?.mapUrl &&
-            !mapCatalog.some((e) => e.file === mapConfig.options?.mapUrl) &&
-            mapConfig.options?.mapUrl !== ''
-          ) ? (
-            <div className="flex items-center gap-2">
-              <label className="text-xs text-theme-text-secondary w-24 shrink-0">URL</label>
-              <input
-                type="text"
-                className="flex-1 bg-app-card border border-theme-border rounded px-2 py-1 text-sm text-theme-text-primary placeholder:text-theme-text-muted focus:outline-none focus:border-accent-link"
-                placeholder="/maps/my-map.glb"
-                value={(mapConfig.options?.mapUrl as string) === '__custom__' ? '' : (mapConfig.options?.mapUrl as string) ?? ''}
-                onChange={(e) => updateOption('mapUrl', e.target.value || undefined)}
-              />
-            </div>
-          ) : null}
           <div className="text-xs text-theme-text-muted ml-[calc(6rem+0.5rem)]">
             Register maps in <code className="text-theme-text-secondary">public/maps/maps.json</code>
           </div>
