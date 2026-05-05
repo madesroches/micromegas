@@ -271,12 +271,27 @@ interface HeatmapLayerProps {
   intensity: number
 }
 
+const HEATMAP_PADDING = 1000
+
 function HeatmapLayer({ events, radius, intensity }: HeatmapLayerProps) {
   const meshRef = useRef<THREE.Mesh>(null)
   const [texture, setTexture] = useState<THREE.CanvasTexture | null>(null)
 
+  // Single pass over events; spread-based Math.min(...arr) blows the stack at large counts.
+  const bounds = useMemo(() => {
+    if (events.length === 0) return null
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity
+    for (const e of events) {
+      if (e.x < minX) minX = e.x
+      if (e.x > maxX) maxX = e.x
+      if (e.y < minY) minY = e.y
+      if (e.y > maxY) maxY = e.y
+    }
+    return { minX, maxX, minY, maxY }
+  }, [events])
+
   useEffect(() => {
-    if (events.length === 0) {
+    if (!bounds) {
       setTexture(null)
       return
     }
@@ -290,17 +305,12 @@ function HeatmapLayer({ events, radius, intensity }: HeatmapLayerProps) {
 
     ctx.clearRect(0, 0, size, size)
 
-    const minX = Math.min(...events.map((e) => e.x))
-    const maxX = Math.max(...events.map((e) => e.x))
-    const minY = Math.min(...events.map((e) => e.y))
-    const maxY = Math.max(...events.map((e) => e.y))
-    const padding = 1000
-    const rangeX = maxX - minX + padding * 2
-    const rangeY = maxY - minY + padding * 2
+    const rangeX = bounds.maxX - bounds.minX + HEATMAP_PADDING * 2
+    const rangeY = bounds.maxY - bounds.minY + HEATMAP_PADDING * 2
 
     events.forEach((event) => {
-      const canvasX = ((event.x - minX + padding) / rangeX) * size
-      const canvasY = ((event.y - minY + padding) / rangeY) * size
+      const canvasX = ((event.x - bounds.minX + HEATMAP_PADDING) / rangeX) * size
+      const canvasY = ((event.y - bounds.minY + HEATMAP_PADDING) / rangeY) * size
 
       const gradient = ctx.createRadialGradient(canvasX, canvasY, 0, canvasX, canvasY, radius)
       gradient.addColorStop(0, `rgba(191, 54, 12, ${intensity})`)
@@ -318,19 +328,14 @@ function HeatmapLayer({ events, radius, intensity }: HeatmapLayerProps) {
     return () => {
       tex.dispose()
     }
-  }, [events, radius, intensity])
+  }, [events, bounds, radius, intensity])
 
-  if (!texture || events.length === 0) return null
+  if (!texture || !bounds) return null
 
-  const minX = Math.min(...events.map((e) => e.x))
-  const maxX = Math.max(...events.map((e) => e.x))
-  const minY = Math.min(...events.map((e) => e.y))
-  const maxY = Math.max(...events.map((e) => e.y))
-  const padding = 1000
-  const width = maxX - minX + padding * 2
-  const height = maxY - minY + padding * 2
-  const centerX = (minX + maxX) / 2
-  const centerY = (minY + maxY) / 2
+  const width = bounds.maxX - bounds.minX + HEATMAP_PADDING * 2
+  const height = bounds.maxY - bounds.minY + HEATMAP_PADDING * 2
+  const centerX = (bounds.minX + bounds.maxX) / 2
+  const centerY = (bounds.minY + bounds.maxY) / 2
 
   return (
     <mesh ref={meshRef} position={[centerX, 10, centerY]} rotation={[-Math.PI / 2, 0, 0]}>
