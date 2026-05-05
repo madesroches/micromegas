@@ -95,7 +95,7 @@ export function deserializeVariableValue(str: string): VariableValue {
 
 // Note: CellType is defined here and re-exported from cell-registry.ts
 // This avoids circular dependencies while keeping the types together
-export type CellType = 'table' | 'chart' | 'log' | 'markdown' | 'variable' | 'propertytimeline' | 'swimlane' | 'perfettoexport' | 'referencetable' | 'hg' | 'transposed' | 'flamegraph'
+export type CellType = 'table' | 'chart' | 'log' | 'markdown' | 'variable' | 'propertytimeline' | 'swimlane' | 'perfettoexport' | 'referencetable' | 'hg' | 'transposed' | 'flamegraph' | 'map'
 
 export type CellStatus = 'idle' | 'loading' | 'success' | 'error' | 'blocked'
 
@@ -107,7 +107,7 @@ export interface CellConfigBase {
 }
 
 export interface QueryCellConfig extends CellConfigBase {
-  type: 'table' | 'chart' | 'log' | 'propertytimeline' | 'swimlane' | 'transposed' | 'flamegraph'
+  type: 'table' | 'chart' | 'log' | 'propertytimeline' | 'swimlane' | 'transposed' | 'flamegraph' | 'map'
   sql: string
   options?: Record<string, unknown>
   dataSource?: string
