@@ -28,15 +28,15 @@ MapPage (Route)
 │   ├── MapControls (pan/zoom)
 │   ├── MapModel (GLB/GLTF loader)
 │   ├── HeatmapLayer (canvas texture)
-│   ├── InstancedDeathMarkers (instanced rendering)
+│   ├── InstancedMarkers (instanced rendering)
 │   └── PlaceholderGrid (fallback)
-├── DeathDetailPanel (event details overlay)
+├── EventDetailPanel (event details overlay)
 └── Mock Data Generator (for testing without backend)
 
 useMapData (Hook)
 ├── SQL query execution
 ├── Arrow table processing
-└── DeathEvent transformation
+└── MapEvent transformation
 ```
 
 ### Pros
@@ -106,7 +106,7 @@ useMapData (Hook)
    - Toggle to use mock data without backend
    - Configurable event count (100 to 100K)
    - Clustered distribution around hotspots
-   - Random player names and death causes
+   - Random event labels and categories
 
 #### ⚠️ Partially Implemented
 
@@ -604,7 +604,7 @@ Instead of switching technologies, these improvements are being implemented:
 
 1. **✅ Instanced Rendering** (DONE)
    ```typescript
-   // InstancedDeathMarkers component uses InstancedMesh
+   // InstancedMarkers component uses InstancedMesh
    <instancedMesh
      ref={meshRef}
      args={[geometry, material, events.length]}

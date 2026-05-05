@@ -602,19 +602,19 @@ When a coordinate transform is applied, the event detail panel shows the origina
 - Event detail panel with properties and link to process logs
 - Results registered in the [local WASM query engine](execution.md#local-wasm-query-engine) under the cell name for downstream queries
 
-**Example SQL (player deaths on a game map):**
+**Example SQL (spatial events from a JSONB-encoded payload):**
 
 ```sql
 SELECT
   time,
   process_id,
-  jsonb_as_f64(jsonb_path_query_first(msg_jsonb, '$.content.victim.position[0]')) as x,
-  jsonb_as_f64(jsonb_path_query_first(msg_jsonb, '$.content.victim.position[1]')) as y,
-  jsonb_as_f64(jsonb_path_query_first(msg_jsonb, '$.content.victim.position[2]')) as z,
-  jsonb_as_string(jsonb_path_query_first(msg_jsonb, '$.content.victim.pg_id')) as pg_id,
-  jsonb_as_string(jsonb_path_query_first(msg_jsonb, '$.content.victim.team_id')) as team_id
-FROM game_analytics
-WHERE jsonb_as_string(jsonb_get(msg_jsonb, 'event_schema_id')) = '052e19dd-2105-4d1b-861c-a24927dafc3f'
+  jsonb_as_f64(jsonb_path_query_first(msg_jsonb, '$.position[0]')) as x,
+  jsonb_as_f64(jsonb_path_query_first(msg_jsonb, '$.position[1]')) as y,
+  jsonb_as_f64(jsonb_path_query_first(msg_jsonb, '$.position[2]')) as z,
+  jsonb_as_string(jsonb_path_query_first(msg_jsonb, '$.actor_id')) as actor_id,
+  jsonb_as_string(jsonb_path_query_first(msg_jsonb, '$.event_type')) as event_type
+FROM events
+WHERE name = 'spatial_event'
 ORDER BY time DESC
 LIMIT 10000
 ```

@@ -34,11 +34,11 @@ Keep the existing R3F + Three.js stack and add performance optimizations.
 
 **Implementation:**
 ```tsx
-// Replace DeathMarkers component in MapViewer.tsx
+// Replace Markers component in MapViewer.tsx
 import { useMemo, useRef } from 'react'
 import * as THREE from 'three'
 
-function InstancedDeathMarkers({ events, selectedId, onSelect }) {
+function InstancedMarkers({ events, selectedId, onSelect }) {
   const meshRef = useRef<THREE.InstancedMesh>(null)
   const tempObject = useMemo(() => new THREE.Object3D(), [])
 
@@ -190,7 +190,7 @@ function GPUHeatmap({ events, radius, intensity }) {
 // Use a clustering library
 import Supercluster from 'supercluster'
 
-function useMarkerClusters(events: DeathEvent[], zoom: number) {
+function useMarkerClusters(events: MapEvent[], zoom: number) {
   const clusterIndex = useMemo(() => {
     const index = new Supercluster({
       radius: 40,
@@ -278,7 +278,7 @@ function ClusteredMarkers({ events, zoom }) {
 ```tsx
 import { Octree } from 'three/examples/jsm/math/Octree'
 
-function useFrustumCulling(events: DeathEvent[], camera: THREE.Camera) {
+function useFrustumCulling(events: MapEvent[], camera: THREE.Camera) {
   const octree = useMemo(() => {
     const tree = new Octree()
     events.forEach(event => {
@@ -348,7 +348,7 @@ import DeckGL from '@deck.gl/react'
 import { HeatmapLayer, ScatterplotLayer } from '@deck.gl/layers'
 import { Canvas } from '@react-three/fiber'
 
-function HybridMapViewer({ mapUrl, deathEvents }) {
+function HybridMapViewer({ mapUrl, events }) {
   return (
     <div style={{ position: 'relative', width: '100%', height: '100%' }}>
       {/* Three.js layer for 3D map */}
@@ -363,16 +363,16 @@ function HybridMapViewer({ mapUrl, deathEvents }) {
         style={{ position: 'absolute', top: 0, left: 0, pointerEvents: 'none' }}
         layers={[
           new HeatmapLayer({
-            id: 'death-heatmap',
-            data: deathEvents,
+            id: 'events-heatmap',
+            data: events,
             getPosition: d => [d.x, d.y],
             getWeight: 1,
             radiusPixels: 50,
             intensity: 0.5
           }),
           new ScatterplotLayer({
-            id: 'death-markers',
-            data: deathEvents,
+            id: 'events-markers',
+            data: events,
             getPosition: d => [d.x, d.y],
             getRadius: 30,
             getFillColor: [191, 54, 12],
@@ -463,7 +463,7 @@ Replace R3F entirely with Deck.gl for 2D/2.5D visualization.
 import DeckGL from '@deck.gl/react'
 import { HeatmapLayer, ScatterplotLayer, BitmapLayer } from '@deck.gl/layers'
 
-function DeckGLMapViewer({ deathEvents, mapImageUrl }) {
+function DeckGLMapViewer({ events, mapImageUrl }) {
   return (
     <DeckGL
       initialViewState={{
@@ -481,15 +481,15 @@ function DeckGLMapViewer({ deathEvents, mapImageUrl }) {
         }),
         // Heatmap
         new HeatmapLayer({
-          id: 'death-heatmap',
-          data: deathEvents,
+          id: 'events-heatmap',
+          data: events,
           getPosition: d => [d.x, d.y],
           radiusPixels: 50
         }),
         // Markers
         new ScatterplotLayer({
-          id: 'death-markers',
-          data: deathEvents,
+          id: 'events-markers',
+          data: events,
           getPosition: d => [d.x, d.y],
           getRadius: 30,
           getFillColor: [191, 54, 12]
@@ -552,7 +552,7 @@ Replace R3F with Babylon.js for more game engine features.
 import { Engine, Scene, ArcRotateCamera, HemisphericLight } from '@babylonjs/core'
 import '@babylonjs/loaders' // GLB/GLTF support
 
-function BabylonMapViewer({ mapUrl, deathEvents }) {
+function BabylonMapViewer({ mapUrl, events }) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
 
   useEffect(() => {
@@ -569,7 +569,7 @@ function BabylonMapViewer({ mapUrl, deathEvents }) {
 
     // Create markers
     const sphere = MeshBuilder.CreateSphere('marker', { diameter: 30 }, scene)
-    deathEvents.forEach(event => {
+    events.forEach(event => {
       const instance = sphere.createInstance(`marker-${event.id}`)
       instance.position = new Vector3(event.x, event.z, event.y)
     })
@@ -580,7 +580,7 @@ function BabylonMapViewer({ mapUrl, deathEvents }) {
       scene.dispose()
       engine.dispose()
     }
-  }, [mapUrl, deathEvents])
+  }, [mapUrl, events])
 
   return <canvas ref={canvasRef} style={{ width: '100%', height: '100%' }} />
 }
@@ -644,9 +644,9 @@ Make minimal changes to address most critical issues.
 
 3. **Add Event Count Warning**
    ```tsx
-   {deathEvents.length > 10000 && (
+   {events.length > 10000 && (
      <div className="warning">
-       Showing {deathEvents.length.toLocaleString()} events.
+       Showing {events.length.toLocaleString()} events.
        Performance may be impacted. Consider narrowing time range.
      </div>
    )}
@@ -717,7 +717,7 @@ Make minimal changes to address most critical issues.
 
 ## Questions to Help Decide
 
-1. **How many death events do you expect to visualize?**
+1. **How many events do you expect to visualize?**
    - < 10K → Current implementation works
    - 10K-100K → Instanced rendering (Option 1A) sufficient
    - 100K-1M → Need clustering (Option 1C) or Deck.gl
