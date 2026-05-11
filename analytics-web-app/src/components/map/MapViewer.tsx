@@ -348,6 +348,10 @@ function HeatmapLayer({ events, radius, intensity }: HeatmapLayerProps) {
     })
 
     const tex = new THREE.CanvasTexture(canvas)
+    // Canvas Y grows top-to-bottom; CanvasTexture's default flipY would map
+    // canvas-top to plane local +Y, which under Z-up sends events at world
+    // minY to world maxY on the plane (mirrored relative to the markers).
+    tex.flipY = false
     tex.needsUpdate = true
     setTexture(tex)
 
