@@ -176,9 +176,12 @@ function InstancedMarkers({
   }, [groundSnap, mapScene, events, raycaster, rayOrigin, rayDirection, heightOffset])
 
   const geometry = useMemo(() => new THREE.SphereGeometry(1, 16, 16), [])
+  // Overlay semantics: markers should remain visible regardless of where
+  // they sit in Z relative to the map. Skip depth test/write and render
+  // after the map.
   const material = useMemo(
     () =>
-      new THREE.MeshBasicMaterial({}),
+      new THREE.MeshBasicMaterial({ depthTest: false, depthWrite: false }),
     []
   )
 
@@ -210,6 +213,10 @@ function InstancedMarkers({
     })
 
     mesh.instanceMatrix.needsUpdate = true
+    // Required for correct raycasting and frustum culling on InstancedMesh:
+    // the default bounding sphere comes from the unit geometry at origin, so
+    // raycasts that miss the origin (i.e. most of them) skip every instance.
+    mesh.computeBoundingSphere()
 
     if (!colorAttrRef.current || colorAttrRef.current.count !== events.length) {
       const colorArray = new Float32Array(events.length * 3)
@@ -277,6 +284,7 @@ function InstancedMarkers({
     <instancedMesh
       ref={meshRef}
       args={[geometry, material, events.length]}
+      renderOrder={10}
       onClick={handleClick}
       onPointerOver={handlePointerOver}
       onPointerOut={handlePointerOut}
