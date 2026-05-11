@@ -91,7 +91,7 @@ function useMapCatalog(): MapCatalogEntry[] {
 // Renderer Component
 // =============================================================================
 
-function MapCell({ data, status, options, onOptionsChange }: CellRendererProps) {
+export function MapCell({ data, status, options, onOptionsChange }: CellRendererProps) {
   // Transform Arrow data to MapEvent[] (memoized on table reference)
   const events = useMemo(() => {
     const table = data[0]
@@ -195,7 +195,7 @@ function MapCell({ data, status, options, onOptionsChange }: CellRendererProps) 
 // Editor Component
 // =============================================================================
 
-function MapCellEditor({
+export function MapCellEditor({
   config,
   onChange,
   variables,

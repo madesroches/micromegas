@@ -443,7 +443,11 @@ function UnrealCameraController({
     shift: false,
   })
 
+  // Route speed updates through a ref so the DOM event-binding effect below
+  // doesn't need to rebind when the parent's callback identity changes.
+  const onSpeedChangeRef = useRef(onSpeedChange)
   useEffect(() => {
+    onSpeedChangeRef.current = onSpeedChange
     onSpeedChange?.(baseSpeedRef.current)
   }, [onSpeedChange])
 
@@ -653,7 +657,7 @@ function UnrealCameraController({
           MIN_SPEED,
           Math.min(MAX_SPEED, baseSpeedRef.current * speedMultiplier)
         )
-        onSpeedChange?.(baseSpeedRef.current)
+        onSpeedChangeRef.current?.(baseSpeedRef.current)
         return
       }
 
