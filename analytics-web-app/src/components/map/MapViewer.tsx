@@ -513,6 +513,11 @@ function UnrealCameraController({
       sphericalRef.current.phi = initialViewRef.current.spherical.phi
       sphericalRef.current.theta = initialViewRef.current.spherical.theta
       zoomFactorRef.current = 1.0
+      // Restore fitRadius alongside the spherical state. The GLB seed set
+      // fitRadius equal to the initial spherical.radius; without restoring
+      // it, a stale fitRadius left over from a prior re-anchor would
+      // cause the next wheel event to snap radius to fitRadius * zoomFactor.
+      fitRadiusRef.current = initialViewRef.current.spherical.radius
 
       const offset = new THREE.Vector3()
       sphericalToZUpOffset(sphericalRef.current, offset)
@@ -591,9 +596,12 @@ function UnrealCameraController({
             const offset = new THREE.Vector3().copy(camera.position).sub(newTarget)
             const sphericalInput = zUpOffsetToSphericalInput(offset, new THREE.Vector3())
             sphericalRef.current.setFromVector3(sphericalInput)
-            // Keep zoom math (radius = fitRadius * zoomFactor) consistent
-            // by absorbing the new radius into fitRadius.
-            fitRadiusRef.current = sphericalRef.current.radius / zoomFactorRef.current
+            // Recompute zoomFactor against the existing scene-sized fitRadius,
+            // preserving the invariant `radius = fitRadius * zoomFactor`. We
+            // deliberately do not shrink fitRadius here: if we did, the new
+            // zoomFactor would land at the upper cap and wheel-out would be
+            // blocked when the re-anchor target is close to the camera.
+            zoomFactorRef.current = sphericalRef.current.radius / fitRadiusRef.current
             targetRef.current.copy(newTarget)
           }
         }
@@ -690,9 +698,13 @@ function UnrealCameraController({
 
       const zoomSpeed = 0.1
       const zoomMultiplier = e.deltaY > 0 ? (1 + zoomSpeed) : (1 - zoomSpeed)
+      // Wide clamp range so re-anchored zoomFactors (which can land far
+      // outside [0.01, 1.0] when the new orbit pivot is close to the camera)
+      // don't cause a single-step snap on the next wheel event, and so the
+      // user can zoom out past the initial scene fit if they want.
       const newZoomFactor = Math.max(
-        0.01,
-        Math.min(1.0, zoomFactorRef.current * zoomMultiplier)
+        0.001,
+        Math.min(10.0, zoomFactorRef.current * zoomMultiplier)
       )
       const oldRadius = sphericalRef.current.radius
       const newRadius = fitRadiusRef.current * newZoomFactor
