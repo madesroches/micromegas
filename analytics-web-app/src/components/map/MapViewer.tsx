@@ -14,11 +14,6 @@ export interface MapEvent {
   properties: Record<string, string>
 }
 
-export interface MapBounds {
-  min: { x: number; y: number; z: number }
-  max: { x: number; y: number; z: number }
-}
-
 export interface MMAmbientLight {
   color: [number, number, number]
   intensity: number
@@ -32,7 +27,6 @@ interface MapViewerProps {
   showHeatmap: boolean
   heatmapRadius: number
   heatmapIntensity: number
-  onMapBoundsChange?: (bounds: MapBounds | null) => void
   markerColor?: string
   markerSize?: number
   groundSnap?: boolean
@@ -133,7 +127,6 @@ function InstancedMarkers({
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null)
 
   const tempObject = useMemo(() => new THREE.Object3D(), [])
-  const tempColor = useMemo(() => new THREE.Color(), [])
 
   const raycaster = useMemo(() => new THREE.Raycaster(), [])
   const rayOrigin = useMemo(() => new THREE.Vector3(), [])
@@ -190,52 +183,92 @@ function InstancedMarkers({
   }, [events, selectedId])
 
   const colorAttrRef = useRef<THREE.InstancedBufferAttribute | null>(null)
+  // Tracks what was last fully rebuilt so the effect below can choose between
+  // "rebuild every slot" (events/style changed) vs "patch 1–4 slots" (only
+  // selection/hover changed). With 10k events, the partial path turns each
+  // hover transition from 20k matrix+color writes into at most 8.
+  const lastFullBuildRef = useRef<{
+    events: MapEvent[]
+    markerColor: string
+    markerSize: number
+    heightOffset: number
+    snappedPositions: { x: number; y: number; z: number }[] | null
+  } | null>(null)
+  const prevSelectedRef = useRef(-1)
+  const prevHoveredRef = useRef<number | null>(null)
 
   useEffect(() => {
     if (!meshRef.current || events.length === 0) return
-
     const mesh = meshRef.current
-
     const normalColor = new THREE.Color(markerColor)
-
-    events.forEach((event, i) => {
-      const isSelected = i === selectedIndex
-      const isHovered = i === hoveredIndex
-      const scaleMultiplier = isSelected ? 1.5 : isHovered ? 1.2 : 1
-      const finalScale = markerSize * scaleMultiplier
-
-      const pos = snappedPositions ? snappedPositions[i] : { x: event.x, y: event.y, z: event.z + heightOffset }
-      tempObject.position.set(pos.x, pos.y, pos.z)
-      tempObject.scale.setScalar(finalScale)
-      tempObject.updateMatrix()
-      mesh.setMatrixAt(i, tempObject.matrix)
-    })
-
-    mesh.instanceMatrix.needsUpdate = true
-    // Required for correct raycasting and frustum culling on InstancedMesh:
-    // the default bounding sphere comes from the unit geometry at origin, so
-    // raycasts that miss the origin (i.e. most of them) skip every instance.
-    mesh.computeBoundingSphere()
 
     if (!colorAttrRef.current || colorAttrRef.current.count !== events.length) {
       const colorArray = new Float32Array(events.length * 3)
       colorAttrRef.current = new THREE.InstancedBufferAttribute(colorArray, 3)
       mesh.instanceColor = colorAttrRef.current
+      // Fresh buffer ⇒ every slot is uninitialized; force a full rebuild below.
+      lastFullBuildRef.current = null
+    }
+    const attr = colorAttrRef.current
+
+    const writeSlot = (i: number) => {
+      const isSelected = i === selectedIndex
+      const isHovered = i === hoveredIndex
+      const scaleMultiplier = isSelected ? 1.5 : isHovered ? 1.2 : 1
+      const finalScale = markerSize * scaleMultiplier
+
+      const event = events[i]
+      const pos = snappedPositions
+        ? snappedPositions[i]
+        : { x: event.x, y: event.y, z: event.z + heightOffset }
+      tempObject.position.set(pos.x, pos.y, pos.z)
+      tempObject.scale.setScalar(finalScale)
+      tempObject.updateMatrix()
+      mesh.setMatrixAt(i, tempObject.matrix)
+
+      const c = isSelected ? COLOR_SELECTED : isHovered ? COLOR_HOVERED : normalColor
+      attr.setXYZ(i, c.r, c.g, c.b)
     }
 
-    const attr = colorAttrRef.current
-    events.forEach((_event, i) => {
-      if (i === selectedIndex) {
-        tempColor.copy(COLOR_SELECTED)
-      } else if (i === hoveredIndex) {
-        tempColor.copy(COLOR_HOVERED)
-      } else {
-        tempColor.copy(normalColor)
+    const last = lastFullBuildRef.current
+    const needsFullRebuild =
+      !last ||
+      events !== last.events ||
+      markerColor !== last.markerColor ||
+      markerSize !== last.markerSize ||
+      heightOffset !== last.heightOffset ||
+      snappedPositions !== last.snappedPositions
+
+    if (needsFullRebuild) {
+      for (let i = 0; i < events.length; i++) writeSlot(i)
+      // Required for correct raycasting and frustum culling on InstancedMesh:
+      // the default bounding sphere comes from the unit geometry at origin, so
+      // raycasts that miss the origin (i.e. most of them) skip every instance.
+      mesh.computeBoundingSphere()
+      lastFullBuildRef.current = { events, markerColor, markerSize, heightOffset, snappedPositions }
+    } else {
+      // Only highlight state moved — touch only the slots that transitioned.
+      const affected = new Set<number>()
+      const pS = prevSelectedRef.current
+      const pH = prevHoveredRef.current
+      if (pS !== selectedIndex) {
+        if (pS >= 0 && pS < events.length) affected.add(pS)
+        if (selectedIndex >= 0 && selectedIndex < events.length) affected.add(selectedIndex)
       }
-      attr.setXYZ(i, tempColor.r, tempColor.g, tempColor.b)
-    })
+      if (pH !== hoveredIndex) {
+        if (pH != null && pH >= 0 && pH < events.length) affected.add(pH)
+        if (hoveredIndex != null && hoveredIndex >= 0 && hoveredIndex < events.length)
+          affected.add(hoveredIndex)
+      }
+      for (const i of affected) writeSlot(i)
+    }
+
+    mesh.instanceMatrix.needsUpdate = true
     attr.needsUpdate = true
-  }, [events, selectedIndex, hoveredIndex, tempObject, tempColor, markerColor, markerSize, heightOffset, snappedPositions])
+
+    prevSelectedRef.current = selectedIndex
+    prevHoveredRef.current = hoveredIndex
+  }, [events, selectedIndex, hoveredIndex, tempObject, markerColor, markerSize, heightOffset, snappedPositions])
 
   useEffect(() => {
     return () => {
@@ -832,11 +865,12 @@ function PlaceholderGrid() {
 }
 
 function SceneSetup() {
-  const { scene, camera } = useThree()
+  // scene.up only — camera.up is recomputed every frame from theta in
+  // UnrealCameraController's useFrame, so setting it here would be dead.
+  const { scene } = useThree()
   useEffect(() => {
     scene.up.set(0, 0, 1)
-    camera.up.set(0, 0, 1)
-  }, [scene, camera])
+  }, [scene])
   return null
 }
 
@@ -848,7 +882,6 @@ export function MapViewer({
   showHeatmap,
   heatmapRadius,
   heatmapIntensity,
-  onMapBoundsChange,
   markerColor,
   markerSize,
   groundSnap = false,
@@ -872,13 +905,6 @@ export function MapViewer({
       setGlbCamera(payload.glbCamera)
       setAmbientLight(payload.ambientLight)
 
-      if (onMapBoundsChange) {
-        onMapBoundsChange({
-          min: { x: payload.bounds.min.x, y: payload.bounds.min.y, z: payload.bounds.min.z },
-          max: { x: payload.bounds.max.x, y: payload.bounds.max.y, z: payload.bounds.max.z },
-        })
-      }
-
       if (payload.ambientLight === null) {
         console.error(
           `[MapViewer] GLB ${mapUrl} is missing MM_ambient_light extension; ambient lighting will be absent`
@@ -890,7 +916,7 @@ export function MapViewer({
         )
       }
     },
-    [onMapBoundsChange, mapUrl]
+    [mapUrl]
   )
 
   const effectiveMarkerSize = useMemo(() => {
@@ -936,17 +962,6 @@ export function MapViewer({
     setAmbientLight(null)
   }
 
-  // Bubble null to the parent's bounds callback when mapUrl transitions to
-  // undefined. Lives in an effect (not the render-phase block above) because
-  // calling parent callbacks during render is a side effect.
-  const prevMapUrlRef = useRef(mapUrl)
-  useEffect(() => {
-    if (!mapUrl && prevMapUrlRef.current) {
-      onMapBoundsChange?.(null)
-    }
-    prevMapUrlRef.current = mapUrl
-  }, [mapUrl, onMapBoundsChange])
-
   return (
     <div className="w-full h-full">
       <Canvas
@@ -961,7 +976,11 @@ export function MapViewer({
         <SceneSetup />
         <color attach="background" args={['#0a0a0f']} />
 
-        <PerspectiveCamera makeDefault position={[0, 5000, 5000]} fov={60} near={1} far={100000} />
+        {/* Position and orientation are owned by UnrealCameraController (overwritten
+            every frame from sphericalRef + targetRef). FOV/near/far are the seed
+            for GLB-cameraless contracts; the GLB-camera effect copies intrinsics
+            onto this camera when a conforming GLB loads. */}
+        <PerspectiveCamera makeDefault fov={60} near={1} far={100000} />
 
         <UnrealCameraController
           mapBounds={mapBounds}
@@ -991,7 +1010,6 @@ export function MapViewer({
         )}
 
         <InstancedMarkers
-          key={`markers-${markerColor}-${effectiveMarkerSize}-${groundSnap}`}
           events={events}
           selectedId={selectedEventId}
           onSelect={onSelectEvent}
