@@ -595,7 +595,7 @@ GLBs missing the camera log a console error and fall back to the default seed fr
 - Heatmap overlay — 2D canvas-based density visualization
 - Interactive markers — click to select, hover to highlight
 - Camera controls — left-drag to pan, right-drag to orbit, scroll to zoom, WASD to fly
-- Fit to Data / Reset View toolbar buttons
+- Reset View toolbar button
 - Event detail panel with properties and link to process logs
 - Results registered in the [local WASM query engine](execution.md#local-wasm-query-engine) under the cell name for downstream queries
 

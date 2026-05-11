@@ -487,6 +487,11 @@ function UnrealCameraController({
       const offset = new THREE.Vector3()
       sphericalToZUpOffset(sphericalRef.current, offset)
       camera.position.copy(targetRef.current).add(offset)
+      // Theta-driven camera.up: at phi=0 the spherical offset is parallel to
+      // world-up, so a static (0,0,1) up makes lookAt degenerate. Deriving up
+      // from theta keeps lookAt well-defined at every phi and makes theta
+      // rotate the screen orientation when looking straight down.
+      camera.up.set(-Math.sin(sphericalRef.current.theta), Math.cos(sphericalRef.current.theta), 0)
       camera.lookAt(targetRef.current)
     }
   }, [resetViewTrigger, camera])
@@ -529,6 +534,7 @@ function UnrealCameraController({
     const offset = new THREE.Vector3()
     sphericalToZUpOffset(sphericalRef.current, offset)
     camera.position.copy(targetRef.current).add(offset)
+    camera.up.set(-Math.sin(sphericalRef.current.theta), Math.cos(sphericalRef.current.theta), 0)
     camera.lookAt(targetRef.current)
 
     saveInitialView()
@@ -635,9 +641,11 @@ function UnrealCameraController({
         sphericalRef.current.phi += deltaY * rotateSpeed
 
         // Keep the camera above the horizon — flipping below the map is
-        // disorienting and rarely useful for a top-down scene.
+        // disorienting and rarely useful for a top-down scene. phi=0
+        // (straight down) is allowed since the theta-driven camera.up keeps
+        // lookAt well-defined there.
         sphericalRef.current.phi = Math.max(
-          0.05,
+          0,
           Math.min(Math.PI / 2 - 0.05, sphericalRef.current.phi)
         )
       }
@@ -797,6 +805,7 @@ function UnrealCameraController({
     const offset = new THREE.Vector3()
     sphericalToZUpOffset(sphericalRef.current, offset)
     camera.position.copy(targetRef.current).add(offset)
+    camera.up.set(-Math.sin(sphericalRef.current.theta), Math.cos(sphericalRef.current.theta), 0)
     camera.lookAt(targetRef.current)
   })
 
@@ -901,15 +910,20 @@ export function MapViewer({
     return heightOffsetProp ?? 50
   }, [mapBounds, heightOffsetProp])
 
+  // Clear loaded-GLB state whenever mapUrl changes (including the A→B case
+  // where both are truthy). Without this, InstancedMarkers' ground-snap
+  // raycasts against the previous scene during Suspense, since the markers
+  // render as a sibling of the suspended MapModel, not a child.
+  const prevMapUrlRef = useRef<string | undefined>(undefined)
   useEffect(() => {
-    if (!mapUrl) {
-      setMapBounds(null)
-      setMapScene(null)
-      setGlbCamera(null)
-      setAmbientLight(null)
-      if (onMapBoundsChange) {
-        onMapBoundsChange(null)
-      }
+    if (prevMapUrlRef.current === mapUrl) return
+    prevMapUrlRef.current = mapUrl
+    setMapBounds(null)
+    setMapScene(null)
+    setGlbCamera(null)
+    setAmbientLight(null)
+    if (!mapUrl && onMapBoundsChange) {
+      onMapBoundsChange(null)
     }
   }, [mapUrl, onMapBoundsChange])
 
