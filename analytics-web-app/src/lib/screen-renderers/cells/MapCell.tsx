@@ -12,7 +12,7 @@ import { DocumentationLink, QUERY_GUIDE_URL } from '@/components/DocumentationLi
 import { SyntaxEditor } from '@/components/SyntaxEditor'
 import { substituteMacros, validateMacros, DEFAULT_SQL } from '../notebook-utils'
 import { timestampToDate } from '@/lib/arrow-utils'
-import { MapViewer, type MapEvent, type MapType, type WorldBounds } from '@/components/map/MapViewer'
+import { MapViewer, type MapEvent } from '@/components/map/MapViewer'
 import { EventDetailPanel } from '@/components/map/EventDetailPanel'
 import { Map as MapIcon } from 'lucide-react'
 
@@ -65,8 +65,6 @@ function arrowTableToMapEvents(table: Table): MapEvent[] {
 interface MapCatalogEntry {
   name: string
   file: string
-  type?: MapType
-  worldBounds?: WorldBounds
 }
 
 /** Shared promise so multiple cells don't fetch the catalog twice */
@@ -106,9 +104,6 @@ function MapCell({ data, status, options, onOptionsChange }: CellRendererProps) 
   const [fitToDataTrigger, setFitToDataTrigger] = useState(0)
   const [resetViewTrigger, setResetViewTrigger] = useState(0)
 
-  // Load map catalog to resolve type and worldBounds for the selected map
-  const mapCatalog = useMapCatalog()
-
   // Read visual options with defaults
   const mapUrl = options?.mapUrl as string | undefined
   const showHeatmap = (options?.showHeatmap as boolean) ?? false
@@ -118,11 +113,6 @@ function MapCell({ data, status, options, onOptionsChange }: CellRendererProps) 
   const markerSize = (options?.markerSize as number) ?? 10
   const groundSnap = (options?.groundSnap as boolean) ?? false
   const heightOffset = options?.heightOffset as number | undefined
-
-  const catalogEntry = useMemo(
-    () => mapCatalog.find((e) => e.file === mapUrl),
-    [mapCatalog, mapUrl]
-  )
 
   const handleSelectEvent = useCallback((event: MapEvent | null) => {
     setSelectedEvent(event)
@@ -189,8 +179,6 @@ function MapCell({ data, status, options, onOptionsChange }: CellRendererProps) 
 
       <MapViewer
         mapUrl={mapUrl}
-        mapType={catalogEntry?.type}
-        worldBounds={catalogEntry?.worldBounds}
         events={events}
         selectedEventId={selectedEvent?.id}
         onSelectEvent={handleSelectEvent}

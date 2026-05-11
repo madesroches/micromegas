@@ -39,25 +39,21 @@ export function EventDetailPanel({ event, onClose }: EventDetailPanelProps) {
           <div className="text-sm font-mono text-theme-text-primary">{formatTime(event.time)}</div>
         </div>
 
-        {Object.entries(event.properties)
-          .filter(([key]) => key !== 'ue_x' && key !== 'ue_y' && key !== 'ue_z')
-          .map(([key, value]) => (
-            <div key={key}>
-              <div className="text-xs text-theme-text-muted uppercase tracking-wider mb-1">
-                {key.replace(/_/g, ' ')}
-              </div>
-              <div className="text-sm text-theme-text-primary">{value}</div>
+        {Object.entries(event.properties).map(([key, value]) => (
+          <div key={key}>
+            <div className="text-xs text-theme-text-muted uppercase tracking-wider mb-1">
+              {key.replace(/_/g, ' ')}
             </div>
-          ))}
+            <div className="text-sm text-theme-text-primary">{value}</div>
+          </div>
+        ))}
 
         <div>
           <div className="text-xs text-theme-text-muted uppercase tracking-wider mb-1">
             Coordinates
           </div>
           <div className="text-sm font-mono text-theme-text-secondary">
-            {event.properties.ue_x !== undefined
-              ? `X: ${parseFloat(event.properties.ue_x).toFixed(1)}, Y: ${parseFloat(event.properties.ue_y).toFixed(1)}, Z: ${parseFloat(event.properties.ue_z).toFixed(1)}`
-              : `X: ${event.x.toFixed(1)}, Y: ${event.y.toFixed(1)}, Z: ${event.z.toFixed(1)}`}
+            X: {event.x.toFixed(1)}, Y: {event.y.toFixed(1)}, Z: {event.z.toFixed(1)}
           </div>
         </div>
 

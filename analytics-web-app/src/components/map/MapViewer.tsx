@@ -19,19 +19,13 @@ export interface MapBounds {
   max: { x: number; y: number; z: number }
 }
 
-export type MapType = 'topdown' | '3d'
-
-export interface WorldBounds {
-  ueMinX: number
-  ueMaxX: number
-  ueMinY: number
-  ueMaxY: number
+export interface MMAmbientLight {
+  color: [number, number, number]
+  intensity: number
 }
 
 interface MapViewerProps {
   mapUrl?: string
-  mapType?: MapType
-  worldBounds?: WorldBounds
   events: MapEvent[]
   selectedEventId?: string
   onSelectEvent: (event: MapEvent | null) => void
@@ -58,15 +52,21 @@ function LoadingIndicator() {
   )
 }
 
-interface MapModelProps {
-  url: string
-  onBoundsCalculated: (bounds: THREE.Box3) => void
-  onSceneReady?: (scene: THREE.Object3D) => void
+export interface MapLoadPayload {
+  scene: THREE.Object3D
+  bounds: THREE.Box3
+  glbCamera: THREE.PerspectiveCamera | null
+  ambientLight: MMAmbientLight | null
 }
 
-function MapModel({ url, onBoundsCalculated, onSceneReady }: MapModelProps) {
-  const { scene } = useGLTF(url)
-  const clonedScene = useMemo(() => scene.clone(), [scene])
+interface MapModelProps {
+  url: string
+  onLoaded: (payload: MapLoadPayload) => void
+}
+
+function MapModel({ url, onLoaded }: MapModelProps) {
+  const gltf = useGLTF(url)
+  const clonedScene = useMemo(() => gltf.scene.clone(), [gltf.scene])
 
   useEffect(() => {
     clonedScene.traverse((child) => {
@@ -76,10 +76,29 @@ function MapModel({ url, onBoundsCalculated, onSceneReady }: MapModelProps) {
       }
     })
 
-    const box = new THREE.Box3().setFromObject(clonedScene)
-    onBoundsCalculated(box)
-    onSceneReady?.(clonedScene)
-  }, [clonedScene, onBoundsCalculated, onSceneReady])
+    // Camera world transform lives on the parent node; refresh matrices before reading.
+    gltf.scene.updateMatrixWorld(true)
+
+    const cam = gltf.cameras[0]
+    const glbCamera = cam instanceof THREE.PerspectiveCamera ? cam : null
+
+    const ambientExt = gltf.parser.json.extensions?.MM_ambient_light as
+      | { color?: unknown; intensity?: unknown }
+      | undefined
+    const color = ambientExt?.color
+    const intensity = ambientExt?.intensity
+    const ambientLight: MMAmbientLight | null =
+      ambientExt &&
+      Array.isArray(color) &&
+      color.length === 3 &&
+      color.every((c) => typeof c === 'number') &&
+      typeof intensity === 'number'
+        ? { color: [color[0], color[1], color[2]], intensity }
+        : null
+
+    const bounds = new THREE.Box3().setFromObject(clonedScene)
+    onLoaded({ scene: clonedScene, bounds, glbCamera, ambientLight })
+  }, [clonedScene, gltf, onLoaded])
 
   return <primitive object={clonedScene} />
 }
@@ -119,7 +138,7 @@ function InstancedMarkers({
 
   const raycaster = useMemo(() => new THREE.Raycaster(), [])
   const rayOrigin = useMemo(() => new THREE.Vector3(), [])
-  const rayDirection = useMemo(() => new THREE.Vector3(0, -1, 0), [])
+  const rayDirection = useMemo(() => new THREE.Vector3(0, 0, -1), [])
 
   const snappedPositions = useMemo(() => {
     if (!groundSnap || !mapScene || events.length === 0) {
@@ -129,10 +148,10 @@ function InstancedMarkers({
     const positions: { x: number; y: number; z: number }[] = []
 
     const mapBox = new THREE.Box3().setFromObject(mapScene)
-    const rayStartHeight = mapBox.max.y + 1000
+    const rayStartHeight = mapBox.max.z + 1000
 
     events.forEach((event) => {
-      rayOrigin.set(event.x, rayStartHeight, event.y)
+      rayOrigin.set(event.x, event.y, rayStartHeight)
       raycaster.set(rayOrigin, rayDirection)
 
       const intersects = raycaster.intersectObject(mapScene, true)
@@ -142,7 +161,7 @@ function InstancedMarkers({
         positions.push({
           x: event.x,
           y: event.y,
-          z: hit.point.y + heightOffset
+          z: hit.point.z + heightOffset
         })
       } else {
         positions.push({
@@ -184,7 +203,7 @@ function InstancedMarkers({
       const finalScale = markerSize * scaleMultiplier
 
       const pos = snappedPositions ? snappedPositions[i] : { x: event.x, y: event.y, z: event.z + heightOffset }
-      tempObject.position.set(pos.x, pos.z, pos.y)
+      tempObject.position.set(pos.x, pos.y, pos.z)
       tempObject.scale.setScalar(finalScale)
       tempObject.updateMatrix()
       mesh.setMatrixAt(i, tempObject.matrix)
@@ -338,29 +357,52 @@ function HeatmapLayer({ events, radius, intensity }: HeatmapLayerProps) {
   const centerY = (bounds.minY + bounds.maxY) / 2
 
   return (
-    <mesh ref={meshRef} position={[centerX, 10, centerY]} rotation={[-Math.PI / 2, 0, 0]}>
+    <mesh ref={meshRef} position={[centerX, centerY, 10]}>
       <planeGeometry args={[width, height]} />
       <meshBasicMaterial map={texture} transparent opacity={0.7} depthWrite={false} />
     </mesh>
   )
 }
 
+/**
+ * Reinterpret a Y-up offset (decoded from THREE.Spherical) as a Z-up world offset.
+ * THREE.Spherical is hard-coded Y-up: phi=0 places the offset along +Y. In a Z-up
+ * scene we want phi=0 to mean "world up" (+Z), so permute (x, y, z) → (x, -z, y).
+ */
+function sphericalToZUpOffset(spherical: THREE.Spherical, out: THREE.Vector3): THREE.Vector3 {
+  out.setFromSpherical(spherical)
+  const tmp = out.y
+  out.y = -out.z
+  out.z = tmp
+  return out
+}
+
+/**
+ * Inverse of sphericalToZUpOffset: convert a Z-up world offset back into a vector
+ * suitable for THREE.Spherical.setFromVector3 (which expects Y-up). Permute
+ * (x, y, z) → (x, z, -y).
+ */
+function zUpOffsetToSphericalInput(offset: THREE.Vector3, out: THREE.Vector3): THREE.Vector3 {
+  out.set(offset.x, offset.z, -offset.y)
+  return out
+}
+
 interface UnrealCameraControllerProps {
   mapBounds: THREE.Box3 | null
-  fitToMapTrigger: number
   fitToDataTrigger: number
   events: MapEvent[]
   onSpeedChange?: (speed: number) => void
   resetViewTrigger: number
+  glbCamera: THREE.PerspectiveCamera | null
 }
 
 function UnrealCameraController({
   mapBounds,
-  fitToMapTrigger,
   fitToDataTrigger,
   events,
   onSpeedChange,
   resetViewTrigger,
+  glbCamera,
 }: UnrealCameraControllerProps) {
   const { camera, gl } = useThree()
   const domElement = gl.domElement
@@ -409,9 +451,10 @@ function UnrealCameraController({
       const fovRad = perspCamera.fov * (Math.PI / 180)
       const aspect = perspCamera.aspect
 
-      const distForZ = (size.z / 2) / Math.tan(fovRad / 2)
+      // Z-up scene with overhead camera: screen-vertical maps to world Y, screen-horizontal to world X.
+      const distForY = (size.y / 2) / Math.tan(fovRad / 2)
       const distForX = (size.x / 2) / (Math.tan(fovRad / 2) * aspect)
-      const distance = Math.max(distForZ, distForX) * 1.05
+      const distance = Math.max(distForY, distForX) * 1.05
 
       targetRef.current.copy(center)
       sphericalRef.current.radius = distance
@@ -422,7 +465,7 @@ function UnrealCameraController({
       zoomFactorRef.current = 1.0
 
       const offset = new THREE.Vector3()
-      offset.setFromSpherical(sphericalRef.current)
+      sphericalToZUpOffset(sphericalRef.current, offset)
       camera.position.copy(targetRef.current).add(offset)
       camera.lookAt(targetRef.current)
     },
@@ -440,31 +483,13 @@ function UnrealCameraController({
     }
   }, [])
 
-  const prevFitToMapTriggerRef = useRef(fitToMapTrigger)
-  useEffect(() => {
-    if (mapBounds && fitToMapTrigger !== prevFitToMapTriggerRef.current) {
-      prevFitToMapTriggerRef.current = fitToMapTrigger
-      fitToBounds(mapBounds)
-      saveInitialView()
-    }
-  }, [mapBounds, fitToMapTrigger, fitToBounds, saveInitialView])
-
-  const hasAutoFitRef = useRef(false)
-  useEffect(() => {
-    if (mapBounds && !hasAutoFitRef.current) {
-      hasAutoFitRef.current = true
-      fitToBounds(mapBounds)
-      saveInitialView()
-    }
-  }, [mapBounds, fitToBounds, saveInitialView])
-
   const prevFitToDataTriggerRef = useRef(fitToDataTrigger)
   useEffect(() => {
     if (fitToDataTrigger !== prevFitToDataTriggerRef.current && events.length > 0) {
       prevFitToDataTriggerRef.current = fitToDataTrigger
       const box = new THREE.Box3()
       events.forEach((event) => {
-        box.expandByPoint(new THREE.Vector3(event.x, event.z + 50, event.y))
+        box.expandByPoint(new THREE.Vector3(event.x, event.y, event.z + 50))
       })
       fitToBounds(box)
     }
@@ -481,11 +506,54 @@ function UnrealCameraController({
       zoomFactorRef.current = 1.0
 
       const offset = new THREE.Vector3()
-      offset.setFromSpherical(sphericalRef.current)
+      sphericalToZUpOffset(sphericalRef.current, offset)
       camera.position.copy(targetRef.current).add(offset)
       camera.lookAt(targetRef.current)
     }
   }, [resetViewTrigger, camera])
+
+  // Seed orbit state from the GLB's embedded camera once it resolves.
+  const seededGlbCameraRef = useRef<THREE.PerspectiveCamera | null>(null)
+  useEffect(() => {
+    if (!glbCamera || seededGlbCameraRef.current === glbCamera) return
+    seededGlbCameraRef.current = glbCamera
+
+    const cameraPos = glbCamera.getWorldPosition(new THREE.Vector3())
+    const worldQuat = glbCamera.getWorldQuaternion(new THREE.Quaternion())
+    const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(worldQuat)
+
+    let radius: number
+    if (mapBounds) {
+      const sphere = mapBounds.getBoundingSphere(new THREE.Sphere())
+      radius = sphere.radius * 2
+    } else {
+      radius = Math.max(cameraPos.length(), 1000)
+    }
+
+    const target = cameraPos.clone().addScaledVector(forward, radius)
+    targetRef.current.copy(target)
+
+    const worldOffset = cameraPos.clone().sub(target)
+    const sphericalInput = zUpOffsetToSphericalInput(worldOffset, new THREE.Vector3())
+    sphericalRef.current.setFromVector3(sphericalInput)
+
+    fitRadiusRef.current = sphericalRef.current.radius
+    zoomFactorRef.current = 1.0
+
+    // Copy intrinsics onto the scene camera.
+    const perspCamera = camera as THREE.PerspectiveCamera
+    perspCamera.fov = glbCamera.fov
+    perspCamera.near = glbCamera.near
+    perspCamera.far = glbCamera.far
+    perspCamera.updateProjectionMatrix()
+
+    const offset = new THREE.Vector3()
+    sphericalToZUpOffset(sphericalRef.current, offset)
+    camera.position.copy(targetRef.current).add(offset)
+    camera.lookAt(targetRef.current)
+
+    saveInitialView()
+  }, [glbCamera, mapBounds, camera, saveInitialView])
 
   useEffect(() => {
     const DRAG_THRESHOLD = 4
@@ -527,14 +595,14 @@ function UnrealCameraController({
     const panCamera = (deltaX: number, deltaY: number) => {
       const panSpeed = sphericalRef.current.radius * 0.001
       const right = new THREE.Vector3()
-      const up = new THREE.Vector3(0, 1, 0)
+      const up = new THREE.Vector3(0, 0, 1)
 
       camera.getWorldDirection(right)
       right.crossVectors(up, right).normalize()
 
       const forward = new THREE.Vector3()
       camera.getWorldDirection(forward)
-      forward.y = 0
+      forward.z = 0
       forward.normalize()
 
       targetRef.current.addScaledVector(right, deltaX * panSpeed)
@@ -645,7 +713,7 @@ function UnrealCameraController({
       forward.normalize()
 
       const right = new THREE.Vector3()
-      right.crossVectors(forward, new THREE.Vector3(0, 1, 0)).normalize()
+      right.crossVectors(forward, new THREE.Vector3(0, 0, 1)).normalize()
 
       if (keysRef.current.w) {
         targetRef.current.addScaledVector(forward, moveSpeed)
@@ -660,15 +728,15 @@ function UnrealCameraController({
         targetRef.current.addScaledVector(right, moveSpeed)
       }
       if (keysRef.current.e) {
-        targetRef.current.y += moveSpeed
+        targetRef.current.z += moveSpeed
       }
       if (keysRef.current.q) {
-        targetRef.current.y -= moveSpeed
+        targetRef.current.z -= moveSpeed
       }
     }
 
     const offset = new THREE.Vector3()
-    offset.setFromSpherical(sphericalRef.current)
+    sphericalToZUpOffset(sphericalRef.current, offset)
     camera.position.copy(targetRef.current).add(offset)
     camera.lookAt(targetRef.current)
   })
@@ -691,69 +759,17 @@ function PlaceholderGrid() {
   )
 }
 
-function transformEvents(
-  events: MapEvent[],
-  mapType: MapType | undefined,
-  worldBounds: WorldBounds | undefined,
-  modelBounds: THREE.Box3 | null
-): MapEvent[] {
-  if (!mapType || events.length === 0) return events
-
-  if (mapType === 'topdown' && worldBounds && modelBounds) {
-    const ueRangeX = worldBounds.ueMaxX - worldBounds.ueMinX
-    const ueRangeY = worldBounds.ueMaxY - worldBounds.ueMinY
-    if (ueRangeX === 0 || ueRangeY === 0) return events
-
-    const modelMinX = modelBounds.min.x
-    const modelMaxX = modelBounds.max.x
-    const modelMinZ = modelBounds.min.z
-    const modelMaxZ = modelBounds.max.z
-    const modelRangeX = modelMaxX - modelMinX
-    const modelRangeZ = modelMaxZ - modelMinZ
-    const planeY = modelBounds.max.y
-
-    return events.map((e) => {
-      // UE(x,y,z) → glTF(y*s, z*s, -x*s): UE_Y maps to model X, UE_X maps to model -Z
-      const normY = (e.y - worldBounds.ueMinY) / ueRangeY
-      const normX = (e.x - worldBounds.ueMinX) / ueRangeX
-      return {
-        ...e,
-        x: modelMinX + normY * modelRangeX,
-        y: modelMaxZ - normX * modelRangeZ,
-        z: planeY,
-        properties: {
-          ...e.properties,
-          ue_x: String(e.x),
-          ue_y: String(e.y),
-          ue_z: String(e.z),
-        },
-      }
-    })
-  }
-
-  if (mapType === '3d') {
-    const s = 0.01
-    return events.map((e) => ({
-      ...e,
-      x: e.y * s,
-      y: -e.x * s,
-      z: e.z * s,
-      properties: {
-        ...e.properties,
-        ue_x: String(e.x),
-        ue_y: String(e.y),
-        ue_z: String(e.z),
-      },
-    }))
-  }
-
-  return events
+function SceneSetup() {
+  const { scene, camera } = useThree()
+  useEffect(() => {
+    scene.up.set(0, 0, 1)
+    camera.up.set(0, 0, 1)
+  }, [scene, camera])
+  return null
 }
 
 export function MapViewer({
   mapUrl,
-  mapType,
-  worldBounds,
   events,
   selectedEventId,
   onSelectEvent,
@@ -770,61 +786,69 @@ export function MapViewer({
 }: MapViewerProps) {
   const [mapBounds, setMapBounds] = useState<THREE.Box3 | null>(null)
   const [mapScene, setMapScene] = useState<THREE.Object3D | null>(null)
-  const [fitToMapTrigger, setFitToMapTrigger] = useState(0)
+  const [glbCamera, setGlbCamera] = useState<THREE.PerspectiveCamera | null>(null)
+  const [ambientLight, setAmbientLight] = useState<MMAmbientLight | null>(null)
   const [currentSpeed, setCurrentSpeed] = useState(2000)
 
   const handleSpeedChange = useCallback((speed: number) => {
     setCurrentSpeed(speed)
   }, [])
 
-  const handleBoundsCalculated = useCallback(
-    (bounds: THREE.Box3) => {
-      setMapBounds(bounds)
-      setFitToMapTrigger((prev) => prev + 1)
+  const handleMapLoaded = useCallback(
+    (payload: MapLoadPayload) => {
+      setMapBounds(payload.bounds)
+      setMapScene(payload.scene)
+      setGlbCamera(payload.glbCamera)
+      setAmbientLight(payload.ambientLight)
 
       if (onMapBoundsChange) {
         onMapBoundsChange({
-          min: { x: bounds.min.x, y: bounds.min.z, z: bounds.min.y },
-          max: { x: bounds.max.x, y: bounds.max.z, z: bounds.max.y },
+          min: { x: payload.bounds.min.x, y: payload.bounds.min.y, z: payload.bounds.min.z },
+          max: { x: payload.bounds.max.x, y: payload.bounds.max.y, z: payload.bounds.max.z },
         })
       }
+
+      if (payload.ambientLight === null) {
+        console.error(
+          `[MapViewer] GLB ${mapUrl} is missing MM_ambient_light extension; ambient lighting will be absent`
+        )
+      }
+      if (payload.glbCamera === null) {
+        console.error(
+          `[MapViewer] GLB ${mapUrl} has no perspective camera; initial framing may be wrong`
+        )
+      }
     },
-    [onMapBoundsChange]
-  )
-
-  const handleSceneReady = useCallback((scene: THREE.Object3D) => {
-    setMapScene(scene)
-  }, [])
-
-  const transformedEvents = useMemo(
-    () => transformEvents(events, mapType, worldBounds, mapBounds),
-    [events, mapType, worldBounds, mapBounds]
+    [onMapBoundsChange, mapUrl]
   )
 
   const effectiveMarkerSize = useMemo(() => {
-    if (mapType && mapBounds) {
+    if (mapBounds) {
       const size = mapBounds.getSize(new THREE.Vector3())
-      const extent = Math.max(size.x, size.z)
+      const extent = Math.max(size.x, size.y)
       return (markerSize ?? DEFAULT_MARKER_SIZE) * extent * 0.00025
     }
     return markerSize ?? DEFAULT_MARKER_SIZE
-  }, [markerSize, mapType, mapBounds])
+  }, [markerSize, mapBounds])
 
   const heightOffset = useMemo(() => {
-    if (mapType && mapBounds) {
+    if (mapBounds) {
       const size = mapBounds.getSize(new THREE.Vector3())
-      const extent = Math.max(size.x, size.z)
+      const extent = Math.max(size.x, size.y)
       if (heightOffsetProp !== undefined) {
         return heightOffsetProp * extent * 0.01
       }
       return extent * 0.005
     }
     return heightOffsetProp ?? 50
-  }, [mapType, mapBounds, heightOffsetProp])
+  }, [mapBounds, heightOffsetProp])
 
   useEffect(() => {
     if (!mapUrl) {
+      setMapBounds(null)
       setMapScene(null)
+      setGlbCamera(null)
+      setAmbientLight(null)
       if (onMapBoundsChange) {
         onMapBoundsChange(null)
       }
@@ -834,44 +858,42 @@ export function MapViewer({
   return (
     <div className="w-full h-full">
       <Canvas gl={{ antialias: true, alpha: false }} onPointerMissed={() => onSelectEvent(null)}>
+        <SceneSetup />
         <color attach="background" args={['#0a0a0f']} />
 
         <PerspectiveCamera makeDefault position={[0, 5000, 5000]} fov={60} near={1} far={100000} />
 
         <UnrealCameraController
           mapBounds={mapBounds}
-          fitToMapTrigger={fitToMapTrigger}
           fitToDataTrigger={fitToDataTrigger}
-          events={transformedEvents}
+          events={events}
           onSpeedChange={handleSpeedChange}
           resetViewTrigger={resetViewTrigger}
+          glbCamera={glbCamera}
         />
 
-        <ambientLight intensity={0.8} />
-        <hemisphereLight args={['#ffffff', '#444444', 0.6]} />
-        <directionalLight position={[5000, 10000, 5000]} intensity={1.0} />
-        <directionalLight position={[-5000, 10000, -5000]} intensity={0.6} />
-        <directionalLight position={[0, -10000, 0]} intensity={0.3} />
+        {ambientLight && (
+          <ambientLight
+            color={new THREE.Color(ambientLight.color[0], ambientLight.color[1], ambientLight.color[2])}
+            intensity={ambientLight.intensity}
+          />
+        )}
 
         <Suspense fallback={<LoadingIndicator />}>
           {mapUrl ? (
-            <MapModel
-              url={mapUrl}
-              onBoundsCalculated={handleBoundsCalculated}
-              onSceneReady={handleSceneReady}
-            />
+            <MapModel url={mapUrl} onLoaded={handleMapLoaded} />
           ) : (
             <PlaceholderGrid />
           )}
         </Suspense>
 
         {showHeatmap && (
-          <HeatmapLayer events={transformedEvents} radius={heatmapRadius} intensity={heatmapIntensity} />
+          <HeatmapLayer events={events} radius={heatmapRadius} intensity={heatmapIntensity} />
         )}
 
         <InstancedMarkers
           key={`markers-${markerColor}-${effectiveMarkerSize}-${groundSnap}`}
-          events={transformedEvents}
+          events={events}
           selectedId={selectedEventId}
           onSelect={onSelectEvent}
           markerColor={markerColor}
