@@ -15,7 +15,7 @@
   "license": "ISC",
   "description": "An Introduction to Micromegas - Technical presentation built with Reveal.js and Micromegas brand theme",
   "dependencies": {
-    "mermaid": "11.12.2",
+    "mermaid": "11.15.0",
     "reveal.js": "^5.2.1",
     "reveal.js-mermaid-plugin": "11.6.0"
   },
