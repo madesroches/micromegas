@@ -32,7 +32,6 @@ interface MapViewerProps {
   showHeatmap: boolean
   heatmapRadius: number
   heatmapIntensity: number
-  fitToDataTrigger?: number
   onMapBoundsChange?: (bounds: MapBounds | null) => void
   markerColor?: string
   markerSize?: number
@@ -398,8 +397,6 @@ function zUpOffsetToSphericalInput(offset: THREE.Vector3, out: THREE.Vector3): T
 interface UnrealCameraControllerProps {
   mapBounds: THREE.Box3 | null
   mapScene: THREE.Object3D | null
-  fitToDataTrigger: number
-  events: MapEvent[]
   onSpeedChange?: (speed: number) => void
   resetViewTrigger: number
   glbCamera: THREE.PerspectiveCamera | null
@@ -408,8 +405,6 @@ interface UnrealCameraControllerProps {
 function UnrealCameraController({
   mapBounds,
   mapScene,
-  fitToDataTrigger,
-  events,
   onSpeedChange,
   resetViewTrigger,
   glbCamera,
@@ -459,36 +454,6 @@ function UnrealCameraController({
     mapSceneRef.current = mapScene
   }, [mapScene])
 
-  const fitToBounds = useCallback(
-    (box: THREE.Box3) => {
-      const center = box.getCenter(new THREE.Vector3())
-      const size = box.getSize(new THREE.Vector3())
-
-      const perspCamera = camera as THREE.PerspectiveCamera
-      const fovRad = perspCamera.fov * (Math.PI / 180)
-      const aspect = perspCamera.aspect
-
-      // Z-up scene with overhead camera: screen-vertical maps to world Y, screen-horizontal to world X.
-      const distForY = (size.y / 2) / Math.tan(fovRad / 2)
-      const distForX = (size.x / 2) / (Math.tan(fovRad / 2) * aspect)
-      const distance = Math.max(distForY, distForX) * 1.05
-
-      targetRef.current.copy(center)
-      sphericalRef.current.radius = distance
-      sphericalRef.current.phi = 0.001
-      sphericalRef.current.theta = 0
-
-      fitRadiusRef.current = distance
-      zoomFactorRef.current = 1.0
-
-      const offset = new THREE.Vector3()
-      sphericalToZUpOffset(sphericalRef.current, offset)
-      camera.position.copy(targetRef.current).add(offset)
-      camera.lookAt(targetRef.current)
-    },
-    [camera]
-  )
-
   const saveInitialView = useCallback(() => {
     initialViewRef.current = {
       target: targetRef.current.clone(),
@@ -499,18 +464,6 @@ function UnrealCameraController({
       },
     }
   }, [])
-
-  const prevFitToDataTriggerRef = useRef(fitToDataTrigger)
-  useEffect(() => {
-    if (fitToDataTrigger !== prevFitToDataTriggerRef.current && events.length > 0) {
-      prevFitToDataTriggerRef.current = fitToDataTrigger
-      const box = new THREE.Box3()
-      events.forEach((event) => {
-        box.expandByPoint(new THREE.Vector3(event.x, event.y, event.z + 50))
-      })
-      fitToBounds(box)
-    }
-  }, [fitToDataTrigger, events, fitToBounds])
 
   const prevResetViewTriggerRef = useRef(resetViewTrigger)
   useEffect(() => {
@@ -877,7 +830,6 @@ export function MapViewer({
   showHeatmap,
   heatmapRadius,
   heatmapIntensity,
-  fitToDataTrigger = 0,
   onMapBoundsChange,
   markerColor,
   markerSize,
@@ -975,8 +927,6 @@ export function MapViewer({
         <UnrealCameraController
           mapBounds={mapBounds}
           mapScene={mapScene}
-          fitToDataTrigger={fitToDataTrigger}
-          events={events}
           onSpeedChange={handleSpeedChange}
           resetViewTrigger={resetViewTrigger}
           glbCamera={glbCamera}

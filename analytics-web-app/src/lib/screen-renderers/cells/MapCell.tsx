@@ -101,7 +101,6 @@ function MapCell({ data, status, options, onOptionsChange }: CellRendererProps) 
 
   // Ephemeral interaction state
   const [selectedEvent, setSelectedEvent] = useState<MapEvent | null>(null)
-  const [fitToDataTrigger, setFitToDataTrigger] = useState(0)
   const [resetViewTrigger, setResetViewTrigger] = useState(0)
 
   // Read visual options with defaults
@@ -148,13 +147,6 @@ function MapCell({ data, status, options, onOptionsChange }: CellRendererProps) 
       {/* Toolbar overlay */}
       <div className="absolute top-2 left-2 z-10 flex items-center gap-2">
         <button
-          onClick={() => setFitToDataTrigger((t) => t + 1)}
-          className="px-2 py-1 bg-app-panel/90 border border-theme-border rounded text-xs text-theme-text-secondary hover:text-theme-text-primary"
-          title="Fit to data"
-        >
-          Fit
-        </button>
-        <button
           onClick={() => setResetViewTrigger((t) => t + 1)}
           className="px-2 py-1 bg-app-panel/90 border border-theme-border rounded text-xs text-theme-text-secondary hover:text-theme-text-primary"
           title="Reset view"
@@ -185,7 +177,6 @@ function MapCell({ data, status, options, onOptionsChange }: CellRendererProps) 
         showHeatmap={showHeatmap}
         heatmapRadius={heatmapRadius}
         heatmapIntensity={heatmapIntensity}
-        fitToDataTrigger={fitToDataTrigger}
         markerColor={markerColor}
         markerSize={markerSize}
         groundSnap={groundSnap}
