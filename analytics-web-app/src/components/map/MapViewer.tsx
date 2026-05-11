@@ -596,16 +596,15 @@ function UnrealCameraController({
 
     const panCamera = (deltaX: number, deltaY: number) => {
       const panSpeed = sphericalRef.current.radius * 0.001
-      const right = new THREE.Vector3()
-      const up = new THREE.Vector3(0, 0, 1)
-
-      camera.getWorldDirection(right)
-      right.crossVectors(up, right).normalize()
-
-      const forward = new THREE.Vector3()
-      camera.getWorldDirection(forward)
-      forward.z = 0
-      forward.normalize()
+      // Derive the horizontal pan basis from theta directly, not from
+      // camera.getWorldDirection: at phi=0 the camera-forward is parallel to
+      // worldUp, and cross(worldUp, cameraForward) collapses to zero, silently
+      // dropping the input. Theta is well-defined at every phi.
+      const theta = sphericalRef.current.theta
+      const sinTheta = Math.sin(theta)
+      const cosTheta = Math.cos(theta)
+      const right = new THREE.Vector3(-cosTheta, -sinTheta, 0)
+      const forward = new THREE.Vector3(-sinTheta, cosTheta, 0)
 
       targetRef.current.addScaledVector(right, deltaX * panSpeed)
       targetRef.current.addScaledVector(forward, deltaY * panSpeed)
@@ -770,8 +769,10 @@ function UnrealCameraController({
       camera.getWorldDirection(forward)
       forward.normalize()
 
-      const right = new THREE.Vector3()
-      right.crossVectors(forward, new THREE.Vector3(0, 0, 1)).normalize()
+      // Theta-based right, same reason as panCamera: cross(cameraForward, worldUp)
+      // collapses to zero at phi=0 and silently drops A/D strafe.
+      const theta = sphericalRef.current.theta
+      const right = new THREE.Vector3(Math.cos(theta), Math.sin(theta), 0)
 
       if (keysRef.current.w) {
         targetRef.current.addScaledVector(forward, moveSpeed)
