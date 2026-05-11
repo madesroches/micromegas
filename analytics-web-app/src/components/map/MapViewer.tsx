@@ -685,13 +685,42 @@ function UnrealCameraController({
           Math.min(MAX_SPEED, baseSpeedRef.current * speedMultiplier)
         )
         onSpeedChange?.(baseSpeedRef.current)
-      } else {
-        const zoomSpeed = 0.1
-        const zoomMultiplier = e.deltaY > 0 ? (1 + zoomSpeed) : (1 - zoomSpeed)
-        zoomFactorRef.current *= zoomMultiplier
-        zoomFactorRef.current = Math.max(0.01, Math.min(1.0, zoomFactorRef.current))
-        sphericalRef.current.radius = fitRadiusRef.current * zoomFactorRef.current
+        return
       }
+
+      const zoomSpeed = 0.1
+      const zoomMultiplier = e.deltaY > 0 ? (1 + zoomSpeed) : (1 - zoomSpeed)
+      const newZoomFactor = Math.max(
+        0.01,
+        Math.min(1.0, zoomFactorRef.current * zoomMultiplier)
+      )
+      const oldRadius = sphericalRef.current.radius
+      const newRadius = fitRadiusRef.current * newZoomFactor
+      zoomFactorRef.current = newZoomFactor
+      sphericalRef.current.radius = newRadius
+
+      // Cursor-anchored zoom. Scale the orbit target around the world point
+      // under the cursor; the camera follows in useFrame as
+      // `target + sphericalOffset`. Because we only scaled the spherical
+      // radius by s = newRadius/oldRadius, the cursor's world hit point
+      // stays at the same screen location across the zoom step.
+      const scene = mapSceneRef.current
+      if (!scene || oldRadius === 0) return
+      const rect = domElement.getBoundingClientRect()
+      if (rect.width === 0 || rect.height === 0) return
+
+      const ndc = new THREE.Vector2(
+        ((e.clientX - rect.left) / rect.width) * 2 - 1,
+        -((e.clientY - rect.top) / rect.height) * 2 + 1
+      )
+      const rc = new THREE.Raycaster()
+      rc.setFromCamera(ndc, camera)
+      const hits = rc.intersectObject(scene, true)
+      if (hits.length === 0) return
+
+      const anchor = hits[0].point
+      const s = newRadius / oldRadius
+      targetRef.current.sub(anchor).multiplyScalar(s).add(anchor)
     }
 
     const onContextMenu = (e: MouseEvent) => {
@@ -718,22 +747,40 @@ function UnrealCameraController({
       }
     }
 
+    // Safety net: if the browser/tab loses focus mid-drag (alt-tab, OS dialog),
+    // the eventual mouseup may never reach us — clear all drag state so the
+    // next interaction starts clean.
+    const onWindowBlur = () => {
+      if (isLeftDraggingRef.current || isRightMouseDownRef.current || isMiddleMouseDownRef.current) {
+        domElement.style.cursor = 'auto'
+      }
+      isLeftMouseDownRef.current = false
+      isLeftDraggingRef.current = false
+      isRightMouseDownRef.current = false
+      isMiddleMouseDownRef.current = false
+    }
+
+    // mousedown stays on the canvas (drags only start over the map), but
+    // mousemove/mouseup live on the window so a drag that sweeps off the
+    // canvas keeps tracking and a release-outside isn't lost.
     domElement.addEventListener('mousedown', onMouseDown)
-    domElement.addEventListener('mouseup', onMouseUp)
-    domElement.addEventListener('mousemove', onMouseMove)
+    window.addEventListener('mouseup', onMouseUp)
+    window.addEventListener('mousemove', onMouseMove)
     domElement.addEventListener('wheel', onWheel, { passive: false })
     domElement.addEventListener('contextmenu', onContextMenu)
     window.addEventListener('keydown', onKeyDown)
     window.addEventListener('keyup', onKeyUp)
+    window.addEventListener('blur', onWindowBlur)
 
     return () => {
       domElement.removeEventListener('mousedown', onMouseDown)
-      domElement.removeEventListener('mouseup', onMouseUp)
-      domElement.removeEventListener('mousemove', onMouseMove)
+      window.removeEventListener('mouseup', onMouseUp)
+      window.removeEventListener('mousemove', onMouseMove)
       domElement.removeEventListener('wheel', onWheel)
       domElement.removeEventListener('contextmenu', onContextMenu)
       window.removeEventListener('keydown', onKeyDown)
       window.removeEventListener('keyup', onKeyUp)
+      window.removeEventListener('blur', onWindowBlur)
     }
   }, [camera, domElement])
 
