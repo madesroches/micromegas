@@ -389,6 +389,7 @@ function zUpOffsetToSphericalInput(offset: THREE.Vector3, out: THREE.Vector3): T
 
 interface UnrealCameraControllerProps {
   mapBounds: THREE.Box3 | null
+  mapScene: THREE.Object3D | null
   fitToDataTrigger: number
   events: MapEvent[]
   onSpeedChange?: (speed: number) => void
@@ -398,6 +399,7 @@ interface UnrealCameraControllerProps {
 
 function UnrealCameraController({
   mapBounds,
+  mapScene,
   fitToDataTrigger,
   events,
   onSpeedChange,
@@ -441,6 +443,13 @@ function UnrealCameraController({
   useEffect(() => {
     onSpeedChange?.(baseSpeedRef.current)
   }, [onSpeedChange])
+
+  // Track latest mapScene through a ref so mousedown can raycast against it
+  // without rebinding the DOM event handlers when the scene changes.
+  const mapSceneRef = useRef<THREE.Object3D | null>(mapScene)
+  useEffect(() => {
+    mapSceneRef.current = mapScene
+  }, [mapScene])
 
   const fitToBounds = useCallback(
     (box: THREE.Box3) => {
@@ -568,6 +577,26 @@ function UnrealCameraController({
         isRightMouseDownRef.current = true
         lastMouseRef.current = { x: e.clientX, y: e.clientY }
         domElement.style.cursor = 'grabbing'
+
+        // Re-anchor the orbit pivot to whatever the camera is currently
+        // looking at, so right-drag rotates around the visible POI rather
+        // than a stale target left over from a previous fit/fly.
+        const scene = mapSceneRef.current
+        if (scene) {
+          const rc = new THREE.Raycaster()
+          rc.setFromCamera(new THREE.Vector2(0, 0), camera)
+          const hits = rc.intersectObject(scene, true)
+          if (hits.length > 0) {
+            const newTarget = hits[0].point
+            const offset = new THREE.Vector3().copy(camera.position).sub(newTarget)
+            const sphericalInput = zUpOffsetToSphericalInput(offset, new THREE.Vector3())
+            sphericalRef.current.setFromVector3(sphericalInput)
+            // Keep zoom math (radius = fitRadius * zoomFactor) consistent
+            // by absorbing the new radius into fitRadius.
+            fitRadiusRef.current = sphericalRef.current.radius / zoomFactorRef.current
+            targetRef.current.copy(newTarget)
+          }
+        }
       } else if (e.button === 1) {
         isMiddleMouseDownRef.current = true
         lastMouseRef.current = { x: e.clientX, y: e.clientY }
@@ -630,10 +659,15 @@ function UnrealCameraController({
 
       if (isRightMouseDownRef.current) {
         const rotateSpeed = 0.005
-        sphericalRef.current.theta -= deltaX * rotateSpeed
+        sphericalRef.current.theta += deltaX * rotateSpeed
         sphericalRef.current.phi += deltaY * rotateSpeed
 
-        sphericalRef.current.phi = Math.max(0.1, Math.min(Math.PI - 0.1, sphericalRef.current.phi))
+        // Keep the camera above the horizon — flipping below the map is
+        // disorienting and rarely useful for a top-down scene.
+        sphericalRef.current.phi = Math.max(
+          0.05,
+          Math.min(Math.PI / 2 - 0.05, sphericalRef.current.phi)
+        )
       }
 
       if (isMiddleMouseDownRef.current) {
@@ -873,6 +907,7 @@ export function MapViewer({
 
         <UnrealCameraController
           mapBounds={mapBounds}
+          mapScene={mapScene}
           fitToDataTrigger={fitToDataTrigger}
           events={events}
           onSpeedChange={handleSpeedChange}
