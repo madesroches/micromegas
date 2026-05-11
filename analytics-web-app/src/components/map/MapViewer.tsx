@@ -857,7 +857,15 @@ export function MapViewer({
 
   return (
     <div className="w-full h-full">
-      <Canvas gl={{ antialias: true, alpha: false }} onPointerMissed={() => onSelectEvent(null)}>
+      <Canvas
+        gl={{
+          antialias: true,
+          alpha: false,
+          toneMapping: THREE.NeutralToneMapping,
+          toneMappingExposure: 1.3,
+        }}
+        onPointerMissed={() => onSelectEvent(null)}
+      >
         <SceneSetup />
         <color attach="background" args={['#0a0a0f']} />
 
