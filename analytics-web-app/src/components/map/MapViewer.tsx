@@ -914,17 +914,33 @@ export function MapViewer({
   // where both are truthy). Without this, InstancedMarkers' ground-snap
   // raycasts against the previous scene during Suspense, since the markers
   // render as a sibling of the suspended MapModel, not a child.
-  const prevMapUrlRef = useRef<string | undefined>(undefined)
-  useEffect(() => {
-    if (prevMapUrlRef.current === mapUrl) return
-    prevMapUrlRef.current = mapUrl
+  //
+  // Done as a render-phase state derivation rather than an effect: an
+  // effect-based clear races against MapModel's load effect when the new GLB
+  // is already in drei's useGLTF cache (no Suspense). useEffects fire
+  // child-first then parent, so the child's onLoaded → setState(payload) runs
+  // before the parent's setState(null), and React 18 auto-batches both into
+  // one commit where the parent's null wins. The render-phase form forces
+  // the clear before MapModel re-renders, so the child effect runs against
+  // already-cleared state.
+  const [clearedForUrl, setClearedForUrl] = useState(mapUrl)
+  if (clearedForUrl !== mapUrl) {
+    setClearedForUrl(mapUrl)
     setMapBounds(null)
     setMapScene(null)
     setGlbCamera(null)
     setAmbientLight(null)
-    if (!mapUrl && onMapBoundsChange) {
-      onMapBoundsChange(null)
+  }
+
+  // Bubble null to the parent's bounds callback when mapUrl transitions to
+  // undefined. Lives in an effect (not the render-phase block above) because
+  // calling parent callbacks during render is a side effect.
+  const prevMapUrlRef = useRef(mapUrl)
+  useEffect(() => {
+    if (!mapUrl && prevMapUrlRef.current) {
+      onMapBoundsChange?.(null)
     }
+    prevMapUrlRef.current = mapUrl
   }, [mapUrl, onMapBoundsChange])
 
   return (
