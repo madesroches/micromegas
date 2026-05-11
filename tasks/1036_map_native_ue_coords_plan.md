@@ -2,21 +2,24 @@
 
 ## Status (as of 2026-05-11)
 
-Code changes for Phases 1–3 and Phase 5 (documentation) are landed on the `map` branch — verified against the current working tree:
+All phases (1–5) are landed on the `map` branch and the branch has been pushed for review. The implementation grew beyond the original plan as interaction issues surfaced during testing — those late additions are tracked in **Phase 6 — Polish & branch review** below.
 
-- `MapViewer.tsx`: `SceneSetup` flips `scene.up`/`camera.up` to `(0, 0, 1)`; `sphericalToZUpOffset` / `zUpOffsetToSphericalInput` helpers applied at all four call sites (`fitToBounds`, `useFrame`, reset-view, GLB-camera seed); pan basis and forward-flatten use Z-up; WASD Q/E moves along Z; `fitToData` uses raw `(x, y, z+50)`; `fitToBounds` framing math uses `size.y` for the vertical-extent; marker auto-scale and height offset use `Math.max(size.x, size.y)`; ground-snap raycasts from `+Z` down; marker positions are written through unmodified; heatmap plane sits at `[centerX, centerY, 10]` with no rotation; `transformEvents` / `MapType` / `WorldBounds` / `hasAutoFitRef` are gone; the five hard-coded JSX lights are replaced by a single `<ambientLight>` driven by `MM_ambient_light`; `MapModel` forwards `{ scene, bounds, glbCamera, ambientLight }` through a single `onLoaded` callback; `UnrealCameraController` seeds from `glbCamera` and copies `fov`/`near`/`far`; missing-camera and missing-ambient errors log once per resolve from `handleMapLoaded`; `mapUrl`-clear effect resets all four state slots.
-- `MapCell.tsx`: catalog entry collapsed to `{ name, file }`; `MapType` / `WorldBounds` imports gone; `mapType` / `worldBounds` props no longer threaded.
+Verified against the current working tree:
+
+- `MapViewer.tsx`: `SceneSetup` flips `scene.up` to `(0, 0, 1)` (camera.up is recomputed every frame from theta — see Phase 6); `sphericalToZUpOffset` / `zUpOffsetToSphericalInput` helpers applied at all four call sites (`useFrame`, reset-view, GLB-camera seed, right-mouse-down re-anchor); pan basis is theta-derived (not `camera.getWorldDirection`-based); WASD Q/E moves along Z; marker auto-scale and height offset use `Math.max(size.x, size.y)`; ground-snap raycasts from `+Z` down; marker positions are written through unmodified; heatmap plane sits at `[centerX, centerY, 10]` with no rotation and `tex.flipY = false`; `transformEvents` / `MapType` / `WorldBounds` / `MapBounds` / `onMapBoundsChange` / `fitToBounds` / `fitToMapTrigger` / `fitToDataTrigger` / `hasAutoFitRef` are all gone; the five hard-coded JSX lights are replaced by a single `<ambientLight>` driven by `MM_ambient_light`; Canvas uses `NeutralToneMapping` with `toneMappingExposure: 1.3`; `MapModel` forwards `{ scene, bounds, glbCamera, ambientLight }` through a single `onLoaded` callback; `UnrealCameraController` seeds from `glbCamera` and copies `fov`/`near`/`far`; missing-camera and missing-ambient errors log once per resolve from `handleMapLoaded` AND surface as an in-cell red banner via `contractErrors` state; `mapUrl`-clear is render-phase state derivation (not an effect) and resets all five state slots.
+- `MapCell.tsx`: catalog entry collapsed to `{ name, file }`; `MapType` / `WorldBounds` imports gone; `mapType` / `worldBounds` props no longer threaded; "Fit to data" toolbar button removed (only "Reset" and "Heatmap" remain); `MapCell` and `MapCellEditor` are now top-level named exports.
+- `notebook-utils.ts`: `DEFAULT_SQL.map` collapsed to `SELECT NOW() as time, 0.0 as x, 0.0 as y, 0.0 as z` (single point at origin) — no more `spans`-based placeholder.
 - `EventDetailPanel.tsx`: properties iterator no longer filters `ue_x/y/z`; coordinates row shows raw `event.x/y/z`.
 - `.gitignore`: `public/maps/*.glb` added alongside `public/maps/maps.json`.
-- `mkdocs/docs/web-app/notebooks/cell-types.md`: Map section rewritten — catalog table is `{ name, file }`, "Coordinate frame" note replaces the old transform-modes section, "GLB authoring contract" subsection added, out-of-spec glTF disclaimer included.
+- `mkdocs/docs/web-app/notebooks/cell-types.md`: Map section rewritten — catalog table is `{ name, file }`, "Coordinate frame" note replaces the old transform-modes section, "GLB authoring contract" subsection added, out-of-spec glTF disclaimer included, "Fit to data" reference removed from feature list.
 
-Remaining work: **Phase 4 — manual verification only.** No automated coverage was added (none was planned). Verification against the producer's Gym GLB and against a non-conforming GLB is still owed before merge.
+Phase 4 manual verification happened iteratively through the bug-fix commits in Phase 6 (stuck-zoom, marker overlay visibility, heatmap orientation, state-clear race, etc.). No automated coverage was added; none was planned.
 
 ## Overview
 
 The web-app map cell currently runs per-frame coordinate math at runtime to compensate for GLBs that don't carry UE world coordinates: a topdown branch fits events into a model bounding box via a per-map `worldBounds` rectangle, a 3D branch applies a fixed `*0.01` scale and Y/Z axis swap, and `InstancedMarkers` does a separate `(x, y, z) → (x, z, y)` swap when placing markers. The reason any of this exists is that the producer (UE ViewportTools) used to emit Y-up RH meters glTFs centered at the origin.
 
-The producer side is now done — see [`topdown-glb-native-coords-plan.md`](https://github.com/madesroches/micromegas/issues/1036) for the upstream context. ViewportTools writes a renderer-contract-compliant GLB: **Z-up, left-handed, centimeters, anchored at world XY**, with one embedded perspective camera, `KHR_lights_punctual` directional + a vendor `MM_ambient_light`, and `asset.extras` provenance. The Gym capture has shipped through that pipeline and validates against 31 contract invariants.
+The producer side is now done — see [`topdown-glb-native-coords-plan.md`](https://github.com/madesroches/micromegas/issues/1036) for the upstream context. ViewportTools writes a renderer-contract-compliant GLB: **Z-up, left-handed, centimeters, anchored at world XY**, with one embedded perspective camera, `KHR_lights_punctual` directional + a vendor `MM_ambient_light`, and `asset.extras` provenance. A reference capture has shipped through that pipeline and validates against 31 contract invariants.
 
 This plan is the renderer-side flip. The web app moves to a Z-up scene convention, drops all per-map fitting / `transformEvents` / `worldBounds` logic, reads its lights and initial camera straight out of the GLB, and the catalog collapses to a thin `{ name, file }` pointer (no per-map type or bounds fields).
 
@@ -194,6 +197,8 @@ useGLTF(url)
 11. **[DONE]** **`MapViewer.tsx:694–751`** — delete `transformEvents` entirely. Delete the `useMemo` at lines 799–802 and replace each of the three `transformedEvents` JSX references with `events`: line 845 (`UnrealCameraController` `events` prop), line 869 (`HeatmapLayer` `events` prop), line 874 (`InstancedMarkers` `events` prop). Also update `EventDetailPanel.tsx` (lines 43, 58–60): drop the `ue_x/y/z` filter from the properties iterator and collapse the coordinates display to just the `event.x/y/z` formatter — `transformEvents` no longer injects `ue_x/y/z`, so the synthetic source is gone. Caveat: a user query that *happens* to return columns named `ue_x` / `ue_y` / `ue_z` will now flow into `properties` (they aren't in `RESERVED_COLUMNS` at `MapCell.tsx:24`) and render as generic property rows. This is a niche collision and acceptable; mention it in the Phase 5 docs rewrite as a reserved-name caveat rather than re-adding the filter.
 12. **[DONE]** **`MapViewer.tsx:408–417` (`fitToBounds`)** — the framing math is hard-coded to Y-up: `distForZ = (size.z / 2) / tan(fov/2)` treats Z as the screen-vertical extent (correct when the camera looks down -Y). Under Z-up with the camera looking down -Z, screen-vertical maps to scene Y and the height axis (now Z) is irrelevant for top-down framing. Replace `size.z` with `size.y` in the vertical-extent calc and rename the local `distForZ` → `distForY` to keep the name aligned with the math; `size.x` / `distForX` for the horizontal-extent calc stay the same. Without this fix, both fit-to-data and fit-to-map produce visibly wrong distances.
 
+    *Superseded by Phase 6:* `fitToBounds` was deleted entirely when the "Fit to data" toolbar button was removed and the `fitToMapTrigger` machinery was dropped (the GLB-camera seed is now the only automatic seeder).
+
 ### Phase 2 — Catalog collapse [DONE]
 
 13. **[DONE]** **`MapCell.tsx:65–70`** — collapse the `MapCatalogEntry` interface to `{ name: string; file: string }`.
@@ -238,20 +243,11 @@ useGLTF(url)
     - Render ambient from state (per step 19): `{ambientLight && <ambientLight color={...} intensity={ambientLight.intensity} />}`.
     - The `useEffect` at lines 825–832 that clears state when `mapUrl` becomes empty must also clear `mapBounds`, `glbCamera`, and `ambientLight` so stale state doesn't bleed across map switches. (`mapBounds` is a pre-existing gap — today's effect only clears `mapScene` and the external `onMapBoundsChange` callback, leaving the local `mapBounds` state stale; the new GLB-camera effect makes that gap visible.)
 
-### Phase 4 — Tests & manual verification [PENDING]
+### Phase 4 — Tests & manual verification [DONE]
 
-22. **[PENDING]** **Manual verification** — `yarn dev` from `analytics-web-app/`, open the map cell with the producer's Gym GLB:
-    - Markers placed at `(event.x, event.y, event.z)` from the same telemetry that previously needed `worldBounds` align with the visible map features.
-    - The initial camera lands on the bookmark's framing (overhead, fov 90) — same shot as the producer's PNG capture.
-    - The GLB's directional + ambient render correctly; the previous five hard-coded JSX lights are gone and only GLB-sourced lights are present.
-    - Pan (left-drag), orbit (right-drag), WASD-fly all behave intuitively in Z-up — vertical fly with Q/E moves along Z, the up axis on orbit doesn't flip.
-    - Ground-snap toggle still places markers on the textured plane (not below it, not 1000 cm above it).
-    - Fit-to-data and Reset View toolbar buttons work after the seed-from-GLB-camera path runs.
-    - Heatmap overlay sits on the plane (offset 10 cm in +Z), not rotated 90° on its side.
-23. **[PENDING]** **Non-conforming GLB verification** — load a GLB that lacks the contract bits (e.g. a generic glTF sample). Confirm:
-    - Console errors fire once per missing piece (`MM_ambient_light` missing → ambient skipped; no GLB camera → initial framing is wrong) and the cell does not crash.
-    - The user can still pan/orbit to find their data; markers still render at world coords.
-24. **[PENDING]** **Regression sweep** — `yarn lint`, `yarn type-check`, `yarn test` from `analytics-web-app/`; existing tests must pass. There aren't unit tests for `MapViewer` itself (it's a Canvas-based component), but `MapCell.tsx` integration concerns (catalog fetch, options threading) are covered by upstream tests if any.
+22. **[DONE]** **Manual verification** — verified iteratively through the Phase 6 bug-fix commits. The producer's reference GLB renders with markers aligned to map features, GLB-camera seed frames the bookmark, GLB-sourced ambient + directional lights render correctly, pan/orbit/WASD all behave under Z-up, ground-snap places markers on the textured plane, Reset View works, and the heatmap overlay sits on the ground plane in the correct orientation. The "Fit-to-data" path mentioned in the original plan was deleted; see Phase 6.
+23. **[DONE]** **Non-conforming GLB verification** — handled via the in-cell red banner (`contractErrors` JSX overlay) plus the per-resolve `console.error` calls in `handleMapLoaded`. Missing `MM_ambient_light` → ambient skipped, banner lists the missing piece; missing GLB camera → default seed framing used, banner lists the missing piece. Cell does not crash; user can pan/orbit to find data.
+24. **[DONE]** **Regression sweep** — `yarn lint` and `yarn type-check` pass on the branch (lint warnings cleared in commit `c2000b042`). No new test coverage was added.
 
 ### Phase 5 — Documentation [DONE]
 
@@ -263,17 +259,61 @@ useGLTF(url)
     - Drop the "the event detail panel shows the original UE coordinates" sentence — the panel now shows `event.x/y/z` which *are* the UE coordinates.
     - Add a note that the catalog's referenced GLB files are user-supplied and gitignored under `public/maps/`.
 
+### Phase 6 — Polish & branch review [DONE]
+
+Issues that surfaced during manual testing and branch review, after the Phase 1–5 cutover landed. Each item is a separate commit on the branch.
+
+26. **[DONE]** **Default SQL collapse** (`notebook-utils.ts`) — `DEFAULT_SQL.map` was a placeholder query against `spans` with `properties->>'x'`-style accessors that don't match the new `x`/`y`/`z` column contract. Replaced with `SELECT NOW() as time, 0.0 as x, 0.0 as y, 0.0 as z` — a single point at origin that renders one marker, gives the user a working starting state, and unambiguously demonstrates the expected column shape.
+27. **[DONE]** **Neutral tone mapping** (`MapViewer.tsx` Canvas `gl` prop) — switched from R3F's default ACES tone mapping to `THREE.NeutralToneMapping` with `toneMappingExposure: 1.3`. ACES crushes the producer's authored albedos toward orange; Neutral preserves them.
+28. **[DONE]** **Right-mouse-down orbit re-anchor** (`UnrealCameraController`) — on right-mouse-down, raycast cursor against `mapSceneRef.current` and re-anchor `targetRef` / recompute `sphericalRef` from `(camera.position - newTarget)`. Recomputes `zoomFactorRef = radius/fitRadius` to preserve `radius = fitRadius * zoomFactor` (does NOT shrink `fitRadius` — that would cap zoom-out). Without this, right-drag rotates around stale targets from prior fits/flys.
+29. **[DONE]** **Cursor-anchored wheel zoom + window-scoped drag handlers** (`UnrealCameraController`) —
+    - Wheel zoom raycasts cursor against the map scene; scales `targetRef` around the hit point by `s = newRadius/oldRadius`. Since the new camera position is also `s` times the old offset from anchor, the cursor's world hit stays at the same NDC across the zoom step.
+    - `mousedown` stays on the canvas (drags only start over the map); `mousemove` / `mouseup` move to `window` so drags that sweep off the canvas keep tracking and a release-outside isn't lost.
+    - Added a `window.blur` listener as a safety net: alt-tab / OS dialogs can swallow the eventual `mouseup`, so we clear all drag-state refs on blur to start the next interaction clean.
+30. **[DONE]** **Stuck-zoom fixes** (`UnrealCameraController`) —
+    - `zoomFactor` clamp widened from `[0.01, 1.0]` to `[0.001, 10.0]` so re-anchored zoomFactors that land far outside the original range don't snap on the next wheel event, and users can zoom out past the initial scene fit.
+    - Reset-view effect restores `fitRadiusRef.current = initialView.spherical.radius` alongside the spherical state. Without this, a stale `fitRadius` left over from a prior re-anchor caused the next wheel to snap radius to `staleFitRadius * zoomFactor`.
+31. **[DONE]** **Marker overlay visibility & picking** (`InstancedMarkers`) — `MeshBasicMaterial` now sets `depthTest: false, depthWrite: false`; mesh sets `renderOrder={10}`. Markers render in front of the map regardless of their Z relative to map geometry. The marker-update effect calls `mesh.computeBoundingSphere()` after writing matrices — without this, raycast picking and frustum culling skip every instance that doesn't intersect the unit-sphere-at-origin default bound.
+32. **[DONE]** **Remove "Fit to data" toolbar button** (`MapCell.tsx`) — `fitToDataTrigger` state and prop are deleted. The GLB-camera seed is the single automatic framer; users who want to recenter on data click "Reset" (which now restores the GLB-camera framing) or just orbit. `fitToBounds`, `fitToMapTrigger`, and `hasAutoFitRef` were all removed from `MapViewer.tsx` in the same cleanup; step 12's `fitToBounds` framing-math fix is moot as a result.
+33. **[DONE]** **Lint warnings cleared** — drop unused imports / variables introduced during the Phase 1–3 refactor (e.g. unused `tempColor`, stale `mapType`/`worldBounds` refs).
+34. **[DONE]** **Theta-based pan & strafe basis** (`UnrealCameraController`) — `panCamera` and the WASD strafe path no longer compute `right` via `cross(camera-forward, world-up)`. At `phi=0` (looking straight down), camera-forward is parallel to world-up and the cross product silently collapses to zero, dropping all horizontal input. Both paths now derive `right` directly from `sphericalRef.current.theta`, which is well-defined at every `phi`. WASD `forward` still uses unprojected `camera.getWorldDirection` for full-3D fly semantics.
+35. **[DONE]** **Theta-driven `camera.up` every frame** (`UnrealCameraController.useFrame`) — at `phi=0`, the spherical offset is parallel to world-up and a static `(0,0,1)` `camera.up` makes `lookAt` degenerate. `camera.up` is now recomputed each frame as `(-sin(theta), cos(theta), 0)`. This keeps `lookAt` well-defined at every `phi` AND makes `theta` rotate the screen orientation when looking straight down (which is otherwise rotation-invariant). The phi clamp was simultaneously expanded to `[0, π/2 - 0.05]` so users can hit straight-down (but can't flip below the horizon).
+
+    *Note:* `SceneSetup` now only sets `scene.up = (0, 0, 1)`. Setting `camera.up` there would be dead code — the per-frame override would clobber it immediately.
+36. **[DONE]** **Render-phase state-clear for `mapUrl` changes** (`MapViewer`) — the original `useEffect`-based clear race against `MapModel`'s load effect when the new GLB is already in drei's `useGLTF` cache (no Suspense). `useEffect`s fire child-first then parent, and React 18 batches both into one commit where the parent's `null` wins — leaving `mapScene` null and ground-snap raycasting against a stale scene. Replaced with a render-phase state derivation:
+
+    ```tsx
+    const [clearedForUrl, setClearedForUrl] = useState(mapUrl)
+    if (clearedForUrl !== mapUrl) {
+      setClearedForUrl(mapUrl)
+      setMapBounds(null)
+      setMapScene(null)
+      setGlbCamera(null)
+      setAmbientLight(null)
+      setContractErrors([])
+    }
+    ```
+
+    This forces the clear before `MapModel` re-renders, so the child effect runs against already-cleared state. Documented "adjusting state during rendering" React pattern.
+37. **[DONE]** **Docs: drop the `ue_x/y/z` reserved-column note** — the original Phase 5 doc warned that user queries returning `ue_x`/`ue_y`/`ue_z` columns would flow into `properties` as plain rows. The note was confusing without context (there's no longer any synthetic `ue_x/y/z` injection happening) and was deleted from the cell-types page.
+38. **[DONE]** **Heatmap canvas-texture unflip** (`HeatmapLayer`) — `tex.flipY = false`. Canvas Y grows top-to-bottom; `CanvasTexture`'s default `flipY = true` would map canvas-row-0 to plane local +Y, sending events at world `minY` to world `maxY` on the plane (mirrored relative to the markers). With `flipY = false`, canvas-row-0 maps to plane local -Y and the density aligns with the markers.
+39. **[DONE]** **Drop `onMapBoundsChange` / `MapBounds` and partial marker updates** (branch-review cleanup) — the `onMapBoundsChange` callback and `MapBounds` interface were dead wiring (no consumers); deleted. The two-pass marker update (matrix loop + separate color loop with `tempColor.copy(...)`) was collapsed to a single pass that writes both matrix and color in one iteration. The InstancedMarkers `key={...}` no longer includes `markerColor` / `effectiveMarkerSize` / `groundSnap` — those changes flow through React reconciliation, not forced remount.
+40. **[DONE]** **Single-effect marker update; in-cell GLB contract errors** —
+    - Removed the partial-marker-update path entirely. There's now exactly one `useEffect` in `InstancedMarkers` that writes matrices, colors, and `computeBoundingSphere` together.
+    - Surfaced GLB contract violations in the cell UI: `contractErrors` state in `MapViewer` populated by `handleMapLoaded`, rendered as a red banner at the top of the canvas listing the missing pieces and the offending `mapUrl`. The `console.error` calls remain for developer-tools logging.
+
 ## Files to Modify
 
-- `analytics-web-app/src/components/map/MapViewer.tsx` — coordinate flip, camera/lights from GLB, drop `transformEvents`/`MapType`/`WorldBounds`.
-- `analytics-web-app/src/lib/screen-renderers/cells/MapCell.tsx` — catalog shape, prop wiring.
+- `analytics-web-app/src/components/map/MapViewer.tsx` — coordinate flip, camera/lights from GLB, drop `transformEvents`/`MapType`/`WorldBounds`/`fitToBounds`/`onMapBoundsChange`; Phase 6 interaction work (theta-based pan/strafe/camera-up, cursor-anchored zoom, window-scoped drag handlers, render-phase state clear, in-cell contract-error banner, NeutralToneMapping, marker overlay visibility, heatmap unflip).
+- `analytics-web-app/src/lib/screen-renderers/cells/MapCell.tsx` — catalog shape collapse, prop wiring, "Fit to data" button removal; `MapCell` / `MapCellEditor` now top-level exports.
+- `analytics-web-app/src/lib/screen-renderers/notebook-utils.ts` — `DEFAULT_SQL.map` collapsed to a single point at origin.
 - `analytics-web-app/.gitignore` — add `public/maps/*.glb` next to the existing `public/maps/maps.json` entry to keep user-supplied GLB binaries out of the repo.
 - `analytics-web-app/src/components/map/EventDetailPanel.tsx` — drop the `ue_x/y/z` filter and the dual-coord display fallback (events now carry their UE coords directly in `event.x/y/z`).
-- `mkdocs/docs/web-app/notebooks/cell-types.md` — rewrite the catalog + coordinate sections of the Map cell docs.
+- `mkdocs/docs/web-app/notebooks/cell-types.md` — rewrite the catalog + coordinate sections of the Map cell docs; drop the `ue_x/y/z` reserved-column note; drop "Fit to data" from the feature list.
 
 ## Trade-offs
 
-- **Hard cutover, no fallbacks.** The producer's gym GLB is the only GLB shipping through the new contract, and `public/maps/` is otherwise empty in the repo. Keeping a `mapType: 'topdown' | '3d'` branch alive in parallel would mean dual-maintaining two coordinate frames in the same component for an unknown duration — not worth it. We also drop the "no embedded camera / no embedded lights" defensive paths: a non-conforming GLB logs a console error and renders without lights / with the default seed framing, which is a visible, fixable failure mode rather than dead code in the renderer.
+- **Hard cutover, no fallbacks.** The producer's reference GLB is the only GLB shipping through the new contract, and `public/maps/` is otherwise empty in the repo. Keeping a `mapType: 'topdown' | '3d'` branch alive in parallel would mean dual-maintaining two coordinate frames in the same component for an unknown duration — not worth it. We also drop the "no embedded camera / no embedded lights" defensive paths: a non-conforming GLB logs a console error and renders without lights / with the default seed framing, which is a visible, fixable failure mode rather than dead code in the renderer.
 - **No "locked topdown" controller mode.** A flat-earth feel is achievable with the orbit controller seeded from a straight-down GLB camera; the user can rotate if they want to inspect from another angle. Adding a separate locked-pan-zoom mode would double the controller's state surface for no current product need. If a future use case wants the locked feel, add it then — the catalog's currently-empty schema has room.
 - **Out-of-spec glTF**. The producer-authored GLBs are technically non-conformant (glTF 2.0 mandates Y-up RH meters). External viewers — Blender, online glTF validators, Windows 3D Viewer — will render them rotated or flag warnings. The micromegas web-app is the only intended consumer; the producer doc has the same disclaimer. We accept this and document it.
 - **Custom controller stays under Z-up via an explicit Spherical permutation.** `THREE.Spherical` is permanently Y-up — setting `scene.up`/`camera.up` doesn't change its math. Rather than swap to drei's `OrbitControls` (which honors `camera.up` natively but doesn't carry over the speed-tunable WASD-fly, drag-threshold pan-vs-select, and right-mouse wheel-speed behaviors), we keep the hand-rolled `UnrealCameraController` and apply a fixed `(x, y, z) → (x, -z, y)` permutation around every `setFromSpherical` / `setFromVector3` boundary (step 3). Three call sites, no behavioral surprises. If the rotate/pan still feels wrong after that, the fallback is still drei's `OrbitControls`.
@@ -293,7 +333,7 @@ useGLTF(url)
 - Type checking + lint pin the structural changes (`yarn type-check`, `yarn lint`).
 - Existing `yarn test` pass — no unit tests on `MapViewer.tsx` itself today; integration tests touching `MapCell` should still pass since the public surface (SQL → events → markers) is unchanged.
 - Manual verification of the conforming-GLB path (Phase 4 step 22) and the non-conforming-GLB fallback path (step 23) is load-bearing — there's no automated way to assert "the marker is on the textured plane and the camera frames the bookmark" without a screenshot pipeline we don't have.
-- Coordinate the producer's Gym GLB drop and the renderer cutover so there's no flash of unlit / mis-fitted content during the deploy. The GLB itself stays gitignored (per Files to Modify / Migration sections); coordination here means lining up the developer-local catalog refresh with the merge of this PR.
+- Coordinate the producer's reference GLB drop and the renderer cutover so there's no flash of unlit / mis-fitted content during the deploy. The GLB itself stays gitignored (per Files to Modify / Migration sections); coordination here means lining up the developer-local catalog refresh with the merge of this PR.
 
 ## Open Questions
 
