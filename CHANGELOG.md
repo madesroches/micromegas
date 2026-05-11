@@ -37,6 +37,7 @@ This file documents the historical progress of the Micromegas project. For curre
   * Bump rustls-webpki, rand, and uuid to fix Dependabot alerts (#210-213)
   * Bump postcss and uuid to fix Dependabot alerts (#214-221)
   * Bump urllib3, fast-uri, @babel/plugin-transform-modules-systemjs, and apache/thrift to fix Dependabot alerts (#222, #225-229)
+  * Bump mermaid to 11.15.0 in `doc/intro-micromegas` and `doc/high-frequency-observability` to fix Dependabot alerts (#230-241)
 
 ## April 2026 - v0.24.0
 
