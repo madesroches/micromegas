@@ -573,7 +573,7 @@ The catalog (`public/maps/maps.json`) and the GLB binaries themselves (`public/m
 
 **Coordinate frame:**
 
-Events are placed at their raw `x`, `y`, `z` values without any runtime transform. The GLB is expected to be authored in the same frame and units the events are emitted in — see the GLB authoring contract below. Reserved column names that should not appear in your query result columns: `ue_x`, `ue_y`, `ue_z` (legacy property names — currently unused but reserved to avoid future collisions).
+Events are placed at their raw `x`, `y`, `z` values without any runtime transform. The GLB is expected to be authored in the same frame and units the events are emitted in — see the GLB authoring contract below.
 
 **GLB authoring contract:**
 
