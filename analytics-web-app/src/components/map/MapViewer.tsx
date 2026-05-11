@@ -183,19 +183,6 @@ function InstancedMarkers({
   }, [events, selectedId])
 
   const colorAttrRef = useRef<THREE.InstancedBufferAttribute | null>(null)
-  // Tracks what was last fully rebuilt so the effect below can choose between
-  // "rebuild every slot" (events/style changed) vs "patch 1–4 slots" (only
-  // selection/hover changed). With 10k events, the partial path turns each
-  // hover transition from 20k matrix+color writes into at most 8.
-  const lastFullBuildRef = useRef<{
-    events: MapEvent[]
-    markerColor: string
-    markerSize: number
-    heightOffset: number
-    snappedPositions: { x: number; y: number; z: number }[] | null
-  } | null>(null)
-  const prevSelectedRef = useRef(-1)
-  const prevHoveredRef = useRef<number | null>(null)
 
   useEffect(() => {
     if (!meshRef.current || events.length === 0) return
@@ -206,12 +193,10 @@ function InstancedMarkers({
       const colorArray = new Float32Array(events.length * 3)
       colorAttrRef.current = new THREE.InstancedBufferAttribute(colorArray, 3)
       mesh.instanceColor = colorAttrRef.current
-      // Fresh buffer ⇒ every slot is uninitialized; force a full rebuild below.
-      lastFullBuildRef.current = null
     }
     const attr = colorAttrRef.current
 
-    const writeSlot = (i: number) => {
+    for (let i = 0; i < events.length; i++) {
       const isSelected = i === selectedIndex
       const isHovered = i === hoveredIndex
       const scaleMultiplier = isSelected ? 1.5 : isHovered ? 1.2 : 1
@@ -230,44 +215,12 @@ function InstancedMarkers({
       attr.setXYZ(i, c.r, c.g, c.b)
     }
 
-    const last = lastFullBuildRef.current
-    const needsFullRebuild =
-      !last ||
-      events !== last.events ||
-      markerColor !== last.markerColor ||
-      markerSize !== last.markerSize ||
-      heightOffset !== last.heightOffset ||
-      snappedPositions !== last.snappedPositions
-
-    if (needsFullRebuild) {
-      for (let i = 0; i < events.length; i++) writeSlot(i)
-      // Required for correct raycasting and frustum culling on InstancedMesh:
-      // the default bounding sphere comes from the unit geometry at origin, so
-      // raycasts that miss the origin (i.e. most of them) skip every instance.
-      mesh.computeBoundingSphere()
-      lastFullBuildRef.current = { events, markerColor, markerSize, heightOffset, snappedPositions }
-    } else {
-      // Only highlight state moved — touch only the slots that transitioned.
-      const affected = new Set<number>()
-      const pS = prevSelectedRef.current
-      const pH = prevHoveredRef.current
-      if (pS !== selectedIndex) {
-        if (pS >= 0 && pS < events.length) affected.add(pS)
-        if (selectedIndex >= 0 && selectedIndex < events.length) affected.add(selectedIndex)
-      }
-      if (pH !== hoveredIndex) {
-        if (pH != null && pH >= 0 && pH < events.length) affected.add(pH)
-        if (hoveredIndex != null && hoveredIndex >= 0 && hoveredIndex < events.length)
-          affected.add(hoveredIndex)
-      }
-      for (const i of affected) writeSlot(i)
-    }
-
+    // Required for correct raycasting and frustum culling on InstancedMesh:
+    // the default bounding sphere comes from the unit geometry at origin, so
+    // raycasts that miss the origin (i.e. most of them) skip every instance.
+    mesh.computeBoundingSphere()
     mesh.instanceMatrix.needsUpdate = true
     attr.needsUpdate = true
-
-    prevSelectedRef.current = selectedIndex
-    prevHoveredRef.current = hoveredIndex
   }, [events, selectedIndex, hoveredIndex, tempObject, markerColor, markerSize, heightOffset, snappedPositions])
 
   useEffect(() => {
@@ -892,6 +845,7 @@ export function MapViewer({
   const [mapScene, setMapScene] = useState<THREE.Object3D | null>(null)
   const [glbCamera, setGlbCamera] = useState<THREE.PerspectiveCamera | null>(null)
   const [ambientLight, setAmbientLight] = useState<MMAmbientLight | null>(null)
+  const [contractErrors, setContractErrors] = useState<string[]>([])
   const [currentSpeed, setCurrentSpeed] = useState(2000)
 
   const handleSpeedChange = useCallback((speed: number) => {
@@ -905,15 +859,17 @@ export function MapViewer({
       setGlbCamera(payload.glbCamera)
       setAmbientLight(payload.ambientLight)
 
-      if (payload.ambientLight === null) {
-        console.error(
-          `[MapViewer] GLB ${mapUrl} is missing MM_ambient_light extension; ambient lighting will be absent`
-        )
-      }
+      const errors: string[] = []
       if (payload.glbCamera === null) {
-        console.error(
-          `[MapViewer] GLB ${mapUrl} has no perspective camera; initial framing may be wrong`
-        )
+        errors.push('No perspective camera in GLB — initial framing is the default seed, and Reset View will not work.')
+      }
+      if (payload.ambientLight === null) {
+        errors.push('No MM_ambient_light extension in GLB — scene will render without ambient illumination.')
+      }
+      setContractErrors(errors)
+
+      for (const msg of errors) {
+        console.error(`[MapViewer] ${mapUrl}: ${msg}`)
       }
     },
     [mapUrl]
@@ -960,6 +916,7 @@ export function MapViewer({
     setMapScene(null)
     setGlbCamera(null)
     setAmbientLight(null)
+    setContractErrors([])
   }
 
   return (
@@ -1020,6 +977,18 @@ export function MapViewer({
           groundSnap={groundSnap}
         />
       </Canvas>
+
+      {contractErrors.length > 0 && (
+        <div className="absolute top-4 left-1/2 -translate-x-1/2 max-w-2xl bg-red-900/90 border border-red-500 rounded-lg px-4 py-3 text-sm text-red-50 shadow-lg">
+          <div className="font-semibold text-base mb-1">GLB does not satisfy renderer contract</div>
+          <div className="text-xs text-red-200 mb-2 font-mono break-all">{mapUrl}</div>
+          <ul className="list-disc pl-5 space-y-1">
+            {contractErrors.map((msg, i) => (
+              <li key={i}>{msg}</li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       <div className="absolute bottom-4 right-4 bg-app-bg border border-theme-border rounded-lg px-3 py-2 text-xs text-theme-text-muted">
         <div className="font-semibold text-theme-text-secondary mb-1">Controls</div>
