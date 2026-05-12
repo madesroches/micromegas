@@ -42,6 +42,8 @@ This file documents the historical progress of the Micromegas project. For curre
   * Bump postcss and uuid to fix Dependabot alerts (#214-221)
   * Bump urllib3, fast-uri, @babel/plugin-transform-modules-systemjs, and apache/thrift to fix Dependabot alerts (#222, #225-229)
   * Bump mermaid to 11.15.0 in `doc/intro-micromegas` and `doc/high-frequency-observability` to fix Dependabot alerts (#230-241)
+* **Repo:**
+  * Migrate Yarn 1 (Classic) to Yarn 4 (Berry) via corepack across all six yarn projects; corepack-only delivery, `nodeLinker: node-modules`; CI/Docker/build scripts updated; clean lock + zero install warnings (#1008)
 
 ## April 2026 - v0.24.0
 
