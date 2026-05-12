@@ -19,6 +19,8 @@ This file documents the historical progress of the Micromegas project. For curre
   * Resolve macros in chart series labels and chart cell titles
   * Defer notebook markdown cell render until sequential execution reaches it, preventing stale macro output on first paint (#1023)
   * Add map notebook cell rendering spatial events on a GLB model with optional heatmap overlay (#1033)
+  * Convert map cell to native UE coordinates (Z-up) with GLB-embedded perspective camera, `MM_ambient_light`, and Neutral tone mapping; replace "Fit to data" with GLB-camera-seeded Reset (#1036)
+  * Polish map interaction: cursor-anchored wheel zoom, right-mouse-drag orbit re-anchor, fix marker overlay visibility/picking and heatmap orientation, surface GLB contract errors in-cell (#1036)
   * Add `--remote-backend` flag to `start_analytics_web.py` for hybrid local-frontend + remote-backend setup (#1033)
 * **Python:**
   * Switch `bulk_ingest` to accept `pyarrow.Table` directly for native pass-through of struct/list/binary columns
