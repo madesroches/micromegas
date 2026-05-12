@@ -52,6 +52,9 @@ export default defineConfig(({ mode }) => {
     build: {
       outDir: 'dist',
       sourcemap: mode === 'development',
+      // ScreenPage pulls in three.js + perfetto and is a lazy-loaded route chunk;
+      // the default 500 kB warning isn't actionable here.
+      chunkSizeWarningLimit: 2000,
     },
     server: {
       port: frontendPort,
