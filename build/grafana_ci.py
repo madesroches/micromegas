@@ -90,8 +90,11 @@ def run_cmd(cmd: str, cwd: Path) -> int:
         full_cmd = f"source {nvm_sh} && nvm use && corepack enable && {cmd}"
         result = subprocess.run(["bash", "-c", full_cmd], cwd=cwd, check=False)
     else:
-        # Fall back to direct execution if nvm not found
-        result = subprocess.run(cmd, shell=True, cwd=cwd, check=False)
+        # Fall back to direct execution if nvm not found (e.g. GitHub Actions
+        # runner with setup-node providing Node directly). Still run corepack
+        # enable so yarn resolves to the version pinned by packageManager.
+        full_cmd = f"corepack enable && {cmd}"
+        result = subprocess.run(["bash", "-c", full_cmd], cwd=cwd, check=False)
 
     return result.returncode
 
