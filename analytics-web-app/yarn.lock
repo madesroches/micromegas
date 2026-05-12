@@ -4087,7 +4087,7 @@ __metadata:
     jsep: "npm:^1.4.0"
     lucide-react: "npm:^0.292.0"
     lz4js: "npm:^0.2.0"
-    micromegas-datafusion-wasm: "file:src/lib/datafusion-wasm"
+    micromegas-datafusion-wasm: "link:src/lib/datafusion-wasm"
     postcss: "npm:^8.5.10"
     react: "npm:^18.3.0"
     react-day-picker: "npm:^9.11.3"
@@ -7945,12 +7945,11 @@ __metadata:
   languageName: node
   linkType: hard
 
-"micromegas-datafusion-wasm@file:src/lib/datafusion-wasm::locator=analytics-web-app%40workspace%3A.":
-  version: 0.1.0
-  resolution: "micromegas-datafusion-wasm@file:src/lib/datafusion-wasm#src/lib/datafusion-wasm::hash=71f467&locator=analytics-web-app%40workspace%3A."
-  checksum: 10c0/20c70bd01579fce29b8b68ae6298418e643b0c55af2779b07d3fb0740ab118f84b2f14252b9902c468f487bfb76808340de7656d9e8f886affceed8448f5ad03
+"micromegas-datafusion-wasm@link:src/lib/datafusion-wasm::locator=analytics-web-app%40workspace%3A.":
+  version: 0.0.0-use.local
+  resolution: "micromegas-datafusion-wasm@link:src/lib/datafusion-wasm::locator=analytics-web-app%40workspace%3A."
   languageName: node
-  linkType: hard
+  linkType: soft
 
 "mimic-fn@npm:^2.1.0":
   version: 2.1.0

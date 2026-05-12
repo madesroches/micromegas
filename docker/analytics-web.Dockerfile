@@ -10,7 +10,7 @@ FROM node:20-alpine AS frontend-builder
 WORKDIR /app
 RUN corepack enable
 COPY analytics-web-app/package.json analytics-web-app/yarn.lock analytics-web-app/.yarnrc.yml ./
-# Local file: dependency must exist for yarn to resolve it
+# Local link: dependency must exist for yarn to create the symlink
 COPY analytics-web-app/src/lib/datafusion-wasm/ ./src/lib/datafusion-wasm/
 RUN yarn install --immutable
 
