@@ -29,9 +29,7 @@ interface MapViewerProps {
   heatmapIntensity: number
   markerColor?: string
   markerSize?: number
-  groundSnap?: boolean
   resetViewTrigger?: number
-  heightOffset?: number
 }
 
 function LoadingIndicator() {
@@ -102,9 +100,6 @@ interface InstancedMarkersProps {
   onSelect: (event: MapEvent | null) => void
   markerColor?: string
   markerSize?: number
-  heightOffset?: number
-  mapScene?: THREE.Object3D | null
-  groundSnap?: boolean
 }
 
 const DEFAULT_MARKER_COLOR = '#bf360c'
@@ -119,53 +114,11 @@ function InstancedMarkers({
   onSelect,
   markerColor = DEFAULT_MARKER_COLOR,
   markerSize = DEFAULT_MARKER_SIZE,
-  heightOffset = 0,
-  mapScene = null,
-  groundSnap = false,
 }: InstancedMarkersProps) {
   const meshRef = useRef<THREE.InstancedMesh>(null)
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null)
 
   const tempObject = useMemo(() => new THREE.Object3D(), [])
-
-  const raycaster = useMemo(() => new THREE.Raycaster(), [])
-  const rayOrigin = useMemo(() => new THREE.Vector3(), [])
-  const rayDirection = useMemo(() => new THREE.Vector3(0, 0, -1), [])
-
-  const snappedPositions = useMemo(() => {
-    if (!groundSnap || !mapScene || events.length === 0) {
-      return null
-    }
-
-    const positions: { x: number; y: number; z: number }[] = []
-
-    const mapBox = new THREE.Box3().setFromObject(mapScene)
-    const rayStartHeight = mapBox.max.z + 1000
-
-    events.forEach((event) => {
-      rayOrigin.set(event.x, event.y, rayStartHeight)
-      raycaster.set(rayOrigin, rayDirection)
-
-      const intersects = raycaster.intersectObject(mapScene, true)
-
-      if (intersects.length > 0) {
-        const hit = intersects[0]
-        positions.push({
-          x: event.x,
-          y: event.y,
-          z: hit.point.z + heightOffset
-        })
-      } else {
-        positions.push({
-          x: event.x,
-          y: event.y,
-          z: event.z + heightOffset
-        })
-      }
-    })
-
-    return positions
-  }, [groundSnap, mapScene, events, raycaster, rayOrigin, rayDirection, heightOffset])
 
   const geometry = useMemo(() => new THREE.SphereGeometry(1, 16, 16), [])
   // Overlay semantics: markers should remain visible regardless of where
@@ -203,10 +156,7 @@ function InstancedMarkers({
       const finalScale = markerSize * scaleMultiplier
 
       const event = events[i]
-      const pos = snappedPositions
-        ? snappedPositions[i]
-        : { x: event.x, y: event.y, z: event.z + heightOffset }
-      tempObject.position.set(pos.x, pos.y, pos.z)
+      tempObject.position.set(event.x, event.y, event.z)
       tempObject.scale.setScalar(finalScale)
       tempObject.updateMatrix()
       mesh.setMatrixAt(i, tempObject.matrix)
@@ -221,7 +171,7 @@ function InstancedMarkers({
     mesh.computeBoundingSphere()
     mesh.instanceMatrix.needsUpdate = true
     attr.needsUpdate = true
-  }, [events, selectedIndex, hoveredIndex, tempObject, markerColor, markerSize, heightOffset, snappedPositions])
+  }, [events, selectedIndex, hoveredIndex, tempObject, markerColor, markerSize])
 
   useEffect(() => {
     return () => {
@@ -837,9 +787,7 @@ export function MapViewer({
   heatmapIntensity,
   markerColor,
   markerSize,
-  groundSnap = false,
   resetViewTrigger = 0,
-  heightOffset: heightOffsetProp,
 }: MapViewerProps) {
   const [mapBounds, setMapBounds] = useState<THREE.Box3 | null>(null)
   const [mapScene, setMapScene] = useState<THREE.Object3D | null>(null)
@@ -884,22 +832,10 @@ export function MapViewer({
     return markerSize ?? DEFAULT_MARKER_SIZE
   }, [markerSize, mapBounds])
 
-  const heightOffset = useMemo(() => {
-    if (mapBounds) {
-      const size = mapBounds.getSize(new THREE.Vector3())
-      const extent = Math.max(size.x, size.y)
-      if (heightOffsetProp !== undefined) {
-        return heightOffsetProp * extent * 0.01
-      }
-      return extent * 0.005
-    }
-    return heightOffsetProp ?? 50
-  }, [mapBounds, heightOffsetProp])
-
   // Clear loaded-GLB state whenever mapUrl changes (including the A→B case
-  // where both are truthy). Without this, InstancedMarkers' ground-snap
-  // raycasts against the previous scene during Suspense, since the markers
-  // render as a sibling of the suspended MapModel, not a child.
+  // where both are truthy), so transient consumers (UnrealCameraController,
+  // marker sizing from mapBounds) don't see stale scene state during the
+  // Suspense gap.
   //
   // Done as a render-phase state derivation rather than an effect: an
   // effect-based clear races against MapModel's load effect when the new GLB
@@ -972,9 +908,6 @@ export function MapViewer({
           onSelect={onSelectEvent}
           markerColor={markerColor}
           markerSize={effectiveMarkerSize}
-          heightOffset={heightOffset}
-          mapScene={mapScene}
-          groundSnap={groundSnap}
         />
       </Canvas>
 

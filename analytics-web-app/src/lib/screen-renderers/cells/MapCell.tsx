@@ -110,8 +110,6 @@ export function MapCell({ data, status, options, onOptionsChange }: CellRenderer
   const heatmapIntensity = (options?.heatmapIntensity as number) ?? 0.5
   const markerColor = (options?.markerColor as string) ?? '#bf360c'
   const markerSize = (options?.markerSize as number) ?? 10
-  const groundSnap = (options?.groundSnap as boolean) ?? false
-  const heightOffset = options?.heightOffset as number | undefined
 
   const handleSelectEvent = useCallback((event: MapEvent | null) => {
     setSelectedEvent(event)
@@ -179,8 +177,6 @@ export function MapCell({ data, status, options, onOptionsChange }: CellRenderer
         heatmapIntensity={heatmapIntensity}
         markerColor={markerColor}
         markerSize={markerSize}
-        groundSnap={groundSnap}
-        heightOffset={heightOffset}
         resetViewTrigger={resetViewTrigger}
       />
 
@@ -349,33 +345,6 @@ export function MapCellEditor({
             {(mapConfig.options?.markerSize as number) ?? 10}
           </span>
         </div>
-
-        {/* Ground snap */}
-        <div className="flex items-center gap-2">
-          <label className="text-xs text-theme-text-secondary w-24 shrink-0">Ground Snap</label>
-          <input
-            type="checkbox"
-            checked={(mapConfig.options?.groundSnap as boolean) ?? false}
-            onChange={(e) => updateOption('groundSnap', e.target.checked)}
-          />
-        </div>
-
-        {/* Height offset */}
-        <div className="flex items-center gap-2">
-          <label className="text-xs text-theme-text-secondary w-24 shrink-0">Height Offset</label>
-          <input
-            type="range"
-            min="-5"
-            max="10"
-            step="0.1"
-            value={(mapConfig.options?.heightOffset as number) ?? 0.5}
-            onChange={(e) => updateOption('heightOffset', Number(e.target.value))}
-            className="w-32 accent-accent-link"
-          />
-          <span className="text-xs text-theme-text-muted w-8">
-            {(mapConfig.options?.heightOffset as number) ?? 0.5}
-          </span>
-        </div>
       </div>
 
       <AvailableVariablesPanel
@@ -413,7 +382,6 @@ export const mapMetadata: CellTypeMetadata = {
       showHeatmap: false,
       markerColor: '#bf360c',
       markerSize: 10,
-      groundSnap: false,
     },
   }),
 
