@@ -2,7 +2,7 @@ import { useEffect } from 'react'
 import { useLocation } from 'react-router-dom'
 import { useAuth } from '@/lib/auth'
 import { getConfig } from '@/lib/config'
-import { navigateTo } from '@/lib/navigation'
+import { navigateTo, reloadPage } from '@/lib/navigation'
 import { Card, CardContent } from '@/components/ui/card'
 import { AlertCircle } from 'lucide-react'
 
@@ -57,7 +57,7 @@ export function AuthGuard({ children, requireAdmin }: AuthGuardProps) {
                 </p>
               )}
               <button
-                onClick={() => window.location.reload()}
+                onClick={reloadPage}
                 className="text-sm text-blue-600 hover:underline"
               >
                 Retry

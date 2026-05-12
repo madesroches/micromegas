@@ -7,8 +7,10 @@ global.fetch = jest.fn()
 
 // Mock navigation module (jsdom 26 freezes window.location methods)
 const mockNavigateTo = jest.fn()
+const mockReloadPage = jest.fn()
 jest.mock('@/lib/navigation', () => ({
   navigateTo: (...args: unknown[]) => mockNavigateTo(...args),
+  reloadPage: () => mockReloadPage(),
 }))
 
 describe('AuthGuard', () => {
@@ -163,7 +165,6 @@ describe('AuthGuard', () => {
     const retryButton = screen.getByText('Retry')
     retryButton.click()
 
-    // Retry button reloads the page, so we just verify it exists
-    expect(retryButton).toBeInTheDocument()
+    expect(mockReloadPage).toHaveBeenCalled()
   })
 })
