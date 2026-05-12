@@ -51,7 +51,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Format**: `poetry run black <file>` (REQUIRED before commit)
 
 ### Grafana Plugin (from `grafana/` directory)
-- **IMPORTANT**: Use `yarn`, NOT `npm` (project uses yarn as package manager)
+- **IMPORTANT**: Use `yarn`, NOT `npm` (project uses Yarn 4 / Berry via corepack — run `corepack enable` once on a new machine)
 - **Install**: `yarn install`
 - **Build**: `yarn build`
 - **Dev build**: `yarn dev`
@@ -59,7 +59,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Test server**: `yarn server` (starts local Grafana with plugin)
 
 ### Analytics Web App (from `analytics-web-app/` directory)
-- **IMPORTANT**: Use `yarn`, NOT `npm` (project uses yarn as package manager)
+- **IMPORTANT**: Use `yarn`, NOT `npm` (project uses Yarn 4 / Berry via corepack — run `corepack enable` once on a new machine)
 - **Install**: `yarn install`
 - **Dev**: `yarn dev` (starts Vite dev server on port 3000)
 - **Build**: `yarn build` (production build to `dist/`)

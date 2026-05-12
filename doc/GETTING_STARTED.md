@@ -11,7 +11,7 @@ For testing purposes, you can run the Micromegas stack on your local workstation
 *   [Python](https://www.python.org/downloads/) (for database setup script)
 *   [Rust](https://www.rust-lang.org/tools/install) and Cargo (for building Micromegas services)
 *   [Node.js](https://nodejs.org/) 18+
-*   [Yarn](https://yarnpkg.com/) (`npm install -g yarn`)
+*   Yarn 4 (Berry) — installed via `corepack enable` (Node 20 ships with corepack)
 *   wasm32 Rust target: `rustup target add wasm32-unknown-unknown`
 *   [wasm-bindgen CLI](https://rustwasm.github.io/wasm-bindgen/) (version must match `rust/datafusion-wasm/Cargo.lock`)
 

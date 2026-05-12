@@ -40,12 +40,17 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     unzip \
     wget
 
-# Node.js 20 + Yarn
+# Node.js 20 + Yarn 4 (via corepack). Shared COREPACK_HOME so the runner user
+# reads the same prepared binary that root sets up — without this, switching
+# USER would force corepack to re-fetch yarn from the network on every container.
+ENV COREPACK_HOME=/opt/corepack
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
-    && npm install -g yarn
+    && corepack enable \
+    && corepack prepare yarn@4.14.1 --activate \
+    && chmod -R a+rX /opt/corepack
 
 # Go 1.21
 RUN GOARCH=$([ "$(uname -m)" = "x86_64" ] && echo "amd64" || echo "arm64") \

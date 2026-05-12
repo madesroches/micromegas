@@ -9,8 +9,8 @@ A Grafana datasource plugin for querying [Micromegas](https://github.com/madesro
 
 ```bash
 cd grafana
-npm install
-npm run build
+yarn install
+yarn build
 ```
 
 ## Documentation

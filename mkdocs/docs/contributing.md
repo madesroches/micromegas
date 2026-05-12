@@ -39,7 +39,7 @@ For information on setting up your local development environment, please refer t
 
 ## Monorepo Structure
 
-Micromegas uses a monorepo structure with npm workspaces for JavaScript/TypeScript components and Cargo workspaces for Rust components.
+Micromegas uses a monorepo structure with Yarn workspaces for JavaScript/TypeScript components and Cargo workspaces for Rust components.
 
 ### Repository Layout
 
@@ -60,7 +60,7 @@ micromegas/
 │   └── types/              # @micromegas/types package
 ├── python/                 # Python client
 │   └── micromegas/         # Poetry package
-├── package.json            # Root npm workspace
+├── package.json            # Root Yarn workspace
 └── CONTRIBUTING.md         # This file
 ```
 
@@ -96,7 +96,7 @@ poetry run black <file> # Format code (REQUIRED before commit)
 
 ### TypeScript/JavaScript Workspaces
 
-The repository uses npm workspaces to manage TypeScript/JavaScript packages, with `yarn` as the package manager.
+The repository uses Yarn workspaces to manage TypeScript/JavaScript packages.
 
 - **Root workspace** (`package.json`): Defines workspaces and shared dev dependencies
 - **`grafana/`**: Grafana FlightSQL datasource plugin (React + Go backend)
@@ -142,7 +142,7 @@ cd python/micromegas && poetry install   # Python doesn't need a build step
 
 **TypeScript/JavaScript workspaces** (use `yarn`):
 ```bash
-yarn workspaces run build                # Build all workspaces (from root)
+yarn workspaces foreach -A run build     # Build all workspaces (from root)
 cd grafana && yarn build                 # Grafana plugin only
 cd typescript/types && yarn build        # Shared types only
 ```
@@ -169,7 +169,7 @@ cd python/micromegas && poetry run pytest  # Python tests
 
 **TypeScript/JavaScript workspaces** (use `yarn`):
 ```bash
-yarn workspaces run test                 # Test all workspaces (from root)
+yarn workspaces foreach -A run test      # Test all workspaces (from root)
 cd grafana && yarn test:ci               # Grafana plugin tests only
 ```
 
@@ -188,7 +188,7 @@ cd python/micromegas && poetry run black .
 
 **TypeScript/JavaScript workspaces** (use `yarn`):
 ```bash
-yarn workspaces run lint                 # Lint all workspaces (from root)
+yarn workspaces foreach -A run lint      # Lint all workspaces (from root)
 cd grafana && yarn lint:fix              # Grafana plugin only
 ```
 
@@ -197,7 +197,7 @@ cd grafana && yarn lint:fix              # Grafana plugin only
 The Grafana plugin requires both Node.js and Go:
 
 **Prerequisites:**
-- Node.js 16+ (18.20.8 recommended)
+- Node.js 20+ (matches `.nvmrc` and all CI workflows; Yarn 4 requires ≥18.12)
 - Go 1.23+ (for backend plugin)
 - yarn (package manager for this repository)
 - mage (for Go builds): `go install github.com/magefile/mage@latest`
@@ -207,7 +207,7 @@ The Grafana plugin requires both Node.js and Go:
 cd grafana
 
 # Install dependencies
-yarn install --ignore-engines
+yarn install
 
 # Build Go backend binaries
 mage -v build
@@ -244,7 +244,7 @@ yarn server             # Starts Grafana with docker compose (includes --build)
 ### TypeScript/JavaScript
 - Follow existing ESLint configuration in each workspace
 - Use Prettier for formatting
-- Run `npm run lint:fix` before committing
+- Run `yarn lint:fix` before committing
 - Prefer functional components and hooks in React code
 
 ### Python

@@ -1,6 +1,6 @@
 #!/usr/bin/bash
 set -e
-yarn install --pure-lockfile
+yarn install --immutable
 yarn build
 mage -v
 mage build:generateManifestFile

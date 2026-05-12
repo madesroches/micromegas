@@ -28,6 +28,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Enable corepack
+        if: needs.check-runner.outputs.runner == 'ubuntu-latest'
+        run: corepack enable
+
       - name: Setup Node.js environment
         if: needs.check-runner.outputs.runner == 'ubuntu-latest'
         uses: actions/setup-node@v4

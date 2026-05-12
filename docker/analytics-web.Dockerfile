@@ -8,10 +8,11 @@ FROM ${WASM_IMAGE} AS wasm-builder
 FROM node:20-alpine AS frontend-builder
 
 WORKDIR /app
-COPY analytics-web-app/package.json analytics-web-app/yarn.lock ./
-# Local file: dependency must exist for yarn to resolve it
+RUN corepack enable
+COPY analytics-web-app/package.json analytics-web-app/yarn.lock analytics-web-app/.yarnrc.yml ./
+# Local link: dependency must exist for yarn to create the symlink
 COPY analytics-web-app/src/lib/datafusion-wasm/ ./src/lib/datafusion-wasm/
-RUN yarn install --frozen-lockfile
+RUN yarn install --immutable
 
 COPY analytics-web-app/ ./
 COPY --from=wasm-builder /build/rust/datafusion-wasm/pkg/ ./src/lib/datafusion-wasm/

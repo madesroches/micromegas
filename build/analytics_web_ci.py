@@ -8,13 +8,14 @@ import sys
 import os
 from pathlib import Path
 
+
 def setup_nvm_and_node(repo_root: Path) -> bool:
     """Setup NVM and switch to the correct Node version."""
     # Look for .nvmrc in analytics-web-app directory
     nvmrc_path = repo_root / "analytics-web-app" / ".nvmrc"
 
     if nvmrc_path.exists():
-        with open(nvmrc_path, 'r') as f:
+        with open(nvmrc_path, "r") as f:
             required_version = f.read().strip()
         print(f"Found .nvmrc at {nvmrc_path} with Node version: {required_version}")
     else:
@@ -22,7 +23,7 @@ def setup_nvm_and_node(repo_root: Path) -> bool:
         print(f"No .nvmrc found, using Node {required_version}")
 
     # Find NVM installation
-    nvm_dir = os.environ.get('NVM_DIR', os.path.expanduser('~/.nvm'))
+    nvm_dir = os.environ.get("NVM_DIR", os.path.expanduser("~/.nvm"))
     nvm_sh = Path(nvm_dir) / "nvm.sh"
 
     if not nvm_sh.exists():
@@ -40,10 +41,7 @@ def setup_nvm_and_node(repo_root: Path) -> bool:
     """
 
     result = subprocess.run(
-        ["bash", "-c", switch_cmd],
-        cwd=repo_root,
-        capture_output=True,
-        text=True
+        ["bash", "-c", switch_cmd], cwd=repo_root, capture_output=True, text=True
     )
 
     if result.returncode != 0:
@@ -53,27 +51,29 @@ def setup_nvm_and_node(repo_root: Path) -> bool:
     print(result.stdout)
     return True
 
+
 def run_cmd(cmd: str, cwd: Path) -> int:
     """Run command with NVM environment."""
     print(f"Running: {cmd} in {cwd}")
 
     # Find NVM installation
-    nvm_dir = os.environ.get('NVM_DIR', os.path.expanduser('~/.nvm'))
+    nvm_dir = os.environ.get("NVM_DIR", os.path.expanduser("~/.nvm"))
     nvm_sh = Path(nvm_dir) / "nvm.sh"
 
     if nvm_sh.exists():
-        # Run command with nvm sourced
-        full_cmd = f"source {nvm_sh} && nvm use && {cmd}"
-        result = subprocess.run(
-            ["bash", "-c", full_cmd],
-            cwd=cwd,
-            check=False
-        )
+        # Run command with nvm sourced; corepack enable activates yarn 4 on the
+        # post-nvm-switch PATH (corepack shims are per-Node-version).
+        full_cmd = f"source {nvm_sh} && nvm use && corepack enable && {cmd}"
+        result = subprocess.run(["bash", "-c", full_cmd], cwd=cwd, check=False)
     else:
-        # Fall back to direct execution if nvm not found
-        result = subprocess.run(cmd, shell=True, cwd=cwd, check=False)
+        # Fall back to direct execution if nvm not found (e.g. GitHub Actions
+        # runner with setup-node providing Node directly). Still run corepack
+        # enable so yarn resolves to the version pinned by packageManager.
+        full_cmd = f"corepack enable && {cmd}"
+        result = subprocess.run(["bash", "-c", full_cmd], cwd=cwd, check=False)
 
     return result.returncode
+
 
 def main():
     repo_root = Path(__file__).parent.parent
@@ -117,6 +117,7 @@ def main():
 
     print("\n✅ All checks passed!")
     return 0
+
 
 if __name__ == "__main__":
     sys.exit(main())
