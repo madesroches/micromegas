@@ -345,7 +345,6 @@ export function MapCellEditor({
             {(mapConfig.options?.markerSize as number) ?? 10}
           </span>
         </div>
-
       </div>
 
       <AvailableVariablesPanel

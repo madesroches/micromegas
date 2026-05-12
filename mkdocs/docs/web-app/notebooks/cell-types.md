@@ -511,7 +511,7 @@ WHERE m.value > t.warn_threshold
 
 ## ![Map](../../assets/images/cell-icons/map.svg){ .cell-icon } Map
 
-3D map visualization that plots spatial events on a GLB model with optional heatmap overlay. Events are rendered as instanced sphere markers with ground-snap raycasting for accurate surface placement.
+3D map visualization that plots spatial events on a GLB model with optional heatmap overlay. Events are rendered as instanced sphere markers at their native `(x, y, z)` coordinates.
 
 **Configuration:**
 
