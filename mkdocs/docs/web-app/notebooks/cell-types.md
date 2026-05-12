@@ -588,7 +588,7 @@ GLBs missing the camera log a console error and fall back to the default seed fr
 - Instanced rendering — handles thousands of markers efficiently
 - Interactive markers — click to select, hover to highlight
 - Camera controls — left-drag to pan, right-drag to orbit, scroll to zoom, WASD to fly
-- Reset View toolbar button
+- Reset view with the Z key
 - Event detail panel with properties and link to process logs
 - Results registered in the [local WASM query engine](execution.md#local-wasm-query-engine) under the cell name for downstream queries
 

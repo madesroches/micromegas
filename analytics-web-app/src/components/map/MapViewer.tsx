@@ -481,7 +481,6 @@ function UnrealCameraController({
           Math.min(Math.PI / 2 - 0.05, sphericalRef.current.phi)
         )
       }
-
     }
 
     const onWheel = (e: WheelEvent) => {
@@ -552,8 +551,8 @@ function UnrealCameraController({
       }
     }
 
-    // Hover gates WASD/QE so multiple Map cells on a page don't all fly
-    // together and so flying stops when the pointer leaves the canvas.
+    // Hover gates WASD so multiple Map cells on a page don't all fly together
+    // and so flying stops when the pointer leaves the canvas.
     const onMouseEnter = () => {
       isHoveredRef.current = true
     }
