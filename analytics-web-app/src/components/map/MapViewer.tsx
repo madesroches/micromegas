@@ -24,9 +24,6 @@ interface MapViewerProps {
   events: MapEvent[]
   selectedEventId?: string
   onSelectEvent: (event: MapEvent | null) => void
-  showHeatmap: boolean
-  heatmapRadius: number
-  heatmapIntensity: number
   markerColor?: string
   markerSize?: number
   resetViewTrigger?: number
@@ -227,90 +224,6 @@ function InstancedMarkers({
   )
 }
 
-interface HeatmapLayerProps {
-  events: MapEvent[]
-  radius: number
-  intensity: number
-}
-
-const HEATMAP_PADDING = 1000
-
-function HeatmapLayer({ events, radius, intensity }: HeatmapLayerProps) {
-  const meshRef = useRef<THREE.Mesh>(null)
-  const [texture, setTexture] = useState<THREE.CanvasTexture | null>(null)
-
-  // Single pass over events; spread-based Math.min(...arr) blows the stack at large counts.
-  const bounds = useMemo(() => {
-    if (events.length === 0) return null
-    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity
-    for (const e of events) {
-      if (e.x < minX) minX = e.x
-      if (e.x > maxX) maxX = e.x
-      if (e.y < minY) minY = e.y
-      if (e.y > maxY) maxY = e.y
-    }
-    return { minX, maxX, minY, maxY }
-  }, [events])
-
-  useEffect(() => {
-    if (!bounds) {
-      setTexture(null)
-      return
-    }
-
-    const canvas = document.createElement('canvas')
-    const size = 1024
-    canvas.width = size
-    canvas.height = size
-    const ctx = canvas.getContext('2d')
-    if (!ctx) return
-
-    ctx.clearRect(0, 0, size, size)
-
-    const rangeX = bounds.maxX - bounds.minX + HEATMAP_PADDING * 2
-    const rangeY = bounds.maxY - bounds.minY + HEATMAP_PADDING * 2
-
-    events.forEach((event) => {
-      const canvasX = ((event.x - bounds.minX + HEATMAP_PADDING) / rangeX) * size
-      const canvasY = ((event.y - bounds.minY + HEATMAP_PADDING) / rangeY) * size
-
-      const gradient = ctx.createRadialGradient(canvasX, canvasY, 0, canvasX, canvasY, radius)
-      gradient.addColorStop(0, `rgba(191, 54, 12, ${intensity})`)
-      gradient.addColorStop(0.5, `rgba(191, 54, 12, ${intensity * 0.5})`)
-      gradient.addColorStop(1, 'rgba(191, 54, 12, 0)')
-
-      ctx.fillStyle = gradient
-      ctx.fillRect(canvasX - radius, canvasY - radius, radius * 2, radius * 2)
-    })
-
-    const tex = new THREE.CanvasTexture(canvas)
-    // Canvas Y grows top-to-bottom; CanvasTexture's default flipY would map
-    // canvas-top to plane local +Y, which under Z-up sends events at world
-    // minY to world maxY on the plane (mirrored relative to the markers).
-    tex.flipY = false
-    tex.needsUpdate = true
-    setTexture(tex)
-
-    return () => {
-      tex.dispose()
-    }
-  }, [events, bounds, radius, intensity])
-
-  if (!texture || !bounds) return null
-
-  const width = bounds.maxX - bounds.minX + HEATMAP_PADDING * 2
-  const height = bounds.maxY - bounds.minY + HEATMAP_PADDING * 2
-  const centerX = (bounds.minX + bounds.maxX) / 2
-  const centerY = (bounds.minY + bounds.maxY) / 2
-
-  return (
-    <mesh ref={meshRef} position={[centerX, centerY, 10]}>
-      <planeGeometry args={[width, height]} />
-      <meshBasicMaterial map={texture} transparent opacity={0.7} depthWrite={false} />
-    </mesh>
-  )
-}
-
 /**
  * Reinterpret a Y-up offset (decoded from THREE.Spherical) as a Z-up world offset.
  * THREE.Spherical is hard-coded Y-up: phi=0 places the offset along +Y. In a Z-up
@@ -337,7 +250,6 @@ function zUpOffsetToSphericalInput(offset: THREE.Vector3, out: THREE.Vector3): T
 interface UnrealCameraControllerProps {
   mapBounds: THREE.Box3 | null
   mapScene: THREE.Object3D | null
-  onSpeedChange?: (speed: number) => void
   resetViewTrigger: number
   glbCamera: THREE.PerspectiveCamera | null
 }
@@ -345,7 +257,6 @@ interface UnrealCameraControllerProps {
 function UnrealCameraController({
   mapBounds,
   mapScene,
-  onSpeedChange,
   resetViewTrigger,
   glbCamera,
 }: UnrealCameraControllerProps) {
@@ -360,9 +271,9 @@ function UnrealCameraController({
     spherical: { radius: number; phi: number; theta: number }
   } | null>(null)
 
-  const baseSpeedRef = useRef(2000)
-  const MIN_SPEED = 10
-  const MAX_SPEED = 50000
+  // WASD speed derives from the current orbit radius so flying feels the same
+  // at every zoom level — one camera-to-target distance per ~2 seconds.
+  const SPEED_PER_RADIUS = 0.5
 
   const fitRadiusRef = useRef(5000)
   const zoomFactorRef = useRef(1.0)
@@ -371,25 +282,14 @@ function UnrealCameraController({
   const isLeftDraggingRef = useRef(false)
   const leftMouseStartRef = useRef({ x: 0, y: 0 })
   const isRightMouseDownRef = useRef(false)
-  const isMiddleMouseDownRef = useRef(false)
+  const isHoveredRef = useRef(false)
   const lastMouseRef = useRef({ x: 0, y: 0 })
   const keysRef = useRef({
     w: false,
     a: false,
     s: false,
     d: false,
-    q: false,
-    e: false,
-    shift: false,
   })
-
-  // Route speed updates through a ref so the DOM event-binding effect below
-  // doesn't need to rebind when the parent's callback identity changes.
-  const onSpeedChangeRef = useRef(onSpeedChange)
-  useEffect(() => {
-    onSpeedChangeRef.current = onSpeedChange
-    onSpeedChange?.(baseSpeedRef.current)
-  }, [onSpeedChange])
 
   // Track latest mapScene through a ref so mousedown can raycast against it
   // without rebinding the DOM event handlers when the scene changes.
@@ -516,11 +416,6 @@ function UnrealCameraController({
             targetRef.current.copy(newTarget)
           }
         }
-      } else if (e.button === 1) {
-        isMiddleMouseDownRef.current = true
-        lastMouseRef.current = { x: e.clientX, y: e.clientY }
-        domElement.style.cursor = 'move'
-        e.preventDefault()
       }
     }
 
@@ -533,9 +428,6 @@ function UnrealCameraController({
         isLeftDraggingRef.current = false
       } else if (e.button === 2) {
         isRightMouseDownRef.current = false
-        domElement.style.cursor = 'auto'
-      } else if (e.button === 1) {
-        isMiddleMouseDownRef.current = false
         domElement.style.cursor = 'auto'
       }
     }
@@ -589,24 +481,10 @@ function UnrealCameraController({
           Math.min(Math.PI / 2 - 0.05, sphericalRef.current.phi)
         )
       }
-
-      if (isMiddleMouseDownRef.current) {
-        panCamera(deltaX, deltaY)
-      }
     }
 
     const onWheel = (e: WheelEvent) => {
       e.preventDefault()
-
-      if (isRightMouseDownRef.current) {
-        const speedMultiplier = e.deltaY > 0 ? 0.8 : 1.25
-        baseSpeedRef.current = Math.max(
-          MIN_SPEED,
-          Math.min(MAX_SPEED, baseSpeedRef.current * speedMultiplier)
-        )
-        onSpeedChangeRef.current?.(baseSpeedRef.current)
-        return
-      }
 
       const zoomSpeed = 0.1
       const zoomMultiplier = e.deltaY > 0 ? (1 + zoomSpeed) : (1 - zoomSpeed)
@@ -651,37 +529,51 @@ function UnrealCameraController({
       e.preventDefault()
     }
 
+    const isFormTarget = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null
+      return !!t?.matches('input, textarea, select, [contenteditable="true"]')
+    }
+
     const onKeyDown = (e: KeyboardEvent) => {
+      if (isFormTarget(e)) return
       const key = e.key.toLowerCase()
       if (key in keysRef.current) {
         keysRef.current[key as keyof typeof keysRef.current] = true
       }
-      if (e.key === 'Shift') {
-        keysRef.current.shift = true
-      }
     }
 
     const onKeyUp = (e: KeyboardEvent) => {
+      // Don't filter form targets on keyup — we need to release any key that
+      // got pressed (e.g., focus moved into an input mid-hold).
       const key = e.key.toLowerCase()
       if (key in keysRef.current) {
         keysRef.current[key as keyof typeof keysRef.current] = false
       }
-      if (e.key === 'Shift') {
-        keysRef.current.shift = false
-      }
+    }
+
+    // Hover gates WASD so multiple Map cells on a page don't all fly together
+    // and so flying stops when the pointer leaves the canvas.
+    const onMouseEnter = () => {
+      isHoveredRef.current = true
+    }
+    const onMouseLeave = () => {
+      isHoveredRef.current = false
+      keysRef.current.w = false
+      keysRef.current.a = false
+      keysRef.current.s = false
+      keysRef.current.d = false
     }
 
     // Safety net: if the browser/tab loses focus mid-drag (alt-tab, OS dialog),
     // the eventual mouseup may never reach us — clear all drag state so the
     // next interaction starts clean.
     const onWindowBlur = () => {
-      if (isLeftDraggingRef.current || isRightMouseDownRef.current || isMiddleMouseDownRef.current) {
+      if (isLeftDraggingRef.current || isRightMouseDownRef.current) {
         domElement.style.cursor = 'auto'
       }
       isLeftMouseDownRef.current = false
       isLeftDraggingRef.current = false
       isRightMouseDownRef.current = false
-      isMiddleMouseDownRef.current = false
     }
 
     // mousedown stays on the canvas (drags only start over the map), but
@@ -692,6 +584,8 @@ function UnrealCameraController({
     window.addEventListener('mousemove', onMouseMove)
     domElement.addEventListener('wheel', onWheel, { passive: false })
     domElement.addEventListener('contextmenu', onContextMenu)
+    domElement.addEventListener('mouseenter', onMouseEnter)
+    domElement.addEventListener('mouseleave', onMouseLeave)
     window.addEventListener('keydown', onKeyDown)
     window.addEventListener('keyup', onKeyUp)
     window.addEventListener('blur', onWindowBlur)
@@ -702,6 +596,8 @@ function UnrealCameraController({
       window.removeEventListener('mousemove', onMouseMove)
       domElement.removeEventListener('wheel', onWheel)
       domElement.removeEventListener('contextmenu', onContextMenu)
+      domElement.removeEventListener('mouseenter', onMouseEnter)
+      domElement.removeEventListener('mouseleave', onMouseLeave)
       window.removeEventListener('keydown', onKeyDown)
       window.removeEventListener('keyup', onKeyUp)
       window.removeEventListener('blur', onWindowBlur)
@@ -709,9 +605,8 @@ function UnrealCameraController({
   }, [camera, domElement])
 
   useFrame((_, delta) => {
-    if (isRightMouseDownRef.current) {
-      const speed = keysRef.current.shift ? baseSpeedRef.current * 2.5 : baseSpeedRef.current
-      const moveSpeed = speed * delta
+    if (isHoveredRef.current) {
+      const moveSpeed = sphericalRef.current.radius * SPEED_PER_RADIUS * delta
 
       const forward = new THREE.Vector3()
       camera.getWorldDirection(forward)
@@ -733,12 +628,6 @@ function UnrealCameraController({
       }
       if (keysRef.current.d) {
         targetRef.current.addScaledVector(right, moveSpeed)
-      }
-      if (keysRef.current.e) {
-        targetRef.current.z += moveSpeed
-      }
-      if (keysRef.current.q) {
-        targetRef.current.z -= moveSpeed
       }
     }
 
@@ -782,9 +671,6 @@ export function MapViewer({
   events,
   selectedEventId,
   onSelectEvent,
-  showHeatmap,
-  heatmapRadius,
-  heatmapIntensity,
   markerColor,
   markerSize,
   resetViewTrigger = 0,
@@ -794,11 +680,6 @@ export function MapViewer({
   const [glbCamera, setGlbCamera] = useState<THREE.PerspectiveCamera | null>(null)
   const [ambientLight, setAmbientLight] = useState<MMAmbientLight | null>(null)
   const [contractErrors, setContractErrors] = useState<string[]>([])
-  const [currentSpeed, setCurrentSpeed] = useState(2000)
-
-  const handleSpeedChange = useCallback((speed: number) => {
-    setCurrentSpeed(speed)
-  }, [])
 
   const handleMapLoaded = useCallback(
     (payload: MapLoadPayload) => {
@@ -878,7 +759,6 @@ export function MapViewer({
         <UnrealCameraController
           mapBounds={mapBounds}
           mapScene={mapScene}
-          onSpeedChange={handleSpeedChange}
           resetViewTrigger={resetViewTrigger}
           glbCamera={glbCamera}
         />
@@ -897,10 +777,6 @@ export function MapViewer({
             <PlaceholderGrid />
           )}
         </Suspense>
-
-        {showHeatmap && (
-          <HeatmapLayer events={events} radius={heatmapRadius} intensity={heatmapIntensity} />
-        )}
 
         <InstancedMarkers
           events={events}
@@ -928,12 +804,8 @@ export function MapViewer({
         <div>Left-click + drag: Pan</div>
         <div>Right-click + drag: Rotate</div>
         <div>Scroll: Zoom</div>
-        <div>Right-click + Scroll: Speed</div>
-        <div>WASD + Right-click: Fly</div>
-        <div>Q/E: Up/Down | Shift: Boost</div>
-        <div className="mt-2 pt-2 border-t border-theme-border text-theme-text-secondary">
-          Speed: <span className="font-mono text-accent-link">{currentSpeed.toLocaleString()}</span>
-        </div>
+        <div>WASD: Fly</div>
+        <div>Z: Reset view</div>
       </div>
     </div>
   )

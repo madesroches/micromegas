@@ -18,10 +18,11 @@ This file documents the historical progress of the Micromegas project. For curre
   * Fix multi-series line chart rendering only points when series have sparsely-aligned X values
   * Resolve macros in chart series labels and chart cell titles
   * Defer notebook markdown cell render until sequential execution reaches it, preventing stale macro output on first paint (#1023)
-  * Add map notebook cell rendering spatial events on a GLB model with optional heatmap overlay (#1033)
+  * Add map notebook cell rendering spatial events on a GLB model (#1033)
   * Convert map cell to native UE coordinates (Z-up) with GLB-embedded perspective camera, `MM_ambient_light`, and Neutral tone mapping; replace "Fit to data" with GLB-camera-seeded Reset (#1036)
-  * Polish map interaction: cursor-anchored wheel zoom, right-mouse-drag orbit re-anchor, fix marker overlay visibility/picking and heatmap orientation, surface GLB contract errors in-cell (#1036)
+  * Polish map interaction: cursor-anchored wheel zoom, right-mouse-drag orbit re-anchor, fix marker overlay visibility/picking, surface GLB contract errors in-cell (#1036)
   * Remove map cell `groundSnap` and `heightOffset` options; markers render at their native `(x, y, z)` coordinates
+  * Simplify map navigation: WASD flies on hover (no right-click hold), Z resets view; remove right-scroll speed control, Q/E vertical movement, Shift boost, middle-mouse pan, and the speed/event-count overlays
   * Add `--remote-backend` flag to `start_analytics_web.py` for hybrid local-frontend + remote-backend setup (#1033)
 * **Python:**
   * Switch `bulk_ingest` to accept `pyarrow.Table` directly for native pass-through of struct/list/binary columns

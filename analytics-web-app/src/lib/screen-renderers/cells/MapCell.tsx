@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useEffect } from 'react'
+import { useState, useCallback, useMemo, useEffect, useRef } from 'react'
 import { Table } from 'apache-arrow'
 import type {
   CellTypeMetadata,
@@ -91,7 +91,7 @@ function useMapCatalog(): MapCatalogEntry[] {
 // Renderer Component
 // =============================================================================
 
-export function MapCell({ data, status, options, onOptionsChange }: CellRendererProps) {
+export function MapCell({ data, status, options }: CellRendererProps) {
   // Transform Arrow data to MapEvent[] (memoized on table reference)
   const events = useMemo(() => {
     const table = data[0]
@@ -105,9 +105,6 @@ export function MapCell({ data, status, options, onOptionsChange }: CellRenderer
 
   // Read visual options with defaults
   const mapUrl = options?.mapUrl as string | undefined
-  const showHeatmap = (options?.showHeatmap as boolean) ?? false
-  const heatmapRadius = (options?.heatmapRadius as number) ?? 50
-  const heatmapIntensity = (options?.heatmapIntensity as number) ?? 0.5
   const markerColor = (options?.markerColor as string) ?? '#bf360c'
   const markerSize = (options?.markerSize as number) ?? 10
 
@@ -115,13 +112,21 @@ export function MapCell({ data, status, options, onOptionsChange }: CellRenderer
     setSelectedEvent(event)
   }, [])
 
-  // Allow toggling heatmap/markers from keyboard or future toolbar
-  const updateOption = useCallback(
-    (key: string, value: unknown) => {
-      onOptionsChange({ ...options, [key]: value })
-    },
-    [options, onOptionsChange]
-  )
+  // Z resets the view, scoped to the hovered cell so multiple Map cells on a
+  // page don't all reset together and typing 'z' in a text/query cell is ignored.
+  const containerRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'z' && e.key !== 'Z') return
+      if (e.ctrlKey || e.metaKey || e.altKey) return
+      const target = e.target as HTMLElement | null
+      if (target?.matches('input, textarea, select, [contenteditable="true"]')) return
+      if (!containerRef.current?.matches(':hover')) return
+      setResetViewTrigger((t) => t + 1)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [])
 
   if (status === 'loading') {
     return (
@@ -141,40 +146,12 @@ export function MapCell({ data, status, options, onOptionsChange }: CellRenderer
   }
 
   return (
-    <div className="relative w-full h-full overflow-hidden">
-      {/* Toolbar overlay */}
-      <div className="absolute top-2 left-2 z-10 flex items-center gap-2">
-        <button
-          onClick={() => setResetViewTrigger((t) => t + 1)}
-          className="px-2 py-1 bg-app-panel/90 border border-theme-border rounded text-xs text-theme-text-secondary hover:text-theme-text-primary"
-          title="Reset view"
-        >
-          Reset
-        </button>
-        <button
-          onClick={() => updateOption('showHeatmap', !showHeatmap)}
-          className={`px-2 py-1 border border-theme-border rounded text-xs transition-colors ${
-            showHeatmap
-              ? 'bg-accent-link/20 text-accent-link border-accent-link/50'
-              : 'bg-app-panel/90 text-theme-text-secondary hover:text-theme-text-primary'
-          }`}
-          title="Toggle heatmap"
-        >
-          Heatmap
-        </button>
-        <span className="text-xs text-theme-text-muted bg-app-panel/90 px-2 py-1 rounded border border-theme-border">
-          {events.length.toLocaleString()} events
-        </span>
-      </div>
-
+    <div ref={containerRef} className="relative w-full h-full overflow-hidden">
       <MapViewer
         mapUrl={mapUrl}
         events={events}
         selectedEventId={selectedEvent?.id}
         onSelectEvent={handleSelectEvent}
-        showHeatmap={showHeatmap}
-        heatmapRadius={heatmapRadius}
-        heatmapIntensity={heatmapIntensity}
         markerColor={markerColor}
         markerSize={markerSize}
         resetViewTrigger={resetViewTrigger}
@@ -274,51 +251,6 @@ export function MapCellEditor({
           </div>
         </div>
 
-        {/* Heatmap toggle */}
-        <div className="flex items-center gap-2">
-          <label className="text-xs text-theme-text-secondary w-24 shrink-0">Heatmap</label>
-          <input
-            type="checkbox"
-            checked={(mapConfig.options?.showHeatmap as boolean) ?? false}
-            onChange={(e) => updateOption('showHeatmap', e.target.checked)}
-          />
-        </div>
-
-        {/* Heatmap radius */}
-        {(mapConfig.options?.showHeatmap as boolean) && (
-          <>
-            <div className="flex items-center gap-2">
-              <label className="text-xs text-theme-text-secondary w-24 shrink-0">Radius</label>
-              <input
-                type="range"
-                min="20"
-                max="100"
-                value={(mapConfig.options?.heatmapRadius as number) ?? 50}
-                onChange={(e) => updateOption('heatmapRadius', Number(e.target.value))}
-                className="w-32 accent-accent-link"
-              />
-              <span className="text-xs text-theme-text-muted w-5">
-                {(mapConfig.options?.heatmapRadius as number) ?? 50}
-              </span>
-            </div>
-            <div className="flex items-center gap-2">
-              <label className="text-xs text-theme-text-secondary w-24 shrink-0">Intensity</label>
-              <input
-                type="range"
-                min="0.1"
-                max="1"
-                step="0.1"
-                value={(mapConfig.options?.heatmapIntensity as number) ?? 0.5}
-                onChange={(e) => updateOption('heatmapIntensity', Number(e.target.value))}
-                className="w-32 accent-accent-link"
-              />
-              <span className="text-xs text-theme-text-muted w-5">
-                {(mapConfig.options?.heatmapIntensity as number) ?? 0.5}
-              </span>
-            </div>
-          </>
-        )}
-
         {/* Marker color */}
         <div className="flex items-center gap-2">
           <label className="text-xs text-theme-text-secondary w-24 shrink-0">Marker Color</label>
@@ -369,7 +301,7 @@ export const mapMetadata: CellTypeMetadata = {
 
   label: 'Map',
   icon: <MapIcon />,
-  description: '3D map visualization with heatmap overlay',
+  description: '3D map visualization of spatial events',
   showTypeBadge: true,
   defaultHeight: 500,
 
@@ -379,7 +311,6 @@ export const mapMetadata: CellTypeMetadata = {
     type: 'map' as const,
     sql: DEFAULT_SQL.map,
     options: {
-      showHeatmap: false,
       markerColor: '#bf360c',
       markerSize: 10,
     },
