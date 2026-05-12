@@ -548,8 +548,6 @@ All columns beyond the reserved names (`time`, `x`, `y`, `z`, `process_id`) are 
 | `heatmapIntensity` | number | `0.5` | Heatmap opacity (0.1–1.0) |
 | `markerColor` | string | `#bf360c` | Marker color (hex) |
 | `markerSize` | number | `10` | Marker size — scaled proportionally to the map extent |
-| `groundSnap` | boolean | `false` | Raycast markers onto the map mesh surface |
-| `heightOffset` | number | `0.5` | Vertical offset above the surface (-5 to 10) — scaled proportionally to the map extent |
 
 **Map catalog:**
 
@@ -591,7 +589,6 @@ GLBs missing the camera log a console error and fall back to the default seed fr
 **Features:**
 
 - Instanced rendering — handles thousands of markers efficiently
-- Ground snap — raycasts each marker onto the mesh surface for accurate placement
 - Heatmap overlay — 2D canvas-based density visualization
 - Interactive markers — click to select, hover to highlight
 - Camera controls — left-drag to pan, right-drag to orbit, scroll to zoom, WASD to fly
