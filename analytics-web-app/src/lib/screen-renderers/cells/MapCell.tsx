@@ -140,9 +140,6 @@ export function MapCell({ data, status, options }: CellRendererProps) {
         >
           Reset
         </button>
-        <span className="text-xs text-theme-text-muted bg-app-panel/90 px-2 py-1 rounded border border-theme-border">
-          {events.length.toLocaleString()} events
-        </span>
       </div>
 
       <MapViewer
