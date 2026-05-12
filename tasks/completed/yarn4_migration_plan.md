@@ -375,3 +375,7 @@ none
 - `docker build -f docker/github-runner.Dockerfile -t test-runner-corepack .` — green; runtime `yarn --version` as `runner` user prints `4.14.1`.
 - All 6 `yarn.lock` files now start with `__metadata: version: 9` (Yarn 4 format).
 - `python3 build/grafana_e2e_tests.py` (Playwright e2e) NOT run — needs running Docker Grafana via docker compose and is slow; the e2e workflow file gets the same corepack-enable step as the unit-test workflow, so the migration's effect on it is identical.
+
+### Phase 7 — Post-merge fix: docker peer-dep regression — ✅ Completed
+
+A `--no-cache` rebuild of `docker/analytics-web.Dockerfile` and `docker/all-in-one.Dockerfile` surfaced a `YN0086: Some peer dependencies are incorrectly met` warning (yarn install exited with "Done with warnings"). Phase 3 had consolidated the `tunnel-rat` and `@typescript-eslint/utils@7.18.0` `packageExtensions` into root `.yarnrc.yml`, relying on monorepo inheritance — but both Dockerfiles only `COPY analytics-web-app/.yarnrc.yml`, so the extensions weren't present inside the image. Mirrored the two extensions back into `analytics-web-app/.yarnrc.yml`. Verified clean `--no-cache` rebuilds for both Dockerfiles. The earlier Phase 4 "no yarn warnings" verification was a cached build that masked the regression.
