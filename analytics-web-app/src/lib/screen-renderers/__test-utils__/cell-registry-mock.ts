@@ -96,7 +96,7 @@ const BASE_METADATA = {
   map: {
     label: 'Map',
     icon: 'M',
-    description: '3D map visualization with heatmap overlay',
+    description: '3D map visualization of spatial events',
     showTypeBadge: true,
     defaultHeight: 500,
     canBlockDownstream: true,

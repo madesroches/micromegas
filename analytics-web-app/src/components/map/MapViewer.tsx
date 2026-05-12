@@ -24,9 +24,6 @@ interface MapViewerProps {
   events: MapEvent[]
   selectedEventId?: string
   onSelectEvent: (event: MapEvent | null) => void
-  showHeatmap: boolean
-  heatmapRadius: number
-  heatmapIntensity: number
   markerColor?: string
   markerSize?: number
   resetViewTrigger?: number
@@ -224,90 +221,6 @@ function InstancedMarkers({
       onPointerOver={handlePointerOver}
       onPointerOut={handlePointerOut}
     />
-  )
-}
-
-interface HeatmapLayerProps {
-  events: MapEvent[]
-  radius: number
-  intensity: number
-}
-
-const HEATMAP_PADDING = 1000
-
-function HeatmapLayer({ events, radius, intensity }: HeatmapLayerProps) {
-  const meshRef = useRef<THREE.Mesh>(null)
-  const [texture, setTexture] = useState<THREE.CanvasTexture | null>(null)
-
-  // Single pass over events; spread-based Math.min(...arr) blows the stack at large counts.
-  const bounds = useMemo(() => {
-    if (events.length === 0) return null
-    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity
-    for (const e of events) {
-      if (e.x < minX) minX = e.x
-      if (e.x > maxX) maxX = e.x
-      if (e.y < minY) minY = e.y
-      if (e.y > maxY) maxY = e.y
-    }
-    return { minX, maxX, minY, maxY }
-  }, [events])
-
-  useEffect(() => {
-    if (!bounds) {
-      setTexture(null)
-      return
-    }
-
-    const canvas = document.createElement('canvas')
-    const size = 1024
-    canvas.width = size
-    canvas.height = size
-    const ctx = canvas.getContext('2d')
-    if (!ctx) return
-
-    ctx.clearRect(0, 0, size, size)
-
-    const rangeX = bounds.maxX - bounds.minX + HEATMAP_PADDING * 2
-    const rangeY = bounds.maxY - bounds.minY + HEATMAP_PADDING * 2
-
-    events.forEach((event) => {
-      const canvasX = ((event.x - bounds.minX + HEATMAP_PADDING) / rangeX) * size
-      const canvasY = ((event.y - bounds.minY + HEATMAP_PADDING) / rangeY) * size
-
-      const gradient = ctx.createRadialGradient(canvasX, canvasY, 0, canvasX, canvasY, radius)
-      gradient.addColorStop(0, `rgba(191, 54, 12, ${intensity})`)
-      gradient.addColorStop(0.5, `rgba(191, 54, 12, ${intensity * 0.5})`)
-      gradient.addColorStop(1, 'rgba(191, 54, 12, 0)')
-
-      ctx.fillStyle = gradient
-      ctx.fillRect(canvasX - radius, canvasY - radius, radius * 2, radius * 2)
-    })
-
-    const tex = new THREE.CanvasTexture(canvas)
-    // Canvas Y grows top-to-bottom; CanvasTexture's default flipY would map
-    // canvas-top to plane local +Y, which under Z-up sends events at world
-    // minY to world maxY on the plane (mirrored relative to the markers).
-    tex.flipY = false
-    tex.needsUpdate = true
-    setTexture(tex)
-
-    return () => {
-      tex.dispose()
-    }
-  }, [events, bounds, radius, intensity])
-
-  if (!texture || !bounds) return null
-
-  const width = bounds.maxX - bounds.minX + HEATMAP_PADDING * 2
-  const height = bounds.maxY - bounds.minY + HEATMAP_PADDING * 2
-  const centerX = (bounds.minX + bounds.maxX) / 2
-  const centerY = (bounds.minY + bounds.maxY) / 2
-
-  return (
-    <mesh ref={meshRef} position={[centerX, centerY, 10]}>
-      <planeGeometry args={[width, height]} />
-      <meshBasicMaterial map={texture} transparent opacity={0.7} depthWrite={false} />
-    </mesh>
   )
 }
 
@@ -782,9 +695,6 @@ export function MapViewer({
   events,
   selectedEventId,
   onSelectEvent,
-  showHeatmap,
-  heatmapRadius,
-  heatmapIntensity,
   markerColor,
   markerSize,
   resetViewTrigger = 0,
@@ -897,10 +807,6 @@ export function MapViewer({
             <PlaceholderGrid />
           )}
         </Suspense>
-
-        {showHeatmap && (
-          <HeatmapLayer events={events} radius={heatmapRadius} intensity={heatmapIntensity} />
-        )}
 
         <InstancedMarkers
           events={events}
