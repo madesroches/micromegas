@@ -559,19 +559,7 @@ Maps are registered in `public/maps/maps.json`. Each entry defines a GLB model a
 [
   {
     "name": "Level Overview",
-    "file": "/maps/level_topdown.glb",
-    "type": "topdown",
-    "worldBounds": {
-      "ueMinX": -46596,
-      "ueMaxX": 168007,
-      "ueMinY": -149004,
-      "ueMaxY": 65600
-    }
-  },
-  {
-    "name": "Main Map",
-    "file": "/maps/main.glb",
-    "type": "3d"
+    "file": "/maps/level.glb"
   }
 ]
 ```
@@ -580,16 +568,25 @@ Maps are registered in `public/maps/maps.json`. Each entry defines a GLB model a
 |-------|------|-------------|
 | `name` | string | Display name in the dropdown |
 | `file` | string | Path to the GLB file under `public/` |
-| `type` | `'topdown'` \| `'3d'` | Coordinate transform mode |
-| `worldBounds` | object | Unreal Engine world extents for topdown maps (required when `type` is `topdown`) |
 
-**Coordinate transform modes:**
+The catalog (`public/maps/maps.json`) and the GLB binaries themselves (`public/maps/*.glb`) are gitignored. Each developer drops their own GLBs into `public/maps/` and writes a local catalog pointing at them.
 
-- **`topdown`** — UE coordinates are mapped onto a flat textured plane using `worldBounds`. Requires `ueMinX`, `ueMaxX`, `ueMinY`, `ueMaxY`. Marker size and height offset scale proportionally to the model extent.
-- **`3d`** — UE coordinates are converted to glTF space: `UE(x,y,z) → glTF(y×0.01, z×0.01, -x×0.01)`.
-- **No type** — coordinates are used as-is in Three.js world space.
+**Coordinate frame:**
 
-When a coordinate transform is applied, the event detail panel shows the original UE coordinates rather than the converted model-space values.
+Events are placed at their raw `x`, `y`, `z` values without any runtime transform. The GLB is expected to be authored in the same frame and units the events are emitted in — see the GLB authoring contract below.
+
+**GLB authoring contract:**
+
+The renderer expects each GLB to satisfy these invariants — there is no fallback path:
+
+- **Z-up, left-handed, centimeters** — matches the Unreal Engine world frame; no auto-centering. Events flow through unmodified.
+- **Exactly one perspective camera** referenced from `scenes[0]`, used to seed the initial camera (position, orientation, fov, near, far). Camera roll is dropped when seeding the orbit controller.
+- **`KHR_lights_punctual`** — directional lights live inside the scene tree and render automatically.
+- **`MM_ambient_light`** vendor extension — `{ color: [r, g, b], intensity: number }` at the root extensions; the renderer reads it directly from `gltf.parser.json.extensions`.
+
+GLBs missing the camera log a console error and fall back to the default seed framing (likely mis-framed); GLBs missing `MM_ambient_light` log a console error and render without ambient illumination. These are visible failure modes that signal a non-conforming GLB.
+
+> Because the contract uses Z-up / left-handed / centimeters, the GLBs are technically out of spec for glTF 2.0 (which mandates Y-up RH meters). External viewers — Blender, online glTF validators, Windows 3D Viewer — will render them rotated or flag warnings. The micromegas web-app is the only intended consumer.
 
 **Features:**
 
@@ -598,7 +595,7 @@ When a coordinate transform is applied, the event detail panel shows the origina
 - Heatmap overlay — 2D canvas-based density visualization
 - Interactive markers — click to select, hover to highlight
 - Camera controls — left-drag to pan, right-drag to orbit, scroll to zoom, WASD to fly
-- Fit to Data / Reset View toolbar buttons
+- Reset View toolbar button
 - Event detail panel with properties and link to process logs
 - Results registered in the [local WASM query engine](execution.md#local-wasm-query-engine) under the cell name for downstream queries
 

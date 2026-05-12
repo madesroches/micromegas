@@ -12,7 +12,7 @@ import { DocumentationLink, QUERY_GUIDE_URL } from '@/components/DocumentationLi
 import { SyntaxEditor } from '@/components/SyntaxEditor'
 import { substituteMacros, validateMacros, DEFAULT_SQL } from '../notebook-utils'
 import { timestampToDate } from '@/lib/arrow-utils'
-import { MapViewer, type MapEvent, type MapType, type WorldBounds } from '@/components/map/MapViewer'
+import { MapViewer, type MapEvent } from '@/components/map/MapViewer'
 import { EventDetailPanel } from '@/components/map/EventDetailPanel'
 import { Map as MapIcon } from 'lucide-react'
 
@@ -65,8 +65,6 @@ function arrowTableToMapEvents(table: Table): MapEvent[] {
 interface MapCatalogEntry {
   name: string
   file: string
-  type?: MapType
-  worldBounds?: WorldBounds
 }
 
 /** Shared promise so multiple cells don't fetch the catalog twice */
@@ -93,7 +91,7 @@ function useMapCatalog(): MapCatalogEntry[] {
 // Renderer Component
 // =============================================================================
 
-function MapCell({ data, status, options, onOptionsChange }: CellRendererProps) {
+export function MapCell({ data, status, options, onOptionsChange }: CellRendererProps) {
   // Transform Arrow data to MapEvent[] (memoized on table reference)
   const events = useMemo(() => {
     const table = data[0]
@@ -103,11 +101,7 @@ function MapCell({ data, status, options, onOptionsChange }: CellRendererProps) 
 
   // Ephemeral interaction state
   const [selectedEvent, setSelectedEvent] = useState<MapEvent | null>(null)
-  const [fitToDataTrigger, setFitToDataTrigger] = useState(0)
   const [resetViewTrigger, setResetViewTrigger] = useState(0)
-
-  // Load map catalog to resolve type and worldBounds for the selected map
-  const mapCatalog = useMapCatalog()
 
   // Read visual options with defaults
   const mapUrl = options?.mapUrl as string | undefined
@@ -118,11 +112,6 @@ function MapCell({ data, status, options, onOptionsChange }: CellRendererProps) 
   const markerSize = (options?.markerSize as number) ?? 10
   const groundSnap = (options?.groundSnap as boolean) ?? false
   const heightOffset = options?.heightOffset as number | undefined
-
-  const catalogEntry = useMemo(
-    () => mapCatalog.find((e) => e.file === mapUrl),
-    [mapCatalog, mapUrl]
-  )
 
   const handleSelectEvent = useCallback((event: MapEvent | null) => {
     setSelectedEvent(event)
@@ -158,13 +147,6 @@ function MapCell({ data, status, options, onOptionsChange }: CellRendererProps) 
       {/* Toolbar overlay */}
       <div className="absolute top-2 left-2 z-10 flex items-center gap-2">
         <button
-          onClick={() => setFitToDataTrigger((t) => t + 1)}
-          className="px-2 py-1 bg-app-panel/90 border border-theme-border rounded text-xs text-theme-text-secondary hover:text-theme-text-primary"
-          title="Fit to data"
-        >
-          Fit
-        </button>
-        <button
           onClick={() => setResetViewTrigger((t) => t + 1)}
           className="px-2 py-1 bg-app-panel/90 border border-theme-border rounded text-xs text-theme-text-secondary hover:text-theme-text-primary"
           title="Reset view"
@@ -189,15 +171,12 @@ function MapCell({ data, status, options, onOptionsChange }: CellRendererProps) 
 
       <MapViewer
         mapUrl={mapUrl}
-        mapType={catalogEntry?.type}
-        worldBounds={catalogEntry?.worldBounds}
         events={events}
         selectedEventId={selectedEvent?.id}
         onSelectEvent={handleSelectEvent}
         showHeatmap={showHeatmap}
         heatmapRadius={heatmapRadius}
         heatmapIntensity={heatmapIntensity}
-        fitToDataTrigger={fitToDataTrigger}
         markerColor={markerColor}
         markerSize={markerSize}
         groundSnap={groundSnap}
@@ -216,7 +195,7 @@ function MapCell({ data, status, options, onOptionsChange }: CellRendererProps) 
 // Editor Component
 // =============================================================================
 
-function MapCellEditor({
+export function MapCellEditor({
   config,
   onChange,
   variables,
