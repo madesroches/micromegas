@@ -10,22 +10,18 @@ import signal
 import os
 from pathlib import Path
 
+
 def print_status(message, status_type="info"):
     """Print colored status messages"""
     colors = {
-        "info": "\033[94m",      # Blue
-        "success": "\033[92m",   # Green
-        "warning": "\033[93m",   # Yellow
-        "error": "\033[91m",     # Red
-        "reset": "\033[0m"       # Reset
+        "info": "\033[94m",  # Blue
+        "success": "\033[92m",  # Green
+        "warning": "\033[93m",  # Yellow
+        "error": "\033[91m",  # Red
+        "reset": "\033[0m",  # Reset
     }
 
-    icons = {
-        "info": "🚀",
-        "success": "✅",
-        "warning": "⚠️",
-        "error": "❌"
-    }
+    icons = {"info": "🚀", "success": "✅", "warning": "⚠️", "error": "❌"}
 
     color = colors.get(status_type, colors["info"])
     icon = icons.get(status_type, "📍")
@@ -33,15 +29,15 @@ def print_status(message, status_type="info"):
 
     print(f"{color}{icon} {message}{reset}")
 
+
 def check_command_exists(command):
     """Check if a command exists in PATH"""
     try:
-        subprocess.run([command, "--version"],
-                      capture_output=True,
-                      check=True)
+        subprocess.run([command, "--version"], capture_output=True, check=True)
         return True
     except (subprocess.CalledProcessError, FileNotFoundError):
         return False
+
 
 def check_yarn_installed():
     """Check if yarn is installed (via corepack — Node 20+ ships it)."""
@@ -52,44 +48,49 @@ def check_yarn_installed():
             print_status("Corepack enabled — yarn shim is now available", "success")
             return True
         except (subprocess.CalledProcessError, FileNotFoundError):
-            print_status("Failed to enable corepack. Please enable it manually:", "error")
+            print_status(
+                "Failed to enable corepack. Please enable it manually:", "error"
+            )
             print_status("corepack enable", "info")
             return False
     return True
+
 
 def check_flightsql_server(port):
     """Check if FlightSQL server is running on the given port"""
     try:
         # FlightSQL is gRPC, not HTTP, but we can try to connect to the port
         import socket
+
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(2)
-        result = sock.connect_ex(('127.0.0.1', port))
+        result = sock.connect_ex(("127.0.0.1", port))
         sock.close()
         return result == 0
     except:
         return False
 
+
 def check_port_in_use(port):
     """Check if a port is already in use"""
     import socket
+
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(1)
-        result = sock.connect_ex(('localhost', port))
+        result = sock.connect_ex(("localhost", port))
         sock.close()
         return result == 0
     except Exception:
         return False
+
 
 def kill_existing_backend():
     """Kill any existing analytics-web-srv processes"""
     try:
         # Find and kill analytics-web-srv processes
         result = subprocess.run(
-            ["pkill", "-f", "analytics-web-srv"],
-            capture_output=True,
-            text=True
+            ["pkill", "-f", "analytics-web-srv"], capture_output=True, text=True
         )
         if result.returncode == 0:
             print_status("Killed existing analytics-web-srv process", "info")
@@ -99,15 +100,12 @@ def kill_existing_backend():
     except Exception:
         return False
 
+
 def kill_existing_frontend():
     """Kill any existing Vite dev servers"""
     try:
         # Find and kill vite dev processes
-        result = subprocess.run(
-            ["pkill", "-f", "vite"],
-            capture_output=True,
-            text=True
-        )
+        result = subprocess.run(["pkill", "-f", "vite"], capture_output=True, text=True)
         if result.returncode == 0:
             print_status("Killed existing Vite dev server", "info")
             time.sleep(1)  # Give it a moment to shut down
@@ -115,6 +113,7 @@ def kill_existing_frontend():
         return False
     except Exception:
         return False
+
 
 def seed_data_source(app_db_conn_string, name, url):
     """Seed a data source in the app database via direct SQL insert.
@@ -132,12 +131,17 @@ def seed_data_source(app_db_conn_string, name, url):
     )
     result = subprocess.run(
         [
-            "psql", app_db_conn_string,
-            "-v", f"name={name}",
-            "-v", f"config={config_json}",
-            "-c", sql,
+            "psql",
+            app_db_conn_string,
+            "-v",
+            f"name={name}",
+            "-v",
+            f"config={config_json}",
+            "-c",
+            sql,
         ],
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
     )
     if result.returncode != 0 and result.stderr:
         print_status(f"psql error: {result.stderr.strip()}", "warning")
@@ -175,6 +179,7 @@ def setup_environment():
     """
     # Generate a random secret for development if not set
     import secrets
+
     dev_secret = secrets.token_urlsafe(32)
 
     # Handle base path - defaults to /mmlocal for local dev to emphasize it's dynamic
@@ -205,7 +210,9 @@ def setup_environment():
         print_status("MICROMEGAS_DB_PORT environment variable not set", "error")
         print_status("Run: export MICROMEGAS_DB_PORT=6432", "info")
         sys.exit(1)
-    app_db_conn_string = f"postgres://{db_username}:{db_passwd}@127.0.0.1:{db_port}/micromegas_app"
+    app_db_conn_string = (
+        f"postgres://{db_username}:{db_passwd}@127.0.0.1:{db_port}/micromegas_app"
+    )
 
     # Ensure localhost traffic bypasses any corporate proxy
     no_proxy = os.environ.get("no_proxy", "")
@@ -235,7 +242,9 @@ def setup_environment():
             elif key == "MICROMEGAS_STATE_SECRET":
                 print_status(f"Set {key}=<generated>", "info")
             elif key == "MICROMEGAS_APP_SQL_CONNECTION_STRING":
-                print_status("Screens feature enabled (micromegas_app database)", "success")
+                print_status(
+                    "Screens feature enabled (micromegas_app database)", "success"
+                )
             else:
                 print_status(f"Set {key}={default_value}", "info")
 
@@ -244,17 +253,37 @@ def setup_environment():
     if oidc_configured:
         print_status("MICROMEGAS_OIDC_CONFIG found - authentication enabled", "success")
     else:
-        print_status("MICROMEGAS_OIDC_CONFIG not set - will run with --disable-auth", "warning")
+        print_status(
+            "MICROMEGAS_OIDC_CONFIG not set - will run with --disable-auth", "warning"
+        )
 
     return oidc_configured, base_path, backend_port, frontend_port, app_db_conn_string
 
+
 def main():
-    parser = argparse.ArgumentParser(description="Start Analytics Web App Development Environment")
-    parser.add_argument("--disable-auth", action="store_true", help="Disable authentication even if OIDC config is present")
-    parser.add_argument("--build-wasm", action="store_true", help="Force rebuild of the micromegas-datafusion-wasm engine")
-    parser.add_argument("--debug", action="store_true", help="Skip wasm-opt optimization (faster WASM builds)")
-    parser.add_argument("--remote-backend", metavar="FLIGHTSQL_URL",
-                        help="Use a remote FlightSQL backend (skips local service check and seeds a data source)")
+    parser = argparse.ArgumentParser(
+        description="Start Analytics Web App Development Environment"
+    )
+    parser.add_argument(
+        "--disable-auth",
+        action="store_true",
+        help="Disable authentication even if OIDC config is present",
+    )
+    parser.add_argument(
+        "--build-wasm",
+        action="store_true",
+        help="Force rebuild of the micromegas-datafusion-wasm engine",
+    )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Skip wasm-opt optimization (faster WASM builds)",
+    )
+    parser.add_argument(
+        "--remote-backend",
+        metavar="FLIGHTSQL_URL",
+        help="Use a remote FlightSQL backend (skips local service check and seeds a data source)",
+    )
     args = parser.parse_args()
 
     print_status("Starting Analytics Web App Development Environment", "info")
@@ -274,7 +303,9 @@ def main():
         return 1
 
     # Setup environment first to get port configuration
-    auth_enabled, base_path, backend_port, frontend_port, app_db_conn_string = setup_environment()
+    auth_enabled, base_path, backend_port, frontend_port, app_db_conn_string = (
+        setup_environment()
+    )
 
     # Check FlightSQL server (skip when using remote backend)
     if args.remote_backend:
@@ -282,7 +313,9 @@ def main():
     else:
         flightsql_port = int(os.environ.get("MICROMEGAS_FLIGHTSQL_PORT", "50051"))
         if not check_flightsql_server(flightsql_port):
-            print_status(f"FlightSQL server not detected on port {flightsql_port}", "warning")
+            print_status(
+                f"FlightSQL server not detected on port {flightsql_port}", "warning"
+            )
             print_status("Start local services or use --remote-backend <url>", "info")
             print()
 
@@ -329,18 +362,26 @@ def main():
         if check_port_in_use(backend_port):
             print_status(f"Port {backend_port} is already in use", "error")
             print_status(f"Another service is running on port {backend_port}", "error")
-            print_status(f"Please stop the service using port {backend_port} or set MICROMEGAS_BACKEND_PORT", "warning")
+            print_status(
+                f"Please stop the service using port {backend_port} or set MICROMEGAS_BACKEND_PORT",
+                "warning",
+            )
             return 1
 
         # Start backend server
         print_status("Starting Rust backend server...", "info")
-        backend_cmd = ["cargo", "run", "--bin", "analytics-web-srv", "--", "--port", str(backend_port)]
+        backend_cmd = [
+            "cargo",
+            "run",
+            "--bin",
+            "analytics-web-srv",
+            "--",
+            "--port",
+            str(backend_port),
+        ]
         if not auth_enabled:
             backend_cmd.append("--disable-auth")
-        backend_proc = subprocess.Popen(
-            backend_cmd,
-            cwd="rust"
-        )
+        backend_proc = subprocess.Popen(backend_cmd, cwd="rust")
         processes.append(backend_proc)
 
         # Wait for backend to start with health check polling
@@ -358,15 +399,15 @@ def main():
                     stdout, stderr = backend_proc.communicate(timeout=1)
                     if stderr:
                         print_status("Backend error output:", "error")
-                        print(stderr.decode('utf-8'))
+                        print(stderr.decode("utf-8"))
                     if stdout:
                         print_status("Backend stdout:", "info")
-                        print(stdout.decode('utf-8'))
+                        print(stdout.decode("utf-8"))
                 except Exception as e:
                     print_status(f"Could not get backend output: {e}", "warning")
 
                 print()
-                return 1            # Try health check (health endpoint is at {base_path}/health)
+                return 1  # Try health check (health endpoint is at {base_path}/health)
             try:
                 import urllib.request
                 import urllib.error
@@ -384,20 +425,33 @@ def main():
             time.sleep(1)
 
         if not backend_ready:
-            print_status(f"Backend server health check timed out after {max_attempts} seconds", "error")
+            print_status(
+                f"Backend server health check timed out after {max_attempts} seconds",
+                "error",
+            )
             print()
-            print_status("The backend process is running but not responding to health checks", "error")
+            print_status(
+                "The backend process is running but not responding to health checks",
+                "error",
+            )
             return 1
 
         # Seed remote data source if --remote-backend was provided
         if args.remote_backend:
             if seed_data_source(app_db_conn_string, "remote", args.remote_backend):
-                print_status(f"Data source 'remote' seeded: {args.remote_backend}", "success")
+                print_status(
+                    f"Data source 'remote' seeded: {args.remote_backend}", "success"
+                )
             else:
-                print_status("Failed to seed data source (check psql and DB connection)", "warning")
+                print_status(
+                    "Failed to seed data source (check psql and DB connection)",
+                    "warning",
+                )
 
         # Build WASM engine if not already built or if --build-wasm is passed
-        wasm_binary = Path("analytics-web-app/src/lib/datafusion-wasm/micromegas_datafusion_wasm_bg.wasm")
+        wasm_binary = Path(
+            "analytics-web-app/src/lib/datafusion-wasm/micromegas_datafusion_wasm_bg.wasm"
+        )
         if args.build_wasm or not wasm_binary.exists():
             print_status("Building micromegas-datafusion-wasm...", "info")
             try:
@@ -409,11 +463,16 @@ def main():
             except (subprocess.CalledProcessError, FileNotFoundError) as e:
                 if args.build_wasm:
                     print_status(f"WASM build failed: {e}", "error")
-                    print_status("Install wasm-bindgen and wasm-opt, then retry.", "info")
+                    print_status(
+                        "Install wasm-bindgen and wasm-opt, then retry.", "info"
+                    )
                     cleanup()
                     return 1
                 print_status(f"WASM build failed: {e}", "warning")
-                print_status("Local Query screens will not work. Install wasm-bindgen and wasm-opt, then run: python3 rust/datafusion-wasm/build.py", "info")
+                print_status(
+                    "Local Query screens will not work. Install wasm-bindgen and wasm-opt, then run: python3 rust/datafusion-wasm/build.py",
+                    "info",
+                )
                 print()
 
         # Start frontend dev server
@@ -424,23 +483,22 @@ def main():
         if not (frontend_dir / "node_modules").exists():
             print_status("Installing Node.js dependencies...", "info")
             yarn_install = subprocess.run(
-                ["yarn", "install"],
-                cwd=frontend_dir,
-                check=True
+                ["yarn", "install"], cwd=frontend_dir, check=True
             )
 
-        frontend_proc = subprocess.Popen(
-            ["yarn", "dev"],
-            cwd=frontend_dir
-        )
+        frontend_proc = subprocess.Popen(["yarn", "dev"], cwd=frontend_dir)
         processes.append(frontend_proc)
 
         # Print status
         print()
         print_status("Analytics Web App is starting up!", "success")
         print()
-        print_status(f"Frontend:       http://localhost:{frontend_port}{base_path}/", "info")
-        print_status(f"Backend:        http://localhost:{backend_port}{base_path}/", "info")
+        print_status(
+            f"Frontend:       http://localhost:{frontend_port}{base_path}/", "info"
+        )
+        print_status(
+            f"Backend:        http://localhost:{backend_port}{base_path}/", "info"
+        )
         if base_path:
             print_status(f"Note: Using base path '{base_path}'", "info")
         print()
@@ -464,6 +522,7 @@ def main():
         print_status(f"Error: {e}", "error")
         cleanup()
         return 1
+
 
 if __name__ == "__main__":
     sys.exit(main())
