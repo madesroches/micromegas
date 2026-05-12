@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useEffect } from 'react'
+import { useState, useCallback, useMemo, useEffect, useRef } from 'react'
 import { Table } from 'apache-arrow'
 import type {
   CellTypeMetadata,
@@ -112,6 +112,22 @@ export function MapCell({ data, status, options }: CellRendererProps) {
     setSelectedEvent(event)
   }, [])
 
+  // Z resets the view, scoped to the hovered cell so multiple Map cells on a
+  // page don't all reset together and typing 'z' in a text/query cell is ignored.
+  const containerRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'z' && e.key !== 'Z') return
+      if (e.ctrlKey || e.metaKey || e.altKey) return
+      const target = e.target as HTMLElement | null
+      if (target?.matches('input, textarea, select, [contenteditable="true"]')) return
+      if (!containerRef.current?.matches(':hover')) return
+      setResetViewTrigger((t) => t + 1)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [])
+
   if (status === 'loading') {
     return (
       <div className="flex items-center justify-center h-full">
@@ -130,18 +146,7 @@ export function MapCell({ data, status, options }: CellRendererProps) {
   }
 
   return (
-    <div className="relative w-full h-full overflow-hidden">
-      {/* Toolbar overlay */}
-      <div className="absolute top-2 left-2 z-10 flex items-center gap-2">
-        <button
-          onClick={() => setResetViewTrigger((t) => t + 1)}
-          className="px-2 py-1 bg-app-panel/90 border border-theme-border rounded text-xs text-theme-text-secondary hover:text-theme-text-primary"
-          title="Reset view"
-        >
-          Reset
-        </button>
-      </div>
-
+    <div ref={containerRef} className="relative w-full h-full overflow-hidden">
       <MapViewer
         mapUrl={mapUrl}
         events={events}
