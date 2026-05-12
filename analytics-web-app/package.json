@@ -87,5 +87,6 @@
     "ts-jest": "^29.4.0",
     "typescript": "^5.4.0",
     "vite": "^6.2.0"
-  }
+  },
+  "packageManager": "yarn@4.14.1"
 }

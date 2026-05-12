@@ -44,16 +44,16 @@ def check_command_exists(command):
         return False
 
 def check_yarn_installed():
-    """Check if yarn is installed"""
+    """Check if yarn is installed (via corepack — Node 20+ ships it)."""
     if not check_command_exists("yarn"):
-        print_status("Yarn not found. Installing yarn...", "info")
+        print_status("Yarn not found. Enabling corepack...", "info")
         try:
-            subprocess.run(["npm", "install", "-g", "yarn"], check=True)
-            print_status("Yarn installed successfully", "success")
+            subprocess.run(["corepack", "enable"], check=True)
+            print_status("Corepack enabled — yarn shim is now available", "success")
             return True
-        except subprocess.CalledProcessError:
-            print_status("Failed to install yarn. Please install it manually:", "error")
-            print_status("npm install -g yarn", "info")
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            print_status("Failed to enable corepack. Please enable it manually:", "error")
+            print_status("corepack enable", "info")
             return False
     return True
 

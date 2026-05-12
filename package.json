@@ -6,18 +6,12 @@
     "grafana",
     "typescript/*"
   ],
-  "scripts": {
-    "build": "npm run build --workspaces",
-    "test": "npm run test --workspaces",
-    "lint": "npm run lint --workspaces",
-    "format": "npm run format --workspaces"
-  },
   "devDependencies": {
     "eslint": "latest",
     "prettier": "latest",
     "typescript": "5.4.5"
   },
-  "packageManager": "yarn@1.22.22+sha512.a6b2f7906b721bba3d67d4aff083df04dad64c399707841b7acf00f6b133b7ac24255f2652fa22ae3534329dc6180534e98d17432037ff6fd140556e2bb3137e",
+  "packageManager": "yarn@4.14.1+sha512.64df448055b2d37ba269d7db535a469b8da93f8ef1140c25fd7a83c00a8fbaacb214ca0e02553b92a2c54cef78bb67d0b4817fab02001df0e24fac0faccc3b42",
   "dependencies": {
     "js-yaml": "^4.1.1",
     "lodash": "^4.18.0"
@@ -38,7 +32,6 @@
     "protocol-buffers-schema": "^3.6.1",
     "qs": "^6.14.2",
     "react-router": "^6.30.2",
-    "schema-utils/ajv": "6.14.0",
     "serialize-javascript": "^7.0.5",
     "uuid": "^14.0.0"
   }

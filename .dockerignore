@@ -8,6 +8,10 @@ node_modules/
 analytics-web-app/node_modules/
 grafana/node_modules/
 
+# Yarn 4 local caches — Docker repopulates them; copying dev caches inflates context.
+**/.yarn/cache/
+**/.yarn/install-state.gz
+
 # Python virtual environments
 **/venv/
 **/*_venv/

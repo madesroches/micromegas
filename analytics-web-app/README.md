@@ -6,7 +6,7 @@ Web application for exploring and analyzing micromegas telemetry data.
 
 - Node.js 18+
 - Rust 1.70+
-- Yarn (`npm install -g yarn`)
+- Yarn 4 (Berry) — installed via `corepack enable` (Node 20 ships with corepack)
 - Running micromegas services (PostgreSQL, ingestion, flight-sql)
 
 For Local Query screens (optional):

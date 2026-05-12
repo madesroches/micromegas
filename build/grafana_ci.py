@@ -85,8 +85,8 @@ def run_cmd(cmd: str, cwd: Path) -> int:
     nvm_sh = Path(nvm_dir) / "nvm.sh"
 
     if nvm_sh.exists():
-        # Run command with nvm sourced
-        full_cmd = f"source {nvm_sh} && nvm use && {cmd}"
+        # Run command with nvm sourced; corepack enable provisions yarn for the active Node.
+        full_cmd = f"source {nvm_sh} && nvm use && corepack enable && {cmd}"
         result = subprocess.run(
             ["bash", "-c", full_cmd],
             cwd=cwd,

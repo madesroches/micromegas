@@ -52,6 +52,15 @@ yarn-debug.log*
 yarn-error.log*
 package-lock.json
 
+# Yarn 4 (Berry) — corepack-only, no committed releases.
+# Use **/.yarn so this catches root and all standalone projects (analytics-web-app, welcome, doc/*).
+**/.yarn/*
+!**/.yarn/patches
+!**/.yarn/plugins
+!**/.yarn/sdks
+!**/.yarn/versions
+**/.pnp.*
+
 # TypeScript
 *.tsbuildinfo
 typescript/*/dist/
