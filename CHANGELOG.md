@@ -30,6 +30,7 @@ This file documents the historical progress of the Micromegas project. For curre
   * Pin map `LoadingIndicator` to viewport center so drei's `<Html>` doesn't write a `NaN` transform before the camera is initialized (#1034)
   * Silence upstream `THREE.Clock`, `MouseEvent.mozPressure`, and `MouseEvent.mozInputSource` deprecation warnings emitted by R3F 9 / three 0.183 in dev (#1034)
   * Move map GLB assets and catalog off the static `ServeDir` to an object-store-backed `/api/maps/{catalog,blob}` (cookie-auth-gated, streaming `Body::from_stream`, pass-through `Content-Encoding`); `MICROMEGAS_MAPS_OBJECT_STORE_URI` configures the prefix, `start_analytics_web.py` derives a sane local-dev default
+  * Add admin-only Maps management UI at `/admin/maps` with upload (server-side gzip, `.gz`-suffix storage), delete, drag-and-drop, and replace-confirm flow; per-route 256 MiB upload cap configurable via `MICROMEGAS_MAPS_MAX_UPLOAD_BYTES`; scope GLB load failures to the map cell with a retry affordance (#1050)
 * **Python:**
   * Switch `bulk_ingest` to accept `pyarrow.Table` directly for native pass-through of struct/list/binary columns
   * Resolve CLI connection settings from `~/.micromegas/config.json` with env-var override (#1033)
