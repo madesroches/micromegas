@@ -344,14 +344,18 @@ export function useCellExecution({
     [cells, executeCell, engine]
   )
 
-  // Execute all cells on initial load
+  // Execute all cells once the WASM engine is ready. Waiting for the engine
+  // avoids a race where an eager auto-execute kicked off a fetch that was then
+  // aborted (and replaced) by a second executeFromCell when the engine loaded
+  // — the aborted fetch's stream cancellation surfaces as an unhandled
+  // DOMException in Firefox even though the consumer-side catch handles it.
   const hasExecutedRef = useRef(false)
   useEffect(() => {
-    if (!hasExecutedRef.current && cells.length > 0) {
+    if (!hasExecutedRef.current && cells.length > 0 && engine !== null) {
       hasExecutedRef.current = true
       executeFromCell(0)
     }
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [cells.length, engine, executeFromCell])
 
   // Re-execute on refresh trigger
   const prevRefreshRef = useRef(refreshTrigger)
@@ -373,17 +377,6 @@ export function useCellExecution({
       executeFromCell(0)
     }
   }, [rawTimeRange, executeFromCell])
-
-  // Re-execute all cells when WASM engine becomes available
-  // (initial execution may have run before the engine loaded,
-  // so remote cell results weren't registered in WASM)
-  const prevEngineRef = useRef(engine)
-  useEffect(() => {
-    if (prevEngineRef.current === null && engine !== null) {
-      executeFromCell(0)
-    }
-    prevEngineRef.current = engine
-  }, [engine, executeFromCell])
 
   // Update selection for a cell and re-execute downstream cells
   const updateCellSelection = useCallback(

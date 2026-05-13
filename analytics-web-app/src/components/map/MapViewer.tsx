@@ -29,9 +29,16 @@ interface MapViewerProps {
   resetViewTrigger?: number
 }
 
+// Override calculatePosition so drei doesn't project the 3D origin while the
+// camera is still in its identity state — that projection produces NaN, which
+// drei then writes into `transform:translate3d(NaNpx, NaNpx, 0)` and Firefox
+// reports as a CSS parse error.
+const centerOfViewport = (_el: THREE.Object3D, _camera: THREE.Camera, size: { width: number; height: number }): [number, number] =>
+  [size.width / 2, size.height / 2]
+
 function LoadingIndicator() {
   return (
-    <Html center>
+    <Html calculatePosition={centerOfViewport} center>
       <div className="flex items-center gap-2 bg-app-panel px-4 py-2 rounded-lg border border-theme-border">
         <div className="animate-spin rounded-full h-4 w-4 border-2 border-accent-link border-t-transparent" />
         <span className="text-sm text-theme-text-secondary">Loading map...</span>
