@@ -8,6 +8,15 @@ import { AppRouter } from '@/router'
 import { getConfig } from '@/lib/config'
 import './styles/globals.css'
 
+// R3F 9.x still does `new THREE.Clock()` internally; three@0.183 emits a
+// deprecation warning from the Clock constructor. Remove once @react-three/fiber
+// 10 ships stable (its canary line already swapped Clock for performance.now()).
+const originalWarn = console.warn
+console.warn = (...args: unknown[]) => {
+  if (typeof args[0] === 'string' && args[0].startsWith('THREE.Clock: This module has been deprecated')) return
+  originalWarn(...args)
+}
+
 // Get base path for router - must match the proxy/deployment path
 const basePath = getConfig().basePath
 
