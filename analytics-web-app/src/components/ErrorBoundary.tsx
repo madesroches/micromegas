@@ -6,7 +6,12 @@ import { useToast } from '@/lib/use-toast'
 
 interface ErrorBoundaryProps {
   children: React.ReactNode
-  fallback?: React.ReactNode
+  /**
+   * Optional custom fallback. Pass a function to receive the caught error
+   * and a `reset` callback that clears the boundary state — useful for
+   * showing a "Try again" affordance scoped to the failing subtree.
+   */
+  fallback?: React.ReactNode | ((error: Error, reset: () => void) => React.ReactNode)
 }
 
 interface ErrorBoundaryState {
@@ -30,7 +35,13 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
 
   render() {
     if (this.state.hasError) {
-      if (this.props.fallback) {
+      if (typeof this.props.fallback === 'function') {
+        return this.props.fallback(
+          this.state.error ?? new Error('Unknown error'),
+          () => this.setState({ hasError: false, error: undefined })
+        )
+      }
+      if (this.props.fallback !== undefined) {
         return this.props.fallback
       }
 
