@@ -25,6 +25,7 @@ This file documents the historical progress of the Micromegas project. For curre
   * Simplify map navigation: WASD flies on hover (no right-click hold), Z resets view; remove right-scroll speed control, Q/E vertical movement, Shift boost, middle-mouse pan, and the speed/event-count overlays
   * Add `--remote-backend` flag to `start_analytics_web.py` for hybrid local-frontend + remote-backend setup (#1033)
   * Silence jsdom `navigation not implemented` console.error in AuthGuard test (#1047)
+  * Upgrade to React 19.2, `@react-three/fiber` 9, `@react-three/drei` 10, `@testing-library/react` 16, and `lucide-react` 1.x; drop now-unused `react-reconciler` resolution (#1034)
 * **Python:**
   * Switch `bulk_ingest` to accept `pyarrow.Table` directly for native pass-through of struct/list/binary columns
   * Resolve CLI connection settings from `~/.micromegas/config.json` with env-var override (#1033)
