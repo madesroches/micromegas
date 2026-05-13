@@ -50,4 +50,5 @@ path = "src/main.rs"
 axum-test = "16.4"
 jsonwebtoken.workspace = true
 rsa.workspace = true
+tempfile = "3.14"
 tower.workspace = true

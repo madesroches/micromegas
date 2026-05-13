@@ -23,9 +23,7 @@ use axum::{
     routing::{get, put},
 };
 use flate2::read::GzDecoder;
-use object_store::{
-    Attribute, AttributeValue, Attributes, ObjectStore, PutOptions, memory::InMemory, path::Path,
-};
+use object_store::{ObjectStore, local::LocalFileSystem, memory::InMemory, path::Path};
 use std::io::Read;
 use std::sync::Arc;
 use tower::ServiceExt;
@@ -99,27 +97,23 @@ fn build_handler_router_with_upload_limit(maps_state: MapsState, max_bytes: usiz
         .layer(Extension(anon_user()))
 }
 
-async fn put_glb(store: &Arc<dyn ObjectStore>, name: &str, bytes: Vec<u8>) {
-    store
-        .put(&Path::from(name), bytes.into())
-        .await
-        .expect("put glb");
+/// Gzip-compress `raw` with the default compression level. Used by tests
+/// that need to assert what the handlers store on disk under the `.gz`
+/// suffix.
+fn gzip_bytes(raw: &[u8]) -> Vec<u8> {
+    let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    std::io::Write::write_all(&mut enc, raw).expect("gzip in test fixture");
+    enc.finish().expect("gzip in test fixture")
 }
 
-async fn put_with_attrs(
-    store: &Arc<dyn ObjectStore>,
-    name: &str,
-    bytes: Vec<u8>,
-    attrs: Attributes,
-) {
-    let opts = PutOptions {
-        attributes: attrs,
-        ..PutOptions::default()
-    };
+/// Test fixture: gzip the raw payload and store it under `<name>.gz`,
+/// matching the storage convention enforced by `maps_upload`.
+async fn put_map(store: &Arc<dyn ObjectStore>, name: &str, raw: &[u8]) {
+    let gz = gzip_bytes(raw);
     store
-        .put_opts(&Path::from(name), bytes.into(), opts)
+        .put(&Path::from(format!("{name}.gz")), gz.into())
         .await
-        .expect("put_opts glb");
+        .expect("put map fixture");
 }
 
 #[tokio::test]
@@ -157,16 +151,25 @@ async fn blob_returns_503_when_storage_unconfigured() {
 }
 
 #[tokio::test]
-async fn catalog_lists_flat_entries_alphabetized_with_size() {
+async fn catalog_lists_flat_entries_alphabetized_with_stripped_suffix() {
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-    put_glb(&store, "main.glb", vec![0u8; 1000]).await;
-    put_glb(&store, "level_a.glb", vec![0u8; 2000]).await;
-    // Nested content has a `/` in the location returned by `list` — the
-    // catalog filters those out so subdirectory clutter doesn't surface.
+    let main_gz_len = gzip_bytes(&vec![0u8; 1000]).len() as u64;
+    let level_gz_len = gzip_bytes(&vec![0u8; 2000]).len() as u64;
+    put_map(&store, "main.glb", &vec![0u8; 1000]).await;
+    put_map(&store, "level_a.glb", &vec![0u8; 2000]).await;
+    // Nested `.gz` is still nested — the catalog filters by direct
+    // children so subdirectory clutter doesn't surface.
     store
-        .put(&Path::from("nested/foo.glb"), vec![0u8; 10].into())
+        .put(&Path::from("nested/foo.glb.gz"), vec![0u8; 10].into())
         .await
         .expect("put nested");
+    // A bare key (no `.gz`) sneaked in via some out-of-band path must not
+    // surface in the catalog — only entries that follow the storage
+    // convention show up.
+    store
+        .put(&Path::from("rogue.glb"), vec![0u8; 5].into())
+        .await
+        .expect("put rogue");
 
     let app = build_handler_router(MapsState::new(Some(store.clone())));
 
@@ -189,19 +192,23 @@ async fn catalog_lists_flat_entries_alphabetized_with_size() {
     assert_eq!(
         arr.len(),
         2,
-        "expected only flat children, no nested: {arr:?}"
+        "expected only flat .gz children — no nested, no bare-key rogue: {arr:?}"
     );
-    assert_eq!(arr[0]["file"], "level_a.glb", "alphabetized");
-    assert_eq!(arr[0]["size"], 2000);
+    assert_eq!(
+        arr[0]["file"], "level_a.glb",
+        "alphabetized, suffix stripped"
+    );
+    assert_eq!(arr[0]["size"], level_gz_len);
     assert_eq!(arr[1]["file"], "main.glb");
-    assert_eq!(arr[1]["size"], 1000);
+    assert_eq!(arr[1]["size"], main_gz_len);
 }
 
 #[tokio::test]
-async fn blob_streams_bytes_and_sets_content_type_and_length() {
+async fn blob_streams_gzipped_bytes_and_sets_headers() {
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let payload: Vec<u8> = (0..256u32).map(|i| i as u8).collect();
-    put_glb(&store, "main.glb", payload.clone()).await;
+    put_map(&store, "main.glb", &payload).await;
+    let stored_len = gzip_bytes(&payload).len();
 
     let app = build_handler_router(MapsState::new(Some(store)));
 
@@ -225,54 +232,29 @@ async fn blob_streams_bytes_and_sets_content_type_and_length() {
     );
     assert_eq!(
         headers
+            .get(http::header::CONTENT_ENCODING)
+            .and_then(|v| v.to_str().ok()),
+        Some("gzip"),
+        "GET always advertises gzip — the `.gz` suffix is the contract",
+    );
+    assert_eq!(
+        headers
             .get(http::header::CONTENT_LENGTH)
             .and_then(|v| v.to_str().ok())
             .and_then(|s| s.parse::<usize>().ok()),
-        Some(payload.len())
-    );
-    assert!(
-        headers.get(http::header::CONTENT_ENCODING).is_none(),
-        "no Content-Encoding when upstream object has none"
+        Some(stored_len),
+        "Content-Length is the on-disk (gzipped) byte count",
     );
 
     let body = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .unwrap();
-    assert_eq!(body.to_vec(), payload, "body matches what was put");
-}
-
-#[tokio::test]
-async fn blob_passes_through_content_encoding_from_object_metadata() {
-    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-    let mut attrs = Attributes::new();
-    attrs.insert(Attribute::ContentEncoding, AttributeValue::from("gzip"));
-    attrs.insert(
-        Attribute::ContentType,
-        AttributeValue::from("model/gltf-binary"),
-    );
-    put_with_attrs(&store, "main.glb", vec![1u8, 2, 3, 4], attrs).await;
-
-    let app = build_handler_router(MapsState::new(Some(store)));
-
-    let response = app
-        .oneshot(
-            Request::builder()
-                .uri("/api/maps/blob/main.glb")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(
-        response
-            .headers()
-            .get(http::header::CONTENT_ENCODING)
-            .and_then(|v| v.to_str().ok()),
-        Some("gzip"),
-        "gzip encoding from object metadata should be passed through"
-    );
+    let mut decoder = GzDecoder::new(&body[..]);
+    let mut decompressed = Vec::new();
+    decoder
+        .read_to_end(&mut decompressed)
+        .expect("gzip decompress");
+    assert_eq!(decompressed, payload, "decoded body matches what was put");
 }
 
 #[tokio::test]
@@ -282,7 +264,7 @@ async fn blob_rejects_filenames_containing_slashes() {
     // is that the decoded filename segment must not contain a `/`, in
     // case a percent-encoded `/` makes it past axum's path routing.
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-    put_glb(&store, "main.glb", b"hi".to_vec()).await;
+    put_map(&store, "main.glb", b"hi").await;
     let app = build_handler_router(MapsState::new(Some(store)));
 
     let bad_names = ["..%2Fmain.glb", "foo%2Fbar.glb"];
@@ -304,10 +286,10 @@ async fn blob_rejects_filenames_containing_slashes() {
 #[tokio::test]
 async fn blob_serves_non_glb_extensions_from_prefix() {
     // Reserve-the-prefix policy: the maps URI is committed to hold map
-    // assets, so the extension isn't enforced server-side. Anything flat
-    // in the bucket is fetchable.
+    // assets, so the `.glb` extension isn't enforced — only the storage
+    // convention is (`<name>.gz` on disk).
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-    put_glb(&store, "readme.txt", b"hello".to_vec()).await;
+    put_map(&store, "readme.txt", b"hello").await;
     let app = build_handler_router(MapsState::new(Some(store)));
 
     let response = app
@@ -391,7 +373,7 @@ async fn unauthenticated_catalog_returns_401() {
 async fn unauthenticated_blob_returns_401() {
     let auth_state = create_test_auth_state();
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-    put_glb(&store, "main.glb", b"SECRET-GLB-BYTES".to_vec()).await;
+    put_map(&store, "main.glb", b"SECRET-GLB-BYTES").await;
 
     let app = Router::new()
         .route("/api/maps/blob/{filename}", get(maps_blob))
@@ -451,7 +433,7 @@ fn is_direct_child_rejects_paths_with_slashes() {
 #[tokio::test]
 async fn catalog_includes_last_modified() {
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-    put_glb(&store, "main.glb", vec![0u8; 4]).await;
+    put_map(&store, "main.glb", &vec![0u8; 4]).await;
 
     let app = build_handler_router(MapsState::new(Some(store)));
 
@@ -491,7 +473,7 @@ fn put_glb_request(uri: &str, body: Vec<u8>) -> Request<Body> {
 }
 
 #[tokio::test]
-async fn upload_stores_gzipped_with_attributes() {
+async fn upload_stores_at_gz_suffix_and_round_trips() {
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let app = build_handler_router(MapsState::new(Some(store.clone())));
 
@@ -506,26 +488,30 @@ async fn upload_stores_gzipped_with_attributes() {
         .await
         .unwrap();
     let parsed: serde_json::Value = serde_json::from_slice(&body).expect("json");
-    assert_eq!(parsed["file"], "new.glb");
+    assert_eq!(
+        parsed["file"], "new.glb",
+        "response echoes user-facing name"
+    );
     let wire_size = parsed["size"].as_u64().expect("size");
     assert!(wire_size > 0);
 
-    let got = store.get(&Path::from("new.glb")).await.expect("get stored");
-    assert_eq!(
-        got.attributes
-            .get(&Attribute::ContentType)
-            .map(|v| v.as_ref().to_string()),
-        Some("model/gltf-binary".to_string())
-    );
-    assert_eq!(
-        got.attributes
-            .get(&Attribute::ContentEncoding)
-            .map(|v| v.as_ref().to_string()),
-        Some("gzip".to_string())
-    );
+    // Stored under the `.gz` suffix; the user-facing key has nothing on it.
+    let bare = store
+        .get(&Path::from("new.glb"))
+        .await
+        .expect_err("user-facing key must not exist");
+    assert!(matches!(bare, object_store::Error::NotFound { .. }));
 
+    let got = store
+        .get(&Path::from("new.glb.gz"))
+        .await
+        .expect("stored at .gz suffix");
     let stored = got.bytes().await.expect("read stored bytes");
-    assert_eq!(stored.len() as u64, wire_size, "size reflects wire bytes");
+    assert_eq!(
+        stored.len() as u64,
+        wire_size,
+        "reported size matches on-disk byte count",
+    );
 
     let mut decoder = GzDecoder::new(&stored[..]);
     let mut decompressed = Vec::new();
@@ -542,9 +528,7 @@ async fn upload_passes_through_client_gzipped_body() {
 
     // Construct a real gzip frame so the client-pregzipped branch stores it
     // verbatim — a non-empty body, not just a flag check.
-    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
-    std::io::Write::write_all(&mut encoder, b"hello world").unwrap();
-    let gzipped = encoder.finish().unwrap();
+    let gzipped = gzip_bytes(b"hello world");
 
     let req = Request::builder()
         .method("PUT")
@@ -556,13 +540,34 @@ async fn upload_passes_through_client_gzipped_body() {
     let response = app.oneshot(req).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
 
-    let got = store.get(&Path::from("pre.glb")).await.expect("get stored");
+    let got = store
+        .get(&Path::from("pre.glb.gz"))
+        .await
+        .expect("stored at .gz suffix");
     let stored = got.bytes().await.expect("read stored bytes");
     assert_eq!(
         stored.as_ref(),
         gzipped.as_slice(),
         "pre-gzipped body must be stored verbatim — no double encode"
     );
+}
+
+#[tokio::test]
+async fn upload_rejects_dot_gz_filename() {
+    // The `.gz` suffix is server-owned; accepting `level.glb.gz` would mean
+    // either double-suffixing on disk (`level.glb.gz.gz`) or letting the
+    // user pre-claim the stored key. Reject up front.
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let app = build_handler_router(MapsState::new(Some(store)));
+
+    let response = app
+        .oneshot(put_glb_request(
+            "/api/maps/blob/level.glb.gz",
+            vec![1, 2, 3],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]
@@ -614,12 +619,17 @@ async fn upload_requires_admin() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
 
-    // And nothing was stored.
-    let listed = store
+    // And nothing was stored (neither under the bare name nor `.gz`).
+    let bare = store
         .get(&Path::from("blocked.glb"))
         .await
         .expect_err("not stored");
-    assert!(matches!(listed, object_store::Error::NotFound { .. }));
+    assert!(matches!(bare, object_store::Error::NotFound { .. }));
+    let gz = store
+        .get(&Path::from("blocked.glb.gz"))
+        .await
+        .expect_err("not stored");
+    assert!(matches!(gz, object_store::Error::NotFound { .. }));
 }
 
 #[tokio::test]
@@ -669,7 +679,7 @@ async fn upload_body_limit_does_not_apply_to_delete_or_get() {
     // bleed onto the sibling DELETE / GET methods on the same path —
     // they share a `MethodRouter` but the layer is scoped to PUT.
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-    put_glb(&store, "main.glb", vec![0u8; 2048]).await;
+    put_map(&store, "main.glb", &vec![0u8; 2048]).await;
 
     let app = build_handler_router_with_upload_limit(MapsState::new(Some(store)), 128);
 
@@ -707,7 +717,7 @@ async fn upload_body_limit_does_not_apply_to_delete_or_get() {
 #[tokio::test]
 async fn delete_removes_object_and_returns_204() {
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-    put_glb(&store, "main.glb", b"glb-bytes".to_vec()).await;
+    put_map(&store, "main.glb", b"glb-bytes").await;
 
     let app = build_handler_router(MapsState::new(Some(store.clone())));
 
@@ -723,7 +733,10 @@ async fn delete_removes_object_and_returns_204() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::NO_CONTENT);
 
-    let after = store.get(&Path::from("main.glb")).await.expect_err("gone");
+    let after = store
+        .get(&Path::from("main.glb.gz"))
+        .await
+        .expect_err("gone");
     assert!(matches!(after, object_store::Error::NotFound { .. }));
 }
 
@@ -768,7 +781,8 @@ async fn delete_returns_503_when_storage_unconfigured() {
 #[tokio::test]
 async fn delete_requires_admin() {
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-    put_glb(&store, "main.glb", b"glb".to_vec()).await;
+    put_map(&store, "main.glb", b"glb").await;
+    let stored_size = gzip_bytes(b"glb").len() as u64;
 
     let app = build_handler_router_with_user(MapsState::new(Some(store.clone())), non_admin_user());
 
@@ -786,10 +800,10 @@ async fn delete_requires_admin() {
 
     // Object survives — admin gate ran before any store call.
     let got = store
-        .get(&Path::from("main.glb"))
+        .get(&Path::from("main.glb.gz"))
         .await
         .expect("still there");
-    assert_eq!(got.meta.size, 3);
+    assert_eq!(got.meta.size, stored_size);
 }
 
 #[tokio::test]
@@ -859,4 +873,87 @@ async fn unauthenticated_delete_returns_401() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+// ---------------------------------------------------------------------------
+// LocalFileSystem backend (file:// URIs)
+// ---------------------------------------------------------------------------
+//
+// `object_store::LocalFileSystem::put_opts` rejects any non-empty
+// `PutOptions::attributes` with `NotImplemented`. The `.gz` suffix
+// convention sidesteps that: PUT uses plain `put()` and the encoding
+// signal lives in the key name, not in object metadata. This test pins
+// the end-to-end behavior on a real on-disk store.
+
+#[tokio::test]
+async fn upload_round_trips_through_local_filesystem() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let local = LocalFileSystem::new_with_prefix(tmp.path()).expect("local fs");
+    let store: Arc<dyn ObjectStore> = Arc::new(local);
+
+    let app = build_handler_router(MapsState::new(Some(store.clone())));
+
+    let payload: Vec<u8> = (0..1024u32).map(|i| i as u8).collect();
+    let response = app
+        .clone()
+        .oneshot(put_glb_request("/api/maps/blob/local.glb", payload.clone()))
+        .await
+        .unwrap();
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "upload to LocalFileSystem must succeed",
+    );
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let parsed: serde_json::Value = serde_json::from_slice(&body).expect("json");
+    assert_eq!(parsed["file"], "local.glb");
+    let wire_size = parsed["size"].as_u64().expect("size");
+    assert!(wire_size > 0);
+
+    // Stored under the `.gz` suffix even on LocalFileSystem — no attributes
+    // touched, so the backend's `NotImplemented` for `put_opts` is never
+    // hit. We confirm by re-fetching and decoding the gzip frame.
+    let got = store
+        .get(&Path::from("local.glb.gz"))
+        .await
+        .expect("stored at .gz suffix");
+    let stored = got.bytes().await.expect("read stored bytes");
+    let mut decoder = GzDecoder::new(&stored[..]);
+    let mut decompressed = Vec::new();
+    decoder
+        .read_to_end(&mut decompressed)
+        .expect("gzip decompress");
+    assert_eq!(decompressed, payload, "round-trip through gzip");
+
+    // Round-trip the GET handler too, since the read path is what users
+    // actually hit. Response body is still gzipped (the browser decodes).
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/maps/blob/local.glb")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get(http::header::CONTENT_ENCODING)
+            .and_then(|v| v.to_str().ok()),
+        Some("gzip"),
+    );
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let mut decoder = GzDecoder::new(&body[..]);
+    let mut decompressed = Vec::new();
+    decoder
+        .read_to_end(&mut decompressed)
+        .expect("gzip decompress");
+    assert_eq!(decompressed, payload);
 }
