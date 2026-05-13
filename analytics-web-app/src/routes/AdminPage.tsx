@@ -1,6 +1,6 @@
 import { Suspense } from 'react'
 import { usePageTitle } from '@/hooks/usePageTitle'
-import { Database, Download, Upload } from 'lucide-react'
+import { Database, Download, Upload, Map } from 'lucide-react'
 import { PageLayout } from '@/components/layout'
 import { AuthGuard } from '@/components/AuthGuard'
 import { AppLink } from '@/components/AppLink'
@@ -52,6 +52,18 @@ function AdminPageContent() {
                 <h3 className="text-base font-semibold text-theme-text-primary mb-1.5">Import Screens</h3>
                 <p className="text-sm text-theme-text-muted leading-relaxed">
                   Upload a screens export file to restore or migrate screen configurations into this environment.
+                </p>
+              </div>
+            </AppLink>
+
+            <AppLink href="/admin/maps" className="block">
+              <div className="p-6 rounded-xl border border-theme-border bg-app-panel hover:border-accent-link hover:bg-app-card transition-colors">
+                <div className="w-11 h-11 rounded-lg flex items-center justify-center mb-4 bg-rust-500/15 text-accent-link">
+                  <Map className="w-6 h-6" />
+                </div>
+                <h3 className="text-base font-semibold text-theme-text-primary mb-1.5">Maps</h3>
+                <p className="text-sm text-theme-text-muted leading-relaxed">
+                  Upload and remove GLB map assets served to map cells.
                 </p>
               </div>
             </AppLink>

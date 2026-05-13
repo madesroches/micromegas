@@ -845,3 +845,31 @@ pub async fn cookie_auth_middleware(
 /// Will be used to pass token to FlightSQL in future phases
 #[derive(Clone, Debug)]
 pub struct AuthToken(pub String);
+
+/// Returned by `require_admin` when the user is not an admin.
+///
+/// Implements `IntoResponse` as 403 with a JSON `{ code, message }` body
+/// matching the data-sources error shape, so handlers can `?`-propagate
+/// it directly or convert into a domain error enum at the boundary.
+#[derive(Debug)]
+pub struct AdminRequired;
+
+impl IntoResponse for AdminRequired {
+    fn into_response(self) -> Response {
+        let body = serde_json::json!({
+            "code": "FORBIDDEN",
+            "message": "Admin access required",
+        });
+        (StatusCode::FORBIDDEN, Json(body)).into_response()
+    }
+}
+
+/// Returns `Ok(())` when the user is an admin, otherwise an `AdminRequired`
+/// error that renders as a 403 with `{ code: "FORBIDDEN", message: ... }`.
+pub fn require_admin(user: &ValidatedUser) -> Result<(), AdminRequired> {
+    if user.is_admin {
+        Ok(())
+    } else {
+        Err(AdminRequired)
+    }
+}

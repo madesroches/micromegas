@@ -4,6 +4,10 @@ import {
   resolveMapBlobUrl,
   fetchMapCatalog,
   __resetMapCatalogForTest,
+  invalidateMapCatalog,
+  uploadMap,
+  deleteMap,
+  MapApiError,
 } from '../maps-catalog'
 
 describe('normalizeMapFilename', () => {
@@ -95,5 +99,180 @@ describe('fetchMapCatalog', () => {
 
     const catalog = await fetchMapCatalog('/mmlocal')
     expect(catalog).toEqual([])
+  })
+})
+
+describe('uploadMap', () => {
+  beforeEach(() => {
+    __resetMapCatalogForTest()
+  })
+
+  afterEach(() => {
+    jest.restoreAllMocks()
+  })
+
+  it('PUTs the file as raw body with model/gltf-binary and returns the parsed body', async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ file: 'level.glb', size: 1234 }),
+    } as unknown as Response)
+    global.fetch = fetchMock as unknown as typeof fetch
+
+    const file = new File([new Uint8Array([1, 2, 3, 4])], 'level.glb', {
+      type: 'model/gltf-binary',
+    })
+    const result = await uploadMap(file, '/mmlocal')
+
+    expect(result).toEqual({ file: 'level.glb', size: 1234 })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toBe('/mmlocal/api/maps/blob/level.glb')
+    expect(init).toEqual(
+      expect.objectContaining({
+        method: 'PUT',
+        body: file,
+        credentials: 'include',
+        headers: expect.objectContaining({
+          'Content-Type': 'model/gltf-binary',
+        }),
+      })
+    )
+  })
+
+  it('invalidates the catalog cache on success', async () => {
+    // Prime the cache with a single fetch
+    const catalogPayload = [{ file: 'main.glb', size: 100, last_modified: '2026-01-01T00:00:00Z' }]
+    const fetchMock = jest
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve(catalogPayload),
+      } as unknown as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ file: 'main.glb', size: 50 }),
+      } as unknown as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () =>
+          Promise.resolve([
+            ...catalogPayload,
+            { file: 'new.glb', size: 1, last_modified: '2026-01-02T00:00:00Z' },
+          ]),
+      } as unknown as Response)
+    global.fetch = fetchMock as unknown as typeof fetch
+
+    const first = await fetchMapCatalog('/mmlocal')
+    expect(first).toHaveLength(1)
+    await uploadMap(new File([new Uint8Array(1)], 'main.glb'), '/mmlocal')
+    const second = await fetchMapCatalog('/mmlocal')
+    expect(second).toHaveLength(2)
+  })
+
+  it('surfaces server errors as MapApiError with code + message', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 413,
+      json: () =>
+        Promise.resolve({ code: 'TOO_LARGE', message: 'Upload exceeds 256 MiB cap' }),
+    } as unknown as Response) as unknown as typeof fetch
+
+    const file = new File([new Uint8Array(8)], 'big.glb', { type: 'model/gltf-binary' })
+    await expect(uploadMap(file, '/mmlocal')).rejects.toMatchObject({
+      code: 'TOO_LARGE',
+      message: 'Upload exceeds 256 MiB cap',
+      status: 413,
+    })
+  })
+
+  it('falls back to HTTP status when the error body is not JSON', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 500,
+      json: () => Promise.reject(new Error('not json')),
+    } as unknown as Response) as unknown as typeof fetch
+
+    const file = new File([new Uint8Array(1)], 'x.glb', { type: 'model/gltf-binary' })
+    await expect(uploadMap(file, '/mmlocal')).rejects.toBeInstanceOf(MapApiError)
+  })
+})
+
+describe('deleteMap', () => {
+  beforeEach(() => {
+    __resetMapCatalogForTest()
+  })
+
+  afterEach(() => {
+    jest.restoreAllMocks()
+  })
+
+  it('DELETEs the right URL and invalidates the cache on success', async () => {
+    const fetchMock = jest
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () =>
+          Promise.resolve([{ file: 'main.glb', size: 1, last_modified: '2026-01-01T00:00:00Z' }]),
+      } as unknown as Response)
+      .mockResolvedValueOnce({ ok: true, status: 204 } as unknown as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve([]),
+      } as unknown as Response)
+    global.fetch = fetchMock as unknown as typeof fetch
+
+    await fetchMapCatalog('/mmlocal')
+    await deleteMap('main.glb', '/mmlocal')
+    const after = await fetchMapCatalog('/mmlocal')
+
+    expect(after).toEqual([])
+    const deleteCall = fetchMock.mock.calls[1]
+    expect(deleteCall[0]).toBe('/mmlocal/api/maps/blob/main.glb')
+    expect(deleteCall[1]).toEqual(
+      expect.objectContaining({ method: 'DELETE', credentials: 'include' })
+    )
+  })
+
+  it('surfaces server errors as MapApiError', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 403,
+      json: () =>
+        Promise.resolve({ code: 'FORBIDDEN', message: 'Admin access required' }),
+    } as unknown as Response) as unknown as typeof fetch
+
+    await expect(deleteMap('main.glb', '/mmlocal')).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      status: 403,
+    })
+  })
+})
+
+describe('invalidateMapCatalog', () => {
+  beforeEach(() => {
+    __resetMapCatalogForTest()
+  })
+
+  afterEach(() => {
+    jest.restoreAllMocks()
+  })
+
+  it('forces a re-fetch on the next fetchMapCatalog call', async () => {
+    const fetchMock = jest
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve([{ file: 'main.glb', size: 1 }]),
+      } as unknown as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve([{ file: 'other.glb', size: 2 }]),
+      } as unknown as Response)
+    global.fetch = fetchMock as unknown as typeof fetch
+
+    await fetchMapCatalog('/mmlocal')
+    invalidateMapCatalog()
+    await fetchMapCatalog('/mmlocal')
+    expect(fetchMock).toHaveBeenCalledTimes(2)
   })
 })

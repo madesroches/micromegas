@@ -67,6 +67,7 @@ dependencies = [
  "chrono",
  "clap",
  "datafusion",
+ "flate2",
  "futures",
  "http 1.4.0",
  "jsonwebtoken",

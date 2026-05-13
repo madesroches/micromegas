@@ -4,19 +4,30 @@
 //! streamed body-as-stream so the server doesn't buffer 30 MB blobs in RAM
 //! per request. All paths are scoped to `MICROMEGAS_MAPS_OBJECT_STORE_URI`.
 
+use crate::auth::{AdminRequired, ValidatedUser, require_admin};
 use anyhow::{Context, Result};
 use axum::{
     Extension, Json,
-    body::Body,
+    body::{Body, Bytes},
     extract::Path as AxumPath,
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
 };
+use chrono::{DateTime, Utc};
+use flate2::{Compression, write::GzEncoder};
 use futures::StreamExt;
 use micromegas::tracing::prelude::*;
-use object_store::{Attribute, ObjectStore, path::Path as ObjectPath, prefix::PrefixStore};
+use object_store::{
+    Attribute, AttributeValue, Attributes, ObjectStore, PutOptions, path::Path as ObjectPath,
+    prefix::PrefixStore,
+};
 use serde::Serialize;
+use std::io::Write;
 use std::sync::Arc;
+
+/// Default max upload body size (256 MiB). Configurable via the
+/// `MICROMEGAS_MAPS_MAX_UPLOAD_BYTES` env var, surfaced on `MapsState`.
+pub const DEFAULT_MAX_UPLOAD_BYTES: usize = 256 * 1024 * 1024;
 
 /// The maps prefix is reserved for direct children — any subdirectory
 /// content is ignored. The configured store is treated as the source of
@@ -38,6 +49,26 @@ pub fn is_direct_child(name: &str) -> bool {
 #[derive(Clone)]
 pub struct MapsState {
     pub store: Option<Arc<dyn ObjectStore>>,
+    /// Upper bound on the upload body, used in error messages. The actual
+    /// rejection happens earlier via `axum::extract::DefaultBodyLimit` layered
+    /// on the upload route, so this value is surfaced for diagnostics only.
+    pub max_upload_bytes: usize,
+}
+
+impl MapsState {
+    pub fn new(store: Option<Arc<dyn ObjectStore>>) -> Self {
+        Self {
+            store,
+            max_upload_bytes: DEFAULT_MAX_UPLOAD_BYTES,
+        }
+    }
+
+    pub fn with_max_upload_bytes(store: Option<Arc<dyn ObjectStore>>, max: usize) -> Self {
+        Self {
+            store,
+            max_upload_bytes: max,
+        }
+    }
 }
 
 /// Connect to the store named by `MICROMEGAS_MAPS_OBJECT_STORE_URI`.
@@ -60,6 +91,7 @@ pub fn connect_maps_store(uri: Option<&str>) -> Result<Option<Arc<dyn ObjectStor
 pub struct CatalogEntry {
     pub file: String,
     pub size: u64,
+    pub last_modified: DateTime<Utc>,
 }
 
 /// GET /api/maps/catalog
@@ -88,6 +120,7 @@ pub async fn maps_catalog(Extension(state): Extension<MapsState>) -> Response {
                     entries.push(CatalogEntry {
                         file: location.to_string(),
                         size: meta.size,
+                        last_modified: meta.last_modified,
                     });
                 }
             }
@@ -173,4 +206,198 @@ pub async fn maps_blob(
         .map(|res| res.map_err(std::io::Error::other));
 
     (headers, Body::from_stream(stream)).into_response()
+}
+
+/// JSON error body returned by the mutation handlers.
+#[derive(Debug, Serialize)]
+struct MapsErrorBody {
+    code: &'static str,
+    message: String,
+}
+
+fn maps_error(status: StatusCode, code: &'static str, message: impl Into<String>) -> Response {
+    let body = MapsErrorBody {
+        code,
+        message: message.into(),
+    };
+    (status, Json(body)).into_response()
+}
+
+/// 200 response body for a successful upload — matches the catalog shape so
+/// the frontend can splice the entry in without an immediate re-fetch.
+#[derive(Debug, Serialize)]
+pub struct UploadResponse {
+    pub file: String,
+    pub size: u64,
+}
+
+/// PUT /api/maps/blob/{filename}
+///
+/// Admin-only. Stores a GLB at the configured prefix with
+/// `Content-Type: model/gltf-binary` + `Content-Encoding: gzip` attributes,
+/// gzipping the body server-side unless the request already provided
+/// `Content-Encoding: gzip`. The companion GET handler is responsible for
+/// passing those attributes back so the browser decodes transparently.
+#[span_fn]
+pub async fn maps_upload(
+    Extension(state): Extension<MapsState>,
+    Extension(user): Extension<ValidatedUser>,
+    AxumPath(filename): AxumPath<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Response, AdminRequired> {
+    require_admin(&user)?;
+
+    if !is_direct_child(&filename) {
+        return Ok(maps_error(
+            StatusCode::BAD_REQUEST,
+            "INVALID_FILENAME",
+            "Filename must be a single path segment",
+        ));
+    }
+
+    let content_type = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    if content_type != "model/gltf-binary" {
+        return Ok(maps_error(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "UNSUPPORTED_MEDIA_TYPE",
+            "Content-Type must be model/gltf-binary",
+        ));
+    }
+
+    let Some(store) = state.store else {
+        return Ok(maps_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "MAPS_STORE_UNAVAILABLE",
+            "Maps endpoint not configured: set MICROMEGAS_MAPS_OBJECT_STORE_URI",
+        ));
+    };
+
+    // If the client pre-gzipped the body, store it verbatim. Otherwise gzip
+    // server-side so the stored object always carries
+    // `Content-Encoding: gzip` and the read path can stream it untouched.
+    let client_pregzipped = headers
+        .get(header::CONTENT_ENCODING)
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.eq_ignore_ascii_case("gzip"))
+        .unwrap_or(false);
+
+    let stored_bytes: Vec<u8> = if client_pregzipped {
+        body.to_vec()
+    } else {
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+        if let Err(e) = encoder.write_all(&body) {
+            error!("gzip write failed for '{filename}': {e:?}");
+            return Ok(maps_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "GZIP_FAILED",
+                "Failed to compress upload",
+            ));
+        }
+        match encoder.finish() {
+            Ok(buf) => buf,
+            Err(e) => {
+                error!("gzip finish failed for '{filename}': {e:?}");
+                return Ok(maps_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "GZIP_FAILED",
+                    "Failed to compress upload",
+                ));
+            }
+        }
+    };
+
+    let mut attrs = Attributes::new();
+    attrs.insert(
+        Attribute::ContentType,
+        AttributeValue::from("model/gltf-binary"),
+    );
+    attrs.insert(Attribute::ContentEncoding, AttributeValue::from("gzip"));
+
+    let stored_size = stored_bytes.len() as u64;
+    let put_opts = PutOptions {
+        attributes: attrs,
+        ..PutOptions::default()
+    };
+
+    if let Err(e) = store
+        .put_opts(
+            &ObjectPath::from(filename.as_str()),
+            stored_bytes.into(),
+            put_opts,
+        )
+        .await
+    {
+        error!("storing map '{filename}': {e:?}");
+        return Ok(maps_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "STORE_FAILED",
+            "Failed to store map",
+        ));
+    }
+
+    info!(
+        "Uploaded map '{filename}' ({stored_size} bytes gzipped) by {sub}",
+        sub = user.email.as_deref().unwrap_or(&user.subject)
+    );
+
+    Ok((
+        StatusCode::OK,
+        Json(UploadResponse {
+            file: filename,
+            size: stored_size,
+        }),
+    )
+        .into_response())
+}
+
+/// DELETE /api/maps/blob/{filename}
+///
+/// Admin-only. Idempotent — returns 204 whether or not the object existed,
+/// matching S3's native DELETE semantics and avoiding a useless `head()`
+/// round-trip just to manufacture a 404.
+#[span_fn]
+pub async fn maps_delete(
+    Extension(state): Extension<MapsState>,
+    Extension(user): Extension<ValidatedUser>,
+    AxumPath(filename): AxumPath<String>,
+) -> Result<Response, AdminRequired> {
+    require_admin(&user)?;
+
+    if !is_direct_child(&filename) {
+        return Ok(maps_error(
+            StatusCode::BAD_REQUEST,
+            "INVALID_FILENAME",
+            "Filename must be a single path segment",
+        ));
+    }
+
+    let Some(store) = state.store else {
+        return Ok(maps_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "MAPS_STORE_UNAVAILABLE",
+            "Maps endpoint not configured: set MICROMEGAS_MAPS_OBJECT_STORE_URI",
+        ));
+    };
+
+    match store.delete(&ObjectPath::from(filename.as_str())).await {
+        Ok(()) | Err(object_store::Error::NotFound { .. }) => {
+            info!(
+                "Deleted map '{filename}' by {sub}",
+                sub = user.email.as_deref().unwrap_or(&user.subject)
+            );
+            Ok(StatusCode::NO_CONTENT.into_response())
+        }
+        Err(e) => {
+            error!("deleting map '{filename}': {e:?}");
+            Ok(maps_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "DELETE_FAILED",
+                "Failed to delete map",
+            ))
+        }
+    }
 }

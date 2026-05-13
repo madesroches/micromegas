@@ -557,9 +557,15 @@ Configure the prefix via `MICROMEGAS_MAPS_OBJECT_STORE_URI`. The URL grammar mat
 | Local dev | `file:///home/you/lake/maps/` (sibling of `lake/blobs/`) |
 | AWS prod | `s3://my-bucket/maps/` |
 
-Drop a `.glb` into the configured prefix and it appears in the dropdown on the next page load — no script needed. Display names are derived client-side: the `.glb` extension is stripped (`Arena_North.glb` → `Arena_North`).
+Admins upload `.glb` files through the **Admin → Maps** page. The server gzips on upload and stores the object with `Content-Type: model/gltf-binary` + `Content-Encoding: gzip` so the existing read path serves it verbatim and the browser decodes transparently. Display names are derived client-side: the `.glb` extension is stripped (`Arena_North.glb` → `Arena_North`).
+
+Ops can still drop `.glb` files directly into the configured prefix (no UI required), but the upload must set the same `Content-Type` + `Content-Encoding` attributes — the Admin → Maps page is the recommended path because it handles the compression and metadata in one shot.
 
 If `MICROMEGAS_MAPS_OBJECT_STORE_URI` is unset, `/api/maps/catalog` returns 503 and the dropdown is empty. The local-dev start script (`start_analytics_web.py`) defaults this to `<MICROMEGAS_OBJECT_STORE_URI>/maps/` — i.e. a `maps/` sibling of the telemetry lake — so a single lake root supplies both telemetry blobs and map assets.
+
+**Upload size:**
+
+Uploads through the Admin → Maps page are capped per request at 256 MiB by default; override with `MICROMEGAS_MAPS_MAX_UPLOAD_BYTES` (raw byte count).
 
 **Storage compression:**
 

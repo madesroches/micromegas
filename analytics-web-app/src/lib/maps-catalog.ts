@@ -5,9 +5,41 @@
 // store the bare filename in `options.mapUrl`; the viewer composes the
 // blob URL at render time.
 
+import { authenticatedFetch } from './api'
+
 export interface MapCatalogEntry {
   file: string
   size: number
+  last_modified: string
+}
+
+export interface UploadMapResponse {
+  file: string
+  size: number
+}
+
+export interface MapApiErrorBody {
+  code?: string
+  message?: string
+}
+
+export class MapApiError extends Error {
+  constructor(
+    public code: string,
+    message: string,
+    public status: number
+  ) {
+    super(message)
+    this.name = 'MapApiError'
+  }
+}
+
+async function readErrorBody(response: Response): Promise<MapApiErrorBody | undefined> {
+  try {
+    return (await response.json()) as MapApiErrorBody
+  } catch {
+    return undefined
+  }
 }
 
 /**
@@ -56,7 +88,56 @@ export function fetchMapCatalog(basePath: string): Promise<MapCatalogEntry[]> {
   return catalogPromise
 }
 
-/** Test-only helper: clear the shared promise so tests can re-trigger fetches. */
-export function __resetMapCatalogForTest(): void {
+/** Clears the cached catalog so the next `fetchMapCatalog` call re-fetches. */
+export function invalidateMapCatalog(): void {
   catalogPromise = null
+}
+
+/** Test-only alias kept so existing tests don't need to change. */
+export const __resetMapCatalogForTest = invalidateMapCatalog
+
+/**
+ * Upload (or replace) a map GLB. The body is sent as the raw bytes from the
+ * `File` blob — multipart would buy nothing here. Cached catalog is
+ * invalidated on success so the next render sees the new entry.
+ */
+export async function uploadMap(
+  file: File,
+  basePath: string
+): Promise<UploadMapResponse> {
+  const response = await authenticatedFetch(
+    `${basePath}/api/maps/blob/${encodeURIComponent(file.name)}`,
+    {
+      method: 'PUT',
+      headers: { 'Content-Type': 'model/gltf-binary' },
+      body: file,
+    }
+  )
+  if (!response.ok) {
+    const body = await readErrorBody(response)
+    throw new MapApiError(
+      body?.code ?? 'UNKNOWN_ERROR',
+      body?.message ?? `HTTP ${response.status}`,
+      response.status
+    )
+  }
+  invalidateMapCatalog()
+  return (await response.json()) as UploadMapResponse
+}
+
+/** Delete a map GLB. Idempotent: a missing object is still treated as success. */
+export async function deleteMap(filename: string, basePath: string): Promise<void> {
+  const response = await authenticatedFetch(
+    `${basePath}/api/maps/blob/${encodeURIComponent(filename)}`,
+    { method: 'DELETE' }
+  )
+  if (!response.ok) {
+    const body = await readErrorBody(response)
+    throw new MapApiError(
+      body?.code ?? 'UNKNOWN_ERROR',
+      body?.message ?? `HTTP ${response.status}`,
+      response.status
+    )
+  }
+  invalidateMapCatalog()
 }

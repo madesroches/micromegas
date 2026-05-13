@@ -11,17 +11,22 @@
 //!    server is needed.
 
 use analytics_web_srv::auth::{AuthState, AuthToken, OidcClientConfig, ValidatedUser};
-use analytics_web_srv::maps::{MapsState, is_direct_child, maps_blob, maps_catalog};
+use analytics_web_srv::maps::{
+    MapsState, is_direct_child, maps_blob, maps_catalog, maps_delete, maps_upload,
+};
 use axum::{
     Extension, Router,
     body::Body,
+    extract::DefaultBodyLimit,
     http::{Request, StatusCode},
     middleware,
-    routing::get,
+    routing::{get, put},
 };
+use flate2::read::GzDecoder;
 use object_store::{
     Attribute, AttributeValue, Attributes, ObjectStore, PutOptions, memory::InMemory, path::Path,
 };
+use std::io::Read;
 use std::sync::Arc;
 use tower::ServiceExt;
 
@@ -31,6 +36,15 @@ fn anon_user() -> ValidatedUser {
         email: None,
         issuer: "local".to_string(),
         is_admin: true,
+    }
+}
+
+fn non_admin_user() -> ValidatedUser {
+    ValidatedUser {
+        subject: "reader".to_string(),
+        email: Some("reader@example.com".to_string()),
+        issuer: "local".to_string(),
+        is_admin: false,
     }
 }
 
@@ -54,9 +68,32 @@ fn create_test_auth_state() -> AuthState {
 /// auth bypassed by pre-inserting a synthetic `ValidatedUser`. Used to exercise
 /// handler behavior without standing up an OIDC mock.
 fn build_handler_router(maps_state: MapsState) -> Router {
+    build_handler_router_with_user(maps_state, anon_user())
+}
+
+fn build_handler_router_with_user(maps_state: MapsState, user: ValidatedUser) -> Router {
     Router::new()
         .route("/api/maps/catalog", get(maps_catalog))
-        .route("/api/maps/blob/{filename}", get(maps_blob))
+        .route(
+            "/api/maps/blob/{filename}",
+            get(maps_blob).put(maps_upload).delete(maps_delete),
+        )
+        .layer(Extension(maps_state))
+        .layer(Extension(AuthToken(String::new())))
+        .layer(Extension(user))
+}
+
+/// Variant that scopes a per-route body limit to PUT, mirroring main.rs.
+fn build_handler_router_with_upload_limit(maps_state: MapsState, max_bytes: usize) -> Router {
+    Router::new()
+        .route("/api/maps/catalog", get(maps_catalog))
+        .route(
+            "/api/maps/blob/{filename}",
+            put(maps_upload)
+                .layer(DefaultBodyLimit::max(max_bytes))
+                .delete(maps_delete)
+                .get(maps_blob),
+        )
         .layer(Extension(maps_state))
         .layer(Extension(AuthToken(String::new())))
         .layer(Extension(anon_user()))
@@ -87,7 +124,7 @@ async fn put_with_attrs(
 
 #[tokio::test]
 async fn catalog_returns_503_when_storage_unconfigured() {
-    let app = build_handler_router(MapsState { store: None });
+    let app = build_handler_router(MapsState::new(None));
 
     let response = app
         .oneshot(
@@ -104,7 +141,7 @@ async fn catalog_returns_503_when_storage_unconfigured() {
 
 #[tokio::test]
 async fn blob_returns_503_when_storage_unconfigured() {
-    let app = build_handler_router(MapsState { store: None });
+    let app = build_handler_router(MapsState::new(None));
 
     let response = app
         .oneshot(
@@ -131,9 +168,7 @@ async fn catalog_lists_flat_entries_alphabetized_with_size() {
         .await
         .expect("put nested");
 
-    let app = build_handler_router(MapsState {
-        store: Some(store.clone()),
-    });
+    let app = build_handler_router(MapsState::new(Some(store.clone())));
 
     let response = app
         .oneshot(
@@ -168,7 +203,7 @@ async fn blob_streams_bytes_and_sets_content_type_and_length() {
     let payload: Vec<u8> = (0..256u32).map(|i| i as u8).collect();
     put_glb(&store, "main.glb", payload.clone()).await;
 
-    let app = build_handler_router(MapsState { store: Some(store) });
+    let app = build_handler_router(MapsState::new(Some(store)));
 
     let response = app
         .oneshot(
@@ -217,7 +252,7 @@ async fn blob_passes_through_content_encoding_from_object_metadata() {
     );
     put_with_attrs(&store, "main.glb", vec![1u8, 2, 3, 4], attrs).await;
 
-    let app = build_handler_router(MapsState { store: Some(store) });
+    let app = build_handler_router(MapsState::new(Some(store)));
 
     let response = app
         .oneshot(
@@ -248,7 +283,7 @@ async fn blob_rejects_filenames_containing_slashes() {
     // case a percent-encoded `/` makes it past axum's path routing.
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     put_glb(&store, "main.glb", b"hi".to_vec()).await;
-    let app = build_handler_router(MapsState { store: Some(store) });
+    let app = build_handler_router(MapsState::new(Some(store)));
 
     let bad_names = ["..%2Fmain.glb", "foo%2Fbar.glb"];
     for name in bad_names {
@@ -273,7 +308,7 @@ async fn blob_serves_non_glb_extensions_from_prefix() {
     // in the bucket is fetchable.
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     put_glb(&store, "readme.txt", b"hello".to_vec()).await;
-    let app = build_handler_router(MapsState { store: Some(store) });
+    let app = build_handler_router(MapsState::new(Some(store)));
 
     let response = app
         .oneshot(
@@ -292,7 +327,7 @@ async fn blob_serves_non_glb_extensions_from_prefix() {
 async fn blob_returns_404_for_missing_object() {
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     // Empty store — main.glb doesn't exist.
-    let app = build_handler_router(MapsState { store: Some(store) });
+    let app = build_handler_router(MapsState::new(Some(store)));
 
     let response = app
         .oneshot(
@@ -326,7 +361,7 @@ async fn unauthenticated_catalog_returns_401() {
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let app = Router::new()
         .route("/api/maps/catalog", get(maps_catalog))
-        .layer(Extension(MapsState { store: Some(store) }))
+        .layer(Extension(MapsState::new(Some(store))))
         .layer(middleware::from_fn_with_state(
             auth_state,
             analytics_web_srv::auth::cookie_auth_middleware,
@@ -360,7 +395,7 @@ async fn unauthenticated_blob_returns_401() {
 
     let app = Router::new()
         .route("/api/maps/blob/{filename}", get(maps_blob))
-        .layer(Extension(MapsState { store: Some(store) }))
+        .layer(Extension(MapsState::new(Some(store))))
         .layer(middleware::from_fn_with_state(
             auth_state,
             analytics_web_srv::auth::cookie_auth_middleware,
@@ -407,4 +442,395 @@ fn is_direct_child_rejects_paths_with_slashes() {
     assert!(!is_direct_child("nested/foo.glb"));
     assert!(!is_direct_child("/etc/passwd"));
     assert!(!is_direct_child("../main.glb"));
+}
+
+// ---------------------------------------------------------------------------
+// Catalog last_modified
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn catalog_includes_last_modified() {
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    put_glb(&store, "main.glb", vec![0u8; 4]).await;
+
+    let app = build_handler_router(MapsState::new(Some(store)));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/maps/catalog")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let entries: serde_json::Value = serde_json::from_slice(&body).expect("json catalog");
+    let entry = &entries.as_array().expect("array")[0];
+    let last_modified = entry["last_modified"]
+        .as_str()
+        .expect("last_modified is RFC3339 string");
+    chrono::DateTime::parse_from_rfc3339(last_modified).expect("RFC3339 parses");
+}
+
+// ---------------------------------------------------------------------------
+// Upload handler
+// ---------------------------------------------------------------------------
+
+fn put_glb_request(uri: &str, body: Vec<u8>) -> Request<Body> {
+    Request::builder()
+        .method("PUT")
+        .uri(uri)
+        .header(http::header::CONTENT_TYPE, "model/gltf-binary")
+        .body(Body::from(body))
+        .unwrap()
+}
+
+#[tokio::test]
+async fn upload_stores_gzipped_with_attributes() {
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let app = build_handler_router(MapsState::new(Some(store.clone())));
+
+    let payload: Vec<u8> = (0..1024u32).map(|i| i as u8).collect();
+    let response = app
+        .oneshot(put_glb_request("/api/maps/blob/new.glb", payload.clone()))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let parsed: serde_json::Value = serde_json::from_slice(&body).expect("json");
+    assert_eq!(parsed["file"], "new.glb");
+    let wire_size = parsed["size"].as_u64().expect("size");
+    assert!(wire_size > 0);
+
+    let got = store.get(&Path::from("new.glb")).await.expect("get stored");
+    assert_eq!(
+        got.attributes
+            .get(&Attribute::ContentType)
+            .map(|v| v.as_ref().to_string()),
+        Some("model/gltf-binary".to_string())
+    );
+    assert_eq!(
+        got.attributes
+            .get(&Attribute::ContentEncoding)
+            .map(|v| v.as_ref().to_string()),
+        Some("gzip".to_string())
+    );
+
+    let stored = got.bytes().await.expect("read stored bytes");
+    assert_eq!(stored.len() as u64, wire_size, "size reflects wire bytes");
+
+    let mut decoder = GzDecoder::new(&stored[..]);
+    let mut decompressed = Vec::new();
+    decoder
+        .read_to_end(&mut decompressed)
+        .expect("gzip decompress");
+    assert_eq!(decompressed, payload);
+}
+
+#[tokio::test]
+async fn upload_passes_through_client_gzipped_body() {
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let app = build_handler_router(MapsState::new(Some(store.clone())));
+
+    // Construct a real gzip frame so the client-pregzipped branch stores it
+    // verbatim — a non-empty body, not just a flag check.
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    std::io::Write::write_all(&mut encoder, b"hello world").unwrap();
+    let gzipped = encoder.finish().unwrap();
+
+    let req = Request::builder()
+        .method("PUT")
+        .uri("/api/maps/blob/pre.glb")
+        .header(http::header::CONTENT_TYPE, "model/gltf-binary")
+        .header(http::header::CONTENT_ENCODING, "gzip")
+        .body(Body::from(gzipped.clone()))
+        .unwrap();
+    let response = app.oneshot(req).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let got = store.get(&Path::from("pre.glb")).await.expect("get stored");
+    let stored = got.bytes().await.expect("read stored bytes");
+    assert_eq!(
+        stored.as_ref(),
+        gzipped.as_slice(),
+        "pre-gzipped body must be stored verbatim — no double encode"
+    );
+}
+
+#[tokio::test]
+async fn upload_rejects_wrong_content_type() {
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let app = build_handler_router(MapsState::new(Some(store)));
+
+    let req = Request::builder()
+        .method("PUT")
+        .uri("/api/maps/blob/x.glb")
+        .header(http::header::CONTENT_TYPE, "text/plain")
+        .body(Body::from("not a glb"))
+        .unwrap();
+    let response = app.oneshot(req).await.unwrap();
+    assert_eq!(response.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+}
+
+#[tokio::test]
+async fn upload_rejects_invalid_filename() {
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let app = build_handler_router(MapsState::new(Some(store)));
+
+    let response = app
+        .oneshot(put_glb_request("/api/maps/blob/%2Fevil.glb", vec![1, 2, 3]))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn upload_returns_503_when_storage_unconfigured() {
+    let app = build_handler_router(MapsState::new(None));
+
+    let response = app
+        .oneshot(put_glb_request("/api/maps/blob/x.glb", vec![1, 2, 3]))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+}
+
+#[tokio::test]
+async fn upload_requires_admin() {
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let app = build_handler_router_with_user(MapsState::new(Some(store.clone())), non_admin_user());
+
+    let response = app
+        .oneshot(put_glb_request("/api/maps/blob/blocked.glb", vec![0u8; 8]))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    // And nothing was stored.
+    let listed = store
+        .get(&Path::from("blocked.glb"))
+        .await
+        .expect_err("not stored");
+    assert!(matches!(listed, object_store::Error::NotFound { .. }));
+}
+
+#[tokio::test]
+async fn upload_rejects_oversize_body() {
+    // Use a tiny limit so the test doesn't synthesize hundreds of MiB —
+    // the per-route layer is identical to what main.rs applies; this
+    // verifies the wiring scopes the cap to PUT.
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let app = build_handler_router_with_upload_limit(MapsState::new(Some(store)), 128);
+
+    let response = app
+        .oneshot(put_glb_request("/api/maps/blob/big.glb", vec![0u8; 1024]))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+}
+
+#[tokio::test]
+async fn upload_body_limit_does_not_apply_to_delete_or_get() {
+    // Sanity check: the per-route limit attached to put(...) must not
+    // bleed onto the sibling DELETE / GET methods on the same path —
+    // they share a `MethodRouter` but the layer is scoped to PUT.
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    put_glb(&store, "main.glb", vec![0u8; 2048]).await;
+
+    let app = build_handler_router_with_upload_limit(MapsState::new(Some(store)), 128);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/api/maps/blob/main.glb")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/maps/blob/main.glb")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    // GET should still report 404 (we just deleted it) — not 413, which
+    // would imply the limit layered onto a non-PUT method.
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+// ---------------------------------------------------------------------------
+// Delete handler
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn delete_removes_object_and_returns_204() {
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    put_glb(&store, "main.glb", b"glb-bytes".to_vec()).await;
+
+    let app = build_handler_router(MapsState::new(Some(store.clone())));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/api/maps/blob/main.glb")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+    let after = store.get(&Path::from("main.glb")).await.expect_err("gone");
+    assert!(matches!(after, object_store::Error::NotFound { .. }));
+}
+
+#[tokio::test]
+async fn delete_is_idempotent_for_missing_object() {
+    // S3 returns 204 for DELETE on a missing key. LocalFileSystem and
+    // some other backends surface `Error::NotFound`; the handler swallows
+    // it so the API surface stays uniform.
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let app = build_handler_router(MapsState::new(Some(store)));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/api/maps/blob/never_existed.glb")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
+async fn delete_returns_503_when_storage_unconfigured() {
+    let app = build_handler_router(MapsState::new(None));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/api/maps/blob/main.glb")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+}
+
+#[tokio::test]
+async fn delete_requires_admin() {
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    put_glb(&store, "main.glb", b"glb".to_vec()).await;
+
+    let app = build_handler_router_with_user(MapsState::new(Some(store.clone())), non_admin_user());
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/api/maps/blob/main.glb")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    // Object survives — admin gate ran before any store call.
+    let got = store
+        .get(&Path::from("main.glb"))
+        .await
+        .expect("still there");
+    assert_eq!(got.meta.size, 3);
+}
+
+#[tokio::test]
+async fn delete_rejects_invalid_filename() {
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let app = build_handler_router(MapsState::new(Some(store)));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/api/maps/blob/%2Fevil.glb")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+// ---------------------------------------------------------------------------
+// Auth regression guards for the mutation routes
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn unauthenticated_upload_returns_401() {
+    let auth_state = create_test_auth_state();
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let app = Router::new()
+        .route("/api/maps/blob/{filename}", put(maps_upload))
+        .layer(Extension(MapsState::new(Some(store))))
+        .layer(middleware::from_fn_with_state(
+            auth_state,
+            analytics_web_srv::auth::cookie_auth_middleware,
+        ));
+
+    let response = app
+        .oneshot(put_glb_request("/api/maps/blob/x.glb", vec![1, 2, 3]))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn unauthenticated_delete_returns_401() {
+    let auth_state = create_test_auth_state();
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let app = Router::new()
+        .route(
+            "/api/maps/blob/{filename}",
+            axum::routing::delete(maps_delete),
+        )
+        .layer(Extension(MapsState::new(Some(store))))
+        .layer(middleware::from_fn_with_state(
+            auth_state,
+            analytics_web_srv::auth::cookie_auth_middleware,
+        ));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/api/maps/blob/x.glb")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }
