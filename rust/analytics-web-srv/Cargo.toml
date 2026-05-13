@@ -26,6 +26,7 @@ futures.workspace = true
 http.workspace = true
 micromegas-auth.workspace = true
 moka.workspace = true
+object_store.workspace = true
 openidconnect.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -34,6 +35,7 @@ time = "0.3"
 tokio.workspace = true
 tower.workspace = true
 tower-http = { workspace = true, features = ["compression-gzip", "fs", "normalize-path"] }
+url.workspace = true
 
 [lib]
 name = "analytics_web_srv"

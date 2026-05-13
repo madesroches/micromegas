@@ -1,6 +1,6 @@
 import { Suspense, useRef, useEffect, useState, useMemo, useCallback } from 'react'
 import { Canvas, useThree, useFrame, ThreeEvent } from '@react-three/fiber'
-import { useGLTF, Html, Grid, PerspectiveCamera } from '@react-three/drei'
+import { useGLTF, Html, PerspectiveCamera } from '@react-three/drei'
 import * as THREE from 'three'
 
 export interface MapEvent {
@@ -20,7 +20,7 @@ export interface MMAmbientLight {
 }
 
 interface MapViewerProps {
-  mapUrl?: string
+  mapUrl: string
   events: MapEvent[]
   selectedEventId?: string
   onSelectEvent: (event: MapEvent | null) => void
@@ -648,21 +648,6 @@ function UnrealCameraController({
   return null
 }
 
-function PlaceholderGrid() {
-  return (
-    <Grid
-      infiniteGrid
-      cellSize={100}
-      cellThickness={0.5}
-      cellColor="#2a2a35"
-      sectionSize={1000}
-      sectionThickness={1}
-      sectionColor="#3a3a45"
-      fadeDistance={50000}
-    />
-  )
-}
-
 function SceneSetup() {
   // scene.up only — camera.up is recomputed every frame from theta in
   // UnrealCameraController's useFrame, so setting it here would be dead.
@@ -778,11 +763,7 @@ export function MapViewer({
         )}
 
         <Suspense fallback={<LoadingIndicator />}>
-          {mapUrl ? (
-            <MapModel url={mapUrl} onLoaded={handleMapLoaded} />
-          ) : (
-            <PlaceholderGrid />
-          )}
+          <MapModel url={mapUrl} onLoaded={handleMapLoaded} />
         </Suspense>
 
         <InstancedMarkers

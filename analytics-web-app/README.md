@@ -106,6 +106,7 @@ The entire application is served from a single port.
 | `MICROMEGAS_BACKEND_PORT` | No | `8000` | Backend server port |
 | `MICROMEGAS_FRONTEND_PORT` | No | `3000` | Frontend dev server port |
 | `MICROMEGAS_WEB_CORS_ORIGIN` | No | `http://localhost:3000` | CORS origin |
+| `MICROMEGAS_MAPS_OBJECT_STORE_URI` | No | `<MICROMEGAS_OBJECT_STORE_URI>/maps/` (dev) | Object store prefix backing the Map cell catalog. Accepts any `object_store::parse_url_opts` form (`file://`, `s3://`, `memory://`). Sits next to the telemetry lake's `blobs/` directory. Unset = catalog returns 503. |
 
 ### OIDC Configuration
 

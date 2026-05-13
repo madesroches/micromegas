@@ -73,6 +73,7 @@ dependencies = [
  "micromegas",
  "micromegas-auth",
  "moka",
+ "object_store",
  "openidconnect",
  "rsa",
  "serde",
@@ -82,6 +83,7 @@ dependencies = [
  "tokio",
  "tower",
  "tower-http",
+ "url",
 ]
 
 [[package]]
