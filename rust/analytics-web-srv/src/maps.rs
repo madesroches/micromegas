@@ -49,9 +49,10 @@ pub fn is_direct_child(name: &str) -> bool {
 #[derive(Clone)]
 pub struct MapsState {
     pub store: Option<Arc<dyn ObjectStore>>,
-    /// Upper bound on the upload body, used in error messages. The actual
-    /// rejection happens earlier via `axum::extract::DefaultBodyLimit` layered
-    /// on the upload route, so this value is surfaced for diagnostics only.
+    /// Configured cap on the upload body, threaded through `MapsState` so
+    /// the router-build site can size the per-route `DefaultBodyLimit`
+    /// layer from a single source of truth. Not referenced inside handlers
+    /// — the 413 response from the layer is axum's plaintext default.
     pub max_upload_bytes: usize,
 }
 
@@ -288,19 +289,28 @@ pub async fn maps_upload(
     let stored_bytes: Vec<u8> = if client_pregzipped {
         body.to_vec()
     } else {
-        let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-        if let Err(e) = encoder.write_all(&body) {
-            error!("gzip write failed for '{filename}': {e:?}");
-            return Ok(maps_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "GZIP_FAILED",
-                "Failed to compress upload",
-            ));
-        }
-        match encoder.finish() {
-            Ok(buf) => buf,
+        // gzip is CPU-bound and can run for seconds on a 256 MiB upload at
+        // the default compression level — offload it to a blocking thread
+        // so other futures on this tokio worker keep making progress.
+        let to_encode = body;
+        let encode_result = tokio::task::spawn_blocking(move || -> std::io::Result<Vec<u8>> {
+            let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+            encoder.write_all(&to_encode)?;
+            encoder.finish()
+        })
+        .await;
+        match encode_result {
+            Ok(Ok(buf)) => buf,
+            Ok(Err(e)) => {
+                error!("gzip failed for '{filename}': {e:?}");
+                return Ok(maps_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "GZIP_FAILED",
+                    "Failed to compress upload",
+                ));
+            }
             Err(e) => {
-                error!("gzip finish failed for '{filename}': {e:?}");
+                error!("gzip task join failed for '{filename}': {e:?}");
                 return Ok(maps_error(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "GZIP_FAILED",
