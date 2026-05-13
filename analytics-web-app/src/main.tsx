@@ -13,9 +13,21 @@ import './styles/globals.css'
 // 10 ships stable (its canary line already swapped Clock for performance.now()).
 const originalWarn = console.warn
 console.warn = (...args: unknown[]) => {
-  if (typeof args[0] === 'string' && args[0].startsWith('THREE.Clock: This module has been deprecated')) return
+  if (typeof args[0] === 'string' && args[0].includes('Clock: This module has been deprecated')) return
   originalWarn(...args)
 }
+
+// AbortController-driven cancellations are intentional. When fetch's body
+// stream is cancelled by abort(), the underlying source's cleanup can produce
+// an internal rejection that browsers surface even though our consumer-side
+// awaits catch their own AbortError. Treat AbortError unhandled rejections as
+// benign so they don't pollute the dev console.
+window.addEventListener('unhandledrejection', (event) => {
+  const reason = event.reason
+  if (reason instanceof DOMException && reason.name === 'AbortError') {
+    event.preventDefault()
+  }
+})
 
 // Get base path for router - must match the proxy/deployment path
 const basePath = getConfig().basePath
