@@ -14,6 +14,14 @@ import { substituteMacros, validateMacros, DEFAULT_SQL } from '../notebook-utils
 import { timestampToDate } from '@/lib/arrow-utils'
 import { MapViewer, type MapEvent } from '@/components/map/MapViewer'
 import { EventDetailPanel } from '@/components/map/EventDetailPanel'
+import {
+  type MapCatalogEntry,
+  fetchMapCatalog,
+  formatMapName,
+  normalizeMapFilename,
+  resolveMapBlobUrl,
+} from '@/lib/maps-catalog'
+import { getConfig } from '@/lib/config'
 import { Map as MapIcon } from 'lucide-react'
 
 // =============================================================================
@@ -59,31 +67,15 @@ function arrowTableToMapEvents(table: Table): MapEvent[] {
 }
 
 // =============================================================================
-// Map Catalog (loaded from public/maps/maps.json)
+// Map Catalog (loaded from /api/maps/catalog)
 // =============================================================================
-
-interface MapCatalogEntry {
-  name: string
-  file: string
-}
-
-/** Shared promise so multiple cells don't fetch the catalog twice */
-let catalogPromise: Promise<MapCatalogEntry[]> | null = null
-
-function fetchMapCatalog(): Promise<MapCatalogEntry[]> {
-  if (!catalogPromise) {
-    catalogPromise = fetch('/maps/maps.json')
-      .then((res) => (res.ok ? res.json() : []))
-      .catch(() => [])
-  }
-  return catalogPromise
-}
 
 function useMapCatalog(): MapCatalogEntry[] {
   const [catalog, setCatalog] = useState<MapCatalogEntry[]>([])
+  const basePath = getConfig().basePath
   useEffect(() => {
-    fetchMapCatalog().then(setCatalog)
-  }, [])
+    fetchMapCatalog(basePath).then(setCatalog)
+  }, [basePath])
   return catalog
 }
 
@@ -103,8 +95,16 @@ export function MapCell({ data, status, options }: CellRendererProps) {
   const [selectedEvent, setSelectedEvent] = useState<MapEvent | null>(null)
   const [resetViewTrigger, setResetViewTrigger] = useState(0)
 
-  // Read visual options with defaults
-  const mapUrl = options?.mapUrl as string | undefined
+  // Read visual options with defaults. `mapUrl` is stored as the bare
+  // filename — the renderer composes the blob URL at render time so saved
+  // notebooks keep working across base-path changes and the legacy
+  // `/maps/...` → `${basePath}/api/maps/blob/...` transition.
+  const mapFilename = options?.mapUrl as string | undefined
+  const basePath = getConfig().basePath
+  const mapBlobUrl = useMemo(
+    () => resolveMapBlobUrl(mapFilename, basePath),
+    [mapFilename, basePath]
+  )
   const markerColor = (options?.markerColor as string) ?? '#bf360c'
   const markerSize = (options?.markerSize as number) ?? 10
 
@@ -145,10 +145,18 @@ export function MapCell({ data, status, options }: CellRendererProps) {
     )
   }
 
+  if (!mapBlobUrl) {
+    return (
+      <div className="flex items-center justify-center h-full text-theme-text-muted text-sm">
+        No map selected. Open the editor and pick a map from the dropdown.
+      </div>
+    )
+  }
+
   return (
     <div ref={containerRef} className="relative w-full h-full overflow-hidden">
       <MapViewer
-        mapUrl={mapUrl}
+        mapUrl={mapBlobUrl}
         events={events}
         selectedEventId={selectedEvent?.id}
         onSelectEvent={handleSelectEvent}
@@ -235,19 +243,24 @@ export function MapCellEditor({
             <label className="text-xs text-theme-text-secondary w-24 shrink-0">Map</label>
             <select
               className="flex-1 bg-app-card border border-theme-border rounded px-2 py-1 text-sm text-theme-text-primary focus:outline-none focus:border-accent-link"
-              value={(mapConfig.options?.mapUrl as string) ?? ''}
+              value={normalizeMapFilename(mapConfig.options?.mapUrl as string | undefined) ?? ''}
               onChange={(e) => updateOption('mapUrl', e.target.value || undefined)}
             >
-              <option value="">None (grid only)</option>
+              <option value="" disabled>
+                Select a map…
+              </option>
               {mapCatalog.map((entry) => (
                 <option key={entry.file} value={entry.file}>
-                  {entry.name}
+                  {formatMapName(entry.file)}
                 </option>
               ))}
             </select>
           </div>
           <div className="text-xs text-theme-text-muted ml-[calc(6rem+0.5rem)]">
-            Register maps in <code className="text-theme-text-secondary">public/maps/maps.json</code>
+            Maps are loaded from the server's object store (
+            <code className="text-theme-text-secondary">MICROMEGAS_MAPS_OBJECT_STORE_URI</code>).
+            Drop <code className="text-theme-text-secondary">.glb</code> files at that prefix to
+            make them appear here.
           </div>
         </div>
 

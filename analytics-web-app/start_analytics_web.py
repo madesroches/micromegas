@@ -231,6 +231,19 @@ def setup_environment():
         "MICROMEGAS_APP_SQL_CONNECTION_STRING": app_db_conn_string,
     }
 
+    # Default the maps object store to a `maps/` sibling of the telemetry
+    # lake (the data path used by the rest of the stack). The ingestion
+    # service writes telemetry blobs under `<MICROMEGAS_OBJECT_STORE_URI>/blobs/`
+    # — putting maps at `<MICROMEGAS_OBJECT_STORE_URI>/maps/` keeps both
+    # under one root. If the lake URI isn't set, leave maps unset; the
+    # endpoint returns 503 and the Map cell dropdown is empty.
+    if (
+        "MICROMEGAS_MAPS_OBJECT_STORE_URI" not in os.environ
+        and "MICROMEGAS_OBJECT_STORE_URI" in os.environ
+    ):
+        lake_uri = os.environ["MICROMEGAS_OBJECT_STORE_URI"].rstrip("/")
+        env_vars["MICROMEGAS_MAPS_OBJECT_STORE_URI"] = f"{lake_uri}/maps/"
+
     for key, default_value in env_vars.items():
         if key not in os.environ:
             os.environ[key] = default_value

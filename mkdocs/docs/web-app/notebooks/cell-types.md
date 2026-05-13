@@ -542,29 +542,28 @@ All columns beyond the reserved names (`time`, `x`, `y`, `z`, `process_id`) are 
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `mapUrl` | string | none | GLB model URL — select from the map catalog or enter a custom path |
+| `mapUrl` | string | none | GLB filename selected from the catalog (bare filename — the renderer composes the blob URL) |
 | `markerColor` | string | `#bf360c` | Marker color (hex) |
 | `markerSize` | number | `10` | Marker size — scaled proportionally to the map extent |
 
 **Map catalog:**
 
-Maps are registered in `public/maps/maps.json`. Each entry defines a GLB model available in the map dropdown:
+Maps are stored in a server-side object store and served through the analytics web tier. The catalog is derived at request time by listing every `*.glb` object directly under the configured prefix — there is no `maps.json` to keep in sync.
 
-```json
-[
-  {
-    "name": "Level Overview",
-    "file": "/maps/level.glb"
-  }
-]
-```
+Configure the prefix via `MICROMEGAS_MAPS_OBJECT_STORE_URI`. The URL grammar matches the rest of the platform (passed through `object_store::parse_url_opts`):
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `name` | string | Display name in the dropdown |
-| `file` | string | Path to the GLB file under `public/` |
+| Environment | Example URI |
+|---|---|
+| Local dev | `file:///home/you/lake/maps/` (sibling of `lake/blobs/`) |
+| AWS prod | `s3://my-bucket/maps/` |
 
-The catalog (`public/maps/maps.json`) and the GLB binaries themselves (`public/maps/*.glb`) are gitignored. Each developer drops their own GLBs into `public/maps/` and writes a local catalog pointing at them.
+Drop a `.glb` into the configured prefix and it appears in the dropdown on the next page load — no script needed. Display names are derived client-side: the `.glb` extension is stripped (`Arena_North.glb` → `Arena_North`).
+
+If `MICROMEGAS_MAPS_OBJECT_STORE_URI` is unset, `/api/maps/catalog` returns 503 and the dropdown is empty. The local-dev start script (`start_analytics_web.py`) defaults this to `<MICROMEGAS_OBJECT_STORE_URI>/maps/` — i.e. a `maps/` sibling of the telemetry lake — so a single lake root supplies both telemetry blobs and map assets.
+
+**Storage compression:**
+
+GLBs may be stored gzipped: set `Content-Encoding: gzip` and `Content-Type: model/gltf-binary` on the object. The endpoint passes both headers through verbatim and never re-encodes — the server burns no CPU compressing on the fly, `Content-Length` reflects the wire size, and the browser auto-decodes before handing bytes to three.js. Bare uploads (no metadata) are served uncompressed.
 
 **Coordinate frame:**
 

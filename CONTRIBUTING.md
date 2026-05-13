@@ -65,6 +65,93 @@ To run the full CI pipeline locally (`python3 build/rust_ci.py`), install cargo-
 cargo install cargo-machete
 ```
 
+### Local Pre-commit Hook (Recommended)
+
+A local pre-commit hook scans staged content for common credential
+shapes (AWS access keys, PEM private-key headers, GitHub/Slack/Stripe
+tokens, Google API keys) and any organization-internal codenames you
+don't want to leak into a public commit. Hooks live in `.git/hooks/` —
+per-clone, not tracked in the repo — so each contributor installs it
+once after cloning.
+
+Create `.git/hooks/pre-commit` with the following content, then mark it
+executable with `chmod +x .git/hooks/pre-commit`:
+
+```bash
+#!/usr/bin/env bash
+#
+# Pre-commit hook: block commits that introduce private terms or
+# obvious secrets. Scans the staged blob content (post-commit view) of
+# every Added/Copied/Modified/Renamed file.
+
+set -uo pipefail
+
+# Case-insensitive ERE alternation. Add any organization-internal
+# codenames or product names you do not want leaked into the repo (or
+# leave empty to skip this check entirely).
+# Example: PRIVATE_TERMS='InternalCodename|UnreleasedProduct'
+PRIVATE_TERMS=''
+
+# Case-sensitive ERE patterns, one per line. Each tries to match a
+# known-shape credential. Refine here when you hit a false positive.
+SECRET_PATTERNS=$(cat <<'PATTERNS'
+AKIA[0-9A-Z]{16}
+ASIA[0-9A-Z]{16}
+-----BEGIN [A-Z ]*PRIVATE KEY-----
+gh[opsur]_[A-Za-z0-9]{36}
+xox[bpoars]-[A-Za-z0-9-]{20,}
+sk_live_[A-Za-z0-9]{24,}
+AIza[A-Za-z0-9_-]{35}
+PATTERNS
+)
+
+# Paths to skip (regex, ERE). Every entry is a hole in the net.
+SKIP_PATHS_RE='^(target/|node_modules/|dist/|\.git/|.*\.lock$|.*\.min\.(js|css)$|.*\.(png|jpg|jpeg|gif|ico|webp|woff2?|ttf|otf|eot|pdf|zip|tar|gz|bz2|7z|so|dylib|dll|exe|class|jar|wasm|glb|gltf|bin)$)'
+
+violations=0
+
+while IFS= read -r -d '' file; do
+    [ -z "$file" ] && continue
+    if [[ "$file" =~ $SKIP_PATHS_RE ]]; then continue; fi
+    # Binary detection: --numstat shows "-\t-\t<file>" for binary diffs.
+    if git diff --cached --numstat -- "$file" 2>/dev/null | grep -qP '^-\t-\t'; then continue; fi
+    content=$(git show ":$file" 2>/dev/null) || continue
+
+    if [ -n "$PRIVATE_TERMS" ] && matches=$(printf '%s' "$content" | grep -niE -- "$PRIVATE_TERMS"); then
+        echo "BLOCKED: private term in $file"
+        echo "$matches" | sed 's/^/    /'
+        violations=$((violations + 1))
+    fi
+
+    while IFS= read -r pattern; do
+        [ -z "$pattern" ] && continue
+        if matches=$(printf '%s' "$content" | grep -nE -- "$pattern"); then
+            echo "BLOCKED: possible secret in $file (pattern: $pattern)"
+            echo "$matches" | sed 's/^/    /'
+            violations=$((violations + 1))
+        fi
+    done <<< "$SECRET_PATTERNS"
+done < <(git diff --cached --name-only --diff-filter=ACMR -z)
+
+if [ $violations -gt 0 ]; then
+    echo
+    echo "Commit blocked: found $violations issue(s)."
+    echo "  Remove the offending content, or refine the patterns in"
+    echo "  .git/hooks/pre-commit. Use 'git commit --no-verify' only as"
+    echo "  a last resort."
+    exit 1
+fi
+```
+
+To verify the hook is wired up, create a throwaway file containing a
+string in AWS access-key shape (`AKIA` followed by 16 uppercase
+alphanumerics), stage it, and try to commit — the commit should be
+blocked with a `BLOCKED: possible secret` message. Remove the file
+afterwards.
+
+`git commit --no-verify` bypasses the hook for one commit. Treat that
+escape hatch as a last resort, not a workflow.
+
 ## Monorepo Structure
 
 Micromegas uses a monorepo structure with Yarn workspaces for JavaScript/TypeScript components and Cargo workspaces for Rust components.

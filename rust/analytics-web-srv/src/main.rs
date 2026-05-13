@@ -4,6 +4,7 @@ mod screens;
 use analytics_web_srv::app_db;
 use analytics_web_srv::auth;
 use analytics_web_srv::data_source_cache::DataSourceCache;
+use analytics_web_srv::maps;
 use analytics_web_srv::stream_query;
 use anyhow::{Context, Result};
 use auth::{AuthState, AuthToken, OidcClientConfig};
@@ -127,6 +128,7 @@ fn build_protected_routes(
     auth_state: &Option<AuthState>,
     app_db_pool: PgPool,
     data_source_cache: DataSourceCache,
+    maps_state: maps::MapsState,
 ) -> Router {
     let routes = Router::new()
         // Query streaming
@@ -165,8 +167,52 @@ fn build_protected_routes(
                 .put(data_sources::update_data_source)
                 .delete(data_sources::delete_data_source),
         )
+        // Maps catalog (small JSON; safe under CompressionLayer)
+        .route(
+            &format!("{base_path}/api/maps/catalog"),
+            get(maps::maps_catalog),
+        )
         .layer(Extension(app_db_pool))
         .layer(Extension(data_source_cache))
+        .layer(Extension(maps_state))
+        .layer(middleware::from_fn(observability_middleware));
+
+    if let Some(state) = auth_state {
+        routes.layer(middleware::from_fn_with_state(
+            state.clone(),
+            auth::cookie_auth_middleware,
+        ))
+    } else {
+        routes
+            .layer(Extension(AuthToken(String::new())))
+            .layer(Extension(auth::ValidatedUser {
+                subject: "anonymous".to_string(),
+                email: None,
+                issuer: "local".to_string(),
+                is_admin: true,
+            }))
+    }
+}
+
+/// Streaming maps-blob route, kept on its own router branch so the global
+/// `CompressionLayer` doesn't sit in front of it.
+///
+/// Why a separate branch: re-compressing GLBs on the fly is wasted CPU (the
+/// upload tooling already gzips them and sets `Content-Encoding`), and
+/// chunked transfer would drop the honest `Content-Length`. Same auth +
+/// Extension + observability layers as `build_protected_routes` — only the
+/// compression layer is missing.
+fn build_protected_maps_blob_route(
+    base_path: &str,
+    auth_state: &Option<AuthState>,
+    maps_state: maps::MapsState,
+) -> Router {
+    let routes = Router::new()
+        .route(
+            &format!("{base_path}/api/maps/blob/{{filename}}"),
+            get(maps::maps_blob),
+        )
+        .layer(Extension(maps_state))
         .layer(middleware::from_fn(observability_middleware));
 
     if let Some(state) = auth_state {
@@ -321,6 +367,17 @@ async fn main() -> Result<()> {
     let data_source_cache =
         DataSourceCache::new(app_db_pool.clone(), std::time::Duration::from_secs(60));
 
+    // Maps object store (optional — endpoints 503 when unset)
+    let maps_uri = std::env::var("MICROMEGAS_MAPS_OBJECT_STORE_URI").ok();
+    let maps_store = maps::connect_maps_store(maps_uri.as_deref())
+        .context("Failed to connect to maps object store")?;
+    if maps_store.is_some() {
+        info!("Maps object store connected");
+    } else {
+        info!("MICROMEGAS_MAPS_OBJECT_STORE_URI not set — /api/maps/* will return 503");
+    }
+    let maps_state = maps::MapsState { store: maps_store };
+
     // Auth
     let auth_state = if args.disable_auth {
         println!("WARNING: Authentication is disabled (--disable-auth)");
@@ -337,6 +394,7 @@ async fn main() -> Result<()> {
             &auth_state,
             app_db_pool,
             data_source_cache,
+            maps_state.clone(),
         ))
         .merge(build_auth_routes(&base_path, &auth_state));
 
@@ -349,8 +407,17 @@ async fn main() -> Result<()> {
     let app = mount_frontend(app, &base_path, frontend, index_state);
 
     // Global middleware
+    //
+    // CompressionLayer wraps the JSON/HTML branch only. The maps blob route
+    // is merged in afterwards so it bypasses compression — see
+    // `build_protected_maps_blob_route` for the rationale.
+    let app = app.layer(CompressionLayer::new().gzip(true));
     let app = app
-        .layer(CompressionLayer::new().gzip(true))
+        .merge(build_protected_maps_blob_route(
+            &base_path,
+            &auth_state,
+            maps_state,
+        ))
         .layer(build_cors_layer(&cors_origin)?);
 
     // Start server
