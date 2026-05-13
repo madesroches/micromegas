@@ -1,4 +1,4 @@
-import { ReactNode, useRef, useEffect, forwardRef, HTMLAttributes, useCallback } from 'react'
+import { ReactNode, Ref, useRef, useEffect, HTMLAttributes, useCallback } from 'react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import { ChevronDown, ChevronRight, Copy, Download, Pencil, Play, Plus, RotateCcw, MoreVertical, Trash2, GripVertical, Zap } from 'lucide-react'
 import { CellType, CellStatus, getCellTypeMetadata } from '@/lib/screen-renderers/cell-registry'
@@ -7,6 +7,7 @@ import { ResizeHandle } from '@/components/ResizeHandle'
 import { useFadeOnIdle } from '@/hooks/useFadeOnIdle'
 
 interface CellContainerProps extends Omit<HTMLAttributes<HTMLDivElement>, 'children'> {
+  ref?: Ref<HTMLDivElement>
   /** Cell name/title */
   name: string
   /** Cell type */
@@ -61,39 +62,37 @@ interface CellContainerProps extends Omit<HTMLAttributes<HTMLDivElement>, 'child
   childNames?: string[]
 }
 
-export const CellContainer = forwardRef<HTMLDivElement, CellContainerProps>(function CellContainer(
-  {
-    name,
-    type,
-    status,
-    error,
-    collapsed = false,
-    onToggleCollapsed,
-    isSelected = false,
-    onSelect,
-    onRun,
-    onRunFromHere,
-    autoRunFromHere,
-    onToggleAutoRunFromHere,
-    onDownloadCsv,
-    onInsertAbove,
-    onInsertBelow,
-    onDuplicate,
-    onDelete,
-    statusText,
-    height = 300,
-    onHeightChange,
-    titleBarContent,
-    children,
-    dragHandleProps,
-    isDragging,
-    canRun: canRunProp,
-    childNames,
-    style,
-    ...divProps
-  },
-  ref
-) {
+export function CellContainer({
+  ref,
+  name,
+  type,
+  status,
+  error,
+  collapsed = false,
+  onToggleCollapsed,
+  isSelected = false,
+  onSelect,
+  onRun,
+  onRunFromHere,
+  autoRunFromHere,
+  onToggleAutoRunFromHere,
+  onDownloadCsv,
+  onInsertAbove,
+  onInsertBelow,
+  onDuplicate,
+  onDelete,
+  statusText,
+  height = 300,
+  onHeightChange,
+  titleBarContent,
+  children,
+  dragHandleProps,
+  isDragging,
+  canRun: canRunProp,
+  childNames,
+  style,
+  ...divProps
+}: CellContainerProps) {
   const meta = getCellTypeMetadata(type)
   const canRun = canRunProp ?? !!meta.execute
   const isGroup = type === 'hg'
@@ -472,4 +471,4 @@ export const CellContainer = forwardRef<HTMLDivElement, CellContainerProps>(func
       )}
     </div>
   )
-})
+}
