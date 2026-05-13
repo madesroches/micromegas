@@ -302,8 +302,8 @@ pub async fn maps_upload(
         .map(|v| v.eq_ignore_ascii_case("gzip"))
         .unwrap_or(false);
 
-    let stored_bytes: Vec<u8> = if client_pregzipped {
-        body.to_vec()
+    let stored: Bytes = if client_pregzipped {
+        body
     } else {
         // gzip is CPU-bound and can run for seconds on a 256 MiB upload at
         // the default compression level — offload it to a blocking thread
@@ -316,7 +316,7 @@ pub async fn maps_upload(
         })
         .await;
         match encode_result {
-            Ok(Ok(buf)) => buf,
+            Ok(Ok(buf)) => Bytes::from(buf),
             Ok(Err(e)) => {
                 error!("gzip failed for '{filename}': {e:?}");
                 return Ok(maps_error(
@@ -336,11 +336,11 @@ pub async fn maps_upload(
         }
     };
 
-    let stored_size = stored_bytes.len() as u64;
+    let stored_size = stored.len() as u64;
     let key = stored_key(&filename);
 
     if let Err(e) = store
-        .put(&ObjectPath::from(key.as_str()), stored_bytes.into())
+        .put(&ObjectPath::from(key.as_str()), stored.into())
         .await
     {
         error!("storing map '{filename}': {e:?}");

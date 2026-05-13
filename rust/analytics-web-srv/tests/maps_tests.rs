@@ -153,10 +153,10 @@ async fn blob_returns_503_when_storage_unconfigured() {
 #[tokio::test]
 async fn catalog_lists_flat_entries_alphabetized_with_stripped_suffix() {
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-    let main_gz_len = gzip_bytes(&vec![0u8; 1000]).len() as u64;
-    let level_gz_len = gzip_bytes(&vec![0u8; 2000]).len() as u64;
-    put_map(&store, "main.glb", &vec![0u8; 1000]).await;
-    put_map(&store, "level_a.glb", &vec![0u8; 2000]).await;
+    let main_gz_len = gzip_bytes(&[0u8; 1000]).len() as u64;
+    let level_gz_len = gzip_bytes(&[0u8; 2000]).len() as u64;
+    put_map(&store, "main.glb", &[0u8; 1000]).await;
+    put_map(&store, "level_a.glb", &[0u8; 2000]).await;
     // Nested `.gz` is still nested — the catalog filters by direct
     // children so subdirectory clutter doesn't surface.
     store
@@ -433,7 +433,7 @@ fn is_direct_child_rejects_paths_with_slashes() {
 #[tokio::test]
 async fn catalog_includes_last_modified() {
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-    put_map(&store, "main.glb", &vec![0u8; 4]).await;
+    put_map(&store, "main.glb", &[0u8; 4]).await;
 
     let app = build_handler_router(MapsState::new(Some(store)));
 
@@ -679,7 +679,7 @@ async fn upload_body_limit_does_not_apply_to_delete_or_get() {
     // bleed onto the sibling DELETE / GET methods on the same path —
     // they share a `MethodRouter` but the layer is scoped to PUT.
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-    put_map(&store, "main.glb", &vec![0u8; 2048]).await;
+    put_map(&store, "main.glb", &[0u8; 2048]).await;
 
     let app = build_handler_router_with_upload_limit(MapsState::new(Some(store)), 128);
 

@@ -12,7 +12,7 @@ import {
   MapCatalogEntry,
   deleteMap,
   invalidateMapCatalog,
-  fetchMapCatalog,
+  fetchMapCatalogStrict,
   formatMapName,
   uploadMap,
 } from '@/lib/maps-catalog'
@@ -42,18 +42,24 @@ function MapsPageContent() {
   const [isDeleting, setIsDeleting] = useState(false)
   const [isDragOver, setIsDragOver] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  // Distinguishes the very first fetch (renders the full-height spinner) from
+  // refreshes after upload/delete (keep the table mounted, no skeleton flash).
+  const initialLoadDoneRef = useRef(false)
 
   const loadCatalog = useCallback(async () => {
-    setIsLoading(true)
+    if (!initialLoadDoneRef.current) {
+      setIsLoading(true)
+    }
     setError(null)
     invalidateMapCatalog()
     try {
-      const data = await fetchMapCatalog(basePath)
+      const data = await fetchMapCatalogStrict(basePath)
       setEntries(data)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load maps')
     } finally {
       setIsLoading(false)
+      initialLoadDoneRef.current = true
     }
   }, [basePath])
 
@@ -84,6 +90,15 @@ function MapsPageContent() {
 
   const handleFile = useCallback(
     (file: File) => {
+      // The file picker's `accept` attribute is only a hint and doesn't
+      // apply to drag-drop at all, so a JPG dropped on the zone would
+      // otherwise be uploaded with the hardcoded `model/gltf-binary`
+      // Content-Type and stored as a "GLB". Reject anything that doesn't
+      // end in `.glb` (case-insensitive) up front.
+      if (!file.name.toLowerCase().endsWith('.glb')) {
+        setError(`"${file.name}" is not a .glb file`)
+        return
+      }
       if (collidesWithExisting(file.name)) {
         setPendingUpload(file)
       } else {

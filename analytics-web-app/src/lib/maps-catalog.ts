@@ -67,6 +67,26 @@ export function formatMapName(file: string): string {
 let catalogPromise: Promise<MapCatalogEntry[]> | null = null
 
 /**
+ * One-shot network fetch — throws on non-OK responses. Used by the admin
+ * page where the caller wants to surface failures, and as the inner core
+ * of the cached `fetchMapCatalog`.
+ */
+async function fetchMapCatalogRaw(basePath: string): Promise<MapCatalogEntry[]> {
+  const res = await fetch(`${basePath}/api/maps/catalog`, { credentials: 'include' })
+  if (!res.ok) throw new Error(`catalog fetch returned ${res.status}`)
+  return (await res.json()) as MapCatalogEntry[]
+}
+
+/**
+ * Strict variant: throws on error. Use this when the caller can surface
+ * the failure (e.g. the admin page); the read path of Map cells uses the
+ * forgiving `fetchMapCatalog` below.
+ */
+export function fetchMapCatalogStrict(basePath: string): Promise<MapCatalogEntry[]> {
+  return fetchMapCatalogRaw(basePath)
+}
+
+/**
  * Fetch the maps catalog once per tab. Multiple cells share the same
  * in-flight promise; a successful response is cached for the tab's
  * lifetime. Errors clear the cache so the next caller retries — a
@@ -75,15 +95,10 @@ let catalogPromise: Promise<MapCatalogEntry[]> | null = null
  */
 export function fetchMapCatalog(basePath: string): Promise<MapCatalogEntry[]> {
   if (!catalogPromise) {
-    catalogPromise = fetch(`${basePath}/api/maps/catalog`, { credentials: 'include' })
-      .then((res) => {
-        if (!res.ok) throw new Error(`catalog fetch returned ${res.status}`)
-        return res.json() as Promise<MapCatalogEntry[]>
-      })
-      .catch(() => {
-        catalogPromise = null
-        return [] as MapCatalogEntry[]
-      })
+    catalogPromise = fetchMapCatalogRaw(basePath).catch(() => {
+      catalogPromise = null
+      return [] as MapCatalogEntry[]
+    })
   }
   return catalogPromise
 }
