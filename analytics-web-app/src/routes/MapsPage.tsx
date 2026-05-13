@@ -10,7 +10,6 @@ import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { getConfig } from '@/lib/config'
 import {
   MapCatalogEntry,
-  MapApiError,
   deleteMap,
   invalidateMapCatalog,
   fetchMapCatalog,
@@ -75,7 +74,7 @@ function MapsPageContent() {
         await uploadMap(file, basePath)
         await loadCatalog()
       } catch (err) {
-        setError(err instanceof MapApiError ? err.message : 'Failed to upload map')
+        setError(err instanceof Error ? err.message : 'Failed to upload map')
       } finally {
         setIsUploading(false)
       }
@@ -118,9 +117,12 @@ function MapsPageContent() {
 
   const handleConfirmReplace = async () => {
     if (!pendingUpload) return
+    // Keep the dialog open across the upload so the spinner inside
+    // `ConfirmDialog` (driven by `isLoading={isUploading}`) is visible.
+    // Mirrors the delete-confirm flow.
     const file = pendingUpload
-    setPendingUpload(null)
     await doUpload(file)
+    setPendingUpload(null)
   }
 
   const handleDelete = async () => {
@@ -132,7 +134,7 @@ function MapsPageContent() {
       setDeleteTarget(null)
       await loadCatalog()
     } catch (err) {
-      setError(err instanceof MapApiError ? err.message : 'Failed to delete map')
+      setError(err instanceof Error ? err.message : 'Failed to delete map')
       setDeleteTarget(null)
     } finally {
       setIsDeleting(false)

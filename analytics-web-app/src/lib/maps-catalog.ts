@@ -114,6 +114,16 @@ export async function uploadMap(
     }
   )
   if (!response.ok) {
+    // 413 is emitted by axum's DefaultBodyLimit layer before the handler
+    // runs, so the body is plaintext rather than the JSON shape mutation
+    // handlers produce. Surface a friendlier message for that case.
+    if (response.status === 413) {
+      throw new MapApiError(
+        'TOO_LARGE',
+        'Upload exceeds the configured size cap',
+        413
+      )
+    }
     const body = await readErrorBody(response)
     throw new MapApiError(
       body?.code ?? 'UNKNOWN_ERROR',

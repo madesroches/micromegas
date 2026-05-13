@@ -169,18 +169,37 @@ describe('uploadMap', () => {
     expect(second).toHaveLength(2)
   })
 
-  it('surfaces server errors as MapApiError with code + message', async () => {
+  it('surfaces JSON server errors as MapApiError with code + message', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 415,
+      json: () =>
+        Promise.resolve({
+          code: 'UNSUPPORTED_MEDIA_TYPE',
+          message: 'Content-Type must be model/gltf-binary',
+        }),
+    } as unknown as Response) as unknown as typeof fetch
+
+    const file = new File([new Uint8Array(8)], 'bad.glb', { type: 'text/plain' })
+    await expect(uploadMap(file, '/mmlocal')).rejects.toMatchObject({
+      code: 'UNSUPPORTED_MEDIA_TYPE',
+      message: 'Content-Type must be model/gltf-binary',
+      status: 415,
+    })
+  })
+
+  it('maps 413 (axum body-limit plaintext) to a friendly TOO_LARGE error', async () => {
+    // DefaultBodyLimit responds with plaintext, so reading JSON would
+    // throw — uploadMap short-circuits on 413 with a stable code.
     global.fetch = jest.fn().mockResolvedValue({
       ok: false,
       status: 413,
-      json: () =>
-        Promise.resolve({ code: 'TOO_LARGE', message: 'Upload exceeds 256 MiB cap' }),
+      json: () => Promise.reject(new Error('not json')),
     } as unknown as Response) as unknown as typeof fetch
 
     const file = new File([new Uint8Array(8)], 'big.glb', { type: 'model/gltf-binary' })
     await expect(uploadMap(file, '/mmlocal')).rejects.toMatchObject({
       code: 'TOO_LARGE',
-      message: 'Upload exceeds 256 MiB cap',
       status: 413,
     })
   })

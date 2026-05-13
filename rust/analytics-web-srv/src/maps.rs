@@ -224,8 +224,10 @@ fn maps_error(status: StatusCode, code: &'static str, message: impl Into<String>
     (status, Json(body)).into_response()
 }
 
-/// 200 response body for a successful upload — matches the catalog shape so
-/// the frontend can splice the entry in without an immediate re-fetch.
+/// 200 response body for a successful upload. The frontend refetches the
+/// catalog after each upload, so the response only needs to confirm what
+/// was stored (filename + on-the-wire byte count); `last_modified` is
+/// owned by the object store and surfaces on the next catalog fetch.
 #[derive(Debug, Serialize)]
 pub struct UploadResponse {
     pub file: String,
