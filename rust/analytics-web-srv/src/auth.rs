@@ -14,8 +14,8 @@
 use anyhow::{Result, anyhow};
 use axum::{
     Json,
-    extract::{Query, Request, State},
-    http::StatusCode,
+    extract::{FromRequestParts, Query, Request, State},
+    http::{StatusCode, request::Parts},
     middleware::Next,
     response::{IntoResponse, Redirect, Response},
 };
@@ -871,5 +871,32 @@ pub fn require_admin(user: &ValidatedUser) -> Result<(), AdminRequired> {
         Ok(())
     } else {
         Err(AdminRequired)
+    }
+}
+
+/// Extractor that yields the validated user only when `is_admin` is true.
+///
+/// Why: `FromRequestParts` runs before any body extractor (which is
+/// `FromRequest`), so handlers that take a `Bytes` upload body can use
+/// this to short-circuit with 403 *before* the body is buffered into
+/// memory. Doing the admin check inside the handler body would mean a
+/// non-admin authenticated user could force the server to buffer up to
+/// `DefaultBodyLimit` bytes per request before getting rejected.
+pub struct AdminUser(pub ValidatedUser);
+
+impl<S: Send + Sync> FromRequestParts<S> for AdminUser {
+    type Rejection = AdminRequired;
+
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+        let user = parts
+            .extensions
+            .get::<ValidatedUser>()
+            .cloned()
+            .ok_or(AdminRequired)?;
+        if user.is_admin {
+            Ok(AdminUser(user))
+        } else {
+            Err(AdminRequired)
+        }
     }
 }

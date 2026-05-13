@@ -4,7 +4,7 @@
 //! streamed body-as-stream so the server doesn't buffer 30 MB blobs in RAM
 //! per request. All paths are scoped to `MICROMEGAS_MAPS_OBJECT_STORE_URI`.
 
-use crate::auth::{AdminRequired, ValidatedUser, require_admin};
+use crate::auth::{AdminRequired, AdminUser};
 use anyhow::{Context, Result};
 use axum::{
     Extension, Json,
@@ -244,13 +244,13 @@ pub struct UploadResponse {
 #[span_fn]
 pub async fn maps_upload(
     Extension(state): Extension<MapsState>,
-    Extension(user): Extension<ValidatedUser>,
+    // `AdminUser` is `FromRequestParts`, so this runs *before* the `Bytes`
+    // body extractor — a non-admin gets 403 without buffering the upload.
+    AdminUser(user): AdminUser,
     AxumPath(filename): AxumPath<String>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Response, AdminRequired> {
-    require_admin(&user)?;
-
     if !is_direct_child(&filename) {
         return Ok(maps_error(
             StatusCode::BAD_REQUEST,
@@ -374,11 +374,9 @@ pub async fn maps_upload(
 #[span_fn]
 pub async fn maps_delete(
     Extension(state): Extension<MapsState>,
-    Extension(user): Extension<ValidatedUser>,
+    AdminUser(user): AdminUser,
     AxumPath(filename): AxumPath<String>,
 ) -> Result<Response, AdminRequired> {
-    require_admin(&user)?;
-
     if !is_direct_child(&filename) {
         return Ok(maps_error(
             StatusCode::BAD_REQUEST,

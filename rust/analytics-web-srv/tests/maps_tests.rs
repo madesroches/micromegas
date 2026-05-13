@@ -623,6 +623,32 @@ async fn upload_requires_admin() {
 }
 
 #[tokio::test]
+async fn upload_non_admin_does_not_buffer_body() {
+    // Regression for the memory-exhaustion vector: a non-admin authenticated
+    // user must not be able to force the server to buffer an upload body
+    // before getting 403. We send a body whose stream errors on the *first*
+    // poll — if the `Bytes` extractor ran, axum would surface a 400
+    // body-read error. The `AdminUser` extractor is `FromRequestParts`, so
+    // it runs before any body extractor; non-admins should see a clean 403
+    // with the stream untouched.
+    use futures::stream;
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let app = build_handler_router_with_user(MapsState::new(Some(store.clone())), non_admin_user());
+
+    let err_body = Body::from_stream(stream::once(async {
+        Err::<axum::body::Bytes, std::io::Error>(std::io::Error::other("body must not be read"))
+    }));
+    let req = Request::builder()
+        .method("PUT")
+        .uri("/api/maps/blob/blocked.glb")
+        .header(http::header::CONTENT_TYPE, "model/gltf-binary")
+        .body(err_body)
+        .unwrap();
+    let response = app.oneshot(req).await.unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
 async fn upload_rejects_oversize_body() {
     // Use a tiny limit so the test doesn't synthesize hundreds of MiB —
     // the per-route layer is identical to what main.rs applies; this
