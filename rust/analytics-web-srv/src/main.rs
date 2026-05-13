@@ -10,11 +10,11 @@ use anyhow::{Context, Result};
 use auth::{AuthState, AuthToken, OidcClientConfig};
 use axum::{
     Extension, Json, Router, ServiceExt,
-    extract::State,
+    extract::{DefaultBodyLimit, State},
     http::StatusCode,
     middleware,
     response::{IntoResponse, Redirect},
-    routing::{get, post},
+    routing::{get, post, put},
 };
 use chrono::{DateTime, Utc};
 use clap::Parser;
@@ -171,6 +171,15 @@ fn build_protected_routes(
         .route(
             &format!("{base_path}/api/maps/catalog"),
             get(maps::maps_catalog),
+        )
+        // Maps upload/delete (admin only). Body limit applied per-route
+        // via the `MethodRouter` returned by `put(...)` so the cap scopes
+        // to PUT only and doesn't affect screens / query streaming.
+        .route(
+            &format!("{base_path}/api/maps/blob/{{filename}}"),
+            put(maps::maps_upload)
+                .layer(DefaultBodyLimit::max(maps_state.max_upload_bytes))
+                .delete(maps::maps_delete),
         )
         .layer(Extension(app_db_pool))
         .layer(Extension(data_source_cache))
@@ -376,7 +385,11 @@ async fn main() -> Result<()> {
     } else {
         info!("MICROMEGAS_MAPS_OBJECT_STORE_URI not set — /api/maps/* will return 503");
     }
-    let maps_state = maps::MapsState { store: maps_store };
+    let max_upload_bytes = std::env::var("MICROMEGAS_MAPS_MAX_UPLOAD_BYTES")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(maps::DEFAULT_MAX_UPLOAD_BYTES);
+    let maps_state = maps::MapsState::with_max_upload_bytes(maps_store, max_upload_bytes);
 
     // Auth
     let auth_state = if args.disable_auth {

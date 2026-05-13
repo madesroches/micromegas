@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useEffect, useRef } from 'react'
+import { Suspense, use, useState, useCallback, useMemo, useEffect, useRef } from 'react'
 import { Table } from 'apache-arrow'
 import type {
   CellTypeMetadata,
@@ -14,6 +14,8 @@ import { substituteMacros, validateMacros, DEFAULT_SQL } from '../notebook-utils
 import { timestampToDate } from '@/lib/arrow-utils'
 import { MapViewer, type MapEvent } from '@/components/map/MapViewer'
 import { EventDetailPanel } from '@/components/map/EventDetailPanel'
+import { ErrorBoundary } from '@/components/ErrorBoundary'
+import { useGLTF } from '@react-three/drei'
 import {
   type MapCatalogEntry,
   fetchMapCatalog,
@@ -69,14 +71,68 @@ function arrowTableToMapEvents(table: Table): MapEvent[] {
 // =============================================================================
 // Map Catalog (loaded from /api/maps/catalog)
 // =============================================================================
+//
+// `useMapCatalog` reads the cached catalog promise via React 19's `use()`,
+// so callers see a resolved `MapCatalogEntry[]` synchronously — there is
+// no in-component "loading" state to thread through render code. Any
+// caller must be inside a `<Suspense>` boundary that handles the first
+// render's suspension; the editor's dropdown wraps itself in one below.
 
 function useMapCatalog(): MapCatalogEntry[] {
-  const [catalog, setCatalog] = useState<MapCatalogEntry[]>([])
   const basePath = getConfig().basePath
-  useEffect(() => {
-    fetchMapCatalog(basePath).then(setCatalog)
-  }, [basePath])
-  return catalog
+  return use(fetchMapCatalog(basePath))
+}
+
+function MapDropdownLoading() {
+  return (
+    <select
+      className="flex-1 bg-app-card border border-theme-border rounded px-2 py-1 text-sm text-theme-text-muted"
+      value=""
+      disabled
+    >
+      <option value="">Loading maps…</option>
+    </select>
+  )
+}
+
+function MapDropdown({
+  selectedRaw,
+  onChange,
+}: {
+  selectedRaw: string | undefined
+  onChange: (value: string | undefined) => void
+}) {
+  const mapCatalog = useMapCatalog()
+  const selectedFilename = normalizeMapFilename(selectedRaw)
+  // When the saved mapUrl doesn't match any catalog entry, a controlled
+  // `<select value={X}>` with no matching `<option>` is browser-defined:
+  // most show the first option visually, and clicking that already-displayed
+  // option fires no change. So we synthesize a placeholder `<option>` for
+  // the stale value — the catalog is guaranteed loaded by the time this
+  // renders (Suspense above), so a working map never flashes as missing.
+  const isInCatalog =
+    !!selectedFilename && mapCatalog.some((entry) => entry.file === selectedFilename)
+  return (
+    <select
+      className="flex-1 bg-app-card border border-theme-border rounded px-2 py-1 text-sm text-theme-text-primary focus:outline-none focus:border-accent-link"
+      value={selectedFilename ?? ''}
+      onChange={(e) => onChange(e.target.value || undefined)}
+    >
+      <option value="" disabled>
+        Select a map…
+      </option>
+      {selectedFilename && !isInCatalog && (
+        <option value={selectedFilename}>
+          {formatMapName(selectedFilename)} (not in catalog)
+        </option>
+      )}
+      {mapCatalog.map((entry) => (
+        <option key={entry.file} value={entry.file}>
+          {formatMapName(entry.file)}
+        </option>
+      ))}
+    </select>
+  )
 }
 
 // =============================================================================
@@ -155,19 +211,52 @@ export function MapCell({ data, status, options }: CellRendererProps) {
 
   return (
     <div ref={containerRef} className="relative w-full h-full overflow-hidden">
-      <MapViewer
-        mapUrl={mapBlobUrl}
-        events={events}
-        selectedEventId={selectedEvent?.id}
-        onSelectEvent={handleSelectEvent}
-        markerColor={markerColor}
-        markerSize={markerSize}
-        resetViewTrigger={resetViewTrigger}
-      />
+      {/* Keyed by URL: a new map gets a fresh boundary, so picking a working
+          map after a failed load clears the error automatically. The fallback
+          stays scoped to the cell so a 404 (or any GLB load failure) doesn't
+          bubble up to the screen-level ErrorBoundary and replace the whole
+          page with "Something went wrong". */}
+      <ErrorBoundary
+        key={mapBlobUrl}
+        fallback={(error, reset) => (
+          <div className="flex flex-col items-center justify-center h-full p-4 text-center">
+            <div className="text-red-400 text-sm font-medium mb-2">Could not load map</div>
+            {mapFilename && (
+              <div className="text-xs text-theme-text-muted font-mono break-all mb-2">
+                {mapFilename}
+              </div>
+            )}
+            <div className="text-xs text-theme-text-muted mb-3 max-w-md break-words">
+              {error.message}
+            </div>
+            <button
+              className="px-3 py-1 text-xs bg-app-card border border-theme-border rounded hover:border-accent-link"
+              onClick={() => {
+                // Clear drei's cached failed promise — otherwise a retry on
+                // the same URL re-throws the same error without refetching.
+                useGLTF.clear(mapBlobUrl)
+                reset()
+              }}
+            >
+              Try again
+            </button>
+          </div>
+        )}
+      >
+        <MapViewer
+          mapUrl={mapBlobUrl}
+          events={events}
+          selectedEventId={selectedEvent?.id}
+          onSelectEvent={handleSelectEvent}
+          markerColor={markerColor}
+          markerSize={markerSize}
+          resetViewTrigger={resetViewTrigger}
+        />
 
-      {selectedEvent && (
-        <EventDetailPanel event={selectedEvent} onClose={() => setSelectedEvent(null)} />
-      )}
+        {selectedEvent && (
+          <EventDetailPanel event={selectedEvent} onClose={() => setSelectedEvent(null)} />
+        )}
+      </ErrorBoundary>
     </div>
   )
 }
@@ -186,7 +275,6 @@ export function MapCellEditor({
   cellSelections,
 }: CellEditorProps) {
   const mapConfig = config as QueryCellConfig
-  const mapCatalog = useMapCatalog()
 
   const updateSql = useCallback(
     (sql: string) => {
@@ -241,20 +329,12 @@ export function MapCellEditor({
         <div className="space-y-2">
           <div className="flex items-center gap-2">
             <label className="text-xs text-theme-text-secondary w-24 shrink-0">Map</label>
-            <select
-              className="flex-1 bg-app-card border border-theme-border rounded px-2 py-1 text-sm text-theme-text-primary focus:outline-none focus:border-accent-link"
-              value={normalizeMapFilename(mapConfig.options?.mapUrl as string | undefined) ?? ''}
-              onChange={(e) => updateOption('mapUrl', e.target.value || undefined)}
-            >
-              <option value="" disabled>
-                Select a map…
-              </option>
-              {mapCatalog.map((entry) => (
-                <option key={entry.file} value={entry.file}>
-                  {formatMapName(entry.file)}
-                </option>
-              ))}
-            </select>
+            <Suspense fallback={<MapDropdownLoading />}>
+              <MapDropdown
+                selectedRaw={mapConfig.options?.mapUrl as string | undefined}
+                onChange={(value) => updateOption('mapUrl', value)}
+              />
+            </Suspense>
           </div>
           <div className="text-xs text-theme-text-muted ml-[calc(6rem+0.5rem)]">
             Maps are loaded from the server's object store (

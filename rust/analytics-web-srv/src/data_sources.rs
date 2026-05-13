@@ -2,7 +2,7 @@ use analytics_web_srv::app_db::{
     CreateDataSourceRequest, DataSource, DataSourceSummary, UpdateDataSourceRequest,
     ValidationError, validate_data_source_config,
 };
-use analytics_web_srv::auth::ValidatedUser;
+use analytics_web_srv::auth::{ValidatedUser, require_admin as auth_require_admin};
 use analytics_web_srv::data_source_cache::DataSourceCache;
 use axum::{
     Extension, Json,
@@ -75,10 +75,7 @@ impl From<ValidationError> for DataSourceError {
 type DataSourceResult<T> = Result<T, DataSourceError>;
 
 fn require_admin(user: &ValidatedUser) -> Result<(), DataSourceError> {
-    if !user.is_admin {
-        return Err(DataSourceError::Forbidden);
-    }
-    Ok(())
+    auth_require_admin(user).map_err(|_| DataSourceError::Forbidden)
 }
 
 /// GET /api/data-sources — list names and default flag (any authenticated user).

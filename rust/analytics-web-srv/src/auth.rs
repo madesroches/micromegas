@@ -14,8 +14,8 @@
 use anyhow::{Result, anyhow};
 use axum::{
     Json,
-    extract::{Query, Request, State},
-    http::StatusCode,
+    extract::{FromRequestParts, Query, Request, State},
+    http::{StatusCode, request::Parts},
     middleware::Next,
     response::{IntoResponse, Redirect, Response},
 };
@@ -845,3 +845,58 @@ pub async fn cookie_auth_middleware(
 /// Will be used to pass token to FlightSQL in future phases
 #[derive(Clone, Debug)]
 pub struct AuthToken(pub String);
+
+/// Returned by `require_admin` when the user is not an admin.
+///
+/// Implements `IntoResponse` as 403 with a JSON `{ code, message }` body
+/// matching the data-sources error shape, so handlers can `?`-propagate
+/// it directly or convert into a domain error enum at the boundary.
+#[derive(Debug)]
+pub struct AdminRequired;
+
+impl IntoResponse for AdminRequired {
+    fn into_response(self) -> Response {
+        let body = serde_json::json!({
+            "code": "FORBIDDEN",
+            "message": "Admin access required",
+        });
+        (StatusCode::FORBIDDEN, Json(body)).into_response()
+    }
+}
+
+/// Returns `Ok(())` when the user is an admin, otherwise an `AdminRequired`
+/// error that renders as a 403 with `{ code: "FORBIDDEN", message: ... }`.
+pub fn require_admin(user: &ValidatedUser) -> Result<(), AdminRequired> {
+    if user.is_admin {
+        Ok(())
+    } else {
+        Err(AdminRequired)
+    }
+}
+
+/// Extractor that yields the validated user only when `is_admin` is true.
+///
+/// Why: `FromRequestParts` runs before any body extractor (which is
+/// `FromRequest`), so handlers that take a `Bytes` upload body can use
+/// this to short-circuit with 403 *before* the body is buffered into
+/// memory. Doing the admin check inside the handler body would mean a
+/// non-admin authenticated user could force the server to buffer up to
+/// `DefaultBodyLimit` bytes per request before getting rejected.
+pub struct AdminUser(pub ValidatedUser);
+
+impl<S: Send + Sync> FromRequestParts<S> for AdminUser {
+    type Rejection = AdminRequired;
+
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+        let user = parts
+            .extensions
+            .get::<ValidatedUser>()
+            .cloned()
+            .ok_or(AdminRequired)?;
+        if user.is_admin {
+            Ok(AdminUser(user))
+        } else {
+            Err(AdminRequired)
+        }
+    }
+}

@@ -50,9 +50,31 @@ export MICROMEGAS_BASE_PATH="/analytics"
 export MICROMEGAS_COOKIE_DOMAIN=".example.com"
 export MICROMEGAS_SECURE_COOKIES="true"  # HTTPS only
 
+# Map assets (object store URI; see "Maps" below)
+export MICROMEGAS_MAPS_OBJECT_STORE_URI="s3://my-bucket/maps/"
+export MICROMEGAS_MAPS_MAX_UPLOAD_BYTES="268435456"  # 256 MiB default
+
 # Disable auth (dev only)
 analytics-web-srv --disable-auth
 ```
+
+## Maps
+
+Map cells render GLB assets fetched from a server-side object store. Set `MICROMEGAS_MAPS_OBJECT_STORE_URI` to a prefix the web-app process can read **and write** — admins upload and delete GLBs through **Admin → Maps**, which calls `PUT`/`DELETE` on `/api/maps/blob/{filename}`. If the variable is unset, the maps endpoints return 503 and the dropdown is empty.
+
+**IAM / credentials.** The process credentials need the equivalent of `s3:GetObject`, `s3:PutObject`, `s3:DeleteObject`, and `s3:ListBucket` (or GCS / local-fs equivalents) scoped to the configured prefix. Read-only credentials are sufficient only if you keep populating maps out-of-band (`aws s3 cp ...`) and don't expose the admin page.
+
+**Upload cap.** `MICROMEGAS_MAPS_MAX_UPLOAD_BYTES` bounds the per-request body for uploads (default 256 MiB). The cap is enforced before the body is buffered. The handler gzips on upload and the read path serves bytes verbatim with `Content-Encoding: gzip`.
+
+**URI grammar.** Same shape as `MICROMEGAS_OBJECT_STORE_URI` (passed through `object_store::parse_url_opts`):
+
+| Backend | Example |
+|---|---|
+| Local dev | `file:///home/you/lake/maps/` |
+| AWS prod | `s3://my-bucket/maps/` |
+| GCS | `gs://my-bucket/maps/` |
+
+`start_analytics_web.py` defaults this to `<MICROMEGAS_OBJECT_STORE_URI>/maps/` — i.e. a `maps/` sibling of the telemetry lake — so a single lake root supplies both telemetry blobs and map assets for local dev.
 
 ## Production Notes
 
