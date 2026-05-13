@@ -8,12 +8,21 @@ import { AppRouter } from '@/router'
 import { getConfig } from '@/lib/config'
 import './styles/globals.css'
 
-// R3F 9.x still does `new THREE.Clock()` internally; three@0.183 emits a
-// deprecation warning from the Clock constructor. Remove once @react-three/fiber
-// 10 ships stable (its canary line already swapped Clock for performance.now()).
+// Filter benign Firefox dev-console warnings emitted by upstream R3F / three.js
+// code we don't control:
+//   - `THREE.Clock: This module has been deprecated`: R3F 9.x still constructs
+//     `new THREE.Clock()` internally; three@0.183 warns from the Clock ctor.
+//     R3F 10 canary already moved off Clock.
+//   - `MouseEvent.mozPressure` / `MouseEvent.mozInputSource`: R3F's event
+//     extractor does `for (prop in event)` over the native MouseEvent, which
+//     accesses Firefox's deprecated non-standard properties.
 const originalWarn = console.warn
 console.warn = (...args: unknown[]) => {
-  if (typeof args[0] === 'string' && args[0].includes('Clock: This module has been deprecated')) return
+  if (typeof args[0] === 'string') {
+    const msg = args[0]
+    if (msg.includes('Clock: This module has been deprecated')) return
+    if (msg.includes('MouseEvent.mozPressure') || msg.includes('MouseEvent.mozInputSource')) return
+  }
   originalWarn(...args)
 }
 
