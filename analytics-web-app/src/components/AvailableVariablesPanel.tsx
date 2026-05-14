@@ -13,6 +13,13 @@ interface AvailableVariablesPanelProps {
   cellResults: Record<string, Table>
   /** Selected rows from upstream cells (for $cell.selected.col references) */
   cellSelections: Record<string, Record<string, unknown>>
+  /**
+   * Column names of the current cell's own most recent result row.
+   * Surfaced as a "Selected event columns" section so a Map detail-template
+   * author can discover the `$colname` references that resolve from the
+   * clicked row.
+   */
+  localRowColumns?: string[]
 }
 
 function formatSelectionValue(value: unknown, cellName: string, colName: string, cellResults: Record<string, Table>): string {
@@ -94,6 +101,7 @@ export function AvailableVariablesPanel({
   additionalVariables,
   cellResults,
   cellSelections,
+  localRowColumns,
 }: AvailableVariablesPanelProps) {
   // Time range variables (always simple strings)
   const timeVars = [
@@ -125,7 +133,15 @@ export function AvailableVariablesPanel({
 
   const allVars = [...timeVars, ...userVars, ...additionalVars]
 
-  if (allVars.length === 0 && cellResultEntries.length === 0 && cellSelectionEntries.length === 0) return null
+  const localCols = localRowColumns ?? []
+
+  if (
+    allVars.length === 0 &&
+    cellResultEntries.length === 0 &&
+    cellSelectionEntries.length === 0 &&
+    localCols.length === 0
+  )
+    return null
 
   return (
     <div>
@@ -172,6 +188,22 @@ export function AvailableVariablesPanel({
         {cellSelectionEntries.map(([cellName, selection]) => (
           <CellSelectionEntry key={cellName} cellName={cellName} selection={selection} cellResults={cellResults} />
         ))}
+        {localCols.length > 0 &&
+          (allVars.length > 0 || cellResultEntries.length > 0 || cellSelectionEntries.length > 0) && (
+            <div className="border-t border-theme-border my-1" />
+          )}
+        {localCols.length > 0 && (
+          <div className="space-y-0.5">
+            <div className="text-theme-text-secondary font-mono font-medium py-0.5">
+              Selected event columns
+            </div>
+            {localCols.map((col) => (
+              <div key={col} className="flex justify-between py-0.5 pl-2">
+                <span className="text-accent-link font-mono">${col}</span>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   )

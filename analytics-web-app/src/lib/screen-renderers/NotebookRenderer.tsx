@@ -602,7 +602,10 @@ export function NotebookRenderer({
     const statusText = buildStatusText(cell, state)
     const cellDataSource = resolveCellDataSource(cell, availableVariables, dataSource)
 
-    const selectionMode = ((cell as QueryCellConfig).options?.selectionMode as 'none' | 'single' | undefined) || 'none'
+    const selectionMode =
+      ((cell as QueryCellConfig).options?.selectionMode as 'none' | 'single' | undefined)
+      ?? meta.defaultSelectionMode
+      ?? 'none'
 
     const commonRendererProps = buildCellRendererProps(cell, state,
       {

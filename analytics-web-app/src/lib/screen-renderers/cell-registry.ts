@@ -127,6 +127,14 @@ export interface CellTypeMetadata {
   /** Whether this cell can block downstream execution (false for markdown) */
   readonly canBlockDownstream: boolean
 
+  /**
+   * Fallback selection mode when the cell config doesn't specify
+   * `options.selectionMode`. Used for cells where selection is intrinsic to
+   * the renderer (e.g., the map cell publishes the clicked marker without an
+   * authoring opt-in).
+   */
+  readonly defaultSelectionMode?: 'none' | 'single'
+
   /** Creates default config for a new cell of this type */
   readonly createDefaultConfig: () => Omit<CellConfig, 'name' | 'layout'>
 

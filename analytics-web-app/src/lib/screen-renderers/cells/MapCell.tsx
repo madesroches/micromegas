@@ -10,8 +10,14 @@ import type { QueryCellConfig, CellConfig, CellState } from '../notebook-types'
 import { AvailableVariablesPanel } from '@/components/AvailableVariablesPanel'
 import { DocumentationLink, QUERY_GUIDE_URL } from '@/components/DocumentationLink'
 import { SyntaxEditor } from '@/components/SyntaxEditor'
-import { substituteMacros, validateMacros, DEFAULT_SQL } from '../notebook-utils'
-import { timestampToDate } from '@/lib/arrow-utils'
+import {
+  substituteMacros,
+  validateMacros,
+  formatArrowValue,
+  DEFAULT_SQL,
+  DEFAULT_MAP_DETAIL_TEMPLATE,
+} from '../notebook-utils'
+import { isTimeType, timestampToDate } from '@/lib/arrow-utils'
 import { MapViewer, type MapEvent } from '@/components/map/MapViewer'
 import { EventDetailPanel } from '@/components/map/EventDetailPanel'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
@@ -30,39 +36,45 @@ import { Map as MapIcon } from 'lucide-react'
 // Data Transformation (Arrow Table → MapEvent[])
 // =============================================================================
 
-/** Reserved column names that map to MapEvent fields (not included in properties) */
-const RESERVED_COLUMNS = new Set(['time', 'process_id', 'x', 'y', 'z'])
-
-function arrowTableToMapEvents(table: Table): MapEvent[] {
+// eslint-disable-next-line react-refresh/only-export-components
+export function arrowTableToMapEvents(table: Table): MapEvent[] {
   const result: MapEvent[] = []
+  const fields = table.schema.fields
+  const timeField = fields.find((f) => f.name === 'time')
   for (let i = 0; i < table.numRows; i++) {
-    const row = table.get(i)
-    if (!row) continue
+    const arrowRow = table.get(i)
+    if (!arrowRow) continue
 
-    const time = timestampToDate(row.time)
-    const x = parseFloat(String(row.x ?? '0'))
-    const y = parseFloat(String(row.y ?? '0'))
-    const z = parseFloat(String(row.z ?? '0'))
-
+    const x = parseFloat(String(arrowRow.x ?? '0'))
+    const y = parseFloat(String(arrowRow.y ?? '0'))
+    const z = parseFloat(String(arrowRow.z ?? '0'))
     if (isNaN(x) || isNaN(y) || isNaN(z)) continue
 
-    // Collect all extra columns as generic properties
-    const properties: Record<string, string> = {}
-    const rowObj = row.toJSON?.() ?? row
-    for (const [key, value] of Object.entries(rowObj)) {
-      if (!RESERVED_COLUMNS.has(key) && value != null && String(value).trim() !== '') {
-        properties[key] = String(value)
+    // Build the row map preserving SELECT order; omit null/undefined entries.
+    const row: Record<string, string> = {}
+    for (const field of fields) {
+      const value = arrowRow[field.name]
+      if (value === null || value === undefined) continue
+      row[field.name] = formatArrowValue(value, field.type)
+    }
+
+    // Derive typed `time` only when the query produced a time column.
+    let time: Date | undefined
+    if (timeField && isTimeType(timeField.type)) {
+      const rawTime = arrowRow.time
+      if (rawTime !== null && rawTime !== undefined) {
+        const parsed = timestampToDate(rawTime, timeField.type)
+        if (parsed) time = parsed
       }
     }
 
     result.push({
-      id: `${row.process_id ?? 'unknown'}-${i}`,
-      time: time ?? new Date(),
-      processId: String(row.process_id ?? ''),
+      id: `${row['process_id'] ?? 'unknown'}-${i}`,
+      time,
       x,
       y,
       z,
-      properties,
+      row,
     })
   }
   return result
@@ -139,17 +151,39 @@ function MapDropdown({
 // Renderer Component
 // =============================================================================
 
-export function MapCell({ data, status, options }: CellRendererProps) {
+export function MapCell({
+  data,
+  status,
+  options,
+  variables,
+  timeRange,
+  cellResults,
+  cellSelections,
+  onSelectionChange,
+}: CellRendererProps) {
   // Transform Arrow data to MapEvent[] (memoized on table reference)
+  const sourceTable = data[0]
   const events = useMemo(() => {
-    const table = data[0]
-    if (!table || table.numRows === 0) return []
-    return arrowTableToMapEvents(table)
-  }, [data])
+    if (!sourceTable || sourceTable.numRows === 0) return []
+    return arrowTableToMapEvents(sourceTable)
+  }, [sourceTable])
 
   // Ephemeral interaction state
   const [selectedEvent, setSelectedEvent] = useState<MapEvent | null>(null)
   const [resetViewTrigger, setResetViewTrigger] = useState(0)
+
+  // Stable ref for onSelectionChange to avoid infinite re-render loops:
+  // the callback is an inline arrow in NotebookRenderer, so including it
+  // in effect deps would fire on every render.
+  const onSelectionChangeRef = useRef(onSelectionChange)
+  onSelectionChangeRef.current = onSelectionChange
+
+  // Clear selection on data change (re-execution) — a stale selection from
+  // a prior query must not keep publishing ghost rows to cellSelections.
+  useEffect(() => {
+    setSelectedEvent(null)
+    onSelectionChangeRef.current?.(null)
+  }, [sourceTable])
 
   // Read visual options with defaults. `mapUrl` is stored as the bare
   // filename — the renderer composes the blob URL at render time so saved
@@ -163,9 +197,12 @@ export function MapCell({ data, status, options }: CellRendererProps) {
   )
   const markerColor = (options?.markerColor as string) ?? '#bf360c'
   const markerSize = (options?.markerSize as number) ?? 10
+  const detailTemplate =
+    (options?.detailTemplate as string | undefined) ?? DEFAULT_MAP_DETAIL_TEMPLATE
 
   const handleSelectEvent = useCallback((event: MapEvent | null) => {
     setSelectedEvent(event)
+    onSelectionChangeRef.current?.(event ? event.row : null)
   }, [])
 
   // Z resets the view, scoped to the hovered cell so multiple Map cells on a
@@ -196,7 +233,7 @@ export function MapCell({ data, status, options }: CellRendererProps) {
   if (events.length === 0 && status === 'success') {
     return (
       <div className="flex items-center justify-center h-full text-theme-text-muted text-sm">
-        No spatial data available. Query must return columns: time, x, y, z
+        No spatial data available. Query must return columns: x, y, z
       </div>
     )
   }
@@ -254,7 +291,15 @@ export function MapCell({ data, status, options }: CellRendererProps) {
         />
 
         {selectedEvent && (
-          <EventDetailPanel event={selectedEvent} onClose={() => setSelectedEvent(null)} />
+          <EventDetailPanel
+            event={selectedEvent}
+            template={detailTemplate}
+            variables={variables}
+            timeRange={timeRange}
+            cellResults={cellResults}
+            cellSelections={cellSelections}
+            onClose={() => handleSelectEvent(null)}
+          />
         )}
       </ErrorBoundary>
     </div>
@@ -271,6 +316,7 @@ export function MapCellEditor({
   variables,
   timeRange,
   onRun,
+  availableColumns,
   cellResults,
   cellSelections,
 }: CellEditorProps) {
@@ -293,6 +339,21 @@ export function MapCellEditor({
   const validationErrors = useMemo(() => {
     return validateMacros(mapConfig.sql, variables, cellResults, cellSelections).errors
   }, [mapConfig.sql, variables, cellResults, cellSelections])
+
+  const detailTemplate =
+    (mapConfig.options?.detailTemplate as string | undefined) ?? DEFAULT_MAP_DETAIL_TEMPLATE
+
+  // Empty-string placeholders for every column from the most recent result
+  // so the editor doesn't flag `$columnFromQuery` as "Unknown variable" at
+  // edit time. validateMacros only checks presence.
+  const templateValidationErrors = useMemo(() => {
+    const syntheticColumnVars: Record<string, string> = {}
+    for (const name of availableColumns ?? []) {
+      syntheticColumnVars[name] = ''
+    }
+    const mergedVars = { ...variables, ...syntheticColumnVars }
+    return validateMacros(detailTemplate, mergedVars, cellResults, cellSelections).errors
+  }, [detailTemplate, availableColumns, variables, cellResults, cellSelections])
 
   return (
     <>
@@ -372,11 +433,38 @@ export function MapCellEditor({
         </div>
       </div>
 
+      {/* Detail template */}
+      <div>
+        <label className="block text-xs font-medium text-theme-text-secondary uppercase mb-1.5">
+          Detail Template (Markdown)
+        </label>
+        <SyntaxEditor
+          value={detailTemplate}
+          onChange={(value) => updateOption('detailTemplate', value)}
+          language="markdown"
+          placeholder="### Event\n\n**Location:** ($x, $y, $z)"
+          minHeight="160px"
+        />
+        <div className="text-xs text-theme-text-muted mt-1">
+          Rendered when a marker is selected. References query columns as
+          <code className="text-theme-text-secondary mx-1">$colname</code>
+          and notebook variables as <code className="text-theme-text-secondary">$var</code>.
+        </div>
+      </div>
+      {templateValidationErrors.length > 0 && (
+        <div className="text-red-400 text-sm space-y-1">
+          {templateValidationErrors.map((err, i) => (
+            <div key={i}>Warning: {err}</div>
+          ))}
+        </div>
+      )}
+
       <AvailableVariablesPanel
         variables={variables}
         timeRange={timeRange}
         cellResults={cellResults}
         cellSelections={cellSelections}
+        localRowColumns={availableColumns}
       />
       <DocumentationLink url={QUERY_GUIDE_URL} label="Query Guide" />
     </>
@@ -400,12 +488,15 @@ export const mapMetadata: CellTypeMetadata = {
 
   canBlockDownstream: true,
 
+  defaultSelectionMode: 'single',
+
   createDefaultConfig: () => ({
     type: 'map' as const,
     sql: DEFAULT_SQL.map,
     options: {
       markerColor: '#bf360c',
       markerSize: 10,
+      detailTemplate: DEFAULT_MAP_DETAIL_TEMPLATE,
     },
   }),
 

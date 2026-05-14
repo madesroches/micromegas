@@ -524,7 +524,6 @@ WHERE m.value > t.warn_threshold
 
 | Column | Type | Description |
 |--------|------|-------------|
-| `time` | timestamp | Event timestamp |
 | `x` | number | X coordinate (Unreal Engine world units) |
 | `y` | number | Y coordinate (Unreal Engine world units) |
 | `z` | number | Z coordinate (Unreal Engine world units) |
@@ -533,10 +532,9 @@ WHERE m.value > t.warn_threshold
 
 | Column | Type | Description |
 |--------|------|-------------|
-| `process_id` | string | Process identifier (links to process page) |
-| *(any other)* | string | Displayed as properties in the event detail panel |
-
-All columns beyond the reserved names (`time`, `x`, `y`, `z`, `process_id`) are collected as key-value properties and shown when clicking a marker.
+| `time` | timestamp | Event timestamp — addressable as `$time` in the detail template |
+| `process_id` | string | Process identifier — addressable as `$process_id` in the detail template |
+| *(any other)* | any | Every column the query produces is addressable as `$column` in the detail template |
 
 **Options:**
 
@@ -545,6 +543,41 @@ All columns beyond the reserved names (`time`, `x`, `y`, `z`, `process_id`) are 
 | `mapUrl` | string | none | GLB filename selected from the catalog (bare filename — the renderer composes the blob URL) |
 | `markerColor` | string | `#bf360c` | Marker color (hex) |
 | `markerSize` | number | `10` | Marker size — scaled proportionally to the map extent |
+| `detailTemplate` | string | see below | Markdown template rendered in the event detail panel when a marker is clicked |
+
+**Detail template:**
+
+When a marker is selected, the cell renders a Markdown template with macro
+substitution. The selected row's columns are exposed as `$column`, and the
+standard notebook macros work too:
+
+- `$column` — column from the selected row (wins name collisions against variables)
+- `$from`, `$to` — current time range
+- `$variable`, `$variable.column` — notebook variables and their columns
+- `$cell[N].column`, `$cell.selected.column` — cross-cell references
+
+The default template is:
+
+```markdown
+### Event
+
+**Location:** ($x, $y, $z)
+```
+
+Authors extend it to surface query-specific columns. For example, to link to
+the process page using a `process_id` column:
+
+```markdown
+### Event
+
+**Location:** ($x, $y, $z)
+
+[View process logs](/process?process_id=$process_id)
+```
+
+Internal links (starting with `/`) route through the app's base-path-aware
+router; external links open in a new tab. Raw HTML in the template is
+rendered as text (not parsed), matching the Markdown cell's behavior.
 
 **Map catalog:**
 
@@ -594,7 +627,7 @@ GLBs missing the camera log a console error and fall back to the default seed fr
 - Interactive markers — click to select, hover to highlight
 - Camera controls — left-drag to pan, right-drag to orbit, scroll to zoom, WASD to fly
 - Reset view with the Z key
-- Event detail panel with properties and link to process logs
+- Event detail panel rendered from a Markdown template with macro substitution
 - Results registered in the [local WASM query engine](execution.md#local-wasm-query-engine) under the cell name for downstream queries
 
 **Example SQL (spatial events from a JSONB-encoded payload):**

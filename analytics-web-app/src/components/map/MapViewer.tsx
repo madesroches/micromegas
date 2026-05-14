@@ -4,14 +4,16 @@ import { useGLTF, Html, PerspectiveCamera } from '@react-three/drei'
 import * as THREE from 'three'
 
 export interface MapEvent {
+  /** Stable per-event id, derived as `${row['process_id'] ?? 'unknown'}-${rowIndex}` */
   id: string
-  time: Date
-  processId: string
+  /** Optional — only set when the query produced a `time` column. */
+  time?: Date
   x: number
   y: number
   z: number
-  /** Generic key-value properties from query result columns beyond x/y/z/time/process_id */
-  properties: Record<string, string>
+  /** Full row from the SQL result, formatted to strings for template substitution.
+   *  Columns whose value is null/undefined are omitted (no '' coercion). */
+  row: Record<string, string>
 }
 
 export interface MMAmbientLight {

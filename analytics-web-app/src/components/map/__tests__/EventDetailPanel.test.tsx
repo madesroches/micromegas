@@ -1,0 +1,90 @@
+import { render, screen } from '@testing-library/react'
+import { MemoryRouter } from 'react-router-dom'
+import { EventDetailPanel } from '../EventDetailPanel'
+import type { MapEvent } from '../MapViewer'
+
+function buildEvent(overrides: Partial<MapEvent> = {}): MapEvent {
+  return {
+    id: 'pid-0',
+    x: 1,
+    y: 2,
+    z: 3,
+    row: { x: '1', y: '2', z: '3' },
+    ...overrides,
+  }
+}
+
+function renderPanel(props: {
+  event?: MapEvent
+  template: string
+  variables?: Record<string, string | Record<string, string>>
+  timeRange?: { begin: string; end: string }
+}) {
+  return render(
+    <MemoryRouter>
+      <EventDetailPanel
+        event={props.event ?? buildEvent()}
+        template={props.template}
+        variables={props.variables ?? {}}
+        timeRange={props.timeRange ?? { begin: '2026-01-01T00:00:00Z', end: '2026-01-02T00:00:00Z' }}
+        cellResults={{}}
+        cellSelections={{}}
+        onClose={jest.fn()}
+      />
+    </MemoryRouter>,
+  )
+}
+
+describe('EventDetailPanel', () => {
+  it('substitutes $x/$y/$z column macros', () => {
+    renderPanel({
+      template: 'Location: ($x, $y, $z)',
+      event: buildEvent({ row: { x: '10.5', y: '-3', z: '7' } }),
+    })
+    expect(screen.getByText('Location: (10.5, -3, 7)')).toBeInTheDocument()
+  })
+
+  it('substitutes $time when the row provides it', () => {
+    renderPanel({
+      template: 'At $time',
+      event: buildEvent({ row: { x: '0', y: '0', z: '0', time: '2026-05-01T12:00:00.000Z' } }),
+    })
+    expect(screen.getByText('At 2026-05-01T12:00:00.000Z')).toBeInTheDocument()
+  })
+
+  it('substitutes $from and $to time-range variables', () => {
+    renderPanel({
+      template: 'Range: $from to $to',
+      timeRange: { begin: '2026-04-01T00:00:00Z', end: '2026-04-02T00:00:00Z' },
+    })
+    expect(
+      screen.getByText('Range: 2026-04-01T00:00:00Z to 2026-04-02T00:00:00Z'),
+    ).toBeInTheDocument()
+  })
+
+  it('row columns win name collisions against notebook variables', () => {
+    renderPanel({
+      template: 'value=$shared',
+      event: buildEvent({ row: { x: '0', y: '0', z: '0', shared: 'from-row' } }),
+      variables: { shared: 'from-vars' },
+    })
+    expect(screen.getByText('value=from-row')).toBeInTheDocument()
+  })
+
+  it('leaves unresolved column references literal', () => {
+    renderPanel({
+      template: 'pid=$process_id',
+      event: buildEvent({ row: { x: '0', y: '0', z: '0' } }),
+    })
+    expect(screen.getByText('pid=$process_id')).toBeInTheDocument()
+  })
+
+  it('renders the process-logs link from a template using $process_id', () => {
+    renderPanel({
+      template: '[View process logs](/process?process_id=$process_id)',
+      event: buildEvent({ row: { x: '0', y: '0', z: '0', process_id: 'abc-123' } }),
+    })
+    const link = screen.getByRole('link', { name: 'View process logs' })
+    expect(link).toHaveAttribute('href', expect.stringContaining('process_id=abc-123'))
+  })
+})
