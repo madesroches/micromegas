@@ -17,7 +17,16 @@ import {
 } from '../notebook-utils'
 import { MapViewer } from '@/components/map/MapViewer'
 import { EventDetailPanel } from '@/components/map/EventDetailPanel'
-import { buildOverlay, materializeRow } from '@/components/map/overlay'
+import {
+  buildOverlay,
+  defaultMappingFor,
+  hexFromRgba,
+  materializeRow,
+  rgbaFromHex,
+  type ChannelBinding,
+  type OverlayMapping,
+  type Shape,
+} from '@/components/map/overlay'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { useGLTF } from '@react-three/drei'
 import {
@@ -98,6 +107,38 @@ function MapDropdown({
 }
 
 // =============================================================================
+// Mapping resolution
+// =============================================================================
+//
+// `resolveMapping` synthesizes a complete `OverlayMapping` from stored options
+// plus legacy `markerColor`/`markerSize` fallbacks. All back-compat lives here
+// so `buildOverlay` stays agnostic of cell-config shape.
+
+function resolveMapping(options: Record<string, unknown> | undefined): {
+  shape: Shape
+  mapping: OverlayMapping
+} {
+  const shape: Shape = (options?.shape as Shape) === 'box' ? 'box' : 'sphere'
+  const stored = (options?.mapping as OverlayMapping | undefined) ?? {}
+
+  const legacyColor = options?.markerColor as string | undefined
+  const legacySize = options?.markerSize as number | undefined
+
+  const defaults = defaultMappingFor(shape)
+  const merged: OverlayMapping = { ...defaults, ...stored }
+
+  if (!stored.color && legacyColor) {
+    const parsed = rgbaFromHex(legacyColor)
+    if (parsed !== null) merged.color = { scalar: parsed }
+  }
+  if (shape === 'sphere' && !stored.size && typeof legacySize === 'number') {
+    merged.size = { scalar: legacySize }
+  }
+
+  return { shape, mapping: merged }
+}
+
+// =============================================================================
 // Renderer Component
 // =============================================================================
 
@@ -112,12 +153,25 @@ export function MapCell({
   onSelectionChange,
 }: CellRendererProps) {
   const sourceTable = data[0]
+  // Key the memo on the underlying option fields, not on `resolveMapping(...)`
+  // — `resolveMapping` returns a fresh object every render, and
+  // `getRendererProps` spreads `options` into a new object each call. A
+  // derived-object dep would re-run `buildOverlay` every render at 100K-row
+  // cost.
   const overlayResult = useMemo(
-    () => (sourceTable ? buildOverlay(sourceTable) : null),
-    [sourceTable]
+    () => {
+      if (!sourceTable) return null
+      const { mapping } = resolveMapping(options)
+      return buildOverlay(sourceTable, mapping)
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [sourceTable, options?.shape, options?.mapping, options?.markerColor, options?.markerSize]
   )
-  // Narrow once; `overlay` is `Overlay | null` from here on.
+  // Narrow once; from here on, `overlay`/`constants` are paired non-null when
+  // the build succeeded.
   const overlay = overlayResult?.ok ? overlayResult.overlay : null
+  const constants = overlayResult?.ok ? overlayResult.constants : null
+  const shape: Shape = (options?.shape as Shape) === 'box' ? 'box' : 'sphere'
 
   const [selectedRowIndex, setSelectedRowIndex] = useState<number | null>(null)
   const [resetViewTrigger, setResetViewTrigger] = useState(0)
@@ -156,8 +210,6 @@ export function MapCell({
     () => resolveMapBlobUrl(mapFilename, basePath),
     [mapFilename, basePath]
   )
-  const markerColor = (options?.markerColor as string) ?? '#bf360c'
-  const markerSize = (options?.markerSize as number) ?? 10
   const detailTemplate =
     (options?.detailTemplate as string | undefined) ?? DEFAULT_MAP_DETAIL_TEMPLATE
 
@@ -214,7 +266,7 @@ export function MapCell({
     )
   }
 
-  if (!overlay || overlay.table.numRows === 0) {
+  if (!overlay || !constants || overlay.table.numRows === 0) {
     return (
       <div className="flex items-center justify-center h-full text-theme-text-muted text-sm">
         No spatial data available. Query must return columns: x, y, z
@@ -267,10 +319,10 @@ export function MapCell({
         <MapViewer
           mapUrl={mapBlobUrl}
           overlay={overlay}
+          constants={constants}
+          shape={shape}
           selectedRowIndex={selectedRowIndex}
           onSelect={handleSelectByRowIndex}
-          markerColor={markerColor}
-          markerSize={markerSize}
           resetViewTrigger={resetViewTrigger}
         />
 
@@ -294,6 +346,132 @@ export function MapCell({
 // Editor Component
 // =============================================================================
 
+/**
+ * One channel-binding row in the Primitive section. The radio toggles between
+ * a literal value (`scalar`) and a column reference (`column`); the inline
+ * editor swaps to match.
+ */
+function ChannelBindingControl({
+  label,
+  kind,
+  binding,
+  fallbackScalar,
+  numericRange,
+  columns,
+  onChange,
+}: {
+  label: string
+  kind: 'numeric' | 'color'
+  binding: ChannelBinding | undefined
+  fallbackScalar: number
+  numericRange?: { min: number; max: number; step: number }
+  columns: string[]
+  onChange: (next: ChannelBinding) => void
+}) {
+  const isColumn = !!binding && 'column' in binding
+  const mode: 'scalar' | 'column' = isColumn ? 'column' : 'scalar'
+
+  const setMode = (next: 'scalar' | 'column') => {
+    if (next === mode) return
+    if (next === 'scalar') {
+      onChange({ scalar: fallbackScalar })
+    } else {
+      onChange({ column: columns[0] ?? '' })
+    }
+  }
+
+  const scalarValue =
+    binding && 'scalar' in binding ? (binding.scalar as number) : fallbackScalar
+
+  // Split RGBA u32 into hex (#rrggbb) + alpha byte for the picker widgets.
+  const colorHex = kind === 'color' ? hexFromRgba(scalarValue).slice(0, 7) : '#000000'
+  const alphaByte = kind === 'color' ? scalarValue & 0xff : 0xff
+
+  const packRgba = (hex: string, alpha: number): number => {
+    const rgba = rgbaFromHex(`${hex}${alpha.toString(16).padStart(2, '0')}`)
+    return rgba ?? 0
+  }
+
+  return (
+    <div className="flex items-center gap-2 flex-wrap">
+      <label className="text-xs text-theme-text-secondary w-24 shrink-0">{label}</label>
+      <div className="flex items-center gap-3 text-xs text-theme-text-secondary">
+        <label className="flex items-center gap-1 cursor-pointer">
+          <input
+            type="radio"
+            checked={mode === 'scalar'}
+            onChange={() => setMode('scalar')}
+          />
+          scalar
+        </label>
+        <label className="flex items-center gap-1 cursor-pointer">
+          <input
+            type="radio"
+            checked={mode === 'column'}
+            onChange={() => setMode('column')}
+          />
+          column
+        </label>
+      </div>
+
+      {mode === 'scalar' && kind === 'numeric' && (
+        <input
+          type="number"
+          value={Number.isFinite(scalarValue) ? scalarValue : 0}
+          min={numericRange?.min}
+          max={numericRange?.max}
+          step={numericRange?.step ?? 1}
+          onChange={(e) => {
+            const v = Number(e.target.value)
+            onChange({ scalar: Number.isFinite(v) ? v : 0 })
+          }}
+          className="w-24 bg-app-card border border-theme-border rounded px-2 py-1 text-sm text-theme-text-primary focus:outline-none focus:border-accent-link"
+        />
+      )}
+
+      {mode === 'scalar' && kind === 'color' && (
+        <>
+          <input
+            type="color"
+            value={colorHex}
+            onChange={(e) => onChange({ scalar: packRgba(e.target.value, alphaByte) })}
+            className="w-7 h-7 rounded cursor-pointer border border-theme-border bg-transparent"
+          />
+          <label className="text-xs text-theme-text-muted">alpha</label>
+          <input
+            type="range"
+            min="0"
+            max="255"
+            value={alphaByte}
+            onChange={(e) =>
+              onChange({ scalar: packRgba(colorHex, Number(e.target.value)) })
+            }
+            className="w-24 accent-accent-link"
+          />
+          <span className="text-xs text-theme-text-muted w-7">{alphaByte}</span>
+        </>
+      )}
+
+      {mode === 'column' && (
+        <select
+          value={isColumn ? (binding as { column: string }).column : ''}
+          onChange={(e) => onChange({ column: e.target.value })}
+          className="flex-1 bg-app-card border border-theme-border rounded px-2 py-1 text-sm text-theme-text-primary focus:outline-none focus:border-accent-link"
+        >
+          {columns.length === 0 && (
+            <option value="">No columns available — run the query</option>
+          )}
+          {columns.map((name) => (
+            <option key={name} value={name}>
+              {name}
+            </option>
+          ))}
+        </select>
+      )}
+    </div>
+  )
+}
+
 export function MapCellEditor({
   config,
   onChange,
@@ -316,6 +494,46 @@ export function MapCellEditor({
   const updateOption = useCallback(
     (key: string, value: unknown) => {
       onChange({ ...mapConfig, options: { ...mapConfig.options, [key]: value } })
+    },
+    [mapConfig, onChange]
+  )
+
+  // Read the persisted `shape` + `mapping`, layered with the per-shape
+  // defaults so empty channels resolve to the same scalars buildOverlay would
+  // use. Legacy `markerColor`/`markerSize` aren't re-read here on purpose —
+  // those exist only for the runtime back-compat path; the editor writes
+  // the new `mapping` shape from first touch.
+  const shape: Shape =
+    (mapConfig.options?.shape as Shape) === 'box' ? 'box' : 'sphere'
+  const storedMapping =
+    (mapConfig.options?.mapping as OverlayMapping | undefined) ?? {}
+  const mappingDefaults = defaultMappingFor(shape)
+
+  const channelBinding = (channel: keyof OverlayMapping): ChannelBinding | undefined => {
+    const v = (storedMapping[channel] ?? mappingDefaults[channel]) as
+      | ChannelBinding
+      | undefined
+    return v
+  }
+
+  const updateMappingChannel = useCallback(
+    (channel: keyof OverlayMapping, next: ChannelBinding) => {
+      const prev = (mapConfig.options?.mapping as OverlayMapping | undefined) ?? {}
+      const nextMapping = { ...prev, [channel]: next }
+      onChange({
+        ...mapConfig,
+        options: { ...mapConfig.options, mapping: nextMapping },
+      })
+    },
+    [mapConfig, onChange]
+  )
+
+  const updateShape = useCallback(
+    (next: Shape) => {
+      onChange({
+        ...mapConfig,
+        options: { ...mapConfig.options, shape: next },
+      })
     },
     [mapConfig, onChange]
   )
@@ -388,33 +606,87 @@ export function MapCellEditor({
             make them appear here.
           </div>
         </div>
+      </div>
 
-        {/* Marker color */}
+      {/* Primitive */}
+      <div className="space-y-3">
+        <label className="block text-xs font-medium text-theme-text-secondary uppercase">
+          Primitive
+        </label>
+
         <div className="flex items-center gap-2">
-          <label className="text-xs text-theme-text-secondary w-24 shrink-0">Marker Color</label>
-          <input
-            type="color"
-            value={(mapConfig.options?.markerColor as string) ?? '#bf360c'}
-            onChange={(e) => updateOption('markerColor', e.target.value)}
-            className="w-7 h-7 rounded cursor-pointer border border-theme-border bg-transparent"
-          />
+          <label className="text-xs text-theme-text-secondary w-24 shrink-0">Shape</label>
+          <select
+            value={shape}
+            onChange={(e) => updateShape(e.target.value as Shape)}
+            className="bg-app-card border border-theme-border rounded px-2 py-1 text-sm text-theme-text-primary focus:outline-none focus:border-accent-link"
+          >
+            <option value="sphere">Sphere</option>
+            <option value="box">Box</option>
+          </select>
         </div>
 
-        {/* Marker size */}
-        <div className="flex items-center gap-2">
-          <label className="text-xs text-theme-text-secondary w-24 shrink-0">Marker Size</label>
-          <input
-            type="range"
-            min="1"
-            max="50"
-            value={(mapConfig.options?.markerSize as number) ?? 10}
-            onChange={(e) => updateOption('markerSize', Number(e.target.value))}
-            className="w-32 accent-accent-link"
-          />
-          <span className="text-xs text-theme-text-muted w-5">
-            {(mapConfig.options?.markerSize as number) ?? 10}
-          </span>
-        </div>
+        {shape === 'sphere' && (
+          <>
+            <ChannelBindingControl
+              label="Size"
+              kind="numeric"
+              binding={channelBinding('size')}
+              fallbackScalar={10}
+              numericRange={{ min: 0, max: 10000, step: 1 }}
+              columns={availableColumns ?? []}
+              onChange={(b) => updateMappingChannel('size', b)}
+            />
+            <ChannelBindingControl
+              label="Color"
+              kind="color"
+              binding={channelBinding('color')}
+              fallbackScalar={0xbf360cff}
+              columns={availableColumns ?? []}
+              onChange={(b) => updateMappingChannel('color', b)}
+            />
+          </>
+        )}
+
+        {shape === 'box' && (
+          <>
+            <ChannelBindingControl
+              label="Scale X"
+              kind="numeric"
+              binding={channelBinding('scaleX')}
+              fallbackScalar={100}
+              numericRange={{ min: 0, max: 100000, step: 1 }}
+              columns={availableColumns ?? []}
+              onChange={(b) => updateMappingChannel('scaleX', b)}
+            />
+            <ChannelBindingControl
+              label="Scale Y"
+              kind="numeric"
+              binding={channelBinding('scaleY')}
+              fallbackScalar={100}
+              numericRange={{ min: 0, max: 100000, step: 1 }}
+              columns={availableColumns ?? []}
+              onChange={(b) => updateMappingChannel('scaleY', b)}
+            />
+            <ChannelBindingControl
+              label="Scale Z"
+              kind="numeric"
+              binding={channelBinding('scaleZ')}
+              fallbackScalar={100}
+              numericRange={{ min: 0, max: 100000, step: 1 }}
+              columns={availableColumns ?? []}
+              onChange={(b) => updateMappingChannel('scaleZ', b)}
+            />
+            <ChannelBindingControl
+              label="Color"
+              kind="color"
+              binding={channelBinding('color')}
+              fallbackScalar={0xbf360cff}
+              columns={availableColumns ?? []}
+              onChange={(b) => updateMappingChannel('color', b)}
+            />
+          </>
+        )}
       </div>
 
       {/* Detail template */}
@@ -478,8 +750,11 @@ export const mapMetadata: CellTypeMetadata = {
     type: 'map' as const,
     sql: DEFAULT_SQL.map,
     options: {
-      markerColor: '#bf360c',
-      markerSize: 10,
+      shape: 'sphere' as const,
+      mapping: {
+        size: { scalar: 10 },
+        color: { scalar: 0xbf360cff },
+      },
       detailTemplate: DEFAULT_MAP_DETAIL_TEMPLATE,
     },
   }),

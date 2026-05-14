@@ -2,7 +2,7 @@ import { Suspense, useRef, useEffect, useState, useMemo, useCallback } from 'rea
 import { Canvas, useThree, useFrame, ThreeEvent } from '@react-three/fiber'
 import { useGLTF, Html, PerspectiveCamera } from '@react-three/drei'
 import * as THREE from 'three'
-import type { Overlay } from './overlay'
+import type { Overlay, OverlayConstants, Shape } from './overlay'
 
 export interface MMAmbientLight {
   color: [number, number, number]
@@ -12,10 +12,10 @@ export interface MMAmbientLight {
 interface MapViewerProps {
   mapUrl: string
   overlay: Overlay
+  constants: OverlayConstants
+  shape: Shape
   selectedRowIndex: number | null
   onSelect: (rowIndex: number | null) => void
-  markerColor?: string
-  markerSize?: number
   resetViewTrigger?: number
 }
 
@@ -90,24 +90,56 @@ function MapModel({ url, onLoaded }: MapModelProps) {
 
 interface InstancedMarkersProps {
   overlay: Overlay
+  constants: OverlayConstants
+  shape: Shape
   selectedRowIndex: number | null
   onSelect: (rowIndex: number | null) => void
-  markerColor?: string
-  markerSize?: number
 }
 
-const DEFAULT_MARKER_COLOR = '#bf360c'
-const COLOR_SELECTED = new THREE.Color('#ff6b6b')
-const COLOR_HOVERED = new THREE.Color('#ff8a65')
+const COLOR_SELECTED_RGBA = 0xff6b6bff
+const COLOR_HOVERED_RGBA = 0xff8a65ff
+const SCALE_SELECTED = 1.5
+const SCALE_HOVERED = 1.2
 
-const DEFAULT_MARKER_SIZE = 10
+/**
+ * Patch a MeshBasicMaterial so it reads a per-instance vec4 RGBA from a
+ * geometry attribute named `instanceColorRGBA` (Uint8Array, normalized). The
+ * patch targets the `#include <opaque_fragment>` chunk directive — modern
+ * three.js (r152+) wraps the fragment output inside that include, and
+ * replacing the unexpanded `gl_FragColor = ...` line silently no-ops.
+ */
+function patchInstanceColorRGBA(material: THREE.MeshBasicMaterial): void {
+  material.onBeforeCompile = (shader) => {
+    shader.vertexShader = shader.vertexShader
+      .replace(
+        '#include <common>',
+        '#include <common>\nattribute vec4 instanceColorRGBA;\nvarying vec4 vInstanceColor;',
+      )
+      .replace(
+        '#include <begin_vertex>',
+        '#include <begin_vertex>\nvInstanceColor = instanceColorRGBA;',
+      )
+    shader.fragmentShader = shader.fragmentShader
+      .replace(
+        '#include <common>',
+        '#include <common>\nvarying vec4 vInstanceColor;',
+      )
+      .replace(
+        '#include <opaque_fragment>',
+        `#ifdef OPAQUE
+  diffuseColor.a = 1.0;
+#endif
+gl_FragColor = vec4( outgoingLight * vInstanceColor.rgb, diffuseColor.a * vInstanceColor.a );`,
+      )
+  }
+}
 
 function InstancedMarkers({
   overlay,
+  constants,
+  shape,
   selectedRowIndex,
   onSelect,
-  markerColor = DEFAULT_MARKER_COLOR,
-  markerSize = DEFAULT_MARKER_SIZE,
 }: InstancedMarkersProps) {
   const meshRef = useRef<THREE.InstancedMesh>(null)
   const [hoveredRowIndex, setHoveredRowIndex] = useState<number | null>(null)
@@ -125,45 +157,79 @@ function InstancedMarkers({
 
   const tempObject = useMemo(() => new THREE.Object3D(), [])
 
-  const geometry = useMemo(() => new THREE.SphereGeometry(1, 16, 16), [])
-  // Overlay semantics: markers should remain visible regardless of where
-  // they sit in Z relative to the map. Skip depth test/write and render
-  // after the map.
-  const material = useMemo(
-    () =>
-      new THREE.MeshBasicMaterial({ depthTest: false, depthWrite: false }),
-    []
-  )
+  // Unit geometry per shape. Layout pass scales per-instance.
+  const geometry = useMemo(() => {
+    if (shape === 'box') return new THREE.BoxGeometry(1, 1, 1)
+    return new THREE.SphereGeometry(1, 16, 16)
+  }, [shape])
 
+  // Material flags differ per shape:
+  //  - sphere: depth-disabled, opaque (existing marker semantics — always
+  //    visible regardless of Z; alpha byte ignored at composition).
+  //  - box:    depth-tested, transparent (per-row alpha contributes to
+  //    blending; occlusion against the GLB is correct).
+  const material = useMemo(() => {
+    const mat =
+      shape === 'box'
+        ? new THREE.MeshBasicMaterial({
+            transparent: true,
+            depthTest: true,
+            depthWrite: false,
+          })
+        : new THREE.MeshBasicMaterial({
+            depthTest: false,
+            depthWrite: false,
+          })
+    patchInstanceColorRGBA(mat)
+    return mat
+  }, [shape])
+
+  // Runtime per-instance RGBA buffer the GPU reads. We never write through
+  // overlay.colorsRGBA directly — it's the immutable baseline that the
+  // highlight pass restores from on de-select / un-hover.
   const colorAttrRef = useRef<THREE.InstancedBufferAttribute | null>(null)
+  const runtimeColorsRef = useRef<Uint8Array | null>(null)
   const prevHighlightRef = useRef<{ selected: number | null; hovered: number | null }>({
     selected: null,
     hovered: null,
   })
 
-  // Layout pass: write positions, normal scale, and normal color for every
-  // instance. Runs only when the overlay or the color/size knobs change.
+  // Layout pass: write positions and scale for every instance, and refresh
+  // the per-instance RGBA buffer from the immutable baseline.
   useEffect(() => {
     const mesh = meshRef.current
     const numRows = overlay.table.numRows
     if (!mesh || numRows === 0) return
-    const { positions } = overlay
-    const normalColor = new THREE.Color(markerColor)
+    const { positions, scales, sizes, colorsRGBA } = overlay
 
-    if (!colorAttrRef.current || colorAttrRef.current.count !== numRows) {
-      const colorArray = new Float32Array(numRows * 3)
-      colorAttrRef.current = new THREE.InstancedBufferAttribute(colorArray, 3)
-      mesh.instanceColor = colorAttrRef.current
+    const expectedColorLen = numRows * 4
+    if (!runtimeColorsRef.current || runtimeColorsRef.current.length !== expectedColorLen) {
+      runtimeColorsRef.current = new Uint8Array(expectedColorLen)
+      colorAttrRef.current = new THREE.InstancedBufferAttribute(
+        runtimeColorsRef.current,
+        4,
+        /* normalized */ true,
+      )
+      mesh.geometry.setAttribute('instanceColorRGBA', colorAttrRef.current)
     }
-    const attr = colorAttrRef.current
+    runtimeColorsRef.current.set(colorsRGBA)
+    const colorAttr = colorAttrRef.current!
 
     for (let i = 0; i < numRows; i++) {
-      const base = i * 3
-      tempObject.position.set(positions[base], positions[base + 1], positions[base + 2])
-      tempObject.scale.setScalar(markerSize)
+      const pBase = i * 3
+      tempObject.position.set(positions[pBase], positions[pBase + 1], positions[pBase + 2])
+      if (shape === 'box') {
+        if (scales) {
+          tempObject.scale.set(scales[pBase], scales[pBase + 1], scales[pBase + 2])
+        } else {
+          tempObject.scale.set(constants.scale[0], constants.scale[1], constants.scale[2])
+        }
+      } else {
+        const s = sizes ? sizes[i] : constants.size
+        tempObject.scale.setScalar(s)
+      }
       tempObject.updateMatrix()
       mesh.setMatrixAt(i, tempObject.matrix)
-      attr.setXYZ(i, normalColor.r, normalColor.g, normalColor.b)
     }
 
     // Required for correct raycasting and frustum culling on InstancedMesh:
@@ -171,11 +237,11 @@ function InstancedMarkers({
     // raycasts that miss the origin (i.e. most of them) skip every instance.
     mesh.computeBoundingSphere()
     mesh.instanceMatrix.needsUpdate = true
-    attr.needsUpdate = true
+    colorAttr.needsUpdate = true
     // The layout pass repainted every slot with the normal color; the
     // highlight effect must re-apply the current selection/hover on top.
     prevHighlightRef.current = { selected: null, hovered: null }
-  }, [overlay, tempObject, markerColor, markerSize])
+  }, [overlay, constants, shape, tempObject])
 
   // Highlight diff: restore the previously highlighted slots to normal,
   // then write selected/hovered slots. Touches O(1) instances per change.
@@ -185,46 +251,70 @@ function InstancedMarkers({
     const mesh = meshRef.current
     const numRows = overlay.table.numRows
     if (!mesh || numRows === 0) return
-    const attr = colorAttrRef.current
-    if (!attr) return
-    const { positions } = overlay
-    const normalColor = new THREE.Color(markerColor)
+    const runtime = runtimeColorsRef.current
+    const colorAttr = colorAttrRef.current
+    if (!runtime || !colorAttr) return
+    const { positions, scales, sizes, colorsRGBA } = overlay
     const prev = prevHighlightRef.current
+
+    const writeMatrix = (i: number, scaleMul: number) => {
+      const pBase = i * 3
+      tempObject.position.set(positions[pBase], positions[pBase + 1], positions[pBase + 2])
+      if (shape === 'box') {
+        const sx = scales ? scales[pBase] : constants.scale[0]
+        const sy = scales ? scales[pBase + 1] : constants.scale[1]
+        const sz = scales ? scales[pBase + 2] : constants.scale[2]
+        tempObject.scale.set(sx * scaleMul, sy * scaleMul, sz * scaleMul)
+      } else {
+        const base = sizes ? sizes[i] : constants.size
+        tempObject.scale.setScalar(base * scaleMul)
+      }
+      tempObject.updateMatrix()
+      mesh.setMatrixAt(i, tempObject.matrix)
+    }
+
+    const writeColorFromBaseline = (i: number) => {
+      const cBase = i * 4
+      runtime[cBase] = colorsRGBA[cBase]
+      runtime[cBase + 1] = colorsRGBA[cBase + 1]
+      runtime[cBase + 2] = colorsRGBA[cBase + 2]
+      runtime[cBase + 3] = colorsRGBA[cBase + 3]
+    }
+
+    const writeColorRGBA = (i: number, rgba: number) => {
+      const cBase = i * 4
+      runtime[cBase] = (rgba >>> 24) & 0xff
+      runtime[cBase + 1] = (rgba >>> 16) & 0xff
+      runtime[cBase + 2] = (rgba >>> 8) & 0xff
+      runtime[cBase + 3] = rgba & 0xff
+    }
 
     const restoreNormal = (i: number | null) => {
       if (i === null || i < 0 || i >= numRows) return
       if (i === selectedRowIndex || i === hoveredRowIndex) return
-      const base = i * 3
-      tempObject.position.set(positions[base], positions[base + 1], positions[base + 2])
-      tempObject.scale.setScalar(markerSize)
-      tempObject.updateMatrix()
-      mesh.setMatrixAt(i, tempObject.matrix)
-      attr.setXYZ(i, normalColor.r, normalColor.g, normalColor.b)
+      writeMatrix(i, 1)
+      writeColorFromBaseline(i)
     }
     restoreNormal(prev.selected)
     restoreNormal(prev.hovered)
 
-    const paint = (i: number | null, multiplier: number, color: THREE.Color) => {
+    const paint = (i: number | null, multiplier: number, rgba: number) => {
       if (i === null || i < 0 || i >= numRows) return
-      const base = i * 3
-      tempObject.position.set(positions[base], positions[base + 1], positions[base + 2])
-      tempObject.scale.setScalar(markerSize * multiplier)
-      tempObject.updateMatrix()
-      mesh.setMatrixAt(i, tempObject.matrix)
-      attr.setXYZ(i, color.r, color.g, color.b)
+      writeMatrix(i, multiplier)
+      writeColorRGBA(i, rgba)
     }
     // Hover first, then selection — selection wins if a row is both.
     if (hoveredRowIndex !== null && hoveredRowIndex !== selectedRowIndex) {
-      paint(hoveredRowIndex, 1.2, COLOR_HOVERED)
+      paint(hoveredRowIndex, SCALE_HOVERED, COLOR_HOVERED_RGBA)
     }
     if (selectedRowIndex !== null) {
-      paint(selectedRowIndex, 1.5, COLOR_SELECTED)
+      paint(selectedRowIndex, SCALE_SELECTED, COLOR_SELECTED_RGBA)
     }
 
     mesh.instanceMatrix.needsUpdate = true
-    attr.needsUpdate = true
+    colorAttr.needsUpdate = true
     prevHighlightRef.current = { selected: selectedRowIndex, hovered: hoveredRowIndex }
-  }, [overlay, selectedRowIndex, hoveredRowIndex, tempObject, markerColor, markerSize])
+  }, [overlay, constants, shape, selectedRowIndex, hoveredRowIndex, tempObject])
 
   useEffect(() => {
     return () => {
@@ -705,10 +795,10 @@ function SceneSetup() {
 export function MapViewer({
   mapUrl,
   overlay,
+  constants,
+  shape,
   selectedRowIndex,
   onSelect,
-  markerColor,
-  markerSize,
   resetViewTrigger = 0,
 }: MapViewerProps) {
   const [mapBounds, setMapBounds] = useState<THREE.Box3 | null>(null)
@@ -739,15 +829,6 @@ export function MapViewer({
     },
     [mapUrl]
   )
-
-  const effectiveMarkerSize = useMemo(() => {
-    if (mapBounds) {
-      const size = mapBounds.getSize(new THREE.Vector3())
-      const extent = Math.max(size.x, size.y)
-      return (markerSize ?? DEFAULT_MARKER_SIZE) * extent * 0.00025
-    }
-    return markerSize ?? DEFAULT_MARKER_SIZE
-  }, [markerSize, mapBounds])
 
   // Clear loaded-GLB state whenever mapUrl changes (including the A→B case
   // where both are truthy), so transient consumers (UnrealCameraController,
@@ -812,10 +893,10 @@ export function MapViewer({
 
         <InstancedMarkers
           overlay={overlay}
+          constants={constants}
+          shape={shape}
           selectedRowIndex={selectedRowIndex}
           onSelect={onSelect}
-          markerColor={markerColor}
-          markerSize={effectiveMarkerSize}
         />
       </Canvas>
 
