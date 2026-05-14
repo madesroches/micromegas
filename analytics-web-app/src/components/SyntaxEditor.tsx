@@ -197,6 +197,7 @@ export function SyntaxEditor({
           style={isSql ? { whiteSpace: 'pre' } : undefined}
           placeholder={placeholder}
           spellCheck={false}
+          wrap={isSql ? 'off' : 'soft'}
         />
       </div>
       {/* SQL toolbar */}
