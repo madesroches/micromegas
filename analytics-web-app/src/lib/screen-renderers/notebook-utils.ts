@@ -149,6 +149,16 @@ ORDER BY lane, begin`,
   map: `SELECT NOW() as time, 0.0 as x, 0.0 as y, 0.0 as z`,
 }
 
+/**
+ * Default Markdown template for the Map cell's event detail panel.
+ * Renders the canonical x/y/z columns; authors extend this in the editor
+ * to surface their own query columns (e.g. process_id, event_type).
+ */
+export const DEFAULT_MAP_DETAIL_TEMPLATE = `### Event
+
+**Location:** ($x, $y, $z)
+`
+
 // ============================================================================
 // Pure Functions
 // ============================================================================
@@ -264,7 +274,7 @@ export function cleanupVariableParams(
 /**
  * Format an Arrow value as a string, converting timestamps to RFC3339.
  */
-function formatArrowValue(value: unknown, dataType?: DataType): string {
+export function formatArrowValue(value: unknown, dataType?: DataType): string {
   if (dataType && isTimeType(dataType)) {
     const date = timestampToDate(value, dataType)
     if (date) return date.toISOString()

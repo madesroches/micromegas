@@ -402,7 +402,11 @@ export function HorizontalGroupCell({
           {config.children.map((child, index) => {
             const state = cellStates[child.name] || { status: 'idle' as const, data: [] }
 
-            const childSelectionMode = ((child as import('../notebook-types').QueryCellConfig).options?.selectionMode as 'none' | 'single' | undefined) || 'none'
+            const childMeta = getCellTypeMetadata(child.type)
+            const childSelectionMode =
+              ((child as import('../notebook-types').QueryCellConfig).options?.selectionMode as 'none' | 'single' | undefined)
+              ?? childMeta.defaultSelectionMode
+              ?? 'none'
 
             const commonProps = buildCellRendererProps(child, state,
               {

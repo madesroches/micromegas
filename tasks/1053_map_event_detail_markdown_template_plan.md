@@ -74,13 +74,15 @@ plus the typed fields the renderer still needs to place markers:
 
 ```ts
 export interface MapEvent {
+  /** Stable per-event id, derived as
+      `${row['process_id'] ?? 'unknown'}-${rowIndex}` to match the
+      current scheme so React keys stay stable across the rewrite. */
   id: string
   /** Optional — present when the query produced a `time` column.
       Not load-bearing for the current renderer (markers are placed
       from x/y/z); kept for future animated-overlay work and as a
       convenience for the template via $time. */
   time?: Date
-  processId: string         // kept for legacy back-compat in non-template paths; can be dropped after migration
   x: number
   y: number
   z: number
@@ -92,13 +94,19 @@ export interface MapEvent {
 }
 ```
 
+`processId` is **removed** from `MapEvent` in this PR: its only
+consumer is the hard-coded `View Process Logs` link, which the
+rewrite deletes. Template authors read `$process_id` from `row`
+instead. Dropping the field avoids leaving a typed accessor with
+zero call sites.
+
 `arrowTableToMapEvents` (`MapCell.tsx:36-69`) is simplified: no
 `RESERVED_COLUMNS` split, every column is coerced to string (timestamps
 to RFC3339 via `timestampToDate(...).toISOString()`) and stored in
-`row`. The typed `x`/`y`/`z`/`processId` fields are derived from the
-same columns for marker placement; `time` is derived only when a
-`time` column exists in the result (left `undefined` otherwise — the
-renderer does not require it).
+`row`. The typed `x`/`y`/`z` fields are derived from the same columns
+for marker placement; `time` is derived only when a `time` column
+exists in the result (left `undefined` otherwise — the renderer does
+not require it).
 
 ### Macro substitution
 
@@ -250,13 +258,18 @@ export const DEFAULT_MAP_DETAIL_TEMPLATE = `### Event
 `
 ```
 
-Rationale: covers `x`, `y`, `z` — the only columns every map query
-is guaranteed to define (the cell rejects rows without `x`/`y`/`z`).
+Rationale: covers `x`, `y`, `z` — the only columns the documented
+map query contract requires. (Aside: the current `arrowTableToMapEvents`
+does not strictly *reject* rows with missing `x`/`y`/`z`; it defaults
+the value to `0` via `parseFloat(String(row.x ?? '0'))` and only drops
+rows whose values are non-numeric NaN. The new implementation keeps
+that defaulting for the typed fields — see Phase 2 — so a non-conforming
+query still places markers at the origin rather than silently emptying.)
 `time` is not currently load-bearing for the renderer — markers are
 placed purely from coordinates — and the query contract for `time`
-is intentionally being relaxed in this plan (see Open Questions);
-including it in the default template would lock in a column that may
-become optional. Anything beyond `x`/`y`/`z` is query-specific and
+is being relaxed in this plan (see "Relaxing the `time` requirement");
+including it in the default template would lock in a column that is
+becoming optional. Anything beyond `x`/`y`/`z` is query-specific and
 authors extend the template to reference their own columns; the
 cell-types docs include a `[View process logs](/process?process_id=$process_id)`
 example so the internal-link affordance is discoverable without
@@ -312,9 +325,12 @@ In `MapCellEditor` (`MapCell.tsx:268-384`):
 ### Type changes
 
 - `MapEvent.properties: Record<string, string>` →
-  `MapEvent.row: Record<string, string>`. (`processId` can stay as a
-  convenience for the `View Process Logs` legacy code path; new code
-  reads it from `row['process_id']`.)
+  `MapEvent.row: Record<string, string>`.
+- `MapEvent.processId: string` → **removed**. The only consumer is the
+  hard-coded `View Process Logs` link, which is being deleted in this
+  PR; template authors get `process_id` via `$process_id` (i.e.
+  `row['process_id']`). `MapEvent.id` continues to be derived from
+  `row['process_id']` directly (`${row['process_id'] ?? 'unknown'}-${i}`).
 - `MapEvent.time: Date` → `MapEvent.time?: Date`. Today the cell
   silently substitutes `new Date()` when the query omits `time`; the
   optional form makes the missing-column case visible rather than
@@ -341,6 +357,11 @@ In `MapCellEditor` (`MapCell.tsx:268-384`):
 
 1. **`analytics-web-app/src/lib/screen-renderers/notebook-utils.ts`**
    - Add `export const DEFAULT_MAP_DETAIL_TEMPLATE`.
+   - Add `export` to the existing `formatArrowValue` helper (currently
+     a private function at line 267). Phase 2's `arrowTableToMapEvents`
+     rewrite reuses it for timestamp formatting; exporting is cleaner
+     than duplicating the `isTimeType` + `timestampToDate` branch
+     inline.
    - No changes to `substituteMacros` / `validateMacros` signatures;
      the panel reuses them as-is (same pattern as MarkdownCell).
 
@@ -353,27 +374,30 @@ In `MapCellEditor` (`MapCell.tsx:268-384`):
    - Delete `RESERVED_COLUMNS` and the split.
    - Rewrite `arrowTableToMapEvents`: every column to `row` as a
      formatted string. Iterate `table.schema.fields` so the column's
-     `DataType` is in scope; reuse the existing `formatArrowValue(value,
-     field.type)` helper from `notebook-utils.ts:267` (or inline the
-     equivalent — `isTimeType(field.type)` → `timestampToDate(value,
-     field.type)?.toISOString()`, else `String(value)`). Passing
-     `DataType` is required for BigInt timestamp columns, where
-     `timestampToDate` without it falls back to "assume nanoseconds"
-     and would mis-convert non-nanosecond units. **No fallbacks**: when
-     a column's value is `null`/`undefined`, omit the key from `row`
-     entirely (don't coerce to `''`). This leaves any `$col` reference
-     unresolved in the template — matching the literal "$name stays
-     literal when unknown" rule `substituteMacros` already follows for
-     missing variables — instead of silently rendering an empty value.
-   - The typed `x`/`y`/`z`/`processId` fields are derived from
-     `row['x']`/`row['y']`/`row['z']`/`row['process_id']` (parsed as
-     before). The typed `time` field is set only when the query
-     produced a `time` column (use the Arrow schema, not the
-     stringified `row['time']`, to detect presence and parse from the
-     raw value via `timestampToDate`); leave it `undefined` otherwise.
-     **Remove the `time ?? new Date()` fallback** at `MapCell.tsx:60`
-     — it manufactures a misleading "now" value when the query has no
-     `time` column and obscures the missing-data case. Row
+     `DataType` is in scope; call the now-exported `formatArrowValue(value,
+     field.type)` helper from `notebook-utils.ts` (`isTimeType(field.type)`
+     → `timestampToDate(value, field.type)?.toISOString()`, else
+     `String(value)`). Passing `DataType` is required for BigInt
+     timestamp columns, where `timestampToDate` without it falls back
+     to "assume nanoseconds" and would mis-convert non-nanosecond
+     units. **No fallbacks**: when a column's value is `null`/`undefined`,
+     omit the key from `row` entirely (don't coerce to `''`). This
+     leaves any `$col` reference unresolved in the template — matching
+     the literal "$name stays literal when unknown" rule
+     `substituteMacros` already follows for missing variables —
+     instead of silently rendering an empty value.
+   - The typed `x`/`y`/`z` fields are derived from `row['x']`/`row['y']`/`row['z']`
+     using the same `parseFloat(String(row['x'] ?? '0'))` form as
+     today (default-to-0 for missing values, drop row only on NaN).
+     The typed `time` field is set only when the query produced a
+     `time` column (use the Arrow schema, not the stringified
+     `row['time']`, to detect presence and parse from the raw value
+     via `timestampToDate`); leave it `undefined` otherwise. **Remove
+     the `time ?? new Date()` fallback** at `MapCell.tsx:60` — it
+     manufactures a misleading "now" value when the query has no
+     `time` column and obscures the missing-data case. The `id` field
+     stays `${row['process_id'] ?? 'unknown'}-${i}`, matching the
+     current scheme (no typed `processId` field needed). Row
      construction is order-preserving so the editor's "Available
      columns" list reflects SELECT order.
    - Wire `onSelectionChange`: stash it in a ref
@@ -508,10 +532,13 @@ In `MapCellEditor` (`MapCell.tsx:268-384`):
 
 10. **`mkdocs/docs/web-app/notebooks/cell-types.md`** — under the Map
     section (`cell-types.md:512-616`):
+    - Update the "Required columns" table (`cell-types.md:523-530`):
+      move `time` out, since the implementation no longer requires it.
+      Required columns are now `x`, `y`, `z`.
     - Update the "Optional columns" paragraph
-      (`cell-types.md:537-539`) — remove the "key-value properties"
-      sentence; columns are addressable from the detail template
-      instead.
+      (`cell-types.md:532-539`) — add `time` to the optional list, and
+      remove the "key-value properties" sentence; columns are
+      addressable from the detail template instead.
     - Add an "Options" row for `detailTemplate` and a new
       "Detail template" subsection describing the macro forms, the
       default template, and an example using `process_id` to build a
@@ -522,6 +549,14 @@ In `MapCellEditor` (`MapCell.tsx:268-384`):
       "Event detail panel with properties and link to process logs"
       with "Event detail panel rendered from a Markdown template with
       macro substitution".
+
+11. **`analytics-web-app/src/lib/screen-renderers/cells/MapCell.tsx`**
+    (`MapCell.tsx:199` empty-state message)
+    - Change `Query must return columns: time, x, y, z` to
+      `Query must return columns: x, y, z` to reflect the relaxed
+      contract. (The message already fires only when the result has
+      zero rows, so it's actually about no-data more than missing
+      columns; that's a separate copy issue not in scope here.)
 
 ## Files to Modify
 
@@ -572,13 +607,11 @@ matches the existing per-option fallback pattern (no `markerColor` →
 `#bf360c`). Eager would force a write on every legacy notebook open,
 producing churn for users who never customize the panel.
 
-**Keep MapEvent.processId vs drop it.** Keeping it is one field of
-duplication for an easier diff; the typed accessor `event.processId`
-is used in one place (the legacy hard-coded link). After the rewrite
-that link goes away; the field can be deleted along with it. Plan
-keeps the field through the rewrite and drops it as a follow-up cleanup
-when the legacy code path is verified gone — strictly optional and
-trivial.
+**Drop MapEvent.processId in this PR.** The only consumer is the
+hard-coded `View Process Logs` link, which the rewrite removes in the
+same diff, so keeping the typed field would leave it with zero call
+sites. Template authors read `process_id` via `$process_id` from the
+row map.
 
 **MarkdownLink in EventDetailPanel vs shared component.** The
 behavior is generally useful (any cell rendering substituted Markdown
@@ -630,22 +663,20 @@ with no current threat surface; revisit if the project ever pulls in
   defines an additional `event_type` column and confirm `$event_type`
   resolves.
 
-## Open Questions
+## Relaxing the `time` requirement
 
-- **Relax `time` from required to optional in the map query contract.**
-  Today the cell tolerates rows without a usable `time` (falls back to
-  `new Date()` for the typed field) but the docs and default copy
-  treat `time` as required alongside `x`/`y`/`z`. With this plan,
-  marker placement is purely from coordinates and `time` only matters
-  inside the template, so it can become genuinely optional. The
-  intent is to keep `time` optional until there's an animated overlay
-  feature that actually needs it — at which point the contract
-  becomes "time is required iff the animated overlay is enabled."
-  Follow-ups required when that lands:
-  - Reintroduce a non-template code path that depends on `event.time`
-    (timeline scrubber, marker fade, etc.) and gate on its presence.
-  - Update the cell-types docs and the "Query must return columns…"
-    empty-state message in `MapCell.tsx:199` to mention the new
-    requirement only in the animated-overlay context.
-  - Re-add `$time` to the default detail template, since at that
-    point every animated-overlay query will define it.
+`time` moves from required to optional in this PR. The rewrite drops
+the `time ?? new Date()` fallback in `arrowTableToMapEvents`, makes
+`MapEvent.time` optional, updates the cell-types docs (Required/Optional
+tables), and updates the empty-state message at `MapCell.tsx:199`.
+Marker placement is purely from coordinates, so this is a non-breaking
+implementation change.
+
+Future work (out of scope here): if an animated-overlay feature ever
+needs `event.time`, it will need to:
+- Reintroduce a non-template code path that depends on `event.time`
+  (timeline scrubber, marker fade, etc.) and gate on its presence.
+- Re-tighten the contract to "time is required iff the animated
+  overlay is enabled," with corresponding docs / empty-state copy.
+- Re-add `$time` to the default detail template, since at that point
+  every animated-overlay query will define it.
