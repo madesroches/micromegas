@@ -204,7 +204,7 @@ describe('buildOverlay', () => {
     expect(result.ok).toBe(false)
     if (result.ok) return
     expect(result.error).toMatch(/'c'/)
-    expect(result.error).toMatch(/integer or string/)
+    expect(result.error).toMatch(/must be integer .* or string/)
   })
 
   it('returns ok: false naming the row for a non-finite numeric channel', () => {
