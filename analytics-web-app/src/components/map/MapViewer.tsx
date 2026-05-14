@@ -214,7 +214,7 @@ function InstancedMarkers({
     const mesh = meshRef.current
     const numRows = overlay.table.numRows
     if (!mesh || numRows === 0) return
-    const { positions, scales, sizes } = overlay
+    const { positions, scales, scaleColumnMask, sizes } = overlay
 
     const expectedColorLen = numRows * 4
     if (!runtimeColorsRef.current || runtimeColorsRef.current.length !== expectedColorLen) {
@@ -233,11 +233,14 @@ function InstancedMarkers({
       const pBase = i * 3
       tempObject.position.set(positions[pBase], positions[pBase + 1], positions[pBase + 2])
       if (shape === 'box') {
-        if (scales) {
-          tempObject.scale.set(scales[pBase], scales[pBase + 1], scales[pBase + 2])
-        } else {
-          tempObject.scale.set(cscale0, cscale1, cscale2)
-        }
+        // Per-channel: read from `scales` only when the channel was
+        // column-bound at bake time; otherwise fall back to the live scalar
+        // in `constants.scale` so editor edits aren't pinned to bake-time
+        // values when mixed with a column-bound sibling channel.
+        const sx = scales && scaleColumnMask?.[0] ? scales[pBase] : cscale0
+        const sy = scales && scaleColumnMask?.[1] ? scales[pBase + 1] : cscale1
+        const sz = scales && scaleColumnMask?.[2] ? scales[pBase + 2] : cscale2
+        tempObject.scale.set(sx, sy, sz)
       } else {
         const s = sizes ? sizes[i] : csize
         tempObject.scale.setScalar(s)
@@ -299,16 +302,16 @@ function InstancedMarkers({
     const runtime = runtimeColorsRef.current
     const colorAttr = colorAttrRef.current
     if (!runtime || !colorAttr) return
-    const { positions, scales, sizes, colorsRGBA } = overlay
+    const { positions, scales, scaleColumnMask, sizes, colorsRGBA } = overlay
     const prev = prevHighlightRef.current
 
     const writeMatrix = (i: number, scaleMul: number) => {
       const pBase = i * 3
       tempObject.position.set(positions[pBase], positions[pBase + 1], positions[pBase + 2])
       if (shape === 'box') {
-        const sx = scales ? scales[pBase] : cscale0
-        const sy = scales ? scales[pBase + 1] : cscale1
-        const sz = scales ? scales[pBase + 2] : cscale2
+        const sx = scales && scaleColumnMask?.[0] ? scales[pBase] : cscale0
+        const sy = scales && scaleColumnMask?.[1] ? scales[pBase + 1] : cscale1
+        const sz = scales && scaleColumnMask?.[2] ? scales[pBase + 2] : cscale2
         tempObject.scale.set(sx * scaleMul, sy * scaleMul, sz * scaleMul)
       } else {
         const base = sizes ? sizes[i] : csize

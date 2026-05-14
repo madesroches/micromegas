@@ -62,8 +62,14 @@ export interface Overlay {
   colorsRGBA?: Uint8Array
   /** Non-uniform per-instance scale [sx0,sy0,sz0, ...]. Length = numRows * 3.
    *  Allocated iff any of scaleX/scaleY/scaleZ is column-bound (box only).
-   *  When absent, the renderer reads `constants.scale` for every instance. */
+   *  Only the slots whose channel is column-bound (per `scaleColumnMask`)
+   *  are authoritative — the renderer must fall back to `constants.scale[k]`
+   *  for any channel whose mask bit is false, otherwise scalar edits would
+   *  read stale bake-time values. */
   scales?: Float32Array
+  /** Per-channel mask matching `scales`: `[scaleXIsColumn, scaleYIsColumn,
+   *  scaleZIsColumn]`. Present iff `scales` is present. */
+  scaleColumnMask?: [boolean, boolean, boolean]
   /** Uniform per-instance scale [s0,s1,...]. Length = numRows. Allocated iff
    *  `size` is column-bound (sphere only). When absent, the renderer reads
    *  `constants.size` for every instance. */
@@ -281,6 +287,10 @@ export function buildOverlay(
   const scaleYCol = scaleYIsColumn ? table.getChild((m.scaleY as { column: string }).column) : null
   const scaleZCol = scaleZIsColumn ? table.getChild((m.scaleZ as { column: string }).column) : null
 
+  const scaleColumnMask: [boolean, boolean, boolean] | undefined = scales
+    ? [scaleXIsColumn, scaleYIsColumn, scaleZIsColumn]
+    : undefined
+
   const scaleXScalar = m.scaleX && 'scalar' in m.scaleX ? m.scaleX.scalar : DEFAULT_BOX_SCALE[0]
   const scaleYScalar = m.scaleY && 'scalar' in m.scaleY ? m.scaleY.scalar : DEFAULT_BOX_SCALE[1]
   const scaleZScalar = m.scaleZ && 'scalar' in m.scaleZ ? m.scaleZ.scalar : DEFAULT_BOX_SCALE[2]
@@ -320,34 +330,41 @@ export function buildOverlay(
     }
 
     if (scales) {
+      // Only write the column-bound slots. Scalar slots stay at the
+      // Float32Array's zero-init value — the renderer ignores them via
+      // `scaleColumnMask` and reads `constants.scale[k]` instead, so scalar
+      // edits don't get pinned to the bake-time value.
       const sBase = i * 3
-      let sx: number
       if (scaleXIsColumn && scaleXCol) {
-        sx = Number(scaleXCol.get(i) ?? NaN)
-      } else {
-        sx = scaleXScalar
-      }
-      let sy: number
-      if (scaleYIsColumn && scaleYCol) {
-        sy = Number(scaleYCol.get(i) ?? NaN)
-      } else {
-        sy = scaleYScalar
-      }
-      let sz: number
-      if (scaleZIsColumn && scaleZCol) {
-        sz = Number(scaleZCol.get(i) ?? NaN)
-      } else {
-        sz = scaleZScalar
-      }
-      if (!Number.isFinite(sx) || !Number.isFinite(sy) || !Number.isFinite(sz)) {
-        return {
-          ok: false,
-          error: `Row ${i}: non-finite value in scaleX/scaleY/scaleZ (sx=${sx}, sy=${sy}, sz=${sz}).`,
+        const sx = Number(scaleXCol.get(i) ?? NaN)
+        if (!Number.isFinite(sx)) {
+          return {
+            ok: false,
+            error: `Row ${i}: non-finite value in column '${(m.scaleX as { column: string }).column}' for channel 'scaleX'.`,
+          }
         }
+        scales[sBase] = sx
       }
-      scales[sBase] = sx
-      scales[sBase + 1] = sy
-      scales[sBase + 2] = sz
+      if (scaleYIsColumn && scaleYCol) {
+        const sy = Number(scaleYCol.get(i) ?? NaN)
+        if (!Number.isFinite(sy)) {
+          return {
+            ok: false,
+            error: `Row ${i}: non-finite value in column '${(m.scaleY as { column: string }).column}' for channel 'scaleY'.`,
+          }
+        }
+        scales[sBase + 1] = sy
+      }
+      if (scaleZIsColumn && scaleZCol) {
+        const sz = Number(scaleZCol.get(i) ?? NaN)
+        if (!Number.isFinite(sz)) {
+          return {
+            ok: false,
+            error: `Row ${i}: non-finite value in column '${(m.scaleZ as { column: string }).column}' for channel 'scaleZ'.`,
+          }
+        }
+        scales[sBase + 2] = sz
+      }
     }
 
     if (colorsRGBA && colorCol) {
@@ -394,7 +411,7 @@ export function buildOverlay(
 
   return {
     ok: true,
-    overlay: { table, positions, colorsRGBA, scales, sizes },
+    overlay: { table, positions, colorsRGBA, scales, scaleColumnMask, sizes },
     constants,
   }
 }

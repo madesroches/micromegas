@@ -87,7 +87,11 @@ describe('buildOverlay', () => {
     expect(result.constants.size).toBe(10)
   })
 
-  it('writes per-instance scales when scaleX is column-bound (box)', () => {
+  it('writes per-instance scales only for column-bound channels (box mixed)', () => {
+    // Mixed mapping: scaleX is column-bound, scaleY/scaleZ are scalar. The
+    // baked buffer must NOT pin the scalar values into its slots — the
+    // renderer reads `constants.scale[k]` for scalar channels via
+    // `scaleColumnMask`, so editor edits to scaleY/scaleZ aren't lost.
     const table = tableFromArrays({
       x: new Float64Array([0, 0]),
       y: new Float64Array([0, 0]),
@@ -102,7 +106,12 @@ describe('buildOverlay', () => {
     expect(result.ok).toBe(true)
     if (!result.ok) return
     expect(result.overlay.scales).toBeDefined()
-    expect(Array.from(result.overlay.scales!)).toEqual([7, 100, 100, 11, 100, 100])
+    // Only the X slots are written; Y/Z slots stay zero-initialized.
+    expect(Array.from(result.overlay.scales!)).toEqual([7, 0, 0, 11, 0, 0])
+    expect(result.overlay.scaleColumnMask).toEqual([true, false, false])
+    // The scalar fallbacks live in constants for the renderer to pick up
+    // on every render, untouched by buildOverlay's row walk.
+    expect(result.constants.scale).toEqual([100, 100, 100])
   })
 
   it('reads Int32 color column as u32, including high-bit-set values', () => {
