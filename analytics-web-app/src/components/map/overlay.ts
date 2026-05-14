@@ -247,7 +247,7 @@ export function buildOverlay(
     } else {
       return {
         ok: false,
-        error: `Column '${colorColumnName}' for channel 'color' must be integer or string, got ${field.type.toString()}`,
+        error: `Column '${colorColumnName}' for channel 'color' must be integer (packed RGBA, e.g. 0xff0000ff) or string ('#rrggbb' or '#rrggbbaa', e.g. '#1565c0'), got ${field.type.toString()}`,
       }
     }
   }
