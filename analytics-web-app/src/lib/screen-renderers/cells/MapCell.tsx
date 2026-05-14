@@ -1,4 +1,4 @@
-import { Suspense, use, useState, useCallback, useMemo, useEffect, useRef } from 'react'
+import { Suspense, use, useState, useCallback, useMemo, useEffect, useRef, startTransition } from 'react'
 import type {
   CellTypeMetadata,
   CellRendererProps,
@@ -22,6 +22,7 @@ import {
   defaultMappingFor,
   hexFromRgba,
   materializeRow,
+  resolveOverlayConstants,
   rgbaFromHex,
   type ChannelBinding,
   type OverlayMapping,
@@ -153,11 +154,27 @@ export function MapCell({
   onSelectionChange,
 }: CellRendererProps) {
   const sourceTable = data[0]
-  // Key the memo on the underlying option fields, not on `resolveMapping(...)`
-  // — `resolveMapping` returns a fresh object every render, and
-  // `getRendererProps` spreads `options` into a new object each call. A
-  // derived-object dep would re-run `buildOverlay` every render at 100K-row
-  // cost.
+  // Two-layer memo so editor scrubbing stays cheap.
+  //
+  // `buildOverlay` walks every row to bake position/scale/color buffers — at
+  // 100K rows this is the expensive path. Keying its memo on the *structural*
+  // shape of the mapping (which channels are column-bound and which column
+  // names they reference) lets scalar-only edits — alpha slider, color
+  // picker, size scrub — skip the row walk and reuse the prior overlay. The
+  // changed scalars instead flow through `resolveOverlayConstants` into a
+  // cheap `constants` object the renderer reads at draw time.
+  const mappingObj = options?.mapping as OverlayMapping | undefined
+  const bindingColumn = (b: ChannelBinding<unknown> | undefined): string | null =>
+    b && 'column' in b ? b.column : null
+  const xCol = bindingColumn(mappingObj?.x)
+  const yCol = bindingColumn(mappingObj?.y)
+  const zCol = bindingColumn(mappingObj?.z)
+  const sizeCol = bindingColumn(mappingObj?.size)
+  const scaleXCol = bindingColumn(mappingObj?.scaleX)
+  const scaleYCol = bindingColumn(mappingObj?.scaleY)
+  const scaleZCol = bindingColumn(mappingObj?.scaleZ)
+  const colorCol = bindingColumn(mappingObj?.color)
+
   const overlayResult = useMemo(
     () => {
       if (!sourceTable) return null
@@ -165,12 +182,32 @@ export function MapCell({
       return buildOverlay(sourceTable, mapping)
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [sourceTable, options?.shape, options?.mapping, options?.markerColor, options?.markerSize]
+    [
+      sourceTable,
+      options?.shape,
+      xCol,
+      yCol,
+      zCol,
+      sizeCol,
+      scaleXCol,
+      scaleYCol,
+      scaleZCol,
+      colorCol,
+    ],
   )
-  // Narrow once; from here on, `overlay`/`constants` are paired non-null when
-  // the build succeeded.
+  // Scalar fallbacks resolve on every render (cheap — just reads from
+  // mapping). When `buildOverlay` skipped allocating `overlay.colorsRGBA`
+  // because color is scalar, the renderer reads `constants.color` from here
+  // instead.
+  const constants = useMemo(
+    () => {
+      const { mapping } = resolveMapping(options)
+      return resolveOverlayConstants(mapping)
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [options?.shape, options?.mapping, options?.markerColor, options?.markerSize],
+  )
   const overlay = overlayResult?.ok ? overlayResult.overlay : null
-  const constants = overlayResult?.ok ? overlayResult.constants : null
   const shape: Shape = (options?.shape as Shape) === 'box' ? 'box' : 'sphere'
 
   const [selectedRowIndex, setSelectedRowIndex] = useState<number | null>(null)
@@ -266,7 +303,7 @@ export function MapCell({
     )
   }
 
-  if (!overlay || !constants || overlay.table.numRows === 0) {
+  if (!overlay || overlay.table.numRows === 0) {
     return (
       <div className="flex items-center justify-center h-full text-theme-text-muted text-sm">
         No spatial data available. Query must return columns: x, y, z
@@ -527,11 +564,20 @@ export function MapCellEditor({
 
   const updateMappingChannel = useCallback(
     (channel: keyof OverlayMapping, next: ChannelBinding) => {
-      const prev = (mapConfig.options?.mapping as OverlayMapping | undefined) ?? {}
-      const nextMapping = { ...prev, [channel]: next }
-      onChange({
-        ...mapConfig,
-        options: { ...mapConfig.options, mapping: nextMapping },
+      // Wrap in startTransition so React treats the update as non-urgent.
+      // Color/alpha sliders fire onChange on every pointer move (~60–120 Hz
+      // in Firefox); each event would otherwise trigger a full re-render
+      // tree through screenConfig. Marking the update as a transition lets
+      // React drop stale work mid-render when newer events arrive — without
+      // it, the cumulative commit depth hits React's 50-update ceiling and
+      // surfaces as "Maximum update depth exceeded".
+      startTransition(() => {
+        const prev = (mapConfig.options?.mapping as OverlayMapping | undefined) ?? {}
+        const nextMapping = { ...prev, [channel]: next }
+        onChange({
+          ...mapConfig,
+          options: { ...mapConfig.options, mapping: nextMapping },
+        })
       })
     },
     [mapConfig, onChange]

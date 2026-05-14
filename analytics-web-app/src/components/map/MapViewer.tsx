@@ -194,13 +194,26 @@ function InstancedMarkers({
     hovered: null,
   })
 
-  // Layout pass: write positions and scale for every instance, and refresh
-  // the per-instance RGBA buffer from the immutable baseline.
+  // Destructure into primitives so the effect dep arrays compare by value,
+  // not by `constants` object identity. Without this split, a fresh
+  // `constants` object on every render (it's a useMemo output that re-runs on
+  // editor edits) would invalidate effect deps that don't actually use the
+  // mutated field — e.g. a color-scalar drag would needlessly trigger the
+  // matrix pass (63K setMatrixAt + computeBoundingSphere).
+  const csize = constants.size
+  const cscale0 = constants.scale[0]
+  const cscale1 = constants.scale[1]
+  const cscale2 = constants.scale[2]
+  const ccolor = constants.color
+
+  // Matrix pass: writes positions + scales for every instance. Allocates and
+  // attaches the runtime color attribute the GPU reads (always — the color
+  // baseline effect below fills it).
   useEffect(() => {
     const mesh = meshRef.current
     const numRows = overlay.table.numRows
     if (!mesh || numRows === 0) return
-    const { positions, scales, sizes, colorsRGBA } = overlay
+    const { positions, scales, sizes } = overlay
 
     const expectedColorLen = numRows * 4
     if (!runtimeColorsRef.current || runtimeColorsRef.current.length !== expectedColorLen) {
@@ -210,10 +223,10 @@ function InstancedMarkers({
         4,
         /* normalized */ true,
       )
-      mesh.geometry.setAttribute('instanceColorRGBA', colorAttrRef.current)
     }
-    runtimeColorsRef.current.set(colorsRGBA)
-    const colorAttr = colorAttrRef.current!
+    // Re-attach unconditionally: on shape change the geometry is swapped
+    // (see `geometry` useMemo above) and the old attribute would be orphaned.
+    mesh.geometry.setAttribute('instanceColorRGBA', colorAttrRef.current!)
 
     for (let i = 0; i < numRows; i++) {
       const pBase = i * 3
@@ -222,10 +235,10 @@ function InstancedMarkers({
         if (scales) {
           tempObject.scale.set(scales[pBase], scales[pBase + 1], scales[pBase + 2])
         } else {
-          tempObject.scale.set(constants.scale[0], constants.scale[1], constants.scale[2])
+          tempObject.scale.set(cscale0, cscale1, cscale2)
         }
       } else {
-        const s = sizes ? sizes[i] : constants.size
+        const s = sizes ? sizes[i] : csize
         tempObject.scale.setScalar(s)
       }
       tempObject.updateMatrix()
@@ -237,11 +250,42 @@ function InstancedMarkers({
     // raycasts that miss the origin (i.e. most of them) skip every instance.
     mesh.computeBoundingSphere()
     mesh.instanceMatrix.needsUpdate = true
-    colorAttr.needsUpdate = true
-    // The layout pass repainted every slot with the normal color; the
+    // The matrix pass rewrote every slot's transform at the normal scale; the
     // highlight effect must re-apply the current selection/hover on top.
     prevHighlightRef.current = { selected: null, hovered: null }
-  }, [overlay, constants, shape, tempObject])
+  }, [overlay, csize, cscale0, cscale1, cscale2, shape, tempObject])
+
+  // Color baseline pass: refills the runtime color buffer from either the
+  // column-bound buffer or the scalar fallback. Split from the matrix pass so
+  // editor-side color scrubbing only does a 0.4 MB buffer write, not a
+  // 63K-row matrix re-layout.
+  useEffect(() => {
+    const mesh = meshRef.current
+    const numRows = overlay.table.numRows
+    const runtime = runtimeColorsRef.current
+    const colorAttr = colorAttrRef.current
+    if (!mesh || numRows === 0 || !runtime || !colorAttr) return
+    const { colorsRGBA } = overlay
+
+    if (colorsRGBA) {
+      runtime.set(colorsRGBA)
+    } else {
+      const r = (ccolor >>> 24) & 0xff
+      const g = (ccolor >>> 16) & 0xff
+      const b = (ccolor >>> 8) & 0xff
+      const a = ccolor & 0xff
+      for (let i = 0; i < numRows; i++) {
+        const base = i * 4
+        runtime[base] = r
+        runtime[base + 1] = g
+        runtime[base + 2] = b
+        runtime[base + 3] = a
+      }
+    }
+    colorAttr.needsUpdate = true
+    // Color baseline just overwrote any highlight tints; force re-apply.
+    prevHighlightRef.current = { selected: null, hovered: null }
+  }, [overlay, ccolor])
 
   // Highlight diff: restore the previously highlighted slots to normal,
   // then write selected/hovered slots. Touches O(1) instances per change.
@@ -261,12 +305,12 @@ function InstancedMarkers({
       const pBase = i * 3
       tempObject.position.set(positions[pBase], positions[pBase + 1], positions[pBase + 2])
       if (shape === 'box') {
-        const sx = scales ? scales[pBase] : constants.scale[0]
-        const sy = scales ? scales[pBase + 1] : constants.scale[1]
-        const sz = scales ? scales[pBase + 2] : constants.scale[2]
+        const sx = scales ? scales[pBase] : cscale0
+        const sy = scales ? scales[pBase + 1] : cscale1
+        const sz = scales ? scales[pBase + 2] : cscale2
         tempObject.scale.set(sx * scaleMul, sy * scaleMul, sz * scaleMul)
       } else {
-        const base = sizes ? sizes[i] : constants.size
+        const base = sizes ? sizes[i] : csize
         tempObject.scale.setScalar(base * scaleMul)
       }
       tempObject.updateMatrix()
@@ -275,10 +319,17 @@ function InstancedMarkers({
 
     const writeColorFromBaseline = (i: number) => {
       const cBase = i * 4
-      runtime[cBase] = colorsRGBA[cBase]
-      runtime[cBase + 1] = colorsRGBA[cBase + 1]
-      runtime[cBase + 2] = colorsRGBA[cBase + 2]
-      runtime[cBase + 3] = colorsRGBA[cBase + 3]
+      if (colorsRGBA) {
+        runtime[cBase] = colorsRGBA[cBase]
+        runtime[cBase + 1] = colorsRGBA[cBase + 1]
+        runtime[cBase + 2] = colorsRGBA[cBase + 2]
+        runtime[cBase + 3] = colorsRGBA[cBase + 3]
+      } else {
+        runtime[cBase] = (ccolor >>> 24) & 0xff
+        runtime[cBase + 1] = (ccolor >>> 16) & 0xff
+        runtime[cBase + 2] = (ccolor >>> 8) & 0xff
+        runtime[cBase + 3] = ccolor & 0xff
+      }
     }
 
     const writeColorRGBA = (i: number, rgba: number) => {
@@ -314,7 +365,18 @@ function InstancedMarkers({
     mesh.instanceMatrix.needsUpdate = true
     colorAttr.needsUpdate = true
     prevHighlightRef.current = { selected: selectedRowIndex, hovered: hoveredRowIndex }
-  }, [overlay, constants, shape, selectedRowIndex, hoveredRowIndex, tempObject])
+  }, [
+    overlay,
+    csize,
+    cscale0,
+    cscale1,
+    cscale2,
+    ccolor,
+    shape,
+    selectedRowIndex,
+    hoveredRowIndex,
+    tempObject,
+  ])
 
   useEffect(() => {
     return () => {

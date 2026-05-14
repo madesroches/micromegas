@@ -52,10 +52,11 @@ export interface Overlay {
   /** Flat [x0,y0,z0, x1,y1,z1, ...] in row order. Length = numRows * 3. */
   positions: Float32Array
   /** Per-instance RGBA bytes — [r,g,b,a, r,g,b,a, ...]. Length = numRows * 4.
-   *  Always materialized: at 4 bytes/row the buffer is 0.4 MB even at 100K
-   *  rows, small enough that the "constant fill vs per-row" optimization is
-   *  not worth a second code path in the renderer. */
-  colorsRGBA: Uint8Array
+   *  Allocated iff `color` is column-bound. When absent, the renderer fills
+   *  its runtime buffer from `constants.color`. Splitting scalar vs column
+   *  here keeps scalar color changes (alpha slider drags) from invalidating
+   *  the overlay reference and triggering a full O(numRows) re-layout. */
+  colorsRGBA?: Uint8Array
   /** Non-uniform per-instance scale [sx0,sy0,sz0, ...]. Length = numRows * 3.
    *  Allocated iff any of scaleX/scaleY/scaleZ is column-bound (box only).
    *  When absent, the renderer reads `constants.scale` for every instance. */
@@ -66,12 +67,15 @@ export interface Overlay {
   sizes?: Float32Array
 }
 
-/** Scalar fallbacks for size channels. Color is always in `Overlay.colorsRGBA`. */
+/** Scalar fallbacks for size and color channels — read by the renderer when
+ *  the corresponding per-row buffer is absent. */
 export interface OverlayConstants {
   /** Sphere fallback when `overlay.sizes` is absent. */
   size: number
   /** Box fallback when `overlay.scales` is absent. [sx, sy, sz]. */
   scale: [number, number, number]
+  /** RGBA u32 fallback when `overlay.colorsRGBA` is absent. */
+  color: number
 }
 
 export type OverlayResult =
@@ -274,10 +278,12 @@ export function buildOverlay(
   const scaleYScalar = m.scaleY && 'scalar' in m.scaleY ? m.scaleY.scalar : DEFAULT_BOX_SCALE[1]
   const scaleZScalar = m.scaleZ && 'scalar' in m.scaleZ ? m.scaleZ.scalar : DEFAULT_BOX_SCALE[2]
 
-  // Color is always materialized into the per-instance buffer.
-  const colorsRGBA = new Uint8Array(numRows * 4)
+  // Color: only materialize a per-instance buffer when column-bound. Scalar
+  // color flows through `constants.color` so editor scrubbing doesn't
+  // invalidate the overlay reference.
   const colorIsColumn = !!m.color && 'column' in m.color
   const colorScalar = m.color && 'scalar' in m.color ? (m.color.scalar as number) : DEFAULT_RGBA
+  const colorsRGBA = colorIsColumn ? new Uint8Array(numRows * 4) : undefined
   const colorCol = colorIsColumn ? table.getChild((m.color as { column: string }).column) : null
 
   for (let i = 0; i < numRows; i++) {
@@ -337,7 +343,7 @@ export function buildOverlay(
       scales[sBase + 2] = sz
     }
 
-    if (colorIsColumn && colorCol) {
+    if (colorsRGBA && colorCol) {
       const v = colorCol.get(i)
       if (v === null || v === undefined) {
         return {
@@ -357,20 +363,36 @@ export function buildOverlay(
       } else {
         writeRGBA(colorsRGBA, i, coerceCellToU32(v))
       }
-    } else {
-      writeRGBA(colorsRGBA, i, colorScalar >>> 0)
     }
   }
 
   const constants: OverlayConstants = {
     size: m.size && 'scalar' in m.size ? m.size.scalar : DEFAULT_SPHERE_SIZE,
     scale: [scaleXScalar, scaleYScalar, scaleZScalar],
+    color: colorScalar >>> 0,
   }
 
   return {
     ok: true,
     overlay: { table, positions, colorsRGBA, scales, sizes },
     constants,
+  }
+}
+
+/** Resolves the scalar fallbacks for size and color channels without touching
+ *  the table. Cheap to call on every render so cell-level useMemo can key on
+ *  scalar values without invalidating the heavyweight `buildOverlay` memo. */
+export function resolveOverlayConstants(mapping?: OverlayMapping): OverlayConstants {
+  const m = mapping ?? defaultMappingFor('sphere')
+  return {
+    size: m.size && 'scalar' in m.size ? m.size.scalar : DEFAULT_SPHERE_SIZE,
+    scale: [
+      m.scaleX && 'scalar' in m.scaleX ? m.scaleX.scalar : DEFAULT_BOX_SCALE[0],
+      m.scaleY && 'scalar' in m.scaleY ? m.scaleY.scalar : DEFAULT_BOX_SCALE[1],
+      m.scaleZ && 'scalar' in m.scaleZ ? m.scaleZ.scalar : DEFAULT_BOX_SCALE[2],
+    ],
+    color:
+      (m.color && 'scalar' in m.color ? (m.color.scalar as number) : DEFAULT_RGBA) >>> 0,
   }
 }
 

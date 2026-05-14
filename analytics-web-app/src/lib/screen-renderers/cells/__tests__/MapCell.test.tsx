@@ -66,7 +66,10 @@ describe('buildOverlay', () => {
     expect(result.error).toMatch(/numeric/)
   })
 
-  it('default mapping fills colorsRGBA with #bf360c (alpha 0xff) for every row', () => {
+  it('default mapping leaves colorsRGBA undefined and puts #bf360cff in constants.color', () => {
+    // Scalar color is not materialized into a per-row buffer — the renderer
+    // reads `constants.color` instead. This is what keeps editor-side color
+    // scrubbing from triggering a full O(numRows) overlay rebuild.
     const table = tableFromArrays({
       x: new Float64Array([0, 0]),
       y: new Float64Array([0, 0]),
@@ -75,11 +78,8 @@ describe('buildOverlay', () => {
     const result = buildOverlay(table)
     expect(result.ok).toBe(true)
     if (!result.ok) return
-    expect(result.overlay.colorsRGBA).toHaveLength(8)
-    expect(Array.from(result.overlay.colorsRGBA)).toEqual([
-      0xbf, 0x36, 0x0c, 0xff,
-      0xbf, 0x36, 0x0c, 0xff,
-    ])
+    expect(result.overlay.colorsRGBA).toBeUndefined()
+    expect(result.constants.color).toBe(0xbf360cff)
     // Default mapping is sphere; no scales/sizes buffers when channels are scalar.
     expect(result.overlay.sizes).toBeUndefined()
     expect(result.overlay.scales).toBeUndefined()
