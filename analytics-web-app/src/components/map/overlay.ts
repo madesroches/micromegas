@@ -1,5 +1,6 @@
 import type { Table } from 'apache-arrow'
 import {
+  isBinaryType,
   isIntegerType,
   isNumericType,
   isStringType,
@@ -41,8 +42,10 @@ export interface OverlayMapping {
 
   /**
    * Color binding. Scalar payload is an RGBA u32 (0xrrggbbaa). A column
-   * binding may reference either an integer column (read bit-for-bit as
-   * u32) or a string column (parsed as '#rrggbb' or '#rrggbbaa').
+   * binding may reference an integer column (read bit-for-bit as u32),
+   * a string column (parsed as '#rrggbb' or '#rrggbbaa'), or a 4-byte
+   * binary column (treated as packed R,G,B,A — matches what DataFusion
+   * produces for a `0xrrggbbaa` hex literal).
    */
   color?: ChannelBinding
 }
@@ -227,8 +230,8 @@ export function buildOverlay(
     }
   }
 
-  // Validate color column (integer or string).
-  let colorColumnKind: 'integer' | 'string' | null = null
+  // Validate color column (integer, string, or 4-byte binary).
+  let colorColumnKind: 'integer' | 'string' | 'binary' | null = null
   let colorColumnName: string | null = null
   if (m.color && 'column' in m.color) {
     colorColumnName = m.color.column
@@ -244,10 +247,14 @@ export function buildOverlay(
       colorColumnKind = 'integer'
     } else if (isStringType(innerType)) {
       colorColumnKind = 'string'
+    } else if (isBinaryType(innerType)) {
+      // DataFusion parses `0xrrggbbaa` SQL literals as Binary, not Int. The 4
+      // bytes are already in R,G,B,A order — we copy them in directly.
+      colorColumnKind = 'binary'
     } else {
       return {
         ok: false,
-        error: `Column '${colorColumnName}' for channel 'color' must be integer (packed RGBA, e.g. 0xff0000ff) or string ('#rrggbb' or '#rrggbbaa', e.g. '#1565c0'), got ${field.type.toString()}`,
+        error: `Column '${colorColumnName}' for channel 'color' must be integer (packed RGBA, e.g. 0xff0000ff), string ('#rrggbb' or '#rrggbbaa', e.g. '#1565c0'), or 4-byte binary, got ${field.type.toString()}`,
       }
     }
   }
@@ -360,6 +367,19 @@ export function buildOverlay(
           }
         }
         writeRGBA(colorsRGBA, i, parsed)
+      } else if (colorColumnKind === 'binary') {
+        const bytes = v as Uint8Array | ArrayLike<number>
+        if (bytes.length !== 4) {
+          return {
+            ok: false,
+            error: `Row ${i}: column '${(m.color as { column: string }).column}' has ${bytes.length} bytes, expected 4 (R,G,B,A).`,
+          }
+        }
+        const base = i * 4
+        colorsRGBA[base] = bytes[0]
+        colorsRGBA[base + 1] = bytes[1]
+        colorsRGBA[base + 2] = bytes[2]
+        colorsRGBA[base + 3] = bytes[3]
       } else {
         writeRGBA(colorsRGBA, i, coerceCellToU32(v))
       }

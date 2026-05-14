@@ -1,4 +1,5 @@
 import {
+  Binary,
   Dictionary,
   Int32,
   Table,
@@ -193,7 +194,7 @@ describe('buildOverlay', () => {
     expect(result.error).toMatch(/unparseable/)
   })
 
-  it('returns ok: false when color column is neither integer nor string', () => {
+  it('returns ok: false when color column is neither integer, string, nor binary', () => {
     const table = tableFromArrays({
       x: new Float64Array([0]),
       y: new Float64Array([0]),
@@ -204,7 +205,45 @@ describe('buildOverlay', () => {
     expect(result.ok).toBe(false)
     if (result.ok) return
     expect(result.error).toMatch(/'c'/)
-    expect(result.error).toMatch(/must be integer .* or string/)
+    expect(result.error).toMatch(/must be integer/)
+    expect(result.error).toMatch(/binary/)
+  })
+
+  it('reads Binary color column as packed R,G,B,A (the 0xrrggbbaa SQL literal case)', () => {
+    // DataFusion parses `0xff0000ff` as a 4-byte Binary literal, not an int.
+    // The bytes come back from Arrow JS as a Uint8Array in big-endian order,
+    // which we copy straight into the RGBA buffer.
+    const colorVec = vectorFromArray(
+      [new Uint8Array([0xff, 0x00, 0x00, 0xff])],
+      new Binary(),
+    )
+    const xVec = vectorFromArray(new Float64Array([0]))
+    const yVec = vectorFromArray(new Float64Array([0]))
+    const zVec = vectorFromArray(new Float64Array([0]))
+    const table = new Table({ x: xVec, y: yVec, z: zVec, c: colorVec })
+    const result = buildOverlay(table, { color: { column: 'c' } })
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(Array.from(result.overlay.colorsRGBA)).toEqual([0xff, 0x00, 0x00, 0xff])
+  })
+
+  it('returns ok: false naming the row when a Binary color cell is not exactly 4 bytes', () => {
+    const colorVec = vectorFromArray(
+      [
+        new Uint8Array([0xff, 0x00, 0x00, 0xff]),
+        new Uint8Array([0xff, 0x00]),
+      ],
+      new Binary(),
+    )
+    const xVec = vectorFromArray(new Float64Array([0, 0]))
+    const yVec = vectorFromArray(new Float64Array([0, 0]))
+    const zVec = vectorFromArray(new Float64Array([0, 0]))
+    const table = new Table({ x: xVec, y: yVec, z: zVec, c: colorVec })
+    const result = buildOverlay(table, { color: { column: 'c' } })
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.error).toMatch(/Row 1/)
+    expect(result.error).toMatch(/2 bytes/)
   })
 
   it('returns ok: false naming the row for a non-finite numeric channel', () => {
