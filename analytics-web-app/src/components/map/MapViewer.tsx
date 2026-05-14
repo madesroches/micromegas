@@ -112,6 +112,17 @@ function InstancedMarkers({
   const meshRef = useRef<THREE.InstancedMesh>(null)
   const [hoveredRowIndex, setHoveredRowIndex] = useState<number | null>(null)
 
+  // Clear hover synchronously when the overlay changes. Without this, a
+  // stale hoveredRowIndex from the previous table would index a different
+  // point in the new one, briefly highlighting the wrong marker until the
+  // next pointer event corrected it. Mirrors the selection-clear pattern
+  // in MapCell.
+  const [overlayForHover, setOverlayForHover] = useState(overlay)
+  if (overlayForHover !== overlay) {
+    setOverlayForHover(overlay)
+    setHoveredRowIndex(null)
+  }
+
   const tempObject = useMemo(() => new THREE.Object3D(), [])
 
   const geometry = useMemo(() => new THREE.SphereGeometry(1, 16, 16), [])
