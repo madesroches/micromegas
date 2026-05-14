@@ -164,8 +164,8 @@ function InstancedMarkers({
   }, [shape])
 
   // Material flags differ per shape:
-  //  - sphere: depth-disabled, opaque (existing marker semantics — always
-  //    visible regardless of Z; alpha byte ignored at composition).
+  //  - sphere: depth-disabled, transparent (always visible regardless of Z;
+  //    per-row alpha blends with background — sort order is draw order).
   //  - box:    depth-tested, transparent (per-row alpha contributes to
   //    blending; occlusion against the GLB is correct).
   const material = useMemo(() => {
@@ -177,6 +177,7 @@ function InstancedMarkers({
             depthWrite: false,
           })
         : new THREE.MeshBasicMaterial({
+            transparent: true,
             depthTest: false,
             depthWrite: false,
           })
