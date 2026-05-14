@@ -5,11 +5,67 @@ import {
   tableFromArrays,
   vectorFromArray,
 } from 'apache-arrow'
-import { arrowTableToMapEvents, mapMetadata } from '../MapCell'
+import { mapMetadata } from '../MapCell'
+import { buildOverlay, materializeRow } from '@/components/map/overlay'
 import { DEFAULT_MAP_DETAIL_TEMPLATE } from '../../notebook-utils'
 
-describe('arrowTableToMapEvents', () => {
-  it('stores every non-null column on row as a string', () => {
+describe('buildOverlay', () => {
+  it('returns ok with a row-ordered positions buffer of length numRows * 3', () => {
+    const table = tableFromArrays({
+      x: new Float64Array([1.5, 4.5]),
+      y: new Float64Array([2.5, 5.5]),
+      z: new Float64Array([3.5, 6.5]),
+    })
+    const result = buildOverlay(table)
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.overlay.positions).toHaveLength(6)
+    expect(Array.from(result.overlay.positions)).toEqual([1.5, 2.5, 3.5, 4.5, 5.5, 6.5])
+    expect(result.overlay.table).toBe(table)
+  })
+
+  it('returns ok: false naming the offending row when x is non-finite', () => {
+    const table = tableFromArrays({
+      x: new Float64Array([1, NaN]),
+      y: new Float64Array([1, 1]),
+      z: new Float64Array([1, 1]),
+    })
+    const result = buildOverlay(table)
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.error).toMatch(/Row 1/)
+    expect(result.error).toMatch(/non-finite/)
+  })
+
+  it('returns ok: false when required columns are missing', () => {
+    const table = tableFromArrays({
+      x: new Float64Array([0]),
+      y: new Float64Array([0]),
+      // z missing
+    })
+    const result = buildOverlay(table)
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.error).toMatch(/Missing required columns/)
+    expect(result.error).toMatch(/z/)
+  })
+
+  it('returns ok: false when x/y/z exist but are not numeric', () => {
+    const table = tableFromArrays({
+      x: ['a', 'b'],
+      y: new Float64Array([0, 0]),
+      z: new Float64Array([0, 0]),
+    })
+    const result = buildOverlay(table)
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.error).toMatch(/'x'/)
+    expect(result.error).toMatch(/numeric/)
+  })
+})
+
+describe('materializeRow', () => {
+  it('formats every non-null column as a string', () => {
     const table = tableFromArrays({
       process_id: ['p1'],
       x: new Float64Array([1.5]),
@@ -17,14 +73,7 @@ describe('arrowTableToMapEvents', () => {
       z: new Float64Array([3.5]),
       event_type: ['hit'],
     })
-    const events = arrowTableToMapEvents(table)
-    expect(events).toHaveLength(1)
-    const [event] = events
-    expect(event.id).toBe('p1-0')
-    expect(event.x).toBeCloseTo(1.5)
-    expect(event.y).toBeCloseTo(2.5)
-    expect(event.z).toBeCloseTo(3.5)
-    expect(event.row).toEqual({
+    expect(materializeRow(table, 0)).toEqual({
       process_id: 'p1',
       x: '1.5',
       y: '2.5',
@@ -41,62 +90,19 @@ describe('arrowTableToMapEvents', () => {
       z: new Float64Array([0]),
       maybe_null: [null as string | null],
     })
-    const events = arrowTableToMapEvents(table)
-    expect(events).toHaveLength(1)
-    expect(events[0].row).not.toHaveProperty('maybe_null')
+    const row = materializeRow(table, 0)
+    expect(row).not.toHaveProperty('maybe_null')
+    expect(row.process_id).toBe('p1')
   })
 
-  it('formats timestamp columns as RFC3339 when present', () => {
+  it('formats timestamp columns as RFC3339', () => {
     const timestampType = new Timestamp(TimeUnit.MILLISECOND, null)
     const timeVec = vectorFromArray([1705314600000], timestampType)
     const xVec = vectorFromArray([0])
     const yVec = vectorFromArray([0])
     const zVec = vectorFromArray([0])
     const table = new Table({ time: timeVec, x: xVec, y: yVec, z: zVec })
-
-    const events = arrowTableToMapEvents(table)
-    expect(events).toHaveLength(1)
-    expect(events[0].time).toBeInstanceOf(Date)
-    expect(events[0].row.time).toBe('2024-01-15T10:30:00.000Z')
-  })
-
-  it('leaves time undefined when no time column is present', () => {
-    const table = tableFromArrays({
-      x: new Float64Array([0]),
-      y: new Float64Array([0]),
-      z: new Float64Array([0]),
-    })
-    const events = arrowTableToMapEvents(table)
-    expect(events).toHaveLength(1)
-    expect(events[0].time).toBeUndefined()
-    expect(events[0].row).not.toHaveProperty('time')
-  })
-
-  it('skips rows whose x/y/z are non-numeric (NaN), defaults missing to 0', () => {
-    const table = tableFromArrays({
-      x: new Float64Array([1, NaN]),
-      y: new Float64Array([1, 1]),
-      z: new Float64Array([1, 1]),
-    })
-    const events = arrowTableToMapEvents(table)
-    expect(events).toHaveLength(1)
-    expect(events[0].x).toBe(1)
-  })
-
-  it('derives id from process_id when present, "unknown" otherwise', () => {
-    const tableWithPid = tableFromArrays({
-      process_id: ['abc'],
-      x: new Float64Array([0]),
-      y: new Float64Array([0]),
-      z: new Float64Array([0]),
-    })
-    const tableNoPid = tableFromArrays({
-      x: new Float64Array([0]),
-      y: new Float64Array([0]),
-      z: new Float64Array([0]),
-    })
-    expect(arrowTableToMapEvents(tableWithPid)[0].id).toBe('abc-0')
-    expect(arrowTableToMapEvents(tableNoPid)[0].id).toBe('unknown-0')
+    expect(materializeRow(table, 0).time).toBe('2024-01-15T10:30:00.000Z')
   })
 })
 

@@ -6,10 +6,10 @@ import remarkGfm from 'remark-gfm'
 import { AppLink } from '@/components/AppLink'
 import { substituteMacros } from '@/lib/screen-renderers/notebook-utils'
 import type { VariableValue } from '@/lib/screen-renderers/notebook-types'
-import type { MapEvent } from './MapViewer'
+import type { Row } from './overlay'
 
 interface EventDetailPanelProps {
-  event: MapEvent
+  row: Row
   template: string
   variables: Record<string, VariableValue>
   timeRange: { begin: string; end: string }
@@ -44,7 +44,7 @@ function MarkdownLink({
 }
 
 export function EventDetailPanel({
-  event,
+  row,
   template,
   variables,
   timeRange,
@@ -55,9 +55,9 @@ export function EventDetailPanel({
   const rendered = useMemo(() => {
     // Columns win name collisions against variables: `$x` in a Map template
     // means the selected row's `x` column.
-    const mergedVars: Record<string, VariableValue> = { ...variables, ...event.row }
+    const mergedVars: Record<string, VariableValue> = { ...variables, ...row }
     return substituteMacros(template, mergedVars, timeRange, cellResults, cellSelections)
-  }, [template, event, variables, timeRange, cellResults, cellSelections])
+  }, [template, row, variables, timeRange, cellResults, cellSelections])
 
   return (
     <div className="absolute bottom-4 left-4 w-80 max-h-[60%] overflow-y-auto bg-app-panel border border-theme-border rounded-lg shadow-lg z-10">

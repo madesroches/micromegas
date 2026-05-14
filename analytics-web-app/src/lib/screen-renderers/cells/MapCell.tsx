@@ -1,5 +1,4 @@
 import { Suspense, use, useState, useCallback, useMemo, useEffect, useRef } from 'react'
-import { Table } from 'apache-arrow'
 import type {
   CellTypeMetadata,
   CellRendererProps,
@@ -13,13 +12,12 @@ import { SyntaxEditor } from '@/components/SyntaxEditor'
 import {
   substituteMacros,
   validateMacros,
-  formatArrowValue,
   DEFAULT_SQL,
   DEFAULT_MAP_DETAIL_TEMPLATE,
 } from '../notebook-utils'
-import { isTimeType, timestampToDate } from '@/lib/arrow-utils'
-import { MapViewer, type MapEvent } from '@/components/map/MapViewer'
+import { MapViewer } from '@/components/map/MapViewer'
 import { EventDetailPanel } from '@/components/map/EventDetailPanel'
+import { buildOverlay, materializeRow } from '@/components/map/overlay'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { useGLTF } from '@react-three/drei'
 import {
@@ -31,54 +29,6 @@ import {
 } from '@/lib/maps-catalog'
 import { getConfig } from '@/lib/config'
 import { Map as MapIcon } from 'lucide-react'
-
-// =============================================================================
-// Data Transformation (Arrow Table → MapEvent[])
-// =============================================================================
-
-// eslint-disable-next-line react-refresh/only-export-components
-export function arrowTableToMapEvents(table: Table): MapEvent[] {
-  const result: MapEvent[] = []
-  const fields = table.schema.fields
-  const timeField = fields.find((f) => f.name === 'time')
-  for (let i = 0; i < table.numRows; i++) {
-    const arrowRow = table.get(i)
-    if (!arrowRow) continue
-
-    const x = parseFloat(String(arrowRow.x ?? '0'))
-    const y = parseFloat(String(arrowRow.y ?? '0'))
-    const z = parseFloat(String(arrowRow.z ?? '0'))
-    if (isNaN(x) || isNaN(y) || isNaN(z)) continue
-
-    // Build the row map preserving SELECT order; omit null/undefined entries.
-    const row: Record<string, string> = {}
-    for (const field of fields) {
-      const value = arrowRow[field.name]
-      if (value === null || value === undefined) continue
-      row[field.name] = formatArrowValue(value, field.type)
-    }
-
-    // Derive typed `time` only when the query produced a time column.
-    let time: Date | undefined
-    if (timeField && isTimeType(timeField.type)) {
-      const rawTime = arrowRow.time
-      if (rawTime !== null && rawTime !== undefined) {
-        const parsed = timestampToDate(rawTime, timeField.type)
-        if (parsed) time = parsed
-      }
-    }
-
-    result.push({
-      id: `${row['process_id'] ?? 'unknown'}-${i}`,
-      time,
-      x,
-      y,
-      z,
-      row,
-    })
-  }
-  return result
-}
 
 // =============================================================================
 // Map Catalog (loaded from /api/maps/catalog)
@@ -161,16 +111,26 @@ export function MapCell({
   cellSelections,
   onSelectionChange,
 }: CellRendererProps) {
-  // Transform Arrow data to MapEvent[] (memoized on table reference)
   const sourceTable = data[0]
-  const events = useMemo(() => {
-    if (!sourceTable || sourceTable.numRows === 0) return []
-    return arrowTableToMapEvents(sourceTable)
-  }, [sourceTable])
+  const overlayResult = useMemo(
+    () => (sourceTable ? buildOverlay(sourceTable) : null),
+    [sourceTable]
+  )
+  // Narrow once; `overlay` is `Overlay | null` from here on.
+  const overlay = overlayResult?.ok ? overlayResult.overlay : null
 
-  // Ephemeral interaction state
-  const [selectedEvent, setSelectedEvent] = useState<MapEvent | null>(null)
+  const [selectedRowIndex, setSelectedRowIndex] = useState<number | null>(null)
   const [resetViewTrigger, setResetViewTrigger] = useState(0)
+
+  // Clear selection synchronously when the overlay changes, before
+  // `selectedRow` is derived for the new overlay — otherwise a stale row
+  // index materializes against the new table for one render and the panel
+  // briefly shows the wrong row.
+  const [overlayForSelection, setOverlayForSelection] = useState(overlay)
+  if (overlayForSelection !== overlay) {
+    setOverlayForSelection(overlay)
+    setSelectedRowIndex(null)
+  }
 
   // Stable ref for onSelectionChange to avoid infinite re-render loops:
   // the callback is an inline arrow in NotebookRenderer, so including it
@@ -178,12 +138,13 @@ export function MapCell({
   const onSelectionChangeRef = useRef(onSelectionChange)
   onSelectionChangeRef.current = onSelectionChange
 
-  // Clear selection on data change (re-execution) — a stale selection from
-  // a prior query must not keep publishing ghost rows to cellSelections.
+  // Publish the clear to upstream cells after commit — calling
+  // onSelectionChange during render would trigger React's "Cannot update a
+  // component while rendering a different component" warning, because it
+  // resolves to a parent setState through updateCellSelection.
   useEffect(() => {
-    setSelectedEvent(null)
     onSelectionChangeRef.current?.(null)
-  }, [sourceTable])
+  }, [overlay])
 
   // Read visual options with defaults. `mapUrl` is stored as the bare
   // filename — the renderer composes the blob URL at render time so saved
@@ -200,10 +161,25 @@ export function MapCell({
   const detailTemplate =
     (options?.detailTemplate as string | undefined) ?? DEFAULT_MAP_DETAIL_TEMPLATE
 
-  const handleSelectEvent = useCallback((event: MapEvent | null) => {
-    setSelectedEvent(event)
-    onSelectionChangeRef.current?.(event ? event.row : null)
-  }, [])
+  const handleSelectByRowIndex = useCallback(
+    (rowIndex: number | null) => {
+      setSelectedRowIndex(rowIndex)
+      if (rowIndex === null || !overlay) {
+        onSelectionChangeRef.current?.(null)
+      } else {
+        onSelectionChangeRef.current?.(materializeRow(overlay.table, rowIndex))
+      }
+    },
+    [overlay]
+  )
+
+  const selectedRow = useMemo(
+    () =>
+      selectedRowIndex !== null && overlay
+        ? materializeRow(overlay.table, selectedRowIndex)
+        : null,
+    [selectedRowIndex, overlay]
+  )
 
   // Z resets the view, scoped to the hovered cell so multiple Map cells on a
   // page don't all reset together and typing 'z' in a text/query cell is ignored.
@@ -230,7 +206,15 @@ export function MapCell({
     )
   }
 
-  if (events.length === 0 && status === 'success') {
+  if (overlayResult && !overlayResult.ok) {
+    return (
+      <div className="flex items-center justify-center h-full text-theme-text-muted text-sm whitespace-pre-wrap text-center px-4">
+        {overlayResult.error}
+      </div>
+    )
+  }
+
+  if (!overlay || overlay.table.numRows === 0) {
     return (
       <div className="flex items-center justify-center h-full text-theme-text-muted text-sm">
         No spatial data available. Query must return columns: x, y, z
@@ -282,23 +266,23 @@ export function MapCell({
       >
         <MapViewer
           mapUrl={mapBlobUrl}
-          events={events}
-          selectedEventId={selectedEvent?.id}
-          onSelectEvent={handleSelectEvent}
+          overlay={overlay}
+          selectedRowIndex={selectedRowIndex}
+          onSelect={handleSelectByRowIndex}
           markerColor={markerColor}
           markerSize={markerSize}
           resetViewTrigger={resetViewTrigger}
         />
 
-        {selectedEvent && (
+        {selectedRow && (
           <EventDetailPanel
-            event={selectedEvent}
+            row={selectedRow}
             template={detailTemplate}
             variables={variables}
             timeRange={timeRange}
             cellResults={cellResults}
             cellSelections={cellSelections}
-            onClose={() => handleSelectEvent(null)}
+            onClose={() => handleSelectByRowIndex(null)}
           />
         )}
       </ErrorBoundary>
