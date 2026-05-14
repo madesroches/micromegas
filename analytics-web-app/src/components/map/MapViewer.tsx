@@ -2,19 +2,7 @@ import { Suspense, useRef, useEffect, useState, useMemo, useCallback } from 'rea
 import { Canvas, useThree, useFrame, ThreeEvent } from '@react-three/fiber'
 import { useGLTF, Html, PerspectiveCamera } from '@react-three/drei'
 import * as THREE from 'three'
-
-export interface MapEvent {
-  /** Stable per-event id, derived as `${row['process_id'] ?? 'unknown'}-${rowIndex}` */
-  id: string
-  /** Optional — only set when the query produced a `time` column. */
-  time?: Date
-  x: number
-  y: number
-  z: number
-  /** Full row from the SQL result, formatted to strings for template substitution.
-   *  Columns whose value is null/undefined are omitted (no '' coercion). */
-  row: Record<string, string>
-}
+import type { Overlay } from './overlay'
 
 export interface MMAmbientLight {
   color: [number, number, number]
@@ -23,9 +11,9 @@ export interface MMAmbientLight {
 
 interface MapViewerProps {
   mapUrl: string
-  events: MapEvent[]
-  selectedEventId?: string
-  onSelectEvent: (event: MapEvent | null) => void
+  overlay: Overlay
+  selectedRowIndex: number | null
+  onSelect: (rowIndex: number | null) => void
   markerColor?: string
   markerSize?: number
   resetViewTrigger?: number
@@ -101,9 +89,9 @@ function MapModel({ url, onLoaded }: MapModelProps) {
 }
 
 interface InstancedMarkersProps {
-  events: MapEvent[]
-  selectedId?: string
-  onSelect: (event: MapEvent | null) => void
+  overlay: Overlay
+  selectedRowIndex: number | null
+  onSelect: (rowIndex: number | null) => void
   markerColor?: string
   markerSize?: number
 }
@@ -115,14 +103,25 @@ const COLOR_HOVERED = new THREE.Color('#ff8a65')
 const DEFAULT_MARKER_SIZE = 10
 
 function InstancedMarkers({
-  events,
-  selectedId,
+  overlay,
+  selectedRowIndex,
   onSelect,
   markerColor = DEFAULT_MARKER_COLOR,
   markerSize = DEFAULT_MARKER_SIZE,
 }: InstancedMarkersProps) {
   const meshRef = useRef<THREE.InstancedMesh>(null)
-  const [hoveredIndex, setHoveredIndex] = useState<number | null>(null)
+  const [hoveredRowIndex, setHoveredRowIndex] = useState<number | null>(null)
+
+  // Clear hover synchronously when the overlay changes. Without this, a
+  // stale hoveredRowIndex from the previous table would index a different
+  // point in the new one, briefly highlighting the wrong marker until the
+  // next pointer event corrected it. Mirrors the selection-clear pattern
+  // in MapCell.
+  const [overlayForHover, setOverlayForHover] = useState(overlay)
+  if (overlayForHover !== overlay) {
+    setOverlayForHover(overlay)
+    setHoveredRowIndex(null)
+  }
 
   const tempObject = useMemo(() => new THREE.Object3D(), [])
 
@@ -136,39 +135,35 @@ function InstancedMarkers({
     []
   )
 
-  const selectedIndex = useMemo(() => {
-    if (!selectedId) return -1
-    return events.findIndex((e) => e.id === selectedId)
-  }, [events, selectedId])
-
   const colorAttrRef = useRef<THREE.InstancedBufferAttribute | null>(null)
+  const prevHighlightRef = useRef<{ selected: number | null; hovered: number | null }>({
+    selected: null,
+    hovered: null,
+  })
 
+  // Layout pass: write positions, normal scale, and normal color for every
+  // instance. Runs only when the overlay or the color/size knobs change.
   useEffect(() => {
-    if (!meshRef.current || events.length === 0) return
     const mesh = meshRef.current
+    const numRows = overlay.table.numRows
+    if (!mesh || numRows === 0) return
+    const { positions } = overlay
     const normalColor = new THREE.Color(markerColor)
 
-    if (!colorAttrRef.current || colorAttrRef.current.count !== events.length) {
-      const colorArray = new Float32Array(events.length * 3)
+    if (!colorAttrRef.current || colorAttrRef.current.count !== numRows) {
+      const colorArray = new Float32Array(numRows * 3)
       colorAttrRef.current = new THREE.InstancedBufferAttribute(colorArray, 3)
       mesh.instanceColor = colorAttrRef.current
     }
     const attr = colorAttrRef.current
 
-    for (let i = 0; i < events.length; i++) {
-      const isSelected = i === selectedIndex
-      const isHovered = i === hoveredIndex
-      const scaleMultiplier = isSelected ? 1.5 : isHovered ? 1.2 : 1
-      const finalScale = markerSize * scaleMultiplier
-
-      const event = events[i]
-      tempObject.position.set(event.x, event.y, event.z)
-      tempObject.scale.setScalar(finalScale)
+    for (let i = 0; i < numRows; i++) {
+      const base = i * 3
+      tempObject.position.set(positions[base], positions[base + 1], positions[base + 2])
+      tempObject.scale.setScalar(markerSize)
       tempObject.updateMatrix()
       mesh.setMatrixAt(i, tempObject.matrix)
-
-      const c = isSelected ? COLOR_SELECTED : isHovered ? COLOR_HOVERED : normalColor
-      attr.setXYZ(i, c.r, c.g, c.b)
+      attr.setXYZ(i, normalColor.r, normalColor.g, normalColor.b)
     }
 
     // Required for correct raycasting and frustum culling on InstancedMesh:
@@ -177,7 +172,59 @@ function InstancedMarkers({
     mesh.computeBoundingSphere()
     mesh.instanceMatrix.needsUpdate = true
     attr.needsUpdate = true
-  }, [events, selectedIndex, hoveredIndex, tempObject, markerColor, markerSize])
+    // The layout pass repainted every slot with the normal color; the
+    // highlight effect must re-apply the current selection/hover on top.
+    prevHighlightRef.current = { selected: null, hovered: null }
+  }, [overlay, tempObject, markerColor, markerSize])
+
+  // Highlight diff: restore the previously highlighted slots to normal,
+  // then write selected/hovered slots. Touches O(1) instances per change.
+  // Declared after the layout effect so it runs after it in commit order,
+  // overriding any colors the layout pass painted into the highlight slots.
+  useEffect(() => {
+    const mesh = meshRef.current
+    const numRows = overlay.table.numRows
+    if (!mesh || numRows === 0) return
+    const attr = colorAttrRef.current
+    if (!attr) return
+    const { positions } = overlay
+    const normalColor = new THREE.Color(markerColor)
+    const prev = prevHighlightRef.current
+
+    const restoreNormal = (i: number | null) => {
+      if (i === null || i < 0 || i >= numRows) return
+      if (i === selectedRowIndex || i === hoveredRowIndex) return
+      const base = i * 3
+      tempObject.position.set(positions[base], positions[base + 1], positions[base + 2])
+      tempObject.scale.setScalar(markerSize)
+      tempObject.updateMatrix()
+      mesh.setMatrixAt(i, tempObject.matrix)
+      attr.setXYZ(i, normalColor.r, normalColor.g, normalColor.b)
+    }
+    restoreNormal(prev.selected)
+    restoreNormal(prev.hovered)
+
+    const paint = (i: number | null, multiplier: number, color: THREE.Color) => {
+      if (i === null || i < 0 || i >= numRows) return
+      const base = i * 3
+      tempObject.position.set(positions[base], positions[base + 1], positions[base + 2])
+      tempObject.scale.setScalar(markerSize * multiplier)
+      tempObject.updateMatrix()
+      mesh.setMatrixAt(i, tempObject.matrix)
+      attr.setXYZ(i, color.r, color.g, color.b)
+    }
+    // Hover first, then selection — selection wins if a row is both.
+    if (hoveredRowIndex !== null && hoveredRowIndex !== selectedRowIndex) {
+      paint(hoveredRowIndex, 1.2, COLOR_HOVERED)
+    }
+    if (selectedRowIndex !== null) {
+      paint(selectedRowIndex, 1.5, COLOR_SELECTED)
+    }
+
+    mesh.instanceMatrix.needsUpdate = true
+    attr.needsUpdate = true
+    prevHighlightRef.current = { selected: selectedRowIndex, hovered: hoveredRowIndex }
+  }, [overlay, selectedRowIndex, hoveredRowIndex, tempObject, markerColor, markerSize])
 
   useEffect(() => {
     return () => {
@@ -189,42 +236,37 @@ function InstancedMarkers({
   const handleClick = useCallback(
     (e: ThreeEvent<MouseEvent>) => {
       e.stopPropagation()
-      const instanceId = e.instanceId
-      if (instanceId === undefined || instanceId < 0 || instanceId >= events.length) return
-
-      const clickedEvent = events[instanceId]
-      if (clickedEvent.id === selectedId) {
-        onSelect(null)
-      } else {
-        onSelect(clickedEvent)
-      }
+      const rowIdx = e.instanceId
+      const numRows = overlay.table.numRows
+      if (rowIdx === undefined || rowIdx < 0 || rowIdx >= numRows) return
+      onSelect(rowIdx === selectedRowIndex ? null : rowIdx)
     },
-    [events, selectedId, onSelect]
+    [overlay, selectedRowIndex, onSelect]
   )
 
   const handlePointerOver = useCallback(
     (e: ThreeEvent<PointerEvent>) => {
       e.stopPropagation()
-      const instanceId = e.instanceId
-      if (instanceId === undefined || instanceId < 0 || instanceId >= events.length) return
-
-      setHoveredIndex(instanceId)
+      const rowIdx = e.instanceId
+      const numRows = overlay.table.numRows
+      if (rowIdx === undefined || rowIdx < 0 || rowIdx >= numRows) return
+      setHoveredRowIndex(rowIdx)
       document.body.style.cursor = 'pointer'
     },
-    [events.length]
+    [overlay]
   )
 
   const handlePointerOut = useCallback(() => {
-    setHoveredIndex(null)
+    setHoveredRowIndex(null)
     document.body.style.cursor = 'auto'
   }, [])
 
-  if (events.length === 0) return null
+  if (overlay.table.numRows === 0) return null
 
   return (
     <instancedMesh
       ref={meshRef}
-      args={[geometry, material, events.length]}
+      args={[geometry, material, overlay.table.numRows]}
       renderOrder={10}
       onClick={handleClick}
       onPointerOver={handlePointerOver}
@@ -662,9 +704,9 @@ function SceneSetup() {
 
 export function MapViewer({
   mapUrl,
-  events,
-  selectedEventId,
-  onSelectEvent,
+  overlay,
+  selectedRowIndex,
+  onSelect,
   markerColor,
   markerSize,
   resetViewTrigger = 0,
@@ -739,7 +781,7 @@ export function MapViewer({
           toneMapping: THREE.NeutralToneMapping,
           toneMappingExposure: 1.3,
         }}
-        onPointerMissed={() => onSelectEvent(null)}
+        onPointerMissed={() => onSelect(null)}
       >
         <SceneSetup />
         <color attach="background" args={['#0a0a0f']} />
@@ -769,9 +811,9 @@ export function MapViewer({
         </Suspense>
 
         <InstancedMarkers
-          events={events}
-          selectedId={selectedEventId}
-          onSelect={onSelectEvent}
+          overlay={overlay}
+          selectedRowIndex={selectedRowIndex}
+          onSelect={onSelect}
           markerColor={markerColor}
           markerSize={effectiveMarkerSize}
         />
