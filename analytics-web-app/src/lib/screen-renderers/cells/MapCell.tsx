@@ -371,12 +371,17 @@ function ChannelBindingControl({
   const isColumn = !!binding && 'column' in binding
   const mode: 'scalar' | 'column' = isColumn ? 'column' : 'scalar'
 
+  const noColumns = columns.length === 0
   const setMode = (next: 'scalar' | 'column') => {
     if (next === mode) return
     if (next === 'scalar') {
       onChange({ scalar: fallbackScalar })
     } else {
-      onChange({ column: columns[0] ?? '' })
+      // Guard: writing `{column: ''}` produces an unresolvable binding that
+      // fails buildOverlay with `Column '' not found`. Force scalar mode
+      // until a query result is available.
+      if (noColumns) return
+      onChange({ column: columns[0] })
     }
   }
 
@@ -404,10 +409,14 @@ function ChannelBindingControl({
           />
           scalar
         </label>
-        <label className="flex items-center gap-1 cursor-pointer">
+        <label
+          className={`flex items-center gap-1 ${noColumns ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}`}
+          title={noColumns ? 'Run the query to populate available columns' : undefined}
+        >
           <input
             type="radio"
             checked={mode === 'column'}
+            disabled={noColumns}
             onChange={() => setMode('column')}
           />
           column
