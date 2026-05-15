@@ -35,6 +35,7 @@ This file documents the historical progress of the Micromegas project. For curre
   * Refactor map cell to keep SQL results in Arrow Table format through the render path: replace eager `MapEvent[]` materialization with an `Overlay` struct (positions `Float32Array` + table) and on-demand row materialization; split InstancedMesh layout from selection/hover diff so selection changes touch O(1) instances; reject non-finite x/y/z at build time to avoid `InstancedMesh` bounding-sphere poisoning (#1035)
   * Generalize map cell to primitive overlays with shape dispatch (sphere/box), per-instance RGBA via an `instanceColorRGBA` attribute, and column-or-scalar bindings per visual channel (size, scaleX/Y/Z, color); color column accepts integer (packed RGBA u32), `#rrggbb[aa]` string, or 4-byte binary (DataFusion's `0xrrggbbaa` literal); fix SyntaxEditor cursor/overlay alignment in SQL mode (#1055)
   * Enlarge SQL query editors across the app: screen-level editors to 384px and per-cell editors to 240px; trim the flame chart cell description for new-cell dialog consistency
+  * Refine map navigation: WASD pans horizontally (no elevation), add Q/E keyboard zoom, suppress the browser context menu when a right-drag releases off-canvas, and auto-size the event detail panel with the title rendered via the Markdown template
 * **Python:**
   * Switch `bulk_ingest` to accept `pyarrow.Table` directly for native pass-through of struct/list/binary columns
   * Resolve CLI connection settings from `~/.micromegas/config.json` with env-var override (#1033)
