@@ -519,6 +519,8 @@ function UnrealCameraController({
     a: false,
     s: false,
     d: false,
+    q: false,
+    e: false,
   })
 
   // Track latest mapScene through a ref so mousedown can raycast against it
@@ -613,6 +615,14 @@ function UnrealCameraController({
   useEffect(() => {
     const DRAG_THRESHOLD = 4
 
+    // Arm-and-fire flag for the contextmenu that follows a right-mousedown on
+    // the canvas. Set on right-mousedown, consumed by the window-level
+    // contextmenu handler. A window listener is required because if the
+    // mouseup happens off-canvas, the contextmenu fires on whatever element
+    // is under the cursor — not the canvas — so a canvas-bound listener
+    // would miss it.
+    let suppressNextContextMenu = false
+
     const onMouseDown = (e: MouseEvent) => {
       if (e.button === 0) {
         isLeftMouseDownRef.current = true
@@ -621,6 +631,7 @@ function UnrealCameraController({
         lastMouseRef.current = { x: e.clientX, y: e.clientY }
       } else if (e.button === 2) {
         isRightMouseDownRef.current = true
+        suppressNextContextMenu = true
         lastMouseRef.current = { x: e.clientX, y: e.clientY }
         domElement.style.cursor = 'grabbing'
 
@@ -756,7 +767,10 @@ function UnrealCameraController({
     }
 
     const onContextMenu = (e: MouseEvent) => {
-      e.preventDefault()
+      if (suppressNextContextMenu) {
+        e.preventDefault()
+        suppressNextContextMenu = false
+      }
     }
 
     const isFormTarget = (e: KeyboardEvent) => {
@@ -792,6 +806,8 @@ function UnrealCameraController({
       keysRef.current.a = false
       keysRef.current.s = false
       keysRef.current.d = false
+      keysRef.current.q = false
+      keysRef.current.e = false
     }
 
     // Safety net: if the browser/tab loses focus mid-drag (alt-tab, OS dialog),
@@ -804,6 +820,7 @@ function UnrealCameraController({
       isLeftMouseDownRef.current = false
       isLeftDraggingRef.current = false
       isRightMouseDownRef.current = false
+      suppressNextContextMenu = false
     }
 
     // mousedown stays on the canvas (drags only start over the map), but
@@ -813,7 +830,7 @@ function UnrealCameraController({
     window.addEventListener('mouseup', onMouseUp)
     window.addEventListener('mousemove', onMouseMove)
     domElement.addEventListener('wheel', onWheel, { passive: false })
-    domElement.addEventListener('contextmenu', onContextMenu)
+    window.addEventListener('contextmenu', onContextMenu)
     domElement.addEventListener('mouseenter', onMouseEnter)
     domElement.addEventListener('mouseleave', onMouseLeave)
     window.addEventListener('keydown', onKeyDown)
@@ -825,7 +842,7 @@ function UnrealCameraController({
       window.removeEventListener('mouseup', onMouseUp)
       window.removeEventListener('mousemove', onMouseMove)
       domElement.removeEventListener('wheel', onWheel)
-      domElement.removeEventListener('contextmenu', onContextMenu)
+      window.removeEventListener('contextmenu', onContextMenu)
       domElement.removeEventListener('mouseenter', onMouseEnter)
       domElement.removeEventListener('mouseleave', onMouseLeave)
       window.removeEventListener('keydown', onKeyDown)
@@ -838,14 +855,12 @@ function UnrealCameraController({
     if (isHoveredRef.current) {
       const moveSpeed = sphericalRef.current.radius * SPEED_PER_RADIUS * delta
 
-      const forward = new THREE.Vector3()
-      camera.getWorldDirection(forward)
-      forward.normalize()
-
-      // Theta-based right, same reason as panCamera: cross(cameraForward, worldUp)
-      // collapses to zero at phi=0 and silently drops A/D strafe.
+      // Theta-based XY basis, same as panCamera: keeps WASD as a top-down pan
+      // (W/S no longer changes elevation), and avoids the cross-product
+      // collapse at phi=0 that would silently drop strafe.
       const theta = sphericalRef.current.theta
       const right = new THREE.Vector3(Math.cos(theta), Math.sin(theta), 0)
+      const forward = new THREE.Vector3(-Math.sin(theta), Math.cos(theta), 0)
 
       if (keysRef.current.w) {
         targetRef.current.addScaledVector(forward, moveSpeed)
@@ -858,6 +873,23 @@ function UnrealCameraController({
       }
       if (keysRef.current.d) {
         targetRef.current.addScaledVector(right, moveSpeed)
+      }
+
+      // Q/E zoom: time-based exponential so the per-frame step is independent
+      // of framerate. Mirrors the wheel handler's zoomFactor invariant but
+      // skips cursor-anchoring (no pointer to anchor against).
+      let zoomSign = 0
+      if (keysRef.current.q) zoomSign += 1
+      if (keysRef.current.e) zoomSign -= 1
+      if (zoomSign !== 0) {
+        const KEY_ZOOM_RATE_PER_SEC = 2.0
+        const zoomMultiplier = Math.pow(KEY_ZOOM_RATE_PER_SEC, zoomSign * delta)
+        const newZoomFactor = Math.max(
+          0.001,
+          Math.min(10.0, zoomFactorRef.current * zoomMultiplier)
+        )
+        zoomFactorRef.current = newZoomFactor
+        sphericalRef.current.radius = fitRadiusRef.current * newZoomFactor
       }
     }
 
@@ -1005,7 +1037,8 @@ export function MapViewer({
         <div>Left-click + drag: Pan</div>
         <div>Right-click + drag: Rotate</div>
         <div>Scroll: Zoom</div>
-        <div>WASD: Fly</div>
+        <div>WASD: Pan</div>
+        <div>QE: Zoom</div>
         <div>Z: Reset view</div>
       </div>
     </div>
