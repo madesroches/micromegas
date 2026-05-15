@@ -1,4 +1,4 @@
-import { Suspense, useRef, useEffect, useState, useMemo, useCallback } from 'react'
+import { Suspense, useRef, useEffect, useLayoutEffect, useState, useMemo, useCallback } from 'react'
 import { Canvas, useThree, useFrame, ThreeEvent } from '@react-three/fiber'
 import { useGLTF, Html, PerspectiveCamera } from '@react-three/drei'
 import * as THREE from 'three'
@@ -210,7 +210,14 @@ function InstancedMarkers({
   // Matrix pass: writes positions + scales for every instance. Allocates and
   // attaches the runtime color attribute the GPU reads (always — the color
   // baseline effect below fills it).
-  useEffect(() => {
+  //
+  // useLayoutEffect (not useEffect): on shape toggle the InstancedMesh is
+  // re-created with default identity matrices and a fresh geometry that has
+  // no instanceColorRGBA attribute. A plain useEffect runs *after* paint, so
+  // R3F's next rAF would render markers snapped to origin/scale=1 with zero
+  // RGBA for one frame. useLayoutEffect runs synchronously after commit,
+  // before any rAF, eliminating the glitch.
+  useLayoutEffect(() => {
     const mesh = meshRef.current
     const numRows = overlay.table.numRows
     if (!mesh || numRows === 0) return
@@ -254,16 +261,25 @@ function InstancedMarkers({
     // raycasts that miss the origin (i.e. most of them) skip every instance.
     mesh.computeBoundingSphere()
     mesh.instanceMatrix.needsUpdate = true
-    // The matrix pass rewrote every slot's transform at the normal scale; the
-    // highlight effect must re-apply the current selection/hover on top.
-    prevHighlightRef.current = { selected: null, hovered: null }
+    // We intentionally do NOT reset prevHighlightRef here. The matrix pass
+    // rewrites every slot's transform but does not touch the runtime color
+    // buffer (baseline lives in its own effect). If we cleared prev, a row
+    // that was tinted by the highlight pass before this re-layout would keep
+    // its tint in runtime; the next highlight pass would have no record of
+    // it and skip the restoreNormal that would write the baseline color
+    // back. Leaving prev intact lets restoreNormal clean up correctly.
   }, [overlay, csize, cscale0, cscale1, cscale2, shape, tempObject])
 
   // Color baseline pass: refills the runtime color buffer from either the
   // column-bound buffer or the scalar fallback. Split from the matrix pass so
   // editor-side color scrubbing only does a 0.4 MB buffer write, not a
   // 63K-row matrix re-layout.
-  useEffect(() => {
+  //
+  // useLayoutEffect for the same reason as the matrix pass: on first mount
+  // (and any overlay swap) the runtime buffer is zero-initialized, which
+  // renders fully transparent under the patched shader. Running pre-paint
+  // ensures the first drawn frame has correct colors.
+  useLayoutEffect(() => {
     const mesh = meshRef.current
     const numRows = overlay.table.numRows
     const runtime = runtimeColorsRef.current
@@ -287,15 +303,22 @@ function InstancedMarkers({
       }
     }
     colorAttr.needsUpdate = true
-    // Color baseline just overwrote any highlight tints; force re-apply.
-    prevHighlightRef.current = { selected: null, hovered: null }
+    // We intentionally do NOT reset prevHighlightRef here. The baseline
+    // overwrote the runtime color for every slot, but slot scales (matrices)
+    // are untouched — if a previously-highlighted row is no longer selected
+    // or hovered in this render, the highlight pass must still call
+    // restoreNormal on it to revert its 1.5x scaled matrix. The currently-
+    // highlighted row gets re-tinted unconditionally by the highlight pass's
+    // paint() calls, so we don't need to force re-apply via a prev reset.
   }, [overlay, ccolor])
 
   // Highlight diff: restore the previously highlighted slots to normal,
   // then write selected/hovered slots. Touches O(1) instances per change.
   // Declared after the layout effect so it runs after it in commit order,
   // overriding any colors the layout pass painted into the highlight slots.
-  useEffect(() => {
+  // useLayoutEffect so a shape toggle that re-runs all three passes lands
+  // the selection highlight in the first painted frame, not the second.
+  useLayoutEffect(() => {
     const mesh = meshRef.current
     const numRows = overlay.table.numRows
     if (!mesh || numRows === 0) return
@@ -897,9 +920,8 @@ export function MapViewer({
   )
 
   // Clear loaded-GLB state whenever mapUrl changes (including the A→B case
-  // where both are truthy), so transient consumers (UnrealCameraController,
-  // marker sizing from mapBounds) don't see stale scene state during the
-  // Suspense gap.
+  // where both are truthy), so transient consumers (UnrealCameraController)
+  // don't see stale scene state during the Suspense gap.
   //
   // Done as a render-phase state derivation rather than an effect: an
   // effect-based clear races against MapModel's load effect when the new GLB

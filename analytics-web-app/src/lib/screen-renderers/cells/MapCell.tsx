@@ -125,14 +125,35 @@ function resolveMapping(options: Record<string, unknown> | undefined): {
   const legacyColor = options?.markerColor as string | undefined
   const legacySize = options?.markerSize as number | undefined
 
-  const defaults = defaultMappingFor(shape)
-  const merged: OverlayMapping = { ...defaults, ...stored }
+  // Drop channels that don't apply to the active shape *before* the merge.
+  // The editor's updateShape callback already strips these on toggle, but
+  // configs persisted from older versions or edited externally can carry
+  // stale bindings — letting them flow into buildOverlay surfaces a
+  // confusing "Column 'foo' for channel 'size' not found" when the user's
+  // actual issue is that the binding doesn't apply to the current shape.
+  // Only assign defined keys so a missing channel doesn't shadow the default
+  // when spread.
+  const filtered: OverlayMapping = {}
+  if (stored.x !== undefined) filtered.x = stored.x
+  if (stored.y !== undefined) filtered.y = stored.y
+  if (stored.z !== undefined) filtered.z = stored.z
+  if (stored.color !== undefined) filtered.color = stored.color
+  if (shape === 'sphere') {
+    if (stored.size !== undefined) filtered.size = stored.size
+  } else {
+    if (stored.scaleX !== undefined) filtered.scaleX = stored.scaleX
+    if (stored.scaleY !== undefined) filtered.scaleY = stored.scaleY
+    if (stored.scaleZ !== undefined) filtered.scaleZ = stored.scaleZ
+  }
 
-  if (!stored.color && legacyColor) {
+  const defaults = defaultMappingFor(shape)
+  const merged: OverlayMapping = { ...defaults, ...filtered }
+
+  if (!filtered.color && legacyColor) {
     const parsed = rgbaFromHex(legacyColor)
     if (parsed !== null) merged.color = { scalar: parsed }
   }
-  if (shape === 'sphere' && !stored.size && typeof legacySize === 'number') {
+  if (shape === 'sphere' && !filtered.size && typeof legacySize === 'number') {
     merged.size = { scalar: legacySize }
   }
 
@@ -166,9 +187,16 @@ export function MapCell({
   const mappingObj = options?.mapping as OverlayMapping | undefined
   const bindingColumn = (b: ChannelBinding<unknown> | undefined): string | null =>
     b && 'column' in b ? b.column : null
-  const xCol = bindingColumn(mappingObj?.x)
-  const yCol = bindingColumn(mappingObj?.y)
-  const zCol = bindingColumn(mappingObj?.z)
+  // Position channels accept either `{column}` or `{scalar: 'colname'}` — both
+  // resolve to a column-name string. Mirror resolvePositionColumn so the dep
+  // captures column-name changes in either form.
+  const positionColumn = (
+    b: ChannelBinding<string> | undefined,
+    fallback: string,
+  ): string => (b ? ('column' in b ? b.column : b.scalar) : fallback)
+  const xCol = positionColumn(mappingObj?.x, 'x')
+  const yCol = positionColumn(mappingObj?.y, 'y')
+  const zCol = positionColumn(mappingObj?.z, 'z')
   const sizeCol = bindingColumn(mappingObj?.size)
   const scaleXCol = bindingColumn(mappingObj?.scaleX)
   const scaleYCol = bindingColumn(mappingObj?.scaleY)
@@ -585,9 +613,28 @@ export function MapCellEditor({
 
   const updateShape = useCallback(
     (next: Shape) => {
+      // Drop channels that don't apply to the new shape. Without this, a
+      // column-bound `size` left over from sphere mode (or `scaleX/Y/Z` from
+      // box mode) would still be validated by buildOverlay against the new
+      // query result — surfacing a confusing "Column 'foo' for channel
+      // 'size' not found" when the user's actual issue is just that the
+      // binding is stale.
+      const prev = (mapConfig.options?.mapping as OverlayMapping | undefined) ?? {}
+      const nextMapping: OverlayMapping = {}
+      if (prev.x !== undefined) nextMapping.x = prev.x
+      if (prev.y !== undefined) nextMapping.y = prev.y
+      if (prev.z !== undefined) nextMapping.z = prev.z
+      if (prev.color !== undefined) nextMapping.color = prev.color
+      if (next === 'sphere') {
+        if (prev.size !== undefined) nextMapping.size = prev.size
+      } else {
+        if (prev.scaleX !== undefined) nextMapping.scaleX = prev.scaleX
+        if (prev.scaleY !== undefined) nextMapping.scaleY = prev.scaleY
+        if (prev.scaleZ !== undefined) nextMapping.scaleZ = prev.scaleZ
+      }
       onChange({
         ...mapConfig,
-        options: { ...mapConfig.options, shape: next },
+        options: { ...mapConfig.options, shape: next, mapping: nextMapping },
       })
     },
     [mapConfig, onChange]
