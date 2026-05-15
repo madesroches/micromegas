@@ -31,7 +31,9 @@ primitive overlays plan
   micromegas" — color UDFs are a natural new neighbor.
 - **Implementation pattern.** Each UDF is a `struct` implementing
   `ScalarUDFImpl`, with a `make_*_udf()` constructor returning a `ScalarUDF`.
-  See `rust/datafusion-extensions/src/jsonb/array_length.rs` for a concise
+  The struct must derive `#[derive(Debug, PartialEq, Eq, Hash)]` (DataFusion
+  trait requirement — every existing UDF in this crate does so). See
+  `rust/datafusion-extensions/src/jsonb/array_length.rs` for a concise
   numeric example: explicit `Signature`, `return_type`, `invoke_with_args`
   building an Arrow array directly.
 - **Test convention.** Per `CLAUDE.md`, tests live in the crate's `tests/`
@@ -156,6 +158,15 @@ pub fn float_to_byte(f: f64) -> u8 {
   - Unpack both colors into four `(u8, u8, u8, u8)` tuples, lerp each channel
     as `f64` (`a + (b - a) * t`), round to nearest, repack.
   - Alpha is treated the same as RGB (no premultiplication, no special-casing).
+- **Caller note (literal colors).** Unlike `Float64`, DataFusion 52.5 does **not**
+  coerce `Int64` (or `Binary`, which is how hex literals like `0xff000000` parse)
+  into `UInt32` under `Signature::exact` — verified empirically. Callers passing
+  literal colors must either:
+  - Construct them via `rgba(...)` (returns `UInt32` natively), or
+  - Wrap them in `CAST(<literal> AS INT UNSIGNED)`.
+
+  Column references that are already `UInt32` (e.g. a stored color column) work
+  without ceremony. This needs to be called out explicitly in the docs page.
 
 ### Why a single t (not per-channel)
 
@@ -196,11 +207,16 @@ at the top.
    `mkdocs/docs/query-guide/functions-reference.md`, placed after "Histogram
    Functions". Match the existing entry style (Syntax / Parameters / Returns
    / Examples).
-8. Run `cargo fmt`, `cargo clippy --workspace -- -D warnings`, and
+8. Update the `description` field in `rust/datafusion-extensions/Cargo.toml`
+   to mention color, e.g. `"WASM-compatible DataFusion UDF extensions (JSONB,
+   histogram, color) for micromegas"`.
+9. Run `cargo fmt`, `cargo clippy --workspace -- -D warnings`, and
    `cargo test -p micromegas-datafusion-extensions`.
 
 ## Files to Modify
 
+- `rust/datafusion-extensions/Cargo.toml` — add "color" to crate
+  description.
 - `rust/datafusion-extensions/src/lib.rs` — add module, register UDFs.
 - `rust/datafusion-extensions/src/color/mod.rs` (new).
 - `rust/datafusion-extensions/src/color/rgba.rs` (new).
@@ -253,11 +269,14 @@ Coverage:
   (round, not truncate).
 - **rgba — nulls:** if any of the four inputs is NULL, the row's result is
   NULL.
-- **lerp_color — endpoints:** `lerp_color(c1, c2, 0.0) == c1`,
-  `lerp_color(c1, c2, 1.0) == c2`.
-- **lerp_color — midpoint:** `lerp_color(0xff000000, 0x00ff0000, 0.5)` →
-  `0x7f7f0000` (or `0x80800000` depending on rounding — pick one and lock it
-  in).
+- **lerp_color — endpoints:** with `c1`/`c2` built via `rgba(...)` or
+  `CAST(... AS INT UNSIGNED)`, `lerp_color(c1, c2, 0.0) == c1` and
+  `lerp_color(c1, c2, 1.0) == c2`. (Bare `UInt32` literals do not coerce —
+  see the caller note in the `lerp_color` design section.)
+- **lerp_color — midpoint:** e.g. `lerp_color(rgba(1, 0, 0, 0), rgba(0, 1, 0, 0), 0.5)`
+  → expected midpoint per the chosen rounding rule (`0x7f7f0000` truncate vs
+  `0x80800000` round-to-nearest — pick one and lock it in). Equivalent form:
+  `lerp_color(CAST(4278190080 AS INT UNSIGNED), CAST(16711680 AS INT UNSIGNED), 0.5)`.
 - **lerp_color — t clamping:** `t = -0.5` behaves like `t = 0`, `t = 1.5`
   like `t = 1`.
 - **lerp_color — alpha interpolation:** confirm alpha channel interpolates
@@ -265,21 +284,29 @@ Coverage:
 - **lerp_color — nulls:** any null input → null result.
 - **Integration smoke:** a SQL expression combining the two,
   e.g., `lerp_color(rgba(1,0,0,1), rgba(0,0,1,1), 0.5)`.
+- **Coercion regression guard:** an explicit negative test asserting that
+  `lerp_color(0xff000000, 0x00ff0000, 0.5)` (or `lerp_color(4278190080, 65280, 0.5)`)
+  fails at planning time with a coercion error — pins the documented caller
+  contract so a future signature change doesn't silently break it.
 
 ## Documentation
 
 Add a new `#### Color Functions` group to
 `mkdocs/docs/query-guide/functions-reference.md`, placed after `#### Histogram
 Functions`. One subsection per UDF, matching the existing template (Syntax,
-Parameters, Returns, Examples). Examples should reference the map-cell
-`color` channel as the primary motivating use case, e.g.:
+Parameters, Returns, Examples). The `lerp_color` subsection must explicitly
+note that literal color inputs must be constructed via `rgba(...)` or cast with
+`CAST(<literal> AS INT UNSIGNED)` — bare hex/integer literals do not satisfy
+the `UInt32` signature. Examples should reference the map-cell `color` channel
+as the primary motivating use case, e.g.:
 
 ```sql
--- Hot/cold gradient over a metric, with full alpha
+-- Hot/cold gradient over a metric, with full alpha.
+-- `t` is clamped internally, so out-of-range ratios safely saturate.
 SELECT x, y, z,
        lerp_color(rgba(0, 0.5, 1, 1),       -- cool
                   rgba(1, 0.2, 0, 1),       -- hot
-                  least(greatest(value / 100.0, 0.0), 1.0)) AS color
+                  value / 100.0) AS color
 FROM my_events;
 ```
 
