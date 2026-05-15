@@ -1142,7 +1142,7 @@ lerp_color(c1, c2, t)
 
 **Returns:** `UInt32` — packed color. `NULL` if any input is `NULL`.
 
-> **Note on literal colors.** `c1`/`c2` must be `UInt32`. DataFusion does **not** coerce `Int64` (or `Binary`, which is how hex literals like `0xff000000` parse) to `UInt32` under this signature — bare integer literals will fail at planning time with a coercion error. Either construct colors via `rgba(...)` (which returns `UInt32` natively) or wrap literals with `CAST(<literal> AS INT UNSIGNED)`. Existing `UInt32` columns work without ceremony.
+> **Note on literal colors.** `c1`/`c2` must be `UInt32`. Bare integer or hex literals do not coerce to `UInt32` under this signature and will fail at planning time with a coercion error. Either construct colors via `rgba(...)` (which returns `UInt32` natively) or wrap literals with `CAST(<literal> AS INT UNSIGNED)`. Existing `UInt32` columns work without ceremony.
 
 **Examples:**
 ```sql
