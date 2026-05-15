@@ -357,7 +357,7 @@ function ChartCellEditor({ config, onChange, variables, timeRange, datasourceVar
                 onChange={(sql) => updateQuery(i, { sql })}
                 language="sql"
                 placeholder="SELECT time, value FROM ..."
-                minHeight="80px"
+                minHeight="240px"
                 onRunShortcut={onRun}
               />
             </div>

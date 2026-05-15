@@ -164,7 +164,7 @@ function PropertyTimelineCellEditor({ config, onChange, variables, timeRange, on
           onChange={(sql) => onChange({ ...ptConfig, sql })}
           language="sql"
           placeholder="SELECT time, properties FROM ..."
-          minHeight="150px"
+          minHeight="240px"
           onRunShortcut={onRun}
         />
       </div>

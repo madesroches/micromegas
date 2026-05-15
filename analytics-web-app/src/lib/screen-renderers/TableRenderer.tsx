@@ -284,7 +284,7 @@ export function TableRenderer({
                   handleSqlChange(value)
                 }}
                 language="sql"
-                minHeight="192px"
+                minHeight="384px"
                 onRunShortcut={handleSqlRun}
               />
 

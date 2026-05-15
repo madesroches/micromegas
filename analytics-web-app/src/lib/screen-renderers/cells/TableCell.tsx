@@ -245,7 +245,7 @@ function TableCellEditor({ config, onChange, variables, timeRange, availableColu
           onChange={(sql) => onChange({ ...tableConfig, sql })}
           language="sql"
           placeholder="SELECT * FROM ..."
-          minHeight="150px"
+          minHeight="240px"
           onRunShortcut={onRun}
         />
       </div>

@@ -165,7 +165,7 @@ function TransposedTableCellEditor({ config, onChange, variables, timeRange, ava
           onChange={(sql) => onChange({ ...transposedConfig, sql })}
           language="sql"
           placeholder="SELECT * FROM ..."
-          minHeight="150px"
+          minHeight="240px"
           onRunShortcut={onRun}
         />
       </div>

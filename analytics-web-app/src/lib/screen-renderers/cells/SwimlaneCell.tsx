@@ -417,7 +417,7 @@ function SwimlaneCellEditor({ config, onChange, variables, timeRange, onRun, cel
           onChange={(sql) => onChange({ ...slConfig, sql })}
           language="sql"
           placeholder="SELECT id, name, begin, end FROM ..."
-          minHeight="150px"
+          minHeight="240px"
           onRunShortcut={onRun}
         />
       </div>
