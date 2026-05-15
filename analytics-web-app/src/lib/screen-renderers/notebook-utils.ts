@@ -154,7 +154,9 @@ ORDER BY lane, begin`,
  * Renders the canonical x/y/z columns; authors extend this in the editor
  * to surface their own query columns (e.g. process_id, event_type).
  */
-export const DEFAULT_MAP_DETAIL_TEMPLATE = `### Event
+export const DEFAULT_MAP_DETAIL_TEMPLATE = `### Event Details
+
+---
 
 **Location:** ($x, $y, $z)
 `
