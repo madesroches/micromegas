@@ -93,7 +93,7 @@ function LogCellEditor({ config, onChange, variables, timeRange, onRun, cellResu
           onChange={(sql) => onChange({ ...logConfig, sql })}
           language="sql"
           placeholder="SELECT time, level, target, msg FROM log_entries ..."
-          minHeight="150px"
+          minHeight="240px"
           onRunShortcut={onRun}
         />
       </div>

@@ -107,7 +107,7 @@ export function QueryEditor({
             onChange?.(value)
           }}
           language="sql"
-          minHeight="192px"
+          minHeight="384px"
           onRunShortcut={handleRun}
         />
 

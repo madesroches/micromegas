@@ -671,7 +671,7 @@ export function MapCellEditor({
           onChange={updateSql}
           language="sql"
           placeholder="SELECT time, x, y, z, process_id FROM ..."
-          minHeight="120px"
+          minHeight="240px"
           onRunShortcut={onRun}
         />
       </div>

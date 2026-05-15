@@ -291,7 +291,7 @@ function VariableCellEditor({ config, onChange, variables, timeRange, datasource
               onChange={(sql) => onChange({ ...varConfig, sql })}
               language="sql"
               placeholder="SELECT value, label FROM ..."
-              minHeight="150px"
+              minHeight="240px"
               onRunShortcut={onRun}
             />
           </div>

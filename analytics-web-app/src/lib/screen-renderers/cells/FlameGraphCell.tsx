@@ -1168,7 +1168,7 @@ function FlameGraphCellEditor({ config, onChange, variables, timeRange, onRun, c
           onChange={(sql) => onChange({ ...fgConfig, sql })}
           language="sql"
           placeholder="SELECT name, begin, end, depth, lane FROM ... (begin/end are timestamps for CPU traces, or bit offsets for net_spans)"
-          minHeight="150px"
+          minHeight="240px"
           onRunShortcut={onRun}
         />
       </div>
@@ -1230,7 +1230,7 @@ export const flamegraphMetadata: CellTypeMetadata = {
 
   label: 'Flame Graph',
   icon: <Flame />,
-  description: 'Flame chart visualization of CPU traces (X = time) or network traces (X = bits on the wire)',
+  description: 'Stack visualization for CPU or network traces',
   showTypeBadge: true,
   defaultHeight: 400,
 
