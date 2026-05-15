@@ -615,6 +615,14 @@ function UnrealCameraController({
   useEffect(() => {
     const DRAG_THRESHOLD = 4
 
+    // Arm-and-fire flag for the contextmenu that follows a right-mousedown on
+    // the canvas. Set on right-mousedown, consumed by the window-level
+    // contextmenu handler. A window listener is required because if the
+    // mouseup happens off-canvas, the contextmenu fires on whatever element
+    // is under the cursor — not the canvas — so a canvas-bound listener
+    // would miss it.
+    let suppressNextContextMenu = false
+
     const onMouseDown = (e: MouseEvent) => {
       if (e.button === 0) {
         isLeftMouseDownRef.current = true
@@ -623,6 +631,7 @@ function UnrealCameraController({
         lastMouseRef.current = { x: e.clientX, y: e.clientY }
       } else if (e.button === 2) {
         isRightMouseDownRef.current = true
+        suppressNextContextMenu = true
         lastMouseRef.current = { x: e.clientX, y: e.clientY }
         domElement.style.cursor = 'grabbing'
 
@@ -758,7 +767,10 @@ function UnrealCameraController({
     }
 
     const onContextMenu = (e: MouseEvent) => {
-      e.preventDefault()
+      if (suppressNextContextMenu) {
+        e.preventDefault()
+        suppressNextContextMenu = false
+      }
     }
 
     const isFormTarget = (e: KeyboardEvent) => {
@@ -808,6 +820,7 @@ function UnrealCameraController({
       isLeftMouseDownRef.current = false
       isLeftDraggingRef.current = false
       isRightMouseDownRef.current = false
+      suppressNextContextMenu = false
     }
 
     // mousedown stays on the canvas (drags only start over the map), but
@@ -817,7 +830,7 @@ function UnrealCameraController({
     window.addEventListener('mouseup', onMouseUp)
     window.addEventListener('mousemove', onMouseMove)
     domElement.addEventListener('wheel', onWheel, { passive: false })
-    domElement.addEventListener('contextmenu', onContextMenu)
+    window.addEventListener('contextmenu', onContextMenu)
     domElement.addEventListener('mouseenter', onMouseEnter)
     domElement.addEventListener('mouseleave', onMouseLeave)
     window.addEventListener('keydown', onKeyDown)
@@ -829,7 +842,7 @@ function UnrealCameraController({
       window.removeEventListener('mouseup', onMouseUp)
       window.removeEventListener('mousemove', onMouseMove)
       domElement.removeEventListener('wheel', onWheel)
-      domElement.removeEventListener('contextmenu', onContextMenu)
+      window.removeEventListener('contextmenu', onContextMenu)
       domElement.removeEventListener('mouseenter', onMouseEnter)
       domElement.removeEventListener('mouseleave', onMouseLeave)
       window.removeEventListener('keydown', onKeyDown)
