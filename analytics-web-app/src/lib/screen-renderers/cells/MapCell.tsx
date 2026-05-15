@@ -701,12 +701,6 @@ export function MapCellEditor({
               />
             </Suspense>
           </div>
-          <div className="text-xs text-theme-text-muted ml-[calc(6rem+0.5rem)]">
-            Maps are loaded from the server's object store (
-            <code className="text-theme-text-secondary">MICROMEGAS_MAPS_OBJECT_STORE_URI</code>).
-            Drop <code className="text-theme-text-secondary">.glb</code> files at that prefix to
-            make them appear here.
-          </div>
         </div>
       </div>
 
