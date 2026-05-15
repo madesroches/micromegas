@@ -1,5 +1,7 @@
 /// Unified binary column accessor for Arrow arrays
 pub mod binary_column_accessor;
+/// Color UDFs (rgba, lerp_color)
+pub mod color;
 /// Compute histograms from SQL
 pub mod histogram;
 /// JSONB support
@@ -9,6 +11,7 @@ pub mod properties;
 
 use std::sync::Arc;
 
+use color::{lerp_color::make_lerp_color_udf, rgba::make_rgba_udf};
 use datafusion::logical_expr::ScalarUDF;
 use datafusion::prelude::SessionContext;
 use histogram::{
@@ -67,4 +70,7 @@ pub fn register_extension_udfs(ctx: &SessionContext) {
     ctx.register_udf(ScalarUDF::from(PropertyGet::new()));
     ctx.register_udf(ScalarUDF::from(PropertiesToArray::new()));
     ctx.register_udf(ScalarUDF::from(PropertiesLength::new()));
+
+    ctx.register_udf(make_rgba_udf());
+    ctx.register_udf(make_lerp_color_udf());
 }

@@ -12,6 +12,7 @@ This file documents the historical progress of the Micromegas project. For curre
   * Add `otel_spans` JIT view (per-process) materializing OTel spans with `trace_id`/`span_id` as `FixedSizeBinary`
 * **Analytics:**
   * Add `net_spans` JIT view materializing Connection/Object/Property/RPC bandwidth spans with cumulative bit offsets
+  * Add `rgba(r, g, b, a)` and `lerp_color(c1, c2, t)` scalar UDFs for building packed RGBA `u32` colors from SQL (#1062)
 * **Web App:**
   * Extend flame graph cell to render bit-axis spans for `net_spans` and add bit-unit support to XYChart
   * Apply adaptive scaling to `bits/s` and `bytes/s` chart axes
@@ -36,6 +37,7 @@ This file documents the historical progress of the Micromegas project. For curre
   * Generalize map cell to primitive overlays with shape dispatch (sphere/box), per-instance RGBA via an `instanceColorRGBA` attribute, and column-or-scalar bindings per visual channel (size, scaleX/Y/Z, color); color column accepts integer (packed RGBA u32), `#rrggbb[aa]` string, or 4-byte binary (DataFusion's `0xrrggbbaa` literal); fix SyntaxEditor cursor/overlay alignment in SQL mode (#1055)
   * Enlarge SQL query editors across the app: screen-level editors to 384px and per-cell editors to 240px; trim the flame chart cell description for new-cell dialog consistency
   * Refine map navigation: WASD pans horizontally (no elevation), add Q/E keyboard zoom, suppress the browser context menu when a right-drag releases off-canvas, and auto-size the event detail panel with the title rendered via the Markdown template
+  * Remove admin-oriented `MICROMEGAS_MAPS_OBJECT_STORE_URI` / `.glb` drop hint from the map cell editor (admins use the Maps management UI)
 * **Python:**
   * Switch `bulk_ingest` to accept `pyarrow.Table` directly for native pass-through of struct/list/binary columns
   * Resolve CLI connection settings from `~/.micromegas/config.json` with env-var override (#1033)
@@ -49,6 +51,7 @@ This file documents the historical progress of the Micromegas project. For curre
   * Add "An Introduction to Micromegas" presentation
   * Document map notebook cell type and hybrid local-frontend setup (#1033)
   * Document CLI configuration file and authentication settings (#1033)
+  * Document `rgba` and `lerp_color` color functions in the SQL functions reference (#1062)
 * **Security:**
   * Bump rustls-webpki, rand, and uuid to fix Dependabot alerts (#210-213)
   * Bump postcss and uuid to fix Dependabot alerts (#214-221)

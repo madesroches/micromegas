@@ -1085,6 +1085,81 @@ SELECT sum_from_histogram(duration_histogram) as total_duration
 FROM performance_histograms;
 ```
 
+#### Color Functions
+
+Color functions build packed RGBA `u32` values suitable for the map cell's `color` channel (and any other consumer that decodes colors in `0xRRGGBBAA` byte order). Component floats are in `[0.0, 1.0]`; out-of-range values are clamped at the byte boundary. Alpha is straight (not premultiplied), and operations act directly on sRGB-encoded 8-bit channels.
+
+##### `rgba(r, g, b, a)`
+
+Packs four `[0.0, 1.0]` floats into a `UInt32` color in `0xRRGGBBAA` byte order.
+
+**Syntax:**
+```sql
+rgba(r, g, b, a)
+```
+
+**Parameters:**
+
+- `r` (`Float64`): Red channel, `[0.0, 1.0]` (clamped)
+
+- `g` (`Float64`): Green channel, `[0.0, 1.0]` (clamped)
+
+- `b` (`Float64`): Blue channel, `[0.0, 1.0]` (clamped)
+
+- `a` (`Float64`): Alpha channel, `[0.0, 1.0]` (clamped). Straight alpha — not premultiplied.
+
+**Returns:** `UInt32` — packed color where byte 0 (high) is red and byte 3 (low) is alpha. `NULL` if any input is `NULL`. Integer literals (e.g. `rgba(1, 0, 0, 1)`) are accepted via DataFusion's implicit numeric coercion to `Float64`.
+
+**Examples:**
+```sql
+-- Opaque red.
+SELECT rgba(1, 0, 0, 1) AS color;          -- 0xff0000ff
+
+-- 50% grey, fully opaque (round-half-up: 0.5 -> 128).
+SELECT rgba(0.5, 0.5, 0.5, 1) AS color;    -- 0x808080ff
+
+-- Out-of-range values clamp safely (useful for normalized metrics).
+SELECT rgba(value / max_value, 0.0, 1.0 - value / max_value, 1.0) AS color
+FROM measures;
+```
+
+##### `lerp_color(c1, c2, t)`
+
+Component-wise linear interpolation between two packed RGBA colors.
+
+**Syntax:**
+```sql
+lerp_color(c1, c2, t)
+```
+
+**Parameters:**
+
+- `c1` (`UInt32`): Start color in `0xRRGGBBAA` packing.
+
+- `c2` (`UInt32`): End color in `0xRRGGBBAA` packing.
+
+- `t` (`Float64`): Interpolation factor, clamped to `[0.0, 1.0]`. Alpha is interpolated alongside RGB.
+
+**Returns:** `UInt32` — packed color. `NULL` if any input is `NULL`.
+
+> **Note on literal colors.** `c1`/`c2` must be `UInt32`. Bare integer or hex literals do not coerce to `UInt32` under this signature and will fail at planning time with a coercion error. Either construct colors via `rgba(...)` (which returns `UInt32` natively) or wrap literals with `CAST(<literal> AS INT UNSIGNED)`. Existing `UInt32` columns work without ceremony.
+
+**Examples:**
+```sql
+-- Hot/cold gradient over a metric, with full alpha.
+-- `t` is clamped internally, so out-of-range ratios safely saturate.
+SELECT x, y, z,
+       lerp_color(rgba(0, 0.5, 1, 1),       -- cool
+                  rgba(1, 0.2, 0, 1),       -- hot
+                  value / 100.0) AS color
+FROM my_events;
+
+-- Equivalent endpoint construction via CAST.
+SELECT lerp_color(CAST(4278190080 AS INT UNSIGNED),  -- 0xff000000
+                  CAST(16711680   AS INT UNSIGNED),  -- 0x00ff0000
+                  0.5) AS color;                     -- 0x80800000
+```
+
 ## Standard SQL Functions
 
 Micromegas supports all standard DataFusion SQL functions including math, string, date/time, conditional, and array functions. For a complete list with examples, see the [DataFusion Scalar Functions documentation](https://datafusion.apache.org/user-guide/sql/scalar_functions.html).
