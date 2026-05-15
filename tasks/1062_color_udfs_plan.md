@@ -46,6 +46,44 @@ primitive overlays plan
 
 ## Design
 
+### API conventions (locked in by this plan)
+
+These are the conventions every color UDF in this crate must honour. Once
+external SQL exists in the wild, they are effectively frozen — document them
+in the `color/mod.rs` module doc-comment so future UDFs reuse one source of
+truth.
+
+- **Packing.** Colors are packed `u32` in `0xRRGGBBAA` byte order: byte 0
+  (high byte) is red, byte 3 (low byte) is alpha. Matches the map cell's
+  decode in `MapViewer.tsx:293-296`.
+- **Component range.** Float inputs/outputs are in `[0.0, 1.0]`. Out-of-range
+  values are clamped at the byte boundary, not rejected.
+- **Alpha is straight, not premultiplied.** No special casing of the alpha
+  channel — it interpolates and quantizes like RGB.
+- **Color space is sRGB-encoded 8-bit.** Lerps and other ops happen directly
+  on sRGB byte values, which is what the GPU consumes and what
+  HLSL/Cg-style 8-bit color code does. Future perceptual-space variants
+  (e.g., `lerp_oklab`) must use an explicit suffix; unsuffixed names always
+  mean sRGB.
+
+### Future-extension naming reservations
+
+Not built now, but the names are reserved so the API stays coherent as it
+grows. Recording them here keeps the next person from picking conflicting
+names.
+
+- **Constructors by format:** `rgba(r,g,b,a)` (this plan), `rgb(r,g,b)`
+  (alpha=1), `hsla(h,s,l,a)`, `hsva(...)`, `color_from_hex('#bf360cff')`.
+- **Operations on packed colors:** `<op>_color` suffix —
+  `lerp_color` (this plan), and (future) `mix_color` (alias?),
+  `blend_color` (over-compositing), `tint_color`, `saturate_color`.
+- **Color-space-specific operations:** `<op>_<space>` suffix —
+  `lerp_oklab`, `lerp_hsl`, etc.
+- **Component accessors** (`color_r/g/b/a(c) -> Float64`) are deliberately
+  out of scope for this issue — colormap-band SQL builds colors up rather
+  than tearing them down. Worth a follow-up if anyone needs to manipulate
+  existing color columns.
+
 ### Module layout
 
 Add a `color` submodule to the extensions crate, mirroring the existing
@@ -143,7 +181,10 @@ at the top.
 1. Add `pub mod color;` to `rust/datafusion-extensions/src/lib.rs`.
 2. Create `rust/datafusion-extensions/src/color/mod.rs` with the three
    helpers (`pack_rgba`, `unpack_rgba`, `float_to_byte`) and `pub mod rgba;
-   pub mod lerp_color;`.
+   pub mod lerp_color;`. Lead with a module doc-comment that states the
+   four locked-in API conventions (packing, component range, straight
+   alpha, sRGB color space) — this is the canonical reference for future
+   color UDFs.
 3. Implement `rust/datafusion-extensions/src/color/rgba.rs` —
    `RgbaUdf` struct, `ScalarUDFImpl` impl, `make_rgba_udf()`.
 4. Implement `rust/datafusion-extensions/src/color/lerp_color.rs` —
