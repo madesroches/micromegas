@@ -29,10 +29,15 @@ primitive overlays plan
   `rust/datafusion-extensions/src/lib.rs:39-70`. The crate is described as
   "WASM-compatible DataFusion UDF extensions (JSONB, histogram) for
   micromegas" — color UDFs are a natural new neighbor.
-- **Implementation pattern.** Each UDF is a `struct` implementing
-  `ScalarUDFImpl`, with a `make_*_udf()` constructor returning a `ScalarUDF`.
-  The struct must derive `#[derive(Debug, PartialEq, Eq, Hash)]` (DataFusion
-  trait requirement — every existing UDF in this crate does so). See
+- **Implementation pattern.** Two patterns coexist in this crate: the
+  histogram UDFs use the `create_udf` helper (function-pointer style), while
+  the JSONB and properties UDFs define a `struct` implementing
+  `ScalarUDFImpl` with a `make_*_udf()` constructor returning a `ScalarUDF`.
+  The color UDFs follow the struct pattern (it gives explicit control over
+  the signature and lets us downcast each input array). Every struct-based
+  UDF in this crate (JSONB, properties) derives
+  `#[derive(Debug, PartialEq, Eq, Hash)]` so the default `equals`/`hash_value`
+  on `ScalarUDFImpl` work without a hand-written impl. See
   `rust/datafusion-extensions/src/jsonb/array_length.rs` for a concise
   numeric example: explicit `Signature`, `return_type`, `invoke_with_args`
   building an Arrow array directly.
@@ -97,7 +102,7 @@ avoids future churn.
 ```
 rust/datafusion-extensions/src/
   color/
-    mod.rs          # re-exports + shared helpers (pack, unpack, clamp)
+    mod.rs          # shared helpers (pack, unpack, clamp) + submodule decls
     rgba.rs         # rgba(r,g,b,a) -> UInt32
     lerp_color.rs   # lerp_color(c1,c2,t) -> UInt32
 ```
@@ -122,12 +127,21 @@ pub fn unpack_rgba(c: u32) -> (u8, u8, u8, u8) {
     )
 }
 
-/// Quantize a normalized float to 0..=255 with round-to-nearest.
+/// Quantize a normalized float to 0..=255 with round-half-up.
 /// Clamps the scaled value (not the input) so the output invariant holds
-/// regardless of input range and is robust to NaN/±∞.
+/// regardless of input range. ±∞ saturate via the `clamp`; NaN saturates to
+/// 0 via Rust's saturating `f64 as u8` cast (the clamp itself propagates
+/// NaN, so the cast is what makes NaN inputs safe).
 #[inline]
 pub fn float_to_byte(f: f64) -> u8 {
     (f * 255.0 + 0.5).clamp(0.0, 255.0) as u8
+}
+
+/// Round-half-up an already-in-`[0,255]` lerp result to a `u8`. Shared with
+/// `lerp_color` so both UDFs use the same tie-breaking rule.
+#[inline]
+pub fn round_to_byte(f: f64) -> u8 {
+    (f + 0.5).clamp(0.0, 255.0) as u8
 }
 ```
 
@@ -156,7 +170,9 @@ pub fn float_to_byte(f: f64) -> u8 {
   - If any input is null → result is null.
   - Clamp `t` to `[0.0, 1.0]`.
   - Unpack both colors into four `(u8, u8, u8, u8)` tuples, lerp each channel
-    as `f64` (`a + (b - a) * t`), round to nearest, repack.
+    as `f64` (`a + (b - a) * t`), quantize via the shared `round_to_byte`
+    helper (round-half-up, same tie-breaking as `rgba`'s `float_to_byte`),
+    and repack.
   - Alpha is treated the same as RGB (no premultiplication, no special-casing).
 - **Caller note (literal colors).** Unlike `Float64`, DataFusion 52.5 does **not**
   coerce `Int64` (or `Binary`, which is how hex literals like `0xff000000` parse)
@@ -190,12 +206,12 @@ at the top.
 ## Implementation Steps
 
 1. Add `pub mod color;` to `rust/datafusion-extensions/src/lib.rs`.
-2. Create `rust/datafusion-extensions/src/color/mod.rs` with the three
-   helpers (`pack_rgba`, `unpack_rgba`, `float_to_byte`) and `pub mod rgba;
-   pub mod lerp_color;`. Lead with a module doc-comment that states the
-   four locked-in API conventions (packing, component range, straight
-   alpha, sRGB color space) — this is the canonical reference for future
-   color UDFs.
+2. Create `rust/datafusion-extensions/src/color/mod.rs` with the four
+   helpers (`pack_rgba`, `unpack_rgba`, `float_to_byte`, `round_to_byte`)
+   and `pub mod rgba; pub mod lerp_color;`. Lead with a module doc-comment
+   that states the four locked-in API conventions (packing, component
+   range, straight alpha, sRGB color space) — this is the canonical
+   reference for future color UDFs.
 3. Implement `rust/datafusion-extensions/src/color/rgba.rs` —
    `RgbaUdf` struct, `ScalarUDFImpl` impl, `make_rgba_udf()`.
 4. Implement `rust/datafusion-extensions/src/color/lerp_color.rs` —
@@ -208,8 +224,9 @@ at the top.
    Functions". Match the existing entry style (Syntax / Parameters / Returns
    / Examples).
 8. Update the `description` field in `rust/datafusion-extensions/Cargo.toml`
-   to mention color, e.g. `"WASM-compatible DataFusion UDF extensions (JSONB,
-   histogram, color) for micromegas"`.
+   to mention color (and fill in the already-omitted properties module),
+   e.g. `"WASM-compatible DataFusion UDF extensions (JSONB, histogram,
+   properties, color) for micromegas"`.
 9. Run `cargo fmt`, `cargo clippy --workspace -- -D warnings`, and
    `cargo test -p micromegas-datafusion-extensions`.
 
@@ -240,9 +257,11 @@ at the top.
   derived from arithmetic that may drift slightly past `[0,1]`; an error on
   every such row would be more surprising than the silent clamp.
 - **Clamp after scaling, not before.** Encodes the actual invariant (output
-  is `0..=255`) and is robust to NaN / ±∞: the scaled value clamp catches
-  them directly rather than relying on the saturating `as u8` cast and
-  clamp-input ordering.
+  is `0..=255`). ±∞ saturate to `0` / `255` via the clamp directly; NaN
+  propagates through the clamp (per `f64::clamp` semantics) and is folded
+  to `0` by Rust's saturating `f64 as u8` cast. Both safety nets are load-
+  bearing — the comment on `float_to_byte` calls this out so future readers
+  don't strip either one.
 - **Round-to-nearest vs. truncation when quantizing.** Round (`* 255 + 0.5`).
   Matches what users expect when reading `1.0 → 255` and avoids the
   truncation artifact where `1.0 * 255 = 255` but `0.999 * 255 = 254`.
@@ -273,9 +292,9 @@ Coverage:
   `CAST(... AS INT UNSIGNED)`, `lerp_color(c1, c2, 0.0) == c1` and
   `lerp_color(c1, c2, 1.0) == c2`. (Bare `UInt32` literals do not coerce —
   see the caller note in the `lerp_color` design section.)
-- **lerp_color — midpoint:** e.g. `lerp_color(rgba(1, 0, 0, 0), rgba(0, 1, 0, 0), 0.5)`
-  → expected midpoint per the chosen rounding rule (`0x7f7f0000` truncate vs
-  `0x80800000` round-to-nearest — pick one and lock it in). Equivalent form:
+- **lerp_color — midpoint:** `lerp_color(rgba(1, 0, 0, 0), rgba(0, 1, 0, 0), 0.5)`
+  → `0x80800000` (round-half-up via the shared `round_to_byte` helper: `127.5
+  → 128` on both R and G channels). Equivalent form:
   `lerp_color(CAST(4278190080 AS INT UNSIGNED), CAST(16711680 AS INT UNSIGNED), 0.5)`.
 - **lerp_color — t clamping:** `t = -0.5` behaves like `t = 0`, `t = 1.5`
   like `t = 1`.
@@ -314,9 +333,6 @@ No update needed for `CLAUDE.md` or `AI_GUIDELINES.md`.
 
 ## Open Questions
 
-- **Midpoint rounding sign.** `(127 + 128) / 2 = 127.5` — round-to-nearest
-  goes to `128`. Confirm that's the desired behavior in the test for
-  `lerp_color(0xff000000, 0x00ff0000, 0.5)` before locking it in.
 - **Naming.** `rgba` is short and memorable but generic enough to collide
   with future variants (e.g., a hex-string form). If a collision feels
   likely, `pack_rgba` is an alternative; recommend keeping `rgba` for
