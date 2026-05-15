@@ -122,6 +122,17 @@ export function isNumericType(dataType: DataType): boolean {
 }
 
 /**
+ * Check if an Arrow DataType is an integer type.
+ * Tighter than isNumericType (excludes Float/Decimal) — for paths that need
+ * bit-exact integer semantics, e.g. an integer column read as RGBA u32.
+ * Like isNumericType / isStringType, this does NOT unwrap dictionaries —
+ * callers wrap with unwrapDictionary themselves.
+ */
+export function isIntegerType(dataType: DataType): boolean {
+  return DataType.isInt(dataType)
+}
+
+/**
  * Check if an Arrow DataType is a string type
  */
 export function isStringType(dataType: DataType): boolean {
