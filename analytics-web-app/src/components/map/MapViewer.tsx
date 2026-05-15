@@ -519,6 +519,8 @@ function UnrealCameraController({
     a: false,
     s: false,
     d: false,
+    q: false,
+    e: false,
   })
 
   // Track latest mapScene through a ref so mousedown can raycast against it
@@ -792,6 +794,8 @@ function UnrealCameraController({
       keysRef.current.a = false
       keysRef.current.s = false
       keysRef.current.d = false
+      keysRef.current.q = false
+      keysRef.current.e = false
     }
 
     // Safety net: if the browser/tab loses focus mid-drag (alt-tab, OS dialog),
@@ -838,14 +842,12 @@ function UnrealCameraController({
     if (isHoveredRef.current) {
       const moveSpeed = sphericalRef.current.radius * SPEED_PER_RADIUS * delta
 
-      const forward = new THREE.Vector3()
-      camera.getWorldDirection(forward)
-      forward.normalize()
-
-      // Theta-based right, same reason as panCamera: cross(cameraForward, worldUp)
-      // collapses to zero at phi=0 and silently drops A/D strafe.
+      // Theta-based XY basis, same as panCamera: keeps WASD as a top-down pan
+      // (W/S no longer changes elevation), and avoids the cross-product
+      // collapse at phi=0 that would silently drop strafe.
       const theta = sphericalRef.current.theta
       const right = new THREE.Vector3(Math.cos(theta), Math.sin(theta), 0)
+      const forward = new THREE.Vector3(-Math.sin(theta), Math.cos(theta), 0)
 
       if (keysRef.current.w) {
         targetRef.current.addScaledVector(forward, moveSpeed)
@@ -858,6 +860,23 @@ function UnrealCameraController({
       }
       if (keysRef.current.d) {
         targetRef.current.addScaledVector(right, moveSpeed)
+      }
+
+      // Q/E zoom: time-based exponential so the per-frame step is independent
+      // of framerate. Mirrors the wheel handler's zoomFactor invariant but
+      // skips cursor-anchoring (no pointer to anchor against).
+      let zoomSign = 0
+      if (keysRef.current.q) zoomSign += 1
+      if (keysRef.current.e) zoomSign -= 1
+      if (zoomSign !== 0) {
+        const KEY_ZOOM_RATE_PER_SEC = 2.0
+        const zoomMultiplier = Math.pow(KEY_ZOOM_RATE_PER_SEC, zoomSign * delta)
+        const newZoomFactor = Math.max(
+          0.001,
+          Math.min(10.0, zoomFactorRef.current * zoomMultiplier)
+        )
+        zoomFactorRef.current = newZoomFactor
+        sphericalRef.current.radius = fitRadiusRef.current * newZoomFactor
       }
     }
 
@@ -1005,7 +1024,8 @@ export function MapViewer({
         <div>Left-click + drag: Pan</div>
         <div>Right-click + drag: Rotate</div>
         <div>Scroll: Zoom</div>
-        <div>WASD: Fly</div>
+        <div>WASD: Pan</div>
+        <div>QE: Zoom</div>
         <div>Z: Reset view</div>
       </div>
     </div>
