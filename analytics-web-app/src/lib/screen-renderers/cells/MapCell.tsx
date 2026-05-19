@@ -456,7 +456,8 @@ export function MapCell({
  * scalars stored as raw numbers/RGBA-u32 still load — they're rendered in
  * their canonical string form (`"10"` or `"#bf360cff"`) on first edit.
  */
-function ChannelBindingControl({
+// eslint-disable-next-line react-refresh/only-export-components
+export function ChannelBindingControl({
   label,
   kind,
   binding,
@@ -515,7 +516,16 @@ function ChannelBindingControl({
     lastSyncedScalarRef.current = scalarString
     setDraft(scalarString)
   }
+  // Escape resets the draft and then blurs the input — but React batches the
+  // `setDraft` so the immediately-following `onBlur` reads the stale typed
+  // value from the closure and would commit it. This ref tells commitDraft
+  // to skip the next call, so Escape reliably cancels.
+  const skipNextCommitRef = useRef(false)
   const commitDraft = () => {
+    if (skipNextCommitRef.current) {
+      skipNextCommitRef.current = false
+      return
+    }
     if (draft !== scalarString) {
       onChange({ scalar: draft })
     }
@@ -575,7 +585,11 @@ function ChannelBindingControl({
               // single-sourced so Enter and click-away behave identically.
               e.currentTarget.blur()
             } else if (e.key === 'Escape') {
-              // Cancel the in-flight edit, restoring the committed value.
+              // Cancel the in-flight edit, restoring the committed value. The
+              // flag is required because React batches `setDraft` — without
+              // it, the synchronous `onBlur` would still see the stale typed
+              // draft from this render's closure and commit it.
+              skipNextCommitRef.current = true
               setDraft(scalarString)
               e.currentTarget.blur()
             }

@@ -1,3 +1,4 @@
+import { render, screen, fireEvent } from '@testing-library/react'
 import {
   Binary,
   Dictionary,
@@ -9,11 +10,12 @@ import {
   tableFromArrays,
   vectorFromArray,
 } from 'apache-arrow'
-import { mapMetadata } from '../MapCell'
+import { ChannelBindingControl, mapMetadata } from '../MapCell'
 import {
   buildOverlay,
   materializeRow,
   resolveMappingScalars,
+  type ChannelBinding,
 } from '@/components/map/overlay'
 import { DEFAULT_MAP_DETAIL_TEMPLATE } from '../../notebook-utils'
 
@@ -447,5 +449,151 @@ describe('mapMetadata', () => {
 
   it('declares single-row selection mode by default', () => {
     expect(mapMetadata.defaultSelectionMode).toBe('single')
+  })
+})
+
+describe('ChannelBindingControl', () => {
+  // Common props for the numeric variant. Tests override `binding` and `onChange`.
+  const baseProps = {
+    label: 'Size',
+    kind: 'numeric' as const,
+    fallbackScalar: 10,
+    columns: ['x', 'y', 'radius'],
+  }
+
+  it('does not fire onChange while the user types', () => {
+    const onChange = jest.fn()
+    render(
+      <ChannelBindingControl
+        {...baseProps}
+        binding={{ scalar: '10' }}
+        onChange={onChange}
+      />,
+    )
+    const input = screen.getByDisplayValue('10') as HTMLInputElement
+    fireEvent.change(input, { target: { value: '42' } })
+    fireEvent.change(input, { target: { value: '425' } })
+    // The text input is local-draft; nothing should reach the model yet.
+    expect(onChange).not.toHaveBeenCalled()
+    expect(input.value).toBe('425')
+  })
+
+  it('commits the draft on blur', () => {
+    const onChange = jest.fn()
+    render(
+      <ChannelBindingControl
+        {...baseProps}
+        binding={{ scalar: '10' }}
+        onChange={onChange}
+      />,
+    )
+    const input = screen.getByDisplayValue('10') as HTMLInputElement
+    fireEvent.change(input, { target: { value: '42' } })
+    fireEvent.blur(input)
+    expect(onChange).toHaveBeenCalledTimes(1)
+    expect(onChange).toHaveBeenCalledWith({ scalar: '42' })
+  })
+
+  it('commits the draft on Enter', () => {
+    const onChange = jest.fn()
+    render(
+      <ChannelBindingControl
+        {...baseProps}
+        binding={{ scalar: '10' }}
+        onChange={onChange}
+      />,
+    )
+    const input = screen.getByDisplayValue('10') as HTMLInputElement
+    // Focus is required for `.blur()` to actually fire a blur event in jsdom.
+    input.focus()
+    fireEvent.change(input, { target: { value: '99' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(onChange).toHaveBeenCalledTimes(1)
+    expect(onChange).toHaveBeenCalledWith({ scalar: '99' })
+  })
+
+  it('Escape discards the draft without committing', () => {
+    // Regression: keydown's setDraft is batched in React 18+, so the
+    // synchronous blur triggered by `.blur()` reads the typed value from
+    // closure. A skip-next-commit flag is required.
+    const onChange = jest.fn()
+    render(
+      <ChannelBindingControl
+        {...baseProps}
+        binding={{ scalar: '10' }}
+        onChange={onChange}
+      />,
+    )
+    const input = screen.getByDisplayValue('10') as HTMLInputElement
+    input.focus()
+    fireEvent.change(input, { target: { value: 'foo' } })
+    fireEvent.keyDown(input, { key: 'Escape' })
+    expect(onChange).not.toHaveBeenCalled()
+    expect(input.value).toBe('10')
+  })
+
+  it('does not fire onChange on blur when the draft equals the prop', () => {
+    const onChange = jest.fn()
+    render(
+      <ChannelBindingControl
+        {...baseProps}
+        binding={{ scalar: '10' }}
+        onChange={onChange}
+      />,
+    )
+    const input = screen.getByDisplayValue('10') as HTMLInputElement
+    fireEvent.focus(input)
+    fireEvent.blur(input)
+    expect(onChange).not.toHaveBeenCalled()
+  })
+
+  it('adopts an external prop change over the in-flight draft', () => {
+    // Mode switches, color-picker picks, and saved-config reloads update
+    // the binding from outside. The text input should pick up the new
+    // value instead of keeping a stale uncommitted draft.
+    const onChange = jest.fn()
+    const { rerender } = render(
+      <ChannelBindingControl
+        {...baseProps}
+        binding={{ scalar: '10' }}
+        onChange={onChange}
+      />,
+    )
+    const input = screen.getByDisplayValue('10') as HTMLInputElement
+    fireEvent.change(input, { target: { value: 'typing...' } })
+    expect(input.value).toBe('typing...')
+    rerender(
+      <ChannelBindingControl
+        {...baseProps}
+        binding={{ scalar: '50' }}
+        onChange={onChange}
+      />,
+    )
+    expect(input.value).toBe('50')
+  })
+
+  it('renders legacy numeric scalar in canonical string form', () => {
+    render(
+      <ChannelBindingControl
+        {...baseProps}
+        binding={{ scalar: 25 } as ChannelBinding}
+        onChange={jest.fn()}
+      />,
+    )
+    expect(screen.getByDisplayValue('25')).toBeInTheDocument()
+  })
+
+  it('renders legacy numeric color scalar as #rrggbbaa', () => {
+    render(
+      <ChannelBindingControl
+        label="Color"
+        kind="color"
+        fallbackScalar={0xbf360cff}
+        columns={[]}
+        binding={{ scalar: 0xbf360cff } as ChannelBinding}
+        onChange={jest.fn()}
+      />,
+    )
+    expect(screen.getByDisplayValue('#bf360cff')).toBeInTheDocument()
   })
 })

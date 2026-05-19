@@ -464,11 +464,36 @@ export interface MappingResolveContext {
   cellSelections: Record<string, Record<string, unknown>>
 }
 
+/** Fast scan: returns true iff at least one channel has a string scalar that
+ *  may need macro substitution. Used to skip the entire resolution pass for
+ *  legacy mappings with purely numeric scalars. */
+function hasStringScalar(m: OverlayMapping): boolean {
+  for (const ch of ['size', 'scaleX', 'scaleY', 'scaleZ', 'color'] as const) {
+    const b = m[ch]
+    if (b && 'scalar' in b && typeof b.scalar === 'string') return true
+  }
+  return false
+}
+
 export function resolveMappingScalars(
   mapping: OverlayMapping,
   ctx: MappingResolveContext,
 ): MappingResolveResult {
+  // Fast path: legacy mappings store scalars as raw numbers — nothing to
+  // resolve. Returning the input by reference lets the caller's memo stay
+  // stable across parent re-renders that pass unstable ctx identities.
+  if (!hasStringScalar(mapping)) return { ok: true, mapping }
+
   const resolved: OverlayMapping = { ...mapping }
+
+  // Macro substitution only runs when the scalar text actually contains a
+  // `$`. Literal strings like `"10"` or `"#bf360cff"` bypass the regex passes
+  // entirely — keeps the hot path cheap when MapCell re-renders per keystroke
+  // in an unrelated SQL editor.
+  const substitute = (s: string): string =>
+    s.includes('$')
+      ? substituteMacrosRaw(s, ctx.variables, ctx.timeRange, ctx.cellResults, ctx.cellSelections)
+      : s
 
   const resolveNumeric = (
     label: string,
@@ -476,13 +501,7 @@ export function resolveMappingScalars(
   ): { ok: true; binding: ChannelBinding | undefined } | { ok: false; error: string } => {
     if (!b || !('scalar' in b)) return { ok: true, binding: b }
     if (typeof b.scalar === 'number') return { ok: true, binding: b }
-    const raw = substituteMacrosRaw(
-      b.scalar,
-      ctx.variables,
-      ctx.timeRange,
-      ctx.cellResults,
-      ctx.cellSelections,
-    )
+    const raw = substitute(b.scalar)
     // Trim+empty check: `Number("")` is 0, which silently turns an unset
     // scalar into zero. Surface it as an error instead so an empty field is
     // visible rather than a render-time mystery.
@@ -512,13 +531,7 @@ export function resolveMappingScalars(
   if (mapping.color && 'scalar' in mapping.color) {
     const s = mapping.color.scalar
     if (typeof s === 'string') {
-      const raw = substituteMacrosRaw(
-        s,
-        ctx.variables,
-        ctx.timeRange,
-        ctx.cellResults,
-        ctx.cellSelections,
-      )
+      const raw = substitute(s)
       const rgba = rgbaFromHex(raw)
       if (rgba === null) {
         return {
