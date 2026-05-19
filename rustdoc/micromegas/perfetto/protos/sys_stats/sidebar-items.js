@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"mod":["psi_sample"],"struct":["BuddyInfo","CpuTimes","DevfreqValue","DiskStat","InterruptCount","MeminfoValue","PsiSample","VmstatValue"]};

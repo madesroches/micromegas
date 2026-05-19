@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["RecordType"],"mod":["arg"],"struct":["Arg","InternedString"]};

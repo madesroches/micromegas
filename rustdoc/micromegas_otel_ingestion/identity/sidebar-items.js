@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["NS_OTEL_BLOCK_V1","NS_OTEL_PROCESS_V1","NS_OTEL_STREAM_V1"],"enum":["SignalKey"],"fn":["attr","attr_to_string","block_id_from_payload","is_degenerate_resource","process_id_from_resource","process_start_string","stream_id_from_process_signal"]};

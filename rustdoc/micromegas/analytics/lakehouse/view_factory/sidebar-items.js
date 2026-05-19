@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["default_view_factory"],"struct":["ViewFactory"],"trait":["ViewMaker"]};

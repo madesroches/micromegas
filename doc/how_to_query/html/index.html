@@ -1,0 +1,1845 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Micromegas SQL Documentation</title>
+    <style>
+        :root {
+            --sidebar-width: 300px;
+            --primary-color: #0969da;
+            --border-color: #d0d7de;
+            --bg-secondary: #f6f8fa;
+            --text-primary: #24292e;
+            --text-secondary: #656d76;
+        }
+        
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            line-height: 1.6;
+            color: var(--text-primary);
+            background: white;
+        }
+        
+        .container {
+            display: flex;
+            min-height: 100vh;
+        }
+        
+        /* Sidebar Navigation */
+        .sidebar {
+            width: var(--sidebar-width);
+            background: var(--bg-secondary);
+            border-right: 1px solid var(--border-color);
+            position: fixed;
+            height: 100vh;
+            overflow-y: auto;
+            z-index: 100;
+        }
+        
+        .sidebar-header {
+            padding: 20px;
+            border-bottom: 1px solid var(--border-color);
+            background: white;
+        }
+        
+        .sidebar-header h3 {
+            font-size: 18px;
+            font-weight: 600;
+        }
+        
+        .sidebar-header a {
+            color: var(--text-primary);
+            text-decoration: none;
+        }
+        
+        .sidebar-content {
+            padding: 20px 0;
+        }
+        
+        .nav-section {
+            margin-bottom: 16px;
+        }
+        
+        .sidebar a {
+            display: block;
+            padding: 4px 20px;
+            color: var(--text-secondary);
+            text-decoration: none;
+            border-left: 3px solid transparent;
+            transition: all 0.2s ease;
+        }
+        
+        .sidebar a:hover {
+            color: var(--primary-color);
+            background: rgba(9, 105, 218, 0.1);
+        }
+        
+        .nav-h1 {
+            font-weight: 600;
+            color: var(--text-primary) !important;
+            margin-top: 12px;
+            font-size: 14px;
+        }
+        
+        .nav-h2 {
+            padding-left: 32px !important;
+            font-size: 13px;
+        }
+        
+        .nav-h3 {
+            padding-left: 44px !important;
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+        
+        /* Main Content */
+        .main-content {
+            flex: 1;
+            margin-left: var(--sidebar-width);
+            padding: 40px;
+            max-width: calc(100vw - var(--sidebar-width));
+        }
+        
+        .content {
+            max-width: 900px;
+        }
+        
+        /* Typography */
+        h1, h2, h3, h4, h5, h6 { 
+            color: var(--text-primary); 
+            margin-top: 32px;
+            margin-bottom: 16px;
+            font-weight: 600;
+            line-height: 1.25;
+        }
+        
+        h1 { 
+            border-bottom: 1px solid var(--border-color); 
+            padding-bottom: 10px;
+            font-size: 32px;
+            margin-top: 0;
+        }
+        
+        h2 { 
+            border-bottom: 1px solid var(--border-color); 
+            padding-bottom: 8px;
+            font-size: 24px;
+        }
+        
+        h3 { font-size: 20px; }
+        h4 { font-size: 16px; }
+        
+        p {
+            margin-bottom: 16px;
+        }
+        
+        /* Code styling */
+        code { 
+            background: var(--bg-secondary);
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+            font-size: 85%;
+        }
+        
+        pre { 
+            background: var(--bg-secondary);
+            padding: 16px;
+            border-radius: 6px;
+            overflow-x: auto;
+            border: 1px solid var(--border-color);
+            margin: 16px 0;
+        }
+        
+        pre code {
+            background: transparent;
+            padding: 0;
+            font-size: 14px;
+        }
+        
+        /* Tables */
+        table { 
+            border-collapse: collapse; 
+            width: 100%; 
+            margin: 24px 0;
+            font-size: 14px;
+        }
+        
+        th, td { 
+            border: 1px solid var(--border-color); 
+            padding: 8px 12px; 
+            text-align: left; 
+        }
+        
+        th { 
+            background: var(--bg-secondary); 
+            font-weight: 600;
+        }
+        
+        /* Links */
+        a { 
+            color: var(--primary-color); 
+            text-decoration: none; 
+        }
+        
+        a:hover { text-decoration: underline; }
+        
+        /* Lists */
+        ul, ol { 
+            padding-left: 32px; 
+            margin-bottom: 16px;
+        }
+        
+        li { margin: 4px 0; }
+        
+        /* Blockquotes */
+        blockquote {
+            padding: 16px;
+            margin: 16px 0;
+            color: var(--text-secondary);
+            border-left: 4px solid var(--border-color);
+            background: var(--bg-secondary);
+            border-radius: 0 6px 6px 0;
+        }
+        
+        /* Responsive design */
+        @media (max-width: 1024px) {
+            :root {
+                --sidebar-width: 280px;
+            }
+        }
+        
+        @media (max-width: 768px) {
+            .sidebar {
+                transform: translateX(-100%);
+                transition: transform 0.3s ease;
+            }
+            
+            .main-content {
+                margin-left: 0;
+                max-width: 100vw;
+                padding: 20px;
+            }
+        }
+        
+        /* Smooth scrolling for anchor links */
+        html {
+            scroll-behavior: smooth;
+        }
+        
+        /* Highlight target sections */
+        :target {
+            scroll-margin-top: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        
+    <nav class="sidebar">
+        <div class="sidebar-header">
+            <h3><a href="/">Micromegas SQL</a></h3>
+        </div>
+        <div class="sidebar-content">
+                <div class="nav-section">
+                <a href="#how-to-query-micromegas-data" class="nav-h1">How to Query Micromegas Data</a>
+                <a href="#overview" class="nav-h2">Overview</a>
+                <a href="#quick-start" class="nav-h2">Quick Start</a>
+                <a href="#python-api" class="nav-h3">Python API</a>
+            <div class="nav-section">
+                <a href="#connect-to-micromegas-analytics-service" class="nav-h1">Connect to Micromegas analytics service</a>
+            <div class="nav-section">
+                <a href="#set-up-time-range-for-queries" class="nav-h1">Set up time range for queries</a>
+            <div class="nav-section">
+                <a href="#query-recent-log-entries" class="nav-h1">Query recent log entries</a>
+            <div class="nav-section">
+                <a href="#returns-pandas-dataframe-with-columns-matching-the-select-fields" class="nav-h1">Returns: pandas DataFrame with columns matching the SELECT fields</a>
+            <div class="nav-section">
+                <a href="#query-logs-from-specific-process-using-view-instance" class="nav-h1">Query logs from specific process using view instance</a>
+                <a href="#query-without-time-range-uses-all-available-data" class="nav-h3">Query without time range (uses all available data)</a>
+            <div class="nav-section">
+                <a href="#count-total-log-entries-use-with-caution-on-large-datasets" class="nav-h1">Count total log entries (use with caution on large datasets)</a>
+            <div class="nav-section">
+                <a href="#get-process-information-safe-typically-small-dataset" class="nav-h1">Get process information (safe - typically small dataset)</a>
+                <a href="#return-types" class="nav-h3">Return Types</a>
+            <div class="nav-section">
+                <a href="#query-returns-a-pandas-dataframe" class="nav-h1">Query returns a pandas DataFrame</a>
+            <div class="nav-section">
+                <a href="#access-dataframe-properties" class="nav-h1">Access DataFrame properties</a>
+            <div class="nav-section">
+                <a href="#use-pandas-operations" class="nav-h1">Use pandas operations</a>
+                <a href="#working-with-metrics" class="nav-h2">Working with Metrics</a>
+            <div class="nav-section">
+                <a href="#get-recent-measures-from-a-specific-process" class="nav-h1">Get recent measures from a specific process</a>
+            <div class="nav-section">
+                <a href="#find-measures-by-name-pattern-eg-all-cpu-related-metrics" class="nav-h1">Find measures by name pattern (e.g., all CPU-related metrics)</a>
+            <div class="nav-section">
+                <a href="#aggregate-measures-over-time-windows" class="nav-h1">Aggregate measures over time windows</a>
+                <a href="#query-streaming" class="nav-h3">Query Streaming</a>
+            <div class="nav-section">
+                <a href="#set-up-time-range-for-large-dataset" class="nav-h1">Set up time range for large dataset</a>
+            <div class="nav-section">
+                <a href="#stream-query-results-to-process-large-datasets" class="nav-h1">Stream query results to process large datasets</a>
+            <div class="nav-section">
+                <a href="#use-query_stream-to-get-record-batches" class="nav-h1">Use query_stream() to get record batches</a>
+                <a href="#grafana-plugin" class="nav-h3">Grafana Plugin</a>
+                <a href="#table-of-contents" class="nav-h2">Table of Contents</a>
+                <a href="#schema-referenceschema-reference" class="nav-h3">[Schema Reference](#schema-reference)</a>
+                <a href="#functions-referencefunctions-reference" class="nav-h3">[Functions Reference](#functions-reference)</a>
+                <a href="#query-patternsquery-patterns" class="nav-h3">[Query Patterns](#query-patterns)</a>
+                <a href="#query-performancequery-performance" class="nav-h3">[Query Performance](#query-performance)</a>
+                <a href="#advanced-featuresadvanced-features" class="nav-h3">[Advanced Features](#advanced-features)</a>
+                <a href="#schema-reference" class="nav-h2">Schema Reference</a>
+                <a href="#views" class="nav-h3">Views</a>
+                <a href="#data-types" class="nav-h3">Data Types</a>
+                <a href="#view-relationships" class="nav-h3">View Relationships</a>
+                <a href="#functions-reference" class="nav-h2">Functions Reference</a>
+                <a href="#table-functions" class="nav-h3">Table Functions</a>
+                <a href="#scalar-functions" class="nav-h3">Scalar Functions</a>
+                <a href="#histogram-functions" class="nav-h3">Histogram Functions</a>
+                <a href="#aggregate-functions" class="nav-h3">Aggregate Functions</a>
+                <a href="#json-functions" class="nav-h3">JSON Functions</a>
+                <a href="#datafusion-functions" class="nav-h3">DataFusion Functions</a>
+                <a href="#query-patterns" class="nav-h2">Query Patterns</a>
+                <a href="#common-queries" class="nav-h3">Common Queries</a>
+            <div class="nav-section">
+                <a href="#get-recent-error-logs" class="nav-h1">Get recent error logs</a>
+            <div class="nav-section">
+                <a href="#find-logs-from-specific-executable" class="nav-h1">Find logs from specific executable</a>
+            <div class="nav-section">
+                <a href="#get-processes-and-their-basic-info" class="nav-h1">Get processes and their basic info</a>
+            <div class="nav-section">
+                <a href="#query-spans-for-a-specific-stream-to-find-slow-operations" class="nav-h1">Query spans for a specific stream to find slow operations</a>
+            <div class="nav-section">
+                <a href="#query-async-events-for-specific-process" class="nav-h1">Query async events for specific process</a>
+                <a href="#query-performance" class="nav-h2">Query Performance</a>
+                <a href="#performance-overview" class="nav-h3">Performance Overview</a>
+                <a href="#critical-performance-rules" class="nav-h3">Critical Performance Rules</a>
+            <div class="nav-section">
+                <a href="#-dangerous-no-time-filter-scans-all-data" class="nav-h1">❌ DANGEROUS: No time filter (scans all data)</a>
+            <div class="nav-section">
+                <a href="#-safe-time-bounded-query" class="nav-h1">✅ SAFE: Time-bounded query</a>
+            <div class="nav-section">
+                <a href="#-expensive-order-by-without-limit-on-large-time-range" class="nav-h1">❌ EXPENSIVE: ORDER BY without LIMIT on large time range</a>
+            <div class="nav-section">
+                <a href="#-efficient-order-by-with-limit" class="nav-h1">✅ EFFICIENT: ORDER BY with LIMIT</a>
+            <div class="nav-section">
+                <a href="#-efficient-no-order-by-for-aggregations" class="nav-h1">✅ EFFICIENT: No ORDER BY for aggregations</a>
+            <div class="nav-section">
+                <a href="#-expensive-cross-process-joins-on-global-views" class="nav-h1">❌ EXPENSIVE: Cross-process JOINs on global views</a>
+            <div class="nav-section">
+                <a href="#-efficient-process-scoped-joins" class="nav-h1">✅ EFFICIENT: Process-scoped JOINs</a>
+            <div class="nav-section">
+                <a href="#-efficient-simple-process-lookup" class="nav-h1">✅ EFFICIENT: Simple process lookup</a>
+            <div class="nav-section">
+                <a href="#-no-streaming-group-by-requires-full-dataset-processing" class="nav-h1">❌ NO STREAMING: GROUP BY requires full dataset processing</a>
+            <div class="nav-section">
+                <a href="#-streaming-friendly-no-aggregations" class="nav-h1">✅ STREAMING FRIENDLY: No aggregations</a>
+                <a href="#view-selection-performance" class="nav-h3">View Selection Performance</a>
+                <a href="#query-optimization-patterns" class="nav-h3">Query Optimization Patterns</a>
+            <div class="nav-section">
+                <a href="#-fastest-process-scoped-time-filter-limit" class="nav-h1">✅ FASTEST: Process-scoped + time filter + limit</a>
+            <div class="nav-section">
+                <a href="#-fast-aggregations-without-order-by" class="nav-h1">✅ FAST: Aggregations without ORDER BY</a>
+            <div class="nav-section">
+                <a href="#-fast-recent-global-data-with-limits" class="nav-h1">✅ FAST: Recent global data with limits</a>
+            <div class="nav-section">
+                <a href="#-slower-large-time-range-with-order-by" class="nav-h1">⚠️ SLOWER: Large time range with ORDER BY</a>
+            <div class="nav-section">
+                <a href="#-slower-global-cross-process-joins" class="nav-h1">⚠️ SLOWER: Global cross-process JOINs</a>
+                <a href="#performance-best-practices" class="nav-h3">Performance Best Practices</a>
+                <a href="#performance-monitoring" class="nav-h3">Performance Monitoring</a>
+            <div class="nav-section">
+                <a href="#monitor-query-execution-time-in-notebooks" class="nav-h1">Monitor query execution time in notebooks</a>
+            <div class="nav-section">
+                <a href="#alternative-manual-timing-in-scripts" class="nav-h1">Alternative: Manual timing in scripts</a>
+                <a href="#troubleshooting" class="nav-h3">Troubleshooting</a>
+                <a href="#advanced-features" class="nav-h2">Advanced Features</a>
+                <a href="#view-materialization" class="nav-h3">View Materialization</a>
+            <div class="nav-section">
+                <a href="#-fast-process-scoped-with-time-filter" class="nav-h1">✅ FAST: Process-scoped with time filter</a>
+            <div class="nav-section">
+                <a href="#-fast-global-view-with-small-time-window" class="nav-h1">✅ FAST: Global view with small time window</a>
+            <div class="nav-section">
+                <a href="#-slower-global-view-with-large-time-window" class="nav-h1">⚠️ SLOWER: Global view with large time window</a>
+            <div class="nav-section">
+                <a href="#jit-processing-for-process-specific-analysis" class="nav-h1">JIT processing for process-specific analysis</a>
+            <div class="nav-section">
+                <a href="#this-triggers-jit-etl-fetch-blocks-parse-generate-parquet-query" class="nav-h1">This triggers JIT ETL: fetch blocks → parse → generate parquet → query</a>
+                <a href="#custom-views" class="nav-h3">Custom Views</a>
+                <a href="#getting-help" class="nav-h2">Getting Help</a>
+
+        </div>
+    </nav>
+    
+        
+        <main class="main-content">
+            <div class="content">
+                <h1 id="how-to-query-micromegas-data">How to Query Micromegas Data</h1>
+<h2 id="overview">Overview</h2>
+<p>Micromegas provides a powerful SQL interface for querying observability data including logs, metrics, spans, and traces. <strong>Micromegas SQL is an extension of <a href="https://datafusion.apache.org/user-guide/sql/">Apache DataFusion SQL</a></strong> - you can use all standard DataFusion SQL features plus Micromegas-specific functions and views optimized for observability workloads.</p>
+<h2 id="quick-start">Quick Start</h2>
+<h3 id="python-api">Python API</h3>
+<pre><code class="language-python">import datetime
+import micromegas
+
+# Connect to Micromegas analytics service
+client = micromegas.connect()
+
+# Set up time range for queries
+now = datetime.datetime.now(datetime.timezone.utc)
+begin = now - datetime.timedelta(hours=1)
+end = now
+
+# Query recent log entries
+# Returns: pandas DataFrame with columns matching the SELECT fields
+sql = &quot;&quot;&quot;
+    SELECT time, process_id, level, target, msg
+    FROM log_entries
+    WHERE level &lt;= 4
+    ORDER BY time DESC
+    LIMIT 10;
+&quot;&quot;&quot;
+logs = client.query(sql, begin, end)  # Returns pandas.DataFrame
+print(logs)
+print(f&quot;Result type: {type(logs)}&quot;)  # &lt;class 'pandas.core.frame.DataFrame'&gt;
+
+# Query logs from specific process using view instance
+sql = &quot;&quot;&quot;
+    SELECT time, level, target, msg
+    FROM view_instance('log_entries', '{process_id}')
+    WHERE level &lt;= 3
+    ORDER BY time DESC
+    LIMIT 20;
+&quot;&quot;&quot;.format(process_id=&quot;your_process_id&quot;)
+process_logs = client.query(sql, begin, end)  # Returns pandas.DataFrame
+print(process_logs)
+</code></pre>
+<h3 id="query-without-time-range-uses-all-available-data">Query without time range (uses all available data)</h3>
+<p>For system metadata and development only. See <a href="#query-performance">Query Performance</a> section for detailed performance guidance.</p>
+<pre><code class="language-python"># Count total log entries (use with caution on large datasets)
+rows = client.query(&quot;SELECT COUNT(*) FROM log_entries;&quot;)
+print(rows)
+
+# Get process information (safe - typically small dataset)
+processes = client.query(&quot;SELECT process_id, exe FROM processes LIMIT 10;&quot;)
+print(processes)
+</code></pre>
+<h3 id="return-types">Return Types</h3>
+<p>All queries return <strong><a href="https://pandas.pydata.org/docs/reference/api/pandas.DataFrame.html">pandas DataFrames</a></strong>, making it easy to work with the results using the pandas ecosystem:</p>
+<pre><code class="language-python"># Query returns a pandas DataFrame
+result = client.query(&quot;SELECT process_id, exe FROM processes LIMIT 5;&quot;)
+
+# Access DataFrame properties
+print(f&quot;Shape: {result.shape}&quot;)
+print(f&quot;Columns: {result.columns.tolist()}&quot;)
+print(f&quot;Data types:\n{result.dtypes}&quot;)
+
+# Use pandas operations
+filtered = result[result['exe'].str.contains('analytics')]
+print(filtered.head())
+</code></pre>
+<p>For more information on working with DataFrames, see the <a href="https://pandas.pydata.org/docs/">pandas documentation</a>.</p>
+<h2 id="working-with-metrics">Working with Metrics</h2>
+<p>Measures capture numeric metrics and performance data from your applications. Here are common patterns for querying measure data:</p>
+<pre><code class="language-python">import micromegas
+
+client = micromegas.connect()
+
+# Get recent measures from a specific process
+process_id = &quot;your_process_id_here&quot;  # Replace with actual process ID
+recent_measures = client.query(f&quot;&quot;&quot;
+    SELECT time, name, value, unit
+    FROM view_instance('measures', '{process_id}')
+    WHERE time &gt;= NOW() - INTERVAL '1 hour'
+    ORDER BY time DESC
+    LIMIT 100;
+&quot;&quot;&quot;)
+print(recent_measures)
+
+# Find measures by name pattern (e.g., all CPU-related metrics)
+cpu_measures = client.query(f&quot;&quot;&quot;
+    SELECT time, name, value, unit
+    FROM view_instance('measures', '{process_id}')
+    WHERE name LIKE '%cpu%'
+      AND time &gt;= NOW() - INTERVAL '2 hours'
+    ORDER BY time DESC;
+&quot;&quot;&quot;)
+print(cpu_measures)
+
+# Aggregate measures over time windows
+memory_stats = client.query(f&quot;&quot;&quot;
+    SELECT 
+        date_trunc('minute', time) as minute,
+        AVG(value) as avg_memory,
+        MAX(value) as max_memory,
+        MIN(value) as min_memory
+    FROM view_instance('measures', '{process_id}')
+    WHERE name = 'memory_usage'
+      AND time &gt;= NOW() - INTERVAL '6 hours'
+    GROUP BY date_trunc('minute', time)
+    ORDER BY minute;
+&quot;&quot;&quot;)
+print(memory_stats)
+</code></pre>
+<p><strong>Common measure query patterns:</strong>
+- <strong>Filter by measure name</strong> - Use <code>WHERE name = 'specific_measure'</code> or <code>LIKE '%pattern%'</code>
+- <strong>Time-based aggregation</strong> - Use <code>date_trunc()</code> with <code>GROUP BY</code> for time windows
+- <strong>Statistical analysis</strong> - Use <code>AVG()</code>, <code>MAX()</code>, <code>MIN()</code>, <code>COUNT()</code> for summaries
+- <strong>Performance monitoring</strong> - Query specific time ranges during incidents or deployments</p>
+<h3 id="query-streaming">Query Streaming</h3>
+<p>For large result sets, Micromegas supports query streaming to handle data efficiently:</p>
+<pre><code class="language-python">import datetime
+import micromegas
+import pyarrow as pa
+
+client = micromegas.connect()
+
+# Set up time range for large dataset
+now = datetime.datetime.now(datetime.timezone.utc)
+begin = now - datetime.timedelta(days=7)  # Week of data
+end = now
+
+# Stream query results to process large datasets
+sql = &quot;&quot;&quot;
+    SELECT time, process_id, level, target, msg
+    FROM log_entries
+    WHERE time &gt;= NOW() - INTERVAL '7 days'
+    ORDER BY time DESC;
+&quot;&quot;&quot;
+
+# Use query_stream() to get record batches
+for record_batch in client.query_stream(sql, begin, end):
+    # record_batch is a pyarrow.RecordBatch
+    print(f&quot;RecordBatch schema: {record_batch.schema}&quot;)
+    print(f&quot;Number of rows: {record_batch.num_rows}&quot;)
+    print(f&quot;Number of columns: {record_batch.num_columns}&quot;)
+
+    # Convert RecordBatch to pandas DataFrame for processing
+    df = record_batch.to_pandas()
+    print(f&quot;Processing DataFrame with {len(df)} rows&quot;)
+
+    # Process the DataFrame (e.g., filter, aggregate, save to file)
+    error_logs = df[df['level'] &lt;= 3]
+    if not error_logs.empty:
+        print(f&quot;Found {len(error_logs)} error logs in this batch&quot;)
+        # Process error logs...
+
+    # Memory is freed after each batch is processed
+</code></pre>
+<p><strong>Record Batch Data Type:</strong>
+- Streaming returns <a href="https://arrow.apache.org/docs/python/generated/pyarrow.RecordBatch.html">pyarrow.RecordBatch</a> objects
+- RecordBatch is Apache Arrow's columnar data structure for efficient data transfer
+- Use <code>record_batch.to_pandas()</code> to convert to pandas DataFrame for analysis
+- RecordBatch provides schema information and efficient memory layout
+- <strong>Conversion to pandas is zero-copy</strong> - uses the same underlying buffers for maximum efficiency</p>
+<p><strong>FlightSQL Benefits:</strong>
+- Query streaming leverages Apache Arrow FlightSQL for high-performance data transfer
+- Columnar data format makes transfers <strong>orders of magnitude more efficient</strong> than JSON
+- Binary protocol eliminates serialization/deserialization overhead
+- Native compression and vectorized operations for optimal throughput</p>
+<p><strong>Accessing record batches:</strong>
+- Use <code>client.query_stream(sql, begin, end)</code> instead of <code>client.query()</code>
+- Returns an iterator of pyarrow RecordBatch objects
+- Each batch contains a subset of the total results
+- Convert to pandas with <code>.to_pandas()</code> method when needed
+- Process each batch individually to keep memory usage low</p>
+<p><strong>Benefits of streaming:</strong>
+- Start processing results before server completes the full query
+- Reduced perceived latency for large datasets
+- Better resource utilization on both client and server</p>
+<p><strong>Memory considerations:</strong>
+- Results are processed in chunks, allowing datasets larger than available RAM
+- Each chunk must fit in memory, but not the entire result set
+- For extremely large datasets, consider using time-based partitioning or LIMIT clauses</p>
+<h3 id="grafana-plugin">Grafana Plugin</h3>
+<p>The same SQL capabilities are available through the <a href="https://github.com/madesroches/micromegas-grafana">Grafana plugin</a> for creating dashboards and visualizations. Simply use the Micromegas data source and write SQL queries in the query editor.</p>
+<h2 id="table-of-contents">Table of Contents</h2>
+<h3 id="schema-reference"><a href="#schema-reference">Schema Reference</a></h3>
+<ul>
+<li><a href="#views">Views</a></li>
+<li><a href="#data-types">Data Types</a></li>
+<li><a href="#view-relationships">View Relationships</a></li>
+</ul>
+<h3 id="functions-reference"><a href="#functions-reference">Functions Reference</a></h3>
+<ul>
+<li><a href="#observability-functions">Observability Functions</a></li>
+<li><a href="#time-based-functions">Time-based Functions</a></li>
+<li><a href="#aggregation-functions">Aggregation Functions</a></li>
+<li><a href="#datafusion-functions">DataFusion Functions</a></li>
+</ul>
+<h3 id="query-patterns"><a href="#query-patterns">Query Patterns</a></h3>
+<ul>
+<li><a href="#common-queries">Common Queries</a></li>
+<li><a href="#troubleshooting">Troubleshooting</a></li>
+</ul>
+<h3 id="query-performance"><a href="#query-performance">Query Performance</a></h3>
+<ul>
+<li><a href="#performance-overview">Performance Overview</a></li>
+<li><a href="#critical-performance-rules">Critical Performance Rules</a></li>
+<li><a href="#view-selection-performance">View Selection Performance</a></li>
+<li><a href="#query-optimization-patterns">Query Optimization Patterns</a></li>
+<li><a href="#performance-best-practices">Performance Best Practices</a></li>
+</ul>
+<h3 id="advanced-features"><a href="#advanced-features">Advanced Features</a></h3>
+<ul>
+<li><a href="#view-materialization">View Materialization</a></li>
+<li><a href="#custom-views">Custom Views</a></li>
+</ul>
+<hr />
+<h2 id="schema-reference_1">Schema Reference</h2>
+<h3 id="views">Views</h3>
+<p>Micromegas organizes telemetry data into several views that can be queried using SQL:</p>
+<h4 id="processes"><code>processes</code></h4>
+<p>Contains metadata about processes that have sent telemetry data.</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>process_id</code></td>
+<td><code>Dictionary(Int16, Utf8)</code></td>
+<td>Unique identifier for the process</td>
+</tr>
+<tr>
+<td><code>exe</code></td>
+<td><code>Dictionary(Int16, Utf8)</code></td>
+<td>Executable name</td>
+</tr>
+<tr>
+<td><code>username</code></td>
+<td><code>Dictionary(Int16, Utf8)</code></td>
+<td>User who ran the process</td>
+</tr>
+<tr>
+<td><code>realname</code></td>
+<td><code>Dictionary(Int16, Utf8)</code></td>
+<td>Real name of the user</td>
+</tr>
+<tr>
+<td><code>computer</code></td>
+<td><code>Dictionary(Int16, Utf8)</code></td>
+<td>Computer/hostname</td>
+</tr>
+<tr>
+<td><code>distro</code></td>
+<td><code>Dictionary(Int16, Utf8)</code></td>
+<td>Operating system distribution</td>
+</tr>
+<tr>
+<td><code>cpu_brand</code></td>
+<td><code>Dictionary(Int16, Utf8)</code></td>
+<td>CPU brand information</td>
+</tr>
+<tr>
+<td><code>tsc_frequency</code></td>
+<td><code>UInt64</code></td>
+<td>Time stamp counter frequency</td>
+</tr>
+<tr>
+<td><code>start_time</code></td>
+<td><code>Timestamp(Nanosecond)</code></td>
+<td>Process start time</td>
+</tr>
+<tr>
+<td><code>start_ticks</code></td>
+<td><code>UInt64</code></td>
+<td>Process start time in ticks</td>
+</tr>
+<tr>
+<td><code>insert_time</code></td>
+<td><code>Timestamp(Nanosecond)</code></td>
+<td>When the process data was first inserted</td>
+</tr>
+<tr>
+<td><code>parent_process_id</code></td>
+<td><code>Dictionary(Int16, Utf8)</code></td>
+<td>Parent process identifier</td>
+</tr>
+<tr>
+<td><code>properties</code></td>
+<td><code>Map</code></td>
+<td>Additional process metadata</td>
+</tr>
+<tr>
+<td><code>last_update_time</code></td>
+<td><code>Timestamp(Nanosecond)</code></td>
+<td>When the process data was last updated</td>
+</tr>
+</tbody>
+</table>
+<h4 id="streams"><code>streams</code></h4>
+<p>Contains information about data streams within processes.</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>stream_id</code></td>
+<td><code>Dictionary(Int16, Utf8)</code></td>
+<td>Unique identifier for the stream</td>
+</tr>
+<tr>
+<td><code>process_id</code></td>
+<td><code>Dictionary(Int16, Utf8)</code></td>
+<td>Reference to the parent process</td>
+</tr>
+<tr>
+<td><code>dependencies_metadata</code></td>
+<td>Various</td>
+<td>Stream dependency metadata</td>
+</tr>
+<tr>
+<td><code>objects_metadata</code></td>
+<td>Various</td>
+<td>Stream object metadata</td>
+</tr>
+<tr>
+<td><code>tags</code></td>
+<td>Various</td>
+<td>Stream tags</td>
+</tr>
+<tr>
+<td><code>properties</code></td>
+<td>Various</td>
+<td>Stream properties</td>
+</tr>
+<tr>
+<td><code>insert_time</code></td>
+<td><code>Timestamp(Nanosecond)</code></td>
+<td>When the stream data was first inserted</td>
+</tr>
+<tr>
+<td><code>last_update_time</code></td>
+<td><code>Timestamp(Nanosecond)</code></td>
+<td>When the stream data was last updated</td>
+</tr>
+</tbody>
+</table>
+<h4 id="blocks"><code>blocks</code></h4>
+<p>Core table containing telemetry block metadata with joined process and stream information.</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>block_id</code></td>
+<td><code>Utf8</code></td>
+<td>Unique identifier for the block</td>
+</tr>
+<tr>
+<td><code>stream_id</code></td>
+<td><code>Utf8</code></td>
+<td>Stream identifier</td>
+</tr>
+<tr>
+<td><code>process_id</code></td>
+<td><code>Utf8</code></td>
+<td>Process identifier</td>
+</tr>
+<tr>
+<td><code>begin_time</code></td>
+<td><code>Timestamp(Nanosecond)</code></td>
+<td>Block start time</td>
+</tr>
+<tr>
+<td><code>begin_ticks</code></td>
+<td><code>Int64</code></td>
+<td>Block start time in ticks</td>
+</tr>
+<tr>
+<td><code>end_time</code></td>
+<td><code>Timestamp(Nanosecond)</code></td>
+<td>Block end time</td>
+</tr>
+<tr>
+<td><code>end_ticks</code></td>
+<td><code>Int64</code></td>
+<td>Block end time in ticks</td>
+</tr>
+<tr>
+<td><code>nb_objects</code></td>
+<td><code>Int32</code></td>
+<td>Number of objects in block</td>
+</tr>
+<tr>
+<td><code>object_offset</code></td>
+<td><code>Int64</code></td>
+<td>Offset to objects in storage</td>
+</tr>
+<tr>
+<td><code>payload_size</code></td>
+<td><code>Int64</code></td>
+<td>Size of block payload</td>
+</tr>
+<tr>
+<td><code>insert_time</code></td>
+<td><code>Timestamp(Nanosecond)</code></td>
+<td>When block was inserted</td>
+</tr>
+<tr>
+<td><code>streams.dependencies_metadata</code></td>
+<td><code>Binary</code></td>
+<td>Stream dependency metadata</td>
+</tr>
+<tr>
+<td><code>streams.objects_metadata</code></td>
+<td><code>Binary</code></td>
+<td>Stream object metadata</td>
+</tr>
+<tr>
+<td><code>streams.tags</code></td>
+<td><code>List&lt;Utf8&gt;</code></td>
+<td>Stream tags</td>
+</tr>
+<tr>
+<td><code>streams.properties</code></td>
+<td><code>List&lt;Struct&gt;</code></td>
+<td>Stream properties</td>
+</tr>
+<tr>
+<td><code>streams.insert_time</code></td>
+<td><code>Timestamp(Nanosecond)</code></td>
+<td>Stream insertion time</td>
+</tr>
+<tr>
+<td><code>processes.start_time</code></td>
+<td><code>Timestamp(Nanosecond)</code></td>
+<td>Process start time</td>
+</tr>
+<tr>
+<td><code>processes.start_ticks</code></td>
+<td><code>Int64</code></td>
+<td>Process start ticks</td>
+</tr>
+<tr>
+<td><code>processes.tsc_frequency</code></td>
+<td><code>Int64</code></td>
+<td>Time stamp counter frequency</td>
+</tr>
+<tr>
+<td><code>processes.exe</code></td>
+<td><code>Utf8</code></td>
+<td>Executable name</td>
+</tr>
+<tr>
+<td><code>processes.username</code></td>
+<td><code>Utf8</code></td>
+<td>User who ran the process</td>
+</tr>
+<tr>
+<td><code>processes.realname</code></td>
+<td><code>Utf8</code></td>
+<td>Real name of the user</td>
+</tr>
+<tr>
+<td><code>processes.computer</code></td>
+<td><code>Utf8</code></td>
+<td>Computer/hostname</td>
+</tr>
+<tr>
+<td><code>processes.distro</code></td>
+<td><code>Utf8</code></td>
+<td>Operating system distribution</td>
+</tr>
+<tr>
+<td><code>processes.cpu_brand</code></td>
+<td><code>Utf8</code></td>
+<td>CPU brand information</td>
+</tr>
+<tr>
+<td><code>processes.insert_time</code></td>
+<td><code>Timestamp(Nanosecond)</code></td>
+<td>Process insertion time</td>
+</tr>
+<tr>
+<td><code>processes.parent_process_id</code></td>
+<td><code>Utf8</code></td>
+<td>Parent process identifier</td>
+</tr>
+<tr>
+<td><code>processes.properties</code></td>
+<td><code>List&lt;Struct&gt;</code></td>
+<td>Process properties</td>
+</tr>
+</tbody>
+</table>
+<h4 id="async_events"><code>async_events</code></h4>
+<p>Asynchronous span events for tracking async operations.</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>stream_id</code></td>
+<td><code>Dictionary(Int16, Utf8)</code></td>
+<td>Thread stream identifier</td>
+</tr>
+<tr>
+<td><code>block_id</code></td>
+<td><code>Dictionary(Int16, Utf8)</code></td>
+<td>Block identifier</td>
+</tr>
+<tr>
+<td><code>time</code></td>
+<td><code>Timestamp(Nanosecond)</code></td>
+<td>Event timestamp</td>
+</tr>
+<tr>
+<td><code>event_type</code></td>
+<td><code>Dictionary(Int16, Utf8)</code></td>
+<td>"begin" or "end"</td>
+</tr>
+<tr>
+<td><code>span_id</code></td>
+<td><code>Int64</code></td>
+<td>Async span identifier</td>
+</tr>
+<tr>
+<td><code>parent_span_id</code></td>
+<td><code>Int64</code></td>
+<td>Parent span identifier</td>
+</tr>
+<tr>
+<td><code>name</code></td>
+<td><code>Dictionary(Int16, Utf8)</code></td>
+<td>Span name (function)</td>
+</tr>
+<tr>
+<td><code>filename</code></td>
+<td><code>Dictionary(Int16, Utf8)</code></td>
+<td>Source file</td>
+</tr>
+<tr>
+<td><code>target</code></td>
+<td><code>Dictionary(Int16, Utf8)</code></td>
+<td>Module/target</td>
+</tr>
+<tr>
+<td><code>line</code></td>
+<td><code>UInt32</code></td>
+<td>Line number</td>
+</tr>
+</tbody>
+</table>
+<h4 id="thread_spans"><code>thread_spans</code></h4>
+<p>Derived view for analyzing span durations and hierarchies (accessed via <code>view_instance('thread_spans', stream_id)</code>).</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>id</code></td>
+<td><code>Int64</code></td>
+<td>Span identifier</td>
+</tr>
+<tr>
+<td><code>parent</code></td>
+<td><code>Int64</code></td>
+<td>Parent span identifier</td>
+</tr>
+<tr>
+<td><code>depth</code></td>
+<td><code>UInt32</code></td>
+<td>Nesting depth in call tree</td>
+</tr>
+<tr>
+<td><code>hash</code></td>
+<td><code>UInt32</code></td>
+<td>Span hash for deduplication</td>
+</tr>
+<tr>
+<td><code>begin</code></td>
+<td><code>Timestamp(Nanosecond)</code></td>
+<td>Span start time</td>
+</tr>
+<tr>
+<td><code>end</code></td>
+<td><code>Timestamp(Nanosecond)</code></td>
+<td>Span end time</td>
+</tr>
+<tr>
+<td><code>duration</code></td>
+<td><code>Int64</code></td>
+<td>Span duration in nanoseconds</td>
+</tr>
+<tr>
+<td><code>name</code></td>
+<td><code>Dictionary(Int16, Utf8)</code></td>
+<td>Span name (function)</td>
+</tr>
+<tr>
+<td><code>target</code></td>
+<td><code>Dictionary(Int16, Utf8)</code></td>
+<td>Module/target</td>
+</tr>
+<tr>
+<td><code>filename</code></td>
+<td><code>Dictionary(Int16, Utf8)</code></td>
+<td>Source file</td>
+</tr>
+<tr>
+<td><code>line</code></td>
+<td><code>UInt32</code></td>
+<td>Line number</td>
+</tr>
+</tbody>
+</table>
+<h4 id="measures-metrics"><code>measures</code> (metrics)</h4>
+<p>Numerical measurements and counters.</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>process_id</code></td>
+<td><code>Dictionary(Int16, Utf8)</code></td>
+<td>Process identifier</td>
+</tr>
+<tr>
+<td><code>stream_id</code></td>
+<td><code>Dictionary(Int16, Utf8)</code></td>
+<td>Stream identifier</td>
+</tr>
+<tr>
+<td><code>block_id</code></td>
+<td><code>Dictionary(Int16, Utf8)</code></td>
+<td>Block identifier</td>
+</tr>
+<tr>
+<td><code>insert_time</code></td>
+<td><code>Timestamp(Nanosecond)</code></td>
+<td>Block insertion time</td>
+</tr>
+<tr>
+<td><code>exe</code></td>
+<td><code>Dictionary(Int16, Utf8)</code></td>
+<td>Executable name</td>
+</tr>
+<tr>
+<td><code>username</code></td>
+<td><code>Dictionary(Int16, Utf8)</code></td>
+<td>User who ran the process</td>
+</tr>
+<tr>
+<td><code>computer</code></td>
+<td><code>Dictionary(Int16, Utf8)</code></td>
+<td>Computer/hostname</td>
+</tr>
+<tr>
+<td><code>time</code></td>
+<td><code>Timestamp(Nanosecond)</code></td>
+<td>Measurement timestamp</td>
+</tr>
+<tr>
+<td><code>target</code></td>
+<td><code>Dictionary(Int16, Utf8)</code></td>
+<td>Module/target</td>
+</tr>
+<tr>
+<td><code>name</code></td>
+<td><code>Dictionary(Int16, Utf8)</code></td>
+<td>Metric name</td>
+</tr>
+<tr>
+<td><code>unit</code></td>
+<td><code>Dictionary(Int16, Utf8)</code></td>
+<td>Measurement unit</td>
+</tr>
+<tr>
+<td><code>value</code></td>
+<td><code>Float64</code></td>
+<td>Metric value</td>
+</tr>
+<tr>
+<td><code>properties</code></td>
+<td><code>List&lt;Struct&gt;</code></td>
+<td>Metric-specific properties</td>
+</tr>
+<tr>
+<td><code>process_properties</code></td>
+<td><code>List&lt;Struct&gt;</code></td>
+<td>Process-specific properties</td>
+</tr>
+</tbody>
+</table>
+<h4 id="log_entries"><code>log_entries</code></h4>
+<p>Text-based log entries with levels and structured data.</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>process_id</code></td>
+<td><code>Dictionary(Int16, Utf8)</code></td>
+<td>Process identifier</td>
+</tr>
+<tr>
+<td><code>stream_id</code></td>
+<td><code>Dictionary(Int16, Utf8)</code></td>
+<td>Stream identifier</td>
+</tr>
+<tr>
+<td><code>block_id</code></td>
+<td><code>Dictionary(Int16, Utf8)</code></td>
+<td>Block identifier</td>
+</tr>
+<tr>
+<td><code>insert_time</code></td>
+<td><code>Timestamp(Nanosecond)</code></td>
+<td>Block insertion time</td>
+</tr>
+<tr>
+<td><code>exe</code></td>
+<td><code>Dictionary(Int16, Utf8)</code></td>
+<td>Executable name</td>
+</tr>
+<tr>
+<td><code>username</code></td>
+<td><code>Dictionary(Int16, Utf8)</code></td>
+<td>User who ran the process</td>
+</tr>
+<tr>
+<td><code>computer</code></td>
+<td><code>Dictionary(Int16, Utf8)</code></td>
+<td>Computer/hostname</td>
+</tr>
+<tr>
+<td><code>time</code></td>
+<td><code>Timestamp(Nanosecond)</code></td>
+<td>Log entry timestamp</td>
+</tr>
+<tr>
+<td><code>target</code></td>
+<td><code>Dictionary(Int16, Utf8)</code></td>
+<td>Module/target</td>
+</tr>
+<tr>
+<td><code>level</code></td>
+<td><code>Int32</code></td>
+<td>Log level: 1=Fatal, 2=Error, 3=Warn, 4=Info, 5=Debug, 6=Trace (lower = more severe)</td>
+</tr>
+<tr>
+<td><code>msg</code></td>
+<td><code>Utf8</code></td>
+<td>Log message</td>
+</tr>
+<tr>
+<td><code>properties</code></td>
+<td><code>List&lt;Struct&gt;</code></td>
+<td>Log-specific properties</td>
+</tr>
+<tr>
+<td><code>process_properties</code></td>
+<td><code>List&lt;Struct&gt;</code></td>
+<td>Process-specific properties</td>
+</tr>
+</tbody>
+</table>
+<h3 id="data-types">Data Types</h3>
+<p>Micromegas uses custom structured data types for observability-specific data:</p>
+<h4 id="properties">Properties</h4>
+<p>Key-value pairs stored as <code>List&lt;Struct&gt;</code> with the following structure:</p>
+<pre><code class="language-sql">-- Properties structure
+List&lt;Struct&lt;
+    key: Utf8,
+    value: Utf8
+&gt;&gt;
+</code></pre>
+<p><strong>Common properties fields:</strong>
+- <code>properties</code> - Event-specific metadata (log properties, metric properties)
+- <code>process_properties</code> - Process-wide metadata shared across all events from a process</p>
+<p><strong>Querying properties:</strong></p>
+<pre><code class="language-sql">-- Access property values (functions may vary by implementation)
+SELECT property_get(&quot;process_properties&quot;, 'thread-name') as thread_name
+FROM log_entries
+</code></pre>
+<h4 id="histograms">Histograms</h4>
+<p>Statistical distributions stored as structured data for performance metrics:</p>
+<pre><code class="language-sql">-- Histogram structure (implementation-specific)
+Struct&lt;
+    min: Float64,
+    max: Float64,
+    buckets: List&lt;Struct&lt;
+        upper_bound: Float64,
+        count: Int64
+    &gt;&gt;
+&gt;
+</code></pre>
+<h3 id="view-relationships">View Relationships</h3>
+<p>Views can be joined to get complete information:</p>
+<pre><code class="language-sql">-- Join streams with processes to get process info
+SELECT ae.*, p.exe, p.username, p.computer 
+FROM view_instance('async_events', 'your_process_id_here') ae
+JOIN streams s ON ae.stream_id = s.stream_id  
+JOIN processes p ON s.process_id = p.process_id
+</code></pre>
+<hr />
+<h2 id="functions-reference_1">Functions Reference</h2>
+<h3 id="table-functions">Table Functions</h3>
+<h4 id="view_instance"><code>view_instance</code></h4>
+<p>Creates a view instance for a specific process or stream.</p>
+<pre><code class="language-sql">view_instance(view_name, identifier)
+</code></pre>
+<p><strong>Arguments:</strong>
+- <code>view_name</code>: <code>Utf8</code> - Name of the view ('async_events', 'log_entries', 'measures', 'thread_spans', etc.)
+- <code>identifier</code>: <code>Utf8</code> - Process ID (for most views) or Stream ID (for thread_spans)</p>
+<p><strong>Returns:</strong> Schema depends on the view type (see Views section)</p>
+<p><strong>Example:</strong></p>
+<pre><code class="language-sql">SELECT * FROM view_instance('async_events', 'my_process_123')
+WHERE time &gt;= NOW() - INTERVAL '1 hour'
+</code></pre>
+<h4 id="list_partitions"><code>list_partitions</code></h4>
+<p>Lists available partitions in the data lake.</p>
+<pre><code class="language-sql">SELECT * FROM list_partitions()
+</code></pre>
+<p><strong>Returns:</strong>
+| Column | Type | Description |
+|--------|------|-------------|
+| <code>view_set_name</code> | <code>Utf8</code> | Name of the view set |
+| <code>view_instance_id</code> | <code>Utf8</code> | Instance identifier |
+| <code>begin_insert_time</code> | <code>Timestamp(Nanosecond)</code> | Partition start time |
+| <code>end_insert_time</code> | <code>Timestamp(Nanosecond)</code> | Partition end time |
+| <code>min_event_time</code> | <code>Timestamp(Nanosecond)</code> | Earliest event time |
+| <code>max_event_time</code> | <code>Timestamp(Nanosecond)</code> | Latest event time |
+| <code>updated</code> | <code>Timestamp(Nanosecond)</code> | Last update time |
+| <code>file_path</code> | <code>Utf8</code> | Partition file path |
+| <code>file_size</code> | <code>Int64</code> | File size in bytes |
+| <code>file_schema_hash</code> | <code>Binary</code> | Schema hash |
+| <code>source_data_hash</code> | <code>Binary</code> | Source data hash |</p>
+<h4 id="retire_partitions"><code>retire_partitions</code></h4>
+<p>Administrative function for retiring old partitions.</p>
+<pre><code class="language-sql">SELECT * FROM retire_partitions()
+</code></pre>
+<p><strong>Returns:</strong>
+| Column | Type | Description |
+|--------|------|-------------|
+| <code>time</code> | <code>Timestamp(Nanosecond)</code> | Log entry timestamp |
+| <code>msg</code> | <code>Utf8</code> | Log message |</p>
+<h4 id="materialize_partitions"><code>materialize_partitions</code></h4>
+<p>Administrative function for materializing view partitions.</p>
+<pre><code class="language-sql">SELECT * FROM materialize_partitions()
+</code></pre>
+<p><strong>Returns:</strong>
+| Column | Type | Description |
+|--------|------|-------------|
+| <code>time</code> | <code>Timestamp(Nanosecond)</code> | Log entry timestamp |
+| <code>msg</code> | <code>Utf8</code> | Log message |</p>
+<h3 id="scalar-functions">Scalar Functions</h3>
+<h4 id="property_get"><code>property_get</code></h4>
+<p>Extracts a value from a properties structure.</p>
+<pre><code class="language-sql">property_get(properties_column, 'key')
+</code></pre>
+<p><strong>Arguments:</strong>
+- <code>properties_column</code>: <code>List&lt;Struct&gt;</code> - Column containing properties (e.g., <code>properties</code>, <code>process_properties</code>)
+- <code>key</code>: <code>Utf8</code> - String key to extract</p>
+<p><strong>Returns:</strong> <code>Utf8</code> - The value associated with the key, or NULL if not found</p>
+<p><strong>Example:</strong></p>
+<pre><code class="language-sql">SELECT property_get(process_properties, 'thread-name') as thread_name
+FROM log_entries
+</code></pre>
+<h4 id="get_payload"><code>get_payload</code></h4>
+<p>Retrieves payload data from storage (async function).</p>
+<pre><code class="language-sql">get_payload(payload_reference)
+</code></pre>
+<p><strong>Arguments:</strong>
+- <code>payload_reference</code>: <code>Utf8</code> - Reference to payload data in storage</p>
+<p><strong>Returns:</strong> <code>Binary</code> - The payload data</p>
+<h3 id="histogram-functions">Histogram Functions</h3>
+<h4 id="quantile_from_histogram"><code>quantile_from_histogram</code></h4>
+<p>Calculates quantiles from histogram data.</p>
+<pre><code class="language-sql">quantile_from_histogram(histogram, quantile)
+</code></pre>
+<p><strong>Arguments:</strong>
+- <code>histogram</code>: <code>Struct</code> - Histogram data structure
+- <code>quantile</code>: <code>Float64</code> - Quantile value between 0.0 and 1.0</p>
+<p><strong>Returns:</strong> <code>Float64</code> - The calculated quantile value</p>
+<p><strong>Example:</strong></p>
+<pre><code class="language-sql">SELECT quantile_from_histogram(duration_histogram, 0.95) as p95_duration
+FROM performance_metrics
+</code></pre>
+<h4 id="variance_from_histogram"><code>variance_from_histogram</code></h4>
+<p>Calculates variance from histogram data.</p>
+<pre><code class="language-sql">variance_from_histogram(histogram)
+</code></pre>
+<p><strong>Arguments:</strong>
+- <code>histogram</code>: <code>Struct</code> - Histogram data structure</p>
+<p><strong>Returns:</strong> <code>Float64</code> - The calculated variance</p>
+<h4 id="count_from_histogram"><code>count_from_histogram</code></h4>
+<p>Extracts total count from histogram data.</p>
+<pre><code class="language-sql">count_from_histogram(histogram)
+</code></pre>
+<p><strong>Arguments:</strong>
+- <code>histogram</code>: <code>Struct</code> - Histogram data structure</p>
+<p><strong>Returns:</strong> <code>Int64</code> - The total count of observations</p>
+<h4 id="sum_from_histogram"><code>sum_from_histogram</code></h4>
+<p>Calculates sum from histogram data.</p>
+<pre><code class="language-sql">sum_from_histogram(histogram)
+</code></pre>
+<p><strong>Arguments:</strong>
+- <code>histogram</code>: <code>Struct</code> - Histogram data structure</p>
+<p><strong>Returns:</strong> <code>Float64</code> - The sum of all observations</p>
+<h3 id="aggregate-functions">Aggregate Functions</h3>
+<h4 id="make_histogram"><code>make_histogram</code></h4>
+<p>Creates histograms from numeric data.</p>
+<pre><code class="language-sql">make_histogram(start, end, nb_bins, values)
+</code></pre>
+<p><strong>Arguments:</strong>
+- <code>start</code>: <code>Float64</code> - Start value of histogram range
+- <code>end</code>: <code>Float64</code> - End value of histogram range<br />
+- <code>nb_bins</code>: <code>Int64</code> - Number of histogram bins
+- <code>values</code>: <code>Float64</code> - Numeric values to create histogram from</p>
+<p><strong>Returns:</strong> <code>Struct</code> - Histogram data structure</p>
+<p><strong>Example:</strong></p>
+<pre><code class="language-sql">SELECT target, make_histogram(0.0, 1000000.0, 100, duration) as duration_histogram
+FROM view_instance('thread_spans', 'stream_123')
+GROUP BY target
+</code></pre>
+<h4 id="sum_histograms"><code>sum_histograms</code></h4>
+<p>Aggregates multiple histograms into a single histogram.</p>
+<pre><code class="language-sql">sum_histograms(histogram_column)
+</code></pre>
+<p><strong>Arguments:</strong>
+- <code>histogram_column</code>: <code>Struct</code> - Column containing histogram data structures</p>
+<p><strong>Returns:</strong> <code>Struct</code> - Combined histogram data structure</p>
+<p><strong>Example:</strong></p>
+<pre><code class="language-sql">SELECT sum_histograms(duration_histogram) as combined_histogram
+FROM performance_data
+GROUP BY service_name
+</code></pre>
+<h3 id="json-functions">JSON Functions</h3>
+<p>Micromegas provides JSON support through integration with the <a href="https://docs.rs/jsonb/latest/jsonb/">jsonb crate</a>, offering efficient binary JSON storage and manipulation.</p>
+<h4 id="jsonb_parse"><code>jsonb_parse</code></h4>
+<p>Parses JSON strings into JSONB format.</p>
+<pre><code class="language-sql">jsonb_parse(json_string)
+</code></pre>
+<p><strong>Arguments:</strong>
+- <code>json_string</code>: <code>Utf8</code> - JSON string to parse</p>
+<p><strong>Returns:</strong> <code>Binary</code> - JSONB binary data</p>
+<h4 id="jsonb_format_json"><code>jsonb_format_json</code></h4>
+<p>Formats JSONB data as JSON string.</p>
+<pre><code class="language-sql">jsonb_format_json(jsonb_data)
+</code></pre>
+<p><strong>Arguments:</strong>
+- <code>jsonb_data</code>: <code>Binary</code> - JSONB binary data</p>
+<p><strong>Returns:</strong> <code>Utf8</code> - Formatted JSON string</p>
+<h4 id="jsonb_get"><code>jsonb_get</code></h4>
+<p>Extracts values from JSONB data.</p>
+<pre><code class="language-sql">jsonb_get(jsonb_data, 'key')
+</code></pre>
+<p><strong>Arguments:</strong>
+- <code>jsonb_data</code>: <code>Binary</code> - JSONB binary data
+- <code>key</code>: <code>Utf8</code> - Key to extract from JSONB</p>
+<p><strong>Returns:</strong> <code>Binary</code> - JSONB value for the specified key</p>
+<h4 id="jsonb_as_string"><code>jsonb_as_string</code></h4>
+<p>Converts JSONB value to string.</p>
+<pre><code class="language-sql">jsonb_as_string(jsonb_value)
+</code></pre>
+<p><strong>Arguments:</strong>
+- <code>jsonb_value</code>: <code>Binary</code> - JSONB value to convert</p>
+<p><strong>Returns:</strong> <code>Utf8</code> - String representation</p>
+<h4 id="jsonb_as_f64"><code>jsonb_as_f64</code></h4>
+<p>Converts JSONB value to float64.</p>
+<pre><code class="language-sql">jsonb_as_f64(jsonb_value)
+</code></pre>
+<p><strong>Arguments:</strong>
+- <code>jsonb_value</code>: <code>Binary</code> - JSONB value to convert</p>
+<p><strong>Returns:</strong> <code>Float64</code> - Numeric value</p>
+<h4 id="jsonb_as_i64"><code>jsonb_as_i64</code></h4>
+<p>Converts JSONB value to int64.</p>
+<pre><code class="language-sql">jsonb_as_i64(jsonb_value)
+</code></pre>
+<p><strong>Arguments:</strong>
+- <code>jsonb_value</code>: <code>Binary</code> - JSONB value to convert</p>
+<p><strong>Returns:</strong> <code>Int64</code> - Integer value</p>
+<h3 id="datafusion-functions">DataFusion Functions</h3>
+<p>Micromegas supports the complete DataFusion SQL function library:</p>
+<ul>
+<li><strong><a href="https://datafusion.apache.org/user-guide/sql/scalar_functions.html">Scalar Functions</a></strong> - Math, string, date/time operations</li>
+<li><strong><a href="https://datafusion.apache.org/user-guide/sql/aggregate_functions.html">Aggregate Functions</a></strong> - COUNT, SUM, AVG, etc.</li>
+<li><strong><a href="https://datafusion.apache.org/user-guide/sql/window_functions.html">Window Functions</a></strong> - ROW_NUMBER, RANK, LAG/LEAD</li>
+<li><strong><a href="https://datafusion.apache.org/user-guide/sql/scalar_functions.html#array-functions">Array Functions</a></strong> - Array manipulation</li>
+</ul>
+<hr />
+<h2 id="query-patterns_1">Query Patterns</h2>
+<h3 id="common-queries">Common Queries</h3>
+<h4 id="basic-log-analysis">Basic Log Analysis</h4>
+<pre><code class="language-python"># Get recent error logs
+sql = &quot;&quot;&quot;
+    SELECT time, process_id, level, target, msg
+    FROM log_entries
+    WHERE level &lt;= 3
+    AND time &gt;= NOW() - INTERVAL '1 hour'
+    ORDER BY time DESC
+    LIMIT 50;
+&quot;&quot;&quot;
+errors = client.query(sql, begin, end)
+print(errors)
+</code></pre>
+<h4 id="log-filtering-by-application">Log Filtering by Application</h4>
+<pre><code class="language-python"># Find logs from specific executable
+sql = &quot;&quot;&quot;
+    SELECT time, level, target, msg
+    FROM log_entries
+    WHERE exe LIKE '%analytics%'
+    ORDER BY time DESC
+    LIMIT 20;
+&quot;&quot;&quot;
+app_logs = client.query(sql, begin, end)
+</code></pre>
+<h4 id="process-discovery">Process Discovery</h4>
+<pre><code class="language-python"># Get processes and their basic info
+sql = &quot;&quot;&quot;
+    SELECT process_id, exe, insert_time
+    FROM processes
+    ORDER BY insert_time DESC
+    LIMIT 10;
+&quot;&quot;&quot;
+processes = client.query(sql)
+print(processes)
+</code></pre>
+<h4 id="advanced-finding-slow-operations">Advanced: Finding Slow Operations</h4>
+<pre><code class="language-python"># Query spans for a specific stream to find slow operations
+sql = &quot;&quot;&quot;
+    SELECT target, name, duration, begin, end
+    FROM view_instance('thread_spans', '{stream_id}')
+    ORDER BY duration DESC
+    LIMIT 10;
+&quot;&quot;&quot;.format(stream_id=&quot;your_stream_id_here&quot;)
+spans = client.query(sql, begin, end)
+print(spans)
+</code></pre>
+<h4 id="advanced-async-event-analysis">Advanced: Async Event Analysis</h4>
+<pre><code class="language-python"># Query async events for specific process
+sql = &quot;&quot;&quot;
+    SELECT stream_id, time, event_type, span_id, name, target
+    FROM view_instance('async_events', '{process_id}')
+    ORDER BY time
+    LIMIT 10;
+&quot;&quot;&quot;.format(process_id=process_id)
+events = client.query(sql, begin, end)
+</code></pre>
+<h2 id="query-performance_1">Query Performance</h2>
+<p>Micromegas' unique architecture provides multiple optimization strategies for different query patterns. Understanding these patterns is crucial for optimal performance.</p>
+<h3 id="performance-overview">Performance Overview</h3>
+<p><strong>Key Performance Factors:</strong>
+- <strong>Time Range Scoping</strong> - Most critical performance factor
+- <strong>View Selection</strong> - Global vs process-scoped views
+- <strong>Query Complexity</strong> - ORDER BY, JOINs, and GROUP BY operations
+- <strong>Data Freshness</strong> - Live vs JIT processing trade-offs</p>
+<h3 id="critical-performance-rules">Critical Performance Rules</h3>
+<h4 id="1-always-use-time-ranges">1. ⚠️ Always Use Time Ranges</h4>
+<p>Queries without time ranges scan all available data, which can cause:
+- <strong>Long query times</strong> - Processing months or years of data
+- <strong>High memory usage</strong> - Query engine loads large datasets into memory<br />
+- <strong>Potential instability</strong> - Memory exhaustion may cause query failures or system instability</p>
+<pre><code class="language-python"># ❌ DANGEROUS: No time filter (scans all data)
+sql = &quot;SELECT * FROM log_entries WHERE level &lt;= 3;&quot;
+
+# ✅ SAFE: Time-bounded query
+sql = &quot;&quot;&quot;
+    SELECT * FROM log_entries 
+    WHERE level &lt;= 3 
+    AND time &gt;= NOW() - INTERVAL '1 hour';
+&quot;&quot;&quot;
+</code></pre>
+<h4 id="2-avoid-order-by-on-large-datasets">2. ⚠️ Avoid ORDER BY on Large Datasets</h4>
+<p><code>ORDER BY</code> requires loading and sorting the entire result set, which can be expensive:</p>
+<pre><code class="language-python"># ❌ EXPENSIVE: ORDER BY without LIMIT on large time range
+sql = &quot;&quot;&quot;
+    SELECT time, level, target, msg
+    FROM log_entries
+    WHERE time &gt;= NOW() - INTERVAL '7 days'
+    ORDER BY time DESC;  -- Sorts potentially millions of rows
+&quot;&quot;&quot;
+
+# ✅ EFFICIENT: ORDER BY with LIMIT
+sql = &quot;&quot;&quot;
+    SELECT time, level, target, msg
+    FROM log_entries
+    WHERE time &gt;= NOW() - INTERVAL '1 hour'
+    ORDER BY time DESC
+    LIMIT 100;  -- Only sorts top results
+&quot;&quot;&quot;
+
+# ✅ EFFICIENT: No ORDER BY for aggregations
+sql = &quot;&quot;&quot;
+    SELECT target, COUNT(*) as count
+    FROM log_entries
+    WHERE time &gt;= NOW() - INTERVAL '6 hours'
+    GROUP BY target;  -- No sorting needed
+&quot;&quot;&quot;
+</code></pre>
+<p><strong>ORDER BY Performance Impact:</strong>
+- Forces the entire query result to be loaded into server memory before any results are returned
+- Prevents streaming - no record batches can be sent until full dataset is sorted
+- Adds significant latency as clients must wait for complete dataset processing
+- Can cause server memory pressure on large datasets</p>
+<p><strong>ORDER BY Alternatives:</strong>
+- <strong>Client-side sorting:</strong> Fetch unsorted data and sort in your application
+- <strong>Time-based natural ordering:</strong> Often <code>time</code> fields are naturally ordered in storage
+- <strong>Eliminate sorting:</strong> Question if sorting is actually necessary for your analysis</p>
+<h4 id="3-use-joins-carefully">3. ⚠️ Use JOINs Carefully</h4>
+<p>JOINs can be expensive, especially cross-process JOINs on global views:</p>
+<pre><code class="language-python"># ❌ EXPENSIVE: Cross-process JOINs on global views
+sql = &quot;&quot;&quot;
+    SELECT l.time, l.msg, p.exe, s.tags
+    FROM log_entries l
+    JOIN processes p ON l.process_id = p.process_id  
+    JOIN streams s ON l.stream_id = s.stream_id
+    WHERE l.time &gt;= NOW() - INTERVAL '1 day';  -- Large dataset + complex JOIN
+&quot;&quot;&quot;
+
+# ✅ EFFICIENT: Process-scoped JOINs
+sql = &quot;&quot;&quot;
+    SELECT ae.time, ae.name, s.tags
+    FROM view_instance('async_events', '{process_id}') ae
+    JOIN streams s ON ae.stream_id = s.stream_id
+    WHERE ae.time &gt;= NOW() - INTERVAL '1 hour';  -- Smaller dataset, co-located data
+&quot;&quot;&quot;
+
+# ✅ EFFICIENT: Simple process lookup
+sql = &quot;&quot;&quot;
+    SELECT time, level, target, msg
+    FROM view_instance('log_entries', '{process_id}')
+    WHERE time &gt;= NOW() - INTERVAL '1 hour';
+    -- Get process info separately if needed
+&quot;&quot;&quot;
+</code></pre>
+<p><strong>JOIN Performance Tips:</strong>
+- Prefer process-scoped views for JOINs when analyzing single processes
+- Keep JOIN datasets small with tight time filters
+- Consider if you really need the JOIN or can fetch related data separately
+- Use <code>LIMIT</code> with JOINs to prevent runaway queries</p>
+<h4 id="4-group-by-prevents-streaming">4. ⚠️ GROUP BY Prevents Streaming</h4>
+<p><code>GROUP BY</code> operations require processing the entire dataset before returning results, which prevents query streaming:</p>
+<pre><code class="language-python"># ❌ NO STREAMING: GROUP BY requires full dataset processing
+sql = &quot;&quot;&quot;
+    SELECT target, COUNT(*) as count
+    FROM log_entries
+    WHERE time &gt;= NOW() - INTERVAL '6 hours'
+    GROUP BY target;  -- Must process all data before streaming results
+&quot;&quot;&quot;
+
+# ✅ STREAMING FRIENDLY: No aggregations
+sql = &quot;&quot;&quot;
+    SELECT time, level, target, msg
+    FROM log_entries
+    WHERE time &gt;= NOW() - INTERVAL '6 hours'
+    ORDER BY time DESC;  -- Can stream results as they're processed
+&quot;&quot;&quot;
+</code></pre>
+<p><strong>GROUP BY Streaming Impact:</strong>
+- <code>client.query()</code> works normally with GROUP BY
+- <code>client.query_stream()</code> will return results only after full aggregation
+- For large datasets, GROUP BY may cause memory pressure
+- Use smaller time ranges with GROUP BY operations</p>
+<h3 id="view-selection-performance">View Selection Performance</h3>
+<h4 id="global-views-vs-process-scoped-views">Global Views vs Process-Scoped Views</h4>
+<p><strong>Global Views</strong> (<code>log_entries</code>, <code>measures</code>):
+- ✅ <strong>Fast for recent data</strong> - Live ETL keeps recent data readily available
+- ✅ <strong>Cross-process analysis</strong> - Perfect for dashboards and trends
+- ❌ <strong>Slower for large time ranges</strong> - Scanning across all processes
+- ❌ <strong>ORDER BY expensive</strong> - Sorting across all processes</p>
+<p><strong>Process-Scoped Views</strong> (<code>view_instance('table', process_id)</code>):
+- ✅ <strong>Dramatically faster</strong> for single-process analysis
+- ✅ <strong>Efficient JOINs</strong> - All data is co-located
+- ✅ <strong>Better ORDER BY performance</strong> - Smaller datasets
+- ✅ <strong>JIT optimization</strong> - Materialized specifically for your query</p>
+<h3 id="query-optimization-patterns">Query Optimization Patterns</h3>
+<h4 id="efficient-query-patterns">Efficient Query Patterns</h4>
+<pre><code class="language-python"># ✅ FASTEST: Process-scoped + time filter + limit
+sql = &quot;&quot;&quot;
+    SELECT time, level, target, msg
+    FROM view_instance('log_entries', '{process_id}')
+    WHERE time &gt;= NOW() - INTERVAL '1 hour'
+    AND level &lt;= 3
+    ORDER BY time DESC
+    LIMIT 100;
+&quot;&quot;&quot;
+
+# ✅ FAST: Aggregations without ORDER BY
+sql = &quot;&quot;&quot;
+    SELECT 
+        date_trunc('minute', time) as minute,
+        AVG(value) as avg_value,
+        COUNT(*) as count
+    FROM view_instance('measures', '{process_id}')
+    WHERE time &gt;= NOW() - INTERVAL '2 hours'
+    GROUP BY minute;
+&quot;&quot;&quot;
+
+# ✅ FAST: Recent global data with limits
+sql = &quot;&quot;&quot;
+    SELECT time, process_id, level, msg
+    FROM log_entries
+    WHERE time &gt;= NOW() - INTERVAL '10 minutes'
+    AND level &lt;= 3
+    ORDER BY time DESC
+    LIMIT 50;
+&quot;&quot;&quot;
+</code></pre>
+<h4 id="less-efficient-query-patterns">Less Efficient Query Patterns</h4>
+<pre><code class="language-python"># ⚠️ SLOWER: Large time range with ORDER BY
+sql = &quot;&quot;&quot;
+    SELECT time, level, target, msg
+    FROM log_entries
+    WHERE time &gt;= NOW() - INTERVAL '7 days'  -- Large time range
+    ORDER BY time DESC;  -- No LIMIT = expensive sort
+&quot;&quot;&quot;
+
+# ⚠️ SLOWER: Global cross-process JOINs
+sql = &quot;&quot;&quot;
+    SELECT l.time, l.msg, p.exe, s.tags
+    FROM log_entries l
+    JOIN processes p ON l.process_id = p.process_id  
+    JOIN streams s ON l.stream_id = s.stream_id
+    WHERE l.time &gt;= NOW() - INTERVAL '1 day'
+    ORDER BY l.time DESC;  -- Complex JOIN + sort
+&quot;&quot;&quot;
+</code></pre>
+<h3 id="performance-best-practices">Performance Best Practices</h3>
+<ol>
+<li><strong>Time filters first</strong> - Always filter on time ranges to limit data scanned</li>
+<li><strong>Use view_instance()</strong> - Scope queries to specific processes when possible  </li>
+<li><strong>Avoid ORDER BY when possible</strong> - Prevents streaming and forces full dataset into memory</li>
+<li><strong>Leverage dictionary compression</strong> - String comparisons are efficient due to dictionary encoding</li>
+<li><strong>Consider aggregate views</strong> - Summarized data is much more efficient to query than raw events</li>
+<li><strong>Use query streaming</strong> - For large result sets, use <code>client.query_stream()</code></li>
+<li><strong>Optimize predicate pushdown</strong> - Place WHERE conditions early to reduce data scanned. See <a href="https://datafusion.apache.org/blog/2025/03/20/parquet-pruning/">DataFusion Parquet Pruning</a> for details</li>
+</ol>
+<h3 id="performance-monitoring">Performance Monitoring</h3>
+<pre><code class="language-python"># Monitor query execution time in notebooks
+%%time
+result = client.query(sql, begin, end)
+print(f&quot;Returned {len(result)} rows&quot;)
+
+# Alternative: Manual timing in scripts
+import time
+start_time = time.time()
+result = client.query(sql, begin, end)
+execution_time = time.time() - start_time
+print(f&quot;Query executed in {execution_time:.2f} seconds&quot;)
+</code></pre>
+<h3 id="troubleshooting">Troubleshooting</h3>
+<h4 id="performance-issues">Performance Issues</h4>
+<p>See the dedicated <a href="#query-performance">Query Performance</a> section for comprehensive optimization guidance.</p>
+<h4 id="data-not-found">Data Not Found</h4>
+<ul>
+<li>Verify the process_id exists in the processes table</li>
+<li>Check time ranges match when data was actually collected</li>
+<li>Ensure view names are correct ('log_entries', 'async_events', etc.)</li>
+</ul>
+<h4 id="connection-issues">Connection Issues</h4>
+<ul>
+<li>Verify analytics service is running (<code>flight-sql-srv</code>)</li>
+<li>Check network connectivity to FlightSQL port (default 50051)</li>
+<li>Confirm authentication if enabled</li>
+</ul>
+<h4 id="query-errors">Query Errors</h4>
+<ul>
+<li>Check SQL syntax against DataFusion documentation</li>
+<li>Verify table and column names match schema</li>
+<li>Ensure time ranges are properly formatted</li>
+</ul>
+<hr />
+<h2 id="advanced-features_1">Advanced Features</h2>
+<h3 id="view-materialization">View Materialization</h3>
+<p>Micromegas uses a sophisticated <strong>Just-In-Time (JIT) ETL system</strong> combined with <strong>live processing</strong> for optimal query performance across different data access patterns.</p>
+<h4 id="live-etl-for-global-views">Live ETL for Global Views</h4>
+<p>The maintenance daemon continuously materializes commonly-accessed data:</p>
+<p><strong>Real-time Processing:</strong>
+- <strong>Every second:</strong> Log and metrics blocks are processed into global <code>log_entries</code> and <code>measures</code> views
+- <strong>Every minute:</strong> Second partitions are merged into minute partitions<br />
+- <strong>Every hour:</strong> Minute partitions are merged into hour partitions</p>
+<p><strong>Benefits:</strong>
+- ✅ Simple queries on recent data (small time windows) are extremely fast
+- ✅ Global trends and dashboards get real-time updates
+- ❌ Large time window queries with JOINs may be slower on global views</p>
+<h4 id="jit-view-instances-process-scoped">JIT View Instances (Process-Scoped)</h4>
+<p>Created on-demand when you call <code>view_instance(view_name, process_id)</code>:</p>
+<p><strong>JIT ETL Process:</strong>
+1. <strong>Query Analysis:</strong> flight-sql-srv receives your SQL query
+2. <strong>Block Fetching:</strong> Fetch relevant blocks (e.g., blocks tagged 'log' from specific process)<br />
+3. <strong>Decompression &amp; Parsing:</strong> Decompress LZ4-compressed payloads, parse binary events
+4. <strong>Parquet Generation:</strong> Transform parsed events into Apache Parquet files (columnar format)
+5. <strong>DataFusion Execution:</strong> Let Apache DataFusion SQL engine run on generated parquet files
+6. <strong>Result Streaming:</strong> Return Apache Arrow record batches to client</p>
+<p><strong>Performance Characteristics:</strong>
+- ✅ <strong>Process-scoped queries</strong> get dramatically better performance vs global views
+- ✅ <strong>Complex JOINs</strong> within a process are efficiently handled
+- ✅ <strong>Time-based filtering</strong> leverages parquet columnar optimizations
+- ✅ <strong>Caching:</strong> Generated parquet files are cached temporarily for repeated queries</p>
+<h4 id="query-optimization-examples">Query Optimization Examples</h4>
+<p><strong>Optimal Query Patterns:</strong></p>
+<pre><code class="language-python"># ✅ FAST: Process-scoped with time filter
+sql = &quot;&quot;&quot;
+    SELECT time, level, target, msg
+    FROM view_instance('log_entries', '{process_id}')
+    WHERE time &gt;= NOW() - INTERVAL '1 hour'
+    AND level &lt;= 3
+    ORDER BY time DESC
+    LIMIT 100;
+&quot;&quot;&quot;
+
+# ✅ FAST: Global view with small time window  
+sql = &quot;&quot;&quot;
+    SELECT COUNT(*) as error_count
+    FROM log_entries
+    WHERE time &gt;= NOW() - INTERVAL '10 minutes'
+    AND level &lt;= 3;
+&quot;&quot;&quot;
+
+# ⚠️ SLOWER: Global view with large time window
+sql = &quot;&quot;&quot;
+    SELECT process_id, COUNT(*) 
+    FROM log_entries
+    WHERE time &gt;= NOW() - INTERVAL '7 days'  -- Large time range
+    GROUP BY process_id;
+&quot;&quot;&quot;
+</code></pre>
+<h4 id="incremental-data-reduction">Incremental Data Reduction</h4>
+<p>For long-term trend analysis, Micromegas supports <strong>SQL-defined incremental views</strong>:</p>
+<p><strong>Transform Queries:</strong> Executed every second/minute/hour to create aggregated partitions:</p>
+<pre><code class="language-sql">-- Example: Log entries per process per minute
+SELECT date_bin('1 minute', time) as time_bin,
+       min(time) as min_time,
+       max(time) as max_time,
+       process_id,
+       sum(fatal) as nb_fatal,
+       sum(err) as nb_err,
+       sum(warn) as nb_warn
+FROM log_entries
+WHERE insert_time &gt;= '{begin}' AND insert_time &lt; '{end}'
+GROUP BY process_id, time_bin;
+</code></pre>
+<p><strong>Merge Queries:</strong> Combine smaller partitions into larger time windows:</p>
+<pre><code class="language-sql">-- Merge minute partitions into hour partitions
+SELECT time_bin,
+       min(min_time) as min_time,
+       max(max_time) as max_time,
+       process_id,
+       sum(nb_fatal) as nb_fatal,
+       sum(nb_err) as nb_err
+FROM {source_partitions}
+GROUP BY process_id, time_bin;
+</code></pre>
+<h4 id="using-materialized-views">Using Materialized Views</h4>
+<pre><code class="language-python"># JIT processing for process-specific analysis
+import datetime
+
+now = datetime.datetime.now(datetime.timezone.utc)
+begin = now - datetime.timedelta(days=1)
+end = now
+
+# This triggers JIT ETL: fetch blocks → parse → generate parquet → query
+sql = &quot;&quot;&quot;
+    SELECT stream_id, time, event_type, span_id, name
+    FROM view_instance('async_events', '{process_id}')
+    WHERE time BETWEEN '{begin}' AND '{end}'
+    ORDER BY time
+    LIMIT 100;
+&quot;&quot;&quot;.format(
+    process_id=process_id,
+    begin=begin.isoformat(),
+    end=end.isoformat()
+)
+events = client.query(sql, begin, end)
+</code></pre>
+<h4 id="architecture-benefits">Architecture Benefits</h4>
+<p><strong>Datalake → Lakehouse → Query:</strong>
+- <strong>Datalake (S3):</strong> Custom binary format, cheap storage, fast writes
+- <strong>Lakehouse (Parquet):</strong> Columnar format, fast analytics, industry standard<br />
+- <strong>Query Engine (DataFusion):</strong> SQL engine optimized for analytical workloads</p>
+<p><strong>Tail Sampling Support:</strong>
+- Heavy data streams remain unprocessed until queried
+- Cheap to store in S3, cheap to delete unused data
+- Use low-frequency streams (logs, metrics) to decide sampling of high-frequency streams (spans)</p>
+<h3 id="custom-views">Custom Views</h3>
+<p>Advanced users can create custom views by extending the view factory system. This requires Rust development and is documented in the contributor guide.</p>
+<hr />
+<h2 id="getting-help">Getting Help</h2>
+<ul>
+<li><strong>DataFusion SQL Reference</strong>: https://datafusion.apache.org/user-guide/sql/</li>
+<li><strong>Micromegas Documentation</strong>: See <code>doc/</code> directory</li>
+<li><strong>Issues and Support</strong>: GitHub Issues</li>
+</ul>
+<p>For questions about specific Micromegas SQL extensions or observability use cases, please refer to the project's issue tracker or documentation.</p>
+            </div>
+        </main>
+    </div>
+    
+    <script>
+        // Highlight current section in navigation
+        document.addEventListener('DOMContentLoaded', function() {
+            const navLinks = document.querySelectorAll('.sidebar a[href^="#"]');
+            const sections = document.querySelectorAll('h1, h2, h3');
+            
+            function highlightNav() {
+                let current = '';
+                sections.forEach(section => {
+                    const sectionTop = section.offsetTop;
+                    const sectionHeight = section.offsetHeight;
+                    if (scrollY >= sectionTop - 100) {
+                        current = section.id;
+                    }
+                });
+                
+                navLinks.forEach(link => {
+                    link.style.borderLeftColor = 'transparent';
+                    link.style.background = 'transparent';
+                    if (link.getAttribute('href') === '#' + current) {
+                        link.style.borderLeftColor = 'var(--primary-color)';
+                        link.style.background = 'rgba(9, 105, 218, 0.1)';
+                    }
+                });
+            }
+            
+            window.addEventListener('scroll', highlightNav);
+            highlightNav(); // Initial highlight
+        });
+    </script>
+</body>
+</html>

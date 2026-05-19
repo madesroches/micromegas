@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["FORMAT_OTLP_LOGS","FORMAT_OTLP_METRICS","FORMAT_OTLP_TRACES","FORMAT_TRANSIT"],"enum":["IngestionServiceError"],"fn":["empty_transit_metadata_cbor"],"struct":["WebIngestionService"]};

@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"attr":["micromegas_main"]};
