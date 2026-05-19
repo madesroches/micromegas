@@ -725,6 +725,10 @@ function UnrealCameraController({
     }
 
     const onWheel = (e: WheelEvent) => {
+      // Gate zoom on Ctrl/Cmd so plain wheel scrolls the surrounding page
+      // (notebooks embed Map cells in a scrollable container). QE keys remain
+      // an unmodified zoom path for users already on the keyboard.
+      if (!e.ctrlKey && !e.metaKey) return
       e.preventDefault()
 
       const zoomSpeed = 0.1
@@ -1036,7 +1040,7 @@ export function MapViewer({
         <div className="font-semibold text-theme-text-secondary mb-1">Controls</div>
         <div>Left-click + drag: Pan</div>
         <div>Right-click + drag: Rotate</div>
-        <div>Scroll: Zoom</div>
+        <div>Ctrl + Scroll: Zoom</div>
         <div>WASD: Pan</div>
         <div>QE: Zoom</div>
         <div>Z: Reset view</div>
