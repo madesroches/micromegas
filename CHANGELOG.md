@@ -39,6 +39,7 @@ This file documents the historical progress of the Micromegas project. For curre
   * Refine map navigation: WASD pans horizontally (no elevation), add Q/E keyboard zoom, suppress the browser context menu when a right-drag releases off-canvas, and auto-size the event detail panel with the title rendered via the Markdown template
   * Remove admin-oriented `MICROMEGAS_MAPS_OBJECT_STORE_URI` / `.glb` drop hint from the map cell editor (admins use the Maps management UI)
   * Resolve `$var` macros in map cell primitive scalar bindings (size, scaleX/Y/Z, color); editor swaps the legacy number/color inputs for a text field with local-draft commit (Enter/blur commits, Escape cancels)
+  * Require Ctrl/Cmd modifier for map cell wheel zoom so plain wheel scrolls the surrounding notebook page
 * **Python:**
   * Switch `bulk_ingest` to accept `pyarrow.Table` directly for native pass-through of struct/list/binary columns
   * Resolve CLI connection settings from `~/.micromegas/config.json` with env-var override (#1033)
