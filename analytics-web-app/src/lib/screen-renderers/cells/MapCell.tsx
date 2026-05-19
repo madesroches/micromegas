@@ -22,6 +22,7 @@ import {
   defaultMappingFor,
   hexFromRgba,
   materializeRow,
+  resolveMappingScalars,
   resolveOverlayConstants,
   rgbaFromHex,
   type ChannelBinding,
@@ -203,7 +204,7 @@ export function MapCell({
   const scaleZCol = bindingColumn(mappingObj?.scaleZ)
   const colorCol = bindingColumn(mappingObj?.color)
 
-  const overlayResult = useMemo(
+  const overlayBuildResult = useMemo(
     () => {
       if (!sourceTable) return null
       const { mapping } = resolveMapping(options)
@@ -227,14 +228,46 @@ export function MapCell({
   // mapping). When `buildOverlay` skipped allocating `overlay.colorsRGBA`
   // because color is scalar, the renderer reads `constants.color` from here
   // instead.
-  const constants = useMemo(
+  //
+  // `resolveMappingScalars` expands any `$macro` strings stored in scalar
+  // bindings against the notebook macro context. Decoupled from the heavy
+  // buildOverlay memo: a macro that drives a scalar (e.g. `$mySize`) changes
+  // the scalar value without changing which column the channel reads from,
+  // so we re-resolve constants but skip the row walk.
+  const resolvedMappingResult = useMemo(
     () => {
       const { mapping } = resolveMapping(options)
-      return resolveOverlayConstants(mapping)
+      return resolveMappingScalars(mapping, {
+        variables,
+        timeRange,
+        cellResults,
+        cellSelections,
+      })
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [options?.shape, options?.mapping, options?.markerColor, options?.markerSize],
+    [
+      options?.shape,
+      options?.mapping,
+      options?.markerColor,
+      options?.markerSize,
+      variables,
+      timeRange.begin,
+      timeRange.end,
+      cellResults,
+      cellSelections,
+    ],
   )
+  const constants = useMemo(
+    () =>
+      resolvedMappingResult.ok
+        ? resolveOverlayConstants(resolvedMappingResult.mapping)
+        : resolveOverlayConstants(undefined),
+    [resolvedMappingResult],
+  )
+  // Surface a macro-resolution failure as if it were a build failure — same
+  // error rendering surface, so the user sees one consistent place for
+  // mapping problems whether they're column-, scalar-, or macro-driven.
+  const overlayResult = resolvedMappingResult.ok ? overlayBuildResult : resolvedMappingResult
   const overlay = overlayResult?.ok ? overlayResult.overlay : null
   const shape: Shape = (options?.shape as Shape) === 'box' ? 'box' : 'sphere'
 
@@ -415,13 +448,19 @@ export function MapCell({
  * One channel-binding row in the Primitive section. The radio toggles between
  * a literal value (`scalar`) and a column reference (`column`); the inline
  * editor swaps to match.
+ *
+ * Scalar input is a plain text field — whatever the user types is stored as
+ * a string and passed through macro substitution at render time, then parsed
+ * to a number (for numeric channels) or `#rrggbb[aa]` (for color). This is
+ * what lets `$mySize` or `$cell.selected.radius` drive the value. Legacy
+ * scalars stored as raw numbers/RGBA-u32 still load — they're rendered in
+ * their canonical string form (`"10"` or `"#bf360cff"`) on first edit.
  */
 function ChannelBindingControl({
   label,
   kind,
   binding,
   fallbackScalar,
-  numericRange,
   columns,
   onChange,
 }: {
@@ -429,18 +468,20 @@ function ChannelBindingControl({
   kind: 'numeric' | 'color'
   binding: ChannelBinding | undefined
   fallbackScalar: number
-  numericRange?: { min: number; max: number; step: number }
   columns: string[]
   onChange: (next: ChannelBinding) => void
 }) {
   const isColumn = !!binding && 'column' in binding
   const mode: 'scalar' | 'column' = isColumn ? 'column' : 'scalar'
 
+  const formatScalar = (value: number): string =>
+    kind === 'color' ? hexFromRgba(value) : String(value)
+
   const noColumns = columns.length === 0
   const setMode = (next: 'scalar' | 'column') => {
     if (next === mode) return
     if (next === 'scalar') {
-      onChange({ scalar: fallbackScalar })
+      onChange({ scalar: formatScalar(fallbackScalar) })
     } else {
       // Guard: writing `{column: ''}` produces an unresolvable binding that
       // fails buildOverlay with `Column '' not found`. Force scalar mode
@@ -450,17 +491,49 @@ function ChannelBindingControl({
     }
   }
 
-  const scalarValue =
-    binding && 'scalar' in binding ? (binding.scalar as number) : fallbackScalar
+  // Render legacy numeric scalars (number / RGBA u32) in their string form so
+  // the text input can edit them; future edits roundtrip as strings.
+  const scalarString: string = (() => {
+    if (!binding || !('scalar' in binding)) return formatScalar(fallbackScalar)
+    if (typeof binding.scalar === 'string') return binding.scalar
+    if (typeof binding.scalar === 'number') return formatScalar(binding.scalar)
+    return formatScalar(fallbackScalar)
+  })()
 
-  // Split RGBA u32 into hex (#rrggbb) + alpha byte for the picker widgets.
-  const colorHex = kind === 'color' ? hexFromRgba(scalarValue).slice(0, 7) : '#000000'
-  const alphaByte = kind === 'color' ? scalarValue & 0xff : 0xff
-
-  const packRgba = (hex: string, alpha: number): number => {
-    const rgba = rgbaFromHex(`${hex}${alpha.toString(16).padStart(2, '0')}`)
-    return rgba ?? 0
+  // Decouple typing from the model. The text input owns an in-flight `draft`
+  // and only commits to `onChange` on blur or Enter. Without this, every
+  // keystroke would round-trip through `updateMappingChannel` (which wraps
+  // the parent update in `startTransition`); the deferred re-render then
+  // resyncs `value` mid-typing and the browser resets the cursor position.
+  //
+  // The ref-guarded sync block adopts the prop value when it changes from
+  // outside this control — mode switch, color-picker pick, saved-config
+  // reload — so external updates win over uncommitted typing.
+  const [draft, setDraft] = useState(scalarString)
+  const lastSyncedScalarRef = useRef(scalarString)
+  if (lastSyncedScalarRef.current !== scalarString) {
+    lastSyncedScalarRef.current = scalarString
+    setDraft(scalarString)
   }
+  const commitDraft = () => {
+    if (draft !== scalarString) {
+      onChange({ scalar: draft })
+    }
+  }
+
+  const placeholder =
+    kind === 'color' ? '#bf360cff or $myColor' : 'e.g. 10 or $mySize'
+
+  // For the color channel, parse the current text into an RGBA u32 so the
+  // picker swatch reflects literal hex values. Macros and invalid text fall
+  // back to the channel's default — clicking the picker then writes a fresh
+  // `#rrggbbff`, replacing whatever non-hex string was there. Read from the
+  // committed `scalarString`, not the in-flight `draft`, so the swatch
+  // doesn't strobe through partially-typed hex codes.
+  const parsedRgba =
+    kind === 'color' ? rgbaFromHex(scalarString) ?? fallbackScalar : 0
+  const colorPickerHex = hexFromRgba(parsedRgba).slice(0, 7)
+  const currentAlpha = parsedRgba & 0xff
 
   return (
     <div className="flex items-center gap-2 flex-wrap">
@@ -488,42 +561,46 @@ function ChannelBindingControl({
         </label>
       </div>
 
-      {mode === 'scalar' && kind === 'numeric' && (
+      {mode === 'scalar' && (
         <input
-          type="number"
-          value={Number.isFinite(scalarValue) ? scalarValue : 0}
-          min={numericRange?.min}
-          max={numericRange?.max}
-          step={numericRange?.step ?? 1}
-          onChange={(e) => {
-            const v = Number(e.target.value)
-            onChange({ scalar: Number.isFinite(v) ? v : 0 })
+          type="text"
+          value={draft}
+          placeholder={placeholder}
+          spellCheck={false}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={commitDraft}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              // Blur triggers commitDraft via onBlur — keeps the commit path
+              // single-sourced so Enter and click-away behave identically.
+              e.currentTarget.blur()
+            } else if (e.key === 'Escape') {
+              // Cancel the in-flight edit, restoring the committed value.
+              setDraft(scalarString)
+              e.currentTarget.blur()
+            }
           }}
-          className="w-24 bg-app-card border border-theme-border rounded px-2 py-1 text-sm text-theme-text-primary focus:outline-none focus:border-accent-link"
+          className="flex-1 min-w-[10rem] bg-app-card border border-theme-border rounded px-2 py-1 text-sm font-mono text-theme-text-primary focus:outline-none focus:border-accent-link"
         />
       )}
 
       {mode === 'scalar' && kind === 'color' && (
-        <>
-          <input
-            type="color"
-            value={colorHex}
-            onChange={(e) => onChange({ scalar: packRgba(e.target.value, alphaByte) })}
-            className="w-7 h-7 rounded cursor-pointer border border-theme-border bg-transparent"
-          />
-          <label className="text-xs text-theme-text-muted">alpha</label>
-          <input
-            type="range"
-            min="0"
-            max="255"
-            value={alphaByte}
-            onChange={(e) =>
-              onChange({ scalar: packRgba(colorHex, Number(e.target.value)) })
-            }
-            className="w-24 accent-accent-link"
-          />
-          <span className="text-xs text-theme-text-muted w-7">{alphaByte}</span>
-        </>
+        <input
+          type="color"
+          value={colorPickerHex}
+          // HTML <input type="color"> doesn't carry alpha, so preserve the
+          // current text's alpha byte (or 0xff for non-hex inputs) when the
+          // picker fires. Picking always replaces the text with a fresh hex,
+          // so a macro typed into the field will be overwritten — that's the
+          // intended affordance for "switch back to a literal color".
+          onChange={(e) => {
+            const alphaHex = currentAlpha.toString(16).padStart(2, '0')
+            onChange({ scalar: `${e.target.value}${alphaHex}` })
+          }}
+          aria-label={`${label} color picker`}
+          title="Pick a color (replaces the text value)"
+          className="w-7 h-7 rounded cursor-pointer border border-theme-border bg-transparent shrink-0"
+        />
       )}
 
       {mode === 'column' && (
@@ -729,7 +806,6 @@ export function MapCellEditor({
               kind="numeric"
               binding={channelBinding('size')}
               fallbackScalar={10}
-              numericRange={{ min: 0, max: 10000, step: 1 }}
               columns={availableColumns ?? []}
               onChange={(b) => updateMappingChannel('size', b)}
             />
@@ -751,7 +827,6 @@ export function MapCellEditor({
               kind="numeric"
               binding={channelBinding('scaleX')}
               fallbackScalar={100}
-              numericRange={{ min: 0, max: 100000, step: 1 }}
               columns={availableColumns ?? []}
               onChange={(b) => updateMappingChannel('scaleX', b)}
             />
@@ -760,7 +835,6 @@ export function MapCellEditor({
               kind="numeric"
               binding={channelBinding('scaleY')}
               fallbackScalar={100}
-              numericRange={{ min: 0, max: 100000, step: 1 }}
               columns={availableColumns ?? []}
               onChange={(b) => updateMappingChannel('scaleY', b)}
             />
@@ -769,7 +843,6 @@ export function MapCellEditor({
               kind="numeric"
               binding={channelBinding('scaleZ')}
               fallbackScalar={100}
-              numericRange={{ min: 0, max: 100000, step: 1 }}
               columns={availableColumns ?? []}
               onChange={(b) => updateMappingChannel('scaleZ', b)}
             />

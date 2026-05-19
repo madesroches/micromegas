@@ -6,7 +6,11 @@ import {
   isStringType,
   unwrapDictionary,
 } from '@/lib/arrow-utils'
-import { formatArrowValue } from '@/lib/screen-renderers/notebook-utils'
+import {
+  formatArrowValue,
+  substituteMacrosRaw,
+} from '@/lib/screen-renderers/notebook-utils'
+import type { VariableValue } from '@/lib/screen-renderers/notebook-types'
 
 /** A single row of the SQL result, formatted to strings for template substitution. */
 export type Row = Record<string, string>
@@ -16,10 +20,16 @@ export type Shape = 'sphere' | 'box'
 /**
  * One channel of an overlay mapping: either a literal value to apply to every
  * row (`scalar`), or the name of a column to read per-row values from (`column`).
+ *
+ * The `scalar` may also be a raw `string` — for numeric channels (size/scale/
+ * color), the string is user-entered text that may contain `$var` macros and
+ * is resolved to a number by `resolveMappingScalars`. Legacy notebooks store
+ * `scalar` as the typed value (`number` for size/scale, RGBA u32 for color);
+ * both forms load.
  */
 export type ChannelBinding<T = number> =
   | { column: string }
-  | { scalar: T }
+  | { scalar: T | string }
 
 /**
  * Per-channel column-or-scalar bindings. Channel semantics depend on `shape`:
@@ -122,6 +132,22 @@ export function hexFromRgba(rgba: number): string {
   const u = rgba >>> 0
   const hex = u.toString(16).padStart(8, '0')
   return `#${hex}`
+}
+
+/** Narrows a (possibly templated) scalar binding to a number. Falls back to
+ *  `fallback` for column-bound channels, missing bindings, or any scalar that
+ *  isn't already a finite number. `resolveMappingScalars` is expected to have
+ *  converted any string scalars upstream — this is the runtime safety net so
+ *  buildOverlay/resolveOverlayConstants can't silently coerce a `"$mySize"`
+ *  string into NaN. */
+function numericScalarOr(
+  b: ChannelBinding | undefined,
+  fallback: number,
+): number {
+  if (!b || !('scalar' in b)) return fallback
+  return typeof b.scalar === 'number' && Number.isFinite(b.scalar)
+    ? b.scalar
+    : fallback
 }
 
 /** Writes a 4-byte RGBA value into a per-instance buffer at row `i`. */
@@ -291,15 +317,15 @@ export function buildOverlay(
     ? [scaleXIsColumn, scaleYIsColumn, scaleZIsColumn]
     : undefined
 
-  const scaleXScalar = m.scaleX && 'scalar' in m.scaleX ? m.scaleX.scalar : DEFAULT_BOX_SCALE[0]
-  const scaleYScalar = m.scaleY && 'scalar' in m.scaleY ? m.scaleY.scalar : DEFAULT_BOX_SCALE[1]
-  const scaleZScalar = m.scaleZ && 'scalar' in m.scaleZ ? m.scaleZ.scalar : DEFAULT_BOX_SCALE[2]
+  const scaleXScalar = numericScalarOr(m.scaleX, DEFAULT_BOX_SCALE[0])
+  const scaleYScalar = numericScalarOr(m.scaleY, DEFAULT_BOX_SCALE[1])
+  const scaleZScalar = numericScalarOr(m.scaleZ, DEFAULT_BOX_SCALE[2])
 
   // Color: only materialize a per-instance buffer when column-bound. Scalar
   // color flows through `constants.color` so editor scrubbing doesn't
   // invalidate the overlay reference.
   const colorIsColumn = !!m.color && 'column' in m.color
-  const colorScalar = m.color && 'scalar' in m.color ? (m.color.scalar as number) : DEFAULT_RGBA
+  const colorScalar = numericScalarOr(m.color, DEFAULT_RGBA)
   const colorsRGBA = colorIsColumn ? new Uint8Array(numRows * 4) : undefined
   const colorCol = colorIsColumn ? table.getChild((m.color as { column: string }).column) : null
 
@@ -404,7 +430,7 @@ export function buildOverlay(
   }
 
   const constants: OverlayConstants = {
-    size: m.size && 'scalar' in m.size ? m.size.scalar : DEFAULT_SPHERE_SIZE,
+    size: numericScalarOr(m.size, DEFAULT_SPHERE_SIZE),
     scale: [scaleXScalar, scaleYScalar, scaleZScalar],
     color: colorScalar >>> 0,
   }
@@ -416,20 +442,110 @@ export function buildOverlay(
   }
 }
 
+/**
+ * Resolves any string scalars in a mapping into their numeric (or RGBA u32 for
+ * color) form. String scalars are user-entered text — possibly containing
+ * `$var` macros — and are substituted against the notebook macro context, then
+ * parsed. Number scalars pass through unchanged (legacy notebooks). Column
+ * bindings pass through unchanged.
+ *
+ * Returns the resolved mapping on success; on failure returns the first
+ * channel that couldn't be resolved (e.g. macro substitution left a value
+ * that isn't a finite number, or a color string isn't `#rrggbb[aa]`).
+ */
+export type MappingResolveResult =
+  | { ok: true; mapping: OverlayMapping }
+  | { ok: false; error: string }
+
+export interface MappingResolveContext {
+  variables: Record<string, VariableValue>
+  timeRange: { begin: string; end: string }
+  cellResults: Record<string, Table>
+  cellSelections: Record<string, Record<string, unknown>>
+}
+
+export function resolveMappingScalars(
+  mapping: OverlayMapping,
+  ctx: MappingResolveContext,
+): MappingResolveResult {
+  const resolved: OverlayMapping = { ...mapping }
+
+  const resolveNumeric = (
+    label: string,
+    b: ChannelBinding | undefined,
+  ): { ok: true; binding: ChannelBinding | undefined } | { ok: false; error: string } => {
+    if (!b || !('scalar' in b)) return { ok: true, binding: b }
+    if (typeof b.scalar === 'number') return { ok: true, binding: b }
+    const raw = substituteMacrosRaw(
+      b.scalar,
+      ctx.variables,
+      ctx.timeRange,
+      ctx.cellResults,
+      ctx.cellSelections,
+    )
+    // Trim+empty check: `Number("")` is 0, which silently turns an unset
+    // scalar into zero. Surface it as an error instead so an empty field is
+    // visible rather than a render-time mystery.
+    const trimmed = raw.trim()
+    const num = trimmed === '' ? NaN : Number(trimmed)
+    if (!Number.isFinite(num)) {
+      return {
+        ok: false,
+        error: `Channel '${label}': '${b.scalar}' resolved to '${raw}', which is not a number.`,
+      }
+    }
+    return { ok: true, binding: { scalar: num } }
+  }
+
+  for (const label of ['size', 'scaleX', 'scaleY', 'scaleZ'] as const) {
+    const r = resolveNumeric(label, mapping[label])
+    if (!r.ok) return r
+    if (r.binding === undefined) {
+      delete resolved[label]
+    } else {
+      resolved[label] = r.binding
+    }
+  }
+
+  // Color: macro string must resolve to a hex (#rrggbb[aa]) value; reuse
+  // rgbaFromHex so the parsing matches what string-typed color columns accept.
+  if (mapping.color && 'scalar' in mapping.color) {
+    const s = mapping.color.scalar
+    if (typeof s === 'string') {
+      const raw = substituteMacrosRaw(
+        s,
+        ctx.variables,
+        ctx.timeRange,
+        ctx.cellResults,
+        ctx.cellSelections,
+      )
+      const rgba = rgbaFromHex(raw)
+      if (rgba === null) {
+        return {
+          ok: false,
+          error: `Channel 'color': '${s}' resolved to '${raw}', which is not a #rrggbb or #rrggbbaa hex color.`,
+        }
+      }
+      resolved.color = { scalar: rgba }
+    }
+  }
+
+  return { ok: true, mapping: resolved }
+}
+
 /** Resolves the scalar fallbacks for size and color channels without touching
  *  the table. Cheap to call on every render so cell-level useMemo can key on
  *  scalar values without invalidating the heavyweight `buildOverlay` memo. */
 export function resolveOverlayConstants(mapping?: OverlayMapping): OverlayConstants {
   const m = mapping ?? defaultMappingFor('sphere')
   return {
-    size: m.size && 'scalar' in m.size ? m.size.scalar : DEFAULT_SPHERE_SIZE,
+    size: numericScalarOr(m.size, DEFAULT_SPHERE_SIZE),
     scale: [
-      m.scaleX && 'scalar' in m.scaleX ? m.scaleX.scalar : DEFAULT_BOX_SCALE[0],
-      m.scaleY && 'scalar' in m.scaleY ? m.scaleY.scalar : DEFAULT_BOX_SCALE[1],
-      m.scaleZ && 'scalar' in m.scaleZ ? m.scaleZ.scalar : DEFAULT_BOX_SCALE[2],
+      numericScalarOr(m.scaleX, DEFAULT_BOX_SCALE[0]),
+      numericScalarOr(m.scaleY, DEFAULT_BOX_SCALE[1]),
+      numericScalarOr(m.scaleZ, DEFAULT_BOX_SCALE[2]),
     ],
-    color:
-      (m.color && 'scalar' in m.color ? (m.color.scalar as number) : DEFAULT_RGBA) >>> 0,
+    color: numericScalarOr(m.color, DEFAULT_RGBA) >>> 0,
   }
 }
 

@@ -10,7 +10,11 @@ import {
   vectorFromArray,
 } from 'apache-arrow'
 import { mapMetadata } from '../MapCell'
-import { buildOverlay, materializeRow } from '@/components/map/overlay'
+import {
+  buildOverlay,
+  materializeRow,
+  resolveMappingScalars,
+} from '@/components/map/overlay'
 import { DEFAULT_MAP_DETAIL_TEMPLATE } from '../../notebook-utils'
 
 describe('buildOverlay', () => {
@@ -271,6 +275,114 @@ describe('buildOverlay', () => {
     if (result.ok) return
     expect(result.error).toMatch(/Row 1/)
     expect(result.error).toMatch(/non-finite/)
+  })
+})
+
+describe('resolveMappingScalars', () => {
+  const emptyCtx = {
+    variables: {},
+    timeRange: { begin: '', end: '' },
+    cellResults: {},
+    cellSelections: {},
+  }
+
+  it('passes legacy numeric scalars through unchanged', () => {
+    const r = resolveMappingScalars(
+      { size: { scalar: 10 }, color: { scalar: 0xbf360cff } },
+      emptyCtx,
+    )
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.mapping.size).toEqual({ scalar: 10 })
+    expect(r.mapping.color).toEqual({ scalar: 0xbf360cff })
+  })
+
+  it('parses a literal numeric string scalar', () => {
+    const r = resolveMappingScalars({ size: { scalar: '42' } }, emptyCtx)
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.mapping.size).toEqual({ scalar: 42 })
+  })
+
+  it('expands a $variable macro into a numeric scalar', () => {
+    const r = resolveMappingScalars(
+      { size: { scalar: '$mySize' } },
+      { ...emptyCtx, variables: { mySize: '75' } },
+    )
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.mapping.size).toEqual({ scalar: 75 })
+  })
+
+  it('expands a $cell.selected.column macro into a numeric scalar', () => {
+    const tbl = tableFromArrays({ radius: new Float64Array([25]) })
+    const r = resolveMappingScalars(
+      { size: { scalar: '$tbl.selected.radius' } },
+      {
+        ...emptyCtx,
+        cellResults: { tbl },
+        cellSelections: { tbl: { radius: 25 } },
+      },
+    )
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.mapping.size).toEqual({ scalar: 25 })
+  })
+
+  it('returns an error when a numeric macro resolves to non-numeric text', () => {
+    const r = resolveMappingScalars(
+      { size: { scalar: '$label' } },
+      { ...emptyCtx, variables: { label: 'big' } },
+    )
+    expect(r.ok).toBe(false)
+    if (r.ok) return
+    expect(r.error).toMatch(/size/)
+    expect(r.error).toMatch(/not a number/)
+  })
+
+  it('rejects an empty/whitespace scalar as not a number', () => {
+    // Number('') is 0 in JS — guard against silently producing zero from an
+    // unset field by surfacing it as an error.
+    const r = resolveMappingScalars({ size: { scalar: '   ' } }, emptyCtx)
+    expect(r.ok).toBe(false)
+  })
+
+  it('parses a hex color scalar literal', () => {
+    const r = resolveMappingScalars({ color: { scalar: '#bf360cff' } }, emptyCtx)
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.mapping.color).toEqual({ scalar: 0xbf360cff })
+  })
+
+  it('expands a $variable macro into a hex color scalar', () => {
+    const r = resolveMappingScalars(
+      { color: { scalar: '$theme' } },
+      { ...emptyCtx, variables: { theme: '#0080ffff' } },
+    )
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.mapping.color).toEqual({ scalar: 0x0080ffff })
+  })
+
+  it('returns an error when a color macro resolves to non-hex text', () => {
+    const r = resolveMappingScalars(
+      { color: { scalar: '$broken' } },
+      { ...emptyCtx, variables: { broken: 'red' } },
+    )
+    expect(r.ok).toBe(false)
+    if (r.ok) return
+    expect(r.error).toMatch(/color/)
+  })
+
+  it('passes column bindings through unchanged', () => {
+    const r = resolveMappingScalars(
+      { size: { column: 'radius' }, color: { column: 'tint' } },
+      emptyCtx,
+    )
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.mapping.size).toEqual({ column: 'radius' })
+    expect(r.mapping.color).toEqual({ column: 'tint' })
   })
 })
 

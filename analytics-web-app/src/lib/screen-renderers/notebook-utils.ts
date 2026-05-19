@@ -325,11 +325,37 @@ export function substituteMacros(
   cellResults: Record<string, Table>,
   cellSelections: Record<string, Record<string, unknown>>,
 ): string {
-  let result = sql
+  return substituteMacrosImpl(sql, variables, timeRange, cellResults, cellSelections, escapeSqlValue)
+}
+
+/**
+ * Substitutes macros without SQL escaping — returns the raw resolved value.
+ * Used by non-SQL contexts (e.g. parsing a macro-driven scalar into a number
+ * or a hex color). Same regex/lookup rules as `substituteMacros`.
+ */
+export function substituteMacrosRaw(
+  input: string,
+  variables: Record<string, VariableValue>,
+  timeRange: { begin: string; end: string },
+  cellResults: Record<string, Table>,
+  cellSelections: Record<string, Record<string, unknown>>,
+): string {
+  return substituteMacrosImpl(input, variables, timeRange, cellResults, cellSelections, (s) => s)
+}
+
+function substituteMacrosImpl(
+  input: string,
+  variables: Record<string, VariableValue>,
+  timeRange: { begin: string; end: string },
+  cellResults: Record<string, Table>,
+  cellSelections: Record<string, Record<string, unknown>>,
+  escape: (value: string) => string,
+): string {
+  let result = input
 
   // 1. Substitute $from and $to (user controls quoting, like other variables)
-  result = result.replace(/\$from\b/g, escapeSqlValue(timeRange.begin))
-  result = result.replace(/\$to\b/g, escapeSqlValue(timeRange.end))
+  result = result.replace(/\$from\b/g, escape(timeRange.begin))
+  result = result.replace(/\$to\b/g, escape(timeRange.end))
 
   // 2. Cell result row references: $cell[N].column
   //    Must process before dotted/simple variables to avoid partial matches
@@ -341,7 +367,7 @@ export function substituteMacros(
     const row = table.get(rowIdx)
     if (!row || row[colName] === undefined || row[colName] === null) return match
     const field = table.schema.fields.find((f) => f.name === colName)
-    return escapeSqlValue(formatArrowValue(row[colName], field?.type))
+    return escape(formatArrowValue(row[colName], field?.type))
   })
 
   // 2b. Selected row references: $cell.selected.column
@@ -354,7 +380,7 @@ export function substituteMacros(
     if (value === undefined || value === null) return ''
     const table = cellResults[cellName]
     const field = table?.schema.fields.find((f) => f.name === colName)
-    return escapeSqlValue(formatArrowValue(value, field?.type))
+    return escape(formatArrowValue(value, field?.type))
   })
 
   // 3. Handle dotted variable references first: $variable.column
@@ -373,7 +399,7 @@ export function substituteMacros(
       return match
     }
 
-    return escapeSqlValue(colValue)
+    return escape(colValue)
   })
 
   // 3. Handle simple variable references: $variable
@@ -384,11 +410,11 @@ export function substituteMacros(
     const regex = new RegExp(`\\$${name}\\b(?![.\\[])`, 'g')
 
     if (typeof value === 'string') {
-      result = result.replace(regex, escapeSqlValue(value))
+      result = result.replace(regex, escape(value))
     } else {
       // Multi-column variable referenced without column - use first column value
       const firstValue = getVariableString(value)
-      result = result.replace(regex, escapeSqlValue(firstValue))
+      result = result.replace(regex, escape(firstValue))
     }
   }
 
