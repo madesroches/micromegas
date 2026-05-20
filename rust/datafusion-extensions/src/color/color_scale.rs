@@ -18,17 +18,23 @@ const RECOGNIZED: &[&str] = &["viridis", "magma", "plasma", "inferno", "cividis"
 /// Resolve a colormap name to a `colorous::Gradient`. Case-insensitive.
 ///
 /// `colorous::Gradient` is `Copy` and the gradient items are `pub const` (not
-/// `'static`), so this returns by value.
+/// `'static`), so this returns by value. Uses `eq_ignore_ascii_case` instead
+/// of lowercasing so a column-driven name doesn't allocate per row.
 fn resolve_colormap(name: &str) -> Option<colorous::Gradient> {
-    let lower = name.to_ascii_lowercase();
-    match lower.as_str() {
-        "viridis" => Some(colorous::VIRIDIS),
-        "magma" => Some(colorous::MAGMA),
-        "plasma" => Some(colorous::PLASMA),
-        "inferno" => Some(colorous::INFERNO),
-        "cividis" => Some(colorous::CIVIDIS),
-        "turbo" => Some(colorous::TURBO),
-        _ => None,
+    if name.eq_ignore_ascii_case("viridis") {
+        Some(colorous::VIRIDIS)
+    } else if name.eq_ignore_ascii_case("magma") {
+        Some(colorous::MAGMA)
+    } else if name.eq_ignore_ascii_case("plasma") {
+        Some(colorous::PLASMA)
+    } else if name.eq_ignore_ascii_case("inferno") {
+        Some(colorous::INFERNO)
+    } else if name.eq_ignore_ascii_case("cividis") {
+        Some(colorous::CIVIDIS)
+    } else if name.eq_ignore_ascii_case("turbo") {
+        Some(colorous::TURBO)
+    } else {
+        None
     }
 }
 
@@ -95,18 +101,11 @@ impl ScalarUDFImpl for ColorScaleUdf {
         // name surfaces at plan time. A column-driven `t` / `alpha` with a
         // literal `name` is not foldable, but this still produces a single
         // upfront error rather than per-row work.
+        // Signature is `exact(Utf8)`, so a literal name arrives as
+        // `ScalarValue::Utf8`; no need to match the other string variants.
         let literal_gradient = match &args.args[0] {
-            ColumnarValue::Scalar(ScalarValue::Utf8(Some(s)))
-            | ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(s)))
-            | ColumnarValue::Scalar(ScalarValue::Utf8View(Some(s))) => {
+            ColumnarValue::Scalar(ScalarValue::Utf8(Some(s))) => {
                 Some(resolve_colormap(s).ok_or_else(|| unknown_colormap_err(s))?)
-            }
-            ColumnarValue::Scalar(ScalarValue::Utf8(None))
-            | ColumnarValue::Scalar(ScalarValue::LargeUtf8(None))
-            | ColumnarValue::Scalar(ScalarValue::Utf8View(None)) => {
-                // NULL name => NULL output for all rows; fall through and
-                // the per-row null check will short-circuit.
-                None
             }
             _ => None,
         };
