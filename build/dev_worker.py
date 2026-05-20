@@ -45,7 +45,10 @@ import uuid
 
 REPO = "madesroches/micromegas"
 IMAGE_NAME = "micromegas-github-runner"
-CONTAINER_NAME = "micromegas-runner"
+CONTAINER_NAME_PREFIX = "micromegas-runner"
+# Label applied to each runner container so we can find them by query without
+# needing to know the unique per-run container name.
+CONTAINER_LABEL = "com.micromegas.runner=dev-worker"
 PAT_FILE = os.path.expanduser("~/.config/micromegas/runner-pat")
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -135,15 +138,15 @@ def build_image():
 
 
 def start_container(pat, cpus=None, memory=None):
-    """Start a persistent runner container. Returns (Popen, token_path).
+    """Start an ephemeral runner container. Returns (Popen, token_path).
 
-    Uses a fixed container name to prevent multiple instances from
-    corrupting the shared build cache. The GitHub runner registration
-    uses a unique name to avoid stale session conflicts.
+    Each run gets a unique container name so successive containers cannot
+    conflict on Docker's name registry while the previous --rm cleanup is
+    still draining. The GitHub runner registers under the same unique name.
     """
     token = get_registration_token(pat)
     arch = get_arch()
-    runner_name = f"{CONTAINER_NAME}-{uuid.uuid4().hex[:8]}"
+    name = f"{CONTAINER_NAME_PREFIX}-{uuid.uuid4().hex[:8]}"
 
     # Write token to a temp file (never pass via env var or CLI)
     fd, token_path = tempfile.mkstemp(prefix="runner-token-")
@@ -155,12 +158,14 @@ def start_container(pat, cpus=None, memory=None):
         "docker",
         "run",
         "--name",
-        CONTAINER_NAME,
+        name,
+        "--label",
+        CONTAINER_LABEL,
         "--rm",
         "-e",
         f"REPO={REPO}",
         "-e",
-        f"RUNNER_NAME={runner_name}",
+        f"RUNNER_NAME={name}",
         "-e",
         f"ARCH={arch}",
         "--mount",
@@ -181,14 +186,21 @@ def start_container(pat, cpus=None, memory=None):
 
 
 def stop_container():
-    """Stop the running container if any."""
-    subprocess.run(["docker", "stop", CONTAINER_NAME], capture_output=True)
+    """Stop any currently running runner containers (located via label)."""
+    result = subprocess.run(
+        ["docker", "ps", "-q", "--filter", f"label={CONTAINER_LABEL}"],
+        capture_output=True,
+        text=True,
+    )
+    ids = result.stdout.split()
+    if ids:
+        subprocess.run(["docker", "stop", *ids], capture_output=True)
 
 
 def clear_cache():
     """Stop runner, clearing the build cache (cache lives on the container filesystem)."""
     stop_container()
-    # Give container time to exit
+    # Give the container time to exit and --rm to drain.
     time.sleep(2)
     print("Container stopped — build cache cleared.")
 
@@ -276,7 +288,7 @@ def nightly_rotation_thread(rotation_event, rotate_hour):
 
 
 def run_worker_loop(pat, cpus=None, memory=None, trigger_warming=False, rotate_hour=None):
-    """Main loop: start persistent container, restart on exit or rotation."""
+    """Main loop: start ephemeral containers, replace each one after it exits."""
     running = True
     rotation_event = threading.Event()
 
@@ -314,8 +326,6 @@ def run_worker_loop(pat, cpus=None, memory=None, trigger_warming=False, rotate_h
             proc, token_path = start_container(pat, cpus=cpus, memory=memory)
         except Exception as e:
             if running:
-                # Remove stale container left behind by a daemon crash
-                subprocess.run(["docker", "rm", "-f", CONTAINER_NAME], capture_output=True)
                 print(f"Failed to start container: {e}")
                 print("Retrying in 10 seconds...")
                 time.sleep(10)
@@ -337,7 +347,7 @@ def run_worker_loop(pat, cpus=None, memory=None, trigger_warming=False, rotate_h
                 pass
 
         if running:
-            print("Container exited unexpectedly, restarting runner...\n")
+            print("Runner finished its job, starting next ephemeral runner...\n")
 
 
 def main():
