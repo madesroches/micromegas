@@ -412,6 +412,15 @@ function InstancedMarkers({
     }
   }, [geometry, material])
 
+  // Restore body cursor on unmount in case a marker is hovered when we tear
+  // down — the {ready} gate in MapViewer unmounts this component on mapUrl
+  // changes, and a pointer-out we'd otherwise rely on never fires.
+  useEffect(() => {
+    return () => {
+      document.body.style.cursor = 'auto'
+    }
+  }, [])
+
   const handleClick = useCallback(
     (e: ThreeEvent<MouseEvent>) => {
       e.stopPropagation()
@@ -852,6 +861,10 @@ function MapCameraController({
       window.removeEventListener('keydown', onKeyDown)
       window.removeEventListener('keyup', onKeyUp)
       window.removeEventListener('blur', onWindowBlur)
+      // Restore cursor on unmount in case we tear down mid-drag — the
+      // {ready} gate in MapViewer unmounts this controller on mapUrl
+      // changes, and a mouseup we'd otherwise rely on never fires.
+      domElement.style.cursor = 'auto'
     }
   }, [camera, domElement])
 
