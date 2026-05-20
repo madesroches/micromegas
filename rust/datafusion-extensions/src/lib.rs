@@ -2,7 +2,7 @@
 pub mod binary_column_accessor;
 /// Binning UDFs (bin_center)
 pub mod binning;
-/// Color UDFs (rgba, lerp_color)
+/// Color UDFs (rgba, lerp_color, color_scale)
 pub mod color;
 /// Compute histograms from SQL
 pub mod histogram;
@@ -14,7 +14,9 @@ pub mod properties;
 use std::sync::Arc;
 
 use binning::bin_center::make_bin_center_udf;
-use color::{lerp_color::make_lerp_color_udf, rgba::make_rgba_udf};
+use color::{
+    color_scale::make_color_scale_udf, lerp_color::make_lerp_color_udf, rgba::make_rgba_udf,
+};
 use datafusion::logical_expr::ScalarUDF;
 use datafusion::prelude::SessionContext;
 use histogram::{
@@ -76,6 +78,7 @@ pub fn register_extension_udfs(ctx: &SessionContext) {
 
     ctx.register_udf(make_rgba_udf());
     ctx.register_udf(make_lerp_color_udf());
+    ctx.register_udf(make_color_scale_udf());
 
     ctx.register_udf(make_bin_center_udf());
 }
