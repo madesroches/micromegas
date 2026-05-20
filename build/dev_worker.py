@@ -38,6 +38,11 @@ CONTAINER_NAME_PREFIX = "micromegas-runner"
 # Label applied to each runner container so we can find them by query without
 # needing to know the unique per-run container name.
 CONTAINER_LABEL = "com.micromegas.runner=dev-worker"
+# Named Docker volume that persists the build cache across ephemeral runs.
+# Layout: /cache/{rust,yarn,go-mod,go-build,playwright}. Assumes a single
+# worker per workstation; multiple concurrent workers would corrupt cargo's
+# registry/target locks.
+CACHE_VOLUME = "micromegas-runner-cache"
 PAT_FILE = os.path.expanduser("~/.config/micromegas/runner-pat")
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -132,6 +137,10 @@ def start_container(pat, cpus=None, memory=None):
     Each run gets a unique container name so successive containers cannot
     conflict on Docker's name registry while the previous --rm cleanup is
     still draining. The GitHub runner registers under the same unique name.
+
+    /cache is mounted from a named Docker volume so per-tool build caches
+    (cargo, yarn, go, playwright) survive across containers — only changed
+    inputs trigger recompiles/redownloads per job.
     """
     token = get_registration_token(pat)
     arch = get_arch()
@@ -157,8 +166,20 @@ def start_container(pat, cpus=None, memory=None):
         f"RUNNER_NAME={name}",
         "-e",
         f"ARCH={arch}",
+        # Redirect per-tool caches under /cache so the named volume persists
+        # them across ephemeral containers. Tools auto-create the subdirs.
+        "-e",
+        "YARN_CACHE_FOLDER=/cache/yarn",
+        "-e",
+        "GOMODCACHE=/cache/go-mod",
+        "-e",
+        "GOCACHE=/cache/go-build",
+        "-e",
+        "PLAYWRIGHT_BROWSERS_PATH=/cache/playwright",
         "--mount",
         f"type=bind,source={token_path},target=/run/secrets/registration-token,readonly",
+        "--mount",
+        f"type=volume,source={CACHE_VOLUME},target=/cache",
     ]
     if cpus:
         cmd.extend(["--cpus", str(cpus)])

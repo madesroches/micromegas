@@ -169,6 +169,15 @@ Each workflow has a `check-runner` job that runs on `ubuntu-latest` and decides 
 
 The runner container is ephemeral: each container registers with GitHub, picks up one job, executes it, and exits. The worker loop then starts a fresh container for the next job. Each container gets a unique name so successive runs cannot collide while Docker drains the previous `--rm` cleanup.
 
+The build caches live in a named Docker volume (`micromegas-runner-cache`) mounted at `/cache`, so they persist across the ephemeral containers. The volume holds:
+
+- Cargo registry and target directories (`CARGO_HOME`, `CARGO_TARGET_DIR`)
+- Yarn package downloads (`YARN_CACHE_FOLDER`)
+- Go module and build cache (`GOMODCACHE`, `GOCACHE`)
+- Playwright browser downloads (`PLAYWRIGHT_BROWSERS_PATH`)
+
+This assumes a single worker per workstation — two concurrent workers sharing the volume would corrupt cargo's locks. To wipe the cache, stop the worker and run `docker volume rm micromegas-runner-cache`.
+
 See `tasks/container_based_dev_worker_plan.md` for the full design.
 
 ## Next Steps
