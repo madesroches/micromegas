@@ -43,6 +43,7 @@ This file documents the historical progress of the Micromegas project. For curre
   * Resolve `$var` macros in map cell primitive scalar bindings (size, scaleX/Y/Z, color); editor swaps the legacy number/color inputs for a text field with local-draft commit (Enter/blur commits, Escape cancels)
   * Require Ctrl/Cmd modifier for map cell wheel zoom so plain wheel scrolls the surrounding notebook page
   * Fix map cell event detail popup close button overlapping the first line of the markdown template (#1067)
+  * Eliminate map cell first-paint camera snap by gating marker/camera mount until the GLB payload has propagated and promoting payload-extract/camera-seed effects to `useLayoutEffect`; restore cursor on controller/marker unmount; rename `UnrealCameraController` to `MapCameraController` (#1075)
 * **Python:**
   * Switch `bulk_ingest` to accept `pyarrow.Table` directly for native pass-through of struct/list/binary columns
   * Resolve CLI connection settings from `~/.micromegas/config.json` with env-var override (#1033)
