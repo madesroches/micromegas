@@ -53,7 +53,7 @@ function MapModel({ url, onLoaded }: MapModelProps) {
   const gltf = useGLTF(url)
   const clonedScene = useMemo(() => gltf.scene.clone(), [gltf.scene])
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     clonedScene.traverse((child) => {
       if (child instanceof THREE.Mesh) {
         child.receiveShadow = true
@@ -477,19 +477,19 @@ function zUpOffsetToSphericalInput(offset: THREE.Vector3, out: THREE.Vector3): T
   return out
 }
 
-interface UnrealCameraControllerProps {
+interface MapCameraControllerProps {
   mapBounds: THREE.Box3 | null
   mapScene: THREE.Object3D | null
   resetViewTrigger: number
   glbCamera: THREE.PerspectiveCamera | null
 }
 
-function UnrealCameraController({
+function MapCameraController({
   mapBounds,
   mapScene,
   resetViewTrigger,
   glbCamera,
-}: UnrealCameraControllerProps) {
+}: MapCameraControllerProps) {
   const { camera, gl } = useThree()
   const domElement = gl.domElement
 
@@ -570,7 +570,7 @@ function UnrealCameraController({
 
   // Seed orbit state from the GLB's embedded camera once it resolves.
   const seededGlbCameraRef = useRef<THREE.PerspectiveCamera | null>(null)
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!glbCamera || seededGlbCameraRef.current === glbCamera) return
     seededGlbCameraRef.current = glbCamera
 
@@ -909,7 +909,7 @@ function UnrealCameraController({
 
 function SceneSetup() {
   // scene.up only — camera.up is recomputed every frame from theta in
-  // UnrealCameraController's useFrame, so setting it here would be dead.
+  // MapCameraController's useFrame, so setting it here would be dead.
   const { scene } = useThree()
   useEffect(() => {
     scene.up.set(0, 0, 1)
@@ -956,7 +956,7 @@ export function MapViewer({
   )
 
   // Clear loaded-GLB state whenever mapUrl changes (including the A→B case
-  // where both are truthy), so transient consumers (UnrealCameraController)
+  // where both are truthy), so transient consumers (MapCameraController)
   // don't see stale scene state during the Suspense gap.
   //
   // Done as a render-phase state derivation rather than an effect: an
@@ -977,6 +977,14 @@ export function MapViewer({
     setContractErrors([])
   }
 
+  // Gate marker/camera/ambient mounting until the GLB payload has propagated.
+  // `mapScene` is set by handleMapLoaded together with mapBounds/glbCamera/
+  // ambientLight, and cleared by the URL-change block above — it's the single
+  // source of truth for "GLB payload arrived". Until it's set, the
+  // <LoadingIndicator> fallback covers the canvas; nothing renders against the
+  // default camera orbit, so no flash/snap.
+  const ready = mapScene !== null
+
   return (
     <div className="w-full h-full">
       <Canvas
@@ -991,37 +999,44 @@ export function MapViewer({
         <SceneSetup />
         <color attach="background" args={['#0a0a0f']} />
 
-        {/* Position and orientation are owned by UnrealCameraController (overwritten
-            every frame from sphericalRef + targetRef). FOV/near/far are the seed
-            for GLB-cameraless contracts; the GLB-camera effect copies intrinsics
-            onto this camera when a conforming GLB loads. */}
+        {/* Stays outside the ready gate so r3f always has a default camera
+            registered, avoiding "no default camera" warnings during the
+            not-ready window. Position and orientation are owned by
+            MapCameraController (overwritten every frame from sphericalRef +
+            targetRef). FOV/near/far are the seed for GLB-cameraless contracts;
+            the GLB-camera effect copies intrinsics onto this camera when a
+            conforming GLB loads. */}
         <PerspectiveCamera makeDefault fov={60} near={1} far={100000} />
-
-        <UnrealCameraController
-          mapBounds={mapBounds}
-          mapScene={mapScene}
-          resetViewTrigger={resetViewTrigger}
-          glbCamera={glbCamera}
-        />
-
-        {ambientLight && (
-          <ambientLight
-            color={new THREE.Color(ambientLight.color[0], ambientLight.color[1], ambientLight.color[2])}
-            intensity={ambientLight.intensity}
-          />
-        )}
 
         <Suspense fallback={<LoadingIndicator />}>
           <MapModel url={mapUrl} onLoaded={handleMapLoaded} />
         </Suspense>
 
-        <InstancedMarkers
-          overlay={overlay}
-          constants={constants}
-          shape={shape}
-          selectedRowIndex={selectedRowIndex}
-          onSelect={onSelect}
-        />
+        {ready && (
+          <>
+            <MapCameraController
+              mapBounds={mapBounds}
+              mapScene={mapScene}
+              resetViewTrigger={resetViewTrigger}
+              glbCamera={glbCamera}
+            />
+
+            {ambientLight && (
+              <ambientLight
+                color={new THREE.Color(ambientLight.color[0], ambientLight.color[1], ambientLight.color[2])}
+                intensity={ambientLight.intensity}
+              />
+            )}
+
+            <InstancedMarkers
+              overlay={overlay}
+              constants={constants}
+              shape={shape}
+              selectedRowIndex={selectedRowIndex}
+              onSelect={onSelect}
+            />
+          </>
+        )}
       </Canvas>
 
       {contractErrors.length > 0 && (
