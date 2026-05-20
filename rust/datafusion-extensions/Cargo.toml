@@ -1,6 +1,6 @@
 [package]
 name = "micromegas-datafusion-extensions"
-description = "WASM-compatible DataFusion UDF extensions (JSONB, histogram, properties, color) for micromegas"
+description = "WASM-compatible DataFusion UDF extensions (JSONB, histogram, properties, color, binning) for micromegas"
 keywords.workspace = true
 version.workspace = true
 edition.workspace = true
