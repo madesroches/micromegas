@@ -1160,6 +1160,38 @@ SELECT lerp_color(CAST(4278190080 AS INT UNSIGNED),  -- 0xff000000
                   0.5) AS color;                     -- 0x80800000
 ```
 
+#### Binning Functions
+
+Binning functions snap continuous coordinates onto a discrete grid. Bins are centered on zero with width `cell_size`, so callers building a 2D heatmap or density grid can `GROUP BY bin_center(x, cs), bin_center(y, cs)` and feed the result straight into a map cell (or any other consumer that expects continuous `(x, y)` coordinates) without grid-aware code.
+
+##### `bin_center(coord, cell_size)`
+
+Snaps a coordinate to the center of its enclosing 1D bin. Bins are centered on zero (`bin_center(0, cs) = 0`) with width `cell_size`; the bin containing `coord` spans the half-open interval `[c - cs/2, c + cs/2)` where `c` is the returned center. Call once per axis to build a 2D grid; the result is a continuous coordinate pair that map cells (and other position-aware consumers) render the same way they render raw points.
+
+**Syntax:**
+```sql
+bin_center(coord, cell_size)
+```
+
+**Parameters:**
+
+- `coord` (`Float64`): Coordinate to snap.
+
+- `cell_size` (`Float64`): Bin width. Must be positive; behaviour is undefined for non-positive values.
+
+**Returns:** `Float64` — the bin center. `NULL` if either input is `NULL`; `NaN`/`±∞` inputs propagate. Integer literals (e.g. `bin_center(3, 10)`) are accepted via DataFusion's implicit numeric coercion to `Float64`.
+
+**Examples:**
+```sql
+-- 2D density grid over map events. Renderer sees (x, y, cnt) the same
+-- way it sees raw points — no awareness of "cells" required.
+SELECT bin_center(x, 50.0) AS x,
+       bin_center(y, 50.0) AS y,
+       COUNT(*) AS cnt
+FROM events
+GROUP BY 1, 2;
+```
+
 ## Standard SQL Functions
 
 Micromegas supports all standard DataFusion SQL functions including math, string, date/time, conditional, and array functions. For a complete list with examples, see the [DataFusion Scalar Functions documentation](https://datafusion.apache.org/user-guide/sql/scalar_functions.html).
