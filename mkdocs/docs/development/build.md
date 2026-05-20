@@ -156,23 +156,9 @@ python3 build/dev_worker.py --cpus 8 --memory 16g
 # Build the container image without starting the worker
 python3 build/dev_worker.py --build-image
 
-# Clear the build cache
-python3 build/dev_worker.py --clear-cache
-
-# Rotate cache: clear, restart, trigger a warming build on main
-python3 build/dev_worker.py --rotate-cache
+# Remove offline dev-worker runners from GitHub and exit
+python3 build/dev_worker.py --cleanup
 ```
-
-### Nightly Cache Rotation
-
-Use `--rotate-at` to automatically wipe and warm the cache each night:
-
-```bash
-# Start with nightly rotation at 03:00 local time
-python3 build/dev_worker.py --rotate-at 3
-```
-
-Between container runs, the worker restarts the container (clearing the cache) and triggers a full build on main so daytime builds hit a warm cache. No cron job needed.
 
 ### How It Works
 
@@ -181,7 +167,7 @@ Each workflow has a `check-runner` job that runs on `ubuntu-latest` and decides 
 1. If the build author is the repo owner **and** a dev worker is online, jobs route to `dev-worker`
 2. Otherwise, jobs run on `ubuntu-latest` (existing behavior)
 
-The runner container is persistent and handles multiple jobs back-to-back. The build cache (cargo registry, target directories) lives on the container filesystem and stays warm as long as the container is running.
+The runner container is ephemeral: each container registers with GitHub, picks up one job, executes it, and exits. The worker loop then starts a fresh container for the next job. Each container gets a unique name so successive runs cannot collide while Docker drains the previous `--rm` cleanup.
 
 See `tasks/container_based_dev_worker_plan.md` for the full design.
 

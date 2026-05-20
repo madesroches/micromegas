@@ -15,7 +15,7 @@ on:
       - 'build/rust_ci.py'
       - 'build/rust_command.py'
       - '.github/workflows/rust.yml'
-  workflow_dispatch:  # For nightly cache warming via dev_worker.py --rotate-cache
+  workflow_dispatch:  # Allow manual runs from the Actions UI
 
 env:
   CARGO_TERM_COLOR: always
