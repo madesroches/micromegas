@@ -66,6 +66,8 @@ This file documents the historical progress of the Micromegas project. For curre
   * Bump protobufjs, @protobufjs/utf8, brace-expansion, and authlib to fix Dependabot alerts (#178, #242-250)
 * **Repo:**
   * Migrate Yarn 1 (Classic) to Yarn 4 (Berry) via corepack across all six yarn projects; corepack-only delivery, `nodeLinker: node-modules`; CI/Docker/build scripts updated; clean lock + zero install warnings (#1008)
+* **CI:**
+  * Switch dev-worker runners to ephemeral mode (one job per container, unique name per run) with build caches persisted in a named Docker volume (cargo, yarn, go, playwright); bake Go 1.25 into the runner image and skip `setup-go` on dev-worker; drop the now-redundant `--clear-cache` / `--rotate-cache` / `--rotate-at` flags
 
 ## April 2026 - v0.24.0
 
