@@ -1160,6 +1160,79 @@ SELECT lerp_color(CAST(4278190080 AS INT UNSIGNED),  -- 0xff000000
                   0.5) AS color;                     -- 0x80800000
 ```
 
+##### `color_scale(name, t, alpha)`
+
+Samples a built-in perceptually-uniform color scale at position `t` and returns a packed RGBA `UInt32` in `0xRRGGBBAA` byte order. One function call replaces the `lerp_color(rgba(0,0,1,a), rgba(1,0,0,a), t)` pattern, which has a muddy purple mid-band, flat luminance, and poor accessibility.
+
+**Syntax:**
+```sql
+color_scale(name, t, alpha)
+```
+
+**Parameters:**
+
+- `name` (`Utf8`): Color scale identifier (case-insensitive). The recognized scales:
+
+<table>
+  <thead>
+    <tr><th>Name</th><th style="text-align:center;">Gradient</th><th>Notes</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>viridis</code></td>
+      <td><span style="display:inline-block;width:160px;height:14px;border-radius:2px;vertical-align:middle;background:linear-gradient(to right,#440154,#482475,#404387,#345f8d,#29788e,#20908c,#22a884,#42be70,#79d151,#bbde27,#fde725);"></span></td>
+      <td>Sequential blue → green → yellow. Default heatmap; monotonic luminance, color-vision safe.</td>
+    </tr>
+    <tr>
+      <td><code>magma</code></td>
+      <td><span style="display:inline-block;width:160px;height:14px;border-radius:2px;vertical-align:middle;background:linear-gradient(to right,#000004,#140e37,#3b0f6f,#641a80,#8c2981,#b53679,#dd4968,#f66e5b,#fe9f6d,#fece91,#fcfdbf);"></span></td>
+      <td>Sequential black → red → yellow. Reads well on dark backdrops.</td>
+    </tr>
+    <tr>
+      <td><code>plasma</code></td>
+      <td><span style="display:inline-block;width:160px;height:14px;border-radius:2px;vertical-align:middle;background:linear-gradient(to right,#0d0887,#41039d,#6a00a8,#900da3,#b12a90,#cb4678,#e16462,#f1834b,#fca636,#fccd25,#f0f921);"></span></td>
+      <td>Sequential purple → orange → yellow. High contrast.</td>
+    </tr>
+    <tr>
+      <td><code>inferno</code></td>
+      <td><span style="display:inline-block;width:160px;height:14px;border-radius:2px;vertical-align:middle;background:linear-gradient(to right,#000004,#170b3a,#420a67,#6b176e,#932567,#bb3654,#dc5139,#f3761a,#fca40a,#f6d644,#fcffa4);"></span></td>
+      <td>Sequential black → red → yellow. Dark backdrops, hotter mid-band than magma.</td>
+    </tr>
+    <tr>
+      <td><code>cividis</code></td>
+      <td><span style="display:inline-block;width:160px;height:14px;border-radius:2px;vertical-align:middle;background:linear-gradient(to right,#002051,#0a316a,#2a436d,#4c566d,#68686f,#7f7b74,#948f78,#aca375,#cab969,#e9d156,#fde945);"></span></td>
+      <td>Sequential blue → yellow. Maximum color-vision-deficiency safety.</td>
+    </tr>
+    <tr>
+      <td><code>turbo</code></td>
+      <td><span style="display:inline-block;width:160px;height:14px;border-radius:2px;vertical-align:middle;background:linear-gradient(to right,#22171b,#4957dc,#2f9df4,#27d6c3,#4cf883,#94fa50,#dedc32,#ffa422,#f55e17,#ba2108,#900c00);"></span></td>
+      <td>Rainbow-style but perceptually corrected. Use when categorical-looking contrast is wanted.</td>
+    </tr>
+  </tbody>
+</table>
+
+- `t` (`Float64`): Position along the scale, clamped to `[0.0, 1.0]`.
+
+- `alpha` (`Float64`): Output alpha channel, `[0.0, 1.0]` (clamped). Straight (not premultiplied), and independent of the scale's RGB output.
+
+**Returns:** `UInt32` — packed color. `NULL` if any input is `NULL`. An unrecognized `name` raises an error that lists the recognized set.
+
+**Examples:**
+```sql
+-- Density overlay with a perceptual scale; replaces the blue → red lerp.
+SELECT x, y,
+       color_scale('viridis', value / max_value, 0.7) AS color
+FROM density_grid;
+
+-- Dark-mode map cell: magma keeps the hottest cell bright yellow.
+SELECT x, y,
+       color_scale('magma', t, 1.0) AS color
+FROM heatmap;
+
+-- Pure turbo lookup (alpha = 1).
+SELECT color_scale('turbo', 0.5, 1.0);  -- mid-band turbo color
+```
+
 #### Binning Functions
 
 Binning functions snap continuous coordinates onto a discrete grid. Bins are centered on zero with width `cell_size`, so callers building a 2D heatmap or density grid can `GROUP BY bin_center(x, cs), bin_center(y, cs)` and feed the result straight into a map cell (or any other consumer that expects continuous `(x, y)` coordinates) without grid-aware code.

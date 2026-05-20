@@ -28,7 +28,18 @@
 //!   `saturate_color`.
 //! - Color-space-specific operations: `<op>_<space>` suffix — `lerp_oklab`,
 //!   `lerp_hsl`, etc.
+//! - Colormaps: `color_scale(name, t, alpha)` (this module) is the entry
+//!   point for sequential/diverging perceptual scales. Categorical scales
+//!   are reserved under a distinct name (e.g. `color_category(name, i,
+//!   alpha)`) because they take an integer index, not a `t`. Reversed
+//!   scales are reserved as either a `'<name>_r'` suffix or a sibling
+//!   `color_scale_reversed` UDF — pick when the first user asks. Direct
+//!   per-colormap UDFs (`viridis(t, alpha)`, …) are intentionally *not*
+//!   reserved; if needed later they can be added as aliases of
+//!   `color_scale`.
 
+/// `color_scale(name, t, alpha) -> UInt32`
+pub mod color_scale;
 /// `lerp_color(c1, c2, t) -> UInt32`
 pub mod lerp_color;
 /// `rgba(r, g, b, a) -> UInt32`
