@@ -68,7 +68,7 @@ export function EventDetailPanel({
       >
         <X className="w-4 h-4 text-theme-text-muted" />
       </button>
-      <div className="prose prose-invert prose-sm max-w-none px-4 py-3 prose-headings:text-theme-text-primary prose-headings:mt-0 prose-p:text-theme-text-secondary prose-a:text-accent-link prose-strong:text-theme-text-primary prose-code:text-accent-highlight prose-code:bg-app-card prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-code:before:content-none prose-code:after:content-none prose-pre:bg-app-card prose-li:text-theme-text-secondary prose-hr:border-theme-border prose-hr:my-3">
+      <div className="prose prose-invert prose-sm max-w-none pl-4 pr-10 py-3 prose-headings:text-theme-text-primary prose-headings:mt-0 prose-p:text-theme-text-secondary prose-a:text-accent-link prose-strong:text-theme-text-primary prose-code:text-accent-highlight prose-code:bg-app-card prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-code:before:content-none prose-code:after:content-none prose-pre:bg-app-card prose-li:text-theme-text-secondary prose-hr:border-theme-border prose-hr:my-3">
         <Markdown remarkPlugins={[remarkGfm]} components={{ a: MarkdownLink }}>
           {rendered}
         </Markdown>
