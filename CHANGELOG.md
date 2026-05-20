@@ -42,6 +42,7 @@ This file documents the historical progress of the Micromegas project. For curre
   * Remove admin-oriented `MICROMEGAS_MAPS_OBJECT_STORE_URI` / `.glb` drop hint from the map cell editor (admins use the Maps management UI)
   * Resolve `$var` macros in map cell primitive scalar bindings (size, scaleX/Y/Z, color); editor swaps the legacy number/color inputs for a text field with local-draft commit (Enter/blur commits, Escape cancels)
   * Require Ctrl/Cmd modifier for map cell wheel zoom so plain wheel scrolls the surrounding notebook page
+  * Fix map cell event detail popup close button overlapping the first line of the markdown template (#1067)
 * **Python:**
   * Switch `bulk_ingest` to accept `pyarrow.Table` directly for native pass-through of struct/list/binary columns
   * Resolve CLI connection settings from `~/.micromegas/config.json` with env-var override (#1033)
