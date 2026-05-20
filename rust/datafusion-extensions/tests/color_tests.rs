@@ -452,3 +452,40 @@ async fn color_scale_composes_with_arithmetic() {
     assert_ne!(mid, 0x440154ff);
     assert_ne!(mid, 0xfde725ff);
 }
+
+#[tokio::test]
+async fn color_scale_accepts_column_driven_name() {
+    // Exercises the column-driven name path: when `name` is not a literal
+    // scalar, `literal_gradient` is `None` and each row resolves through
+    // the per-row `resolve_colormap` branch. Mixed casing in the same
+    // column also forces the case-insensitive comparison to run per-row.
+    // Endpoints at `t = 0.0` pin each gradient's first stop.
+    let ctx = make_ctx();
+    let df = ctx
+        .sql(
+            "SELECT color_scale(name, 0.0, 1.0) AS v \
+             FROM (VALUES ('viridis'), ('Magma'), ('TURBO')) AS t(name)",
+        )
+        .await
+        .expect("SQL query failed");
+    let batches = df.collect().await.expect("failed to collect results");
+    let mut rows: Vec<Option<u32>> = Vec::new();
+    for batch in &batches {
+        let arr = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<UInt32Array>()
+            .expect("should be UInt32Array");
+        for i in 0..arr.len() {
+            rows.push(if arr.is_null(i) {
+                None
+            } else {
+                Some(arr.value(i))
+            });
+        }
+    }
+    assert_eq!(
+        rows,
+        vec![Some(0x440154ff), Some(0x000004ff), Some(0x22171bff)],
+    );
+}
