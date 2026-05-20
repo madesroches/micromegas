@@ -13,6 +13,7 @@ This file documents the historical progress of the Micromegas project. For curre
 * **Analytics:**
   * Add `net_spans` JIT view materializing Connection/Object/Property/RPC bandwidth spans with cumulative bit offsets
   * Add `rgba(r, g, b, a)` and `lerp_color(c1, c2, t)` scalar UDFs for building packed RGBA `u32` colors from SQL (#1062)
+  * Add `color_scale(name, t, alpha)` scalar UDF for sampling built-in perceptually-uniform color scales (viridis, magma, plasma, inferno, cividis, turbo); returns packed RGBA `u32` and replaces the blue→red `lerp_color` pattern with one accessible call (#1069)
   * Add `bin_center(coord, cell_size)` scalar UDF for snapping coordinates to the centers of zero-centered bins; composes into 2D heatmap grids via `GROUP BY bin_center(x, cs), bin_center(y, cs)` (#1068)
 * **Web App:**
   * Extend flame graph cell to render bit-axis spans for `net_spans` and add bit-unit support to XYChart
@@ -55,6 +56,7 @@ This file documents the historical progress of the Micromegas project. For curre
   * Document map notebook cell type and hybrid local-frontend setup (#1033)
   * Document CLI configuration file and authentication settings (#1033)
   * Document `rgba` and `lerp_color` color functions in the SQL functions reference (#1062)
+  * Document `color_scale` perceptual colormap function in the SQL functions reference (#1069)
   * Document `bin_center` binning function in the SQL functions reference (#1068)
 * **Security:**
   * Bump rustls-webpki, rand, and uuid to fix Dependabot alerts (#210-213)
