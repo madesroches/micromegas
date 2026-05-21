@@ -290,7 +290,9 @@ standard notebook macros work too:
 The default template is:
 
 ```markdown
-### Event
+### Event Details
+
+---
 
 **Location:** ($x, $y, $z)
 ```
