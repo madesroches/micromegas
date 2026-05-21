@@ -74,7 +74,7 @@ Data sources are managed from the **Admin** page.
 
 ## Maps
 
-Map cells render 3D scenes from GLB assets stored in a server-side object store. Admins upload and remove maps from **Admin → Maps**; the server gzips on upload so the read path serves the bytes verbatim with `Content-Encoding: gzip`. See [Map cells](notebooks/cell-types.md#-map) for the authoring contract.
+Map cells render 3D scenes from GLB assets stored in a server-side object store. Admins upload and remove maps from **Admin → Maps**; the server gzips on upload so the read path serves the bytes verbatim with `Content-Encoding: gzip`. See [Map cells](notebooks/cell-types.md#map) for the authoring contract.
 
 ## Further Reading
 
