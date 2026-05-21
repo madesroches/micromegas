@@ -15,8 +15,8 @@ Multi-query time-series charts supporting line and bar chart types.
 | Field | Type | Description |
 |-------|------|-------------|
 | `queries` | array | One or more query definitions |
-| `options.scale_mode` | `'p99'` \| `'max'` | Y-axis scaling mode |
-| `options.chart_type` | `'line'` \| `'bar'` | Chart type |
+| `options.scale_mode` | `'p99'` \| `'max'` | Y-axis scaling mode (default `'p99'`) |
+| `options.chart_type` | `'line'` \| `'bar'` | Chart type (default `'line'`) |
 
 **Query definition:**
 
@@ -39,7 +39,7 @@ Multi-query time-series charts supporting line and bar chart types.
 - Color-coded series with a rotating palette
 - Drag-to-zoom: drag horizontally on the chart to select a time range and zoom in
 - Chart type and scale mode toggleable via controls
-- Each query's results are registered in the WASM engine as `cellName.queryName`
+- Each query's results are registered in the WASM engine as `cellName.queryName` — or just `cellName` if the query has no `name` (single-query charts can omit it; multi-query charts should set distinct names to avoid collision)
 
 **Example:**
 
@@ -93,11 +93,24 @@ Interactive span visualization rendered with WebGL. Spans are grouped into lanes
 
 - WebGL-rendered spans with Canvas2D label and time-axis overlay — handles millions of rows
 - Color-coded by span name using a brand-derived rust/blue/gold palette
-- Drag horizontally to zoom into a time range; WASD keys pan and zoom (cursor-anchored)
-- Mouse wheel scrolls vertically across lanes
-- Hover tooltip shows span name, duration, id, depth, and parent name
+- Mouse wheel scrolls vertically across lanes (no zoom modifier — keeps the surrounding page reachable)
+- Hover tooltip shows span name, duration, id, depth, and parent name (plus any of `target`, `filename`, `line`, `kind`, `bit_size`, etc. when those columns are present in the result)
 - The lane literally named `async` is laid out by greedy packing to avoid overlap; all other lanes use the raw `depth` column
+- Auto-detects the x-axis mode from the `begin`/`end` column types: timestamp columns drive time mode; numeric columns drive "bits" mode (used for memory snapshots). In bits mode, `initialFrom` / `initialTo` are ignored.
 - Results registered in the [local WASM query engine](execution.md#local-wasm-query-engine) under the cell name for downstream queries
+
+**Interactions:**
+
+| Input | Action |
+|-------|--------|
+| Horizontal drag | Zoom into the dragged time range (local zoom) |
+| `Alt` + horizontal drag | In time mode, broadcasts the dragged range to downstream cells via the cell's selection |
+| Double-click | Reset zoom to the full data extent |
+| Mouse wheel | Scroll vertically across lanes |
+| `W` / `S` | Zoom in / out, anchored at the cursor |
+| `A` / `D` | Pan left / right |
+
+Keyboard input requires the flame graph to have keyboard focus (click it first).
 
 **Example SQL:**
 
@@ -125,10 +138,10 @@ A container cell that arranges its children side by side in a horizontal layout.
 
 **Features:**
 
-- Children render side by side with equal width
-- Drag children horizontally to reorder within the group
-- Drag a child vertically (out of the group area) to extract it to the main cell list
-- Add new children via the group editor
+- Children render side by side with equal width via flex layout
+- Reorder via a drag handle (appears on hover over a child)
+- Drag a child vertically more than ~30px outside the group bounds to extract it back to the main cell list
+- Add new children via the group editor; remove a child via the "Remove from group" context-menu entry
 - Each child has independent execution, state, and data source settings
 - Aggregate stats (row count, byte size) displayed in the group header
 
@@ -161,18 +174,18 @@ SQL query results formatted as log entries with level-based coloring.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `pageSize` | number | Entries per page (default: 50) |
+| `pageSize` | number | Entries per page (default: 100; selectable from 50 / 100 / 250 / 500 / 1000) |
 
 **Expected columns:**
 
 The renderer auto-classifies columns by name:
 
 - `time` — event timestamp
-- `level` — log level (`ERROR`, `WARN`, `INFO`, `DEBUG`, `TRACE`)
+- `level` — log level (`FATAL`, `ERROR`, `WARN`, `INFO`, `DEBUG`, `TRACE`)
 - `target` — logger target/module
 - `msg` — log message
 
-Additional columns are rendered as fixed-width monospace text.
+Additional columns render as fixed-width monospace and truncate at 200px — hover to see the full value in a tooltip.
 
 - Results registered in the [local WASM query engine](execution.md#local-wasm-query-engine) under the cell name for downstream queries
 
@@ -180,10 +193,12 @@ Additional columns are rendered as fixed-width monospace text.
 
 | Level | Color |
 |-------|-------|
+| FATAL | Bright red |
 | ERROR | Red |
 | WARN | Yellow |
-| INFO | Gray |
-| DEBUG/TRACE | Muted |
+| INFO | Blue (link color) |
+| DEBUG | Secondary text |
+| TRACE | Muted |
 
 **Example SQL:**
 
@@ -213,9 +228,9 @@ LIMIT 500
 
 | Column | Type | Description |
 |--------|------|-------------|
-| `x` | number | X coordinate (Unreal Engine world units) |
-| `y` | number | Y coordinate (Unreal Engine world units) |
-| `z` | number | Z coordinate (Unreal Engine world units) |
+| `x` | number | X coordinate |
+| `y` | number | Y coordinate |
+| `z` | number | Z coordinate |
 
 Any additional columns the query returns are addressable as `$column` in the detail template (see below).
 
@@ -351,7 +366,7 @@ Static text and documentation using GitHub Flavored Markdown.
 **Features:**
 
 - Full GitHub Flavored Markdown: headings, tables, lists, code blocks, strikethrough
-- Supports [variable substitution](variables.md#sql-macro-substitution): `$variable`, `$variable.column`, `$begin`, `$end`
+- Supports [variable substitution](variables.md#sql-macro-substitution): `$variable`, `$variable.column`, `$from`, `$to`
 - Validates macro references during editing — warns about undefined variables
 - Does not execute queries or block downstream cells
 - Rendered output appears only after the cell's turn in sequential execution — the body stays blank until upstream variables and cell results are resolved, so macros never display stale or broken values on first paint
@@ -361,7 +376,7 @@ Static text and documentation using GitHub Flavored Markdown.
 ```markdown
 # Dashboard for $process_id
 
-Showing data from **$begin** to **$end**.
+Showing data from **$from** to **$to**.
 ```
 
 ---
@@ -381,9 +396,10 @@ Exports trace data to [Perfetto UI](https://ui.perfetto.dev) for visualization, 
 **Features:**
 
 - Split button: **Open in Perfetto** (primary) or **Download** (secondary)
+- Download saves a Perfetto protobuf trace as `trace-{processId}.pb`
 - Shows a warning if the referenced variable is empty or undefined
 - Caches the generated trace buffer — cleared when process ID, span type, time range, or data source changes
-- Progress indicator during trace generation
+- Progress indicator during trace generation (shows running MB received as chunks stream in)
 - No automatic execution — triggered by user button click
 
 ---
@@ -435,13 +451,15 @@ Embeds inline CSV data that is registered as a queryable table in the [local WAS
 
 **Options:**
 
-Same as Table — `sortColumn`, `sortDirection`, `pageSize`, `hiddenColumns`.
+The editor only exposes the CSV body. The renderer honors `sortColumn`, `sortDirection`, `pageSize`, and `hiddenColumns` in the raw config if present, but there is no UI to set them.
 
 **Features:**
 
-- CSV is parsed into an Arrow table with automatic type inference (numeric, boolean, string)
+- CSV parsed with [d3-dsv](https://d3js.org/d3-dsv) (RFC 4180 quoting/escaping)
+- Type inference is per-column: a column becomes `Float64` if every non-empty cell parses as a finite number; otherwise `Utf8` (string). Empty cells become `NaN` (numeric) or `''` (string)
+- Empty or header-only input is rejected with an error
 - Registered in the WASM engine under the cell name — queryable by downstream cells
-- Displays as a sortable, paginated table (same UI as the Table cell)
+- Displays as a sortable, paginated table (same UI as the Table cell). Row selection is not supported.
 - Useful for lookup tables, configuration data, or reference values
 
 **Example:**
@@ -492,7 +510,7 @@ Multiple rows with the same `id` create multiple segments in one lane. Lanes are
 
 - Fixed label column on the left with lane names
 - Horizontal time bars in the center
-- Drag-to-zoom time selection
+- Horizontal drag selects a time range; broadcasts the selection to downstream cells (`$cellname.selected.begin`, `$cellname.selected.end`)
 - Time axis with formatted tick marks
 - Results registered in the [local WASM query engine](execution.md#local-wasm-query-engine) under the cell name for downstream queries
 
@@ -535,9 +553,10 @@ SQL query results displayed in a sortable, paginated table.
 |-------|------|-------------|
 | `sortColumn` | string | Currently sorted column |
 | `sortDirection` | `'asc'` \| `'desc'` | Sort direction |
-| `pageSize` | number | Rows per page (default: 50) |
+| `pageSize` | number | Rows per page (default: 100; selectable from 50 / 100 / 250 / 500 / 1000) |
 | `hiddenColumns` | string[] | Columns to hide |
-| `overrides` | array | Column format overrides |
+| `overrides` | array | Column format overrides — each entry `{ column, format }` |
+| `selectionMode` | `'none'` \| `'single'` | Whether clicking a row publishes a selection to downstream cells (default `'none'`) |
 
 **Features:**
 
@@ -546,6 +565,7 @@ SQL query results displayed in a sortable, paginated table.
 - Client-side pagination with configurable page size
 - Sort column available as `$order_by` macro in SQL for server-side sorting
 - Column format overrides with markdown and row macros (`$row.columnName`)
+- With `selectionMode: 'single'`, the selected row is exposed to downstream cells as `$cellname.selected.column`
 - Results registered in the [local WASM query engine](execution.md#local-wasm-query-engine) under the cell name for downstream queries
 
 **Column format overrides:**
@@ -577,15 +597,14 @@ SQL results with rows and columns swapped. The original column names become the 
 
 **Configuration:**
 
-Same as Table — `sql`, `dataSource`, and options for hidden rows, page size, and format overrides.
+Same as Table — `sql`, `dataSource`. The transposed view has no pagination (all rows scroll inside the cell).
 
 **Options:**
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `pageSize` | number | Page size for scrolling |
 | `hiddenRows` | string[] | Hidden row names (original column names) |
-| `overrides` | array | Row rendering overrides |
+| `overrides` | array | Row rendering overrides — each entry `{ column, format }`, where `column` is the original column name (now a row label) |
 
 **Features:**
 
@@ -616,11 +635,12 @@ There are four variable subtypes, controlled by the `variableType` field.
 
 | Field | Type | Description |
 |-------|------|-------------|
+| `name` | string | Variable identifier — referenced downstream as `$name` (or `$name.column` for multi-column combobox values) |
 | `variableType` | `'text'` \| `'combobox'` \| `'expression'` \| `'datasource'` | Variable subtype |
 | `defaultValue` | string or object | Default value used when no URL override is present |
 | `dataSource` | string | Data source for SQL queries (combobox only) |
 
-See [Variables](variables.md) for full documentation of the variable system including scope, expressions, and URL sync.
+Variable cells block downstream cells until their value is resolved. See [Variables](variables.md) for full documentation of the variable system including scope, expressions, and URL sync.
 
 ### Text
 
@@ -660,9 +680,9 @@ Computed value from a JavaScript expression. Evaluated automatically — not use
 |-------|------|-------------|
 | `expression` | string | JavaScript expression to evaluate |
 
-Available bindings: `$begin`, `$end`, `$duration_ms`, `$innerWidth`, `$devicePixelRatio`, and upstream variables as `$variableName`.
+Available bindings: `$from`, `$to`, `$duration_ms`, `$innerWidth`, `$devicePixelRatio`, and upstream variables as `$variableName`.
 
-Available functions: `snap_interval()`, `Math.*`.
+Allowed operations: arithmetic (`+`, `-`, `*`, `/`, `%`), `Math.*`, `new Date(...)`, and `snap_interval(ms)`. Browser globals (`window`, `document`, `eval`, `fetch`, …) are blocked.
 
 ```javascript
 // Compute a time bin interval based on viewport width
