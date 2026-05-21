@@ -14,8 +14,8 @@ use std::sync::Arc;
 
 /// A scalar UDF that extracts the keys from a JSONB object.
 ///
-/// Accepts both Binary and Dictionary<Int32, Binary> inputs.
-/// Returns Dictionary<Int32, List<Utf8>> containing the object keys, or null if input is not an object.
+/// Accepts both `Binary` and `Dictionary<Int32, Binary>` inputs.
+/// Returns `Dictionary<Int32, List<Utf8>>` containing the object keys, or null if input is not an object.
 /// Dictionary encoding is used because JSONB values (especially properties) are often repeated.
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct JsonbObjectKeys {
