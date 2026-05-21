@@ -46,8 +46,8 @@ SQL queries, markdown content, and chart unit labels all support macro substitut
 | `$cellName.selected.column` | Replaced with a value from the selected row in an upstream table cell |
 | `$variableName` | Replaced with the variable's value |
 | `$variableName.column` | Replaced with a specific column from a multi-column variable |
-| `$begin` | Start of the current time range (ISO 8601 timestamp) |
-| `$end` | End of the current time range (ISO 8601 timestamp) |
+| `$from` | Start of the current time range (ISO 8601 timestamp) |
+| `$to` | End of the current time range (ISO 8601 timestamp) |
 | `$order_by` | Current sort column (table cells only) |
 
 ### Matching Rules
@@ -104,10 +104,10 @@ Table cells support interactive row selection. When enabled (via the **Row Selec
 Table and transposed table cells support column format overrides using markdown with row macros:
 
 ```markdown
-[$row.exe](/process/$row.process_id?from=$begin&to=$end)
+[$row.exe](/process/$row.process_id?from=$from&to=$to)
 ```
 
-Row macros use `$row.columnName` or `$row["column-name"]` syntax to reference values from the current row. Standard variable macros (`$begin`, `$end`, `$variableName`) are also available in format strings.
+Row macros use `$row.columnName` or `$row["column-name"]` syntax to reference values from the current row. Standard variable macros (`$from`, `$to`, `$variableName`) are also available in format strings.
 
 ## Expression Evaluation
 
@@ -117,8 +117,8 @@ Expression variables evaluate JavaScript expressions in a sandboxed environment 
 
 | Binding | Type | Description |
 |---------|------|-------------|
-| `$begin` | string | Time range start (ISO 8601) |
-| `$end` | string | Time range end (ISO 8601) |
+| `$from` | string | Time range start (ISO 8601) |
+| `$to` | string | Time range end (ISO 8601) |
 | `$duration_ms` | number | Time range duration in milliseconds |
 | `$innerWidth` | number | Browser viewport width in CSS pixels |
 | `$devicePixelRatio` | number | Device pixel ratio (e.g., 2 for Retina displays) |
@@ -176,7 +176,7 @@ A cell can only reference variables and cell results from cells that appear **ab
 - Variables inside a horizontal group (HG) are visible to cells below the group.
 - A variable cell cannot reference other variable cells at the same level.
 
-The editor panel shows an **Available Variables** panel listing all variables accessible to the currently selected cell, including `$begin`, `$end`, upstream user-defined variables with their current values, and upstream cell results with their column schemas. Multi-column variables show both the full object and individual `.column` accessors. Cell results show `$cellName[0].column` entries for each column in the result schema.
+The editor panel shows an **Available Variables** panel listing all variables accessible to the currently selected cell, including `$from`, `$to`, upstream user-defined variables with their current values, and upstream cell results with their column schemas. Multi-column variables show both the full object and individual `.column` accessors. Cell results show `$cellName[0].column` entries for each column in the result schema.
 
 ## URL Parameter Sync
 

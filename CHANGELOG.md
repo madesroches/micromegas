@@ -60,6 +60,7 @@ This file documents the historical progress of the Micromegas project. For curre
   * Document `rgba` and `lerp_color` color functions in the SQL functions reference (#1062)
   * Document `color_scale` perceptual colormap function in the SQL functions reference (#1069)
   * Document `bin_center` binning function in the SQL functions reference (#1068)
+  * Rework notebook cell-types reference: alphabetize sections, expand Map cell with channel mapping and color encodings, fact-check defaults/levels/bindings against the implementation, and move admin/maps content to the Admin → Web App page
 * **Security:**
   * Bump rustls-webpki, rand, and uuid to fix Dependabot alerts (#210-213)
   * Bump postcss and uuid to fix Dependabot alerts (#214-221)
