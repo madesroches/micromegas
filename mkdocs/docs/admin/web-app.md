@@ -64,7 +64,22 @@ Map cells render GLB assets fetched from a server-side object store. Set `MICROM
 
 **IAM / credentials.** The process credentials need the equivalent of `s3:GetObject`, `s3:PutObject`, `s3:DeleteObject`, and `s3:ListBucket` (or GCS / local-fs equivalents) scoped to the configured prefix. Read-only credentials are sufficient only if you keep populating maps out-of-band (`aws s3 cp ...`) and don't expose the admin page.
 
-**Upload cap.** `MICROMEGAS_MAPS_MAX_UPLOAD_BYTES` bounds the per-request body for uploads (default 256 MiB). The cap is enforced before the body is buffered. The handler gzips on upload and the read path serves bytes verbatim with `Content-Encoding: gzip`.
+**Upload cap.** `MICROMEGAS_MAPS_MAX_UPLOAD_BYTES` bounds the per-request body for uploads (default 256 MiB). The cap is enforced before the body is buffered. The handler gzips on upload and the read path serves bytes verbatim with `Content-Encoding: gzip`. Bare uploads (no metadata) are served uncompressed.
+
+**Catalog discovery.** The catalog is derived at request time by listing every `*.glb` object directly under the configured prefix — there is no `maps.json` to keep in sync. Display names are derived client-side: the `.glb` extension is stripped (`Arena_North.glb` → `Arena_North`).
+
+**Out-of-band uploads.** Ops can drop `.glb` files directly into the configured prefix (no UI required), but the upload must set `Content-Type: model/gltf-binary` and `Content-Encoding: gzip` if pre-compressed. The Admin → Maps page is the recommended path because it handles the compression and metadata in one shot.
+
+**GLB authoring contract.** The renderer expects each GLB to satisfy these invariants — there is no fallback path:
+
+- **Z-up** — the only hard axis constraint; the renderer pins `scene.up = (0, 0, 1)` and has no axis-conversion step. Handedness and units must simply match between the GLB and the event data (no specific units required, no auto-centering, no scaling).
+- **Exactly one perspective camera** referenced from `scenes[0]`, used to seed the initial camera (position, orientation, fov, near, far). Camera roll is dropped when seeding the orbit controller.
+- **`KHR_lights_punctual`** — directional lights live inside the scene tree and render automatically.
+- **`MM_ambient_light`** vendor extension — `{ color: [r, g, b], intensity: number }` at the root extensions; the renderer reads it directly from `gltf.parser.json.extensions`.
+
+GLBs missing the camera log a console error and fall back to the default seed framing (likely mis-framed); GLBs missing `MM_ambient_light` log a console error and render without ambient illumination. These are visible failure modes that signal a non-conforming GLB.
+
+> Because the contract uses Z-up, the GLBs are technically out of spec for glTF 2.0 (which mandates Y-up). External viewers — Blender, online glTF validators, Windows 3D Viewer — will render them rotated. The micromegas web-app is the only intended consumer.
 
 **URI grammar.** Same shape as `MICROMEGAS_OBJECT_STORE_URI` (passed through `object_store::parse_url_opts`):
 
