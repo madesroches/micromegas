@@ -8,6 +8,8 @@ pub mod color;
 pub mod histogram;
 /// JSONB support
 pub mod jsonb;
+/// Scalar math UDFs (lerp, unlerp)
+pub mod math;
 /// Property UDFs
 pub mod properties;
 
@@ -38,6 +40,7 @@ use jsonb::{
     parse::make_jsonb_parse_udf,
     path_query::{make_jsonb_path_query_first_udf, make_jsonb_path_query_udf},
 };
+use math::{lerp::make_lerp_udf, unlerp::make_unlerp_udf};
 use properties::{
     properties_udf::{PropertiesLength, PropertiesToArray},
     property_get::PropertyGet,
@@ -79,6 +82,9 @@ pub fn register_extension_udfs(ctx: &SessionContext) {
     ctx.register_udf(make_rgba_udf());
     ctx.register_udf(make_lerp_color_udf());
     ctx.register_udf(make_color_scale_udf());
+
+    ctx.register_udf(make_lerp_udf());
+    ctx.register_udf(make_unlerp_udf());
 
     ctx.register_udf(make_bin_center_udf());
 }

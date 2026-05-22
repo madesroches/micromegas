@@ -1265,6 +1265,69 @@ FROM events
 GROUP BY 1, 2;
 ```
 
+#### Math Functions
+
+Scalar math helpers. `lerp` and `unlerp` are the canonical pair for normalize-then-remap pipelines: `lerp(c, d, unlerp(a, b, x))` maps the input range `[a, b]` to the output range `[c, d]`. Neither clamps; callers who want clamping wrap the result (e.g. `LEAST(GREATEST(t, 0.0), 1.0)`) or use the existing `nanvl(...)` to provide a fallback for degenerate `unlerp(a, a, x)` cases.
+
+##### `lerp(a, b, t)`
+
+Linear interpolation between `a` and `b`. Computes `a + (b - a) * t`. No clamping — `t` outside `[0, 1]` extrapolates past the endpoints.
+
+**Syntax:**
+```sql
+lerp(a, b, t)
+```
+
+**Parameters:**
+
+- `a` (`Float64`): Start of the output range.
+
+- `b` (`Float64`): End of the output range.
+
+- `t` (`Float64`): Interpolation parameter. `0.0` returns `a`, `1.0` returns `b`; values outside `[0, 1]` extrapolate.
+
+**Returns:** `Float64` — the interpolated value. `NULL` if any input is `NULL`; `NaN`/`±∞` propagate. Integer literals are accepted via DataFusion's implicit numeric coercion to `Float64`.
+
+**Examples:**
+```sql
+-- Alpha ramp from 0.5 to 1.0 as t goes 0 → 1. Swap the second
+-- argument for whatever maximum alpha the caller wants.
+SELECT color_scale('inferno', t, lerp(0.5, 1.0, t)) AS color
+FROM scaled;
+```
+
+##### `unlerp(a, b, x)`
+
+Inverse linear interpolation. Computes `(x - a) / (b - a)` — i.e. the `t` such that `lerp(a, b, t) == x`. No clamping; `x` outside `[a, b]` returns a value outside `[0, 1]`.
+
+`unlerp(a, a, x)` divides by zero and returns IEEE `NaN` (when `x == a`) or `±Inf` (when `x != a`). Wrap with `nanvl(unlerp(...), 0.0)` if a fallback is required.
+
+**Syntax:**
+```sql
+unlerp(a, b, x)
+```
+
+**Parameters:**
+
+- `a` (`Float64`): Start of the input range.
+
+- `b` (`Float64`): End of the input range.
+
+- `x` (`Float64`): Value to normalize.
+
+**Returns:** `Float64` — the normalized position. `NULL` if any input is `NULL`; `NaN`/`±∞` propagate. Integer literals are accepted via DataFusion's implicit numeric coercion to `Float64`.
+
+**Examples:**
+```sql
+-- Density normalization for a heatmap: t goes 0 → 1 across the visible range.
+WITH scaled AS (
+  SELECT cnt, unlerp(0.0, MAX(cnt) OVER (), CAST(cnt AS DOUBLE)) AS t
+  FROM cells
+)
+SELECT cnt, t, color_scale('inferno', t, lerp(0.5, 1.0, t)) AS color
+FROM scaled;
+```
+
 ## Standard SQL Functions
 
 Micromegas supports all standard DataFusion SQL functions including math, string, date/time, conditional, and array functions. For a complete list with examples, see the [DataFusion Scalar Functions documentation](https://datafusion.apache.org/user-guide/sql/scalar_functions.html).
