@@ -4,6 +4,8 @@ This file documents the historical progress of the Micromegas project. For curre
 
 ## Unreleased
 
+## May 2026 - v0.25.0
+
 * **HTTP Gateway:**
   * Add `GET /gateway/health` liveness endpoint for load balancer probes (#994)
 * **OTLP Ingestion:**

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.25.0 (2026-05-23)
+
+Version sync release. Yarn 1 → Yarn 4 (Berry) migration via corepack (#1046). Security fixes from Dependabot dependency bumps (#1040).
+
 ## 0.24.0 (2026-04-17)
 
 Version sync release. Security fixes: upgrade opentelemetry-go SDK v1.43.0 (#198), protobufjs ^7.5.5 (#209), protocol-buffers-schema ^3.6.1 (#205), rustls-webpki 0.103.12 (#206, #207), dompurify 3.4.0 (#203, #204), vite, lodash, lodash-es, serialize-javascript, handlebars, picomatch.

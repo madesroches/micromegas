@@ -31,6 +31,9 @@ run_command("cargo release -p micromegas-telemetry -x --no-confirm")
 run_command("cargo release -p micromegas-ingestion -x --no-confirm")
 run_command("cargo release -p micromegas-telemetry-sink -x --no-confirm")
 
+# Layer 6.5: OTLP/HTTP ingestion adapter (depends on ingestion, telemetry, tracing)
+run_command("cargo release -p micromegas-otel-ingestion -x --no-confirm")
+
 # Layer 7: Perfetto (depends on tracing, transit)
 run_command("cargo release -p micromegas-perfetto -x --no-confirm")
 

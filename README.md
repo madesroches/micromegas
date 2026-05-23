@@ -70,6 +70,17 @@ To get started with Micromegas, please refer to the [Getting Started](https://mi
 
 ## Current Status & Roadmap
 
+### v0.25.0 (May 2026)
+* Native OTLP/HTTP ingestion for logs, metrics, and traces with `otel_spans` JIT view
+* Map notebook cell: GLB models, native UE coordinates, primitive overlays with column-bound visual channels, admin Maps management UI
+* `net_spans` JIT view with bandwidth flame chart for connection/object/property/RPC scopes
+* Color and math UDFs: `rgba`, `lerp_color`, `color_scale`, `bin_center`, `lerp`, `unlerp`
+* HTTP gateway `/gateway/health` liveness endpoint
+* Unreal net trace instrumentation
+* React 19 / R3F 9 / drei 10 / RTL 16 upgrade; Yarn 1 → Yarn 4 (Berry) migration
+* Dev-worker ephemeral runner mode with persistent build caches
+* 20+ Dependabot security updates across Rust, Python, and JS dependencies
+
 ### v0.24.0 (April 2026)
 * `parse_block` table UDF for generic block inspection with transit-to-JSONB conversion
 * Unified diff output in `micromegas-screens plan`/`apply`
