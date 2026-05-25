@@ -7771,10 +7771,10 @@ __metadata:
   languageName: node
   linkType: hard
 
-"js-cookie@npm:^2.2.1":
-  version: 2.2.1
-  resolution: "js-cookie@npm:2.2.1"
-  checksum: 10c0/ee67fc0f8495d0800b851910b5eb5bf49d3033adff6493d55b5c097ca6da46f7fe666b10e2ecb13cfcaf5b88d71c205ce00a7e646de791689bfd053bbb36a376
+"js-cookie@npm:^3.0.7":
+  version: 3.0.7
+  resolution: "js-cookie@npm:3.0.7"
+  checksum: 10c0/c921c43014e98bb94a1765663a1a10d693048d61444e374c1ecf459eba92320381f9c406e724df9aa44e819c4b606e6a7240f2abe2d5c54ad1e73a3002b191c2
   languageName: node
   linkType: hard
 
@@ -9149,12 +9149,12 @@ __metadata:
   languageName: node
   linkType: hard
 
-"qs@npm:^6.14.2":
-  version: 6.15.1
-  resolution: "qs@npm:6.15.1"
+"qs@npm:^6.15.2":
+  version: 6.15.2
+  resolution: "qs@npm:6.15.2"
   dependencies:
     side-channel: "npm:^1.1.0"
-  checksum: 10c0/19ee504f0ebff72598503e38cd6d9bd7b52a8ab62ae18b1e6bee3d4db58469bd65871ef1893a881bafb0f80ef2f9ab586e1f255cf25cc8d816c0f5a704721d97
+  checksum: 10c0/e6fd5f6f0aab06d480fe9ab15cebfc4ce4235303e2f91dc69a8f7f4df1e668a61c11d1cfbabacf4295cbbeb7b670ed23db45307480726259761f98e5695e93a7
   languageName: node
   linkType: hard
 

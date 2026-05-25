@@ -4,6 +4,9 @@ This file documents the historical progress of the Micromegas project. For curre
 
 ## Unreleased
 
+* **Security:**
+  * Bump qs to 6.15.2 and js-cookie to 3.0.7 to fix Dependabot alerts (#256, #257)
+
 ## May 2026 - v0.25.0
 
 * **HTTP Gateway:**
