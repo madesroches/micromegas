@@ -29,7 +29,7 @@ pub type TaskSpawner =
 /// An `ExecutionPlan` that provides a stream of log messages.
 pub struct TaskLogExecPlan {
     schema: SchemaRef,
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
     spawner: std::sync::Mutex<Option<Box<TaskSpawner>>>,
 }
 
@@ -73,7 +73,7 @@ impl TaskLogExecPlan {
 
         Self {
             schema,
-            cache,
+            cache: Arc::new(cache),
             spawner: std::sync::Mutex::new(Some(spawner)),
         }
     }
@@ -92,7 +92,7 @@ impl ExecutionPlan for TaskLogExecPlan {
         self.schema.clone()
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -131,7 +131,10 @@ impl ExecutionPlan for TaskLogExecPlan {
         }
     }
 
-    fn statistics(&self) -> datafusion::error::Result<Statistics> {
+    fn partition_statistics(
+        &self,
+        _partition: Option<usize>,
+    ) -> datafusion::error::Result<Statistics> {
         Ok(Statistics::new_unknown(&self.schema))
     }
 }

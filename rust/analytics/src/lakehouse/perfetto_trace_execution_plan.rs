@@ -45,7 +45,7 @@ pub struct PerfettoTraceExecutionPlan {
     lakehouse: Arc<LakehouseContext>,
     view_factory: Arc<ViewFactory>,
     part_provider: Arc<dyn QueryPartitionProvider>,
-    properties: PlanProperties,
+    properties: Arc<PlanProperties>,
 }
 
 impl PerfettoTraceExecutionPlan {
@@ -73,7 +73,7 @@ impl PerfettoTraceExecutionPlan {
             lakehouse,
             view_factory,
             part_provider,
-            properties,
+            properties: Arc::new(properties),
         }
     }
 }
@@ -111,7 +111,7 @@ impl ExecutionPlan for PerfettoTraceExecutionPlan {
         self.schema.clone()
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
     }
 

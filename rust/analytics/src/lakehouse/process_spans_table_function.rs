@@ -156,7 +156,7 @@ pub struct ProcessSpansExecutionPlan {
     lakehouse: Arc<LakehouseContext>,
     view_factory: Arc<ViewFactory>,
     part_provider: Arc<dyn QueryPartitionProvider>,
-    properties: PlanProperties,
+    properties: Arc<PlanProperties>,
 }
 
 impl ProcessSpansExecutionPlan {
@@ -183,7 +183,7 @@ impl ProcessSpansExecutionPlan {
             lakehouse,
             view_factory,
             part_provider,
-            properties,
+            properties: Arc::new(properties),
         }
     }
 }
@@ -220,7 +220,7 @@ impl ExecutionPlan for ProcessSpansExecutionPlan {
         self.schema.clone()
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
     }
 

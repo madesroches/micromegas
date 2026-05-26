@@ -17,6 +17,7 @@ use datafusion::{
 };
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_tracing::prelude::*;
+use object_store::ObjectStoreExt;
 use object_store::buffered::BufWriter;
 use sqlx::Row;
 use std::collections::hash_map::DefaultHasher;
