@@ -421,6 +421,49 @@ describe('OverrideCell + column warning surface', () => {
     })
   })
 
+  it('(d2) replaces the warning when the override changes from one bad format to a different bad format', async () => {
+    // Regression: a previous useEffect-based reset in `useColumnWarnings` ran
+    // *after* child OverrideCell effects in the same commit and clobbered any
+    // new warnings the children had just posted. Because the children's
+    // useEffect deps were stable on the next render, they wouldn't re-post —
+    // so editing from `format_value($missing, …)` to `format_value($other, …)`
+    // silently dropped the icon.
+    function Wrapper() {
+      const [swapped, setSwapped] = useState(false)
+      const overrides = useMemo<ColumnOverride[]>(
+        () =>
+          swapped
+            ? [{ column: 'value', format: "format_value($other, 'bytes')" }]
+            : [{ column: 'value', format: "format_value($missing, 'bytes')" }],
+        [swapped],
+      )
+      return (
+        <>
+          <button onClick={() => setSwapped(true)}>swap</button>
+          <TableHarness overrides={overrides} row={{ bytes: 100 }} />
+        </>
+      )
+    }
+
+    render(<Wrapper />)
+    const th = screen.getByTestId('th-value')
+    await waitFor(() => {
+      expect(th.querySelector('[title]')!.getAttribute('title')).toContain(
+        'format_value: $missing is unresolved',
+      )
+    })
+    fireEvent.click(screen.getByText('swap'))
+    await waitFor(() => {
+      expect(th.querySelector('[title]')!.getAttribute('title')).toContain(
+        'format_value: $other is unresolved',
+      )
+    })
+    // And the stale warning is gone (the reset still works).
+    expect(th.querySelector('[title]')!.getAttribute('title')).not.toContain(
+      '$missing',
+    )
+  })
+
   it('(e) preserves naked $cell.selected.col as source and surfaces the icon (pins §6 #2)', async () => {
     function Harness() {
       const overrides = useMemo(

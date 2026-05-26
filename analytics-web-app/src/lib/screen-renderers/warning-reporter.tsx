@@ -1,6 +1,6 @@
 /* eslint-disable react-refresh/only-export-components */
 
-import { createContext, useCallback, useEffect, useRef, useState } from 'react'
+import { createContext, useCallback, useRef, useState } from 'react'
 import { AlertTriangle } from 'lucide-react'
 
 export type ReportWarning = (columnKey: string, warning: string) => void
@@ -40,18 +40,19 @@ export function useColumnWarnings(overridesSource: unknown): {
   // small array of `{ column, format }` objects.
   const overridesHash = JSON.stringify(overridesSource ?? null)
 
-  // Skip the reset on the *first* render: child `OverrideCell` effects
-  // post warnings during the same commit (child effects run before parent
-  // effects), and a mount-time reset would clobber them. After that, track
-  // the previous hash — comparing against the initial hash forever would
-  // leave stale warnings when the override list churns through edits and
-  // ends up at a shape equal to its starting one.
+  // Reset during render (the "derive state from props" pattern) rather than
+  // in a useEffect. A reset in an effect runs *after* child OverrideCell
+  // effects in the same commit (React fires child effects bottom-up before
+  // parent ones), so a parent reset would clobber warnings the children just
+  // posted — losing the new warning whenever overrides change from one bad
+  // format to another bad format. The inline reset triggers an immediate
+  // re-render with an empty Map; on that fresh render the children re-evaluate
+  // their templates and post any new warnings.
   const prevHashRef = useRef(overridesHash)
-  useEffect(() => {
-    if (overridesHash === prevHashRef.current) return
+  if (overridesHash !== prevHashRef.current) {
     prevHashRef.current = overridesHash
     setColumnWarnings(new Map())
-  }, [overridesHash])
+  }
 
   return { columnWarnings, reportWarning }
 }
