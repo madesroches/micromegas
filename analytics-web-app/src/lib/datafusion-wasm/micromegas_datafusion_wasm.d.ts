@@ -57,7 +57,7 @@ export interface InitOutput {
     readonly rust_zstd_wasm_shim_memmove: (a: number, b: number, c: number) => number;
     readonly rust_zstd_wasm_shim_memset: (a: number, b: number, c: number) => number;
     readonly rust_zstd_wasm_shim_qsort: (a: number, b: number, c: number, d: number) => void;
-    readonly wasm_bindgen__closure__destroy__h973cc31d7fb437d2: (a: number, b: number) => void;
+    readonly wasm_bindgen__closure__destroy__h394910442e9fa771: (a: number, b: number) => void;
     readonly wasm_bindgen__convert__closures_____invoke__haf48848aa6f4ecee: (a: number, b: number, c: any) => [number, number];
     readonly wasm_bindgen__convert__closures_____invoke__h41f8af0b13ef8fb0: (a: number, b: number, c: any, d: any) => void;
     readonly __wbindgen_exn_store: (a: number) => void;
