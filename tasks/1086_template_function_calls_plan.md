@@ -127,11 +127,19 @@ while pos < text.length:
       copy the formatted return value
       advance past ')'
   elif text[pos] == '$':
-    try to parse a macro shape (the shapes substituteMacrosImpl handles —
-    $from, $to, $cell[N].col, $cell.selected.col, $var.col, $var — PLUS
-    $row.col and $row["col"] when ctx.row is set)
-    note: $from/$to only resolve when ctx.timeRange is set; otherwise
-    they are treated as unresolved and left in place as source
+    try to parse a macro shape, in this precedence order:
+      1. $from, $to                    (only when ctx.timeRange is set;
+                                        otherwise treated as unresolved
+                                        and left in place as source)
+      2. $cell[N].col
+      3. $cell.selected.col
+      4. $row.col, $row["col"]         (only when ctx.row is set — matched
+                                        BEFORE $variable.col so that a row
+                                        column reference never gets
+                                        shadowed by the $variable.col
+                                        shape with varName='row')
+      5. $variable.col
+      6. $variable
     if a shape matches and resolves:
       copy formatArrowValue(value, dataType)     // RFC3339 for timestamps;
                                                  // dataType source per shape:
@@ -177,14 +185,16 @@ A function call is intercepted **only if** the identifier is in the registry. Un
 
 Add a `resolveMacroRaw(macroSpan, ctx): unknown` helper that mirrors the existing macro lookup logic in `substituteMacrosImpl` **but returns the underlying JS value** instead of a formatted string:
 
+Listed in precedence order — the walker tries each shape in turn and stops at the first one whose syntax matches at the current position (regardless of whether the match resolves or stays unresolved):
+
 | Macro shape | Returns |
 |---|---|
 | `$from`, `$to` | `string` (ISO range value) when `ctx.timeRange` is set; `undefined` otherwise (matches the current `OverrideCell` behavior of skipping from/to merge when its `timeRange` prop is absent) |
 | `$cell[N].column` | the Arrow value (`bigint` for timestamps and i64s, `number` for floats, etc.) |
 | `$cell.selected.column` | same as above, from `cellSelections[cell][column]` |
+| `$row.col` / `$row["col"]` | the row's raw Arrow value — **only when `ctx.row` is set** (Table override path). On surfaces without a row, these shapes are not recognized and the walker skips them. **Matched BEFORE `$variable.col` so a row column reference is never shadowed by the dotted-variable shape with `varName='row'`** (which, with `variables['row']` typically undefined, would otherwise consume `$row.col` as a match-but-unresolved and emit a spurious warning). **A null or `undefined` cell value (or a missing column) is treated as unresolved** (returns `undefined`), matching the design's uniform "leave unresolved as source" rule and the parallel handling of null `$cell[N].col` in `substituteMacrosImpl:368`. |
 | `$variable.column` | `string` (combobox column value) when `variables[var]` is a multi-column object; **`undefined`** when it's a simple string — matches `substituteMacrosImpl:392-394`, which returns `match` (leaves unresolved) for the simple-string case |
 | `$variable` | `string` (or `getVariableString(value)` for multi-column) |
-| `$row.col` / `$row["col"]` | the row's raw Arrow value — **only when `ctx.row` is set** (Table override path). On surfaces without a row, these shapes are not recognized and the walker treats them as unresolved. **A null or `undefined` cell value (or a missing column) is treated as unresolved** (returns `undefined`), matching the design's uniform "leave unresolved as source" rule and the parallel handling of null `$cell[N].col` in `substituteMacrosImpl:368`. |
 | unresolved | `undefined` |
 
 Important: `resolveMacroRaw` returns `undefined` for unresolved-selection (`$cell.selected.col` with no selection), unlike `substituteMacrosImpl` which returns `''` there. The walker keys on `undefined` to decide "leave the source span as-is and emit a warning." Because `resolveMacroRaw` is a fresh helper used only by the walker, this divergence costs nothing — `substituteMacrosImpl`'s SQL/overlay paths are unaffected.
@@ -207,6 +217,10 @@ export const TEMPLATE_FUNCTIONS: Record<string, TemplateFunction> = {
   format_value: (args) => {
     if (args.length !== 2) return undefined
     const [rawValue, rawUnit] = args
+    // Reject empty strings explicitly — Number("") is 0 (finite), so without
+    // this guard an empty-but-defined variable would silently render "0 B"
+    // instead of surfacing as an unresolved-arg warning.
+    if (rawValue === '') return undefined
     const value = Number(rawValue)  // Number() handles bigint, number, and numeric strings
     if (!Number.isFinite(value)) return undefined
     return formatValueWithUnit(value, String(rawUnit ?? ''))
@@ -279,9 +293,9 @@ Banner UI is a thin reusable component (e.g., `<TemplateWarningBanner warnings={
 
 ### Phase 3 — Wire into Map and Markdown cells
 
-7. `components/map/EventDetailPanel.tsx:59`: swap `substituteMacros` → `evaluateTemplate`. Destructure `{ text, warnings }`; render `text` as Markdown and render `warnings` (if any) in a banner above the body.
-8. Create `components/TemplateWarningBanner.tsx` — a small component that renders an amber-bordered list of warning strings, hidden when the list is empty. Used by the Map panel, the Markdown cell, and the table parents.
-9. `lib/screen-renderers/cells/MarkdownCell.tsx:21`: swap `substituteMacros` → `evaluateTemplate`. Same shape — destructure `{ text, warnings }`, render the banner above the existing Markdown body.
+7. Create `components/TemplateWarningBanner.tsx` — a small component that renders an amber-bordered list of warning strings, hidden when the list is empty. Used by the Map panel, the Markdown cell, and the table parents. Created first so the swap steps below have a component to render.
+8. `components/map/EventDetailPanel.tsx:59`: swap `substituteMacros` → `evaluateTemplate`. Destructure `{ text, warnings }`; render `text` as Markdown and render `<TemplateWarningBanner warnings={warnings} />` above the body.
+9. `lib/screen-renderers/cells/MarkdownCell.tsx:21`: swap `substituteMacros` → `evaluateTemplate`. Same shape — destructure `{ text, warnings }`, render `<TemplateWarningBanner warnings={warnings} />` above the existing Markdown body.
 10. Manual test: notebook with a Map cell whose query returns a `bytes` column; template uses `format_value($bytes, 'bytes')`; verify adaptive output in the detail panel. Add a Markdown cell with body `Size: format_value($total_bytes, 'bytes')` referencing a variable; verify the cell renders the adaptive output.
 
 ### Phase 4 — Wire into Table format overrides
@@ -314,7 +328,7 @@ Banner UI is a thin reusable component (e.g., `<TemplateWarningBanner warnings={
     - `cells/ReferenceTableCell.tsx:132` (reference table — empty `cellSelections`/`cellResults`, no overrides): skip the hook entirely. Reference tables don't accept column overrides today, so no `format_value` calls run. If overrides are ever added, switch to match `TableCell`.
 
     **Cost note:** the dry-run pass does duplicate the per-cell `evaluateTemplate` work that `OverrideCell` will do during render. The `TABLE_WARNINGS_ROW_CAP` (default 500) bounds the worst case across all callers (since the hook always scans the unsliced data). If profiling ever shows the duplication as a bottleneck, the hook and `OverrideCell` can share a memoized `Map<(format, rowIdx), Result>` cache.
-14. Add tests at `lib/screen-renderers/__tests__/table-utils.test.tsx` covering: (a) a column override that calls `format_value($row.bytes, 'bytes')` rendering adaptively, (b) a column override with an unresolved arg (e.g., `format_value($cell.selected.missing, 'bytes')` with no selection) leaving the original source text and emitting a warning, (c) `useTableWarnings` deduplicating warnings across rows, (d) a naked unresolved `$cell.selected.col` in a column override `format` string — pins side-effect §6 #2 for the table path (`expandCellSelectionMacros` would previously collapse to `''`; walker now preserves source + warns), and (e) a column override with `$row.col` for a row whose `col` is `null` (or whose column is missing) — pins side-effect §6 #4: walker preserves the `$row.col` source text and emits a warning, where `expandRowMacros` previously rendered `''`.
+14. Add tests at `lib/screen-renderers/__tests__/table-utils.test.tsx` covering: (a) a column override that calls `format_value($row.bytes, 'bytes')` rendering adaptively, (b) a column override with an unresolved arg (e.g., `format_value($cell.selected.missing, 'bytes')` with no selection) leaving the original source text and emitting a warning, (c) `useTableWarnings` deduplicating warnings across rows, (d) a naked unresolved `$cell.selected.col` in a column override `format` string — pins side-effect §6 #2 for the table path (`expandCellSelectionMacros` would previously collapse to `''`; walker now preserves source + warns), (e) a column override with `$row.col` for a row whose `col` is `null` (or whose column is missing) — pins side-effect §6 #4: walker preserves the `$row.col` source text and emits a warning, where `expandRowMacros` previously rendered `''`, and (f) a column override containing `$metric.unit` where `metric` is a simple-string notebook variable — pins side-effect §6 #3: walker recognizes `$metric.unit` as the dotted-variable shape and leaves it unresolved (`$metric.unit` + warning), where the legacy `expandVariableMacros`'s `\\$${name}\\b`-without-lookahead regex would have produced `<metric-value>.unit`.
 
 ### Phase 5 — Documentation
 
@@ -417,7 +431,7 @@ No changes needed to `cell-types.md` or `execution.md`.
   - Function call followed by normal `$variable` substitution outside it.
   - Naked macro behavior parity with `substituteMacrosRaw` for resolved cases.
   - Quote-escape regression: `evaluateTemplate("msg: $search", { variables: { search: "it's working" }, … })` produces `"msg: it's working"` (single quotes preserved, **not** doubled). Pins the Map/Markdown swap behavior change so the SQL escape never silently leaks back in.
-- `lib/screen-renderers/__tests__/table-utils.test.tsx`: column override with `format_value($row.col, 'bytes')` renders adaptive text; unresolved-arg override preserves source + emits a warning; `useTableWarnings` deduplicates warnings across rows.
+- `lib/screen-renderers/__tests__/table-utils.test.tsx`: column override with `format_value($row.col, 'bytes')` renders adaptive text; unresolved-arg override preserves source + emits a warning; `useTableWarnings` deduplicates warnings across rows; naked unresolved `$cell.selected.col` preserves source (pins §6 #2); null `$row.col` preserves source (pins §6 #4); `$metric.unit` with simple-string `metric` preserves source (pins §6 #3 — the boundary-regex behavior change vs. the legacy `expandVariableMacros`).
 
 ### Manual tests
 
