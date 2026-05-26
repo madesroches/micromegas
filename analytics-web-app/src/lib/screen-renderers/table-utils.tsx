@@ -197,14 +197,26 @@ export function extractMacroRefs(template: string): MacroRefs {
     cols.add(col)
   }
 
-  // $name (and $name.col heads). Captures variable references; `$row`, `$from`,
-  // `$to` are built-ins and excluded. Cell names also match here, but hashing
-  // their (likely undefined) variable value is harmless — cell selections and
-  // results are hashed separately and completely.
+  // $name (and $name.col heads). Captures variable references; `$from`/`$to`
+  // are built-ins and always excluded. `$row` is excluded ONLY when it heads a
+  // `$row.col`/`$row["col"]` reference (which reads `ctx.row`, hashed via
+  // `rowCols`); a *bare* `$row` instead resolves to `ctx.variables['row']` in
+  // `tryParseMacro` (case 6), so it must be hashed as a variable. Cell names
+  // also match here, but hashing their (likely undefined) variable value is
+  // harmless — cell selections and results are hashed separately and completely.
   const headRe = /\$(\w+)/g
   while ((m = headRe.exec(template)) !== null) {
     const name = m[1]
-    if (!BUILTIN_MACROS.has(name)) variableNames.add(name)
+    if (BUILTIN_MACROS.has(name)) {
+      // `row` followed by `.` or `[` is a row reference, not a variable.
+      if (name === 'row') {
+        const next = template[headRe.lastIndex]
+        if (next === '.' || next === '[') continue
+      } else {
+        continue
+      }
+    }
+    variableNames.add(name)
   }
 
   return {

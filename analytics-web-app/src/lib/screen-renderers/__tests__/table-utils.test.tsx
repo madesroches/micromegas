@@ -635,6 +635,14 @@ describe('extractMacroRefs', () => {
     expect(refs.variableNames).not.toContain('to')
   })
 
+  it('records bare $row as a variable (resolves to variables["row"]) but not $row.col / $row["col"]', () => {
+    // A bare $row resolves to ctx.variables['row'] in tryParseMacro (case 6),
+    // so it must be hashed as a variable; $row.col / $row["col"] read ctx.row.
+    expect(extractMacroRefs('$row').variableNames).toContain('row')
+    expect(extractMacroRefs('$row.a').variableNames).not.toContain('row')
+    expect(extractMacroRefs('$row["b"]').variableNames).not.toContain('row')
+  })
+
   it('collects $cell.selected.col into cellSelections', () => {
     const refs = extractMacroRefs('$upstream.selected.start and $upstream.selected.end')
     expect(refs.cellSelections.get('upstream')?.sort()).toEqual(['end', 'start'])
