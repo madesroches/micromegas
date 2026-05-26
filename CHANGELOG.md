@@ -7,6 +7,7 @@ This file documents the historical progress of the Micromegas project. For curre
 * **Web App:**
   * Add `format_value(value, unit)` template function for adaptive unit formatting in Markdown templates (Map detail panel, Markdown cells, and table column overrides); surface unresolved-arg and unresolved-macro warnings via a banner (Map/Markdown) or column-header icon (tables) (#1086)
   * Rework map cell keyboard controls onto a single camera-relative orthonormal basis (A/D strafe, W/S up/down, Q/E forward/back) so key pairs no longer collapse onto the same direction at high camera tilt; radial zoom stays on Ctrl+wheel
+  * Fix table column-override memo keying on fresh-per-render objects, causing `evaluateTemplate` to re-run every render; key on a content hash of only template-referenced inputs instead (#1092)
 * **Security:**
   * Bump qs to 6.15.2 and js-cookie to 3.0.7 to fix Dependabot alerts (#256, #257)
 
