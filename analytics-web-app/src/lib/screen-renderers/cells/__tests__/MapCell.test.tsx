@@ -13,8 +13,9 @@ import {
 import { ChannelBindingControl, mapMetadata } from '../MapCell'
 import {
   buildOverlay,
-  materializeRow,
+  columnTypeMap,
   resolveMappingScalars,
+  rowValues,
   type ChannelBinding,
 } from '@/components/map/overlay'
 import { DEFAULT_MAP_DETAIL_TEMPLATE } from '../../notebook-utils'
@@ -388,8 +389,8 @@ describe('resolveMappingScalars', () => {
   })
 })
 
-describe('materializeRow', () => {
-  it('formats every non-null column as a string', () => {
+describe('rowValues', () => {
+  it('returns raw column values (no stringification)', () => {
     const table = tableFromArrays({
       process_id: ['p1'],
       x: new Float64Array([1.5]),
@@ -397,16 +398,16 @@ describe('materializeRow', () => {
       z: new Float64Array([3.5]),
       event_type: ['hit'],
     })
-    expect(materializeRow(table, 0)).toEqual({
+    expect(rowValues(table, 0)).toEqual({
       process_id: 'p1',
-      x: '1.5',
-      y: '2.5',
-      z: '3.5',
+      x: 1.5,
+      y: 2.5,
+      z: 3.5,
       event_type: 'hit',
     })
   })
 
-  it('omits columns whose value is null (no empty-string coercion)', () => {
+  it('omits columns whose value is null', () => {
     const table = tableFromArrays({
       process_id: ['p1'],
       x: new Float64Array([0]),
@@ -414,19 +415,37 @@ describe('materializeRow', () => {
       z: new Float64Array([0]),
       maybe_null: [null as string | null],
     })
-    const row = materializeRow(table, 0)
+    const row = rowValues(table, 0)
     expect(row).not.toHaveProperty('maybe_null')
     expect(row.process_id).toBe('p1')
   })
 
-  it('formats timestamp columns as RFC3339', () => {
+  it('returns a Timestamp column as its raw epoch value', () => {
     const timestampType = new Timestamp(TimeUnit.MILLISECOND, null)
     const timeVec = vectorFromArray([1705314600000], timestampType)
-    const xVec = vectorFromArray([0])
-    const yVec = vectorFromArray([0])
-    const zVec = vectorFromArray([0])
-    const table = new Table({ time: timeVec, x: xVec, y: yVec, z: zVec })
-    expect(materializeRow(table, 0).time).toBe('2024-01-15T10:30:00.000Z')
+    const table = new Table({
+      time: timeVec,
+      x: vectorFromArray([0]),
+      y: vectorFromArray([0]),
+      z: vectorFromArray([0]),
+    })
+    // Raw value (not RFC3339) — the type map carries the DataType so the
+    // template evaluator can format it at emission time.
+    expect(rowValues(table, 0).time).toBe(1705314600000)
+  })
+})
+
+describe('columnTypeMap', () => {
+  it('maps each column name to its Arrow DataType', () => {
+    const timestampType = new Timestamp(TimeUnit.MILLISECOND, null)
+    const table = new Table({
+      time: vectorFromArray([1705314600000], timestampType),
+      x: vectorFromArray([0]),
+    })
+    const types = columnTypeMap(table)
+    expect(types.get('time')).toBe(timestampType)
+    expect(types.get('x')).toBeDefined()
+    expect(types.has('missing')).toBe(false)
   })
 })
 

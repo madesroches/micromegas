@@ -1,4 +1,4 @@
-import type { Table } from 'apache-arrow'
+import type { DataType, Table } from 'apache-arrow'
 import {
   isBinaryType,
   isIntegerType,
@@ -6,14 +6,8 @@ import {
   isStringType,
   unwrapDictionary,
 } from '@/lib/arrow-utils'
-import {
-  formatArrowValue,
-  substituteMacrosRaw,
-} from '@/lib/screen-renderers/notebook-utils'
+import { substituteMacrosRaw } from '@/lib/screen-renderers/notebook-utils'
 import type { VariableValue } from '@/lib/screen-renderers/notebook-types'
-
-/** A single row of the SQL result, formatted to strings for template substitution. */
-export type Row = Record<string, string>
 
 export type Shape = 'sphere' | 'box'
 
@@ -562,14 +556,18 @@ export function resolveOverlayConstants(mapping?: OverlayMapping): OverlayConsta
   }
 }
 
-export function materializeRow(table: Table, rowIndex: number): Row {
-  const row: Row = {}
+/** Raw column values for one row (no stringification). Null/undefined skipped. */
+export function rowValues(table: Table, rowIndex: number): Record<string, unknown> {
+  const row: Record<string, unknown> = {}
   for (const field of table.schema.fields) {
-    const col = table.getChild(field.name)
-    if (!col) continue
-    const value = col.get(rowIndex)
-    if (value === null || value === undefined) continue
-    row[field.name] = formatArrowValue(value, field.type)
+    const v = table.getChild(field.name)?.get(rowIndex)
+    if (v === null || v === undefined) continue
+    row[field.name] = v
   }
   return row
+}
+
+/** Column-name → Arrow DataType, for RFC3339 / format_value resolution. */
+export function columnTypeMap(table: Table): Map<string, DataType> {
+  return new Map(table.schema.fields.map((f) => [f.name, f.type]))
 }

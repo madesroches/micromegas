@@ -1,16 +1,16 @@
 import { useMemo, type AnchorHTMLAttributes } from 'react'
 import { X } from 'lucide-react'
-import type { Table } from 'apache-arrow'
+import type { DataType, Table } from 'apache-arrow'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { AppLink } from '@/components/AppLink'
 import { TemplateWarningBanner } from '@/components/TemplateWarningBanner'
 import { evaluateTemplate } from '@/lib/screen-renderers/notebook-utils'
 import type { VariableValue } from '@/lib/screen-renderers/notebook-types'
-import type { Row } from './overlay'
 
 interface EventDetailPanelProps {
-  row: Row
+  row: Record<string, unknown>
+  columnTypes: Map<string, DataType>
   template: string
   variables: Record<string, VariableValue>
   timeRange: { begin: string; end: string }
@@ -46,6 +46,7 @@ function MarkdownLink({
 
 export function EventDetailPanel({
   row,
+  columnTypes,
   template,
   variables,
   timeRange,
@@ -54,16 +55,20 @@ export function EventDetailPanel({
   onClose,
 }: EventDetailPanelProps) {
   const { text: rendered, warnings } = useMemo(() => {
-    // Columns win name collisions against variables: `$x` in a Map template
-    // means the selected row's `x` column.
-    const mergedVars: Record<string, VariableValue> = { ...variables, ...row }
+    // Bare `$col` macros resolve from the selected row (with their Arrow type)
+    // before falling back to a notebook variable: columns win name collisions,
+    // timestamps render RFC3339, and `format_value($col, unit)` gets the raw
+    // full-precision value.
     return evaluateTemplate(template, {
-      variables: mergedVars,
+      variables,
       timeRange,
       cellResults,
       cellSelections,
+      row,
+      columnTypes,
+      bareColumnsFromRow: true,
     })
-  }, [template, row, variables, timeRange, cellResults, cellSelections])
+  }, [template, row, columnTypes, variables, timeRange, cellResults, cellSelections])
 
   return (
     <div className="absolute bottom-4 left-4 w-fit max-w-[50%] max-h-[60%] overflow-auto bg-app-panel border border-theme-border rounded-lg shadow-lg z-10">
