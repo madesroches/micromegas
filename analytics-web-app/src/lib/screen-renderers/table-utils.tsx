@@ -21,6 +21,7 @@ import {
 } from '@/lib/arrow-utils'
 import type { VariableValue } from './notebook-types'
 import { evaluateTemplate } from './notebook-utils'
+import type { EvaluateTemplateCtx } from './notebook-utils'
 import { ColumnHeaderWarningIcon, WarningReporterContext } from './warning-reporter'
 
 // =============================================================================
@@ -128,6 +129,107 @@ export function validateFormatMacros(
 }
 
 // =============================================================================
+// Macro Reference Extraction (for cache-key construction)
+// =============================================================================
+
+/**
+ * The subset of `evaluateTemplate` inputs a given template actually consults.
+ * Used by `buildEvaluateKey` to hash only the referenced fields instead of the
+ * whole `row` / `variables` / `cellResults` payloads.
+ */
+export interface MacroRefs {
+  /** `$row.x` / `$row["x"]` column names. */
+  rowCols: string[]
+  /** `$name` and `$name.col` heads (excludes `$row`, `$from`, `$to`). */
+  variableNames: string[]
+  /** `$cell.selected.col` — map of cell name → columns used. */
+  cellSelections: Map<string, string[]>
+  /** `$cell[N].col` — map of cell name → { columns referenced, row indices
+   *  referenced }. Indices are retained so the hash only reads the rows the
+   *  template actually consults. */
+  cellResults: Map<string, { cols: string[]; indices: number[] }>
+}
+
+/**
+ * Walk a template and collect every input `evaluateTemplate(format, ctx)` would
+ * read, classified by shape. Mirrors the precedence in `template-evaluator`'s
+ * `tryParseMacro`. Over-inclusion is safe (it only lowers the cache hit rate);
+ * under-inclusion would return stale output, so each shape is captured.
+ */
+export function extractMacroRefs(template: string): MacroRefs {
+  const rowCols = new Set<string>()
+  const variableNames = new Set<string>()
+  const cellSelections = new Map<string, Set<string>>()
+  const cellResults = new Map<string, { cols: Set<string>; indices: Set<number> }>()
+
+  let m: RegExpExecArray | null
+
+  // $row["col"] / $row['col']
+  const rowBracketRe = /\$row\[["']([^"']+)["']\]/g
+  while ((m = rowBracketRe.exec(template)) !== null) rowCols.add(m[1])
+
+  // $row.col
+  const rowDotRe = /\$row\.(\w+)/g
+  while ((m = rowDotRe.exec(template)) !== null) rowCols.add(m[1])
+
+  // $cell[N].col
+  const cellResultRe = /\$(\w+)\[(\d+)\]\.(\w+)/g
+  while ((m = cellResultRe.exec(template)) !== null) {
+    const [, cell, idx, col] = m
+    let entry = cellResults.get(cell)
+    if (!entry) {
+      entry = { cols: new Set(), indices: new Set() }
+      cellResults.set(cell, entry)
+    }
+    entry.cols.add(col)
+    entry.indices.add(parseInt(idx, 10))
+  }
+
+  // $cell.selected.col
+  const cellSelRe = /\$(\w+)\.selected\.(\w+)/g
+  while ((m = cellSelRe.exec(template)) !== null) {
+    const [, cell, col] = m
+    let cols = cellSelections.get(cell)
+    if (!cols) {
+      cols = new Set()
+      cellSelections.set(cell, cols)
+    }
+    cols.add(col)
+  }
+
+  // $name (and $name.col heads). Captures variable references; `$from`/`$to`
+  // are built-ins and always excluded. `$row` is excluded ONLY when it heads a
+  // `$row.col`/`$row["col"]` reference (which reads `ctx.row`, hashed via
+  // `rowCols`); a *bare* `$row` instead resolves to `ctx.variables['row']` in
+  // `tryParseMacro` (case 6), so it must be hashed as a variable. Cell names
+  // also match here, but hashing their (likely undefined) variable value is
+  // harmless — cell selections and results are hashed separately and completely.
+  const headRe = /\$(\w+)/g
+  while ((m = headRe.exec(template)) !== null) {
+    const name = m[1]
+    if (BUILTIN_MACROS.has(name)) {
+      // `row` followed by `.` or `[` is a row reference, not a variable.
+      if (name === 'row') {
+        const next = template[headRe.lastIndex]
+        if (next === '.' || next === '[') continue
+      } else {
+        continue
+      }
+    }
+    variableNames.add(name)
+  }
+
+  return {
+    rowCols: [...rowCols],
+    variableNames: [...variableNames],
+    cellSelections: new Map([...cellSelections].map(([k, v]) => [k, [...v]])),
+    cellResults: new Map(
+      [...cellResults].map(([k, v]) => [k, { cols: [...v.cols], indices: [...v.indices] }]),
+    ),
+  }
+}
+
+// =============================================================================
 // Override Cell Component
 // =============================================================================
 
@@ -147,6 +249,106 @@ interface OverrideCellProps {
   cellSelections: Record<string, Record<string, unknown>>
   /** Upstream cell result tables for type resolution in cell selection macros */
   cellResults: Record<string, Table>
+}
+
+/**
+ * JSON.stringify replacer that tolerates the value shapes Arrow rows produce.
+ * BigInt (time/duration values) becomes a tagged decimal string; binary cells
+ * are fingerprinted by length only, which is enough for cache-keying and avoids
+ * hashing megabyte blobs. Plain JSON.stringify would throw on BigInt.
+ */
+function stableStringify(value: unknown): string {
+  return JSON.stringify(value, (_k, v) => {
+    if (typeof v === 'bigint') return `__bigint:${v.toString()}`
+    if (v instanceof Uint8Array) return `__bytes:${v.length}`
+    return v
+  })
+}
+
+/**
+ * Build a stable cache key from only the inputs that `evaluateTemplate(format,
+ * ctx)` consults. Projecting each input down to its referenced fields keeps the
+ * key small even when the underlying row / cell-result tables are large.
+ *
+ * Column DataTypes are hashed alongside values: `evaluateTemplate` renders
+ * naked macros via `formatArrowValue(value, dataType)`, so a re-type (e.g. a
+ * column going from string to Timestamp) flips the rendering even when the
+ * value is unchanged and must therefore flip the key.
+ */
+export function buildEvaluateKey(
+  format: string,
+  ctx: EvaluateTemplateCtx,
+  refs: MacroRefs,
+): string {
+  const rowSlice: Record<string, unknown> = {}
+  const rowColTypes: Record<string, string | null> = {}
+  if (ctx.row) {
+    for (const c of refs.rowCols) {
+      rowSlice[c] = ctx.row[c]
+      rowColTypes[c] = ctx.columnTypes?.get(c)?.toString() ?? null
+    }
+  }
+
+  const varSlice: Record<string, unknown> = {}
+  for (const n of refs.variableNames) varSlice[n] = ctx.variables[n]
+
+  // Cell selections render via `formatArrowValue(value, dataType)` where the
+  // DataType comes from the upstream cell-result table's schema (NOT
+  // `columnTypes`). Hash both the value and that schema type.
+  const selSlice: Record<string, Record<string, unknown>> = {}
+  const selColTypes: Record<string, Record<string, string | null>> = {}
+  for (const [cell, cols] of refs.cellSelections) {
+    const sel = ctx.cellSelections[cell]
+    if (sel) {
+      const s: Record<string, unknown> = {}
+      const t: Record<string, string | null> = {}
+      const table = ctx.cellResults[cell]
+      for (const c of cols) {
+        s[c] = sel[c]
+        t[c] = table?.schema.fields.find((f) => f.name === c)?.type?.toString() ?? null
+      }
+      selSlice[cell] = s
+      selColTypes[cell] = t
+    }
+  }
+
+  // For cellResults, project only the referenced rows (the `N` from
+  // `$cell[N].col`) down to the referenced columns — upstream tables can be
+  // much larger than the current table's pagination window.
+  const resSlice: Record<string, unknown> = {}
+  const resColTypes: Record<string, Record<string, string | null>> = {}
+  for (const [cell, { cols, indices }] of refs.cellResults) {
+    const t = ctx.cellResults[cell]
+    if (t) {
+      const rows: Record<string, unknown>[] = []
+      for (const i of indices) {
+        if (i >= t.numRows) continue
+        const r = t.get(i)
+        if (!r) continue
+        const proj: Record<string, unknown> = {}
+        for (const c of cols) proj[c] = r[c]
+        rows.push(proj)
+      }
+      resSlice[cell] = rows
+      const tt: Record<string, string | null> = {}
+      for (const c of cols) {
+        tt[c] = t.schema.fields.find((f) => f.name === c)?.type?.toString() ?? null
+      }
+      resColTypes[cell] = tt
+    }
+  }
+
+  return stableStringify({
+    format,
+    timeRange: ctx.timeRange ? [ctx.timeRange.begin, ctx.timeRange.end] : null,
+    row: rowSlice,
+    rowColTypes,
+    variables: varSlice,
+    cellSelections: selSlice,
+    selColTypes,
+    cellResults: resSlice,
+    resColTypes,
+  })
 }
 
 /**
@@ -175,16 +377,32 @@ export function OverrideCell({
     return map
   }, [allColumns, columns])
 
-  const { text: expanded, warnings } = useMemo(() => {
-    return evaluateTemplate(format, {
-      variables,
-      timeRange,
-      cellResults,
-      cellSelections,
-      row,
-      columnTypes,
-    })
-  }, [format, variables, timeRange, cellResults, cellSelections, row, columnTypes])
+  // `variables`, `timeRange`, `cellResults`, `cellSelections`, and `row` are
+  // reconstructed on every parent render, so memoizing on their identities
+  // never hits. Instead key the memo on a content hash built from only the
+  // inputs the template actually reads (mirrors `useColumnWarnings`'s
+  // content-hash approach in `warning-reporter.tsx`). Do NOT replace
+  // `[cacheKey]` with the "obvious" prop list — that reintroduces the bug.
+  const refs = useMemo(() => extractMacroRefs(format), [format])
+  const cacheKey = buildEvaluateKey(
+    format,
+    { variables, timeRange, cellResults, cellSelections, row, columnTypes },
+    refs,
+  )
+
+  const { text: expanded, warnings } = useMemo(
+    () =>
+      evaluateTemplate(format, {
+        variables,
+        timeRange,
+        cellResults,
+        cellSelections,
+        row,
+        columnTypes,
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [cacheKey],
+  )
 
   const reporter = useContext(WarningReporterContext)
   const warningKey = warnings.join('\n')

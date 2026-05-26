@@ -13,12 +13,24 @@ Object.defineProperty(window, 'matchMedia', {
   })),
 })
 
+// Wrap the real `evaluateTemplate` in a counting mock so the memoization
+// test can assert call counts. The factory delegates to the actual
+// implementation, so every other test renders identical output. `jest.spyOn`
+// can't be used here — this repo's Jest runs in ESM mode and module-namespace
+// exports are read-only.
+jest.mock('../notebook-utils', () => {
+  const actual = jest.requireActual('../notebook-utils')
+  return { ...actual, evaluateTemplate: jest.fn(actual.evaluateTemplate) }
+})
+
 import { useMemo, useState } from 'react'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
-import { DataType, Timestamp, TimeUnit } from 'apache-arrow'
+import { DataType, Timestamp, TimeUnit, Float64, Table } from 'apache-arrow'
 import { renderHook, act } from '@testing-library/react'
 import {
   extractMacroColumns,
+  extractMacroRefs,
+  buildEvaluateKey,
   findUnknownMacros,
   validateFormatMacros,
   OverrideCell,
@@ -31,6 +43,8 @@ import {
   ColumnOverride,
   TableBody,
 } from '../table-utils'
+import { evaluateTemplate } from '../notebook-utils'
+import type { EvaluateTemplateCtx } from '../notebook-utils'
 import { ColumnHeaderWarningIcon, useColumnWarnings, WarningReporterContext } from '../warning-reporter'
 
 // =============================================================================
@@ -599,6 +613,210 @@ describe('OverrideCell + column warning surface', () => {
     const titleAttr = th.querySelector('[title]')!.getAttribute('title')!
     expect(titleAttr.split('\n').length).toBe(1)
     expect(titleAttr).toBe('format_value: $missing is unresolved')
+  })
+})
+
+// =============================================================================
+// extractMacroRefs — referenced-input extraction for cache keying
+// =============================================================================
+
+describe('extractMacroRefs', () => {
+  it('collects $row.col and $row["col"] into rowCols', () => {
+    const refs = extractMacroRefs('$row.a and $row["b-c"] and $row.a')
+    expect(refs.rowCols.sort()).toEqual(['a', 'b-c'])
+  })
+
+  it('collects variable heads ($x, $x.col) and ignores $row/$from/$to', () => {
+    const refs = extractMacroRefs('$x then $y.col then $row.a then $from then $to')
+    expect(refs.variableNames).toContain('x')
+    expect(refs.variableNames).toContain('y')
+    expect(refs.variableNames).not.toContain('row')
+    expect(refs.variableNames).not.toContain('from')
+    expect(refs.variableNames).not.toContain('to')
+  })
+
+  it('records bare $row as a variable (resolves to variables["row"]) but not $row.col / $row["col"]', () => {
+    // A bare $row resolves to ctx.variables['row'] in tryParseMacro (case 6),
+    // so it must be hashed as a variable; $row.col / $row["col"] read ctx.row.
+    expect(extractMacroRefs('$row').variableNames).toContain('row')
+    expect(extractMacroRefs('$row.a').variableNames).not.toContain('row')
+    expect(extractMacroRefs('$row["b"]').variableNames).not.toContain('row')
+  })
+
+  it('collects $cell.selected.col into cellSelections', () => {
+    const refs = extractMacroRefs('$upstream.selected.start and $upstream.selected.end')
+    expect(refs.cellSelections.get('upstream')?.sort()).toEqual(['end', 'start'])
+  })
+
+  it('collects $cell[N].col into one entry with deduped cols and retained indices', () => {
+    const refs = extractMacroRefs('$src[0].val and $src[2].val and $src[0].other')
+    const entry = refs.cellResults.get('src')
+    expect(entry).toBeDefined()
+    expect(entry!.cols.sort()).toEqual(['other', 'val'])
+    expect(entry!.indices.sort()).toEqual([0, 2])
+  })
+})
+
+// =============================================================================
+// buildEvaluateKey — stable content hash of referenced inputs
+// =============================================================================
+
+function fakeTable(
+  rows: Record<string, unknown>[],
+  fieldTypes: Record<string, DataType>,
+): Table {
+  return {
+    numRows: rows.length,
+    get: (i: number) => rows[i] ?? null,
+    schema: {
+      fields: Object.entries(fieldTypes).map(([name, type]) => ({ name, type })),
+    },
+  } as unknown as Table
+}
+
+function baseCtx(overrides: Partial<EvaluateTemplateCtx> = {}): EvaluateTemplateCtx {
+  return {
+    variables: {},
+    cellResults: {},
+    cellSelections: {},
+    ...overrides,
+  }
+}
+
+describe('buildEvaluateKey', () => {
+  it('is stable across two calls with structurally equal, fresh-reference inputs', () => {
+    const refs = extractMacroRefs('$row.a-$x')
+    const key1 = buildEvaluateKey(
+      'fmt',
+      baseCtx({ row: { a: '1', ignored: 'z' }, variables: { x: 'v' } }),
+      refs,
+    )
+    const key2 = buildEvaluateKey(
+      'fmt',
+      baseCtx({ row: { a: '1', ignored: 'z' }, variables: { x: 'v' } }),
+      refs,
+    )
+    expect(key1).toBe(key2)
+  })
+
+  it('changes when a referenced column value changes', () => {
+    const refs = extractMacroRefs('$row.a')
+    const key1 = buildEvaluateKey('fmt', baseCtx({ row: { a: '1' } }), refs)
+    const key2 = buildEvaluateKey('fmt', baseCtx({ row: { a: '2' } }), refs)
+    expect(key1).not.toBe(key2)
+  })
+
+  it('ignores unreferenced columns', () => {
+    const refs = extractMacroRefs('$row.a')
+    const key1 = buildEvaluateKey('fmt', baseCtx({ row: { a: '1', other: 'x' } }), refs)
+    const key2 = buildEvaluateKey('fmt', baseCtx({ row: { a: '1', other: 'DIFFERENT' } }), refs)
+    expect(key1).toBe(key2)
+  })
+
+  it('handles BigInt row values without throwing', () => {
+    const refs = extractMacroRefs('$row.ts')
+    expect(() =>
+      buildEvaluateKey('fmt', baseCtx({ row: { ts: BigInt('1705314600000000') } }), refs),
+    ).not.toThrow()
+  })
+
+  it('changes when the DataType of a referenced row column changes', () => {
+    const refs = extractMacroRefs('$row.ts')
+    const value = BigInt('1705314600000000')
+    const asTimestamp = buildEvaluateKey(
+      'fmt',
+      baseCtx({
+        row: { ts: value },
+        columnTypes: new Map([['ts', new Timestamp(TimeUnit.MICROSECOND, null)]]),
+      }),
+      refs,
+    )
+    const asNumeric = buildEvaluateKey(
+      'fmt',
+      baseCtx({ row: { ts: value }, columnTypes: new Map([['ts', new Float64()]]) }),
+      refs,
+    )
+    expect(asTimestamp).not.toBe(asNumeric)
+  })
+
+  it('changes when a referenced $cell[N].col column is re-typed (value unchanged)', () => {
+    const refs = extractMacroRefs('$src[0].ts')
+    const value = BigInt('1705314600000000')
+    const asTimestamp = buildEvaluateKey(
+      'fmt',
+      baseCtx({
+        cellResults: {
+          src: fakeTable([{ ts: value }], { ts: new Timestamp(TimeUnit.MICROSECOND, null) }),
+        },
+      }),
+      refs,
+    )
+    const asNumeric = buildEvaluateKey(
+      'fmt',
+      baseCtx({ cellResults: { src: fakeTable([{ ts: value }], { ts: new Float64() }) } }),
+      refs,
+    )
+    expect(asTimestamp).not.toBe(asNumeric)
+  })
+
+  it('changes when a referenced $cell.selected.col column is re-typed (value unchanged)', () => {
+    const refs = extractMacroRefs('$src.selected.ts')
+    const value = BigInt('1705314600000000')
+    const asTimestamp = buildEvaluateKey(
+      'fmt',
+      baseCtx({
+        cellSelections: { src: { ts: value } },
+        cellResults: {
+          src: fakeTable([{ ts: value }], { ts: new Timestamp(TimeUnit.MICROSECOND, null) }),
+        },
+      }),
+      refs,
+    )
+    const asNumeric = buildEvaluateKey(
+      'fmt',
+      baseCtx({
+        cellSelections: { src: { ts: value } },
+        cellResults: { src: fakeTable([{ ts: value }], { ts: new Float64() }) },
+      }),
+      refs,
+    )
+    expect(asTimestamp).not.toBe(asNumeric)
+  })
+})
+
+// =============================================================================
+// OverrideCell memoization — evaluateTemplate runs once across equal re-renders
+// =============================================================================
+
+describe('OverrideCell — memoization', () => {
+  it('does not re-run evaluateTemplate on re-renders with equal-but-fresh inputs', () => {
+    const mockEval = evaluateTemplate as jest.Mock
+    mockEval.mockClear()
+
+    function Harness() {
+      const [, setTick] = useState(0)
+      // Fresh object references on every render — the bug this fix targets.
+      const row = { id: '123' }
+      return (
+        <>
+          <button onClick={() => setTick((t) => t + 1)}>rerender</button>
+          <OverrideCell
+            format="[View](/p?id=$row.id)"
+            columnName="link"
+            row={row}
+            columns={stringColumns}
+            cellSelections={{}}
+            cellResults={{}}
+          />
+        </>
+      )
+    }
+
+    render(<Harness />)
+    expect(mockEval).toHaveBeenCalledTimes(1)
+    fireEvent.click(screen.getByText('rerender'))
+    fireEvent.click(screen.getByText('rerender'))
+    expect(mockEval).toHaveBeenCalledTimes(1)
   })
 })
 
