@@ -2,7 +2,7 @@ use anyhow::Result;
 use futures::StreamExt;
 use futures::stream;
 use object_store::prefix::PrefixStore;
-use object_store::{ObjectStore, path::Path};
+use object_store::{ObjectStore, ObjectStoreExt, path::Path};
 use std::sync::Arc;
 
 /// A client for interacting with blob storage.
@@ -60,12 +60,11 @@ impl BlobStorage {
 
     /// Deletes a batch of blobs from storage.
     pub async fn delete_batch(&self, objects: &[String]) -> Result<()> {
-        let path_stream = stream::iter(
-            objects
-                .iter()
-                .map(|obj_path| Path::from(obj_path.as_str()))
-                .map(Ok),
-        );
+        let paths: Vec<_> = objects
+            .iter()
+            .map(|obj_path| Ok(Path::from(obj_path.as_str())))
+            .collect();
+        let path_stream = stream::iter(paths);
         let mut stream = self.blob_store.delete_stream(Box::pin(path_stream));
         while let Some(res) = stream.next().await {
             if let Err(e) = res {

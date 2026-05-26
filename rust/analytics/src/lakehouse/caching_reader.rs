@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use datafusion::parquet::errors::ParquetError;
 use micromegas_tracing::prelude::*;
-use object_store::ObjectStore;
+use object_store::{ObjectStore, ObjectStoreExt};
 use std::ops::Range;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};

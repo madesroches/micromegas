@@ -1,7 +1,6 @@
 use chrono::{DateTime, Utc};
 use datafusion::common::plan_err;
 use datafusion::error::DataFusionError;
-use datafusion::execution::context::ExecutionProps;
 use datafusion::logical_expr::simplify::SimplifyContext;
 use datafusion::optimizer::simplify_expressions::ExprSimplifier;
 use datafusion::prelude::*;
@@ -9,8 +8,7 @@ use datafusion::scalar::ScalarValue;
 
 /// Simplifies a DataFusion expression.
 pub fn simplify_exp(expr: &Expr) -> datafusion::error::Result<Expr> {
-    let execution_props = ExecutionProps::new();
-    let info = SimplifyContext::new(&execution_props);
+    let info = SimplifyContext::default();
     ExprSimplifier::new(info).simplify(expr.clone())
 }
 

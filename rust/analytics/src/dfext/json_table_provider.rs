@@ -6,7 +6,7 @@ use datafusion::datasource::listing::{
 };
 use datafusion::execution::context::SessionContext;
 use futures::StreamExt;
-use object_store::ObjectStore;
+use object_store::{ObjectStore, ObjectStoreExt};
 use std::sync::Arc;
 
 /// Verifies that files exist at the specified URL

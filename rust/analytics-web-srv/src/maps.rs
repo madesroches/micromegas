@@ -21,7 +21,7 @@ use chrono::{DateTime, Utc};
 use flate2::{Compression, write::GzEncoder};
 use futures::StreamExt;
 use micromegas::tracing::prelude::*;
-use object_store::{ObjectStore, path::Path as ObjectPath, prefix::PrefixStore};
+use object_store::{ObjectStore, ObjectStoreExt, path::Path as ObjectPath, prefix::PrefixStore};
 use serde::Serialize;
 use std::io::Write;
 use std::sync::Arc;

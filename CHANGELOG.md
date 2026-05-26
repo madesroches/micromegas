@@ -10,6 +10,8 @@ This file documents the historical progress of the Micromegas project. For curre
   * Fix table column-override memo keying on fresh-per-render objects, causing `evaluateTemplate` to re-run every render; key on a content hash of only template-referenced inputs instead (#1092)
 * **Security:**
   * Bump qs to 6.15.2 and js-cookie to 3.0.7 to fix Dependabot alerts (#256, #257)
+* **Dependencies:**
+  * Update DataFusion to 53.1 and rebuild the datafusion-wasm bindings (#1090)
 
 ## May 2026 - v0.25.0
 

@@ -23,7 +23,9 @@ use axum::{
     routing::{get, put},
 };
 use flate2::read::GzDecoder;
-use object_store::{ObjectStore, local::LocalFileSystem, memory::InMemory, path::Path};
+use object_store::{
+    ObjectStore, ObjectStoreExt, local::LocalFileSystem, memory::InMemory, path::Path,
+};
 use std::io::Read;
 use std::sync::Arc;
 use tower::ServiceExt;

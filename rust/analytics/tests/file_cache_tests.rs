@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use micromegas_analytics::lakehouse::caching_reader::CachingReader;
 use micromegas_analytics::lakehouse::file_cache::FileCache;
-use object_store::ObjectStore;
+use object_store::ObjectStoreExt;
 use object_store::memory::InMemory;
 use object_store::path::Path;
 use std::sync::Arc;
