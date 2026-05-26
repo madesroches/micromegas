@@ -492,6 +492,22 @@ describe('OverrideCell + column warning surface', () => {
     expect(screen.getByText('Started: 2024-01-15T10:30:00.000Z')).toBeInTheDocument()
   })
 
+  it('survives an unmemoized overrides array (content-hash robustness)', async () => {
+    // Without content-hashing the hook would treat each fresh-ref `overrides`
+    // array as a change, re-fire the reset effect every render, and trip
+    // React's "Too many re-renders" guard. With hashing this passes.
+    function Harness() {
+      // Deliberately UNmemoized: fresh array reference on every render.
+      const overrides = [{ column: 'value', format: "format_value($missing, 'bytes')" }]
+      return <TableHarness overrides={overrides} row={{ bytes: 100 }} />
+    }
+    render(<Harness />)
+    const th = screen.getByTestId('th-value')
+    await waitFor(() => {
+      expect(th.querySelector('[title]')).not.toBeNull()
+    })
+  })
+
   it('(c) dedups the same warning produced by many rows into a single tooltip entry', async () => {
     function MultiRowHarness() {
       const overrides = useMemo(

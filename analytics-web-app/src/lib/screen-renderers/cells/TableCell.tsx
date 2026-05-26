@@ -14,14 +14,14 @@ import { RowSelectionEditor } from '@/components/RowSelectionEditor'
 import { SyntaxEditor } from '@/components/SyntaxEditor'
 import { substituteMacros, validateMacros, DEFAULT_SQL } from '../notebook-utils'
 import {
-  SortHeader,
+  WarningAwareSortHeaderRow,
   TableBody,
   HiddenColumnsBar,
   buildOrderByClause,
   useColumnManagement,
   ColumnOverride,
 } from '../table-utils'
-import { ColumnHeaderWarningIcon, useColumnWarnings, WarningReporterContext } from '../warning-reporter'
+import { useColumnWarnings, WarningReporterContext } from '../warning-reporter'
 import { usePagination, PaginationBar, DEFAULT_PAGE_SIZE } from '../pagination'
 
 // =============================================================================
@@ -148,28 +148,18 @@ export function TableCell({ data, status, options, onOptionsChange, variables, t
           <table className="w-full text-sm">
             <thead className="sticky top-0">
               <tr className="bg-app-card border-b-2 border-theme-border">
-                {selectionMode === 'single' && (
-                  <th className="px-1 py-1.5 w-8" />
-                )}
-                {visibleColumns.map((col) => {
-                  const colWarnings = columnWarnings.get(col.name)
-                  return (
-                    <SortHeader
-                      key={col.name}
-                      columnName={col.name}
-                      sortColumn={sortColumn}
-                      sortDirection={sortDirection}
-                      onSort={handleSort}
-                      onSortAsc={handleSortAsc}
-                      onSortDesc={handleSortDesc}
-                      onHide={handleHideColumn}
-                      compact
-                      trailingIcon={colWarnings?.size ? <ColumnHeaderWarningIcon warnings={[...colWarnings]} /> : null}
-                    >
-                      {col.name}
-                    </SortHeader>
-                  )
-                })}
+                <WarningAwareSortHeaderRow
+                  columns={visibleColumns}
+                  columnWarnings={columnWarnings}
+                  sortColumn={sortColumn}
+                  sortDirection={sortDirection}
+                  onSort={handleSort}
+                  onSortAsc={handleSortAsc}
+                  onSortDesc={handleSortDesc}
+                  onHide={handleHideColumn}
+                  compact
+                  leading={selectionMode === 'single' ? <th className="px-1 py-1.5 w-8" /> : null}
+                />
               </tr>
             </thead>
             <TableBody

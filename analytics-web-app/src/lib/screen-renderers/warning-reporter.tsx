@@ -11,13 +11,10 @@ export const WarningReporterContext = createContext<ReportWarning | null>(null)
  * Encapsulates the column-warnings reducer used by table parents
  * (`TableCell`, `TableRenderer`, `TransposedTableCell`).
  *
- * Callers MUST pass the *stable source* of overrides (the raw
- * `options?.overrides` or `tableConfig.overrides`) — NOT a locally
- * destructured form like `(options?.overrides as Foo[] | undefined) || []`,
- * whose `|| []` fallback produces a fresh array reference on every render
- * when no overrides are configured. That would re-fire the reset effect
- * every render, schedule a fresh `new Map()`, and trip React's
- * "Too many re-renders" guard.
+ * Pass `overridesSource` as the raw `options?.overrides` (or equivalent).
+ * The hook hashes the source by content, so callers do NOT need to ensure
+ * referential stability — `options?.overrides ?? []` works the same as a
+ * memoized ref.
  */
 export function useColumnWarnings(overridesSource: unknown): {
   columnWarnings: Map<string, Set<string>>
@@ -37,14 +34,20 @@ export function useColumnWarnings(overridesSource: unknown): {
     })
   }, [])
 
-  // Reset on *changes* to the override list — not on mount. Resetting on
-  // mount would clobber warnings that child `OverrideCell` effects post
-  // during the same commit (child effects run before parent effects).
-  const initialOverridesRef = useRef(overridesSource)
+  // Content-hash the override list so a fresh array reference with the
+  // same shape (the `?? []` fallback case, or a parent re-rendering) does
+  // not trigger a reset. JSON.stringify is fine here — overrides are a
+  // small array of `{ column, format }` objects.
+  const overridesHash = JSON.stringify(overridesSource ?? null)
+
+  // Skip the reset on the *first* render: child `OverrideCell` effects
+  // post warnings during the same commit (child effects run before parent
+  // effects), and a mount-time reset would clobber them.
+  const initialHashRef = useRef(overridesHash)
   useEffect(() => {
-    if (overridesSource === initialOverridesRef.current) return
+    if (overridesHash === initialHashRef.current) return
     setColumnWarnings(new Map())
-  }, [overridesSource])
+  }, [overridesHash])
 
   return { columnWarnings, reportWarning }
 }

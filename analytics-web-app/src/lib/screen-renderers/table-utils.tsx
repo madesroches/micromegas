@@ -21,7 +21,7 @@ import {
 } from '@/lib/arrow-utils'
 import type { VariableValue } from './notebook-types'
 import { evaluateTemplate } from './notebook-utils'
-import { WarningReporterContext } from './warning-reporter'
+import { ColumnHeaderWarningIcon, WarningReporterContext } from './warning-reporter'
 
 // =============================================================================
 // Column Override Types
@@ -330,6 +330,72 @@ export function SortHeader({
         </ContextMenu.Content>
       </ContextMenu.Portal>
     </ContextMenu.Root>
+  )
+}
+
+// =============================================================================
+// Warning-aware header row
+// =============================================================================
+
+export interface WarningAwareSortHeaderRowProps {
+  columns: TableColumn[]
+  columnWarnings: Map<string, Set<string>>
+  sortColumn?: string
+  sortDirection?: 'asc' | 'desc'
+  onSort: (columnName: string) => void
+  onSortAsc?: (columnName: string) => void
+  onSortDesc?: (columnName: string) => void
+  onHide?: (columnName: string) => void
+  /** Use compact padding (notebook cells). */
+  compact?: boolean
+  /** Cells rendered before the column headers (e.g. the radio-button placeholder
+   *  cell when single-row selection is enabled). */
+  leading?: React.ReactNode
+}
+
+/**
+ * Renders one `<SortHeader>` per column, decorating each with a
+ * `<ColumnHeaderWarningIcon>` when `columnWarnings` has entries for that
+ * column. Used by `TableCell`, `TableRenderer`, and any other parent that
+ * wraps `TableBody` in a `WarningReporterContext.Provider`.
+ */
+export function WarningAwareSortHeaderRow({
+  columns,
+  columnWarnings,
+  sortColumn,
+  sortDirection,
+  onSort,
+  onSortAsc,
+  onSortDesc,
+  onHide,
+  compact,
+  leading,
+}: WarningAwareSortHeaderRowProps) {
+  return (
+    <>
+      {leading}
+      {columns.map((col) => {
+        const colWarnings = columnWarnings.get(col.name)
+        return (
+          <SortHeader
+            key={col.name}
+            columnName={col.name}
+            sortColumn={sortColumn}
+            sortDirection={sortDirection}
+            onSort={onSort}
+            onSortAsc={onSortAsc}
+            onSortDesc={onSortDesc}
+            onHide={onHide}
+            compact={compact}
+            trailingIcon={
+              colWarnings?.size ? <ColumnHeaderWarningIcon warnings={[...colWarnings]} /> : null
+            }
+          >
+            {col.name}
+          </SortHeader>
+        )
+      })}
+    </>
   )
 }
 

@@ -3,6 +3,31 @@
 ## Issue Reference
 - [#1086](https://github.com/madesroches/micromegas/issues/1086) — Support function-call expressions in template macro engine
 
+## Status (2026-05-26)
+
+**Shipped on branch `format_value`.** All six phases implemented; lint + type-check clean; 972 tests pass.
+
+Commits on this branch (newest first):
+
+- `Add format_value() template function for adaptive unit formatting` — the v1 implementation (Phases 1-6 of this plan).
+- Follow-up refactors in flight on the same branch:
+  - Hardened `useColumnWarnings` via content hashing (eliminates the "must pass a stable reference" footgun that was originally only addressed by a docstring).
+  - Split `notebook-utils.ts` (940 lines) into three focused modules:
+    - `notebook-utils.ts` (295 lines) — cell traversal, name sanitization, defaults, data-source resolution, re-export barrel for the moved symbols.
+    - `macro-substitution.ts` (255 lines) — SQL-targeted `substituteMacros` / `substituteMacrosRaw`, regex factories, `validateMacros`, `findUnresolvedSelectionMacro`, `formatArrowValue`.
+    - `template-evaluator.ts` (357 lines) — the new single-pass walker (`evaluateTemplate`) + parser helpers.
+  - Extracted `<WarningAwareSortHeaderRow>` in `table-utils.tsx`. `TableCell.tsx` and `TableRenderer.tsx` now compose it instead of duplicating ~30 lines of `SortHeader` + warning-icon wiring each. `TransposedTableCell.tsx` keeps its inline icon (different layout — `<td>`, no `SortHeader`).
+
+### Follow-up tracker
+
+- [#1089](https://github.com/madesroches/micromegas/issues/1089) — Tech-debt audit findings unrelated to this PR (FlameGraphCell / MapViewer / PerformanceAnalysisPage splits, smaller code-smell items). The audit's "MapCell.tsx:297 mutation-during-render" item turned out to be a false positive — that's React's canonical "adjusting state during render" pattern, and the existing comment block explains why a `useEffect` there would actually be wrong.
+
+### Deviations from the plan
+
+- The `expectedArity()` helper in `template-evaluator.ts` is currently hard-coded to `format_value: 2`. When a second function is added, generalize either by adding an `arity` field to `TEMPLATE_FUNCTIONS` entries or by having each registered function return a structured `{ ok, error }` result so the walker doesn't need to second-guess.
+- The walker's diagnostic message for invalid argument values is generic (`"format_value: invalid argument value"`) — the plan example `"format_value: argument 1 is not a numeric value"` would be nicer but requires the registry function to return per-argument errors. Out of scope for v1.
+- Hashing `overridesSource` via `JSON.stringify` (in `useColumnWarnings`) is fine for the size of overrides we have today (a small array of `{ column, format }` objects per table). If overrides grow into hundreds, swap to a content-comparing memoizer.
+
 ## Overview
 
 Add a tiny function-call expression layer to the template macro engine so values interpolated into Markdown templates (Map `detailTemplate`, Table `format` overrides) can be rendered with the same adaptive unit formatting the chart cell already uses. v1 surface is a single function — `format_value(value, unit)` — that reuses the chart's adaptive formatters. The evaluator walks the template once and resolves macro arguments to **raw JS/Arrow values** (not strings), so byte counts and large floats keep full precision.
