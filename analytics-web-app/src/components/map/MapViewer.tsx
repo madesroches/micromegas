@@ -486,6 +486,30 @@ function zUpOffsetToSphericalInput(offset: THREE.Vector3, out: THREE.Vector3): T
   return out
 }
 
+/**
+ * Camera-relative orthonormal basis in world coordinates, derived from the
+ * orbit's spherical state and the theta-driven camera.up convention used
+ * by MapCameraController. Returns the right/up/forward vectors that
+ * correspond to screen-X / screen-Y / screen-(-Z) respectively, so a
+ * single right-hand-rule binding can drive A/D, W/S, and Q/E onto three
+ * mutually-orthogonal world axes at every camera tilt.
+ */
+// eslint-disable-next-line react-refresh/only-export-components
+export function cameraBasisFromSpherical(
+  theta: number,
+  phi: number,
+): { right: THREE.Vector3; up: THREE.Vector3; forward: THREE.Vector3 } {
+  const sinTheta = Math.sin(theta)
+  const cosTheta = Math.cos(theta)
+  const sinPhi = Math.sin(phi)
+  const cosPhi = Math.cos(phi)
+  return {
+    right: new THREE.Vector3(cosTheta, sinTheta, 0),
+    up: new THREE.Vector3(-cosPhi * sinTheta, cosPhi * cosTheta, sinPhi),
+    forward: new THREE.Vector3(-sinPhi * sinTheta, sinPhi * cosTheta, -cosPhi),
+  }
+}
+
 interface MapCameraControllerProps {
   mapBounds: THREE.Box3 | null
   mapScene: THREE.Object3D | null
@@ -684,10 +708,14 @@ function MapCameraController({
 
     const panCamera = (deltaX: number, deltaY: number) => {
       const panSpeed = sphericalRef.current.radius * 0.001
-      // Derive the horizontal pan basis from theta directly, not from
-      // camera.getWorldDirection: at phi=0 the camera-forward is parallel to
-      // worldUp, and cross(worldUp, cameraForward) collapses to zero, silently
-      // dropping the input. Theta is well-defined at every phi.
+      // Left-drag intentionally keeps a theta-based XY basis even though the
+      // keyboard now uses the full camera-relative basis (cameraBasisFromSpherical).
+      // Left-drag is "drag the map under the cursor" — a ground-plane map-pan
+      // idiom — so horizontal drag must never elevate the camera, unlike WASD's
+      // fly-cam semantics. Deriving the basis from theta directly (not
+      // camera.getWorldDirection) also avoids the cross-product collapse at
+      // phi=0, where cross(worldUp, cameraForward) is zero and would silently
+      // drop the input. Theta is well-defined at every phi.
       const theta = sphericalRef.current.theta
       const sinTheta = Math.sin(theta)
       const cosTheta = Math.cos(theta)
@@ -735,8 +763,7 @@ function MapCameraController({
 
     const onWheel = (e: WheelEvent) => {
       // Gate zoom on Ctrl/Cmd so plain wheel scrolls the surrounding page
-      // (notebooks embed Map cells in a scrollable container). QE keys remain
-      // an unmodified zoom path for users already on the keyboard.
+      // (notebooks embed Map cells in a scrollable container).
       if (!e.ctrlKey && !e.metaKey) return
       e.preventDefault()
 
@@ -872,42 +899,21 @@ function MapCameraController({
     if (isHoveredRef.current) {
       const moveSpeed = sphericalRef.current.radius * SPEED_PER_RADIUS * delta
 
-      // Theta-based XY basis, same as panCamera: keeps WASD as a top-down pan
-      // (W/S no longer changes elevation), and avoids the cross-product
-      // collapse at phi=0 that would silently drop strafe.
-      const theta = sphericalRef.current.theta
-      const right = new THREE.Vector3(Math.cos(theta), Math.sin(theta), 0)
-      const forward = new THREE.Vector3(-Math.sin(theta), Math.cos(theta), 0)
+      // Single camera-relative orthonormal basis: A/D strafe along camera-right,
+      // W/S along camera-up, Q/E along camera-forward. The three axes are
+      // perpendicular at every tilt, so no two key pairs can collapse onto the
+      // same world direction (the high-phi bug the previous mixed scheme had).
+      const { right, up, forward } = cameraBasisFromSpherical(
+        sphericalRef.current.theta,
+        sphericalRef.current.phi,
+      )
 
-      if (keysRef.current.w) {
-        targetRef.current.addScaledVector(forward, moveSpeed)
-      }
-      if (keysRef.current.s) {
-        targetRef.current.addScaledVector(forward, -moveSpeed)
-      }
-      if (keysRef.current.a) {
-        targetRef.current.addScaledVector(right, -moveSpeed)
-      }
-      if (keysRef.current.d) {
-        targetRef.current.addScaledVector(right, moveSpeed)
-      }
-
-      // Q/E zoom: time-based exponential so the per-frame step is independent
-      // of framerate. Mirrors the wheel handler's zoomFactor invariant but
-      // skips cursor-anchoring (no pointer to anchor against).
-      let zoomSign = 0
-      if (keysRef.current.q) zoomSign += 1
-      if (keysRef.current.e) zoomSign -= 1
-      if (zoomSign !== 0) {
-        const KEY_ZOOM_RATE_PER_SEC = 2.0
-        const zoomMultiplier = Math.pow(KEY_ZOOM_RATE_PER_SEC, zoomSign * delta)
-        const newZoomFactor = Math.max(
-          0.001,
-          Math.min(10.0, zoomFactorRef.current * zoomMultiplier)
-        )
-        zoomFactorRef.current = newZoomFactor
-        sphericalRef.current.radius = fitRadiusRef.current * newZoomFactor
-      }
+      if (keysRef.current.d) targetRef.current.addScaledVector(right, moveSpeed)
+      if (keysRef.current.a) targetRef.current.addScaledVector(right, -moveSpeed)
+      if (keysRef.current.w) targetRef.current.addScaledVector(up, moveSpeed)
+      if (keysRef.current.s) targetRef.current.addScaledVector(up, -moveSpeed)
+      if (keysRef.current.q) targetRef.current.addScaledVector(forward, moveSpeed)
+      if (keysRef.current.e) targetRef.current.addScaledVector(forward, -moveSpeed)
     }
 
     const offset = new THREE.Vector3()
@@ -1069,8 +1075,9 @@ export function MapViewer({
         <div>Left-click + drag: Pan</div>
         <div>Right-click + drag: Rotate</div>
         <div>Ctrl + Scroll: Zoom</div>
-        <div>WASD: Pan</div>
-        <div>QE: Zoom</div>
+        <div>W/S: Up / Down</div>
+        <div>A/D: Strafe</div>
+        <div>Q/E: Forward / Back</div>
         <div>Z: Reset view</div>
       </div>
     </div>
