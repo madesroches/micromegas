@@ -181,6 +181,8 @@ of `Row` survives (only `EventDetailPanel` + tests today).
 ### 3. Wire MapCell + EventDetailPanel
 
 `MapCell.tsx`:
+- Swap the `overlay` import (`MapCell.tsx:24`): replace `materializeRow` with
+  `rowValues` and `columnTypeMap`.
 - `selectedRow` → `rowValues(overlay.table, selectedRowIndex)` (raw).
 - Add memoized `columnTypes = columnTypeMap(overlay.table)`.
 - `onSelectionChange` (`MapCell.tsx:320`) → pass the **raw** `rowValues(...)` so
@@ -218,7 +220,11 @@ return evaluateTemplate(template, {
 4. **EventDetailPanel** (`EventDetailPanel.tsx`): new `row`/`columnTypes` props;
    delete the merge; pass `bareColumnsFromRow: true`.
 5. **Tests**: update `EventDetailPanel.test.tsx` and `MapCell.test.tsx`
-   (`materializeRow` block) per the testing strategy below.
+   (`materializeRow` block) per the testing strategy below. Note for
+   `EventDetailPanel.test.tsx`: drop the `import type { Row } from '../overlay'`
+   (`EventDetailPanel.test.tsx:4`), retype `buildRow`/`renderPanel` rows to
+   `Record<string, unknown>`, and pass the now-required `columnTypes` prop in
+   `renderPanel`.
 6. **Docs**: extend the Map detail-template section with the `format_value`
    capability note.
 
