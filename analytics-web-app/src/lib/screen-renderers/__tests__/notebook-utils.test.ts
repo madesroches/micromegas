@@ -925,13 +925,39 @@ describe('evaluateTemplate', () => {
       expect(warnings).toEqual([])
     })
 
-    it('passes through unknown function names; inner $macros still resolve', () => {
+    it('rejects a Timestamp column passed to format_value (precision-loss guard)', () => {
+      // Wall-clock timestamps would otherwise coerce via Number(BigInt(~1.7e18))
+      // to a finite-but-garbage value and format_value would render nonsense
+      // like "53954068.94 years". The fix routes time-typed args through
+      // formatArrowValue (ISO string) so format_value sees NaN and warns.
+      const tsType = new Timestamp(TimeUnit.MILLISECOND, null)
+      const vector = vectorFromArray([1705314600000], tsType)
+      const table = new Table({ ts: vector })
+      const ctx = { ...emptyCtx(), cellResults: { events: table } }
+      const { text, warnings } = evaluateTemplate(
+        "format_value($events[0].ts, 'milliseconds')",
+        ctx,
+      )
+      expect(text).toBe("format_value($events[0].ts, 'milliseconds')")
+      expect(warnings).toEqual(['format_value: invalid argument value'])
+    })
+
+    it('flags an unknown function name when args use template syntax', () => {
       const ctx = {
         ...emptyCtx(),
         variables: { x: 'X' },
       }
       const { text, warnings } = evaluateTemplate('random_word($x)', ctx)
-      expect(text).toBe('random_word(X)')
+      expect(text).toBe('random_word($x)')
+      expect(warnings).toEqual(['Unknown template function: random_word'])
+    })
+
+    it('does NOT flag function-like prose that uses no template macros', () => {
+      // Markdown commonly contains prose like `Math.max(1, 2)` — flagging
+      // it would be noisy. The heuristic is: warn only when at least one
+      // arg is a $-macro.
+      const { text, warnings } = evaluateTemplate('See Math.max(1, 2) and foo(3.14, "bar").', emptyCtx())
+      expect(text).toBe('See Math.max(1, 2) and foo(3.14, "bar").')
       expect(warnings).toEqual([])
     })
 

@@ -42,10 +42,14 @@ export function useColumnWarnings(overridesSource: unknown): {
 
   // Skip the reset on the *first* render: child `OverrideCell` effects
   // post warnings during the same commit (child effects run before parent
-  // effects), and a mount-time reset would clobber them.
-  const initialHashRef = useRef(overridesHash)
+  // effects), and a mount-time reset would clobber them. After that, track
+  // the previous hash — comparing against the initial hash forever would
+  // leave stale warnings when the override list churns through edits and
+  // ends up at a shape equal to its starting one.
+  const prevHashRef = useRef(overridesHash)
   useEffect(() => {
-    if (overridesHash === initialHashRef.current) return
+    if (overridesHash === prevHashRef.current) return
+    prevHashRef.current = overridesHash
     setColumnWarnings(new Map())
   }, [overridesHash])
 

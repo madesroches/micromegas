@@ -14,6 +14,7 @@
  */
 
 import type { Table, DataType } from 'apache-arrow'
+import { isTimeType } from '@/lib/arrow-utils'
 import { TEMPLATE_FUNCTIONS } from '@/lib/template-functions'
 import type { VariableValue } from './notebook-types'
 import { getVariableString } from './notebook-types'
@@ -204,6 +205,10 @@ interface CallParseResult {
   args: unknown[]
   /** Names of macro shapes that resolved to undefined (for reporting). */
   unresolvedArgShapes: string[]
+  /** True when at least one argument was a `$`-prefixed macro. Used as a
+   *  conservative heuristic for flagging unknown function names: prose
+   *  like "Math.max(1, 2)" parses as a valid call but should not warn. */
+  hadMacroArg: boolean
   /** End index in the input (just past the closing ')'). */
   end: number
 }
@@ -217,10 +222,11 @@ function tryParseCallArgs(
   let cursor = pos + 1
   const args: unknown[] = []
   const unresolvedArgShapes: string[] = []
+  let hadMacroArg = false
   cursor = skipSpaces(text, cursor)
 
   if (text[cursor] === ')') {
-    return { args, unresolvedArgShapes, end: cursor + 1 }
+    return { args, unresolvedArgShapes, hadMacroArg, end: cursor + 1 }
   }
 
   while (cursor < text.length) {
@@ -231,8 +237,18 @@ function tryParseCallArgs(
     if (ch === '$') {
       const m = tryParseMacro(text, cursor, ctx)
       if (!m) return null
-      args.push(m.value)
-      if (m.value === undefined) unresolvedArgShapes.push(m.shape)
+      hadMacroArg = true
+      // Time-typed Arrow values (Timestamp/Date/Time) arrive as BigInt
+      // epoch counts whose Number-coercion silently loses precision
+      // (~1.7e18 ns since epoch). Stringify via formatArrowValue so a
+      // numeric template function gets NaN and surfaces a real warning
+      // instead of producing nonsense like "53954068.94 years".
+      let argValue = m.value
+      if (argValue !== undefined && m.dataType && isTimeType(m.dataType)) {
+        argValue = formatArrowValue(argValue, m.dataType)
+      }
+      args.push(argValue)
+      if (argValue === undefined) unresolvedArgShapes.push(m.shape)
       cursor = m.end
     } else if (ch === "'" || ch === '"') {
       const quote = ch
@@ -257,7 +273,7 @@ function tryParseCallArgs(
       continue
     }
     if (text[cursor] === ')') {
-      return { args, unresolvedArgShapes, end: cursor + 1 }
+      return { args, unresolvedArgShapes, hadMacroArg, end: cursor + 1 }
     }
     return null
   }
@@ -285,43 +301,53 @@ export function evaluateTemplate(text: string, ctx: EvaluateTemplateCtx): Evalua
   while (pos < text.length) {
     const ch = text[pos]
 
-    // Branch (a): identifier-in-registry followed by '('
+    // Branch (a): identifier followed by '('. We try to parse args for any
+    // such call site, then dispatch on whether `ident` is a registered
+    // template function. Unknown names are only flagged when at least one
+    // arg is a `$`-macro — that filter spares prose like "Math.max(1, 2)".
     if ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || ch === '_') {
       const ident = matchIdent(text, pos)
-      if (
-        ident
-        && text[pos + ident.length] === '('
-        && Object.prototype.hasOwnProperty.call(TEMPLATE_FUNCTIONS, ident)
-      ) {
+      if (ident && text[pos + ident.length] === '(') {
         const parenStart = pos + ident.length
         const parsed = tryParseCallArgs(text, parenStart, ctx)
         if (parsed) {
           const callSource = text.slice(pos, parsed.end)
-          if (parsed.unresolvedArgShapes.length > 0) {
-            for (const s of parsed.unresolvedArgShapes) {
-              emitWarning(`${ident}: ${s} is unresolved`)
+          const isKnown = Object.prototype.hasOwnProperty.call(TEMPLATE_FUNCTIONS, ident)
+          if (!isKnown) {
+            if (parsed.hadMacroArg) {
+              emitWarning(`Unknown template function: ${ident}`)
+              out.push(callSource)
+              pos = parsed.end
+              continue
             }
-            out.push(callSource)
+            // Fall through to literal copy below.
+          } else {
+            if (parsed.unresolvedArgShapes.length > 0) {
+              for (const s of parsed.unresolvedArgShapes) {
+                emitWarning(`${ident}: ${s} is unresolved`)
+              }
+              out.push(callSource)
+              pos = parsed.end
+              continue
+            }
+            const fn = TEMPLATE_FUNCTIONS[ident]
+            const result = fn(parsed.args)
+            if (result === undefined) {
+              if (parsed.args.length !== expectedArity(ident)) {
+                emitWarning(
+                  `${ident}: expected ${expectedArity(ident)} arguments, got ${parsed.args.length}`,
+                )
+              } else {
+                emitWarning(`${ident}: invalid argument value`)
+              }
+              out.push(callSource)
+              pos = parsed.end
+              continue
+            }
+            out.push(result)
             pos = parsed.end
             continue
           }
-          const fn = TEMPLATE_FUNCTIONS[ident]
-          const result = fn(parsed.args)
-          if (result === undefined) {
-            if (parsed.args.length !== expectedArity(ident)) {
-              emitWarning(
-                `${ident}: expected ${expectedArity(ident)} arguments, got ${parsed.args.length}`,
-              )
-            } else {
-              emitWarning(`${ident}: invalid argument value`)
-            }
-            out.push(callSource)
-            pos = parsed.end
-            continue
-          }
-          out.push(result)
-          pos = parsed.end
-          continue
         }
         // Parse aborted → fall through to literal copy.
       }
