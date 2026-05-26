@@ -4,7 +4,8 @@ import type { Table } from 'apache-arrow'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { AppLink } from '@/components/AppLink'
-import { substituteMacros } from '@/lib/screen-renderers/notebook-utils'
+import { TemplateWarningBanner } from '@/components/TemplateWarningBanner'
+import { evaluateTemplate } from '@/lib/screen-renderers/notebook-utils'
 import type { VariableValue } from '@/lib/screen-renderers/notebook-types'
 import type { Row } from './overlay'
 
@@ -52,11 +53,16 @@ export function EventDetailPanel({
   cellSelections,
   onClose,
 }: EventDetailPanelProps) {
-  const rendered = useMemo(() => {
+  const { text: rendered, warnings } = useMemo(() => {
     // Columns win name collisions against variables: `$x` in a Map template
     // means the selected row's `x` column.
     const mergedVars: Record<string, VariableValue> = { ...variables, ...row }
-    return substituteMacros(template, mergedVars, timeRange, cellResults, cellSelections)
+    return evaluateTemplate(template, {
+      variables: mergedVars,
+      timeRange,
+      cellResults,
+      cellSelections,
+    })
   }, [template, row, variables, timeRange, cellResults, cellSelections])
 
   return (
@@ -69,6 +75,7 @@ export function EventDetailPanel({
         <X className="w-4 h-4 text-theme-text-muted" />
       </button>
       <div className="prose prose-invert prose-sm max-w-none pl-4 pr-10 py-3 prose-headings:text-theme-text-primary prose-headings:mt-0 prose-p:text-theme-text-secondary prose-a:text-accent-link prose-strong:text-theme-text-primary prose-code:text-accent-highlight prose-code:bg-app-card prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-code:before:content-none prose-code:after:content-none prose-pre:bg-app-card prose-li:text-theme-text-secondary prose-hr:border-theme-border prose-hr:my-3">
+        <TemplateWarningBanner warnings={warnings} />
         <Markdown remarkPlugins={[remarkGfm]} components={{ a: MarkdownLink }}>
           {rendered}
         </Markdown>

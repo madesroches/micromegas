@@ -13,13 +13,14 @@ import { useStreamQuery } from '@/hooks/useStreamQuery'
 import { useDefaultSaveCleanup, useExposeSaveRef } from '@/lib/url-cleanup-utils'
 import { getTimeRangeForApi } from '@/lib/time-range'
 import {
-  SortHeader,
+  WarningAwareSortHeaderRow,
   TableBody,
   HiddenColumnsBar,
   buildOrderByClause,
   useColumnManagement,
   ColumnOverride,
 } from './table-utils'
+import { useColumnWarnings, WarningReporterContext } from './warning-reporter'
 
 // Variables available for table queries
 const VARIABLES = [
@@ -182,6 +183,8 @@ export function TableRenderer({
     handleRestoreColumn,
     handleRestoreAll,
   } = useColumnManagement(tableConfig, onConfigChange)
+
+  const { columnWarnings, reportWarning } = useColumnWarnings(tableConfig.overrides)
 
   // Handle overrides change
   const handleOverridesChange = useCallback(
@@ -382,27 +385,25 @@ export function TableRenderer({
     return (
       <div className="flex-1 overflow-auto bg-app-panel border border-theme-border rounded-lg">
         <HiddenColumnsBar hiddenColumns={hiddenColumns} onRestore={handleRestoreColumn} onRestoreAll={handleRestoreAll} />
-        <table className="w-full">
-          <thead className="sticky top-0">
-            <tr className="bg-app-card border-b border-theme-border">
-              {visibleColumns.map((col) => (
-                <SortHeader
-                  key={col.name}
-                  columnName={col.name}
+        <WarningReporterContext.Provider value={reportWarning}>
+          <table className="w-full">
+            <thead className="sticky top-0">
+              <tr className="bg-app-card border-b border-theme-border">
+                <WarningAwareSortHeaderRow
+                  columns={visibleColumns}
+                  columnWarnings={columnWarnings}
                   sortColumn={sortColumn}
                   sortDirection={sortDirection}
                   onSort={handleSort}
                   onSortAsc={handleSortAsc}
                   onSortDesc={handleSortDesc}
                   onHide={handleHideColumn}
-                >
-                  {col.name}
-                </SortHeader>
-              ))}
-            </tr>
-          </thead>
-          <TableBody data={table} columns={visibleColumns} allColumns={allColumns} overrides={tableConfig.overrides} timeRange={timeRange} cellSelections={{}} cellResults={{}} />
-        </table>
+                />
+              </tr>
+            </thead>
+            <TableBody data={table} columns={visibleColumns} allColumns={allColumns} overrides={tableConfig.overrides} timeRange={timeRange} cellSelections={{}} cellResults={{}} />
+          </table>
+        </WarningReporterContext.Provider>
       </div>
     )
   }

@@ -1,10 +1,23 @@
-import { render, screen, fireEvent } from '@testing-library/react'
-import { DataType, Timestamp, TimeUnit, vectorFromArray, Table } from 'apache-arrow'
+// Mock matchMedia and cell-registry to avoid heavyweight imports in this file.
+Object.defineProperty(window, 'matchMedia', {
+  writable: true,
+  value: jest.fn().mockImplementation((query) => ({
+    matches: false,
+    media: query,
+    onchange: null,
+    addListener: jest.fn(),
+    removeListener: jest.fn(),
+    addEventListener: jest.fn(),
+    removeEventListener: jest.fn(),
+    dispatchEvent: jest.fn(),
+  })),
+})
+
+import { useMemo, useState } from 'react'
+import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { DataType, Timestamp, TimeUnit } from 'apache-arrow'
 import { renderHook, act } from '@testing-library/react'
 import {
-  expandRowMacros,
-  expandVariableMacros,
-  expandCellSelectionMacros,
   extractMacroColumns,
   findUnknownMacros,
   validateFormatMacros,
@@ -15,250 +28,14 @@ import {
   RowContextMenu,
   getNextSortState,
   useRowManagement,
+  ColumnOverride,
+  TableBody,
 } from '../table-utils'
+import { ColumnHeaderWarningIcon, useColumnWarnings, WarningReporterContext } from '../warning-reporter'
 
-describe('expandRowMacros', () => {
-  describe('dot notation', () => {
-    it('should expand a single $row.column macro', () => {
-      const template = '[View](/process?id=$row.process_id)'
-      const row = { process_id: '123', name: 'test' }
-      expect(expandRowMacros(template, row)).toBe('[View](/process?id=123)')
-    })
-
-    it('should expand multiple $row.column macros', () => {
-      const template = '[View $row.name](/process?id=$row.process_id)'
-      const row = { process_id: '123', name: 'MyProcess' }
-      expect(expandRowMacros(template, row)).toBe('[View MyProcess](/process?id=123)')
-    })
-
-    it('should handle alphanumeric column names with underscores', () => {
-      const template = '$row.process_id_123'
-      const row = { process_id_123: 'value' }
-      expect(expandRowMacros(template, row)).toBe('value')
-    })
-
-    it('should replace missing columns with empty string', () => {
-      const template = '[View](/process?id=$row.missing)'
-      const row = { process_id: '123' }
-      expect(expandRowMacros(template, row)).toBe('[View](/process?id=)')
-    })
-
-    it('should handle null values as empty string', () => {
-      const template = '[View](/process?id=$row.process_id)'
-      const row = { process_id: null }
-      expect(expandRowMacros(template, row)).toBe('[View](/process?id=)')
-    })
-
-    it('should handle undefined values as empty string', () => {
-      const template = '[View](/process?id=$row.process_id)'
-      const row = { process_id: undefined }
-      expect(expandRowMacros(template, row)).toBe('[View](/process?id=)')
-    })
-  })
-
-  describe('bracket notation', () => {
-    it('should expand $row["column-name"] with double quotes', () => {
-      const template = '[View](/details?id=$row["process-id"])'
-      const row = { 'process-id': '456' }
-      expect(expandRowMacros(template, row)).toBe('[View](/details?id=456)')
-    })
-
-    it("should expand $row['column-name'] with single quotes", () => {
-      const template = "[View](/details?id=$row['process-id'])"
-      const row = { 'process-id': '789' }
-      expect(expandRowMacros(template, row)).toBe('[View](/details?id=789)')
-    })
-
-    it('should handle column names with spaces', () => {
-      const template = '$row["Display Name"]'
-      const row = { 'Display Name': 'My Process' }
-      expect(expandRowMacros(template, row)).toBe('My Process')
-    })
-
-    it('should handle column names with special characters', () => {
-      const template = '$row["col.with.dots"]'
-      const row = { 'col.with.dots': 'value' }
-      expect(expandRowMacros(template, row)).toBe('value')
-    })
-
-    it('should replace missing bracket notation columns with empty string', () => {
-      const template = '$row["missing-column"]'
-      const row = { other: 'value' }
-      expect(expandRowMacros(template, row)).toBe('')
-    })
-  })
-
-  describe('mixed notation', () => {
-    it('should handle both dot and bracket notation in same template', () => {
-      const template = '[View](/details?id=$row["process-id"]&name=$row.name)'
-      const row = { 'process-id': '123', name: 'Test' }
-      expect(expandRowMacros(template, row)).toBe('[View](/details?id=123&name=Test)')
-    })
-
-    it('should process bracket notation before dot notation', () => {
-      // This ensures bracket notation is processed first so $row.x inside brackets works
-      const template = '$row["key"]$row.simple'
-      const row = { key: 'A', simple: 'B' }
-      expect(expandRowMacros(template, row)).toBe('AB')
-    })
-  })
-
-  describe('edge cases', () => {
-    it('should handle template with no macros', () => {
-      const template = '[Static Link](/path)'
-      const row = { id: '123' }
-      expect(expandRowMacros(template, row)).toBe('[Static Link](/path)')
-    })
-
-    it('should handle empty template', () => {
-      expect(expandRowMacros('', { id: '123' })).toBe('')
-    })
-
-    it('should handle empty row', () => {
-      const template = '$row.id'
-      expect(expandRowMacros(template, {})).toBe('')
-    })
-
-    it('should convert non-string values to strings', () => {
-      const template = '$row.count, $row.active'
-      const row = { count: 42, active: true }
-      expect(expandRowMacros(template, row)).toBe('42, true')
-    })
-
-    it('should handle numeric values', () => {
-      const template = '/details?id=$row.id&count=$row.count'
-      const row = { id: 123, count: 456 }
-      expect(expandRowMacros(template, row)).toBe('/details?id=123&count=456')
-    })
-  })
-})
-
-describe('expandVariableMacros', () => {
-  it('should expand a single variable', () => {
-    const template = '[Search: $search](/results?q=$search)'
-    const variables = { search: 'test query' }
-    expect(expandVariableMacros(template, variables)).toBe('[Search: test query](/results?q=test query)')
-  })
-
-  it('should expand multiple variables', () => {
-    const template = '/metrics?name=$metric&host=$host'
-    const variables = { metric: 'cpu_usage', host: 'server1' }
-    expect(expandVariableMacros(template, variables)).toBe('/metrics?name=cpu_usage&host=server1')
-  })
-
-  it('should not expand unknown variables', () => {
-    const template = '/path?id=$unknown'
-    const variables = { known: 'value' }
-    expect(expandVariableMacros(template, variables)).toBe('/path?id=$unknown')
-  })
-
-  it('should handle longer variable names first to avoid partial matches', () => {
-    const template = '$metric and $metric_name'
-    const variables = { metric: 'cpu', metric_name: 'CPU Usage' }
-    expect(expandVariableMacros(template, variables)).toBe('cpu and CPU Usage')
-  })
-
-  it('should return unchanged template when no variables provided', () => {
-    const template = '/path?id=$var'
-    expect(expandVariableMacros(template, {})).toBe('/path?id=$var')
-  })
-
-  it('should respect word boundaries', () => {
-    const template = '$metrics vs $metric'
-    const variables = { metric: 'cpu' }
-    expect(expandVariableMacros(template, variables)).toBe('$metrics vs cpu')
-  })
-})
-
-describe('expandCellSelectionMacros', () => {
-  it('should expand $cell.selected.column macro', () => {
-    const template = '/details?from=$upstream.selected.start_time'
-    const cellSelections = { upstream: { start_time: '2024-01-01T00:00:00Z', name: 'test' } }
-    expect(expandCellSelectionMacros(template, cellSelections, {})).toBe(
-      '/details?from=2024-01-01T00:00:00Z'
-    )
-  })
-
-  it('should expand multiple cell selection macros', () => {
-    const template = '/details?from=$upstream.selected.start_time&to=$upstream.selected.end_time'
-    const cellSelections = {
-      upstream: { start_time: '2024-01-01T00:00:00Z', end_time: '2024-01-02T00:00:00Z' },
-    }
-    expect(expandCellSelectionMacros(template, cellSelections, {})).toBe(
-      '/details?from=2024-01-01T00:00:00Z&to=2024-01-02T00:00:00Z'
-    )
-  })
-
-  it('should expand macros from different cells', () => {
-    const template = '/details?id=$cell_a.selected.id&name=$cell_b.selected.name'
-    const cellSelections = {
-      cell_a: { id: '123' },
-      cell_b: { name: 'test' },
-    }
-    expect(expandCellSelectionMacros(template, cellSelections, {})).toBe(
-      '/details?id=123&name=test'
-    )
-  })
-
-  it('should resolve to empty string when cell has no selection', () => {
-    const template = '/details?from=$upstream.selected.start_time'
-    expect(expandCellSelectionMacros(template, {}, {})).toBe('/details?from=')
-  })
-
-  it('should resolve to empty string when column is null', () => {
-    const template = '/details?from=$upstream.selected.start_time'
-    const cellSelections = { upstream: { start_time: null } }
-    expect(expandCellSelectionMacros(template, cellSelections, {})).toBe('/details?from=')
-  })
-
-  it('should handle numeric values', () => {
-    const template = '/details?count=$upstream.selected.count'
-    const cellSelections = { upstream: { count: 42 } }
-    expect(expandCellSelectionMacros(template, cellSelections, {})).toBe('/details?count=42')
-  })
-
-  it('should not modify template without cell selection macros', () => {
-    const template = '/details?id=$row.id&var=$search'
-    expect(expandCellSelectionMacros(template, {}, {})).toBe(template)
-  })
-
-  it('should format timestamp values as RFC3339 when cellResults provides type info', () => {
-    const timestampType = new Timestamp(TimeUnit.MILLISECOND, null)
-    // 2024-01-15T10:30:00.000Z in milliseconds
-    const ms = 1705314600000
-    const vector = vectorFromArray([ms], timestampType)
-    const table = new Table({ frame_begin: vector })
-
-    const template = '/details?from=$upstream.selected.frame_begin'
-    const cellSelections = { upstream: { frame_begin: ms } }
-    expect(expandCellSelectionMacros(template, cellSelections, { upstream: table })).toBe(
-      '/details?from=2024-01-15T10:30:00.000Z'
-    )
-  })
-
-  it('should format nanosecond timestamp values as RFC3339', () => {
-    const timestampType = new Timestamp(TimeUnit.NANOSECOND, '+00:00')
-    // Arrow JS converts nanosecond timestamps to millisecond Numbers
-    // 2024-01-15T10:30:00.000Z as milliseconds (what Arrow JS gives us)
-    const msValue = 1705314600000
-    const vector = vectorFromArray([msValue], timestampType)
-    const table = new Table({ frame_begin: vector })
-
-    const template = '/details?from=$upstream.selected.frame_begin'
-    const cellSelections = { upstream: { frame_begin: msValue } }
-    expect(expandCellSelectionMacros(template, cellSelections, { upstream: table })).toBe(
-      '/details?from=2024-01-15T10:30:00.000Z'
-    )
-  })
-
-  it('should fall back to String() when cellResults has no type info', () => {
-    const template = '/details?from=$upstream.selected.frame_begin'
-    const cellSelections = { upstream: { frame_begin: 1705314600000 } }
-    expect(expandCellSelectionMacros(template, cellSelections, {})).toBe(
-      '/details?from=1705314600000'
-    )
-  })
-})
+// =============================================================================
+// Validation helpers (still public)
+// =============================================================================
 
 describe('extractMacroColumns', () => {
   it('should extract dot notation columns', () => {
@@ -418,250 +195,415 @@ describe('validateFormatMacros', () => {
   })
 })
 
-describe('OverrideCell', () => {
-  // Helper to create minimal columns array
-  const stringColumns: TableColumn[] = [
-    { name: 'id', type: new DataType() },
-    { name: 'name', type: new DataType() },
-    { name: 'other', type: new DataType() },
-    { name: 'process-id', type: new DataType() },
-  ]
+// =============================================================================
+// OverrideCell — exercises the new evaluateTemplate path
+// =============================================================================
 
-  // Required props with sensible defaults for tests that don't need cell context
-  const noCells = { cellSelections: {}, cellResults: {} }
+const stringColumns: TableColumn[] = [
+  { name: 'id', type: new DataType() },
+  { name: 'name', type: new DataType() },
+  { name: 'other', type: new DataType() },
+  { name: 'process-id', type: new DataType() },
+]
 
-  it('should render a simple link with expanded macros', () => {
-    render(<OverrideCell format="[View](/process?id=$row.id)" row={{ id: '123' }} columns={stringColumns} {...noCells} />)
+const noCells = { cellSelections: {}, cellResults: {} }
+
+describe('OverrideCell — basic rendering', () => {
+  it('renders a link with $row.col expanded', () => {
+    render(
+      <OverrideCell
+        format="[View](/process?id=$row.id)"
+        columnName="link"
+        row={{ id: '123' }}
+        columns={stringColumns}
+        {...noCells}
+      />,
+    )
     const link = screen.getByRole('link', { name: 'View' })
     expect(link).toHaveAttribute('href', '/process?id=123')
   })
 
-  it('should render expanded macro in link text', () => {
+  it('expands $row.col in both link text and href', () => {
     render(
       <OverrideCell
         format="[$row.name](/process?id=$row.id)"
+        columnName="link"
         row={{ id: '123', name: 'MyApp' }}
         columns={stringColumns}
         {...noCells}
-      />
+      />,
     )
     const link = screen.getByRole('link', { name: 'MyApp' })
     expect(link).toHaveAttribute('href', '/process?id=123')
   })
 
-  it('should render multiple links', () => {
-    render(
-      <OverrideCell
-        format="[View](/view?id=$row.id) | [Edit](/edit?id=$row.id)"
-        row={{ id: '456' }}
-        columns={stringColumns}
-        {...noCells}
-      />
-    )
-    const links = screen.getAllByRole('link')
-    expect(links).toHaveLength(2)
-    expect(links[0]).toHaveAttribute('href', '/view?id=456')
-    expect(links[1]).toHaveAttribute('href', '/edit?id=456')
-  })
-
-  it('should handle missing columns gracefully', () => {
-    render(
-      <OverrideCell format="[View](/process?id=$row.missing)" row={{ other: 'value' }} columns={stringColumns} {...noCells} />
-    )
-    const link = screen.getByRole('link', { name: 'View' })
-    expect(link).toHaveAttribute('href', '/process?id=')
-  })
-
-  it('should render plain text when no markdown link', () => {
-    render(<OverrideCell format="ID: $row.id" row={{ id: '789' }} columns={stringColumns} {...noCells} />)
-    expect(screen.getByText('ID: 789')).toBeInTheDocument()
-  })
-
-  it('should handle bracket notation in links', () => {
+  it('expands bracket-notation row macros', () => {
     render(
       <OverrideCell
         format='[View](/details?id=$row["process-id"])'
+        columnName="link"
         row={{ 'process-id': 'abc' }}
         columns={stringColumns}
         {...noCells}
-      />
+      />,
     )
     const link = screen.getByRole('link', { name: 'View' })
     expect(link).toHaveAttribute('href', '/details?id=abc')
   })
 
-  it('should expand notebook variables', () => {
+  it('expands notebook variables', () => {
     render(
       <OverrideCell
         format="[Search: $search](/results?q=$search&id=$row.id)"
+        columnName="link"
         row={{ id: '123' }}
         columns={stringColumns}
         variables={{ search: 'test query' }}
         {...noCells}
-      />
+      />,
     )
     const link = screen.getByRole('link', { name: 'Search: test query' })
     expect(link).toHaveAttribute('href', '/results?q=test query&id=123')
   })
 
-  it('should expand variables before row macros', () => {
-    render(
-      <OverrideCell
-        format="[$metric on $row.name](/metrics?name=$metric)"
-        row={{ name: 'server1' }}
-        columns={stringColumns}
-        variables={{ metric: 'cpu_usage' }}
-        {...noCells}
-      />
-    )
-    const link = screen.getByRole('link', { name: 'cpu_usage on server1' })
-    expect(link).toHaveAttribute('href', '/metrics?name=cpu_usage')
-  })
-
-  it('should expand $from and $to time range macros', () => {
+  it('expands $from and $to time range macros', () => {
     render(
       <OverrideCell
         format="[View](/details?from=$from&to=$to&id=$row.id)"
+        columnName="link"
         row={{ id: '123' }}
         columns={stringColumns}
         timeRange={{ begin: '2024-01-01T00:00:00Z', end: '2024-01-02T00:00:00Z' }}
         {...noCells}
-      />
+      />,
     )
     const link = screen.getByRole('link', { name: 'View' })
-    expect(link).toHaveAttribute('href', '/details?from=2024-01-01T00:00:00Z&to=2024-01-02T00:00:00Z&id=123')
+    expect(link).toHaveAttribute(
+      'href',
+      '/details?from=2024-01-01T00:00:00Z&to=2024-01-02T00:00:00Z&id=123',
+    )
   })
 
-  it('should expand $cell.selected.column macros', () => {
+  it('expands $cell.selected.col macros', () => {
     render(
       <OverrideCell
-        format="[View](/details?id=$row.id&from=$upstream.selected.start_time&to=$upstream.selected.end_time)"
+        format="[View](/details?from=$upstream.selected.start_time&to=$upstream.selected.end_time)"
+        columnName="link"
         row={{ id: '123' }}
         columns={stringColumns}
-        cellSelections={{ upstream: { start_time: '2024-01-01T00:00:00Z', end_time: '2024-01-02T00:00:00Z' } }}
+        cellSelections={{
+          upstream: {
+            start_time: '2024-01-01T00:00:00Z',
+            end_time: '2024-01-02T00:00:00Z',
+          },
+        }}
         cellResults={{}}
-      />
+      />,
     )
     const link = screen.getByRole('link', { name: 'View' })
-    expect(link).toHaveAttribute('href', '/details?id=123&from=2024-01-01T00:00:00Z&to=2024-01-02T00:00:00Z')
-  })
-
-  it('should resolve cell selection macros to empty when no selection', () => {
-    render(
-      <OverrideCell
-        format="[View](/details?id=$row.id&from=$upstream.selected.start_time)"
-        row={{ id: '123' }}
-        columns={stringColumns}
-        cellSelections={{}}
-        cellResults={{}}
-      />
-    )
-    const link = screen.getByRole('link', { name: 'View' })
-    expect(link).toHaveAttribute('href', '/details?id=123&from=')
+    expect(link).toHaveAttribute('href', '/details?from=2024-01-01T00:00:00Z&to=2024-01-02T00:00:00Z')
   })
 })
 
-describe('OverrideCell with hidden timestamp column', () => {
-  it('should format hidden timestamp column as RFC3339 when allColumns is provided', () => {
+// =============================================================================
+// Phase 4 step 15 — column-header warning surface
+// =============================================================================
+
+// The harness component MUST receive a stable `overrides` reference — otherwise
+// `useColumnWarnings`'s reset effect re-fires every render and trips React's
+// "Too many re-renders" guard (see warning-reporter.tsx). Tests therefore
+// memoize their `overrides` array via `useMemo`.
+function TableHarness({
+  overrides,
+  row,
+  variables = {},
+}: {
+  overrides: ColumnOverride[]
+  row: Record<string, unknown>
+  variables?: Record<string, string>
+}) {
+  const { columnWarnings, reportWarning } = useColumnWarnings(overrides)
+  const data = useMemo(() => ({ numRows: 1, get: () => row }), [row])
+  const columns: TableColumn[] = useMemo(
+    () => [{ name: 'value', type: new DataType() }],
+    [],
+  )
+  return (
+    <WarningReporterContext.Provider value={reportWarning}>
+      <table>
+        <thead>
+          <tr>
+            {columns.map((col) => {
+              const w = columnWarnings.get(col.name)
+              return (
+                <th key={col.name} data-testid={`th-${col.name}`}>
+                  {col.name}
+                  {w?.size ? <ColumnHeaderWarningIcon warnings={[...w]} /> : null}
+                </th>
+              )
+            })}
+          </tr>
+        </thead>
+        <TableBody
+          data={data}
+          columns={columns}
+          allColumns={columns}
+          overrides={overrides}
+          variables={variables}
+          cellSelections={{}}
+          cellResults={{}}
+        />
+      </table>
+    </WarningReporterContext.Provider>
+  )
+}
+
+describe('OverrideCell + column warning surface', () => {
+  it('(a) renders format_value($row.bytes, "bytes") with adaptive output', () => {
+    function Harness() {
+      const overrides = useMemo(
+        () => [{ column: 'value', format: "format_value($row.bytes, 'bytes')" }],
+        [],
+      )
+      return <TableHarness overrides={overrides} row={{ bytes: 3678630912 }} />
+    }
+    render(<Harness />)
+    expect(screen.getByText('3.4 GB')).toBeInTheDocument()
+    const th = screen.getByTestId('th-value')
+    expect(th.querySelector('[title]')).toBeNull()
+  })
+
+  it('(b) renders literal source AND surfaces a warning icon when arg is unresolved', async () => {
+    function Harness() {
+      const overrides = useMemo(
+        () => [{ column: 'value', format: "format_value($missing, 'bytes')" }],
+        [],
+      )
+      return <TableHarness overrides={overrides} row={{ bytes: 100 }} />
+    }
+    render(<Harness />)
+    expect(screen.getByText("format_value($missing, 'bytes')")).toBeInTheDocument()
+    const th = screen.getByTestId('th-value')
+    await waitFor(() => {
+      expect(th.querySelector('[title]')).not.toBeNull()
+    })
+    expect(th.querySelector('[title]')!.getAttribute('title')).toContain(
+      'format_value: $missing is unresolved',
+    )
+  })
+
+  it('(d) clears the warning icon when the override changes to a valid format', async () => {
+    function Wrapper() {
+      const [valid, setValid] = useState(false)
+      const overrides = useMemo<ColumnOverride[]>(
+        () =>
+          valid
+            ? [{ column: 'value', format: 'plain' }]
+            : [{ column: 'value', format: "format_value($missing, 'bytes')" }],
+        [valid],
+      )
+      return (
+        <>
+          <button onClick={() => setValid(true)}>swap</button>
+          <TableHarness overrides={overrides} row={{ bytes: 100 }} />
+        </>
+      )
+    }
+
+    render(<Wrapper />)
+    const th = screen.getByTestId('th-value')
+    await waitFor(() => {
+      expect(th.querySelector('[title]')).not.toBeNull()
+    })
+    fireEvent.click(screen.getByText('swap'))
+    await waitFor(() => {
+      expect(th.querySelector('[title]')).toBeNull()
+    })
+  })
+
+  it('(d2) replaces the warning when the override changes from one bad format to a different bad format', async () => {
+    // Regression: a previous useEffect-based reset in `useColumnWarnings` ran
+    // *after* child OverrideCell effects in the same commit and clobbered any
+    // new warnings the children had just posted. Because the children's
+    // useEffect deps were stable on the next render, they wouldn't re-post —
+    // so editing from `format_value($missing, …)` to `format_value($other, …)`
+    // silently dropped the icon.
+    function Wrapper() {
+      const [swapped, setSwapped] = useState(false)
+      const overrides = useMemo<ColumnOverride[]>(
+        () =>
+          swapped
+            ? [{ column: 'value', format: "format_value($other, 'bytes')" }]
+            : [{ column: 'value', format: "format_value($missing, 'bytes')" }],
+        [swapped],
+      )
+      return (
+        <>
+          <button onClick={() => setSwapped(true)}>swap</button>
+          <TableHarness overrides={overrides} row={{ bytes: 100 }} />
+        </>
+      )
+    }
+
+    render(<Wrapper />)
+    const th = screen.getByTestId('th-value')
+    await waitFor(() => {
+      expect(th.querySelector('[title]')!.getAttribute('title')).toContain(
+        'format_value: $missing is unresolved',
+      )
+    })
+    fireEvent.click(screen.getByText('swap'))
+    await waitFor(() => {
+      expect(th.querySelector('[title]')!.getAttribute('title')).toContain(
+        'format_value: $other is unresolved',
+      )
+    })
+    // And the stale warning is gone (the reset still works).
+    expect(th.querySelector('[title]')!.getAttribute('title')).not.toContain(
+      '$missing',
+    )
+  })
+
+  it('(e) preserves naked $cell.selected.col as source and surfaces the icon (pins §6 #2)', async () => {
+    function Harness() {
+      const overrides = useMemo(
+        () => [{ column: 'value', format: 'value: $upstream.selected.col' }],
+        [],
+      )
+      return <TableHarness overrides={overrides} row={{ bytes: 100 }} />
+    }
+    render(<Harness />)
+    expect(screen.getByText('value: $upstream.selected.col')).toBeInTheDocument()
+    const th = screen.getByTestId('th-value')
+    await waitFor(() => {
+      expect(th.querySelector('[title]')).not.toBeNull()
+    })
+    expect(th.querySelector('[title]')!.getAttribute('title')).toContain(
+      '$upstream.selected.col is unresolved',
+    )
+  })
+
+  it('(f) preserves $row.col source when the value is null and surfaces the icon (pins §6 #4)', async () => {
+    function Harness() {
+      const overrides = useMemo(
+        () => [{ column: 'value', format: 'val=$row.maybe' }],
+        [],
+      )
+      return <TableHarness overrides={overrides} row={{ maybe: null }} />
+    }
+    render(<Harness />)
+    expect(screen.getByText('val=$row.maybe')).toBeInTheDocument()
+    const th = screen.getByTestId('th-value')
+    await waitFor(() => {
+      expect(th.querySelector('[title]')).not.toBeNull()
+    })
+  })
+
+  it('(g) preserves $metric.unit source when metric is a simple-string variable (pins §6 #3)', async () => {
+    function Harness() {
+      const overrides = useMemo(() => [{ column: 'value', format: '$metric.unit' }], [])
+      return <TableHarness overrides={overrides} row={{}} variables={{ metric: 'cpu' }} />
+    }
+    render(<Harness />)
+    expect(screen.getByText('$metric.unit')).toBeInTheDocument()
+    const th = screen.getByTestId('th-value')
+    await waitFor(() => {
+      expect(th.querySelector('[title]')).not.toBeNull()
+    })
+  })
+
+  it('(h) renders a hidden timestamp column as RFC3339 via allColumns', () => {
     const timestampType = new Timestamp(TimeUnit.MICROSECOND, null)
-    // Visible columns only (no timestamp)
-    const visibleColumns: TableColumn[] = [
-      { name: 'name', type: new DataType() },
-    ]
-    // All columns including hidden timestamp
+    const visibleColumns: TableColumn[] = [{ name: 'name', type: new DataType() }]
     const allColumns: TableColumn[] = [
       { name: 'name', type: new DataType() },
       { name: 'start_time', type: timestampType },
     ]
-    // 2024-01-15T10:30:00.000Z in microseconds
     const microsSinceEpoch = BigInt(1705314600000000)
 
     render(
       <OverrideCell
         format="Started: $row.start_time"
+        columnName="name"
         row={{ name: 'server1', start_time: microsSinceEpoch }}
         columns={visibleColumns}
         allColumns={allColumns}
         cellSelections={{}}
         cellResults={{}}
-      />
+      />,
     )
     expect(screen.getByText('Started: 2024-01-15T10:30:00.000Z')).toBeInTheDocument()
   })
 
-  it('should fall back to String() when allColumns is not provided and column is hidden', () => {
-    // Only visible columns (no timestamp type info)
-    const visibleColumns: TableColumn[] = [
-      { name: 'name', type: new DataType() },
-    ]
-    const microsSinceEpoch = BigInt(1705314600000000)
-
-    render(
-      <OverrideCell
-        format="Started: $row.start_time"
-        row={{ name: 'server1', start_time: microsSinceEpoch }}
-        columns={visibleColumns}
-        cellSelections={{}}
-        cellResults={{}}
-      />
-    )
-    // Without allColumns, the timestamp type is unknown, so it renders as a raw bigint
-    expect(screen.getByText(`Started: ${microsSinceEpoch}`)).toBeInTheDocument()
-  })
-})
-
-describe('expandRowMacros with timestamps', () => {
-  it('should format timestamp columns as RFC3339 (ISO 8601)', () => {
-    // Create a timestamp type (microseconds)
-    const timestampType = new Timestamp(TimeUnit.MICROSECOND, null)
-    const columnTypes = new Map<string, DataType>([['start_time', timestampType]])
-
-    // Value in microseconds since epoch (2024-01-15T10:30:00.000Z)
-    const microsSinceEpoch = BigInt(1705314600000000)
-
-    const template = '/process?from=$row.start_time'
-    const row = { start_time: microsSinceEpoch }
-
-    const result = expandRowMacros(template, row, columnTypes)
-    expect(result).toBe('/process?from=2024-01-15T10:30:00.000Z')
+  it('survives an unmemoized overrides array (content-hash robustness)', async () => {
+    // Without content-hashing the hook would treat each fresh-ref `overrides`
+    // array as a change, re-fire the reset effect every render, and trip
+    // React's "Too many re-renders" guard. With hashing this passes.
+    function Harness() {
+      // Deliberately UNmemoized: fresh array reference on every render.
+      const overrides = [{ column: 'value', format: "format_value($missing, 'bytes')" }]
+      return <TableHarness overrides={overrides} row={{ bytes: 100 }} />
+    }
+    render(<Harness />)
+    const th = screen.getByTestId('th-value')
+    await waitFor(() => {
+      expect(th.querySelector('[title]')).not.toBeNull()
+    })
   })
 
-  it('should format timestamp with bracket notation as RFC3339', () => {
-    const timestampType = new Timestamp(TimeUnit.MICROSECOND, null)
-    const columnTypes = new Map<string, DataType>([['start-time', timestampType]])
-
-    const microsSinceEpoch = BigInt(1705314600000000)
-
-    const template = '/process?from=$row["start-time"]'
-    const row = { 'start-time': microsSinceEpoch }
-
-    const result = expandRowMacros(template, row, columnTypes)
-    expect(result).toBe('/process?from=2024-01-15T10:30:00.000Z')
-  })
-
-  it('should handle non-timestamp columns as plain strings', () => {
-    const timestampType = new Timestamp(TimeUnit.MICROSECOND, null)
-    const columnTypes = new Map<string, DataType>([['start_time', timestampType]])
-
-    const template = '/process?id=$row.process_id&from=$row.start_time'
-    const row = { process_id: 'abc123', start_time: BigInt(1705314600000000) }
-
-    const result = expandRowMacros(template, row, columnTypes)
-    expect(result).toBe('/process?id=abc123&from=2024-01-15T10:30:00.000Z')
-  })
-
-  it('should work without column types (backwards compatible)', () => {
-    const template = '/process?id=$row.id'
-    const row = { id: '123' }
-
-    // No column types provided - should still work
-    const result = expandRowMacros(template, row)
-    expect(result).toBe('/process?id=123')
+  it('(c) dedups the same warning produced by many rows into a single tooltip entry', async () => {
+    function MultiRowHarness() {
+      const overrides = useMemo(
+        () => [{ column: 'value', format: "format_value($missing, 'bytes')" }],
+        [],
+      )
+      const { columnWarnings, reportWarning } = useColumnWarnings(overrides)
+      const columns: TableColumn[] = useMemo(
+        () => [{ name: 'value', type: new DataType() }],
+        [],
+      )
+      const data = useMemo(
+        () => ({ numRows: 5, get: (i: number) => ({ value: i }) }),
+        [],
+      )
+      return (
+        <WarningReporterContext.Provider value={reportWarning}>
+          <table>
+            <thead>
+              <tr>
+                <th data-testid="th-value">
+                  value
+                  {columnWarnings.get('value')?.size ? (
+                    <ColumnHeaderWarningIcon warnings={[...columnWarnings.get('value')!]} />
+                  ) : null}
+                </th>
+              </tr>
+            </thead>
+            <TableBody
+              data={data}
+              columns={columns}
+              allColumns={columns}
+              overrides={overrides}
+              cellSelections={{}}
+              cellResults={{}}
+            />
+          </table>
+        </WarningReporterContext.Provider>
+      )
+    }
+    render(<MultiRowHarness />)
+    const th = screen.getByTestId('th-value')
+    await waitFor(() => {
+      expect(th.querySelector('[title]')).not.toBeNull()
+    })
+    const titleAttr = th.querySelector('[title]')!.getAttribute('title')!
+    expect(titleAttr.split('\n').length).toBe(1)
+    expect(titleAttr).toBe('format_value: $missing is unresolved')
   })
 })
 
 // =============================================================================
-// getNextSortState
+// Existing utilities (unchanged) — getNextSortState, SortHeader, etc.
 // =============================================================================
 
 describe('getNextSortState', () => {
@@ -686,10 +628,6 @@ describe('getNextSortState', () => {
   })
 })
 
-// =============================================================================
-// SortHeader
-// =============================================================================
-
 describe('SortHeader', () => {
   const renderInTable = (ui: React.ReactElement) =>
     render(
@@ -697,14 +635,14 @@ describe('SortHeader', () => {
         <thead>
           <tr>{ui}</tr>
         </thead>
-      </table>
+      </table>,
     )
 
   it('should render column name', () => {
     renderInTable(
       <SortHeader columnName="id" onSort={jest.fn()}>
         id
-      </SortHeader>
+      </SortHeader>,
     )
     expect(screen.getByText('id')).toBeInTheDocument()
   })
@@ -714,7 +652,7 @@ describe('SortHeader', () => {
     renderInTable(
       <SortHeader columnName="name" onSort={onSort}>
         name
-      </SortHeader>
+      </SortHeader>,
     )
     fireEvent.click(screen.getByRole('columnheader'))
     expect(onSort).toHaveBeenCalledWith('name')
@@ -726,7 +664,7 @@ describe('SortHeader', () => {
     renderInTable(
       <SortHeader columnName="name" onSort={onSort} onHide={onHide}>
         name
-      </SortHeader>
+      </SortHeader>,
     )
     fireEvent.click(screen.getByRole('columnheader'))
     expect(onSort).toHaveBeenCalledWith('name')
@@ -739,10 +677,9 @@ describe('SortHeader', () => {
     renderInTable(
       <SortHeader columnName="name" onSort={onSort} onHide={onHide}>
         name
-      </SortHeader>
+      </SortHeader>,
     )
     fireEvent.click(screen.getByRole('columnheader'))
-    // Context menu items should not appear on left-click
     expect(screen.queryByText('Hide Column')).not.toBeInTheDocument()
     expect(screen.queryByText('Sort Ascending')).not.toBeInTheDocument()
   })
@@ -751,7 +688,7 @@ describe('SortHeader', () => {
     renderInTable(
       <SortHeader columnName="name" sortColumn="name" sortDirection="asc" onSort={jest.fn()}>
         name
-      </SortHeader>
+      </SortHeader>,
     )
     const th = screen.getByRole('columnheader')
     expect(th.className).toContain('text-theme-text-primary')
@@ -761,7 +698,7 @@ describe('SortHeader', () => {
     renderInTable(
       <SortHeader columnName="name" sortColumn="name" sortDirection="desc" onSort={jest.fn()}>
         name
-      </SortHeader>
+      </SortHeader>,
     )
     const th = screen.getByRole('columnheader')
     expect(th.className).toContain('text-theme-text-primary')
@@ -771,16 +708,21 @@ describe('SortHeader', () => {
     renderInTable(
       <SortHeader columnName="name" sortColumn="other" sortDirection="asc" onSort={jest.fn()}>
         name
-      </SortHeader>
+      </SortHeader>,
     )
     const th = screen.getByRole('columnheader')
     expect(th.className).toContain('text-theme-text-muted')
   })
-})
 
-// =============================================================================
-// HiddenColumnsBar
-// =============================================================================
+  it('renders a trailingIcon when provided', () => {
+    renderInTable(
+      <SortHeader columnName="name" onSort={jest.fn()} trailingIcon={<span data-testid="trail">!</span>}>
+        name
+      </SortHeader>,
+    )
+    expect(screen.getByTestId('trail')).toBeInTheDocument()
+  })
+})
 
 describe('HiddenColumnsBar', () => {
   it('should render nothing when no columns are hidden', () => {
@@ -804,7 +746,7 @@ describe('HiddenColumnsBar', () => {
   it('should show "Show all" button when more than one column is hidden and onRestoreAll is provided', () => {
     const onRestoreAll = jest.fn()
     render(
-      <HiddenColumnsBar hiddenColumns={['col_a', 'col_b']} onRestore={jest.fn()} onRestoreAll={onRestoreAll} />
+      <HiddenColumnsBar hiddenColumns={['col_a', 'col_b']} onRestore={jest.fn()} onRestoreAll={onRestoreAll} />,
     )
     const showAll = screen.getByText('Show all')
     expect(showAll).toBeInTheDocument()
@@ -814,7 +756,7 @@ describe('HiddenColumnsBar', () => {
 
   it('should not show "Show all" when only one column is hidden', () => {
     render(
-      <HiddenColumnsBar hiddenColumns={['col_a']} onRestore={jest.fn()} onRestoreAll={jest.fn()} />
+      <HiddenColumnsBar hiddenColumns={['col_a']} onRestore={jest.fn()} onRestoreAll={jest.fn()} />,
     )
     expect(screen.queryByText('Show all')).not.toBeInTheDocument()
   })
@@ -829,10 +771,6 @@ describe('HiddenColumnsBar', () => {
     expect(screen.getByText('Hidden:')).toBeInTheDocument()
   })
 })
-
-// =============================================================================
-// useRowManagement
-// =============================================================================
 
 describe('useRowManagement', () => {
   it('should return empty hiddenRows by default', () => {
@@ -857,7 +795,7 @@ describe('useRowManagement', () => {
   it('should not duplicate when hiding an already hidden row', () => {
     const onChange = jest.fn()
     const { result } = renderHook(() =>
-      useRowManagement({ hiddenRows: ['field_a'] }, onChange)
+      useRowManagement({ hiddenRows: ['field_a'] }, onChange),
     )
     act(() => result.current.handleHideRow('field_a'))
     expect(onChange).not.toHaveBeenCalled()
@@ -866,7 +804,7 @@ describe('useRowManagement', () => {
   it('should restore a row', () => {
     const onChange = jest.fn()
     const { result } = renderHook(() =>
-      useRowManagement({ hiddenRows: ['field_a', 'field_b'] }, onChange)
+      useRowManagement({ hiddenRows: ['field_a', 'field_b'] }, onChange),
     )
     act(() => result.current.handleRestoreRow('field_a'))
     expect(onChange).toHaveBeenCalledWith({ hiddenRows: ['field_b'] })
@@ -875,7 +813,7 @@ describe('useRowManagement', () => {
   it('should restore all rows', () => {
     const onChange = jest.fn()
     const { result } = renderHook(() =>
-      useRowManagement({ hiddenRows: ['field_a', 'field_b'] }, onChange)
+      useRowManagement({ hiddenRows: ['field_a', 'field_b'] }, onChange),
     )
     act(() => result.current.handleRestoreAll())
     expect(onChange).toHaveBeenCalledWith({ hiddenRows: [] })
@@ -884,16 +822,12 @@ describe('useRowManagement', () => {
   it('should preserve other config keys when hiding', () => {
     const onChange = jest.fn()
     const { result } = renderHook(() =>
-      useRowManagement({ hiddenRows: [], otherKey: 'value' }, onChange)
+      useRowManagement({ hiddenRows: [], otherKey: 'value' }, onChange),
     )
     act(() => result.current.handleHideRow('field_a'))
     expect(onChange).toHaveBeenCalledWith({ hiddenRows: ['field_a'], otherKey: 'value' })
   })
 })
-
-// =============================================================================
-// RowContextMenu
-// =============================================================================
 
 describe('RowContextMenu', () => {
   const renderInTable = (ui: React.ReactElement) =>
@@ -902,14 +836,14 @@ describe('RowContextMenu', () => {
         <tbody>
           <tr>{ui}</tr>
         </tbody>
-      </table>
+      </table>,
     )
 
   it('should render children', () => {
     renderInTable(
       <RowContextMenu rowName="field_a" onHide={jest.fn()}>
         <td>field_a</td>
-      </RowContextMenu>
+      </RowContextMenu>,
     )
     expect(screen.getByText('field_a')).toBeInTheDocument()
   })
@@ -918,7 +852,7 @@ describe('RowContextMenu', () => {
     renderInTable(
       <RowContextMenu rowName="field_a" onHide={jest.fn()}>
         <td>field_a</td>
-      </RowContextMenu>
+      </RowContextMenu>,
     )
     fireEvent.contextMenu(screen.getByText('field_a'))
     expect(screen.getByText('Hide Row')).toBeInTheDocument()
@@ -929,7 +863,7 @@ describe('RowContextMenu', () => {
     renderInTable(
       <RowContextMenu rowName="field_a" onHide={onHide}>
         <td>field_a</td>
-      </RowContextMenu>
+      </RowContextMenu>,
     )
     fireEvent.contextMenu(screen.getByText('field_a'))
     fireEvent.click(screen.getByText('Hide Row'))

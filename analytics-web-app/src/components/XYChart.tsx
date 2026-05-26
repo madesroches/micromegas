@@ -4,11 +4,10 @@ import 'uplot/dist/uPlot.min.css'
 import {
   isTimeUnit,
   getAdaptiveTimeUnit,
-  formatAdaptiveTime,
   formatTimeValue,
-  type AdaptiveTimeUnit,
 } from '@/lib/time-units'
 import { normalizeUnit, isSizeUnit, getAdaptiveSizeUnit, isBitUnit, getAdaptiveBitUnit } from '@/lib/units'
+import { formatValueWithUnit } from '@/lib/format-value'
 import type { ChartSeriesData } from '@/lib/arrow-utils'
 
 import { SERIES_COLORS } from './chart-constants'
@@ -52,52 +51,6 @@ interface XYChartProps {
   onTimeRangeSelect?: (from: Date, to: Date) => void
   onWidthChange?: (width: number) => void
   onAxisBoundsChange?: (bounds: ChartAxisBounds) => void
-}
-
-function formatValue(
-  value: number,
-  rawUnit: string,
-  abbreviated = false,
-  adaptiveTimeUnit?: AdaptiveTimeUnit
-): string {
-  const unit = normalizeUnit(rawUnit)
-
-  // Use adaptive formatting for time units
-  if (adaptiveTimeUnit && isTimeUnit(unit)) {
-    return formatAdaptiveTime(value, adaptiveTimeUnit, abbreviated)
-  }
-
-  // Size units (incl. bytes/s) - use adaptive formatting
-  if (isSizeUnit(unit)) {
-    const adaptive = getAdaptiveSizeUnit(value, unit)
-    const displayValue = value * adaptive.conversionFactor
-    const decimals = adaptive.unit === 'bytes' ? 0 : 1
-    return displayValue.toFixed(decimals) + ' ' + adaptive.abbrev
-  }
-
-  // Bit units (incl. bits/s) - networking, decimal scaling
-  if (isBitUnit(unit)) {
-    const adaptive = getAdaptiveBitUnit(value, unit)
-    const displayValue = value * adaptive.conversionFactor
-    const decimals = adaptive.unit === 'bits' ? 0 : 1
-    return displayValue.toFixed(decimals) + ' ' + adaptive.abbrev
-  }
-
-  // Other units
-  if (unit === 'percent') return value.toFixed(1) + '%'
-  if (unit === 'degrees') return value.toFixed(1) + '°'
-  if (unit === 'boolean') return value !== 0 ? 'true' : 'false'
-
-  // Default: show number, append unit if provided
-  return rawUnit ? `${value.toLocaleString()} ${rawUnit}` : value.toLocaleString()
-}
-
-// Format a stat value - for time units, each value picks its own best unit
-function formatStatValue(value: number, unit: string): string {
-  if (isTimeUnit(unit)) {
-    return formatTimeValue(value, unit, false)
-  }
-  return formatValue(value, unit, false)
 }
 
 // Format X value based on axis mode
@@ -375,7 +328,7 @@ export function XYChart({
                 hasValues = true
                 const formatted = isTimeUnit(info.unit)
                   ? formatTimeValue(value, info.unit)
-                  : formatStatValue(value, info.unit)
+                  : formatValueWithUnit(value, info.unit)
                 html += `<div style="display: flex; align-items: center; gap: 8px; padding: 2px 0;">
                   <div style="width: 8px; height: 8px; border-radius: 50%; background: ${info.color};"></div>
                   <span style="color: #b0b0c0; min-width: 90px;">${safeLabel}</span>
@@ -467,7 +420,7 @@ export function XYChart({
             if (isTimeUnit(originalUnit)) {
               tooltipValue.textContent = formatTimeValue(originalValue, originalUnit)
             } else {
-              tooltipValue.textContent = formatStatValue(originalValue, originalUnit)
+              tooltipValue.textContent = formatValueWithUnit(originalValue, originalUnit)
             }
 
             // Position tooltip using fixed coordinates (immune to overflow clipping)
@@ -930,16 +883,16 @@ export function XYChart({
           {!showMultiSeriesHeader && (
             <>
               <div>
-                min: <span className="text-theme-text-secondary">{formatStatValue(stats.min, primaryUnit)}</span>
+                min: <span className="text-theme-text-secondary">{formatValueWithUnit(stats.min, primaryUnit)}</span>
               </div>
               <div>
-                p99: <span className="text-theme-text-secondary">{formatStatValue(stats.p99, primaryUnit)}</span>
+                p99: <span className="text-theme-text-secondary">{formatValueWithUnit(stats.p99, primaryUnit)}</span>
               </div>
               <div>
-                max: <span className="text-theme-text-secondary">{formatStatValue(stats.max, primaryUnit)}</span>
+                max: <span className="text-theme-text-secondary">{formatValueWithUnit(stats.max, primaryUnit)}</span>
               </div>
               <div>
-                avg: <span className="text-theme-text-secondary">{formatStatValue(stats.avg, primaryUnit)}</span>
+                avg: <span className="text-theme-text-secondary">{formatValueWithUnit(stats.avg, primaryUnit)}</span>
               </div>
               <div>
                 count: <span className="text-theme-text-secondary">{(data?.length ?? totalDataCount).toLocaleString()}</span>

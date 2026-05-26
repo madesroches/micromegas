@@ -4,7 +4,7 @@
 
 /* eslint-disable react-refresh/only-export-components */
 
-import { useCallback, useMemo } from 'react'
+import { useCallback, useContext, useEffect, useMemo } from 'react'
 import * as ContextMenu from '@radix-ui/react-context-menu'
 import { ChevronUp, ChevronDown, EyeOff, ArrowUpNarrowWide, ArrowDownNarrowWide, X } from 'lucide-react'
 import { DataType, Table } from 'apache-arrow'
@@ -20,7 +20,8 @@ import {
   durationToMs,
 } from '@/lib/arrow-utils'
 import type { VariableValue } from './notebook-types'
-import { getVariableString } from './notebook-types'
+import { evaluateTemplate } from './notebook-utils'
+import { ColumnHeaderWarningIcon, WarningReporterContext } from './warning-reporter'
 
 // =============================================================================
 // Column Override Types
@@ -35,34 +36,8 @@ export interface ColumnOverride {
 }
 
 // =============================================================================
-// Macro Expansion
+// Macro Validation
 // =============================================================================
-
-// Matches $row.columnName (dot notation for simple alphanumeric names)
-const DOT_NOTATION_REGEX = /\$row\.(\w+)/g
-
-// Matches $row["column-name"] or $row['column-name'] (bracket notation for any name)
-const BRACKET_NOTATION_REGEX = /\$row\[["']([^"']+)["']\]/g
-
-/**
- * Format a value for URL inclusion, handling timestamps as RFC3339.
- */
-function formatValueForUrl(
-  value: unknown,
-  columnName: string,
-  columnTypes: Map<string, DataType>
-): string {
-  if (value == null) return ''
-
-  const dataType = columnTypes.get(columnName)
-  if (dataType && isTimeType(dataType)) {
-    // Format timestamps as RFC3339 (ISO 8601) for URL compatibility
-    const date = timestampToDate(value, dataType)
-    return date ? date.toISOString() : ''
-  }
-
-  return String(value)
-}
 
 /**
  * Extract all column names referenced in a format template.
@@ -152,91 +127,14 @@ export function validateFormatMacros(
   return { missingColumns, unknownMacros }
 }
 
-/**
- * Expand variable macros like $search, $metric, etc.
- * Sorts by name length descending to avoid partial matches ($metric vs $metric_name).
- */
-export function expandVariableMacros(
-  template: string,
-  variables: Record<string, VariableValue>
-): string {
-  let result = template
-  // Sort by name length descending to avoid partial matches
-  const sortedVars = Object.entries(variables).sort((a, b) => b[0].length - a[0].length)
-  for (const [name, value] of sortedVars) {
-    const regex = new RegExp(`\\$${name}\\b`, 'g')
-    // Use getVariableString to handle both simple strings and multi-column objects
-    result = result.replace(regex, getVariableString(value))
-  }
-  return result
-}
-
-/**
- * Expand $row macros using row data.
- * Supports two syntaxes:
- * - $row.columnName (dot notation for alphanumeric column names)
- * - $row["column-name"] (bracket notation for names with hyphens, spaces, etc.)
- *
- * When columnTypes is provided, timestamps are formatted as RFC3339.
- */
-export function expandRowMacros(
-  template: string,
-  row: Record<string, unknown>,
-  columnTypes?: Map<string, DataType>
-): string {
-  const types = columnTypes || new Map<string, DataType>()
-
-  // First pass: bracket notation (handles special characters)
-  let result = template.replace(BRACKET_NOTATION_REGEX, (_, columnName) => {
-    const value = row[columnName]
-    return formatValueForUrl(value, columnName, types)
-  })
-
-  // Second pass: dot notation (simple alphanumeric names)
-  result = result.replace(DOT_NOTATION_REGEX, (_, columnName) => {
-    const value = row[columnName]
-    return formatValueForUrl(value, columnName, types)
-  })
-
-  return result
-}
-
-/**
- * Expand $cell.selected.column macros using selected row data from upstream cells.
- * When no selection exists for a cell, resolves to empty string.
- * Timestamps are formatted as RFC3339 when cell result types are available.
- */
-export function expandCellSelectionMacros(
-  template: string,
-  cellSelections: Record<string, Record<string, unknown>>,
-  cellResults: Record<string, Table>,
-): string {
-  return template.replace(
-    /\$([a-zA-Z_][a-zA-Z0-9_]*)\.selected\.([a-zA-Z_][a-zA-Z0-9_]*)\b/g,
-    (_match, cellName: string, colName: string) => {
-      const selection = cellSelections[cellName]
-      if (!selection) return ''
-      const value = selection[colName]
-      if (value === undefined || value === null) return ''
-      const table = cellResults[cellName]
-      if (table) {
-        const field = table.schema.fields.find((f) => f.name === colName)
-        if (field && isTimeType(field.type)) {
-          const date = timestampToDate(value, field.type)
-          if (date) return date.toISOString()
-        }
-      }
-      return String(value)
-    },
-  )
-}
-
 // =============================================================================
 // Override Cell Component
 // =============================================================================
 
 interface OverrideCellProps {
   format: string
+  /** Column the override is configured for. Used to key warning reports. */
+  columnName: string
   row: Record<string, unknown>
   columns: TableColumn[]
   /** All columns including hidden (for type resolution in overrides) */
@@ -252,13 +150,23 @@ interface OverrideCellProps {
 }
 
 /**
- * Render a column override: expand macros, then render markdown.
- * Expands notebook variables ($name), cell selections ($cell.selected.column),
- * and row data ($row.column).
- * Timestamps are automatically formatted as RFC3339 for URL compatibility.
+ * Render a column override: evaluate the template, then render Markdown.
+ * Resolves notebook variables ($name), cell results ($cell[N].col),
+ * cell selections ($cell.selected.col), row data ($row.col / $row["col"]),
+ * $from/$to, and template function calls (e.g. format_value($x, 'bytes')).
+ * Timestamps are automatically formatted as RFC3339.
  */
-export function OverrideCell({ format, row, columns, allColumns, variables = {}, timeRange, cellSelections, cellResults }: OverrideCellProps) {
-  // Build column type map for proper value formatting (use allColumns for type resolution when available)
+export function OverrideCell({
+  format,
+  columnName,
+  row,
+  columns,
+  allColumns,
+  variables = {},
+  timeRange,
+  cellSelections,
+  cellResults,
+}: OverrideCellProps) {
   const columnTypes = useMemo(() => {
     const map = new Map<string, DataType>()
     for (const col of (allColumns || columns)) {
@@ -267,16 +175,28 @@ export function OverrideCell({ format, row, columns, allColumns, variables = {},
     return map
   }, [allColumns, columns])
 
-  // Merge time range into variables for $from/$to expansion
-  const allVariables = useMemo(() => {
-    if (!timeRange) return variables
-    return { ...variables, from: timeRange.begin, to: timeRange.end }
-  }, [variables, timeRange])
+  const { text: expanded, warnings } = useMemo(() => {
+    return evaluateTemplate(format, {
+      variables,
+      timeRange,
+      cellResults,
+      cellSelections,
+      row,
+      columnTypes,
+    })
+  }, [format, variables, timeRange, cellResults, cellSelections, row, columnTypes])
 
-  // Expand in order: variables, cell selections, then row macros
-  const withVariables = expandVariableMacros(format, allVariables)
-  const withSelections = expandCellSelectionMacros(withVariables, cellSelections, cellResults)
-  const expanded = expandRowMacros(withSelections, row, columnTypes)
+  const reporter = useContext(WarningReporterContext)
+  const warningKey = warnings.join('\n')
+  useEffect(() => {
+    if (!reporter || warnings.length === 0) return
+    for (const w of warnings) reporter(columnName, w)
+    // `warnings` is intentionally omitted from deps — the array reference is
+    // fresh on every render (new `evaluateTemplate` call), so listing it would
+    // re-fire the effect each render. `warningKey` is the stable string
+    // projection that gates re-runs to actual content changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [warningKey, columnName, reporter])
 
   return (
     <div className="prose prose-invert prose-sm max-w-none prose-headings:text-theme-text-primary prose-headings:my-0 prose-p:text-theme-text-secondary prose-p:my-0 prose-a:text-accent-link prose-strong:text-theme-text-primary prose-code:text-accent-highlight prose-code:bg-app-card prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-code:before:content-none prose-code:after:content-none prose-li:text-theme-text-secondary">
@@ -315,6 +235,9 @@ export interface SortHeaderProps {
   compact?: boolean
   /** When provided, right-click opens a context menu with a "Hide column" option */
   onHide?: (columnName: string) => void
+  /** Optional icon rendered after the column label and sort indicator.
+   *  Lives outside the `truncate` span so it stays visible on long labels. */
+  trailingIcon?: React.ReactNode
 }
 
 export function SortHeader({
@@ -327,6 +250,7 @@ export function SortHeader({
   onSortDesc,
   compact = false,
   onHide,
+  trailingIcon,
 }: SortHeaderProps) {
   const isActive = sortColumn === columnName
   const showAsc = isActive && sortDirection === 'asc'
@@ -348,6 +272,7 @@ export function SortHeader({
           ) : null}
         </span>
       )}
+      {trailingIcon}
     </div>
   )
 
@@ -405,6 +330,72 @@ export function SortHeader({
         </ContextMenu.Content>
       </ContextMenu.Portal>
     </ContextMenu.Root>
+  )
+}
+
+// =============================================================================
+// Warning-aware header row
+// =============================================================================
+
+export interface WarningAwareSortHeaderRowProps {
+  columns: TableColumn[]
+  columnWarnings: Map<string, Set<string>>
+  sortColumn?: string
+  sortDirection?: 'asc' | 'desc'
+  onSort: (columnName: string) => void
+  onSortAsc?: (columnName: string) => void
+  onSortDesc?: (columnName: string) => void
+  onHide?: (columnName: string) => void
+  /** Use compact padding (notebook cells). */
+  compact?: boolean
+  /** Cells rendered before the column headers (e.g. the radio-button placeholder
+   *  cell when single-row selection is enabled). */
+  leading?: React.ReactNode
+}
+
+/**
+ * Renders one `<SortHeader>` per column, decorating each with a
+ * `<ColumnHeaderWarningIcon>` when `columnWarnings` has entries for that
+ * column. Used by `TableCell`, `TableRenderer`, and any other parent that
+ * wraps `TableBody` in a `WarningReporterContext.Provider`.
+ */
+export function WarningAwareSortHeaderRow({
+  columns,
+  columnWarnings,
+  sortColumn,
+  sortDirection,
+  onSort,
+  onSortAsc,
+  onSortDesc,
+  onHide,
+  compact,
+  leading,
+}: WarningAwareSortHeaderRowProps) {
+  return (
+    <>
+      {leading}
+      {columns.map((col) => {
+        const colWarnings = columnWarnings.get(col.name)
+        return (
+          <SortHeader
+            key={col.name}
+            columnName={col.name}
+            sortColumn={sortColumn}
+            sortDirection={sortDirection}
+            onSort={onSort}
+            onSortAsc={onSortAsc}
+            onSortDesc={onSortDesc}
+            onHide={onHide}
+            compact={compact}
+            trailingIcon={
+              colWarnings?.size ? <ColumnHeaderWarningIcon warnings={[...colWarnings]} /> : null
+            }
+          >
+            {col.name}
+          </SortHeader>
+        )
+      })}
+    </>
   )
 }
 
@@ -507,7 +498,7 @@ export function TableBody({ data, columns, allColumns, compact = false, override
               if (override) {
                 return (
                   <td key={col.name} className={cellClass}>
-                    <OverrideCell format={override} row={row} columns={columns} allColumns={allColumns} variables={variables} timeRange={timeRange} cellSelections={cellSelections} cellResults={cellResults} />
+                    <OverrideCell format={override} columnName={col.name} row={row} columns={columns} allColumns={allColumns} variables={variables} timeRange={timeRange} cellSelections={cellSelections} cellResults={cellResults} />
                   </td>
                 )
               }

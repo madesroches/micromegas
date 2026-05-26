@@ -109,6 +109,45 @@ Table and transposed table cells support column format overrides using markdown 
 
 Row macros use `$row.columnName` or `$row["column-name"]` syntax to reference values from the current row. Standard variable macros (`$from`, `$to`, `$variableName`) are also available in format strings.
 
+### Template Functions
+
+Markdown templates (Map detail panel, Markdown cells, and table column overrides) support a small set of function-call expressions that operate on resolved macro values. Function calls are **template-only** — they are not applied inside SQL queries.
+
+#### `format_value(value, unit)`
+
+Adaptive unit formatting. Picks the best display unit for each individual value, matching how the chart cell formats stats.
+
+| Template | Output |
+|---|---|
+| `format_value(3678630912, 'bytes')` | `3.4 GB` |
+| `format_value($metric_avg, $metric.unit)` | `3.4 GB` (when `$metric.unit` is `bytes`) |
+| `format_value($cell.selected.duration_ns, 'nanoseconds')` | `4.07 milliseconds` |
+| `format_value($row.bytes_used, 'bytes')` | `3.4 GB` (table column override) |
+
+Arguments may be:
+
+- **Macros** — `$variable`, `$variable.column`, `$cell[N].column`, `$cell.selected.column`, `$row.column`, `$row["column"]` — resolved to their raw value before the function runs (so byte counts and large floats keep full precision).
+- **String literals** — `'bytes'` or `"bytes"` (either quote style; the *opposite* quote may appear inside without escaping).
+- **Numeric literals** — `3678630912`, `-1.5`, etc.
+
+The accepted unit vocabulary is the same set the chart understands — see `lib/units.ts` for canonical names and aliases (`bytes`, `KB`, `MB`, `seconds`, `ms`, `µs`, `bits/s`, `percent`, `degrees`, `boolean`, …).
+
+#### Error behavior
+
+When an argument macro is unresolved (unknown variable, no row selected, missing column), the function call is left in the rendered output as its original source text and a warning is surfaced:
+
+- Map detail panel and Markdown cell: amber-bordered warning banner above the rendered body.
+- Table column override: amber warning icon next to the column header, with the warnings listed in its tooltip.
+
+This avoids silent failures while keeping the cell renderable.
+
+#### Limitations (v1)
+
+- No nested function calls — `format_value(round($x), 'bytes')` is not supported.
+- No arithmetic or conditionals — `$a + $b` is not a function call.
+- No backslash escapes in string literals — switch the outer quote if you need a literal quote.
+- SQL queries do **not** support function calls.
+
 ## Expression Evaluation
 
 Expression variables evaluate JavaScript expressions in a sandboxed environment to compute derived values.
