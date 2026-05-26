@@ -21,6 +21,7 @@ import {
   TableColumn,
   useRowManagement,
 } from '../table-utils'
+import { ColumnHeaderWarningIcon, useColumnWarnings, WarningReporterContext } from '../warning-reporter'
 
 // =============================================================================
 // Renderer Component
@@ -35,6 +36,8 @@ export function TransposedTableCell({ data, status, options, onOptionsChange, va
     options || EMPTY_OPTIONS,
     onOptionsChange
   )
+
+  const { columnWarnings, reportWarning } = useColumnWarnings(options?.overrides)
 
   const overrideMap = useMemo(() => {
     const overrides = (options?.overrides as ColumnOverride[] | undefined) || []
@@ -97,36 +100,47 @@ export function TransposedTableCell({ data, status, options, onOptionsChange, va
         compact
       />
       <div className="flex-1 overflow-auto min-h-0">
-        <table className="w-full text-sm">
-          <tbody>
-            {visibleRows.map((row) => (
-              <tr key={row.name} className="border-b border-theme-border">
-                <RowContextMenu rowName={row.name} onHide={handleHideRow}>
-                  <td className="px-3 py-1.5 text-theme-text-muted font-medium whitespace-nowrap align-top">
-                    {row.name}
-                  </td>
-                </RowContextMenu>
-                {row.values.map((value, colIdx) => (
-                  <td key={colIdx} className="px-3 py-1.5 text-theme-text-primary">
-                    {overrideMap.has(row.name) ? (
-                      <OverrideCell
-                        format={overrideMap.get(row.name)!}
-                        row={originalRows[colIdx]}
-                        columns={columns}
-                        variables={variables}
-                        timeRange={timeRange}
-                        cellSelections={cellSelections}
-                        cellResults={cellResults}
-                      />
-                    ) : (
-                      formatCell(value, row.type)
-                    )}
-                  </td>
-                ))}
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <WarningReporterContext.Provider value={reportWarning}>
+          <table className="w-full text-sm">
+            <tbody>
+              {visibleRows.map((row) => {
+                const colWarnings = columnWarnings.get(row.name)
+                return (
+                  <tr key={row.name} className="border-b border-theme-border">
+                    <RowContextMenu rowName={row.name} onHide={handleHideRow}>
+                      <td className="px-3 py-1.5 text-theme-text-muted font-medium whitespace-nowrap align-top">
+                        <span className="flex items-center gap-1">
+                          {row.name}
+                          {colWarnings?.size ? (
+                            <ColumnHeaderWarningIcon warnings={[...colWarnings]} />
+                          ) : null}
+                        </span>
+                      </td>
+                    </RowContextMenu>
+                    {row.values.map((value, colIdx) => (
+                      <td key={colIdx} className="px-3 py-1.5 text-theme-text-primary">
+                        {overrideMap.has(row.name) ? (
+                          <OverrideCell
+                            format={overrideMap.get(row.name)!}
+                            columnName={row.name}
+                            row={originalRows[colIdx]}
+                            columns={columns}
+                            variables={variables}
+                            timeRange={timeRange}
+                            cellSelections={cellSelections}
+                            cellResults={cellResults}
+                          />
+                        ) : (
+                          formatCell(value, row.type)
+                        )}
+                      </td>
+                    ))}
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </WarningReporterContext.Provider>
       </div>
     </div>
   )

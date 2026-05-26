@@ -72,7 +72,7 @@ Lift `formatValue` and `formatStatValue` out of `XYChart.tsx` into a new module.
 export function formatValueWithUnit(value: number, rawUnit: string): string
 ```
 
-`formatValueWithUnit` is the body of `formatStatValue` today: use `formatTimeValue` for time units, fall through to the size/bit/percent/degrees/boolean ladder. The size/bit/etc. ladder (today's `formatValue` body, minus the unused `adaptiveTimeUnit` parameter) lives as a private helper inside the module — `adaptiveTimeUnit` has no live caller in `XYChart.tsx` today (the chart's axis code at lines 625-635 and 761-769 formats inline; `formatValue`'s only caller is `formatStatValue`, which omits it), so the parameter is dropped during the lift. The chart imports `formatValueWithUnit` (replacing the existing `formatStatValue` invocations across `XYChart.tsx`); the template engine imports the same.
+`formatValueWithUnit` is the body of `formatStatValue` today: use `formatTimeValue` for time units, fall through to the size/bit/percent/degrees/boolean ladder. The size/bit/etc. ladder (today's `formatValue` body, minus the unused `adaptiveTimeUnit` and `abbreviated` parameters) lives as a private helper inside the module. Both parameters are dropped during the lift: `adaptiveTimeUnit` has no live caller in `XYChart.tsx` today (the chart's axis code at lines 625-635 and 761-769 formats inline; `formatValue`'s only caller is `formatStatValue`, which omits it), and `abbreviated` is read only inside the now-removed adaptive-time branch — the size/bit/percent/degrees/boolean ladder never references it. The chart imports `formatValueWithUnit` (replacing the existing `formatStatValue` invocations across `XYChart.tsx`); the template engine imports the same.
 
 ### 2. Template evaluator — extend `notebook-utils.ts`
 
@@ -236,7 +236,7 @@ A registry makes adding `format_duration`, `round`, `concat`, `clamp` later a on
 | `components/map/EventDetailPanel.tsx:59` | `substituteMacros(...)` → `evaluateTemplate(template, { variables: mergedVars, timeRange, cellResults, cellSelections })`. Destructure `{ text, warnings }`; render `text` as Markdown and `<TemplateWarningBanner warnings={warnings} />` above the body. |
 | `lib/screen-renderers/cells/MarkdownCell.tsx:21` | Same swap. Markdown cells share the Map detail-panel rationale: the SQL-escape pass is wrong for plain Markdown content (it doubles single quotes), and authors should be able to call `format_value` in cell bodies. |
 | `lib/screen-renderers/table-utils.tsx:OverrideCell` | Replace the legacy `expandVariableMacros` → `expandCellSelectionMacros` → `expandRowMacros` chain with a single `evaluateTemplate(format, { variables, timeRange, cellResults, cellSelections, row, columnTypes })` call. The walker resolves `$row.col`, `$cell.selected.col`, `$variable`, `$cell[N].col`, and `$from/$to` all in one pass — and it natively handles `format_value(...)` calls. The existing `allVariables` `useMemo` (which merged `from`/`to` into `variables`) is dropped because the walker resolves those from `ctx.timeRange` directly. The legacy `expand*Macros` exports and their tests are deleted (`OverrideCell` was their sole production caller). Warnings are posted via `WarningReporterContext` (see §6a). |
-| Table parents (`cells/TableCell.tsx`, `TableRenderer.tsx`) | Provide `WarningReporterContext`. Accumulate column-keyed warnings in `useState<Map<string, Set<string>>>`. Render `<ColumnHeaderWarningIcon>` inside each affected column's `SortHeader` children. No dry-run pass, no row cap, no parent memoization preconditions. |
+| Table parents (`cells/TableCell.tsx`, `cells/TransposedTableCell.tsx`, `TableRenderer.tsx`) | All three host `OverrideCell` and need the same warning-collection wiring. Each calls `useColumnWarnings(<stable-overrides-source>)` (shared hook in `warning-reporter.tsx`), provides `WarningReporterContext`, and surfaces `<ColumnHeaderWarningIcon>` on the column label — passed as `SortHeader`'s new `trailingIcon` slot for the two header-based tables, rendered inline next to the row label `<td>` for the transposed layout. No dry-run pass, no row cap, no parent memoization preconditions. |
 
 **Side effects of the Map/Markdown swaps:**
 
@@ -259,36 +259,61 @@ The shape of the warning surface differs by caller:
 
 **Single-template surfaces** (`EventDetailPanel`, `MarkdownCell`) — one `evaluateTemplate` call per render. The caller destructures both, renders `text` as Markdown and `<TemplateWarningBanner warnings={warnings} />` above the body. Empty `warnings` hides the banner. The banner is a thin reusable component (amber-bordered list of warning strings).
 
-**Table override surface** (`OverrideCell`, called once per row per overridden column) — warnings collect during normal render via a React context, keyed by column. The collected state is a `Map<string, Set<string>>` (column name → distinct warning strings) held in `useState` at the table parent (`TableCell` for notebook tables, `TableRenderer` for screen tables). Wiring sketch:
+**Table override surface** (`OverrideCell`, called once per row per overridden column) — warnings collect during normal render via a React context, keyed by column. The collected state is a `Map<string, Set<string>>` (column name → distinct warning strings) held in `useState` at the table parent (`TableCell` for notebook tables, `TableRenderer` for screen tables, `TransposedTableCell` for transposed tables — same parent treatment for all three, since each renders `OverrideCell`). All three sites need the same `useState` + `useCallback`-stable reporter + reset-on-override-change `useEffect` triple, so the plan extracts that triple into a single `useColumnWarnings` hook in `warning-reporter.tsx`:
+
+```ts
+// warning-reporter.tsx
+export function useColumnWarnings(overridesSource: unknown): {
+  columnWarnings: Map<string, Set<string>>
+  reportWarning: (columnKey: string, warning: string) => void
+} {
+  const [columnWarnings, setColumnWarnings] = useState<Map<string, Set<string>>>(new Map())
+  const reportWarning = useCallback((columnKey: string, warning: string) => {
+    setColumnWarnings(prev => {
+      const existing = prev.get(columnKey)
+      if (existing?.has(warning)) return prev   // dedup; no state churn
+      const next = new Map(prev)
+      next.set(columnKey, new Set(existing).add(warning))
+      return next
+    })
+  }, [])
+  // Reset when the override list changes. Callers MUST pass the *stable source* —
+  // the raw `options?.overrides` (TableCell / TransposedTableCell) or
+  // `tableConfig.overrides` (TableRenderer) — NOT a locally-destructured form
+  // like `(options?.overrides as ColumnOverride[] | undefined) || []`, whose
+  // `|| []` fallback produces a fresh array reference on every render when no
+  // overrides are configured; that would re-fire the effect every render,
+  // schedule a fresh `new Map()`, and trip React's "Too many re-renders" guard.
+  useEffect(() => { setColumnWarnings(new Map()) }, [overridesSource])
+  return { columnWarnings, reportWarning }
+}
+```
+
+Table-parent wiring sketch (same shape for `TableCell`, `TableRenderer`, `TransposedTableCell` — each passes its own stable-source override prop):
 
 ```tsx
-// Table parent (TableCell / TableRenderer)
-const [columnWarnings, setColumnWarnings] = useState<Map<string, Set<string>>>(new Map())
-const reportWarning = useCallback((columnKey: string, warning: string) => {
-  setColumnWarnings(prev => {
-    const existing = prev.get(columnKey)
-    if (existing?.has(warning)) return prev   // dedup; no state churn
-    const next = new Map(prev)
-    next.set(columnKey, new Set(existing).add(warning))
-    return next
-  })
-}, [])
-useEffect(() => { setColumnWarnings(new Map()) }, [overrides])   // reset when format edits land
+// Table parent
+const { columnWarnings, reportWarning } = useColumnWarnings(options?.overrides)
 
 return (
   <WarningReporterContext.Provider value={reportWarning}>
     <table>
       <thead><tr>
-        {visibleColumns.map((col) => (
-          <SortHeader key={col.name} columnName={col.name} {...sortProps}>
-            <span className="flex items-center gap-1">
+        {visibleColumns.map((col) => {
+          const colWarnings = columnWarnings.get(col.name)
+          return (
+            <SortHeader
+              key={col.name}
+              columnName={col.name}
+              trailingIcon={colWarnings?.size
+                ? <ColumnHeaderWarningIcon warnings={[...colWarnings]} />
+                : null}
+              {...sortProps}
+            >
               {col.name}
-              {columnWarnings.get(col.name)?.size ? (
-                <ColumnHeaderWarningIcon warnings={[...columnWarnings.get(col.name)!]} />
-              ) : null}
-            </span>
-          </SortHeader>
-        ))}
+            </SortHeader>
+          )
+        })}
       </tr></thead>
       <TableBody … />
     </table>
@@ -302,6 +327,11 @@ const warningKey = warnings.join('\n')
 useEffect(() => {
   if (!reporter || warnings.length === 0) return
   warnings.forEach(w => reporter(columnName, w))
+  // `warnings` is intentionally omitted from deps — the array reference is
+  // fresh on every render (new `evaluateTemplate` call), so listing it would
+  // re-fire the effect each render. `warningKey` is the stable string
+  // projection that gates re-runs to actual content changes.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
 }, [warningKey, columnName, reporter])
 return <Markdown>{text}</Markdown>
 ```
@@ -311,7 +341,11 @@ Why this shape works without parent memoization, row caps, or a dry-run pass:
 - Coverage is naturally bounded by what `TableBody` renders. In notebook tables this is `slicedData` (the paginated page — ~50 rows × N overrides per page). In screen tables (`TableRenderer`) the full unsliced result renders, but dedup means the parent only re-renders for *new* warnings, not for every row that contributes the same one. A 10k-row × 5-override worst case still produces at most one re-render per distinct warning string.
 - Warnings are sticky across pagination: once a column is flagged, it keeps its icon until the override format is edited (the reset effect on `[overrides]`). That matches the failure mode — schema/typo errors are systematic, not row-specific — and tells the author "this column has issues" regardless of which page they're viewing.
 
+**`SortHeader` change** (`table-utils.tsx:320-409`): add an optional `trailingIcon?: React.ReactNode` prop, rendered inside the existing `<div className="flex items-center gap-1">` as a sibling of `<span className="truncate">{children}</span>` (i.e., *outside* the truncate span). Placing the icon outside the truncate span matters: with the icon inside the truncate span, `overflow:hidden; white-space:nowrap; text-overflow:ellipsis` would clip the icon exactly when the column name is long enough to truncate — i.e., when the warning is most needed. As a sibling of the truncate span, the flex container keeps the icon visible regardless of label length. Existing callers that don't pass `trailingIcon` are unaffected.
+
 `<ColumnHeaderWarningIcon warnings={string[]}>` (new): an amber-tinted `<AlertTriangle>` (lucide-react, already a project dep), sized to match the sort indicators, with `title={warnings.join('\n')}` for hover detail. Click-to-open-edit-panel is a clean follow-up — same `columnWarnings` state can be read from anywhere that knows the column name.
+
+**Transposed-table layout note:** `TransposedTableCell` (`cells/TransposedTableCell.tsx:31`) renders rows that correspond to the source query's *columns* (line 105-107 renders the row name in a `<td>`, not a `<th>`/`SortHeader`). The transposed table has no `SortHeader` to attach `trailingIcon` to. Instead, the wiring renders `<ColumnHeaderWarningIcon>` inline next to `{row.name}` inside the row-label `<td>` (e.g., wrapped in a `flex items-center gap-1` span). Same `useColumnWarnings(options?.overrides)` hook, same provider, same `OverrideCell` warning-posting path — only the icon's placement differs.
 
 `<TemplateWarningBanner>` is used by Map detail panel and Markdown cell only.
 
@@ -365,7 +399,9 @@ Why this shape works without parent memoization, row caps, or a dry-run pass:
 
 11. **Add warning surface primitives** at `lib/screen-renderers/warning-reporter.tsx` (new file):
     - `WarningReporterContext: React.Context<((columnKey: string, warning: string) => void) | null>` (default `null`).
+    - `useColumnWarnings(overridesSource: unknown)` hook — returns `{ columnWarnings, reportWarning }`. Encapsulates the `useState<Map<string, Set<string>>>` + `useCallback`-stable reducer-style reporter + `useEffect` reset-on-`overridesSource`-change triple. Single home for the "depend on the stable source, not the `|| []` fallback" footgun.
     - `<ColumnHeaderWarningIcon warnings={string[]}>`: amber-tinted `<AlertTriangle>` (lucide-react), sized `w-3.5 h-3.5`, with `title={warnings.join('\n')}`. Returns `null` if `warnings.length === 0` (defensive; callers gate on size already).
+    - **Update `SortHeader`** (`table-utils.tsx:320-409`) to accept an optional `trailingIcon?: React.ReactNode` prop, rendered inside the existing `<div className="flex items-center gap-1">` *after* the truncate span (so the icon is never clipped by `truncate` on long column names). Existing callers that don't pass `trailingIcon` keep working unchanged.
 
 12. **Refactor `OverrideCell`** (`table-utils.tsx:260-298`):
     - Add a required `columnName: string` prop so cells can post warnings keyed by their column.
@@ -374,12 +410,20 @@ Why this shape works without parent memoization, row caps, or a dry-run pass:
     - Consume `WarningReporterContext` via `useContext`. Post warnings via `useEffect` with a dep on `[warnings.join('\n'), columnName, reporter]` so the effect fires only when the warning set actually changes. Reporter is `null` outside a provider (no-op).
     - Update the call site at `table-utils.tsx:510` to pass `columnName={col.name}`.
 
-13. **Delete legacy macro expansion functions**: remove `expandVariableMacros`, `expandCellSelectionMacros`, `expandRowMacros` exports from `table-utils.tsx:159-232` and the corresponding tests in `__tests__/table-utils.test.tsx`. `OverrideCell` was their sole production caller; the walker tests in `notebook-utils.test.ts` cover the same macro shapes (plus `$cell[N].col` and `$from`/`$to`).
+13. **Delete legacy macro expansion functions** and their now-dead helpers: remove `expandVariableMacros`, `expandCellSelectionMacros`, `expandRowMacros` exports from `table-utils.tsx:159-232` and the corresponding standalone `describe` blocks in `__tests__/table-utils.test.tsx` (`describe('expandRowMacros')` at line 20, `describe('expandVariableMacros')` at 136, `describe('expandCellSelectionMacros')` at 173, `describe('expandRowMacros with timestamps')` at 613). Also delete the three private helpers that were only used by `expandRowMacros` and have no other callers in `src/`:
+    - `formatValueForUrl` (`table-utils.tsx:50-65`)
+    - `DOT_NOTATION_REGEX` (`table-utils.tsx:42`)
+    - `BRACKET_NOTATION_REGEX` (`table-utils.tsx:45`)
+    `OverrideCell` was the sole production caller of the `expand*` chain; the walker tests in `notebook-utils.test.ts` cover the same macro shapes (plus `$cell[N].col` and `$from`/`$to`). The kept validators (`extractMacroColumns`, `findUnknownMacros`, `validateFormatMacros`) continue to compile — `extractMacroColumns` re-creates its own regexes inline (lines 76, 82) rather than depending on the module-level constants.
 
-14. **Wire into table parents:**
-    - **`cells/TableCell.tsx` (notebook table cell)** — add `useState<Map<string, Set<string>>>` for `columnWarnings`, `useCallback` for `reportWarning` (dedup-on-write), `useEffect` to reset on `overrides` change. Wrap the existing `<table>` at lines 144-166 in `<WarningReporterContext.Provider value={reportWarning}>`. Inside the `SortHeader` children at line 162, swap `{col.name}` for a wrapper span that appends `<ColumnHeaderWarningIcon warnings={[...columnWarnings.get(col.name)!]} />` when `columnWarnings.get(col.name)?.size > 0`. No changes to `NotebookRenderer`.
-    - **`TableRenderer.tsx` (screen-level table)** — same shape: `useState`, `useCallback`, reset `useEffect` (these hooks live at the top of the component body, not inside `renderContent()`, so the early returns at lines 366-372 don't violate rules of hooks). Wrap the `<table>` at lines 385-405 in the provider (closure over `reportWarning` works fine from `renderContent`). Swap the `SortHeader` children at line 399 to include the icon when the column has warnings. Even without notebook variables in scope, `format_value($row.col, 'bytes')` still applies in screen tables and can fail.
-    - **`cells/ReferenceTableCell.tsx`** — unchanged. No overrides today, no warnings to surface. If overrides are ever added, copy the same wiring.
+    **Also delete the existing `OverrideCell` test blocks** (`describe('OverrideCell')` at `table-utils.test.tsx:421-562` and `describe('OverrideCell with hidden timestamp column')` at `:564-611`). Two reasons they can't stay as-is: (a) none of the existing `render(<OverrideCell ... />)` calls pass the new required `columnName` prop, so TS compilation breaks across ~13 sites; (b) several assertions test legacy collapse-to-empty behavior the plan deliberately replaces — `:467-473` expects `$row.missing` → empty href arg (now preserved source + warning, §6 #4), `:549-561` expects `$cell.selected.x`-with-no-selection → empty href arg (now preserved source + warning, §6 #2). The new test cases in step 15 (a)–(g) cover the same macro shapes against the new behavior, including the RFC3339 timestamp rendering path (case (a) uses `format_value($row.bytes, 'bytes')`, and a new case (h) below preserves the hidden-timestamp-column coverage):
+    - (h) Hidden timestamp column with `allColumns` containing the type: `format` = `"Started: $row.start_time"`, `row.start_time` = a microsecond BigInt → renders as RFC3339. Preserves the `:564-611` test's intent against the new evaluator.
+
+14. **Wire into table parents.** All three sites call `useColumnWarnings(<stable-overrides-source>)` (from step 11) and wrap their `<table>` in `<WarningReporterContext.Provider value={reportWarning}>`. They differ only in where they render `<ColumnHeaderWarningIcon>`:
+    - **`cells/TableCell.tsx` (notebook table cell)** — call `useColumnWarnings(options?.overrides)`. **Pass the stable source `options?.overrides`, NOT the locally-destructured `overrides`** at `TableCell.tsx:34` (the local is `(options?.overrides as ColumnOverride[] | undefined) || []` and its `|| []` fallback yields a fresh array reference per render whenever no overrides are configured, which would re-fire the reset effect on every render and trip React's "Too many re-renders" guard — see the hook docstring in step 11). Wrap the existing `<table>` at lines 144-166 in the provider. On the `SortHeader` at lines 151-163, pass `trailingIcon={columnWarnings.get(col.name)?.size ? <ColumnHeaderWarningIcon warnings={[...columnWarnings.get(col.name)!]} /> : null}` (keep `{col.name}` as the children). No changes to `NotebookRenderer`.
+    - **`TableRenderer.tsx` (screen-level table)** — call `useColumnWarnings(tableConfig.overrides)`. These hooks live at the top of the component body, not inside `renderContent()`, so the early returns at lines 366-372 don't violate rules of hooks. The `tableConfig.overrides` reference is config-stable across renders (replaced via spread on edits), so the dep is safe without further memoization. Wrap the `<table>` at lines 385-405 in the provider (the `reportWarning` closure works fine from `renderContent`). On the `SortHeader` at lines 389-400, pass `trailingIcon` the same way as `TableCell`. Even without notebook variables in scope, `format_value($row.col, 'bytes')` still applies in screen tables and can fail.
+    - **`cells/TransposedTableCell.tsx` (transposed notebook table cell)** — also renders `OverrideCell` (`TransposedTableCell.tsx:111-120`), so it needs the same provider treatment. Call `useColumnWarnings(options?.overrides)` (same stable-source rule as `TableCell`). Wrap the `<table>` at lines 100-129 in the provider. Transposed tables have no `SortHeader` — the source-query columns are row labels rendered inside `<td>` at lines 105-107 (`{row.name}`). Replace `{row.name}` with a `<span className="flex items-center gap-1">{row.name}{colWarnings?.size ? <ColumnHeaderWarningIcon warnings={[...colWarnings]} /> : null}</span>` where `colWarnings = columnWarnings.get(row.name)`. Row labels are not truncated in the transposed layout (line 105 uses `whitespace-nowrap` without `overflow-hidden`), so the icon stays visible alongside the label. **Pass `columnName={row.name}` to the `OverrideCell` at `TransposedTableCell.tsx:112-120`** — this is the second production call site that step 12's required `columnName` prop addition affects (the first being `table-utils.tsx:510`).
+    - **`cells/ReferenceTableCell.tsx`** — unchanged. No overrides today, no warnings to surface. If overrides are ever added, copy the same hook + provider wiring.
 
 15. **Add tests** at `lib/screen-renderers/__tests__/table-utils.test.tsx`:
     - (a) Column override `format_value($row.bytes, 'bytes')` renders the adaptive value.
@@ -389,6 +433,7 @@ Why this shape works without parent memoization, row caps, or a dry-run pass:
     - (e) Naked unresolved `$cell.selected.col` in a column override `format` → preserved source + icon (pins §6 #2 for the table path; `expandCellSelectionMacros` would previously have collapsed to `''`).
     - (f) `$row.col` for a row whose `col` is null (or whose column is missing) → preserved source + icon (pins §6 #4; `expandRowMacros` previously rendered `''`).
     - (g) `$metric.unit` with `metric` a simple-string notebook variable → preserved source + icon (pins §6 #3; the legacy `expandVariableMacros`'s `\\$${name}\\b`-without-lookahead regex would have produced `<metric-value>.unit`).
+    - (h) Hidden-timestamp-column rendering: column override `format` = `"Started: $row.start_time"`, `row.start_time` = microsecond BigInt, `allColumns` carries the timestamp type → renders as RFC3339. Preserves the intent of the deleted `describe('OverrideCell with hidden timestamp column')` block (step 13) against the new evaluator.
 
 ### Phase 5 — Documentation
 
@@ -414,10 +459,11 @@ Why this shape works without parent memoization, row caps, or a dry-run pass:
 | `analytics-web-app/src/components/map/EventDetailPanel.tsx` | Swap `substituteMacros` → `evaluateTemplate`; render `<TemplateWarningBanner>` above the body |
 | `analytics-web-app/src/lib/screen-renderers/cells/MarkdownCell.tsx` | Swap `substituteMacros` → `evaluateTemplate`; render `<TemplateWarningBanner>` above the body |
 | `analytics-web-app/src/components/TemplateWarningBanner.tsx` *(new)* | Amber-bordered warning list used by Map detail panel and Markdown cell |
-| `analytics-web-app/src/lib/screen-renderers/warning-reporter.tsx` *(new)* | `WarningReporterContext` + `<ColumnHeaderWarningIcon>` used by table parents |
-| `analytics-web-app/src/lib/screen-renderers/table-utils.tsx` | Refactor `OverrideCell` to call `evaluateTemplate` and post warnings via `WarningReporterContext`; add required `columnName` prop and pass it at the call site; delete `expandVariableMacros` / `expandCellSelectionMacros` / `expandRowMacros` |
-| `analytics-web-app/src/lib/screen-renderers/cells/TableCell.tsx` | Provide `WarningReporterContext`; collect column-keyed warnings in `useState`; render `<ColumnHeaderWarningIcon>` in `SortHeader` children |
-| `analytics-web-app/src/lib/screen-renderers/TableRenderer.tsx` | Same wiring as `TableCell` — provider, state, icon |
+| `analytics-web-app/src/lib/screen-renderers/warning-reporter.tsx` *(new)* | `WarningReporterContext`, `useColumnWarnings` hook, `<ColumnHeaderWarningIcon>` used by table parents |
+| `analytics-web-app/src/lib/screen-renderers/table-utils.tsx` | Refactor `OverrideCell` to call `evaluateTemplate` and post warnings via `WarningReporterContext`; add required `columnName` prop and pass it at the call site; add optional `trailingIcon` prop to `SortHeader` (rendered outside the truncate span); delete `expandVariableMacros` / `expandCellSelectionMacros` / `expandRowMacros` and their now-dead helpers `formatValueForUrl`, `DOT_NOTATION_REGEX`, `BRACKET_NOTATION_REGEX` |
+| `analytics-web-app/src/lib/screen-renderers/cells/TableCell.tsx` | Use `useColumnWarnings(options?.overrides)`; provide `WarningReporterContext`; pass `trailingIcon` on each `SortHeader` |
+| `analytics-web-app/src/lib/screen-renderers/cells/TransposedTableCell.tsx` | Use `useColumnWarnings(options?.overrides)`; provide `WarningReporterContext`; render `<ColumnHeaderWarningIcon>` inline next to the row label in each `<td>` |
+| `analytics-web-app/src/lib/screen-renderers/TableRenderer.tsx` | Same wiring as `TableCell` — hook, provider, `trailingIcon` |
 | `analytics-web-app/src/lib/screen-renderers/__tests__/table-utils.test.tsx` | Delete legacy `expand*Macros` tests; add `format_value($row.col, 'unit')` test, unresolved-arg test, dedup test, reset-on-overrides test, and the §6 #2/#3/#4 regression pins |
 | `mkdocs/docs/web-app/notebooks/variables.md` | Document template functions |
 

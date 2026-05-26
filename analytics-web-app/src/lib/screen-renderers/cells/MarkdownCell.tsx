@@ -5,7 +5,8 @@ import type { CellTypeMetadata, CellRendererProps, CellEditorProps } from '../ce
 import type { MarkdownCellConfig, CellConfig, CellState } from '../notebook-types'
 import { SyntaxEditor } from '@/components/SyntaxEditor'
 import { AvailableVariablesPanel } from '@/components/AvailableVariablesPanel'
-import { substituteMacros, validateMacros } from '../notebook-utils'
+import { TemplateWarningBanner } from '@/components/TemplateWarningBanner'
+import { evaluateTemplate, validateMacros } from '../notebook-utils'
 import { FileText } from 'lucide-react'
 
 // =============================================================================
@@ -16,13 +17,14 @@ export function MarkdownCell({ content, status, variables, timeRange, cellResult
   // Defer rendering until the cell has executed in sequence — otherwise macros
   // like $variable, $cell.col, or $begin/$end would resolve against uninitialized
   // upstream state and flash stale data or broken links on first paint.
-  const markdownContent = useMemo(() => {
-    if (status !== 'success' || !content) return ''
-    return substituteMacros(content, variables, timeRange, cellResults, cellSelections)
+  const { text: markdownContent, warnings } = useMemo(() => {
+    if (status !== 'success' || !content) return { text: '', warnings: [] as string[] }
+    return evaluateTemplate(content, { variables, timeRange, cellResults, cellSelections })
   }, [status, content, variables, timeRange, cellResults, cellSelections])
 
   return (
     <div className="prose prose-invert max-w-none prose-headings:text-theme-text-primary prose-p:text-theme-text-secondary prose-a:text-accent-link prose-strong:text-theme-text-primary prose-code:text-accent-highlight prose-code:bg-app-card prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-code:before:content-none prose-code:after:content-none prose-pre:bg-app-card prose-li:text-theme-text-secondary">
+      <TemplateWarningBanner warnings={warnings} />
       <Markdown remarkPlugins={[remarkGfm]}>{markdownContent}</Markdown>
     </div>
   )

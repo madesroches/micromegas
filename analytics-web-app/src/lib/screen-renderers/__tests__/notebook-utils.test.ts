@@ -18,7 +18,7 @@ Object.defineProperty(window, 'matchMedia', {
 jest.mock('../cell-registry', () => require('../__test-utils__/cell-registry-mock').createCellRegistryMock())
 
 import { tableFromArrays, vectorFromArray, Table, Timestamp, TimeUnit } from 'apache-arrow'
-import { substituteMacros, DEFAULT_SQL, sanitizeCellName, validateCellName, validateMacros } from '../notebook-utils'
+import { substituteMacros, DEFAULT_SQL, sanitizeCellName, validateCellName, validateMacros, evaluateTemplate } from '../notebook-utils'
 import { serializeVariableValue, deserializeVariableValue, getVariableString, isMultiColumnValue } from '../notebook-types'
 import { createDefaultCell } from '../cell-registry'
 
@@ -875,5 +875,121 @@ describe('validateMacros with cell selections', () => {
     )
     expect(result.valid).toBe(true)
     expect(result.errors).toHaveLength(0)
+  })
+})
+
+describe('evaluateTemplate', () => {
+  const defaultTimeRange = { begin: '2024-01-01T00:00:00Z', end: '2024-01-02T00:00:00Z' }
+  const emptyCtx = () => ({
+    variables: {},
+    timeRange: defaultTimeRange,
+    cellResults: {},
+    cellSelections: {},
+  })
+
+  describe('format_value calls', () => {
+    it('formats a numeric literal with the bytes unit', () => {
+      const { text, warnings } = evaluateTemplate("format_value(3678630912, 'bytes')", emptyCtx())
+      expect(text).toBe('3.4 GB')
+      expect(warnings).toEqual([])
+    })
+
+    it('formats a multi-column variable value with its unit column', () => {
+      const ctx = {
+        ...emptyCtx(),
+        variables: { metric_avg: '3678630912', metric: { name: 'mem', unit: 'bytes' } },
+      }
+      const { text, warnings } = evaluateTemplate('format_value($metric_avg, $metric.unit)', ctx)
+      expect(text).toBe('3.4 GB')
+      expect(warnings).toEqual([])
+    })
+
+    it('formats a selected cell value', () => {
+      const ctx = {
+        ...emptyCtx(),
+        cellSelections: { stat: { bytes: 3678630912 } },
+      }
+      const { text, warnings } = evaluateTemplate("format_value($cell.selected.bytes, 'bytes')", { ...ctx, cellSelections: { cell: { bytes: 3678630912 } } })
+      expect(text).toBe('3.4 GB')
+      expect(warnings).toEqual([])
+    })
+
+    it('formats a BigInt cell value (timestamp-like arg)', () => {
+      const table = tableFromArrays({ duration_ns: [BigInt(2_500_000_000)] })
+      const ctx = {
+        ...emptyCtx(),
+        cellResults: { stats: table },
+      }
+      const { text, warnings } = evaluateTemplate("format_value($stats[0].duration_ns, 'nanoseconds')", ctx)
+      expect(text).toBe('2.50 seconds')
+      expect(warnings).toEqual([])
+    })
+
+    it('passes through unknown function names; inner $macros still resolve', () => {
+      const ctx = {
+        ...emptyCtx(),
+        variables: { x: 'X' },
+      }
+      const { text, warnings } = evaluateTemplate('random_word($x)', ctx)
+      expect(text).toBe('random_word(X)')
+      expect(warnings).toEqual([])
+    })
+
+    it('emits the original call source plus a warning when an arg macro is unresolved', () => {
+      const { text, warnings } = evaluateTemplate("format_value($missing, 'bytes')", emptyCtx())
+      expect(text).toBe("format_value($missing, 'bytes')")
+      expect(warnings).toEqual(['format_value: $missing is unresolved'])
+    })
+
+    it('preserves the call source when the selection arg is unresolved (no half-substituted state)', () => {
+      const { text, warnings } = evaluateTemplate("format_value($cell.selected.bytes, 'bytes')", emptyCtx())
+      expect(text).toBe("format_value($cell.selected.bytes, 'bytes')")
+      expect(warnings).toEqual(['format_value: $cell.selected.bytes is unresolved'])
+    })
+
+    it('accepts string literals containing commas', () => {
+      const ctx = { ...emptyCtx(), variables: { x: '12' } }
+      const { text } = evaluateTemplate("format_value($x, 'GB, please')", ctx)
+      // Unknown unit -> falls back to "{value.toLocaleString()} {unit}"
+      expect(text).toBe('12 GB, please')
+    })
+
+    it('substitutes a function call and a naked variable in the same template', () => {
+      const ctx = {
+        ...emptyCtx(),
+        variables: { x: '2048', y: 'YVAL' },
+      }
+      const { text } = evaluateTemplate("format_value($x, 'bytes') extra $y", ctx)
+      expect(text).toBe('2.0 KB extra YVAL')
+    })
+
+    it('deduplicates the same unresolved arg referenced in multiple calls', () => {
+      const { warnings } = evaluateTemplate(
+        "format_value($missing, 'bytes') and format_value($missing, 'seconds')",
+        emptyCtx(),
+      )
+      expect(warnings).toEqual(['format_value: $missing is unresolved'])
+    })
+  })
+
+  describe('macro behavior', () => {
+    it('substitutes a naked variable like substituteMacrosRaw would', () => {
+      const ctx = { ...emptyCtx(), variables: { variable: 'X' } }
+      const { text, warnings } = evaluateTemplate('a $variable b', ctx)
+      expect(text).toBe('a X b')
+      expect(warnings).toEqual([])
+    })
+
+    it('leaves a naked unresolved $cell.selected.col in place AND emits a warning (regression-pin §6 #2)', () => {
+      const { text, warnings } = evaluateTemplate('a $cell.selected.col b', emptyCtx())
+      expect(text).toBe('a $cell.selected.col b')
+      expect(warnings).toEqual(['$cell.selected.col is unresolved'])
+    })
+
+    it('preserves single quotes verbatim (quote-escape regression §6 #1)', () => {
+      const ctx = { ...emptyCtx(), variables: { search: "it's working" } }
+      const { text } = evaluateTemplate('msg: $search', ctx)
+      expect(text).toBe("msg: it's working")
+    })
   })
 })

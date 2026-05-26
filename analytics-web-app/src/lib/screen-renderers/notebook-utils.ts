@@ -25,6 +25,7 @@ import type { Table, DataType } from 'apache-arrow'
 import type { CellConfig, CellType, HorizontalGroupCellConfig, VariableValue } from './notebook-types'
 import { isTimeType, timestampToDate } from '@/lib/arrow-utils'
 import { getVariableString } from './notebook-types'
+import { TEMPLATE_FUNCTIONS } from '@/lib/template-functions'
 
 import type { ScreenConfig } from '@/lib/screens-api'
 import { RESERVED_URL_PARAMS } from '@/lib/url-cleanup-utils'
@@ -538,6 +539,386 @@ export function findUnresolvedSelectionMacro(
     }
   }
   return null
+}
+
+// ==========================================================================
+// Template evaluator with function calls (`evaluateTemplate`)
+// ==========================================================================
+//
+// `evaluateTemplate` walks a template string once, left-to-right. At each
+// position it tries (in order):
+//   1. an identifier-in-registry followed by '(' → function call
+//   2. a '$' → macro shape
+//   3. literal char copy
+//
+// Unresolved calls and unresolved macros are left as their original source
+// text (no half-substituted state). Each problem accumulates a warning so
+// callers can surface diagnostics.
+
+export interface EvaluateTemplateCtx {
+  variables: Record<string, VariableValue>
+  /** When omitted, `$from`/`$to` are treated as unresolved. */
+  timeRange?: { begin: string; end: string }
+  cellResults: Record<string, Table>
+  cellSelections: Record<string, Record<string, unknown>>
+  /** Row dict (Table override path). When present, `$row.col` and
+   *  `$row["col"]` resolve to the raw value. */
+  row?: Record<string, unknown>
+  /** Column-type map for RFC3339 stringification of timestamps emitted
+   *  as naked `$row.col` macros outside function-call args. */
+  columnTypes?: Map<string, DataType>
+}
+
+export interface EvaluateTemplateResult {
+  text: string
+  warnings: string[]
+}
+
+interface MacroMatch {
+  /** Original source text spanning the macro. */
+  source: string
+  /** End index in the input (exclusive). */
+  end: number
+  /** Human-readable shape used in warning messages. */
+  shape: string
+  /** Resolved raw value, or undefined when unresolved. */
+  value: unknown
+  /** Optional Arrow DataType used by `formatArrowValue` for naked emission. */
+  dataType?: DataType
+}
+
+const IDENT_RE = /[a-zA-Z_][a-zA-Z0-9_]*/y
+
+function matchIdent(text: string, pos: number): string | null {
+  IDENT_RE.lastIndex = pos
+  const m = IDENT_RE.exec(text)
+  return m ? m[0] : null
+}
+
+function skipSpaces(text: string, pos: number): number {
+  while (pos < text.length && (text[pos] === ' ' || text[pos] === '\t')) pos++
+  return pos
+}
+
+function tryParseMacro(text: string, pos: number, ctx: EvaluateTemplateCtx): MacroMatch | null {
+  if (text[pos] !== '$') return null
+  // 1. $from / $to — only recognized when ctx.timeRange is set, otherwise let
+  //    them fall through (no shape match) so the walker copies '$' verbatim
+  //    and continues. This preserves the documented "treat as unresolved"
+  //    behavior while keeping the walker uniform.
+  if (text.startsWith('$from', pos) && !isIdentChar(text[pos + 5] ?? '')) {
+    if (!ctx.timeRange) return null
+    return { source: '$from', end: pos + 5, shape: '$from', value: ctx.timeRange.begin }
+  }
+  if (text.startsWith('$to', pos) && !isIdentChar(text[pos + 3] ?? '')) {
+    if (!ctx.timeRange) return null
+    return { source: '$to', end: pos + 3, shape: '$to', value: ctx.timeRange.end }
+  }
+
+  // 2-6. All remaining shapes begin with an identifier after '$'.
+  const ident = matchIdent(text, pos + 1)
+  if (!ident) return null
+  const afterIdent = pos + 1 + ident.length
+
+  // 2. $cell[N].col
+  if (text[afterIdent] === '[') {
+    const close = text.indexOf(']', afterIdent + 1)
+    if (close < 0) return null
+    const inside = text.slice(afterIdent + 1, close)
+    let nextStart: number
+    let colName: string | null = null
+    let value: unknown
+    let dataType: DataType | undefined
+    let shape: string
+    let source: string
+
+    if (/^\d+$/.test(inside)) {
+      // $cell[N].col
+      if (text[close + 1] !== '.') return null
+      const colMatch = matchIdent(text, close + 2)
+      if (!colMatch) return null
+      colName = colMatch
+      nextStart = close + 2 + colMatch.length
+      source = text.slice(pos, nextStart)
+      shape = `$${ident}[${inside}].${colName}`
+      const table = ctx.cellResults[ident]
+      const rowIdx = parseInt(inside, 10)
+      if (table && rowIdx < table.numRows) {
+        const row = table.get(rowIdx)
+        if (row && row[colName] !== undefined && row[colName] !== null) {
+          value = row[colName]
+          dataType = table.schema.fields.find((f) => f.name === colName)?.type
+        }
+      }
+      return { source, end: nextStart, shape, value, dataType }
+    }
+
+    // $row["col"] / $row['col']
+    if (ident === 'row' && ctx.row !== undefined) {
+      const m = /^(["'])([^"']+)\1$/.exec(inside)
+      if (!m) return null
+      colName = m[2]
+      nextStart = close + 1
+      source = text.slice(pos, nextStart)
+      shape = `$row[${inside}]`
+      const v = ctx.row[colName]
+      if (v !== undefined && v !== null) {
+        value = v
+        dataType = ctx.columnTypes?.get(colName)
+      }
+      return { source, end: nextStart, shape, value, dataType }
+    }
+
+    return null
+  }
+
+  if (text[afterIdent] === '.') {
+    const second = matchIdent(text, afterIdent + 1)
+    if (!second) return null
+    const afterSecond = afterIdent + 1 + second.length
+
+    // 3. $cell.selected.col
+    if (second === 'selected' && text[afterSecond] === '.') {
+      const colMatch = matchIdent(text, afterSecond + 1)
+      if (!colMatch) return null
+      const end = afterSecond + 1 + colMatch.length
+      const source = text.slice(pos, end)
+      const shape = `$${ident}.selected.${colMatch}`
+      const selection = ctx.cellSelections[ident]
+      let value: unknown
+      let dataType: DataType | undefined
+      if (selection) {
+        const v = selection[colMatch]
+        if (v !== undefined && v !== null) {
+          value = v
+          const table = ctx.cellResults[ident]
+          dataType = table?.schema.fields.find((f) => f.name === colMatch)?.type
+        }
+      }
+      return { source, end, shape, value, dataType }
+    }
+
+    // 4. $row.col (only when ctx.row present; matched BEFORE $variable.col so a
+    //    row reference is never shadowed by a varName='row' lookup).
+    if (ident === 'row' && ctx.row !== undefined) {
+      const end = afterIdent + 1 + second.length
+      const source = text.slice(pos, end)
+      const shape = `$row.${second}`
+      const v = ctx.row[second]
+      if (v !== undefined && v !== null) {
+        return {
+          source,
+          end,
+          shape,
+          value: v,
+          dataType: ctx.columnTypes?.get(second),
+        }
+      }
+      return { source, end, shape, value: undefined }
+    }
+
+    // 5. $variable.col
+    const end = afterIdent + 1 + second.length
+    const source = text.slice(pos, end)
+    const shape = `$${ident}.${second}`
+    const variable = ctx.variables[ident]
+    let value: unknown
+    if (variable !== undefined && typeof variable !== 'string') {
+      const v = variable[second]
+      if (v !== undefined) value = v
+    }
+    return { source, end, shape, value }
+  }
+
+  // 6. $variable
+  const end = afterIdent
+  const source = text.slice(pos, end)
+  const shape = `$${ident}`
+  const variable = ctx.variables[ident]
+  let value: unknown
+  if (variable !== undefined) {
+    value = typeof variable === 'string' ? variable : getVariableString(variable)
+  }
+  return { source, end, shape, value }
+}
+
+function isIdentChar(ch: string): boolean {
+  return /[a-zA-Z0-9_]/.test(ch)
+}
+
+interface CallParseResult {
+  /** Resolved args (undefined entries mark unresolved macros). */
+  args: unknown[]
+  /** Warnings produced during arg parsing (e.g. unresolved macros). */
+  argWarnings: string[]
+  /** Names of macro shapes that resolved to undefined (for reporting). */
+  unresolvedArgShapes: string[]
+  /** End index in the input (just past the closing ')'). */
+  end: number
+  /** True when any structural element failed (bad arg form, missing ')'). */
+  aborted: boolean
+}
+
+function tryParseCallArgs(
+  text: string,
+  pos: number,
+  ctx: EvaluateTemplateCtx,
+): CallParseResult | null {
+  // pos points at '('
+  let cursor = pos + 1
+  const args: unknown[] = []
+  const argWarnings: string[] = []
+  const unresolvedArgShapes: string[] = []
+  cursor = skipSpaces(text, cursor)
+
+  if (text[cursor] === ')') {
+    return { args, argWarnings, unresolvedArgShapes, end: cursor + 1, aborted: false }
+  }
+
+  while (cursor < text.length) {
+    cursor = skipSpaces(text, cursor)
+    const ch = text[cursor]
+    if (ch === undefined) return null
+
+    if (ch === '$') {
+      const m = tryParseMacro(text, cursor, ctx)
+      if (!m) return null // bad macro form mid-arg
+      args.push(m.value)
+      if (m.value === undefined) {
+        unresolvedArgShapes.push(m.shape)
+      }
+      cursor = m.end
+    } else if (ch === "'" || ch === '"') {
+      const quote = ch
+      const close = text.indexOf(quote, cursor + 1)
+      if (close < 0) return null
+      args.push(text.slice(cursor + 1, close))
+      cursor = close + 1
+    } else if (ch === '-' || (ch >= '0' && ch <= '9')) {
+      const numRe = /-?\d+(?:\.\d+)?/y
+      numRe.lastIndex = cursor
+      const m = numRe.exec(text)
+      if (!m) return null
+      args.push(Number(m[0]))
+      cursor = numRe.lastIndex
+    } else {
+      // Unsupported arg form (identifier, parenthesis, etc.)
+      return null
+    }
+
+    cursor = skipSpaces(text, cursor)
+    if (text[cursor] === ',') {
+      cursor++
+      continue
+    }
+    if (text[cursor] === ')') {
+      return {
+        args,
+        argWarnings,
+        unresolvedArgShapes,
+        end: cursor + 1,
+        aborted: false,
+      }
+    }
+    return null
+  }
+
+  return null
+}
+
+/**
+ * Single-pass template walker. Resolves function calls (registered in
+ * `TEMPLATE_FUNCTIONS`) and macros (`$variable`, `$variable.col`,
+ * `$cell[N].col`, `$cell.selected.col`, `$row.col`, `$row["col"]`,
+ * `$from`/`$to`) in left-to-right order. Returns the rendered text and
+ * any warnings collected during the walk.
+ */
+export function evaluateTemplate(text: string, ctx: EvaluateTemplateCtx): EvaluateTemplateResult {
+  const out: string[] = []
+  const warningSet = new Set<string>()
+  let pos = 0
+
+  const emitWarning = (w: string) => {
+    if (!warningSet.has(w)) warningSet.add(w)
+  }
+
+  while (pos < text.length) {
+    const ch = text[pos]
+
+    // Branch (a): identifier-in-registry followed by '('
+    if (ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z' || ch === '_') {
+      const ident = matchIdent(text, pos)
+      if (ident && text[pos + ident.length] === '(' && Object.prototype.hasOwnProperty.call(TEMPLATE_FUNCTIONS, ident)) {
+        const parenStart = pos + ident.length
+        const parsed = tryParseCallArgs(text, parenStart, ctx)
+        if (parsed && !parsed.aborted) {
+          const callSource = text.slice(pos, parsed.end)
+          if (parsed.unresolvedArgShapes.length > 0) {
+            for (const s of parsed.unresolvedArgShapes) {
+              emitWarning(`${ident}: ${s} is unresolved`)
+            }
+            out.push(callSource)
+            pos = parsed.end
+            continue
+          }
+          const fn = TEMPLATE_FUNCTIONS[ident]
+          const result = fn(parsed.args)
+          if (result === undefined) {
+            // Distinguish arity vs. coercion failures with a generic message.
+            if (parsed.args.length !== expectedArity(ident)) {
+              emitWarning(
+                `${ident}: expected ${expectedArity(ident)} arguments, got ${parsed.args.length}`,
+              )
+            } else {
+              emitWarning(`${ident}: invalid argument value`)
+            }
+            out.push(callSource)
+            pos = parsed.end
+            continue
+          }
+          out.push(result)
+          pos = parsed.end
+          continue
+        }
+        // Parse aborted → fall through to literal copy.
+      }
+      // Not a call → copy one char and continue.
+      out.push(ch)
+      pos++
+      continue
+    }
+
+    // Branch (b): macro
+    if (ch === '$') {
+      const m = tryParseMacro(text, pos, ctx)
+      if (m) {
+        if (m.value === undefined) {
+          emitWarning(`${m.shape} is unresolved`)
+          out.push(m.source)
+        } else {
+          out.push(formatArrowValue(m.value, m.dataType))
+        }
+        pos = m.end
+        continue
+      }
+      // No shape matched → literal '$', advance one.
+      out.push('$')
+      pos++
+      continue
+    }
+
+    // Branch (c): literal copy
+    out.push(ch)
+    pos++
+  }
+
+  return { text: out.join(''), warnings: [...warningSet] }
+}
+
+/** Expected arity for diagnostic messages. Keep in sync with registry. */
+function expectedArity(name: string): number {
+  if (name === 'format_value') return 2
+  return -1
 }
 
 /**

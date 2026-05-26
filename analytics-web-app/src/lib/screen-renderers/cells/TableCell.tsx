@@ -21,6 +21,7 @@ import {
   useColumnManagement,
   ColumnOverride,
 } from '../table-utils'
+import { ColumnHeaderWarningIcon, useColumnWarnings, WarningReporterContext } from '../warning-reporter'
 import { usePagination, PaginationBar, DEFAULT_PAGE_SIZE } from '../pagination'
 
 // =============================================================================
@@ -82,6 +83,8 @@ export function TableCell({ data, status, options, onOptionsChange, variables, t
     handleRestoreAll,
   } = useColumnManagement(options || {}, onOptionsChange)
 
+  const { columnWarnings, reportWarning } = useColumnWarnings(options?.overrides)
+
   // Pagination
   const pageSize = (options?.pageSize as number | undefined) ?? DEFAULT_PAGE_SIZE
   const handlePageSizeChange = useCallback(
@@ -141,44 +144,50 @@ export function TableCell({ data, status, options, onOptionsChange, variables, t
     <div className="flex flex-col h-full">
       <HiddenColumnsBar hiddenColumns={hiddenColumns} onRestore={handleRestoreColumn} onRestoreAll={handleRestoreAll} compact />
       <div className="flex-1 overflow-auto min-h-0">
-        <table className="w-full text-sm">
-          <thead className="sticky top-0">
-            <tr className="bg-app-card border-b-2 border-theme-border">
-              {selectionMode === 'single' && (
-                <th className="px-1 py-1.5 w-8" />
-              )}
-              {visibleColumns.map((col) => (
-                <SortHeader
-                  key={col.name}
-                  columnName={col.name}
-                  sortColumn={sortColumn}
-                  sortDirection={sortDirection}
-                  onSort={handleSort}
-                  onSortAsc={handleSortAsc}
-                  onSortDesc={handleSortDesc}
-                  onHide={handleHideColumn}
-                  compact
-                >
-                  {col.name}
-                </SortHeader>
-              ))}
-            </tr>
-          </thead>
-          <TableBody
-            data={slicedData}
-            columns={visibleColumns}
-            allColumns={allColumns}
-            compact
-            overrides={overrides}
-            variables={variables}
-            timeRange={timeRange}
-            cellSelections={cellSelections}
-            cellResults={cellResults}
-            selectionMode={selectionMode}
-            selectedRowIndex={pageRelativeSelectedIndex}
-            onRowSelect={handlePageRelativeRowSelect}
-          />
-        </table>
+        <WarningReporterContext.Provider value={reportWarning}>
+          <table className="w-full text-sm">
+            <thead className="sticky top-0">
+              <tr className="bg-app-card border-b-2 border-theme-border">
+                {selectionMode === 'single' && (
+                  <th className="px-1 py-1.5 w-8" />
+                )}
+                {visibleColumns.map((col) => {
+                  const colWarnings = columnWarnings.get(col.name)
+                  return (
+                    <SortHeader
+                      key={col.name}
+                      columnName={col.name}
+                      sortColumn={sortColumn}
+                      sortDirection={sortDirection}
+                      onSort={handleSort}
+                      onSortAsc={handleSortAsc}
+                      onSortDesc={handleSortDesc}
+                      onHide={handleHideColumn}
+                      compact
+                      trailingIcon={colWarnings?.size ? <ColumnHeaderWarningIcon warnings={[...colWarnings]} /> : null}
+                    >
+                      {col.name}
+                    </SortHeader>
+                  )
+                })}
+              </tr>
+            </thead>
+            <TableBody
+              data={slicedData}
+              columns={visibleColumns}
+              allColumns={allColumns}
+              compact
+              overrides={overrides}
+              variables={variables}
+              timeRange={timeRange}
+              cellSelections={cellSelections}
+              cellResults={cellResults}
+              selectionMode={selectionMode}
+              selectedRowIndex={pageRelativeSelectedIndex}
+              onRowSelect={handlePageRelativeRowSelect}
+            />
+          </table>
+        </WarningReporterContext.Provider>
       </div>
       <PaginationBar pagination={pagination} />
     </div>
