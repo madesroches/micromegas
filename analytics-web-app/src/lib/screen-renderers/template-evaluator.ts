@@ -32,6 +32,11 @@ export interface EvaluateTemplateCtx {
   /** Column-type map for RFC3339 stringification of timestamps emitted
    *  as naked `$row.col` macros outside function-call args. */
   columnTypes?: Map<string, DataType>
+  /** When true, a bare `$ident` resolves to `row[ident]` (with its column
+   *  DataType) before falling back to a notebook variable. Map detail
+   *  templates set this so `$col` means "the selected row's col"; the
+   *  table-override path leaves it false and addresses columns via `$row.col`. */
+  bareColumnsFromRow?: boolean
 }
 
 export interface EvaluateTemplateResult {
@@ -189,10 +194,22 @@ function tryParseMacro(text: string, pos: number, ctx: EvaluateTemplateCtx): Mac
     return { source, end, shape, value }
   }
 
-  // 6. $variable
+  // 6. $variable  (or $column when bareColumnsFromRow)
   const end = afterIdent
   const source = text.slice(pos, end)
   const shape = `$${ident}`
+
+  // Map detail templates address the selected row's columns as bare `$col`,
+  // with columns winning name collisions against notebook variables. Check
+  // the row first so the raw value + its DataType reach the caller (enabling
+  // RFC3339 emission and precision-preserving format_value).
+  if (ctx.bareColumnsFromRow && ctx.row !== undefined) {
+    const v = ctx.row[ident]
+    if (v !== undefined && v !== null) {
+      return { source, end, shape, value: v, dataType: ctx.columnTypes?.get(ident) }
+    }
+  }
+
   const variable = ctx.variables[ident]
   let value: unknown
   if (variable !== undefined) {

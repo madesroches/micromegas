@@ -1,14 +1,17 @@
 import { render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
+import type { DataType } from 'apache-arrow'
+import { Table, Timestamp, TimeUnit, vectorFromArray } from 'apache-arrow'
 import { EventDetailPanel } from '../EventDetailPanel'
-import type { Row } from '../overlay'
+import { columnTypeMap, rowValues } from '../overlay'
 
-function buildRow(overrides: Row = {}): Row {
+function buildRow(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return { x: '1', y: '2', z: '3', ...overrides }
 }
 
 function renderPanel(props: {
-  row?: Row
+  row?: Record<string, unknown>
+  columnTypes?: Map<string, DataType>
   template: string
   variables?: Record<string, string | Record<string, string>>
   timeRange?: { begin: string; end: string }
@@ -17,6 +20,7 @@ function renderPanel(props: {
     <MemoryRouter>
       <EventDetailPanel
         row={props.row ?? buildRow()}
+        columnTypes={props.columnTypes ?? new Map()}
         template={props.template}
         variables={props.variables ?? {}}
         timeRange={props.timeRange ?? { begin: '2026-01-01T00:00:00Z', end: '2026-01-02T00:00:00Z' }}
@@ -43,6 +47,32 @@ describe('EventDetailPanel', () => {
       row: buildRow({ x: '0', y: '0', z: '0', time: '2026-05-01T12:00:00.000Z' }),
     })
     expect(screen.getByText('At 2026-05-01T12:00:00.000Z')).toBeInTheDocument()
+  })
+
+  it('renders a Timestamp column as RFC3339 from a bare $col macro', () => {
+    const timestampType = new Timestamp(TimeUnit.MILLISECOND, null)
+    const table = new Table({
+      time: vectorFromArray([1705314600000], timestampType),
+      x: vectorFromArray([0]),
+      y: vectorFromArray([0]),
+      z: vectorFromArray([0]),
+    })
+    renderPanel({
+      template: 'At $time',
+      row: rowValues(table, 0),
+      columnTypes: columnTypeMap(table),
+    })
+    expect(screen.getByText('At 2024-01-15T10:30:00.000Z')).toBeInTheDocument()
+  })
+
+  it('feeds format_value() the raw column value (precision-preserving)', () => {
+    renderPanel({
+      template: 'Size: format_value($size, "bytes")',
+      // BigInt straight off an Int64 column — never stringified before the
+      // template sees it.
+      row: buildRow({ x: '0', y: '0', z: '0', size: 3145728n }),
+    })
+    expect(screen.getByText('Size: 3.0 MB')).toBeInTheDocument()
   })
 
   it('substitutes $from and $to time-range variables', () => {

@@ -287,6 +287,12 @@ standard notebook macros work too:
 - `$variable`, `$variable.column` — notebook variables and their columns
 - `$cell[N].column`, `$cell.selected.column` — cross-cell references
 
+Each `$column` carries its Arrow type, so timestamp columns render as RFC3339
+and numeric columns can be wrapped with `format_value` for adaptive units —
+e.g. `format_value($bytes_sent, 'bytes')` renders `3.4 GB`. The raw,
+full-precision value reaches `format_value` (no intermediate stringification),
+matching the table cell's override-template capability.
+
 The default template is:
 
 ```markdown

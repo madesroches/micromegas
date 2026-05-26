@@ -19,12 +19,13 @@ import { MapViewer } from '@/components/map/MapViewer'
 import { EventDetailPanel } from '@/components/map/EventDetailPanel'
 import {
   buildOverlay,
+  columnTypeMap,
   defaultMappingFor,
   hexFromRgba,
-  materializeRow,
   resolveMappingScalars,
   resolveOverlayConstants,
   rgbaFromHex,
+  rowValues,
   type ChannelBinding,
   type OverlayMapping,
   type Shape,
@@ -317,7 +318,7 @@ export function MapCell({
       if (rowIndex === null || !overlay) {
         onSelectionChangeRef.current?.(null)
       } else {
-        onSelectionChangeRef.current?.(materializeRow(overlay.table, rowIndex))
+        onSelectionChangeRef.current?.(rowValues(overlay.table, rowIndex))
       }
     },
     [overlay]
@@ -326,9 +327,17 @@ export function MapCell({
   const selectedRow = useMemo(
     () =>
       selectedRowIndex !== null && overlay
-        ? materializeRow(overlay.table, selectedRowIndex)
+        ? rowValues(overlay.table, selectedRowIndex)
         : null,
     [selectedRowIndex, overlay]
+  )
+
+  // Schema-derived type map for the detail template's bare `$col` macros —
+  // depends only on the table schema, so it's memoized off `overlay.table`
+  // rather than the selected row index.
+  const columnTypes = useMemo(
+    () => (overlay ? columnTypeMap(overlay.table) : null),
+    [overlay]
   )
 
   // Z resets the view, scoped to the hovered cell so multiple Map cells on a
@@ -424,9 +433,10 @@ export function MapCell({
           resetViewTrigger={resetViewTrigger}
         />
 
-        {selectedRow && (
+        {selectedRow && columnTypes && (
           <EventDetailPanel
             row={selectedRow}
+            columnTypes={columnTypes}
             template={detailTemplate}
             variables={variables}
             timeRange={timeRange}

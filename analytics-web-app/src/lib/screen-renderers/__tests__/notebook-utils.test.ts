@@ -1018,4 +1018,62 @@ describe('evaluateTemplate', () => {
       expect(text).toBe("msg: it's working")
     })
   })
+
+  describe('bareColumnsFromRow (Map detail templates)', () => {
+    it('renders a bare $col Timestamp as RFC3339 via its column DataType', () => {
+      const tsType = new Timestamp(TimeUnit.MILLISECOND, null)
+      const ctx = {
+        ...emptyCtx(),
+        row: { ts: 1705314600000 },
+        columnTypes: new Map([['ts', tsType]]),
+        bareColumnsFromRow: true,
+      }
+      const { text, warnings } = evaluateTemplate('At $ts', ctx)
+      expect(text).toBe('At 2024-01-15T10:30:00.000Z')
+      expect(warnings).toEqual([])
+    })
+
+    it('feeds format_value the raw BigInt column value (precision preserved)', () => {
+      const ctx = {
+        ...emptyCtx(),
+        row: { size: BigInt(3678630912) },
+        bareColumnsFromRow: true,
+      }
+      const { text, warnings } = evaluateTemplate("format_value($size, 'bytes')", ctx)
+      expect(text).toBe('3.4 GB')
+      expect(warnings).toEqual([])
+    })
+
+    it('prefers the row column over a same-named variable', () => {
+      const ctx = {
+        ...emptyCtx(),
+        variables: { shared: 'from-var' },
+        row: { shared: 'from-row' },
+        bareColumnsFromRow: true,
+      }
+      const { text } = evaluateTemplate('value=$shared', ctx)
+      expect(text).toBe('value=from-row')
+    })
+
+    it('falls back to the variable when the row lacks the column', () => {
+      const ctx = {
+        ...emptyCtx(),
+        variables: { only_var: 'V' },
+        row: { other: 'O' },
+        bareColumnsFromRow: true,
+      }
+      const { text } = evaluateTemplate('value=$only_var', ctx)
+      expect(text).toBe('value=V')
+    })
+
+    it('with the flag off, a bare $name resolves the variable, not the row (table-override default)', () => {
+      const ctx = {
+        ...emptyCtx(),
+        variables: { shared: 'from-var' },
+        row: { shared: 'from-row' },
+      }
+      const { text } = evaluateTemplate('value=$shared', ctx)
+      expect(text).toBe('value=from-var')
+    })
+  })
 })
