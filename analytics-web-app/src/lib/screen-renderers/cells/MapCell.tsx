@@ -37,7 +37,6 @@ import {
   type MapCatalogEntry,
   fetchMapCatalog,
   formatMapName,
-  normalizeMapFilename,
   resolveMapBlobUrl,
 } from '@/lib/maps-catalog'
 import { getConfig } from '@/lib/config'
@@ -78,7 +77,7 @@ function MapDropdown({
   onChange: (value: string | undefined) => void
 }) {
   const mapCatalog = useMapCatalog()
-  const selectedFilename = normalizeMapFilename(selectedRaw)
+  const selectedFilename = selectedRaw
   // When the saved mapUrl doesn't match any catalog entry, a controlled
   // `<select value={X}>` with no matching `<option>` is browser-defined:
   // most show the first option visually, and clicking that already-displayed
@@ -114,9 +113,10 @@ function MapDropdown({
 // Mapping resolution
 // =============================================================================
 //
-// `resolveMapping` synthesizes a complete `OverlayMapping` from stored options
-// plus legacy `markerColor`/`markerSize` fallbacks. All back-compat lives here
-// so `buildOverlay` stays agnostic of cell-config shape.
+// `resolveMapping` synthesizes a complete `OverlayMapping` from stored options,
+// layering per-shape defaults under the stored channels and dropping bindings
+// that don't apply to the active shape — so `buildOverlay` stays agnostic of
+// cell-config shape.
 
 function resolveMapping(options: Record<string, unknown> | undefined): {
   shape: Shape
@@ -124,9 +124,6 @@ function resolveMapping(options: Record<string, unknown> | undefined): {
 } {
   const shape: Shape = (options?.shape as Shape) === 'box' ? 'box' : 'sphere'
   const stored = (options?.mapping as OverlayMapping | undefined) ?? {}
-
-  const legacyColor = options?.markerColor as string | undefined
-  const legacySize = options?.markerSize as number | undefined
 
   // Drop channels that don't apply to the active shape *before* the merge.
   // The editor's updateShape callback already strips these on toggle, but
@@ -151,14 +148,6 @@ function resolveMapping(options: Record<string, unknown> | undefined): {
 
   const defaults = defaultMappingFor(shape)
   const merged: OverlayMapping = { ...defaults, ...filtered }
-
-  if (!filtered.color && legacyColor) {
-    const parsed = rgbaFromHex(legacyColor)
-    if (parsed !== null) merged.color = { scalar: parsed }
-  }
-  if (shape === 'sphere' && !filtered.size && typeof legacySize === 'number') {
-    merged.size = { scalar: legacySize }
-  }
 
   return { shape, mapping: merged }
 }
@@ -250,8 +239,6 @@ export function MapCell({
     [
       options?.shape,
       options?.mapping,
-      options?.markerColor,
-      options?.markerSize,
       variables,
       timeRange.begin,
       timeRange.end,
@@ -302,8 +289,7 @@ export function MapCell({
 
   // Read visual options with defaults. `mapUrl` is stored as the bare
   // filename — the renderer composes the blob URL at render time so saved
-  // notebooks keep working across base-path changes and the legacy
-  // `/maps/...` → `${basePath}/api/maps/blob/...` transition.
+  // notebooks keep working across base-path changes.
   const mapFilename = options?.mapUrl as string | undefined
   const basePath = getConfig().basePath
   const mapBlobUrl = useMemo(
@@ -728,9 +714,7 @@ export function MapCellEditor({
 
   // Read the persisted `shape` + `mapping`, layered with the per-shape
   // defaults so empty channels resolve to the same scalars buildOverlay would
-  // use. Legacy `markerColor`/`markerSize` aren't re-read here on purpose —
-  // those exist only for the runtime back-compat path; the editor writes
-  // the new `mapping` shape from first touch.
+  // use.
   const shape: Shape =
     (mapConfig.options?.shape as Shape) === 'box' ? 'box' : 'sphere'
   const storedMapping =
