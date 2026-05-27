@@ -474,5 +474,25 @@ The test's `buildFlameIndex`/`formatBits` import was repointed to
 Note: no production code imported the moved symbols (only the test), so no
 re-export shim was needed.
 
-### PR C — pending
+### PR C — DONE (type-check + lint + 1028-test suite all green)
+Split `MapViewer.tsx` (1085 → 249 lines) into:
+- `shader-patches.ts` (57) — `patchInstanceColorRGBA` with each GLSL block
+  pulled into a named const documented with the `#include <chunk>` it overrides
+  and why (the doc-debt the issue called out).
+- `map-camera-math.ts` (99) — pure: `sphericalToZUpOffset`/
+  `zUpOffsetToSphericalInput`, `cameraBasisFromSpherical`, plus `panTarget`
+  (the old in-closure `panCamera` math, reshaped to take theta/radius and mutate
+  a passed-in target) and `zoomAnchorTarget` (cursor-anchored zoom scaling).
+- `MapInstancedMarkers.tsx` (356) — the three-pass instancing + ref-held GPU
+  buffers + interaction, moved wholesale. Imports `shader-patches`.
+- `MapCamera.tsx` (414) — `MapCameraController`: orbit state, GLB seeding,
+  reset-view, DOM bindings, `useFrame`. Imports `map-camera-math`.
+- `MapViewer.tsx` — container: `MapModel`, `SceneSetup`, `Canvas`, ready-gate,
+  error banner, control hints. Still exports `MapViewer` (the only symbol
+  `MapCell` imports).
+
+Repointed the test's `cameraBasisFromSpherical` import to `../map-camera-math`
+(no production importer existed) and added `__tests__/map-camera-math.test.ts`
+(spherical round-trip, panTarget ground-plane + radius scaling, zoomAnchor).
+
 ### PR D — pending
