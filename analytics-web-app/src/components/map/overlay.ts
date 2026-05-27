@@ -153,8 +153,8 @@ export function writeRGBA(buf: Uint8Array, i: number, rgba: number): void {
   buf[base + 3] = rgba & 0xff
 }
 
-/** Default mapping for `shape`. No access to cell options — back-compat
- *  with legacy markerSize/markerColor is the cell's job, not the builder's. */
+/** Default mapping for `shape`. No access to cell options — layering stored
+ *  channels over these defaults is the cell's job, not the builder's. */
 export function defaultMappingFor(shape: Shape): OverlayMapping {
   if (shape === 'sphere') {
     return {

@@ -42,21 +42,10 @@ async function readErrorBody(response: Response): Promise<MapApiErrorBody | unde
   }
 }
 
-/**
- * Strip a leading `/maps/` from a legacy `mapUrl` so saved notebooks from
- * the static-files era keep loading. Returns the input verbatim if it
- * doesn't start with `/maps/`, or `undefined` for empty/missing input.
- */
-export function normalizeMapFilename(raw: string | undefined | null): string | undefined {
-  if (!raw) return undefined
-  return raw.startsWith('/maps/') ? raw.slice('/maps/'.length) : raw
-}
-
 /** Compose the blob URL the renderer hands to drei's `useGLTF`. */
 export function resolveMapBlobUrl(file: string | undefined, basePath: string): string | undefined {
-  const filename = normalizeMapFilename(file)
-  if (!filename) return undefined
-  return `${basePath}/api/maps/blob/${filename}`
+  if (!file) return undefined
+  return `${basePath}/api/maps/blob/${file}`
 }
 
 /** Display name: strip the `.glb` extension. Underscores are preserved. */

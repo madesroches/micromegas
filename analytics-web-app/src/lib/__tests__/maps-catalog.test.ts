@@ -1,6 +1,5 @@
 import {
   formatMapName,
-  normalizeMapFilename,
   resolveMapBlobUrl,
   fetchMapCatalog,
   __resetMapCatalogForTest,
@@ -10,29 +9,9 @@ import {
   MapApiError,
 } from '../maps-catalog'
 
-describe('normalizeMapFilename', () => {
-  it('strips legacy /maps/ prefix', () => {
-    expect(normalizeMapFilename('/maps/main.glb')).toBe('main.glb')
-  })
-
-  it('leaves bare filenames alone', () => {
-    expect(normalizeMapFilename('main.glb')).toBe('main.glb')
-  })
-
-  it('returns undefined for empty/missing input', () => {
-    expect(normalizeMapFilename(undefined)).toBeUndefined()
-    expect(normalizeMapFilename(null as unknown as undefined)).toBeUndefined()
-    expect(normalizeMapFilename('')).toBeUndefined()
-  })
-})
-
 describe('resolveMapBlobUrl', () => {
   it('composes the blob URL from a bare filename', () => {
     expect(resolveMapBlobUrl('main.glb', '/mmlocal')).toBe('/mmlocal/api/maps/blob/main.glb')
-  })
-
-  it('strips a legacy /maps/ prefix before composing', () => {
-    expect(resolveMapBlobUrl('/maps/main.glb', '/mmlocal')).toBe('/mmlocal/api/maps/blob/main.glb')
   })
 
   it('returns undefined for empty input', () => {
