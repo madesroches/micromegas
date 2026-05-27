@@ -17,6 +17,7 @@ import {
 } from '../notebook-utils'
 import { MapViewer } from '@/components/map/MapViewer'
 import { EventDetailPanel } from '@/components/map/EventDetailPanel'
+import { MapHoverTooltip } from '@/components/map/MapHoverTooltip'
 import {
   buildOverlay,
   columnTypeMap,
@@ -340,6 +341,37 @@ export function MapCell({
     [overlay]
   )
 
+  // Transient hover preview: row index + cursor position, lifted from the mesh
+  // via MapViewer's onHover. Position drives the tooltip; the row index drives
+  // content.
+  const [hover, setHover] = useState<{ rowIndex: number; x: number; y: number } | null>(null)
+  const handleHover = useCallback(
+    (rowIndex: number | null, x: number, y: number) => {
+      setHover(rowIndex === null ? null : { rowIndex, x, y })
+    },
+    []
+  )
+
+  // Clear stale hover on overlay swap (render-phase). The mesh only calls
+  // onHover from pointer events; when `overlay` changes with no pointer event,
+  // MapInstancedMarkers clears its own hoveredRowIndex but never calls
+  // onHover(null), so this lifted `hover` would keep the old rowIndex and the
+  // memo below would derive rowValues against the new table (no bounds check).
+  // Mirror overlayForSelection: reset hover during render before the derive.
+  const [hoverOverlay, setHoverOverlay] = useState(overlay)
+  if (hoverOverlay !== overlay) {
+    setHoverOverlay(overlay)
+    if (hover !== null) setHover(null)
+  }
+
+  // Memoized on rowIndex (not x/y): cursor movement repositions the tooltip
+  // without re-deriving the row or re-evaluating the template.
+  const hoveredRow = useMemo(
+    () => (hover && overlay ? rowValues(overlay.table, hover.rowIndex) : null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [hover?.rowIndex, overlay]
+  )
+
   // Z resets the view, scoped to the hovered cell so multiple Map cells on a
   // page don't all reset together and typing 'z' in a text/query cell is ignored.
   const containerRef = useRef<HTMLDivElement>(null)
@@ -430,6 +462,7 @@ export function MapCell({
           shape={shape}
           selectedRowIndex={selectedRowIndex}
           onSelect={handleSelectByRowIndex}
+          onHover={handleHover}
           resetViewTrigger={resetViewTrigger}
         />
 
@@ -443,6 +476,24 @@ export function MapCell({
             cellResults={cellResults}
             cellSelections={cellSelections}
             onClose={() => handleSelectByRowIndex(null)}
+          />
+        )}
+
+        {/* Transient cursor preview, same content as the docked panel. Shown
+            for any hovered marker (including the selected one). The
+            detailTemplate.trim() guard implements "blank template → highlight
+            only, no panel". */}
+        {hover && hoveredRow && columnTypes && detailTemplate.trim() && (
+          <MapHoverTooltip
+            x={hover.x}
+            y={hover.y}
+            row={hoveredRow}
+            columnTypes={columnTypes}
+            template={detailTemplate}
+            variables={variables}
+            timeRange={timeRange}
+            cellResults={cellResults}
+            cellSelections={cellSelections}
           />
         )}
       </ErrorBoundary>

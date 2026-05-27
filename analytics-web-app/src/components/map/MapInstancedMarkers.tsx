@@ -19,6 +19,7 @@ interface InstancedMarkersProps {
   shape: Shape
   selectedRowIndex: number | null
   onSelect: (rowIndex: number | null) => void
+  onHover?: (rowIndex: number | null, clientX: number, clientY: number) => void
 }
 
 const COLOR_SELECTED_RGBA = 0xff6b6bff
@@ -32,6 +33,7 @@ export function MapInstancedMarkers({
   shape,
   selectedRowIndex,
   onSelect,
+  onHover,
 }: InstancedMarkersProps) {
   const meshRef = useRef<THREE.InstancedMesh>(null)
   const [hoveredRowIndex, setHoveredRowIndex] = useState<number | null>(null)
@@ -86,6 +88,16 @@ export function MapInstancedMarkers({
     selected: null,
     hovered: null,
   })
+
+  // rAF-throttled hover reporting. Pointer moves stash the latest instance id
+  // and cursor position in a ref; a single queued frame flushes them, so at
+  // most one tooltip reposition lands per paint regardless of move frequency.
+  // `onHover` lives in a ref so the pointer handlers stay stable (the prop is
+  // an inline arrow from MapCell that would otherwise re-create them).
+  const onHoverRef = useRef(onHover)
+  onHoverRef.current = onHover
+  const pendingHoverRef = useRef<{ rowIndex: number; x: number; y: number } | null>(null)
+  const hoverRafRef = useRef<number | null>(null)
 
   // Destructure into primitives so the effect dep arrays compare by value,
   // not by `constants` object identity. Without this split, a fresh
@@ -306,10 +318,15 @@ export function MapInstancedMarkers({
 
   // Restore body cursor on unmount in case a marker is hovered when we tear
   // down — the {ready} gate in MapViewer unmounts this component on mapUrl
-  // changes, and a pointer-out we'd otherwise rely on never fires.
+  // changes, and a pointer-out we'd otherwise rely on never fires. Also cancel
+  // any queued hover-flush frame so it can't fire after unmount.
   useEffect(() => {
     return () => {
       document.body.style.cursor = 'auto'
+      if (hoverRafRef.current !== null) {
+        cancelAnimationFrame(hoverRafRef.current)
+        hoverRafRef.current = null
+      }
     }
   }, [])
 
@@ -332,6 +349,31 @@ export function MapInstancedMarkers({
       if (rowIdx === undefined || rowIdx < 0 || rowIdx >= numRows) return
       setHoveredRowIndex(rowIdx)
       document.body.style.cursor = 'pointer'
+      // Surface the tooltip on enter even before the first move.
+      onHoverRef.current?.(rowIdx, e.clientX, e.clientY)
+    },
+    [overlay]
+  )
+
+  // rAF-throttled: stash the latest instance id + cursor position, then flush
+  // once per frame. `setHoveredRowIndex` with an unchanged value is a no-op for
+  // the highlight effect, so per-move events only reposition the tooltip while
+  // the highlighted row stays put.
+  const handlePointerMove = useCallback(
+    (e: ThreeEvent<PointerEvent>) => {
+      e.stopPropagation()
+      const rowIdx = e.instanceId
+      const numRows = overlay.table.numRows
+      if (rowIdx === undefined || rowIdx < 0 || rowIdx >= numRows) return
+      pendingHoverRef.current = { rowIndex: rowIdx, x: e.clientX, y: e.clientY }
+      if (hoverRafRef.current !== null) return
+      hoverRafRef.current = requestAnimationFrame(() => {
+        hoverRafRef.current = null
+        const pending = pendingHoverRef.current
+        if (!pending) return
+        setHoveredRowIndex(pending.rowIndex)
+        onHoverRef.current?.(pending.rowIndex, pending.x, pending.y)
+      })
     },
     [overlay]
   )
@@ -339,6 +381,12 @@ export function MapInstancedMarkers({
   const handlePointerOut = useCallback(() => {
     setHoveredRowIndex(null)
     document.body.style.cursor = 'auto'
+    pendingHoverRef.current = null
+    if (hoverRafRef.current !== null) {
+      cancelAnimationFrame(hoverRafRef.current)
+      hoverRafRef.current = null
+    }
+    onHoverRef.current?.(null, 0, 0)
   }, [])
 
   if (overlay.table.numRows === 0) return null
@@ -350,6 +398,7 @@ export function MapInstancedMarkers({
       renderOrder={10}
       onClick={handleClick}
       onPointerOver={handlePointerOver}
+      onPointerMove={handlePointerMove}
       onPointerOut={handlePointerOut}
     />
   )
