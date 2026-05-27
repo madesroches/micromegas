@@ -61,7 +61,7 @@ spans, then draws labels/headers/axis/selection on the Canvas2D overlay.
 |---|---|---|---|
 | Types + constants | 1–103 | no | `MapViewerProps`, color/scale constants |
 | Coordinate math: `sphericalToZUpOffset`, `zUpOffsetToSphericalInput`, `cameraBasisFromSpherical` | 471–511 | no | pure; `cameraBasisFromSpherical` already exported |
-| GLSL shader patch `patchInstanceColorRGBA` (`onBeforeCompile`) | 111–135 | no | raw GLSL strings, no doc of which `#include <…>` chunks each block overrides |
+| GLSL shader patch `patchInstanceColorRGBA` (`onBeforeCompile`) | 111–135 | no | raw GLSL strings; each `.replace()` already names its chunk inline, but no explanatory comment on why each block overrides it |
 | `MapModel` — GLTF load, mesh traversal, camera/light extraction | 52–89 | yes | drei `useGLTF` |
 | `InstancedMarkers` — three-pass instancing (matrix / color baseline / highlight diff), interaction | 137–464 | yes | per-instance buffers in refs |
 | `MapCameraController` — orbit state, GLB camera seeding, mouse/keyboard/wheel handlers, `useFrame` loop | 520–927 | yes | largest single block (~400 lines); `panCamera` (709–727) is a closure that reads `sphericalRef.current` and mutates `targetRef.current` — its math must be extracted into a pure function, not moved as-is |
@@ -89,7 +89,7 @@ Pure/extractable bits: `buildUrl` (config→URLSearchParams, 79–95),
 - `CellTypeMetadata` shape repeated in `TableCell.tsx:291`, `TransposedTableCell.tsx:206`, `ReferenceTableCell.tsx:167`.
 - `Table.get()` materialization loop (`Array.from({ length: … })`) appears **8×** across `src/lib/screen-renderers/`.
 - `useColumnManagement` (`table-utils.tsx:863`) and `useRowManagement` (`table-utils.tsx:943`) — near-identical.
-- Regex factories the audit cited in `notebook-utils.ts:303-312` — **the line range no longer matches** (file is now 295 lines; nearest factory is `macro-substitution.ts:137`). Re-locate before acting.
+- Regex factories the audit cited in `notebook-utils.ts:303-312` — **already addressed.** The factories live in `macro-substitution.ts`, are already collapsed into a single shared definition (~lines 41-51), and already carry a comment documenting the fresh-RegExp pattern (~lines 37-39). (Line 137 is a `new RegExp(...)` inside the substitution loop, not a factory.) Verify-only; no action expected.
 
 ## Design
 
@@ -249,9 +249,9 @@ regression (see Testing Strategy).
   `useEffect` in `XYChart.tsx`, shrinking it to orchestration.
 - **`HorizontalGroupCell.tsx`** — extract drag-drop layout and the nested cell
   renderer into sibling helpers/components.
-- **notebook-utils regex factories** — re-locate first (audit line range is
-  stale); add a comment block documenting the required processing order, or
-  collapse into one factory if shapes match.
+- **`macro-substitution.ts` regex factories** — likely a no-op: the factories
+  are already collapsed into one shared definition and carry an ordering comment.
+  Verify they're still DRY and documented; only act if a regression has crept in.
 
 ## Implementation Steps
 
@@ -304,7 +304,7 @@ Each phase is its own PR and its own branch off `main`.
 ### PR D — Item 5: lower-priority cleanups
 Pick up opportunistically; each sub-bullet can also fold into a PR already
 touching that file. Order within the PR: metadata factory → `materializeTable`
-→ management-hook merge → XYChart → HorizontalGroupCell → `macro-substitution.ts` regex-factory comment.
+→ management-hook merge → XYChart → HorizontalGroupCell → `macro-substitution.ts` regex-factory verify (likely no-op).
 Lint/type-check/test after each.
 
 ## Files to Modify
@@ -354,10 +354,11 @@ Lint/type-check/test after each.
 
 No user-facing docs change — these are internal refactors with identical
 behavior. Two internal-doc touch-ups:
-- `shader-patches.ts` must document, per GLSL block, which `#include <chunk>`
-  it overrides (the explicit doc-debt in the issue).
-- If the `macro-substitution.ts` regex factories are kept rather than merged, add the
-  one comment block documenting their required processing order.
+- `shader-patches.ts` — each GLSL block's target chunk is already visible (it's
+  the `.replace()` first arg); add an explanatory comment above each block on
+  *why* it overrides that chunk (the doc-debt the issue calls out).
+- The `macro-substitution.ts` regex factories already carry their ordering comment;
+  no doc change expected unless the verify step finds it missing.
 
 No CLAUDE.md / AI_GUIDELINES.md changes.
 
