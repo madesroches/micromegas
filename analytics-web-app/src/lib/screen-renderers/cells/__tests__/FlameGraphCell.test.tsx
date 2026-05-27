@@ -1,5 +1,5 @@
 import { tableFromArrays } from 'apache-arrow'
-import { buildFlameIndex, formatBits } from '../FlameGraphCell'
+import { buildFlameIndex, formatBits } from '../flame-model'
 
 describe('formatBits', () => {
   it('formats small values in bits', () => {

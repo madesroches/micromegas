@@ -451,6 +451,28 @@ change fetch timing, which the plan forbids. So:
   refresh re-fetch). Written against the pre-refactor code first (green), then
   kept green after the split.
 
-### PR B — pending
+### PR B — DONE (type-check + lint + 1022-test suite all green)
+Split `FlameGraphCell.tsx` (1266 → 727 lines) into:
+- `flame-model.ts` (319) — pure: `axisValue`/`detectXAxisMode`, palette +
+  `spanColor`/`spanColorIndex`, constants, `LaneIndex`/`FlameIndex`,
+  `buildFlameIndex`, `laneYOffset`/`totalHeight`, `hitTest`, `formatDuration`/
+  `formatBits`/`formatAxisTick`. No THREE, no React.
+- `FlameGraphScene.ts` (287) — owns the WebGL resources (renderer, ortho
+  camera, instanced mesh) behind `createFlameScene(webglCanvas, textCanvas,
+  initialCapacity) → { resize(w,h,dpr), render(index, view), dispose() }`.
+  The render body (instancing + Canvas2D overlay) is a verbatim port that now
+  takes the view snapshot as a parameter instead of reading a shared ref.
+- `FlameGraphCell.tsx` — React shell: `FlameGraphView` keeps all view +
+  interaction state in a ref and the rAF loop, snapshots it into
+  `scene.render(index, view)`; plus `resolveInitialTimeRange`, the cell, the
+  editor, and `flamegraphMetadata` (still the only export `cell-registry`
+  imports).
+
+The test's `buildFlameIndex`/`formatBits` import was repointed to
+`../flame-model`; added `__tests__/flame-model.test.ts` covering
+`spanColor(Index)`, `formatDuration`, `laneYOffset`/`totalHeight`, `hitTest`.
+Note: no production code imported the moved symbols (only the test), so no
+re-export shim was needed.
+
 ### PR C — pending
 ### PR D — pending
