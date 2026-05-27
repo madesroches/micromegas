@@ -64,7 +64,7 @@ spans, then draws labels/headers/axis/selection on the Canvas2D overlay.
 | GLSL shader patch `patchInstanceColorRGBA` (`onBeforeCompile`) | 111–135 | no | raw GLSL strings, no doc of which `#include <…>` chunks each block overrides |
 | `MapModel` — GLTF load, mesh traversal, camera/light extraction | 52–89 | yes | drei `useGLTF` |
 | `InstancedMarkers` — three-pass instancing (matrix / color baseline / highlight diff), interaction | 137–464 | yes | per-instance buffers in refs |
-| `MapCameraController` — orbit state, GLB camera seeding, mouse/keyboard/wheel handlers, `useFrame` loop | 520–927 | yes | largest single block (~400 lines); `panCamera` helper is pure |
+| `MapCameraController` — orbit state, GLB camera seeding, mouse/keyboard/wheel handlers, `useFrame` loop | 520–927 | yes | largest single block (~400 lines); `panCamera` (709–727) is a closure that reads `sphericalRef.current` and mutates `targetRef.current` — its math must be extracted into a pure function, not moved as-is |
 | `SceneSetup`, `MapViewer` container | 929–1085 | yes | Canvas, Suspense, ready-gate |
 
 ### Item 4 — `PerformanceAnalysisPage.tsx` (1001 lines)
@@ -148,8 +148,14 @@ shader-patches.ts       patchInstanceColorRGBA + the GLSL blocks as named
                         "// overrides #include <begin_vertex>"). This is the
                         single doc-debt the issue explicitly calls out.
 map-camera-math.ts      sphericalToZUpOffset, zUpOffsetToSphericalInput,
-                        cameraBasisFromSpherical, panCamera, the cursor-anchored
+                        cameraBasisFromSpherical, the cursor-anchored
                         zoom-target computation ── pure, unit-testable.
+                        ALSO: extract panCamera's math into a pure helper taking
+                        (spherical, deltaX, deltaY) and mutating a passed-in
+                        target vector (or returning the offset). The existing
+                        panCamera closure reads sphericalRef.current and mutates
+                        targetRef.current, so it must be reshaped to take those
+                        as explicit parameters — it is NOT pure as written.
 MapCamera.tsx           MapCameraController component: event binding, GLB-camera
                         seeding, useFrame loop, raycasting. Imports map-camera-math.
 MapInstancedMarkers.tsx InstancedMarkers component: three-pass instancing,
@@ -197,9 +203,19 @@ The hard part is the **shared time range / config**. Today all three concerns
 read `apiTimeRange`, `processId`, and the `useScreenConfig` config from the same
 scope. After the split, those stay in the page container and pass **down as
 props**; each child re-queries off its own effect when the time range prop
-changes. The existing `prevTimeRangeRef`-comparison re-query logic moves into
-whichever child owns that query (discovery and thread-coverage each get their
-own copy of the "re-fetch when time range changed" guard).
+changes. **Caveat — the time-range re-fetch is currently gated on the metrics
+chart's completion:** the single time-range-change effect
+(`PerformanceAnalysisPage.tsx:502–518`) guards on `hasLoaded`
+(`= metricsData.isComplete` from the metrics chart) and only then fires BOTH
+`loadDiscovery()` AND `loadThreadCoverage()`. The `hasLoadedDiscoveryRef`
+(line 479) is likewise a single ref shared across discovery + thread-coverage,
+reset together in `handleRefresh` (531–535). Giving each child its own
+independent guard would decouple discovery/thread-coverage re-fetch from
+`metricsData.isComplete` and change fetch timing — violating the "behavior
+identical" constraint. So the **page container must keep owning this gate**:
+lift `isComplete`/load state up to the page and have it orchestrate the
+re-fetch, rather than each child holding an independent
+`prevTimeRangeRef`/`hasLoaded` guard.
 
 This is the only item with a real correctness risk: the current effect
 orchestration (`hasLoadedDiscoveryRef`, the metrics-execute-after-discovery
@@ -251,6 +267,10 @@ Each phase is its own PR and its own branch off `main`.
    open/download + cached-buffer logic.
 5. Reduce `PerformanceAnalysisPage.tsx` to AuthGuard + Suspense +
    `useScreenConfig` + layout; thread shared `timeRange`/`processId`/config down.
+   Keep the time-range re-fetch gate in the page: lift the metrics chart's
+   `isComplete` and the shared `hasLoadedDiscoveryRef` up so the page still
+   gates discovery + thread-coverage re-fetch on metrics completion (do NOT give
+   each child an independent guard — see Item 4 design caveat).
 6. Add unit tests for `queries.ts` (`calculateBinInterval`, `buildUrl`).
 7. Lint, type-check, test, then manual smoke (effect-ordering check).
 
