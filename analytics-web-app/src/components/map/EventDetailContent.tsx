@@ -15,6 +15,9 @@ interface EventDetailContentProps {
   timeRange: { begin: string; end: string }
   cellResults: Record<string, Table>
   cellSelections: Record<string, Record<string, unknown>>
+  // Tighter, symmetric padding for the transient hover tooltip, which has no
+  // close button and so doesn't need the `pr-10` gutter the docked panel keeps.
+  compact?: boolean
 }
 
 // `node` is the AST node react-markdown passes to component overrides;
@@ -56,6 +59,7 @@ export function EventDetailContent({
   timeRange,
   cellResults,
   cellSelections,
+  compact = false,
 }: EventDetailContentProps) {
   const { text: rendered, warnings } = useMemo(() => {
     // Bare `$col` macros resolve from the selected row (with their Arrow type)
@@ -74,7 +78,9 @@ export function EventDetailContent({
   }, [template, row, columnTypes, variables, timeRange, cellResults, cellSelections])
 
   return (
-    <div className="prose prose-invert prose-sm max-w-none pl-4 pr-10 py-3 prose-headings:text-theme-text-primary prose-headings:mt-0 prose-p:text-theme-text-secondary prose-a:text-accent-link prose-strong:text-theme-text-primary prose-code:text-accent-highlight prose-code:bg-app-card prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-code:before:content-none prose-code:after:content-none prose-pre:bg-app-card prose-li:text-theme-text-secondary prose-hr:border-theme-border prose-hr:my-3">
+    <div
+      className={`prose prose-invert prose-sm max-w-none ${compact ? 'px-3 py-2' : 'pl-4 pr-10 py-3'} prose-headings:text-theme-text-primary prose-headings:mt-0 prose-p:text-theme-text-secondary prose-a:text-accent-link prose-strong:text-theme-text-primary prose-code:text-accent-highlight prose-code:bg-app-card prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-code:before:content-none prose-code:after:content-none prose-pre:bg-app-card prose-li:text-theme-text-secondary prose-hr:border-theme-border prose-hr:my-3`}
+    >
       <TemplateWarningBanner warnings={warnings} />
       <Markdown remarkPlugins={[remarkGfm]} components={{ a: MarkdownLink }}>
         {rendered}

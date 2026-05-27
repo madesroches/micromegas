@@ -69,8 +69,14 @@ export function MapHoverTooltip({
   return createPortal(
     <div
       ref={ref}
-      className="fixed pointer-events-none z-50 w-fit max-w-[50%] max-h-[60%] overflow-hidden bg-app-panel border border-theme-border rounded-lg shadow-lg"
-      style={{ left: pos.left, top: pos.top }}
+      className="fixed pointer-events-none z-50 origin-top-left scale-[0.68] w-fit max-w-[50%] max-h-[60%] overflow-hidden border border-theme-border rounded-lg shadow-lg backdrop-blur-sm"
+      // Semi-transparent panel so the map reads through; `color-mix` keeps it
+      // tied to the theme `--panel-bg` rather than a hardcoded hex.
+      style={{
+        left: pos.left,
+        top: pos.top,
+        backgroundColor: 'color-mix(in srgb, var(--panel-bg) 82%, transparent)',
+      }}
     >
       <EventDetailContent
         row={row}
@@ -80,6 +86,7 @@ export function MapHoverTooltip({
         timeRange={timeRange}
         cellResults={cellResults}
         cellSelections={cellSelections}
+        compact
       />
     </div>,
     document.body,

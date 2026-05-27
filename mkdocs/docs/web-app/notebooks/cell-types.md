@@ -281,9 +281,10 @@ Non-finite numeric values (NaN, null) in any column-bound numeric channel fail t
 When a marker is selected, the cell renders a Markdown template with macro
 substitution. The same template is also shown as a transient tooltip that
 follows the cursor while you hover a marker (clicking still opens the docked
-panel); leaving the template empty disables the hover preview. The selected
-row's columns are exposed as `$column`, and the standard notebook macros work
-too:
+panel). The hover tooltip is on by default; uncheck **Show as a tooltip when
+hovering a marker** to disable it, and leaving the template empty disables it
+too. The selected row's columns are exposed as `$column`, and the standard
+notebook macros work too:
 
 - `$column` — column from the selected row (wins name collisions against variables)
 - `$from`, `$to` — current time range

@@ -312,6 +312,8 @@ export function MapCell({
   )
   const detailTemplate =
     (options?.detailTemplate as string | undefined) ?? DEFAULT_MAP_DETAIL_TEMPLATE
+  // Hover tooltip is opt-out: absent (legacy configs) or `true` → shown.
+  const showHoverTooltip = (options?.showHoverTooltip as boolean | undefined) !== false
 
   const handleSelectByRowIndex = useCallback(
     (rowIndex: number | null) => {
@@ -480,10 +482,10 @@ export function MapCell({
         )}
 
         {/* Transient cursor preview, same content as the docked panel. Shown
-            for any hovered marker (including the selected one). The
-            detailTemplate.trim() guard implements "blank template → highlight
-            only, no panel". */}
-        {hover && hoveredRow && columnTypes && detailTemplate.trim() && (
+            for any hovered marker (including the selected one) when the editor
+            option is enabled. The detailTemplate.trim() guard implements
+            "blank template → highlight only, no preview". */}
+        {showHoverTooltip && hover && hoveredRow && columnTypes && detailTemplate.trim() && (
           <MapHoverTooltip
             x={hover.x}
             y={hover.y}
@@ -798,6 +800,8 @@ export function MapCellEditor({
 
   const detailTemplate =
     (mapConfig.options?.detailTemplate as string | undefined) ?? DEFAULT_MAP_DETAIL_TEMPLATE
+  const showHoverTooltip =
+    (mapConfig.options?.showHoverTooltip as boolean | undefined) !== false
 
   // Empty-string placeholders for every column from the most recent result
   // so the editor doesn't flag `$columnFromQuery` as "Unknown variable" at
@@ -950,6 +954,15 @@ export function MapCellEditor({
           <code className="text-theme-text-secondary mx-1">$colname</code>
           and notebook variables as <code className="text-theme-text-secondary">$var</code>.
         </div>
+        <label className="flex items-center gap-2 mt-2 text-xs text-theme-text-secondary cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={showHoverTooltip}
+            onChange={(e) => updateOption('showHoverTooltip', e.target.checked)}
+            className="accent-accent-link"
+          />
+          Show as a tooltip when hovering a marker
+        </label>
       </div>
       {templateValidationErrors.length > 0 && (
         <div className="text-red-400 text-sm space-y-1">
@@ -1000,6 +1013,7 @@ export const mapMetadata: CellTypeMetadata = {
         color: { scalar: 0xbf360cff },
       },
       detailTemplate: DEFAULT_MAP_DETAIL_TEMPLATE,
+      showHoverTooltip: true,
     },
   }),
 
