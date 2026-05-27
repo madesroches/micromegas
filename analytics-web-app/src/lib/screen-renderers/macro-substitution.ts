@@ -16,7 +16,8 @@
 import type { Table, DataType } from 'apache-arrow'
 import { isTimeType, timestampToDate } from '@/lib/arrow-utils'
 import type { VariableValue } from './notebook-types'
-import { getVariableString } from './notebook-types'
+import type { ResolveCtx, ResolvedMacro } from './macro-resolve'
+import { resolveMacro } from './macro-resolve'
 
 /**
  * Format an Arrow value as a string, converting timestamps to RFC3339.
@@ -93,53 +94,41 @@ function substituteMacrosImpl(
 ): string {
   let result = input
 
-  // 1. $from / $to
-  result = result.replace(/\$from\b/g, escape(timeRange.begin))
-  result = result.replace(/\$to\b/g, escape(timeRange.end))
+  // The SQL path supplies only these four context fields; row/columnTypes/
+  // bareColumnsFromRow stay unset so `$row.col` and bare-column shapes (which
+  // SQL doesn't have) never resolve here.
+  const ctx: ResolveCtx = { variables, timeRange, cellResults, cellSelections }
+  const emit = (r: ResolvedMacro) => escape(formatArrowValue(r.value, r.dataType))
+
+  // 1. $from / $to. Routed through resolveMacro for a single source of truth;
+  //    output is identical since formatArrowValue(string, undefined) === String.
+  result = result.replace(/\$from\b/g, () => emit(resolveMacro({ kind: 'time', which: 'from' }, ctx)))
+  result = result.replace(/\$to\b/g, () => emit(resolveMacro({ kind: 'time', which: 'to' }, ctx)))
 
   // 2. $cell[N].col — must run before dotted/simple variables to avoid partial matches.
   result = result.replace(cellRefRegex(), (match, cellName, rowIdxStr, colName) => {
-    const table = cellResults[cellName]
-    if (!table) return match
-    const rowIdx = parseInt(rowIdxStr, 10)
-    if (rowIdx >= table.numRows) return match
-    const row = table.get(rowIdx)
-    if (!row || row[colName] === undefined || row[colName] === null) return match
-    const field = table.schema.fields.find((f) => f.name === colName)
-    return escape(formatArrowValue(row[colName], field?.type))
+    const r = resolveMacro({ kind: 'cellRow', cell: cellName, rowIdx: parseInt(rowIdxStr, 10), col: colName }, ctx)
+    return r.resolved ? emit(r) : match // unresolved: leave source
   })
 
   // 2b. $cell.selected.col — must run before dotted variables. Empty string for unresolved.
   result = result.replace(selectedRefRegex(), (_match, cellName, colName) => {
-    const selection = cellSelections[cellName]
-    if (!selection) return ''
-    const value = selection[colName]
-    if (value === undefined || value === null) return ''
-    const table = cellResults[cellName]
-    const field = table?.schema.fields.find((f) => f.name === colName)
-    return escape(formatArrowValue(value, field?.type))
+    const r = resolveMacro({ kind: 'selected', cell: cellName, col: colName }, ctx)
+    return r.resolved ? emit(r) : '' // unresolved: empty
   })
 
   // 3. $variable.col — must run before simple variables.
   result = result.replace(dottedVarRegex(), (match, varName, colName) => {
-    const value = variables[varName]
-    if (value === undefined) return match
-    if (typeof value === 'string') return match // simple variable has no columns; leave unresolved
-    const colValue = value[colName]
-    if (colValue === undefined) return match
-    return escape(colValue)
+    const r = resolveMacro({ kind: 'varCol', name: varName, col: colName }, ctx)
+    return r.resolved ? emit(r) : match // unresolved: leave source
   })
 
   // 4. $variable — sorted by name length descending to avoid partial matches
   //    ($metric vs $metric_name). Lookahead avoids matching $variable.column.
   const sortedVars = Object.entries(variables).sort((a, b) => b[0].length - a[0].length)
-  for (const [name, value] of sortedVars) {
+  for (const [name] of sortedVars) {
     const regex = new RegExp(`\\$${name}\\b(?![.\\[])`, 'g')
-    if (typeof value === 'string') {
-      result = result.replace(regex, escape(value))
-    } else {
-      result = result.replace(regex, escape(getVariableString(value)))
-    }
+    result = result.replace(regex, () => emit(resolveMacro({ kind: 'var', name }, ctx)))
   }
 
   return result
