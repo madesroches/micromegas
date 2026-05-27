@@ -38,15 +38,34 @@ export function MapInstancedMarkers({
   const meshRef = useRef<THREE.InstancedMesh>(null)
   const [hoveredRowIndex, setHoveredRowIndex] = useState<number | null>(null)
 
+  // rAF-throttled hover flush state. Declared up here (before the overlay-swap
+  // guard) so that guard can cancel any in-flight frame. pendingHoverRef stashes
+  // the latest instance id + cursor position; hoverRafRef holds the queued frame
+  // id. cancelHoverFlush drops both — used by the swap guard, pointer-out, and
+  // unmount so a stale frame can never fire against the wrong table or after
+  // teardown.
+  const pendingHoverRef = useRef<{ rowIndex: number; x: number; y: number } | null>(null)
+  const hoverRafRef = useRef<number | null>(null)
+  const cancelHoverFlush = useCallback(() => {
+    pendingHoverRef.current = null
+    if (hoverRafRef.current !== null) {
+      cancelAnimationFrame(hoverRafRef.current)
+      hoverRafRef.current = null
+    }
+  }, [])
+
   // Clear hover synchronously when the overlay changes. Without this, a
   // stale hoveredRowIndex from the previous table would index a different
   // point in the new one, briefly highlighting the wrong marker until the
-  // next pointer event corrected it. Mirrors the selection-clear pattern
-  // in MapCell.
+  // next pointer event corrected it. Also cancel any pending hover-flush frame:
+  // a rAF queued by a pointer-move just before the swap would otherwise fire
+  // against the new table, re-surfacing a stale/empty tooltip for one frame.
+  // Mirrors the selection-clear pattern in MapCell.
   const [overlayForHover, setOverlayForHover] = useState(overlay)
   if (overlayForHover !== overlay) {
     setOverlayForHover(overlay)
     setHoveredRowIndex(null)
+    cancelHoverFlush()
   }
 
   const tempObject = useMemo(() => new THREE.Object3D(), [])
@@ -96,8 +115,6 @@ export function MapInstancedMarkers({
   // an inline arrow from MapCell that would otherwise re-create them).
   const onHoverRef = useRef(onHover)
   onHoverRef.current = onHover
-  const pendingHoverRef = useRef<{ rowIndex: number; x: number; y: number } | null>(null)
-  const hoverRafRef = useRef<number | null>(null)
 
   // Destructure into primitives so the effect dep arrays compare by value,
   // not by `constants` object identity. Without this split, a fresh
@@ -323,12 +340,9 @@ export function MapInstancedMarkers({
   useEffect(() => {
     return () => {
       document.body.style.cursor = 'auto'
-      if (hoverRafRef.current !== null) {
-        cancelAnimationFrame(hoverRafRef.current)
-        hoverRafRef.current = null
-      }
+      cancelHoverFlush()
     }
-  }, [])
+  }, [cancelHoverFlush])
 
   const handleClick = useCallback(
     (e: ThreeEvent<MouseEvent>) => {
@@ -381,13 +395,9 @@ export function MapInstancedMarkers({
   const handlePointerOut = useCallback(() => {
     setHoveredRowIndex(null)
     document.body.style.cursor = 'auto'
-    pendingHoverRef.current = null
-    if (hoverRafRef.current !== null) {
-      cancelAnimationFrame(hoverRafRef.current)
-      hoverRafRef.current = null
-    }
+    cancelHoverFlush()
     onHoverRef.current?.(null, 0, 0)
-  }, [])
+  }, [cancelHoverFlush])
 
   if (overlay.table.numRows === 0) return null
 
