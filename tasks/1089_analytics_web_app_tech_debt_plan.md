@@ -410,3 +410,47 @@ None blocking — the items below were investigated and resolved against the rep
   imports them, so the moves repoint the test imports — no shims.
 - **PR D granularity (default: one PR).** Treated as a single cleanup PR; split
   per sub-item only if it grows unwieldy. Process preference, not a blocker.
+
+## Execution Log
+
+Landing all four items on the `refac` branch (no separate per-PR branches), with
+a commit between each item. Tests added wherever a safety net was warranted.
+
+### PR A — DONE (type-check + lint + 1013-test suite all green)
+Split `PerformanceAnalysisPage.tsx` (1000 → 463 lines) into:
+- `perf-analysis/queries.ts` — pure SQL/`VARIABLES`/`DEFAULT_CONFIG`/`buildUrl`/
+  `calculateBinInterval`/`Measure`. Unit-tested (`__tests__/queries.test.ts`).
+- `perf-analysis/usePerfettoTrace.ts` — self-contained trace-generation hook
+  (open/download/cached-buffer + progress/error state). The page renders the
+  SplitButton and trace banners from it.
+- `perf-analysis/MeasureDiscovery.tsx` — discovery query + measure dropdown.
+- `perf-analysis/PerformanceMetricsChart.tsx` — `useMetricsData` + custom-query
+  path + the metrics-execute effect + the chart-area states.
+- `perf-analysis/ThreadCoveragePanel.tsx` — thread-coverage + event-count queries,
+  renders the bottom `ThreadCoverageTimeline`.
+
+**Architecture note (deviation from the literal plan, kept behavior-identical):**
+the page's three concerns are entangled through the shared re-fetch gate
+(`hasLoadedDiscoveryRef` + the `hasLoaded`-gated time-range effect) AND the layout
+interleaves them (measure dropdown + Perfetto button share one toolbar row; trace
+banners render between toolbar and chart; the coverage timeline is at the bottom).
+A clean "each child owns and re-queries its own slice independently" split would
+change fetch timing, which the plan forbids. So:
+- **State that the gate or multiple sections read stays page-owned** (`selectedMeasure`,
+  `measures`, `discoveryDone`/`Loading`, `queryError`, `traceEventCount`,
+  `chartWidth`/`chartAxisBounds`). Each component encapsulates its *fetch logic +
+  JSX + genuinely-local state* and **registers its loader into a page-held ref**, so
+  the page's two gate effects call the loaders exactly as before.
+- The metrics-execute effect moved into `PerformanceMetricsChart`; it lifts the
+  gate-relevant view-state (`hasLoaded`, `isLoading`, `chartTimeRange`,
+  `chartDataLength`, `propertyParseErrors`) back to the page via a single stable
+  callback, computed from memo-stable values so there is no render loop.
+- **Safety net:** added `__tests__/PerformanceAnalysisPage.test.tsx`
+  characterizing the gate (mount fetch order + auto-select + metrics execute;
+  one re-fetch per concern on time-range change, gated on metrics completion;
+  refresh re-fetch). Written against the pre-refactor code first (green), then
+  kept green after the split.
+
+### PR B — pending
+### PR C — pending
+### PR D — pending
