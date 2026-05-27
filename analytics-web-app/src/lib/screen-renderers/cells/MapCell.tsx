@@ -70,14 +70,13 @@ function MapDropdownLoading() {
 }
 
 function MapDropdown({
-  selectedRaw,
+  selected,
   onChange,
 }: {
-  selectedRaw: string | undefined
+  selected: string | undefined
   onChange: (value: string | undefined) => void
 }) {
   const mapCatalog = useMapCatalog()
-  const selectedFilename = selectedRaw
   // When the saved mapUrl doesn't match any catalog entry, a controlled
   // `<select value={X}>` with no matching `<option>` is browser-defined:
   // most show the first option visually, and clicking that already-displayed
@@ -85,19 +84,19 @@ function MapDropdown({
   // the stale value — the catalog is guaranteed loaded by the time this
   // renders (Suspense above), so a working map never flashes as missing.
   const isInCatalog =
-    !!selectedFilename && mapCatalog.some((entry) => entry.file === selectedFilename)
+    !!selected && mapCatalog.some((entry) => entry.file === selected)
   return (
     <select
       className="flex-1 bg-app-card border border-theme-border rounded px-2 py-1 text-sm text-theme-text-primary focus:outline-none focus:border-accent-link"
-      value={selectedFilename ?? ''}
+      value={selected ?? ''}
       onChange={(e) => onChange(e.target.value || undefined)}
     >
       <option value="" disabled>
         Select a map…
       </option>
-      {selectedFilename && !isInCatalog && (
-        <option value={selectedFilename}>
-          {formatMapName(selectedFilename)} (not in catalog)
+      {selected && !isInCatalog && (
+        <option value={selected}>
+          {formatMapName(selected)} (not in catalog)
         </option>
       )}
       {mapCatalog.map((entry) => (
@@ -836,7 +835,7 @@ export function MapCellEditor({
             <label className="text-xs text-theme-text-secondary w-24 shrink-0">Map</label>
             <Suspense fallback={<MapDropdownLoading />}>
               <MapDropdown
-                selectedRaw={mapConfig.options?.mapUrl as string | undefined}
+                selected={mapConfig.options?.mapUrl as string | undefined}
                 onChange={(value) => updateOption('mapUrl', value)}
               />
             </Suspense>
