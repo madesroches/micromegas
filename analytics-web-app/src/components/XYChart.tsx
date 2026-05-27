@@ -11,6 +11,7 @@ import { formatValueWithUnit } from '@/lib/format-value'
 import type { ChartSeriesData } from '@/lib/arrow-utils'
 
 import { SERIES_COLORS } from './chart-constants'
+import { buildXAxisConfig } from './xychart-axis'
 
 export interface ChartAxisBounds {
   left: number // Left padding (Y-axis width)
@@ -465,36 +466,7 @@ export function XYChart({
     }
 
     // Build X axis configuration based on mode
-    const xAxisConfig: uPlot.Axis = {
-      stroke: '#6a6a7a',
-      grid: { stroke: '#2a2a35', width: 1 },
-      ticks: { stroke: '#2a2a35', width: 1 },
-      font: '11px -apple-system, BlinkMacSystemFont, sans-serif',
-      size: 65,
-    }
-
-    if (xAxisMode === 'categorical' && xLabels) {
-      xAxisConfig.incrs = [1]
-      xAxisConfig.space = 60
-      xAxisConfig.values = (_u: uPlot, vals: number[]) => {
-        return vals.map((v) => {
-          const idx = Math.round(v)
-          if (idx >= 0 && idx < xLabels.length) return xLabels[idx]
-          return ''
-        })
-      }
-    } else if (xAxisMode === 'numeric') {
-      xAxisConfig.space = 60
-      xAxisConfig.values = (_u: uPlot, vals: number[]) => {
-        return vals.map((v) => {
-          if (v === 0) return '0'
-          const absV = Math.abs(v)
-          if (absV >= 1000) return v.toLocaleString()
-          if (absV >= 1) return v.toFixed(1)
-          return v.toPrecision(2)
-        })
-      }
-    }
+    const xAxisConfig = buildXAxisConfig(xAxisMode, xLabels)
 
     if (isMultiSeries && normalizedSeries.length > 1) {
       // ===================== MULTI-SERIES PATH =====================

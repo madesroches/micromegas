@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import { cameraBasisFromSpherical } from '../MapViewer'
+import { cameraBasisFromSpherical } from '../map-camera-math'
 
 function expectVec(v: THREE.Vector3, x: number, y: number, z: number) {
   expect(v.x).toBeCloseTo(x, 10)

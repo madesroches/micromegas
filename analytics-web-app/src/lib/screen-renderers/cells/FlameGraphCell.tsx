@@ -1,6 +1,4 @@
 import { useRef, useEffect, useCallback, useMemo, useState } from 'react'
-import { DataType, Table } from 'apache-arrow'
-import * as THREE from 'three'
 import type {
   CellTypeMetadata,
   CellRendererProps,
@@ -12,324 +10,22 @@ import { AvailableVariablesPanel } from '@/components/AvailableVariablesPanel'
 import { DocumentationLink, QUERY_GUIDE_URL } from '@/components/DocumentationLink'
 import { SyntaxEditor } from '@/components/SyntaxEditor'
 import { substituteMacros, validateMacros, DEFAULT_SQL } from '../notebook-utils'
-import { timestampToMs } from '@/lib/arrow-utils'
 import { parseRelativeTime } from '@/lib/time-range'
 import { Flame, ChevronDown, ChevronRight } from 'lucide-react'
-import { computeAsyncVisualDepths, type SpanData } from './FlameGraphLayout'
-
-// X-axis mode: 'time' uses timestamp columns; 'bits' uses numeric (Int64/Float64)
-// columns where each unit represents bits on the wire (see `net_spans` view).
-type XAxisMode = 'time' | 'bits'
-
-function axisValue(raw: unknown, dataType: DataType, mode: XAxisMode): number {
-  if (mode === 'bits') {
-    if (raw == null) return NaN
-    if (typeof raw === 'number') return raw
-    if (typeof raw === 'bigint') return Number(raw)
-    const n = Number(raw)
-    return Number.isFinite(n) ? n : NaN
-  }
-  return timestampToMs(raw, dataType)
-}
-
-function detectXAxisMode(dataType: DataType): XAxisMode {
-  if (DataType.isTimestamp(dataType)) return 'time'
-  return 'bits'
-}
+import {
+  axisValue,
+  buildFlameIndex,
+  formatBits,
+  formatDuration,
+  hitTest,
+  totalHeight,
+  TIME_AXIS_HEIGHT,
+  type FlameIndex,
+} from './flame-model'
+import { createFlameScene, type FlameScene } from './FlameGraphScene'
 
 // =============================================================================
-// Constants
-// =============================================================================
-
-const SPAN_HEIGHT = 20
-const SPAN_GAP = 1
-const LANE_HEADER_HEIGHT = 24
-const LANE_PADDING = 4
-const TIME_AXIS_HEIGHT = 24
-const LABEL_MIN_WIDTH_PX = 40
-
-// =============================================================================
-// Brand-derived tricolor palette
-// =============================================================================
-
-const FLAME_PALETTE = [
-  // Rust family
-  '#8d3a14', '#a33c10', '#bf360c', '#c94e1a', '#d46628',
-  // Blue family
-  '#0d47a1', '#1565c0', '#1976d2', '#1e88e5', '#2196f3',
-  // Gold family
-  '#e6a000', '#ecae1a', '#ffb300', '#ffc107', '#ffd54f',
-]
-
-const BLUE_INDICES = new Set([5, 6, 7, 8, 9])
-
-function spanColorIndex(name: string): number {
-  let hash = 0
-  for (let i = 0; i < name.length; i++) {
-    hash = ((hash << 5) - hash + name.charCodeAt(i)) | 0
-  }
-  return Math.abs(hash) % FLAME_PALETTE.length
-}
-
-function spanColor(name: string): [hex: string, textLight: boolean] {
-  const idx = spanColorIndex(name)
-  return [FLAME_PALETTE[idx], BLUE_INDICES.has(idx)]
-}
-
-// =============================================================================
-// Data Model — FlameIndex
-// =============================================================================
-
-interface LaneIndex {
-  id: string
-  name: string
-  maxDepth: number
-  /** Row indices into the Arrow table belonging to this lane, sorted by begin time */
-  rowIndices: Int32Array
-  /** Visual depth for each entry in rowIndices (greedy-packed to avoid overlap) */
-  visualDepths: Int32Array
-}
-
-interface FlameIndex {
-  table: Table
-  lanes: LaneIndex[]
-  timeRange: { min: number; max: number }
-  /** Pre-built id → name lookup for O(1) parent name resolution in tooltips */
-  idToName: Map<bigint, string>
-  /** Whether the X axis represents wall-clock time or bits on the wire. */
-  xAxisMode: XAxisMode
-  error?: string
-}
-
-const REQUIRED_COLUMNS = ['id', 'parent', 'name', 'begin', 'end', 'depth'] as const
-
-// eslint-disable-next-line react-refresh/only-export-components
-export function buildFlameIndex(table: Table): FlameIndex {
-  // Validate required columns
-  const missingColumns = REQUIRED_COLUMNS.filter((col) => !table.getChild(col))
-  if (missingColumns.length > 0) {
-    const available = table.schema.fields.map((f) => f.name).join(', ') || 'none'
-    return {
-      table,
-      lanes: [],
-      timeRange: { min: 0, max: 0 },
-      idToName: new Map(),
-      xAxisMode: 'time',
-      error: `Missing required columns: ${missingColumns.join(', ')}. Query must return: name, begin, end, depth. Available: ${available}`,
-    }
-  }
-
-  const beginCol = table.getChild('begin')!
-  const endCol = table.getChild('end')!
-  const depthCol = table.getChild('depth')!
-  const laneCol = table.getChild('lane')
-
-  const beginType = beginCol.type
-  const endType = endCol.type
-  const xAxisMode = detectXAxisMode(beginType)
-
-  // Single pass: bucket by lane, track min/max time and max depth per lane
-  const laneMap = new Map<string, { rows: number[]; maxDepth: number }>()
-  const laneOrder: string[] = []
-  let globalMin = Infinity
-  let globalMax = -Infinity
-
-  for (let i = 0; i < table.numRows; i++) {
-    const beginRaw = beginCol.get(i)
-    const endRaw = endCol.get(i)
-    if (beginRaw == null || endRaw == null) continue
-
-    const begin = axisValue(beginRaw, beginType, xAxisMode)
-    const end = axisValue(endRaw, endType, xAxisMode)
-    if (isNaN(begin) || isNaN(end)) continue
-
-    const depth = Number(depthCol.get(i) ?? 0)
-    const laneName = laneCol ? String(laneCol.get(i) ?? 'default') : 'default'
-
-    if (!laneMap.has(laneName)) {
-      laneMap.set(laneName, { rows: [], maxDepth: 0 })
-      laneOrder.push(laneName)
-    }
-    const lane = laneMap.get(laneName)!
-    lane.rows.push(i)
-    if (depth > lane.maxDepth) lane.maxDepth = depth
-
-    if (begin < globalMin) globalMin = begin
-    if (end > globalMax) globalMax = end
-  }
-
-  // Sort each lane's rows by begin time, compute visual depths per lane
-  const lanes: LaneIndex[] = laneOrder.map((name) => {
-    const lane = laneMap.get(name)!
-    const rowIndices = new Int32Array(lane.rows)
-    rowIndices.sort((a, b) => {
-      const aBegin = axisValue(beginCol.get(a), beginType, xAxisMode)
-      const bBegin = axisValue(beginCol.get(b), beginType, xAxisMode)
-      return aBegin - bBegin
-    })
-
-    const isAsync = name === 'async'
-
-    if (isAsync) {
-      // Async spans: DFS tree layout via extracted function.
-      // Convert Arrow rows to SpanData[], compute layout, map back.
-      const idCol = table.getChild('id')!
-      const parentCol = table.getChild('parent')!
-
-      const spanDataArr: SpanData[] = []
-      for (let i = 0; i < rowIndices.length; i++) {
-        const row = rowIndices[i]
-        spanDataArr.push({
-          id: Number(idCol.get(row) ?? 0),
-          parent: Number(parentCol.get(row) ?? 0),
-          begin: axisValue(beginCol.get(row), beginType, xAxisMode),
-          end: axisValue(endCol.get(row), endType, xAxisMode),
-          depth: Number(depthCol.get(row) ?? 0),
-        })
-      }
-
-      const vdArr = computeAsyncVisualDepths(spanDataArr)
-      const visualDepths = new Int32Array(vdArr)
-      let maxVisualDepth = 0
-      for (const vd of vdArr) {
-        if (vd > maxVisualDepth) maxVisualDepth = vd
-      }
-
-      return { id: name, name, maxDepth: maxVisualDepth, rowIndices, visualDepths }
-    } else {
-      // Thread spans: depth from data is the call-stack depth, use directly
-      const visualDepths = new Int32Array(rowIndices.length)
-      let maxDepth = 0
-      for (let i = 0; i < rowIndices.length; i++) {
-        const d = Number(depthCol.get(rowIndices[i]) ?? 0)
-        visualDepths[i] = d
-        if (d > maxDepth) maxDepth = d
-      }
-      return { id: name, name, maxDepth, rowIndices, visualDepths }
-    }
-  })
-
-  // Build id → name map for O(1) parent name resolution in tooltips
-  const idToName = new Map<bigint, string>()
-  const idCol = table.getChild('id')
-  const nameCol = table.getChild('name')
-  if (idCol && nameCol) {
-    for (let i = 0; i < table.numRows; i++) {
-      const id = idCol.get(i)
-      if (id != null) idToName.set(id, String(nameCol.get(i) ?? ''))
-    }
-  }
-
-  return {
-    table,
-    lanes,
-    timeRange: { min: globalMin === Infinity ? 0 : globalMin, max: globalMax === -Infinity ? 0 : globalMax },
-    idToName,
-    xAxisMode,
-  }
-}
-
-// =============================================================================
-// Layout helpers
-// =============================================================================
-
-function laneYOffset(lanes: LaneIndex[], laneIdx: number): number {
-  let y = 0
-  for (let i = 0; i < laneIdx; i++) {
-    y += LANE_HEADER_HEIGHT + (lanes[i].maxDepth + 1) * (SPAN_HEIGHT + SPAN_GAP) + LANE_PADDING
-  }
-  return y
-}
-
-function totalHeight(lanes: LaneIndex[]): number {
-  if (lanes.length === 0) return 0
-  return laneYOffset(lanes, lanes.length - 1) +
-    LANE_HEADER_HEIGHT + (lanes[lanes.length - 1].maxDepth + 1) * (SPAN_HEIGHT + SPAN_GAP) + LANE_PADDING
-}
-
-// =============================================================================
-// Hit Testing
-// =============================================================================
-
-interface HitResult {
-  rowIndex: number
-  laneName: string
-}
-
-function hitTest(
-  index: FlameIndex,
-  dataX: number, // time in ms or bits (depends on xAxisMode)
-  dataY: number, // vertical pixel offset (from top of content)
-): HitResult | null {
-  const beginCol = index.table.getChild('begin')!
-  const endCol = index.table.getChild('end')!
-  const beginType = beginCol.type
-  const endType = endCol.type
-
-  // Find which lane the Y falls in
-  let yAccum = 0
-  for (let li = 0; li < index.lanes.length; li++) {
-    const lane = index.lanes[li]
-    const laneTop = yAccum + LANE_HEADER_HEIGHT
-    const laneContentHeight = (lane.maxDepth + 1) * (SPAN_HEIGHT + SPAN_GAP)
-    const laneBottom = yAccum + LANE_HEADER_HEIGHT + laneContentHeight + LANE_PADDING
-
-    if (dataY >= laneTop && dataY < laneBottom) {
-      // Determine depth band
-      const relY = dataY - laneTop
-      const depth = Math.floor(relY / (SPAN_HEIGHT + SPAN_GAP))
-      if (depth > lane.maxDepth) return null
-
-      for (let i = 0; i < lane.rowIndices.length; i++) {
-        const row = lane.rowIndices[i]
-        const begin = axisValue(beginCol.get(row), beginType, index.xAxisMode)
-        if (begin > dataX) break // past cursor — no more candidates
-        const end = axisValue(endCol.get(row), endType, index.xAxisMode)
-        if (lane.visualDepths[i] === depth && dataX >= begin && dataX <= end) {
-          return { rowIndex: row, laneName: lane.name }
-        }
-      }
-      return null
-    }
-    yAccum = laneBottom
-  }
-  return null
-}
-
-// =============================================================================
-// Format helpers
-// =============================================================================
-
-function formatDuration(ms: number): string {
-  if (ms < 0.001) return `${(ms * 1_000_000).toFixed(0)}ns`
-  if (ms < 1) return `${(ms * 1000).toFixed(0)}us`
-  if (ms < 1000) return `${ms.toFixed(1)}ms`
-  return `${(ms / 1000).toFixed(2)}s`
-}
-
-// eslint-disable-next-line react-refresh/only-export-components
-export function formatBits(n: number): string {
-  const abs = Math.abs(n)
-  if (abs < 1_000) return `${n.toFixed(0)} b`
-  if (abs < 1_000_000) return `${(n / 1_000).toFixed(1)} Kb`
-  if (abs < 1_000_000_000) return `${(n / 1_000_000).toFixed(1)} Mb`
-  return `${(n / 1_000_000_000).toFixed(1)} Gb`
-}
-
-const TIME_AXIS_FORMAT = new Intl.DateTimeFormat(undefined, {
-  hour: '2-digit',
-  minute: '2-digit',
-  second: '2-digit',
-  fractionalSecondDigits: 3,
-  hour12: false,
-} as Intl.DateTimeFormatOptions)
-
-function formatAxisTick(value: number, mode: XAxisMode): string {
-  return mode === 'bits' ? formatBits(value) : TIME_AXIS_FORMAT.format(value)
-}
-
-// =============================================================================
-// FlameGraph Renderer (Three.js + Canvas2D + DOM)
+// FlameGraph Renderer (React shell over FlameGraphScene)
 // =============================================================================
 
 interface FlameGraphViewProps {
@@ -344,12 +40,11 @@ function FlameGraphView({ index, onTimeRangeSelect, initialTimeRange }: FlameGra
   const textCanvasRef = useRef<HTMLCanvasElement>(null)
   const tooltipRef = useRef<HTMLDivElement>(null)
 
-  // Rendering state stored in refs to avoid re-renders
+  // The scene owns the WebGL resources; the shell owns the view state below.
+  const sceneRef = useRef<FlameScene | null>(null)
+
+  // View + interaction state stored in refs to avoid re-renders
   const stateRef = useRef({
-    renderer: null as THREE.WebGLRenderer | null,
-    camera: null as THREE.OrthographicCamera | null,
-    scene: null as THREE.Scene | null,
-    mesh: null as THREE.InstancedMesh | null,
     // View state
     viewMinTime: index.timeRange.min,
     viewMaxTime: index.timeRange.max,
@@ -365,212 +60,28 @@ function FlameGraphView({ index, onTimeRangeSelect, initialTimeRange }: FlameGra
     width: 0,
     height: 0,
     contentHeight: totalHeight(index.lanes),
-    // Allocated instance count
-    maxInstances: 0,
   })
 
   const animFrameRef = useRef(0)
 
   // -----------------------------------------------------------------------
-  // Core render function
+  // Frame request — snapshots the view state and hands it to the scene.
   // -----------------------------------------------------------------------
   const render = useCallback(() => {
+    const scene = sceneRef.current
+    if (!scene) return
     const s = stateRef.current
-    if (!s.renderer || !s.camera || !s.scene || !s.mesh) return
-    if (s.width === 0 || s.height === 0) return
-
-    const canvasHeight = s.height - TIME_AXIS_HEIGHT
-    const timeSpan = s.viewMaxTime - s.viewMinTime
-    if (timeSpan <= 0) return
-
-    const beginCol = index.table.getChild('begin')!
-    const endCol = index.table.getChild('end')!
-    const nameCol = index.table.getChild('name')!
-    const beginType = beginCol.type
-    const endType = endCol.type
-    const xAxisMode = index.xAxisMode
-
-    const pxPerMs = s.width / timeSpan
-    const mat = new THREE.Matrix4()
-    const col = new THREE.Color()
-    let instanceIdx = 0
-
-    // Ensure mesh has enough capacity
-    const estimatedMax = index.table.numRows
-    if (estimatedMax > s.maxInstances) {
-      // Recreate mesh with larger capacity
-      s.scene.remove(s.mesh)
-      s.mesh.dispose()
-      const geo = new THREE.PlaneGeometry(1, 1)
-      const material = new THREE.MeshBasicMaterial({ color: 0xffffff })
-      s.mesh = new THREE.InstancedMesh(geo, material, estimatedMax)
-      s.mesh.frustumCulled = false
-      s.scene.add(s.mesh)
-      s.maxInstances = estimatedMax
-    }
-
-    // Populate instances for visible spans
-    for (let li = 0; li < index.lanes.length; li++) {
-      const lane = index.lanes[li]
-      const laneTop = laneYOffset(index.lanes, li) + LANE_HEADER_HEIGHT - s.scrollY
-
-      // Skip lanes entirely off-screen
-      const laneContentHeight = (lane.maxDepth + 1) * (SPAN_HEIGHT + SPAN_GAP)
-      if (laneTop + laneContentHeight < 0 || laneTop > canvasHeight) continue
-
-      for (let i = 0; i < lane.rowIndices.length; i++) {
-        const row = lane.rowIndices[i]
-        const begin = axisValue(beginCol.get(row), beginType, xAxisMode)
-        if (begin >= s.viewMaxTime) break // sorted by begin — nothing further can be visible
-
-        const end = axisValue(endCol.get(row), endType, xAxisMode)
-        if (end <= s.viewMinTime) continue // ends before viewport
-
-        const depth = lane.visualDepths[i]
-        const name = String(nameCol.get(row) ?? '')
-
-        // Pixel coordinates
-        const x1 = (begin - s.viewMinTime) * pxPerMs
-        const x2 = (end - s.viewMinTime) * pxPerMs
-        const w = Math.max(x2 - x1, 1) // min 1px width
-        const y = laneTop + depth * (SPAN_HEIGHT + SPAN_GAP)
-
-        // Skip if off-screen vertically
-        if (y + SPAN_HEIGHT < 0 || y > canvasHeight) continue
-
-        // Set instance transform: translate to center, scale to size
-        mat.makeScale(w, SPAN_HEIGHT, 1)
-        mat.setPosition(x1 + w / 2, canvasHeight - y - SPAN_HEIGHT / 2, 0)
-        s.mesh.setMatrixAt(instanceIdx, mat)
-
-        // Color
-        const [hex] = spanColor(name)
-        col.set(hex)
-        s.mesh.setColorAt(instanceIdx, col)
-
-        instanceIdx++
-      }
-    }
-
-    s.mesh.count = instanceIdx
-    s.mesh.instanceMatrix.needsUpdate = true
-    if (s.mesh.instanceColor) s.mesh.instanceColor.needsUpdate = true
-
-    // Camera: orthographic pixel-space
-    s.camera.left = 0
-    s.camera.right = s.width
-    s.camera.top = canvasHeight
-    s.camera.bottom = 0
-    s.camera.near = -1
-    s.camera.far = 1
-    s.camera.updateProjectionMatrix()
-
-    s.renderer.render(s.scene, s.camera)
-
-    // --- Canvas2D overlay: labels + time axis + selection ---
-    const textCanvas = textCanvasRef.current
-    if (!textCanvas) return
-    const ctx = textCanvas.getContext('2d')
-    if (!ctx) return
-
-    const dpr = window.devicePixelRatio || 1
-    ctx.clearRect(0, 0, textCanvas.width, textCanvas.height)
-    ctx.save()
-    ctx.scale(dpr, dpr)
-
-    // Draw span labels
-    ctx.font = '11px monospace'
-    ctx.textBaseline = 'middle'
-
-    for (let li = 0; li < index.lanes.length; li++) {
-      const lane = index.lanes[li]
-      const laneTop = laneYOffset(index.lanes, li) + LANE_HEADER_HEIGHT - s.scrollY
-
-      const laneContentHeight = (lane.maxDepth + 1) * (SPAN_HEIGHT + SPAN_GAP)
-      if (laneTop + laneContentHeight < 0 || laneTop > canvasHeight) continue
-
-      for (let i = 0; i < lane.rowIndices.length; i++) {
-        const row = lane.rowIndices[i]
-        const begin = axisValue(beginCol.get(row), beginType, xAxisMode)
-        if (begin > s.viewMaxTime) break
-
-        const end = axisValue(endCol.get(row), endType, xAxisMode)
-        if (end < s.viewMinTime) continue
-
-        const depth = lane.visualDepths[i]
-        const name = String(nameCol.get(row) ?? '')
-
-        const x1 = (begin - s.viewMinTime) * pxPerMs
-        const x2 = (end - s.viewMinTime) * pxPerMs
-        const w = x2 - x1
-        const y = laneTop + depth * (SPAN_HEIGHT + SPAN_GAP)
-
-        if (y + SPAN_HEIGHT < 0 || y > canvasHeight) continue
-        if (w < LABEL_MIN_WIDTH_PX) continue
-
-        const [, textLight] = spanColor(name)
-        ctx.fillStyle = textLight ? '#ffffff' : '#000000'
-
-        ctx.save()
-        ctx.beginPath()
-        ctx.rect(Math.max(x1 + 2, 0), y, Math.min(w - 4, s.width), SPAN_HEIGHT)
-        ctx.clip()
-        ctx.fillText(name, x1 + 4, y + SPAN_HEIGHT / 2 + 1)
-        ctx.restore()
-      }
-    }
-
-    // Draw lane headers
-    ctx.font = 'bold 11px sans-serif'
-    ctx.textBaseline = 'middle'
-    ctx.fillStyle = '#9ca3af' // gray-400
-    for (let li = 0; li < index.lanes.length; li++) {
-      const lane = index.lanes[li]
-      const headerY = laneYOffset(index.lanes, li) - s.scrollY
-      if (headerY + LANE_HEADER_HEIGHT < 0 || headerY > canvasHeight) continue
-      ctx.fillText(lane.name, 4, headerY + LANE_HEADER_HEIGHT / 2)
-    }
-
-    // Draw time axis
-    const axisY = canvasHeight
-    ctx.fillStyle = '#1a1a2e'
-    ctx.fillRect(0, axisY, s.width, TIME_AXIS_HEIGHT)
-
-    ctx.font = '10px monospace'
-    ctx.fillStyle = '#9ca3af'
-    ctx.textBaseline = 'top'
-    const tickCount = Math.max(2, Math.floor(s.width / 120))
-    const tickStep = timeSpan / (tickCount - 1)
-    for (let t = 0; t < tickCount; t++) {
-      const tickValue = s.viewMinTime + t * tickStep
-      const x = t * (s.width / (tickCount - 1))
-      ctx.fillText(formatAxisTick(tickValue, xAxisMode), t === tickCount - 1 ? Math.max(0, x - 80) : x + 2, axisY + 4)
-      ctx.strokeStyle = '#374151'
-      ctx.beginPath()
-      ctx.moveTo(x, axisY)
-      ctx.lineTo(x, axisY + 4)
-      ctx.stroke()
-    }
-
-    // Draw selection overlay
-    if (s.isDragging && !s.isPanning) {
-      const selLeft = Math.min(s.dragStartX, s.dragCurrentX)
-      const selWidth = Math.abs(s.dragCurrentX - s.dragStartX)
-      if (selWidth > 2) {
-        ctx.fillStyle = 'rgba(59, 130, 246, 0.2)'
-        ctx.fillRect(selLeft, 0, selWidth, canvasHeight)
-        ctx.strokeStyle = 'rgba(59, 130, 246, 0.6)'
-        ctx.lineWidth = 2
-        ctx.beginPath()
-        ctx.moveTo(selLeft, 0)
-        ctx.lineTo(selLeft, canvasHeight)
-        ctx.moveTo(selLeft + selWidth, 0)
-        ctx.lineTo(selLeft + selWidth, canvasHeight)
-        ctx.stroke()
-      }
-    }
-
-    ctx.restore()
+    scene.render(index, {
+      viewMinTime: s.viewMinTime,
+      viewMaxTime: s.viewMaxTime,
+      scrollY: s.scrollY,
+      isDragging: s.isDragging,
+      isPanning: s.isPanning,
+      dragStartX: s.dragStartX,
+      dragCurrentX: s.dragCurrentX,
+      width: s.width,
+      height: s.height,
+    })
   }, [index])
 
   const requestRender = useCallback(() => {
@@ -579,7 +90,7 @@ function FlameGraphView({ index, onTimeRangeSelect, initialTimeRange }: FlameGra
   }, [render])
 
   // -----------------------------------------------------------------------
-  // Three.js setup / teardown
+  // Scene setup / teardown
   // -----------------------------------------------------------------------
   useEffect(() => {
     const webglCanvas = webglCanvasRef.current
@@ -600,42 +111,9 @@ function FlameGraphView({ index, onTimeRangeSelect, initialTimeRange }: FlameGra
     s.contentHeight = totalHeight(index.lanes)
     s.scrollY = 0
 
-    // WebGL canvas
-    webglCanvas.width = w * dpr
-    webglCanvas.height = (h - TIME_AXIS_HEIGHT) * dpr
-    webglCanvas.style.width = `${w}px`
-    webglCanvas.style.height = `${h - TIME_AXIS_HEIGHT}px`
-
-    // Text canvas
-    textCanvas.width = w * dpr
-    textCanvas.height = h * dpr
-    textCanvas.style.width = `${w}px`
-    textCanvas.style.height = `${h}px`
-
-    // Three.js renderer
-    const renderer = new THREE.WebGLRenderer({ canvas: webglCanvas, antialias: false, alpha: true })
-    renderer.setPixelRatio(dpr)
-    renderer.setSize(w, h - TIME_AXIS_HEIGHT, false)
-
-    const camera = new THREE.OrthographicCamera(0, w, h - TIME_AXIS_HEIGHT, 0, -1, 1)
-    const scene = new THREE.Scene()
-
-    const initialCapacity = Math.max(index.table.numRows, 1024)
-    const geo = new THREE.PlaneGeometry(1, 1)
-    // White base color — instance colors from setColorAt() are multiplied with this.
-    // Do NOT use vertexColors:true — PlaneGeometry has no vertex color attribute,
-    // which zeroes out the color. InstancedMesh has its own USE_INSTANCING_COLOR path.
-    const material = new THREE.MeshBasicMaterial({ color: 0xffffff })
-    const mesh = new THREE.InstancedMesh(geo, material, initialCapacity)
-    mesh.frustumCulled = false
-    scene.add(mesh)
-
-    s.renderer = renderer
-    s.camera = camera
-    s.scene = scene
-    s.mesh = mesh
-    s.maxInstances = initialCapacity
-
+    const scene = createFlameScene(webglCanvas, textCanvas, Math.max(index.table.numRows, 1024))
+    sceneRef.current = scene
+    scene.resize(w, h, dpr)
     requestRender()
 
     // Resize observer
@@ -650,17 +128,7 @@ function FlameGraphView({ index, onTimeRangeSelect, initialTimeRange }: FlameGra
       s.height = newH
 
       const newDpr = window.devicePixelRatio || 1
-      webglCanvas.width = newW * newDpr
-      webglCanvas.height = (newH - TIME_AXIS_HEIGHT) * newDpr
-      webglCanvas.style.width = `${newW}px`
-      webglCanvas.style.height = `${newH - TIME_AXIS_HEIGHT}px`
-
-      textCanvas.width = newW * newDpr
-      textCanvas.height = newH * newDpr
-      textCanvas.style.width = `${newW}px`
-      textCanvas.style.height = `${newH}px`
-
-      renderer.setSize(newW, newH - TIME_AXIS_HEIGHT, false)
+      scene.resize(newW, newH, newDpr)
       requestRender()
     })
     resizeObserver.observe(container)
@@ -668,20 +136,13 @@ function FlameGraphView({ index, onTimeRangeSelect, initialTimeRange }: FlameGra
     return () => {
       resizeObserver.disconnect()
       cancelAnimationFrame(animFrameRef.current)
-      scene.remove(mesh)
-      mesh.dispose()
-      geo.dispose()
-      material.dispose()
-      renderer.dispose()
-      s.renderer = null
-      s.camera = null
-      s.scene = null
-      s.mesh = null
+      scene.dispose()
+      sceneRef.current = null
     }
   }, [index, requestRender])
 
   // -----------------------------------------------------------------------
-  // Apply initial time range (separate from main setup to avoid re-creating Three.js resources)
+  // Apply initial time range (separate from setup to avoid re-creating the scene)
   // -----------------------------------------------------------------------
   useEffect(() => {
     if (!initialTimeRange) return
