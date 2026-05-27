@@ -21,6 +21,8 @@ import { tableFromArrays, vectorFromArray, Table, Timestamp, TimeUnit } from 'ap
 import { substituteMacros, DEFAULT_SQL, sanitizeCellName, validateCellName, validateMacros, evaluateTemplate } from '../notebook-utils'
 import { serializeVariableValue, deserializeVariableValue, getVariableString, isMultiColumnValue } from '../notebook-types'
 import { createDefaultCell } from '../cell-registry'
+import { resolveMacro } from '../macro-resolve'
+import type { ResolveCtx } from '../macro-resolve'
 
 describe('substituteMacros', () => {
   const defaultTimeRange = { begin: '2024-01-01T00:00:00Z', end: '2024-01-02T00:00:00Z' }
@@ -1074,6 +1076,154 @@ describe('evaluateTemplate', () => {
       }
       const { text } = evaluateTemplate('value=$shared', ctx)
       expect(text).toBe('value=from-var')
+    })
+  })
+})
+
+// Pins the shared lookup layer directly, independent of either engine's
+// formatting/escaping. resolveMacro returns raw values + a resolved flag; the
+// '' / leave-source / warning mappings are the callers' job (covered above).
+describe('resolveMacro', () => {
+  const emptyCtx = (): ResolveCtx => ({
+    variables: {},
+    cellResults: {},
+    cellSelections: {},
+  })
+
+  describe('time', () => {
+    const timeRange = { begin: '2024-01-01T00:00:00Z', end: '2024-01-02T00:00:00Z' }
+
+    it('resolves $from / $to when timeRange is set', () => {
+      const ctx = { ...emptyCtx(), timeRange }
+      expect(resolveMacro({ kind: 'time', which: 'from' }, ctx)).toEqual({ value: timeRange.begin, resolved: true })
+      expect(resolveMacro({ kind: 'time', which: 'to' }, ctx)).toEqual({ value: timeRange.end, resolved: true })
+    })
+
+    it('is unresolved when timeRange is omitted', () => {
+      expect(resolveMacro({ kind: 'time', which: 'from' }, emptyCtx())).toEqual({ value: undefined, resolved: false })
+    })
+  })
+
+  describe('cellRow', () => {
+    it('resolves with value and column dataType', () => {
+      const tsType = new Timestamp(TimeUnit.MILLISECOND, null)
+      const table = new Table({
+        name: vectorFromArray(['server1']),
+        ts: vectorFromArray([1705314600000], tsType),
+      })
+      const ctx = { ...emptyCtx(), cellResults: { cell: table } }
+
+      const r = resolveMacro({ kind: 'cellRow', cell: 'cell', rowIdx: 0, col: 'name' }, ctx)
+      expect(r.resolved).toBe(true)
+      expect(r.value).toBe('server1')
+
+      const ts = resolveMacro({ kind: 'cellRow', cell: 'cell', rowIdx: 0, col: 'ts' }, ctx)
+      expect(ts.resolved).toBe(true)
+      expect(ts.dataType).toBe(tsType)
+    })
+
+    it('is unresolved on missing table, OOB row, or null cell', () => {
+      const table = tableFromArrays({ col: ['val'] })
+      const ctx = { ...emptyCtx(), cellResults: { cell: table } }
+      expect(resolveMacro({ kind: 'cellRow', cell: 'nope', rowIdx: 0, col: 'col' }, ctx).resolved).toBe(false)
+      expect(resolveMacro({ kind: 'cellRow', cell: 'cell', rowIdx: 5, col: 'col' }, ctx).resolved).toBe(false)
+      expect(resolveMacro({ kind: 'cellRow', cell: 'cell', rowIdx: 0, col: 'missing' }, ctx).resolved).toBe(false)
+    })
+  })
+
+  describe('selected', () => {
+    it('resolves with dataType taken from cellResults', () => {
+      const tsType = new Timestamp(TimeUnit.MILLISECOND, null)
+      const table = new Table({ ts: vectorFromArray([1705314600000], tsType) })
+      const ctx = {
+        ...emptyCtx(),
+        cellResults: { cell: table },
+        cellSelections: { cell: { ts: 1705314600000, name: 'srv' } },
+      }
+      const r = resolveMacro({ kind: 'selected', cell: 'cell', col: 'ts' }, ctx)
+      expect(r.resolved).toBe(true)
+      expect(r.value).toBe(1705314600000)
+      expect(r.dataType).toBe(tsType)
+    })
+
+    it('is unresolved on missing selection or null value', () => {
+      const ctx = { ...emptyCtx(), cellSelections: { cell: { col: null } } }
+      expect(resolveMacro({ kind: 'selected', cell: 'nope', col: 'col' }, ctx).resolved).toBe(false)
+      expect(resolveMacro({ kind: 'selected', cell: 'cell', col: 'col' }, ctx).resolved).toBe(false)
+    })
+  })
+
+  describe('rowCol', () => {
+    it('resolves only when ctx.row is set, with dataType from columnTypes', () => {
+      const tsType = new Timestamp(TimeUnit.MILLISECOND, null)
+      const ctx = {
+        ...emptyCtx(),
+        row: { ts: 1705314600000, name: 'srv' },
+        columnTypes: new Map([['ts', tsType]]),
+      }
+      const r = resolveMacro({ kind: 'rowCol', col: 'ts' }, ctx)
+      expect(r).toEqual({ value: 1705314600000, resolved: true, dataType: tsType })
+      expect(resolveMacro({ kind: 'rowCol', col: 'name' }, ctx).dataType).toBeUndefined()
+    })
+
+    it('is unresolved with no row, or a null / missing column', () => {
+      expect(resolveMacro({ kind: 'rowCol', col: 'x' }, emptyCtx()).resolved).toBe(false)
+      const ctx = { ...emptyCtx(), row: { x: null } }
+      expect(resolveMacro({ kind: 'rowCol', col: 'x' }, ctx).resolved).toBe(false)
+      expect(resolveMacro({ kind: 'rowCol', col: 'missing' }, ctx).resolved).toBe(false)
+    })
+  })
+
+  describe('varCol', () => {
+    it('resolves a column of a multi-column variable', () => {
+      const ctx = { ...emptyCtx(), variables: { srv: { host: 'h1', port: '8080' } } }
+      expect(resolveMacro({ kind: 'varCol', name: 'srv', col: 'host' }, ctx)).toEqual({ value: 'h1', resolved: true })
+    })
+
+    it('is unresolved for a string var, missing var, or missing column', () => {
+      const ctx = { ...emptyCtx(), variables: { simple: 'v', srv: { host: 'h1' } } }
+      expect(resolveMacro({ kind: 'varCol', name: 'simple', col: 'host' }, ctx).resolved).toBe(false)
+      expect(resolveMacro({ kind: 'varCol', name: 'nope', col: 'host' }, ctx).resolved).toBe(false)
+      expect(resolveMacro({ kind: 'varCol', name: 'srv', col: 'missing' }, ctx).resolved).toBe(false)
+    })
+  })
+
+  describe('var', () => {
+    it('resolves a simple string variable', () => {
+      const ctx = { ...emptyCtx(), variables: { name: 'srv1' } }
+      expect(resolveMacro({ kind: 'var', name: 'name' }, ctx)).toEqual({ value: 'srv1', resolved: true })
+    })
+
+    it('resolves a multi-column variable via getVariableString', () => {
+      const value = { host: 'h1', port: '8080' }
+      const ctx = { ...emptyCtx(), variables: { srv: value } }
+      const r = resolveMacro({ kind: 'var', name: 'srv' }, ctx)
+      expect(r.resolved).toBe(true)
+      expect(r.value).toBe(getVariableString(value))
+    })
+
+    it('lets a row column win over a same-named variable when bareColumnsFromRow is set', () => {
+      const ctx = {
+        ...emptyCtx(),
+        variables: { shared: 'from-var' },
+        row: { shared: 'from-row' },
+        bareColumnsFromRow: true,
+      }
+      expect(resolveMacro({ kind: 'var', name: 'shared' }, ctx).value).toBe('from-row')
+    })
+
+    it('falls back to the variable when bareColumnsFromRow row lookup is null', () => {
+      const ctx = {
+        ...emptyCtx(),
+        variables: { shared: 'from-var' },
+        row: { shared: null },
+        bareColumnsFromRow: true,
+      }
+      expect(resolveMacro({ kind: 'var', name: 'shared' }, ctx).value).toBe('from-var')
+    })
+
+    it('is unresolved for an unknown name', () => {
+      expect(resolveMacro({ kind: 'var', name: 'nope' }, emptyCtx()).resolved).toBe(false)
     })
   })
 })

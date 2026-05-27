@@ -13,31 +13,16 @@
  * separately in `./macro-substitution` and is unaffected.
  */
 
-import type { Table, DataType } from 'apache-arrow'
+import type { DataType } from 'apache-arrow'
 import { isTimeType } from '@/lib/arrow-utils'
 import { TEMPLATE_FUNCTIONS } from '@/lib/template-functions'
-import type { VariableValue } from './notebook-types'
-import { getVariableString } from './notebook-types'
+import type { MacroSpan, ResolveCtx } from './macro-resolve'
+import { resolveMacro } from './macro-resolve'
 import { formatArrowValue } from './macro-substitution'
 
-export interface EvaluateTemplateCtx {
-  variables: Record<string, VariableValue>
-  /** When omitted, `$from`/`$to` are treated as unresolved. */
-  timeRange?: { begin: string; end: string }
-  cellResults: Record<string, Table>
-  cellSelections: Record<string, Record<string, unknown>>
-  /** Row dict (Table override path). When present, `$row.col` and
-   *  `$row["col"]` resolve to the raw value. */
-  row?: Record<string, unknown>
-  /** Column-type map for RFC3339 stringification of timestamps emitted
-   *  as naked `$row.col` macros outside function-call args. */
-  columnTypes?: Map<string, DataType>
-  /** When true, a bare `$ident` resolves to `row[ident]` (with its column
-   *  DataType) before falling back to a notebook variable. Map detail
-   *  templates set this so `$col` means "the selected row's col"; the
-   *  table-override path leaves it false and addresses columns via `$row.col`. */
-  bareColumnsFromRow?: boolean
-}
+/** Context for `evaluateTemplate`. The per-field docs live on `ResolveCtx`,
+ *  which carries the full superset every macro shape needs. */
+export type EvaluateTemplateCtx = ResolveCtx
 
 export interface EvaluateTemplateResult {
   text: string
@@ -74,6 +59,13 @@ function isIdentChar(ch: string): boolean {
   return /[a-zA-Z0-9_]/.test(ch)
 }
 
+/** Build a MacroMatch from the parsed span plus a `resolveMacro` lookup. The
+ *  parser owns `source`/`end`/`shape`; `resolveMacro` owns value/dataType. */
+function matched(source: string, end: number, shape: string, span: MacroSpan, ctx: ResolveCtx): MacroMatch {
+  const r = resolveMacro(span, ctx)
+  return { source, end, shape, value: r.value, dataType: r.dataType }
+}
+
 function tryParseMacro(text: string, pos: number, ctx: EvaluateTemplateCtx): MacroMatch | null {
   if (text[pos] !== '$') return null
 
@@ -81,11 +73,11 @@ function tryParseMacro(text: string, pos: number, ctx: EvaluateTemplateCtx): Mac
   //    them fall through so the walker copies '$' verbatim.
   if (text.startsWith('$from', pos) && !isIdentChar(text[pos + 5] ?? '')) {
     if (!ctx.timeRange) return null
-    return { source: '$from', end: pos + 5, shape: '$from', value: ctx.timeRange.begin }
+    return matched('$from', pos + 5, '$from', { kind: 'time', which: 'from' }, ctx)
   }
   if (text.startsWith('$to', pos) && !isIdentChar(text[pos + 3] ?? '')) {
     if (!ctx.timeRange) return null
-    return { source: '$to', end: pos + 3, shape: '$to', value: ctx.timeRange.end }
+    return matched('$to', pos + 3, '$to', { kind: 'time', which: 'to' }, ctx)
   }
 
   // 2-6. All remaining shapes begin with an identifier after '$'.
@@ -107,18 +99,7 @@ function tryParseMacro(text: string, pos: number, ctx: EvaluateTemplateCtx): Mac
       const end = close + 2 + colMatch.length
       const source = text.slice(pos, end)
       const shape = `$${ident}[${inside}].${colMatch}`
-      const table = ctx.cellResults[ident]
-      const rowIdx = parseInt(inside, 10)
-      let value: unknown
-      let dataType: DataType | undefined
-      if (table && rowIdx < table.numRows) {
-        const row = table.get(rowIdx)
-        if (row && row[colMatch] !== undefined && row[colMatch] !== null) {
-          value = row[colMatch]
-          dataType = table.schema.fields.find((f) => f.name === colMatch)?.type
-        }
-      }
-      return { source, end, shape, value, dataType }
+      return matched(source, end, shape, { kind: 'cellRow', cell: ident, rowIdx: parseInt(inside, 10), col: colMatch }, ctx)
     }
 
     // $row["col"] / $row['col']
@@ -129,14 +110,7 @@ function tryParseMacro(text: string, pos: number, ctx: EvaluateTemplateCtx): Mac
       const end = close + 1
       const source = text.slice(pos, end)
       const shape = `$row[${inside}]`
-      const v = ctx.row[colName]
-      let value: unknown
-      let dataType: DataType | undefined
-      if (v !== undefined && v !== null) {
-        value = v
-        dataType = ctx.columnTypes?.get(colName)
-      }
-      return { source, end, shape, value, dataType }
+      return matched(source, end, shape, { kind: 'rowCol', col: colName }, ctx)
     }
 
     return null
@@ -154,18 +128,7 @@ function tryParseMacro(text: string, pos: number, ctx: EvaluateTemplateCtx): Mac
       const end = afterSecond + 1 + colMatch.length
       const source = text.slice(pos, end)
       const shape = `$${ident}.selected.${colMatch}`
-      const selection = ctx.cellSelections[ident]
-      let value: unknown
-      let dataType: DataType | undefined
-      if (selection) {
-        const v = selection[colMatch]
-        if (v !== undefined && v !== null) {
-          value = v
-          const table = ctx.cellResults[ident]
-          dataType = table?.schema.fields.find((f) => f.name === colMatch)?.type
-        }
-      }
-      return { source, end, shape, value, dataType }
+      return matched(source, end, shape, { kind: 'selected', cell: ident, col: colMatch }, ctx)
     }
 
     // 4. $row.col (matched BEFORE $variable.col so a row reference is never
@@ -174,48 +137,21 @@ function tryParseMacro(text: string, pos: number, ctx: EvaluateTemplateCtx): Mac
       const end = afterIdent + 1 + second.length
       const source = text.slice(pos, end)
       const shape = `$row.${second}`
-      const v = ctx.row[second]
-      if (v !== undefined && v !== null) {
-        return { source, end, shape, value: v, dataType: ctx.columnTypes?.get(second) }
-      }
-      return { source, end, shape, value: undefined }
+      return matched(source, end, shape, { kind: 'rowCol', col: second }, ctx)
     }
 
     // 5. $variable.col
     const end = afterIdent + 1 + second.length
     const source = text.slice(pos, end)
     const shape = `$${ident}.${second}`
-    const variable = ctx.variables[ident]
-    let value: unknown
-    if (variable !== undefined && typeof variable !== 'string') {
-      const v = variable[second]
-      if (v !== undefined) value = v
-    }
-    return { source, end, shape, value }
+    return matched(source, end, shape, { kind: 'varCol', name: ident, col: second }, ctx)
   }
 
   // 6. $variable  (or $column when bareColumnsFromRow)
   const end = afterIdent
   const source = text.slice(pos, end)
   const shape = `$${ident}`
-
-  // Map detail templates address the selected row's columns as bare `$col`,
-  // with columns winning name collisions against notebook variables. Check
-  // the row first so the raw value + its DataType reach the caller (enabling
-  // RFC3339 emission and precision-preserving format_value).
-  if (ctx.bareColumnsFromRow && ctx.row !== undefined) {
-    const v = ctx.row[ident]
-    if (v !== undefined && v !== null) {
-      return { source, end, shape, value: v, dataType: ctx.columnTypes?.get(ident) }
-    }
-  }
-
-  const variable = ctx.variables[ident]
-  let value: unknown
-  if (variable !== undefined) {
-    value = typeof variable === 'string' ? variable : getVariableString(variable)
-  }
-  return { source, end, shape, value }
+  return matched(source, end, shape, { kind: 'var', name: ident }, ctx)
 }
 
 interface CallParseResult {
