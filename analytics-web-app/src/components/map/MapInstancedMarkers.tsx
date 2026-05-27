@@ -19,6 +19,7 @@ interface InstancedMarkersProps {
   shape: Shape
   selectedRowIndex: number | null
   onSelect: (rowIndex: number | null) => void
+  onHover?: (rowIndex: number | null, clientX: number, clientY: number) => void
 }
 
 const COLOR_SELECTED_RGBA = 0xff6b6bff
@@ -32,19 +33,39 @@ export function MapInstancedMarkers({
   shape,
   selectedRowIndex,
   onSelect,
+  onHover,
 }: InstancedMarkersProps) {
   const meshRef = useRef<THREE.InstancedMesh>(null)
   const [hoveredRowIndex, setHoveredRowIndex] = useState<number | null>(null)
 
+  // rAF-throttled hover flush state. Declared up here (before the overlay-swap
+  // guard) so that guard can cancel any in-flight frame. pendingHoverRef stashes
+  // the latest instance id + cursor position; hoverRafRef holds the queued frame
+  // id. cancelHoverFlush drops both — used by the swap guard, pointer-out, and
+  // unmount so a stale frame can never fire against the wrong table or after
+  // teardown.
+  const pendingHoverRef = useRef<{ rowIndex: number; x: number; y: number } | null>(null)
+  const hoverRafRef = useRef<number | null>(null)
+  const cancelHoverFlush = useCallback(() => {
+    pendingHoverRef.current = null
+    if (hoverRafRef.current !== null) {
+      cancelAnimationFrame(hoverRafRef.current)
+      hoverRafRef.current = null
+    }
+  }, [])
+
   // Clear hover synchronously when the overlay changes. Without this, a
   // stale hoveredRowIndex from the previous table would index a different
   // point in the new one, briefly highlighting the wrong marker until the
-  // next pointer event corrected it. Mirrors the selection-clear pattern
-  // in MapCell.
+  // next pointer event corrected it. Also cancel any pending hover-flush frame:
+  // a rAF queued by a pointer-move just before the swap would otherwise fire
+  // against the new table, re-surfacing a stale/empty tooltip for one frame.
+  // Mirrors the selection-clear pattern in MapCell.
   const [overlayForHover, setOverlayForHover] = useState(overlay)
   if (overlayForHover !== overlay) {
     setOverlayForHover(overlay)
     setHoveredRowIndex(null)
+    cancelHoverFlush()
   }
 
   const tempObject = useMemo(() => new THREE.Object3D(), [])
@@ -86,6 +107,14 @@ export function MapInstancedMarkers({
     selected: null,
     hovered: null,
   })
+
+  // rAF-throttled hover reporting. Pointer moves stash the latest instance id
+  // and cursor position in a ref; a single queued frame flushes them, so at
+  // most one tooltip reposition lands per paint regardless of move frequency.
+  // `onHover` lives in a ref so the pointer handlers stay stable (the prop is
+  // an inline arrow from MapCell that would otherwise re-create them).
+  const onHoverRef = useRef(onHover)
+  onHoverRef.current = onHover
 
   // Destructure into primitives so the effect dep arrays compare by value,
   // not by `constants` object identity. Without this split, a fresh
@@ -306,12 +335,14 @@ export function MapInstancedMarkers({
 
   // Restore body cursor on unmount in case a marker is hovered when we tear
   // down — the {ready} gate in MapViewer unmounts this component on mapUrl
-  // changes, and a pointer-out we'd otherwise rely on never fires.
+  // changes, and a pointer-out we'd otherwise rely on never fires. Also cancel
+  // any queued hover-flush frame so it can't fire after unmount.
   useEffect(() => {
     return () => {
       document.body.style.cursor = 'auto'
+      cancelHoverFlush()
     }
-  }, [])
+  }, [cancelHoverFlush])
 
   const handleClick = useCallback(
     (e: ThreeEvent<MouseEvent>) => {
@@ -332,6 +363,31 @@ export function MapInstancedMarkers({
       if (rowIdx === undefined || rowIdx < 0 || rowIdx >= numRows) return
       setHoveredRowIndex(rowIdx)
       document.body.style.cursor = 'pointer'
+      // Surface the tooltip on enter even before the first move.
+      onHoverRef.current?.(rowIdx, e.clientX, e.clientY)
+    },
+    [overlay]
+  )
+
+  // rAF-throttled: stash the latest instance id + cursor position, then flush
+  // once per frame. `setHoveredRowIndex` with an unchanged value is a no-op for
+  // the highlight effect, so per-move events only reposition the tooltip while
+  // the highlighted row stays put.
+  const handlePointerMove = useCallback(
+    (e: ThreeEvent<PointerEvent>) => {
+      e.stopPropagation()
+      const rowIdx = e.instanceId
+      const numRows = overlay.table.numRows
+      if (rowIdx === undefined || rowIdx < 0 || rowIdx >= numRows) return
+      pendingHoverRef.current = { rowIndex: rowIdx, x: e.clientX, y: e.clientY }
+      if (hoverRafRef.current !== null) return
+      hoverRafRef.current = requestAnimationFrame(() => {
+        hoverRafRef.current = null
+        const pending = pendingHoverRef.current
+        if (!pending) return
+        setHoveredRowIndex(pending.rowIndex)
+        onHoverRef.current?.(pending.rowIndex, pending.x, pending.y)
+      })
     },
     [overlay]
   )
@@ -339,7 +395,9 @@ export function MapInstancedMarkers({
   const handlePointerOut = useCallback(() => {
     setHoveredRowIndex(null)
     document.body.style.cursor = 'auto'
-  }, [])
+    cancelHoverFlush()
+    onHoverRef.current?.(null, 0, 0)
+  }, [cancelHoverFlush])
 
   if (overlay.table.numRows === 0) return null
 
@@ -350,6 +408,7 @@ export function MapInstancedMarkers({
       renderOrder={10}
       onClick={handleClick}
       onPointerOver={handlePointerOver}
+      onPointerMove={handlePointerMove}
       onPointerOut={handlePointerOut}
     />
   )

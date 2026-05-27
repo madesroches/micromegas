@@ -279,8 +279,12 @@ Non-finite numeric values (NaN, null) in any column-bound numeric channel fail t
 **Detail template:**
 
 When a marker is selected, the cell renders a Markdown template with macro
-substitution. The selected row's columns are exposed as `$column`, and the
-standard notebook macros work too:
+substitution. The same template is also shown as a transient tooltip that
+follows the cursor while you hover a marker (clicking still opens the docked
+panel). The hover tooltip is on by default; uncheck **Show as a tooltip when
+hovering a marker** to disable it, and leaving the template empty disables it
+too. The selected row's columns are exposed as `$column`, and the standard
+notebook macros work too:
 
 - `$column` — column from the selected row (wins name collisions against variables)
 - `$from`, `$to` — current time range
@@ -325,7 +329,7 @@ Events are placed at their raw `x`, `y`, `z` values without any runtime transfor
 **Features:**
 
 - Instanced rendering — handles hundreds of thousands of markers efficiently
-- Interactive markers — click to select, hover to highlight
+- Interactive markers — click to select, hover to highlight and preview the detail template as a cursor tooltip
 - Event detail panel rendered from a Markdown template with macro substitution
 - Results registered in the [local WASM query engine](execution.md#local-wasm-query-engine) under the cell name for downstream queries
 

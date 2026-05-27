@@ -18,6 +18,7 @@ interface MapViewerProps {
   shape: Shape
   selectedRowIndex: number | null
   onSelect: (rowIndex: number | null) => void
+  onHover?: (rowIndex: number | null, clientX: number, clientY: number) => void
   resetViewTrigger?: number
 }
 
@@ -107,6 +108,7 @@ export function MapViewer({
   shape,
   selectedRowIndex,
   onSelect,
+  onHover,
   resetViewTrigger = 0,
 }: MapViewerProps) {
   const [mapBounds, setMapBounds] = useState<THREE.Box3 | null>(null)
@@ -217,6 +219,7 @@ export function MapViewer({
               shape={shape}
               selectedRowIndex={selectedRowIndex}
               onSelect={onSelect}
+              onHover={onHover}
             />
           </>
         )}
