@@ -66,7 +66,7 @@ renders the detail template:
 - `EventDetailPanel.test.tsx` renders the panel directly and asserts macro
   substitution.
 - `MapCell.test.tsx` exercises helpers/config (it does not mount `MapViewer`).
-- Detail-template docs: `mkdocs/docs/web-app/notebooks/cell-types.md:279-318`.
+- Detail-template docs: `mkdocs/docs/web-app/notebooks/cell-types.md:279-320`.
 
 ## Design
 
@@ -163,13 +163,13 @@ then re-derive `rowValues(overlay.table, hover.rowIndex)` against the *new* tabl
 — and `rowValues` (`overlay.ts:560-568`) does no bounds check, so the tooltip
 renders stale/empty content until the next pointer event. Mirror the existing
 selection guard (`overlayForSelection`, `MapCell.tsx:282-286`) by tracking the
-overlay identity in a ref and resetting `hover` to `null` during render when it
+overlay identity in state and resetting `hover` to `null` during render when it
 changes:
 
 ```ts
-const hoverOverlayRef = useRef(overlay)
-if (hoverOverlayRef.current !== overlay) {
-  hoverOverlayRef.current = overlay
+const [hoverOverlay, setHoverOverlay] = useState(overlay)
+if (hoverOverlay !== overlay) {
+  setHoverOverlay(overlay)
   if (hover !== null) setHover(null)
 }
 ```
@@ -282,7 +282,7 @@ chrome around the shared `EventDetailContent`:
 ## Documentation
 
 `mkdocs/docs/web-app/notebooks/cell-types.md`, detail-template section
-(`:279-318`): add a sentence that the same template is also shown as a transient
+(`:279-320`): add a sentence that the same template is also shown as a transient
 tooltip while hovering a marker (click still opens the docked panel), and that an
 empty template disables the hover preview.
 
