@@ -298,10 +298,13 @@ empty template disables the hover preview.
 - **`EventDetailPanel.test.tsx`:** should still pass unchanged after the
   extraction (same rendered output); adjust only if an assertion couples to
   internal structure.
-- **`MapInstancedMarkers` hover callback:** if the mesh is unit-testable in the
-  existing R3F test setup (`MapViewer.test.tsx`), assert `onHover` fires with the
-  instance id on over and `null` on out; otherwise cover the contract via the
-  `MapHoverTooltip` + MapCell wiring and verify interactively.
+- **`MapInstancedMarkers` hover callback:** there is no R3F mount-test harness
+  today (`MapViewer.test.tsx` only covers pure `cameraBasisFromSpherical` math,
+  and `@react-three/test-renderer` is not a dependency), so cover the `onHover`
+  contract via the `MapHoverTooltip` + MapCell wiring tests and verify
+  interactively. (If a true mesh unit test is wanted, add
+  `@react-three/test-renderer` as a new dev dependency and assert `onHover` fires
+  with the instance id on over and `null` on out.)
 - **Full:** `yarn lint`, `yarn type-check`, `yarn test` from `analytics-web-app/`.
 - **Manual:** hover markers → tooltip follows cursor and shows the same content
   as click; near cell/screen edges it flips and stays on-screen; clearing the
