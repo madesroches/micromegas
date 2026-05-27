@@ -11,6 +11,8 @@ This file documents the historical progress of the Micromegas project. For curre
   * Route Map detail-panel `$column` macros through the evaluator's raw row + column-types channel so bare references carry their Arrow `DataType`; timestamps format as RFC3339 and `format_value()` receives full-precision raw values instead of pre-stringified ones (#1091)
 * **Build:**
   * Fix `cargo doc --workspace --all-features` hiding the `micromegas-perfetto` library modules by re-keying proto regeneration on the `MICROMEGAS_REGEN_PROTOS` env var instead of the `protogen` feature (#1079)
+* **Refactoring:**
+  * Split four high-complexity web-app files (PerformanceAnalysisPage, FlameGraphCell, MapViewer, XYChart) into pure-logic modules, THREE.js scene helpers, and thin React shells, with unit tests for the extracted logic; behavior unchanged (#1089)
 * **Security:**
   * Bump qs to 6.15.2 and js-cookie to 3.0.7 to fix Dependabot alerts (#256, #257)
 * **Dependencies:**
