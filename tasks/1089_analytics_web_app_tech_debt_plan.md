@@ -133,9 +133,10 @@ state and the rAF loop. Moving them would require threading a callback bag
 through the scene module for little gain. What moves into `FlameGraphScene` is
 only the stateless "given this view state + index, paint a frame" logic.
 
-`buildFlameIndex` and `formatBits` are already exported and consumed elsewhere
-— keep the same export names (re-export from `FlameGraphCell.tsx` if any
-importer points at the old path, to avoid touching unrelated files).
+`buildFlameIndex` and `formatBits` are exported but consumed only by the test
+file (`cells/__tests__/FlameGraphCell.test.tsx`); no production code imports
+them — keep the same export names and repoint the test import. No re-export
+shim needed.
 
 ### Item 3 — MapViewer split
 
@@ -303,7 +304,7 @@ Each phase is its own PR and its own branch off `main`.
 ### PR D — Item 5: lower-priority cleanups
 Pick up opportunistically; each sub-bullet can also fold into a PR already
 touching that file. Order within the PR: metadata factory → `materializeTable`
-→ management-hook merge → XYChart → HorizontalGroupCell → regex-factory comment.
+→ management-hook merge → XYChart → HorizontalGroupCell → `macro-substitution.ts` regex-factory comment.
 Lint/type-check/test after each.
 
 ## Files to Modify
@@ -321,7 +322,7 @@ Lint/type-check/test after each.
 **PR D:** `src/lib/screen-renderers/cell-registry.ts`,
 `cells/{TableCell,TransposedTableCell,ReferenceTableCell}.tsx`,
 `table-utils.tsx`, `components/XYChart.tsx`,
-`cells/HorizontalGroupCell.tsx`, `notebook-utils.ts`.
+`cells/HorizontalGroupCell.tsx`, `macro-substitution.ts`.
 
 ## Trade-offs
 
@@ -355,7 +356,7 @@ No user-facing docs change — these are internal refactors with identical
 behavior. Two internal-doc touch-ups:
 - `shader-patches.ts` must document, per GLSL block, which `#include <chunk>`
   it overrides (the explicit doc-debt in the issue).
-- If the notebook-utils regex factories are kept rather than merged, add the
+- If the `macro-substitution.ts` regex factories are kept rather than merged, add the
   one comment block documenting their required processing order.
 
 No CLAUDE.md / AI_GUIDELINES.md changes.
