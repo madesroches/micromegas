@@ -154,6 +154,29 @@ const hoveredRow = useMemo(
 )
 ```
 
+**Clear stale hover on overlay swap (render-phase).** The mesh only calls
+`onHover` from pointer events; when `overlay` changes with no pointer event,
+`MapInstancedMarkers` clears its internal `hoveredRowIndex` via its render-phase
+derivation (`MapInstancedMarkers.tsx:44-48`) but never calls `onHover(null)`, so
+MapCell's lifted `hover` keeps the old `rowIndex`. The `hoveredRow` memo would
+then re-derive `rowValues(overlay.table, hover.rowIndex)` against the *new* table
+— and `rowValues` (`overlay.ts:560-568`) does no bounds check, so the tooltip
+renders stale/empty content until the next pointer event. Mirror the existing
+selection guard (`overlayForSelection`, `MapCell.tsx:282-286`) by tracking the
+overlay identity in a ref and resetting `hover` to `null` during render when it
+changes:
+
+```ts
+const hoverOverlayRef = useRef(overlay)
+if (hoverOverlayRef.current !== overlay) {
+  hoverOverlayRef.current = overlay
+  if (hover !== null) setHover(null)
+}
+```
+
+This runs before the `hoveredRow` memo derives against the new table, so the
+tooltip is gone on the swap and reappears only on the next real pointer event.
+
 Pass `onHover={handleHover}` to `<MapViewer>`. Render the tooltip as a sibling of
 the docked panel:
 
@@ -215,9 +238,10 @@ chrome around the shared `EventDetailContent`:
    `MapInstancedMarkers`.
 4. **New `MapHoverTooltip.tsx`** — portal + fixed positioning + auto-flip/clamp
    wrapping `EventDetailContent`.
-5. **MapCell wiring** — `hover` state, `handleHover`, `hoveredRow` memo, pass
-   `onHover` to `MapViewer`, render `MapHoverTooltip` with the blank-template and
-   selected-row guards.
+5. **MapCell wiring** — `hover` state, `handleHover`, `hoveredRow` memo, the
+   render-phase clear of `hover` on overlay swap (mirroring `overlayForSelection`),
+   pass `onHover` to `MapViewer`, render `MapHoverTooltip` with the blank-template
+   and selected-row guards.
 6. **Tests** — see Testing Strategy.
 7. **Docs** — note the hover preview in the detail-template section.
 
