@@ -495,4 +495,40 @@ Repointed the test's `cameraBasisFromSpherical` import to `../map-camera-math`
 (no production importer existed) and added `__tests__/map-camera-math.test.ts`
 (spherical round-trip, panTarget ground-plane + radius scaling, zoomAnchor).
 
-### PR D — pending
+### PR D — DONE (type-check + lint + 1032-test suite all green)
+Cleanups, each premise re-verified against the repo first:
+- **`useHiddenList` — DONE.** Extracted a generic
+  `useHiddenList(config, fieldKey, onChange) → { hidden, handleHide,
+  handleRestore, handleRestoreAll }` in `table-utils.tsx`. `useRowManagement`
+  is now a thin field-renaming wrapper; `useColumnManagement` reuses it for
+  `hiddenColumns`/restore/restoreAll and keeps its own sort handlers + the
+  sort-clearing `handleHideColumn`. Covered by the existing `table-utils.test`.
+- **`buildXAxisConfig` — DONE.** Extracted the X-axis config builder out of
+  XYChart's chart-construction effect into a pure `xychart-axis.ts`
+  (type-only import of `XAxisMode`, no runtime cycle). Added
+  `__tests__/xychart-axis.test.ts` (time/categorical/numeric formatting).
+  `buildChartSeries` was **left inline**: unlike the axis config it closes over
+  `chartType`, `normalizedSeries`, `seriesVisibility`, `SERIES_COLORS`,
+  `hexToRgba`, and pushes tooltip metadata — extracting it would invert control
+  through a large param bag for no testability gain (XYChart has no test net).
+- **HorizontalGroupCell — DONE.** Moved the already-componentized
+  `SortableChild` + `HgChildPane` (the nested-cell pane: title bar, run/menu
+  controls, nested renderer) into a sibling `HgChildPane.tsx`
+  (820 → 601 lines). Covered by the existing `HorizontalGroupCell.test`.
+- **`macro-substitution.ts` regex factories — VERIFIED no-op.** The factories
+  are already collapsed into single shared definitions (lines ~41-51) and carry
+  the fresh-RegExp ordering comment (lines ~37-39). No change.
+- **`createQueryCellMetadata` factory — SKIPPED (premise weak).** Diffed the
+  three `CellTypeMetadata` literals: `ReferenceTableCell` is not a SQL query
+  cell (its `execute` does CSV→Arrow IPC + `registerTable`, no `runQuery`), and
+  `TableCell`/`TransposedTableCell` differ in `execute` ($order_by vs plain).
+  The genuinely shared part is ~3 lines (`showTypeBadge: true`,
+  `canBlockDownstream: true`, and a `getRendererProps` whose config cast
+  differs). A factory would relocate 8 differing fields into call-site args and
+  obscure the currently-readable per-cell metadata — worse than the duplication.
+- **`materializeTable` helper — SKIPPED (premise false).** The audit's "8×
+  `table.get(i)` materialization" actually counts JSX render loops, an index
+  sequence, and a numeric-step sequence; the genuine
+  `Array.from({length}, (_,i) => table.get(i) as Record)` materialization
+  exists at exactly **one** site (`TransposedTableCell.tsx:58`). A shared helper
+  for one call site isn't warranted.

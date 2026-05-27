@@ -851,7 +851,43 @@ export function HiddenColumnsBar({ hiddenColumns, onRestore, onRestoreAll, compa
 // Column Management Hook
 // =============================================================================
 
-const EMPTY_COLUMNS: string[] = []
+const EMPTY_HIDDEN: string[] = []
+
+/**
+ * Shared hide / restore / restore-all over a named string-array field in a
+ * config object (e.g. `hiddenColumns`, `hiddenRows`). Extracted from
+ * useColumnManagement / useRowManagement (#1089) — the genuinely common body.
+ */
+function useHiddenList<C extends Record<string, unknown>>(
+  config: C,
+  fieldKey: string,
+  onChange: (config: C) => void,
+) {
+  const hidden = (config[fieldKey] as string[] | undefined) || EMPTY_HIDDEN
+
+  const handleHide = useCallback(
+    (name: string) => {
+      const current = (config[fieldKey] as string[] | undefined) || []
+      if (current.includes(name)) return
+      onChange({ ...config, [fieldKey]: [...current, name] } as C)
+    },
+    [config, fieldKey, onChange]
+  )
+
+  const handleRestore = useCallback(
+    (name: string) => {
+      const current = (config[fieldKey] as string[] | undefined) || []
+      onChange({ ...config, [fieldKey]: current.filter((x) => x !== name) } as C)
+    },
+    [config, fieldKey, onChange]
+  )
+
+  const handleRestoreAll = useCallback(() => {
+    onChange({ ...config, [fieldKey]: [] } as C)
+  }, [config, fieldKey, onChange])
+
+  return { hidden, handleHide, handleRestore, handleRestoreAll }
+}
 
 interface ColumnManagementConfig {
   sortColumn?: string
@@ -866,7 +902,11 @@ export function useColumnManagement(
 ) {
   const sortColumn = config.sortColumn
   const sortDirection = config.sortDirection
-  const hiddenColumns = config.hiddenColumns || EMPTY_COLUMNS
+  const {
+    hidden: hiddenColumns,
+    handleRestore: handleRestoreColumn,
+    handleRestoreAll,
+  } = useHiddenList(config, 'hiddenColumns', onChange)
 
   const handleSort = useCallback(
     (columnName: string) => {
@@ -890,6 +930,9 @@ export function useColumnManagement(
     [config, onChange]
   )
 
+  // Column hide keeps a sort-clearing side effect, so it is NOT the generic
+  // useHiddenList.handleHide: hiding the currently-sorted column also drops the
+  // sort state.
   const handleHideColumn = useCallback(
     (columnName: string) => {
       const hidden = config.hiddenColumns || []
@@ -903,18 +946,6 @@ export function useColumnManagement(
     },
     [config, onChange]
   )
-
-  const handleRestoreColumn = useCallback(
-    (columnName: string) => {
-      const hidden = config.hiddenColumns || []
-      onChange({ ...config, hiddenColumns: hidden.filter((c) => c !== columnName) })
-    },
-    [config, onChange]
-  )
-
-  const handleRestoreAll = useCallback(() => {
-    onChange({ ...config, hiddenColumns: [] })
-  }, [config, onChange])
 
   return {
     sortColumn,
@@ -933,39 +964,23 @@ export function useColumnManagement(
 // Row Management Hook (for transposed tables)
 // =============================================================================
 
-const EMPTY_ROWS: string[] = []
-
 interface RowManagementConfig {
   hiddenRows?: string[]
   [key: string]: unknown
 }
 
+// Transposed-table rows have no sort coupling, so this is a thin
+// field-renaming wrapper over the shared useHiddenList.
 export function useRowManagement(
   config: RowManagementConfig,
   onChange: (config: RowManagementConfig) => void
 ) {
-  const hiddenRows = config.hiddenRows || EMPTY_ROWS
-
-  const handleHideRow = useCallback(
-    (rowName: string) => {
-      const hidden = config.hiddenRows || []
-      if (hidden.includes(rowName)) return
-      onChange({ ...config, hiddenRows: [...hidden, rowName] })
-    },
-    [config, onChange]
-  )
-
-  const handleRestoreRow = useCallback(
-    (rowName: string) => {
-      const hidden = config.hiddenRows || []
-      onChange({ ...config, hiddenRows: hidden.filter((r) => r !== rowName) })
-    },
-    [config, onChange]
-  )
-
-  const handleRestoreAll = useCallback(() => {
-    onChange({ ...config, hiddenRows: [] })
-  }, [config, onChange])
+  const {
+    hidden: hiddenRows,
+    handleHide: handleHideRow,
+    handleRestore: handleRestoreRow,
+    handleRestoreAll,
+  } = useHiddenList(config, 'hiddenRows', onChange)
 
   return {
     hiddenRows,
