@@ -38,6 +38,7 @@ import {
   type MapCatalogEntry,
   fetchMapCatalog,
   formatMapName,
+  mapFileBasename,
   resolveMapBlobUrl,
 } from '@/lib/maps-catalog'
 import { getConfig } from '@/lib/config'
@@ -78,6 +79,12 @@ function MapDropdown({
   onChange: (value: string | undefined) => void
 }) {
   const mapCatalog = useMapCatalog()
+  // Match against the basename so a legacy path-prefixed value (e.g.
+  // `/maps/Foo.glb`) still resolves to its catalog entry — catalog entries
+  // are always bare filenames, and the renderer loads by basename too.
+  // Using the basename as the controlled `<select value>` also lets it
+  // line up with the matching catalog `<option value={entry.file}>`.
+  const normalizedSelected = mapFileBasename(selected)
   // When the saved mapUrl doesn't match any catalog entry, a controlled
   // `<select value={X}>` with no matching `<option>` is browser-defined:
   // most show the first option visually, and clicking that already-displayed
@@ -85,19 +92,19 @@ function MapDropdown({
   // the stale value — the catalog is guaranteed loaded by the time this
   // renders (Suspense above), so a working map never flashes as missing.
   const isInCatalog =
-    !!selected && mapCatalog.some((entry) => entry.file === selected)
+    !!normalizedSelected && mapCatalog.some((entry) => entry.file === normalizedSelected)
   return (
     <select
       className="flex-1 bg-app-card border border-theme-border rounded px-2 py-1 text-sm text-theme-text-primary focus:outline-none focus:border-accent-link"
-      value={selected ?? ''}
+      value={normalizedSelected ?? ''}
       onChange={(e) => onChange(e.target.value || undefined)}
     >
       <option value="" disabled>
         Select a map…
       </option>
-      {selected && !isInCatalog && (
-        <option value={selected}>
-          {formatMapName(selected)} (not in catalog)
+      {normalizedSelected && !isInCatalog && (
+        <option value={normalizedSelected}>
+          {formatMapName(normalizedSelected)} (not in catalog)
         </option>
       )}
       {mapCatalog.map((entry) => (

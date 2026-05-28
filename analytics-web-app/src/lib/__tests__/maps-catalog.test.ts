@@ -1,5 +1,6 @@
 import {
   formatMapName,
+  mapFileBasename,
   resolveMapBlobUrl,
   fetchMapCatalog,
   __resetMapCatalogForTest,
@@ -34,6 +35,23 @@ describe('resolveMapBlobUrl', () => {
 
   it('returns undefined when the value has no filename segment', () => {
     expect(resolveMapBlobUrl('maps/', '/mmlocal')).toBeUndefined()
+  })
+})
+
+describe('mapFileBasename', () => {
+  it('passes a bare filename through unchanged', () => {
+    expect(mapFileBasename('main.glb')).toBe('main.glb')
+  })
+
+  it('strips a path prefix', () => {
+    expect(mapFileBasename('/maps/Arena_North.glb')).toBe('Arena_North.glb')
+    expect(mapFileBasename('maps/Arena_North.glb')).toBe('Arena_North.glb')
+  })
+
+  it('returns undefined for empty or filename-less input', () => {
+    expect(mapFileBasename(undefined)).toBeUndefined()
+    expect(mapFileBasename('')).toBeUndefined()
+    expect(mapFileBasename('maps/')).toBeUndefined()
   })
 })
 
