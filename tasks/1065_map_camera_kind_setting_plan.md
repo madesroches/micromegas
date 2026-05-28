@@ -98,6 +98,13 @@ export interface CameraOrbitState {
   // pass-by-value and the controller's refs would never see the update.
   fitRadius: MutableRefObject<number>
   zoomFactor: MutableRefObject<number>
+  // Per-controller scratchpad for adapter-owned state (e.g. ortho's
+  // `seedZoom` / `radiusAtSeed`). Lives on the controller's orbit object —
+  // not on the adapter — so multiple Map cells sharing the same
+  // module-level adapter singleton from `CAMERA_MODES` don't clobber each
+  // other's per-cell seed values. The controller initializes this to `{}`
+  // and never reads from it; only the adapter writes/reads keys it owns.
+  modeState: Record<string, unknown>
 }
 
 export interface SeedParams {
@@ -139,10 +146,13 @@ export interface CameraMode {
    * baseline must equal `(world-per-pixel now) / (world-per-pixel at seed)`.
    * Perspective returns `orbit.spherical.radius` (world-per-pixel scales
    * linearly with radius for a fixed fov). Ortho stores `seedZoom` and
-   * `radiusAtSeed` during `seed()` and returns
+   * `radiusAtSeed` on `orbit.modeState` during `seed()` and returns
    * `radiusAtSeed * seedZoom / camera.zoom` — independent of the current
    * orbit radius, since ortho world-per-pixel is `1 / camera.zoom` and is
-   * unaffected by camera-to-target distance.
+   * unaffected by camera-to-target distance. Keeping this state on
+   * `orbit.modeState` (per controller) rather than on the adapter
+   * singleton is what lets multiple Map cells share the registry's one
+   * `orthographic` instance without racing each other's seed values.
    */
   effectiveRadius: (params: { camera: THREE.Camera; orbit: CameraOrbitState }) => number
 }
@@ -217,6 +227,25 @@ only the projection differs.
   behaves identically. The orbit state — `target`, `spherical (radius, phi,
   theta)`, `fitRadius`, `zoomFactor` — is seeded by the same code path as
   perspective, so right-drag orbit and `Z` reset behave the same.
+
+  **`glbCamera === null` fallback.** `MapCamera.tsx:114` early-returns the
+  GLB seed effect when `glbCamera` is null, and the contract-error overlay
+  in `MapViewer.tsx:228-` is purely informational — the controller still
+  mounts and `useFrame` still runs. If the ortho seed bailed in this case,
+  `orbit.modeState.seedZoom` / `radiusAtSeed` would be unset and
+  `effectiveRadius` would return `NaN` (poisoning pan and fly speeds), and
+  the visible framing would fall back to drei's `<OrthographicCamera>`
+  default of `zoom=1` with a pixel-sized frustum (1 world unit = 1 pixel).
+  To stay deterministic, the ortho adapter does **not** early-return when
+  `glbCamera` is null: instead it seeds `camera.zoom` using the same
+  height-fit formula with an assumed `vFov = 60°` (matching the
+  `<PerspectiveCamera>` JSX default at `MapViewer.tsx:194` that the
+  perspective adapter inherits when GLB intrinsics are missing) and
+  `R = sphericalRef.radius` (whatever the orbit's default radius is at
+  that point). `near` / `far` are left at the `<OrthographicCamera>` JSX
+  defaults. `radiusAtSeed` and `seedZoom` are still written to
+  `orbit.modeState`, so `effectiveRadius` returns finite values and
+  pan/fly speeds remain well-defined.
 - `apply`: `camera.position = target + sphericalToZUpOffset(spherical)`;
   `camera.up` from theta; `lookAt(target)`. Identical to perspective —
   projection-agnostic.
@@ -252,20 +281,26 @@ only the projection differs.
   Both consumers go through the one accessor, so adapters opt in by
   overriding a single method. The ortho `seed()` captures `seedZoom` (the
   initial `camera.zoom` it just computed) and `radiusAtSeed` (the orbit
-  radius at seed time) on the adapter (e.g., closure-local mutable fields or
-  refs scoped to the adapter instance) so `effectiveRadius` can read them
-  later without re-deriving from `glbCamera`.
+  radius at seed time) on `orbit.modeState` (the per-controller scratchpad
+  defined on `CameraOrbitState`) so `effectiveRadius` can read them later
+  without re-deriving from `glbCamera`. Storing on `orbit.modeState`
+  rather than on the adapter object is required because
+  `CAMERA_MODES.orthographic` is a single module-level instance shared
+  across every Map cell — two cells using ortho concurrently would race
+  for the slot if it lived on the adapter. The controller owns the
+  `orbit` object (one per controller instance), so each cell gets its
+  own `modeState`.
 - `snapshot: (camera) => ({ zoom: (camera as THREE.OrthographicCamera).zoom })`.
 - `restore: (camera, snap)` → write `camera.zoom` and
   `updateProjectionMatrix()`.
 - `effectiveRadius`: returns
   `radiusAtSeed * seedZoom / (camera as THREE.OrthographicCamera).zoom`
-  (with `seedZoom` and `radiusAtSeed` captured during `seed()`) so pan and
-  fly speeds shrink as the user zooms in. The current orbit `radius` does
-  not appear in the formula — ortho world-per-pixel is `1 / camera.zoom`
-  and depends only on `camera.zoom`, while `radiusAtSeed * seedZoom`
-  carries the absolute units needed to match the perspective baseline at
-  the seeded framing.
+  (with `seedZoom` and `radiusAtSeed` read from `orbit.modeState`, where
+  `seed()` wrote them) so pan and fly speeds shrink as the user zooms in.
+  The current orbit `radius` does not appear in the formula — ortho
+  world-per-pixel is `1 / camera.zoom` and depends only on `camera.zoom`,
+  while `radiusAtSeed * seedZoom` carries the absolute units needed to
+  match the perspective baseline at the seeded framing.
 
 ### Controller changes (`MapCamera.tsx`)
 
@@ -273,13 +308,18 @@ Take a `cameraMode: CameraMode` prop. Replace the three perspective-specific
 sites with adapter calls. The controller builds one `orbit: CameraOrbitState`
 object that bundles its existing refs — `target: targetRef.current`,
 `spherical: sphericalRef.current`, `fitRadius: fitRadiusRef`,
-`zoomFactor: zoomFactorRef` — and passes it to every adapter call. The
+`zoomFactor: zoomFactorRef` — plus a fresh `modeState: {}` scratchpad owned
+by this controller instance, and passes it to every adapter call. The
 `fitRadius` / `zoomFactor` fields are the refs themselves (not `.current`),
 so when an adapter writes `orbit.zoomFactor.current = newZoom` the
 controller's `zoomFactorRef.current` is updated directly (no read-back step
 needed). `target` and `spherical` are object instances, so in-place
 mutation (`orbit.spherical.radius = ...`) is already visible to the
-controller.
+controller. `modeState` is a plain object the adapter mutates in place
+(e.g., `orbit.modeState.seedZoom = ...`); it lives for the lifetime of
+the controller and is recreated on mode-swap remount (the
+`key={cameraKind}` flow), so adapters never inherit stale state from a
+prior mode.
 
 | Today | After |
 |---|---|
