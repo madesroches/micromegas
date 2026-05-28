@@ -352,10 +352,20 @@ Responsibilities, in one place:
   agnostic.
 - **Latest-callback refs.** Stores `onWheel`, `getPanSpeed`,
   `getFlyMoveSpeedPerFrame`, `onRightDragReAnchor` in internal refs so
-  the DOM-binding `useEffect` can stay keyed on
-  `[domElement, cameraRef.current]` rather than rebinding listeners
-  every render as callback identities change. The `useFrame` callback
-  reads the latest from the same refs.
+  the DOM-binding `useEffect` doesn't rebind listeners every render as
+  callback identities change. The `useFrame` callback reads the latest
+  from the same refs. The effect is keyed on
+  `[cameraRef, domElement, mapSceneRef]` (stable ref objects) and reads
+  `cameraRef.current` *inside* the effect body — **not** on
+  `[domElement, cameraRef.current]`. On the controller's first render
+  `cameraRef.current` is still `null` (the sibling drei camera's ref
+  attaches at commit, and nothing forces a follow-up render), so a
+  dep-array read would capture `null` and the listeners would never
+  bind. Reading inside the effect is correct because React attaches all
+  refs in the committed tree before any effect fires, and the camera
+  identity is fixed for the controller's mount lifetime (`MapViewer`
+  remounts the camera/controller pair on `mapUrl` or `cameraKind`
+  change), so binding once is sufficient.
 
 Each per-mode controller is ~80 lines: declare `mapSceneRef` and its own
 `savedViewRef`, call `useMapOrbitController` with mode-specific
