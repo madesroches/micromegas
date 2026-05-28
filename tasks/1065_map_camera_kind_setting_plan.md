@@ -316,32 +316,15 @@ three hooks with mode-specific callbacks, declare the GLB-seed
   `mapScene`, which unmounts the (currently ready-gated) controller.
   Without the key the orbit state would persist from the prior map
   until the next GLB-seed effect overwrites it.
-- Update the missing-GLB-camera `contractErrors` push at
+- Rephrase the missing-GLB-camera `contractErrors` push at
   `MapViewer.tsx:128-129`. The current message — "No perspective camera
   in GLB — initial framing is the default seed, and Reset View will not
-  work." — is invalidated by ortho's `glbCamera === null` fallback
-  (60° height-fit seed + `saveInitialView` capturing `camera.zoom`, so
-  `Z` reset works without an embedded GLB camera). Gate it on
-  `cameraKind === 'perspective'` — the only mode where the claim still
-  holds, since `PerspectiveCameraController`'s seed effect bails on
-  `!glbCamera` and thus never calls `saveInitialView()`.
-
-  **Gating placement.** Do *not* gate inside `handleMapLoaded` — adding
-  `cameraKind` to its `useCallback` deps would change the callback's
-  identity on every mode swap, and `MapModel`'s `useLayoutEffect` is
-  keyed on `onLoaded` identity, so it would re-fire and re-run the GLB
-  processing pipeline (re-extracting `glbCamera`, re-walking the scene,
-  re-`setState`-ing equivalent values) on every toggle. Instead, keep
-  `handleMapLoaded` mode-agnostic: push a typed category
-  (e.g. `{ code: 'no-glb-camera' }`) into `contractErrors`. Then in
-  `MapViewer`'s render body, derive the user-visible message list and
-  the `console.error` calls from `(contractErrors, cameraKind)` —
-  `useMemo` for the rendered strings, `useEffect` (keyed on the same
-  pair) for the `console.error` side effect — filtering out the
-  `no-glb-camera` entry when `cameraKind !== 'perspective'`. This keeps
-  `handleMapLoaded`'s deps stable and avoids the re-fire, and ensures
-  ortho mode silences both the rendered error and the `console.error`
-  line consistently.
+  work." — embeds a perspective-specific consequence ("Reset View will
+  not work") that's no longer universally true (ortho's
+  `glbCamera === null` fallback seeds `camera.zoom` via
+  `saveInitialView`, so `Z` reset works). Drop the consequence clause:
+  "No perspective camera in GLB — initial framing uses a fallback."
+  `handleMapLoaded` and `contractErrors` stay mode-agnostic.
 
 A `cameraKind` change makes React swap component types in `<mode.Render>`
 — the prior camera/controller unmount cleanly, listeners are removed by
