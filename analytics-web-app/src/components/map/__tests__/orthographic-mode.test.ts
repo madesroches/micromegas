@@ -6,27 +6,30 @@ import {
 import { zoomAnchorTarget } from '../map-camera-math'
 
 describe('computeOrthoSeedZoom', () => {
-  it('fits the sphere diameter to the smaller viewport dimension with margin', () => {
-    // Landscape viewport: height is the limiting dimension.
-    const boundsRadius = 2000
-    const zoom = computeOrthoSeedZoom(boundsRadius, 1600, 800)
-    // At this zoom the world height the frustum covers is hPx / zoom; the
-    // sphere diameter should occupy 90% of it (FIT_FRACTION).
-    const worldHeight = 800 / zoom
-    expect((2 * boundsRadius) / worldHeight).toBeCloseTo(0.9, 9)
+  it('fits the limiting axis so the silhouette fills FIT_FRACTION of it', () => {
+    // Tall silhouette in a landscape viewport → height (Y) is limiting.
+    const halfX = 300
+    const halfY = 1000
+    const wPx = 1600
+    const hPx = 800
+    const zoom = computeOrthoSeedZoom(halfX, halfY, wPx, hPx)
+    // The Y axis is the tighter fit: silhouette height fills 100% of hPx/zoom.
+    const worldHeight = hPx / zoom
+    expect((2 * halfY) / worldHeight).toBeCloseTo(1.0, 9)
+    // And the X axis is not exceeded.
+    const worldWidth = wPx / zoom
+    expect(2 * halfX).toBeLessThanOrEqual(worldWidth)
   })
 
-  it('uses the smaller dimension regardless of orientation', () => {
-    const boundsRadius = 2000
-    // Portrait viewport with the same min dimension yields the same fit.
-    const landscape = computeOrthoSeedZoom(boundsRadius, 1600, 800)
-    const portrait = computeOrthoSeedZoom(boundsRadius, 800, 1600)
-    expect(portrait).toBeCloseTo(landscape, 9)
+  it('lets the wider axis be the limiting fit when the silhouette is wide', () => {
+    const zoom = computeOrthoSeedZoom(2000, 100, 800, 800)
+    const worldWidth = 800 / zoom
+    expect((2 * 2000) / worldWidth).toBeCloseTo(1.0, 9)
   })
 
-  it('halving the bounds radius doubles the zoom', () => {
-    const near = computeOrthoSeedZoom(2000, 1600, 800)
-    const far = computeOrthoSeedZoom(1000, 1600, 800)
+  it('halving the silhouette extent doubles the zoom', () => {
+    const near = computeOrthoSeedZoom(500, 1000, 1600, 800)
+    const far = computeOrthoSeedZoom(250, 500, 1600, 800)
     expect(far).toBeCloseTo(near * 2, 9)
   })
 })

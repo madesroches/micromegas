@@ -31,28 +31,36 @@ const ZOOM_SPEED = 0.1
 // snapping; in practice never reached at sane scene scales.
 const ZOOM_MIN = 1e-6
 const ZOOM_MAX = 1e6
-// Fraction of the viewport the map's bounding sphere fills on the initial
-// fit — < 1 leaves a margin so the map isn't flush against the edges.
-const FIT_FRACTION = 0.9
+// Fraction of the viewport the map's silhouette fills on the initial fit.
+const FIT_FRACTION = 1.0
 
 /**
- * Seed `camera.zoom` so the map's bounding sphere fills the viewport with a
- * small margin, regardless of where the GLB camera was authored. Ortho
- * projection is distance-invariant, so framing is set entirely by zoom: fit
- * the sphere's diameter (`2 * boundsRadius`) to the smaller viewport
- * dimension. `wPx`/`hPx` are drei's auto-fit frustum extents in pixels
- * (`camera.right - camera.left` / `camera.top - camera.bottom`), so the
- * world span the unzoomed frustum covers along each axis equals that pixel
- * extent; `zoom = fittedPx / worldDiameter`.
+ * Seed `camera.zoom` so the map fills the viewport with a small margin,
+ * regardless of where the GLB camera was authored. Ortho projection is
+ * distance-invariant, so framing is set entirely by zoom.
+ *
+ * Fits the map's *projected silhouette* — `halfExtentX`/`halfExtentY` are the
+ * max |x|/|y| of the bounding-box corners in camera view space (world units,
+ * i.e. half the silhouette's width/height as seen on screen). Fitting the box
+ * rather than its bounding sphere avoids over-shrinking flat/wide maps, whose
+ * sphere diameter is the (much larger) box diagonal.
+ *
+ * `wPx`/`hPx` are drei's auto-fit frustum extents in pixels
+ * (`camera.right - camera.left` / `camera.top - camera.bottom`), so the world
+ * span the unzoomed frustum covers along each axis equals that pixel extent.
+ * Take the tighter of the two axis fits so the whole silhouette stays in
+ * frame on any aspect ratio.
  */
 // eslint-disable-next-line react-refresh/only-export-components
 export function computeOrthoSeedZoom(
-  boundsRadius: number,
+  halfExtentX: number,
+  halfExtentY: number,
   wPx: number,
   hPx: number,
 ): number {
-  const minPx = Math.min(wPx, hPx)
-  return (minPx * FIT_FRACTION) / (2 * boundsRadius)
+  const zoomX = (wPx * FIT_FRACTION) / (2 * halfExtentX)
+  const zoomY = (hPx * FIT_FRACTION) / (2 * halfExtentY)
+  return Math.min(zoomX, zoomY)
 }
 
 /**
@@ -162,26 +170,46 @@ export function OrthographicCameraController({
     const sphericalInput = zUpOffsetToSphericalInput(worldOffset, new THREE.Vector3())
     sphericalRef.current.setFromVector3(sphericalInput)
 
-    // Drei applies left/right/top/bottom on the underlying primitive during
-    // commit (before this useLayoutEffect), so the frustum extents are
-    // populated. Fit the map's bounding sphere to the viewport rather than
-    // matching the GLB camera's framing, so the whole map is visible on load
-    // regardless of how the camera was authored.
-    const wPx = camera.right - camera.left
-    const hPx = camera.top - camera.bottom
     camera.near = glbCamera.near
     camera.far = glbCamera.far
-    camera.zoom = computeOrthoSeedZoom(sphere.radius, wPx, hPx)
-    // Drei's own useLayoutEffect for the frustum fires before this one and its
-    // useFrame is a no-op without functional children, so without this call
-    // the first paint would use the stale default projection.
-    camera.updateProjectionMatrix()
 
+    // Place + orient the camera before measuring the silhouette: the fit needs
+    // the final view basis to project the bounding box into view space.
     const offset = new THREE.Vector3()
     sphericalToZUpOffset(sphericalRef.current, offset)
     camera.position.copy(targetRef.current).add(offset)
     camera.up.set(-Math.sin(sphericalRef.current.theta), Math.cos(sphericalRef.current.theta), 0)
     camera.lookAt(targetRef.current)
+    camera.updateMatrixWorld(true)
+
+    // Project the 8 bounding-box corners into view space and take the max
+    // |x|/|y| — half the on-screen silhouette extent — so the fit hugs the
+    // actual footprint rather than the larger bounding sphere.
+    const viewInverse = camera.matrixWorld.clone().invert()
+    let halfExtentX = 0
+    let halfExtentY = 0
+    const corner = new THREE.Vector3()
+    for (let i = 0; i < 8; i++) {
+      corner.set(
+        i & 1 ? mapBounds.max.x : mapBounds.min.x,
+        i & 2 ? mapBounds.max.y : mapBounds.min.y,
+        i & 4 ? mapBounds.max.z : mapBounds.min.z,
+      )
+      corner.applyMatrix4(viewInverse)
+      halfExtentX = Math.max(halfExtentX, Math.abs(corner.x))
+      halfExtentY = Math.max(halfExtentY, Math.abs(corner.y))
+    }
+
+    // Drei applies left/right/top/bottom on the underlying primitive during
+    // commit (before this useLayoutEffect), so the frustum extents are
+    // populated.
+    const wPx = camera.right - camera.left
+    const hPx = camera.top - camera.bottom
+    camera.zoom = computeOrthoSeedZoom(halfExtentX, halfExtentY, wPx, hPx)
+    // Drei's own useLayoutEffect for the frustum fires before this one and its
+    // useFrame is a no-op without functional children, so without this call
+    // the first paint would use the stale default projection.
+    camera.updateProjectionMatrix()
 
     initialViewRef.current = {
       target: targetRef.current.clone(),
