@@ -27,6 +27,10 @@ import type { MapModeRenderProps } from './types'
 // same dimensionless ratio perspective uses (half the orbit radius per second).
 const FLY_SPEED = 0.5
 const ZOOM_SPEED = 0.1
+// Continuous zoom rate for held Q/E keys: e^(rate * seconds) per second, so
+// ~1s of hold scales zoom by e^1.5 ≈ 4.5x. Exponential keeps each frame's
+// step proportional, matching how the wheel multiplies zoom.
+const KEY_ZOOM_RATE = 1.5
 // Wide absolute clamp so the user can zoom far in/out without the step
 // snapping; in practice never reached at sane scene scales.
 const ZOOM_MIN = 1e-6
@@ -72,6 +76,17 @@ export function computeOrthoSeedZoom(
 // eslint-disable-next-line react-refresh/only-export-components
 export function computeOrthoZoomMultiplier(deltaY: number): number {
   return deltaY > 0 ? 1 / (1 + ZOOM_SPEED) : 1 + ZOOM_SPEED
+}
+
+/**
+ * Per-frame zoom multiplier for a held Q/E key. `direction` is +1 to zoom in
+ * (Q) and -1 to zoom out (E); `delta` is the frame time in seconds. The
+ * exponential form makes the zoom frame-rate independent and reciprocal
+ * between the two directions.
+ */
+// eslint-disable-next-line react-refresh/only-export-components
+export function computeOrthoKeyZoomMultiplier(direction: 1 | -1, delta: number): number {
+  return Math.exp(direction * KEY_ZOOM_RATE * delta)
 }
 
 interface OrthographicCameraControllerProps extends MapModeRenderProps {
@@ -139,6 +154,15 @@ export function OrthographicCameraController({
       }
 
       camera.zoom = newZoom
+      camera.updateProjectionMatrix()
+    },
+    // Q/E zoom in/out (forward translation is invisible in ortho). Centered,
+    // not cursor-anchored — there's no pointer position during a key hold.
+    onFlyZoom: (delta, direction) => {
+      const camera = cameraRef.current
+      if (!camera) return
+      const m = computeOrthoKeyZoomMultiplier(direction, delta)
+      camera.zoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, camera.zoom * m))
       camera.updateProjectionMatrix()
     },
   })

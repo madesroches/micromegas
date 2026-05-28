@@ -34,6 +34,11 @@ interface UseMapOrbitControllerParams<
   getPanSpeed: () => number
   getFlyMoveSpeedPerFrame: (delta: number) => number
   onRightDragReAnchor?: () => void
+  // When provided, Q/E drive this instead of forward/back translation. Used by
+  // ortho, where moving along the view axis is a no-op (distance-invariant
+  // projection), so Q/E zoom the camera instead. `direction` is +1 for Q
+  // (zoom in / forward) and -1 for E (zoom out / back).
+  onFlyZoom?: (delta: number, direction: 1 | -1) => void
 }
 
 export function useMapOrbitController<
@@ -46,6 +51,7 @@ export function useMapOrbitController<
   getPanSpeed,
   getFlyMoveSpeedPerFrame,
   onRightDragReAnchor,
+  onFlyZoom,
 }: UseMapOrbitControllerParams<C>): {
   targetRef: RefObject<THREE.Vector3>
   sphericalRef: RefObject<THREE.Spherical>
@@ -79,6 +85,8 @@ export function useMapOrbitController<
   getFlyMoveSpeedPerFrameRef.current = getFlyMoveSpeedPerFrame
   const onRightDragReAnchorRef = useRef(onRightDragReAnchor)
   onRightDragReAnchorRef.current = onRightDragReAnchor
+  const onFlyZoomRef = useRef(onFlyZoom)
+  onFlyZoomRef.current = onFlyZoom
 
   useEffect(() => {
     // Read the camera inside the effect: refs are attached during commit
@@ -293,8 +301,18 @@ export function useMapOrbitController<
       if (keysRef.current.a) targetRef.current.addScaledVector(right, -moveSpeed)
       if (keysRef.current.w) targetRef.current.addScaledVector(up, moveSpeed)
       if (keysRef.current.s) targetRef.current.addScaledVector(up, -moveSpeed)
-      if (keysRef.current.q) targetRef.current.addScaledVector(forward, moveSpeed)
-      if (keysRef.current.e) targetRef.current.addScaledVector(forward, -moveSpeed)
+
+      // Q/E: a mode can take over the depth axis (ortho zooms, since forward
+      // translation is invisible under an orthographic projection); otherwise
+      // they fly the target forward/back along camera-forward.
+      const flyZoom = onFlyZoomRef.current
+      if (flyZoom) {
+        if (keysRef.current.q) flyZoom(delta, 1)
+        if (keysRef.current.e) flyZoom(delta, -1)
+      } else {
+        if (keysRef.current.q) targetRef.current.addScaledVector(forward, moveSpeed)
+        if (keysRef.current.e) targetRef.current.addScaledVector(forward, -moveSpeed)
+      }
     }
 
     const offset = new THREE.Vector3()

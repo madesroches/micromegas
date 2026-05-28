@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import {
   computeOrthoSeedZoom,
   computeOrthoZoomMultiplier,
+  computeOrthoKeyZoomMultiplier,
 } from '../modes/OrthographicCameraController'
 import { zoomAnchorTarget } from '../map-camera-math'
 
@@ -42,6 +43,26 @@ describe('computeOrthoZoomMultiplier', () => {
 
   it('zoom-in and zoom-out steps are reciprocal', () => {
     expect(computeOrthoZoomMultiplier(1) * computeOrthoZoomMultiplier(-1)).toBeCloseTo(1, 9)
+  })
+})
+
+describe('computeOrthoKeyZoomMultiplier', () => {
+  it('zooms in for direction +1 and out for direction -1', () => {
+    expect(computeOrthoKeyZoomMultiplier(1, 1 / 60)).toBeGreaterThan(1)
+    expect(computeOrthoKeyZoomMultiplier(-1, 1 / 60)).toBeLessThan(1)
+  })
+
+  it('opposite directions over the same frame time are reciprocal', () => {
+    const delta = 1 / 60
+    expect(
+      computeOrthoKeyZoomMultiplier(1, delta) * computeOrthoKeyZoomMultiplier(-1, delta)
+    ).toBeCloseTo(1, 9)
+  })
+
+  it('is frame-rate independent: two half-steps equal one full step', () => {
+    const full = computeOrthoKeyZoomMultiplier(1, 0.2)
+    const half = computeOrthoKeyZoomMultiplier(1, 0.1)
+    expect(half * half).toBeCloseTo(full, 9)
   })
 })
 

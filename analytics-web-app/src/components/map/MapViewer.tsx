@@ -249,7 +249,7 @@ export function MapViewer({
         <div>Ctrl + Scroll: Zoom</div>
         <div>W/S: Up / Down</div>
         <div>A/D: Strafe</div>
-        <div>Q/E: Forward / Back</div>
+        <div>Q/E: {cameraKind === 'orthographic' ? 'Zoom in / out' : 'Forward / Back'}</div>
         <div>Z: Reset view</div>
       </div>
     </div>
