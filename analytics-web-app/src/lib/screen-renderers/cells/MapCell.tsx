@@ -16,6 +16,7 @@ import {
   DEFAULT_MAP_DETAIL_TEMPLATE,
 } from '../notebook-utils'
 import { MapViewer } from '@/components/map/MapViewer'
+import { MAP_MODE_KINDS, MAP_MODE_LABELS, type MapModeKind } from '@/components/map/modes'
 import { EventDetailPanel } from '@/components/map/EventDetailPanel'
 import { MapHoverTooltip } from '@/components/map/MapHoverTooltip'
 import {
@@ -37,6 +38,7 @@ import {
   type MapCatalogEntry,
   fetchMapCatalog,
   formatMapName,
+  mapFileBasename,
   resolveMapBlobUrl,
 } from '@/lib/maps-catalog'
 import { getConfig } from '@/lib/config'
@@ -77,6 +79,12 @@ function MapDropdown({
   onChange: (value: string | undefined) => void
 }) {
   const mapCatalog = useMapCatalog()
+  // Match against the basename so a legacy path-prefixed value (e.g.
+  // `/maps/Foo.glb`) still resolves to its catalog entry — catalog entries
+  // are always bare filenames, and the renderer loads by basename too.
+  // Using the basename as the controlled `<select value>` also lets it
+  // line up with the matching catalog `<option value={entry.file}>`.
+  const normalizedSelected = mapFileBasename(selected)
   // When the saved mapUrl doesn't match any catalog entry, a controlled
   // `<select value={X}>` with no matching `<option>` is browser-defined:
   // most show the first option visually, and clicking that already-displayed
@@ -84,19 +92,19 @@ function MapDropdown({
   // the stale value — the catalog is guaranteed loaded by the time this
   // renders (Suspense above), so a working map never flashes as missing.
   const isInCatalog =
-    !!selected && mapCatalog.some((entry) => entry.file === selected)
+    !!normalizedSelected && mapCatalog.some((entry) => entry.file === normalizedSelected)
   return (
     <select
       className="flex-1 bg-app-card border border-theme-border rounded px-2 py-1 text-sm text-theme-text-primary focus:outline-none focus:border-accent-link"
-      value={selected ?? ''}
+      value={normalizedSelected ?? ''}
       onChange={(e) => onChange(e.target.value || undefined)}
     >
       <option value="" disabled>
         Select a map…
       </option>
-      {selected && !isInCatalog && (
-        <option value={selected}>
-          {formatMapName(selected)} (not in catalog)
+      {normalizedSelected && !isInCatalog && (
+        <option value={normalizedSelected}>
+          {formatMapName(normalizedSelected)} (not in catalog)
         </option>
       )}
       {mapCatalog.map((entry) => (
@@ -299,6 +307,10 @@ export function MapCell({
     (options?.detailTemplate as string | undefined) ?? DEFAULT_MAP_DETAIL_TEMPLATE
   // Hover tooltip is opt-out: absent (legacy configs) or `true` → shown.
   const showHoverTooltip = (options?.showHoverTooltip as boolean | undefined) !== false
+  // Resolve cameraKind at the boundary so notebooks saved before this option
+  // existed (undefined) default to perspective; MapViewer indexes MAP_MODES
+  // with the typed value directly.
+  const cameraKind = (options?.cameraKind as MapModeKind | undefined) ?? 'perspective'
 
   const handleSelectByRowIndex = useCallback(
     (rowIndex: number | null) => {
@@ -447,6 +459,7 @@ export function MapCell({
           overlay={overlay}
           constants={constants}
           shape={shape}
+          cameraKind={cameraKind}
           selectedRowIndex={selectedRowIndex}
           onSelect={handleSelectByRowIndex}
           onHover={handleHover}
@@ -785,6 +798,8 @@ export function MapCellEditor({
     (mapConfig.options?.detailTemplate as string | undefined) ?? DEFAULT_MAP_DETAIL_TEMPLATE
   const showHoverTooltip =
     (mapConfig.options?.showHoverTooltip as boolean | undefined) !== false
+  const cameraKind =
+    (mapConfig.options?.cameraKind as MapModeKind | undefined) ?? 'perspective'
 
   // Empty-string placeholders for every column from the most recent result
   // so the editor doesn't flag `$columnFromQuery` as "Unknown variable" at
@@ -840,6 +855,19 @@ export function MapCellEditor({
               />
             </Suspense>
           </div>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <label className="text-xs text-theme-text-secondary w-24 shrink-0">Camera</label>
+          <select
+            value={cameraKind}
+            onChange={(e) => updateOption('cameraKind', e.target.value)}
+            className="bg-app-card border border-theme-border rounded px-2 py-1 text-sm text-theme-text-primary focus:outline-none focus:border-accent-link"
+          >
+            {MAP_MODE_KINDS.map((kind) => (
+              <option key={kind} value={kind}>{MAP_MODE_LABELS[kind]}</option>
+            ))}
+          </select>
         </div>
       </div>
 

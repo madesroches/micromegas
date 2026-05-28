@@ -1,5 +1,6 @@
 import {
   formatMapName,
+  mapFileBasename,
   resolveMapBlobUrl,
   fetchMapCatalog,
   __resetMapCatalogForTest,
@@ -21,6 +22,36 @@ describe('resolveMapBlobUrl', () => {
 
   it('works with empty base path (root deployment)', () => {
     expect(resolveMapBlobUrl('main.glb', '')).toBe('/api/maps/blob/main.glb')
+  })
+
+  it('reduces a path-prefixed legacy value to its basename', () => {
+    // No double slash, single trailing segment — matches the backend's
+    // single-segment blob route.
+    expect(resolveMapBlobUrl('/maps/Arena_North.glb', '/micromegas')).toBe(
+      '/micromegas/api/maps/blob/Arena_North.glb'
+    )
+    expect(resolveMapBlobUrl('maps/Arena_North.glb', '')).toBe('/api/maps/blob/Arena_North.glb')
+  })
+
+  it('returns undefined when the value has no filename segment', () => {
+    expect(resolveMapBlobUrl('maps/', '/mmlocal')).toBeUndefined()
+  })
+})
+
+describe('mapFileBasename', () => {
+  it('passes a bare filename through unchanged', () => {
+    expect(mapFileBasename('main.glb')).toBe('main.glb')
+  })
+
+  it('strips a path prefix', () => {
+    expect(mapFileBasename('/maps/Arena_North.glb')).toBe('Arena_North.glb')
+    expect(mapFileBasename('maps/Arena_North.glb')).toBe('Arena_North.glb')
+  })
+
+  it('returns undefined for empty or filename-less input', () => {
+    expect(mapFileBasename(undefined)).toBeUndefined()
+    expect(mapFileBasename('')).toBeUndefined()
+    expect(mapFileBasename('maps/')).toBeUndefined()
   })
 })
 

@@ -41,17 +41,17 @@ describe('sphericalToZUpOffset / zUpOffsetToSphericalInput round-trip', () => {
 describe('panTarget', () => {
   it('translates only in the ground (XY) plane regardless of input', () => {
     const target = new THREE.Vector3(10, 20, 30)
-    panTarget(target, 0, 1000, 5, 7)
-    // theta=0: right=(-1,0,0), forward=(0,1,0), panSpeed = 1000*0.001 = 1
+    panTarget(target, 0, 1, 5, 7)
+    // theta=0: right=(-1,0,0), forward=(0,1,0), panSpeed = 1
     // dx*right = (-5,0,0), dy*forward = (0,7,0)
     expect(target.x).toBeCloseTo(10 - 5, 6)
     expect(target.y).toBeCloseTo(20 + 7, 6)
     expect(target.z).toBeCloseTo(30, 6) // never elevates
   })
 
-  it('scales pan speed with the orbit radius', () => {
-    const a = panTarget(new THREE.Vector3(), 0, 1000, 10, 0)
-    const b = panTarget(new THREE.Vector3(), 0, 2000, 10, 0)
+  it('scales translation linearly with panSpeed', () => {
+    const a = panTarget(new THREE.Vector3(), 0, 1, 10, 0)
+    const b = panTarget(new THREE.Vector3(), 0, 2, 10, 0)
     expect(Math.abs(b.x)).toBeCloseTo(Math.abs(a.x) * 2, 6)
   })
 })

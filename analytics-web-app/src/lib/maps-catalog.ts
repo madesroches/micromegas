@@ -42,10 +42,31 @@ async function readErrorBody(response: Response): Promise<MapApiErrorBody | unde
   }
 }
 
+/**
+ * The bare filename for a stored/selected map value.
+ *
+ * The blob route captures a single path segment and rejects any `/` (see
+ * `is_direct_child` / `maps_blob` in the backend), so a valid map filename
+ * never contains a slash, and the catalog only ever lists bare filenames.
+ * Legacy or hand-authored notebooks sometimes stored a path-prefixed value
+ * (e.g. `/maps/Foo.glb`); reduce to the last segment so those still resolve
+ * and still match catalog entries. Returns `undefined` when there is no
+ * filename segment (empty input or a trailing-slash value).
+ */
+export function mapFileBasename(file: string | undefined): string | undefined {
+  if (!file) return undefined
+  return file.split('/').pop() || undefined
+}
+
 /** Compose the blob URL the renderer hands to drei's `useGLTF`. */
 export function resolveMapBlobUrl(file: string | undefined, basePath: string): string | undefined {
-  if (!file) return undefined
-  return `${basePath}/api/maps/blob/${file}`
+  // Reduce to the basename: a path prefix would otherwise produce a
+  // multi-segment URL (`…/blob//maps/Foo.glb`) that misses the blob route
+  // and falls through to the SPA's index.html — which the GLB loader then
+  // fails to parse as JSON.
+  const filename = mapFileBasename(file)
+  if (!filename) return undefined
+  return `${basePath}/api/maps/blob/${filename}`
 }
 
 /** Display name: strip the `.glb` extension. Underscores are preserved. */

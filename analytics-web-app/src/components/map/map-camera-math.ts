@@ -34,7 +34,7 @@ export function zUpOffsetToSphericalInput(offset: THREE.Vector3, out: THREE.Vect
 /**
  * Camera-relative orthonormal basis in world coordinates, derived from the
  * orbit's spherical state and the theta-driven camera.up convention used
- * by MapCameraController. Returns the right/up/forward vectors that
+ * by useMapOrbitController. Returns the right/up/forward vectors that
  * correspond to screen-X / screen-Y / screen-(-Z) respectively, so a
  * single right-hand-rule binding can drive A/D, W/S, and Q/E onto three
  * mutually-orthogonal world axes at every camera tilt.
@@ -65,16 +65,17 @@ export function cameraBasisFromSpherical(
  * cross-product collapse at phi=0, where cross(worldUp, cameraForward) is zero
  * and would silently drop the input. Theta is well-defined at every phi.
  *
- * Mutates and returns `target`. `radius` is the current orbit radius (drives pan speed).
+ * Mutates and returns `target`. `panSpeed` is the world-units-per-pixel
+ * translation rate; each mode computes it from its own camera state
+ * (perspective: `radius * 0.001`; orthographic: `1 / camera.zoom`).
  */
 export function panTarget(
   target: THREE.Vector3,
   theta: number,
-  radius: number,
+  panSpeed: number,
   deltaX: number,
   deltaY: number,
 ): THREE.Vector3 {
-  const panSpeed = radius * 0.001
   const sinTheta = Math.sin(theta)
   const cosTheta = Math.cos(theta)
   const right = new THREE.Vector3(-cosTheta, -sinTheta, 0)
