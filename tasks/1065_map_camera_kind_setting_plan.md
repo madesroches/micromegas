@@ -221,8 +221,14 @@ only the projection differs.
   and `R = sphericalRef.radius`, the world height visible at distance R in
   perspective is `worldHeight = 2 * R * tan(THREE.MathUtils.degToRad(vFov) / 2)`.
   For the ortho camera with viewport height `H_px`, `camera.zoom = H_px /
-  worldHeight` gives the same height-fit. Note: do **not** pass `vFov / 2`
-  directly to `Math.tan` — it expects radians. `near` / `far` are copied off the
+  worldHeight` gives the same height-fit. `H_px` is recovered from the
+  camera itself as `H_px = (camera as THREE.OrthographicCamera).top -
+  (camera as THREE.OrthographicCamera).bottom` — drei's
+  `<OrthographicCamera>` sets `top = size.height/2` and `bottom =
+  -size.height/2` from the canvas viewport in a layoutEffect that fires
+  before the controller's seed effect, so no extra `SeedParams` field is
+  needed. Note: do **not** pass `vFov / 2` directly to `Math.tan` — it
+  expects radians. `near` / `far` are copied off the
   GLB camera (same approach as the perspective adapter) so depth clipping
   behaves identically. The orbit state — `target`, `spherical (radius, phi,
   theta)`, `fitRadius`, `zoomFactor` — is seeded by the same code path as
@@ -352,19 +358,33 @@ agnostic and identical across modes.
   wrappers** — one around `<mode.CameraElement>` (still rendered
   unconditionally, before `<Suspense>`, in the same spot as today's
   `<PerspectiveCamera>` at `MapViewer.tsx:187-194` — i.e. *outside* the
-  `{ready && ...}` gate) and one around the ready-gated
-  `<MapCameraController>` block at `MapViewer.tsx:200-225`. Two siblings
-  (not one wrapping fragment) are required because `<Suspense>/<MapModel>`
-  sits between them in the JSX tree and must stay un-keyed so the GLB
-  stays loaded across mode changes; a single wrapping fragment would
-  either have to engulf `<MapModel>` (forcing GLB reload on every camera
-  switch) or skip one of the two sites. Both keyed fragments share the
-  same `cameraKind` key, so React unmounts and remounts them in lockstep
-  on mode change. Swapping `makeDefault` cameras mid-life leaves stale
-  refs in the controller (it captured `useThree().camera` at mount); the
-  key forces a clean teardown + reseed when the user changes the
-  dropdown. The outer `<Canvas>` and `MapModel` are *not* keyed — the GLB
-  stays loaded across mode changes.
+  `{ready && ...}` gate) and one around **only** `<MapCameraController>`
+  inside the `{ready && ...}` block at `MapViewer.tsx:200-225`. The
+  ready-gated block today contains three children — `<MapCameraController>`,
+  `<ambientLight>`, and `<MapInstancedMarkers>` — and only the controller
+  needs to remount on camera-kind change. Keying the whole block would
+  also remount `<MapInstancedMarkers>`, which does substantial GPU work
+  on mount (creates `BoxGeometry`/`SphereGeometry`, allocates the
+  `InstancedMesh` + per-instance color `InstancedBufferAttribute`, and
+  fills per-instance matrices in a `useLayoutEffect`) — forcing a full
+  rebuild and re-upload of GPU buffers for hundreds of thousands of
+  markers on an unrelated UI change. So inside `{ready && ...}` render
+  three siblings:
+  `<Fragment key={cameraKind}><MapCameraController .../></Fragment>`,
+  `<ambientLight ... />`, `<MapInstancedMarkers ... />`. Two keyed
+  siblings (not one wrapping fragment around everything) are required
+  because `<Suspense>/<MapModel>` sits between them in the JSX tree and
+  must stay un-keyed so the GLB stays loaded across mode changes; a
+  single wrapping fragment would either have to engulf `<MapModel>`
+  (forcing GLB reload on every camera switch) or skip one of the two
+  sites. Both keyed fragments share the same `cameraKind` key, so React
+  unmounts and remounts them in lockstep on mode change. Swapping
+  `makeDefault` cameras mid-life leaves stale refs in the controller (it
+  captured `useThree().camera` at mount); the key forces a clean
+  teardown + reseed when the user changes the dropdown. The outer
+  `<Canvas>`, `MapModel`, `<ambientLight>`, and `<MapInstancedMarkers>`
+  are *not* keyed — the GLB stays loaded and the instanced-marker GPU
+  buffers stay alive across mode changes.
 
 ### `MapCell.tsx` changes
 
