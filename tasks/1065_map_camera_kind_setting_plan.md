@@ -333,6 +333,27 @@ prior mode.
 | `MapCamera.tsx:251-294` radius-driven wheel zoom body | `cameraMode.zoom({ camera, orbit, domElement, scene, event })` |
 | `MapCamera.tsx:385-411` useFrame position/lookAt body | `cameraMode.apply({ camera, orbit })` |
 
+**Drop the `seededGlbCameraRef` guard** (`MapCamera.tsx:112-115`). Today the
+GLB-seed `useLayoutEffect` early-returns when `seededGlbCameraRef.current ===
+glbCamera` to avoid re-seeding the same camera on later renders. With the
+mode-swap remount (`key={cameraKind}` in `MapViewer.tsx`) the controller —
+and the ref — is recreated whenever `cameraKind` changes, so the same-GLB
+guard is no longer load-bearing. Removing it also fixes a latent race
+introduced by the remount: drei's camera elements call
+`set({ camera: cameraRef.current })` only inside a `useLayoutEffect`, so on
+the remount render the new controller's `useThree({ camera })` captures the
+**previous** default camera; the seed effect would run once against that
+stale camera, set `seededGlbCameraRef.current = glbCamera`, and then —
+after drei's `set` resolves and the effect re-runs with the new camera —
+early-return because the guard now matches, leaving the new camera
+unseeded (ortho's `camera.zoom` stuck at drei's default `1`, and
+`radiusAtSeed` / `seedZoom` unset on `orbit.modeState`, poisoning
+`effectiveRadius`). With the guard gone the seed runs against the new
+camera and writes `orbit.modeState` correctly; re-running on `glbCamera`
+identity stability is harmless because the effect is idempotent (it
+recomputes `target`, `spherical`, intrinsics, and `orbit.modeState` from
+the same inputs).
+
 `saveInitialView` / reset-view effect:
 - Extend `initialViewRef` to `{ orbit, modeSnapshot: unknown }` where
   `modeSnapshot = cameraMode.snapshot(camera)`.
