@@ -252,6 +252,14 @@ directly. Diffs from perspective:
   during commit before any `useLayoutEffect`, so they're populated by
   the time the controller's seed effect runs). Note: pass `degToRad(vFov) / 2` to
   `Math.tan`, **not** `vFov / 2` directly — `Math.tan` expects radians.
+  After writing `near/far/zoom`, the seed calls
+  `camera.updateProjectionMatrix()` — drei's own `useLayoutEffect` for
+  this fires *before* the controller's seed in sibling effect order, and
+  drei's `useFrame` is a no-op without functional `children`, so without
+  the explicit call the first paint would use the stale default
+  projection until something else triggered a re-render. (Mirrors the
+  perspective seed, which already calls `updateProjectionMatrix` after
+  writing `fov/near/far`.)
   The seed assumes `glbCamera` is present — `MapViewer` only mounts the
   ortho mode when the GLB has an embedded camera (see
   `MapViewer.tsx` changes below); no null-camera branch is needed.
@@ -312,7 +320,7 @@ function useMapOrbitController<C extends THREE.PerspectiveCamera | THREE.Orthogr
   onRightDragReAnchor?: () => void
 }): {
   targetRef: RefObject<THREE.Vector3>
-  sphericalRef: RefObject<{ theta: number; phi: number; radius: number }>
+  sphericalRef: RefObject<THREE.Spherical>
 }
 ```
 
