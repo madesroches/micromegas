@@ -96,8 +96,10 @@ export interface CameraOrbitState {
   // Refs so adapters can mutate these primitives through .current and have
   // the controller observe the new value. Plain `number` fields would be
   // pass-by-value and the controller's refs would never see the update.
-  fitRadius: MutableRefObject<number>
-  zoomFactor: MutableRefObject<number>
+  // (React 19: `RefObject<T>` is the idiomatic spelling — it now permits
+  // mutation via `.current`, replacing the older `MutableRefObject<T>`.)
+  fitRadius: RefObject<number>
+  zoomFactor: RefObject<number>
   // Per-controller scratchpad for adapter-owned state (e.g. ortho's
   // `seedZoom` / `radiusAtSeed`). Lives on the controller's orbit object —
   // not on the adapter — so multiple Map cells sharing the same
@@ -144,15 +146,23 @@ export interface CameraMode {
    * Effective radius used to scale pan and fly speeds so they track the
    * on-screen world-per-pixel. The returned value's ratio to the perspective
    * baseline must equal `(world-per-pixel now) / (world-per-pixel at seed)`.
-   * Perspective returns `orbit.spherical.radius` (world-per-pixel scales
-   * linearly with radius for a fixed fov). Ortho stores `seedZoom` and
-   * `radiusAtSeed` on `orbit.modeState` during `seed()` and returns
-   * `radiusAtSeed * seedZoom / camera.zoom` — independent of the current
-   * orbit radius, since ortho world-per-pixel is `1 / camera.zoom` and is
-   * unaffected by camera-to-target distance. Keeping this state on
-   * `orbit.modeState` (per controller) rather than on the adapter
-   * singleton is what lets multiple Map cells share the registry's one
-   * `orthographic` instance without racing each other's seed values.
+   *
+   * Contract notes on inputs (both adapters reuse this signature; neither
+   * reads both fields):
+   * - Perspective ignores `camera` entirely and reads only
+   *   `orbit.spherical.radius` (world-per-pixel scales linearly with radius
+   *   for a fixed fov).
+   * - Ortho ignores both `camera.position`/`spherical.radius` (camera-to-
+   *   target distance is irrelevant to ortho projection) and instead reads
+   *   `orbit.modeState.radiusAtSeed` and `orbit.modeState.seedZoom`
+   *   (captured during `seed()`) together with `camera.zoom`, returning
+   *   `radiusAtSeed * seedZoom / camera.zoom` — since ortho world-per-
+   *   pixel is `1 / camera.zoom`.
+   *
+   * Keeping `radiusAtSeed`/`seedZoom` on `orbit.modeState` (per controller)
+   * rather than on the adapter singleton is what lets multiple Map cells
+   * share the registry's one `orthographic` instance without racing each
+   * other's seed values.
    */
   effectiveRadius: (params: { camera: THREE.Camera; orbit: CameraOrbitState }) => number
 }
@@ -229,9 +239,10 @@ only the projection differs.
   camera itself as `H_px = (camera as THREE.OrthographicCamera).top -
   (camera as THREE.OrthographicCamera).bottom` — drei's
   `<OrthographicCamera>` sets `top = size.height/2` and `bottom =
-  -size.height/2` from the canvas viewport in a layoutEffect that fires
-  before the controller's seed effect, so no extra `SeedParams` field is
-  needed. Note: do **not** pass `vFov / 2` directly to `Math.tan` — it
+  -size.height/2` from the canvas viewport via JSX props on the
+  `orthographicCamera` primitive (committed by r3f during render, before
+  the controller's seed effect runs); only `updateProjectionMatrix()` runs
+  in drei's layoutEffect. So no extra `SeedParams` field is needed. Note: do **not** pass `vFov / 2` directly to `Math.tan` — it
   expects radians. `near` / `far` are copied off the
   GLB camera (same approach as the perspective adapter) so depth clipping
   behaves identically. The orbit state — `target`, `spherical (radius, phi,
@@ -337,7 +348,7 @@ prior mode.
 |---|---|
 | `MapCamera.tsx:140-144` perspective intrinsic copy | `cameraMode.seed({ camera, glbCamera, mapBounds, orbit })` |
 | `MapCamera.tsx:251-294` radius-driven wheel zoom body | `cameraMode.zoom({ camera, orbit, domElement, scene, event })` |
-| `MapCamera.tsx:385-411` useFrame position/lookAt body | `cameraMode.apply({ camera, orbit })` |
+| `MapCamera.tsx:406-411` useFrame position/up/lookAt tail (WASD movement at `:385-405` stays in the controller) | `cameraMode.apply({ camera, orbit })` |
 
 **Drop the full `!glbCamera || seededGlbCameraRef.current === glbCamera`
 early-return** (`MapCamera.tsx:112-115`). Both halves go, and
@@ -391,31 +402,26 @@ agnostic and identical across modes.
 - Render `<mode.CameraElement />` instead of the hardcoded `<PerspectiveCamera>`
   at `MapViewer.tsx:194`.
 - Pass `cameraMode={mode}` to `<MapCameraController>`.
-- **Mode-swap remount.** Use **two sibling `<Fragment key={cameraKind}>`
-  wrappers** — one around `<mode.CameraElement>` (still rendered
-  unconditionally, before `<Suspense>`, in the same spot as today's
-  `<PerspectiveCamera>` at `MapViewer.tsx:187-194` — i.e. *outside* the
-  `{ready && ...}` gate) and one around **only** `<MapCameraController>`
-  inside the `{ready && ...}` block at `MapViewer.tsx:200-225`. The
-  ready-gated block today contains three children — `<MapCameraController>`,
-  `<ambientLight>`, and `<MapInstancedMarkers>` — and only the controller
-  needs to remount on camera-kind change. Keying the whole block would
-  also remount `<MapInstancedMarkers>`, which does substantial GPU work
-  on mount (creates `BoxGeometry`/`SphereGeometry`, allocates the
-  `InstancedMesh` + per-instance color `InstancedBufferAttribute`, and
-  fills per-instance matrices in a `useLayoutEffect`) — forcing a full
-  rebuild and re-upload of GPU buffers for hundreds of thousands of
-  markers on an unrelated UI change. So inside `{ready && ...}` render
-  three siblings:
+- **Mode-swap remount.** Render `<mode.CameraElement>` unconditionally
+  before `<Suspense>`, in the same spot as today's `<PerspectiveCamera>`
+  at `MapViewer.tsx:187-194` (i.e. *outside* the `{ready && ...}` gate),
+  **without** wrapping it in a keyed fragment — each adapter exports a
+  distinct `CameraElement` component type, so the component-type change
+  on `cameraKind` swap is what drives React to unmount/remount the
+  camera element. Then wrap **only** `<MapCameraController>` in a
+  `<Fragment key={cameraKind}>` inside the `{ready && ...}` block at
+  `MapViewer.tsx:200-225`. The ready-gated block today contains three
+  children — `<MapCameraController>`, `<ambientLight>`, and
+  `<MapInstancedMarkers>` — and only the controller needs to remount on
+  camera-kind change. Keying the whole block would also remount
+  `<MapInstancedMarkers>`, which does substantial GPU work on mount
+  (creates `BoxGeometry`/`SphereGeometry`, allocates the `InstancedMesh`
+  + per-instance color `InstancedBufferAttribute`, and fills per-instance
+  matrices in a `useLayoutEffect`) — forcing a full rebuild and
+  re-upload of GPU buffers for hundreds of thousands of markers on an
+  unrelated UI change. So inside `{ready && ...}` render three siblings:
   `<Fragment key={cameraKind}><MapCameraController .../></Fragment>`,
-  `<ambientLight ... />`, `<MapInstancedMarkers ... />`. Two keyed
-  siblings (not one wrapping fragment around everything) are required
-  because `<Suspense>/<MapModel>` sits between them in the JSX tree and
-  must stay un-keyed so the GLB stays loaded across mode changes; a
-  single wrapping fragment would either have to engulf `<MapModel>`
-  (forcing GLB reload on every camera switch) or skip one of the two
-  sites. Both keyed fragments share the same `cameraKind` key, so React
-  unmounts and remounts them in lockstep on mode change. Swapping
+  `<ambientLight ... />`, `<MapInstancedMarkers ... />`. Swapping
   `makeDefault` cameras mid-life leaves stale refs in the controller (it
   captured `useThree().camera` at mount); the key forces a clean
   teardown + reseed when the user changes the dropdown. The outer
@@ -501,10 +507,13 @@ changes if a new control-gating flag is added.
    `perspectiveOrbit` registered initially).
 2. **Extract `perspectiveOrbit`.** Move the perspective intrinsic-copy
    (`MapCamera.tsx:140-144`), the wheel handler body (`:251-294`), and the
-   useFrame body (`:385-411`) into `camera-modes/perspectiveOrbit.ts`,
+   useFrame tail (`:406-411`) into `camera-modes/perspectiveOrbit.ts`,
    preserving every line of behavior. Replace those sites in `MapCamera.tsx`
-   with adapter calls. Wire `key={cameraKind}` in `MapViewer.tsx`. Tests
-   should still pass — this step is a pure refactor.
+   with adapter calls. Wire `key={cameraKind}` in `MapViewer.tsx`.
+   `MapViewer` defaults `cameraKind` to `'perspective'` until Step 4 wires
+   the prop through from `MapCell`, so current callers see no behavior
+   change — this step is a true no-op pure refactor and tests should
+   still pass.
 3. **Add `orthographic.ts`.** Implement `CameraElement` (drei
    `<OrthographicCamera>`), `seed` (derive `zoom` from GLB frustum, copy
    `near`/`far`, share orbit-state seed with perspective), `apply` (identical
