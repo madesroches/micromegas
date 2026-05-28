@@ -31,22 +31,28 @@ const ZOOM_SPEED = 0.1
 // snapping; in practice never reached at sane scene scales.
 const ZOOM_MIN = 1e-6
 const ZOOM_MAX = 1e6
+// Fraction of the viewport the map's bounding sphere fills on the initial
+// fit — < 1 leaves a margin so the map isn't flush against the edges.
+const FIT_FRACTION = 0.9
 
 /**
- * Seed `camera.zoom` so the initial ortho framing visually matches what the
- * perspective camera shows at orbit distance `radius`. In perspective the
- * world height visible at distance R is `2 * R * tan(vFov/2)`; an ortho
- * camera spanning `hPx` pixels over that same world height has
- * `zoom = hPx / worldHeight`. `vFov` is in degrees (THREE convention).
+ * Seed `camera.zoom` so the map's bounding sphere fills the viewport with a
+ * small margin, regardless of where the GLB camera was authored. Ortho
+ * projection is distance-invariant, so framing is set entirely by zoom: fit
+ * the sphere's diameter (`2 * boundsRadius`) to the smaller viewport
+ * dimension. `wPx`/`hPx` are drei's auto-fit frustum extents in pixels
+ * (`camera.right - camera.left` / `camera.top - camera.bottom`), so the
+ * world span the unzoomed frustum covers along each axis equals that pixel
+ * extent; `zoom = fittedPx / worldDiameter`.
  */
 // eslint-disable-next-line react-refresh/only-export-components
 export function computeOrthoSeedZoom(
-  glbCamera: { fov: number },
-  radius: number,
+  boundsRadius: number,
+  wPx: number,
   hPx: number,
 ): number {
-  const worldHeight = 2 * radius * Math.tan(THREE.MathUtils.degToRad(glbCamera.fov) / 2)
-  return hPx / worldHeight
+  const minPx = Math.min(wPx, hPx)
+  return (minPx * FIT_FRACTION) / (2 * boundsRadius)
 }
 
 /**
@@ -157,11 +163,15 @@ export function OrthographicCameraController({
     sphericalRef.current.setFromVector3(sphericalInput)
 
     // Drei applies left/right/top/bottom on the underlying primitive during
-    // commit (before this useLayoutEffect), so camera.top/bottom are populated.
+    // commit (before this useLayoutEffect), so the frustum extents are
+    // populated. Fit the map's bounding sphere to the viewport rather than
+    // matching the GLB camera's framing, so the whole map is visible on load
+    // regardless of how the camera was authored.
+    const wPx = camera.right - camera.left
     const hPx = camera.top - camera.bottom
     camera.near = glbCamera.near
     camera.far = glbCamera.far
-    camera.zoom = computeOrthoSeedZoom(glbCamera, sphericalRef.current.radius, hPx)
+    camera.zoom = computeOrthoSeedZoom(sphere.radius, wPx, hPx)
     // Drei's own useLayoutEffect for the frustum fires before this one and its
     // useFrame is a no-op without functional children, so without this call
     // the first paint would use the stale default projection.

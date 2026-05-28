@@ -6,20 +6,27 @@ import {
 import { zoomAnchorTarget } from '../map-camera-math'
 
 describe('computeOrthoSeedZoom', () => {
-  it('matches the perspective height-fit at distance R', () => {
-    const glbCamera = { fov: 60, near: 1, far: 100000 }
-    const radius = 4000
-    const hPx = 800
-    const zoom = computeOrthoSeedZoom(glbCamera, radius, hPx)
-    const expected = hPx / (2 * radius * Math.tan(THREE.MathUtils.degToRad(60) / 2))
-    expect(zoom).toBeCloseTo(expected, 9)
+  it('fits the sphere diameter to the smaller viewport dimension with margin', () => {
+    // Landscape viewport: height is the limiting dimension.
+    const boundsRadius = 2000
+    const zoom = computeOrthoSeedZoom(boundsRadius, 1600, 800)
+    // At this zoom the world height the frustum covers is hPx / zoom; the
+    // sphere diameter should occupy 90% of it (FIT_FRACTION).
+    const worldHeight = 800 / zoom
+    expect((2 * boundsRadius) / worldHeight).toBeCloseTo(0.9, 9)
   })
 
-  it('halving the visible world height doubles the zoom', () => {
-    const glbCamera = { fov: 45 }
-    const hPx = 1000
-    const near = computeOrthoSeedZoom(glbCamera, 2000, hPx)
-    const far = computeOrthoSeedZoom(glbCamera, 1000, hPx)
+  it('uses the smaller dimension regardless of orientation', () => {
+    const boundsRadius = 2000
+    // Portrait viewport with the same min dimension yields the same fit.
+    const landscape = computeOrthoSeedZoom(boundsRadius, 1600, 800)
+    const portrait = computeOrthoSeedZoom(boundsRadius, 800, 1600)
+    expect(portrait).toBeCloseTo(landscape, 9)
+  })
+
+  it('halving the bounds radius doubles the zoom', () => {
+    const near = computeOrthoSeedZoom(2000, 1600, 800)
+    const far = computeOrthoSeedZoom(1000, 1600, 800)
     expect(far).toBeCloseTo(near * 2, 9)
   })
 })
