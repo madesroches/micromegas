@@ -34,7 +34,7 @@ export function zUpOffsetToSphericalInput(offset: THREE.Vector3, out: THREE.Vect
 /**
  * Camera-relative orthonormal basis in world coordinates, derived from the
  * orbit's spherical state and the theta-driven camera.up convention used
- * by MapCameraController. Returns the right/up/forward vectors that
+ * by useMapOrbitController. Returns the right/up/forward vectors that
  * correspond to screen-X / screen-Y / screen-(-Z) respectively, so a
  * single right-hand-rule binding can drive A/D, W/S, and Q/E onto three
  * mutually-orthogonal world axes at every camera tilt.
