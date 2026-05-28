@@ -3,12 +3,15 @@
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Critical Rules
-- **NEVER COMMIT UNLESS EXPLICITLY ASKED**
+- **NEVER push without a direct, unambiguous instruction** — this includes `git push`, `git push --force`, and creating PRs. Local commits are fine; publishing them is not.
+- **NEVER commit directly to `main`** — always work on a branch.
 - **NEVER dismiss Dependabot alerts** — leave them open until fixed by code/dependency changes
 - follow @AI_GUIDELINES.md
 - **Project Structure**: Run cargo commands from `rust/` directory (main workspace at `rust/Cargo.toml`)
 
 ## Source control rules
+- **Local commits on branches are allowed** without asking — useful as rollback points during iterative/looped work. Keep messages short and scoped.
+- **Pushing requires an explicit, direct instruction** ("push", "open a PR", "publish"). Ambiguous phrasing ("ship it", "you can wrap up") does not count — ask if unsure.
 - **Commit Messages**: NEVER include AI-generated credits or co-author tags
 - **Pull Requests**: Always run `git log --oneline main..HEAD` before creating PRs
 - unless asked, don't amend commits
