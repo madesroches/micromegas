@@ -146,10 +146,13 @@ export interface ChartSeriesData {
 is additive so existing call sites compile unchanged.)
 
 **Extraction.** In `validateChartColumns`, return the resolved
-`{ xColumnName, yColumnName, colorColumnName? }` instead of assuming columns
-0/1. `extractChartData` and `extractMultiSeriesChartData` read the color column
-per row, decode via `packedRgbaToCss` (or pass through a `#…` string), and set
-`point.color`. Null/invalid color → leave `point.color` undefined (falls back
+`{ xColumnName, yColumnName, colorColumnName? }` (keeping the existing
+`xType`/`yType`, which callers still use for `detectXAxisMode`/`timestampToMs`)
+instead of assuming columns 0/1. `extractChartData` and
+`extractMultiSeriesChartData` read the color column per row, decode via
+`packedRgbaToCss` (or pass through a `#…` string), and set `point.color`. Note
+`extractMultiSeriesChartData`'s zero-row branch (`arrow-utils.ts:255-268`) does
+its own column check and must be relaxed alongside `validateChartColumns`. Null/invalid color → leave `point.color` undefined (falls back
 to series color). Color travels with the point through the existing sort.
 
 ### 2. Reference lines (UI-configured)
@@ -308,10 +311,16 @@ it no longer silently doubles as both legend identity and mark color.
   color to a neutral value (e.g. gray) to signal "colored by value".
 - **Default marks.** When a series has no `color` column, both marks and legend
   use `series.color` — exactly today's behavior, just user-overridable.
-- **Single-series.** The single-series path's hard-coded `#bf360c`
-  (`XYChart.tsx:702-704`) becomes the query's chosen color (default
-  `--chart-line` / rust), used for the line/bars and the header line indicator
-  (`XYChart.tsx:851`).
+- **Single-series.** The single-series render path consumes the `data` prop and
+  wraps it into `normalizedSeries[0]` internally (`XYChart.tsx:146-150`), which
+  carries no color — so the chosen color cannot ride in on `ChartSeriesData`
+  there. Add a `color?: string` prop to `XYChart` for this path: `ChartCell`
+  passes the resolved single-query color (default `--chart-line` / rust), and
+  the path uses it for the line/bars (replacing the hard-coded `#bf360c` at
+  `XYChart.tsx:702-704`) and the header line indicator (`XYChart.tsx:851`).
+  (Alternatively, `ChartCell` could pass a one-element `series=[{…, color}]`
+  instead of `data`; the explicit prop is preferred to avoid disturbing the
+  `data`-based single-series code path.)
 
 ### Color precedence (per series)
 
@@ -360,17 +369,25 @@ functions reference.
 
 ### Phase 2 — Color column extraction
 3. `arrow-utils.ts`: introduce `ChartPoint`; relax `validateChartColumns` to
-   detect an optional `color` column and return resolved column names.
+   detect an optional `color` column and return resolved column names
+   *alongside* the existing `xType`/`yType` (callers still need the types for
+   `detectXAxisMode`/`timestampToMs`). Also relax the zero-row branch in
+   `extractMultiSeriesChartData` (`arrow-utils.ts:255-268`), which has its own
+   hard-coded `fields.length !== 2` check and never calls `validateChartColumns`
+   — otherwise a 0-row query that selects a `color` column (3 columns) errors.
 4. Decode `point.color` in `extractChartData` and `extractMultiSeriesChartData`
    (all extraction branches: categorical + time/numeric, single + multi).
 
 ### Phase 3 — User-selectable series color
-5. `ChartCell.tsx`: add `color?: string` to `ChartQueryDef`; thread it into
-   `ChartSeriesData.color` (multi-series) and the single-series render path via
-   `getRendererProps`/the renderer, falling back to `SERIES_COLORS[i % len]`.
-6. `XYChart.tsx`: replace index-based palette lookups
-   (`XYChart.tsx:568,576,702-704,819`) with `series.color ?? palette[i]`; the
-   legend swatch and default marks both read it.
+5. `ChartCell.tsx`: add `color?: string` to `ChartQueryDef`; carry it through
+   `_queryMeta` (`getRendererProps`). Multi-series: merge it into
+   `ChartSeriesData.color` in the `resolvedSeries` map (`ChartCell.tsx:188-192`),
+   falling back to `SERIES_COLORS[i % len]`. Single-series: pass the resolved
+   color via the new `XYChart` `color?` prop, falling back to `SERIES_COLORS[0]`.
+6. `XYChart.tsx`: add the `color?` prop (single-series). Replace index-based
+   palette lookups (`XYChart.tsx:568,576,819`) with `series.color ?? palette[i]`
+   and the single-series hard-coded `#bf360c` (`XYChart.tsx:702-704`) with the
+   `color` prop; the legend swatch and default marks both read it.
 
 ### Phase 4 — Reference line + per-row mark color rendering
 7. `XYChart.tsx`: add `referenceLines` prop + `ReferenceLine` type (or import
@@ -385,8 +402,10 @@ functions reference.
 
 ### Phase 5 — Config, editor, plumbing
 9. `ChartCell.tsx`: add `reference_lines` to `ChartCellConfigV2.options`;
-   resolve macros in line `label`/`value`; pass `referenceLines` to `XYChart`
-   in both single- and multi-series render paths.
+   resolve macros in each reference line's `name`, `value`, and `unit` (mirroring
+   `ChartCell.tsx:188-192`, since the array is skipped by
+   `substituteOptionsWithMacros`); pass `referenceLines` to `XYChart` in both
+   single- and multi-series render paths.
 10. `ChartCellEditor`: add the Reference Lines section, the per-query color
     picker (replacing the static palette dot), and the SQL color-column hint.
 
