@@ -240,6 +240,7 @@ Any additional columns the query returns are addressable as `$column` in the det
 |-------|------|---------|-------------|
 | `mapUrl` | string | none | Bare GLB filename from the catalog (e.g. `Arena_North.glb`) — despite the name, not a URL; the renderer composes the blob URL at load time. |
 | `shape` | `'sphere'` \| `'box'` | `'sphere'` | Marker primitive |
+| `cameraKind` | `'perspective'` \| `'orthographic'` | `'perspective'` | Camera projection. Orthographic removes perspective foreshortening — better for flat heatmap-style data. Controls are identical in both modes. |
 | `mapping` | object | per-shape defaults | Per-channel column-or-scalar bindings (see below) |
 | `detailTemplate` | string | see below | Markdown template rendered in the event detail panel when a marker is clicked |
 
@@ -334,6 +335,8 @@ Events are placed at their raw `x`, `y`, `z` values without any runtime transfor
 - Results registered in the [local WASM query engine](execution.md#local-wasm-query-engine) under the cell name for downstream queries
 
 **Camera controls:**
+
+The same controls apply in both perspective and orthographic camera modes.
 
 | Input | Action |
 |-------|--------|

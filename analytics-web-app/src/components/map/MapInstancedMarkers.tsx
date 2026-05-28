@@ -334,7 +334,7 @@ export function MapInstancedMarkers({
   }, [geometry, material])
 
   // Restore body cursor on unmount in case a marker is hovered when we tear
-  // down — the {ready} gate in MapViewer unmounts this component on mapUrl
+  // down — the GLB-loaded gate in MapViewer unmounts this component on mapUrl
   // changes, and a pointer-out we'd otherwise rely on never fires. Also cancel
   // any queued hover-flush frame so it can't fire after unmount.
   useEffect(() => {

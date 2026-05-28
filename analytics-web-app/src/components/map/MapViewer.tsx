@@ -3,7 +3,7 @@ import { Canvas, useThree } from '@react-three/fiber'
 import { useGLTF, Html, PerspectiveCamera } from '@react-three/drei'
 import * as THREE from 'three'
 import type { Overlay, OverlayConstants, Shape } from './overlay'
-import { MapCameraController } from './MapCamera'
+import { MAP_MODES, type MapModeKind } from './modes'
 import { MapInstancedMarkers } from './MapInstancedMarkers'
 
 export interface MMAmbientLight {
@@ -16,6 +16,7 @@ interface MapViewerProps {
   overlay: Overlay
   constants: OverlayConstants
   shape: Shape
+  cameraKind: MapModeKind
   selectedRowIndex: number | null
   onSelect: (rowIndex: number | null) => void
   onHover?: (rowIndex: number | null, clientX: number, clientY: number) => void
@@ -93,7 +94,7 @@ function MapModel({ url, onLoaded }: MapModelProps) {
 
 function SceneSetup() {
   // scene.up only — camera.up is recomputed every frame from theta in
-  // MapCameraController's useFrame, so setting it here would be dead.
+  // useMapOrbitController's useFrame, so setting it here would be dead.
   const { scene } = useThree()
   useEffect(() => {
     scene.up.set(0, 0, 1)
@@ -106,11 +107,18 @@ export function MapViewer({
   overlay,
   constants,
   shape,
+  cameraKind,
   selectedRowIndex,
   onSelect,
   onHover,
   resetViewTrigger = 0,
 }: MapViewerProps) {
+  // Stable module-level reference — no useMemo needed. The prop type
+  // guarantees the lookup; a malformed value bypassing the MapCell boundary
+  // would make `mode` undefined and fail loudly at <mode.Render> rather than
+  // silently falling back to perspective.
+  const mode = MAP_MODES[cameraKind]
+
   const [mapBounds, setMapBounds] = useState<THREE.Box3 | null>(null)
   const [mapScene, setMapScene] = useState<THREE.Object3D | null>(null)
   const [glbCamera, setGlbCamera] = useState<THREE.PerspectiveCamera | null>(null)
@@ -126,7 +134,7 @@ export function MapViewer({
 
       const errors: string[] = []
       if (payload.glbCamera === null) {
-        errors.push('No perspective camera in GLB — initial framing is the default seed, and Reset View will not work.')
+        errors.push('No camera in GLB — map cannot be rendered.')
       }
       if (payload.ambientLight === null) {
         errors.push('No MM_ambient_light extension in GLB — scene will render without ambient illumination.')
@@ -141,8 +149,8 @@ export function MapViewer({
   )
 
   // Clear loaded-GLB state whenever mapUrl changes (including the A→B case
-  // where both are truthy), so transient consumers (MapCameraController)
-  // don't see stale scene state during the Suspense gap.
+  // where both are truthy), so transient consumers (the mode's camera
+  // controller) don't see stale scene state during the Suspense gap.
   //
   // Done as a render-phase state derivation rather than an effect: an
   // effect-based clear races against MapModel's load effect when the new GLB
@@ -162,14 +170,6 @@ export function MapViewer({
     setContractErrors([])
   }
 
-  // Gate marker/camera/ambient mounting until the GLB payload has propagated.
-  // `mapScene` is set by handleMapLoaded together with mapBounds/glbCamera/
-  // ambientLight, and cleared by the URL-change block above — it's the single
-  // source of truth for "GLB payload arrived". Until it's set, the
-  // <LoadingIndicator> fallback covers the canvas; nothing renders against the
-  // default camera orbit, so no flash/snap.
-  const ready = mapScene !== null
-
   return (
     <div className="w-full h-full">
       <Canvas
@@ -184,26 +184,31 @@ export function MapViewer({
         <SceneSetup />
         <color attach="background" args={['#0a0a0f']} />
 
-        {/* Stays outside the ready gate so r3f always has a default camera
-            registered, avoiding "no default camera" warnings during the
-            not-ready window. Position and orientation are owned by
-            MapCameraController (overwritten every frame from sphericalRef +
-            targetRef). FOV/near/far are the seed for GLB-cameraless contracts;
-            the GLB-camera effect copies intrinsics onto this camera when a
-            conforming GLB loads. */}
+        {/* r3f's always-registered default camera, so it never reports "no
+            default camera" during the not-ready window or while a
+            non-conforming GLB is on screen. It doesn't drive the user-facing
+            render once a mode is mounted — the mode's own camera takes over
+            via makeDefault. */}
         <PerspectiveCamera makeDefault fov={60} near={1} far={100000} />
 
         <Suspense fallback={<LoadingIndicator />}>
           <MapModel url={mapUrl} onLoaded={handleMapLoaded} />
         </Suspense>
 
-        {ready && (
+        {/* Inline triple-check (rather than an aliased `ready` boolean) so TS
+            narrows mapScene/mapBounds/glbCamera to non-null at <mode.Render>.
+            A non-conforming GLB (no embedded camera) renders nothing here —
+            the red contractErrors banner is the entire failure UI. key={mapUrl}
+            fully remounts the camera/controller pair on a map switch so the new
+            GLB gets a fresh seed. */}
+        {mapScene !== null && mapBounds !== null && glbCamera !== null && (
           <>
-            <MapCameraController
-              mapBounds={mapBounds}
-              mapScene={mapScene}
-              resetViewTrigger={resetViewTrigger}
+            <mode.Render
+              key={mapUrl}
               glbCamera={glbCamera}
+              mapScene={mapScene}
+              mapBounds={mapBounds}
+              resetViewTrigger={resetViewTrigger}
             />
 
             {ambientLight && (

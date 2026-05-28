@@ -16,6 +16,7 @@ import {
   DEFAULT_MAP_DETAIL_TEMPLATE,
 } from '../notebook-utils'
 import { MapViewer } from '@/components/map/MapViewer'
+import { MAP_MODE_KINDS, MAP_MODE_LABELS, type MapModeKind } from '@/components/map/modes'
 import { EventDetailPanel } from '@/components/map/EventDetailPanel'
 import { MapHoverTooltip } from '@/components/map/MapHoverTooltip'
 import {
@@ -299,6 +300,10 @@ export function MapCell({
     (options?.detailTemplate as string | undefined) ?? DEFAULT_MAP_DETAIL_TEMPLATE
   // Hover tooltip is opt-out: absent (legacy configs) or `true` → shown.
   const showHoverTooltip = (options?.showHoverTooltip as boolean | undefined) !== false
+  // Resolve cameraKind at the boundary so notebooks saved before this option
+  // existed (undefined) default to perspective; MapViewer indexes MAP_MODES
+  // with the typed value directly.
+  const cameraKind = (options?.cameraKind as MapModeKind | undefined) ?? 'perspective'
 
   const handleSelectByRowIndex = useCallback(
     (rowIndex: number | null) => {
@@ -447,6 +452,7 @@ export function MapCell({
           overlay={overlay}
           constants={constants}
           shape={shape}
+          cameraKind={cameraKind}
           selectedRowIndex={selectedRowIndex}
           onSelect={handleSelectByRowIndex}
           onHover={handleHover}
@@ -785,6 +791,8 @@ export function MapCellEditor({
     (mapConfig.options?.detailTemplate as string | undefined) ?? DEFAULT_MAP_DETAIL_TEMPLATE
   const showHoverTooltip =
     (mapConfig.options?.showHoverTooltip as boolean | undefined) !== false
+  const cameraKind =
+    (mapConfig.options?.cameraKind as MapModeKind | undefined) ?? 'perspective'
 
   // Empty-string placeholders for every column from the most recent result
   // so the editor doesn't flag `$columnFromQuery` as "Unknown variable" at
@@ -840,6 +848,19 @@ export function MapCellEditor({
               />
             </Suspense>
           </div>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <label className="text-xs text-theme-text-secondary w-24 shrink-0">Camera</label>
+          <select
+            value={cameraKind}
+            onChange={(e) => updateOption('cameraKind', e.target.value)}
+            className="bg-app-card border border-theme-border rounded px-2 py-1 text-sm text-theme-text-primary focus:outline-none focus:border-accent-link"
+          >
+            {MAP_MODE_KINDS.map((kind) => (
+              <option key={kind} value={kind}>{MAP_MODE_LABELS[kind]}</option>
+            ))}
+          </select>
         </div>
       </div>
 
