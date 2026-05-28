@@ -190,9 +190,12 @@ no cast. Its body is the current `MapCamera.tsx` with four changes:
 
 - GLB seed reads `cameraRef.current` and writes `fov/near/far` without a
   cast.
-- The wheel handler is unchanged (radius-driven zoom).
-- Left-drag pan calls `panTarget(target, theta, radius * 0.001, dx, dy)`
-  with the new explicit-`panSpeed` signature.
+- The wheel handler is unchanged (radius-driven zoom) — passed to the hook
+  as `onWheel`.
+- Pan speed: the actual `panTarget(target, theta, getPanSpeed(), dx, dy)`
+  call lives in the hook's `onMouseMove` (see Shared hook below). The
+  controller only supplies `getPanSpeed: () => radius * 0.001`, matching
+  the new explicit-`panSpeed` signature.
 - Owns the perspective-specific `fitRadiusRef` and `zoomFactorRef` (the
   invariant `radius = fitRadius * zoomFactor`). Passes
   `onRightDragReAnchor: () => { zoomFactorRef.current = sphericalRef.current.radius / fitRadiusRef.current }`
@@ -376,7 +379,11 @@ correct.
   at line 194 as r3f's always-registered default camera. It exists only
   so r3f never reports "no default camera" during the not-ready window
   or while a non-conforming GLB is on screen; it doesn't drive the
-  user-facing render once a mode is mounted.
+  user-facing render once a mode is mounted. Update its comment
+  (`MapViewer.tsx:187-194`): the current text — "FOV/near/far are the
+  seed for GLB-cameraless contracts; the GLB-camera effect copies
+  intrinsics onto this camera" — is stale once intrinsics are seeded
+  onto the mode's own camera and a non-conforming GLB renders nothing.
 - Gate the camera/controller/markers on a conforming GLB: replace the
   current `{ready && ...}` block with an inline triple-check
   `{mapScene !== null && mapBounds !== null && glbCamera !== null && ...}`,
@@ -560,8 +567,11 @@ per-mode controllers. Only `MapViewer.tsx:6` imports it today.
    error banner shows over a dark canvas (see `MapViewer.tsx`
    changes).
 4. **Update `panTarget`.** Change the signature in `map-camera-math.ts`
-   and the test. Update the perspective controller's pan call site to
-   pass `radius * 0.001` explicitly.
+   and the test. The `panTarget` call itself lives in the hook's
+   `onMouseMove` as `panTarget(target, theta, getPanSpeed(), dx, dy)`;
+   update the perspective controller's `getPanSpeed` to return
+   `radius * 0.001` explicitly (it was returning the raw `radius` while
+   the old `panTarget` applied the `* 0.001` internally).
 5. **Add `OrthographicMode` + controller.** Widen
    `useMapOrbitController`'s `cameraRef` from
    `RefObject<THREE.PerspectiveCamera>` (introduced in Step 2) to
