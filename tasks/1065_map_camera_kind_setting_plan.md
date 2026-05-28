@@ -194,8 +194,12 @@ is one import + one map entry.
 
 - `CameraElement` is `<PerspectiveCamera makeDefault fov={60} near={1} far={100000} />`
   (the exact element currently in `MapViewer.tsx:194`).
-- `seed`: copies `fov / near / far` from `glbCamera`, calls
-  `updateProjectionMatrix()`. Same body as `MapCamera.tsx:140-144` today.
+- `seed`: when `params.glbCamera === null`, no-op — leaves the
+  `<PerspectiveCamera>` JSX defaults (`fov={60} near={1} far={100000}`) in
+  place, matching today's behavior when the controller's `!glbCamera`
+  early-return fires. Otherwise copies `fov / near / far` from `glbCamera`
+  and calls `updateProjectionMatrix()` (same body as
+  `MapCamera.tsx:140-144` today).
 - `apply`: writes `camera.position = target + sphericalToZUpOffset(spherical)`;
   sets `camera.up` from theta; calls `lookAt(target)`. Same as the controller's
   current `useFrame` body.
@@ -234,17 +238,19 @@ only the projection differs.
   theta)`, `fitRadius`, `zoomFactor` — is seeded by the same code path as
   perspective, so right-drag orbit and `Z` reset behave the same.
 
-  **`glbCamera === null` fallback.** `MapCamera.tsx:114` early-returns the
-  GLB seed effect when `glbCamera` is null, and the contract-error overlay
-  in `MapViewer.tsx:228-` is purely informational — the controller still
+  **`glbCamera === null` fallback.** `MapCamera.tsx:114` today early-returns
+  the GLB seed effect when `glbCamera` is null (see "Controller changes"
+  below — the full `!glbCamera` early-return is dropped so adapters always
+  get a `seed()` call), and the contract-error overlay in
+  `MapViewer.tsx:228-` is purely informational — the controller still
   mounts and `useFrame` still runs. If the ortho seed bailed in this case,
   `orbit.modeState.seedZoom` / `radiusAtSeed` would be unset and
   `effectiveRadius` would return `NaN` (poisoning pan and fly speeds), and
   the visible framing would fall back to drei's `<OrthographicCamera>`
   default of `zoom=1` with a pixel-sized frustum (1 world unit = 1 pixel).
   To stay deterministic, the ortho adapter does **not** early-return when
-  `glbCamera` is null: instead it seeds `camera.zoom` using the same
-  height-fit formula with an assumed `vFov = 60°` (matching the
+  `params.glbCamera === null`: instead it seeds `camera.zoom` using the
+  same height-fit formula with an assumed `vFov = 60°` (matching the
   `<PerspectiveCamera>` JSX default at `MapViewer.tsx:194` that the
   perspective adapter inherits when GLB intrinsics are missing) and
   `R = sphericalRef.radius` (whatever the orbit's default radius is at
@@ -333,26 +339,36 @@ prior mode.
 | `MapCamera.tsx:251-294` radius-driven wheel zoom body | `cameraMode.zoom({ camera, orbit, domElement, scene, event })` |
 | `MapCamera.tsx:385-411` useFrame position/lookAt body | `cameraMode.apply({ camera, orbit })` |
 
-**Drop the `seededGlbCameraRef` guard** (`MapCamera.tsx:112-115`). Today the
-GLB-seed `useLayoutEffect` early-returns when `seededGlbCameraRef.current ===
-glbCamera` to avoid re-seeding the same camera on later renders. With the
-mode-swap remount (`key={cameraKind}` in `MapViewer.tsx`) the controller —
-and the ref — is recreated whenever `cameraKind` changes, so the same-GLB
-guard is no longer load-bearing. Removing it also fixes a latent race
-introduced by the remount: drei's camera elements call
-`set({ camera: cameraRef.current })` only inside a `useLayoutEffect`, so on
-the remount render the new controller's `useThree({ camera })` captures the
-**previous** default camera; the seed effect would run once against that
-stale camera, set `seededGlbCameraRef.current = glbCamera`, and then —
-after drei's `set` resolves and the effect re-runs with the new camera —
-early-return because the guard now matches, leaving the new camera
-unseeded (ortho's `camera.zoom` stuck at drei's default `1`, and
-`radiusAtSeed` / `seedZoom` unset on `orbit.modeState`, poisoning
+**Drop the full `!glbCamera || seededGlbCameraRef.current === glbCamera`
+early-return** (`MapCamera.tsx:112-115`). Both halves go, and
+`cameraMode.seed({ camera, glbCamera, mapBounds, orbit })` is called
+**unconditionally** from the GLB-seed effect (passing through whatever
+`glbCamera` is, including `null`). Each adapter defines its own
+null-`glbCamera` path — the perspective adapter's `seed` is a no-op when
+`params.glbCamera === null` (leaving the `<PerspectiveCamera>` JSX
+defaults in place, matching today's behavior), and the ortho adapter
+seeds `camera.zoom` from the documented `vFov = 60°` fallback (see
+"Adapter: `orthographic`" above). Dropping the `!glbCamera` half is what
+lets `saveInitialView()` (which lives in the same effect body) run when
+the GLB has no camera, fixing the `Z`-reset-stays-broken case in both
+modes. Dropping the `seededGlbCameraRef` half is safe because the
+mode-swap remount (`key={cameraKind}` in `MapViewer.tsx`) recreates the
+controller — and the ref — whenever `cameraKind` changes, so the
+same-GLB guard is no longer load-bearing. Removing it also fixes a
+latent race introduced by the remount: drei's camera elements call
+`set({ camera: cameraRef.current })` only inside a `useLayoutEffect`, so
+on the remount render the new controller's `useThree({ camera })`
+captures the **previous** default camera; the seed effect would run once
+against that stale camera, set `seededGlbCameraRef.current = glbCamera`,
+and then — after drei's `set` resolves and the effect re-runs with the
+new camera — early-return because the guard now matches, leaving the
+new camera unseeded (ortho's `camera.zoom` stuck at drei's default `1`,
+and `radiusAtSeed` / `seedZoom` unset on `orbit.modeState`, poisoning
 `effectiveRadius`). With the guard gone the seed runs against the new
 camera and writes `orbit.modeState` correctly; re-running on `glbCamera`
-identity stability is harmless because the effect is idempotent (it
-recomputes `target`, `spherical`, intrinsics, and `orbit.modeState` from
-the same inputs).
+identity stability is harmless because both adapters' `seed` bodies are
+idempotent (they recompute intrinsics / `camera.zoom` / `orbit.modeState`
+from the same inputs each call).
 
 `saveInitialView` / reset-view effect:
 - Extend `initialViewRef` to `{ orbit, modeSnapshot: unknown }` where
