@@ -135,8 +135,14 @@ export interface CameraMode {
   restore: (camera: THREE.Camera, snap: unknown) => void
   /**
    * Effective radius used to scale pan and fly speeds so they track the
-   * on-screen world-per-pixel. Perspective returns `orbit.spherical.radius`;
-   * ortho returns `orbit.spherical.radius / camera.zoom`.
+   * on-screen world-per-pixel. The returned value's ratio to the perspective
+   * baseline must equal `(world-per-pixel now) / (world-per-pixel at seed)`.
+   * Perspective returns `orbit.spherical.radius` (world-per-pixel scales
+   * linearly with radius for a fixed fov). Ortho stores `seedZoom` and
+   * `radiusAtSeed` during `seed()` and returns
+   * `radiusAtSeed * seedZoom / camera.zoom` — independent of the current
+   * orbit radius, since ortho world-per-pixel is `1 / camera.zoom` and is
+   * unaffected by camera-to-target distance.
    */
   effectiveRadius: (params: { camera: THREE.Camera; orbit: CameraOrbitState }) => number
 }
@@ -226,26 +232,40 @@ only the projection differs.
   target distance is irrelevant to ortho projection. Two speeds in the
   controller scale off `radius` today and need to track the effective on-
   screen scale in ortho instead:
-  - **Pan speed.** `panTarget` scales by `radius * 0.001`. In ortho the
-    visible world-per-pixel is `(H_px / camera.zoom) / H_px = 1 / camera.zoom`
-    relative to the seeded fit, so we expose an `effectiveRadius` accessor
-    on the adapter — `effectiveRadius({ orbit, camera })` returns `radius`
-    in perspective and `radius / camera.zoom` in ortho — and the left-drag
-    pan handler reads that instead of `sphericalRef.current.radius`. Without
-    this, dragging in zoomed-in ortho no longer keeps the cursor anchored
-    to the same world point.
+  - **Pan speed.** `panTarget` scales by `radius * 0.001`. Drei's
+    `<OrthographicCamera>` auto-fits `left/right/top/bottom` to pixel
+    dimensions, so ortho world-per-pixel is exactly `1 / camera.zoom` —
+    independent of `radius`. We expose an `effectiveRadius` accessor on the
+    adapter; perspective returns `radius` and ortho returns
+    `radiusAtSeed * seedZoom / camera.zoom` (both captured during `seed()`),
+    so the ratio of returned value to the perspective baseline equals the
+    ratio of current world-per-pixel to seed world-per-pixel. The left-drag
+    pan handler reads that instead of `sphericalRef.current.radius`. Plugging
+    this into the existing `panTarget` (which multiplies by `0.001`) yields
+    `panSpeed = radiusAtSeed * 0.001 * (seedZoom / camera.zoom)` — i.e., at
+    `camera.zoom = seedZoom` the ortho pan speed matches perspective at the
+    seeded framing, and scales correctly as the user zooms.
   - **Fly speed.** WASD scales off `radius * SPEED_PER_RADIUS`
     (`MapCamera.tsx:46-47`). For consistency we route it through the same
-    `effectiveRadius` accessor so fly-speed shrinks as the user zooms in,
-    matching perspective feel.
+    `effectiveRadius` accessor so fly-speed tracks on-screen scale and
+    matches perspective feel at the seeded zoom.
   Both consumers go through the one accessor, so adapters opt in by
-  overriding a single method.
+  overriding a single method. The ortho `seed()` captures `seedZoom` (the
+  initial `camera.zoom` it just computed) and `radiusAtSeed` (the orbit
+  radius at seed time) on the adapter (e.g., closure-local mutable fields or
+  refs scoped to the adapter instance) so `effectiveRadius` can read them
+  later without re-deriving from `glbCamera`.
 - `snapshot: (camera) => ({ zoom: (camera as THREE.OrthographicCamera).zoom })`.
 - `restore: (camera, snap)` → write `camera.zoom` and
   `updateProjectionMatrix()`.
 - `effectiveRadius`: returns
-  `orbit.spherical.radius / (camera as THREE.OrthographicCamera).zoom` so pan
-  and fly speeds shrink as the user zooms in.
+  `radiusAtSeed * seedZoom / (camera as THREE.OrthographicCamera).zoom`
+  (with `seedZoom` and `radiusAtSeed` captured during `seed()`) so pan and
+  fly speeds shrink as the user zooms in. The current orbit `radius` does
+  not appear in the formula — ortho world-per-pixel is `1 / camera.zoom`
+  and depends only on `camera.zoom`, while `radiusAtSeed * seedZoom`
+  carries the absolute units needed to match the perspective baseline at
+  the seeded framing.
 
 ### Controller changes (`MapCamera.tsx`)
 
@@ -288,16 +308,23 @@ agnostic and identical across modes.
 - Render `<mode.CameraElement />` instead of the hardcoded `<PerspectiveCamera>`
   at `MapViewer.tsx:194`.
 - Pass `cameraMode={mode}` to `<MapCameraController>`.
-- **Mode-swap remount.** Wrap both `<mode.CameraElement>` (still rendered
+- **Mode-swap remount.** Use **two sibling `<Fragment key={cameraKind}>`
+  wrappers** — one around `<mode.CameraElement>` (still rendered
   unconditionally, before `<Suspense>`, in the same spot as today's
   `<PerspectiveCamera>` at `MapViewer.tsx:187-194` — i.e. *outside* the
-  `{ready && ...}` gate) and the ready-gated `<MapCameraController>` block
-  in a single `<Fragment key={cameraKind}>` so they remount in lockstep
-  without moving the camera inside the ready gate. Swapping `makeDefault`
-  cameras mid-life leaves stale refs in the controller (it captured
-  `useThree().camera` at mount); the key forces a clean teardown + reseed
-  when the user changes the dropdown. The outer `<Canvas>` and `MapModel`
-  are *not* keyed — the GLB stays loaded across mode changes.
+  `{ready && ...}` gate) and one around the ready-gated
+  `<MapCameraController>` block at `MapViewer.tsx:200-225`. Two siblings
+  (not one wrapping fragment) are required because `<Suspense>/<MapModel>`
+  sits between them in the JSX tree and must stay un-keyed so the GLB
+  stays loaded across mode changes; a single wrapping fragment would
+  either have to engulf `<MapModel>` (forcing GLB reload on every camera
+  switch) or skip one of the two sites. Both keyed fragments share the
+  same `cameraKind` key, so React unmounts and remounts them in lockstep
+  on mode change. Swapping `makeDefault` cameras mid-life leaves stale
+  refs in the controller (it captured `useThree().camera` at mount); the
+  key forces a clean teardown + reseed when the user changes the
+  dropdown. The outer `<Canvas>` and `MapModel` are *not* keyed — the GLB
+  stays loaded across mode changes.
 
 ### `MapCell.tsx` changes
 
