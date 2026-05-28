@@ -5,6 +5,7 @@ This file documents the historical progress of the Micromegas project. For curre
 ## Unreleased
 
 * **Web App:**
+  * Add a per-Map-cell **Camera** setting with `perspective` (default) and `orthographic` modes; orthographic fits the camera to the projected map silhouette and maps Q/E to zoom (#1065)
   * Add a hover tooltip preview for map markers that renders the cell's `detailTemplate` as a small floating panel following the cursor, with a per-cell show/hide option (#1080)
   * Add `format_value(value, unit)` template function for adaptive unit formatting in Markdown templates (Map detail panel, Markdown cells, and table column overrides); surface unresolved-arg and unresolved-macro warnings via a banner (Map/Markdown) or column-header icon (tables) (#1086)
   * Rework map cell keyboard controls onto a single camera-relative orthonormal basis (A/D strafe, W/S up/down, Q/E forward/back) so key pairs no longer collapse onto the same direction at high camera tilt; radial zoom stays on Ctrl+wheel
