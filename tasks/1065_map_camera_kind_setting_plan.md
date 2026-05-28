@@ -93,8 +93,11 @@ export type CameraKind = 'perspective' | 'orthographic'
 export interface CameraOrbitState {
   target: THREE.Vector3
   spherical: THREE.Spherical
-  fitRadius: number
-  zoomFactor: number
+  // Refs so adapters can mutate these primitives through .current and have
+  // the controller observe the new value. Plain `number` fields would be
+  // pass-by-value and the controller's refs would never see the update.
+  fitRadius: MutableRefObject<number>
+  zoomFactor: MutableRefObject<number>
 }
 
 export interface SeedParams {
@@ -134,8 +137,11 @@ export interface CameraMode {
 ```
 
 `CameraOrbitState` is what `MapCameraController` already maintains in refs —
-the adapter mutates these refs through the typed surface so the controller has
-no `if (kind === ...)` branches.
+the controller passes its `targetRef.current`, `sphericalRef.current`,
+`fitRadiusRef`, and `zoomFactorRef` into the adapter, so when the adapter
+writes `orbit.zoomFactor.current = newZoom` (or mutates `orbit.spherical`
+in place) the controller's refs see the update directly. No `if (kind ===
+...)` branches in the controller.
 
 ### Registry
 
@@ -220,7 +226,16 @@ only the projection differs.
 ### Controller changes (`MapCamera.tsx`)
 
 Take a `cameraMode: CameraMode` prop. Replace the three perspective-specific
-sites with adapter calls:
+sites with adapter calls. The controller builds one `orbit: CameraOrbitState`
+object that bundles its existing refs — `target: targetRef.current`,
+`spherical: sphericalRef.current`, `fitRadius: fitRadiusRef`,
+`zoomFactor: zoomFactorRef` — and passes it to every adapter call. The
+`fitRadius` / `zoomFactor` fields are the refs themselves (not `.current`),
+so when an adapter writes `orbit.zoomFactor.current = newZoom` the
+controller's `zoomFactorRef.current` is updated directly (no read-back step
+needed). `target` and `spherical` are object instances, so in-place
+mutation (`orbit.spherical.radius = ...`) is already visible to the
+controller.
 
 | Today | After |
 |---|---|
@@ -263,6 +278,14 @@ projection-agnostic and identical across modes.
 - Pass `cameraKind={cameraKind}` to `<MapViewer>`.
 - Editor: new "Camera" row in the existing **Map Options** section
   (`MapCell.tsx:826-844`), modeled after the **Shape** select (`:852-862`).
+  Inside `MapCellEditor`, declare the editor-scope read mirroring the
+  existing `detailTemplate` / `showHoverTooltip` reads at
+  `MapCell.tsx:784-787`:
+  ```ts
+  const cameraKind = (mapConfig.options?.cameraKind as CameraKind | undefined) ?? 'perspective'
+  ```
+  Then render the select, populated from the registry so a new adapter
+  appears automatically in the dropdown (OCP at the UI level too):
   ```tsx
   <div className="flex items-center gap-2">
     <label className="text-xs text-theme-text-secondary w-24 shrink-0">Camera</label>
@@ -271,14 +294,14 @@ projection-agnostic and identical across modes.
       onChange={(e) => updateOption('cameraKind', e.target.value)}
       className="bg-app-card border border-theme-border rounded px-2 py-1 text-sm text-theme-text-primary focus:outline-none focus:border-accent-link"
     >
-      <option value="perspective">Perspective</option>
-      <option value="orthographic">Orthographic</option>
+      {(Object.keys(CAMERA_MODES) as CameraKind[]).map((kind) => (
+        <option key={kind} value={kind}>{CAMERA_KIND_LABELS[kind]}</option>
+      ))}
     </select>
   </div>
   ```
-  The options are populated from `Object.keys(CAMERA_MODES)` with a
-  human-label lookup so a new adapter appears automatically in the dropdown
-  (OCP at the UI level too).
+  `CAMERA_KIND_LABELS` lives in `camera-modes/labels.ts` (the single source
+  for human-readable labels).
 - `createDefaultConfig` (`MapCell.tsx:989-1001`) — leave `cameraKind` out so
   existing notebooks default to `'perspective'`. New notebooks also get
   perspective (matches current behavior).
