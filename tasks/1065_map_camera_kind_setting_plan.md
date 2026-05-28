@@ -322,14 +322,9 @@ three hooks with mode-specific callbacks, declare the GLB-seed
   work." — is invalidated by ortho's `glbCamera === null` fallback
   (60° height-fit seed + `saveInitialView` capturing `camera.zoom`, so
   `Z` reset works without an embedded GLB camera). Gate it on
-  `cameraKind === 'perspective'` (the only mode where the claim still
-  holds), or rephrase to "No perspective camera in GLB — initial framing
-  uses a default 60° fallback" and drop the "Reset View will not work"
-  clause (no longer true in either mode now that perspective also
-  proceeds through its seed effect without the GLB intrinsics — the
-  current text already overstates the failure). Pick whichever variant
-  is shorter; the gated form is preferred since it keeps the warning
-  loud in perspective where the framing quality drop is more visible.
+  `cameraKind === 'perspective'` — the only mode where the claim still
+  holds, since `PerspectiveCameraController`'s seed effect bails on
+  `!glbCamera` and thus never calls `saveInitialView()`.
 
 A `cameraKind` change makes React swap component types in `<mode.Render>`
 — the prior camera/controller unmount cleanly, listeners are removed by
