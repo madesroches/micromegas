@@ -126,6 +126,9 @@ export const MAP_MODES: Record<MapModeKind, MapMode> = {
 export const MAP_MODE_KINDS = Object.keys(MAP_MODES) as MapModeKind[]
 
 export function getMapMode(kind: MapModeKind | undefined): MapMode {
+  // `?? perspectiveMode` is a runtime guard against a malformed persisted
+  // `options.cameraKind` (the `as` cast in MapCell bypasses validation);
+  // unreachable under the declared types.
   return MAP_MODES[kind ?? 'perspective'] ?? perspectiveMode
 }
 
@@ -229,10 +232,10 @@ directly. Diffs from perspective:
   `R = sphericalRef.radius`, the world height visible at distance R in
   perspective is `worldHeight = 2 * R * tan(degToRad(vFov) / 2)`. For the
   ortho camera, `camera.zoom = H_px / worldHeight` matches the height-fit,
-  where `H_px = camera.top - camera.bottom` (drei sets these to the
-  canvas pixel extents in a layout effect before this seed effect runs;
-  the controller's seed is in `useLayoutEffect` chained after drei's, so
-  it sees the populated values). Note: pass `degToRad(vFov) / 2` to
+  where `H_px = camera.top - camera.bottom` (drei passes these as JSX
+  props on the underlying `<orthographicCamera>` primitive, applied
+  during commit before any `useLayoutEffect`, so they're populated by
+  the time the controller's seed effect runs). Note: pass `degToRad(vFov) / 2` to
   `Math.tan`, **not** `vFov / 2` directly — `Math.tan` expects radians.
 - **`glbCamera === null` fallback**: don't bail. Use `vFov = 60°` (matching
   the `<PerspectiveCamera>` JSX default that perspective inherits when
@@ -277,11 +280,12 @@ The two controllers share structure: orbit refs, DOM event wiring, the
 per-frame pose write. Extract into hooks under
 `analytics-web-app/src/components/map/hooks/`:
 
-- `useMapOrbitState()` — owns `targetRef`, `sphericalRef`,
+- `useMapOrbitState<E = void>()` — owns `targetRef`, `sphericalRef`,
   `fitRadiusRef`, `zoomFactorRef`, `savedViewRef`. Exposes
-  `saveInitialView(extras?)` and `restoreSavedView()` helpers, where
-  `extras` is an optional mode-specific blob (ortho passes
-  `{ zoom: camera.zoom }`). No effects.
+  `saveInitialView(extras: E)` and `restoreSavedView(): { extras: E } | null`
+  so the per-mode reset effect can apply mode-specific restore on top of
+  the orbit restore (ortho instantiates `<{ zoom: number }>()` and reads
+  `extras.zoom` in its reset). No effects.
 - `useMapOrbitPose({ orbit, cameraRef, getFlyMoveSpeedPerFrame, isHoveredRef, keysRef })`
   — `useFrame` body: WASD step using the supplied speed callback, then
   write `camera.position / up / lookAt` from `orbit`. Both projection-
@@ -291,7 +295,10 @@ per-frame pose write. Extract into hooks under
   raycast, contextmenu suppression, hover gating, keyboard, window-blur
   cleanup. Returns `{ isHoveredRef, keysRef }` so `useMapOrbitPose` can
   read them. `onWheel(e)` is the mode-specific zoom; `getPanSpeed()` is
-  the mode-specific world-per-pixel.
+  the mode-specific world-per-pixel. The hook stores the latest
+  callbacks in refs internally and keeps the DOM-binding `useEffect`
+  keyed on `[domElement, camera]`, so listener wiring runs once per
+  mount rather than rebinding when callback identities change.
 
 Each per-mode controller is ~80 lines: declare `mapSceneRef`, call the
 three hooks with mode-specific callbacks, declare the GLB-seed
@@ -301,13 +308,14 @@ three hooks with mode-specific callbacks, declare the GLB-seed
 ### `MapViewer.tsx` changes
 
 - Add prop `cameraKind: MapModeKind`.
-- Resolve `const mode = useMemo(() => getMapMode(cameraKind), [cameraKind])`.
+- Resolve `const mode = getMapMode(cameraKind)` — `MAP_MODES[kind]` is a
+  stable module-level reference, so no `useMemo` is needed.
 - Remove the unconditional `<PerspectiveCamera>` at line 194.
-- Render `<mode.Render>` unconditionally at the same position. The
-  controller inside it handles null `glbCamera/mapScene/mapBounds`
-  gracefully (its seed effect bails on `!glbCamera`; the wheel/raycast
-  handlers bail on `!scene`), and the camera element is always present
-  so r3f has a default camera registered.
+- Render `<mode.Render>` unconditionally at the same position. Each
+  controller defines its own null-`glbCamera` behavior (perspective
+  bails out of the seed effect; ortho applies the 60° fallback); both
+  bail their wheel/raycast handlers on `!scene`. The camera element is
+  always present so r3f has a default camera registered.
 - Inside `{ready && ...}`, render only `<ambientLight>` (when present)
   and `<MapInstancedMarkers>` — the controller is no longer ready-gated.
 - Add `key={mapUrl}` to `<mode.Render>` so a map switch fully remounts
@@ -415,11 +423,13 @@ per-mode controllers. Only `MapViewer.tsx:6` imports it today.
 2. **Extract shared hooks.** Move orbit-state setup, per-frame pose, and
    input handlers from `MapCamera.tsx` into the three hook files. The
    hooks accept callbacks for the mode-specific bits (`onWheel`,
-   `getPanSpeed`, `getFlyMoveSpeedPerFrame`). At this point
-   `MapCamera.tsx` remains, refactored into a thin wrapper that calls
-   the hooks with perspective-specific callbacks — verifies the
-   extraction is behavior-preserving. Tests still pass against
-   `MapCamera`.
+   `getPanSpeed`, `getFlyMoveSpeedPerFrame`) and a
+   `cameraRef: RefObject<THREE.PerspectiveCamera>`. Attach a `ref` to
+   the JSX `<PerspectiveCamera>` in `MapViewer.tsx:194` and thread it
+   into `MapCamera` as a new prop; `MapCamera.tsx` remains, refactored
+   into a thin wrapper that calls the hooks with that `cameraRef` and
+   perspective-specific callbacks — verifies the extraction is
+   behavior-preserving. Tests still pass against `MapCamera`.
 3. **Build `PerspectiveCameraController` + `PerspectiveMode`.** Move the
    thin wrapper into `modes/PerspectiveCameraController.tsx`, retyping
    `cameraRef: RefObject<THREE.PerspectiveCamera>`. Build
@@ -550,7 +560,9 @@ per-mode controllers. Only `MapViewer.tsx:6` imports it today.
     on the fake ortho camera; no DOM needed (synthetic rect).
 - **`map-camera-math.test.ts`** — update existing `panTarget` calls to
   the new `panSpeed` signature. Assertions are unchanged in spirit; the
-  test inputs swap `radius` for `radius * 0.001`.
+  test inputs swap `radius` for `radius * 0.001`. Rename
+  `it('scales pan speed with the orbit radius', …)` to reflect the new
+  parameter (e.g. `'scales translation linearly with panSpeed'`).
 - **`MapViewer.test.tsx`** — unchanged. Existing assertions exercise
   pure helpers, not Canvas mounting.
 - **Full local suite**: `yarn lint`, `yarn type-check`, `yarn test` from
