@@ -326,6 +326,23 @@ three hooks with mode-specific callbacks, declare the GLB-seed
   holds, since `PerspectiveCameraController`'s seed effect bails on
   `!glbCamera` and thus never calls `saveInitialView()`.
 
+  **Gating placement.** Do *not* gate inside `handleMapLoaded` — adding
+  `cameraKind` to its `useCallback` deps would change the callback's
+  identity on every mode swap, and `MapModel`'s `useLayoutEffect` is
+  keyed on `onLoaded` identity, so it would re-fire and re-run the GLB
+  processing pipeline (re-extracting `glbCamera`, re-walking the scene,
+  re-`setState`-ing equivalent values) on every toggle. Instead, keep
+  `handleMapLoaded` mode-agnostic: push a typed category
+  (e.g. `{ code: 'no-glb-camera' }`) into `contractErrors`. Then in
+  `MapViewer`'s render body, derive the user-visible message list and
+  the `console.error` calls from `(contractErrors, cameraKind)` —
+  `useMemo` for the rendered strings, `useEffect` (keyed on the same
+  pair) for the `console.error` side effect — filtering out the
+  `no-glb-camera` entry when `cameraKind !== 'perspective'`. This keeps
+  `handleMapLoaded`'s deps stable and avoids the re-fire, and ensures
+  ortho mode silences both the rendered error and the `console.error`
+  line consistently.
+
 A `cameraKind` change makes React swap component types in `<mode.Render>`
 — the prior camera/controller unmount cleanly, listeners are removed by
 the existing cleanup, the new mode mounts with fresh refs and re-seeds
