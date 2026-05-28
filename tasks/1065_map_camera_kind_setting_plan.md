@@ -95,11 +95,13 @@ export type MapModeKind = 'perspective' | 'orthographic'
 
 export interface MapModeRenderProps {
   // All three are non-nullable: `MapViewer` only mounts a mode when
-  // the GLB has arrived *and* includes an embedded camera. `mapScene`
-  // and `mapBounds` are set together with `glbCamera` in
-  // `handleMapLoaded`, so a single `{ready && glbCamera && ...}` gate
-  // guarantees all three. A missing camera is a contract violation
-  // that surfaces as a red error banner with no map content rendered.
+  // the GLB has arrived *and* includes an embedded camera. `mapScene`,
+  // `mapBounds`, and `glbCamera` are set together in `handleMapLoaded`,
+  // so the gate checks all three inline (rather than reusing the
+  // aliased `ready = mapScene !== null` boolean) — TS narrows each at
+  // the call site only when its non-null check is part of the JSX
+  // expression. A missing camera is a contract violation that surfaces
+  // as a red error banner with no map content rendered.
   glbCamera: THREE.PerspectiveCamera
   mapScene: THREE.Object3D
   mapBounds: THREE.Box3
@@ -376,18 +378,27 @@ correct.
   or while a non-conforming GLB is on screen; it doesn't drive the
   user-facing render once a mode is mounted.
 - Gate the camera/controller/markers on a conforming GLB: replace the
-  current `{ready && ...}` block with `{ready && glbCamera && ...}`,
-  containing `<mode.Render key={mapUrl} glbCamera={glbCamera} .../>`,
-  the optional `<ambientLight>`, and `<MapInstancedMarkers>`. A
-  non-conforming GLB (no embedded camera) is a hard contract failure:
-  nothing mounts, the existing red `contractErrors` banner is the
-  entire failure UI. No silent fallback, no degraded "default camera"
-  experience. The `key={mapUrl}` ensures a map switch fully remounts
-  the camera/controller pair and the new GLB gets a fresh seed.
-- Because `<mode.Render>` only mounts when `glbCamera !== null`, the
-  `MapModeRenderProps.glbCamera` type is non-nullable (see
-  `MapMode` interface above). Per-mode controllers do not branch on
-  `glbCamera === null`.
+  current `{ready && ...}` block with an inline triple-check
+  `{mapScene !== null && mapBounds !== null && glbCamera !== null && ...}`,
+  containing `<mode.Render key={mapUrl} glbCamera={glbCamera} mapScene={mapScene} mapBounds={mapBounds} .../>`,
+  the optional `<ambientLight>`, and `<MapInstancedMarkers>`. The
+  inline checks (rather than reusing the aliased `ready` boolean) are
+  what let TS narrow `mapScene`, `mapBounds`, and `glbCamera` to
+  non-null at the `<mode.Render>` call site — TS 5.4 aliased-condition
+  narrowing covers `mapScene` through `ready`, but `mapBounds` is
+  independent state and only narrows through an inline check. With
+  the triple-check, the `ready` local in `MapViewer` is no longer
+  used and can be removed. A non-conforming GLB (no embedded camera)
+  is a hard contract failure: nothing mounts, the existing red
+  `contractErrors` banner is the entire failure UI. No silent
+  fallback, no degraded "default camera" experience. The
+  `key={mapUrl}` ensures a map switch fully remounts the camera/
+  controller pair and the new GLB gets a fresh seed.
+- Because `<mode.Render>` only mounts when all three of `mapScene`,
+  `mapBounds`, `glbCamera` are non-null, the corresponding
+  `MapModeRenderProps` fields are non-nullable (see `MapMode`
+  interface above). Per-mode controllers do not branch on any of them
+  being null.
 - Tighten the missing-GLB-camera `contractErrors` push at
   `MapViewer.tsx:128-129`. The current message — "No perspective
   camera in GLB — initial framing is the default seed, and Reset View
@@ -534,11 +545,13 @@ per-mode controllers. Only `MapViewer.tsx:6` imports it today.
      Step 6 wires it through `MapCell`).
    - Resolve `mode` via `MAP_MODES[cameraKind]`.
    - Keep the line-194 `<PerspectiveCamera>` as r3f's always-registered
-     default. Tighten the existing `{ready && ...}` block to
-     `{ready && glbCamera && ...}`; replace `<MapCameraController .../>`
-     inside it with `<mode.Render key={mapUrl} glbCamera={glbCamera} .../>`.
+     default. Replace the existing `{ready && ...}` block with an
+     inline triple-check
+     `{mapScene !== null && mapBounds !== null && glbCamera !== null && ...}`;
+     replace `<MapCameraController .../>` inside it with
+     `<mode.Render key={mapUrl} glbCamera={glbCamera} mapScene={mapScene} mapBounds={mapBounds} .../>`.
      `<ambientLight>` and `<MapInstancedMarkers>` move under the same
-     stricter gate.
+     stricter gate. Remove the now-unused `ready` local.
    - Tighten the contractError message at `MapViewer.tsx:128-129` to
      "No camera in GLB — map cannot be rendered."
    For conforming GLBs (the common case), behavior is preserved
