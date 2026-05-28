@@ -45,7 +45,17 @@ async function readErrorBody(response: Response): Promise<MapApiErrorBody | unde
 /** Compose the blob URL the renderer hands to drei's `useGLTF`. */
 export function resolveMapBlobUrl(file: string | undefined, basePath: string): string | undefined {
   if (!file) return undefined
-  return `${basePath}/api/maps/blob/${file}`
+  // The blob route captures a single path segment and rejects any `/`
+  // (see `is_direct_child` / `maps_blob` in the backend), so a valid map
+  // filename never contains a slash. Legacy or hand-authored notebooks
+  // sometimes stored a path-prefixed value (e.g. `/maps/Foo.glb`); reduce
+  // to the basename so those still load. Without this, the prefix produces
+  // a multi-segment URL (`…/blob//maps/Foo.glb`) that misses the route and
+  // falls through to the SPA's index.html — which the GLB loader then
+  // fails to parse as JSON.
+  const filename = file.split('/').pop()
+  if (!filename) return undefined
+  return `${basePath}/api/maps/blob/${filename}`
 }
 
 /** Display name: strip the `.glb` extension. Underscores are preserved. */

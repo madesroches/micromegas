@@ -22,6 +22,19 @@ describe('resolveMapBlobUrl', () => {
   it('works with empty base path (root deployment)', () => {
     expect(resolveMapBlobUrl('main.glb', '')).toBe('/api/maps/blob/main.glb')
   })
+
+  it('reduces a path-prefixed legacy value to its basename', () => {
+    // No double slash, single trailing segment — matches the backend's
+    // single-segment blob route.
+    expect(resolveMapBlobUrl('/maps/Arena_North.glb', '/micromegas')).toBe(
+      '/micromegas/api/maps/blob/Arena_North.glb'
+    )
+    expect(resolveMapBlobUrl('maps/Arena_North.glb', '')).toBe('/api/maps/blob/Arena_North.glb')
+  })
+
+  it('returns undefined when the value has no filename segment', () => {
+    expect(resolveMapBlobUrl('maps/', '/mmlocal')).toBeUndefined()
+  })
 })
 
 describe('formatMapName', () => {
