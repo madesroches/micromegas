@@ -1,4 +1,4 @@
-# Map Cell: Camera Kind Setting Plan (#1065)
+# Map Cell: Camera Mode Setting Plan (#1065)
 
 ## Issue Reference
 - [#1065](https://github.com/madesroches/micromegas/issues/1065) — Map viewer:
@@ -6,22 +6,23 @@
 
 ## Overview
 
-The map viewer hard-codes a perspective camera and an orbit-style interaction.
-For flat heatmap-style data (gameplay density binned into cells) the
-foreshortening hurts readability. This plan adds a Map-cell **Camera** setting
-with two values to start — `perspective` (current behavior) and `orthographic`
-(same orbit/pan/fly controls, just a different projection) — and restructures
-the controller so each new camera variant is a self-contained adapter behind
-a small interface. Adding a future locked-top-down or isometric mode becomes a
-new file in `camera-modes/` plus one registry entry; no edits to
-`MapCamera.tsx`, `MapViewer.tsx`, or `MapCell.tsx` (OCP).
+The map viewer hard-codes a perspective camera. For flat heatmap-style data
+(gameplay density binned into cells, scale-Z=0 box overlays) perspective
+foreshortening hurts readability. This plan adds a per-Map-cell **Camera**
+setting with two values to start — `perspective` (current behavior) and
+`orthographic` — and restructures the camera/controller around a
+"Mode = (camera, controller)" pairing.
+
+Picking a mode in the dropdown selects a self-contained component that
+renders the right drei camera element and a controller typed against that
+exact camera class. The controller has direct access to its camera's API
+(`fov`, `zoom`, ...) — no casts, no `useThree().camera` race, no shared
+abstract `CameraMode` interface to evolve as new modes are added.
 
 **Controls policy.** All existing inputs (left-drag pan, right-drag orbit,
-Ctrl-wheel zoom, WASDQE, `Z` reset) stay active in every mode for now. We
-ship one orthographic variant with the same controls as perspective and
-watch for real usability issues before introducing per-mode control gating
-(e.g. a locked top-down sub-variant). Keeping the controls uniform also
-keeps the adapter interface smaller.
+Ctrl-wheel zoom, WASDQE fly, `Z` reset) stay active in every mode. We ship
+one orthographic variant with the same controls as perspective and watch
+for real usability issues before introducing per-mode control gating.
 
 ## Current State
 
@@ -30,30 +31,31 @@ keeps the adapter interface smaller.
 `analytics-web-app/src/components/map/MapViewer.tsx`:
 
 - Hardcoded `<PerspectiveCamera makeDefault fov={60} near={1} far={100000} />`
-  inside `<Canvas>` (`MapViewer.tsx:194`).
-- `<MapCameraController>` reads `useThree().camera`, mutates it every frame.
-- Threads `glbCamera: THREE.PerspectiveCamera | null` from `MapModel` into the
-  controller (`:200-207`).
+  at `MapViewer.tsx:194`, outside the `{ready && ...}` gate so r3f always
+  has a default camera registered.
+- `<MapCameraController>` rendered inside `{ready && ...}`
+  (`MapViewer.tsx:200-207`), reading `useThree().camera` and mutating it
+  every frame.
+- Threads `glbCamera: THREE.PerspectiveCamera | null` from `MapModel`.
 
-`analytics-web-app/src/components/map/MapCamera.tsx` is the single ~400-line
-controller. The orbit math is camera-agnostic (target + Z-up spherical), but
-three places reach in with perspective-specific assumptions:
+`analytics-web-app/src/components/map/MapCamera.tsx` (~400 lines) is the
+controller. The orbit math is camera-agnostic, but three places carry
+perspective-specific assumptions:
 
-- **GLB seed effect** (`MapCamera.tsx:113-153`): copies `fov / near / far`
-  off the GLB perspective camera onto the scene camera. Casts
-  `camera as THREE.PerspectiveCamera`.
-- **Wheel handler** (`:251-294`): drives `sphericalRef.current.radius` via a
-  `zoomFactor`. For an ortho camera, the projection is distance-invariant —
-  scaling radius changes only the orbit point distance, not the apparent size.
-  The user-perceived zoom for ortho lives on `camera.zoom`.
-- **Reset-view effect** (`:84-109`) and **`useFrame` placement** (`:385-411`):
-  set `camera.position`, `camera.up`, then `camera.lookAt(target)` —
-  projection-agnostic, but the saved snapshot omits anything the ortho variant
-  would need to restore (e.g., `camera.zoom`).
+- **GLB seed effect** (`:113-153`): copies `fov / near / far` off the GLB
+  camera; casts `camera as THREE.PerspectiveCamera`.
+- **Wheel handler** (`:251-294`): drives `sphericalRef.current.radius`. In
+  ortho the projection is distance-invariant — scaling radius doesn't
+  change apparent size; the user-perceived zoom lives on `camera.zoom`.
+- **Reset-view effect** (`:84-109`): restores orbit refs but captures
+  nothing ortho would need (e.g. `camera.zoom`).
 
 Pure helpers in `map-camera-math.ts` (`sphericalToZUpOffset`,
 `zUpOffsetToSphericalInput`, `cameraBasisFromSpherical`, `panTarget`,
-`zoomAnchorTarget`) take only THREE vector primitives — already adapter-ready.
+`zoomAnchorTarget`) operate on plain THREE primitives. One needs a
+signature change: `panTarget(target, theta, radius, dx, dy)` bakes in
+`panSpeed = radius * 0.001`. The `radius` argument becomes `panSpeed`,
+computed by each mode from its own camera state.
 
 ### Where the cell config lives
 
@@ -62,390 +64,279 @@ Pure helpers in `map-camera-math.ts` (`sphericalToZUpOffset`,
 - Reads typed options inline: `shape`, `mapUrl`, `detailTemplate`,
   `showHoverTooltip` (`:260, :292, :298-301`).
 - Default config in `createDefaultConfig` (`:989-1001`).
-- Editor block "Map Options" renders the map dropdown (`:832-844`); "Primitive"
-  renders the shape select + bindings (`:847-921`). The shape select is the
-  pattern this plan follows for the new camera select.
+- Editor "Map Options" block renders the map dropdown (`:826-844`);
+  "Primitive" renders the shape select (`:847-921`) — the pattern this
+  plan follows for the new Camera select.
 
 ### Tests / docs
 
-- `analytics-web-app/src/components/map/__tests__/map-camera-math.test.ts` —
-  pure helpers; no controller mount.
-- `analytics-web-app/src/components/map/__tests__/MapViewer.test.tsx` —
-  exercises the pure `cameraBasisFromSpherical` helper; no Canvas/r3f mounting.
-- Docs: `mkdocs/docs/web-app/notebooks/cell-types.md:216-348` — the Map cell
-  section, including the **Camera controls** table at `:336-348`.
+- `analytics-web-app/src/components/map/__tests__/map-camera-math.test.ts`
+  — pure helpers; no controller mount.
+- `analytics-web-app/src/components/map/__tests__/MapViewer.test.tsx`
+  — exercises `cameraBasisFromSpherical`; no Canvas mounting.
+- `mkdocs/docs/web-app/notebooks/cell-types.md:216-348` covers the Map
+  cell, with a **Camera controls** table at `:336-348`.
 
 ## Design
 
-### Camera-mode adapter (the OCP seam)
+### `MapMode` interface
 
-A `CameraMode` describes everything that varies between camera variants. The
-controller and viewer talk only to this interface; concrete adapters
-encapsulate the perspective vs. orthographic differences.
+A `MapMode` is a kind tag plus a React component that mounts the camera
+and its controller together. The interface exists only so `MapViewer` can
+switch on `cameraKind` and `MapCell`'s editor dropdown can enumerate
+choices.
 
 ```ts
-// camera-modes/types.ts
+// modes/types.ts
 import type { ComponentType } from 'react'
 import type * as THREE from 'three'
 
-export type CameraKind = 'perspective' | 'orthographic'
+export type MapModeKind = 'perspective' | 'orthographic'
 
-export interface CameraOrbitState {
-  target: THREE.Vector3
-  spherical: THREE.Spherical
-  // Refs so adapters can mutate these primitives through .current and have
-  // the controller observe the new value. Plain `number` fields would be
-  // pass-by-value and the controller's refs would never see the update.
-  // (React 19: `RefObject<T>` is the idiomatic spelling — it now permits
-  // mutation via `.current`, replacing the older `MutableRefObject<T>`.)
-  fitRadius: RefObject<number>
-  zoomFactor: RefObject<number>
-  // Per-controller scratchpad for adapter-owned state (e.g. ortho's
-  // `seedZoom` / `radiusAtSeed`). Lives on the controller's orbit object —
-  // not on the adapter — so multiple Map cells sharing the same
-  // module-level adapter singleton from `CAMERA_MODES` don't clobber each
-  // other's per-cell seed values. The controller initializes this to `{}`
-  // and never reads from it; only the adapter writes/reads keys it owns.
-  modeState: Record<string, unknown>
-}
-
-export interface SeedParams {
-  camera: THREE.Camera
+export interface MapModeRenderProps {
   glbCamera: THREE.PerspectiveCamera | null
+  mapScene: THREE.Object3D | null
   mapBounds: THREE.Box3 | null
-  orbit: CameraOrbitState  // mutated in place
+  resetViewTrigger: number
 }
 
-export interface ApplyParams {
-  camera: THREE.Camera
-  orbit: CameraOrbitState
+export interface MapMode {
+  kind: MapModeKind
+  /** Mounts the camera element and its controller as a wired pair. */
+  Render: ComponentType<MapModeRenderProps>
 }
 
-export interface ZoomParams {
-  camera: THREE.Camera
-  orbit: CameraOrbitState  // mutated
-  domElement: HTMLCanvasElement
-  scene: THREE.Object3D | null
-  event: WheelEvent
-}
-
-export interface CameraMode {
-  kind: CameraKind
-  /** Drei camera element rendered inside <Canvas> with makeDefault. */
-  CameraElement: ComponentType
-  /** Seed orbit + intrinsics from the GLB perspective camera. */
-  seed: (params: SeedParams) => void
-  /** Per-frame: write camera.position / .up / projection state. */
-  apply: (params: ApplyParams) => void
-  /** Ctrl-wheel zoom step (mutates orbit and/or camera.zoom). */
-  zoom: (params: ZoomParams) => void
-  /** Saved-view extras serialized alongside orbit on Z reset. */
-  snapshot: (camera: THREE.Camera) => unknown
-  restore: (camera: THREE.Camera, snap: unknown) => void
-  /**
-   * Effective radius used to scale pan and fly speeds so they track the
-   * on-screen world-per-pixel. The returned value's ratio to the perspective
-   * baseline must equal `(world-per-pixel now) / (world-per-pixel at seed)`.
-   *
-   * Contract notes on inputs (both adapters reuse this signature; neither
-   * reads both fields):
-   * - Perspective ignores `camera` entirely and reads only
-   *   `orbit.spherical.radius` (world-per-pixel scales linearly with radius
-   *   for a fixed fov).
-   * - Ortho ignores both `camera.position`/`spherical.radius` (camera-to-
-   *   target distance is irrelevant to ortho projection) and instead reads
-   *   `orbit.modeState.radiusAtSeed` and `orbit.modeState.seedZoom`
-   *   (captured during `seed()`) together with `camera.zoom`, returning
-   *   `radiusAtSeed * seedZoom / camera.zoom` — since ortho world-per-
-   *   pixel is `1 / camera.zoom`.
-   *
-   * Keeping `radiusAtSeed`/`seedZoom` on `orbit.modeState` (per controller)
-   * rather than on the adapter singleton is what lets multiple Map cells
-   * share the registry's one `orthographic` instance without racing each
-   * other's seed values.
-   */
-  effectiveRadius: (params: { camera: THREE.Camera; orbit: CameraOrbitState }) => number
+export const MAP_MODE_LABELS: Record<MapModeKind, string> = {
+  perspective: 'Perspective',
+  orthographic: 'Orthographic',
 }
 ```
-
-`CameraOrbitState` is what `MapCameraController` already maintains in refs —
-the controller passes its `targetRef.current`, `sphericalRef.current`,
-`fitRadiusRef`, and `zoomFactorRef` into the adapter, so when the adapter
-writes `orbit.zoomFactor.current = newZoom` (or mutates `orbit.spherical`
-in place) the controller's refs see the update directly. No `if (kind ===
-...)` branches in the controller.
-
-### Registry
 
 ```ts
-// camera-modes/index.ts
-import { perspectiveOrbit } from './perspectiveOrbit'
-import { orthographic } from './orthographic'
-import type { CameraKind, CameraMode } from './types'
+// modes/index.ts
+import { perspectiveMode } from './PerspectiveMode'
+import { orthographicMode } from './OrthographicMode'
+import type { MapMode, MapModeKind } from './types'
 
-export const CAMERA_MODES: Record<CameraKind, CameraMode> = {
-  'perspective': perspectiveOrbit,
-  'orthographic': orthographic,
+export const MAP_MODES: Record<MapModeKind, MapMode> = {
+  perspective: perspectiveMode,
+  orthographic: orthographicMode,
 }
 
-export function getCameraMode(kind: CameraKind | undefined): CameraMode {
-  return CAMERA_MODES[kind ?? 'perspective'] ?? perspectiveOrbit
+export const MAP_MODE_KINDS = Object.keys(MAP_MODES) as MapModeKind[]
+
+export function getMapMode(kind: MapModeKind | undefined): MapMode {
+  return MAP_MODES[kind ?? 'perspective'] ?? perspectiveMode
 }
 
-export type { CameraKind, CameraMode } from './types'
+export { MAP_MODE_LABELS } from './types'
+export type { MapMode, MapModeKind, MapModeRenderProps } from './types'
 ```
 
-This is the only file that names every concrete adapter. Adding a third mode
-is one import + one map entry.
+A future locked-top-down (or isometric) mode adds one file and one entry
+in `MAP_MODES` / `MAP_MODE_LABELS`. No edits to `MapViewer`, `MapCell`, or
+the existing modes.
 
-### Adapter: `perspectiveOrbit` (current behavior, reorganized)
+### `PerspectiveMode` (current behavior, extracted)
 
-`camera-modes/perspectiveOrbit.ts`:
+```tsx
+// modes/PerspectiveMode.tsx
+import { useRef } from 'react'
+import { PerspectiveCamera } from '@react-three/drei'
+import * as THREE from 'three'
+import type { MapMode, MapModeRenderProps } from './types'
+import { PerspectiveCameraController } from './PerspectiveCameraController'
 
-- `CameraElement` is `<PerspectiveCamera makeDefault fov={60} near={1} far={100000} />`
-  (the exact element currently in `MapViewer.tsx:194`).
-- `seed`: when `params.glbCamera === null`, no-op — leaves the
-  `<PerspectiveCamera>` JSX defaults (`fov={60} near={1} far={100000}`) in
-  place, matching today's behavior when the controller's `!glbCamera`
-  early-return fires. Otherwise copies `fov / near / far` from `glbCamera`
-  and calls `updateProjectionMatrix()` (same body as
-  `MapCamera.tsx:140-144` today).
-- `apply`: writes `camera.position = target + sphericalToZUpOffset(spherical)`;
-  sets `camera.up` from theta; calls `lookAt(target)`. Same as the controller's
-  current `useFrame` body.
-- `zoom`: the existing radius-driven cursor-anchored zoom (`MapCamera.tsx:257-293`),
-  moved verbatim — multiplies `zoomFactor`, scales `target` toward the
-  raycast-hit anchor by `s = newRadius / oldRadius`.
-- `snapshot` / `restore`: empty `{}` — orbit state is enough to restore
-  perspective view.
-- `effectiveRadius`: returns `orbit.spherical.radius` (current behavior).
+function PerspectiveModeRender({
+  glbCamera, mapScene, mapBounds, resetViewTrigger,
+}: MapModeRenderProps) {
+  const cameraRef = useRef<THREE.PerspectiveCamera>(null!)
+  return (
+    <>
+      <PerspectiveCamera ref={cameraRef} makeDefault fov={60} near={1} far={100000} />
+      <PerspectiveCameraController
+        cameraRef={cameraRef}
+        glbCamera={glbCamera}
+        mapScene={mapScene}
+        mapBounds={mapBounds}
+        resetViewTrigger={resetViewTrigger}
+      />
+    </>
+  )
+}
 
-### Adapter: `orthographic` (new)
+export const perspectiveMode: MapMode = {
+  kind: 'perspective',
+  Render: PerspectiveModeRender,
+}
+```
 
-`camera-modes/orthographic.ts`. Same orbit/pan/fly controls as perspective —
-only the projection differs.
+`PerspectiveCameraController` takes
+`cameraRef: RefObject<THREE.PerspectiveCamera>` — no `useThree().camera`,
+no cast. Its body is the current `MapCamera.tsx` with three changes:
 
-- `CameraElement`: `<OrthographicCamera makeDefault near={1} far={100000} />`.
-  Drei's `<OrthographicCamera>` auto-fits `left/right/top/bottom` to the
-  canvas viewport and re-fits on resize — so we don't manage the frustum
-  manually. Initial `zoom={1}` (the seed will overwrite it).
-- `seed`: derives an initial `camera.zoom` from the GLB perspective frustum at
-  the seeded radius so the initial framing visually matches the perspective
-  mode. With `vFov = glbCamera.fov` (in **degrees**, per `THREE.PerspectiveCamera`)
-  and `R = sphericalRef.radius`, the world height visible at distance R in
-  perspective is `worldHeight = 2 * R * tan(THREE.MathUtils.degToRad(vFov) / 2)`.
-  For the ortho camera with viewport height `H_px`, `camera.zoom = H_px /
-  worldHeight` gives the same height-fit. `H_px` is recovered from the
-  camera itself as `H_px = (camera as THREE.OrthographicCamera).top -
-  (camera as THREE.OrthographicCamera).bottom` — drei's
-  `<OrthographicCamera>` sets `top = size.height/2` and `bottom =
-  -size.height/2` from the canvas viewport via JSX props on the
-  `orthographicCamera` primitive (committed by r3f during render, before
-  the controller's seed effect runs); only `updateProjectionMatrix()` runs
-  in drei's layoutEffect. So no extra `SeedParams` field is needed. Note: do **not** pass `vFov / 2` directly to `Math.tan` — it
-  expects radians. `near` / `far` are copied off the
-  GLB camera (same approach as the perspective adapter) so depth clipping
-  behaves identically. The orbit state — `target`, `spherical (radius, phi,
-  theta)`, `fitRadius`, `zoomFactor` — is seeded by the same code path as
-  perspective, so right-drag orbit and `Z` reset behave the same.
+- GLB seed reads `cameraRef.current` and writes `fov/near/far` without a
+  cast.
+- The wheel handler is unchanged (radius-driven zoom).
+- Left-drag pan calls `panTarget(target, theta, radius * 0.001, dx, dy)`
+  with the new explicit-`panSpeed` signature.
 
-  **`glbCamera === null` fallback.** `MapCamera.tsx:114` today early-returns
-  the GLB seed effect when `glbCamera` is null (see "Controller changes"
-  below — the full `!glbCamera` early-return is dropped so adapters always
-  get a `seed()` call), and the contract-error overlay in
-  `MapViewer.tsx:228-` is purely informational — the controller still
-  mounts and `useFrame` still runs. If the ortho seed bailed in this case,
-  `orbit.modeState.seedZoom` / `radiusAtSeed` would be unset and
-  `effectiveRadius` would return `NaN` (poisoning pan and fly speeds), and
-  the visible framing would fall back to drei's `<OrthographicCamera>`
-  default of `zoom=1` with a pixel-sized frustum (1 world unit = 1 pixel).
-  To stay deterministic, the ortho adapter does **not** early-return when
-  `params.glbCamera === null`: instead it seeds `camera.zoom` using the
-  same height-fit formula with an assumed `vFov = 60°` (matching the
-  `<PerspectiveCamera>` JSX default at `MapViewer.tsx:194` that the
-  perspective adapter inherits when GLB intrinsics are missing) and
-  `R = sphericalRef.radius` (whatever the orbit's default radius is at
-  that point). `near` / `far` are left at the `<OrthographicCamera>` JSX
-  defaults. `radiusAtSeed` and `seedZoom` are still written to
-  `orbit.modeState`, so `effectiveRadius` returns finite values and
-  pan/fly speeds remain well-defined.
-- `apply`: `camera.position = target + sphericalToZUpOffset(spherical)`;
-  `camera.up` from theta; `lookAt(target)`. Identical to perspective —
-  projection-agnostic.
-- `zoom`: cursor-anchored on `camera.zoom`. Algorithm:
-  1. `m = e.deltaY > 0 ? 1 / (1 + zoomSpeed) : (1 + zoomSpeed)` (matches the
-     perspective UX where `deltaY > 0` zooms out).
+### `OrthographicMode` (new)
+
+```tsx
+// modes/OrthographicMode.tsx
+import { useRef } from 'react'
+import { OrthographicCamera } from '@react-three/drei'
+import * as THREE from 'three'
+import type { MapMode, MapModeRenderProps } from './types'
+import { OrthographicCameraController } from './OrthographicCameraController'
+
+function OrthographicModeRender({
+  glbCamera, mapScene, mapBounds, resetViewTrigger,
+}: MapModeRenderProps) {
+  const cameraRef = useRef<THREE.OrthographicCamera>(null!)
+  return (
+    <>
+      <OrthographicCamera ref={cameraRef} makeDefault near={1} far={100000} />
+      <OrthographicCameraController
+        cameraRef={cameraRef}
+        glbCamera={glbCamera}
+        mapScene={mapScene}
+        mapBounds={mapBounds}
+        resetViewTrigger={resetViewTrigger}
+      />
+    </>
+  )
+}
+
+export const orthographicMode: MapMode = {
+  kind: 'orthographic',
+  Render: OrthographicModeRender,
+}
+```
+
+Drei's `<OrthographicCamera>` auto-fits `left/right/top/bottom` to the
+canvas viewport and re-fits on resize — the controller doesn't manage the
+frustum.
+
+`OrthographicCameraController` takes
+`cameraRef: RefObject<THREE.OrthographicCamera>` and reads/writes `.zoom`
+directly. Diffs from perspective:
+
+- **GLB seed**: copies `near/far` off the GLB camera; computes
+  `camera.zoom` so the initial framing visually matches perspective mode.
+  With `vFov = glbCamera.fov` (degrees, per THREE) and
+  `R = sphericalRef.radius`, the world height visible at distance R in
+  perspective is `worldHeight = 2 * R * tan(degToRad(vFov) / 2)`. For the
+  ortho camera, `camera.zoom = H_px / worldHeight` matches the height-fit,
+  where `H_px = camera.top - camera.bottom` (drei sets these to the
+  canvas pixel extents in a layout effect before this seed effect runs;
+  the controller's seed is in `useLayoutEffect` chained after drei's, so
+  it sees the populated values). Note: pass `degToRad(vFov) / 2` to
+  `Math.tan`, **not** `vFov / 2` directly — `Math.tan` expects radians.
+- **`glbCamera === null` fallback**: don't bail. Use `vFov = 60°` (matching
+  the `<PerspectiveCamera>` JSX default that perspective inherits when
+  GLB intrinsics are missing) and `R = sphericalRef.radius`; apply the
+  same height-fit. Without this fallback `camera.zoom` would stay at
+  drei's default `1` (a pixel-sized frustum) and pan/fly would be
+  ill-scaled. `near/far` stay at the `<OrthographicCamera>` JSX defaults.
+- **Wheel handler**: cursor-anchored on `camera.zoom`. Algorithm:
+  1. `m = e.deltaY > 0 ? 1 / (1 + zoomSpeed) : (1 + zoomSpeed)` — matches
+     perspective UX where `deltaY > 0` zooms out.
   2. `newZoom = clamp(camera.zoom * m, ZOOM_MIN, ZOOM_MAX)`.
-  3. Raycast the cursor against `mapScene` → world anchor `a`. Translate
-     `target` so `a` stays under the cursor: `target = a + (target - a) / m`
-     — same `zoomAnchorTarget(target, anchor, 1 / m)` helper, with `s = 1/m`.
+  3. Raycast cursor against `mapScene` → world anchor `a`. Translate
+     `target` to keep `a` under the cursor:
+     `target = a + (target - a) / m` — same `zoomAnchorTarget` helper
+     with `s = 1 / m`.
   4. `camera.zoom = newZoom; camera.updateProjectionMatrix()`.
-  Note: the orbit `radius` is **not** changed by ortho zoom — the camera-to-
-  target distance is irrelevant to ortho projection. Two speeds in the
-  controller scale off `radius` today and need to track the effective on-
-  screen scale in ortho instead:
-  - **Pan speed.** `panTarget` scales by `radius * 0.001`. Drei's
-    `<OrthographicCamera>` auto-fits `left/right/top/bottom` to pixel
-    dimensions, so ortho world-per-pixel is exactly `1 / camera.zoom` —
-    independent of `radius`. We expose an `effectiveRadius` accessor on the
-    adapter; perspective returns `radius` and ortho returns
-    `radiusAtSeed * seedZoom / camera.zoom` (both captured during `seed()`),
-    so the ratio of returned value to the perspective baseline equals the
-    ratio of current world-per-pixel to seed world-per-pixel. The left-drag
-    pan handler reads that instead of `sphericalRef.current.radius`. Plugging
-    this into the existing `panTarget` (which multiplies by `0.001`) yields
-    `panSpeed = radiusAtSeed * 0.001 * (seedZoom / camera.zoom)` — i.e., at
-    `camera.zoom = seedZoom` the ortho pan speed matches perspective at the
-    seeded framing, and scales correctly as the user zooms.
-  - **Fly speed.** WASD scales off `radius * SPEED_PER_RADIUS`
-    (`MapCamera.tsx:46-47`). For consistency we route it through the same
-    `effectiveRadius` accessor so fly-speed tracks on-screen scale and
-    matches perspective feel at the seeded zoom.
-  Both consumers go through the one accessor, so adapters opt in by
-  overriding a single method. The ortho `seed()` captures `seedZoom` (the
-  initial `camera.zoom` it just computed) and `radiusAtSeed` (the orbit
-  radius at seed time) on `orbit.modeState` (the per-controller scratchpad
-  defined on `CameraOrbitState`) so `effectiveRadius` can read them later
-  without re-deriving from `glbCamera`. Storing on `orbit.modeState`
-  rather than on the adapter object is required because
-  `CAMERA_MODES.orthographic` is a single module-level instance shared
-  across every Map cell — two cells using ortho concurrently would race
-  for the slot if it lived on the adapter. The controller owns the
-  `orbit` object (one per controller instance), so each cell gets its
-  own `modeState`.
-- `snapshot: (camera) => ({ zoom: (camera as THREE.OrthographicCamera).zoom })`.
-- `restore: (camera, snap)` → write `camera.zoom` and
-  `updateProjectionMatrix()`.
-- `effectiveRadius`: returns
-  `radiusAtSeed * seedZoom / (camera as THREE.OrthographicCamera).zoom`
-  (with `seedZoom` and `radiusAtSeed` read from `orbit.modeState`, where
-  `seed()` wrote them) so pan and fly speeds shrink as the user zooms in.
-  The current orbit `radius` does not appear in the formula — ortho
-  world-per-pixel is `1 / camera.zoom` and depends only on `camera.zoom`,
-  while `radiusAtSeed * seedZoom` carries the absolute units needed to
-  match the perspective baseline at the seeded framing.
 
-### Controller changes (`MapCamera.tsx`)
+  Orbit `radius` is **not** changed — camera-to-target distance is
+  irrelevant to ortho projection.
+- **Pan / fly speed**: computed live from camera intrinsics, not from
+  `radius` and not from any captured seed state.
+  - Pan: `panSpeed = 1 / camera.zoom` — exact world-per-pixel for ortho,
+    since drei's auto-fit makes `top - bottom = H_px`.
+  - Fly per frame: `moveSpeed = (camera.top - camera.bottom) / camera.zoom * FLY_SPEED * delta`
+    — half the visible world-height per second at `FLY_SPEED = 0.5`,
+    same dimensionless ratio perspective uses (`radius * 0.5 * delta`,
+    which is half the radius per second).
 
-Take a `cameraMode: CameraMode` prop. Replace the three perspective-specific
-sites with adapter calls. The controller builds one `orbit: CameraOrbitState`
-object that bundles its existing refs — `target: targetRef.current`,
-`spherical: sphericalRef.current`, `fitRadius: fitRadiusRef`,
-`zoomFactor: zoomFactorRef` — plus a fresh `modeState: {}` scratchpad owned
-by this controller instance, and passes it to every adapter call. The
-`fitRadius` / `zoomFactor` fields are the refs themselves (not `.current`),
-so when an adapter writes `orbit.zoomFactor.current = newZoom` the
-controller's `zoomFactorRef.current` is updated directly (no read-back step
-needed). `target` and `spherical` are object instances, so in-place
-mutation (`orbit.spherical.radius = ...`) is already visible to the
-controller. `modeState` is a plain object the adapter mutates in place
-(e.g., `orbit.modeState.seedZoom = ...`); it lives for the lifetime of
-the controller and is recreated on mode-swap remount (the
-`key={cameraKind}` flow), so adapters never inherit stale state from a
-prior mode.
+  Both auto-scale as the user zooms (rising `camera.zoom` shrinks visible
+  world, shrinks pan/fly speed proportionally). No `seedZoom`/`radiusAtSeed`
+  captured state needed — current camera state is sufficient.
+- **Reset (`Z`)**: in addition to restoring orbit refs, restore
+  `camera.zoom` from the saved view. Captured at seed time alongside the
+  orbit snapshot.
+- **Per-frame pose**: identical to perspective —
+  `camera.position = target + sphericalToZUpOffset(spherical)`,
+  `camera.up` from theta, `camera.lookAt(target)`. Projection-agnostic.
 
-| Today | After |
-|---|---|
-| `MapCamera.tsx:140-144` perspective intrinsic copy | `cameraMode.seed({ camera, glbCamera, mapBounds, orbit })` |
-| `MapCamera.tsx:251-294` radius-driven wheel zoom body | `cameraMode.zoom({ camera, orbit, domElement, scene, event })` |
-| `MapCamera.tsx:406-411` useFrame position/up/lookAt tail (WASD movement at `:385-405` stays in the controller) | `cameraMode.apply({ camera, orbit })` |
+### Shared hooks
 
-**Drop the full `!glbCamera || seededGlbCameraRef.current === glbCamera`
-early-return** (`MapCamera.tsx:112-115`). Both halves go, and
-`cameraMode.seed({ camera, glbCamera, mapBounds, orbit })` is called
-**unconditionally** from the GLB-seed effect (passing through whatever
-`glbCamera` is, including `null`). Each adapter defines its own
-null-`glbCamera` path — the perspective adapter's `seed` is a no-op when
-`params.glbCamera === null` (leaving the `<PerspectiveCamera>` JSX
-defaults in place, matching today's behavior), and the ortho adapter
-seeds `camera.zoom` from the documented `vFov = 60°` fallback (see
-"Adapter: `orthographic`" above). Dropping the `!glbCamera` half is what
-lets `saveInitialView()` (which lives in the same effect body) run when
-the GLB has no camera, fixing the `Z`-reset-stays-broken case in both
-modes. Dropping the `seededGlbCameraRef` half is safe because the
-mode-swap remount (`key={cameraKind}` in `MapViewer.tsx`) recreates the
-controller — and the ref — whenever `cameraKind` changes, so the
-same-GLB guard is no longer load-bearing. Removing it also fixes a
-latent race introduced by the remount: drei's camera elements call
-`set({ camera: cameraRef.current })` only inside a `useLayoutEffect`, so
-on the remount render the new controller's `useThree({ camera })`
-captures the **previous** default camera; the seed effect would run once
-against that stale camera, set `seededGlbCameraRef.current = glbCamera`,
-and then — after drei's `set` resolves and the effect re-runs with the
-new camera — early-return because the guard now matches, leaving the
-new camera unseeded (ortho's `camera.zoom` stuck at drei's default `1`,
-and `radiusAtSeed` / `seedZoom` unset on `orbit.modeState`, poisoning
-`effectiveRadius`). With the guard gone the seed runs against the new
-camera and writes `orbit.modeState` correctly; re-running on `glbCamera`
-identity stability is harmless because both adapters' `seed` bodies are
-idempotent (they recompute intrinsics / `camera.zoom` / `orbit.modeState`
-from the same inputs each call).
+The two controllers share structure: orbit refs, DOM event wiring, the
+per-frame pose write. Extract into hooks under
+`analytics-web-app/src/components/map/hooks/`:
 
-`saveInitialView` / reset-view effect:
-- Extend `initialViewRef` to `{ orbit, modeSnapshot: unknown }` where
-  `modeSnapshot = cameraMode.snapshot(camera)`.
-- On reset, after restoring orbit refs, call
-  `cameraMode.restore(camera, initialViewRef.current.modeSnapshot)`.
+- `useMapOrbitState()` — owns `targetRef`, `sphericalRef`,
+  `fitRadiusRef`, `zoomFactorRef`, `savedViewRef`. Exposes
+  `saveInitialView(extras?)` and `restoreSavedView()` helpers, where
+  `extras` is an optional mode-specific blob (ortho passes
+  `{ zoom: camera.zoom }`). No effects.
+- `useMapOrbitPose({ orbit, cameraRef, getFlyMoveSpeedPerFrame, isHoveredRef, keysRef })`
+  — `useFrame` body: WASD step using the supplied speed callback, then
+  write `camera.position / up / lookAt` from `orbit`. Both projection-
+  agnostic.
+- `useMapInputHandlers({ orbit, cameraRef, mapSceneRef, domElement, onWheel, getPanSpeed })`
+  — sets up mousedown/mousemove/mouseup, the right-drag re-anchor
+  raycast, contextmenu suppression, hover gating, keyboard, window-blur
+  cleanup. Returns `{ isHoveredRef, keysRef }` so `useMapOrbitPose` can
+  read them. `onWheel(e)` is the mode-specific zoom; `getPanSpeed()` is
+  the mode-specific world-per-pixel.
 
-All input handlers — left-drag pan, right-drag orbit/re-anchor, Ctrl-wheel
-zoom, WASDQE fly, `Z` reset — stay as-is structurally. The wheel handler
-delegates to `cameraMode.zoom`; left-drag pan and WASD fly read their speed
-basis from `cameraMode.effectiveRadius({ camera, orbit })` instead of
-`sphericalRef.current.radius` directly, so ortho zoom (which doesn't touch
-`radius`) still updates them. The remaining handlers are projection-
-agnostic and identical across modes.
+Each per-mode controller is ~80 lines: declare `mapSceneRef`, call the
+three hooks with mode-specific callbacks, declare the GLB-seed
+`useLayoutEffect`, declare the reset-view `useEffect` (calling
+`restoreSavedView()` then doing any mode-specific restore).
 
 ### `MapViewer.tsx` changes
 
-- Add prop `cameraKind: CameraKind`.
-- Resolve `const mode = getCameraMode(cameraKind)` once.
-- Render `<mode.CameraElement />` instead of the hardcoded `<PerspectiveCamera>`
-  at `MapViewer.tsx:194`.
-- Pass `cameraMode={mode}` to `<MapCameraController>`.
-- **Mode-swap remount.** Render `<mode.CameraElement>` unconditionally
-  before `<Suspense>`, in the same spot as today's `<PerspectiveCamera>`
-  at `MapViewer.tsx:187-194` (i.e. *outside* the `{ready && ...}` gate),
-  **without** wrapping it in a keyed fragment — each adapter exports a
-  distinct `CameraElement` component type, so the component-type change
-  on `cameraKind` swap is what drives React to unmount/remount the
-  camera element. Then wrap **only** `<MapCameraController>` in a
-  `<Fragment key={cameraKind}>` inside the `{ready && ...}` block at
-  `MapViewer.tsx:200-225`. The ready-gated block today contains three
-  children — `<MapCameraController>`, `<ambientLight>`, and
-  `<MapInstancedMarkers>` — and only the controller needs to remount on
-  camera-kind change. Keying the whole block would also remount
-  `<MapInstancedMarkers>`, which does substantial GPU work on mount
-  (creates `BoxGeometry`/`SphereGeometry`, allocates the `InstancedMesh`
-  + per-instance color `InstancedBufferAttribute`, and fills per-instance
-  matrices in a `useLayoutEffect`) — forcing a full rebuild and
-  re-upload of GPU buffers for hundreds of thousands of markers on an
-  unrelated UI change. So inside `{ready && ...}` render three siblings:
-  `<Fragment key={cameraKind}><MapCameraController .../></Fragment>`,
-  `<ambientLight ... />`, `<MapInstancedMarkers ... />`. Swapping
-  `makeDefault` cameras mid-life leaves stale refs in the controller (it
-  captured `useThree().camera` at mount); the key forces a clean
-  teardown + reseed when the user changes the dropdown. The outer
-  `<Canvas>`, `MapModel`, `<ambientLight>`, and `<MapInstancedMarkers>`
-  are *not* keyed — the GLB stays loaded and the instanced-marker GPU
-  buffers stay alive across mode changes.
+- Add prop `cameraKind: MapModeKind`.
+- Resolve `const mode = useMemo(() => getMapMode(cameraKind), [cameraKind])`.
+- Remove the unconditional `<PerspectiveCamera>` at line 194.
+- Render `<mode.Render>` unconditionally at the same position. The
+  controller inside it handles null `glbCamera/mapScene/mapBounds`
+  gracefully (its seed effect bails on `!glbCamera`; the wheel/raycast
+  handlers bail on `!scene`), and the camera element is always present
+  so r3f has a default camera registered.
+- Inside `{ready && ...}`, render only `<ambientLight>` (when present)
+  and `<MapInstancedMarkers>` — the controller is no longer ready-gated.
+- Add `key={mapUrl}` to `<mode.Render>` so a map switch fully remounts
+  the camera/controller pair and the new GLB gets a fresh seed. Matches
+  today's effective behavior — the `clearedForUrl` block briefly nulls
+  `mapScene`, which unmounts the (currently ready-gated) controller.
+  Without the key the orbit state would persist from the prior map
+  until the next GLB-seed effect overwrites it.
+
+A `cameraKind` change makes React swap component types in `<mode.Render>`
+— the prior camera/controller unmount cleanly, listeners are removed by
+the existing cleanup, the new mode mounts with fresh refs and re-seeds
+from the GLB. No `key={cameraKind}` workaround needed.
 
 ### `MapCell.tsx` changes
 
-- Read `cameraKind`:
+- In the renderer scope, alongside the other option reads
+  (`MapCell.tsx:298-301`):
   ```ts
-  const cameraKind = (options?.cameraKind as CameraKind | undefined) ?? 'perspective'
+  const cameraKind = (options?.cameraKind as MapModeKind | undefined) ?? 'perspective'
   ```
-- Pass `cameraKind={cameraKind}` to `<MapViewer>`.
-- Editor: new "Camera" row in the existing **Map Options** section
-  (`MapCell.tsx:826-844`), modeled after the **Shape** select (`:852-862`).
-  Inside `MapCellEditor`, declare the editor-scope read mirroring the
-  existing `detailTemplate` / `showHoverTooltip` reads at
-  `MapCell.tsx:784-787`:
+  Pass `cameraKind={cameraKind}` to `<MapViewer>`.
+- In `MapCellEditor`, alongside the other editor-scope option reads
+  (`:784-787`):
   ```ts
-  const cameraKind = (mapConfig.options?.cameraKind as CameraKind | undefined) ?? 'perspective'
+  const cameraKind = (mapConfig.options?.cameraKind as MapModeKind | undefined) ?? 'perspective'
   ```
-  Then render the select, populated from the registry so a new adapter
-  appears automatically in the dropdown (OCP at the UI level too):
+  Add a **Camera** row in the "Map Options" section (`:826-844`), modeled
+  after the Shape select:
   ```tsx
   <div className="flex items-center gap-2">
     <label className="text-xs text-theme-text-secondary w-24 shrink-0">Camera</label>
@@ -454,180 +345,224 @@ agnostic and identical across modes.
       onChange={(e) => updateOption('cameraKind', e.target.value)}
       className="bg-app-card border border-theme-border rounded px-2 py-1 text-sm text-theme-text-primary focus:outline-none focus:border-accent-link"
     >
-      {(Object.keys(CAMERA_MODES) as CameraKind[]).map((kind) => (
-        <option key={kind} value={kind}>{CAMERA_KIND_LABELS[kind]}</option>
+      {MAP_MODE_KINDS.map((kind) => (
+        <option key={kind} value={kind}>{MAP_MODE_LABELS[kind]}</option>
       ))}
     </select>
   </div>
   ```
-  `CAMERA_KIND_LABELS` lives in `camera-modes/labels.ts` (the single source
-  for human-readable labels).
-- `createDefaultConfig` (`MapCell.tsx:989-1001`) — leave `cameraKind` out so
-  existing notebooks default to `'perspective'`. New notebooks also get
-  perspective (matches current behavior).
+- Leave `createDefaultConfig` (`:989-1001`) unchanged — saved notebooks
+  and new cells default to `'perspective'` when `cameraKind` is absent.
 
-### File layout
+### `map-camera-math.ts` changes
+
+`panTarget`'s `radius` parameter is replaced by `panSpeed`:
+
+```ts
+// Before
+export function panTarget(target, theta, radius, deltaX, deltaY) {
+  const panSpeed = radius * 0.001
+  // ...
+}
+
+// After
+export function panTarget(target, theta, panSpeed, deltaX, deltaY) {
+  // ...
+}
+```
+
+Callers pass `radius * 0.001` (perspective) or `1 / camera.zoom` (ortho).
+The doc comment loses the "drives pan speed" note on the old `radius`
+parameter and gains one on `panSpeed` instead.
+
+## File Layout
 
 ```
 analytics-web-app/src/components/map/
-  camera-modes/
-    types.ts                 // CameraKind, CameraMode, params
-    perspectiveOrbit.ts      // current behavior, extracted
-    orthographic.ts   // new
-    labels.ts                // CameraKind → human label (single source for editor select)
-    index.ts                 // CAMERA_MODES registry + getCameraMode
-  MapCamera.tsx              // consumes CameraMode prop
-  MapViewer.tsx              // selects CameraElement, passes mode to controller
-  map-camera-math.ts         // unchanged (already adapter-agnostic)
+  modes/
+    types.ts                            // MapMode, MapModeKind, MapModeRenderProps, MAP_MODE_LABELS
+    PerspectiveMode.tsx                 // <PerspectiveCamera> + PerspectiveCameraController
+    OrthographicMode.tsx                // <OrthographicCamera> + OrthographicCameraController
+    PerspectiveCameraController.tsx     // typed against THREE.PerspectiveCamera
+    OrthographicCameraController.tsx    // typed against THREE.OrthographicCamera
+    index.ts                            // MAP_MODES, MAP_MODE_KINDS, getMapMode
+  hooks/
+    useMapOrbitState.ts
+    useMapOrbitPose.ts
+    useMapInputHandlers.ts
+  MapViewer.tsx                         // selects mode, renders <mode.Render>
+  map-camera-math.ts                    // panTarget signature update
+  MapCamera.tsx                         // DELETED
 ```
 
-### How a future mode plugs in (the OCP demonstration)
-
-Adding a hypothetical `orthographic-top-down-locked` mode (phi=0, no orbit —
-the "pure 2D heatmap" feel) once we know we want it:
-
-1. New file `camera-modes/orthographicTopDownLocked.ts` exporting a
-   `CameraMode`. `apply` writes `spherical.phi = 0` before computing the
-   offset (and optionally `spherical.theta = 0`); `zoom` is the ortho
-   variant; `seed` is the ortho variant with a phi-lock. If a control needs
-   to be disabled for this mode, that's the moment to add a flag to
-   `CameraMode` (e.g. `allowsOrbit`) and gate the right-drag handler — the
-   interface evolves only when an actual mode forces it.
-2. Add `'orthographic-top-down-locked': orthographicTopDownLocked` to
-   `CAMERA_MODES`.
-3. Add a label entry in `labels.ts`.
-
-`MapViewer.tsx` and `MapCell.tsx` don't change at all. `MapCamera.tsx` only
-changes if a new control-gating flag is added.
+`MapCamera.tsx` goes away — its logic is split between hooks and the two
+per-mode controllers. Only `MapViewer.tsx:6` imports it today.
 
 ## Implementation Steps
 
-1. **Scaffold the adapter module.** New `camera-modes/types.ts`,
-   `camera-modes/labels.ts`, `camera-modes/index.ts` (with only
-   `perspectiveOrbit` registered initially).
-2. **Extract `perspectiveOrbit`.** Move the perspective intrinsic-copy
-   (`MapCamera.tsx:140-144`), the wheel handler body (`:251-294`), and the
-   useFrame tail (`:406-411`) into `camera-modes/perspectiveOrbit.ts`,
-   preserving every line of behavior. Replace those sites in `MapCamera.tsx`
-   with adapter calls. Wire `key={cameraKind}` in `MapViewer.tsx`.
-   `MapViewer` defaults `cameraKind` to `'perspective'` until Step 4 wires
-   the prop through from `MapCell`, so current callers see no behavior
-   change — this step is a true no-op pure refactor and tests should
-   still pass.
-3. **Add `orthographic.ts`.** Implement `CameraElement` (drei
-   `<OrthographicCamera>`), `seed` (derive `zoom` from GLB frustum, copy
-   `near`/`far`, share orbit-state seed with perspective), `apply` (identical
-   to perspective), `zoom` (cursor-anchored on `camera.zoom`), `snapshot` /
-   `restore`. Register in `index.ts` and `labels.ts`.
-4. **MapCell wiring.** Read `options.cameraKind`, thread to `<MapViewer>`,
-   add the **Camera** select in the editor.
-5. **Tests.** See Testing Strategy below.
-6. **Docs.** Update `mkdocs/docs/web-app/notebooks/cell-types.md` Map section.
+1. **Scaffold the modes module.** Create `modes/types.ts` and
+   `modes/index.ts` registering only `perspectiveMode` initially. No
+   behavior change yet.
+2. **Extract shared hooks.** Move orbit-state setup, per-frame pose, and
+   input handlers from `MapCamera.tsx` into the three hook files. The
+   hooks accept callbacks for the mode-specific bits (`onWheel`,
+   `getPanSpeed`, `getFlyMoveSpeedPerFrame`). At this point
+   `MapCamera.tsx` remains, refactored into a thin wrapper that calls
+   the hooks with perspective-specific callbacks — verifies the
+   extraction is behavior-preserving. Tests still pass against
+   `MapCamera`.
+3. **Build `PerspectiveCameraController` + `PerspectiveMode`.** Move the
+   thin wrapper into `modes/PerspectiveCameraController.tsx`, retyping
+   `cameraRef: RefObject<THREE.PerspectiveCamera>`. Build
+   `modes/PerspectiveMode.tsx`. Delete `MapCamera.tsx`. Update
+   `MapViewer.tsx`:
+   - Add `cameraKind` prop (still defaulted to `'perspective'` until
+     Step 6 wires it through `MapCell`).
+   - Resolve `mode` via `getMapMode(cameraKind)`.
+   - Replace the line-194 `<PerspectiveCamera>` and line-200-207
+     `<MapCameraController>` with a single `<mode.Render key={mapUrl} .../>`.
+   - Drop the controller from the `{ready && ...}` block; keep
+     `<ambientLight>` and `<MapInstancedMarkers>` ready-gated.
+   Pure refactor — behavior preserved end-to-end.
+4. **Update `panTarget`.** Change the signature in `map-camera-math.ts`
+   and the test. Update the perspective controller's pan call site to
+   pass `radius * 0.001` explicitly.
+5. **Add `OrthographicMode` + controller.** Build
+   `modes/OrthographicCameraController.tsx` (GLB seed with null
+   fallback, cursor-anchored wheel, live-from-camera speed math,
+   savedZoom restore on `Z`) and `modes/OrthographicMode.tsx`. Register
+   in `MAP_MODES` and label it in `MAP_MODE_LABELS`.
+6. **Wire `MapCell`.** Read `options.cameraKind`, thread it to
+   `<MapViewer>`. Add the **Camera** select in the editor.
+7. **Tests.** See Testing Strategy.
+8. **Docs.** Update `mkdocs/docs/web-app/notebooks/cell-types.md`.
 
 ## Files to Modify
 
-- `analytics-web-app/src/components/map/camera-modes/types.ts` (new)
-- `analytics-web-app/src/components/map/camera-modes/perspectiveOrbit.ts` (new)
-- `analytics-web-app/src/components/map/camera-modes/orthographic.ts` (new)
-- `analytics-web-app/src/components/map/camera-modes/labels.ts` (new)
-- `analytics-web-app/src/components/map/camera-modes/index.ts` (new)
-- `analytics-web-app/src/components/map/MapCamera.tsx`
+- `analytics-web-app/src/components/map/modes/types.ts` (new)
+- `analytics-web-app/src/components/map/modes/PerspectiveMode.tsx` (new)
+- `analytics-web-app/src/components/map/modes/OrthographicMode.tsx` (new)
+- `analytics-web-app/src/components/map/modes/PerspectiveCameraController.tsx` (new)
+- `analytics-web-app/src/components/map/modes/OrthographicCameraController.tsx` (new)
+- `analytics-web-app/src/components/map/modes/index.ts` (new)
+- `analytics-web-app/src/components/map/hooks/useMapOrbitState.ts` (new)
+- `analytics-web-app/src/components/map/hooks/useMapOrbitPose.ts` (new)
+- `analytics-web-app/src/components/map/hooks/useMapInputHandlers.ts` (new)
+- `analytics-web-app/src/components/map/MapCamera.tsx` (deleted)
 - `analytics-web-app/src/components/map/MapViewer.tsx`
+- `analytics-web-app/src/components/map/map-camera-math.ts`
+- `analytics-web-app/src/components/map/__tests__/map-camera-math.test.ts`
+- `analytics-web-app/src/components/map/__tests__/orthographic-mode.test.ts` (new)
 - `analytics-web-app/src/lib/screen-renderers/cells/MapCell.tsx`
-- `analytics-web-app/src/components/map/__tests__/camera-modes.test.ts` (new)
 - `mkdocs/docs/web-app/notebooks/cell-types.md`
 
 ## Trade-offs
 
-- **Adapter object vs. discriminated union with `switch`.** A `switch
-  (kind)` inside `MapCamera.tsx` would work for two cases but each new mode
-  reopens the controller — the very OCP violation we're trying to avoid. The
-  adapter object closes the controller; the registry is the single place
-  modes are enumerated.
-- **Adapter mutates `orbit` in place vs. returning a new state.** Mutation
-  matches the existing controller idiom (everything is a ref). A pure-return
-  shape would force the controller to write the return back into refs, which
-  is just ceremony given there's exactly one consumer.
-- **Mode swap remount via `key={cameraKind}` vs. preserving controller
-  state across switches.** Remount is the simpler correctness guarantee:
-  `makeDefault` flips, the controller re-runs its seed effect, and saved-view
-  refs are fresh. Preserving state would require manually tearing down DOM
-  listeners and re-seeding from the new camera type — extra complexity for a
-  user action that's already a deliberate UI choice. The GLB stays cached
-  (drei caches by URL); the visible "reframe" is the intended feedback.
-- **One ortho variant with full controls vs. a locked top-down mode.** The
-  issue floats a locked top-down (no theta/phi, pan + zoom only) as the
-  "right default for heatmaps." We're shipping one ortho variant with the
-  same controls as perspective first and watching for usability issues —
-  cheaper to add a locked sub-variant later (a new adapter file) than to
-  guess control gating upfront. The OCP seam means that follow-up costs one
-  file and one registry line, not a refactor.
-- **`OrthographicCamera` from drei vs. raw THREE.** Drei's variant auto-fits
-  the frustum to the canvas viewport and reacts to resize — saving us a
-  resize observer. The cost is a drei dependency we already use for
+- **Mode owns both vs. one controller + adapter.** Considered an adapter
+  pattern where one shared controller takes a `CameraMode` object with
+  `seed/zoom/snapshot/effectiveRadius/...` methods. The divergences
+  between modes (camera API, seed math, zoom mutation target, snapshot
+  fields, speed quantity) are deep enough that the adapter ended up with
+  leaky abstractions — notably an `effectiveRadius` that returned
+  perspective radius for one mode and a synthetic
+  `radiusAtSeed * seedZoom / camera.zoom` for the other, with the
+  controller forced to receive `THREE.Camera` and cast at every usage
+  site. Mode-owns-both produces self-contained typed controllers, no
+  casts, no shared interface to maintain. The interface that does exist
+  (`MapMode`) is just `{ kind, Render }` — minimal and stable.
+- **Per-mode controllers vs. one branched controller.** Considered a
+  single controller with `if (cameraKind === ...)` at each divergent
+  site. Smaller in lines but reopens the controller for every new mode
+  and forces both modes' state to coexist. Per-mode controllers are
+  larger but each reads end-to-end for one mode.
+- **Ortho speed math from live camera state vs. captured seed state.**
+  Considered storing `seedZoom` and `radiusAtSeed` at seed time and
+  scaling pan/fly speeds by their ratio against the perspective
+  baseline. Simpler: compute `panSpeed = 1 / camera.zoom` and
+  `flySpeed = (top - bottom) / zoom * 0.5` directly from current camera
+  intrinsics — both auto-scale correctly as the user zooms, no captured
+  state needed. The numbers come within ~15% of perspective at the
+  seeded framing (close enough to feel consistent across modes).
+- **Mode swap loses orbit framing.** A `perspective` ↔ `orthographic`
+  swap re-seeds from the GLB; target/spherical are not preserved.
+  Considered lifting orbit state to `MapViewer` so it survives the
+  swap, but: mode swaps are rare (users pick a projection for the
+  visualization and stay there), the swap is a deliberate UI action
+  with a reframe expectation, and preserving framing across a
+  projection change can look broken anyway (the same `radius` produces
+  very different on-screen size in the two modes). Re-seeding is the
+  simpler contract and not worth optimizing.
+- **Drei `<OrthographicCamera>` vs. raw THREE.** Drei auto-fits
+  `left/right/top/bottom` to the canvas viewport and reacts to resize,
+  saving a manual resize observer. Already a dependency for
   `<PerspectiveCamera>` and `useGLTF`.
-- **Single `zoomAnchorTarget` helper across modes.** Perspective passes
-  `s = newRadius / oldRadius` (scaling the orbit radius); ortho passes
-  `s = 1 / m` (scaling the inverse zoom multiplier). The math is identical:
-  in both cases, `s` is the factor that the world-units-per-pixel changes
-  by, and translating `target` toward `anchor` by `(1 - s)` keeps the cursor
-  point fixed on screen. Kept the helper as-is.
+- **`panTarget` signature change.** Considered keeping `radius` and
+  adding an opt-in override. Two ways to call the same function is the
+  worst of both worlds. Replacing the parameter is one line per caller.
+- **One ortho variant with full controls vs. a locked top-down mode.**
+  Issue floats a locked top-down (no phi/theta, pan + zoom only) as the
+  "right default for heatmaps." Shipping one ortho variant with full
+  controls — nothing forbids a user who only wants pan+zoom from
+  right-dragging to `phi=0` once and using only left-drag and
+  Ctrl-wheel afterwards (the controller already allows `phi=0`). A
+  locked variant would only prevent accidental re-tilts — a small UX
+  nicety, not a feature gap. If real usability data ever justifies it,
+  the mode-as-component shape makes it a third file + one registry
+  line.
 
 ## Documentation
 
 `mkdocs/docs/web-app/notebooks/cell-types.md`:
 
-- **Options table** (`:239-244`): add a `cameraKind` row —
+- **Options table** (around `:239-244`): add a `cameraKind` row.
   ```
   | `cameraKind` | `'perspective'` \| `'orthographic'` | `'perspective'` | Camera projection. Orthographic removes perspective foreshortening — better for flat heatmap-style data. Controls are identical in both modes. |
   ```
-- **Camera controls table** (`:336-348`): no row changes — all controls work
-  identically in both modes. Add a one-line note above or below the table
-  stating that the same controls apply in both perspective and orthographic
-  modes.
+- **Camera controls** table (`:336-348`): no row changes — all controls
+  work identically. Add one sentence above the table noting that the
+  same controls apply in both perspective and orthographic modes.
 
 ## Testing Strategy
 
-- **`camera-modes.test.ts` (new):**
-  - Construct each adapter and assert `kind` and the shape of `CameraElement`
-    (it's a function). No mounting required.
-  - **Ortho seed derivation.** Build a fake `glbCamera` (just `{ fov, near,
-    far }` shape) + a fake orthographic camera with a known viewport height,
-    call `seed`, assert `camera.zoom` matches the `vFov`/`radius` formula
-    within tolerance.
-  - **Ortho zoom anchor.** With a hand-built `target`/`anchor`/`camera.zoom`,
-    call `zoom` with a synthetic `WheelEvent` and assert the anchor's world
-    point projects to the same screen position before and after (within a
-    small epsilon). Uses `camera.updateProjectionMatrix` + `project` from
-    THREE — no DOM needed; pass a fake `domElement` rect.
-- **`map-camera-math.test.ts`:** unchanged — math helpers are untouched.
-- **`MapViewer.test.tsx`:** unchanged — the existing file tests the pure
-  `cameraBasisFromSpherical` helper and doesn't mount a Canvas. Adapter-level
-  guarantees (including the ortho `CameraElement` being an
-  `OrthographicCamera`) are covered by `camera-modes.test.ts` without
-  standing up r3f/WebGL/GLTFLoader mocks.
-- **Full:** `yarn lint`, `yarn type-check`, `yarn test` from
+- **`orthographic-mode.test.ts`** (new) — covers ortho-specific math
+  without mounting r3f. The seed and zoom-anchor functions live as pure
+  helpers inside `OrthographicCameraController.tsx` (exported for
+  testing) so tests can call them with fake camera objects.
+  - **Seed zoom from GLB.** Fake `glbCamera = { fov, near, far }`, fake
+    ortho camera with known `top - bottom = H_px`, call
+    `computeOrthoSeedZoom(glbCamera, radius, H_px)`. Assert
+    `zoom ≈ H_px / (2 * radius * tan(degToRad(fov)/2))`.
+  - **Seed zoom with `glbCamera === null`.** Same assertion with
+    `vFov = 60°`.
+  - **Wheel zoom anchor stability.** With hand-built
+    `target / anchor / camera.zoom`, apply the ortho zoom step. Assert
+    the anchor's world point projects to the same NDC coordinate before
+    and after, within epsilon. Uses `updateProjectionMatrix` + `project`
+    on the fake ortho camera; no DOM needed (synthetic rect).
+- **`map-camera-math.test.ts`** — update existing `panTarget` calls to
+  the new `panSpeed` signature. Assertions are unchanged in spirit; the
+  test inputs swap `radius` for `radius * 0.001`.
+- **`MapViewer.test.tsx`** — unchanged. Existing assertions exercise
+  pure helpers, not Canvas mounting.
+- **Full local suite**: `yarn lint`, `yarn type-check`, `yarn test` from
   `analytics-web-app/`.
-- **Manual:**
-  - Switch between modes in the editor — view re-seeds, no console errors,
-    no stuck cursor.
-  - In ortho: left-drag pans, right-drag orbits, Ctrl-wheel cursor-anchored
-    zoom feels right, WASDQE flies, `Z` resets to the seeded view.
-  - In perspective: everything works exactly as it did before this change
-    (regression check).
-  - Two Map cells on the same page with different `cameraKind` values render
-    independently.
-  - **Usability watch (no acceptance gate — just observations to log for
-    future tuning):** does right-drag orbit in ortho feel disorienting?
-    Does fly-speed feel wrong after zooming way in or out? These are the
-    signals that would justify either a locked top-down variant or a
-    fly-speed tweak.
+- **Manual checks**:
+  - Switch between modes in the editor; view re-seeds cleanly, no
+    console errors, cursor isn't stuck.
+  - In ortho: left-drag pans, right-drag orbits, Ctrl-wheel
+    cursor-anchored zoom feels right, WASDQE flies, `Z` resets to
+    seeded view including the seeded `camera.zoom`.
+  - In perspective: behavior matches pre-change (regression).
+  - Two Map cells on the same page with different `cameraKind` values
+    render independently.
+  - GLB without an embedded camera: ortho seed produces a sensible
+    initial framing via the 60° fallback rather than drei's pixel-sized
+    default.
+  - **Usability watch (no acceptance gate):** does right-drag orbit in
+    ortho feel disorienting? Does fly-speed feel wrong after extreme
+    zoom-in or zoom-out? Notes feed into the decision on a locked
+    top-down sub-variant or fly-speed tweak.
 
 ## Open Questions
 
-None blocking — direction decisions resolved:
-
-- **Controls** are identical in both modes; we'll watch for usability issues
-  rather than gate inputs preemptively.
-- **Default** stays `'perspective'` for new Map cells (saved notebooks
-  unchanged; new cells match prior behavior).
+None.
