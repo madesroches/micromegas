@@ -267,13 +267,19 @@ stroke: (u, sidx) => {
 }
 ```
 
-`normalizeStops` maps each point's x to `clamp((valToPos(x,'x',true) - left) / width, 0, 1)`,
-**sorts ascending and dedupes** offsets (`addColorStop` throws on out-of-range
-offsets and renders oddly on unsorted/duplicate ones). The same gradient is
-applied to `fill` so the area under the line is tinted consistently.
+`normalizeStops` maps each point's x to `clamp((valToPos(xScaleVal,'x',true) - left) / width, 0, 1)`,
+where `xScaleVal = xAxisMode === 'time' ? point.x / 1000 : point.x` — the same
+millisecond→second transform applied to the x values actually fed to uPlot
+(`XYChart.tsx:478,493,652-653`). It then **sorts ascending and dedupes** offsets
+(`addColorStop` throws on out-of-range offsets and renders oddly on
+unsorted/duplicate ones). The same gradient is applied to `fill` so the area
+under the line is tinted consistently.
 
-x positions are unaffected by the y conversion-factor subtlety (only y is
-pre-scaled), so no extra handling is needed for gradients.
+`ChartPoint.x` carries the raw millisecond value from `timestampToMs`
+(`arrow-utils.ts:477`), but in time mode uPlot's x scale is calibrated in
+seconds; passing raw `point.x` to `valToPos` would misplace every stop by 1000x.
+The y conversion-factor subtlety is separate (only y is pre-scaled), so the x
+transform above is the only x-side handling needed.
 
 **Large-N guard.** Stop count equals point count; thousands of stops per redraw
 is slow and some browsers cap stops. When a series exceeds a threshold (e.g.
