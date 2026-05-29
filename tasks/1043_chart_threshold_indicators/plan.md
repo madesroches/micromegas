@@ -132,7 +132,9 @@ integer cells through `coerceCellToU32` first. Then add a single
 `cellColorToCss(value, kind)` helper in the shared module that mirrors the map's
 per-kind decode (`overlay.ts:259-423`): `integer → packedRgbaToCss(coerceCellToU32(value))`,
 `string → rgbaFromHex(value)` then `packedRgbaToCss` (pass-through `#…`),
-`binary → read the 4 R,G,B,A bytes`. This is a small, mechanical relocation that
+`binary → return the `#rrggbbaa` CSS string built from the 4 R,G,B,A bytes
+(each byte formatted as 2-hex and concatenated)`. All three kinds return a CSS
+string. This is a small, mechanical relocation that
 keeps no behavior change for the map and gives both the map and the chart one
 source of truth for all three color-column kinds.
 
@@ -273,7 +275,16 @@ uPlot.paths.bars!({
 ```
 
 `colorArrayForSeries[sidx]` is built from the series points: `point.color ??
-seriesColor`, indexed by data position. When no point in a series carries a
+seriesColor`, indexed by data position. **In the single-series path** the uPlot
+data index is the (sorted) point index directly. **In the multi-series path**
+each uPlot series is a union-X-aligned array with `null` at missing positions
+(`XYChart.tsx:482-498`), and `disp.fill.values(u, sidx, i0, i1)` returns facet
+values aligned to those same union-X data indices (`uPlot.d.ts:733`) — not the
+original per-series sorted point order. So the multi-series color array must be
+built aligned to the union-X array, exactly as `yArr` is built at
+`XYChart.tsx:491-496`: walk the union-X positions, use each covered point's
+`point.color ?? seriesColor`, and use `seriesColor` as the fallback at union
+positions this series does not cover. When no point in a series carries a
 color, skip `disp` entirely and keep the existing flat `fill`/`stroke` (avoids
 the per-bar code path when unused).
 
@@ -407,8 +418,11 @@ functions reference.
    `hexFromRgba`, and `coerceCellToU32` from `components/map/overlay.ts` into it,
    add `packedRgbaToCss` (alias of `hexFromRgba`) and `cellColorToCss(value,
    kind)` (integer → `packedRgbaToCss(coerceCellToU32(value))`; string →
-   `rgbaFromHex` then `packedRgbaToCss`; binary → read 4 R,G,B,A bytes). Re-export
-   from `overlay.ts` (so the map keeps using `coerceCellToU32`).
+   `rgbaFromHex` then `packedRgbaToCss`; binary → return `#rrggbbaa` built from
+   the 4 R,G,B,A bytes, each formatted as 2-hex and concatenated — so all three
+   kinds return a CSS string). In `overlay.ts`, `import { coerceCellToU32 }` from
+   `color-utils.ts` (so `buildOverlay` keeps using it) and re-export only the
+   helpers MapCell imports externally (`rgbaFromHex`, `hexFromRgba`).
 2. Update existing map imports if any reference the originals directly.
 
 ### Phase 2 — Color column extraction
@@ -455,7 +469,11 @@ functions reference.
    `draw` hook with scale-name + conversion-factor resolution as above.
 8. Build per-series color arrays from points. For bars, wire
    `disp.fill`/`disp.stroke` in both single- and multi-series paths; skip
-   `disp` when no colors present. For lines, supply a `stroke`/`fill` function
+   `disp` when no colors present. **In the multi-series path, build the color
+   array aligned to the union-X array (same construction as `yArr` at
+   `XYChart.tsx:491-496`), using `seriesColor` as the fallback at union
+   positions the series does not cover** — `disp` values are indexed by uPlot
+   data position (union-X), not the original sorted point order. For lines, supply a `stroke`/`fill` function
    returning a `CanvasGradient` built from clamped+sorted+deduped per-point
    stops (with the large-N downsampling guard); return the flat `seriesColor`
    (the user-chosen series color) when the series carries no per-row colors.
@@ -541,7 +559,11 @@ functions reference.
   per-row `disp` colors when present and fall back otherwise; line gradient
   stops are clamped to `[0,1]`, sorted, and downsampled past the large-N
   threshold (unit-test `normalizeStops` directly — it's pure and the highest-risk
-  piece). Mock uPlot as in existing chart tests.
+  piece). Note the existing chart-adjacent test (`xychart-axis.test.ts`) only
+  exercises pure axis-config closures with a stubbed `u = undefined` and never
+  mocks a uPlot instance, so there is no precedent to follow: prefer scoping
+  assertions to the pure helpers (`normalizeStops`, `formatAxisValue`); any
+  uPlot-instance mocking needed for the plugin/`disp` tests is new.
 - **Manual**: a benchmark-style bar query with `CASE … rgba() AS color` plus a
   budget reference line — verify green/red bars and a dashed crimson line at
   the budget; switch to line mode and confirm the stroke interpolates between
