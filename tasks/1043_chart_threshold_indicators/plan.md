@@ -69,6 +69,16 @@ own `color` column. See [Trade-offs](#trade-offs).
   build `{ x, y }` point arrays. Points are **sorted** by x in time/numeric
   mode (`arrow-utils.ts:494,339`), so any per-row color must travel *with* the
   point, not in a parallel array.
+- `extractChartData` has a **second caller besides `ChartCell`**:
+  `MetricsRenderer.tsx:145` (`analytics-web-app/src/lib/screen-renderers/MetricsRenderer.tsx`).
+  It renders the single-series `data` prop and is unaffected by the additive
+  `ChartPoint.color` field, but relaxing the "exactly 2 columns" gate inside
+  `validateChartColumns`/`extractChartData` also changes its behavior: a metrics
+  query that aliases a column `color` (case-insensitive) would shift from
+  *erroring* to being *accepted* (the third column consumed as the color
+  channel). This is the intended, consistent behavior — `color` is a reserved
+  channel everywhere `extractChartData` is used — and `MetricsRenderer` simply
+  ignores the decoded per-row colors since it consumes only `data`.
 - `ChartSeriesData` (`arrow-utils.ts:219-223`) is the series shape consumed by
   `XYChart`; its `data` is `{ x: number; y: number }[]`.
 - `isNumericType` / dictionary unwrap helpers already exist for type checks.
@@ -168,10 +178,30 @@ existing `xType`/`yType`, which callers still use for
 `detectXAxisMode`/`timestampToMs`, instead of assuming columns 0/1.
 `extractChartData` and `extractMultiSeriesChartData` read the color column per
 row, decode via `cellColorToCss(value, colorColumnKind)` (which handles the
-bigint/string/binary cases), and set `point.color`. Note
-`extractMultiSeriesChartData`'s zero-row branch (`arrow-utils.ts:255-268`) does
-its own column check and must be relaxed alongside `validateChartColumns`. **The
-non-zero-row branch (`arrow-utils.ts:274-281`) must also stop reading
+bigint/string/binary cases), and set `point.color`.
+
+To resolve X/Y/color **without requiring rows**, factor the color-aware column
+resolution out of `validateChartColumns` into a pure helper
+`resolveChartColumns(fields)` that takes the schema field list and returns
+`{ xColumnName, yColumnName, xType, yType, colorColumnName?, colorColumnKind? }`
+(the color column is the `color`-named field; X/Y are the first two non-color
+fields in order). `validateChartColumns` calls this helper after its row/column
+count checks; the zero-row branch can call it directly.
+
+Note `extractMultiSeriesChartData`'s zero-row branch (`arrow-utils.ts:255-268`)
+does its own column check and **must use `resolveChartColumns(fields)` instead
+of the positional `fields[0]`/`fields[1]` name+type reads** — relaxing only its
+`fields.length !== 2` count check is not enough: if a zero-row query's `color`
+column is not last, `fields[0]`/`fields[1]` would pick the color column as X/Y,
+and because `validations[0]` drives the cross-series x-axis-mode agreement
+(`arrow-utils.ts:285`) and `xColumnName = validations[0].xColumnName`
+(`arrow-utils.ts:295`), the whole chart's x resolution would be wrong.
+Concretely, replace the branch's `xType: fields[0].type`,
+`yType: fields[1].type`, `xColumnName: fields[0].name`,
+`yColumnName: fields[1].name`, and `detectXAxisMode(fields[0].type)` with the
+resolved values from `resolveChartColumns(fields)` (and
+`detectXAxisMode(resolved.xType)`). **The non-zero-row branch
+(`arrow-utils.ts:274-281`) must likewise stop reading
 `fields[0].name`/`fields[1].name` and instead consume the resolved
 `v.xColumnName`/`v.yColumnName` from `validateChartColumns`** (and
 `xColumnName = validations[0].xColumnName` at `arrow-utils.ts:295` follows from
@@ -207,11 +237,18 @@ supplies a descriptive `name` (e.g. "frame budget"); the **value portion of the
 label is computed** (see below) so it always matches the axis. `unit` doubles as
 the scale selector, so there is no separate scale field.
 
-**Macro resolution.** `name`, `value`, and `unit` support macros (`$variable`,
-`$cell.column`, time-range, etc.). `ChartCell` resolves them before passing to
-`XYChart`, mirroring `ChartCell.tsx:188-192`: `name` → `substituteMacros(...)`;
-`value` → if a string, `substituteMacros(...)` then `Number(...)`; if a number,
-used directly. Lines whose value resolves to NaN are dropped.
+**Macro resolution.** `name`, `value`, `unit`, and `color` support macros
+(`$variable`, `$cell.column`, time-range, etc.). `ChartCell` resolves them
+before passing to `XYChart`, mirroring `ChartCell.tsx:188-192`. `name` and
+`unit` are SQL-context-free display strings → `substituteMacros(...)`. `value`
+and `color`, however, are parsed to a number / used as a CSS color, **not**
+embedded in SQL, so they must use `substituteMacrosRaw(...)`
+(`macro-substitution.ts:77`, the non-SQL-escaping variant documented for
+"a macro-driven scalar into a number or hex color") — the SQL-escaping
+`substituteMacros` would corrupt a numeric/hex value. So: `value` → if a string,
+`substituteMacrosRaw(...)` then `Number(...)`; if a number, used directly;
+`color` → if a string, `substituteMacrosRaw(...)`. Lines whose value resolves to
+NaN are dropped.
 
 **Macro validation (editor).** The editor already validates macros in each
 query's `sql`/`unit`/`label` (`ChartCell.tsx:293-309`). Extend
@@ -274,8 +311,15 @@ uPlot.paths.bars!({
 })
 ```
 
-`colorArrayForSeries[sidx]` is built from the series points: `point.color ??
-seriesColor`, indexed by data position. **In the single-series path** the uPlot
+`colorArrayForSeries[sidx]` is built from the series points: per entry, a
+**decoded SQL color** (`point.color`) is used at its full alpha, while the
+**`seriesColor` fallback** (for points with no color) is passed through
+`hexToRgba(seriesColor, 0.6)` to match the default bar fill
+(`XYChart.tsx:576,704` use `hexToRgba(color, 0.6)`). SQL-driven per-row colors
+are full-alpha by design (the `color` UDFs carry their own alpha channel); only
+the palette fallback gets the 0.6 fill alpha so non-colored bars in a partially
+colored series render identically to the all-palette case. Entries are indexed
+by data position. **In the single-series path** the uPlot
 data index is the (sorted) point index directly. **In the multi-series path**
 each uPlot series is a union-X-aligned array with `null` at missing positions
 (`XYChart.tsx:482-498`), and `disp.fill.values(u, sidx, i0, i1)` returns facet
@@ -429,16 +473,25 @@ functions reference.
 2. Update existing map imports if any reference the originals directly.
 
 ### Phase 2 — Color column extraction
-3. `arrow-utils.ts`: introduce `ChartPoint`; relax `validateChartColumns` to
-   detect an optional `color` column, classify its kind
+3. `arrow-utils.ts`: introduce `ChartPoint`; factor the color-aware column
+   resolution into a pure `resolveChartColumns(fields)` helper that detects an
+   optional `color` column, classifies its kind
    (`'integer' | 'string' | 'binary'` via `isIntegerType`/`isStringType`/`isBinaryType`
-   on the dictionary-unwrapped type, mirroring `overlay.ts:259-286`), and return
-   the resolved column names + `colorColumnKind` *alongside* the existing
-   `xType`/`yType` (callers still need the types for
-   `detectXAxisMode`/`timestampToMs`). Also relax the zero-row branch in
+   on the dictionary-unwrapped type, mirroring `overlay.ts:259-286`), and
+   returns the resolved `xColumnName`/`yColumnName`/`xType`/`yType` (first two
+   non-color fields) + `colorColumnName`/`colorColumnKind`. `validateChartColumns`
+   calls it after its count checks and returns the same resolved fields
+   *alongside* the existing `xType`/`yType` (callers still need the types for
+   `detectXAxisMode`/`timestampToMs`). Relax the zero-row branch in
    `extractMultiSeriesChartData` (`arrow-utils.ts:255-268`), which has its own
    hard-coded `fields.length !== 2` check and never calls `validateChartColumns`
-   — otherwise a 0-row query that selects a `color` column (3 columns) errors.
+   — both relax the count check (a 0-row query that selects a `color` column has
+   3 columns and would otherwise error) **and replace its positional
+   `fields[0]`/`fields[1]` name+type reads (lines 262-266) with
+   `resolveChartColumns(fields)`** (using `detectXAxisMode(resolved.xType)`), so
+   a 0-row query whose `color` column is not last does not pick the color column
+   as X — which would otherwise corrupt the cross-series x-axis-mode agreement
+   and `xColumnName` (`arrow-utils.ts:285,295`, both driven by `validations[0]`).
    In the non-zero-row branch (`arrow-utils.ts:274-281`), replace
    `fields[0].name`/`fields[1].name` with the resolved `v.xColumnName`/
    `v.yColumnName` from `validateChartColumns` so X/Y resolve correctly when
@@ -506,6 +559,9 @@ functions reference.
 - `analytics-web-app/src/lib/arrow-utils.ts`
 - `analytics-web-app/src/components/XYChart.tsx`
 - `analytics-web-app/src/lib/screen-renderers/cells/ChartCell.tsx`
+- `analytics-web-app/src/lib/screen-renderers/MetricsRenderer.tsx` (no code
+  change required — it consumes only `ChartSeriesData.data`; listed because it
+  is the other `extractChartData` caller and inherits the relaxed column gate)
 - `mkdocs/docs/web-app/notebooks/cell-types.md`
 - Tests: `analytics-web-app/src/lib/__tests__/arrow-utils.test.ts`,
   new `color-utils.test.ts`, and `XYChart`/`ChartCell` tests as applicable.
@@ -558,8 +614,10 @@ functions reference.
 
 - **Unit (`arrow-utils`)**: 3-column extraction sets `point.color`; color
   survives x-sort; integer `u32` and `#rrggbbaa` decode correctly; missing/null
-  color → undefined; 2-column path unchanged; non-color extra column still
-  errors.
+  color → undefined; 2-column path unchanged; a non-`color` extra column still
+  errors; a `color`-named third column is accepted (consumed as the color
+  channel) — this case also covers `MetricsRenderer`'s relaxed gate, which now
+  accepts (rather than errors on) a metrics query aliasing a `color` column.
 - **Unit (`color-utils`)**: round-trip `rgbaFromHex`/`packedRgbaToCss`; alpha
   preserved; map re-exports still resolve.
 - **Component (`XYChart`)**: reference-line plugin computes the right `valToPos`
