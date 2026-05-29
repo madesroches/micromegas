@@ -113,16 +113,28 @@ own `color` column. See [Trade-offs](#trade-offs).
 `color` (case-insensitive) is the color channel. The X and Y axes are the
 first two *non-color* columns, in order. When no `color` column is present,
 the current "exactly 2 columns" rule still applies (back-compat). The color
-column must be an integer type (packed `u32`, matching the map and the color
-UDFs); a leading-`#` hex string is also accepted as a convenience.
+column accepts the **same three kinds the map already accepts** (matching the
+packed-RGBA convention and color UDFs): an **integer** type (packed `u32` —
+note Int64/UInt64 arrive as JS `bigint`, so it must be coerced, not bit-shifted
+directly), a **string** (`#rrggbb`/`#rrggbbaa`), or a **4-byte binary**
+(DataFusion parses `0xrrggbbaa` SQL literals as Binary, not Int). The canonical
+`rgba()`/`color_scale()` UDFs return UInt32, which surfaces as a JS `number`.
 
-**Decode helper (shared).** Add `packedRgbaToCss(u32): string` returning an
-`#rrggbbaa` string. To keep the chart core decoupled from the map module,
-move `rgbaFromHex`/`hexFromRgba` into a new `analytics-web-app/src/lib/color-utils.ts`
-and re-export them from `overlay.ts` for back-compat. `packedRgbaToCss` is
-then `hexFromRgba` (renamed/aliased) living in the shared module. This is a
-small, mechanical relocation — no behavior change — and gives both the map and
-the chart one source of truth.
+**Decode helper (shared).** To keep the chart core decoupled from the map
+module, move the map's color primitives into a new
+`analytics-web-app/src/lib/color-utils.ts` and re-export them from `overlay.ts`
+for back-compat: `rgbaFromHex`, `hexFromRgba`, and `coerceCellToU32` (the
+`overlay.ts:196-201` helper that masks `value & 0xffffffffn` for `bigint` and
+otherwise does `value >>> 0`). Add `packedRgbaToCss(u32): string` = `hexFromRgba`
+(renamed/aliased). Crucially, do **not** feed a raw cell straight to
+`hexFromRgba` (its `rgba >>> 0` throws a `TypeError` on a `bigint`); coerce
+integer cells through `coerceCellToU32` first. Then add a single
+`cellColorToCss(value, kind)` helper in the shared module that mirrors the map's
+per-kind decode (`overlay.ts:259-423`): `integer → packedRgbaToCss(coerceCellToU32(value))`,
+`string → rgbaFromHex(value)` then `packedRgbaToCss` (pass-through `#…`),
+`binary → read the 4 R,G,B,A bytes`. This is a small, mechanical relocation that
+keeps no behavior change for the map and gives both the map and the chart one
+source of truth for all three color-column kinds.
 
 **Type change.** Extend the chart point shape with an optional color:
 
@@ -146,13 +158,26 @@ export interface ChartSeriesData {
 is additive so existing call sites compile unchanged.)
 
 **Extraction.** In `validateChartColumns`, return the resolved
-`{ xColumnName, yColumnName, colorColumnName? }` (keeping the existing
-`xType`/`yType`, which callers still use for `detectXAxisMode`/`timestampToMs`)
-instead of assuming columns 0/1. `extractChartData` and
-`extractMultiSeriesChartData` read the color column per row, decode via
-`packedRgbaToCss` (or pass through a `#…` string), and set `point.color`. Note
+`{ xColumnName, yColumnName, colorColumnName?, colorColumnKind? }` — where
+`colorColumnKind` is `'integer' | 'string' | 'binary'`, detected with the same
+`isIntegerType`/`isStringType`/`isBinaryType` checks the map uses
+(`overlay.ts:259-286`), over the dictionary-unwrapped field type — keeping the
+existing `xType`/`yType`, which callers still use for
+`detectXAxisMode`/`timestampToMs`, instead of assuming columns 0/1.
+`extractChartData` and `extractMultiSeriesChartData` read the color column per
+row, decode via `cellColorToCss(value, colorColumnKind)` (which handles the
+bigint/string/binary cases), and set `point.color`. Note
 `extractMultiSeriesChartData`'s zero-row branch (`arrow-utils.ts:255-268`) does
-its own column check and must be relaxed alongside `validateChartColumns`. Null/invalid color → leave `point.color` undefined (falls back
+its own column check and must be relaxed alongside `validateChartColumns`. **The
+non-zero-row branch (`arrow-utils.ts:274-281`) must also stop reading
+`fields[0].name`/`fields[1].name` and instead consume the resolved
+`v.xColumnName`/`v.yColumnName` from `validateChartColumns`** (and
+`xColumnName = validations[0].xColumnName` at `arrow-utils.ts:295` follows from
+that) — otherwise, when `color` is not the last column, X/Y are mislabeled and
+mis-extracted, defeating the order-independent detection. The categorical
+second-pass remap loop (`arrow-utils.ts:374-394`) already reads `v.xColumnName`/
+`v.yColumnName`, so it stays correct once the validations carry resolved names.
+Null/invalid color → leave `point.color` undefined (falls back
 to series color). Color travels with the point through the existing sort. Note
 the multi-series **categorical** path builds its data in two passes: the first
 loop pushes placeholder `{x:0,y}` points, then the categorical block rebuilds
@@ -378,20 +403,32 @@ functions reference.
 ## Implementation Steps
 
 ### Phase 1 — Shared color helper
-1. Create `analytics-web-app/src/lib/color-utils.ts`; move `rgbaFromHex` and
-   `hexFromRgba` from `components/map/overlay.ts` into it, add
-   `packedRgbaToCss` (alias of `hexFromRgba`). Re-export from `overlay.ts`.
+1. Create `analytics-web-app/src/lib/color-utils.ts`; move `rgbaFromHex`,
+   `hexFromRgba`, and `coerceCellToU32` from `components/map/overlay.ts` into it,
+   add `packedRgbaToCss` (alias of `hexFromRgba`) and `cellColorToCss(value,
+   kind)` (integer → `packedRgbaToCss(coerceCellToU32(value))`; string →
+   `rgbaFromHex` then `packedRgbaToCss`; binary → read 4 R,G,B,A bytes). Re-export
+   from `overlay.ts` (so the map keeps using `coerceCellToU32`).
 2. Update existing map imports if any reference the originals directly.
 
 ### Phase 2 — Color column extraction
 3. `arrow-utils.ts`: introduce `ChartPoint`; relax `validateChartColumns` to
-   detect an optional `color` column and return resolved column names
-   *alongside* the existing `xType`/`yType` (callers still need the types for
+   detect an optional `color` column, classify its kind
+   (`'integer' | 'string' | 'binary'` via `isIntegerType`/`isStringType`/`isBinaryType`
+   on the dictionary-unwrapped type, mirroring `overlay.ts:259-286`), and return
+   the resolved column names + `colorColumnKind` *alongside* the existing
+   `xType`/`yType` (callers still need the types for
    `detectXAxisMode`/`timestampToMs`). Also relax the zero-row branch in
    `extractMultiSeriesChartData` (`arrow-utils.ts:255-268`), which has its own
    hard-coded `fields.length !== 2` check and never calls `validateChartColumns`
    — otherwise a 0-row query that selects a `color` column (3 columns) errors.
-4. Decode `point.color` in `extractChartData` and `extractMultiSeriesChartData`
+   In the non-zero-row branch (`arrow-utils.ts:274-281`), replace
+   `fields[0].name`/`fields[1].name` with the resolved `v.xColumnName`/
+   `v.yColumnName` from `validateChartColumns` so X/Y resolve correctly when
+   `color` is not the last column (the categorical second-pass loop already uses
+   `v.xColumnName`/`v.yColumnName`).
+4. Decode `point.color` via `cellColorToCss(value, colorColumnKind)` in
+   `extractChartData` and `extractMultiSeriesChartData`
    (all extraction branches: categorical + time/numeric, single + multi). For
    the multi-series categorical path, decode in the second remap loop
    (`arrow-utils.ts:374-394`) where `seriesData` is rebuilt — not the first
