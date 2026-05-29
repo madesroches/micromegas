@@ -420,9 +420,12 @@ functions reference.
    kind)` (integer → `packedRgbaToCss(coerceCellToU32(value))`; string →
    `rgbaFromHex` then `packedRgbaToCss`; binary → return `#rrggbbaa` built from
    the 4 R,G,B,A bytes, each formatted as 2-hex and concatenated — so all three
-   kinds return a CSS string). In `overlay.ts`, `import { coerceCellToU32 }` from
-   `color-utils.ts` (so `buildOverlay` keeps using it) and re-export only the
-   helpers MapCell imports externally (`rgbaFromHex`, `hexFromRgba`).
+   kinds return a CSS string). In `overlay.ts`, `import { coerceCellToU32,
+   rgbaFromHex }` from `color-utils.ts` (both are called internally —
+   `coerceCellToU32` in `buildOverlay`, `rgbaFromHex` at lines 399 and 529 — and
+   a bare re-export creates no local binding) and re-export the helpers MapCell
+   imports externally (`rgbaFromHex`, `hexFromRgba`). `hexFromRgba` has no
+   internal use, so it can be a pure re-export.
 2. Update existing map imports if any reference the originals directly.
 
 ### Phase 2 — Color column extraction
@@ -441,6 +444,11 @@ functions reference.
    `v.yColumnName` from `validateChartColumns` so X/Y resolve correctly when
    `color` is not the last column (the categorical second-pass loop already uses
    `v.xColumnName`/`v.yColumnName`).
+   In the single-series `extractChartData`, replace the positional
+   `xColumnName = fields[0].name`/`yColumnName = fields[1].name`
+   (`arrow-utils.ts:421-423`, used by both the time/numeric and categorical
+   branches) with the resolved `xColumnName`/`yColumnName` returned by
+   `validateChartColumns`, so X/Y resolve correctly when `color` is column 0 or 1.
 4. Decode `point.color` via `cellColorToCss(value, colorColumnKind)` in
    `extractChartData` and `extractMultiSeriesChartData`
    (all extraction branches: categorical + time/numeric, single + multi). For
