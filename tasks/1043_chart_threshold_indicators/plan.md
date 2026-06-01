@@ -132,10 +132,13 @@ directly), a **string** (`#rrggbb`/`#rrggbbaa`), or a **4-byte binary**
 
 **Decode helper (shared).** To keep the chart core decoupled from the map
 module, move the map's color primitives into a new
-`analytics-web-app/src/lib/color-utils.ts` and re-export them from `overlay.ts`
-for back-compat: `rgbaFromHex`, `hexFromRgba`, and `coerceCellToU32` (the
-`overlay.ts:196-201` helper that masks `value & 0xffffffffn` for `bigint` and
-otherwise does `value >>> 0`). Add `packedRgbaToCss(u32): string` = `hexFromRgba`
+`analytics-web-app/src/lib/color-utils.ts` and re-export the helpers MapCell
+imports externally from `overlay.ts` for back-compat: `rgbaFromHex` and
+`hexFromRgba`. `coerceCellToU32` (the `overlay.ts:196-201` helper that masks
+`value & 0xffffffffn` for `bigint` and otherwise does `value >>> 0`) is a
+private, non-exported function with no callers outside `overlay.ts`; it moves
+to `color-utils.ts` as an internal export consumed by `cellColorToCss` and
+re-imported by `overlay.ts`. Add `packedRgbaToCss(u32): string` = `hexFromRgba`
 (renamed/aliased). Crucially, do **not** feed a raw cell straight to
 `hexFromRgba` (its `rgba >>> 0` throws a `TypeError` on a `bigint`); coerce
 integer cells through `coerceCellToU32` first. Then add a single
@@ -317,7 +320,9 @@ uPlot.paths.bars!({
 **decoded SQL color** (`point.color`) is used at its full alpha, while the
 **`seriesColor` fallback** (for points with no color) is passed through
 `hexToRgba(seriesColor, 0.6)` to match the default bar fill
-(`XYChart.tsx:576,704` use `hexToRgba(color, 0.6)`). SQL-driven per-row colors
+(`XYChart.tsx:576` uses `hexToRgba(color, 0.6)`; `XYChart.tsx:704` uses a
+hard-coded `rgba(191, 54, 12, 0.6)` literal that must be converted to
+`hexToRgba(seriesColor, 0.6)` after the `color` prop is introduced). SQL-driven per-row colors
 are full-alpha by design (the `color` UDFs carry their own alpha channel); only
 the palette fallback gets the 0.6 fill alpha so non-colored bars in a partially
 colored series render identically to the all-palette case. Entries are indexed
