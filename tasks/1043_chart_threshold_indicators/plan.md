@@ -258,7 +258,7 @@ NaN are dropped.
 **Macro validation (editor).** The editor already validates macros in each
 query's `sql`/`unit`/`label` (`ChartCell.tsx:293-309`). Extend
 `validationErrors` to also run `validateMacros` over every reference line's
-`name`, (string) `value`, and `unit`, surfacing errors as
+`name`, (string) `value`, `unit`, and `color`, surfacing errors as
 `Reference line N: <error>`.
 
 **Computed label.** The label is `name` followed by the value, where the value
@@ -561,10 +561,13 @@ functions reference.
 
 ### Phase 5 — Config, editor, plumbing
 9. `ChartCell.tsx`: add `reference_lines` to `ChartCellConfigV2.options`;
-   resolve macros in each reference line's `name`, `value`, `unit`, and `color`
-   (mirroring `ChartCell.tsx:188-192`, since the array is skipped by
-   `substituteOptionsWithMacros`); `name` and `unit` use `substituteMacros`;
-   `value` and `color` use `substituteMacrosRaw` (non-SQL-escaping); pass
+   add `substituteMacrosRaw` to the `import { substituteMacros, validateMacros,
+   DEFAULT_SQL }` line at `ChartCell.tsx:18` so it is available for reference
+   line resolution; resolve macros in each reference line's `name`, `value`,
+   `unit`, and `color` (mirroring `ChartCell.tsx:188-192`, since the array is
+   skipped by `substituteOptionsWithMacros`); `name` and `unit` use
+   `substituteMacros`; `value` and `color` use `substituteMacrosRaw`
+   (non-SQL-escaping); pass
    `referenceLines` to `XYChart` in both single- and multi-series render paths.
    Extend the `validationErrors` macro-validation loop in `ChartCellEditor` to
    also run `validateMacros` over each reference line's `name`, (string) `value`,
