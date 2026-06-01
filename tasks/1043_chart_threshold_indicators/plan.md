@@ -519,10 +519,14 @@ functions reference.
 
 ### Phase 3 — User-selectable series color
 5. `ChartCell.tsx`: add `color?: string` to `ChartQueryDef`; carry it through
-   `_queryMeta` (`getRendererProps`). Multi-series: merge it into
-   `ChartSeriesData.color` in the `resolvedSeries` map (`ChartCell.tsx:188-192`),
-   falling back to `SERIES_COLORS[i % len]`. Single-series: pass the resolved
-   color via the new `XYChart` `color?` prop, falling back to `SERIES_COLORS[0]`.
+   `_queryMeta` (`getRendererProps`) by including `color: q.color` in each
+   `_queryMeta` entry (alongside the existing `unit` and `label`). Multi-series:
+   in the `resolvedSeries` map (`ChartCell.tsx:188-192`), inject
+   `color: queryMeta?.[i]?.color ?? SERIES_COLORS[i % SERIES_COLORS.length]`
+   directly from `_queryMeta` — do **not** route user config color through
+   `extractMultiSeriesChartData`, which processes data, not user config.
+   Single-series: pass the resolved color via the new `XYChart` `color?` prop,
+   falling back to `SERIES_COLORS[0]`.
 6. `XYChart.tsx`: add the `color?` prop (single-series). Replace index-based
    palette lookups (`XYChart.tsx:568,576,819`) with `series.color ?? palette[i]`
    and the single-series hard-coded `#bf360c` (`XYChart.tsx:702-704`) with the
