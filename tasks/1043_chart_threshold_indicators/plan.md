@@ -639,12 +639,19 @@ functions reference.
   errors; a `color`-named third column is accepted (consumed as the color
   channel) — this case also covers `MetricsRenderer`'s relaxed gate, which now
   accepts (rather than errors on) a metrics query aliasing a `color` column.
-  Update the existing `validateChartColumns` test at `arrow-utils.test.ts:300-314`
-  (3-column table with columns `x`, `y`, `z` rejected with `'exactly 2 columns'`):
-  after the logic change that error message no longer applies — the test must be
-  updated to assert that a third column is only accepted when named `color`, and
-  that a 3-column table where no column is named `color` is rejected with the new
-  error message (e.g. that an extra column is only accepted when named `color`).
+  Update the following three existing tests in `arrow-utils.test.ts` that assert
+  the old `'exactly 2 columns'` error message — all break when the message changes
+  to reflect "requires X and Y columns" rather than "exactly 2":
+  - Lines 291-298 (`validateChartColumns` rejects a 1-column table): update the
+    `toContain('exactly 2 columns')` assertion to match the new error message for
+    the 1-column (too few columns) case.
+  - Lines 300-314 (`validateChartColumns` rejects a 3-column table with columns
+    `x`, `y`, `z`): update to assert that a third column is only accepted when
+    named `color`, and that a 3-column table where no column is named `color` is
+    rejected with the new error message.
+  - Line 623 (`extractChartData` validation error for a 1-column table): update
+    the `toContain('exactly 2 columns')` assertion to match the new error message
+    for the 1-column case.
 - **Unit (`color-utils`)**: round-trip `rgbaFromHex`/`packedRgbaToCss`; alpha
   preserved; map re-exports still resolve.
 - **Component (`XYChart`)**: reference-line plugin computes the right `valToPos`
