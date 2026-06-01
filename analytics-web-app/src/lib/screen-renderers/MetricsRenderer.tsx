@@ -8,6 +8,7 @@ import { LoadingState, EmptyState, RendererLayout } from './shared'
 import { QueryEditor } from '@/components/QueryEditor'
 import { DataSourceField } from '@/components/DataSourceSelector'
 import { XYChart, type ScaleMode, type ChartType } from '@/components/XYChart'
+import { DEFAULT_SERIES_COLOR } from '@/components/chart-constants'
 import { extractChartData } from '@/lib/arrow-utils'
 import { useDefaultSaveCleanup, useExposeSaveRef } from '@/lib/url-cleanup-utils'
 
@@ -196,6 +197,7 @@ export function MetricsRenderer({
           xLabels={xLabels}
           xColumnName={xColumnName}
           yColumnName={yColumnName}
+          color={DEFAULT_SERIES_COLOR}
           scaleMode={scaleMode}
           onScaleModeChange={handleScaleModeChange}
           chartType={chartType}

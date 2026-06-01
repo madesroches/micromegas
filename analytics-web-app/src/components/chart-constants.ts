@@ -12,3 +12,9 @@ export const SERIES_COLORS = [
   '#00acc1', // Cyan
   '#ad1457', // Pink Dusk
 ]
+
+/** Default single-series color (Rust Orange — SERIES_COLORS[0]). */
+export const DEFAULT_SERIES_COLOR = SERIES_COLORS[0]
+
+/** Default reference line color (Crimson — SERIES_COLORS[7]). */
+export const DEFAULT_REFERENCE_LINE_COLOR = SERIES_COLORS[7]

@@ -17,16 +17,38 @@ Multi-query time-series charts supporting line and bar chart types.
 | `queries` | array | One or more query definitions |
 | `options.scale_mode` | `'p99'` \| `'max'` | Y-axis scaling mode (default `'p99'`) |
 | `options.chart_type` | `'line'` \| `'bar'` | Chart type (default `'line'`) |
+| `options.reference_lines` | array | Horizontal threshold lines drawn over the chart |
 
 **Query definition:**
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `sql` | string | SQL query returning `time` + value columns |
+| `sql` | string | SQL query returning X + Y columns (plus optional `color`) |
 | `name` | string | Query name (used for WASM table registration) |
 | `unit` | string | Y-axis unit label |
 | `label` | string | Series label override |
+| `color` | string | Series color `#rrggbb` (default: rotating palette) |
 | `dataSource` | string | Per-query data source |
+
+**SQL columns:**
+
+| Column | Required | Description |
+|--------|----------|-------------|
+| X (1st non-color) | Yes | Timestamp, numeric, or string for categorical |
+| Y (2nd non-color) | Yes | Numeric value |
+| `color` | No | Per-row mark color — packed RGBA u32 (e.g. from `rgba()` or `color_scale()`), `'#rrggbb'`/`'#rrggbbaa'` string, or 4-byte binary |
+
+The `color` column is identified by name (case-insensitive) and may appear in any position. When present, bars use per-row fill colors and lines use an interpolated gradient stroke. The query's `color` field above then acts as the legend token only — set it to a neutral color (e.g. gray) when the marks are SQL-colored.
+
+**Reference line fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `value` | number \| string | Threshold value (or `$macro`) |
+| `name` | string | Label prefix shown before the formatted value |
+| `unit` | string | Unit of the value — selects the scale (default: primary series unit) |
+| `color` | string | CSS color (default crimson `#c62828`) |
+| `style` | `'dashed'` \| `'solid'` | Line style (default `'dashed'`) |
 
 **Scale modes:**
 
@@ -36,19 +58,34 @@ Multi-query time-series charts supporting line and bar chart types.
 **Features:**
 
 - Multiple queries per chart, each with its own data source and unit
-- Color-coded series with a rotating palette
+- User-chosen series color (editable color picker in the editor; default palette)
+- SQL-driven per-row mark colors via `color` column (`rgba()`, `lerp_color()`, `color_scale()`)
+- Horizontal reference lines at configurable thresholds
 - Drag-to-zoom: drag horizontally on the chart to select a time range and zoom in
 - Chart type and scale mode toggleable via controls
-- Each query's results are registered in the WASM engine as `cellName.queryName` — or just `cellName` if the query has no `name` (single-query charts can omit it; multi-query charts should set distinct names to avoid collision)
+- Each query's results are registered in the WASM engine as `cellName.queryName` — or just `cellName` if the query has no `name`
 
-**Example:**
+**Example — threshold-colored bars with a budget line:**
 
 ```sql
-SELECT time, value
-FROM measures
-WHERE name = '$metric'
+SELECT
+  time,
+  frame_time_us AS value,
+  CASE WHEN frame_time_us > $budget_us
+    THEN rgba(0.8, 0.1, 0.1, 1.0)
+    ELSE rgba(0.2, 0.7, 0.2, 1.0)
+  END AS color
+FROM frame_metrics
 ORDER BY time
 ```
+
+With `options.reference_lines`:
+
+```json
+[{ "name": "frame budget", "value": "$budget_us", "unit": "us", "color": "#c62828" }]
+```
+
+See [color UDFs](../../query-guide/functions-reference.md) for `rgba()`, `lerp_color()`, and `color_scale()`.
 
 ![Chart cell with frame time data and drag-to-zoom](../../assets/images/notebooks/chart_zoom.png){ .screenshot }
 

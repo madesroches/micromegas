@@ -3,6 +3,7 @@
  */
 
 import { DataType, TimeUnit, Timestamp, Duration, Table } from 'apache-arrow'
+import { cellColorToCss } from '@/lib/color-utils'
 
 export type XAxisMode = 'time' | 'numeric' | 'categorical'
 
@@ -175,23 +176,107 @@ export function detectXAxisMode(dataType: DataType): XAxisMode {
   return 'categorical'
 }
 
-/**
- * Validate that a table has exactly 2 columns with valid types for charting
- */
-export function validateChartColumns(table: Table):
-  | { valid: true; xType: DataType; yType: DataType }
-  | { valid: false; error: string } {
-  const fields = table.schema.fields
+// =============================================================================
+// Chart Point Type
+// =============================================================================
 
-  if (fields.length !== 2) {
-    return {
-      valid: false,
-      error: `Query must return exactly 2 columns (X and Y axis), got ${fields.length}`,
+export interface ChartPoint {
+  x: number
+  y: number
+  /** CSS color decoded from the SQL `color` column, if present. */
+  color?: string
+}
+
+// =============================================================================
+// Color Column Resolution
+// =============================================================================
+
+type ColorColumnKind = 'integer' | 'string' | 'binary'
+
+interface ResolvedChartColumns {
+  xColumnName: string
+  yColumnName: string
+  xType: DataType
+  yType: DataType
+  colorColumnName?: string
+  colorColumnKind?: ColorColumnKind
+}
+
+/**
+ * Resolve X, Y, and optional color columns from a schema field list.
+ * The color column is the field named 'color' (case-insensitive).
+ * X and Y are the first two non-color fields in order.
+ * Callers must ensure there are at least 2 non-color fields.
+ */
+export function resolveChartColumns(
+  fields: { name: string; type: DataType }[]
+): ResolvedChartColumns {
+  const colorIdx = fields.findIndex(f => f.name.toLowerCase() === 'color')
+  const nonColorFields = colorIdx >= 0
+    ? fields.filter((_, i) => i !== colorIdx)
+    : fields
+
+  const xField = nonColorFields[0]
+  const yField = nonColorFields[1]
+
+  const result: ResolvedChartColumns = {
+    xColumnName: xField.name,
+    yColumnName: yField.name,
+    xType: xField.type,
+    yType: yField.type,
+  }
+
+  if (colorIdx >= 0) {
+    const colorField = fields[colorIdx]
+    const innerType = unwrapDictionary(colorField.type)
+    result.colorColumnName = colorField.name
+    if (isIntegerType(innerType)) {
+      result.colorColumnKind = 'integer'
+    } else if (isStringType(innerType)) {
+      result.colorColumnKind = 'string'
+    } else if (isBinaryType(colorField.type)) {
+      result.colorColumnKind = 'binary'
     }
   }
 
-  const xType = fields[0].type
-  const yType = fields[1].type
+  return result
+}
+
+/**
+ * Validate that a table has X and Y columns (plus optional 'color') with valid types.
+ * Returns resolved column names and types for callers that need them.
+ */
+export function validateChartColumns(table: Table):
+  | {
+      valid: true
+      xType: DataType
+      yType: DataType
+      xColumnName: string
+      yColumnName: string
+      colorColumnName?: string
+      colorColumnKind?: ColorColumnKind
+    }
+  | { valid: false; error: string } {
+  const fields = table.schema.fields
+  const colorIdx = fields.findIndex(f => f.name.toLowerCase() === 'color')
+  const nonColorCount = colorIdx >= 0 ? fields.length - 1 : fields.length
+
+  if (nonColorCount < 2) {
+    return {
+      valid: false,
+      error: `Query must return X and Y columns, got ${nonColorCount} non-color columns`,
+    }
+  }
+
+  if (nonColorCount > 2) {
+    return {
+      valid: false,
+      error: `Query must return X and Y columns (plus optional 'color'), got ${nonColorCount} non-color columns`,
+    }
+  }
+
+  const resolved = resolveChartColumns(fields)
+  const { xType, yType, xColumnName, yColumnName, colorColumnName, colorColumnKind } = resolved
 
   // X column must be timestamp, numeric, or string
   if (!isTimeType(xType) && !isNumericType(xType) && !isStringType(xType)) {
@@ -209,7 +294,19 @@ export function validateChartColumns(table: Table):
     }
   }
 
-  return { valid: true, xType, yType }
+  // Validate color column type if present
+  if (colorIdx >= 0) {
+    const colorField = fields[colorIdx]
+    const innerType = unwrapDictionary(colorField.type)
+    if (!isIntegerType(innerType) && !isStringType(innerType) && !isBinaryType(colorField.type)) {
+      return {
+        valid: false,
+        error: `'color' column must be integer (packed RGBA u32), string ('#rrggbb'/'#rrggbbaa'), or binary, got ${colorField.type.toString()}`,
+      }
+    }
+  }
+
+  return { valid: true, xType, yType, xColumnName, yColumnName, colorColumnName, colorColumnKind }
 }
 
 // =============================================================================
@@ -219,7 +316,9 @@ export function validateChartColumns(table: Table):
 export interface ChartSeriesData {
   label: string
   unit: string
-  data: { x: number; y: number }[]
+  /** User-chosen series color; default = rotating palette by index. */
+  color?: string
+  data: ChartPoint[]
 }
 
 export interface MultiSeriesChartData {
@@ -231,7 +330,7 @@ export interface MultiSeriesChartData {
 
 /**
  * Extract multi-series chart data from multiple Arrow tables.
- * Each table must have exactly 2 columns (X, Y).
+ * Each table must have X and Y columns (plus optional 'color').
  * All tables must agree on X-axis mode.
  */
 export function extractMultiSeriesChartData(
@@ -248,6 +347,8 @@ export function extractMultiSeriesChartData(
     xColumnName: string
     yColumnName: string
     xAxisMode: XAxisMode
+    colorColumnName?: string
+    colorColumnKind?: ColorColumnKind
   }[] = []
 
   for (let i = 0; i < tables.length; i++) {
@@ -255,15 +356,20 @@ export function extractMultiSeriesChartData(
     if (table.numRows === 0) {
       // Allow empty tables — they produce an empty series
       const fields = table.schema.fields
-      if (fields.length !== 2) {
-        return { ok: false, error: `Query ${i + 1}: must return exactly 2 columns, got ${fields.length}` }
+      const colorIdx = fields.findIndex(f => f.name.toLowerCase() === 'color')
+      const nonColorCount = colorIdx >= 0 ? fields.length - 1 : fields.length
+      if (nonColorCount !== 2) {
+        return { ok: false, error: `Query ${i + 1}: must return X and Y columns, got ${nonColorCount} non-color columns` }
       }
+      const resolved = resolveChartColumns(fields)
       validations.push({
-        xType: fields[0].type,
-        yType: fields[1].type,
-        xColumnName: fields[0].name,
-        yColumnName: fields[1].name,
-        xAxisMode: detectXAxisMode(fields[0].type),
+        xType: resolved.xType,
+        yType: resolved.yType,
+        xColumnName: resolved.xColumnName,
+        yColumnName: resolved.yColumnName,
+        xAxisMode: detectXAxisMode(resolved.xType),
+        colorColumnName: resolved.colorColumnName,
+        colorColumnKind: resolved.colorColumnKind,
       })
       continue
     }
@@ -271,13 +377,14 @@ export function extractMultiSeriesChartData(
     if (!v.valid) {
       return { ok: false, error: `Query ${i + 1}: ${v.error}` }
     }
-    const fields = table.schema.fields
     validations.push({
       xType: v.xType,
       yType: v.yType,
-      xColumnName: fields[0].name,
-      yColumnName: fields[1].name,
+      xColumnName: v.xColumnName,
+      yColumnName: v.yColumnName,
       xAxisMode: detectXAxisMode(v.xType),
+      colorColumnName: v.colorColumnName,
+      colorColumnKind: v.colorColumnKind,
     })
   }
 
@@ -302,11 +409,11 @@ export function extractMultiSeriesChartData(
     const seriesLabel = label || v.yColumnName
     const seriesUnit = unit || ''
 
-    const data: { x: number; y: number }[] = []
+    const data: ChartPoint[] = []
 
     if (xAxisMode === 'categorical') {
-      // For categorical, we'll handle label mapping after collecting all data
-      // For now, just collect string-indexed data
+      // For categorical, we'll handle label mapping after collecting all data.
+      // Color is decoded in the second-pass remap loop below.
       for (let r = 0; r < table.numRows; r++) {
         const row = table.get(r)
         if (!row) continue
@@ -315,8 +422,7 @@ export function extractMultiSeriesChartData(
         if (xVal == null || yVal == null) continue
         const yNum = Number(yVal)
         if (isNaN(yNum)) continue
-        // Temporarily store the string hash — will be remapped below
-        data.push({ x: 0, y: yNum }) // placeholder x
+        data.push({ x: 0, y: yNum }) // placeholder x; rebuilt below
       }
     } else {
       for (let r = 0; r < table.numRows; r++) {
@@ -333,7 +439,16 @@ export function extractMultiSeriesChartData(
         }
         const yNum = Number(yVal)
         if (isNaN(xNum) || isNaN(yNum)) continue
-        data.push({ x: xNum, y: yNum })
+
+        const point: ChartPoint = { x: xNum, y: yNum }
+        if (v.colorColumnName && v.colorColumnKind) {
+          const colorVal = row[v.colorColumnName]
+          if (colorVal != null) {
+            const css = cellColorToCss(colorVal, v.colorColumnKind)
+            if (css !== null) point.color = css
+          }
+        }
+        data.push(point)
       }
       // Sort by X ascending (uPlot requirement)
       data.sort((a, b) => a.x - b.x)
@@ -370,11 +485,11 @@ export function extractMultiSeriesChartData(
     labelMap.clear()
     xLabels.forEach((lbl, idx) => labelMap.set(lbl, idx))
 
-    // Second pass: remap x values to indices
+    // Second pass: remap x values to indices (and decode color here)
     for (let i = 0; i < tables.length; i++) {
       const { table } = tables[i]
       const v = validations[i]
-      const seriesData: { x: number; y: number }[] = []
+      const seriesData: ChartPoint[] = []
 
       for (let r = 0; r < table.numRows; r++) {
         const row = table.get(r)
@@ -387,7 +502,16 @@ export function extractMultiSeriesChartData(
         const str = String(xVal)
         const idx = labelMap.get(str)
         if (idx == null) continue
-        seriesData.push({ x: idx, y: yNum })
+
+        const point: ChartPoint = { x: idx, y: yNum }
+        if (v.colorColumnName && v.colorColumnKind) {
+          const colorVal = row[v.colorColumnName]
+          if (colorVal != null) {
+            const css = cellColorToCss(colorVal, v.colorColumnKind)
+            if (css !== null) point.color = css
+          }
+        }
+        seriesData.push(point)
       }
 
       series[i] = { ...series[i], data: seriesData }
@@ -400,12 +524,12 @@ export function extractMultiSeriesChartData(
 }
 
 /**
- * Extract chart data from Arrow table (first 2 columns)
+ * Extract chart data from Arrow table (X and Y columns, plus optional 'color')
  */
 export function extractChartData(table: Table):
   | {
       ok: true
-      data: { x: number; y: number }[]
+      data: ChartPoint[]
       xAxisMode: XAxisMode
       xLabels?: string[] // for categorical - unique labels in SQL order
       xColumnName: string
@@ -417,13 +541,10 @@ export function extractChartData(table: Table):
     return { ok: false, error: validation.error }
   }
 
-  const { xType, yType: _yType } = validation
-  const fields = table.schema.fields
-  const xColumnName = fields[0].name
-  const yColumnName = fields[1].name
+  const { xType, xColumnName, yColumnName, colorColumnName, colorColumnKind } = validation
   const xAxisMode = detectXAxisMode(xType)
 
-  const data: { x: number; y: number }[] = []
+  const data: ChartPoint[] = []
 
   if (xAxisMode === 'categorical') {
     // For categorical, build label array and map strings to indices
@@ -450,7 +571,15 @@ export function extractChartData(table: Table):
         xLabels.push(str)
       }
 
-      data.push({ x: labelMap.get(str)!, y: yNum })
+      const point: ChartPoint = { x: labelMap.get(str)!, y: yNum }
+      if (colorColumnName && colorColumnKind) {
+        const colorVal = row[colorColumnName]
+        if (colorVal != null) {
+          const css = cellColorToCss(colorVal, colorColumnKind)
+          if (css !== null) point.color = css
+        }
+      }
+      data.push(point)
     }
 
     if (data.length === 0) {
@@ -483,7 +612,15 @@ export function extractChartData(table: Table):
 
       if (isNaN(xNum) || isNaN(yNum)) continue
 
-      data.push({ x: xNum, y: yNum })
+      const point: ChartPoint = { x: xNum, y: yNum }
+      if (colorColumnName && colorColumnKind) {
+        const colorVal = row[colorColumnName]
+        if (colorVal != null) {
+          const css = cellColorToCss(colorVal, colorColumnKind)
+          if (css !== null) point.color = css
+        }
+      }
+      data.push(point)
     }
 
     if (data.length === 0) {
