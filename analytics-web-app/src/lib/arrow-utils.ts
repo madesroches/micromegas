@@ -264,7 +264,7 @@ export function validateChartColumns(table: Table):
   if (nonColorCount < 2) {
     return {
       valid: false,
-      error: `Query must return X and Y columns, got ${fields.length}`,
+      error: `Query must return X and Y columns, got ${nonColorCount} non-color columns`,
     }
   }
 

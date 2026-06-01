@@ -375,7 +375,8 @@ export function XYChart({
               typeof line.value === 'string' ? parseFloat(line.value) : line.value
             if (!Number.isFinite(rawValue)) continue
 
-            const lineColor = line.color ?? DEFAULT_REFERENCE_LINE_COLOR
+            const rawColor = line.color ?? ''
+            const lineColor = /^#[0-9a-fA-F]{6}$/.test(rawColor) ? rawColor : DEFAULT_REFERENCE_LINE_COLOR
             const lineStyle = line.style ?? 'dashed'
             const lineUnit = line.unit ?? pu
             const scaleName = (lineUnit || 'y') as string
@@ -406,8 +407,9 @@ export function XYChart({
             ctx.fillStyle = lineColor
             ctx.font = '11px -apple-system, BlinkMacSystemFont, sans-serif'
             ctx.textAlign = 'right'
-            ctx.textBaseline = 'bottom'
-            ctx.fillText(labelText, left + width - 4, yPx - 2)
+            const labelAbove = yPx - 13 >= top
+            ctx.textBaseline = labelAbove ? 'bottom' : 'top'
+            ctx.fillText(labelText, left + width - 4, labelAbove ? yPx - 2 : yPx + 2)
           }
 
           ctx.restore()
