@@ -634,6 +634,12 @@ functions reference.
   errors; a `color`-named third column is accepted (consumed as the color
   channel) — this case also covers `MetricsRenderer`'s relaxed gate, which now
   accepts (rather than errors on) a metrics query aliasing a `color` column.
+  Update the existing `validateChartColumns` test at `arrow-utils.test.ts:300-314`
+  (3-column table with columns `x`, `y`, `z` rejected with `'exactly 2 columns'`):
+  after the logic change that error message no longer applies — the test must be
+  updated to assert that a third column is only accepted when named `color`, and
+  that a 3-column table where no column is named `color` is rejected with the new
+  error message (e.g. that an extra column is only accepted when named `color`).
 - **Unit (`color-utils`)**: round-trip `rgbaFromHex`/`packedRgbaToCss`; alpha
   preserved; map re-exports still resolve.
 - **Component (`XYChart`)**: reference-line plugin computes the right `valToPos`
