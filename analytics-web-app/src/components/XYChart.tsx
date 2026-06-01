@@ -59,10 +59,17 @@ export function normalizeGradientStops(
   if (width <= 0) return []
 
   // Downsample when too many points
-  const source =
-    pts.length > GRADIENT_STOP_LIMIT
-      ? pts.filter((_, i) => i % Math.ceil(pts.length / GRADIENT_STOP_LIMIT) === 0)
-      : pts
+  let source: { x: number; color: string }[]
+  if (pts.length > GRADIENT_STOP_LIMIT) {
+    const step = Math.ceil(pts.length / GRADIENT_STOP_LIMIT)
+    source = pts.filter((_, i) => i % step === 0)
+    // Ensure the last point is always included so the rightmost color is correct
+    if (source[source.length - 1] !== pts[pts.length - 1]) {
+      source.push(pts[pts.length - 1])
+    }
+  } else {
+    source = pts
+  }
 
   const stops = source.map(p => ({
     x: Math.max(0, Math.min(1, (u.valToPos(p.x, 'x', true) - left) / width)),
