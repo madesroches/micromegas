@@ -141,10 +141,12 @@ otherwise does `value >>> 0`). Add `packedRgbaToCss(u32): string` = `hexFromRgba
 integer cells through `coerceCellToU32` first. Then add a single
 `cellColorToCss(value, kind)` helper in the shared module that mirrors the map's
 per-kind decode (`overlay.ts:259-423`): `integer → packedRgbaToCss(coerceCellToU32(value))`,
-`string → rgbaFromHex(value)` then `packedRgbaToCss` (pass-through `#…`),
+`string → rgbaFromHex(value)` then `packedRgbaToCss` (a `#rrggbb` input is
+normalized to `#rrggbbff` output; returns `null` for invalid/malformed input),
 `binary → return the `#rrggbbaa` CSS string built from the 4 R,G,B,A bytes
-(each byte formatted as 2-hex and concatenated)`. All three kinds return a CSS
-string. This is a small, mechanical relocation that
+(each byte formatted as 2-hex and concatenated)`. `cellColorToCss` returns
+`string | null` (null for invalid string input); callers treat null as
+absent color (leave `point.color` undefined). This is a small, mechanical relocation that
 keeps no behavior change for the map and gives both the map and the chart one
 source of truth for all three color-column kinds.
 
@@ -461,10 +463,11 @@ functions reference.
 1. Create `analytics-web-app/src/lib/color-utils.ts`; move `rgbaFromHex`,
    `hexFromRgba`, and `coerceCellToU32` from `components/map/overlay.ts` into it,
    add `packedRgbaToCss` (alias of `hexFromRgba`) and `cellColorToCss(value,
-   kind)` (integer → `packedRgbaToCss(coerceCellToU32(value))`; string →
-   `rgbaFromHex` then `packedRgbaToCss`; binary → return `#rrggbbaa` built from
-   the 4 R,G,B,A bytes, each formatted as 2-hex and concatenated — so all three
-   kinds return a CSS string). In `overlay.ts`, `import { coerceCellToU32,
+   kind): string | null` (integer → `packedRgbaToCss(coerceCellToU32(value))`;
+   string → `rgbaFromHex` then `packedRgbaToCss`, returning null for
+   invalid/malformed input (a `#rrggbb` input is normalized to `#rrggbbff`
+   output); binary → return `#rrggbbaa` built from the 4 R,G,B,A bytes, each
+   formatted as 2-hex and concatenated). In `overlay.ts`, `import { coerceCellToU32,
    rgbaFromHex }` from `color-utils.ts` (both are called internally —
    `coerceCellToU32` in `buildOverlay`, `rgbaFromHex` at lines 399 and 529 — and
    a bare re-export creates no local binding) and re-export the helpers MapCell
@@ -522,7 +525,10 @@ functions reference.
    the single-series header indicator (`XYChart.tsx:851`) is a `bg-chart-line`
    CSS-class binding, not an index lookup — convert it to an inline
    `style={{ background: color }}` from the `color` prop rather than swapping a
-   palette index. **`MetricsRenderer` and `TimeSeriesChart` must also be updated
+   palette index. **Update `XYChartProps.data` from `{ x: number; y: number }[]`
+   to `ChartPoint[]` so the single-series render path can read `point.color`**
+   (the `color` field is additive and optional, so existing callers compile
+   unchanged). **`MetricsRenderer` and `TimeSeriesChart` must also be updated
    to pass `color='#bf360c'` (the existing rust default) so they continue to
    render identically**: `MetricsRenderer.tsx:193` adds `color='#bf360c'` to the
    `<XYChart>` call; `TimeSeriesChart` (`XYChart.tsx:956`) likewise adds
