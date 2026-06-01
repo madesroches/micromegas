@@ -517,12 +517,14 @@ functions reference.
    color via the new `XYChart` `color?` prop, falling back to `SERIES_COLORS[0]`.
 6. `XYChart.tsx`: add the `color?` prop (single-series). Replace index-based
    palette lookups (`XYChart.tsx:568,576,819`) with `series.color ?? palette[i]`
-   and the single-series hard-coded `#bf360c` (`XYChart.tsx:702-704`) with the
-   `color` prop; the legend swatch and default marks both read it. Note the
+   and the single-series hard-coded `#bf360c` (`XYChart.tsx:702-704`) with
+   `color ?? '#bf360c'` (i.e. keep the existing fallback so callers that pass no
+   `color` prop — `MetricsRenderer`, `TimeSeriesChart` — continue to render
+   identically); the legend swatch and default marks both read it. Note the
    single-series header indicator (`XYChart.tsx:851`) is a `bg-chart-line`
    CSS-class binding, not an index lookup — convert it to an inline
-   `style={{ background: color }}` from the `color` prop rather than swapping a
-   palette index.
+   `style={{ background: color ?? '#bf360c' }}` from the `color` prop rather than
+   swapping a palette index.
 
 ### Phase 4 — Reference line + per-row mark color rendering
 7. `XYChart.tsx`: add `referenceLines` prop + `ReferenceLine` type (or import
@@ -541,10 +543,14 @@ functions reference.
 
 ### Phase 5 — Config, editor, plumbing
 9. `ChartCell.tsx`: add `reference_lines` to `ChartCellConfigV2.options`;
-   resolve macros in each reference line's `name`, `value`, and `unit` (mirroring
-   `ChartCell.tsx:188-192`, since the array is skipped by
-   `substituteOptionsWithMacros`); pass `referenceLines` to `XYChart` in both
-   single- and multi-series render paths.
+   resolve macros in each reference line's `name`, `value`, `unit`, and `color`
+   (mirroring `ChartCell.tsx:188-192`, since the array is skipped by
+   `substituteOptionsWithMacros`); `name` and `unit` use `substituteMacros`;
+   `value` and `color` use `substituteMacrosRaw` (non-SQL-escaping); pass
+   `referenceLines` to `XYChart` in both single- and multi-series render paths.
+   Extend the `validationErrors` macro-validation loop in `ChartCellEditor` to
+   also run `validateMacros` over each reference line's `name`, (string) `value`,
+   `unit`, and `color`, surfacing errors as `Reference line N: <error>`.
 10. `ChartCellEditor`: add the Reference Lines section, the per-query color
     picker (replacing the static palette dot), and the SQL color-column hint.
 
