@@ -5,6 +5,7 @@ This file documents the historical progress of the Micromegas project. For curre
 ## Unreleased
 
 * **Web App:**
+  * Add per-row colors, user-selectable series colors, and reference line threshold indicators to XYChart; reference lines support named labels, units, dashed/solid style, and per-line color (#1043)
   * Add a per-Map-cell **Camera** setting with `perspective` (default) and `orthographic` modes; orthographic fits the camera to the projected map silhouette and maps Q/E to zoom (#1065)
   * Add a hover tooltip preview for map markers that renders the cell's `detailTemplate` as a small floating panel following the cursor, with a per-cell show/hide option (#1080)
   * Add `format_value(value, unit)` template function for adaptive unit formatting in Markdown templates (Map detail panel, Markdown cells, and table column overrides); surface unresolved-arg and unresolved-macro warnings via a banner (Map/Markdown) or column-header icon (tables) (#1086)
