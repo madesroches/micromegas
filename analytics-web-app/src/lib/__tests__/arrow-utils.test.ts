@@ -107,6 +107,7 @@ import {
   isStringType,
   unwrapDictionary,
   isBinaryType,
+  resolveChartColumns,
 } from '../arrow-utils'
 
 // Get test helpers from mock
@@ -293,11 +294,11 @@ describe('validateChartColumns', () => {
     const result = validateChartColumns(table as never)
     expect(result.valid).toBe(false)
     if (!result.valid) {
-      expect(result.error).toContain('exactly 2 columns')
+      expect(result.error).toContain('X and Y columns')
     }
   })
 
-  it('should reject tables with more than 2 columns', () => {
+  it('should reject tables with more than 2 non-color columns', () => {
     const table = createMockTable(
       [
         { name: 'x', type: createIntType() },
@@ -309,7 +310,92 @@ describe('validateChartColumns', () => {
     const result = validateChartColumns(table as never)
     expect(result.valid).toBe(false)
     if (!result.valid) {
-      expect(result.error).toContain('exactly 2 columns')
+      expect(result.error).toContain('non-color columns')
+    }
+  })
+
+  it('should accept a 3-column table when the third column is named color', () => {
+    const table = createMockTable(
+      [
+        { name: 'x', type: createIntType() },
+        { name: 'y', type: createFloatType() },
+        { name: 'color', type: createIntType() },
+      ],
+      []
+    )
+    const result = validateChartColumns(table as never)
+    expect(result.valid).toBe(true)
+    if (result.valid) {
+      expect(result.xColumnName).toBe('x')
+      expect(result.yColumnName).toBe('y')
+      expect(result.colorColumnName).toBe('color')
+      expect(result.colorColumnKind).toBe('integer')
+    }
+  })
+
+  it('should detect color column as string kind', () => {
+    const table = createMockTable(
+      [
+        { name: 'x', type: createIntType() },
+        { name: 'y', type: createFloatType() },
+        { name: 'color', type: createUtf8Type() },
+      ],
+      []
+    )
+    const result = validateChartColumns(table as never)
+    expect(result.valid).toBe(true)
+    if (result.valid) {
+      expect(result.colorColumnKind).toBe('string')
+    }
+  })
+
+  it('should detect color column as binary kind', () => {
+    const table = createMockTable(
+      [
+        { name: 'x', type: createIntType() },
+        { name: 'y', type: createFloatType() },
+        { name: 'color', type: createBinaryType() },
+      ],
+      []
+    )
+    const result = validateChartColumns(table as never)
+    expect(result.valid).toBe(true)
+    if (result.valid) {
+      expect(result.colorColumnKind).toBe('binary')
+    }
+  })
+
+  it('should detect color column regardless of position (color first)', () => {
+    const table = createMockTable(
+      [
+        { name: 'color', type: createIntType() },
+        { name: 'x', type: createIntType() },
+        { name: 'y', type: createFloatType() },
+      ],
+      []
+    )
+    const result = validateChartColumns(table as never)
+    expect(result.valid).toBe(true)
+    if (result.valid) {
+      expect(result.xColumnName).toBe('x')
+      expect(result.yColumnName).toBe('y')
+      expect(result.colorColumnName).toBe('color')
+    }
+  })
+
+  it('should detect color column case-insensitively', () => {
+    const table = createMockTable(
+      [
+        { name: 'x', type: createIntType() },
+        { name: 'y', type: createFloatType() },
+        { name: 'Color', type: createIntType() },
+      ],
+      []
+    )
+    const result = validateChartColumns(table as never)
+    expect(result.valid).toBe(true)
+    if (result.valid) {
+      expect(result.colorColumnName).toBe('Color')
     }
   })
 
@@ -620,8 +706,151 @@ describe('extractChartData', () => {
       const result = extractChartData(table as never)
       expect(result.ok).toBe(false)
       if (!result.ok) {
-        expect(result.error).toContain('exactly 2 columns')
+        expect(result.error).toContain('X and Y columns')
       }
     })
+  })
+
+  describe('color column', () => {
+    it('should decode integer color column into point.color', () => {
+      const table = createMockTable(
+        [
+          { name: 'x', type: createIntType() },
+          { name: 'y', type: createFloatType() },
+          { name: 'color', type: createIntType() },
+        ],
+        [
+          { x: 1, y: 10, color: 0xff0000ff },
+          { x: 2, y: 20, color: 0x00ff00ff },
+        ]
+      )
+      const result = extractChartData(table as never)
+      expect(result.ok).toBe(true)
+      if (result.ok) {
+        expect(result.data[0].color).toBeDefined()
+        expect(result.data[1].color).toBeDefined()
+      }
+    })
+
+    it('should decode string color column into point.color', () => {
+      const table = createMockTable(
+        [
+          { name: 'x', type: createIntType() },
+          { name: 'y', type: createFloatType() },
+          { name: 'color', type: createUtf8Type() },
+        ],
+        [
+          { x: 1, y: 10, color: '#ff0000' },
+          { x: 2, y: 20, color: '#00ff00ff' },
+        ]
+      )
+      const result = extractChartData(table as never)
+      expect(result.ok).toBe(true)
+      if (result.ok) {
+        expect(result.data[0].color).toBe('#ff0000ff')
+        expect(result.data[1].color).toBe('#00ff00ff')
+      }
+    })
+
+    it('should leave point.color undefined for null color values', () => {
+      const table = createMockTable(
+        [
+          { name: 'x', type: createIntType() },
+          { name: 'y', type: createFloatType() },
+          { name: 'color', type: createIntType() },
+        ],
+        [
+          { x: 1, y: 10, color: null },
+          { x: 2, y: 20, color: 0xff0000ff },
+        ]
+      )
+      const result = extractChartData(table as never)
+      expect(result.ok).toBe(true)
+      if (result.ok) {
+        expect(result.data[0].color).toBeUndefined()
+        expect(result.data[1].color).toBeDefined()
+      }
+    })
+
+    it('should preserve color through x-sort (color travels with point)', () => {
+      const table = createMockTable(
+        [
+          { name: 'x', type: createIntType() },
+          { name: 'y', type: createFloatType() },
+          { name: 'color', type: createUtf8Type() },
+        ],
+        [
+          { x: 3, y: 30, color: '#0000ff' },
+          { x: 1, y: 10, color: '#ff0000' },
+          { x: 2, y: 20, color: '#00ff00' },
+        ]
+      )
+      const result = extractChartData(table as never)
+      expect(result.ok).toBe(true)
+      if (result.ok) {
+        // After sort by x: x=1,x=2,x=3
+        expect(result.data[0].x).toBe(1)
+        expect(result.data[0].color).toBe('#ff0000ff')
+        expect(result.data[1].x).toBe(2)
+        expect(result.data[1].color).toBe('#00ff00ff')
+        expect(result.data[2].x).toBe(3)
+        expect(result.data[2].color).toBe('#0000ffff')
+      }
+    })
+
+    it('should work without color column (2-column path unchanged)', () => {
+      const table = createMockTable(
+        [
+          { name: 'x', type: createIntType() },
+          { name: 'y', type: createFloatType() },
+        ],
+        [{ x: 1, y: 10 }, { x: 2, y: 20 }]
+      )
+      const result = extractChartData(table as never)
+      expect(result.ok).toBe(true)
+      if (result.ok) {
+        expect(result.data[0].color).toBeUndefined()
+        expect(result.data[1].color).toBeUndefined()
+      }
+    })
+
+    it('should reject a 3-column table where no column is named color', () => {
+      const table = createMockTable(
+        [
+          { name: 'x', type: createIntType() },
+          { name: 'y', type: createFloatType() },
+          { name: 'z', type: createFloatType() },
+        ],
+        []
+      )
+      const result = extractChartData(table as never)
+      expect(result.ok).toBe(false)
+    })
+  })
+})
+
+describe('resolveChartColumns', () => {
+  it('should return x and y from first two fields when no color column', () => {
+    const fields = [
+      { name: 'time', type: createTimestampType() },
+      { name: 'value', type: createFloatType() },
+    ]
+    const resolved = resolveChartColumns(fields as never)
+    expect(resolved.xColumnName).toBe('time')
+    expect(resolved.yColumnName).toBe('value')
+    expect(resolved.colorColumnName).toBeUndefined()
+  })
+
+  it('should skip the color column when finding x and y', () => {
+    const fields = [
+      { name: 'x', type: createIntType() },
+      { name: 'color', type: createIntType() },
+      { name: 'y', type: createFloatType() },
+    ]
+    const resolved = resolveChartColumns(fields as never)
+    expect(resolved.xColumnName).toBe('x')
+    expect(resolved.yColumnName).toBe('y')
+    expect(resolved.colorColumnName).toBe('color')
+    expect(resolved.colorColumnKind).toBe('integer')
   })
 })

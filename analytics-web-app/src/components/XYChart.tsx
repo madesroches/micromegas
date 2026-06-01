@@ -8,9 +8,9 @@ import {
 } from '@/lib/time-units'
 import { normalizeUnit, isSizeUnit, getAdaptiveSizeUnit, isBitUnit, getAdaptiveBitUnit } from '@/lib/units'
 import { formatValueWithUnit } from '@/lib/format-value'
-import type { ChartSeriesData } from '@/lib/arrow-utils'
+import type { ChartSeriesData, ChartPoint } from '@/lib/arrow-utils'
 
-import { SERIES_COLORS } from './chart-constants'
+import { SERIES_COLORS, DEFAULT_SERIES_COLOR, DEFAULT_REFERENCE_LINE_COLOR } from './chart-constants'
 import { buildXAxisConfig } from './xychart-axis'
 
 export interface ChartAxisBounds {
@@ -24,6 +24,16 @@ export type ChartType = 'line' | 'bar'
 
 export type XAxisMode = 'time' | 'numeric' | 'categorical'
 
+export interface ReferenceLine {
+  name?: string
+  value: number | string
+  unit?: string
+  color?: string
+  style?: 'solid' | 'dashed'
+}
+
+const GRADIENT_STOP_LIMIT = 512
+
 function escapeHtml(str: string): string {
   return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 }
@@ -35,14 +45,53 @@ function hexToRgba(hex: string, alpha: number): string {
   return `rgba(${r}, ${g}, ${b}, ${alpha})`
 }
 
+/**
+ * Map per-point color stops to normalized canvas offsets [0, 1], sorted and
+ * deduped. Downsamples to GRADIENT_STOP_LIMIT stops when the series is large.
+ * Exported for unit testing.
+ */
+// eslint-disable-next-line react-refresh/only-export-components
+export function normalizeGradientStops(
+  u: uPlot,
+  pts: { x: number; color: string }[],
+): { x: number; color: string }[] {
+  const { left, width } = u.bbox
+  if (width <= 0) return []
+
+  // Downsample when too many points
+  const source =
+    pts.length > GRADIENT_STOP_LIMIT
+      ? pts.filter((_, i) => i % Math.ceil(pts.length / GRADIENT_STOP_LIMIT) === 0)
+      : pts
+
+  const stops = source.map(p => ({
+    x: Math.max(0, Math.min(1, (u.valToPos(p.x, 'x', true) - left) / width)),
+    color: p.color,
+  }))
+
+  // Sort ascending
+  stops.sort((a, b) => a.x - b.x)
+
+  // Dedupe: keep first at each offset
+  const deduped: { x: number; color: string }[] = []
+  for (const stop of stops) {
+    if (deduped.length === 0 || stop.x !== deduped[deduped.length - 1].x) {
+      deduped.push(stop)
+    }
+  }
+  return deduped
+}
+
 interface XYChartProps {
-  data?: { x: number; y: number }[] // categorical: x is index into xLabels
+  data?: ChartPoint[] // categorical: x is index into xLabels
   xAxisMode: XAxisMode // required, determined by extractChartData
   xLabels?: string[] // for categorical mode - the actual string labels
   xColumnName?: string
   yColumnName?: string
   title?: string
   unit?: string
+  /** User-chosen series color for the single-series path. */
+  color?: string
   // Multi-series
   series?: ChartSeriesData[]
   scaleMode?: ScaleMode
@@ -52,6 +101,7 @@ interface XYChartProps {
   onTimeRangeSelect?: (from: Date, to: Date) => void
   onWidthChange?: (width: number) => void
   onAxisBoundsChange?: (bounds: ChartAxisBounds) => void
+  referenceLines?: ReferenceLine[]
 }
 
 // Format X value based on axis mode
@@ -106,6 +156,7 @@ export function XYChart({
   yColumnName,
   title = '',
   unit = '',
+  color: colorProp,
   series: seriesProp,
   scaleMode: scaleModeFromProps,
   onScaleModeChange,
@@ -114,6 +165,7 @@ export function XYChart({
   onTimeRangeSelect,
   onWidthChange,
   onAxisBoundsChange,
+  referenceLines,
 }: XYChartProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<uPlot | null>(null)
@@ -128,6 +180,19 @@ export function XYChart({
   onTimeRangeSelectRef.current = onTimeRangeSelect
   const onAxisBoundsChangeRef = useRef(onAxisBoundsChange)
   onAxisBoundsChangeRef.current = onAxisBoundsChange
+
+  // Reference line plugin state (updated without recreating chart)
+  const refLineStateRef = useRef<{
+    lines: ReferenceLine[]
+    isMultiSeries: boolean
+    conversionFactor: number
+    primaryUnit: string
+  }>({
+    lines: referenceLines ?? [],
+    isMultiSeries: false,
+    conversionFactor: 1,
+    primaryUnit: '',
+  })
 
   // Use prop if provided, otherwise use internal state
   const scaleMode = scaleModeFromProps ?? internalScaleMode
@@ -217,7 +282,6 @@ export function XYChart({
   }, [primaryUnit, stats.p99])
 
   // Display unit for the header (adaptive abbreviation for time/size/bits, original for others).
-  // Using `.abbrev` across all three keeps the header consistent with the y-axis label below.
   const displayUnit = adaptiveTimeUnit?.abbrev ?? adaptiveSizeUnit?.abbrev ?? adaptiveBitUnit?.abbrev ?? primaryUnit
 
   // Use ref for onWidthChange to avoid effect re-runs when callback identity changes
@@ -273,6 +337,77 @@ export function XYChart({
     window.addEventListener('resize', handleWindowResize)
     return () => window.removeEventListener('resize', handleWindowResize)
   }, [measureContainer])
+
+  // Keep ref-line state in sync without recreating the chart
+  useEffect(() => {
+    refLineStateRef.current.lines = referenceLines ?? []
+    if (chartRef.current) {
+      chartRef.current.redraw(false)
+    }
+  }, [referenceLines])
+
+  // Reference line draw plugin — reads from ref so chart is not recreated on line edits
+  const createReferenceLinePlugin = useCallback((): uPlot.Plugin => {
+    return {
+      hooks: {
+        draw: [(u: uPlot) => {
+          const { lines, isMultiSeries: multi, conversionFactor: cf, primaryUnit: pu } =
+            refLineStateRef.current
+          if (!lines || lines.length === 0) return
+
+          const ctx = u.ctx
+          const { left, top, width, height } = u.bbox
+
+          ctx.save()
+          ctx.beginPath()
+          ctx.rect(left, top, width, height)
+          ctx.clip()
+
+          for (const line of lines) {
+            const rawValue =
+              typeof line.value === 'string' ? parseFloat(line.value) : line.value
+            if (!Number.isFinite(rawValue)) continue
+
+            const lineColor = line.color ?? DEFAULT_REFERENCE_LINE_COLOR
+            const lineStyle = line.style ?? 'dashed'
+            const lineUnit = line.unit ?? pu
+            const scaleName = (lineUnit || 'y') as string
+
+            // Check if scale exists; fall back to 'y'
+            const effectiveScale = scaleName in u.scales ? scaleName : 'y'
+
+            // Scale value to plot space
+            const plotValue = multi ? rawValue : rawValue * cf
+            const yPx = u.valToPos(plotValue, effectiveScale, true)
+
+            // Skip if outside draw area
+            if (yPx < top || yPx > top + height) continue
+
+            ctx.strokeStyle = lineColor
+            ctx.lineWidth = 1.5
+            ctx.setLineDash(lineStyle === 'dashed' ? [6, 4] : [])
+
+            ctx.beginPath()
+            ctx.moveTo(left, yPx)
+            ctx.lineTo(left + width, yPx)
+            ctx.stroke()
+
+            // Label: name followed by formatted value
+            const formatted = formatValueWithUnit(rawValue, lineUnit || pu)
+            const labelText = line.name ? `${line.name}  ${formatted}` : formatted
+            ctx.setLineDash([])
+            ctx.fillStyle = lineColor
+            ctx.font = '11px -apple-system, BlinkMacSystemFont, sans-serif'
+            ctx.textAlign = 'right'
+            ctx.textBaseline = 'bottom'
+            ctx.fillText(labelText, left + width - 4, yPx - 2)
+          }
+
+          ctx.restore()
+        }],
+      },
+    }
+  }, [])
 
   // Multi-series tooltip plugin
   const createMultiSeriesTooltipPlugin = useCallback(
@@ -468,8 +603,15 @@ export function XYChart({
     // Build X axis configuration based on mode
     const xAxisConfig = buildXAxisConfig(xAxisMode, xLabels)
 
+    const refLinePlugin = createReferenceLinePlugin()
+
     if (isMultiSeries && normalizedSeries.length > 1) {
       // ===================== MULTI-SERIES PATH =====================
+
+      // Update ref-line state
+      refLineStateRef.current.isMultiSeries = true
+      refLineStateRef.current.conversionFactor = 1
+      refLineStateRef.current.primaryUnit = primaryUnit
 
       // Build union of all X values
       const xSet = new Set<number>()
@@ -495,6 +637,51 @@ export function XYChart({
           if (idx != null) yArr[idx] = d.y
         }
         uPlotData.push(yArr)
+      }
+
+      // Build color arrays aligned to union-X for each series (bar disp)
+      // and gradient stop lists (line)
+      const seriesFillArrays: (string[] | null)[] = []
+      const seriesStrokeArrays: (string[] | null)[] = []
+      const seriesGradientStops: ({ x: number; color: string }[] | null)[] = []
+
+      for (let i = 0; i < normalizedSeries.length; i++) {
+        const s = normalizedSeries[i]
+        const seriesColor = s.color ?? SERIES_COLORS[i % SERIES_COLORS.length]
+        const hasColors = s.data.some(p => p.color != null)
+
+        if (!hasColors) {
+          seriesFillArrays.push(null)
+          seriesStrokeArrays.push(null)
+          seriesGradientStops.push(null)
+          continue
+        }
+
+        // Build map from xVal → point color for fast lookup
+        const colorByX = new Map<number, string | undefined>()
+        for (const d of s.data) {
+          const xVal = xAxisMode === 'time' ? d.x / 1000 : d.x
+          colorByX.set(xVal, d.color)
+        }
+
+        // Fill/stroke arrays indexed by union-X position
+        const fillArr = unionX.map(xVal => {
+          const c = colorByX.get(xVal)
+          return c != null ? c : hexToRgba(seriesColor, 0.6)
+        })
+        const strokeArr = unionX.map(xVal => {
+          const c = colorByX.get(xVal)
+          return c != null ? c : seriesColor
+        })
+        seriesFillArrays.push(fillArr)
+        seriesStrokeArrays.push(strokeArr)
+
+        // Gradient stops for line mode (x in uPlot time scale or raw)
+        const gradStops = s.data.map(p => ({
+          x: xAxisMode === 'time' ? p.x / 1000 : p.x,
+          color: p.color ?? seriesColor,
+        }))
+        seriesGradientStops.push(gradStops)
       }
 
       // Build scales, axes, and series configs
@@ -565,30 +752,81 @@ export function XYChart({
       const seriesInfoForTooltip: { label: string; unit: string; color: string }[] = []
       for (let i = 0; i < normalizedSeries.length; i++) {
         const s = normalizedSeries[i]
-        const color = SERIES_COLORS[i % SERIES_COLORS.length]
+        const color = s.color ?? SERIES_COLORS[i % SERIES_COLORS.length]
         const scaleName = s.unit || 'y'
+        const fillArr = seriesFillArrays[i]
+        const strokeArr = seriesStrokeArrays[i]
+        const gradStops = seriesGradientStops[i]
 
-        uPlotSeries.push({
+        const seriesEntry: uPlot.Series = {
           label: s.label,
           scale: scaleName,
           stroke: color,
           width: chartType === 'bar' ? 1 : 2,
           fill: chartType === 'bar' ? hexToRgba(color, 0.6) : hexToRgba(color, 0.1),
-          paths: chartType === 'bar'
-            ? uPlot.paths.bars!({ size: [0.8 / normalizedSeries.length], gap: 1, align: i as never })
-            : undefined,
           points: { show: chartType !== 'bar' },
           show: seriesVisibility ? seriesVisibility[i] : true,
           spanGaps: chartType === 'line',
-        })
+        }
 
+        if (chartType === 'bar') {
+          if (fillArr && strokeArr) {
+            seriesEntry.paths = uPlot.paths.bars!({
+              size: [0.8 / normalizedSeries.length],
+              gap: 1,
+              align: i as never,
+              disp: {
+                fill: { unit: 3 as never, kind: 2 as never, values: () => fillArr },
+                stroke: { unit: 3 as never, kind: 2 as never, values: () => strokeArr },
+              },
+            })
+          } else {
+            seriesEntry.paths = uPlot.paths.bars!({
+              size: [0.8 / normalizedSeries.length],
+              gap: 1,
+              align: i as never,
+            })
+          }
+        } else if (gradStops) {
+          // Line mode with per-row colors: gradient stroke
+          const capturedStops = gradStops
+          seriesEntry.stroke = (u: uPlot) => {
+            const { left, width } = u.bbox
+            if (width <= 0) return color
+            const g = u.ctx.createLinearGradient(left, 0, left + width, 0)
+            const stops = normalizeGradientStops(u, capturedStops)
+            if (stops.length === 0) return color
+            for (const stop of stops) {
+              g.addColorStop(stop.x, stop.color)
+            }
+            return g
+          }
+          seriesEntry.fill = (u: uPlot) => {
+            const { left, width } = u.bbox
+            if (width <= 0) return hexToRgba(color, 0.1)
+            const g = u.ctx.createLinearGradient(left, 0, left + width, 0)
+            const stops = normalizeGradientStops(u, capturedStops)
+            if (stops.length === 0) return hexToRgba(color, 0.1)
+            for (const stop of stops) {
+              // Area fill: use stop color at reduced alpha
+              const match = stop.color.match(/^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})/i)
+              const fillColor = match
+                ? `rgba(${parseInt(match[1], 16)},${parseInt(match[2], 16)},${parseInt(match[3], 16)},0.15)`
+                : hexToRgba(color, 0.1)
+              g.addColorStop(stop.x, fillColor)
+            }
+            return g
+          }
+        }
+
+        uPlotSeries.push(seriesEntry)
         seriesInfoForTooltip.push({ label: s.label, unit: s.unit, color })
       }
 
       const opts: uPlot.Options = {
         width: dimensions.width,
         height: dimensions.height,
-        plugins: [createMultiSeriesTooltipPlugin(seriesInfoForTooltip, xAxisMode, xLabels)],
+        plugins: [createMultiSeriesTooltipPlugin(seriesInfoForTooltip, xAxisMode, xLabels), refLinePlugin],
         tzDate: xAxisMode === 'time' ? (ts: number) => new Date(ts * 1000) : undefined,
         scales,
         axes,
@@ -647,7 +885,14 @@ export function XYChart({
       const singleData = normalizedSeries[0]?.data ?? data ?? []
       if (singleData.length === 0) return
 
+      const seriesColor = colorProp ?? DEFAULT_SERIES_COLOR
+
       const conversionFactor = adaptiveTimeUnit?.conversionFactor ?? adaptiveSizeUnit?.conversionFactor ?? adaptiveBitUnit?.conversionFactor ?? 1
+
+      // Update ref-line state
+      refLineStateRef.current.isMultiSeries = false
+      refLineStateRef.current.conversionFactor = conversionFactor
+      refLineStateRef.current.primaryUnit = primaryUnit
 
       const xValues = xAxisMode === 'time'
         ? singleData.map((d) => d.x / 1000)
@@ -659,10 +904,74 @@ export function XYChart({
 
       const yAxisUnit = adaptiveTimeUnit?.abbrev ?? adaptiveSizeUnit?.abbrev ?? adaptiveBitUnit?.abbrev ?? (primaryUnit === 'percent' ? '%' : primaryUnit)
 
+      // Per-row color support for single-series
+      const hasPerRowColors = singleData.some(p => p.color != null)
+      const fillArr = hasPerRowColors
+        ? singleData.map(p => p.color != null ? p.color : hexToRgba(seriesColor, 0.6))
+        : null
+      const strokeArr = hasPerRowColors
+        ? singleData.map(p => p.color != null ? p.color : seriesColor)
+        : null
+      const gradStops = hasPerRowColors
+        ? singleData.map(p => ({
+            x: xAxisMode === 'time' ? p.x / 1000 : p.x,
+            color: p.color ?? seriesColor,
+          }))
+        : null
+
+      let seriesStroke: uPlot.Series['stroke'] = seriesColor
+      let seriesFill: uPlot.Series['fill'] =
+        chartType === 'bar' ? hexToRgba(seriesColor, 0.6) : hexToRgba(seriesColor, 0.1)
+      let seriesPaths: uPlot.Series['paths'] = undefined
+
+      if (chartType === 'bar') {
+        if (fillArr && strokeArr) {
+          seriesPaths = uPlot.paths.bars!({
+            size: [0.8],
+            gap: 1,
+            disp: {
+              fill: { unit: 3 as never, kind: 2 as never, values: () => fillArr },
+              stroke: { unit: 3 as never, kind: 2 as never, values: () => strokeArr },
+            },
+          })
+        } else {
+          seriesPaths = uPlot.paths.bars!({ size: [0.8], gap: 1 })
+        }
+      } else if (gradStops) {
+        // Line with per-row gradient
+        const capturedStops = gradStops
+        seriesStroke = (u: uPlot) => {
+          const { left, width } = u.bbox
+          if (width <= 0) return seriesColor
+          const g = u.ctx.createLinearGradient(left, 0, left + width, 0)
+          const stops = normalizeGradientStops(u, capturedStops)
+          if (stops.length === 0) return seriesColor
+          for (const stop of stops) {
+            g.addColorStop(stop.x, stop.color)
+          }
+          return g
+        }
+        seriesFill = (u: uPlot) => {
+          const { left, width } = u.bbox
+          if (width <= 0) return hexToRgba(seriesColor, 0.1)
+          const g = u.ctx.createLinearGradient(left, 0, left + width, 0)
+          const stops = normalizeGradientStops(u, capturedStops)
+          if (stops.length === 0) return hexToRgba(seriesColor, 0.1)
+          for (const stop of stops) {
+            const match = stop.color.match(/^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})/i)
+            const fillColor = match
+              ? `rgba(${parseInt(match[1], 16)},${parseInt(match[2], 16)},${parseInt(match[3], 16)},0.15)`
+              : hexToRgba(seriesColor, 0.1)
+            g.addColorStop(stop.x, fillColor)
+          }
+          return g
+        }
+      }
+
       const opts: uPlot.Options = {
         width: dimensions.width,
         height: dimensions.height,
-        plugins: [createTooltipPlugin(primaryUnit, conversionFactor, xAxisMode, xLabels)],
+        plugins: [createTooltipPlugin(primaryUnit, conversionFactor, xAxisMode, xLabels), refLinePlugin],
         tzDate: xAxisMode === 'time' ? (ts: number) => new Date(ts * 1000) : undefined,
         scales: {
           x: { time: xAxisMode === 'time' },
@@ -699,10 +1008,10 @@ export function XYChart({
           {},
           {
             label: title || yColumnName || 'Value',
-            stroke: '#bf360c',
+            stroke: seriesStroke,
             width: chartType === 'bar' ? 1 : 2,
-            fill: chartType === 'bar' ? 'rgba(191, 54, 12, 0.6)' : 'rgba(191, 54, 12, 0.1)',
-            paths: chartType === 'bar' ? uPlot.paths.bars!({ size: [0.8], gap: 1 }) : undefined,
+            fill: seriesFill,
+            paths: seriesPaths,
             points: { show: chartType !== 'bar' },
           },
         ],
@@ -765,7 +1074,7 @@ export function XYChart({
     }
     // Note: dimensions intentionally excluded - handled by separate resize effect
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data, normalizedSeries, title, unit, primaryUnit, createTooltipPlugin, createMultiSeriesTooltipPlugin, stats, adaptiveTimeUnit, adaptiveSizeUnit, adaptiveBitUnit, scaleMode, chartType, xAxisMode, xLabels, yColumnName, isMultiSeries, unitScaleInfo, seriesVisibility])
+  }, [data, normalizedSeries, title, unit, primaryUnit, createTooltipPlugin, createMultiSeriesTooltipPlugin, createReferenceLinePlugin, stats, adaptiveTimeUnit, adaptiveSizeUnit, adaptiveBitUnit, scaleMode, chartType, xAxisMode, xLabels, yColumnName, isMultiSeries, unitScaleInfo, seriesVisibility, colorProp])
 
   // Resize chart without recreating when dimensions change
   useEffect(() => {
@@ -809,6 +1118,8 @@ export function XYChart({
   const showMultiSeriesHeader = isMultiSeries && normalizedSeries.length > 1
   const totalDataCount = normalizedSeries.reduce((sum, s) => sum + s.data.length, 0)
 
+  const singleSeriesColor = colorProp ?? DEFAULT_SERIES_COLOR
+
   return (
     <div className="flex flex-col h-full bg-app-panel border border-theme-border rounded-lg">
       {/* Chart header */}
@@ -816,7 +1127,7 @@ export function XYChart({
         {showMultiSeriesHeader ? (
           <div className="flex items-center gap-3">
             {normalizedSeries.map((s, i) => {
-              const color = SERIES_COLORS[i % SERIES_COLORS.length]
+              const color = s.color ?? SERIES_COLORS[i % SERIES_COLORS.length]
               const isVisible = seriesVisibility ? seriesVisibility[i] : true
               return (
                 <button
@@ -848,7 +1159,7 @@ export function XYChart({
         <div className="flex items-center gap-4 text-xs text-theme-text-muted">
           {!showMultiSeriesHeader && displayTitle && (
             <div className="flex items-center gap-1.5">
-              <div className="w-3 h-0.5 bg-chart-line rounded" />
+              <div className="w-3 h-0.5 rounded" style={{ background: singleSeriesColor }} />
               <span>{displayTitle}</span>
             </div>
           )}
@@ -958,6 +1269,7 @@ export function TimeSeriesChart({
       xAxisMode="time"
       title={title}
       unit={unit}
+      color={DEFAULT_SERIES_COLOR}
       scaleMode={scaleMode}
       onScaleModeChange={onScaleModeChange}
       onTimeRangeSelect={onTimeRangeSelect}

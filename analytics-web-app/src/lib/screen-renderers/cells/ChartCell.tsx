@@ -6,8 +6,8 @@ import type {
   CellExecutionContext,
 } from '../cell-registry'
 import type { CellConfigBase, CellConfig, CellState, VariableValue } from '../notebook-types'
-import { SERIES_COLORS } from '@/components/chart-constants'
-import { XYChart, ScaleMode, ChartType } from '@/components/XYChart'
+import { SERIES_COLORS, DEFAULT_SERIES_COLOR, DEFAULT_REFERENCE_LINE_COLOR } from '@/components/chart-constants'
+import { XYChart, ScaleMode, ChartType, ReferenceLine } from '@/components/XYChart'
 import { extractChartData, extractMultiSeriesChartData } from '@/lib/arrow-utils'
 import type { ChartSeriesData } from '@/lib/arrow-utils'
 import { AvailableVariablesPanel } from '@/components/AvailableVariablesPanel'
@@ -15,7 +15,7 @@ import { DocumentationLink, QUERY_GUIDE_URL } from '@/components/DocumentationLi
 import { SyntaxEditor } from '@/components/SyntaxEditor'
 import { DataSourceSelector } from '@/components/DataSourceSelector'
 import { BarChart3 } from 'lucide-react'
-import { substituteMacros, validateMacros, DEFAULT_SQL } from '../notebook-utils'
+import { substituteMacros, substituteMacrosRaw, validateMacros, DEFAULT_SQL } from '../notebook-utils'
 
 // =============================================================================
 // Multi-Query Chart Types
@@ -27,6 +27,8 @@ export interface ChartQueryDef {
   unit?: string
   label?: string
   dataSource?: string
+  /** User-chosen series color (#rrggbb). Seeded from palette when query is added. */
+  color?: string
 }
 
 interface ChartCellConfigV1 extends CellConfigBase {
@@ -48,6 +50,7 @@ export interface ChartCellConfigV2 extends CellConfigBase {
   options?: {
     scale_mode?: ScaleMode
     chart_type?: ChartType
+    reference_lines?: ReferenceLine[]
     [key: string]: unknown
   }
 }
@@ -81,6 +84,7 @@ function queryTableName(cellName: string, queryName?: string): string {
 /**
  * Substitutes macros in string values within chart options.
  * This allows using $variable.column syntax in options like unit labels.
+ * Non-string values (including arrays like reference_lines) pass through untouched.
  */
 function substituteOptionsWithMacros(
   options: Record<string, unknown> | undefined,
@@ -98,12 +102,44 @@ function substituteOptionsWithMacros(
       // Apply macro substitution to string values
       result[key] = substituteMacros(value, variables, timeRange, cellResults, cellSelections)
     } else {
-      // Keep non-string values as-is
+      // Keep non-string values as-is (arrays, numbers, objects)
       result[key] = value
     }
   }
 
   return result
+}
+
+/** Resolve macros in a single reference line. Returns null if the value is NaN after resolution. */
+function resolveReferenceLine(
+  line: ReferenceLine,
+  variables: Record<string, VariableValue>,
+  timeRange: { begin: string; end: string },
+  cellResults: Record<string, import('apache-arrow').Table>,
+  cellSelections: Record<string, Record<string, unknown>>,
+): ReferenceLine | null {
+  // name and unit: SQL-context display strings — use SQL-escaping substituteMacros
+  const name = line.name
+    ? substituteMacros(line.name, variables, timeRange, cellResults, cellSelections)
+    : undefined
+  const unit = line.unit
+    ? substituteMacros(line.unit, variables, timeRange, cellResults, cellSelections)
+    : undefined
+
+  // value and color: parsed to number / used as CSS, not embedded in SQL → use substituteMacrosRaw
+  let value: number | string = line.value
+  if (typeof line.value === 'string') {
+    const resolved = substituteMacrosRaw(line.value, variables, timeRange, cellResults, cellSelections)
+    const num = Number(resolved)
+    if (isNaN(num)) return null
+    value = num
+  }
+
+  const color = line.color
+    ? substituteMacrosRaw(line.color, variables, timeRange, cellResults, cellSelections)
+    : undefined
+
+  return { ...line, name, unit, value, color }
 }
 
 // =============================================================================
@@ -127,7 +163,7 @@ export function ChartCell({ data, status, options, onOptionsChange, variables, t
 
     // Get query metadata from options (set by getRendererProps)
     const queryMeta = (options as Record<string, unknown>)?._queryMeta as
-      { unit?: string; label?: string }[] | undefined
+      { unit?: string; label?: string; color?: string }[] | undefined
 
     const tableInputs = data.map((table, i) => ({
       table,
@@ -143,6 +179,18 @@ export function ChartCell({ data, status, options, onOptionsChange, variables, t
     () => substituteOptionsWithMacros(options, variables, timeRange, cellResults, cellSelections),
     [options, variables, timeRange, cellResults, cellSelections]
   )
+
+  // Resolve reference lines (macro substitution + value parsing)
+  const resolvedReferenceLines = useMemo(() => {
+    const lines = resolvedOptions?.reference_lines as ReferenceLine[] | undefined
+    if (!lines || lines.length === 0) return undefined
+    const resolved: ReferenceLine[] = []
+    for (const line of lines) {
+      const r = resolveReferenceLine(line, variables, timeRange, cellResults, cellSelections)
+      if (r !== null) resolved.push(r)
+    }
+    return resolved.length > 0 ? resolved : undefined
+  }, [resolvedOptions, variables, timeRange, cellResults, cellSelections])
 
   const handleScaleModeChange = useCallback(
     (mode: ScaleMode) => {
@@ -184,11 +232,16 @@ export function ChartCell({ data, status, options, onOptionsChange, variables, t
       )
     }
 
-    // Resolve macros in per-series units and labels
-    const resolvedSeries: ChartSeriesData[] = multiResult.series.map(s => ({
+    // Get query metadata for per-series colors and labels
+    const queryMeta = (options as Record<string, unknown>)?._queryMeta as
+      { unit?: string; label?: string; color?: string }[] | undefined
+
+    // Resolve macros in per-series units and labels, and inject series colors
+    const resolvedSeries: ChartSeriesData[] = multiResult.series.map((s, i) => ({
       ...s,
       label: s.label ? substituteMacros(s.label, variables, timeRange, cellResults, cellSelections) : s.label,
       unit: s.unit ? substituteMacros(s.unit, variables, timeRange, cellResults, cellSelections) : '',
+      color: queryMeta?.[i]?.color ?? SERIES_COLORS[i % SERIES_COLORS.length],
     }))
 
     return (
@@ -203,6 +256,7 @@ export function ChartCell({ data, status, options, onOptionsChange, variables, t
           chartType={(resolvedOptions?.chart_type as ChartType) ?? 'line'}
           onChartTypeChange={handleChartTypeChange}
           onTimeRangeSelect={onTimeRangeSelect}
+          referenceLines={resolvedReferenceLines}
         />
       </div>
     )
@@ -229,13 +283,14 @@ export function ChartCell({ data, status, options, onOptionsChange, variables, t
 
   // Extract per-query unit and label for single-series charts
   const singleQueryMeta = (options as Record<string, unknown>)?._queryMeta as
-    { unit?: string; label?: string }[] | undefined
+    { unit?: string; label?: string; color?: string }[] | undefined
   const chartUnit = singleQueryMeta?.[0]?.unit
     ? substituteMacros(singleQueryMeta[0].unit, variables, timeRange, cellResults, cellSelections)
     : (resolvedOptions?.unit as string) ?? undefined
   const chartTitle = singleQueryMeta?.[0]?.label
     ? substituteMacros(singleQueryMeta[0].label, variables, timeRange, cellResults, cellSelections)
     : undefined
+  const chartColor = singleQueryMeta?.[0]?.color ?? DEFAULT_SERIES_COLOR
 
   return (
     <div className="h-full">
@@ -251,7 +306,9 @@ export function ChartCell({ data, status, options, onOptionsChange, variables, t
         onChartTypeChange={handleChartTypeChange}
         unit={chartUnit}
         title={chartTitle}
+        color={chartColor}
         onTimeRangeSelect={onTimeRangeSelect}
+        referenceLines={resolvedReferenceLines}
       />
     </div>
   )
@@ -276,9 +333,11 @@ function ChartCellEditor({ config, onChange, variables, timeRange, datasourceVar
   }, [v2.queries, updateConfig])
 
   const addQuery = useCallback(() => {
+    const idx = v2.queries.length
     const newQuery: ChartQueryDef = {
       sql: DEFAULT_SQL.chart,
       dataSource: v2.queries[0]?.dataSource,
+      color: SERIES_COLORS[idx % SERIES_COLORS.length],
     }
     updateConfig({ queries: [...v2.queries, newQuery] })
   }, [v2.queries, updateConfig])
@@ -289,7 +348,29 @@ function ChartCellEditor({ config, onChange, variables, timeRange, datasourceVar
     updateConfig({ queries: newQueries })
   }, [v2.queries, updateConfig])
 
-  // Validate macro references across all queries
+  const referenceLines = useMemo(
+    () => (v2.options?.reference_lines as ReferenceLine[] | undefined) ?? [],
+    [v2.options?.reference_lines]
+  )
+
+  const addReferenceLine = useCallback(() => {
+    const newLine: ReferenceLine = { value: 0, style: 'dashed', color: DEFAULT_REFERENCE_LINE_COLOR }
+    const newLines = [...referenceLines, newLine]
+    updateConfig({ options: { ...v2.options, reference_lines: newLines } })
+  }, [referenceLines, v2.options, updateConfig])
+
+  const updateReferenceLine = useCallback((index: number, updates: Partial<ReferenceLine>) => {
+    const newLines = [...referenceLines]
+    newLines[index] = { ...newLines[index], ...updates }
+    updateConfig({ options: { ...v2.options, reference_lines: newLines } })
+  }, [referenceLines, v2.options, updateConfig])
+
+  const removeReferenceLine = useCallback((index: number) => {
+    const newLines = referenceLines.filter((_, i) => i !== index)
+    updateConfig({ options: { ...v2.options, reference_lines: newLines } })
+  }, [referenceLines, v2.options, updateConfig])
+
+  // Validate macro references across all queries and reference lines
   const validationErrors = useMemo(() => {
     const errors: string[] = []
     for (let i = 0; i < v2.queries.length; i++) {
@@ -305,8 +386,32 @@ function ChartCellEditor({ config, onChange, variables, timeRange, datasourceVar
         labelValidation.errors.forEach(e => errors.push(`Query ${i + 1} label: ${e}`))
       }
     }
+    for (let i = 0; i < referenceLines.length; i++) {
+      const line = referenceLines[i]
+      const prefix = `Reference line ${i + 1}`
+      if (line.name) {
+        validateMacros(line.name, variables, cellResults, cellSelections).errors.forEach(e =>
+          errors.push(`${prefix} name: ${e}`)
+        )
+      }
+      if (typeof line.value === 'string') {
+        validateMacros(line.value, variables, cellResults, cellSelections).errors.forEach(e =>
+          errors.push(`${prefix} value: ${e}`)
+        )
+      }
+      if (line.unit) {
+        validateMacros(line.unit, variables, cellResults, cellSelections).errors.forEach(e =>
+          errors.push(`${prefix} unit: ${e}`)
+        )
+      }
+      if (line.color) {
+        validateMacros(line.color, variables, cellResults, cellSelections).errors.forEach(e =>
+          errors.push(`${prefix} color: ${e}`)
+        )
+      }
+    }
     return errors
-  }, [v2.queries, variables, cellResults, cellSelections])
+  }, [v2.queries, referenceLines, variables, cellResults, cellSelections])
 
   return (
     <>
@@ -315,9 +420,12 @@ function ChartCellEditor({ config, onChange, variables, timeRange, datasourceVar
           {/* Query block header */}
           <div className="flex justify-between items-center px-3 py-2 bg-app-panel border-b border-theme-border">
             <div className="flex items-center gap-2 text-xs font-medium text-theme-text-secondary">
-              <div
-                className="w-2 h-2 rounded-full"
-                style={{ background: SERIES_COLORS[i % SERIES_COLORS.length] }}
+              <input
+                type="color"
+                value={(query.color ?? SERIES_COLORS[i % SERIES_COLORS.length]).slice(0, 7)}
+                onChange={(e) => updateQuery(i, { color: e.target.value })}
+                className="w-5 h-5 rounded cursor-pointer border-0 p-0 bg-transparent"
+                title="Series color (legend token and default mark color)"
               />
               Query {i + 1}
             </div>
@@ -360,6 +468,14 @@ function ChartCellEditor({ config, onChange, variables, timeRange, datasourceVar
                 minHeight="240px"
                 onRunShortcut={onRun}
               />
+              <p className="mt-1 text-[11px] text-theme-text-muted leading-snug">
+                Add a <code className="font-mono">color</code> column (packed RGBA u32, e.g. via{' '}
+                <code className="font-mono">rgba()</code> or <code className="font-mono">color_scale()</code>) to color
+                each point. The series color above then acts as the legend token only.{' '}
+                <a href={QUERY_GUIDE_URL} target="_blank" rel="noreferrer" className="text-accent-link hover:underline">
+                  Functions reference
+                </a>
+              </p>
             </div>
 
             {/* Inline fields: Unit and Label */}
@@ -400,6 +516,68 @@ function ChartCellEditor({ config, onChange, variables, timeRange, datasourceVar
       >
         + Add Query
       </button>
+
+      {/* Reference Lines section */}
+      <div className="bg-app-card border border-theme-border rounded-lg overflow-hidden">
+        <div className="px-3 py-2 bg-app-panel border-b border-theme-border">
+          <span className="text-xs font-medium text-theme-text-secondary uppercase">Reference Lines</span>
+        </div>
+        <div className="p-3 space-y-2">
+          {referenceLines.map((line, i) => (
+            <div key={i} className="flex items-center gap-2">
+              <input
+                type="text"
+                value={line.name ?? ''}
+                onChange={(e) => updateReferenceLine(i, { name: e.target.value || undefined })}
+                className="flex-1 px-2 py-1 bg-app-panel border border-theme-border rounded text-theme-text-primary text-xs focus:outline-none focus:border-accent-link"
+                placeholder="Name (optional)"
+              />
+              <input
+                type="text"
+                value={String(line.value)}
+                onChange={(e) => updateReferenceLine(i, { value: e.target.value })}
+                className="w-24 px-2 py-1 bg-app-panel border border-theme-border rounded text-theme-text-primary text-xs focus:outline-none focus:border-accent-link"
+                placeholder="Value or $var"
+              />
+              <input
+                type="text"
+                value={line.unit ?? ''}
+                onChange={(e) => updateReferenceLine(i, { unit: e.target.value || undefined })}
+                className="w-16 px-2 py-1 bg-app-panel border border-theme-border rounded text-theme-text-primary text-xs focus:outline-none focus:border-accent-link"
+                placeholder="Unit"
+              />
+              <input
+                type="color"
+                value={(line.color ?? DEFAULT_REFERENCE_LINE_COLOR).slice(0, 7)}
+                onChange={(e) => updateReferenceLine(i, { color: e.target.value })}
+                className="w-7 h-7 rounded cursor-pointer border border-theme-border p-0.5 bg-transparent"
+                title="Line color"
+              />
+              <select
+                value={line.style ?? 'dashed'}
+                onChange={(e) => updateReferenceLine(i, { style: e.target.value as 'solid' | 'dashed' })}
+                className="px-2 py-1 bg-app-panel border border-theme-border rounded text-theme-text-primary text-xs focus:outline-none focus:border-accent-link"
+              >
+                <option value="dashed">Dashed</option>
+                <option value="solid">Solid</option>
+              </select>
+              <button
+                onClick={() => removeReferenceLine(i)}
+                className="text-theme-text-muted hover:text-accent-error text-base px-1 rounded transition-colors"
+                title="Remove"
+              >
+                &times;
+              </button>
+            </div>
+          ))}
+          <button
+            onClick={addReferenceLine}
+            className="w-full py-1.5 border border-dashed border-theme-border rounded text-theme-text-muted text-xs hover:border-accent-link hover:text-accent-link transition-colors"
+          >
+            + Add Reference Line
+          </button>
+        </div>
+      </div>
 
       {validationErrors.length > 0 && (
         <div className="text-red-400 text-sm space-y-1">
@@ -469,8 +647,8 @@ export const chartMetadata: CellTypeMetadata = {
 
   getRendererProps: (config: CellConfig, state: CellState) => {
     const v2 = migrateChartConfig(config)
-    // Pass query metadata (units/labels) through options so the renderer can build series
-    const queryMeta = v2.queries.map(q => ({ unit: q.unit, label: q.label }))
+    // Pass query metadata (units/labels/colors) through options so the renderer can build series
+    const queryMeta = v2.queries.map(q => ({ unit: q.unit, label: q.label, color: q.color }))
     return {
       data: state.data,
       status: state.status,
