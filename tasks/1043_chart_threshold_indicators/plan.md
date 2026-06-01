@@ -517,14 +517,17 @@ functions reference.
    color via the new `XYChart` `color?` prop, falling back to `SERIES_COLORS[0]`.
 6. `XYChart.tsx`: add the `color?` prop (single-series). Replace index-based
    palette lookups (`XYChart.tsx:568,576,819`) with `series.color ?? palette[i]`
-   and the single-series hard-coded `#bf360c` (`XYChart.tsx:702-704`) with
-   `color ?? '#bf360c'` (i.e. keep the existing fallback so callers that pass no
-   `color` prop — `MetricsRenderer`, `TimeSeriesChart` — continue to render
-   identically); the legend swatch and default marks both read it. Note the
-   single-series header indicator (`XYChart.tsx:851`) is a `bg-chart-line`
+   and the single-series hard-coded `#bf360c` (`XYChart.tsx:702-704`) with the
+   `color` prop directly; the legend swatch and default marks both read it. Note
+   the single-series header indicator (`XYChart.tsx:851`) is a `bg-chart-line`
    CSS-class binding, not an index lookup — convert it to an inline
-   `style={{ background: color ?? '#bf360c' }}` from the `color` prop rather than
-   swapping a palette index.
+   `style={{ background: color }}` from the `color` prop rather than swapping a
+   palette index. **`MetricsRenderer` and `TimeSeriesChart` must also be updated
+   to pass `color='#bf360c'` (the existing rust default) so they continue to
+   render identically**: `MetricsRenderer.tsx:193` adds `color='#bf360c'` to the
+   `<XYChart>` call; `TimeSeriesChart` (`XYChart.tsx:956`) likewise adds
+   `color='#bf360c'` to its inner `<XYChart>` call (alternatively, expose a
+   `color?` prop on `TimeSeriesChartProps` defaulting to `'#bf360c'`).
 
 ### Phase 4 — Reference line + per-row mark color rendering
 7. `XYChart.tsx`: add `referenceLines` prop + `ReferenceLine` type (or import
@@ -565,9 +568,10 @@ functions reference.
 - `analytics-web-app/src/lib/arrow-utils.ts`
 - `analytics-web-app/src/components/XYChart.tsx`
 - `analytics-web-app/src/lib/screen-renderers/cells/ChartCell.tsx`
-- `analytics-web-app/src/lib/screen-renderers/MetricsRenderer.tsx` (no code
-  change required — it consumes only `ChartSeriesData.data`; listed because it
-  is the other `extractChartData` caller and inherits the relaxed column gate)
+- `analytics-web-app/src/lib/screen-renderers/MetricsRenderer.tsx` (add
+  `color='#bf360c'` to the `<XYChart>` call so it keeps the existing rust
+  default; also inherits the relaxed column gate from the `extractChartData`
+  change)
 - `mkdocs/docs/web-app/notebooks/cell-types.md`
 - Tests: `analytics-web-app/src/lib/__tests__/arrow-utils.test.ts`,
   new `color-utils.test.ts`, and `XYChart`/`ChartCell` tests as applicable.
