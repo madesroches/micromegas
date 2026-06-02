@@ -37,6 +37,10 @@ async fn delete_expired_temporary_files_batch(
         .map(|r| r.try_get("file_path"))
         .collect::<Result<_, _>>()?;
 
+    for file_path in &to_delete {
+        debug!("deleted expired temporary file {file_path}");
+    }
+
     delete_partition_metadata_batch(&mut tr, &to_delete)
         .await
         .with_context(|| "deleting partition metadata for expired temporary files")?;

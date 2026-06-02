@@ -1,6 +1,6 @@
 # Temporary File Delete Batching Plan
 
-Issue: [#1108](https://github.com/madesroches/micromegas/issues/1108)
+Issues: [#1108](https://github.com/madesroches/micromegas/issues/1108), [#1109](https://github.com/madesroches/micromegas/issues/1109)
 
 ## Overview
 
@@ -92,6 +92,12 @@ a future cycle).
 2. Run `cargo fmt` and `cargo clippy --workspace -- -D warnings` from `rust/`.
 
 3. Run `cargo test` to confirm no regressions.
+
+## Status: Done
+
+- Batching + summary log: commit `6b9bd01e7` on branch `cleanup`.
+- Per-file `debug!` audit log (issue #1109): added after initial implementation — each deleted file path is logged at `debug!` level so the full audit trail is available on demand without flooding telemetry under normal load.
+- `cargo fmt` and `cargo clippy --workspace -- -D warnings` passed clean.
 
 ## Files to Modify
 
