@@ -41,11 +41,13 @@ describe('spanColorIndex / spanColor', () => {
 })
 
 describe('formatDuration', () => {
-  it('renders nanoseconds, microseconds, milliseconds, and seconds', () => {
-    expect(formatDuration(0.0005)).toBe('500ns')
-    expect(formatDuration(0.5)).toBe('500us')
-    expect(formatDuration(12.34)).toBe('12.3ms')
-    expect(formatDuration(2500)).toBe('2.50s')
+  it('renders nanoseconds, microseconds, milliseconds, seconds, minutes, and hours', () => {
+    expect(formatDuration(0.0005)).toBe('500 ns')
+    expect(formatDuration(0.5)).toBe('500 µs')
+    expect(formatDuration(12.34)).toBe('12.3 ms')
+    expect(formatDuration(2500)).toBe('2.50 s')
+    expect(formatDuration(120_000)).toBe('2.00 min')
+    expect(formatDuration(7_200_000)).toBe('2.00 h')
   })
 })
 

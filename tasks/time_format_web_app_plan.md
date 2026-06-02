@@ -1,4 +1,4 @@
-# Time Format in Web App Plan
+# Time Format in Web App Plan — DONE
 
 ## Overview
 
@@ -61,9 +61,8 @@ Keeping `formatDuration` as a named wrapper preserves the call site in `FlameGra
 
 ## Implementation Steps
 
-1. **`flame-model.ts`**: Replace the body of `formatDuration` (lines 294–299) with `return formatTimeValue(ms, 'milliseconds', true)`. Add the import from `@/lib/time-units`.
-
-2. **`flame-model.test.ts`**: Update the `formatDuration` test cases to match new output (space-separated unit, `µs` instead of `us`). Add a case for `> 60s` (minutes) and `> 3600s` (hours).
+1. **`flame-model.ts`**: Replace the body of `formatDuration` (lines 294–299) with `return formatTimeValue(ms, 'milliseconds', true)`. Add the import from `@/lib/time-units`. ✓
+2. **`flame-model.test.ts`**: Update the `formatDuration` test cases to match new output (space-separated unit, `µs` instead of `us`). Add a case for `> 60_000 ms` (minutes) and `> 3_600_000 ms` (hours). ✓
 
 ## Files to Modify
 
