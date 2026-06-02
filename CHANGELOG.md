@@ -12,6 +12,8 @@ This file documents the historical progress of the Micromegas project. For curre
   * Rework map cell keyboard controls onto a single camera-relative orthonormal basis (A/D strafe, W/S up/down, Q/E forward/back) so key pairs no longer collapse onto the same direction at high camera tilt; radial zoom stays on Ctrl+wheel
   * Fix table column-override memo keying on fresh-per-render objects, causing `evaluateTemplate` to re-run every render; key on a content hash of only template-referenced inputs instead (#1092)
   * Route Map detail-panel `$column` macros through the evaluator's raw row + column-types channel so bare references carry their Arrow `DataType`; timestamps format as RFC3339 and `format_value()` receives full-precision raw values instead of pre-stringified ones (#1091)
+* **Analytics:**
+  * Batch `delete_expired_temporary_files` to avoid unbounded SQL/S3 operations on large `temporary_files` tables; add per-file `debug!`-level audit logging (#1108, #1109)
 * **Build:**
   * Fix `cargo doc --workspace --all-features` hiding the `micromegas-perfetto` library modules by re-keying proto regeneration on the `MICROMEGAS_REGEN_PROTOS` env var instead of the `protogen` feature (#1079)
 * **Refactoring:**
