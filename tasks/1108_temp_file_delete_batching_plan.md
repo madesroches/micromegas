@@ -17,8 +17,9 @@ same bounded-batch + loop pattern already used by `delete_expired_blocks_batch`.
   unbounded `DELETE … RETURNING` over the entire `temporary_files` table.
   - `delete_partition_metadata_batch` issues `DELETE … WHERE file_path = ANY($1)` with
     the full (potentially 500 k+) array (see `partition_metadata.rs:153-168`).
-  - `BlobStorage::delete_batch` uses `.try_chunks(1_000).buffered(20)` — 500 k
-    files → 500 concurrent `DeleteObjects` requests → S3 `SlowDown`.
+  - `BlobStorage::delete_batch` calls `delete_stream` from the `object_store`
+    crate, which issues individual deletes — 500 k files → 500 k sequential
+    object-store delete calls → S3 `SlowDown`.
   - S3 error propagates before `tr.commit()`, transaction rolls back, rows
     remain, next cycle is even larger.
   - Per-file `info!("deleting expired file {file_path}")` produces hundreds of
