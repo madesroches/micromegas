@@ -8,6 +8,7 @@
 import { DataType, Table } from 'apache-arrow'
 import { timestampToMs } from '@/lib/arrow-utils'
 import { computeAsyncVisualDepths, type SpanData } from './FlameGraphLayout'
+import { formatTimeValue } from '@/lib/time-units'
 
 // X-axis mode: 'time' uses timestamp columns; 'bits' uses numeric (Int64/Float64)
 // columns where each unit represents bits on the wire (see `net_spans` view).
@@ -292,10 +293,7 @@ export function hitTest(
 // =============================================================================
 
 export function formatDuration(ms: number): string {
-  if (ms < 0.001) return `${(ms * 1_000_000).toFixed(0)}ns`
-  if (ms < 1) return `${(ms * 1000).toFixed(0)}us`
-  if (ms < 1000) return `${ms.toFixed(1)}ms`
-  return `${(ms / 1000).toFixed(2)}s`
+  return formatTimeValue(ms, 'milliseconds', true)
 }
 
 export function formatBits(n: number): string {
