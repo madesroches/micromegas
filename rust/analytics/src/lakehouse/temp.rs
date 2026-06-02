@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use super::partition_metadata::delete_partition_metadata_batch;
 
+#[span_fn]
 async fn delete_expired_temporary_files_batch(
     lake: &DataLakeConnection,
     now: DateTime<Utc>,
@@ -51,6 +52,7 @@ async fn delete_expired_temporary_files_batch(
     Ok(true)
 }
 
+#[span_fn]
 pub async fn delete_expired_temporary_files(lake: Arc<DataLakeConnection>) -> Result<()> {
     let now = Utc::now();
     while delete_expired_temporary_files_batch(&lake, now).await? {}
