@@ -49,9 +49,14 @@ Use a single `DELETE … WHERE file_path IN (SELECT … LIMIT $2) RETURNING file
 within a transaction. This atomically selects and removes the batch from the DB,
 preventing a concurrent cycle from picking up the same rows.
 
-The partition metadata and S3 deletes happen inside the same transaction span
-before commit, preserving the existing ordering guarantee: if S3 fails the
-transaction rolls back and the rows stay for the next attempt.
+The partition metadata and S3 deletes happen before `tr.commit()`, preserving
+the existing ordering guarantee: if S3 fails the transaction rolls back and the
+rows stay for the next attempt. The required order within the transaction is:
+(1) `DELETE … RETURNING` to collect file paths, (2) `delete_partition_metadata_batch`,
+(3) `blob_storage.delete_batch`, (4) `tr.commit()` — same ordering as the current
+code. S3 is not transactional; `tr.commit()` must not be called until after
+`blob_storage.delete_batch` succeeds, so that a failed S3 delete leaves the DB
+rows intact for the next retry.
 
 Batch size: **1 000** — consistent with `delete_expired_blocks_batch` and all
 other bounded-batch operations in `delete.rs`. At 1 000 files,
