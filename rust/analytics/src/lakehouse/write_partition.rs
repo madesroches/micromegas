@@ -66,44 +66,49 @@ impl PartitionRowSet {
     }
 }
 
-/// Retires partitions that have exceeded their expiration time.
+#[span_fn]
+async fn retire_expired_partitions_batch(
+    lake: &DataLakeConnection,
+    expiration: DateTime<Utc>,
+) -> Result<bool> {
+    let batch_size: i32 = 1000;
+    let mut transaction = lake.db_pool.begin().await?;
+    let rows = sqlx::query(
+        "DELETE FROM lakehouse_partitions
+         WHERE (view_set_name, view_instance_id, begin_insert_time, end_insert_time) IN (
+             SELECT view_set_name, view_instance_id, begin_insert_time, end_insert_time
+             FROM lakehouse_partitions
+             WHERE end_insert_time < $1
+             LIMIT $2
+         )
+         RETURNING file_path, file_size;",
+    )
+    .bind(expiration)
+    .bind(batch_size)
+    .fetch_all(&mut *transaction)
+    .await
+    .with_context(|| "deleting expired partitions batch")?;
+
+    let count = rows.len();
+    for row in &rows {
+        let file_path: Option<String> = row.try_get("file_path")?;
+        let file_size: i64 = row.try_get("file_size")?;
+        if let Some(path) = file_path {
+            debug!("retiring expired partition file {path} ({file_size} bytes)");
+            add_file_for_cleanup(&mut transaction, &path, file_size).await?;
+        }
+    }
+    transaction.commit().await.with_context(|| "commit")?;
+    info!("retired {count} expired partitions");
+    Ok(count == batch_size as usize)
+}
+
+#[span_fn]
 pub async fn retire_expired_partitions(
     lake: &DataLakeConnection,
     expiration: DateTime<Utc>,
 ) -> Result<()> {
-    let mut transaction = lake.db_pool.begin().await?;
-    let old_partitions = sqlx::query(
-        "SELECT file_path, file_size
-         FROM lakehouse_partitions
-         WHERE end_insert_time < $1
-         ;",
-    )
-    .bind(expiration)
-    .fetch_all(&mut *transaction)
-    .await
-    .with_context(|| "listing expired partitions")?;
-
-    let mut file_paths = Vec::new();
-    for old_part in &old_partitions {
-        let file_path: Option<String> = old_part.try_get("file_path")?;
-        let file_size: i64 = old_part.try_get("file_size")?;
-        if let Some(path) = file_path {
-            info!("adding out of date partition {path} to temporary files to be deleted");
-            add_file_for_cleanup(&mut transaction, &path, file_size).await?;
-            file_paths.push(path);
-        }
-    }
-
-    sqlx::query(
-        "DELETE from lakehouse_partitions
-         WHERE end_insert_time < $1
-         ;",
-    )
-    .bind(expiration)
-    .execute(&mut *transaction)
-    .await
-    .with_context(|| "deleting expired partitions")?;
-    transaction.commit().await.with_context(|| "commit")?;
+    while retire_expired_partitions_batch(lake, expiration).await? {}
     Ok(())
 }
 
