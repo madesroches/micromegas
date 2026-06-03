@@ -140,7 +140,7 @@ impl PartitionSpec for BlockPartitionSpec {
                     logger.write_log_entry(format!("{e:?}")).await?;
                 }
                 Ok(Some(row_set)) => {
-                    tx.send(row_set).await?;
+                    tx.send(Ok(row_set)).await?;
                 }
                 Ok(None) => {
                     debug!("empty block");

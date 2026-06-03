@@ -124,7 +124,6 @@ async fn write_partition(
 ) -> Result<()> {
     let nb_events = hash_to_object_count(&spec.block_ids_hash)? as usize;
     info!("nb_events: {nb_events}");
-    let mut record_builder = NetSpanRecordBuilder::with_capacity(nb_events / 2);
     if spec.blocks.is_empty() {
         anyhow::bail!("empty partition spec");
     }
@@ -143,30 +142,39 @@ async fn write_partition(
         null_response_writer,
     ));
 
-    // A process has exactly one net stream (the Unreal NetTraceWriter creates a
-    // single NetStream tagged "net"), so all blocks here share the same stream.
-    // Validate the invariant so a future regression surfaces early instead of
-    // silently tagging rows with the wrong stream_id.
-    let stream = spec.blocks[0].stream.clone();
-    for b in &spec.blocks {
-        anyhow::ensure!(
-            b.stream.stream_id == stream.stream_id,
-            "net_spans partition contains multiple streams ({} and {}); expected one per process",
-            stream.stream_id,
-            b.stream.stream_id,
-        );
-    }
-
-    // Split on time gaps: blocks are contiguous in ticks by construction (the
-    // flush point's `Now` is shared between the closing and new block), so a
-    // gap means a block was lost — don't stitch the span stack across it.
-    let mut blocks_to_process: Vec<BlockMetadata> = vec![];
-    let mut last_end: Option<i64> = None;
-    for block in &spec.blocks {
-        let contiguous = last_end
-            .map(|e| block.block.begin_ticks == e)
-            .unwrap_or(true);
-        if !contiguous {
+    let build_result: Result<Option<PartitionRowSet>> = async {
+        let mut record_builder = NetSpanRecordBuilder::with_capacity(nb_events / 2);
+        let stream = spec.blocks[0].stream.clone();
+        for b in &spec.blocks {
+            anyhow::ensure!(
+                b.stream.stream_id == stream.stream_id,
+                "net_spans partition contains multiple streams ({} and {}); expected one per process",
+                stream.stream_id,
+                b.stream.stream_id,
+            );
+        }
+        let mut blocks_to_process: Vec<BlockMetadata> = vec![];
+        let mut last_end: Option<i64> = None;
+        for block in &spec.blocks {
+            let contiguous = last_end
+                .map(|e| block.block.begin_ticks == e)
+                .unwrap_or(true);
+            if !contiguous {
+                append_net_span_tree(
+                    &mut record_builder,
+                    convert_ticks,
+                    &blocks_to_process,
+                    lake.blob_storage.clone(),
+                    &stream,
+                    process_id.clone(),
+                )
+                .await?;
+                blocks_to_process = vec![];
+            }
+            blocks_to_process.push(block.block.clone());
+            last_end = Some(block.block.end_ticks);
+        }
+        if !blocks_to_process.is_empty() {
             append_net_span_tree(
                 &mut record_builder,
                 convert_ticks,
@@ -176,44 +184,59 @@ async fn write_partition(
                 process_id.clone(),
             )
             .await?;
-            blocks_to_process = vec![];
         }
-        blocks_to_process.push(block.block.clone());
-        last_end = Some(block.block.end_ticks);
+        let min_time_row = convert_ticks.delta_ticks_to_time(spec.blocks[0].block.begin_ticks);
+        let max_time_row =
+            convert_ticks.delta_ticks_to_time(spec.blocks[spec.blocks.len() - 1].block.end_ticks);
+        let rows_time_range = record_builder
+            .get_time_range()
+            .unwrap_or(TimeRange::new(min_time_row, max_time_row));
+        let nb_rows = record_builder.len();
+        let rows = record_builder
+            .finish()
+            .with_context(|| "record_builder.finish()")?;
+        info!("writing {} rows", nb_rows);
+        if nb_rows > 0 {
+            Ok(Some(PartitionRowSet { rows_time_range, rows }))
+        } else {
+            Ok(None)
+        }
     }
-    if !blocks_to_process.is_empty() {
-        append_net_span_tree(
-            &mut record_builder,
-            convert_ticks,
-            &blocks_to_process,
-            lake.blob_storage.clone(),
-            &stream,
-            process_id.clone(),
-        )
-        .await?;
-    }
+    .await;
 
-    let min_time_row = convert_ticks.delta_ticks_to_time(spec.blocks[0].block.begin_ticks);
-    let max_time_row =
-        convert_ticks.delta_ticks_to_time(spec.blocks[spec.blocks.len() - 1].block.end_ticks);
-    let rows_time_range = record_builder
-        .get_time_range()
-        .unwrap_or(TimeRange::new(min_time_row, max_time_row));
-    let nb_rows = record_builder.len();
-    let rows = record_builder
-        .finish()
-        .with_context(|| "record_builder.finish()")?;
-    info!("writing {} rows", nb_rows);
-    if nb_rows > 0 {
-        tx.send(PartitionRowSet {
-            rows_time_range,
-            rows,
-        })
-        .await?;
+    match build_result {
+        Ok(Some(row_set)) => {
+            tx.send(Ok(row_set)).await?;
+            drop(tx);
+            join_handle.await??;
+            Ok(())
+        }
+        Ok(None) => {
+            drop(tx);
+            join_handle.await??;
+            Ok(())
+        }
+        Err(e) => {
+            warn!(
+                "aborting net-spans partition write for block {:?}: {e:?}",
+                spec.block_ids_hash
+            );
+            let _ = tx
+                .send(Err(anyhow::anyhow!("net-spans build aborted")))
+                .await;
+            drop(tx);
+            match join_handle.await {
+                Ok(Ok(())) => {}
+                Ok(Err(writer_err)) => {
+                    debug!("net-spans writer task error during abort: {writer_err:?}");
+                }
+                Err(join_err) => {
+                    warn!("net-spans writer task panicked during abort: {join_err:?}");
+                }
+            }
+            Err(e)
+        }
     }
-    drop(tx);
-    join_handle.await??;
-    Ok(())
 }
 
 /// Rebuilds the partition if it's missing or out of date.

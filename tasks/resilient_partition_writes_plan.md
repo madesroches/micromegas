@@ -376,41 +376,28 @@ use `DataFusionError::Execution(format!("{e:#}"))` instead if the `External erro
 unwanted.) This is the shared `scan` path used by **all** views, so it improves error reporting
 everywhere.
 
-## Implementation Steps
+## Implementation Steps — COMPLETED 2026-06-03
 
-1. **`write_partition.rs`**:
-   - Change `write_partition_from_rows` parameter: `Receiver<PartitionRowSet>` → `Receiver<Result<PartitionRowSet, anyhow::Error>>`
-   - Also change `write_rows_and_track_times`'s first parameter accordingly.
-   - In `write_rows_and_track_times`, change loop body: `while let Some(row_set) = rb_stream.recv()` → `while let Some(msg) = rb_stream.recv() { let row_set = msg?; ... }`
-   - Make `write_rows_and_track_times` `pub` so it is accessible from external test files.
+1. ✅ **`write_partition.rs`**: Changed receiver type to `Receiver<Result<PartitionRowSet, anyhow::Error>>` on both `write_partition_from_rows` and `write_rows_and_track_times`; changed loop body to `while let Some(msg) = ... { let row_set = msg?; ... }`; made `write_rows_and_track_times` `pub`.
 
-2. **`thread_spans_view.rs`** — wrap the build loop in an inner async block returning `Result<PartitionRowSet>`; replace the trailing `tx.send(PartitionRowSet { ... }).await?` with the `match build_result { Ok → send + join.await??, Err → warn!, poison-send, reap-and-log join, return Err(e) }` pattern shown above. Ensure `warn!` and `debug!` are imported via `micromegas_tracing::prelude::*`.
+2. ✅ **`thread_spans_view.rs`**: Wrapped build loop in inner async block returning `Result<PartitionRowSet>`; replaced send with match pattern (abort path: warn!, poison-send, reap join, return Err(e)).
 
-3. **`net_spans_view.rs`** — wrap the build phase (from the `ensure!` through `record_builder.finish()`) in an inner async block returning `Result<Option<PartitionRowSet>>`; apply the three-arm match (`Ok(Some(...))`, `Ok(None)`, `Err(e)`) shown above.
+3. ✅ **`net_spans_view.rs`**: Wrapped build phase in inner async block returning `Result<Option<PartitionRowSet>>`; applied three-arm match.
 
-4. **`merge.rs`** — wrap the streaming loop in an inner async block returning `Result<()>`; apply the two-arm match (`Ok(())`, `Err(e)`) shown above. Wrap each `tx.send(PartitionRowSet::new(...))` in `Ok(...)` inside the inner block. Also replace the existing `spawn_with_context(async move { ... if let Err(e) = &res { error!("{e:?}"); } ... })` wrapper around `write_partition_from_rows` with a bare `spawn_with_context(write_partition_from_rows(...))` (matching the style used in `thread_spans_view.rs` and `net_spans_view.rs`); the inner `error!` log is redundant after the refactor because the caller's match arm already handles all error paths, and it would fire spuriously on every intentional abort, double-logging at the wrong level.
+4. ✅ **`merge.rs`**: Wrapped streaming loop in inner async block returning `Result<()>`; applied two-arm match; simplified `spawn_with_context` to bare `write_partition_from_rows(...)` (removed redundant `error!` wrapper).
 
-5. **Three remaining callers** — wrap each `tx.send(<row_set expr>)` argument in `Ok(...)` only. No abort-path changes:
-   - `rust/analytics/src/lakehouse/sql_partition_spec.rs` (`PartitionRowSet::new(...)`)
-   - `rust/analytics/src/lakehouse/block_partition_spec.rs` (bare `row_set`)
-   - `rust/analytics/src/lakehouse/metadata_partition_spec.rs` (`PartitionRowSet::new(...)`)
+5. ✅ **Three remaining callers**: Wrapped each `tx.send(...)` argument in `Ok(...)`.
+   - `rust/analytics/src/lakehouse/sql_partition_spec.rs`
+   - `rust/analytics/src/lakehouse/block_partition_spec.rs`
+   - `rust/analytics/src/lakehouse/metadata_partition_spec.rs`
 
-6. **`call_tree.rs`** — improve the `on_end_thread_scope` mismatch diagnostic. (Already applied in the working tree, uncommitted — verify it matches the below and commit it; no further edit needed.) Replace the committed `anyhow::bail!("top scope mismatch parsing thread block")` with:
+6. ✅ **`call_tree.rs`**: Improved `on_end_thread_scope` diagnostic already applied in working tree (was uncommitted). Verified: bail message includes block ID, closing scope name, and open scope name.
 
-   ```rust
-   let ending_name = self.scopes.get(&hash).map_or("?", |s| s.name.as_str());
-   let open_name = self
-       .scopes
-       .get(&old_top.hash)
-       .map_or("?", |s| s.name.as_str());
-   anyhow::bail!(
-       "top scope mismatch in block {_block_id}: closing '{ending_name}' but '{open_name}' is open"
-   );
-   ```
+7. ✅ **`materialized_view.rs`**: Changed `DataFusionError::External(e.into())` to `DataFusionError::External(format!("{e:#}").into())` at the jit_update boundary.
 
-7. **`materialized_view.rs`** — at the `scan` jit_update boundary (line 74), change `DataFusionError::External(e.into())` to `DataFusionError::External(format!("{e:#}").into())` so the full anyhow chain reaches the query error. See "Surfacing an informative query error".
-
-8. Run `cargo fmt && cargo clippy --workspace -- -D warnings && cargo test`.
+8. ✅ `cargo fmt && cargo clippy --workspace -- -D warnings && cargo test` — all clean, 2 new tests pass:
+   - `tests/call_tree_tests.rs::test_crossing_spans_returns_err`
+   - `tests/write_partition_tests.rs::test_write_rows_propagates_err_from_channel`
 
 ## Files to Modify
 

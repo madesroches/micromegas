@@ -409,8 +409,8 @@ struct PartitionWriteResult {
 }
 
 /// Writes rows from the stream and tracks event time ranges.
-async fn write_rows_and_track_times(
-    rb_stream: &mut Receiver<PartitionRowSet>,
+pub async fn write_rows_and_track_times(
+    rb_stream: &mut Receiver<Result<PartitionRowSet, anyhow::Error>>,
     arrow_writer: &mut AsyncArrowWriter<AsyncParquetWriter>,
     logger: &Arc<dyn Logger>,
     desc: &str,
@@ -419,7 +419,8 @@ async fn write_rows_and_track_times(
     let mut max_event_time: Option<DateTime<Utc>> = None;
     let mut write_progression = 0;
 
-    while let Some(row_set) = rb_stream.recv().await {
+    while let Some(msg) = rb_stream.recv().await {
+        let row_set = msg?;
         min_event_time = Some(
             min_event_time
                 .unwrap_or(row_set.rows_time_range.begin)
@@ -567,7 +568,7 @@ pub async fn write_partition_from_rows(
     file_schema: Arc<Schema>,
     insert_range: TimeRange,
     source_data_hash: Vec<u8>,
-    mut rb_stream: Receiver<PartitionRowSet>,
+    mut rb_stream: Receiver<Result<PartitionRowSet, anyhow::Error>>,
     logger: Arc<dyn Logger>,
 ) -> Result<()> {
     let file_id = uuid::Uuid::new_v4();

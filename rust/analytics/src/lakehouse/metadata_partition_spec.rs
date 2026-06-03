@@ -102,7 +102,7 @@ impl PartitionSpec for MetadataPartitionSpec {
                 .compute_time_bounds
                 .get_time_bounds(ctx.read_batch(record_batch.clone())?)
                 .await?;
-            tx.send(PartitionRowSet::new(event_time_range, record_batch))
+            tx.send(Ok(PartitionRowSet::new(event_time_range, record_batch)))
                 .await?;
         }
 
