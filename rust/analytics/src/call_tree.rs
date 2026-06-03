@@ -179,7 +179,14 @@ impl ThreadBlockProcessor for CallTreeBuilder {
                 old_top.end = time;
                 self.add_child_to_top(old_top);
             } else {
-                anyhow::bail!("top scope mismatch parsing thread block");
+                let ending_name = self.scopes.get(&hash).map_or("?", |s| s.name.as_str());
+                let open_name = self
+                    .scopes
+                    .get(&old_top.hash)
+                    .map_or("?", |s| s.name.as_str());
+                anyhow::bail!(
+                    "top scope mismatch in block {_block_id}: closing '{ending_name}' but '{open_name}' is open"
+                );
             }
         } else {
             if self.limit.is_some() && self.nb_spans >= self.limit.unwrap() {

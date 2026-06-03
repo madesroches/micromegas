@@ -73,7 +73,7 @@ impl TableProvider for MaterializedView {
         self.view
             .jit_update(self.lakehouse.clone(), self.query_range)
             .await
-            .map_err(|e| DataFusionError::External(e.into()))?;
+            .map_err(|e| DataFusionError::External(format!("{e:#}").into()))?;
 
         let partitions = self
             .part_provider

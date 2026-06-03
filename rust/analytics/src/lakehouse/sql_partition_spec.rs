@@ -105,7 +105,8 @@ impl PartitionSpec for SqlPartitionSpec {
                 .compute_time_bounds
                 .get_time_bounds(self.ctx.read_batch(rb.clone())?)
                 .await?;
-            tx.send(PartitionRowSet::new(event_time_range, rb)).await?;
+            tx.send(Ok(PartitionRowSet::new(event_time_range, rb)))
+                .await?;
         }
         drop(tx);
         join_handle.await??;

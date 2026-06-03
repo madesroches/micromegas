@@ -181,35 +181,52 @@ pub async fn create_merged_partition(
     let (tx, rx) = tokio::sync::mpsc::channel(1);
     let view_copy = view.clone();
     let lake = lakehouse.lake().clone();
-    let join_handle = spawn_with_context(async move {
-        let res = write_partition_from_rows(
-            lake,
-            view_copy.get_meta(),
-            view_copy.get_file_schema(),
-            insert_range,
-            source_hash.to_le_bytes().to_vec(),
-            rx,
-            logger.clone(),
-        )
-        .await;
-        if let Err(e) = &res {
-            error!("{e:?}");
-        }
-        res
-    });
+    let join_handle = spawn_with_context(write_partition_from_rows(
+        lake,
+        view_copy.get_meta(),
+        view_copy.get_file_schema(),
+        insert_range,
+        source_hash.to_le_bytes().to_vec(),
+        rx,
+        logger.clone(),
+    ));
     let compute_time_bounds = view.get_time_bounds();
     let ctx =
         SessionContext::new_with_config_rt(SessionConfig::default(), lakehouse.runtime().clone());
-    while let Some(rb_res) = merged_stream.next().await {
-        let rb = rb_res.with_context(|| "receiving record_batch from stream")?;
-        let event_time_range = compute_time_bounds
-            .get_time_bounds(ctx.read_batch(rb.clone()).with_context(|| "read_batch")?)
-            .await?;
-        tx.send(PartitionRowSet::new(event_time_range, rb))
-            .await
-            .with_context(|| "sending partition row set")?;
+    let stream_result: Result<()> = async {
+        while let Some(rb_res) = merged_stream.next().await {
+            let rb = rb_res.with_context(|| "receiving record_batch from stream")?;
+            let event_time_range = compute_time_bounds
+                .get_time_bounds(ctx.read_batch(rb.clone()).with_context(|| "read_batch")?)
+                .await?;
+            tx.send(Ok(PartitionRowSet::new(event_time_range, rb)))
+                .await
+                .with_context(|| "sending partition row set")?;
+        }
+        Ok(())
     }
-    drop(tx);
-    join_handle.await??;
-    Ok(())
+    .await;
+
+    match stream_result {
+        Ok(()) => {
+            drop(tx);
+            join_handle.await??;
+            Ok(())
+        }
+        Err(e) => {
+            warn!("aborting merge partition write for {desc}: {e:?}");
+            let _ = tx.send(Err(anyhow::anyhow!("merge stream aborted"))).await;
+            drop(tx);
+            match join_handle.await {
+                Ok(Ok(())) => {}
+                Ok(Err(writer_err)) => {
+                    debug!("merge writer task error during abort: {writer_err:?}");
+                }
+                Err(join_err) => {
+                    warn!("merge writer task panicked during abort: {join_err:?}");
+                }
+            }
+            Err(e)
+        }
+    }
 }

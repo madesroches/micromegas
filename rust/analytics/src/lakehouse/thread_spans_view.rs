@@ -112,9 +112,6 @@ async fn write_partition(
 ) -> Result<()> {
     let nb_events = hash_to_object_count(&spec.block_ids_hash)? as usize;
     info!("nb_events: {nb_events}");
-    let mut record_builder = SpanRecordBuilder::with_capacity(nb_events / 2);
-    let mut blocks_to_process = vec![];
-    let mut last_end = None;
     if spec.blocks.is_empty() {
         anyhow::bail!("empty partition spec");
     }
@@ -135,48 +132,79 @@ async fn write_partition(
         null_response_writer,
     ));
 
-    for block in &spec.blocks {
-        if block.block.begin_ticks == last_end.unwrap_or(block.block.begin_ticks) {
-            last_end = Some(block.block.end_ticks);
-            blocks_to_process.push(block.block.clone());
-        } else {
+    let build_result: Result<PartitionRowSet> = async {
+        let mut record_builder = SpanRecordBuilder::with_capacity(nb_events / 2);
+        let mut blocks_to_process = vec![];
+        let mut last_end = None;
+        for block in &spec.blocks {
+            if block.block.begin_ticks == last_end.unwrap_or(block.block.begin_ticks) {
+                last_end = Some(block.block.end_ticks);
+                blocks_to_process.push(block.block.clone());
+            } else {
+                append_call_tree(
+                    &mut record_builder,
+                    convert_ticks,
+                    &blocks_to_process,
+                    lake.blob_storage.clone(),
+                    &block.stream,
+                )
+                .await?;
+                last_end = Some(block.block.end_ticks);
+                blocks_to_process = vec![block.block.clone()];
+            }
+        }
+        if !blocks_to_process.is_empty() {
             append_call_tree(
                 &mut record_builder,
                 convert_ticks,
                 &blocks_to_process,
                 lake.blob_storage.clone(),
-                &block.stream,
+                &spec.blocks[0].stream,
             )
             .await?;
-            last_end = Some(block.block.end_ticks);
-            blocks_to_process = vec![block.block.clone()];
+        }
+        let min_time_row = convert_ticks.delta_ticks_to_time(spec.blocks[0].block.begin_ticks);
+        let max_time_row =
+            convert_ticks.delta_ticks_to_time(spec.blocks[spec.blocks.len() - 1].block.end_ticks);
+        let rows = record_builder
+            .finish()
+            .with_context(|| "record_builder.finish()")?;
+        info!("writing {} rows", rows.num_rows());
+        Ok(PartitionRowSet {
+            rows_time_range: TimeRange::new(min_time_row, max_time_row),
+            rows,
+        })
+    }
+    .await;
+
+    match build_result {
+        Ok(row_set) => {
+            tx.send(Ok(row_set)).await?;
+            drop(tx);
+            join_handle.await??;
+            Ok(())
+        }
+        Err(e) => {
+            warn!(
+                "aborting thread-spans partition write for block {:?}: {e:?}",
+                spec.block_ids_hash
+            );
+            let _ = tx
+                .send(Err(anyhow::anyhow!("thread-spans build aborted")))
+                .await;
+            drop(tx);
+            match join_handle.await {
+                Ok(Ok(())) => {}
+                Ok(Err(writer_err)) => {
+                    debug!("thread-spans writer task error during abort: {writer_err:?}");
+                }
+                Err(join_err) => {
+                    warn!("thread-spans writer task panicked during abort: {join_err:?}");
+                }
+            }
+            Err(e)
         }
     }
-    if !blocks_to_process.is_empty() {
-        append_call_tree(
-            &mut record_builder,
-            convert_ticks,
-            &blocks_to_process,
-            lake.blob_storage.clone(),
-            &spec.blocks[0].stream,
-        )
-        .await?;
-    }
-    let min_time_row = convert_ticks.delta_ticks_to_time(spec.blocks[0].block.begin_ticks);
-    let max_time_row =
-        convert_ticks.delta_ticks_to_time(spec.blocks[spec.blocks.len() - 1].block.end_ticks);
-    let rows = record_builder
-        .finish()
-        .with_context(|| "record_builder.finish()")?;
-    info!("writing {} rows", rows.num_rows());
-    tx.send(PartitionRowSet {
-        rows_time_range: TimeRange::new(min_time_row, max_time_row),
-        rows,
-    })
-    .await?;
-    drop(tx);
-    join_handle.await??;
-    Ok(())
 }
 /// Rebuilds the partition if it's missing or out of date.
 #[span_fn]

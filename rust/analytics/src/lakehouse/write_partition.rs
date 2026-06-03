@@ -409,8 +409,8 @@ struct PartitionWriteResult {
 }
 
 /// Writes rows from the stream and tracks event time ranges.
-async fn write_rows_and_track_times(
-    rb_stream: &mut Receiver<PartitionRowSet>,
+pub async fn write_rows_and_track_times(
+    rb_stream: &mut Receiver<Result<PartitionRowSet, anyhow::Error>>,
     arrow_writer: &mut AsyncArrowWriter<AsyncParquetWriter>,
     logger: &Arc<dyn Logger>,
     desc: &str,
@@ -419,7 +419,8 @@ async fn write_rows_and_track_times(
     let mut max_event_time: Option<DateTime<Utc>> = None;
     let mut write_progression = 0;
 
-    while let Some(row_set) = rb_stream.recv().await {
+    while let Some(msg) = rb_stream.recv().await {
+        let row_set = msg?;
         min_event_time = Some(
             min_event_time
                 .unwrap_or(row_set.rows_time_range.begin)
@@ -567,7 +568,7 @@ pub async fn write_partition_from_rows(
     file_schema: Arc<Schema>,
     insert_range: TimeRange,
     source_data_hash: Vec<u8>,
-    mut rb_stream: Receiver<PartitionRowSet>,
+    mut rb_stream: Receiver<Result<PartitionRowSet, anyhow::Error>>,
     logger: Arc<dyn Logger>,
 ) -> Result<()> {
     let file_id = uuid::Uuid::new_v4();
@@ -611,7 +612,27 @@ pub async fn write_partition_from_rows(
 
     // Write rows and track event time ranges
     let event_time_range =
-        write_rows_and_track_times(&mut rb_stream, &mut arrow_writer, &logger, &desc).await?;
+        match write_rows_and_track_times(&mut rb_stream, &mut arrow_writer, &logger, &desc).await {
+            Ok(range) => range,
+            Err(e) => {
+                // The writer is dropped without close/abort on this error path, which can
+                // leave already-uploaded multipart data orphaned in object storage. Delete
+                // any partial file before propagating the error (mirror finalize cleanup).
+                drop(arrow_writer);
+                warn!(
+                    "write_rows_and_track_times failed, attempting to delete partial file: {}",
+                    file_path
+                );
+                let path = object_store::path::Path::from(file_path.as_str());
+                if let Err(delete_err) = lake.blob_storage.inner().delete(&path).await {
+                    warn!(
+                        "failed to delete partial file {}: {}",
+                        file_path, delete_err
+                    );
+                }
+                return Err(e).with_context(|| "write_rows_and_track_times");
+            }
+        };
 
     // Finalize the write (close file or create empty metadata)
     let result = finalize_partition_write(
