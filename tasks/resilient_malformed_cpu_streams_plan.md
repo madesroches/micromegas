@@ -178,7 +178,7 @@ which yields e.g. `External error: update_partition: write_partition: adding cal
    - Change `write_partition_from_rows` parameter: `Receiver<PartitionRowSet>` → `Receiver<Result<PartitionRowSet, anyhow::Error>>`
    - Also change `write_rows_and_track_times`'s first parameter from `&mut Receiver<PartitionRowSet>` to `&mut Receiver<Result<PartitionRowSet, anyhow::Error>>`.
    - In `write_rows_and_track_times`, change loop body: `while let Some(row_set) = rb_stream.recv()` → `while let Some(msg) = rb_stream.recv() { let row_set = msg?; ... }`
-   - No other changes needed.
+   - Make `write_rows_and_track_times` `pub` so it is accessible from external test files (required by the unit test in Testing Strategy bullet 2).
 
 2. **`thread_spans_view.rs`** — wrap the build loop in an inner async block; replace the trailing `tx.send(PartitionRowSet { ... }).await?` with the `match build_result { Ok → send + join.await??, Err → warn!, poison-send, reap-and-log join, return Err(e) }` pattern shown above. Ensure `warn!` and `debug!` are imported via `micromegas_tracing::prelude::*` (the file already uses `info!`).
 
