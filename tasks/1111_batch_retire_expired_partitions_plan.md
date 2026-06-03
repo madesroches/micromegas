@@ -55,6 +55,7 @@ Split into the two-function form matching the established pattern:
 ```
 #[span_fn]
 async fn retire_expired_partitions_batch(lake, expiration) -> Result<bool>
+#[span_fn]
 pub async fn retire_expired_partitions(lake, expiration)   -> Result<()>   // loop
 ```
 
@@ -93,6 +94,7 @@ Log a single `info!` line per batch: `"retired {count} expired partitions"`.
 ### Wrapper function
 
 ```rust
+#[span_fn]
 pub async fn retire_expired_partitions(
     lake: &DataLakeConnection,
     expiration: DateTime<Utc>,
@@ -108,8 +110,8 @@ The signature is unchanged — `delete.rs` needs no edits.
 
 1. Edit `rust/analytics/src/lakehouse/write_partition.rs`:
    - Add `retire_expired_partitions_batch(lake: &DataLakeConnection, expiration: DateTime<Utc>) -> Result<bool>` using the `DELETE … RETURNING` pattern above.
-   - Annotate the new function with `#[span_fn]`.
-   - Replace the body of `retire_expired_partitions` with a `while` loop that calls `retire_expired_partitions_batch`.
+   - Annotate `retire_expired_partitions_batch` with `#[span_fn]`.
+   - Replace the body of `retire_expired_partitions` with a `while` loop that calls `retire_expired_partitions_batch`, and annotate `retire_expired_partitions` with `#[span_fn]`.
    - Remove the original `fetch_all` + loop + unbounded `DELETE` from `retire_expired_partitions`.
 
 2. Run `cargo fmt` from `rust/`.
