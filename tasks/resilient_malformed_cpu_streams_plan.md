@@ -8,7 +8,7 @@ Thread span blocks occasionally contain non-nested (overlapping) span events —
 
 ### Error origin
 
-`CallTreeBuilder::on_end_thread_scope` (`rust/analytics/src/call_tree.rs:181-189`) calls `anyhow::bail!` when an End event arrives for a scope that doesn't match the stack top and isn't the root placeholder. This is the correct behavior. However, the committed message is `"top scope mismatch parsing thread block"` — it omits the block ID and scope names. This plan improves it to include block ID, closing scope name, and open scope name (see Implementation Steps step 4).
+`CallTreeBuilder::on_end_thread_scope` (`rust/analytics/src/call_tree.rs:181-189`) calls `anyhow::bail!` when an End event arrives for a scope that doesn't match the stack top and isn't the root placeholder. This is the correct behavior. However, the committed (HEAD) message is `"top scope mismatch parsing thread block"` — it omits the block ID and scope names. This plan improves it to include block ID, closing scope name, and open scope name (see Implementation Steps step 4). Note: this improvement is already applied in the working tree (uncommitted) and only needs to be committed.
 
 ### Problem — Phantom empty partition + detached task
 
@@ -135,14 +135,14 @@ The caller receives a query failure with the mismatch message. The service keeps
 
 2. **`thread_spans_view.rs`** — wrap the build loop in an inner async block; replace the trailing `tx.send(PartitionRowSet { ... }).await?` with the `match build_result { Ok → tx.send(Ok(...)), Err → tx.send(Err(...)) }` pattern shown above.
 
-3. **Five remaining callers** — change each `tx.send(row_set)` to `tx.send(Ok(row_set))`:
-   - `rust/analytics/src/lakehouse/net_spans_view.rs`
-   - `rust/analytics/src/lakehouse/sql_partition_spec.rs`
-   - `rust/analytics/src/lakehouse/block_partition_spec.rs`
-   - `rust/analytics/src/lakehouse/merge.rs`
-   - `rust/analytics/src/lakehouse/metadata_partition_spec.rs`
+3. **Five remaining callers** — wrap each `tx.send(<row_set expr>)` argument in `Ok(...)`. Only `block_partition_spec.rs` sends a bare `row_set` variable; the others send constructed values, so the wrap applies to the constructor/struct-literal expression (e.g. `tx.send(Ok(PartitionRowSet::new(...)))`, `tx.send(Ok(PartitionRowSet { ... }))`):
+   - `rust/analytics/src/lakehouse/net_spans_view.rs` (`PartitionRowSet { ... }` struct literal)
+   - `rust/analytics/src/lakehouse/sql_partition_spec.rs` (`PartitionRowSet::new(...)`)
+   - `rust/analytics/src/lakehouse/block_partition_spec.rs` (bare `row_set`)
+   - `rust/analytics/src/lakehouse/merge.rs` (`PartitionRowSet::new(...)`)
+   - `rust/analytics/src/lakehouse/metadata_partition_spec.rs` (`PartitionRowSet::new(...)`)
 
-4. **`call_tree.rs`** — improve the `on_end_thread_scope` mismatch diagnostic. Replace the committed `anyhow::bail!("top scope mismatch parsing thread block")` with a message that includes the block ID, the closing scope name, and the open scope name:
+4. **`call_tree.rs`** — improve the `on_end_thread_scope` mismatch diagnostic. (Already applied in the working tree, uncommitted — verify it matches the below and commit it; no further edit needed.) Replace the committed `anyhow::bail!("top scope mismatch parsing thread block")` with a message that includes the block ID, the closing scope name, and the open scope name:
 
    ```rust
    let ending_name = self.scopes.get(&hash).map_or("?", |s| s.name.as_str());
