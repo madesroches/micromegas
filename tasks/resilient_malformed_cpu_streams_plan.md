@@ -100,9 +100,13 @@ On the error path: `tx.send(Err(e))` causes `write_rows_and_track_times` to retu
 
 On the happy path: writer receives `Ok(row_set)`, writes, closes the channel, calls `finalize_partition_write` + `insert_partition` as before.
 
-### Why other callers are unaffected beyond `Ok(...)` wrapping
+### Why other callers don't get the abort path beyond `Ok(...)` wrapping
+
+This plan's abort path is scoped to the thread-spans crossing-span error. The other callers get only the `Ok(...)` wrapping; none get explicit `Err` aborts.
 
 Callers like `block_partition_spec` send multiple batches then drop `tx`; they never send `Err`. Their existing block-level errors are already logged and swallowed — the partition is committed with whatever data was collected. That behaviour is preserved exactly. No abort semantics are introduced for those callers.
+
+`net_spans_view.rs` is a special case worth calling out: it has the *same structure* as `thread_spans_view.rs` (spawn writer at line 136, build rows with `?` at lines 178/193, await join handle at line 215), so any build `?` error there also drops `tx` and lets the detached writer commit a `num_rows=0` phantom partition. However, the *malformed-CPU-stream* trigger this plan targets does **not** fire for net spans: `NetSpanTrack::close_span` (`rust/analytics/src/net_span_tree.rs:96-116`) returns `Ok(true)` on a stack mismatch (it skips overlapping/orphan End events instead of `bail!`-ing), so a crossing net span never produces an error to abort on. The structural phantom-partition risk remains for *other* net_spans build errors (e.g. the `ensure!` on line 152 or `record_builder.finish()` on line 205), but fixing that is out of scope for this plan — it is not triggered by malformed CPU streams.
 
 ### Error propagation (unchanged, already correct)
 
@@ -168,7 +172,7 @@ The caller receives a query failure with the mismatch message. The service keeps
 
 **Query fails entirely vs. partial results per thread**: `process_spans` fails as soon as any thread stream hits a mismatch. Per-thread isolation (log-and-skip) was considered but rejected: a failing query with a clear error message is the right signal that the upstream instrumentation is broken.
 
-**Other callers that implicitly drop tx on error**: Callers that return early via `?` before sending anything leave the channel closed without an `Err` message. The writer treats this as "empty but committed" and calls `insert_partition`. This is the pre-existing behaviour and is intentional for streaming callers where partial results are acceptable. Only `thread_spans_view.rs` requires the explicit abort path.
+**Other callers that implicitly drop tx on error**: Callers that return early via `?` before sending anything leave the channel closed without an `Err` message. The writer treats this as "empty but committed" and calls `insert_partition`. This is the pre-existing behaviour and is intentional for streaming callers where partial results are acceptable. Only `thread_spans_view.rs` requires the explicit abort path *for the malformed-CPU-stream error this plan targets*. `net_spans_view.rs` shares the same structural phantom-partition risk on other build errors (see "Why other callers don't get the abort path"), but the crossing-span trigger does not fire there because net span parsing skips mismatches (`close_span` returns `Ok(true)`) rather than `bail!`-ing, so that risk is left as-is and out of scope here.
 
 ## Testing Strategy
 
