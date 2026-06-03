@@ -96,7 +96,7 @@ match build_result {
     }
     Err(e) => {
         warn!(
-            "aborting thread-spans partition write for block {}: {e:?}",
+            "aborting thread-spans partition write for block {:?}: {e:?}",
             spec.block_ids_hash
         );
         // Poison the channel so the writer returns early and SKIPS insert_partition —
