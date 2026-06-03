@@ -89,6 +89,9 @@ async fn retire_expired_partitions_batch(
     .await
     .with_context(|| "deleting expired partitions batch")?;
 
+    if rows.is_empty() {
+        return Ok(false);
+    }
     let count = rows.len();
     for row in &rows {
         let file_path: Option<String> = row.try_get("file_path")?;
