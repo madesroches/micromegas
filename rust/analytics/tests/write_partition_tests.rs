@@ -23,8 +23,7 @@ fn make_arrow_writer() -> AsyncArrowWriter<AsyncParquetWriter> {
 #[tokio::test]
 async fn test_write_rows_propagates_err_from_channel() {
     let (tx, mut rx) = tokio::sync::mpsc::channel::<Result<PartitionRowSet, anyhow::Error>>(1);
-    let _ = tx
-        .send(Err(anyhow::anyhow!("injected error")))
+    tx.send(Err(anyhow::anyhow!("injected error")))
         .await
         .expect("send");
     drop(tx);

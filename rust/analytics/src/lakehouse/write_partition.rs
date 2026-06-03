@@ -612,7 +612,27 @@ pub async fn write_partition_from_rows(
 
     // Write rows and track event time ranges
     let event_time_range =
-        write_rows_and_track_times(&mut rb_stream, &mut arrow_writer, &logger, &desc).await?;
+        match write_rows_and_track_times(&mut rb_stream, &mut arrow_writer, &logger, &desc).await {
+            Ok(range) => range,
+            Err(e) => {
+                // The writer is dropped without close/abort on this error path, which can
+                // leave already-uploaded multipart data orphaned in object storage. Delete
+                // any partial file before propagating the error (mirror finalize cleanup).
+                drop(arrow_writer);
+                warn!(
+                    "write_rows_and_track_times failed, attempting to delete partial file: {}",
+                    file_path
+                );
+                let path = object_store::path::Path::from(file_path.as_str());
+                if let Err(delete_err) = lake.blob_storage.inner().delete(&path).await {
+                    warn!(
+                        "failed to delete partial file {}: {}",
+                        file_path, delete_err
+                    );
+                }
+                return Err(e).with_context(|| "write_rows_and_track_times");
+            }
+        };
 
     // Finalize the write (close file or create empty metadata)
     let result = finalize_partition_write(
