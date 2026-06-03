@@ -195,7 +195,7 @@ async fn write_partition(
         let rows = record_builder
             .finish()
             .with_context(|| "record_builder.finish()")?;
-        info!("writing {} rows", nb_rows);
+        info!("writing {nb_rows} rows");
         if nb_rows > 0 {
             Ok(Some(PartitionRowSet { rows_time_range, rows }))
         } else {
