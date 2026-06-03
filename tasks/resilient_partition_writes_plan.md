@@ -388,7 +388,7 @@ everywhere.
 
 3. **`net_spans_view.rs`** — wrap the build phase (from the `ensure!` through `record_builder.finish()`) in an inner async block returning `Result<Option<PartitionRowSet>>`; apply the three-arm match (`Ok(Some(...))`, `Ok(None)`, `Err(e)`) shown above.
 
-4. **`merge.rs`** — wrap the streaming loop in an inner async block returning `Result<()>`; apply the two-arm match (`Ok(())`, `Err(e)`) shown above. Wrap each `tx.send(PartitionRowSet::new(...))` in `Ok(...)` inside the inner block.
+4. **`merge.rs`** — wrap the streaming loop in an inner async block returning `Result<()>`; apply the two-arm match (`Ok(())`, `Err(e)`) shown above. Wrap each `tx.send(PartitionRowSet::new(...))` in `Ok(...)` inside the inner block. Also replace the existing `spawn_with_context(async move { ... if let Err(e) = &res { error!("{e:?}"); } ... })` wrapper around `write_partition_from_rows` with a bare `spawn_with_context(write_partition_from_rows(...))` (matching the style used in `thread_spans_view.rs` and `net_spans_view.rs`); the inner `error!` log is redundant after the refactor because the caller's match arm already handles all error paths, and it would fire spuriously on every intentional abort, double-logging at the wrong level.
 
 5. **Three remaining callers** — wrap each `tx.send(<row_set expr>)` argument in `Ok(...)` only. No abort-path changes:
    - `rust/analytics/src/lakehouse/sql_partition_spec.rs` (`PartitionRowSet::new(...)`)
