@@ -176,6 +176,7 @@ which yields e.g. `External error: update_partition: write_partition: adding cal
 
 1. **`write_partition.rs`**:
    - Change `write_partition_from_rows` parameter: `Receiver<PartitionRowSet>` → `Receiver<Result<PartitionRowSet, anyhow::Error>>`
+   - Also change `write_rows_and_track_times`'s first parameter from `&mut Receiver<PartitionRowSet>` to `&mut Receiver<Result<PartitionRowSet, anyhow::Error>>`.
    - In `write_rows_and_track_times`, change loop body: `while let Some(row_set) = rb_stream.recv()` → `while let Some(msg) = rb_stream.recv() { let row_set = msg?; ... }`
    - No other changes needed.
 
