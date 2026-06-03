@@ -8,7 +8,7 @@ Thread span blocks occasionally contain non-nested (overlapping) span events —
 
 ### Error origin
 
-`CallTreeBuilder::on_end_thread_scope` (`rust/analytics/src/call_tree.rs:181-189`) calls `anyhow::bail!` when an End event arrives for a scope that doesn't match the stack top and isn't the root placeholder. This is the correct behavior — the error message includes block ID, closing scope name, and open scope name.
+`CallTreeBuilder::on_end_thread_scope` (`rust/analytics/src/call_tree.rs:181-189`) calls `anyhow::bail!` when an End event arrives for a scope that doesn't match the stack top and isn't the root placeholder. This is the correct behavior. However, the committed message is `"top scope mismatch parsing thread block"` — it omits the block ID and scope names. This plan improves it to include block ID, closing scope name, and open scope name (see Implementation Steps step 4).
 
 ### Problem — Phantom empty partition + detached task
 
@@ -138,7 +138,18 @@ The caller receives a query failure with the mismatch message. The service keeps
    - `rust/analytics/src/lakehouse/merge.rs`
    - `rust/analytics/src/lakehouse/metadata_partition_spec.rs`
 
-4. **`call_tree.rs`** — no change needed; current `bail!` with diagnostic message is correct.
+4. **`call_tree.rs`** — improve the `on_end_thread_scope` mismatch diagnostic. Replace the committed `anyhow::bail!("top scope mismatch parsing thread block")` with a message that includes the block ID, the closing scope name, and the open scope name:
+
+   ```rust
+   let ending_name = self.scopes.get(&hash).map_or("?", |s| s.name.as_str());
+   let open_name = self
+       .scopes
+       .get(&old_top.hash)
+       .map_or("?", |s| s.name.as_str());
+   anyhow::bail!(
+       "top scope mismatch in block {_block_id}: closing '{ending_name}' but '{open_name}' is open"
+   );
+   ```
 
 5. Run `cargo fmt && cargo clippy --workspace -- -D warnings && cargo test`.
 
@@ -151,7 +162,7 @@ The caller receives a query failure with the mismatch message. The service keeps
 - `rust/analytics/src/lakehouse/block_partition_spec.rs`
 - `rust/analytics/src/lakehouse/merge.rs`
 - `rust/analytics/src/lakehouse/metadata_partition_spec.rs`
-- `rust/analytics/src/call_tree.rs` (no code change; already correct)
+- `rust/analytics/src/call_tree.rs` (improve `on_end_thread_scope` mismatch diagnostic message — see step 4)
 
 ## Trade-offs
 
@@ -161,6 +172,6 @@ The caller receives a query failure with the mismatch message. The service keeps
 
 ## Testing Strategy
 
-- Unit test in `rust/analytics/tests/`: construct a `CallTreeBuilder`, feed it crossing spans (BeginA → BeginB → EndA sequence), and assert that processing returns `Err` containing both scope names and the block ID.
+- Unit test in `rust/analytics/tests/`: construct a `CallTreeBuilder`, feed it crossing spans (BeginA → BeginB → EndA sequence), and assert that processing returns `Err`. With the improved diagnostic from step 4, assert the message contains both scope names and the block ID.
 - Confirm no row is inserted into `lakehouse_partitions` for a stream whose `jit_update` returns `Err` (i.e., `is_jit_partition_up_to_date` returns `false` on the next call for those blocks).
 - Confirm `process_spans(...)` returns a DataFusion execution error whose message contains the mismatch detail when a bad stream is included.
