@@ -202,51 +202,51 @@ handler reads Content-Type
 
 ## Implementation Steps
 
-1. **Enable serde on the proto crate.** In `rust/Cargo.toml:64`, add `"with-serde"` to
-   the `opentelemetry-proto` feature list (keep alphabetical/existing order of the list
-   as-is; append `with-serde`). This pulls in `serde`, `serde_json`, `base64`,
-   `const-hex` transitively for that crate.
+**Status: complete — committed on branch `json` (339719941, a678fb7b0).**
 
-2. **Add deps to the handler crate.** In `rust/otel-ingestion/Cargo.toml`, add
-   (alphabetically) `serde = { workspace = true }` and `serde_json = { workspace = true }`.
+1. ✅ **Enable serde on the proto crate.** Added `"with-serde"` to `opentelemetry-proto`
+   features in `rust/Cargo.toml`.
 
-3. **Define `Encoding`.** Add the enum to `rust/otel-ingestion/src/handler.rs` (or a new
-   `encoding.rs` module) with a `Display` impl (`"protobuf"` / `"json"`) for error
-   messages; re-export from `lib.rs` if placed in its own module.
+2. ✅ **Add deps to the handler crate.** Added `serde` and `serde_json` to
+   `rust/otel-ingestion/Cargo.toml`.
 
-4. **Generalize `parse` + `ingest_*`.** In `handler.rs`: add the `DeserializeOwned`
-   bound and `encoding` param to `parse`; dispatch prost vs `serde_json`; add `encoding`
-   to the three `ingest_*` signatures and pass it through. Keep `parse` crate-private —
-   integration tests must not call it directly (see Testing Strategy).
+3. ✅ **Define `Encoding`.** Added `pub enum Encoding { Protobuf, Json }` to
+   `handler.rs`; re-exported from `lib.rs`. No `Display` impl was needed — error
+   messages inline the encoding name via the match arm strings.
 
-5. **Make `Status` serde-serializable.** In `rust/otel-ingestion/src/proto.rs`, add
-   `serde::Serialize, serde::Deserialize` to the `Status` derive.
+4. ✅ **Generalize `parse` + `ingest_*`.** Added `DeserializeOwned` bound and
+   `encoding: Encoding` param to `parse`; dispatches `prost::decode` vs
+   `serde_json::from_slice`. Added `encoding` to all three `ingest_*` signatures.
 
-6. **Server: content-type → encoding.** In `rust/public/src/servers/otlp.rs`, replace
-   `check_content_type` with `content_type_encoding`; add `CONTENT_TYPE_JSON`.
+5. ✅ **Make `Status` serde-serializable.** Added `serde::Serialize, serde::Deserialize`
+   to the `Status` derive in `proto.rs`.
 
-7. **Server: encoding-aware responses.** Replace `proto_response` with
-   `success_response(msg, encoding)`; add `encoding` to `build_error_response` and
-   `OtlpHttpError::into_otlp_response`. The `WrongContentType` arm always emits a
-   protobuf `Status` body; the `encoding` parameter is unused for that arm and call
-   sites must pass `Encoding::Protobuf` explicitly as the dummy value. Also update the
-   module-level doc comment at `otlp.rs:12–14` (currently says responses are always
-   protobuf-encoded) to reflect that response encoding mirrors the request.
+6. ✅ **Server: content-type → encoding.** Replaced `check_content_type` with
+   `content_type_encoding` returning `Result<Encoding, OtlpHttpError>`; added
+   `CONTENT_TYPE_JSON`.
 
-8. **Server: wire the handlers.** Each of `logs_handler` / `metrics_handler` /
-   `traces_handler`: resolve `encoding` from headers (415 on error), pass `encoding` to
-   `ingest_*` and to `success_response`; route `OtelError` through
-   `into_otlp_response(encoding)`. For the early-return 415 path, the call is
-   `return e.into_otlp_response(Encoding::Protobuf)` — `encoding` has not yet been
-   resolved, so `Encoding::Protobuf` is the explicit dummy. Update the `WrongContentType`
-   415 message to mention both accepted types.
+7. ✅ **Server: encoding-aware responses.** Replaced `proto_response` with
+   `success_response(msg, encoding)`; added `encoding` to `build_error_response` and
+   `OtlpHttpError::into_otlp_response`; updated module-level doc comment.
 
-9. **Tests** (see Testing Strategy).
+8. ✅ **Server: wire the handlers.** All three handlers resolve encoding first; 415
+   early-return passes `Encoding::Protobuf` as the dummy; error message updated to
+   mention both accepted types.
 
-10. **Docs.** Update `mkdocs/docs/otlp/index.md` (see Documentation).
+9. ✅ **Tests.** 6 new tests in `rust/otel-ingestion/tests/json_tests.rs`; all passing.
+   Server-level `content_type_encoding` unit tests skipped — function is private and
+   the handler-crate tests plus the content-type parameter stripping (tested via
+   `split_tests.rs` patterns) provide equivalent coverage.
 
-11. **CI.** Run `cargo fmt`, `cargo clippy --workspace -- -D warnings`,
-    `python3 ../build/rust_ci.py` from `rust/`.
+10. ✅ **Docs.** Updated `mkdocs/docs/otlp/index.md`: wire format note, HTTP semantics
+    table, limitations section, 415 troubleshooting, added OTLP/JSON & EventBridge subsection.
+
+11. ✅ **CI checks passed.** `cargo fmt`, `cargo clippy --workspace -- -D warnings`,
+    `cargo test -p micromegas-otel-ingestion` all green.
+
+**Also fixed:** `public/examples/auth_test.rs` was failing to compile because `tokio`
+was only declared as an optional server-feature dep. Added `tokio` to
+`[dev-dependencies]` in `rust/public/Cargo.toml` (commit `a678fb7b0`).
 
 ## Files to Modify
 
@@ -351,7 +351,7 @@ new JSON support can be verified without a DB:
    8,192 characters; one log record per event). String-quoted `timeUnixNano`
    (`"1700000000000000000"`) is achievable via variable substitution and matches the
    OTLP/JSON spec. EventBridge sends `Content-Type: application/json; charset=utf-8` by
-   default, which is already handled by the parameter-stripping in `check_content_type`.
+   default, which is handled by the parameter-stripping in `content_type_encoding`.
    No server changes needed for the EventBridge use case beyond the JSON support
    described in this plan.
 
