@@ -328,7 +328,7 @@ new JSON support can be verified without a DB:
      `serde_json::from_slice::<ExportLogsServiceRequest>` on the bare-number form
      (`1700000000000000000`) returns `Err(_)` (locks in the documented limitation so a
      future dependency change is noticed).
-   - **Empty request.** JSON `{}` → empty `Export*ServiceResponse`, no error.
+   - **Empty request.** JSON `{"resourceLogs":[]}` (and `{"resourceMetrics":[]}` / `{"resourceSpans":[]}` for the other signals) → empty `Export*ServiceResponse`, no error. Using `{}` would fail deserialization because `ExportLogsServiceRequest` has no struct-level `#[serde(default)]` and "missing field `resourceLogs`" would be returned.
 
 2. **Server-level (`rust/public/src/servers/otlp.rs`):** add unit tests for
    `content_type_encoding` covering `application/x-protobuf`,
