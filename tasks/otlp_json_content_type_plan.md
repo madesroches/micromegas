@@ -213,10 +213,10 @@ handler reads Content-Type
    `encoding.rs` module) with a `Display` impl (`"protobuf"` / `"json"`) for error
    messages; re-export from `lib.rs` if placed in its own module.
 
-4. **Generalize `parse` + `ingest_*`.** In `handler.rs`: make `parse` `pub` (required
-   so integration tests in `tests/json_tests.rs` can call it directly); add the
-   `DeserializeOwned` bound and `encoding` param to `parse`; dispatch prost vs
-   `serde_json`; add `encoding` to the three `ingest_*` signatures and pass it through.
+4. **Generalize `parse` + `ingest_*`.** In `handler.rs`: add the `DeserializeOwned`
+   bound and `encoding` param to `parse`; dispatch prost vs `serde_json`; add `encoding`
+   to the three `ingest_*` signatures and pass it through. Keep `parse` crate-private —
+   integration tests must not call it directly (see Testing Strategy).
 
 5. **Make `Status` serde-serializable.** In `rust/otel-ingestion/src/proto.rs`, add
    `serde::Serialize, serde::Deserialize` to the `Status` derive.
@@ -226,13 +226,17 @@ handler reads Content-Type
 
 7. **Server: encoding-aware responses.** Replace `proto_response` with
    `success_response(msg, encoding)`; add `encoding` to `build_error_response` and
-   `OtlpHttpError::into_otlp_response` (the `WrongContentType` arm stays protobuf).
+   `OtlpHttpError::into_otlp_response`. The `WrongContentType` arm always emits a
+   protobuf `Status` body; the `encoding` parameter is unused for that arm and call
+   sites must pass `Encoding::Protobuf` explicitly as the dummy value.
 
 8. **Server: wire the handlers.** Each of `logs_handler` / `metrics_handler` /
    `traces_handler`: resolve `encoding` from headers (415 on error), pass `encoding` to
    `ingest_*` and to `success_response`; route `OtelError` through
-   `into_otlp_response(encoding)`. Update the `WrongContentType` 415 message to mention
-   both accepted types.
+   `into_otlp_response(encoding)`. For the early-return 415 path, the call is
+   `return e.into_otlp_response(Encoding::Protobuf)` — `encoding` has not yet been
+   resolved, so `Encoding::Protobuf` is the explicit dummy. Update the `WrongContentType`
+   415 message to mention both accepted types.
 
 9. **Tests** (see Testing Strategy).
 
@@ -302,10 +306,12 @@ new JSON support can be verified without a DB:
 
 1. **New `rust/otel-ingestion/tests/json_tests.rs`:**
    - **Proto/JSON parse equivalence.** Build a request with the existing `fixtures.rs`
-     helpers (`make_logs_request`, etc.), serialize it to JSON with `serde_json`,
-     deserialize back with `parse::<_>(..., Encoding::Json)`, and assert it equals the
-     original — then assert `split_logs` produces identical `PreparedBlock`s for both
-     encodings (block ids are content-addressed, so equality is a strong check).
+     helpers (`make_logs_request`, etc.), serialize it to JSON with `serde_json::to_vec`,
+     then deserialize back with `serde_json::from_slice::<ExportLogsServiceRequest>` and
+     pass the result to `split_logs` — mirroring the pattern in `split_tests.rs`. Assert
+     `split_logs` produces identical `PreparedBlock`s for both the original struct and the
+     round-tripped one (block ids are content-addressed, so equality is a strong check).
+     Do not call `parse` directly; keep it crate-private.
    - **Official-fixture parse.** Deserialize a canonical OTLP/JSON example
      (logs/traces, mirroring the upstream `examples/*.json`) and assert
      `split_*` succeeds with expected block counts/bounds.
