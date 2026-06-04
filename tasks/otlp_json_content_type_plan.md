@@ -229,7 +229,9 @@ handler reads Content-Type
    `success_response(msg, encoding)`; add `encoding` to `build_error_response` and
    `OtlpHttpError::into_otlp_response`. The `WrongContentType` arm always emits a
    protobuf `Status` body; the `encoding` parameter is unused for that arm and call
-   sites must pass `Encoding::Protobuf` explicitly as the dummy value.
+   sites must pass `Encoding::Protobuf` explicitly as the dummy value. Also update the
+   module-level doc comment at `otlp.rs:12–14` (currently says responses are always
+   protobuf-encoded) to reflect that response encoding mirrors the request.
 
 8. **Server: wire the handlers.** Each of `logs_handler` / `metrics_handler` /
    `traces_handler`: resolve `encoding` from headers (415 on error), pass `encoding` to
@@ -350,6 +352,6 @@ new JSON support can be verified without a DB:
    not, a thin EventBridge-shape adapter would be a separate follow-up (out of scope
    here).
 
-3. **gzip + JSON.** The existing `RequestDecompressionLayer` is encoding-agnostic, so
+2. **gzip + JSON.** The existing `RequestDecompressionLayer` is encoding-agnostic, so
    gzipped JSON already works transparently. No action needed — flagged only for
    confirmation.
