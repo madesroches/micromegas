@@ -14,7 +14,7 @@ The ingestion service exposes three OTLP/HTTP routes that mirror the OpenTelemet
 
 Routes share the existing listener (default `127.0.0.1:9000`) and authentication chain. OTLP payloads are stored as-is in object storage; decoding into parquet rows happens lazily at the analytics layer.
 
-**Wire format:** OTLP/HTTP with `Content-Type: application/x-protobuf` only. Optional `Content-Encoding: gzip` is supported. JSON-encoded OTLP and gRPC OTLP are not supported in the current release.
+**Wire format:** OTLP/HTTP with `Content-Type: application/x-protobuf` or `Content-Type: application/json`. Optional `Content-Encoding: gzip` is supported. gRPC OTLP is not supported in the current release.
 
 ## Quick Start
 
@@ -169,9 +169,9 @@ WHERE process_id = '...';
 |---|---|
 | Body limit | 20 MiB compressed (matches the OTel Collector's default `confighttp.max_request_body_size`) |
 | Compression | `Content-Encoding: gzip` supported; other codecs return `415` |
-| Content-Type | `application/x-protobuf` only (parameters like `; charset=utf-8` accepted); other types return `415` |
-| Empty top-level request | `200 OK` with empty `Export*ServiceResponse` proto body, no rows written (per spec) |
-| Success | `200 OK`, `Content-Type: application/x-protobuf`, body is an empty `Export*ServiceResponse` proto |
+| Content-Type | `application/x-protobuf` or `application/json` (parameters like `; charset=utf-8` accepted); other types return `415` |
+| Empty top-level request | `200 OK` with empty `Export*ServiceResponse` body, no rows written (per spec) |
+| Success | `200 OK`, response `Content-Type` mirrors the request encoding; body is an empty `Export*ServiceResponse` |
 | Parse error | `400 Bad Request`, body is a `google.rpc.Status` proto with `code = INVALID_ARGUMENT (3)` |
 | Auth failure | `401 Unauthorized`, body is `google.rpc.Status` |
 | Body too large | `413 Payload Too Large`, body is `google.rpc.Status` |
@@ -256,10 +256,32 @@ export OTEL_SERVICE_NAME="my-service"
 
 Then use `otlptracehttp.New(ctx)` (or the equivalent for logs/metrics) — it picks up the env vars.
 
+## OTLP/JSON & EventBridge API Destinations
+
+AWS EventBridge API Destinations send `Content-Type: application/json; charset=utf-8` by default, which is accepted by the ingestion server. Use an input transformer to produce the full `ExportLogsServiceRequest` envelope:
+
+```json
+{
+  "resourceLogs": [{
+    "resource": { "attributes": [{"key": "service.name", "value": {"stringValue": "<$.source>"}}] },
+    "scopeLogs": [{
+      "scope": {"name": "eventbridge"},
+      "logRecords": [{
+        "timeUnixNano": "<$.time_ns>",
+        "severityNumber": 9,
+        "body": {"stringValue": "<$.detail.message>"}
+      }]
+    }]
+  }]
+}
+```
+
+`timeUnixNano` must be a **quoted string** in the template (e.g. `"<$.time_ns>"`). EventBridge input transformers substitute variables as strings inside quotes, satisfying the OTLP/JSON spec requirement. No Lambda translation layer is needed.
+
 ## Limitations
 
 - **OTLP/HTTP only.** gRPC OTLP is not implemented; SDKs that default to gRPC need `OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf`.
-- **Protobuf only.** JSON-encoded OTLP is not implemented.
+- **OTLP/JSON: string-encoded 64-bit fields required.** The OTLP/JSON spec mandates `"timeUnixNano"` and similar 64-bit integer fields as quoted strings (e.g. `"1700000000000000000"`). Bare JSON numbers are rejected. Conformant OTel SDKs and EventBridge input transformers produce the string form automatically.
 - **No mTLS / client certs.** Only bearer-token and OIDC auth.
 - **Histograms not yet materialized.** Sum and Gauge land in `measures`; Histogram, ExponentialHistogram, and Summary are skipped with a debug log.
 - **`otel_spans` is JIT-only and per-process.** Cross-process trace queries (`WHERE trace_id = X` across all services) need to UNION across each participating process.
@@ -268,7 +290,7 @@ Then use `otlptracehttp.New(ctx)` (or the equivalent for logs/metrics) — it pi
 
 ## Troubleshooting
 
-**`415 Unsupported Media Type`** — the SDK is sending JSON-encoded OTLP or omitting `Content-Type`. Set `OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf`. Other compression codecs (`deflate`, `zstd`) also return 415; only gzip is accepted.
+**`415 Unsupported Media Type`** — the SDK is sending an unsupported `Content-Type` or omitting it entirely. Accepted types are `application/x-protobuf` and `application/json`. Other compression codecs (`deflate`, `zstd`) also return 415; only gzip is accepted.
 
 **`401 Unauthorized`** — verify the bearer token matches an entry in `MICROMEGAS_API_KEYS` on the server. Check that the SDK is actually attaching the header (`OTEL_EXPORTER_OTLP_HEADERS` is processed at export time, not at SDK init — typos are silently ignored).
 

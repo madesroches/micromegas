@@ -32,7 +32,7 @@ pub use opentelemetry_proto::tonic::trace::v1::{ResourceSpans, ScopeSpans, Span,
 /// Protobuf-encoded Status message that describes the problem.").
 ///
 /// `details` is `repeated google.protobuf.Any` per the upstream proto; we omit it in v1.
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, ::prost::Message, serde::Serialize, serde::Deserialize)]
 pub struct Status {
     #[prost(int32, tag = "1")]
     pub code: i32,
