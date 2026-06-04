@@ -314,8 +314,11 @@ new JSON support can be verified without a DB:
      helpers (`make_logs_request`, etc.), serialize it to JSON with `serde_json::to_vec`,
      then deserialize back with `serde_json::from_slice::<ExportLogsServiceRequest>` and
      pass the result to `split_logs` — mirroring the pattern in `split_tests.rs`. Assert
-     `split_logs` produces identical `PreparedBlock`s for both the original struct and the
-     round-tripped one (block ids are content-addressed, so equality is a strong check).
+     `split_logs` produces matching `PreparedBlock`s for both the original struct and the
+     round-tripped one by comparing individual fields: `.block.block_id` (content-addressed
+     UUID, so equality is a strong check), `.nb_records`, `.begin_time`, and `.end_time`.
+     `PreparedBlock` derives no `PartialEq` so `assert_eq!` on the struct directly will
+     not compile; use field comparisons as `split_tests.rs` does.
      Do not call `parse` directly; keep it crate-private.
    - **Official-fixture parse.** Deserialize a canonical OTLP/JSON example
      (logs/traces, mirroring the upstream `examples/*.json`) and assert
