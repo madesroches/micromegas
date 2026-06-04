@@ -80,6 +80,10 @@ pub async fn delete_empty_streams_batch(
     .bind(batch_size)
     .fetch_all(&lake.db_pool)
     .await?;
+    for r in &rows {
+        let stream_id: Uuid = r.try_get("stream_id")?;
+        debug!("deleted stream {stream_id}");
+    }
     let count = rows.len();
     info!("deleted {count} empty streams");
     Ok(count == batch_size as usize)
@@ -118,6 +122,10 @@ pub async fn delete_empty_processes_batch(
     .bind(batch_size)
     .fetch_all(&lake.db_pool)
     .await?;
+    for r in &rows {
+        let process_id: Uuid = r.try_get("process_id")?;
+        debug!("deleted process {process_id}");
+    }
     let count = rows.len();
     info!("deleted {count} empty processes");
     Ok(count == batch_size as usize)
