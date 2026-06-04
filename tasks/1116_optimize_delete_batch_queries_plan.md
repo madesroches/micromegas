@@ -42,7 +42,7 @@ Problems:
 
 Comment at line 65: `// delete returning would be more efficient`
 
-### `delete_empty_processes_batch` (lines 110–145)
+### `delete_empty_processes_batch` (lines 109–145)
 
 ```
 1. SELECT processes.process_id LEFT JOIN streams … GROUP BY … HAVING count = 0 LIMIT 1000
@@ -153,14 +153,14 @@ RETURNING process_id;
       - Collect returned `stream_id` values from RETURNING to compute the count.
       - Return `Ok(count == batch_size as usize)` to preserve the loop-continuation
         signal, matching the existing pattern.
-      - Replace the two-line log with `info!("deleted {count} empty streams")`.
+      - Replace the log line with `info!("deleted {count} empty streams")`.
 
    c. `delete_empty_processes_batch`:
       - Replace the LEFT JOIN + GROUP BY query with a `NOT EXISTS` subquery.
       - Apply the same CTE + `DELETE … RETURNING` pattern as streams.
       - Return `Ok(count == batch_size as usize)` to preserve the loop-continuation
         signal, matching the existing pattern.
-      - Replace the two-line log with `info!("deleted {count} empty processes")`.
+      - Replace the log line with `info!("deleted {count} empty processes")`.
 
 2. **Run `cargo fmt`** from `rust/`.
 
