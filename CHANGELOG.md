@@ -27,6 +27,7 @@ This file documents the historical progress of the Micromegas project. For curre
   * Split four high-complexity web-app files (PerformanceAnalysisPage, FlameGraphCell, MapViewer, XYChart) into pure-logic modules, THREE.js scene helpers, and thin React shells, with unit tests for the extracted logic; behavior unchanged (#1089)
   * Unify template and SQL macro value lookup behind a shared `resolveMacro` helper so both engines route every shape (`time`, `cellRow`, `selected`, `rowCol`, `varCol`, `var`) through one lookup; no behavior change (#1088)
 * **Security:**
+  * Bump react-router to 6.30.4 and @remix-run/router to 1.23.3 to fix open redirect CVE
   * Bump qs to 6.15.2 and js-cookie to 3.0.7 to fix Dependabot alerts (#256, #257)
 * **Dependencies:**
   * Update DataFusion to 53.1 and rebuild the datafusion-wasm bindings (#1090)
