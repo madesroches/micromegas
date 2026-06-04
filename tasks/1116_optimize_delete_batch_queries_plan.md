@@ -7,13 +7,13 @@ Issue: [#1116](https://github.com/madesroches/micromegas/issues/1116)
 `delete_expired_blocks_batch` uses two un-transacted round-trips to delete a batch
 of expired blocks: a `SELECT` followed by `DELETE … WHERE block_id = ANY($1)` with
 1 000 UUIDs. The array-form DELETE can fall back to a sequential scan as the table
-grows, hitting the slow-query threshold. The fix wraps the operation in a
-transaction using `SELECT … FOR UPDATE SKIP LOCKED` to lock the batch, deletes S3
-blobs, then deletes the locked rows — a pattern that is also safe for concurrent
-workers. The same commit also converts `delete_empty_streams_batch` and
-`delete_empty_processes_batch` from SELECT+DELETE pairs to single-statement
-`DELETE … RETURNING` operations (already annotated with `// delete returning would
-be more efficient` comments).
+grows, hitting the slow-query threshold. The fix replaces both statements with a
+single `DELETE FROM blocks WHERE block_id IN (SELECT block_id … LIMIT $2) RETURNING
+process_id, stream_id, block_id` inside a transaction — matching the established
+pattern in `temp.rs` and `write_partition.rs`. The same commit also converts
+`delete_empty_streams_batch` and `delete_empty_processes_batch` from SELECT+DELETE
+pairs to single-statement `DELETE … RETURNING` operations (already annotated with
+`// delete returning would be more efficient` comments).
 
 ## Current State
 
@@ -32,7 +32,6 @@ Problems:
   are gone but the DB rows remain, causing orphaned rows on the next run.
 - `ANY(large_array)` can cause the planner to choose a sequential scan.
 - Two round trips to the DB.
-- Not safe for concurrent maintenance workers (double-processing possible).
 
 ### `delete_empty_streams_batch` (lines 60–97)
 
@@ -57,41 +56,32 @@ to replace the GROUP BY with a NOT EXISTS pattern matching `delete_empty_streams
 
 ### `delete_expired_blocks_batch`
 
-Wrap the entire operation in a transaction. Use `SELECT … FOR UPDATE SKIP LOCKED`
-to atomically reserve the batch, preventing concurrent workers from selecting the
-same rows:
+Wrap the entire operation in a transaction. Use a single `DELETE … RETURNING`
+statement to atomically remove the batch and retrieve the rows needed to build
+S3 blob paths — the same pattern used by `delete_expired_temporary_files_batch`
+in `temp.rs` and `retire_expired_partitions_batch` in `write_partition.rs`:
 
 ```sql
 -- inside a sqlx transaction
-SELECT block_id, process_id, stream_id
-FROM   blocks
-WHERE  insert_time <= $1
-LIMIT  $2
-FOR UPDATE SKIP LOCKED;
+DELETE FROM blocks
+WHERE block_id IN (
+    SELECT block_id FROM blocks WHERE insert_time <= $1 LIMIT $2
+)
+RETURNING process_id, stream_id, block_id;
 
--- Rust: build paths from returned rows, call lake.blob_storage.delete_batch(...)
-
-DELETE FROM blocks WHERE block_id = ANY($1);  -- $1 = locked_ids Vec<Uuid>
+-- Rust: build paths from RETURNING rows, call lake.blob_storage.delete_batch(...)
 
 -- transaction.commit()
 ```
 
-Failure modes (unchanged from issue spec):
+Failure modes:
 - S3 delete fails → don't commit → DB unchanged → retry next run.
 - Crash after S3 but before COMMIT → transaction rolls back → next run re-selects
   same rows → S3 returns "not found" (idempotent) → DB delete succeeds cleanly.
 
-`FOR UPDATE SKIP LOCKED` ensures a second concurrent worker will skip locked rows
-rather than block, making the design safe for concurrent execution.
-
-The `DELETE … WHERE block_id = ANY($1)` with a 1 000-element array still relies
-on the planner choosing the index on `block_id`. If that remains problematic after
-this change, a follow-up could use a CTE join:
-```sql
-WITH locked AS (…)
-DELETE FROM blocks USING locked WHERE blocks.block_id = locked.block_id
-```
-That is out of scope here; the transaction + SKIP LOCKED change is the primary fix.
+The subquery form lets the planner use the index on `insert_time` for the inner
+scan and the primary key index for the outer delete, avoiding the sequential-scan
+risk of `ANY(large_array)`.
 
 ### `delete_empty_streams_batch`
 
@@ -99,40 +89,16 @@ Replace the SELECT+DELETE pair with a single `DELETE … RETURNING` inside a
 transaction, eliminating the double-round-trip and the double-processing risk:
 
 ```sql
-DELETE FROM streams
-WHERE stream_id IN (
-    SELECT stream_id
-    FROM   streams
-    WHERE  insert_time <= $1
-    AND    NOT EXISTS (
-        SELECT 1 FROM blocks WHERE blocks.stream_id = streams.stream_id LIMIT 1
-    )
-    LIMIT  $2
-    FOR UPDATE SKIP LOCKED
-)
-RETURNING stream_id;
-```
-
-Note: PostgreSQL does not allow `FOR UPDATE` in a subquery of `DELETE` directly,
-but it is allowed in a nested sub-select (the inner `SELECT … FOR UPDATE SKIP
-LOCKED` within the `IN (…)` expression is valid). If the planner doesn't push
-the lock down, an alternative using a CTE is:
-
-```sql
-WITH locked AS (
+WITH batch AS (
     SELECT stream_id FROM streams
     WHERE  insert_time <= $1
     AND    NOT EXISTS (SELECT 1 FROM blocks WHERE blocks.stream_id = streams.stream_id LIMIT 1)
     LIMIT  $2
-    FOR UPDATE SKIP LOCKED
 )
 DELETE FROM streams
-WHERE stream_id IN (SELECT stream_id FROM locked)
+WHERE stream_id IN (SELECT stream_id FROM batch)
 RETURNING stream_id;
 ```
-
-Use whichever form sqlx accepts cleanly. The CTE form is preferred as it makes
-the intent explicit and is unambiguously valid.
 
 The `stream_ids` variable becomes unnecessary (rows come back from RETURNING).
 Log a single `info!` line with the count.
@@ -144,17 +110,16 @@ Replace the inefficient `LEFT JOIN … GROUP BY … HAVING count = 0` pattern wi
 `DELETE … RETURNING`:
 
 ```sql
-WITH locked AS (
+WITH batch AS (
     SELECT process_id FROM processes
     WHERE  insert_time <= $1
     AND    NOT EXISTS (
         SELECT 1 FROM streams WHERE streams.process_id = processes.process_id LIMIT 1
     )
     LIMIT  $2
-    FOR UPDATE SKIP LOCKED
 )
 DELETE FROM processes
-WHERE process_id IN (SELECT process_id FROM locked)
+WHERE process_id IN (SELECT process_id FROM batch)
 RETURNING process_id;
 ```
 
@@ -164,16 +129,16 @@ RETURNING process_id;
 
    a. `delete_expired_blocks_batch`:
       - Add `let mut transaction = lake.db_pool.begin().await?;`
-      - Change the SELECT query to append `FOR UPDATE SKIP LOCKED` and execute
-        against `&mut *transaction`.
-      - Keep the path/block_id extraction loop unchanged.
-      - Keep `lake.blob_storage.delete_batch(&paths).await?;` (no transaction
-        needed for S3 — it is not transactional).
-      - Change the DELETE to execute against `&mut *transaction`.
+      - Replace the SELECT + DELETE pair with a single
+        `DELETE FROM blocks WHERE block_id IN (SELECT block_id FROM blocks WHERE
+        insert_time <= $1 LIMIT $2) RETURNING process_id, stream_id, block_id`
+        executed against `&mut *transaction`.
+      - Build blob paths from the RETURNING rows.
+      - Early-return `Ok(false)` (committing the empty transaction) when no rows
+        are returned.
+      - Call `lake.blob_storage.delete_batch(&paths).await?;` (S3 is not
+        transactional; the transaction guards the DB side).
       - Add `transaction.commit().await.with_context(|| "commit")?;`
-      - Early-return `Ok(false)` when `paths.is_empty()` (before starting the
-        transaction would also work; either is fine since the SELECT would find
-        nothing anyway).
 
    b. `delete_empty_streams_batch`:
       - Replace the SELECT + DELETE pair with a single CTE-based
@@ -200,16 +165,13 @@ RETURNING process_id;
 
 ## Trade-offs
 
-- **SELECT FOR UPDATE SKIP LOCKED vs. SELECT + DELETE (no transaction).**
-  The transaction approach is strictly better: it is atomic, prevents
-  double-processing by concurrent workers, and makes crash recovery clean. The
-  only downside is that the transaction holds locks while S3 deletes run (~100 ms
-  for 1 000 blobs), which is acceptable.
-
-- **DELETE RETURNING vs. SELECT + DELETE for streams/processes.**
-  Single-statement `DELETE … RETURNING` is one round-trip instead of two,
-  eliminates the concurrent double-processing window, and removes the intermediate
-  UUID array. No downside.
+- **DELETE … RETURNING vs. SELECT + DELETE (no transaction).**
+  The `DELETE … RETURNING` approach matches the established pattern in `temp.rs`
+  and `write_partition.rs`. It is atomic (one round-trip), makes crash recovery
+  clean, and avoids the sequential-scan risk of `ANY(large_array)`. The
+  transaction holds the DB rows deleted until `commit()`, but S3 deletes happen
+  before commit so a failure there leaves the DB unchanged for the next retry.
+  No meaningful downside.
 
 - **NOT EXISTS vs. LEFT JOIN + GROUP BY for processes.**
   `NOT EXISTS` short-circuits on the first matching row, which is more efficient
@@ -219,12 +181,6 @@ RETURNING process_id;
 - **Batch size stays at 1 000.** No reason to change it; all existing
   bounded-batch operations in this codebase use 1 000.
 
-- **CTE form vs. nested subquery for SKIP LOCKED.**
-  PostgreSQL technically allows `FOR UPDATE SKIP LOCKED` in a subquery used by
-  `DELETE … WHERE x IN (SELECT … FOR UPDATE SKIP LOCKED)`, but the CTE form
-  (`WITH locked AS (SELECT … FOR UPDATE SKIP LOCKED) DELETE … WHERE x IN (SELECT
-  x FROM locked)`) is unambiguously valid per the PostgreSQL docs and makes the
-  intent clearer.
 
 ## Testing Strategy
 
