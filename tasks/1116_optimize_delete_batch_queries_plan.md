@@ -58,8 +58,11 @@ to replace the GROUP BY with a NOT EXISTS pattern matching `delete_empty_streams
 
 Wrap the entire operation in a transaction. Use a single `DELETE … RETURNING`
 statement to atomically remove the batch and retrieve the rows needed to build
-S3 blob paths — the same pattern used by `delete_expired_temporary_files_batch`
-in `temp.rs`:
+S3 blob paths — the same transaction + S3-cleanup structure used by
+`delete_expired_temporary_files_batch` in `temp.rs`. (Note: `temp.rs` returns
+`Ok(true)` unconditionally when non-empty; this function instead returns
+`Ok(paths.len() == batch_size as usize)`, matching `retire_expired_partitions_batch`
+in `write_partition.rs` and the original blocks code.)
 
 ```sql
 -- inside a sqlx transaction
@@ -144,9 +147,9 @@ RETURNING process_id;
 
    b. `delete_empty_streams_batch`:
       - Replace the SELECT + DELETE pair with a single CTE-based
-        `DELETE … RETURNING` statement executed against `&lake.db_pool` (no
-        transaction object needed since it is one statement) or wrapped in a
-        short transaction for consistency.
+        `DELETE … RETURNING` statement executed against `&lake.db_pool`. No
+        transaction object is needed: it is one statement (inherently atomic in
+        Postgres) and there is no S3 cleanup to coordinate.
       - Collect returned `stream_id` values from RETURNING to compute the count.
       - Return `Ok(count == batch_size as usize)` to preserve the loop-continuation
         signal, matching the existing pattern.
