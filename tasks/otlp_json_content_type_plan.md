@@ -345,13 +345,13 @@ new JSON support can be verified without a DB:
 
 ## Open Questions
 
-1. **EventBridge payload shape.** Does the target EventBridge API Destination emit a
-   *full* `ExportLogsServiceRequest` envelope (`{"resourceLogs":[...]}`) via its input
-   transformer, or a bare log record that would need server-side wrapping? This plan
-   assumes the transformer produces a complete OTLP/JSON `ExportLogsServiceRequest`. If
-   not, a thin EventBridge-shape adapter would be a separate follow-up (out of scope
-   here).
+1. ~~**EventBridge payload shape.**~~ **Resolved.** The input transformer produces the
+   complete `ExportLogsServiceRequest` envelope — there is no server-side wrapping
+   needed. You write the full OTLP/JSON structure in the `InputTemplate` string (up to
+   8,192 characters; one log record per event). String-quoted `timeUnixNano`
+   (`"1700000000000000000"`) is achievable via variable substitution and matches the
+   OTLP/JSON spec. EventBridge sends `Content-Type: application/json; charset=utf-8` by
+   default, which is already handled by the parameter-stripping in `check_content_type`.
+   No server changes needed for the EventBridge use case beyond the JSON support
+   described in this plan.
 
-2. **gzip + JSON.** The existing `RequestDecompressionLayer` is encoding-agnostic, so
-   gzipped JSON already works transparently. No action needed — flagged only for
-   confirmation.
