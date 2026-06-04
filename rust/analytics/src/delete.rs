@@ -38,9 +38,9 @@ pub async fn delete_expired_blocks_batch(
         let path = format!("blobs/{process_id}/{stream_id}/{block_id}");
         paths.push(path);
     }
-    info!("deleting {} blocks", paths.len());
     lake.blob_storage.delete_batch(&paths).await?;
     transaction.commit().await.with_context(|| "commit")?;
+    info!("deleted {} blocks", paths.len());
     Ok(paths.len() == batch_size as usize)
 }
 
