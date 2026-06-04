@@ -19,5 +19,7 @@ bytes.workspace = true
 chrono.workspace = true
 opentelemetry-proto.workspace = true
 prost.workspace = true
+serde = { workspace = true }
+serde_json = { workspace = true }
 thiserror.workspace = true
 uuid.workspace = true

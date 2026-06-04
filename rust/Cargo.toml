@@ -61,7 +61,7 @@ moka = { version = "0.12", features = ["future"] }
 object_store = { version = "0.13", features = ["aws"] }
 once_cell = "1.7.2"
 openidconnect = "4.0"
-opentelemetry-proto = { version = "0.31", default-features = false, features = ["gen-tonic-messages", "logs", "metrics", "trace"] }
+opentelemetry-proto = { version = "0.31", default-features = false, features = ["gen-tonic-messages", "logs", "metrics", "trace", "with-serde"] }
 parquet = "58.0"
 pin-project = "1.1"
 proc-macro2 = "1.0"

@@ -17,13 +17,31 @@ use crate::{
 use micromegas_ingestion::web_ingestion_service::WebIngestionService;
 use micromegas_tracing::prelude::*;
 use prost::Message;
+use serde::de::DeserializeOwned;
 use std::sync::Arc;
 
-fn parse<M: Message + Default>(body: &[u8], signal: Signal) -> Result<M, OtelError> {
-    M::decode(body).map_err(|e| OtelError::Parse {
-        signal,
-        message: format!("decoding {}: {}", signal.as_str(), e),
-    })
+/// Wire encoding negotiated from the request `Content-Type` header.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Encoding {
+    Protobuf,
+    Json,
+}
+
+fn parse<M: Message + Default + DeserializeOwned>(
+    body: &[u8],
+    signal: Signal,
+    encoding: Encoding,
+) -> Result<M, OtelError> {
+    match encoding {
+        Encoding::Protobuf => M::decode(body).map_err(|e| OtelError::Parse {
+            signal,
+            message: format!("decoding {} (protobuf): {e}", signal.as_str()),
+        }),
+        Encoding::Json => serde_json::from_slice(body).map_err(|e| OtelError::Parse {
+            signal,
+            message: format!("decoding {} (json): {e}", signal.as_str()),
+        }),
+    }
 }
 
 fn signal_tag(signal: Signal) -> &'static str {
@@ -101,8 +119,9 @@ async fn write_blocks(
 pub async fn ingest_logs(
     service: Arc<WebIngestionService>,
     body: bytes::Bytes,
+    encoding: Encoding,
 ) -> Result<ExportLogsServiceResponse, OtelError> {
-    let req: ExportLogsServiceRequest = parse(&body, Signal::Logs)?;
+    let req: ExportLogsServiceRequest = parse(&body, Signal::Logs, encoding)?;
     if req.resource_logs.is_empty() {
         return Ok(ExportLogsServiceResponse::default());
     }
@@ -118,8 +137,9 @@ pub async fn ingest_logs(
 pub async fn ingest_metrics(
     service: Arc<WebIngestionService>,
     body: bytes::Bytes,
+    encoding: Encoding,
 ) -> Result<ExportMetricsServiceResponse, OtelError> {
-    let req: ExportMetricsServiceRequest = parse(&body, Signal::Metrics)?;
+    let req: ExportMetricsServiceRequest = parse(&body, Signal::Metrics, encoding)?;
     if req.resource_metrics.is_empty() {
         return Ok(ExportMetricsServiceResponse::default());
     }
@@ -135,8 +155,9 @@ pub async fn ingest_metrics(
 pub async fn ingest_traces(
     service: Arc<WebIngestionService>,
     body: bytes::Bytes,
+    encoding: Encoding,
 ) -> Result<ExportTraceServiceResponse, OtelError> {
-    let req: ExportTraceServiceRequest = parse(&body, Signal::Traces)?;
+    let req: ExportTraceServiceRequest = parse(&body, Signal::Traces, encoding)?;
     if req.resource_spans.is_empty() {
         return Ok(ExportTraceServiceResponse::default());
     }

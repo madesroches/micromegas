@@ -9,9 +9,10 @@
 //! `confighttp.max_request_body_size` default) plus gzip request decompression,
 //! independent of the parent router's 100 MiB limit on `/ingestion/insert_block`.
 //!
-//! Per OTLP/HTTP spec, success responses are 2xx with an `Export*ServiceResponse` proto;
-//! 4xx/5xx responses are protobuf-encoded `google.rpc.Status` messages, with a
-//! `Retry-After` header on retryable 503 responses.
+//! Per OTLP/HTTP spec, success responses mirror the request encoding (JSON in → JSON out,
+//! proto in → proto out). Error responses (4xx/5xx) carry a `google.rpc.Status` body
+//! encoded in the same way, except 415 responses which always use protobuf because the
+//! request encoding is unknown at that point.
 
 use axum::Extension;
 use axum::Router;
@@ -21,6 +22,7 @@ use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::Response;
 use axum::routing::post;
 use micromegas_ingestion::web_ingestion_service::WebIngestionService;
+use micromegas_otel_ingestion::Encoding;
 use micromegas_otel_ingestion::error::OtelError;
 use micromegas_otel_ingestion::handler;
 use micromegas_tracing::prelude::*;
@@ -47,10 +49,12 @@ const OTLP_DECOMPRESSED_BODY_LIMIT_BYTES: usize = 300 * 1024 * 1024;
 const RETRY_AFTER_SECONDS: u32 = 30;
 
 const CONTENT_TYPE_PROTOBUF: &str = "application/x-protobuf";
+const CONTENT_TYPE_JSON: &str = "application/json";
 
-/// Examines the `Content-Type` header. The spec allows parameters
-/// (e.g. `application/x-protobuf; charset=utf-8`), so we parse rather than string-compare.
-fn check_content_type(headers: &HeaderMap) -> Result<(), OtlpHttpError> {
+/// Examines the `Content-Type` header and maps it to an `Encoding`. The spec allows
+/// parameters (e.g. `application/json; charset=utf-8`), so we parse rather than
+/// string-compare. Returns `Err(OtlpHttpError::WrongContentType)` for unknown types.
+fn content_type_encoding(headers: &HeaderMap) -> Result<Encoding, OtlpHttpError> {
     let Some(ct) = headers.get(header::CONTENT_TYPE) else {
         return Err(OtlpHttpError::WrongContentType);
     };
@@ -63,10 +67,10 @@ fn check_content_type(headers: &HeaderMap) -> Result<(), OtlpHttpError> {
         .unwrap_or("")
         .trim()
         .to_ascii_lowercase();
-    if media == CONTENT_TYPE_PROTOBUF {
-        Ok(())
-    } else {
-        Err(OtlpHttpError::WrongContentType)
+    match media.as_str() {
+        CONTENT_TYPE_PROTOBUF => Ok(Encoding::Protobuf),
+        CONTENT_TYPE_JSON => Ok(Encoding::Json),
+        _ => Err(OtlpHttpError::WrongContentType),
     }
 }
 
@@ -79,13 +83,15 @@ enum OtlpHttpError {
 }
 
 impl OtlpHttpError {
-    fn into_otlp_response(self) -> Response {
+    fn into_otlp_response(self, encoding: Encoding) -> Response {
         match self {
             OtlpHttpError::WrongContentType => build_error_response(
                 StatusCode::UNSUPPORTED_MEDIA_TYPE,
                 3, // INVALID_ARGUMENT
-                "Content-Type must be application/x-protobuf",
+                "Content-Type must be application/x-protobuf or application/json",
                 false,
+                // encoding is unknown for 415; always emit proto Status (OTLP/HTTP default)
+                Encoding::Protobuf,
             ),
             OtlpHttpError::Otel(err) => {
                 let retryable = err.is_retryable();
@@ -101,24 +107,33 @@ impl OtlpHttpError {
                 // logged server-side; only the sanitized public form goes to the
                 // client to avoid leaking backend internals.
                 error!("OTLP error: {}", err);
-                build_error_response(status, code, &err.public_message(), retryable)
+                build_error_response(status, code, &err.public_message(), retryable, encoding)
             }
         }
     }
 }
 
-fn build_error_response(status: StatusCode, code: i32, message: &str, retryable: bool) -> Response {
+fn build_error_response(
+    status: StatusCode,
+    code: i32,
+    message: &str,
+    retryable: bool,
+    encoding: Encoding,
+) -> Response {
     let proto_status = micromegas_otel_ingestion::proto::Status {
         code,
         message: message.to_string(),
     };
-    let body = proto_status.encode_to_vec();
+    let (body, content_type) = match encoding {
+        Encoding::Protobuf => (proto_status.encode_to_vec(), CONTENT_TYPE_PROTOBUF),
+        Encoding::Json => (
+            serde_json::to_vec(&proto_status).expect("serializing Status to JSON"),
+            CONTENT_TYPE_JSON,
+        ),
+    };
     let mut response = Response::builder()
         .status(status)
-        .header(
-            header::CONTENT_TYPE,
-            HeaderValue::from_static(CONTENT_TYPE_PROTOBUF),
-        )
+        .header(header::CONTENT_TYPE, HeaderValue::from_static(content_type))
         .body(Body::from(body))
         .expect("building OTLP error response");
     if retryable && let Ok(value) = HeaderValue::from_str(&RETRY_AFTER_SECONDS.to_string()) {
@@ -127,14 +142,17 @@ fn build_error_response(status: StatusCode, code: i32, message: &str, retryable:
     response
 }
 
-fn proto_response<M: Message>(msg: M) -> Response {
-    let body = msg.encode_to_vec();
+fn success_response<M: Message + serde::Serialize>(msg: M, encoding: Encoding) -> Response {
+    let (body, content_type) = match encoding {
+        Encoding::Protobuf => (msg.encode_to_vec(), CONTENT_TYPE_PROTOBUF),
+        Encoding::Json => (
+            serde_json::to_vec(&msg).expect("serializing OTLP response to JSON"),
+            CONTENT_TYPE_JSON,
+        ),
+    };
     Response::builder()
         .status(StatusCode::OK)
-        .header(
-            header::CONTENT_TYPE,
-            HeaderValue::from_static(CONTENT_TYPE_PROTOBUF),
-        )
+        .header(header::CONTENT_TYPE, HeaderValue::from_static(content_type))
         .body(Body::from(body))
         .expect("building OTLP success response")
 }
@@ -144,12 +162,13 @@ async fn logs_handler(
     headers: HeaderMap,
     body: bytes::Bytes,
 ) -> Response {
-    if let Err(e) = check_content_type(&headers) {
-        return e.into_otlp_response();
-    }
-    match handler::ingest_logs(service, body).await {
-        Ok(resp) => proto_response(resp),
-        Err(e) => OtlpHttpError::Otel(e).into_otlp_response(),
+    let encoding = match content_type_encoding(&headers) {
+        Ok(enc) => enc,
+        Err(e) => return e.into_otlp_response(Encoding::Protobuf),
+    };
+    match handler::ingest_logs(service, body, encoding).await {
+        Ok(resp) => success_response(resp, encoding),
+        Err(e) => OtlpHttpError::Otel(e).into_otlp_response(encoding),
     }
 }
 
@@ -158,12 +177,13 @@ async fn metrics_handler(
     headers: HeaderMap,
     body: bytes::Bytes,
 ) -> Response {
-    if let Err(e) = check_content_type(&headers) {
-        return e.into_otlp_response();
-    }
-    match handler::ingest_metrics(service, body).await {
-        Ok(resp) => proto_response(resp),
-        Err(e) => OtlpHttpError::Otel(e).into_otlp_response(),
+    let encoding = match content_type_encoding(&headers) {
+        Ok(enc) => enc,
+        Err(e) => return e.into_otlp_response(Encoding::Protobuf),
+    };
+    match handler::ingest_metrics(service, body, encoding).await {
+        Ok(resp) => success_response(resp, encoding),
+        Err(e) => OtlpHttpError::Otel(e).into_otlp_response(encoding),
     }
 }
 
@@ -172,12 +192,13 @@ async fn traces_handler(
     headers: HeaderMap,
     body: bytes::Bytes,
 ) -> Response {
-    if let Err(e) = check_content_type(&headers) {
-        return e.into_otlp_response();
-    }
-    match handler::ingest_traces(service, body).await {
-        Ok(resp) => proto_response(resp),
-        Err(e) => OtlpHttpError::Otel(e).into_otlp_response(),
+    let encoding = match content_type_encoding(&headers) {
+        Ok(enc) => enc,
+        Err(e) => return e.into_otlp_response(Encoding::Protobuf),
+    };
+    match handler::ingest_traces(service, body, encoding).await {
+        Ok(resp) => success_response(resp, encoding),
+        Err(e) => OtlpHttpError::Otel(e).into_otlp_response(encoding),
     }
 }
 

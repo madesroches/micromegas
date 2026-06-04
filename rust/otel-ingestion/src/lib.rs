@@ -14,6 +14,7 @@ pub mod identity;
 pub mod proto;
 
 pub use error::{OtelError, Signal};
+pub use handler::Encoding;
 
 /// `tsc_frequency` value recorded on processes synthesized from OTLP resources.
 /// OTLP timestamps are absolute nanoseconds, so 1 tick = 1 ns.
