@@ -139,6 +139,8 @@ RETURNING process_id;
       - Call `lake.blob_storage.delete_batch(&paths).await?;` (S3 is not
         transactional; the transaction guards the DB side).
       - Add `transaction.commit().await.with_context(|| "commit")?;`
+      - Return `Ok(paths.len() == batch_size as usize)` to preserve the
+        loop-continuation signal, matching steps 1b/1c and the original semantics.
 
    b. `delete_empty_streams_batch`:
       - Replace the SELECT + DELETE pair with a single CTE-based
