@@ -10,7 +10,7 @@ of expired blocks: a `SELECT` followed by `DELETE … WHERE block_id = ANY($1)` 
 grows, hitting the slow-query threshold. The fix replaces both statements with a
 single `DELETE FROM blocks WHERE block_id IN (SELECT block_id … LIMIT $2) RETURNING
 process_id, stream_id, block_id` inside a transaction — matching the established
-pattern in `temp.rs` and `write_partition.rs`. The same commit also converts
+pattern in `temp.rs` (`delete_expired_temporary_files_batch`). The same commit also converts
 `delete_empty_streams_batch` and `delete_empty_processes_batch` from SELECT+DELETE
 pairs to single-statement `DELETE … RETURNING` operations (already annotated with
 `// delete returning would be more efficient` comments).
@@ -49,7 +49,7 @@ Comment at line 65: `// delete returning would be more efficient`
 2. DELETE FROM processes WHERE process_id = ANY($1)
 ```
 
-Comments at lines 65–66: `// delete returning would be more efficient` and a note
+Comments at lines 117–118: `// delete returning would be more efficient` and a note
 to replace the GROUP BY with a NOT EXISTS pattern matching `delete_empty_streams_batch`.
 
 ## Design
@@ -59,7 +59,7 @@ to replace the GROUP BY with a NOT EXISTS pattern matching `delete_empty_streams
 Wrap the entire operation in a transaction. Use a single `DELETE … RETURNING`
 statement to atomically remove the batch and retrieve the rows needed to build
 S3 blob paths — the same pattern used by `delete_expired_temporary_files_batch`
-in `temp.rs` and `retire_expired_partitions_batch` in `write_partition.rs`:
+in `temp.rs`:
 
 ```sql
 -- inside a sqlx transaction
@@ -171,7 +171,7 @@ RETURNING process_id;
 
 - **DELETE … RETURNING vs. SELECT + DELETE (no transaction).**
   The `DELETE … RETURNING` approach matches the established pattern in `temp.rs`
-  and `write_partition.rs`. It is atomic (one round-trip), makes crash recovery
+  (`delete_expired_temporary_files_batch`). It is atomic (one round-trip), makes crash recovery
   clean, and avoids the sequential-scan risk of `ANY(large_array)`. The
   transaction holds the DB rows deleted until `commit()`, but S3 deletes happen
   before commit so a failure there leaves the DB unchanged for the next retry.
