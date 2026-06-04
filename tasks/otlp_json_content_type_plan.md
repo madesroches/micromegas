@@ -324,9 +324,10 @@ new JSON support can be verified without a DB:
      (logs/traces, mirroring the upstream `examples/*.json`) and assert
      `split_*` succeeds with expected block counts/bounds.
    - **String-encoded timestamps.** Assert `"timeUnixNano": "1700000000000000000"`
-     parses and the resulting block bound matches; assert the bare-number form
-     (`1700000000000000000`) returns an `OtelError::Parse` (locks in the documented
-     limitation so a future dependency change is noticed).
+     parses and the resulting block bound matches; assert that calling
+     `serde_json::from_slice::<ExportLogsServiceRequest>` on the bare-number form
+     (`1700000000000000000`) returns `Err(_)` (locks in the documented limitation so a
+     future dependency change is noticed).
    - **Empty request.** JSON `{}` → empty `Export*ServiceResponse`, no error.
 
 2. **Server-level (`rust/public/src/servers/otlp.rs`):** add unit tests for
