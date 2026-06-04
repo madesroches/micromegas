@@ -131,10 +131,11 @@ fn parse<M: Message + Default + serde::de::DeserializeOwned>(
     encoding: Encoding,
 ) -> Result<M, OtelError> {
     match encoding {
-        Encoding::Protobuf => M::decode(body),                  // existing path
-        Encoding::Json      => serde_json::from_slice(body),    // new path
+        Encoding::Protobuf => M::decode(body)
+            .map_err(|e| OtelError::Parse { signal, message: format!("decoding {} (protobuf): {e}", signal.as_str()) }),
+        Encoding::Json => serde_json::from_slice(body)
+            .map_err(|e| OtelError::Parse { signal, message: format!("decoding {} (json): {e}", signal.as_str()) }),
     }
-    .map_err(|e| OtelError::Parse { signal, message: format!("decoding {} ({encoding}): {e}", signal.as_str()) })
 }
 ```
 
@@ -305,6 +306,10 @@ Existing handler-level DB round-trip tests are deferred (per the note in
 new JSON support can be verified without a DB:
 
 1. **New `rust/otel-ingestion/tests/json_tests.rs`:**
+   - **`mod fixtures;` declaration required.** Each file under `tests/` is a separate
+     integration test binary. `fixtures.rs` is only accessible when the test file opens
+     with `mod fixtures;` (verified pattern in `split_tests.rs:10`). Without this
+     declaration, `make_logs_request` and the other helpers are undefined.
    - **Proto/JSON parse equivalence.** Build a request with the existing `fixtures.rs`
      helpers (`make_logs_request`, etc.), serialize it to JSON with `serde_json::to_vec`,
      then deserialize back with `serde_json::from_slice::<ExportLogsServiceRequest>` and
