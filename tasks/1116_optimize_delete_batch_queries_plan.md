@@ -134,8 +134,8 @@ RETURNING process_id;
         insert_time <= $1 LIMIT $2) RETURNING process_id, stream_id, block_id`
         executed against `&mut *transaction`.
       - Build blob paths from the RETURNING rows.
-      - Early-return `Ok(false)` (committing the empty transaction) when no rows
-        are returned.
+      - Early-return `Ok(false)` (let the transaction drop — no commit needed) when
+        no rows are returned.
       - Call `lake.blob_storage.delete_batch(&paths).await?;` (S3 is not
         transactional; the transaction guards the DB side).
       - Add `transaction.commit().await.with_context(|| "commit")?;`
@@ -146,11 +146,15 @@ RETURNING process_id;
         transaction object needed since it is one statement) or wrapped in a
         short transaction for consistency.
       - Collect returned `stream_id` values from RETURNING to compute the count.
+      - Return `Ok(count == batch_size as usize)` to preserve the loop-continuation
+        signal, matching the existing pattern.
       - Replace the two-line log with `info!("deleted {count} empty streams")`.
 
    c. `delete_empty_processes_batch`:
       - Replace the LEFT JOIN + GROUP BY query with a `NOT EXISTS` subquery.
       - Apply the same CTE + `DELETE … RETURNING` pattern as streams.
+      - Return `Ok(count == batch_size as usize)` to preserve the loop-continuation
+        signal, matching the existing pattern.
       - Replace the two-line log with `info!("deleted {count} empty processes")`.
 
 2. **Run `cargo fmt`** from `rust/`.
