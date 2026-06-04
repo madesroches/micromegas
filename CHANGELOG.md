@@ -14,6 +14,7 @@ This file documents the historical progress of the Micromegas project. For curre
   * Fix table column-override memo keying on fresh-per-render objects, causing `evaluateTemplate` to re-run every render; key on a content hash of only template-referenced inputs instead (#1092)
   * Route Map detail-panel `$column` macros through the evaluator's raw row + column-types channel so bare references carry their Arrow `DataType`; timestamps format as RFC3339 and `format_value()` receives full-precision raw values instead of pre-stringified ones (#1091)
 * **Analytics:**
+  * Replace SELECT+DELETE pairs in `delete_expired_blocks_batch` with atomic `DELETE … RETURNING` queries; eliminates double-counting and phantom deletes under concurrent writers (#1116)
   * Batch `retire_expired_partitions` to bound memory and transaction size on large backlogs; uses `DELETE … RETURNING` with a row-tuple subquery, matching the established batch pattern (#1111)
   * Prevent phantom empty partitions and detached writer tasks when span builds fail (crossing spans, net-span tree errors, merge stream errors); poison the write channel so `insert_partition` is skipped and the original error propagates to the query; surface full anyhow error chain at the DataFusion boundary
   * Batch `delete_expired_temporary_files` to avoid unbounded SQL/S3 operations on large `temporary_files` tables; add per-file `debug!`-level audit logging (#1108, #1109)
