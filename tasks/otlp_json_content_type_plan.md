@@ -196,7 +196,7 @@ handler reads Content-Type
         ▼
   success_response(resp, encoding)
         ├─ Protobuf → x-protobuf, encode_to_vec
-        └─ Json     → application/json, serde_json (empty resp → "{}")
+        └─ Json     → application/json, serde_json (empty resp → {"partialSuccess":null})
 ```
 
 ## Implementation Steps
@@ -213,9 +213,10 @@ handler reads Content-Type
    `encoding.rs` module) with a `Display` impl (`"protobuf"` / `"json"`) for error
    messages; re-export from `lib.rs` if placed in its own module.
 
-4. **Generalize `parse` + `ingest_*`.** In `handler.rs`: add the `DeserializeOwned`
-   bound and `encoding` param to `parse`; dispatch prost vs `serde_json`; add `encoding`
-   to the three `ingest_*` signatures and pass it through.
+4. **Generalize `parse` + `ingest_*`.** In `handler.rs`: make `parse` `pub` (required
+   so integration tests in `tests/json_tests.rs` can call it directly); add the
+   `DeserializeOwned` bound and `encoding` param to `parse`; dispatch prost vs
+   `serde_json`; add `encoding` to the three `ingest_*` signatures and pass it through.
 
 5. **Make `Status` serde-serializable.** In `rust/otel-ingestion/src/proto.rs`, add
    `serde::Serialize, serde::Deserialize` to the `Status` derive.
@@ -316,7 +317,7 @@ new JSON support can be verified without a DB:
    `content_type_encoding` covering `application/x-protobuf`,
    `application/json`, parameters (`application/json; charset=utf-8`), unknown types,
    and missing header. If practical, an axum router test that POSTs a JSON body and
-   asserts a `200` with `Content-Type: application/json` and a `{}` body (may require the
+   asserts a `200` with `Content-Type: application/json` and a `{"partialSuccess":null}` body (may require the
    ingestion service; otherwise covered by the handler-crate tests above plus the
    content-type unit tests).
 
