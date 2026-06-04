@@ -287,6 +287,8 @@ Update `mkdocs/docs/otlp/index.md`:
 - `:172` (Content-Type table row) — list both `application/x-protobuf` and
   `application/json`.
 - `:174` (Success row) — note the response Content-Type mirrors the request.
+- `:262` (Limitations bullet) — remove the `**Protobuf only.**` bullet (or replace it
+  with a note that gRPC transport is not implemented, which remains true).
 - `:271` (troubleshooting `415`) — update to reflect that JSON is now accepted, and that
   the remaining `415` causes are missing/other content types and non-gzip compression.
 - Consider a short "OTLP/JSON & EventBridge" subsection describing the API Destination
