@@ -339,12 +339,7 @@ new JSON support can be verified without a DB:
 
 ## Open Questions
 
-1. **Lenient numeric timestamps.** Is rejecting bare-number 64-bit fields acceptable for
-   v1, or must we accept both string and number forms? Accepting numbers means custom
-   deserializers and abandoning the crate's derives — significantly more work. Plan
-   assumes strings-only is acceptable (documented limitation).
-
-2. **EventBridge payload shape.** Does the target EventBridge API Destination emit a
+1. **EventBridge payload shape.** Does the target EventBridge API Destination emit a
    *full* `ExportLogsServiceRequest` envelope (`{"resourceLogs":[...]}`) via its input
    transformer, or a bare log record that would need server-side wrapping? This plan
    assumes the transformer produces a complete OTLP/JSON `ExportLogsServiceRequest`. If
