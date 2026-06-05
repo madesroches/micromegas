@@ -35,11 +35,14 @@ consists of zero-timestamp records, `nb_appended == 0` and `process()` returns `
 
 Mutate each `ResourceLogs` before encoding: iterate over all `scope_logs` / `log_records`
 and set `record.observed_time_unix_nano = now_nanos` wherever both fields are zero.
-Capture `now` once per `ResourceLogs` (not per record) so all records in the same batch
-share the same observed timestamp and the block envelope is consistent with the payload.
+Capture `now_nanos` once per `ResourceLogs` (not per record) so all records in the same
+batch share the same observed timestamp. **`logs_bounds` must be called on the mutated
+`rl` after the backfill loop**, so the block envelope timestamps are derived from the
+same `now_nanos` value that was written into the proto payload — eliminating wall-clock
+jitter between the two.
 
-After the backfill `logs_bounds` returns a real non-zero range, so the envelope, the
-stored proto, and the analytics processor all see the same wall-clock time.
+After the backfill, `logs_bounds` returns a real non-zero range, so the envelope, the
+stored proto, and the analytics processor all see consistent timestamps.
 
 Add a `debug!` log at ingestion when records are backfilled (count + block context),
 mirroring the existing pattern at the analytics layer.
@@ -69,6 +72,9 @@ a defensive safety net.
    - Capture `now_nanos` once before the inner loop (a `u64` from
      `Utc::now().timestamp_nanos_opt().unwrap_or(0) as u64`).
    - Accumulate a backfill count; emit `debug!` if `> 0`.
+   - **After** the backfill loop, call `logs_bounds(&rl)` to derive `begin_time`/`end_time`
+     for the block envelope. Remove (or skip) the early `logs_bounds` call that currently
+     precedes encoding, so `bounds` always reflects the backfilled timestamps.
    - Pass `Some(pre_mutation_id)` to `build_prepared_block` so the stored `block_id` is
      stable across retries with the same original payload.
 
@@ -90,7 +96,9 @@ a defensive safety net.
      original non-zero timestamp, and `end_time` is after a sentinel date (e.g.,
      2024-01-01) rather than matching the exact max of the original non-zero range
      (because zero-timestamp records are backfilled to `now_nanos`, which is greater than
-     any historical fixture timestamp).
+     any historical fixture timestamp). This assertion is only valid when `logs_bounds` is
+     called **after** the backfill loop; if called before, `end_time` would reflect the
+     pre-backfill maximum and the sentinel check would fail.
 
 ## Files to Modify
 
