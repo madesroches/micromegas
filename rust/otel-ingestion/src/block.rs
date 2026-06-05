@@ -267,7 +267,9 @@ pub fn split_logs(req: crate::proto::ExportLogsServiceRequest) -> Result<Vec<Pre
 
         // Backfill observed_time_unix_nano for records missing both timestamps.
         // now_nanos is captured once per ResourceLogs so all records in the batch share the same value.
-        let now_nanos = Utc::now().timestamp_nanos_opt().unwrap_or(0) as u64;
+        let now_nanos = Utc::now()
+            .timestamp_nanos_opt()
+            .expect("Utc::now() is always representable as nanoseconds") as u64;
         let mut nb_backfilled: usize = 0;
         for scope in &mut rl.scope_logs {
             for record in &mut scope.log_records {
