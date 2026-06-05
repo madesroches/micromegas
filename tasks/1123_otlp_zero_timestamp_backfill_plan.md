@@ -72,6 +72,10 @@ a defensive safety net.
    - Capture `now_nanos` once before the inner loop (a `u64` from
      `Utc::now().timestamp_nanos_opt().unwrap_or(0) as u64`).
    - Accumulate a backfill count; emit `debug!` if `> 0`.
+   - **After** the backfill loop, re-encode the mutated proto:
+     `let payload_bytes = rl.encode_to_vec();`. This is the bytes that will be stored as
+     `block.payload.objects`. `pre_mutation_bytes` is used only for ID derivation and must
+     not be passed as the payload — doing so would store zero timestamps, defeating the fix.
    - **After** the backfill loop, reposition the `let Some(bounds) = logs_bounds(&rl) else { continue; }` guard to this point (do not delete it). This preserves the existing filtering semantics — zero-record `ResourceLogs` that yield `None` from `logs_bounds` are still skipped via `continue` — while ensuring `bounds` always reflects the backfilled timestamps. Placing the guard before the backfill loop (as in the current code) would derive bounds from pre-mutation timestamps; placing it after keeps the envelope and the stored proto consistent.
    - Pass `Some(pre_mutation_id)` to `build_prepared_block` so the stored `block_id` is
      stable across retries with the same original payload.
