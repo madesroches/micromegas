@@ -108,6 +108,20 @@ future consumer.
 guard to use `insert_time` as last-resort. Rejected as over-engineering; the single fix
 at ingestion is sufficient and keeps the analytics layer simple.
 
+**Idempotency impact of pre-encode mutation** — `block_id_from_payload` (called in
+`identity.rs` line 143 and `block.rs` line 202) computes a UUID-v5 over
+`rl.encode_to_vec()`. Because the backfill mutates `observed_time_unix_nano` to
+`now_nanos` *before* encoding, two retries of a byte-identical zero-timestamp payload
+arrive at a different encoded byte sequence → different `block_id` → both pass the
+`ON CONFLICT (block_id) DO NOTHING` guard in `web_ingestion_service.rs` line 136,
+creating duplicate blocks and ultimately duplicate `log_entries` rows.
+Mitigation: compute `block_id` from the **pre-mutation** bytes by calling
+`block_id_from_payload` before the backfill loop, then passing the pre-computed ID
+through to `build_prepared_block` instead of letting it be re-derived from the mutated
+proto. This preserves retry idempotency without changing the stored payload or the
+analytics output. The implementation step for `block.rs` should be updated to reflect
+this ordering (capture `block_id` → backfill → encode).
+
 ## Testing Strategy
 
 - Unit tests in `split_tests.rs` verify the backfill logic without touching Postgres or
