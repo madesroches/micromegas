@@ -19,6 +19,7 @@ This file documents the historical progress of the Micromegas project. For curre
   * Prevent phantom empty partitions and detached writer tasks when span builds fail (crossing spans, net-span tree errors, merge stream errors); poison the write channel so `insert_partition` is skipped and the original error propagates to the query; surface full anyhow error chain at the DataFusion boundary
   * Batch `delete_expired_temporary_files` to avoid unbounded SQL/S3 operations on large `temporary_files` tables; add per-file `debug!`-level audit logging (#1108, #1109)
 * **OTLP Ingestion:**
+  * Backfill `observed_time_unix_nano` at ingestion time for OTLP log records where both timestamp fields are zero; block ID is derived from the pre-mutation bytes to preserve retry idempotency (#1123)
   * Accept `Content-Type: application/json` on all three OTLP/HTTP routes in addition to `application/x-protobuf`; response encoding mirrors the request; enables AWS EventBridge API Destinations to POST directly without a Lambda translation layer (#1115)
 * **Build:**
   * Fix `cargo doc --workspace --all-features` hiding the `micromegas-perfetto` library modules by re-keying proto regeneration on the `MICROMEGAS_REGEN_PROTOS` env var instead of the `protogen` feature (#1079)
