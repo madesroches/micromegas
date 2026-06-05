@@ -77,6 +77,7 @@ a defensive safety net.
      `block.payload.objects`. `pre_mutation_bytes` is used only for ID derivation and must
      not be passed as the payload — doing so would store zero timestamps, defeating the fix.
    - **After** the backfill loop, reposition the `let Some(bounds) = logs_bounds(&rl) else { continue; }` guard to this point (do not delete it). This preserves the existing filtering semantics — zero-record `ResourceLogs` that yield `None` from `logs_bounds` are still skipped via `continue` — while ensuring `bounds` always reflects the backfilled timestamps. Placing the guard before the backfill loop (as in the current code) would derive bounds from pre-mutation timestamps; placing it after keeps the envelope and the stored proto consistent.
+   - Optional optimization: keep a cheap `if rl.scope_logs.is_empty() { continue; }` (or equivalent `count == 0`) fast-path skip *before* the pre-mutation encode, so zero-record `ResourceLogs` don't incur two `encode_to_vec()` calls plus a UUID-v5 hash only to be discarded by the repositioned `logs_bounds` guard. Backfill never changes record count, so this preserves the `None`/skip semantics exactly.
    - Pass `Some(pre_mutation_id)` to `build_prepared_block` so the stored `block_id` is
      stable across retries with the same original payload.
 
@@ -142,7 +143,8 @@ at ingestion is sufficient and keeps the analytics layer simple.
 `rl.encode_to_vec()`. Because the backfill mutates `observed_time_unix_nano` to
 `now_nanos` *before* encoding, two retries of a byte-identical zero-timestamp payload
 arrive at a different encoded byte sequence → different `block_id` → both pass the
-`ON CONFLICT (block_id) DO NOTHING` guard in `web_ingestion_service.rs` line 136,
+`ON CONFLICT (block_id) DO NOTHING` guard in `rust/ingestion/src/web_ingestion_service.rs:136`
+(note: this guard lives in the `ingestion` crate, not `otel-ingestion`),
 creating duplicate blocks and ultimately duplicate `log_entries` rows.
 Mitigation: compute `block_id` from the **pre-mutation** bytes by calling
 `block_id_from_payload` before the backfill loop, then passing the pre-computed ID
