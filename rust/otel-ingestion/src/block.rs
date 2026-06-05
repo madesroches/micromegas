@@ -266,9 +266,24 @@ pub fn split_logs(req: crate::proto::ExportLogsServiceRequest) -> Result<Vec<Pre
             continue;
         }
 
-        // Encode pre-mutation bytes to derive a stable block_id before backfill.
-        let pre_mutation_bytes = rl.encode_to_vec();
-        let pre_mutation_id = block_id_from_payload(&pre_mutation_bytes);
+        // Count zero-timestamp candidates before mutating so we can skip the
+        // pre-mutation encode on the common path (all records already have timestamps).
+        let zero_ts_candidates: usize = rl
+            .scope_logs
+            .iter()
+            .flat_map(|s| s.log_records.iter())
+            .filter(|r| r.time_unix_nano == 0 && r.observed_time_unix_nano == 0)
+            .count();
+
+        // Only capture pre-mutation bytes when backfill may actually occur.
+        // The stable block_id must be derived from the original payload so retries
+        // with the same input always produce the same ID.
+        let pre_mutation_id = if zero_ts_candidates > 0 {
+            let pre_mutation_bytes = rl.encode_to_vec();
+            Some(block_id_from_payload(&pre_mutation_bytes))
+        } else {
+            None
+        };
 
         // Backfill observed_time_unix_nano for records missing both timestamps.
         // Captured once per ResourceLogs so all records in the batch share the same value.
@@ -289,7 +304,9 @@ pub fn split_logs(req: crate::proto::ExportLogsServiceRequest) -> Result<Vec<Pre
             );
         }
 
-        // Re-encode after mutation — stored bytes must reflect the backfilled timestamps.
+        // Re-encode after potential mutation — stored bytes must reflect the backfilled timestamps.
+        // When nb_backfilled == 0 this is the only encode (pre_mutation_id is None and
+        // build_prepared_block derives the block_id from these bytes directly).
         let payload_bytes = rl.encode_to_vec();
 
         // Derive bounds from the mutated rl so the envelope and stored proto are consistent.
@@ -307,7 +324,7 @@ pub fn split_logs(req: crate::proto::ExportLogsServiceRequest) -> Result<Vec<Pre
             resource_attrs,
             SignalKey::Logs,
             bounds,
-            Some(pre_mutation_id),
+            pre_mutation_id,
         ));
     }
     Ok(out)
