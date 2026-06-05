@@ -79,7 +79,11 @@ a defensive safety net.
      have `observed_time_unix_nano != 0` and `time_unix_nano == 0`; assert the value is
      unchanged after `split_logs`.
    - `logs_split_mixed_timestamps_all_survive`: a block with some zero-timestamp records
-     and some non-zero; assert all records survive and bounds reflect the non-zero range.
+     and some non-zero; assert all records survive, `begin_time` equals the minimum
+     original non-zero timestamp, and `end_time` is after a sentinel date (e.g.,
+     2024-01-01) rather than matching the exact max of the original non-zero range
+     (because zero-timestamp records are backfilled to `now_nanos`, which is greater than
+     any historical fixture timestamp).
 
 ## Files to Modify
 
