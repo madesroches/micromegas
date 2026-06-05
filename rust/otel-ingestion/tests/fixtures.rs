@@ -3,6 +3,7 @@
 //! `opentelemetry-proto` alone is enough for tests — adding `opentelemetry-sdk`
 //! and the `opentelemetry-otlp` exporter just to materialize bytes would drag
 //! tokio/tower/reqwest in transitively for no test-coverage gain.
+#![allow(dead_code)]
 
 use micromegas_otel_ingestion::proto::{
     AnyValue, ExportLogsServiceRequest, ExportMetricsServiceRequest, ExportTraceServiceRequest,
@@ -66,6 +67,44 @@ pub fn make_logs_request(
             }],
             schema_url: String::new(),
         }],
+    }
+}
+
+/// `LogRecord` with both timestamps set to zero — models an SDK that omits all timestamps.
+pub fn log_record_no_timestamp(severity: i32, body: &str) -> LogRecord {
+    LogRecord {
+        time_unix_nano: 0,
+        observed_time_unix_nano: 0,
+        severity_number: severity,
+        severity_text: String::new(),
+        body: Some(AnyValue {
+            value: Some(AnyVal::StringValue(body.into())),
+        }),
+        attributes: vec![],
+        dropped_attributes_count: 0,
+        flags: 0,
+        trace_id: vec![],
+        span_id: vec![],
+        event_name: String::new(),
+    }
+}
+
+/// `LogRecord` with `time_unix_nano = 0` and a non-zero `observed_time_unix_nano`.
+pub fn log_record_observed_only(observed_nanos: u64, severity: i32, body: &str) -> LogRecord {
+    LogRecord {
+        time_unix_nano: 0,
+        observed_time_unix_nano: observed_nanos,
+        severity_number: severity,
+        severity_text: String::new(),
+        body: Some(AnyValue {
+            value: Some(AnyVal::StringValue(body.into())),
+        }),
+        attributes: vec![],
+        dropped_attributes_count: 0,
+        flags: 0,
+        trace_id: vec![],
+        span_id: vec![],
+        event_name: String::new(),
     }
 }
 

@@ -1,0 +1,168 @@
+# OTLP Zero-Timestamp Backfill Plan
+
+Addresses [issue #1123](https://github.com/madesroches/micromegas/issues/1123).
+
+## Overview
+
+OTLP log records where both `time_unix_nano` and `observed_time_unix_nano` are zero are
+silently dropped at analytics time, producing empty `log_entries` results even though
+ingestion returns 200 OK. The fix is to backfill `observed_time_unix_nano` at ingestion
+time — before encoding the proto payload — which is exactly what the OTLP spec requires
+of the collecting system. A companion change adds `debug!` logging at both the ingestion
+and analytics layers so operators can detect data loss.
+
+## Current State
+
+### Ingestion (`rust/otel-ingestion/src/block.rs`)
+
+`split_logs` (line 248) calls `logs_bounds` to derive `begin_time`/`end_time` for the
+block envelope. `logs_bounds` (line 41) detects the all-zero case and returns
+`Some((0, 0, count))`, which causes `build_prepared_block` (line 188) to substitute
+`Utc::now()` for the envelope timestamps. **However**, the `ResourceLogs` proto is then
+encoded as-is (line 259) with the zero timestamps still in place.
+
+### Analytics (`rust/analytics/src/lakehouse/otel/logs_block_processor.rs`)
+
+`OtelLogsBlockProcessor::process()` (lines 102–112) reads the stored proto and skips any
+`LogRecord` where both fields are zero, incrementing `nb_dropped_no_timestamp`. A single
+aggregated `debug!` fires at line 199 if any records were dropped. When the entire block
+consists of zero-timestamp records, `nb_appended == 0` and `process()` returns `Ok(None)`
+— the partition gets no rows and `log_entries` returns nothing.
+
+## Design
+
+### Backfill in `split_logs`
+
+Mutate each `ResourceLogs` before encoding: iterate over all `scope_logs` / `log_records`
+and set `record.observed_time_unix_nano = now_nanos` wherever both fields are zero.
+Capture `now_nanos` once per `ResourceLogs` (not per record) so all records in the same
+batch share the same observed timestamp. **`logs_bounds` must be called on the mutated
+`rl` after the backfill loop**, so the block envelope timestamps are derived from the
+same `now_nanos` value that was written into the proto payload — eliminating wall-clock
+jitter between the two.
+
+After the backfill, `logs_bounds` returns a real non-zero range, so the envelope, the
+stored proto, and the analytics processor all see consistent timestamps.
+
+Add a `debug!` log at ingestion when records are backfilled (count + block context),
+mirroring the existing pattern at the analytics layer.
+
+### Logging when dropping data
+
+**Ingestion side** (new): emit `debug!` listing how many records had timestamps backfilled,
+per `ResourceLogs`. This surfaces in the telemetry stream so operators can tell that
+a sender is omitting timestamps without needing to dig into analytics logs.
+
+**Analytics side** (existing, no change needed): the `debug!` at line 199 of
+`logs_block_processor.rs` already fires when records are dropped. With the fix applied,
+this should never trigger for OTLP blocks ingested after the fix, but the guard stays as
+a defensive safety net.
+
+## Implementation Steps
+
+1. **`rust/otel-ingestion/src/block.rs` — backfill in `split_logs` and update `build_prepared_block`**
+   - Add an `Option<Uuid>` parameter (`pre_computed_id`) to `build_prepared_block`; when
+     `Some`, use it directly instead of calling `block_id_from_payload(&payload_bytes)`.
+     Call sites for `split_metrics` and `split_traces` pass `None` (no behaviour change).
+   - Change `for rl in req.resource_logs` to `for mut rl in req.resource_logs`.
+   - Before mutating, encode the untouched proto: `let pre_mutation_bytes = rl.encode_to_vec();`
+     and compute `let pre_mutation_id = block_id_from_payload(&pre_mutation_bytes);`.
+   - Then iterate `rl.scope_logs` mutably, backfilling `observed_time_unix_nano` on each
+     record where both fields are `0`.
+   - Capture `now_nanos` once before iterating `rl.scope_logs` (i.e., once per `ResourceLogs`, outside both inner loops) (a `u64` from
+     `Utc::now().timestamp_nanos_opt().unwrap_or(0) as u64`).
+   - Accumulate a backfill count; emit `debug!` if `> 0`.
+   - **After** the backfill loop, re-encode the mutated proto:
+     `let payload_bytes = rl.encode_to_vec();`. This is the bytes that will be stored as
+     `block.payload.objects`. `pre_mutation_bytes` is used only for ID derivation and must
+     not be passed as the payload — doing so would store zero timestamps, defeating the fix.
+   - **After** the backfill loop, reposition the `let Some(bounds) = logs_bounds(&rl) else { continue; }` guard to this point (do not delete it). This preserves the existing filtering semantics — zero-record `ResourceLogs` that yield `None` from `logs_bounds` are still skipped via `continue` — while ensuring `bounds` always reflects the backfilled timestamps. Placing the guard before the backfill loop (as in the current code) would derive bounds from pre-mutation timestamps; placing it after keeps the envelope and the stored proto consistent.
+   - Optional optimization: keep a cheap `if rl.scope_logs.is_empty() { continue; }` (or equivalent `count == 0`) fast-path skip *before* the pre-mutation encode, so zero-record `ResourceLogs` don't incur two `encode_to_vec()` calls plus a UUID-v5 hash only to be discarded by the repositioned `logs_bounds` guard. Backfill never changes record count, so this preserves the `None`/skip semantics exactly.
+   - Pass `Some(pre_mutation_id)` to `build_prepared_block` so the stored `block_id` is
+     stable across retries with the same original payload.
+
+2. **`rust/otel-ingestion/tests/fixtures.rs` — add fixture helpers**
+   - `log_record_no_timestamp`: a variant of `log_record` where both `time_unix_nano` and
+     `observed_time_unix_nano` are `0`. Keeps test call-sites explicit and readable.
+   - `log_record_observed_only(observed_nanos: u64, severity: i32, body: &str) -> LogRecord`:
+     a variant where `time_unix_nano = 0` and `observed_time_unix_nano = observed_nanos`.
+     Required by `logs_split_preserves_existing_observed_time`, which needs a record that
+     has an observed timestamp but no event timestamp — a combination neither `log_record`
+     nor `log_record_no_timestamp` can produce.
+
+3. **`rust/otel-ingestion/tests/split_tests.rs` — add regression tests**
+   - `logs_split_backfills_observed_time_when_both_timestamps_zero`: build a request with
+     `log_record_no_timestamp` records, call `split_logs`, assert `begin_time` and
+     `end_time` are after a sentinel date (i.e., not epoch), then re-decode
+     `block.payload.objects` as `ResourceLogs` and assert every record's
+     `observed_time_unix_nano != 0`.
+   - `logs_split_preserves_existing_observed_time`: build a request where records already
+     have `observed_time_unix_nano != 0` and `time_unix_nano == 0`; assert the value is
+     unchanged after `split_logs`.
+   - `logs_split_mixed_timestamps_all_survive`: a block with some zero-timestamp records
+     and some non-zero; assert all records survive, `begin_time` equals the minimum
+     original non-zero timestamp, and `end_time` is after a sentinel date (e.g.,
+     2024-01-01) rather than matching the exact max of the original non-zero range
+     (because zero-timestamp records are backfilled to `now_nanos`, which is greater than
+     any historical fixture timestamp). This assertion is only valid when `logs_bounds` is
+     called **after** the backfill loop; if called before, `end_time` would reflect the
+     pre-backfill maximum and the sentinel check would fail.
+   - `logs_split_block_id_stable_across_retries_for_zero_timestamp_payload`: build a
+     request with `log_record_no_timestamp` records, call `split_logs` twice with the
+     same request (cloned before the first call), and assert that the `block_id` from the
+     first call equals the `block_id` from the second call. This is the regression test
+     for the `pre_computed_id` path: without it, the two calls would backfill `now_nanos`
+     independently and produce diverging content-addressed IDs, defeating the
+     `ON CONFLICT (block_id) DO NOTHING` deduplication guard.
+
+## Files to Modify
+
+| File | Change |
+|------|--------|
+| `rust/otel-ingestion/src/block.rs` | Backfill `observed_time_unix_nano`, add `debug!` |
+| `rust/otel-ingestion/tests/fixtures.rs` | Add `log_record_no_timestamp` helper |
+| `rust/otel-ingestion/tests/split_tests.rs` | Add 4 regression tests |
+
+Analytics files (`logs_block_processor.rs`) require no changes — the existing guard and
+debug log stay as-is.
+
+## Trade-offs
+
+**Alternative: fix in the analytics processor** — use `src_block.block.begin_time` as a
+fallback when both fields are zero. Rejected: the block envelope time is a coarse
+per-block value shared by all records; it would not give individual records an accurate
+`observed_time_unix_nano`. It would also leave the stored proto non-conformant for any
+future consumer.
+
+**Alternative: fix in both layers** — backfill at ingestion *and* relax the analytics
+guard to use `insert_time` as last-resort. Rejected as over-engineering; the single fix
+at ingestion is sufficient and keeps the analytics layer simple.
+
+**Idempotency impact of pre-encode mutation** — `block_id_from_payload` (called in
+`identity.rs` line 143 and `block.rs` line 202) computes a UUID-v5 over
+`rl.encode_to_vec()`. Because the backfill mutates `observed_time_unix_nano` to
+`now_nanos` *before* encoding, two retries of a byte-identical zero-timestamp payload
+arrive at a different encoded byte sequence → different `block_id` → both pass the
+`ON CONFLICT (block_id) DO NOTHING` guard in `rust/ingestion/src/web_ingestion_service.rs:136`
+(note: this guard lives in the `ingestion` crate, not `otel-ingestion`),
+creating duplicate blocks and ultimately duplicate `log_entries` rows.
+Mitigation: compute `block_id` from the **pre-mutation** bytes by calling
+`block_id_from_payload` before the backfill loop, then passing the pre-computed ID
+through to `build_prepared_block` (via a new `Option<Uuid>` parameter) instead of
+letting it be re-derived from the mutated proto. `split_metrics` and `split_traces`
+call sites are unaffected — they pass `None` and keep the existing derivation path.
+This preserves retry idempotency without changing the stored payload or the analytics
+output. Step 1 covers the full ordering: encode pre-mutation bytes → compute ID →
+backfill → encode mutated bytes → call `build_prepared_block` with the pre-computed ID.
+
+## Testing Strategy
+
+- Unit tests in `split_tests.rs` verify the backfill logic without touching Postgres or
+  object storage (pure proto manipulation).
+- Run `cargo test -p micromegas-otel-ingestion` after the change.
+- Manual smoke test: send an OTLP/JSON payload with `timeUnixNano` omitted (e.g. using
+  `curl`) to a local ingestion service and confirm `log_entries` returns rows.
+
+## Open Questions
+
+None — the fix is fully specified by the OTLP spec and the issue.

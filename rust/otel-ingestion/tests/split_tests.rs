@@ -13,7 +13,7 @@ use fixtures::*;
 use micromegas_otel_ingestion::FORMAT_OTLP_LOGS;
 use micromegas_otel_ingestion::block::{split_logs, split_metrics, split_traces};
 use micromegas_otel_ingestion::identity::SignalKey;
-use micromegas_otel_ingestion::proto::ExportLogsServiceRequest;
+use micromegas_otel_ingestion::proto::{ExportLogsServiceRequest, ResourceLogs};
 use prost::Message;
 
 #[test]
@@ -176,4 +176,89 @@ fn format_constants_match_signal_keys() {
     // Smoke: stream tag and format are set consistently across the crate.
     assert_eq!(FORMAT_OTLP_LOGS, "otlp/v1/logs");
     assert_eq!(SignalKey::Logs.as_str(), "logs");
+}
+
+#[test]
+fn logs_split_backfills_observed_time_when_both_timestamps_zero() {
+    let req = make_logs_request(
+        "svc",
+        "h1",
+        1,
+        vec![
+            log_record_no_timestamp(9, "no-ts-a"),
+            log_record_no_timestamp(9, "no-ts-b"),
+        ],
+    );
+    let blocks = split_logs(req).unwrap();
+    assert_eq!(blocks.len(), 1);
+    let b = &blocks[0];
+    assert_eq!(b.nb_records, 2);
+    // Envelope times must be well past epoch after backfill (sentinel: 2024-01-01).
+    let sentinel_ns: i64 = 1_704_067_200_000_000_000;
+    assert!(b.begin_time.timestamp_nanos_opt().unwrap() > sentinel_ns);
+    assert!(b.end_time.timestamp_nanos_opt().unwrap() > sentinel_ns);
+    // Stored proto must have observed_time_unix_nano backfilled on every record.
+    let decoded = ResourceLogs::decode(&*b.block.payload.objects).unwrap();
+    for scope in &decoded.scope_logs {
+        for record in &scope.log_records {
+            assert_ne!(
+                record.observed_time_unix_nano, 0,
+                "record still has zero observed timestamp after backfill"
+            );
+        }
+    }
+}
+
+#[test]
+fn logs_split_preserves_existing_observed_time() {
+    let observed: u64 = 1_700_000_000_000_000_000;
+    let req = make_logs_request(
+        "svc",
+        "h1",
+        1,
+        vec![log_record_observed_only(observed, 9, "has-observed")],
+    );
+    let blocks = split_logs(req).unwrap();
+    assert_eq!(blocks.len(), 1);
+    let decoded = ResourceLogs::decode(&*blocks[0].block.payload.objects).unwrap();
+    let record = &decoded.scope_logs[0].log_records[0];
+    assert_eq!(
+        record.observed_time_unix_nano, observed,
+        "existing observed timestamp must not be overwritten by backfill"
+    );
+}
+
+#[test]
+fn logs_split_mixed_timestamps_all_survive() {
+    let known_ts: u64 = 1_700_000_000_000_000_000; // 2023-11-14
+    let req = make_logs_request(
+        "svc",
+        "h1",
+        1,
+        vec![
+            log_record(known_ts, 9, "has-time"),
+            log_record_no_timestamp(9, "no-ts"),
+        ],
+    );
+    let blocks = split_logs(req).unwrap();
+    assert_eq!(blocks.len(), 1);
+    let b = &blocks[0];
+    assert_eq!(b.nb_records, 2);
+    // begin_time reflects the known minimum non-zero timestamp.
+    assert_eq!(b.begin_time.timestamp_nanos_opt().unwrap(), known_ts as i64);
+    // end_time is the backfilled now_nanos, which must be after 2024-01-01.
+    let sentinel_ns: i64 = 1_704_067_200_000_000_000;
+    assert!(b.end_time.timestamp_nanos_opt().unwrap() > sentinel_ns);
+}
+
+#[test]
+fn logs_split_block_id_stable_across_retries_for_zero_timestamp_payload() {
+    let req1 = make_logs_request("svc", "h1", 1, vec![log_record_no_timestamp(9, "msg")]);
+    let req2 = make_logs_request("svc", "h1", 1, vec![log_record_no_timestamp(9, "msg")]);
+    let blocks1 = split_logs(req1).unwrap();
+    let blocks2 = split_logs(req2).unwrap();
+    assert_eq!(
+        blocks1[0].block.block_id, blocks2[0].block.block_id,
+        "block_id must be stable across retries with identical zero-timestamp payloads"
+    );
 }

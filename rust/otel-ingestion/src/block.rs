@@ -177,8 +177,8 @@ fn nanos_to_datetime(nanos: i64) -> DateTime<Utc> {
     DateTime::from_timestamp_nanos(nanos)
 }
 
-/// Builds a single `PreparedBlock` from a per-resource payload.
 fn build_prepared_block(
+    block_id: Uuid,
     payload_bytes: Vec<u8>,
     resource_attrs: Vec<KeyValue>,
     signal: SignalKey,
@@ -199,7 +199,6 @@ fn build_prepared_block(
     };
     let process_id = process_id_from_resource(Some(&resource));
     let stream_id = stream_id_from_process_signal(process_id, signal);
-    let block_id = block_id_from_payload(&payload_bytes);
 
     if is_degenerate_resource(&resource_attrs) {
         // debug! rather than warn! — fires per resource per request, so a misconfigured
@@ -245,19 +244,68 @@ fn build_prepared_block(
 }
 
 /// Splits a logs request into per-resource blocks.
+///
+/// Records where both `time_unix_nano` and `observed_time_unix_nano` are zero are
+/// backfilled with the current wall-clock time before encoding, conforming to the
+/// OTLP spec requirement that the collecting system supply an observed timestamp.
+///
+/// The `block_id` is derived from the pre-backfill bytes so retries with the same
+/// original payload always produce the same ID, preserving deduplication semantics.
 pub fn split_logs(req: crate::proto::ExportLogsServiceRequest) -> Result<Vec<PreparedBlock>> {
     let mut out = Vec::with_capacity(req.resource_logs.len());
-    for rl in req.resource_logs {
+    for mut rl in req.resource_logs {
+        // Fast-path: skip ResourceLogs with no records before incurring encode overhead.
+        let total_records: usize = rl.scope_logs.iter().map(|s| s.log_records.len()).sum();
+        if total_records == 0 {
+            continue;
+        }
+
+        // Encode before any mutation so the block_id is stable across retries with the same
+        // original payload, regardless of whether backfill fires.
+        let pre_mutation_bytes = rl.encode_to_vec();
+        let block_id = block_id_from_payload(&pre_mutation_bytes);
+
+        // Backfill observed_time_unix_nano for records missing both timestamps.
+        // now_nanos is captured once per ResourceLogs so all records in the batch share the same value.
+        let now_nanos = Utc::now()
+            .timestamp_nanos_opt()
+            .expect("Utc::now() is always representable as nanoseconds")
+            as u64;
+        let mut nb_backfilled: usize = 0;
+        for scope in &mut rl.scope_logs {
+            for record in &mut scope.log_records {
+                if record.time_unix_nano == 0 && record.observed_time_unix_nano == 0 {
+                    record.observed_time_unix_nano = now_nanos;
+                    nb_backfilled += 1;
+                }
+            }
+        }
+        if nb_backfilled > 0 {
+            debug!("OTLP logs: backfilled observed_time_unix_nano on {nb_backfilled} records");
+        }
+
+        // Re-encode only when the payload was mutated; otherwise reuse the bytes already produced.
+        let payload_bytes = if nb_backfilled > 0 {
+            rl.encode_to_vec()
+        } else {
+            pre_mutation_bytes
+        };
+
+        // Derive bounds from the mutated rl so the envelope and stored proto are consistent.
+        // logs_bounds is expected to be Some here (the total_records == 0 fast-path above
+        // skipped empty resources, and backfill only mutates timestamps without changing
+        // count), but skip defensively rather than panic on the ingestion request path.
         let Some(bounds) = logs_bounds(&rl) else {
             continue;
         };
+
         let resource_attrs = rl
             .resource
             .as_ref()
             .map(|r| r.attributes.clone())
             .unwrap_or_default();
-        let payload_bytes = rl.encode_to_vec();
         out.push(build_prepared_block(
+            block_id,
             payload_bytes,
             resource_attrs,
             SignalKey::Logs,
@@ -280,7 +328,9 @@ pub fn split_metrics(req: crate::proto::ExportMetricsServiceRequest) -> Result<V
             .map(|r| r.attributes.clone())
             .unwrap_or_default();
         let payload_bytes = rm.encode_to_vec();
+        let block_id = block_id_from_payload(&payload_bytes);
         out.push(build_prepared_block(
+            block_id,
             payload_bytes,
             resource_attrs,
             SignalKey::Metrics,
@@ -303,7 +353,9 @@ pub fn split_traces(req: crate::proto::ExportTraceServiceRequest) -> Result<Vec<
             .map(|r| r.attributes.clone())
             .unwrap_or_default();
         let payload_bytes = rs.encode_to_vec();
+        let block_id = block_id_from_payload(&payload_bytes);
         out.push(build_prepared_block(
+            block_id,
             payload_bytes,
             resource_attrs,
             SignalKey::Traces,
