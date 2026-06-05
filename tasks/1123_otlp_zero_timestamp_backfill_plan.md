@@ -99,6 +99,13 @@ a defensive safety net.
      any historical fixture timestamp). This assertion is only valid when `logs_bounds` is
      called **after** the backfill loop; if called before, `end_time` would reflect the
      pre-backfill maximum and the sentinel check would fail.
+   - `logs_split_block_id_stable_across_retries_for_zero_timestamp_payload`: build a
+     request with `log_record_no_timestamp` records, call `split_logs` twice with the
+     same request (cloned before the first call), and assert that the `block_id` from the
+     first call equals the `block_id` from the second call. This is the regression test
+     for the `pre_computed_id` path: without it, the two calls would backfill `now_nanos`
+     independently and produce diverging content-addressed IDs, defeating the
+     `ON CONFLICT (block_id) DO NOTHING` deduplication guard.
 
 ## Files to Modify
 
@@ -106,7 +113,7 @@ a defensive safety net.
 |------|--------|
 | `rust/otel-ingestion/src/block.rs` | Backfill `observed_time_unix_nano`, add `debug!` |
 | `rust/otel-ingestion/tests/fixtures.rs` | Add `log_record_no_timestamp` helper |
-| `rust/otel-ingestion/tests/split_tests.rs` | Add 3 regression tests |
+| `rust/otel-ingestion/tests/split_tests.rs` | Add 4 regression tests |
 
 Analytics files (`logs_block_processor.rs`) require no changes — the existing guard and
 debug log stay as-is.
