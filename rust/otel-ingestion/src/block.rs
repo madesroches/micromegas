@@ -312,9 +312,9 @@ pub fn split_logs(req: crate::proto::ExportLogsServiceRequest) -> Result<Vec<Pre
         let payload_bytes = rl.encode_to_vec();
 
         // Derive bounds from the mutated rl so the envelope and stored proto are consistent.
-        let Some(bounds) = logs_bounds(&rl) else {
-            continue;
-        };
+        // logs_bounds is always Some here: the total_records == 0 fast-path above already
+        // skipped empty resources, and backfill only mutates timestamps without changing count.
+        let bounds = logs_bounds(&rl).expect("logs_bounds is Some when total_records > 0");
 
         let resource_attrs = rl
             .resource
