@@ -69,7 +69,7 @@ a defensive safety net.
      and compute `let pre_mutation_id = block_id_from_payload(&pre_mutation_bytes);`.
    - Then iterate `rl.scope_logs` mutably, backfilling `observed_time_unix_nano` on each
      record where both fields are `0`.
-   - Capture `now_nanos` once before the inner loop (a `u64` from
+   - Capture `now_nanos` once before iterating `rl.scope_logs` (i.e., once per `ResourceLogs`, outside both inner loops) (a `u64` from
      `Utc::now().timestamp_nanos_opt().unwrap_or(0) as u64`).
    - Accumulate a backfill count; emit `debug!` if `> 0`.
    - **After** the backfill loop, re-encode the mutated proto:
@@ -80,9 +80,14 @@ a defensive safety net.
    - Pass `Some(pre_mutation_id)` to `build_prepared_block` so the stored `block_id` is
      stable across retries with the same original payload.
 
-2. **`rust/otel-ingestion/tests/fixtures.rs` — add `log_record_no_timestamp` helper**
-   - A variant of `log_record` where both `time_unix_nano` and `observed_time_unix_nano`
-     are `0`. Keeps test call-sites explicit and readable.
+2. **`rust/otel-ingestion/tests/fixtures.rs` — add fixture helpers**
+   - `log_record_no_timestamp`: a variant of `log_record` where both `time_unix_nano` and
+     `observed_time_unix_nano` are `0`. Keeps test call-sites explicit and readable.
+   - `log_record_observed_only(observed_nanos: u64, severity: i32, body: &str) -> LogRecord`:
+     a variant where `time_unix_nano = 0` and `observed_time_unix_nano = observed_nanos`.
+     Required by `logs_split_preserves_existing_observed_time`, which needs a record that
+     has an observed timestamp but no event timestamp — a combination neither `log_record`
+     nor `log_record_no_timestamp` can produce.
 
 3. **`rust/otel-ingestion/tests/split_tests.rs` — add regression tests**
    - `logs_split_backfills_observed_time_when_both_timestamps_zero`: build a request with
