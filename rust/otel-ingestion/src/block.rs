@@ -269,7 +269,8 @@ pub fn split_logs(req: crate::proto::ExportLogsServiceRequest) -> Result<Vec<Pre
         // now_nanos is captured once per ResourceLogs so all records in the batch share the same value.
         let now_nanos = Utc::now()
             .timestamp_nanos_opt()
-            .expect("Utc::now() is always representable as nanoseconds") as u64;
+            .expect("Utc::now() is always representable as nanoseconds")
+            as u64;
         let mut nb_backfilled: usize = 0;
         for scope in &mut rl.scope_logs {
             for record in &mut scope.log_records {
@@ -280,10 +281,7 @@ pub fn split_logs(req: crate::proto::ExportLogsServiceRequest) -> Result<Vec<Pre
             }
         }
         if nb_backfilled > 0 {
-            debug!(
-                "OTLP logs: backfilled observed_time_unix_nano on {} records",
-                nb_backfilled
-            );
+            debug!("OTLP logs: backfilled observed_time_unix_nano on {nb_backfilled} records");
         }
 
         // Re-encode only when the payload was mutated; otherwise reuse the bytes already produced.
