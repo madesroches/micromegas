@@ -3,6 +3,7 @@
 //! `opentelemetry-proto` alone is enough for tests — adding `opentelemetry-sdk`
 //! and the `opentelemetry-otlp` exporter just to materialize bytes would drag
 //! tokio/tower/reqwest in transitively for no test-coverage gain.
+#![allow(dead_code)]
 
 use micromegas_otel_ingestion::proto::{
     AnyValue, ExportLogsServiceRequest, ExportMetricsServiceRequest, ExportTraceServiceRequest,
