@@ -57,13 +57,20 @@ a defensive safety net.
 
 ## Implementation Steps
 
-1. **`rust/otel-ingestion/src/block.rs` — backfill in `split_logs`**
+1. **`rust/otel-ingestion/src/block.rs` — backfill in `split_logs` and update `build_prepared_block`**
+   - Add an `Option<Uuid>` parameter (`pre_computed_id`) to `build_prepared_block`; when
+     `Some`, use it directly instead of calling `block_id_from_payload(&payload_bytes)`.
+     Call sites for `split_metrics` and `split_traces` pass `None` (no behaviour change).
    - Change `for rl in req.resource_logs` to `for mut rl in req.resource_logs`.
-   - Before calling `logs_bounds`, iterate `rl.scope_logs` mutably, backfilling
-     `observed_time_unix_nano` on each record where both fields are `0`.
+   - Before mutating, encode the untouched proto: `let pre_mutation_bytes = rl.encode_to_vec();`
+     and compute `let pre_mutation_id = block_id_from_payload(&pre_mutation_bytes);`.
+   - Then iterate `rl.scope_logs` mutably, backfilling `observed_time_unix_nano` on each
+     record where both fields are `0`.
    - Capture `now_nanos` once before the inner loop (a `u64` from
      `Utc::now().timestamp_nanos_opt().unwrap_or(0) as u64`).
    - Accumulate a backfill count; emit `debug!` if `> 0`.
+   - Pass `Some(pre_mutation_id)` to `build_prepared_block` so the stored `block_id` is
+     stable across retries with the same original payload.
 
 2. **`rust/otel-ingestion/tests/fixtures.rs` — add `log_record_no_timestamp` helper**
    - A variant of `log_record` where both `time_unix_nano` and `observed_time_unix_nano`
@@ -117,10 +124,12 @@ arrive at a different encoded byte sequence → different `block_id` → both pa
 creating duplicate blocks and ultimately duplicate `log_entries` rows.
 Mitigation: compute `block_id` from the **pre-mutation** bytes by calling
 `block_id_from_payload` before the backfill loop, then passing the pre-computed ID
-through to `build_prepared_block` instead of letting it be re-derived from the mutated
-proto. This preserves retry idempotency without changing the stored payload or the
-analytics output. The implementation step for `block.rs` should be updated to reflect
-this ordering (capture `block_id` → backfill → encode).
+through to `build_prepared_block` (via a new `Option<Uuid>` parameter) instead of
+letting it be re-derived from the mutated proto. `split_metrics` and `split_traces`
+call sites are unaffected — they pass `None` and keep the existing derivation path.
+This preserves retry idempotency without changing the stored payload or the analytics
+output. Step 1 covers the full ordering: encode pre-mutation bytes → compute ID →
+backfill → encode mutated bytes → call `build_prepared_block` with the pre-computed ID.
 
 ## Testing Strategy
 
