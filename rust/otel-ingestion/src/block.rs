@@ -177,17 +177,12 @@ fn nanos_to_datetime(nanos: i64) -> DateTime<Utc> {
     DateTime::from_timestamp_nanos(nanos)
 }
 
-/// Builds a single `PreparedBlock` from a per-resource payload.
-///
-/// `pre_computed_id`: when `Some`, use it as the `block_id` instead of deriving it from
-/// `payload_bytes`. Pass for logs where the payload has been mutated by backfill — the ID
-/// must be derived from the pre-mutation bytes so retry idempotency is preserved.
 fn build_prepared_block(
+    block_id: Uuid,
     payload_bytes: Vec<u8>,
     resource_attrs: Vec<KeyValue>,
     signal: SignalKey,
     bounds: (i64, i64, i32),
-    pre_computed_id: Option<Uuid>,
 ) -> PreparedBlock {
     let (min_nanos, max_nanos, nb_records) = bounds;
     let (begin_time, end_time) = if min_nanos == 0 && max_nanos == 0 {
@@ -204,7 +199,6 @@ fn build_prepared_block(
     };
     let process_id = process_id_from_resource(Some(&resource));
     let stream_id = stream_id_from_process_signal(process_id, signal);
-    let block_id = pre_computed_id.unwrap_or_else(|| block_id_from_payload(&payload_bytes));
 
     if is_degenerate_resource(&resource_attrs) {
         // debug! rather than warn! — fires per resource per request, so a misconfigured
@@ -266,50 +260,36 @@ pub fn split_logs(req: crate::proto::ExportLogsServiceRequest) -> Result<Vec<Pre
             continue;
         }
 
-        // Count zero-timestamp candidates before mutating so we can skip the
-        // pre-mutation encode on the common path (all records already have timestamps).
-        let zero_ts_candidates: usize = rl
-            .scope_logs
-            .iter()
-            .flat_map(|s| s.log_records.iter())
-            .filter(|r| r.time_unix_nano == 0 && r.observed_time_unix_nano == 0)
-            .count();
-
-        // Only capture pre-mutation bytes when backfill may actually occur.
-        // The stable block_id must be derived from the original payload so retries
-        // with the same input always produce the same ID.
-        let pre_mutation_id = if zero_ts_candidates > 0 {
-            let pre_mutation_bytes = rl.encode_to_vec();
-            Some(block_id_from_payload(&pre_mutation_bytes))
-        } else {
-            None
-        };
+        // Encode before any mutation so the block_id is stable across retries with the same
+        // original payload, regardless of whether backfill fires.
+        let pre_mutation_bytes = rl.encode_to_vec();
+        let block_id = block_id_from_payload(&pre_mutation_bytes);
 
         // Backfill observed_time_unix_nano for records missing both timestamps.
+        // now_nanos is captured once per ResourceLogs so all records in the batch share the same value.
+        let now_nanos = Utc::now().timestamp_nanos_opt().unwrap_or(0) as u64;
         let mut nb_backfilled: usize = 0;
-        if zero_ts_candidates > 0 {
-            // Captured once per ResourceLogs so all records in the batch share the same value.
-            let now_nanos = Utc::now().timestamp_nanos_opt().unwrap_or(0) as u64;
-            for scope in &mut rl.scope_logs {
-                for record in &mut scope.log_records {
-                    if record.time_unix_nano == 0 && record.observed_time_unix_nano == 0 {
-                        record.observed_time_unix_nano = now_nanos;
-                        nb_backfilled += 1;
-                    }
+        for scope in &mut rl.scope_logs {
+            for record in &mut scope.log_records {
+                if record.time_unix_nano == 0 && record.observed_time_unix_nano == 0 {
+                    record.observed_time_unix_nano = now_nanos;
+                    nb_backfilled += 1;
                 }
             }
-            if nb_backfilled > 0 {
-                debug!(
-                    "OTLP logs: backfilled observed_time_unix_nano on {} records",
-                    nb_backfilled
-                );
-            }
+        }
+        if nb_backfilled > 0 {
+            debug!(
+                "OTLP logs: backfilled observed_time_unix_nano on {} records",
+                nb_backfilled
+            );
         }
 
-        // Re-encode after potential mutation — stored bytes must reflect the backfilled timestamps.
-        // When nb_backfilled == 0 this is the only encode (pre_mutation_id is None and
-        // build_prepared_block derives the block_id from these bytes directly).
-        let payload_bytes = rl.encode_to_vec();
+        // Re-encode only when the payload was mutated; otherwise reuse the bytes already produced.
+        let payload_bytes = if nb_backfilled > 0 {
+            rl.encode_to_vec()
+        } else {
+            pre_mutation_bytes
+        };
 
         // Derive bounds from the mutated rl so the envelope and stored proto are consistent.
         // logs_bounds is expected to be Some here (the total_records == 0 fast-path above
@@ -325,11 +305,11 @@ pub fn split_logs(req: crate::proto::ExportLogsServiceRequest) -> Result<Vec<Pre
             .map(|r| r.attributes.clone())
             .unwrap_or_default();
         out.push(build_prepared_block(
+            block_id,
             payload_bytes,
             resource_attrs,
             SignalKey::Logs,
             bounds,
-            pre_mutation_id,
         ));
     }
     Ok(out)
@@ -348,12 +328,13 @@ pub fn split_metrics(req: crate::proto::ExportMetricsServiceRequest) -> Result<V
             .map(|r| r.attributes.clone())
             .unwrap_or_default();
         let payload_bytes = rm.encode_to_vec();
+        let block_id = block_id_from_payload(&payload_bytes);
         out.push(build_prepared_block(
+            block_id,
             payload_bytes,
             resource_attrs,
             SignalKey::Metrics,
             bounds,
-            None,
         ));
     }
     Ok(out)
@@ -372,12 +353,13 @@ pub fn split_traces(req: crate::proto::ExportTraceServiceRequest) -> Result<Vec<
             .map(|r| r.attributes.clone())
             .unwrap_or_default();
         let payload_bytes = rs.encode_to_vec();
+        let block_id = block_id_from_payload(&payload_bytes);
         out.push(build_prepared_block(
+            block_id,
             payload_bytes,
             resource_attrs,
             SignalKey::Traces,
             bounds,
-            None,
         ));
     }
     Ok(out)
