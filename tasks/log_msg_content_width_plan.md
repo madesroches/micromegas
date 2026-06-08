@@ -41,11 +41,11 @@ const msgWidth = useMemo(() => {
   let max = 0
   for (let i = startRow; i < endRow; i++) {
     const row = table.get(i)
-    const len = String(row?.msg ?? '').length
+    const len = String(row?.['msg'] ?? '').length
     if (len > max) max = len
   }
   return Math.min(Math.max(Math.ceil(max * MSG_CHAR_WIDTH_PX), MIN_MSG_WIDTH_PX), MAX_MSG_WIDTH_PX)
-}, [table, startRow, endRow])
+}, [table, pagination.startRow, pagination.endRow])
 ```
 
 For `LogRenderer` (no pagination), `startRow = 0`, `endRow = numRows`.
