@@ -175,7 +175,7 @@ export function computeFlexWidths(
   for (let i = startRow; i < endRow; i++) {
     const row = table.get(i)
     for (const col of flexCols) {
-      const len = String(row?.[col.name] ?? '').length
+      const len = formatCell(row?.[col.name], col.type).length
       if (len > maxLens[col.name]) maxLens[col.name] = len
     }
   }
