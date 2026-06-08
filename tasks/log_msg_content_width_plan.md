@@ -81,20 +81,22 @@ case 'msg': {
 }
 ```
 
-- `truncate` replaces `break-words` — rows stay single-line
+- `truncate` (width path) keeps rows single-line within the fixed column width
 - `title` on the span exposes full text on hover (consistent with `target` column)
-- When `msgWidth` is not provided (e.g., third-party callers), the span falls back to `flex-1`-like behavior without an explicit width, so old callers are unaffected
+- When `msgWidth` is not provided the span falls back to `flex-1 break-words`, preserving existing behavior for all current callers
 
-Actually: without `flex-1`, the span won't expand at all if no width is given. To keep backward compatibility without width, fall back to `flex-1`:
+Without `flex-1`, the span won't expand at all if no width is given. Use `break-words` in the fallback to keep backward compatibility:
 
 ```tsx
-className={`text-theme-text-primary truncate ${w == null ? 'flex-1' : 'mr-3'}`}
+className={w != null
+  ? 'text-theme-text-primary mr-3 truncate'
+  : 'text-theme-text-primary flex-1 break-words'}
 style={w != null ? { width: w, minWidth: w, maxWidth: w } : undefined}
 ```
 
 ## Implementation Steps
 
-1. **`log-utils.tsx`** — add `RenderLogColumnOptions` interface and `msgWidth` param to `renderLogColumn`; update `msg` case to use width + truncate as described above. Export the three constants (`MSG_CHAR_WIDTH_PX`, `MAX_MSG_WIDTH_PX`, `MIN_MSG_WIDTH_PX`) for use by callers.
+1. **`log-utils.tsx`** — add `RenderLogColumnOptions` interface and `msgWidth` param to `renderLogColumn`; update `msg` case to use width + truncate as described above. The three constants (`MSG_CHAR_WIDTH_PX`, `MAX_MSG_WIDTH_PX`, `MIN_MSG_WIDTH_PX`) are file-private; do not export them.
 
 2. **`LogCell.tsx`** — compute `msgWidth` via `useMemo` over `table`, `pagination.startRow`, `pagination.endRow`; pass `{ msgWidth }` as the third arg to `renderLogColumn`.
 
