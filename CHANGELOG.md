@@ -5,6 +5,7 @@ This file documents the historical progress of the Micromegas project. For curre
 ## Unreleased
 
 * **Web App:**
+  * Add optional `label` column to swimlane cells; labels render as truncated text inside each bar and appear in a hover tooltip alongside the lane name and time range
   * Route `formatDuration` through `formatTimeValue` so flamegraph tooltips show minutes, hours, and days for long spans instead of capping at seconds
   * Add per-row colors, user-selectable series colors, and reference line threshold indicators to XYChart; reference lines support named labels, units, dashed/solid style, and per-line color (#1043)
   * Add a per-Map-cell **Camera** setting with `perspective` (default) and `orthographic` modes; orthographic fits the camera to the projected map silhouette and maps Q/E to zoom (#1065)
