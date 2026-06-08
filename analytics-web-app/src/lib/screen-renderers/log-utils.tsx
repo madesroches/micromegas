@@ -90,8 +90,9 @@ export interface LogColumn {
 
 /**
  * Classify Arrow schema fields into log columns, preserving schema order.
- * Known columns (time, level, target, msg) get special rendering via their
- * `kind` discriminant; all other columns are tagged as 'generic'.
+ * Known columns (time, level, target) get special rendering via their
+ * `kind` discriminant; all other columns (including `msg`) are tagged as
+ * 'generic' and rendered as content-sized flex columns.
  */
 export function classifyLogColumns(fields: Field[]): LogColumn[] {
   const knownSet = new Set<string>(KNOWN_COLUMN_ORDER)
