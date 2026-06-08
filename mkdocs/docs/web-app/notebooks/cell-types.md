@@ -556,6 +556,12 @@ Horizontal lane visualization for thread or async activity over time. Each lane 
 | `begin` | timestamp | Segment start time |
 | `end` | timestamp | Segment end time |
 
+**Optional columns:**
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `label` | string | Text displayed inside each segment bar; shown in a tooltip on hover alongside the lane name and time range |
+
 Multiple rows with the same `id` create multiple segments in one lane. Lanes are ordered by first occurrence in the query results.
 
 **Features:**

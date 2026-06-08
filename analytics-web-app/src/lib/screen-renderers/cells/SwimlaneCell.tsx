@@ -33,6 +33,7 @@ const TIME_AXIS_FORMAT = new Intl.DateTimeFormat(undefined, {
 interface Segment {
   begin: number
   end: number
+  label?: string
 }
 
 interface Lane {
@@ -63,7 +64,7 @@ function extractLanesFromTable(table: Table): ExtractResult {
     const available = table.schema.fields.map((f) => f.name).join(', ') || 'none'
     return {
       lanes: [],
-      error: `Missing required columns: ${missingColumns.join(', ')}. Query must return: id, name, begin, end. Available: ${available}`,
+      error: `Missing required columns: ${missingColumns.join(', ')}. Query must return: id, name, begin, end (label is optional). Available: ${available}`,
     }
   }
 
@@ -71,6 +72,7 @@ function extractLanesFromTable(table: Table): ExtractResult {
   const nameCol = table.getChild('name')!
   const beginCol = table.getChild('begin')!
   const endCol = table.getChild('end')!
+  const labelCol = table.getChild('label') ?? null
 
   const beginField = table.schema.fields.find((f) => f.name === 'begin')
   const endField = table.schema.fields.find((f) => f.name === 'end')
@@ -95,7 +97,9 @@ function extractLanesFromTable(table: Table): ExtractResult {
       laneOrder.push(id)
     }
 
-    laneMap.get(id)!.segments.push({ begin, end })
+    const labelRaw = labelCol?.get(i)
+    const label = labelRaw != null ? String(labelRaw) : undefined
+    laneMap.get(id)!.segments.push({ begin, end, label })
   }
 
   // Return lanes in first-occurrence order
@@ -149,10 +153,25 @@ interface SwimlaneProps {
   onTimeRangeSelect?: (from: Date, to: Date) => void
 }
 
+const TIME_FORMAT = new Intl.DateTimeFormat(undefined, {
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+  hour12: false,
+})
+
 function Swimlane({ lanes, timeRange, onTimeRangeSelect }: SwimlaneProps) {
   const duration = timeRange.to - timeRange.from
   const [selection, setSelection] = useState<{ startX: number; currentX: number } | null>(null)
   const [isDragging, setIsDragging] = useState(false)
+  const [tooltip, setTooltip] = useState<{
+    x: number
+    y: number
+    laneName: string
+    label: string
+    begin: number
+    end: number
+  } | null>(null)
 
   // Calculate position as percentage
   const toPercent = (time: number) => {
@@ -305,12 +324,36 @@ function Swimlane({ lanes, timeRange, onTimeRangeSelect }: SwimlaneProps) {
                   return (
                     <div
                       key={idx}
-                      className="absolute top-1 bottom-1 bg-chart-line rounded-sm pointer-events-none"
+                      className="absolute top-1 bottom-1 bg-chart-line rounded-sm flex items-center overflow-hidden transition-opacity hover:opacity-85 hover:ring-1 hover:ring-brand-gold"
                       style={{
                         left: `${startPercent}%`,
-                        width: `${Math.max(widthPercent, 0.5)}%`, // Min width for visibility
+                        width: `${Math.max(widthPercent, 0.5)}%`,
                       }}
-                    />
+                      onMouseEnter={(e) => {
+                        if (segment.label != null) {
+                          setTooltip({
+                            x: e.clientX,
+                            y: e.clientY,
+                            laneName: lane.name,
+                            label: segment.label,
+                            begin: segment.begin,
+                            end: segment.end,
+                          })
+                        }
+                      }}
+                      onMouseMove={(e) => {
+                        if (segment.label != null) {
+                          setTooltip((prev) => prev ? { ...prev, x: e.clientX, y: e.clientY } : null)
+                        }
+                      }}
+                      onMouseLeave={() => setTooltip(null)}
+                    >
+                      {segment.label != null && (
+                        <span className="truncate px-1 text-[10px] font-medium text-white pointer-events-none">
+                          {segment.label}
+                        </span>
+                      )}
+                    </div>
                   )
                 })}
               </div>
@@ -326,6 +369,20 @@ function Swimlane({ lanes, timeRange, onTimeRangeSelect }: SwimlaneProps) {
           <TimeAxis from={timeRange.from} to={timeRange.to} />
         </div>
       </div>
+
+      {/* Tooltip */}
+      {tooltip && (
+        <div
+          className="fixed bg-app-bg border border-theme-border rounded-md px-3 py-2 text-xs pointer-events-none z-50 shadow-lg"
+          style={{ left: tooltip.x + 15, top: tooltip.y - 10 }}
+        >
+          <div className="text-theme-text-muted text-[10px] mb-1">{tooltip.laneName}</div>
+          <div className="text-theme-text-primary font-medium">{tooltip.label}</div>
+          <div className="text-theme-text-secondary text-[10px] mt-1">
+            {TIME_FORMAT.format(tooltip.begin)} → {TIME_FORMAT.format(tooltip.end)}
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -416,7 +473,7 @@ function SwimlaneCellEditor({ config, onChange, variables, timeRange, onRun, cel
           value={slConfig.sql}
           onChange={(sql) => onChange({ ...slConfig, sql })}
           language="sql"
-          placeholder="SELECT id, name, begin, end FROM ..."
+          placeholder="SELECT id, name, begin, end [, label] FROM ..."
           minHeight="240px"
           onRunShortcut={onRun}
         />
