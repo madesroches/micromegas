@@ -21,7 +21,7 @@ export const LEVEL_NAMES: Record<number, string> = {
 }
 
 /** Known log columns in canonical display order */
-const KNOWN_COLUMN_ORDER = ['time', 'level', 'target', 'msg'] as const
+const KNOWN_COLUMN_ORDER = ['time', 'level', 'target'] as const
 
 export type KnownColumnName = (typeof KNOWN_COLUMN_ORDER)[number]
 
@@ -90,8 +90,9 @@ export interface LogColumn {
 
 /**
  * Classify Arrow schema fields into log columns, preserving schema order.
- * Known columns (time, level, target, msg) get special rendering via their
- * `kind` discriminant; all other columns are tagged as 'generic'.
+ * Known columns (time, level, target) get special rendering via their
+ * `kind` discriminant; all other columns (including `msg`) are tagged as
+ * 'generic' and rendered as content-sized flex columns.
  */
 export function classifyLogColumns(fields: Field[]): LogColumn[] {
   const knownSet = new Set<string>(KNOWN_COLUMN_ORDER)
@@ -106,7 +107,19 @@ export function classifyLogColumns(fields: Field[]): LogColumn[] {
 // Rendering
 // =============================================================================
 
-export function renderLogColumn(col: LogColumn, row: Record<string, unknown>): React.ReactNode {
+const FLEX_CHAR_WIDTH_PX = 7.2
+const MAX_FLEX_WIDTH_PX = 700
+const MIN_FLEX_WIDTH_PX = 60
+
+export interface RenderLogColumnOptions {
+  width?: number
+}
+
+export function renderLogColumn(
+  col: LogColumn,
+  row: Record<string, unknown>,
+  opts?: RenderLogColumnOptions,
+): React.ReactNode {
   const value = row[col.name]
   switch (col.kind) {
     case 'time':
@@ -134,17 +147,45 @@ export function renderLogColumn(col: LogColumn, row: Record<string, unknown>): R
         </span>
       )
     }
-    case 'msg':
-      return (
-        <span className="text-theme-text-primary flex-1 break-words">{String(value ?? '')}</span>
-      )
     default: {
       const formatted = formatCell(value, col.type)
+      const w = opts?.width
       return (
-        <span className="text-theme-text-secondary mr-3 truncate min-w-[60px] max-w-[200px]" title={formatted}>
+        <span
+          className="text-theme-text-primary mr-3 truncate"
+          style={w != null ? { width: w, minWidth: w, maxWidth: w } : { minWidth: MIN_FLEX_WIDTH_PX, maxWidth: MAX_FLEX_WIDTH_PX }}
+          title={formatted}
+        >
           {formatted}
         </span>
       )
     }
   }
+}
+
+export function computeFlexWidths(
+  table: { numRows: number; get(i: number): Record<string, unknown> | null | undefined } | null | undefined,
+  columns: LogColumn[],
+  startRow: number,
+  endRow: number,
+): Record<string, number> {
+  const flexCols = columns.filter((c) => c.kind === 'generic')
+  if (!table || flexCols.length === 0) return {}
+  const maxLens: Record<string, number> = {}
+  for (const col of flexCols) maxLens[col.name] = 0
+  for (let i = startRow; i < endRow; i++) {
+    const row = table.get(i)
+    for (const col of flexCols) {
+      const len = formatCell(row?.[col.name], col.type).length
+      if (len > maxLens[col.name]) maxLens[col.name] = len
+    }
+  }
+  const result: Record<string, number> = {}
+  for (const col of flexCols) {
+    result[col.name] = Math.min(
+      Math.max(Math.ceil(maxLens[col.name] * FLEX_CHAR_WIDTH_PX), MIN_FLEX_WIDTH_PX),
+      MAX_FLEX_WIDTH_PX,
+    )
+  }
+  return result
 }

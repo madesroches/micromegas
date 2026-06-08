@@ -11,7 +11,7 @@ import { DocumentationLink, QUERY_GUIDE_URL } from '@/components/DocumentationLi
 import { SyntaxEditor } from '@/components/SyntaxEditor'
 import { substituteMacros, DEFAULT_SQL } from '../notebook-utils'
 import { usePagination, PaginationBar, DEFAULT_PAGE_SIZE } from '../pagination'
-import { classifyLogColumns, renderLogColumn } from '../log-utils'
+import { classifyLogColumns, renderLogColumn, computeFlexWidths } from '../log-utils'
 import { ScrollText } from 'lucide-react'
 
 // =============================================================================
@@ -35,6 +35,11 @@ export function LogCell({ data, status, options, onOptionsChange }: CellRenderer
     [options, onOptionsChange],
   )
   const pagination = usePagination(numRows, pageSize, handlePageSizeChange)
+
+  const columnWidths = useMemo(
+    () => computeFlexWidths(table, columns, pagination.startRow, pagination.endRow),
+    [table, columns, pagination.startRow, pagination.endRow],
+  )
 
   if (status === 'loading') {
     return (
@@ -64,7 +69,9 @@ export function LogCell({ data, status, options, onOptionsChange }: CellRenderer
               className={`flex px-2 py-0.5 hover:bg-app-card/50 transition-colors${i % 2 === 0 ? '' : ' bg-app-card/30'}`}
             >
               {columns.map((col) => (
-                <React.Fragment key={col.name}>{renderLogColumn(col, row)}</React.Fragment>
+                <React.Fragment key={col.name}>
+                  {renderLogColumn(col, row, { width: columnWidths[col.name] })}
+                </React.Fragment>
               ))}
             </div>
           )
