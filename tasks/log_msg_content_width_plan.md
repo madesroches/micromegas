@@ -71,7 +71,9 @@ case 'msg': {
   const w = opts?.msgWidth
   return (
     <span
-      className="text-theme-text-primary mr-3 truncate"
+      className={w != null
+        ? 'text-theme-text-primary mr-3 truncate'
+        : 'text-theme-text-primary flex-1 break-words'}
       style={w != null ? { width: w, minWidth: w, maxWidth: w } : undefined}
       title={String(value ?? '')}
     >
@@ -84,15 +86,6 @@ case 'msg': {
 - `truncate` (width path) keeps rows single-line within the fixed column width
 - `title` on the span exposes full text on hover (consistent with `target` column)
 - When `msgWidth` is not provided the span falls back to `flex-1 break-words`, preserving existing behavior for all current callers
-
-Without `flex-1`, the span won't expand at all if no width is given. Use `break-words` in the fallback to keep backward compatibility:
-
-```tsx
-className={w != null
-  ? 'text-theme-text-primary mr-3 truncate'
-  : 'text-theme-text-primary flex-1 break-words'}
-style={w != null ? { width: w, minWidth: w, maxWidth: w } : undefined}
-```
 
 ## Implementation Steps
 
