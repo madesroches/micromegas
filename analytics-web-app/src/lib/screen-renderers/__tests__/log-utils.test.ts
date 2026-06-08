@@ -132,7 +132,7 @@ describe('classifyLogColumns', () => {
     const columns = classifyLogColumns(fields as never)
 
     expect(columns.map((c) => c.name)).toEqual(['msg', 'time', 'level', 'target'])
-    expect(columns.map((c) => c.kind)).toEqual(['msg', 'time', 'level', 'target'])
+    expect(columns.map((c) => c.kind)).toEqual(['generic', 'time', 'level', 'target'])
   })
 
   it('preserves schema order with mixed known and extra columns', () => {
@@ -147,7 +147,7 @@ describe('classifyLogColumns', () => {
     const columns = classifyLogColumns(fields as never)
 
     expect(columns.map((c) => c.name)).toEqual(['time', 'process_id', 'level', 'thread_id', 'msg'])
-    expect(columns.map((c) => c.kind)).toEqual(['time', 'generic', 'level', 'generic', 'msg'])
+    expect(columns.map((c) => c.kind)).toEqual(['time', 'generic', 'level', 'generic', 'generic'])
   })
 
   it('handles schema with only extra columns (no known columns)', () => {
@@ -166,7 +166,7 @@ describe('classifyLogColumns', () => {
     const columns = classifyLogColumns(fields as never)
 
     expect(columns.map((c) => c.name)).toEqual(['time', 'msg'])
-    expect(columns.map((c) => c.kind)).toEqual(['time', 'msg'])
+    expect(columns.map((c) => c.kind)).toEqual(['time', 'generic'])
   })
 
   it('handles empty schema', () => {

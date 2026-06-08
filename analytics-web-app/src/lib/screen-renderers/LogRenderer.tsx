@@ -17,7 +17,7 @@ import {
   DEFAULT_LOG_LIMIT,
 } from '@/lib/screen-defaults'
 import { getTimeRangeForApi } from '@/lib/time-range'
-import { classifyLogColumns, renderLogColumn } from './log-utils'
+import { classifyLogColumns, renderLogColumn, computeFlexWidths } from './log-utils'
 
 // Variables available for log queries
 const VARIABLES = [
@@ -152,6 +152,11 @@ function EditableCombobox({
   )
 }
 
+/**
+ * @deprecated The standalone log screen renderer is deprecated. Use the notebook
+ * Log cell (`LogCell`) instead, which supports pagination and scans only the
+ * current page. Kept for backward compatibility with existing saved screens.
+ */
 export function LogRenderer({
   config,
   onConfigChange,
@@ -333,6 +338,11 @@ export function LogRenderer({
   }, [resultTable])
 
   const numRows = resultTable?.numRows ?? 0
+
+  const columnWidths = useMemo(
+    () => computeFlexWidths(resultTable, columns, 0, numRows),
+    [resultTable, columns, numRows],
+  )
 
   // Refs for query execution
   const currentSqlRef = useRef<string>(logConfig.sql)
@@ -581,7 +591,9 @@ export function LogRenderer({
               className="flex px-3 py-1 border-b border-app-panel hover:bg-app-panel/50 transition-colors"
             >
               {columns.map((col) => (
-                <React.Fragment key={col.name}>{renderLogColumn(col, row)}</React.Fragment>
+                <React.Fragment key={col.name}>
+                  {renderLogColumn(col, row, { width: columnWidths[col.name] })}
+                </React.Fragment>
               ))}
             </div>
           )

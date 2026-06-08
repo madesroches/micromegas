@@ -1,60 +1,42 @@
-# Log Msg Column Content-Guided Width Plan
+# Log Column Content-Guided Width Plan
 
 ## Overview
 
-The `msg` column in log cells currently uses `flex-1`, expanding to fill all horizontal space regardless of message length. This wastes space when messages are short and causes multi-line wrapping when messages are long. Instead, size the column to the longest `msg` value on the current page, capped at a maximum width, then truncate overflow.
+Non-fixed log columns (everything except `time`, `level`, `target`) are sized to the longest value on the current page, capped at a maximum width, then truncated. `msg` is not a special case — it is simply another flex column.
 
-## Current State
+## Current State (implemented)
 
-`renderLogColumn` in `log-utils.tsx:109` renders the `msg` case as:
-
-```tsx
-case 'msg':
-  return (
-    <span className="text-theme-text-primary flex-1 break-words">{String(value ?? '')}</span>
-  )
-```
-
-`flex-1` makes it consume all remaining space after the fixed-width columns (time: 188px, level: 38px, target: 200px). `break-words` causes multi-line rows for long messages.
-
-Both consumers call `renderLogColumn` the same way:
-- `LogCell.tsx:67` (notebook log cell, paginates — relevant page is `startRow..endRow`)
-- `LogRenderer.tsx` (standalone renderer — renders `numRows` rows from the result table)
-
-`renderLogColumn` signature: `(col: LogColumn, row: Record<string, unknown>): React.ReactNode`
+`time`, `level`, `target` have fixed pixel widths. All other columns (`msg` and any generic columns) share the same content-driven rendering path in the `default` case of `renderLogColumn`.
 
 ## Design
 
-### Width Computation
+### Fixed columns
 
-Add a `msgWidth` option to `renderLogColumn`. Callers compute it from the visible page rows:
+| Column   | Width  |
+|----------|--------|
+| `time`   | 188 px |
+| `level`  | 38 px  |
+| `target` | 200 px |
+
+### Flex columns
+
+All columns with `kind === 'generic'` (including `msg`) get a content-driven width computed once per page via `computeFlexWidths`.
 
 ```ts
-const MSG_CHAR_WIDTH_PX = 7.2   // approx ch width at font-mono 12px
-const MAX_MSG_WIDTH_PX  = 700   // cap — prevents runaway columns
-const MIN_MSG_WIDTH_PX  = 120   // floor — avoids collapsing on empty pages
+const FLEX_CHAR_WIDTH_PX = 7.2   // approx ch width at font-mono 12px
+const MAX_FLEX_WIDTH_PX  = 700   // cap
+const MIN_FLEX_WIDTH_PX  = 60    // floor
 ```
 
-```ts
-const msgWidth = useMemo(() => {
-  if (!table) return MIN_MSG_WIDTH_PX
-  let max = 0
-  for (let i = startRow; i < endRow; i++) {
-    const row = table.get(i)
-    const len = String(row?.['msg'] ?? '').length
-    if (len > max) max = len
-  }
-  return Math.min(Math.max(Math.ceil(max * MSG_CHAR_WIDTH_PX), MIN_MSG_WIDTH_PX), MAX_MSG_WIDTH_PX)
-}, [table, pagination.startRow, pagination.endRow])
-```
+### `computeFlexWidths`
 
-For `LogRenderer` (no pagination), `startRow = 0`, `endRow = numRows`.
+Exported from `log-utils.tsx`. Scans `columns` where `kind === 'generic'` over `table` rows `[startRow, endRow)` and returns `Record<string, number>` mapping column name → pixel width.
 
-### `renderLogColumn` Signature Change
+### `renderLogColumn` signature
 
 ```ts
 export interface RenderLogColumnOptions {
-  msgWidth?: number   // pixels; if omitted, falls back to flex-1
+  width?: number   // pixels; used in the default case
 }
 
 export function renderLogColumn(
@@ -64,55 +46,56 @@ export function renderLogColumn(
 ): React.ReactNode
 ```
 
-### `msg` Case
+### `default` case
 
 ```tsx
-case 'msg': {
-  const w = opts?.msgWidth
+default: {
+  const formatted = formatCell(value, col.type)
+  const w = opts?.width
   return (
     <span
-      className={w != null
-        ? 'text-theme-text-primary mr-3 truncate'
-        : 'text-theme-text-primary flex-1 break-words'}
-      style={w != null ? { width: w, minWidth: w, maxWidth: w } : undefined}
-      title={String(value ?? '')}
+      className="text-theme-text-primary mr-3 truncate"
+      style={w != null
+        ? { width: w, minWidth: w, maxWidth: w }
+        : { minWidth: MIN_FLEX_WIDTH_PX, maxWidth: MAX_FLEX_WIDTH_PX }}
+      title={formatted}
     >
-      {String(value ?? '')}
+      {formatted}
     </span>
   )
 }
 ```
 
-- `truncate` (width path) keeps rows single-line within the fixed column width
-- `title` on the span exposes full text on hover (consistent with `target` column)
-- When `msgWidth` is not provided the span falls back to `flex-1 break-words`, preserving existing behavior for all current callers
+- `truncate` keeps rows single-line
+- `title` exposes full text on hover
+- When `width` is absent the span falls back to min/max bounds (backwards-compat for callers that don't compute widths)
 
-## Implementation Steps
-
-1. **`log-utils.tsx`** — add `RenderLogColumnOptions` interface and `msgWidth` param to `renderLogColumn`; update `msg` case to use width + truncate as described above. The three constants (`MSG_CHAR_WIDTH_PX`, `MAX_MSG_WIDTH_PX`, `MIN_MSG_WIDTH_PX`) are file-private; do not export them.
-
-2. **`LogCell.tsx`** — compute `msgWidth` via `useMemo` over `table`, `pagination.startRow`, `pagination.endRow`; pass `{ msgWidth }` as the third arg to `renderLogColumn`.
-
-3. **`LogRenderer.tsx`** — compute `msgWidth` via `useMemo` over `resultTable` and `numRows`; pass `{ msgWidth }` as the third arg to `renderLogColumn`.
-
-## Files to Modify
+## Files Modified
 
 - `analytics-web-app/src/lib/screen-renderers/log-utils.tsx`
 - `analytics-web-app/src/lib/screen-renderers/cells/LogCell.tsx`
 - `analytics-web-app/src/lib/screen-renderers/LogRenderer.tsx`
 
+## Callers
+
+Both callers compute `columnWidths` via `useMemo` and pass `{ width: columnWidths[col.name] }` per cell:
+
+**`LogCell.tsx`** — depends on `table`, `columns`, `pagination.startRow`, `pagination.endRow`
+
+**`LogRenderer.tsx`** — depends on `resultTable`, `columns`, `numRows` (startRow = 0, endRow = numRows)
+
 ## Trade-offs
 
-**Content-scan vs CSS `ch` units**: Pure CSS can't measure max content width across rows. A JS scan at render time is the right tool; it's O(page-size) over already-materialized Arrow rows.
+**No `msg` special case**: `msg` falls into the `default` case like any unknown column. Column ordering is preserved by schema field order; `time/level/target` are still recognised for their fixed-width rendering.
 
-**Character width constant**: A fixed `7.2px/ch` is an approximation for `font-mono` at `12px`. This is slightly over rather than under to avoid clipping edge cases. The `MAX_MSG_WIDTH_PX` cap handles outliers.
+**Character width constant**: 7.2 px/ch is an overestimate for `font-mono 12px` to avoid clipping. `MAX_FLEX_WIDTH_PX` handles outliers.
 
-**`truncate` vs `break-words`**: With a bounded width, `truncate` keeps rows single-line, matching the compact log style. The `title` attribute covers readability. If wrap behavior is ever desired it can be added per-row as a separate feature.
+**`truncate` vs `break-words`**: Bounded width keeps rows single-line. `title` covers readability.
 
 ## Testing Strategy
 
-- Load a log cell with short messages (e.g., `"OK"`) — column should be narrow.
-- Load a log cell with long messages — column should cap at `MAX_MSG_WIDTH_PX`.
-- Verify truncated messages show full text on hover via `title`.
-- Pagination: change page and verify the column width updates to reflect the new page's content.
-- `LogRenderer` (standalone screen): same checks without pagination.
+- Short messages (e.g., `"OK"`) → narrow column
+- Long messages → capped at `MAX_FLEX_WIDTH_PX`
+- Truncated messages → full text on hover via `title`
+- Pagination: column width updates per page
+- `LogRenderer` (standalone): same checks without pagination
