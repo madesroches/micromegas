@@ -330,7 +330,7 @@ function Swimlane({ lanes, timeRange, onTimeRangeSelect }: SwimlaneProps) {
                         width: `${Math.max(widthPercent, 0.5)}%`,
                       }}
                       onMouseEnter={(e) => {
-                        if (segment.label != null) {
+                        if (segment.label != null && !isDragging) {
                           setTooltip({
                             x: e.clientX,
                             y: e.clientY,
@@ -342,7 +342,7 @@ function Swimlane({ lanes, timeRange, onTimeRangeSelect }: SwimlaneProps) {
                         }
                       }}
                       onMouseMove={(e) => {
-                        if (segment.label != null) {
+                        if (segment.label != null && !isDragging) {
                           setTooltip((prev) => prev ? { ...prev, x: e.clientX, y: e.clientY } : null)
                         }
                       }}
@@ -374,7 +374,10 @@ function Swimlane({ lanes, timeRange, onTimeRangeSelect }: SwimlaneProps) {
       {tooltip && (
         <div
           className="fixed bg-app-bg border border-theme-border rounded-md px-3 py-2 text-xs pointer-events-none z-50 shadow-lg"
-          style={{ left: tooltip.x + 15, top: tooltip.y - 10 }}
+          style={{
+            left: Math.min(tooltip.x + 15, window.innerWidth - 196),
+            top: Math.min(tooltip.y - 10, window.innerHeight - 76),
+          }}
         >
           <div className="text-theme-text-muted text-[10px] mb-1">{tooltip.laneName}</div>
           <div className="text-theme-text-primary font-medium">{tooltip.label}</div>
