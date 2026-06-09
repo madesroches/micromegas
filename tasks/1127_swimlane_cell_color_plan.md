@@ -52,7 +52,7 @@ No change to `Lane`.
 1. After resolving `labelCol`, detect the optional `color` column:
    - Look up the column: `const colorCol = table.getChild('color') ?? null`
    - If present, detect its kind using `unwrapDictionary` + `isIntegerType` /
-     `isStringType` / `isBinaryType` (same pattern as `arrow-utils.ts:231-238`).
+     `isStringType` / `isBinaryType` (same pattern as `arrow-utils.ts:298-307`).
    - Reject unsupported types with a clear error message (matching the chart
      cell's wording).
 2. Per row, if `colorCol` is present call `cellColorToCss(colorCol.get(i), colorColumnKind)`.
@@ -100,7 +100,7 @@ already correct as a minimal example.
      from `@/lib/arrow-utils`.
    - Import `cellColorToCss` from `@/lib/color-utils`.
    - After `labelCol` lookup, add `colorCol` lookup + kind detection + unsupported-type
-     error return (matching the pattern from `arrow-utils.ts:229-244`).
+     error return (matching the pattern from `arrow-utils.ts:298-307`).
 4. **Extract per-row color** in the row loop, alongside `label`, calling
    `cellColorToCss` and storing the result on the `Segment`.
 5. **Update the segment renderer** to use `backgroundColor: segment.color ?? 'var(--chart-line)'`
