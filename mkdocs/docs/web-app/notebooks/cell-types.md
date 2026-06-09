@@ -561,6 +561,7 @@ Horizontal lane visualization for thread or async activity over time. Each lane 
 | Column | Type | Description |
 |--------|------|-------------|
 | `label` | string | Text displayed inside each segment bar; shown in a tooltip on hover alongside the lane name and time range |
+| `color` | integer / string / binary | Per-segment bar color — packed RGBA u32 (e.g. from `rgba()` or `color_scale()`), `'#rrggbb'`/`'#rrggbbaa'` string, or 4-byte binary |
 
 Multiple rows with the same `id` create multiple segments in one lane. Lanes are ordered by first occurrence in the query results.
 

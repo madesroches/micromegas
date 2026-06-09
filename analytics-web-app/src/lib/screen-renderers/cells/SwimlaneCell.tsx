@@ -11,7 +11,8 @@ import { AvailableVariablesPanel } from '@/components/AvailableVariablesPanel'
 import { DocumentationLink, QUERY_GUIDE_URL } from '@/components/DocumentationLink'
 import { SyntaxEditor } from '@/components/SyntaxEditor'
 import { substituteMacros, validateMacros, DEFAULT_SQL } from '../notebook-utils'
-import { timestampToMs } from '@/lib/arrow-utils'
+import { timestampToMs, isIntegerType, isStringType, isBinaryType, unwrapDictionary } from '@/lib/arrow-utils'
+import { cellColorToCss } from '@/lib/color-utils'
 import { AlignCenter } from 'lucide-react'
 
 // =============================================================================
@@ -34,6 +35,7 @@ interface Segment {
   begin: number
   end: number
   label?: string
+  color?: string
 }
 
 interface Lane {
@@ -53,8 +55,8 @@ interface ExtractResult {
   error?: string
 }
 
-/** Extract lanes and segments from Arrow table */
-function extractLanesFromTable(table: Table): ExtractResult {
+// eslint-disable-next-line react-refresh/only-export-components
+export function extractLanesFromTable(table: Table): ExtractResult {
   const laneMap = new Map<string, Lane>()
   const laneOrder: string[] = []
 
@@ -76,6 +78,25 @@ function extractLanesFromTable(table: Table): ExtractResult {
 
   const beginField = table.schema.fields.find((f) => f.name === 'begin')
   const endField = table.schema.fields.find((f) => f.name === 'end')
+
+  const colorCol = table.getChild('color') ?? null
+  let colorColumnKind: 'integer' | 'string' | 'binary' | null = null
+  if (colorCol) {
+    const colorField = table.schema.fields.find((f) => f.name === 'color')!
+    const innerType = unwrapDictionary(colorField.type)
+    if (isIntegerType(innerType)) {
+      colorColumnKind = 'integer'
+    } else if (isStringType(innerType)) {
+      colorColumnKind = 'string'
+    } else if (isBinaryType(colorField.type)) {
+      colorColumnKind = 'binary'
+    } else {
+      return {
+        lanes: [],
+        error: `'color' column must be integer (packed RGBA u32), string ('#rrggbb'/'#rrggbbaa'), or binary, got ${colorField.type.toString()}`,
+      }
+    }
+  }
 
   for (let i = 0; i < table.numRows; i++) {
     const id = String(idCol.get(i) ?? '')
@@ -99,7 +120,14 @@ function extractLanesFromTable(table: Table): ExtractResult {
 
     const labelRaw = labelCol?.get(i)
     const label = labelRaw != null ? String(labelRaw) : undefined
-    laneMap.get(id)!.segments.push({ begin, end, label })
+
+    let color: string | undefined
+    if (colorCol && colorColumnKind) {
+      const cssColor = cellColorToCss(colorCol.get(i), colorColumnKind)
+      if (cssColor != null) color = cssColor
+    }
+
+    laneMap.get(id)!.segments.push({ begin, end, label, color })
   }
 
   // Return lanes in first-occurrence order
@@ -324,10 +352,11 @@ function Swimlane({ lanes, timeRange, onTimeRangeSelect }: SwimlaneProps) {
                   return (
                     <div
                       key={idx}
-                      className="absolute top-1 bottom-1 bg-chart-line rounded-sm flex items-center overflow-hidden transition-opacity hover:opacity-85 hover:ring-1 hover:ring-brand-gold"
+                      className="absolute top-1 bottom-1 rounded-sm flex items-center overflow-hidden transition-opacity hover:opacity-85 hover:ring-1 hover:ring-brand-gold"
                       style={{
                         left: `${startPercent}%`,
                         width: `${Math.max(widthPercent, 0.5)}%`,
+                        backgroundColor: segment.color ?? 'var(--chart-line)',
                       }}
                       onMouseEnter={(e) => {
                         if (segment.label != null && !isDragging) {
@@ -476,7 +505,7 @@ function SwimlaneCellEditor({ config, onChange, variables, timeRange, onRun, cel
           value={slConfig.sql}
           onChange={(sql) => onChange({ ...slConfig, sql })}
           language="sql"
-          placeholder="SELECT id, name, begin, end [, label] FROM ..."
+          placeholder="SELECT id, name, begin, end [, label] [, color] FROM ..."
           minHeight="240px"
           onRunShortcut={onRun}
         />
