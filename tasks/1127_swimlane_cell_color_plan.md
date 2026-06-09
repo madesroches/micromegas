@@ -93,18 +93,19 @@ already correct as a minimal example.
 
 ## Implementation Steps
 
-1. **Add `color?: string` to `Segment`** in `SwimlaneCell.tsx`.
-2. **Detect the color column kind** in `extractLanesFromTable`:
+1. **Export `extractLanesFromTable`** by adding the `export` keyword to its function declaration in `SwimlaneCell.tsx`.
+2. **Add `color?: string` to `Segment`** in `SwimlaneCell.tsx`.
+3. **Detect the color column kind** in `extractLanesFromTable`:
    - Import `isIntegerType`, `isStringType`, `isBinaryType`, `unwrapDictionary`
      from `@/lib/arrow-utils`.
    - Import `cellColorToCss` from `@/lib/color-utils`.
    - After `labelCol` lookup, add `colorCol` lookup + kind detection + unsupported-type
      error return (matching the pattern from `arrow-utils.ts:229-244`).
-3. **Extract per-row color** in the row loop, alongside `label`, calling
+4. **Extract per-row color** in the row loop, alongside `label`, calling
    `cellColorToCss` and storing the result on the `Segment`.
-4. **Update the segment renderer** to use `backgroundColor: segment.color ?? 'var(--chart-line)'`
+5. **Update the segment renderer** to use `backgroundColor: segment.color ?? 'var(--chart-line)'`
    instead of the `bg-chart-line` Tailwind class.
-5. **Update the SQL placeholder** in `SwimlaneCellEditor`.
+6. **Update the SQL placeholder** in `SwimlaneCellEditor`.
 
 ## Files to Modify
 
