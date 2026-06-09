@@ -93,7 +93,7 @@ already correct as a minimal example.
 
 ## Implementation Steps
 
-1. **Export `extractLanesFromTable`** by adding the `export` keyword to its function declaration in `SwimlaneCell.tsx`.
+1. **Export `extractLanesFromTable`** by adding the `export` keyword to its function declaration in `SwimlaneCell.tsx`, and add `// eslint-disable-next-line react-refresh/only-export-components` on the line immediately before the declaration, matching the pattern in `ChartCell.tsx` and `MapCell.tsx`.
 2. **Add `color?: string` to `Segment`** in `SwimlaneCell.tsx`.
 3. **Detect the color column kind** in `extractLanesFromTable`:
    - Import `isIntegerType`, `isStringType`, `isBinaryType`, `unwrapDictionary`
