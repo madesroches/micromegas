@@ -106,10 +106,12 @@ already correct as a minimal example.
 5. **Update the segment renderer** to use `backgroundColor: segment.color ?? 'var(--chart-line)'`
    instead of the `bg-chart-line` Tailwind class.
 6. **Update the SQL placeholder** in `SwimlaneCellEditor`.
+7. **Update the docs** in `mkdocs/docs/web-app/notebooks/cell-types.md`: add a `color` row to the swimlane optional columns table (same wording convention as the chart cell's `color` row — packed RGBA u32, `#rrggbb`/`#rrggbbaa` string, or 4-byte binary).
 
 ## Files to Modify
 
 - `analytics-web-app/src/lib/screen-renderers/cells/SwimlaneCell.tsx` — all changes.
+- `mkdocs/docs/web-app/notebooks/cell-types.md` — add `color` row to the swimlane optional columns table.
 
 ## Trade-offs
 
