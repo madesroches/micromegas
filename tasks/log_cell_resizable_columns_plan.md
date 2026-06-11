@@ -53,7 +53,7 @@ const setAndSyncWidths = (updater: (prev: Record<string,number>) => Record<strin
 
 - `mousedown` on divider → populate `dragRef`, attach document-level `mousemove`/`mouseup`.
 - `mousemove` → `setAndSyncWidths(prev => ({ ...prev, [col]: clamp(newW) }))`.
-- `mouseup` → `onOptionsChange({ ...options, columnWidths: { ...livePinnedWidthsRef.current } })`, detach listeners, clear `dragRef`.
+- `mouseup` → `onOptionsChange({ ...optionsRef.current, columnWidths: { ...livePinnedWidthsRef.current } })`, detach listeners, clear `dragRef`. The spread reads `options` through `optionsRef` (a `useRef` kept current each render) rather than the closure-captured `options`, for the same stale-closure reason as `livePinnedWidthsRef` — otherwise a `pageSize` change between `mousedown` and `mouseup` would be clobbered by the stale spread on persist.
 
 Sync from outside (notebook reload):
 ```ts
@@ -68,7 +68,7 @@ Remove the hardcoded Tailwind `w-[Npx] min-w-[Npx]` from `renderLogColumn` for `
 
 Known-column floor/cap rules applied after auto-measurement:
 - **`time`**: `formatLocalTime` always returns exactly 29 chars, so `ceil(29 × 7.2) = 209px` unconditionally. This is a ~21px increase from the previous hardcoded 188px, accepted as an improvement — no floor expression needed.
-- **`target`**: cap at 200px (`Math.min(autoMeasured, 200)`) — same as the current truncation behaviour; users who need more can pin-drag to widen.
+- **`target`**: now auto-sizes up to a 200px cap (`Math.min(autoMeasured, 200)`). This is a behavior change from the current fixed 200px column: short targets will render narrower than 200px instead of always occupying 200px. Users who need more width can pin-drag to widen.
 - **`level`**: `formatLevelValue` produces at most 5 chars ("FATAL", "ERROR"), measuring ~36px — below the generic `MIN_FLEX_WIDTH_PX = 60`. Apply a per-kind floor of 40px (instead of 60) so the column matches its content rather than jumping from the current hardcoded 38px to 60px; `MAX_FLEX_WIDTH_PX` (700px) applies as the cap.
 - **`generic`**: no special floor or cap override; `MIN_FLEX_WIDTH_PX` (60px) and `MAX_FLEX_WIDTH_PX` (700px) apply.
 
@@ -103,17 +103,17 @@ Use `@radix-ui/react-dropdown-menu` with `<DropdownMenu.Portal>` — the same pa
      - `level` → `formatLevelValue(value)`
      - `target` → `String(value ?? "")`
      - `generic` (all other kinds) → `formatCell(value, col.type)` (existing path)
-   - After measuring, apply the floor/cap rules from the "Column widths for known columns" section (`time` auto-measures to 209px with no floor needed; `target` cap 200px; `level` floor 40px instead of the generic 60px).
+   - After measuring, apply the floor/cap rules from the "Column widths for known columns" section (`time` auto-measures to 209px with no floor needed; `target` auto-sizes up to a 200px cap — a behavior change from the current fixed 200px; `level` floor 40px instead of the generic 60px).
 
 2. **`log-utils.tsx`** — update `renderLogColumn`:
    - Remove hardcoded `w-[Npx] min-w-[Npx]` Tailwind classes from `time`, `level`, `target` cases.
-   - Remove `mr-3` from the non-terminal column span cases — spacing between those columns is now provided by `LogDivider`. Keep `mr-3` on the last (rightmost) column rendered in a row, because no `LogDivider` follows it and the row container's `px-2` does not provide sufficient right clearance on its own. Add `isLast?: boolean` to `RenderLogColumnOptions` and pass it from LogCell's render loop using `i === columns.length - 1`; `renderLogColumn` applies `mr-3` when `isLast` is `true` or `undefined`; omits it when `isLast === false`. Because `undefined` is the default when `isLast` is not passed, `LogRenderer.tsx` requires no changes — its existing call sites already get `mr-3` spacing preserved.
+   - Remove `mr-3` from the non-terminal column span cases — spacing between those columns is now provided by `LogDivider`. Keep `mr-3` on the last (rightmost) column rendered in a row, because no `LogDivider` follows it and the row container's `px-2` does not provide sufficient right clearance on its own. Add `isLast?: boolean` to `RenderLogColumnOptions` and pass it from LogCell's render loop using `i === columns.length - 1`; `renderLogColumn` applies `mr-3` when `isLast` is `true` or `undefined`; omits it when `isLast === false`. Because `undefined` is the default when `isLast` is not passed, `LogRenderer.tsx` needs no code edits for spacing — its existing call sites keep `mr-3`. However, `LogRenderer.tsx` calls the shared `computeFlexWidths` and passes `{ width: columnWidths[col.name] }` into `renderLogColumn`, so its known-column widths will change to the new auto-sized values (time → 209px, level → 40px floor, target → auto-sized capped at 200px). This is a behavior change with no code edits, accepted as part of this work.
    - Apply `style={{ width: opts?.width, minWidth: opts?.width }}` uniformly across all kinds (same as current generic path).
 
 3. **`log-utils.tsx`** — add `LogDivider` component.
 
 4. **`LogCell.tsx`** — add state:
-   - `livePinnedWidths` state, `livePinnedWidthsRef` (kept in sync via `setAndSyncWidths`), `dragRef`, `hoveredDivider` state, `contextMenu` state.
+   - `livePinnedWidths` state, `livePinnedWidthsRef` (kept in sync via `setAndSyncWidths`), `optionsRef` (a `useRef` kept current each render so the `mouseup` handler reads the latest `options`), `dragRef`, `hoveredDivider` state, `contextMenu` state.
    - Sync effect from `options.columnWidths`.
 
 5. **`LogCell.tsx`** — compute effective widths from `livePinnedWidths` merged with auto widths.
