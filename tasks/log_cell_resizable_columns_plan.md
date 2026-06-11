@@ -96,8 +96,8 @@ Rendered via `ReactDOM.createPortal` into `document.body`. A portal is required 
 
 2. **`log-utils.tsx`** — update `renderLogColumn`:
    - Remove hardcoded `w-[Npx] min-w-[Npx]` Tailwind classes from `time`, `level`, `target` cases.
-   - Remove `mr-3` from the non-terminal column span cases — spacing between those columns is now provided by `LogDivider`. Keep `mr-3` on the last (rightmost) column rendered in a row, because no `LogDivider` follows it and the row container's `px-2` does not provide sufficient right clearance on its own. Add `isLast?: boolean` to `RenderLogColumnOptions` and pass it from LogCell's render loop using `i === columns.length - 1`; `renderLogColumn` then applies `mr-3` only when `isLast` is true.
-   - **`LogRenderer.tsx`**: update every `renderLogColumn` call site in this file to pass `isLast` using the same `i === columns.length - 1` index pattern. (`LogRenderer.tsx` imports and calls `renderLogColumn` independently of `LogCell.tsx`; without this update the `isLast` prop would always be `undefined`, silently omitting `mr-3` on all columns.)
+   - Remove `mr-3` from the non-terminal column span cases — spacing between those columns is now provided by `LogDivider`. Keep `mr-3` on the last (rightmost) column rendered in a row, because no `LogDivider` follows it and the row container's `px-2` does not provide sufficient right clearance on its own. Add `isLast?: boolean` to `RenderLogColumnOptions` and pass it from LogCell's render loop using `i === columns.length - 1`; `renderLogColumn` applies `mr-3` unless `isLast === false` (i.e. the default when `isLast` is `undefined` keeps `mr-3`, so any call site that does not pass `isLast` retains the original spacing and is not silently broken).
+   - **`LogRenderer.tsx`**: update every `renderLogColumn` call site in this file to pass `isLast` using the same `i === columns.length - 1` index pattern. (`LogRenderer.tsx` imports and calls `renderLogColumn` independently of `LogCell.tsx`; passing `isLast` here enables `<LogDivider>` insertion in a future step, but even without dividers the backward-safe default above ensures columns are not rendered flush against each other.)
    - Apply `style={{ width: opts?.width, minWidth: opts?.width }}` uniformly across all kinds (same as current generic path).
 
 3. **`log-utils.tsx`** — add `LogDivider` component.
@@ -108,7 +108,7 @@ Rendered via `ReactDOM.createPortal` into `document.body`. A portal is required 
 
 5. **`LogCell.tsx`** — compute effective widths from `livePinnedWidths` merged with auto widths.
 
-6. **`LogCell.tsx`** — row rendering: insert `<LogDivider>` between each pair of columns, wiring all handlers.
+6. **`LogCell.tsx`** — row rendering: insert `<LogDivider>` between each pair of columns, wiring all handlers. Also insert `<LogDivider>` (with static/no-op props — no drag, no context menu) in `LogRenderer.tsx`'s render loop at the same positions so non-last columns in that deprecated path also have visual separation.
 
 7. **`LogCell.tsx`** — render the context menu via `ReactDOM.createPortal(menu, document.body)` rather than a `position: fixed` div inside the cell, as required by the Design section.
 
