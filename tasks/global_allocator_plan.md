@@ -18,7 +18,7 @@ jemalloc vs snmalloc vs mimalloc analysis.
 No `#[global_allocator]` is declared anywhere in the workspace; every binary uses
 Rust's default system allocator. The five production entry points are:
 
-| Binary | Entry point |
+| Crate | Entry point |
 |---|---|
 | `telemetry-ingestion-srv` | `rust/telemetry-ingestion-srv/src/main.rs` |
 | `flight-sql-srv` | `rust/flight-sql-srv/src/flight_sql_srv.rs` |
@@ -26,7 +26,8 @@ Rust's default system allocator. The five production entry points are:
 | `http-gateway` | `rust/http-gateway/src/http_gateway_srv.rs` |
 | `telemetry-admin-cli` | `rust/telemetry-admin-cli/src/telemetry_admin.rs` |
 
-No `[global_allocator]` entry exists in the workspace `rust/Cargo.toml`.
+No allocator crate (jemalloc/mimalloc/snmalloc) appears in `rust/Cargo.toml`'s
+`[workspace.dependencies]`.
 
 ## Design
 
@@ -53,7 +54,10 @@ on Linux; the guard is defensive (there is currently no Windows CI).
 
 ### Scope
 
-Apply to all five production service entry points listed above. Exclude:
+Apply to all five production service entry points listed above.
+`telemetry-admin-cli` counts as a service because it runs as a long-lived
+maintenance daemon via its `crond` subcommand (as started by
+`local_test_env/ai_scripts/start_services.py`). Exclude:
 - `telemetry-generator` (test load-generator, not a service)
 - `micromegas-uri-handler` (client-side CLI tool, not a long-running service)
 - `update-perfetto-protos`, `write-perfetto`, `validate-perfetto` (dev / example tools)
@@ -85,8 +89,9 @@ tikv-jemallocator.workspace = true
 2. **telemetry-ingestion-srv**
    - `rust/telemetry-ingestion-srv/Cargo.toml`: add `tikv-jemallocator.workspace = true`
      under `[target.'cfg(not(target_os = "windows"))'.dependencies]`
-   - `rust/telemetry-ingestion-srv/src/main.rs`: add allocator declaration at
-     the top of the file (before `use` statements).
+   - `rust/telemetry-ingestion-srv/src/main.rs`: add allocator declaration
+     after any `//!` inner doc comments, before the `use` statements (same
+     placement in steps 3–6).
 
 3. **flight-sql-srv**
    - `rust/flight-sql-srv/Cargo.toml`: add dependency
@@ -160,7 +165,9 @@ the cfg attribute removes the declaration, but only the target gate keeps
 
 ## Testing Strategy
 
-- `python3 build/rust_ci.py` — verifies format, clippy, and tests pass.
+- `python3 build/rust_ci.py native` — verifies format, clippy, tests, and
+  `cargo machete` (relevant here since a new dependency is added); the bare
+  invocation would also run the unrelated wasm pipeline.
 - Smoke test: start services via `local_test_env/ai_scripts/start_services.py`,
   run a representative query with `micromegas-query`, confirm no crashes.
 - Heap profiling (optional, future): not available with the default features
