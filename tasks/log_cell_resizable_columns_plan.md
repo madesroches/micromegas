@@ -99,7 +99,7 @@ Rendered via `ReactDOM.createPortal` into `document.body`. A portal is required 
 
 6. **`LogCell.tsx`** — row rendering: insert `<LogDivider>` between each pair of columns, wiring all handlers.
 
-7. **`LogCell.tsx`** — add context menu `<div>` (fixed position, outside scroll container).
+7. **`LogCell.tsx`** — render the context menu via `ReactDOM.createPortal(menu, document.body)` rather than a `position: fixed` div inside the cell, as required by the Design section.
 
 8. **`LogCell.tsx`** — add "Reset widths" button in the bottom bar (alongside `PaginationBar`), shown only when `Object.keys(livePinnedWidths).length > 0`.
 
