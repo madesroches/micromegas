@@ -81,6 +81,7 @@ sysinfo = "0.37"
 thiserror = "2"
 thrift = "0.17"
 thread-id = "4.0"
+tikv-jemallocator = "0.6"
 tokio = { version = "1.47", features = ["macros","rt-multi-thread","tracing","io-util"]}
 tokio-retry2 = "0.6"
 tonic = { version = "0.14", features = ["server", "tls-ring", "tls-native-roots"] }

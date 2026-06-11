@@ -9,6 +9,10 @@
 //!  - `MICROMEGAS_API_KEYS` : (optional) JSON array of API keys
 //!  - `MICROMEGAS_OIDC_CONFIG` : (optional) OIDC configuration JSON
 
+#[cfg(not(target_os = "windows"))]
+#[global_allocator]
+static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
 use anyhow::{Context, Result};
 use axum::Extension;
 use axum::Router;

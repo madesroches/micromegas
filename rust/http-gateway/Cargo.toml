@@ -19,3 +19,6 @@ micromegas = { workspace = true, features = ["server"] }
 anyhow.workspace = true
 clap.workspace = true
 tokio.workspace = true
+
+[target.'cfg(not(target_os = "windows"))'.dependencies]
+tikv-jemallocator.workspace = true

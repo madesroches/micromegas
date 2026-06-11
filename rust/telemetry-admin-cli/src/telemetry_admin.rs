@@ -1,5 +1,9 @@
 //! Telemetry Admin CLI
 
+#[cfg(not(target_os = "windows"))]
+#[global_allocator]
+static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
 use anyhow::Context;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
