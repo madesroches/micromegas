@@ -34,7 +34,7 @@ type ColumnWidths = Record<string, number>
 
 Effective width resolution:
 ```
-effectiveWidth(col) = pinnedWidths[col] ?? autoWidths[col] ?? MIN_COLUMN_WIDTH_PX
+effectiveWidth(col) = pinnedWidths[col] ?? autoWidths[col] ?? MIN_FLEX_WIDTH_PX
 ```
 
 ### Drag interaction
@@ -99,7 +99,7 @@ Renders a `<span>` (5px wide, full row height via `self-stretch`) with a 1px inn
 
 ### Context menu
 
-Use `@radix-ui/react-dropdown-menu` with `<DropdownMenu.Portal>` — the same pattern already used in `CellContainer.tsx`, `HgChildPane.tsx`, `PivotButton.tsx`, `RefreshIntervalPicker.tsx`, and `SplitButton.tsx`. `DropdownMenu.Portal` renders into `document.body`, escaping the dnd-kit CSS `transform` applied by `SortableCell` in `NotebookRenderer.tsx` (a transformed ancestor would otherwise mis-position any `position: fixed` descendant). Radix also provides built-in dismiss-on-outside-click, eliminating the need for a manual document `mousedown` listener. Controlled by `useState<{ col: string; x: number; y: number } | null>` which drives the `open` prop and the portal's anchor position.
+Use `@radix-ui/react-context-menu` (already a dependency, `^2.2.16`), which is Radix's purpose-built right-click menu: its `ContextMenu.Trigger` opens the menu at the cursor position natively on `onContextMenu`, so no manual x/y coordinate tracking is needed. `DropdownMenu` (used elsewhere in the codebase) is trigger-anchored via `align`/`sideOffset` and has no coordinate-anchoring prop, so it does not fit a cursor-positioned menu. Wrap each `LogDivider` in a `ContextMenu.Root` whose `ContextMenu.Trigger` is the divider itself (`asChild`). Use `<ContextMenu.Portal>` to render the content into `document.body`, escaping the dnd-kit CSS `transform` applied by `SortableCell` in `NotebookRenderer.tsx` (a transformed ancestor would otherwise mis-position any `position: fixed` descendant). Radix handles cursor positioning and dismiss-on-outside-click automatically — no `useState<{ col; x; y }>` and no manual document `mousedown` listener. The menu only needs to know which column it acts on, which is available from the divider's `col` prop.
 
 ## Implementation Steps
 
@@ -120,14 +120,14 @@ Use `@radix-ui/react-dropdown-menu` with `<DropdownMenu.Portal>` — the same pa
 3. **`log-utils.tsx`** — add `LogDivider` component.
 
 4. **`LogCell.tsx`** — add state:
-   - `livePinnedWidths` state, `livePinnedWidthsRef` (kept in sync via `setAndSyncWidths`), `optionsRef` (a `useRef` kept current each render so the `mouseup` handler reads the latest `options`), `dragRef`, `hoveredDivider` state, `contextMenu` state.
+   - `livePinnedWidths` state, `livePinnedWidthsRef` (kept in sync via `setAndSyncWidths`), `optionsRef` (a `useRef` kept current each render so the `mouseup` handler reads the latest `options`), `dragRef`, `hoveredDivider` state. No context-menu state is needed — `@radix-ui/react-context-menu` manages open/closed and cursor position internally.
    - Sync effect from `options.columnWidths`.
 
 5. **`LogCell.tsx`** — compute effective widths from `livePinnedWidths` merged with auto widths.
 
 6. **`LogCell.tsx`** — row rendering: insert `<LogDivider>` between each pair of columns, wiring all handlers.
 
-7. **`LogCell.tsx`** — render the context menu using `@radix-ui/react-dropdown-menu` with `<DropdownMenu.Portal>`, consistent with `CellContainer.tsx` and other components in the codebase. The portal renders into `document.body` (escaping the dnd-kit transform), and Radix handles outside-click dismissal automatically — no manual `mousedown` listener needed.
+7. **`LogCell.tsx`** — render the context menu using `@radix-ui/react-context-menu`. Wrap each `LogDivider` in a `ContextMenu.Root`, with the divider as the `ContextMenu.Trigger asChild`; put the items ("Reset to auto", "Reset all columns") in a `<ContextMenu.Portal>` → `ContextMenu.Content`. The portal renders into `document.body` (escaping the dnd-kit transform), and Radix positions the menu at the cursor and handles outside-click dismissal automatically — no x/y state and no manual `mousedown` listener needed.
 
 8. **`LogCell.tsx`** — add "Reset widths" button in the bottom bar. Wrap both `PaginationBar` and the button in a permanent `<div className="flex justify-between items-center">` row so the layout is consistent even when `PaginationBar` returns `null` (i.e., `totalPages <= 1`). The "Reset widths" button renders only when `Object.keys(livePinnedWidths).length > 0`; `PaginationBar` renders only when `totalPages > 1`. Either or both may be absent on any given page without breaking the layout.
 
