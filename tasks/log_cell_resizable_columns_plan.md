@@ -39,11 +39,21 @@ effectiveWidth(col) = pinnedWidths[col] ?? autoWidths[col] ?? MIN_COLUMN_WIDTH_P
 
 ### Drag interaction
 
-Use a `useRef` for the in-flight drag (avoids closure staleness, no re-render per pixel) and a `useState<Record<string, number>>` for `livePinnedWidths` which drives rendering:
+Use a `useRef` for the in-flight drag (avoids closure staleness, no re-render per pixel) and a `useState<Record<string, number>>` for `livePinnedWidths` which drives rendering. Because `mouseup` is attached to `document` at `mousedown` time, it captures a stale `livePinnedWidths` closure value — the same problem that motivated `dragRef`. Fix by adding a `livePinnedWidthsRef = useRef<Record<string,number>>({})` and keeping it in sync every time `setLivePinnedWidths` is called:
+
+```ts
+const setAndSyncWidths = (updater: (prev: Record<string,number>) => Record<string,number>) => {
+  setLivePinnedWidths(prev => {
+    const next = updater(prev);
+    livePinnedWidthsRef.current = next;
+    return next;
+  });
+};
+```
 
 - `mousedown` on divider → populate `dragRef`, attach document-level `mousemove`/`mouseup`.
-- `mousemove` → `setLivePinnedWidths(prev => ({ ...prev, [col]: clamp(newW) }))`.
-- `mouseup` → `onOptionsChange({ ...options, columnWidths: { ...livePinnedWidths } })`, detach listeners, clear `dragRef`.
+- `mousemove` → `setAndSyncWidths(prev => ({ ...prev, [col]: clamp(newW) }))`.
+- `mouseup` → `onOptionsChange({ ...options, columnWidths: { ...livePinnedWidthsRef.current } })`, detach listeners, clear `dragRef`.
 
 Sync from outside (notebook reload):
 ```ts
@@ -102,7 +112,7 @@ Rendered via `ReactDOM.createPortal` into `document.body`. A portal is required 
 3. **`log-utils.tsx`** — add `LogDivider` component.
 
 4. **`LogCell.tsx`** — add state:
-   - `livePinnedWidths` state, `dragRef`, `hoveredDivider` state, `contextMenu` state.
+   - `livePinnedWidths` state, `livePinnedWidthsRef` (kept in sync via `setAndSyncWidths`), `dragRef`, `hoveredDivider` state, `contextMenu` state.
    - Sync effect from `options.columnWidths`.
 
 5. **`LogCell.tsx`** — compute effective widths from `livePinnedWidths` merged with auto widths.
