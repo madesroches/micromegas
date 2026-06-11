@@ -38,6 +38,9 @@ tower.workspace = true
 tower-http = { workspace = true, features = ["compression-gzip", "fs", "normalize-path"] }
 url.workspace = true
 
+[target.'cfg(not(target_os = "windows"))'.dependencies]
+tikv-jemallocator.workspace = true
+
 [lib]
 name = "analytics_web_srv"
 path = "src/lib.rs"

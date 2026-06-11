@@ -4,6 +4,8 @@ This file documents the historical progress of the Micromegas project. For curre
 
 ## Unreleased
 
+* **Performance:**
+  * Switch all production service binaries to jemalloc (`tikv-jemallocator`) as the global allocator; reduces allocation latency and memory fragmentation under multi-threaded workloads (#1129)
 * **Web App:**
   * Add optional `color` column to swimlane cells; per-segment colors support packed RGBA u32, `#rrggbb`/`#rrggbbaa` strings, and 4-byte binary values; falls back to the default theme color when absent (#1127)
   * Add optional `label` column to swimlane cells; labels render as truncated text inside each bar and appear in a hover tooltip alongside the lane name and time range
