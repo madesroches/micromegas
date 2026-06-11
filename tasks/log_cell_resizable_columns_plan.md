@@ -50,7 +50,7 @@ Sync from outside (notebook reload):
 const pinnedWidths = options?.columnWidths ?? {};
 useEffect(() => setLivePinnedWidths(pinnedWidths), [pinnedWidths]);
 ```
-**Reference-stability assumption**: the notebook layer must memoize the `options` object (or at minimum the `columnWidths` sub-object) so that its identity is stable across renders; otherwise the effect fires every render and overwrites any in-progress drag state. If that guarantee cannot be made, replace the dependency with a `JSON.stringify` comparison via a custom hook, or use `useRef` to track the previous serialized value and only call `setLivePinnedWidths` when the content actually changes.
+**Reference-stability**: `useCellManager.ts`'s `updateCell` always spreads the cell into a new object, and `NotebookRenderer.tsx` extracts `options` without any `useMemo`, so `options` (and `options.columnWidths`) will be a new reference on every render. The notebook layer therefore cannot guarantee reference stability. The sync `useEffect` must use a `JSON.stringify`-based guard to avoid overwriting in-progress drag state: track the previous serialized value in a `useRef<string>` and call `setLivePinnedWidths` only when `JSON.stringify(pinnedWidths)` differs from the stored ref value.
 
 ### Column widths for known columns
 
@@ -76,7 +76,7 @@ Renders a `<span>` (5px wide, full row height via `self-stretch`) with a 1px inn
 
 ### Context menu
 
-Rendered as a fixed-position `<div>` inside `LogCell` (not a portal — the cell already has `overflow: auto` on the scroll container, so the menu must be outside it or use `position: fixed`). Controlled by `useState<{ col: string; x: number; y: number } | null>`. Dismissed on document `mousedown` outside.
+Rendered via `ReactDOM.createPortal` into `document.body`. A portal is required because `SortableCell` in `NotebookRenderer.tsx` applies a dnd-kit CSS `transform` to the cell wrapper; any `position: fixed` element nested inside a transformed ancestor is positioned relative to that ancestor rather than the viewport, producing wrong coordinates during and after a drag. The portal bypasses this by attaching the menu directly to `document.body`, outside the transformed subtree. Controlled by `useState<{ col: string; x: number; y: number } | null>`. Dismissed on document `mousedown` outside.
 
 ## Implementation Steps
 
@@ -86,7 +86,7 @@ Rendered as a fixed-position `<div>` inside `LogCell` (not a portal — the cell
 
 2. **`log-utils.tsx`** — update `renderLogColumn`:
    - Remove hardcoded `w-[Npx] min-w-[Npx]` Tailwind classes from `time`, `level`, `target` cases.
-   - Remove `mr-3` from the non-terminal column span cases — spacing between those columns is now provided by `LogDivider`. Keep `mr-3` on the last (rightmost) column rendered in a row, because no `LogDivider` follows it and the row container's `px-2` does not provide sufficient right clearance on its own. In practice, the last column is `generic/default`; add a conditional or a dedicated `isLast` prop so the span retains `mr-3` only when it is the final column.
+   - Remove `mr-3` from the non-terminal column span cases — spacing between those columns is now provided by `LogDivider`. Keep `mr-3` on the last (rightmost) column rendered in a row, because no `LogDivider` follows it and the row container's `px-2` does not provide sufficient right clearance on its own. Add `isLast?: boolean` to `RenderLogColumnOptions` and pass it from LogCell's render loop using `i === columns.length - 1`; `renderLogColumn` then applies `mr-3` only when `isLast` is true.
    - Apply `style={{ width: opts?.width, minWidth: opts?.width }}` uniformly across all kinds (same as current generic path).
 
 3. **`log-utils.tsx`** — add `LogDivider` component.
