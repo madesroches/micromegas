@@ -57,7 +57,7 @@ useEffect(() => setLivePinnedWidths(pinnedWidths), [pinnedWidths]);
 Remove the hardcoded Tailwind `w-[Npx] min-w-[Npx]` from `renderLogColumn` for `time`, `level`, and `target`. Extend `computeFlexWidths` to scan all columns (not just `generic` ones), so known columns get auto-sized from their formatted content just like generic columns.
 
 Known-column floor/cap rules applied after auto-measurement:
-- **`time`**: `formatLocalTime` always returns exactly 29 chars, so `ceil(29 × 7.2) = 209px`. Use `Math.max(autoMeasured, 188)` to preserve the current 188px minimum and avoid shrinking on sparse pages.
+- **`time`**: `formatLocalTime` always returns exactly 29 chars, so `ceil(29 × 7.2) = 209px` unconditionally. This is a ~21px increase from the previous hardcoded 188px, accepted as an improvement — no floor expression needed.
 - **`target`**: cap at 200px (`Math.min(autoMeasured, 200)`) — same as the current truncation behaviour; users who need more can pin-drag to widen.
 - **`level`** and **`generic`**: no special cap; `MAX_FLEX_WIDTH_PX` (700px) applies.
 
@@ -92,12 +92,11 @@ Rendered via `ReactDOM.createPortal` into `document.body`. A portal is required 
      - `level` → `formatLevelValue(value)`
      - `target` → `String(value ?? "")`
      - `generic` (all other kinds) → `formatCell(value, col.type)` (existing path)
-   - After measuring, apply the floor/cap rules from the "Column widths for known columns" section (`time` floor 188px, `target` cap 200px).
+   - After measuring, apply the floor/cap rules from the "Column widths for known columns" section (`time` auto-measures to 209px with no floor needed; `target` cap 200px).
 
 2. **`log-utils.tsx`** — update `renderLogColumn`:
    - Remove hardcoded `w-[Npx] min-w-[Npx]` Tailwind classes from `time`, `level`, `target` cases.
    - Remove `mr-3` from the non-terminal column span cases — spacing between those columns is now provided by `LogDivider`. Keep `mr-3` on the last (rightmost) column rendered in a row, because no `LogDivider` follows it and the row container's `px-2` does not provide sufficient right clearance on its own. Add `isLast?: boolean` to `RenderLogColumnOptions` and pass it from LogCell's render loop using `i === columns.length - 1`; `renderLogColumn` applies `mr-3` unless `isLast === false` (i.e. the default when `isLast` is `undefined` keeps `mr-3`, so any call site that does not pass `isLast` retains the original spacing and is not silently broken).
-   - **`LogRenderer.tsx`**: update every `renderLogColumn` call site in this file to pass `isLast` using the same `i === columns.length - 1` index pattern. (`LogRenderer.tsx` imports and calls `renderLogColumn` independently of `LogCell.tsx`; passing `isLast` here enables `<LogDivider>` insertion in a future step, but even without dividers the backward-safe default above ensures columns are not rendered flush against each other.)
    - Apply `style={{ width: opts?.width, minWidth: opts?.width }}` uniformly across all kinds (same as current generic path).
 
 3. **`log-utils.tsx`** — add `LogDivider` component.
@@ -108,7 +107,7 @@ Rendered via `ReactDOM.createPortal` into `document.body`. A portal is required 
 
 5. **`LogCell.tsx`** — compute effective widths from `livePinnedWidths` merged with auto widths.
 
-6. **`LogCell.tsx`** — row rendering: insert `<LogDivider>` between each pair of columns, wiring all handlers. Also insert `<LogDivider>` (with static/no-op props — no drag, no context menu) in `LogRenderer.tsx`'s render loop at the same positions so non-last columns in that deprecated path also have visual separation.
+6. **`LogCell.tsx`** — row rendering: insert `<LogDivider>` between each pair of columns, wiring all handlers.
 
 7. **`LogCell.tsx`** — render the context menu via `ReactDOM.createPortal(menu, document.body)` rather than a `position: fixed` div inside the cell, as required by the Design section.
 
@@ -118,7 +117,6 @@ Rendered via `ReactDOM.createPortal` into `document.body`. A portal is required 
 
 - `analytics-web-app/src/lib/screen-renderers/log-utils.tsx`
 - `analytics-web-app/src/lib/screen-renderers/cells/LogCell.tsx`
-- `analytics-web-app/src/lib/screen-renderers/LogRenderer.tsx`
 
 ## Trade-offs
 
