@@ -54,7 +54,12 @@ useEffect(() => setLivePinnedWidths(pinnedWidths), [pinnedWidths]);
 
 ### Column widths for known columns
 
-Remove the hardcoded Tailwind `w-[Npx] min-w-[Npx]` from `renderLogColumn` for `time`, `level`, and `target`. Extend `computeFlexWidths` to scan all columns (not just `generic` ones), so known columns get auto-sized from their formatted content just like generic columns. No fixed defaults — auto-sizing is at least as good.
+Remove the hardcoded Tailwind `w-[Npx] min-w-[Npx]` from `renderLogColumn` for `time`, `level`, and `target`. Extend `computeFlexWidths` to scan all columns (not just `generic` ones), so known columns get auto-sized from their formatted content just like generic columns.
+
+Known-column floor/cap rules applied after auto-measurement:
+- **`time`**: `formatLocalTime` always returns exactly 29 chars, so `ceil(29 × 7.2) = 209px`. Use `Math.max(autoMeasured, 188)` to preserve the current 188px minimum and avoid shrinking on sparse pages.
+- **`target`**: cap at 200px (`Math.min(autoMeasured, 200)`) — same as the current truncation behaviour; users who need more can pin-drag to widen.
+- **`level`** and **`generic`**: no special cap; `MAX_FLEX_WIDTH_PX` (700px) applies.
 
 ### New component: `LogDivider`
 
@@ -82,11 +87,17 @@ Rendered via `ReactDOM.createPortal` into `document.body`. A portal is required 
 
 1. **`log-utils.tsx`** — update `computeFlexWidths`:
    - Remove the `generic`-only filter — scan all columns including `time`, `level`, `target`.
-   - Use the appropriate format function per kind (`formatLocalTime`, `formatLevelValue`, `String`) to measure content length accurately.
+   - Dispatch to the per-kind format function when measuring content length:
+     - `time` → `formatLocalTime(value)`
+     - `level` → `formatLevelValue(value)`
+     - `target` → `String(value ?? "")`
+     - `generic` (all other kinds) → `formatCell(value, col.type)` (existing path)
+   - After measuring, apply the floor/cap rules from the "Column widths for known columns" section (`time` floor 188px, `target` cap 200px).
 
 2. **`log-utils.tsx`** — update `renderLogColumn`:
    - Remove hardcoded `w-[Npx] min-w-[Npx]` Tailwind classes from `time`, `level`, `target` cases.
    - Remove `mr-3` from the non-terminal column span cases — spacing between those columns is now provided by `LogDivider`. Keep `mr-3` on the last (rightmost) column rendered in a row, because no `LogDivider` follows it and the row container's `px-2` does not provide sufficient right clearance on its own. Add `isLast?: boolean` to `RenderLogColumnOptions` and pass it from LogCell's render loop using `i === columns.length - 1`; `renderLogColumn` then applies `mr-3` only when `isLast` is true.
+   - **`LogRenderer.tsx`**: update every `renderLogColumn` call site in this file to pass `isLast` using the same `i === columns.length - 1` index pattern. (`LogRenderer.tsx` imports and calls `renderLogColumn` independently of `LogCell.tsx`; without this update the `isLast` prop would always be `undefined`, silently omitting `mr-3` on all columns.)
    - Apply `style={{ width: opts?.width, minWidth: opts?.width }}` uniformly across all kinds (same as current generic path).
 
 3. **`log-utils.tsx`** — add `LogDivider` component.
@@ -101,12 +112,13 @@ Rendered via `ReactDOM.createPortal` into `document.body`. A portal is required 
 
 7. **`LogCell.tsx`** — render the context menu via `ReactDOM.createPortal(menu, document.body)` rather than a `position: fixed` div inside the cell, as required by the Design section.
 
-8. **`LogCell.tsx`** — add "Reset widths" button in the bottom bar (alongside `PaginationBar`), shown only when `Object.keys(livePinnedWidths).length > 0`.
+8. **`LogCell.tsx`** — add "Reset widths" button in the bottom bar. Wrap both `PaginationBar` and the button in a permanent `<div className="flex justify-between items-center">` row so the layout is consistent even when `PaginationBar` returns `null` (i.e., `totalPages <= 1`). The "Reset widths" button renders only when `Object.keys(livePinnedWidths).length > 0`; `PaginationBar` renders only when `totalPages > 1`. Either or both may be absent on any given page without breaking the layout.
 
 ## Files to Modify
 
 - `analytics-web-app/src/lib/screen-renderers/log-utils.tsx`
 - `analytics-web-app/src/lib/screen-renderers/cells/LogCell.tsx`
+- `analytics-web-app/src/lib/screen-renderers/LogRenderer.tsx`
 
 ## Trade-offs
 
