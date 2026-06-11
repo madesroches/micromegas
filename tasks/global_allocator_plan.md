@@ -129,7 +129,7 @@ tikv-jemallocator.workspace = true
 
 | Allocator | Crate | Notes |
 |---|---|---|
-| jemalloc | `tikv-jemallocator` | Used by Polars, DuckDB, ClickHouse; excellent heap-profiling (`MALLOC_CONF=prof:true`); does not compile on Windows |
+| jemalloc | `tikv-jemallocator` | Used by Polars, DuckDB, ClickHouse; excellent heap-profiling (opt-in via the `profiling` cargo feature; see Testing Strategy); does not compile on Windows |
 | snmalloc | `snmalloc-rs` | DataFusion docs recommend it; wins DataFusion TPC-DS benchmarks over mimalloc; best RSS return-to-OS; least production ecosystem validation |
 | mimalloc | `mimalloc` | What DataFusion CLI ships; cross-platform; can retain RSS under bursty workloads (1.5 GB → 3.2 GB observed in DataFusion benchmarks) |
 
@@ -138,7 +138,11 @@ mimalloc on Linux/macOS citing "outperforms on all tasks"; DuckDB v1.5.3 bundled
 it to fix glibc's failure to return freed pages). snmalloc's DataFusion benchmark
 wins are real but it lacks the same depth of production validation and the
 `malloc_conf` observability tooling is weaker. mimalloc's RSS retention behavior
-is a concern for long-running services.
+is a concern for long-running services. Note that jemalloc's heap profiling is
+not available with `tikv-jemallocator`'s default features — it requires building
+with the `profiling` cargo feature (which compiles jemalloc with
+`--enable-prof`); the planned default-feature dependency keeps the door open for
+this without enabling it up front.
 
 **Future**: once jemalloc is in place, a head-to-head with snmalloc on a
 representative `micromegas-query` workload is the natural next step — the swap
@@ -159,5 +163,11 @@ the cfg attribute removes the declaration, but only the target gate keeps
 - `python3 build/rust_ci.py` — verifies format, clippy, and tests pass.
 - Smoke test: start services via `local_test_env/ai_scripts/start_services.py`,
   run a representative query with `micromegas-query`, confirm no crashes.
-- Heap profiling (optional, future): enable `MALLOC_CONF=prof:true` with jemalloc
-  to capture allocation profiles for before/after latency comparison.
+- Heap profiling (optional, future): not available with the default features
+  planned here. Requires building `tikv-jemallocator` with
+  `features = ["profiling"]` (compiles jemalloc with `--enable-prof`), then
+  enabling profiles at runtime via `_RJEM_MALLOC_CONF=prof:true` (the sys crate
+  prefixes symbols with `_rjem_` by default; add the
+  `unprefixed_malloc_on_supported_platforms` feature to use plain
+  `MALLOC_CONF`). To be done as a separate step when before/after allocation
+  profiles are needed.
