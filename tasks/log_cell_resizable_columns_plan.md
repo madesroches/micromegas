@@ -92,7 +92,7 @@ Renders a `<span>` (5px wide, full row height via `self-stretch`) with a 1px inn
 
 ### Context menu
 
-Rendered via `ReactDOM.createPortal` into `document.body`. A portal is required because `SortableCell` in `NotebookRenderer.tsx` applies a dnd-kit CSS `transform` to the cell wrapper; any `position: fixed` element nested inside a transformed ancestor is positioned relative to that ancestor rather than the viewport, producing wrong coordinates during and after a drag. The portal bypasses this by attaching the menu directly to `document.body`, outside the transformed subtree. Controlled by `useState<{ col: string; x: number; y: number } | null>`. Dismissed on document `mousedown` outside.
+Use `@radix-ui/react-dropdown-menu` with `<DropdownMenu.Portal>` — the same pattern already used in `CellContainer.tsx`, `HgChildPane.tsx`, `PivotButton.tsx`, `RefreshIntervalPicker.tsx`, and `SplitButton.tsx`. `DropdownMenu.Portal` renders into `document.body`, escaping the dnd-kit CSS `transform` applied by `SortableCell` in `NotebookRenderer.tsx` (a transformed ancestor would otherwise mis-position any `position: fixed` descendant). Radix also provides built-in dismiss-on-outside-click, eliminating the need for a manual document `mousedown` listener. Controlled by `useState<{ col: string; x: number; y: number } | null>` which drives the `open` prop and the portal's anchor position.
 
 ## Implementation Steps
 
@@ -107,7 +107,7 @@ Rendered via `ReactDOM.createPortal` into `document.body`. A portal is required 
 
 2. **`log-utils.tsx`** — update `renderLogColumn`:
    - Remove hardcoded `w-[Npx] min-w-[Npx]` Tailwind classes from `time`, `level`, `target` cases.
-   - Remove `mr-3` from the non-terminal column span cases — spacing between those columns is now provided by `LogDivider`. Keep `mr-3` on the last (rightmost) column rendered in a row, because no `LogDivider` follows it and the row container's `px-2` does not provide sufficient right clearance on its own. Add `isLast?: boolean` to `RenderLogColumnOptions` and pass it from LogCell's render loop using `i === columns.length - 1`; `renderLogColumn` applies `mr-3` unless `isLast === false` (i.e. the default when `isLast` is `undefined` keeps `mr-3`, so any call site that does not pass `isLast` retains the original spacing and is not silently broken).
+   - Remove `mr-3` from the non-terminal column span cases — spacing between those columns is now provided by `LogDivider`. Keep `mr-3` on the last (rightmost) column rendered in a row, because no `LogDivider` follows it and the row container's `px-2` does not provide sufficient right clearance on its own. Add `isLast?: boolean` to `RenderLogColumnOptions` and pass it from LogCell's render loop using `i === columns.length - 1`; `renderLogColumn` applies `mr-3` when `isLast` is `true` or `undefined`; omits it when `isLast === false`. Because `undefined` is the default when `isLast` is not passed, `LogRenderer.tsx` requires no changes — its existing call sites already get `mr-3` spacing preserved.
    - Apply `style={{ width: opts?.width, minWidth: opts?.width }}` uniformly across all kinds (same as current generic path).
 
 3. **`log-utils.tsx`** — add `LogDivider` component.
@@ -120,7 +120,7 @@ Rendered via `ReactDOM.createPortal` into `document.body`. A portal is required 
 
 6. **`LogCell.tsx`** — row rendering: insert `<LogDivider>` between each pair of columns, wiring all handlers.
 
-7. **`LogCell.tsx`** — render the context menu via `ReactDOM.createPortal(menu, document.body)` rather than a `position: fixed` div inside the cell, as required by the Design section.
+7. **`LogCell.tsx`** — render the context menu using `@radix-ui/react-dropdown-menu` with `<DropdownMenu.Portal>`, consistent with `CellContainer.tsx` and other components in the codebase. The portal renders into `document.body` (escaping the dnd-kit transform), and Radix handles outside-click dismissal automatically — no manual `mousedown` listener needed.
 
 8. **`LogCell.tsx`** — add "Reset widths" button in the bottom bar. Wrap both `PaginationBar` and the button in a permanent `<div className="flex justify-between items-center">` row so the layout is consistent even when `PaginationBar` returns `null` (i.e., `totalPages <= 1`). The "Reset widths" button renders only when `Object.keys(livePinnedWidths).length > 0`; `PaginationBar` renders only when `totalPages > 1`. Either or both may be absent on any given page without breaking the layout.
 
