@@ -67,6 +67,7 @@ useEffect(() => {
   }
 });
 ```
+On first render both `serialized` and `lastSyncedRef.current` equal the saved JSON, so this effect is intentionally a no-op at mount. The saved widths are instead applied by seeding `livePinnedWidths` itself: `useState(() => options?.columnWidths ?? {})` (see Step 4). The effect then only handles subsequent external changes.
 **Reference-stability**: `useCellManager.ts`'s `updateCell` always spreads the cell into a new object, and `NotebookRenderer.tsx` extracts `options` without any `useMemo`, so `options` (and `options.columnWidths`) will be a new reference on every render. The notebook layer therefore cannot guarantee reference stability. The sync `useEffect` must use a `JSON.stringify`-based guard to avoid overwriting in-progress drag state: track the previous serialized value in a `useRef<string>` and call `setLivePinnedWidths` only when `JSON.stringify(pinnedWidths)` differs from the stored ref value.
 
 ### Column widths for known columns
@@ -76,7 +77,7 @@ Remove the hardcoded Tailwind `w-[Npx] min-w-[Npx]` from `renderLogColumn` for `
 Known-column floor/cap rules applied after auto-measurement:
 - **`time`**: `formatLocalTime` always returns exactly 29 chars, so `ceil(29 × 7.2) = 209px` unconditionally. This is a ~21px increase from the previous hardcoded 188px, accepted as an improvement — no floor expression needed.
 - **`target`**: now auto-sizes within `clamp(autoMeasured, 60, 200)` — the generic `MIN_FLEX_WIDTH_PX = 60` floor with a 200px cap. This is a behavior change from the current fixed 200px column: short targets will render narrower than 200px (but never below 60px) instead of always occupying 200px. Users who need more width can pin-drag to widen.
-- **`level`**: `formatLevelValue` produces at most 5 chars ("FATAL", "ERROR"), measuring ~36px — below the generic `MIN_FLEX_WIDTH_PX = 60`. Apply a per-kind floor of 40px (instead of 60) so the column matches its content rather than jumping from the current hardcoded 38px to 60px; `MAX_FLEX_WIDTH_PX` (700px) applies as the cap.
+- **`level`**: `formatLevelValue` produces the named levels ("FATAL", "ERROR", etc., 4–5 chars, ~36px) or the `'UNKNOWN'` fallback (7 chars, ~51px). Apply a per-kind floor of 40px (instead of the generic 60) so the common 4–5 char levels match their content rather than jumping from the current hardcoded 38px to 60px; auto-measurement still accommodates the wider `'UNKNOWN'` fallback, which exceeds the floor on its own. `MAX_FLEX_WIDTH_PX` (700px) applies as the cap.
 - **`generic`**: no special floor or cap override; `MIN_FLEX_WIDTH_PX` (60px) and `MAX_FLEX_WIDTH_PX` (700px) apply.
 
 ### New component: `LogDivider`
@@ -120,7 +121,8 @@ Use `@radix-ui/react-context-menu` (already a dependency, `^2.2.16`), which is R
 3. **`log-utils.tsx`** — add `LogDivider` component.
 
 4. **`LogCell.tsx`** — add state:
-   - `livePinnedWidths` state, `livePinnedWidthsRef` (kept in sync via `setAndSyncWidths`), `optionsRef` (a `useRef` kept current each render so the `mouseup` handler reads the latest `options`), `dragRef`, `hoveredDivider` state. No context-menu state is needed — `@radix-ui/react-context-menu` manages open/closed and cursor position internally.
+   - `livePinnedWidths` state, seeded from saved options on mount: `const [livePinnedWidths, setLivePinnedWidths] = useState(() => options?.columnWidths ?? {})`. This is required because the sync effect's `lastSyncedRef` is also initialized to the saved value, so on first render the guard is a no-op — without seeding the state, persisted widths would not be applied on reload.
+   - `livePinnedWidthsRef` (kept in sync via `setAndSyncWidths`), `optionsRef` (a `useRef` kept current each render so the `mouseup` handler reads the latest `options`), `dragRef`, `hoveredDivider` state. No context-menu state is needed — `@radix-ui/react-context-menu` manages open/closed and cursor position internally.
    - Sync effect from `options.columnWidths`.
 
 5. **`LogCell.tsx`** — compute effective widths from `livePinnedWidths` merged with auto widths.
