@@ -67,7 +67,7 @@ interface LogDividerProps {
 }
 ```
 
-Renders a `<span>` (5px wide, full row height via `self-stretch`) with a 1px inner line whose color reflects state. No external CSS — inline styles or a small set of Tailwind classes.
+Renders a `<span>` (5px wide, full row height via `self-stretch`) with a 1px inner line whose color reflects state. No external CSS — inline styles or a small set of Tailwind classes. Because `LogDivider` provides visual separation, all column spans must have `mr-3` removed (see Step 2); otherwise the divider sits 12px away from the column content edge instead of flush at the boundary.
 
 ### Context menu
 
@@ -81,6 +81,7 @@ Rendered as a fixed-position `<div>` inside `LogCell` (not a portal — the cell
 
 2. **`log-utils.tsx`** — update `renderLogColumn`:
    - Remove hardcoded `w-[Npx] min-w-[Npx]` Tailwind classes from `time`, `level`, `target` cases.
+   - Remove `mr-3` from all four column span cases (`time`, `level`, `target`, generic/default) — spacing between columns is now provided by `LogDivider`, so the right margin is no longer needed.
    - Apply `style={{ width: opts?.width, minWidth: opts?.width }}` uniformly across all kinds (same as current generic path).
 
 3. **`log-utils.tsx`** — add `LogDivider` component.
