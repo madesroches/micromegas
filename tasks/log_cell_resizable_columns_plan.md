@@ -45,7 +45,12 @@ Use a `useRef` for the in-flight drag (avoids closure staleness, no re-render pe
 - `mousemove` → `setLivePinnedWidths(prev => ({ ...prev, [col]: clamp(newW) }))`.
 - `mouseup` → `onOptionsChange({ ...options, columnWidths: { ...livePinnedWidths } })`, detach listeners, clear `dragRef`.
 
-Sync from outside (notebook reload): `useEffect(() => setLivePinnedWidths(pinnedWidths), [options?.columnWidths])`.
+Sync from outside (notebook reload):
+```ts
+const pinnedWidths = options?.columnWidths ?? {};
+useEffect(() => setLivePinnedWidths(pinnedWidths), [pinnedWidths]);
+```
+**Reference-stability assumption**: the notebook layer must memoize the `options` object (or at minimum the `columnWidths` sub-object) so that its identity is stable across renders; otherwise the effect fires every render and overwrites any in-progress drag state. If that guarantee cannot be made, replace the dependency with a `JSON.stringify` comparison via a custom hook, or use `useRef` to track the previous serialized value and only call `setLivePinnedWidths` when the content actually changes.
 
 ### Column widths for known columns
 
@@ -67,7 +72,7 @@ interface LogDividerProps {
 }
 ```
 
-Renders a `<span>` (5px wide, full row height via `self-stretch`) with a 1px inner line whose color reflects state. No external CSS — inline styles or a small set of Tailwind classes. Because `LogDivider` provides visual separation, all column spans must have `mr-3` removed (see Step 2); otherwise the divider sits 12px away from the column content edge instead of flush at the boundary.
+Renders a `<span>` (5px wide, full row height via `self-stretch`) with a 1px inner line whose color reflects state. No external CSS — inline styles or a small set of Tailwind classes. Because `LogDivider` provides visual separation, all column spans except the last must have `mr-3` removed (see Step 2); the last column retains `mr-3` (or an equivalent right-padding class on the row container) because no divider follows it.
 
 ### Context menu
 
@@ -81,7 +86,7 @@ Rendered as a fixed-position `<div>` inside `LogCell` (not a portal — the cell
 
 2. **`log-utils.tsx`** — update `renderLogColumn`:
    - Remove hardcoded `w-[Npx] min-w-[Npx]` Tailwind classes from `time`, `level`, `target` cases.
-   - Remove `mr-3` from all four column span cases (`time`, `level`, `target`, generic/default) — spacing between columns is now provided by `LogDivider`, so the right margin is no longer needed.
+   - Remove `mr-3` from the non-terminal column span cases — spacing between those columns is now provided by `LogDivider`. Keep `mr-3` on the last (rightmost) column rendered in a row, because no `LogDivider` follows it and the row container's `px-2` does not provide sufficient right clearance on its own. In practice, the last column is `generic/default`; add a conditional or a dedicated `isLast` prop so the span retains `mr-3` only when it is the final column.
    - Apply `style={{ width: opts?.width, minWidth: opts?.width }}` uniformly across all kinds (same as current generic path).
 
 3. **`log-utils.tsx`** — add `LogDivider` component.
