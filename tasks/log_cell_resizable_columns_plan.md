@@ -69,7 +69,8 @@ Remove the hardcoded Tailwind `w-[Npx] min-w-[Npx]` from `renderLogColumn` for `
 Known-column floor/cap rules applied after auto-measurement:
 - **`time`**: `formatLocalTime` always returns exactly 29 chars, so `ceil(29 × 7.2) = 209px` unconditionally. This is a ~21px increase from the previous hardcoded 188px, accepted as an improvement — no floor expression needed.
 - **`target`**: cap at 200px (`Math.min(autoMeasured, 200)`) — same as the current truncation behaviour; users who need more can pin-drag to widen.
-- **`level`** and **`generic`**: no special cap; `MAX_FLEX_WIDTH_PX` (700px) applies.
+- **`level`**: `formatLevelValue` produces at most 5 chars ("FATAL", "ERROR"), measuring ~36px — below the generic `MIN_FLEX_WIDTH_PX = 60`. Apply a per-kind floor of 40px (instead of 60) so the column matches its content rather than jumping from the current hardcoded 38px to 60px; `MAX_FLEX_WIDTH_PX` (700px) applies as the cap.
+- **`generic`**: no special floor or cap override; `MIN_FLEX_WIDTH_PX` (60px) and `MAX_FLEX_WIDTH_PX` (700px) apply.
 
 ### New component: `LogDivider`
 
@@ -102,7 +103,7 @@ Rendered via `ReactDOM.createPortal` into `document.body`. A portal is required 
      - `level` → `formatLevelValue(value)`
      - `target` → `String(value ?? "")`
      - `generic` (all other kinds) → `formatCell(value, col.type)` (existing path)
-   - After measuring, apply the floor/cap rules from the "Column widths for known columns" section (`time` auto-measures to 209px with no floor needed; `target` cap 200px).
+   - After measuring, apply the floor/cap rules from the "Column widths for known columns" section (`time` auto-measures to 209px with no floor needed; `target` cap 200px; `level` floor 40px instead of the generic 60px).
 
 2. **`log-utils.tsx`** — update `renderLogColumn`:
    - Remove hardcoded `w-[Npx] min-w-[Npx]` Tailwind classes from `time`, `level`, `target` cases.
