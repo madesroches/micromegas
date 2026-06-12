@@ -83,12 +83,13 @@ export function LogCell({ data, status, options, onOptionsChange }: CellRenderer
     optionsRef.current = options
   })
 
-  // Sync from outside (notebook reload) — guard by reference to avoid clobbering drags
+  // Sync from outside (notebook reload) — guard by JSON equality to avoid clobbering drags
   const pinnedWidthsFromOptions = (options?.columnWidths as Record<string, number> | undefined) ?? {}
-  const lastSyncedRef = useRef<Record<string, number>>(pinnedWidthsFromOptions)
+  const lastSyncedRef = useRef<string>(JSON.stringify(pinnedWidthsFromOptions))
   useEffect(() => {
-    if (pinnedWidthsFromOptions !== lastSyncedRef.current) {
-      lastSyncedRef.current = pinnedWidthsFromOptions
+    const serialized = JSON.stringify(pinnedWidthsFromOptions)
+    if (serialized !== lastSyncedRef.current) {
+      lastSyncedRef.current = serialized
       setAndSyncWidths(() => pinnedWidthsFromOptions)
     }
   })
@@ -122,11 +123,12 @@ export function LogCell({ data, status, options, onOptionsChange }: CellRenderer
       const onMouseMove = (me: MouseEvent) => {
         if (!dragRef.current) return
         const delta = me.clientX - dragRef.current.startX
+        const col = dragRef.current.col
         const newWidth = Math.min(
           Math.max(dragRef.current.startWidth + delta, MIN_COL_WIDTH_PX),
           MAX_COL_WIDTH_PX,
         )
-        setAndSyncWidths((prev) => ({ ...prev, [dragRef.current!.col]: newWidth }))
+        setAndSyncWidths((prev) => ({ ...prev, [col]: newWidth }))
       }
 
       const onMouseUp = () => {
