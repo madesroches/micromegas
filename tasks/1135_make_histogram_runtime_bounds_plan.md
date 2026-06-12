@@ -20,9 +20,9 @@ So the infrastructure for lazy initialization already exists. The missing piece 
 ### Change 1 — Graceful fallback in `make_state()`
 
 `make_state()` in `histogram_udaf.rs` should be changed to:
-1. Attempt the existing `Literal` downcast for all three args.
-2. If all succeed, return `HistogramAccumulator::new(start, end, nb_bins)` as today.
-3. If any downcast fails, return `HistogramAccumulator::new_non_configured()`.
+1. Attempt the existing `Literal` downcast for all three args, followed by the existing `ScalarValue` type validation (`Float64(Some(_))` for start/end, `Int64(Some(_))` for nb_bins).
+2. If all three args downcast to `Literal` **and** match the expected `Float64(Some)` / `Int64(Some)` scalar pattern, return `HistogramAccumulator::new(start, end, nb_bins)` as today.
+3. Fall back to `HistogramAccumulator::new_non_configured()` when *either* a `Literal` downcast fails *or* a `ScalarValue` is not the expected `Float64(Some)` / `Int64(Some)` (i.e. a runtime expression, a non-matching type, or a `None` value). The existing `return Err(...)` for the wrong-type case is removed in favor of this fallback, so non-literal/non-matching bounds defer to the runtime path rather than erroring.
 
 This means the accumulator is allowed to be born without knowing its bounds. The bounds will be supplied in `update_batch`.
 
@@ -71,9 +71,9 @@ Fix both sides of the mismatch:
    - Before reading `.value(0)`, add an early return when `values[0].is_empty()` (DataFusion may call `update_batch` with a zero-row batch). In that case, leave the accumulator unconfigured and return `Ok(())`.
 
 3. **`histogram_udaf.rs`** — update `make_state()`:
-   - Wrap each `downcast_ref::<Literal>()` block in a helper or use `if let` chains.
-   - If all three succeed, construct `HistogramAccumulator::new(start, end, nb_bins)` as before.
-   - Otherwise, construct `HistogramAccumulator::new_non_configured()`.
+   - Wrap each `downcast_ref::<Literal>()` block plus its `ScalarValue` pattern match in a helper or use `if let` chains.
+   - Construct `HistogramAccumulator::new(start, end, nb_bins)` only when all three args downcast to `Literal` **and** match the expected scalar pattern (`Float64(Some(_))` for start/end, `Int64(Some(_))` for nb_bins).
+   - Otherwise — when either the `Literal` downcast fails or the `ScalarValue` is not the expected `Float64(Some)` / `Int64(Some)` — construct `HistogramAccumulator::new_non_configured()`. Remove the existing `return Err(...)` that fired on the wrong-type case so it falls through to this branch instead.
 
 4. **`histogram_udaf.rs`** — update `get_start()` and `get_end()`:
    - Before calling `.value(idx)` on the `Float64Array`, check `.is_null(idx)`.
@@ -82,7 +82,7 @@ Fix both sides of the mismatch:
 5. **`accumulator.rs`** — update `configure()`:
    - Match on the `Err` return from `get_start` / `get_end`; when either returns an error (null slot), return `Ok(())` immediately, leaving `self.start` / `self.end` as `None` so the accumulator stays in the unconfigured state. Do **not** use `?` here — `?` propagates the error to the caller rather than absorbing it, which would not leave the accumulator unconfigured.
    - The inner-loop `merge_histograms()` call sites (lines 108 and 114) use `get_start(index_histo)?` and `get_end(index_histo)?`. Because `get_start`/`get_end` remain `Result`-returning, `?` continues to work there without changes.
-   - Also update `merge_histograms()`: after calling `self.configure(histo_array)?`, check `self.start.is_some()` before reaching `self.start.unwrap()` (line 109) and `self.end.unwrap()` (line 115). If `self.start` is still `None` (the first histogram slot was null), return early with `Ok(())` to skip the merge for that batch.
+   - Also update `merge_histograms()`: insert `if self.start.is_none() { return Ok(()); }` *immediately after* the `self.configure(histo_array)?` call (line 106) and *before* the `for index_histo` loop (line 108). The guard must precede the loop because, once Step 4 makes `get_start`/`get_end` return `Err` on a null slot, the loop body's `histo_array.get_start(index_histo)?` (line 108) would otherwise propagate that error before `self.start.unwrap()` (line 109) is ever reached. Placing the guard before the loop skips the entire loop (and the `self.start.unwrap()` / `self.end.unwrap()`) when the first histogram slot was null.
 
 6. **`accumulator.rs`** — update `state_arrow_fields()`:
    - Change the `start` and `end` `Field` entries to `nullable = true`.
