@@ -196,8 +196,15 @@ export function LogCell({ data, status, options, onOptionsChange }: CellRenderer
   // -------------------------------------------------------------------------
 
   const [copiedRowIdx, setCopiedRowIdx] = useState<number | null>(null)
+  const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => { setCopiedRowIdx(null) }, [pagination.currentPage])
+
+  useEffect(() => {
+    return () => {
+      if (copyTimerRef.current !== null) clearTimeout(copyTimerRef.current)
+    }
+  }, [])
 
   const handleCopyRow = useCallback(
     async (rowIdx: number, text: string, e: React.MouseEvent) => {
@@ -212,8 +219,9 @@ export function LogCell({ data, status, options, onOptionsChange }: CellRenderer
         document.execCommand('copy')
         document.body.removeChild(ta)
       }
+      if (copyTimerRef.current !== null) clearTimeout(copyTimerRef.current)
       setCopiedRowIdx(rowIdx)
-      setTimeout(() => setCopiedRowIdx(null), 1500)
+      copyTimerRef.current = setTimeout(() => setCopiedRowIdx(null), 1500)
     },
     [],
   )
