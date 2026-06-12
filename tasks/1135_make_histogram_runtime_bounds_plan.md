@@ -52,7 +52,7 @@ More critically, the `merge_batch` path is **not** already safe: it calls `confi
 Fix both sides of the mismatch:
 
 1. **`state_arrow_fields()`** — change the `start` and `end` `Field` declarations to `nullable = true`.
-2. **`get_start()` / `get_end()` in `histogram_array.rs`** — guard against the null slot before calling `.value()`. Return `None` (or a `Result::Err`) when the slot is null.
+2. **`get_start()` / `get_end()` in `histogram_udaf.rs`** — guard against the null slot before calling `.value()`. Return `None` (or a `Result::Err`) when the slot is null.
 3. **`configure()` in `accumulator.rs`** — handle the `None` / error return from `get_start` / `get_end` by keeping `self.start` and `self.end` as `None`, leaving the accumulator in the unconfigured state rather than writing garbage bounds.
 
 ### No changes needed
@@ -74,7 +74,7 @@ Fix both sides of the mismatch:
    - If all three succeed, construct `HistogramAccumulator::new(start, end, nb_bins)` as before.
    - Otherwise, construct `HistogramAccumulator::new_non_configured()`.
 
-4. **`histogram_array.rs`** — update `get_start()` and `get_end()`:
+4. **`histogram_udaf.rs`** — update `get_start()` and `get_end()`:
    - Before calling `.value(idx)` on the `Float64Array`, check `.is_null(idx)`.
    - Return `None` (or propagate an error) when the slot is null.
 
@@ -93,8 +93,7 @@ Fix both sides of the mismatch:
 ## Files to Modify
 
 - `rust/datafusion-extensions/src/histogram/accumulator.rs` — new method + update `update_batch`; fix `configure()` null propagation; change `start`/`end` fields to `nullable = true` in `state_arrow_fields()`
-- `rust/datafusion-extensions/src/histogram/histogram_array.rs` — add null guards to `get_start()` / `get_end()`
-- `rust/datafusion-extensions/src/histogram/histogram_udaf.rs` — relax `make_state()`
+- `rust/datafusion-extensions/src/histogram/histogram_udaf.rs` — add null guards to `get_start()` / `get_end()`; relax `make_state()`
 - `rust/datafusion-extensions/tests/histogram_runtime_bounds_tests.rs` — new test file
 
 ## Trade-offs
