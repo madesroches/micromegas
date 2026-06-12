@@ -80,6 +80,7 @@ Fix both sides of the mismatch:
 
 5. **`accumulator.rs`** — update `configure()`:
    - Handle the `None` / error return from `get_start` / `get_end`; when either is absent, skip setting `self.start` / `self.end` so the accumulator stays in the unconfigured state.
+   - Also update `merge_histograms()` (lines 108 and 114): the `get_start(index_histo)?` and `get_end(index_histo)?` call sites now return `Option` instead of `Result`. A null slot mid-batch is invalid (it means a partially-serialized histogram arrived), so map a `None` return to `DataFusionError::Execution("histogram slot is null in merge_histograms")` and propagate with `?`.
 
 6. **`accumulator.rs`** — update `state_arrow_fields()`:
    - Change the `start` and `end` `Field` entries to `nullable = true`.
