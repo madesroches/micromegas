@@ -80,8 +80,9 @@ Fix both sides of the mismatch:
    - Return `Err(DataFusionError::Execution("histogram slot is null"))` when the slot is null, preserving the existing `Result<f64, DataFusionError>` return type.
 
 5. **`accumulator.rs`** — update `configure()`:
-   - Call `get_start` / `get_end` with `?` or match on `Err`; when either returns an error (null slot), skip setting `self.start` / `self.end` so the accumulator stays in the unconfigured state.
-   - The `merge_histograms()` call sites (lines 108 and 114) already use `get_start(index_histo)?` and `get_end(index_histo)?` with `?`. Because `get_start`/`get_end` remain `Result`-returning, `?` continues to work without any changes: a null slot returns `Err` and propagates naturally.
+   - Match on the `Err` return from `get_start` / `get_end`; when either returns an error (null slot), return `Ok(())` immediately, leaving `self.start` / `self.end` as `None` so the accumulator stays in the unconfigured state. Do **not** use `?` here — `?` propagates the error to the caller rather than absorbing it, which would not leave the accumulator unconfigured.
+   - The inner-loop `merge_histograms()` call sites (lines 108 and 114) use `get_start(index_histo)?` and `get_end(index_histo)?`. Because `get_start`/`get_end` remain `Result`-returning, `?` continues to work there without changes.
+   - Also update `merge_histograms()`: after calling `self.configure(histo_array)?`, check `self.start.is_some()` before reaching `self.start.unwrap()` (line 109) and `self.end.unwrap()` (line 115). If `self.start` is still `None` (the first histogram slot was null), return early with `Ok(())` to skip the merge for that batch.
 
 6. **`accumulator.rs`** — update `state_arrow_fields()`:
    - Change the `start` and `end` `Field` entries to `nullable = true`.
