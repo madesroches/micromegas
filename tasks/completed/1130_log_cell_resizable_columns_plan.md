@@ -1,0 +1,162 @@
+# Log Cell Resizable Columns Plan
+
+**GitHub Issue**: https://github.com/madesroches/micromegas/issues/1130
+
+## Overview
+
+Add user-resizable columns to the log cell via draggable inline dividers between cells. Pinned widths are persisted in the cell's `options.columnWidths` object (same mechanism already used for `pageSize`). Non-pinned columns continue to auto-size from visible content. Pinned columns display an amber divider; a "Reset widths" button appears in the bottom bar when any column is pinned.
+
+## Current State
+
+- **`log-utils.tsx`**: `computeFlexWidths()` computes auto widths for `generic` columns from max content length on the current page. Known columns (`time`, `level`, `target`) use hardcoded Tailwind `w-[Npx] min-w-[Npx]` classes inside `renderLogColumn()`.
+- **`LogCell.tsx`**: calls `computeFlexWidths`, passes `{ width }` to `renderLogColumn` for generic columns only. Known column widths are not configurable.
+- **`options` persistence**: `onOptionsChange({ ...options, pageSize: size })` is the established pattern; the notebook serializes this to config and restores it on reload.
+
+## Design
+
+### UX (agreed in mockup review)
+
+- Thin 5px draggable dividers between every pair of columns in every row — no header row.
+- Drag a divider → pins only that column. Other columns remain auto.
+- Pinned divider renders amber; auto divider renders dim gray; hovered/active renders blue.
+- Right-click any divider → context menu:
+  - "Reset to auto" (dimmed when not pinned)
+  - "Reset all columns"
+- "Reset widths" button in the cell bottom bar, visible only when ≥1 column is pinned.
+- No legend.
+
+### Data model
+
+```ts
+// stored under options.columnWidths — sparse: only pinned columns present
+type ColumnWidths = Record<string, number>
+```
+
+Effective width resolution:
+```
+effectiveWidth(col) = pinnedWidths[col] ?? autoWidths[col] ?? MIN_FLEX_WIDTH_PX
+```
+
+### Drag interaction
+
+Use a `useRef` for the in-flight drag (avoids closure staleness, no re-render per pixel) and a `useState<Record<string, number>>` for `livePinnedWidths` which drives rendering. Because `mouseup` is attached to `document` at `mousedown` time, it captures a stale `livePinnedWidths` closure value — the same problem that motivated `dragRef`. Fix by adding a `livePinnedWidthsRef = useRef<Record<string,number>>({})` and keeping it in sync every time `setLivePinnedWidths` is called:
+
+```ts
+const setAndSyncWidths = (updater: (prev: Record<string,number>) => Record<string,number>) => {
+  setLivePinnedWidths(prev => {
+    const next = updater(prev);
+    livePinnedWidthsRef.current = next;
+    return next;
+  });
+};
+```
+
+- `mousedown` on divider → populate `dragRef`, attach document-level `mousemove`/`mouseup`.
+- `mousemove` → `setAndSyncWidths(prev => ({ ...prev, [col]: clamp(newW) }))`.
+- `mouseup` → `onOptionsChange({ ...optionsRef.current, columnWidths: { ...livePinnedWidthsRef.current } })`, detach listeners, clear `dragRef`. The spread reads `options` through `optionsRef` (a `useRef` kept current each render) rather than the closure-captured `options`, for the same stale-closure reason as `livePinnedWidthsRef` — otherwise a `pageSize` change between `mousedown` and `mouseup` would be clobbered by the stale spread on persist.
+
+Sync from outside (notebook reload):
+```ts
+const pinnedWidths = options?.columnWidths ?? {};
+const lastSyncedRef = useRef<string>(JSON.stringify(pinnedWidths));
+useEffect(() => {
+  const serialized = JSON.stringify(pinnedWidths);
+  if (serialized !== lastSyncedRef.current) {
+    lastSyncedRef.current = serialized;
+    setLivePinnedWidths(pinnedWidths);
+  }
+});
+```
+On first render both `serialized` and `lastSyncedRef.current` equal the saved JSON, so this effect is intentionally a no-op at mount. The saved widths are instead applied by seeding `livePinnedWidths` itself: `useState(() => options?.columnWidths ?? {})` (see Step 4). The effect then only handles subsequent external changes.
+**Reference-stability**: `useCellManager.ts`'s `updateCell` always spreads the cell into a new object, and `NotebookRenderer.tsx` extracts `options` without any `useMemo`, so `options` (and `options.columnWidths`) will be a new reference on every render. The notebook layer therefore cannot guarantee reference stability. The sync `useEffect` must use a `JSON.stringify`-based guard to avoid overwriting in-progress drag state: track the previous serialized value in a `useRef<string>` and call `setLivePinnedWidths` only when `JSON.stringify(pinnedWidths)` differs from the stored ref value.
+
+### Column widths for known columns
+
+Remove the hardcoded Tailwind `w-[Npx] min-w-[Npx]` from `renderLogColumn` for `time`, `level`, and `target`. Extend `computeFlexWidths` to scan all columns (not just `generic` ones), so known columns get auto-sized from their formatted content just like generic columns.
+
+Known-column floor/cap rules applied after auto-measurement:
+- **`time`**: `formatLocalTime` always returns exactly 29 chars, so `ceil(29 × 7.2) = 209px` unconditionally. This is a ~21px increase from the previous hardcoded 188px, accepted as an improvement — no floor expression needed.
+- **`target`**: now auto-sizes within `clamp(autoMeasured, 60, 200)` — the generic `MIN_FLEX_WIDTH_PX = 60` floor with a 200px cap. This is a behavior change from the current fixed 200px column: short targets will render narrower than 200px (but never below 60px) instead of always occupying 200px. Users who need more width can pin-drag to widen.
+- **`level`**: `formatLevelValue` produces the named levels (4-char "WARN"/"INFO" ≈ 29px, 5-char "FATAL"/"ERROR"/"DEBUG"/"TRACE" ≈ 36px) or the `'UNKNOWN'` fallback (7 chars, ~51px). Apply a per-kind floor of 40px — a uniform minimum that keeps the column compact (narrower than the generic 60px floor, close to the current hardcoded 38px) while leaving room for the named levels; auto-measurement still accommodates the wider `'UNKNOWN'` fallback, which exceeds the floor on its own. `MAX_FLEX_WIDTH_PX` (700px) applies as the cap.
+- **`generic`**: no special floor or cap override; `MIN_FLEX_WIDTH_PX` (60px) and `MAX_FLEX_WIDTH_PX` (700px) apply.
+
+### New component: `LogDivider`
+
+Add to `log-utils.tsx`:
+
+```tsx
+interface LogDividerProps {
+  col: string           // left column name
+  pinned: boolean
+  hovered: boolean
+  onMouseDown: (e: React.MouseEvent) => void
+  onContextMenu: (e: React.MouseEvent) => void
+  onMouseEnter: () => void
+  onMouseLeave: () => void
+}
+```
+
+Renders a `<span>` (5px wide, full row height via `self-stretch`) with a 1px inner line whose color reflects state. No external CSS — inline styles or a small set of Tailwind classes. Because `LogDivider` provides visual separation, all column spans except the last must have `mr-3` removed (see Step 2); the last column retains `mr-3` (or an equivalent right-padding class on the row container) because no divider follows it.
+
+### Context menu
+
+Use `@radix-ui/react-context-menu` (already a dependency, `^2.2.16`), which is Radix's purpose-built right-click menu: its `ContextMenu.Trigger` opens the menu at the cursor position natively on `onContextMenu`, so no manual x/y coordinate tracking is needed. `DropdownMenu` (used elsewhere in the codebase) is trigger-anchored via `align`/`sideOffset` and has no coordinate-anchoring prop, so it does not fit a cursor-positioned menu. Wrap each `LogDivider` in a `ContextMenu.Root` whose `ContextMenu.Trigger` is the divider itself (`asChild`). Use `<ContextMenu.Portal>` to render the content into `document.body`, escaping the dnd-kit CSS `transform` applied by `SortableCell` in `NotebookRenderer.tsx` (a transformed ancestor would otherwise mis-position any `position: fixed` descendant). Radix handles cursor positioning and dismiss-on-outside-click automatically — no `useState<{ col; x; y }>` and no manual document `mousedown` listener. The menu only needs to know which column it acts on, which is available from the divider's `col` prop.
+
+## Implementation Steps
+
+1. **`log-utils.tsx`** — update `computeFlexWidths`:
+   - Remove the `generic`-only filter — scan all columns including `time`, `level`, `target`.
+   - Dispatch to the per-kind format function when measuring content length:
+     - `time` → `formatLocalTime(value)`
+     - `level` → `formatLevelValue(value)`
+     - `target` → `String(value ?? "")`
+     - `generic` (all other kinds) → `formatCell(value, col.type)` (existing path)
+   - After measuring, apply the floor/cap rules from the "Column widths for known columns" section (`time` auto-measures to 209px with no floor needed; `target` auto-sizes within `clamp(autoMeasured, 60, 200)` — the generic 60px floor with a 200px cap, a behavior change from the current fixed 200px; `level` floor 40px instead of the generic 60px).
+
+2. **`log-utils.tsx`** — update `renderLogColumn`:
+   - Remove hardcoded `w-[Npx] min-w-[Npx]` Tailwind classes from `time`, `level`, `target` cases.
+   - Remove `mr-3` from the non-terminal column span cases — spacing between those columns is now provided by `LogDivider`. Keep `mr-3` on the last (rightmost) column rendered in a row, because no `LogDivider` follows it and the row container's `px-2` does not provide sufficient right clearance on its own. Add `isLast?: boolean` to `RenderLogColumnOptions` and pass it from LogCell's render loop using `i === columns.length - 1`; `renderLogColumn` applies `mr-3` when `isLast` is `true` or `undefined`; omits it when `isLast === false`. Because `undefined` is the default when `isLast` is not passed, `LogRenderer.tsx` needs no code edits for spacing — its existing call sites keep `mr-3`. However, `LogRenderer.tsx` calls the shared `computeFlexWidths` and passes `{ width: columnWidths[col.name] }` into `renderLogColumn`, so its known-column widths will change to the new auto-sized values (time → 209px, level → 40px floor, target → auto-sized capped at 200px). This is a behavior change with no code edits, accepted as part of this work.
+   - Apply `style={{ width: opts?.width, minWidth: opts?.width, maxWidth: opts?.width }}` uniformly across all kinds (same as current generic path, which sets all three so `truncate` can clip reliably).
+
+3. **`log-utils.tsx`** — add `LogDivider` component.
+
+4. **`LogCell.tsx`** — add state:
+   - `livePinnedWidths` state, seeded from saved options on mount: `const [livePinnedWidths, setLivePinnedWidths] = useState(() => options?.columnWidths ?? {})`. This is required because the sync effect's `lastSyncedRef` is also initialized to the saved value, so on first render the guard is a no-op — without seeding the state, persisted widths would not be applied on reload.
+   - `livePinnedWidthsRef` (kept in sync via `setAndSyncWidths`), `optionsRef` (a `useRef` kept current each render so the `mouseup` handler reads the latest `options`), `dragRef`, `hoveredDivider` state. No context-menu state is needed — `@radix-ui/react-context-menu` manages open/closed and cursor position internally.
+   - Sync effect from `options.columnWidths`.
+
+5. **`LogCell.tsx`** — compute effective widths from `livePinnedWidths` merged with auto widths.
+
+6. **`LogCell.tsx`** — row rendering: insert `<LogDivider>` between each pair of columns, wiring all handlers.
+
+7. **`LogCell.tsx`** — render the context menu using `@radix-ui/react-context-menu`. Wrap each `LogDivider` in a `ContextMenu.Root`, with the divider as the `ContextMenu.Trigger asChild`; put the items ("Reset to auto", "Reset all columns") in a `<ContextMenu.Portal>` → `ContextMenu.Content`. The portal renders into `document.body` (escaping the dnd-kit transform), and Radix positions the menu at the cursor and handles outside-click dismissal automatically — no x/y state and no manual `mousedown` listener needed.
+
+8. **`LogCell.tsx`** — add "Reset widths" button in the bottom bar. Wrap both `PaginationBar` and the button in a permanent `<div className="flex justify-between items-center">` row so the layout is consistent even when `PaginationBar` returns `null` (i.e., `totalPages <= 1`). The "Reset widths" button renders only when `Object.keys(livePinnedWidths).length > 0`; `PaginationBar` renders only when `totalPages > 1`. Either or both may be absent on any given page without breaking the layout.
+
+## Files to Modify
+
+- `analytics-web-app/src/lib/screen-renderers/log-utils.tsx`
+- `analytics-web-app/src/lib/screen-renderers/cells/LogCell.tsx`
+
+## Trade-offs
+
+**Inline dividers vs header row**: Header row adds vertical space and a new DOM layer; inline dividers are invisible until hovered and keep the compact log feel. Chosen: inline dividers.
+
+**Pin only dragged column vs snapshot all**: Snapshotting all on first drag is simpler to reason about but surprises users who only want to widen one column. Chosen: pin only the dragged column.
+
+**`useRef` for drag state**: Avoids attaching/detaching handlers on every render during a fast drag. Width updates go through `useState` so React re-renders the rows; the ref just tracks the drag origin.
+
+**`options.columnWidths` vs localStorage**: `options` is already persisted by the notebook layer and is per-cell, which is the right granularity. No extra persistence code needed.
+
+## Testing Strategy
+
+1. `yarn type-check` — no TS errors.
+2. `yarn lint` — clean.
+3. `yarn test` — existing tests pass.
+4. Manual in the running app (`./start_analytics_web.py`):
+   - Drag a divider → resizes; turns amber; other columns unchanged.
+   - Page to next page → non-pinned columns reflow; pinned stays fixed.
+   - Right-click pinned divider → "Reset to auto" available; resets correctly.
+   - "Reset all" resets all dividers.
+   - "Reset widths" button visible while pinned; disappears after reset.
+   - Reload page → pinned widths restored.

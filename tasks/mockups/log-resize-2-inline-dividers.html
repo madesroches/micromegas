@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Log Cell Mockup 2 — Inline Dividers (no header)</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #0a0a0f; color: #e7e9ea; font-family: monospace; font-size: 12px; padding: 16px; }
+
+  .approach { color: #ffb300; font-size: 11px; margin-bottom: 4px; }
+  .note { color: #6b7280; font-size: 10px; margin-bottom: 12px; line-height: 1.6; }
+  .note b { color: #9ca3af; }
+
+  .log-cell { background: #12121a; border: 1px solid #2a2a3e; border-radius: 4px; overflow: hidden; width: 960px; }
+
+  /* ── Rows ── */
+  .log-body { overflow-y: auto; max-height: 320px; }
+  .log-row {
+    display: flex;
+    align-items: baseline;
+    padding: 1px 0 1px 8px;
+    transition: background .12s;
+    position: relative;
+  }
+  .log-row:nth-child(odd)  { background: rgba(26,26,46,.3); }
+  .log-row:nth-child(even) { background: transparent; }
+  .log-row:hover           { background: rgba(26,26,46,.6); }
+
+  .cell { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; flex-shrink: 0; padding: 0 6px; }
+  .cell-time   { color: #6b7280; }
+  .cell-level-INFO  { color: #1565c0; font-weight: 600; }
+  .cell-level-WARN  { color: #ffb300; font-weight: 600; }
+  .cell-level-ERROR { color: #f87171; font-weight: 600; }
+  .cell-level-DEBUG { color: #9ca3af; font-weight: 600; }
+  .cell-level-TRACE { color: #6b7280; font-weight: 600; }
+  .cell-target { color: #ffb300; }
+  .cell-msg    { color: #e7e9ea; }
+
+  /* ── Divider ── */
+  .divider {
+    width: 5px;
+    flex-shrink: 0;
+    cursor: col-resize;
+    align-self: stretch;
+    position: relative;
+    z-index: 1;
+  }
+  /* The visible tick line */
+  .divider::before {
+    content: '';
+    position: absolute;
+    left: 2px; top: 15%; bottom: 15%;
+    width: 1px;
+    background: #2a2a3e;
+    transition: background 0.12s, top 0.12s, bottom 0.12s;
+  }
+  /* auto divider: barely visible */
+  .divider[data-pinned="false"]::before { background: #2a2a3e; }
+  /* pinned divider: amber dot to signal user override */
+  .divider[data-pinned="true"]::before  { background: #ffb300; opacity: .45; top: 0; bottom: 0; }
+
+  /* hover: always show blue */
+  .divider:hover::before,
+  .divider.dragging::before { background: #1565c0 !important; opacity: 1 !important; top: 0 !important; bottom: 0 !important; width: 2px !important; left: 1.5px !important; }
+
+  /* ── Resize tracking line ── */
+  #resize-line {
+    position: fixed; display: none;
+    width: 1px; background: #1565c0; opacity: .8;
+    pointer-events: none; z-index: 99; top: 0; bottom: 0;
+  }
+
+  /* ── Width tooltip ── */
+  #drag-tooltip {
+    position: fixed; display: none;
+    background: #1a1a2e; border: 1px solid #1565c0;
+    color: #e7e9ea; font-size: 10px;
+    padding: 2px 6px; border-radius: 3px;
+    pointer-events: none; z-index: 100;
+  }
+
+  /* ── Context menu ── */
+  #ctx-menu {
+    position: fixed; display: none;
+    background: #1a1a2e; border: 1px solid #2a2a3e;
+    border-radius: 4px; box-shadow: 0 4px 16px rgba(0,0,0,.6);
+    z-index: 200; min-width: 190px; overflow: hidden; font-size: 11px;
+  }
+  .ctx-label {
+    padding: 5px 10px 3px;
+    color: #6b7280; font-size: 9px; text-transform: uppercase; letter-spacing: .08em;
+  }
+  .ctx-item {
+    display: flex; align-items: center; gap: 8px;
+    padding: 5px 10px;
+    cursor: pointer; color: #9ca3af;
+    transition: background .1s, color .1s;
+  }
+  .ctx-item:hover { background: rgba(21,101,192,.2); color: #e7e9ea; }
+  .ctx-item.danger:hover { background: rgba(248,113,113,.1); color: #f87171; }
+  .ctx-item .icon { width: 12px; text-align: center; opacity: .7; font-style: normal; }
+
+  /* ── Legend ── */
+  .legend {
+    display: flex; gap: 16px; padding: 6px 10px;
+    border-top: 1px solid #2a2a3e; color: #6b7280; font-size: 10px;
+    align-items: center;
+  }
+  .legend-item { display: flex; align-items: center; gap: 5px; }
+  .legend-line { width: 1px; height: 12px; }
+  .legend-line.auto   { background: #2a2a3e; }
+  .legend-line.pinned { background: #ffb300; opacity: .65; }
+
+  .pagination { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-top: 1px solid #2a2a3e; color: #6b7280; font-size: 10px; }
+  .pg-btn { background: #1a1a2e; border: 1px solid #2a2a3e; color: #9ca3af; padding: 2px 7px; cursor: pointer; border-radius: 3px; font-size: 10px; }
+  .pg-btn:hover { border-color: #1565c0; color: #e7e9ea; }
+
+  /* ── Reset-all button (only shown when ≥1 column is pinned) ── */
+  #resetAllBtn {
+    display: none;
+    background: transparent; border: 1px solid #2a2a3e;
+    color: #6b7280; padding: 2px 8px; border-radius: 3px;
+    cursor: pointer; font-size: 10px; font-family: monospace;
+    margin-left: auto;
+    transition: border-color .12s, color .12s;
+  }
+  #resetAllBtn:hover { border-color: #ffb300; color: #ffb300; }
+  #resetAllBtn.visible { display: block; }
+</style>
+</head>
+<body>
+
+<div class="approach">Approach 2 (revised) — Inline dividers, auto widths, pinned-width persistence</div>
+<div class="note">
+  <b>Initial state:</b> all column widths are auto-computed from visible content — no user preference stored.<br>
+  <b>Dragging a divider</b> pins that column to the user-chosen width (amber divider = pinned).<br>
+  <b>Right-click any divider</b> → menu to reset that column to auto, or reset all at once.<br>
+  <b>"Reset widths" button</b> appears in the pagination bar as soon as any column is pinned.
+</div>
+
+<div class="log-cell">
+  <div class="log-body" id="logBody"></div>
+  <div class="legend">
+    <div class="legend-item"><div class="legend-line auto"></div> auto width</div>
+    <div class="legend-item"><div class="legend-line pinned"></div> pinned (user set)</div>
+    <button id="resetAllBtn" title="Forget all user-set widths">Reset widths</button>
+  </div>
+  <div class="pagination">
+    <button class="pg-btn">«</button>
+    <button class="pg-btn">‹</button>
+    <span>1 / 4</span>
+    <button class="pg-btn">›</button>
+    <button class="pg-btn">»</button>
+    <span style="margin-left:auto">1–100 of 342</span>
+    <select style="background:#1a1a2e;border:1px solid #2a2a3e;color:#9ca3af;padding:2px 4px;font-size:10px;border-radius:3px">
+      <option>100</option><option>250</option><option>500</option>
+    </select>
+  </div>
+</div>
+
+<div id="resize-line"></div>
+<div id="drag-tooltip"></div>
+
+<div id="ctx-menu">
+  <div class="ctx-label" id="ctxColLabel"></div>
+  <div class="ctx-item" id="ctxResetOne"><i class="icon">↺</i> Reset to auto width</div>
+  <div class="ctx-item danger" id="ctxResetAll"><i class="icon">↺</i> Reset all columns to auto</div>
+</div>
+
+<script>
+// ── Sample data ───────────────────────────────────────────────────────────────
+const LEVELS  = ['INFO','INFO','INFO','WARN','ERROR','DEBUG','INFO','DEBUG','WARN','TRACE'];
+const TARGETS = ['engine::render','engine::audio','world::physics','world::ai','net::transport',
+                 'engine::render','storage::cache','world::physics','engine::audio','net::transport'];
+const MSGS = [
+  'Frame rendered in 14.2ms, 3 draw calls',
+  'Audio buffer underrun — increasing buffer size to 2048',
+  'Physics step completed, 128 bodies active',
+  'NavMesh rebuild took 84ms, expected <30ms',
+  'Connection timeout after 5000ms — retrying (attempt 2/3)',
+  'Texture cache hit ratio: 0.94 (2341/2490)',
+  'Asset bundle loaded: maps/canyon_01.pak (142 MB in 320ms)',
+  'Broad phase: 1024 collision pairs checked, 38 contacts',
+  'Audio device latency exceeds threshold: 24ms > 20ms',
+  'Heartbeat ACK received from relay 10.0.1.44:9001',
+];
+
+const sampleData = [];
+let ts = new Date('2026-06-11T09:14:32.000Z');
+for (let i = 0; i < 20; i++) {
+  ts = new Date(ts.getTime() + (Math.sin(i) * 400 + 500));
+  sampleData.push({
+    time:   ts.toISOString().replace('T',' ').replace('Z',''),
+    level:  LEVELS[i % LEVELS.length],
+    target: TARGETS[i % TARGETS.length],
+    msg:    MSGS[i % MSGS.length],
+  });
+}
+
+const COLS = ['time','level','target','msg'];
+const FLEX_PX  = 7.2;
+const MIN_W    = 40;
+
+// ── Width state ───────────────────────────────────────────────────────────────
+// pinnedWidths = user overrides; null means "use auto"
+const pinnedWidths = { time: null, level: null, target: null, msg: null };
+
+function autoWidth(col) {
+  const maxLen = sampleData.reduce((m, r) => Math.max(m, String(r[col]).length), col.length);
+  return Math.min(Math.max(Math.ceil(maxLen * FLEX_PX), MIN_W), 700);
+}
+function effectiveWidth(col) {
+  return pinnedWidths[col] !== null ? pinnedWidths[col] : autoWidth(col);
+}
+function isPinned(col) { return pinnedWidths[col] !== null; }
+function anyPinned()   { return COLS.some(c => isPinned(c)); }
+
+function syncResetAllBtn() {
+  document.getElementById('resetAllBtn').classList.toggle('visible', anyPinned());
+}
+
+// ── Render ────────────────────────────────────────────────────────────────────
+function renderRows() {
+  const body = document.getElementById('logBody');
+  body.innerHTML = sampleData.map(r => {
+    let html = '<div class="log-row">';
+    COLS.forEach((col, i) => {
+      const w = effectiveWidth(col);
+      const levelCls = col === 'level' ? ` cell-level-${r[col]}` : '';
+      const kindCls  = col === 'time' ? 'cell-time' : col === 'target' ? 'cell-target' : col === 'msg' ? 'cell-msg' : '';
+      html += `<div class="cell ${kindCls}${levelCls}" style="width:${w}px" title="${r[col]}">${r[col]}</div>`;
+      if (i < COLS.length - 1) {
+        const pinned = isPinned(col) ? 'true' : 'false';
+        html += `<div class="divider" data-left="${col}" data-pinned="${pinned}"></div>`;
+      }
+    });
+    html += '</div>';
+    return html;
+  }).join('');
+
+  // attach events
+  document.querySelectorAll('.divider').forEach(div => {
+    div.addEventListener('mouseenter', () => setDividerHover(div.dataset.left, true));
+    div.addEventListener('mouseleave', () => setDividerHover(div.dataset.left, false));
+    div.addEventListener('mousedown',  startDrag);
+    div.addEventListener('contextmenu', openCtxMenu);
+  });
+}
+
+function setDividerHover(col, on) {
+  if (dragging) return;
+  document.querySelectorAll(`.divider[data-left="${col}"]`).forEach(d =>
+    d.classList.toggle('dragging', on));
+}
+
+// ── Drag ──────────────────────────────────────────────────────────────────────
+const resizeLine = document.getElementById('resize-line');
+const tooltip    = document.getElementById('drag-tooltip');
+let dragging     = null;
+
+function startDrag(e) {
+  e.preventDefault();
+  const col = e.currentTarget.dataset.left;
+  dragging = { col, startX: e.clientX, startW: effectiveWidth(col) };
+  document.querySelectorAll(`.divider[data-left="${col}"]`).forEach(d => d.classList.add('dragging'));
+  resizeLine.style.display = 'block';
+  resizeLine.style.left = e.clientX + 'px';
+  tooltip.style.display = 'block';
+  updateTooltip(e.clientX, e.clientY, effectiveWidth(col));
+}
+
+function updateTooltip(x, y, w) {
+  tooltip.innerText = w + 'px';
+  tooltip.style.left = (x + 12) + 'px';
+  tooltip.style.top  = (y - 24) + 'px';
+}
+
+document.addEventListener('mousemove', e => {
+  if (!dragging) return;
+  const newW = Math.max(MIN_W, dragging.startW + (e.clientX - dragging.startX));
+  pinnedWidths[dragging.col] = newW;
+  resizeLine.style.left = e.clientX + 'px';
+  updateTooltip(e.clientX, e.clientY, newW);
+  renderRows();
+  syncResetAllBtn();
+});
+
+document.addEventListener('mouseup', () => {
+  if (!dragging) return;
+  document.querySelectorAll(`.divider[data-left="${dragging.col}"]`).forEach(d => d.classList.remove('dragging'));
+  dragging = null;
+  resizeLine.style.display = 'none';
+  tooltip.style.display = 'none';
+});
+
+// ── Context menu ──────────────────────────────────────────────────────────────
+const ctxMenu = document.getElementById('ctx-menu');
+let ctxCol    = null;
+
+function openCtxMenu(e) {
+  e.preventDefault();
+  ctxCol = e.currentTarget.dataset.left;
+  const pinned = isPinned(ctxCol);
+  const resetOne = document.getElementById('ctxResetOne');
+  document.getElementById('ctxColLabel').textContent = ctxCol;
+  resetOne.style.opacity = pinned ? '1' : '0.35';
+  resetOne.style.pointerEvents = pinned ? 'auto' : 'none';
+  ctxMenu.style.display = 'block';
+  const x = Math.min(e.clientX, window.innerWidth  - 200);
+  const y = Math.min(e.clientY, window.innerHeight - 100);
+  ctxMenu.style.left = x + 'px';
+  ctxMenu.style.top  = y + 'px';
+}
+
+function closeCtxMenu() { ctxMenu.style.display = 'none'; ctxCol = null; }
+
+document.getElementById('ctxResetOne').addEventListener('click', () => {
+  if (!ctxCol) return;
+  pinnedWidths[ctxCol] = null;
+  renderRows(); syncResetAllBtn(); closeCtxMenu();
+});
+document.getElementById('ctxResetAll').addEventListener('click', () => {
+  COLS.forEach(c => { pinnedWidths[c] = null; });
+  renderRows(); syncResetAllBtn(); closeCtxMenu();
+});
+document.getElementById('resetAllBtn').addEventListener('click', () => {
+  COLS.forEach(c => { pinnedWidths[c] = null; });
+  renderRows(); syncResetAllBtn();
+});
+document.addEventListener('mousedown', e => {
+  if (!ctxMenu.contains(e.target)) closeCtxMenu();
+});
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+renderRows();
+syncResetAllBtn();
+</script>
+</body>
+</html>

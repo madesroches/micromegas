@@ -18,6 +18,7 @@ This file documents the historical progress of the Micromegas project. For curre
   * Fix table column-override memo keying on fresh-per-render objects, causing `evaluateTemplate` to re-run every render; key on a content hash of only template-referenced inputs instead (#1092)
   * Route Map detail-panel `$column` macros through the evaluator's raw row + column-types channel so bare references carry their Arrow `DataType`; timestamps format as RFC3339 and `format_value()` receives full-precision raw values instead of pre-stringified ones (#1091)
   * Size non-fixed log columns (including `msg`) to their longest formatted value on the current page, capped and truncated with full text on hover; `msg` is no longer a special case
+  * Add resizable columns to the log cell via draggable inline dividers; drag to pin a column width, right-click a divider to reset to auto or reset all, "Reset widths" button in bottom bar; pinned widths persist in cell options (#1130)
 * **Analytics:**
   * Replace SELECT+DELETE pairs in `delete_expired_blocks_batch` with atomic `DELETE … RETURNING` queries; eliminates double-counting and phantom deletes under concurrent writers (#1116)
   * Batch `retire_expired_partitions` to bound memory and transaction size on large backlogs; uses `DELETE … RETURNING` with a row-tuple subquery, matching the established batch pattern (#1111)
