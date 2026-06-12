@@ -11,9 +11,9 @@ import { DocumentationLink, QUERY_GUIDE_URL } from '@/components/DocumentationLi
 import { SyntaxEditor } from '@/components/SyntaxEditor'
 import { substituteMacros, DEFAULT_SQL } from '../notebook-utils'
 import { usePagination, PaginationBar, DEFAULT_PAGE_SIZE } from '../pagination'
-import { classifyLogColumns, renderLogColumn, computeFlexWidths } from '../log-utils'
+import { classifyLogColumns, renderLogColumn, computeFlexWidths, formatRowForCopy } from '../log-utils'
 import { LogDivider } from '../LogDivider'
-import { ScrollText } from 'lucide-react'
+import { ScrollText, Copy, Check } from 'lucide-react'
 
 const MIN_COL_WIDTH_PX = 40
 const MAX_COL_WIDTH_PX = 1200
@@ -192,6 +192,33 @@ export function LogCell({ data, status, options, onOptionsChange }: CellRenderer
   const hasPinnedWidths = Object.keys(livePinnedWidths).length > 0
 
   // -------------------------------------------------------------------------
+  // Copy state
+  // -------------------------------------------------------------------------
+
+  const [copiedRowIdx, setCopiedRowIdx] = useState<number | null>(null)
+
+  useEffect(() => { setCopiedRowIdx(null) }, [pagination.currentPage])
+
+  const handleCopyRow = useCallback(
+    async (rowIdx: number, text: string, e: React.MouseEvent) => {
+      e.stopPropagation()
+      try {
+        await navigator.clipboard.writeText(text)
+      } catch {
+        const ta = document.createElement('textarea')
+        ta.value = text
+        document.body.appendChild(ta)
+        ta.select()
+        document.execCommand('copy')
+        document.body.removeChild(ta)
+      }
+      setCopiedRowIdx(rowIdx)
+      setTimeout(() => setCopiedRowIdx(null), 1500)
+    },
+    [],
+  )
+
+  // -------------------------------------------------------------------------
   // Render
   // -------------------------------------------------------------------------
 
@@ -220,8 +247,18 @@ export function LogCell({ data, status, options, onOptionsChange }: CellRenderer
           return (
             <div
               key={rowIdx}
-              className={`flex px-2 py-0.5 hover:bg-app-card/50 transition-colors${i % 2 === 0 ? '' : ' bg-app-card/30'}`}
+              className={`relative group flex px-2 py-0.5 hover:bg-app-card/50 transition-colors${i % 2 === 0 ? '' : ' bg-app-card/30'}`}
             >
+              <button
+                className="absolute left-0 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity text-theme-text-muted hover:text-theme-text-primary"
+                onClick={(e) => handleCopyRow(rowIdx, formatRowForCopy(columns, row), e)}
+                aria-label="Copy row"
+                tabIndex={-1}
+              >
+                {copiedRowIdx === rowIdx
+                  ? <Check size={10} className="text-green-500" />
+                  : <Copy size={10} />}
+              </button>
               {columns.map((col, colIdx) => {
                 const isLast = colIdx === columns.length - 1
                 return (
