@@ -98,6 +98,19 @@ export function LogCell({ data, status, options, onOptionsChange }: CellRenderer
     startWidth: number
   }
   const dragRef = useRef<DragState | null>(null)
+  const dragListenersRef = useRef<{
+    onMouseMove: ((e: MouseEvent) => void) | null
+    onMouseUp: (() => void) | null
+  }>({ onMouseMove: null, onMouseUp: null })
+
+  // Remove document listeners if the component unmounts during an active drag.
+  useEffect(() => {
+    return () => {
+      const { onMouseMove, onMouseUp } = dragListenersRef.current
+      if (onMouseMove) document.removeEventListener('mousemove', onMouseMove)
+      if (onMouseUp) document.removeEventListener('mouseup', onMouseUp)
+    }
+  }, [])
 
   const handleDividerMouseDown = useCallback(
     (col: string, e: React.MouseEvent) => {
@@ -119,6 +132,7 @@ export function LogCell({ data, status, options, onOptionsChange }: CellRenderer
       const onMouseUp = () => {
         document.removeEventListener('mousemove', onMouseMove)
         document.removeEventListener('mouseup', onMouseUp)
+        dragListenersRef.current = { onMouseMove: null, onMouseUp: null }
         if (!dragRef.current) return
         const currentOptions = optionsRef.current
         onOptionsChange({
@@ -128,6 +142,7 @@ export function LogCell({ data, status, options, onOptionsChange }: CellRenderer
         dragRef.current = null
       }
 
+      dragListenersRef.current = { onMouseMove, onMouseUp }
       document.addEventListener('mousemove', onMouseMove)
       document.addEventListener('mouseup', onMouseUp)
     },
