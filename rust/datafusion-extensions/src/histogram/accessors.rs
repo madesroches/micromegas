@@ -20,6 +20,10 @@ fn sum_from_histogram(values: &[ColumnarValue]) -> Result<ColumnarValue, DataFus
     let histo_array: HistogramArray = (&values[0]).try_into()?;
     let mut result_builder = Float64Builder::with_capacity(histo_array.len());
     for index_histo in 0..histo_array.len() {
+        if histo_array.is_null_at(index_histo) {
+            result_builder.append_null();
+            continue;
+        }
         result_builder.append_value(histo_array.get_sum(index_histo)?);
     }
 
@@ -47,6 +51,10 @@ fn count_from_histogram(values: &[ColumnarValue]) -> Result<ColumnarValue, DataF
     let histo_array: HistogramArray = (&values[0]).try_into()?;
     let mut result_builder = UInt64Builder::with_capacity(histo_array.len());
     for index_histo in 0..histo_array.len() {
+        if histo_array.is_null_at(index_histo) {
+            result_builder.append_null();
+            continue;
+        }
         result_builder.append_value(histo_array.get_count(index_histo)?);
     }
 

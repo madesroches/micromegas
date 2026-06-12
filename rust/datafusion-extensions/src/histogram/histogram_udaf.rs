@@ -38,6 +38,10 @@ impl HistogramArray {
         self.inner.is_empty()
     }
 
+    pub fn is_null_at(&self, index: usize) -> bool {
+        self.inner.is_null(index)
+    }
+
     pub fn get_start(&self, index: usize) -> Result<f64, DataFusionError> {
         let starts = self
             .inner
@@ -168,59 +172,45 @@ impl TryFrom<&ColumnarValue> for HistogramArray {
 }
 
 fn make_state(args: AccumulatorArgs) -> Result<Box<dyn Accumulator>, DataFusionError> {
-    let start_arg = args
+    let start_literal = args
         .exprs
         .first()
-        .ok_or_else(|| DataFusionError::Execution("Reading first argument".into()))?
-        .as_any()
-        .downcast_ref::<Literal>()
-        .ok_or_else(|| DataFusionError::Execution("Downcasting first argument to Literal".into()))?
-        .value();
-    let start = if let ScalarValue::Float64(Some(start_value)) = start_arg {
-        start_value
-    } else {
-        return Err(DataFusionError::Execution(format!(
-            "arg 0 should be a float64, found {start_arg:?}"
-        )));
-    };
-
-    let end_arg = args
+        .and_then(|e| e.as_any().downcast_ref::<Literal>())
+        .and_then(|l| {
+            if let ScalarValue::Float64(Some(v)) = l.value() {
+                Some(*v)
+            } else {
+                None
+            }
+        });
+    let end_literal = args
         .exprs
         .get(1)
-        .ok_or_else(|| DataFusionError::Execution("Reading argument 1".into()))?
-        .as_any()
-        .downcast_ref::<Literal>()
-        .ok_or_else(|| DataFusionError::Execution("Downcasting argument 1 to Literal".into()))?
-        .value();
-    let end = if let ScalarValue::Float64(Some(end_value)) = end_arg {
-        end_value
-    } else {
-        return Err(DataFusionError::Execution(format!(
-            "arg 0 should be a float64, found {end_arg:?}"
-        )));
-    };
-
-    let nb_bins_arg = args
+        .and_then(|e| e.as_any().downcast_ref::<Literal>())
+        .and_then(|l| {
+            if let ScalarValue::Float64(Some(v)) = l.value() {
+                Some(*v)
+            } else {
+                None
+            }
+        });
+    let nb_bins_literal = args
         .exprs
         .get(2)
-        .ok_or_else(|| DataFusionError::Execution("Reading argument 2".into()))?
-        .as_any()
-        .downcast_ref::<Literal>()
-        .ok_or_else(|| DataFusionError::Execution("Downcasting argument 2 to Literal".into()))?
-        .value();
-    let nb_bins = if let ScalarValue::Int64(Some(nb_bins_value)) = nb_bins_arg {
-        nb_bins_value
-    } else {
-        return Err(DataFusionError::Execution(format!(
-            "arg 0 should be a int64, found {nb_bins_arg:?}"
-        )));
-    };
+        .and_then(|e| e.as_any().downcast_ref::<Literal>())
+        .and_then(|l| {
+            if let ScalarValue::Int64(Some(v)) = l.value() {
+                Some(*v)
+            } else {
+                None
+            }
+        });
 
-    Ok(Box::new(HistogramAccumulator::new(
-        *start,
-        *end,
-        *nb_bins as usize,
-    )))
+    let mut acc = HistogramAccumulator::new_non_configured();
+    if let (Some(start), Some(end), Some(nb_bins)) = (start_literal, end_literal, nb_bins_literal) {
+        acc.configure_from_params(start, end, nb_bins)?;
+    }
+    Ok(Box::new(acc))
 }
 
 pub fn make_histogram_arrow_type() -> DataType {

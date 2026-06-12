@@ -83,6 +83,9 @@ fn expand_histogram_to_batch(
     histo_array: &HistogramArray,
     index: usize,
 ) -> Result<RecordBatch, DataFusionError> {
+    if histo_array.is_null_at(index) {
+        return Ok(RecordBatch::new_empty(output_schema()));
+    }
     let start = histo_array.get_start(index)?;
     let end = histo_array.get_end(index)?;
     let bins = histo_array.get_bins(index)?;
