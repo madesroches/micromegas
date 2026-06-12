@@ -102,7 +102,9 @@ const handleCopyRow = useCallback(
 
 1. **`log-utils.tsx`** — add `formatRowForCopy(columns, row)` export (pure function, no component changes).
 
-2. **`LogCell.tsx`** — add state:
+2. **`LogCell.tsx`** — update the `lucide-react` import from `{ ScrollText }` to `{ ScrollText, Copy, Check }`.
+
+2a. **`LogCell.tsx`** — add state:
    ```tsx
    const [copiedRowIdx, setCopiedRowIdx] = useState<number | null>(null)
    ```
