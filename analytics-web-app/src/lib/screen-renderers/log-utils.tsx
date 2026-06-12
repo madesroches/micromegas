@@ -192,6 +192,10 @@ export function formatRowForCopy(columns: LogColumn[], row: Record<string, unkno
           return formatCell(row[col.name], col.type)
       }
     })
+    // Replace embedded tabs/newlines so a multi-line or tab-containing value
+    // (e.g. a stack trace in `msg`) doesn't inject phantom rows/columns when
+    // pasted into the tab-delimited output.
+    .map((value) => value.replace(/[\t\r\n]+/g, ' '))
     .join('\t')
 }
 
