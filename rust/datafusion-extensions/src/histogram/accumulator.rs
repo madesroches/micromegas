@@ -219,15 +219,18 @@ impl Accumulator for HistogramAccumulator {
                         DataFusionError::Execution("values[2] should be an Int64Array".into())
                     })?
                     .value(0);
-                if self.start.is_none() {
+                if let Some(configured_start) = self.start {
+                    let configured_end = self.end.expect("end is set whenever start is set");
+                    if configured_start != batch_start
+                        || configured_end != batch_end
+                        || self.bins.len() != batch_nb_bins as usize
+                    {
+                        return Err(DataFusionError::Execution(
+                            "make_histogram: bounds/bins changed between batches".into(),
+                        ));
+                    }
+                } else {
                     self.configure_from_params(batch_start, batch_end, batch_nb_bins)?;
-                } else if self.start.unwrap() != batch_start
-                    || self.end.unwrap() != batch_end
-                    || self.bins.len() != batch_nb_bins as usize
-                {
-                    return Err(DataFusionError::Execution(
-                        "make_histogram: bounds/bins changed between batches".into(),
-                    ));
                 }
                 let scalars = values[3]
                     .as_any()
