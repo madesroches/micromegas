@@ -3,6 +3,7 @@
  */
 
 import React from 'react'
+import * as ContextMenu from '@radix-ui/react-context-menu'
 import type { Field } from 'apache-arrow'
 import { timestampToDate } from '@/lib/arrow-utils'
 import { formatCell } from './table-utils'
@@ -110,9 +111,11 @@ export function classifyLogColumns(fields: Field[]): LogColumn[] {
 const FLEX_CHAR_WIDTH_PX = 7.2
 const MAX_FLEX_WIDTH_PX = 700
 const MIN_FLEX_WIDTH_PX = 60
+const MIN_LEVEL_WIDTH_PX = 40
 
 export interface RenderLogColumnOptions {
   width?: number
+  isLast?: boolean
 }
 
 export function renderLogColumn(
@@ -121,17 +124,26 @@ export function renderLogColumn(
   opts?: RenderLogColumnOptions,
 ): React.ReactNode {
   const value = row[col.name]
+  const w = opts?.width
+  const trailingMargin = opts?.isLast !== false ? 'mr-3' : ''
+  const widthStyle = w != null ? { width: w, minWidth: w, maxWidth: w } : undefined
   switch (col.kind) {
     case 'time':
       return (
-        <span className="text-theme-text-muted mr-3 w-[188px] min-w-[188px] whitespace-nowrap">
+        <span
+          className={`text-theme-text-muted ${trailingMargin} whitespace-nowrap`}
+          style={widthStyle}
+        >
           {formatLocalTime(value)}
         </span>
       )
     case 'level': {
       const levelStr = formatLevelValue(value)
       return (
-        <span className={`w-[38px] min-w-[38px] mr-3 font-semibold ${getLevelColor(levelStr)}`}>
+        <span
+          className={`${trailingMargin} font-semibold ${getLevelColor(levelStr)}`}
+          style={widthStyle}
+        >
           {levelStr}
         </span>
       )
@@ -140,7 +152,8 @@ export function renderLogColumn(
       const targetStr = String(value ?? '')
       return (
         <span
-          className="text-accent-highlight mr-3 w-[200px] min-w-[200px] truncate"
+          className={`text-accent-highlight ${trailingMargin} truncate`}
+          style={widthStyle}
           title={targetStr}
         >
           {targetStr}
@@ -149,11 +162,14 @@ export function renderLogColumn(
     }
     default: {
       const formatted = formatCell(value, col.type)
-      const w = opts?.width
       return (
         <span
-          className="text-theme-text-primary mr-3 truncate"
-          style={w != null ? { width: w, minWidth: w, maxWidth: w } : { minWidth: MIN_FLEX_WIDTH_PX, maxWidth: MAX_FLEX_WIDTH_PX }}
+          className={`text-theme-text-primary ${trailingMargin} truncate`}
+          style={
+            w != null
+              ? { width: w, minWidth: w, maxWidth: w }
+              : { minWidth: MIN_FLEX_WIDTH_PX, maxWidth: MAX_FLEX_WIDTH_PX }
+          }
           title={formatted}
         >
           {formatted}
@@ -169,23 +185,134 @@ export function computeFlexWidths(
   startRow: number,
   endRow: number,
 ): Record<string, number> {
-  const flexCols = columns.filter((c) => c.kind === 'generic')
-  if (!table || flexCols.length === 0) return {}
+  if (!table || columns.length === 0) return {}
   const maxLens: Record<string, number> = {}
-  for (const col of flexCols) maxLens[col.name] = 0
+  for (const col of columns) maxLens[col.name] = 0
   for (let i = startRow; i < endRow; i++) {
     const row = table.get(i)
-    for (const col of flexCols) {
-      const len = formatCell(row?.[col.name], col.type).length
+    for (const col of columns) {
+      let formatted: string
+      switch (col.kind) {
+        case 'time':
+          formatted = formatLocalTime(row?.[col.name])
+          break
+        case 'level':
+          formatted = formatLevelValue(row?.[col.name])
+          break
+        case 'target':
+          formatted = String(row?.[col.name] ?? '')
+          break
+        default:
+          formatted = formatCell(row?.[col.name], col.type)
+      }
+      const len = formatted.length
       if (len > maxLens[col.name]) maxLens[col.name] = len
     }
   }
   const result: Record<string, number> = {}
-  for (const col of flexCols) {
-    result[col.name] = Math.min(
-      Math.max(Math.ceil(maxLens[col.name] * FLEX_CHAR_WIDTH_PX), MIN_FLEX_WIDTH_PX),
-      MAX_FLEX_WIDTH_PX,
-    )
+  for (const col of columns) {
+    const measured = Math.ceil(maxLens[col.name] * FLEX_CHAR_WIDTH_PX)
+    switch (col.kind) {
+      case 'time':
+        // formatLocalTime always returns exactly 29 chars → 209px
+        result[col.name] = Math.min(Math.max(measured, MIN_FLEX_WIDTH_PX), MAX_FLEX_WIDTH_PX)
+        break
+      case 'level':
+        result[col.name] = Math.min(Math.max(measured, MIN_LEVEL_WIDTH_PX), MAX_FLEX_WIDTH_PX)
+        break
+      case 'target':
+        result[col.name] = Math.min(Math.max(measured, MIN_FLEX_WIDTH_PX), 200)
+        break
+      default:
+        result[col.name] = Math.min(Math.max(measured, MIN_FLEX_WIDTH_PX), MAX_FLEX_WIDTH_PX)
+    }
   }
   return result
+}
+
+// =============================================================================
+// LogDivider
+// =============================================================================
+
+export interface LogDividerProps {
+  col: string
+  pinned: boolean
+  hovered: boolean
+  onMouseDown: (e: React.MouseEvent) => void
+  onContextMenu: (e: React.MouseEvent) => void
+  onMouseEnter: () => void
+  onMouseLeave: () => void
+  onResetToAuto: () => void
+  onResetAll: () => void
+}
+
+export function LogDivider({
+  col,
+  pinned,
+  hovered,
+  onMouseDown,
+  onContextMenu,
+  onMouseEnter,
+  onMouseLeave,
+  onResetToAuto,
+  onResetAll,
+}: LogDividerProps) {
+  const lineColor = hovered
+    ? '#3b82f6'
+    : pinned
+      ? '#f59e0b'
+      : 'rgba(255,255,255,0.12)'
+
+  return (
+    <ContextMenu.Root>
+      <ContextMenu.Trigger asChild>
+        <span
+          data-col={col}
+          onMouseDown={onMouseDown}
+          onContextMenu={onContextMenu}
+          onMouseEnter={onMouseEnter}
+          onMouseLeave={onMouseLeave}
+          style={{
+            display: 'inline-flex',
+            alignSelf: 'stretch',
+            width: 5,
+            minWidth: 5,
+            cursor: 'col-resize',
+            alignItems: 'center',
+            justifyContent: 'center',
+            flexShrink: 0,
+          }}
+        >
+          <span
+            style={{
+              display: 'block',
+              width: 1,
+              height: '100%',
+              backgroundColor: lineColor,
+              transition: 'background-color 0.1s',
+            }}
+          />
+        </span>
+      </ContextMenu.Trigger>
+      <ContextMenu.Portal>
+        <ContextMenu.Content
+          className="min-w-[160px] bg-app-panel border border-theme-border rounded-md shadow-lg py-1 z-50"
+        >
+          <ContextMenu.Item
+            onSelect={onResetToAuto}
+            disabled={!pinned}
+            className="flex items-center px-3 py-1.5 text-xs text-theme-text-primary hover:bg-theme-border/50 cursor-pointer outline-none data-[disabled]:opacity-40 data-[disabled]:cursor-default"
+          >
+            Reset to auto
+          </ContextMenu.Item>
+          <ContextMenu.Item
+            onSelect={onResetAll}
+            className="flex items-center px-3 py-1.5 text-xs text-theme-text-primary hover:bg-theme-border/50 cursor-pointer outline-none"
+          >
+            Reset all columns
+          </ContextMenu.Item>
+        </ContextMenu.Content>
+      </ContextMenu.Portal>
+    </ContextMenu.Root>
+  )
 }
