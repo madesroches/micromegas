@@ -9,8 +9,8 @@
 The constraint lives entirely in `make_state()` in `rust/datafusion-extensions/src/histogram/histogram_udaf.rs` (lines 170–224). When DataFusion creates the accumulator for a query, it calls `make_state(AccumulatorArgs)`, which reads the argument expressions and calls `downcast_ref::<Literal>()` on each of the first three args. If any arg is not a `Literal` node in the logical plan — e.g. a `Column` reference from a CTE — the downcast returns `None` and the function returns `DataFusionError::Execution("Downcasting first argument to Literal")`.
 
 The accumulator itself (`HistogramAccumulator` in `accumulator.rs`) already supports a "not yet configured" state:
-- `new_non_configured()` (line 53) creates an accumulator with `start: None`, `end: None`, empty `bins`.
-- `configure()` (line 66) lazily populates those fields from an existing `HistogramArray`.
+- `new_non_configured()` (line 46) creates an accumulator with `start: None`, `end: None`, empty `bins`.
+- `configure()` (line 61) lazily populates those fields from an existing `HistogramArray`.
 - `update_batch_scalars()` (line 88) guards against an unconfigured accumulator and returns an error.
 
 So the infrastructure for lazy initialization already exists. The missing piece is wiring the runtime scalar values (`values[0..2]` in `update_batch`) into the accumulator when it is not yet configured.
@@ -102,7 +102,7 @@ This public-output change does require consumer code edits. `quantile.rs` (lines
 
 7. **`quantile.rs` / `expand.rs`** — handle the new null-bound (`Err` from `get_start` / `get_end`) case at the consumer call sites:
    - **`quantile.rs` (lines 73–74)** — `estimate_quantile` is called with `get_start(index_histo)?` / `get_end(index_histo)?`. Before this call, check whether the histogram row is null-bound (`histo_array.is_null_at(index_histo)` or matching `Err` from the getters) and skip it instead of `?`-propagating. A skipped row should append a null quantile result rather than aborting the query.
-   - **`expand.rs` (lines 86–87)** — `expand_histogram_to_batch` reads `get_start(index)?` / `get_end(index)?`. A null-bound histogram cannot be expanded into bins; return an empty `RecordBatch` (as already done for the zero-bin case at lines 91–92) instead of `?`-aborting.
+   - **`expand.rs` (lines 86–87)** — `expand_histogram_to_batch` reads `get_start(index)?` / `get_end(index)?` at lines 86–87, *before* the existing zero-bin early-return at lines 91–92. Because `get_start` / `get_end` now return `Err` on a null slot, the `?` at lines 86–87 would abort the query before that early-return is ever reached — so the zero-bin pattern cannot be reused as-is. Insert a null-bound check (`histo_array.is_null_at(index)`) returning an empty `RecordBatch` (`RecordBatch::new_empty(...)`, mirroring the zero-bin case) **before** the `get_start` / `get_end` calls at line 86, not after.
 
 8. **`tests/`** — add `histogram_runtime_bounds_tests.rs`:
    - Register all extensions on a `SessionContext`.
