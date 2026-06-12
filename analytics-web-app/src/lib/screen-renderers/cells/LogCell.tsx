@@ -22,6 +22,12 @@ import { ScrollText } from 'lucide-react'
 const MIN_COL_WIDTH_PX = 40
 const MAX_COL_WIDTH_PX = 1200
 
+interface DragState {
+  col: string
+  startX: number
+  startWidth: number
+}
+
 // =============================================================================
 // Renderer Component
 // =============================================================================
@@ -77,13 +83,12 @@ export function LogCell({ data, status, options, onOptionsChange }: CellRenderer
     optionsRef.current = options
   })
 
-  // Sync from outside (notebook reload) — guard with JSON.stringify to avoid clobbering drags
+  // Sync from outside (notebook reload) — guard by reference to avoid clobbering drags
   const pinnedWidthsFromOptions = (options?.columnWidths as Record<string, number> | undefined) ?? {}
-  const lastSyncedRef = useRef<string>(JSON.stringify(pinnedWidthsFromOptions))
+  const lastSyncedRef = useRef<Record<string, number>>(pinnedWidthsFromOptions)
   useEffect(() => {
-    const serialized = JSON.stringify(pinnedWidthsFromOptions)
-    if (serialized !== lastSyncedRef.current) {
-      lastSyncedRef.current = serialized
+    if (pinnedWidthsFromOptions !== lastSyncedRef.current) {
+      lastSyncedRef.current = pinnedWidthsFromOptions
       setAndSyncWidths(() => pinnedWidthsFromOptions)
     }
   })
@@ -92,11 +97,6 @@ export function LogCell({ data, status, options, onOptionsChange }: CellRenderer
   // Drag state
   // -------------------------------------------------------------------------
 
-  interface DragState {
-    col: string
-    startX: number
-    startWidth: number
-  }
   const dragRef = useRef<DragState | null>(null)
   const dragListenersRef = useRef<{
     onMouseMove: ((e: MouseEvent) => void) | null

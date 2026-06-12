@@ -258,10 +258,10 @@ export function LogDivider({
   onResetAll,
 }: LogDividerProps) {
   const lineColor = hovered
-    ? '#3b82f6'
+    ? 'var(--accent-link)'
     : pinned
-      ? '#f59e0b'
-      : 'rgba(255,255,255,0.12)'
+      ? 'var(--accent-warning)'
+      : 'var(--border-color)'
 
   return (
     <ContextMenu.Root>
