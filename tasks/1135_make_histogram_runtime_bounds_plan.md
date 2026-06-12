@@ -41,7 +41,7 @@ if not configured {
 
 Add a new method `HistogramAccumulator::configure_from_params(start: f64, end: f64, nb_bins: usize)` that sets the three fields and resizes `self.bins`. This mirrors what `new()` does but works on an already-allocated accumulator.
 
-`values[0..2]` are constant across all rows of a batch (either they are broadcast literals or uniform columns from a scalar CROSS JOIN). Taking `value(0)` is correct and sufficient; no need to validate every row.
+`values[0..2]` are constant across all rows of a batch (either they are broadcast literals or uniform columns from a scalar CROSS JOIN). Taking `value(0)` is correct and sufficient; no need to validate every row. Guard against the zero-row case: if `values[0].is_empty()`, return `Ok(())` immediately without calling `configure_from_params`, leaving the accumulator unconfigured until a non-empty batch arrives. DataFusion may legally call `update_batch` with zero rows, and calling `.value(0)` on an empty array panics.
 
 ### Change 3 — Fix nullable mismatch for `start` / `end` in accumulator state
 
@@ -52,8 +52,8 @@ More critically, the `merge_batch` path is **not** already safe: it calls `confi
 Fix both sides of the mismatch:
 
 1. **`state_arrow_fields()`** — change the `start` and `end` `Field` declarations to `nullable = true`.
-2. **`get_start()` / `get_end()` in `histogram_udaf.rs`** — guard against the null slot before calling `.value()`. Return `None` (or a `Result::Err`) when the slot is null.
-3. **`configure()` in `accumulator.rs`** — handle the `None` / error return from `get_start` / `get_end` by keeping `self.start` and `self.end` as `None`, leaving the accumulator in the unconfigured state rather than writing garbage bounds.
+2. **`get_start()` / `get_end()` in `histogram_udaf.rs`** — guard against the null slot before calling `.value()`. Return `Err(DataFusionError::Execution(...))` when the slot is null, keeping the existing `Result<f64, DataFusionError>` return type so all `?` operators at call sites continue to compile unchanged.
+3. **`configure()` in `accumulator.rs`** — handle the `Err` return from `get_start` / `get_end` by keeping `self.start` and `self.end` as `None`, leaving the accumulator in the unconfigured state rather than writing garbage bounds.
 
 ### No changes needed
 
@@ -68,6 +68,7 @@ Fix both sides of the mismatch:
 
 2. **`accumulator.rs`** — update 4-arg branch of `update_batch`:
    - After extracting `values[3]` as `Float64Array`, add a guard: if `self.start.is_none()`, downcast `values[0]` to `Float64Array`, `values[1]` to `Float64Array`, `values[2]` to `Int64Array`, read index 0 of each, call `self.configure_from_params(...)`.
+   - Before reading `.value(0)`, add an early return when `values[0].is_empty()` (DataFusion may call `update_batch` with a zero-row batch). In that case, leave the accumulator unconfigured and return `Ok(())`.
 
 3. **`histogram_udaf.rs`** — update `make_state()`:
    - Wrap each `downcast_ref::<Literal>()` block in a helper or use `if let` chains.
@@ -76,11 +77,11 @@ Fix both sides of the mismatch:
 
 4. **`histogram_udaf.rs`** — update `get_start()` and `get_end()`:
    - Before calling `.value(idx)` on the `Float64Array`, check `.is_null(idx)`.
-   - Return `None` (or propagate an error) when the slot is null.
+   - Return `Err(DataFusionError::Execution("histogram slot is null"))` when the slot is null, preserving the existing `Result<f64, DataFusionError>` return type.
 
 5. **`accumulator.rs`** — update `configure()`:
-   - Handle the `None` / error return from `get_start` / `get_end`; when either is absent, skip setting `self.start` / `self.end` so the accumulator stays in the unconfigured state.
-   - Also update `merge_histograms()` (lines 108 and 114): the `get_start(index_histo)?` and `get_end(index_histo)?` call sites now return `Option` instead of `Result`. A null slot mid-batch is invalid (it means a partially-serialized histogram arrived), so map a `None` return to `DataFusionError::Execution("histogram slot is null in merge_histograms")` and propagate with `?`.
+   - Call `get_start` / `get_end` with `?` or match on `Err`; when either returns an error (null slot), skip setting `self.start` / `self.end` so the accumulator stays in the unconfigured state.
+   - The `merge_histograms()` call sites (lines 108 and 114) already use `get_start(index_histo)?` and `get_end(index_histo)?` with `?`. Because `get_start`/`get_end` remain `Result`-returning, `?` continues to work without any changes: a null slot returns `Err` and propagates naturally.
 
 6. **`accumulator.rs`** — update `state_arrow_fields()`:
    - Change the `start` and `end` `Field` entries to `nullable = true`.
