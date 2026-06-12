@@ -11,12 +11,8 @@ import { DocumentationLink, QUERY_GUIDE_URL } from '@/components/DocumentationLi
 import { SyntaxEditor } from '@/components/SyntaxEditor'
 import { substituteMacros, DEFAULT_SQL } from '../notebook-utils'
 import { usePagination, PaginationBar, DEFAULT_PAGE_SIZE } from '../pagination'
-import {
-  classifyLogColumns,
-  renderLogColumn,
-  computeFlexWidths,
-  LogDivider,
-} from '../log-utils'
+import { classifyLogColumns, renderLogColumn, computeFlexWidths } from '../log-utils'
+import { LogDivider } from '../LogDivider'
 import { ScrollText } from 'lucide-react'
 
 const MIN_COL_WIDTH_PX = 40
