@@ -85,14 +85,14 @@ export function LogCell({ data, status, options, onOptionsChange }: CellRenderer
 
   // Sync from outside (notebook reload) — guard by JSON equality to avoid clobbering drags
   const pinnedWidthsFromOptions = (options?.columnWidths as Record<string, number> | undefined) ?? {}
-  const lastSyncedRef = useRef<string>(JSON.stringify(pinnedWidthsFromOptions))
+  const serializedWidthsFromOptions = JSON.stringify(pinnedWidthsFromOptions)
+  const lastSyncedRef = useRef<string>(serializedWidthsFromOptions)
   useEffect(() => {
-    const serialized = JSON.stringify(pinnedWidthsFromOptions)
-    if (serialized !== lastSyncedRef.current) {
-      lastSyncedRef.current = serialized
-      setAndSyncWidths(() => pinnedWidthsFromOptions)
+    if (serializedWidthsFromOptions !== lastSyncedRef.current) {
+      lastSyncedRef.current = serializedWidthsFromOptions
+      setAndSyncWidths(() => JSON.parse(serializedWidthsFromOptions))
     }
-  })
+  }, [serializedWidthsFromOptions, setAndSyncWidths])
 
   // -------------------------------------------------------------------------
   // Drag state
@@ -116,6 +116,10 @@ export function LogCell({ data, status, options, onOptionsChange }: CellRenderer
   const handleDividerMouseDown = useCallback(
     (col: string, e: React.MouseEvent) => {
       e.preventDefault()
+      // Cancel any in-progress drag before starting a new one
+      const prev = dragListenersRef.current
+      if (prev.onMouseMove) document.removeEventListener('mousemove', prev.onMouseMove)
+      if (prev.onMouseUp) document.removeEventListener('mouseup', prev.onMouseUp)
       const effectiveWidth =
         livePinnedWidthsRef.current[col] ?? autoWidths[col] ?? MIN_COL_WIDTH_PX
       dragRef.current = { col, startX: e.clientX, startWidth: effectiveWidth }
