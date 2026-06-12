@@ -26,6 +26,8 @@ So the infrastructure for lazy initialization already exists. The missing piece 
 
 The key distinction is *literal vs. non-literal*, not *valid vs. invalid*. Only a non-`Literal` expression defers to `new_non_configured()`; a present-but-wrong literal still errors.
 
+**Ordering / precedence (resolves the mixed case).** The two rules above can collide when the args differ in position — e.g. arg0 is a wrong-type string literal while arg1 is a non-literal `Column`. To make the outcome deterministic, the non-literal check wins: first scan **all three** args for any non-`Literal` expression; if **any** arg is non-literal, defer to `new_non_configured()` immediately (do not validate literal types at all). Only when **all three** args are `Literal` nodes do we then validate their `ScalarValue` types and `return Err(...)` on a wrong-type/`None` literal. So in the mixed example above, the presence of the non-literal `Column` makes the whole call take the `new_non_configured()` path, and the wrong-type literal in arg0 is never reached. This requires a two-pass structure (scan-for-non-literal, then type-check) rather than the current per-argument interleaved downcast-then-typecheck.
+
 This means the accumulator is allowed to be born without knowing its bounds. The bounds will be supplied in `update_batch`.
 
 ### Change 2 — Lazy configuration in `update_batch`
@@ -77,16 +79,16 @@ This public-output change does require consumer code edits. `quantile.rs` (lines
    - After extracting `values[3]` as `Float64Array`, add a guard: if `self.start.is_none()`, downcast `values[0]` to `Float64Array`, `values[1]` to `Float64Array`, `values[2]` to `Int64Array`, read index 0 of each, call `self.configure_from_params(...)`.
    - Before reading `.value(0)`, add an early return when `values[0].is_empty()` (DataFusion may call `update_batch` with a zero-row batch). In that case, leave the accumulator unconfigured and return `Ok(())`.
 
-3. **`histogram_udaf.rs`** — update `make_state()`, keeping the three cases distinct:
-   - For each of the three args, first try `downcast_ref::<Literal>()`.
-   - **If the downcast fails** (non-`Literal` expression — the runtime path), construct `HistogramAccumulator::new_non_configured()` and return it. Do this as soon as any one of the three args is non-literal.
-   - **If all three downcast to `Literal`**, match each on the expected `ScalarValue` pattern (`Float64(Some(_))` for start/end, `Int64(Some(_))` for nb_bins):
+3. **`histogram_udaf.rs`** — update `make_state()` as a two-pass structure so the literal-vs-non-literal precedence is unambiguous (see Design Change 1 "Ordering / precedence"):
+   - **Pass 1 — scan all three args for non-literals first.** Try `downcast_ref::<Literal>()` on each of the three args without doing any type validation yet. If **any** arg fails to downcast (non-`Literal` expression — the runtime path), construct `HistogramAccumulator::new_non_configured()` and return it. This pass must complete across all three args before any type checking, so that a non-literal in a later position still diverts the call even when an earlier-positioned literal is wrong-typed.
+   - **Pass 2 — type-check the literals (only reached when all three are `Literal`).** Match each literal on the expected `ScalarValue` pattern (`Float64(Some(_))` for start/end, `Int64(Some(_))` for nb_bins):
      - When all match, construct `HistogramAccumulator::new(start, end, nb_bins)`.
-     - When a literal is present but the scalar is the wrong type or a typed `None` (e.g. string literal, `Float64(None)`), keep the existing `return Err(...)` with a descriptive message. Do **not** fall through to `new_non_configured()` here — a wrong-type literal is a user error and must fail early (otherwise a `Float64(None)` literal would later be read as `0.0` by `value(0)` in Change 2).
-   - Net effect: the `Literal`-downcast-failure path is the only one that now diverts to `new_non_configured()`; the wrong-type-literal `return Err(...)` is retained, not removed.
+     - When a literal is present but the scalar is the wrong type or a typed `None` (e.g. string literal, `Float64(None)`), `return Err(...)` with a descriptive message. Do **not** fall through to `new_non_configured()` here — a wrong-type literal is a user error and must fail early (otherwise a `Float64(None)` literal would later be read as `0.0` by `value(0)` in Change 2).
+   - Net effect: the non-literal path (Pass 1) takes precedence and is the only one that diverts to `new_non_configured()`; the wrong-type-literal `return Err(...)` is reached only when all args are literals.
 
-4. **`histogram_udaf.rs`** — update `get_start()` and `get_end()`:
-   - Before calling `.value(idx)` on the `Float64Array`, check `.is_null(idx)`.
+4. **`histogram_udaf.rs`** — add a null-check helper and update `get_start()` and `get_end()`:
+   - Add a new method `HistogramArray::is_null_at(&self, index: usize) -> bool` that returns `self.inner.column(0).is_null(index)` (the start column). `HistogramArray` currently exposes only `new`/`inner`/`len`/`is_empty`/`get_start`/`get_end`/`get_min`/`get_max`/`get_sum`/`get_sum_sq`/`get_count`/`get_bins` — there is no existing null-check accessor, so this helper must be added before Steps 5 and 7 can reference it.
+   - In `get_start()` / `get_end()`, before calling `.value(idx)` on the `Float64Array`, check `.is_null(idx)`.
    - Return `Err(DataFusionError::Execution("histogram slot is null"))` when the slot is null, preserving the existing `Result<f64, DataFusionError>` return type.
 
 5. **`accumulator.rs`** — update `configure()` and `merge_histograms()` so leading nulls do not discard valid rows:
@@ -111,7 +113,7 @@ This public-output change does require consumer code edits. `quantile.rs` (lines
 ## Files to Modify
 
 - `rust/datafusion-extensions/src/histogram/accumulator.rs` — new method + update `update_batch`; fix `configure()` null propagation; change `start`/`end` fields to `nullable = true` in `state_arrow_fields()`
-- `rust/datafusion-extensions/src/histogram/histogram_udaf.rs` — add null guards to `get_start()` / `get_end()`; relax `make_state()`
+- `rust/datafusion-extensions/src/histogram/histogram_udaf.rs` — add `HistogramArray::is_null_at()` helper; add null guards to `get_start()` / `get_end()`; relax `make_state()`
 - `rust/datafusion-extensions/src/histogram/quantile.rs` — skip null-bound rows at the `get_start`/`get_end` call sites (lines 73–74) instead of `?`-aborting
 - `rust/datafusion-extensions/src/histogram/expand.rs` — return an empty batch for null-bound histograms at the `get_start`/`get_end` call sites (lines 86–87) instead of `?`-aborting
 - `rust/datafusion-extensions/tests/histogram_runtime_bounds_tests.rs` — new test file
