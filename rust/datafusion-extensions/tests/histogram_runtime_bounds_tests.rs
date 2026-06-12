@@ -57,17 +57,17 @@ async fn test_runtime_bounds_happy_path() {
         .column(0)
         .as_any()
         .downcast_ref::<Float64Array>()
-        .unwrap();
+        .expect("should be Float64Array");
     let ends = struct_array
         .column(1)
         .as_any()
         .downcast_ref::<Float64Array>()
-        .unwrap();
+        .expect("should be Float64Array");
     let counts = struct_array
         .column(6)
         .as_any()
         .downcast_ref::<UInt64Array>()
-        .unwrap();
+        .expect("should be UInt64Array");
     assert!((starts.value(0) - 1.0).abs() < f64::EPSILON);
     assert!((ends.value(0) - 10.0).abs() < f64::EPSILON);
     assert_eq!(counts.value(0), 10);
@@ -143,7 +143,7 @@ async fn test_zero_input_rows_literal_bounds_empty_histogram() {
         .column(6)
         .as_any()
         .downcast_ref::<UInt64Array>()
-        .unwrap();
+        .expect("should be UInt64Array");
     assert_eq!(counts.value(0), 0, "count should be 0 with no input rows");
 }
 
@@ -453,12 +453,12 @@ async fn test_point_histogram_runtime_bounds() {
         .column(0)
         .as_any()
         .downcast_ref::<StructArray>()
-        .unwrap();
+        .expect("should be StructArray");
     let counts = struct_array
         .column(6)
         .as_any()
         .downcast_ref::<UInt64Array>()
-        .unwrap();
+        .expect("should be UInt64Array");
     assert_eq!(counts.value(0), 5, "all 5 values should be counted");
 }
 
@@ -486,12 +486,12 @@ async fn test_point_histogram_literal_bounds() {
         .column(0)
         .as_any()
         .downcast_ref::<StructArray>()
-        .unwrap();
+        .expect("should be StructArray");
     let counts = struct_array
         .column(6)
         .as_any()
         .downcast_ref::<UInt64Array>()
-        .unwrap();
+        .expect("should be UInt64Array");
     assert_eq!(counts.value(0), 5);
 }
 
@@ -578,22 +578,22 @@ async fn test_literal_bounds_happy_path() {
         .column(0)
         .as_any()
         .downcast_ref::<StructArray>()
-        .unwrap();
+        .expect("should be StructArray");
     let starts = struct_array
         .column(0)
         .as_any()
         .downcast_ref::<Float64Array>()
-        .unwrap();
+        .expect("should be Float64Array");
     let ends = struct_array
         .column(1)
         .as_any()
         .downcast_ref::<Float64Array>()
-        .unwrap();
+        .expect("should be Float64Array");
     let counts = struct_array
         .column(6)
         .as_any()
         .downcast_ref::<UInt64Array>()
-        .unwrap();
+        .expect("should be UInt64Array");
     assert!((starts.value(0) - 0.0).abs() < f64::EPSILON);
     assert!((ends.value(0) - 100.0).abs() < f64::EPSILON);
     assert_eq!(counts.value(0), 100);
@@ -622,7 +622,7 @@ async fn test_literal_bounds_expand() {
         .column(1)
         .as_any()
         .downcast_ref::<UInt64Array>()
-        .unwrap();
+        .expect("should be UInt64Array");
     let total: u64 = (0..10).map(|i| counts.value(i)).sum();
     assert_eq!(total, 10);
 }
