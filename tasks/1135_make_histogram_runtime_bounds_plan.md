@@ -61,7 +61,9 @@ Fix both sides of the mismatch:
 
 `make_histogram_arrow_type()` builds `DataType::Struct(Fields::from(state_arrow_fields()))` and `create_udaf` uses it as **both** the UDAF's final return type and its intermediate state type. Marking `start` / `end` nullable in `state_arrow_fields()` therefore also makes them nullable in the public histogram output struct seen by all consumers — this is not merely an intermediate-state schema fix.
 
-Because every consumer (`sum_histograms_udaf.rs`, `accessors.rs`, `quantile.rs`, `variance.rs`, `expand`) reads the histogram type through the shared `make_histogram_arrow_type()` / `state_arrow_fields()`, there is no hard schema mismatch: the producer and all consumers move to the same nullable definition together. No consumer code needs to change, but the change is intentionally a public-output-type change (start/end become nullable everywhere), not a state-only tweak.
+Because every consumer (`sum_histograms_udaf.rs`, `accessors.rs`, `quantile.rs`, `variance.rs`, `expand`) reads the histogram type through the shared `make_histogram_arrow_type()` / `state_arrow_fields()`, there is no hard schema mismatch: the producer and all consumers move to the same nullable definition together. The change is intentionally a public-output-type change (start/end become nullable everywhere), not a state-only tweak.
+
+This public-output change does require consumer code edits. `quantile.rs` (lines 73–74) and `expand.rs` (lines 86–87) both `?`-propagate `get_start` / `get_end`. Today `.value(idx)` on a null slot silently returns `0.0`; once `get_start` / `get_end` return `Err` on a null slot, those `?` turn a null-bound histogram into a query-fatal error. The intended semantics is that a null-bound (unconfigured) histogram row should be skipped at these call sites — producing no output row for that input row — rather than aborting the query. See Implementation Step 8.
 
 `make_histogram_arrow_type()` itself needs no edit beyond the `state_arrow_fields()` change it composes: the `bins` field is `DataType::List(List<UInt64>)`, variable-length, so the Arrow type does not depend on the number of bins.
 
@@ -89,13 +91,18 @@ Because every consumer (`sum_histograms_udaf.rs`, `accessors.rs`, `quantile.rs`,
 
 5. **`accumulator.rs`** — update `configure()` and `merge_histograms()` so leading nulls do not discard valid rows:
    - **`configure()`** must not decide configured/unconfigured from element 0 alone. `merge_batch` concatenates partial accumulator outputs in arbitrary order, so the array may have a leading null (an empty/unconfigured partition) followed by valid rows. Scan for the first **non-null** start/end slot and configure `self.start` / `self.end` from that index; only leave the accumulator unconfigured if **every** slot is null. Use `is_null(idx)` to find the first valid slot rather than blindly reading index 0.
-   - **`merge_histograms()` loop body** — for each `index_histo`, skip rows whose start/end slot is null. Replace the `get_start(index_histo)?` / `get_end(index_histo)?` calls with a null check (`histo_array.is_null_at(index_histo)` or matching `Err` from `get_start`/`get_end`) that `continue`s to the next row instead of `?`-propagating. This way a null partial row (an unconfigured partition) is ignored, while valid rows at index ≥ 1 are still merged. Do **not** insert a blanket `if self.start.is_none() { return Ok(()); }` early-return: that would discard every valid histogram whenever index 0 happened to be null.
+   - **`get_bins` must use the same first-non-null index** found above, not index 0. The current `configure()` (accumulator.rs:68–70) reads `get_start(0)`, `get_end(0)`, and `get_bins(0)` all at index 0; `self.bins.resize(get_bins(idx).len(), 0)` sizes the bin vector. If index 0 is an unconfigured empty-bins row (`bins = []`) and the first non-null row is at index ≥ 1, resizing from `get_bins(0).len() == 0` leaves `self.bins` empty and the later `self.bins[i] += bins.value(i)` merge loop (accumulator.rs:139–141) panics out-of-bounds. Read `get_bins` from the same non-null index used for start/end so the bin length matches the row being configured from.
+   - **`merge_histograms()` loop body** — for each `index_histo`, skip rows whose start/end slot is null. The per-row null check (and its `continue`) **must be the first statement in the loop body**, placed *before* the existing `get_start(index_histo)?` / `get_end(index_histo)?` / `self.start.unwrap()` accesses at the top of the loop (currently accumulator.rs:107–119). Because `get_start` / `get_end` now return `Err` on a null slot, a null check placed *after* the existing `get_start(index_histo)?` would hit that `Err` and `?`-abort — the exact failure this change is meant to avoid. Use a null check (`histo_array.is_null_at(index_histo)`) that `continue`s to the next row before any getter is called. This way a null partial row (an unconfigured partition) is ignored, while valid rows at index ≥ 1 are still merged. Do **not** insert a blanket `if self.start.is_none() { return Ok(()); }` early-return: that would discard every valid histogram whenever index 0 happened to be null.
    - Once a non-null row has configured `self.start` / `self.end`, the per-row `self.start.unwrap()` / `self.end.unwrap()` inside the loop are only reached for non-null rows (null rows `continue` before that point), so they no longer panic.
 
 6. **`accumulator.rs`** — update `state_arrow_fields()`:
    - Change the `start` and `end` `Field` entries to `nullable = true`.
 
-7. **`tests/`** — add `histogram_runtime_bounds_tests.rs`:
+7. **`quantile.rs` / `expand.rs`** — handle the new null-bound (`Err` from `get_start` / `get_end`) case at the consumer call sites:
+   - **`quantile.rs` (lines 73–74)** — `estimate_quantile` is called with `get_start(index_histo)?` / `get_end(index_histo)?`. Before this call, check whether the histogram row is null-bound (`histo_array.is_null_at(index_histo)` or matching `Err` from the getters) and skip it instead of `?`-propagating. A skipped row should append a null quantile result rather than aborting the query.
+   - **`expand.rs` (lines 86–87)** — `expand_histogram_to_batch` reads `get_start(index)?` / `get_end(index)?`. A null-bound histogram cannot be expanded into bins; return an empty `RecordBatch` (as already done for the zero-bin case at lines 91–92) instead of `?`-aborting.
+
+8. **`tests/`** — add `histogram_runtime_bounds_tests.rs`:
    - Register all extensions on a `SessionContext`.
    - Create an in-memory table with float values.
    - Execute a query using a CTE to compute `lo`/`hi` via `percentile_cont` or `min`/`max`, then CROSS JOIN to use them as bounds in `make_histogram`.
@@ -105,6 +112,8 @@ Because every consumer (`sum_histograms_udaf.rs`, `accessors.rs`, `quantile.rs`,
 
 - `rust/datafusion-extensions/src/histogram/accumulator.rs` — new method + update `update_batch`; fix `configure()` null propagation; change `start`/`end` fields to `nullable = true` in `state_arrow_fields()`
 - `rust/datafusion-extensions/src/histogram/histogram_udaf.rs` — add null guards to `get_start()` / `get_end()`; relax `make_state()`
+- `rust/datafusion-extensions/src/histogram/quantile.rs` — skip null-bound rows at the `get_start`/`get_end` call sites (lines 73–74) instead of `?`-aborting
+- `rust/datafusion-extensions/src/histogram/expand.rs` — return an empty batch for null-bound histograms at the `get_start`/`get_end` call sites (lines 86–87) instead of `?`-aborting
 - `rust/datafusion-extensions/tests/histogram_runtime_bounds_tests.rs` — new test file
 
 ## Trade-offs
