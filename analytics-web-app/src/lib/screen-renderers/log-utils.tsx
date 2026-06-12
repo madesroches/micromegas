@@ -178,6 +178,27 @@ export function renderLogColumn(
   }
 }
 
+export function formatRowForCopy(columns: LogColumn[], row: Record<string, unknown>): string {
+  return columns
+    .map((col) => {
+      switch (col.kind) {
+        case 'time':
+          return formatLocalTime(row[col.name])
+        case 'level':
+          return formatLevelValue(row[col.name])
+        case 'target':
+          return String(row[col.name] ?? '')
+        default:
+          return formatCell(row[col.name], col.type)
+      }
+    })
+    // Replace embedded tabs/newlines so a multi-line or tab-containing value
+    // (e.g. a stack trace in `msg`) doesn't inject phantom rows/columns when
+    // pasted into the tab-delimited output.
+    .map((value) => value.replace(/[\t\r\n]+/g, ' '))
+    .join('\t')
+}
+
 export function computeFlexWidths(
   table: { numRows: number; get(i: number): Record<string, unknown> | null | undefined } | null | undefined,
   columns: LogColumn[],
