@@ -43,9 +43,20 @@ Add a new method `HistogramAccumulator::configure_from_params(start: f64, end: f
 
 `values[0..2]` are constant across all rows of a batch (either they are broadcast literals or uniform columns from a scalar CROSS JOIN). Taking `value(0)` is correct and sufficient; no need to validate every row.
 
+### Change 3 — Fix nullable mismatch for `start` / `end` in accumulator state
+
+`state_arrow_fields()` currently declares `start` and `end` with `nullable = false`. However, `evaluate()` already appends Arrow nulls for `None` start/end (the unconfigured case introduced by `new_non_configured()`). This creates a schema/data mismatch: Arrow rejects or silently misrepresents nulls in a non-nullable field.
+
+More critically, the `merge_batch` path is **not** already safe: it calls `configure()` → `get_start(0)` / `get_end(0)`, which calls `.value(0)` on the `Float64Array` without a null check. When the array slot is null (an unconfigured accumulator was serialized), `.value(0)` returns `0.0` (Arrow's default for an unset float), silently misconfiguring the merged accumulator's bounds to `[0.0, 0.0]` instead of propagating the unconfigured state.
+
+Fix both sides of the mismatch:
+
+1. **`state_arrow_fields()`** — change the `start` and `end` `Field` declarations to `nullable = true`.
+2. **`get_start()` / `get_end()` in `histogram_array.rs`** — guard against the null slot before calling `.value()`. Return `None` (or a `Result::Err`) when the slot is null.
+3. **`configure()` in `accumulator.rs`** — handle the `None` / error return from `get_start` / `get_end` by keeping `self.start` and `self.end` as `None`, leaving the accumulator in the unconfigured state rather than writing garbage bounds.
+
 ### No changes needed
 
-- `merge_batch` — the merge path already configures lazily via `configure()`.
 - `make_histogram_arrow_type()` — the return type is `DataType::Struct(Fields::from(state_arrow_fields()))`. The `bins` field is `DataType::List(List<UInt64>)`, which is variable-length, so the Arrow type does not depend on the number of bins and needs no change.
 - All downstream UDFs (`sum_histograms`, `quantile_from_histogram`, accessors, `expand`) — they operate on the fully-evaluated histogram struct, unaffected.
 
@@ -63,7 +74,17 @@ Add a new method `HistogramAccumulator::configure_from_params(start: f64, end: f
    - If all three succeed, construct `HistogramAccumulator::new(start, end, nb_bins)` as before.
    - Otherwise, construct `HistogramAccumulator::new_non_configured()`.
 
-4. **`tests/`** — add `histogram_runtime_bounds_tests.rs`:
+4. **`histogram_array.rs`** — update `get_start()` and `get_end()`:
+   - Before calling `.value(idx)` on the `Float64Array`, check `.is_null(idx)`.
+   - Return `None` (or propagate an error) when the slot is null.
+
+5. **`accumulator.rs`** — update `configure()`:
+   - Handle the `None` / error return from `get_start` / `get_end`; when either is absent, skip setting `self.start` / `self.end` so the accumulator stays in the unconfigured state.
+
+6. **`accumulator.rs`** — update `state_arrow_fields()`:
+   - Change the `start` and `end` `Field` entries to `nullable = true`.
+
+7. **`tests/`** — add `histogram_runtime_bounds_tests.rs`:
    - Register all extensions on a `SessionContext`.
    - Create an in-memory table with float values.
    - Execute a query using a CTE to compute `lo`/`hi` via `percentile_cont` or `min`/`max`, then CROSS JOIN to use them as bounds in `make_histogram`.
@@ -71,7 +92,8 @@ Add a new method `HistogramAccumulator::configure_from_params(start: f64, end: f
 
 ## Files to Modify
 
-- `rust/datafusion-extensions/src/histogram/accumulator.rs` — new method + update `update_batch`
+- `rust/datafusion-extensions/src/histogram/accumulator.rs` — new method + update `update_batch`; fix `configure()` null propagation; change `start`/`end` fields to `nullable = true` in `state_arrow_fields()`
+- `rust/datafusion-extensions/src/histogram/histogram_array.rs` — add null guards to `get_start()` / `get_end()`
 - `rust/datafusion-extensions/src/histogram/histogram_udaf.rs` — relax `make_state()`
 - `rust/datafusion-extensions/tests/histogram_runtime_bounds_tests.rs` — new test file
 
