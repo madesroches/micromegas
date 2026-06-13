@@ -207,17 +207,19 @@ existing seams: ingestion's `serve_ingestion(..., auth_provider)` and the Flight
 `with_auth_provider(...)`. The web app's cookie/OIDC `AuthState` remains its own separate config —
 out of scope for this unification.
 
-**Caveat — admin scoping does not reach the web role.** The web app builds its own
+**Web role admin scoping — resolved in v1.** The web app builds its own
 `OidcAuthProvider::new(config)` directly (`analytics-web-srv/src/auth.rs:204`), which calls the same
 parameterless `load_admin_users()` reading **unprefixed** `MICROMEGAS_ADMINS`. It does not go through
-`provider_with_prefix`, so any analytics prefix added there never reaches it. The two analytics
-surfaces in one process therefore diverge: if an operator sets `MICROMEGAS_ANALYTICS_ADMINS`, the
-FlightSQL role honors it but the web role silently keeps reading unprefixed `MICROMEGAS_ADMINS`. For
-v1 the web role's admin list **stays on unprefixed `MICROMEGAS_ADMINS`** (web auth is out of scope per
-above); this is an intentional, documented limitation. Either keep `MICROMEGAS_ADMINS` set as the
-shared admin list both roles read, or, if scoping FlightSQL admins matters, thread the analytics var
-name through the web app's `OidcAuthProvider::new` call too (the same plumbing the admin bullet above
-requires) so the two surfaces gate admins consistently.
+`provider_with_prefix`, so without further work an analytics prefix added there would never reach it,
+and the two analytics surfaces in one process would diverge: an operator who set
+`MICROMEGAS_ANALYTICS_ADMINS` would have FlightSQL honor it while the web role silently kept reading
+unprefixed `MICROMEGAS_ADMINS`. To avoid shipping that latent inconsistency, **v1 threads the
+analytics admin-var name through the web app's `OidcAuthProvider::new` call too** — the same plumbing
+the admin bullet above already requires (`load_admin_users(name)` + the new `OidcAuthProvider::new`
+parameter). The web role therefore reads `MICROMEGAS_ANALYTICS_ADMINS` with fallback to unprefixed
+`MICROMEGAS_ADMINS`, exactly like the FlightSQL role, so both analytics surfaces gate admins from one
+consistent source. This is the *only* part of the web app's auth wiring that the monolith unifies; the
+rest of its cookie/OIDC `AuthState` remains its own separate config (out of scope per above).
 
 ### Shared resource construction (monolith `main`)
 
@@ -363,8 +365,10 @@ with the real single-process entrypoint.
    unprefixed fallback), `OidcConfig::from_env_var(name)`, and prefixed admins (thread an admin-var
    name through `load_admin_users` and `OidcAuthProvider::new`, updating all `new` call sites:
    `default_provider.rs:56`, the web app, the `oidc_tests.rs` tests, and the lib.rs/multi.rs
-   doctests); reduce `provider()` to the unprefixed call so existing callers are unchanged. Note
-   the web role keeps reading unprefixed `MICROMEGAS_ADMINS` for v1 (see per-role auth caveat).
+   doctests); reduce `provider()` to the unprefixed call so existing callers are unchanged. The web
+   app's `OidcAuthProvider::new` call (`analytics-web-srv/src/auth.rs:204`) passes the analytics
+   admin-var name (`MICROMEGAS_ANALYTICS_ADMINS`, fallback unprefixed) so its admin list matches the
+   FlightSQL role (see per-role auth section).
 6. Run full test suite + `cargo clippy --workspace -- -D warnings`; confirm the four standalone
    binaries behave identically.
 
@@ -420,6 +424,9 @@ with the real single-process entrypoint.
   `auth/src/multi.rs:41` (doctests)
 - `rust/analytics/src/lakehouse/lakehouse_context.rs` — `from_connection(...)`; route `from_env`
 - `rust/analytics-web-srv/src/lib.rs` + `src/main.rs` — extract `run_web_server`, move modules
+- `rust/analytics-web-srv/src/auth.rs` — pass the analytics admin-var name
+  (`MICROMEGAS_ANALYTICS_ADMINS`, fallback unprefixed) into `OidcAuthProvider::new` so the web role's
+  admin list matches the FlightSQL role (per-role auth section)
 - `rust/Cargo.toml` — workspace member if needed; new workspace deps if any
 - `local_test_env/ai_scripts/start_services.py`, `stop_services.py` — monolith mode
 - `build/build_docker_images.py` — add `"monolith"` to `SERVICES` and to `WASM_SERVICES`;
