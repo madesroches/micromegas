@@ -147,6 +147,25 @@ def start_monolith_mode(rust_dir, target_dir, postgres_pid):
     repo_root = rust_dir.parent
     frontend_dir = repo_root / "analytics-web-app" / "dist"
 
+    # Web role requires these vars; set dev defaults if not already in the environment.
+    web_port = int(env.get("MICROMEGAS_PORT", "3000"))
+    if "MICROMEGAS_WEB_CORS_ORIGIN" not in env:
+        env["MICROMEGAS_WEB_CORS_ORIGIN"] = f"http://localhost:{web_port}"
+        print(f"Set MICROMEGAS_WEB_CORS_ORIGIN=http://localhost:{web_port}")
+    if "MICROMEGAS_BASE_PATH" not in env:
+        env["MICROMEGAS_BASE_PATH"] = "/"
+        print("Set MICROMEGAS_BASE_PATH=/")
+    if "MICROMEGAS_APP_SQL_CONNECTION_STRING" not in env:
+        db_user = env.get("MICROMEGAS_DB_USERNAME")
+        db_pass = env.get("MICROMEGAS_DB_PASSWD")
+        db_port = env.get("MICROMEGAS_DB_PORT")
+        if db_user and db_pass and db_port:
+            conn = f"postgres://{db_user}:{db_pass}@127.0.0.1:{db_port}/micromegas_app"
+            env["MICROMEGAS_APP_SQL_CONNECTION_STRING"] = conn
+            print("Set MICROMEGAS_APP_SQL_CONNECTION_STRING (micromegas_app)")
+        else:
+            print("⚠️  MICROMEGAS_APP_SQL_CONNECTION_STRING not set (screens feature disabled)")
+
     cmd = [
         str(target_dir / "micromegas-monolith"),
         "--roles", "all",
