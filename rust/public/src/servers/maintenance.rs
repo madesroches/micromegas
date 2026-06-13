@@ -186,18 +186,37 @@ where
         for task in &mut tasks {
             if task.get_next_run() < Utc::now() {
                 task_set.spawn(task.spawn().await);
-                if task_set.len() >= max_parallelism
-                    && let Some(res) = task_set.join_next().await
-                {
-                    match res {
-                        Ok(res) => match res {
-                            Ok(res) => match res {
-                                Ok(()) => {}
-                                Err(e) => error!("{e:?}"),
-                            },
-                            Err(e) => error!("{e:?}"),
-                        },
-                        Err(e) => error!("{e:?}"),
+                if task_set.len() >= max_parallelism {
+                    tokio::select! {
+                        res = task_set.join_next() => {
+                            if let Some(res) = res {
+                                match res {
+                                    Ok(res) => match res {
+                                        Ok(res) => match res {
+                                            Ok(()) => {}
+                                            Err(e) => error!("{e:?}"),
+                                        },
+                                        Err(e) => error!("{e:?}"),
+                                    },
+                                    Err(e) => error!("{e:?}"),
+                                }
+                            }
+                        }
+                        _ = &mut shutdown => {
+                            while let Some(res) = task_set.join_next().await {
+                                match res {
+                                    Ok(res) => match res {
+                                        Ok(res) => match res {
+                                            Ok(()) => {}
+                                            Err(e) => error!("{e:?}"),
+                                        },
+                                        Err(e) => error!("{e:?}"),
+                                    },
+                                    Err(e) => error!("{e:?}"),
+                                }
+                            }
+                            return;
+                        }
                     }
                 }
             }
