@@ -283,7 +283,8 @@ comment shows `docker run micromegas-all flight-sql-srv`). That is not the issue
 goal. The monolith needs its own image whose **default entrypoint runs all roles**.
 
 **New: `docker/monolith.Dockerfile`** — mirror the proven `analytics-web.Dockerfile` 4-stage shape
-(it's the only existing image that already bundles a frontend, which the monolith also needs):
+(a clean single-binary image that already bundles a frontend, which the monolith also needs —
+unlike the toolbox-style `all-in-one.Dockerfile`):
 1. WASM builder (`ARG WASM_IMAGE=micromegas-wasm-builder:latest`) — shared, same as today.
 2. Frontend build (`node:20-alpine`, `corepack`, `yarn build`) → `/app/dist`.
 3. Rust build (`rust:1-bookworm`): `cargo build --release --bin micromegas-monolith`.
@@ -517,3 +518,168 @@ These are settled and reflected in the design above; all are low-cost to reverse
 
 _None outstanding._ All design decisions above are settled; remaining choices are low-stakes and
 reversible before release.
+
+## Appendix A — Efficiency rationale: why one process, and for whom
+
+This appendix captures the reasoning behind the monolith's *value*, separate from the *mechanics*
+in the body. It is deliberately balanced — each efficiency claim is paired with the cost or residual
+risk it carries — so it can seed the user-facing "when to use the monolith" documentation without
+overselling. The throughline is that the monolith is **one rung of a two-rung model**, not a
+replacement for the split deployment.
+
+### A.1 The honest baseline: compose the four existing services
+
+The cheapest alternative to this whole plan is *zero code change*: the existing
+`docker/all-in-one.Dockerfile` already bundles all binaries + the built frontend, so a
+`docker-compose.yaml` can run four service containers (`telemetry-ingestion-srv`, `flight-sql-srv`,
+`telemetry-admin crond`, `analytics-web-srv`) + Postgres + a local-volume object store, all sharing
+the same connection strings. Both approaches run on one box and both are "one command up," so the
+*instance-count* framing ("one instance instead of four") does **not** distinguish them — everything
+already fits on one host either way.
+
+Two things the compose-of-existing-services path gets **for free** that the monolith must build:
+
+- **Per-role auth.** Each container has its own environment, so ingestion can run API-key auth and
+  FlightSQL can run OIDC using the existing unprefixed env vars. The monolith shares one process
+  environment, which is the *only* reason it needs the `MICROMEGAS_INGESTION_*` / `MICROMEGAS_ANALYTICS_*`
+  prefix scheme (Decision #4). That entire section of the plan exists to recover something compose
+  has by construction.
+- **Web → FlightSQL wiring.** Compose service DNS (`http://flight-sql:50051`) replaces the monolith's
+  loopback data-source seeding (Decision #7).
+
+So the monolith's real, non-overlapping advantages are narrow and must justify the refactor on their
+own merits: lower resident memory (one shared `LakehouseContext`, one runtime, one allocator), a
+single binary/image artifact, a unified scheduler, and loopback (not bridge) inter-role transport.
+Everything below qualifies how large those wins actually are.
+
+### A.2 Memory, at the *real* telemetry volume
+
+The initial "personal stack = low volume, caches stay empty" assumption is wrong for this product.
+A single game instance generates on the order of **100 Mbps (~12.5 MB/s) sustained**, so ingestion
+and the ETL/maintenance path are continuously busy and the `LakehouseContext` caches (metadata cache
++ file cache + DataFusion runtime) are **hot and large**, not idle. That changes the weighting:
+
+- **Fixed per-process overhead (always present):** one tokio runtime instead of four; one jemalloc
+  reserve instead of four; one telemetry DB connection pool instead of three (ingestion + flightsql +
+  maintenance each open their own today, plus their Postgres backend processes); one set of code
+  pages / static init. Bounded — tens to low-hundreds of MB total — but this is exactly the overhead
+  that hurts on a small or contended box.
+- **Variable, load-proportional saving (the dominant one at 100 Mbps):** the split deployment warms
+  **two** `LakehouseContext` instances (flight-sql + maintenance), each with its own working set
+  competing for the page cache. The monolith shares **one**, cutting both resident footprint and the
+  redundant I/O to warm a second copy. The busier the stack, the bigger this gets.
+- **Big-RAM bonus:** a single process can put the *entire* RAM pool behind one unified cache. Four
+  containers fragment it — either each warms its own cache (duplication) or you carve cgroup limits
+  (stranded RAM). So a high-memory machine is utilized *better* by the monolith than by the split
+  stack, not just adequately.
+
+What the monolith does **not** do: it does not turn inter-role data flow into in-memory handoff.
+Ingestion → ETL still round-trips through object store + Postgres, and web → FlightSQL still goes
+over loopback gRPC. The memory wins are shared caches + shared allocator + one runtime — *not*
+zero-copy between roles.
+
+### A.3 The shared tokio runtime: scheduling and adaptivity
+
+This is the cleanest single justification for one process over four, because — unlike memory, which
+you can address with hardware — cross-process scheduling **cannot be fixed at any price**.
+
+- **Thread oversubscription.** Four runtimes each size their worker pool to the core count → ~4×N
+  worker threads contending for N cores → involuntary preemption, run-queue contention, cache/TLB
+  thrash. One runtime sizes the pool once to the hardware.
+- **Process switches cost more than thread switches** (address-space change → TLB flush / page-table
+  reload). Role-to-role task switching in one process is cheaper.
+- **Work-stealing across roles is the irreducible win.** Separate runtimes can't see each other's
+  queues: ingestion threads spin idle while ETL is backed up, and vice versa. One work-stealing
+  scheduler load-balances ingestion/ETL/query/web tasks across the *same* pool automatically.
+
+The decisive point for the single-operator profile is **adaptivity under phase shift.** A power user
+alternates between *generating* data (run the game → ingestion-heavy, queries quiet) and *processing*
+it (stop and investigate → FlightSQL/DataFusion-heavy, ingestion quiet). These phases are largely
+**temporally exclusive**, so the optimal allocation is "all cores on whatever is hot right now."
+
+A static per-service thread cap (`TOKIO_WORKER_THREADS`) — the obvious way to tame oversubscription
+in the split deployment — does the *opposite*: it freezes a core partition that this workload
+violates minute to minute, reserving idle threads for ingestion while you query and ceilinging
+queries while ingestion is quiet. One runtime needs no such cap: tokio keeps the pool pinned to the
+core count and **work-steals tasks** across it, so threads that were feeding ingestion handlers steal
+DataFusion scan work the instant the phase flips. The pool tracks the hardware; the task mix tracks
+the phase. This is unreachable across process boundaries by any tuning.
+
+Two residuals:
+
+1. **No QoS between roles in one runtime.** tokio is cooperative, not priority-preemptive. A large
+   CPU-bound query landing *while* data is still streaming can monopolize cores and spike
+   ingestion-handler latency → backpressure. On a many-core, high-RAM workstation this rarely
+   escalates to drops, and flush-cadence + restart (A.5) covers the tail — but hard isolation lives
+   in the split deployment, not here.
+2. **The benefit inverts in the multi-user/production tier.** "All cores to the hot phase" is ideal
+   *because* a single operator's phases are exclusive. In a shared/team setting ingestion and queries
+   overlap continuously and you often *want* isolation so a runaway query can't starve ingestion.
+   Adaptive sharing is a strength in the single-operator tier and a liability in the production tier.
+
+### A.4 Loopback vs container-bridge networking
+
+The monolith's web → FlightSQL hop is loopback (`127.0.0.1:50051`); the split-on-bridge equivalent
+traverses a veth pair, the Linux bridge, and netfilter/conntrack. Loopback wins, but in a bounded,
+specific way:
+
+- **What it saves:** fewer per-packet hops, and — the concrete one — `lo`'s 65536 MTU vs the bridge's
+  1500, so a multi-MB Arrow Flight result becomes ~40× fewer packets → far fewer syscalls and less
+  per-packet TCP overhead. Measurable on large query responses.
+- **What it does *not* save:** loopback still traverses the full TCP stack and copies through kernel
+  socket buffers, and the **dominant** cost on this path is Arrow Flight serialization + gRPC/HTTP-2
+  framing — identical in both deployments and untouched by loopback.
+
+Two caveats:
+
+- **Not monolith-exclusive.** Compose with `network_mode: host` puts containers in the host network
+  namespace → web → flight-sql is also over `127.0.0.1`, same win, no refactor (at the cost of
+  network isolation and risking port collisions).
+- **The real lever is below loopback.** Escalation order if this path ever shows up in profiles: TCP
+  loopback → Unix domain socket (skip the TCP stack; tonic supports it) → **in-process query call**
+  (skip gRPC + serialization entirely). Only the last needs the single process, and it's the
+  deferred optimization flagged in Trade-offs.
+
+### A.5 The target niche: amortized workstation, bursty queries
+
+The sharpest economic case is not "small cheap VM" but **amortized hardware under an asymmetric
+load**:
+
+- Observability load is asymmetric — **ingestion is continuous, queries are bursty** (humans
+  investigating). A cloud VM sized for peak query concurrency sits idle most of the day but bills
+  24/7. A workstation you already own is a sunk cost; the marginal cost of running the stack on it is
+  ~zero. "Amortize the big machine you have" dominates "rent an always-on VM sized for occasional
+  queries."
+- **RAM headroom neutralizes the main stability objection.** "One process, one OOM, everything dies"
+  is fundamentally an OOM concern; 10s of GB of headroom makes OOM-kill unlikely even with ingestion
+  buffers + ETL working set + hot caches all resident. Combined with abundant cores, query
+  performance is excellent (warm Parquet, parallel scans, one unified cache).
+- **Residual stability is process-fatal *bugs*, not memory** — a panic, allocator abort, or poisoned
+  lock in any role still takes ingestion down regardless of free RAM. The blast radius is bounded by
+  **ingestion's flush cadence to object store** (a crash loses only the not-yet-persisted in-flight
+  window) plus an **auto-restart supervisor** (`systemd` / `restart: unless-stopped`). For
+  dev/personal/single-team telemetry, "lose a few seconds on a rare crash, auto-recover" is normally
+  acceptable. The stability story rests on flush cadence + restart, not on RAM.
+
+### A.6 The two-rung model
+
+The boundary that keeps the monolith honest: **one workstation is not HA and has a ceiling.** When
+sustained ingestion outgrows what one box's object-store writes + ETL can keep up with, or when the
+stack must stay up while the machine is off, you are back to the horizontal split — which is also
+where you get hard QoS isolation between roles (A.3) and per-container auth/network isolation (A.1).
+
+| Concern | Monolith (single-operator tier) | Split deployment (production/HA tier) |
+|---|---|---|
+| Resident memory | Lower — one shared `LakehouseContext`, one runtime/allocator | Higher — duplicated caches, N runtimes/pools |
+| CPU under phase shift | Adaptive — work-stealing follows the hot phase | Static partition or oversubscription |
+| Inter-role transport | Loopback (low overhead) | Bridge, or host-mode for loopback |
+| Role isolation / QoS | None — shared fate, no priority | Hard — separate processes/containers |
+| Per-role auth | Requires env-prefix scheme | Free (separate environments) |
+| HA / horizontal scale | No — single box ceiling | Yes |
+| Artifact | One binary / one image | Toolbox image + multi-service wiring |
+
+These are not competing options; they are two rungs. The monolith is the dev / personal /
+single-team / amortized-workstation rung. The split deployment remains the production / HA / scale
+rung and must stay fully supported (Overview). The efficiency wins above are real and grow with load,
+but every one of them is the same property — shared fate — that the production tier deliberately
+gives up for isolation.
