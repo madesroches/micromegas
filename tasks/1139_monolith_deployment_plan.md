@@ -187,8 +187,10 @@ Auth-crate changes (additive, open/closed — standalone binaries keep using the
   `OidcAuthProvider::new(config)` (`oidc.rs:373`) — there is no seam for a prefix at the call
   site. Supporting a prefixed admin list means changing `load_admin_users` to take a var name
   (`load_admin_users(name: &str)`) and threading that name through `OidcAuthProvider::new`'s
-  signature, updating **every** call site of `new` (FlightSQL via the provider builder, and the
-  web app at `analytics-web-srv/src/auth.rs:204`). This is more work than the API-key/OIDC-config
+  signature, updating **every** call site of `new`: the FlightSQL path goes through
+  `default_provider.rs:56` (not a direct call), the web app at `analytics-web-srv/src/auth.rs:204`,
+  the two tests in `auth/tests/oidc_tests.rs:55` and `:68`, plus the two doc-comment examples in
+  `auth/src/lib.rs:55` and `auth/src/multi.rs:41` (the latter break doctests). This is more work than the API-key/OIDC-config
   prefixing above; do not treat it as a trivial var lookup. Note the admin concept is OIDC-only:
   ingestion authenticates with API keys (`telemetry-ingestion-srv/src/main.rs:133`) and has no
   admin notion, so there is no "ingestion vs analytics" admin distinction to scope. The only
@@ -353,8 +355,9 @@ with the real single-process entrypoint.
    grace)`; move `data_sources`/`screens` modules into the lib; reduce the binary `main` to wiring.
 5. Add role-scoped auth to the auth crate: `default_provider::provider_with_prefix(prefix)` (with
    unprefixed fallback), `OidcConfig::from_env_var(name)`, and prefixed admins (thread an admin-var
-   name through `load_admin_users` and `OidcAuthProvider::new`, updating all `new` call sites incl.
-   the web app); reduce `provider()` to the unprefixed call so existing callers are unchanged. Note
+   name through `load_admin_users` and `OidcAuthProvider::new`, updating all `new` call sites:
+   `default_provider.rs:56`, the web app, the `oidc_tests.rs` tests, and the lib.rs/multi.rs
+   doctests); reduce `provider()` to the unprefixed call so existing callers are unchanged. Note
    the web role keeps reading unprefixed `MICROMEGAS_ADMINS` for v1 (see per-role auth caveat).
 6. Run full test suite + `cargo clippy --workspace -- -D warnings`; confirm the four standalone
    binaries behave identically.
@@ -398,8 +401,10 @@ with the real single-process entrypoint.
   `provider()` delegates to it
 - `rust/auth/src/oidc.rs` — `OidcConfig::from_env_var(name)`; for prefixed admins, change
   `load_admin_users()` to `load_admin_users(name: &str)` and add an admin-var-name parameter to
-  `OidcAuthProvider::new` (thread it through), updating all `new` call sites (FlightSQL via the
-  provider builder; web app at `analytics-web-srv/src/auth.rs:204`)
+  `OidcAuthProvider::new` (thread it through), updating all `new` call sites: FlightSQL via
+  `default_provider.rs:56`; web app at `analytics-web-srv/src/auth.rs:204`; tests at
+  `auth/tests/oidc_tests.rs:55` and `:68`; doc-comment examples at `auth/src/lib.rs:55` and
+  `auth/src/multi.rs:41` (doctests)
 - `rust/analytics/src/lakehouse/lakehouse_context.rs` — `from_connection(...)`; route `from_env`
 - `rust/analytics-web-srv/src/lib.rs` + `src/main.rs` — extract `run_web_server`, move modules
 - `rust/Cargo.toml` — workspace member if needed; new workspace deps if any
