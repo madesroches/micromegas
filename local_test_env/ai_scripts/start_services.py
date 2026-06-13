@@ -167,6 +167,13 @@ def start_monolith_mode(rust_dir, target_dir, postgres_pid):
         else:
             print("⚠️  MICROMEGAS_APP_SQL_CONNECTION_STRING not set (screens feature disabled)")
 
+    if not env.get("MICROMEGAS_TELEMETRY_URL"):
+        env["MICROMEGAS_TELEMETRY_URL"] = "http://127.0.0.1:9000"
+        print("Set MICROMEGAS_TELEMETRY_URL=http://127.0.0.1:9000")
+    if not env.get("MICROMEGAS_FLUSH_PERIOD"):
+        env["MICROMEGAS_FLUSH_PERIOD"] = "5"
+        print("Set MICROMEGAS_FLUSH_PERIOD=5")
+
     has_oidc = "MICROMEGAS_OIDC_CONFIG" in env or "MICROMEGAS_ANALYTICS_OIDC_CONFIG" in env
     if has_oidc and "MICROMEGAS_STATE_SECRET" not in env:
         env["MICROMEGAS_STATE_SECRET"] = secrets.token_hex(32)
