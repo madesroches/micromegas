@@ -68,6 +68,8 @@ pub struct FlightSqlServerBuilder {
     max_decoding_message_size: usize,
     listen_addr: SocketAddr,
     shutdown_grace: Duration,
+    injected_lakehouse: Option<Arc<LakehouseContext>>,
+    injected_shutdown: Option<Pin<Box<dyn Future<Output = ()> + Send + 'static>>>,
 }
 
 impl Default for FlightSqlServerBuilder {
@@ -82,6 +84,8 @@ impl Default for FlightSqlServerBuilder {
                 .parse()
                 .expect("valid default listen address"),
             shutdown_grace: Duration::from_secs(25),
+            injected_lakehouse: None,
+            injected_shutdown: None,
         }
     }
 }
@@ -142,11 +146,32 @@ impl FlightSqlServerBuilder {
         self
     }
 
+    /// Inject a pre-built `LakehouseContext` instead of calling `LakehouseContext::from_env`.
+    ///
+    /// Useful for the monolith, which constructs one shared context for all lake-backed roles.
+    pub fn with_lakehouse(mut self, lakehouse: Arc<LakehouseContext>) -> Self {
+        self.injected_lakehouse = Some(lakehouse);
+        self
+    }
+
+    /// Inject a custom shutdown future instead of the default `wait_for_sigterm()`.
+    ///
+    /// The monolith passes `fanout.subscribe()` here so all roles shut down from one signal.
+    pub fn with_shutdown(mut self, shutdown: impl Future<Output = ()> + Send + 'static) -> Self {
+        self.injected_shutdown = Some(Box::pin(shutdown));
+        self
+    }
+
     /// Build and run the FlightSQL server.
     ///
     /// Runs the full setup sequence and blocks until the server shuts down.
     pub async fn build_and_serve(self) -> Result<()> {
-        let lakehouse = LakehouseContext::from_env().await?;
+        // Use injected lakehouse or build one from environment
+        let lakehouse = if let Some(lh) = self.injected_lakehouse {
+            lh
+        } else {
+            LakehouseContext::from_env().await?
+        };
         let data_lake = lakehouse.lake().clone();
         info!(
             "created lakehouse context with metadata cache: {:?}",
@@ -214,7 +239,11 @@ impl FlightSqlServerBuilder {
         let listener = std::net::TcpListener::bind(self.listen_addr)?;
         let incoming = ConnectedIncoming::from_std_listener(listener)?;
 
-        let fanout = ShutdownFanout::new(wait_for_sigterm());
+        // Use injected shutdown future or default to SIGTERM
+        let shutdown_future: Pin<Box<dyn Future<Output = ()> + Send + 'static>> = self
+            .injected_shutdown
+            .unwrap_or_else(|| Box::pin(wait_for_sigterm()));
+        let fanout = ShutdownFanout::new(shutdown_future);
         let grace_secs = self.shutdown_grace.as_secs();
         let grace = self.shutdown_grace;
 

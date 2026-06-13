@@ -33,6 +33,20 @@ pub struct LakehouseContext {
 }
 
 impl LakehouseContext {
+    /// Builds a lakehouse context from an already-connected `DataLakeConnection`.
+    ///
+    /// Runs `migrate_lakehouse` on the supplied connection (idempotent) and
+    /// creates the DataFusion runtime.  The caller is responsible for running
+    /// `migrate_db` (ingestion schema) before this if both migrations are needed
+    /// — the monolith does this via `connect_to_remote_data_lake`.
+    pub async fn from_connection(lake: Arc<DataLakeConnection>) -> Result<Arc<Self>> {
+        migrate_lakehouse(lake.db_pool.clone())
+            .await
+            .with_context(|| "migrate_lakehouse")?;
+        let runtime = Arc::new(make_runtime_env()?);
+        Ok(Arc::new(Self::new(lake, runtime)))
+    }
+
     /// Reads MICROMEGAS_SQL_CONNECTION_STRING and MICROMEGAS_OBJECT_STORE_URI,
     /// connects to the data lake, runs lakehouse migrations, and creates the
     /// runtime environment.

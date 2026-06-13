@@ -1,9 +1,9 @@
-use analytics_web_srv::app_db::{
+use crate::app_db::{
     CreateDataSourceRequest, DataSource, DataSourceSummary, UpdateDataSourceRequest,
     ValidationError, validate_data_source_config,
 };
-use analytics_web_srv::auth::{ValidatedUser, require_admin as auth_require_admin};
-use analytics_web_srv::data_source_cache::DataSourceCache;
+use crate::auth::{ValidatedUser, require_admin as auth_require_admin};
+use crate::data_source_cache::DataSourceCache;
 use axum::{
     Extension, Json,
     extract::Path,

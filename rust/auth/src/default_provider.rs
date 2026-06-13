@@ -14,7 +14,8 @@ use std::sync::Arc;
 ///
 /// Reads configuration from:
 /// - `MICROMEGAS_API_KEYS`: JSON array of API keys
-/// - `MICROMEGAS_OIDC_*`: OIDC configuration (see `OidcConfig::from_env`)
+/// - `MICROMEGAS_OIDC_CONFIG`: OIDC configuration JSON
+/// - `MICROMEGAS_ADMINS`: JSON array of admin user emails/subjects
 ///
 /// Returns `Ok(Some(...))` if at least one provider is configured.
 /// Returns `Ok(None)` if no providers are configured (auth disabled).
@@ -36,24 +37,63 @@ use std::sync::Arc;
 /// # }
 /// ```
 pub async fn provider() -> anyhow::Result<Option<Arc<dyn AuthProvider>>> {
-    // Initialize API key provider if configured
-    let api_key_provider = match std::env::var("MICROMEGAS_API_KEYS") {
-        Ok(keys_json) => {
-            let keyring = parse_key_ring(&keys_json)?;
-            info!("API key authentication enabled");
-            Some(Arc::new(ApiKeyAuthProvider::new(keyring)) as Arc<dyn AuthProvider>)
-        }
-        Err(_) => {
-            info!("MICROMEGAS_API_KEYS not set - API key auth disabled");
-            None
+    provider_with_prefix("").await
+}
+
+/// Initializes auth providers using env vars scoped to a prefix.
+///
+/// For prefix `"MICROMEGAS_INGESTION"`:
+/// - API keys: tries `MICROMEGAS_INGESTION_API_KEYS`, falls back to `MICROMEGAS_API_KEYS`
+/// - OIDC:     tries `MICROMEGAS_INGESTION_OIDC_CONFIG`, falls back to `MICROMEGAS_OIDC_CONFIG`
+/// - Admins:   tries `MICROMEGAS_INGESTION_ADMINS`, falls back to `MICROMEGAS_ADMINS`
+///
+/// With an empty prefix the behaviour is identical to [`provider`].
+pub async fn provider_with_prefix(prefix: &str) -> anyhow::Result<Option<Arc<dyn AuthProvider>>> {
+    // Resolve API keys var with fallback
+    let api_keys_json = if prefix.is_empty() {
+        std::env::var("MICROMEGAS_API_KEYS").ok()
+    } else {
+        std::env::var(format!("{prefix}_API_KEYS"))
+            .or_else(|_| std::env::var("MICROMEGAS_API_KEYS"))
+            .ok()
+    };
+
+    // Resolve OIDC config var with fallback
+    let oidc_config_var: String = if prefix.is_empty() {
+        "MICROMEGAS_OIDC_CONFIG".to_string()
+    } else if std::env::var(format!("{prefix}_OIDC_CONFIG")).is_ok() {
+        format!("{prefix}_OIDC_CONFIG")
+    } else {
+        "MICROMEGAS_OIDC_CONFIG".to_string()
+    };
+
+    // Resolve admin users var with fallback
+    let admin_var: String = if prefix.is_empty() {
+        "MICROMEGAS_ADMINS".to_string()
+    } else {
+        let prefixed = format!("{prefix}_ADMINS");
+        if std::env::var(&prefixed).is_ok() {
+            prefixed
+        } else {
+            "MICROMEGAS_ADMINS".to_string()
         }
     };
 
+    // Initialize API key provider if configured
+    let api_key_provider = if let Some(keys_json) = api_keys_json {
+        let keyring = parse_key_ring(&keys_json)?;
+        info!("API key authentication enabled");
+        Some(Arc::new(ApiKeyAuthProvider::new(keyring)) as Arc<dyn AuthProvider>)
+    } else {
+        info!("API key auth not configured");
+        None
+    };
+
     // Initialize OIDC provider if configured
-    let oidc_provider = match OidcConfig::from_env() {
+    let oidc_provider = match OidcConfig::from_env_var(&oidc_config_var) {
         Ok(config) => {
             info!("Initializing OIDC authentication");
-            Some(Arc::new(OidcAuthProvider::new(config).await?) as Arc<dyn AuthProvider>)
+            Some(Arc::new(OidcAuthProvider::new(config, &admin_var).await?) as Arc<dyn AuthProvider>)
         }
         Err(e) => {
             info!("OIDC not configured ({e}) - OIDC auth disabled");
@@ -63,11 +103,11 @@ pub async fn provider() -> anyhow::Result<Option<Arc<dyn AuthProvider>>> {
 
     // Build multi-provider from available providers
     let mut multi = MultiAuthProvider::new();
-    if let Some(provider) = api_key_provider {
-        multi = multi.with_provider(provider);
+    if let Some(p) = api_key_provider {
+        multi = multi.with_provider(p);
     }
-    if let Some(provider) = oidc_provider {
-        multi = multi.with_provider(provider);
+    if let Some(p) = oidc_provider {
+        multi = multi.with_provider(p);
     }
 
     // Return None if no providers configured

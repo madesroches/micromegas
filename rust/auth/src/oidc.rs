@@ -148,10 +148,15 @@ impl Default for OidcConfig {
 impl OidcConfig {
     /// Load OIDC configuration from environment variable
     pub fn from_env() -> Result<Self> {
-        let json = std::env::var("MICROMEGAS_OIDC_CONFIG")
-            .map_err(|_| anyhow!("MICROMEGAS_OIDC_CONFIG environment variable not set"))?;
-        let config: OidcConfig = serde_json::from_str(&json)
-            .map_err(|e| anyhow!("Failed to parse MICROMEGAS_OIDC_CONFIG: {e:?}"))?;
+        Self::from_env_var("MICROMEGAS_OIDC_CONFIG")
+    }
+
+    /// Load OIDC configuration from a named environment variable
+    pub fn from_env_var(name: &str) -> Result<Self> {
+        let json =
+            std::env::var(name).map_err(|_| anyhow!("{name} environment variable not set"))?;
+        let config: OidcConfig =
+            serde_json::from_str(&json).map_err(|e| anyhow!("Failed to parse {name}: {e:?}"))?;
         Ok(config)
     }
 }
@@ -255,9 +260,9 @@ impl OidcIssuerClient {
     }
 }
 
-/// Load admin users from environment variable
-fn load_admin_users() -> Vec<String> {
-    match std::env::var("MICROMEGAS_ADMINS") {
+/// Load admin users from the named environment variable
+fn load_admin_users(admin_var: &str) -> Vec<String> {
+    match std::env::var(admin_var) {
         Ok(json) => serde_json::from_str::<Vec<String>>(&json).unwrap_or_default(),
         Err(_) => vec![],
     }
@@ -329,8 +334,11 @@ impl std::fmt::Debug for OidcAuthProvider {
 }
 
 impl OidcAuthProvider {
-    /// Create a new OIDC authentication provider
-    pub async fn new(config: OidcConfig) -> Result<Self> {
+    /// Create a new OIDC authentication provider.
+    ///
+    /// `admin_var` is the environment-variable name from which the admin user list
+    /// is loaded (e.g. `"MICROMEGAS_ADMINS"` or `"MICROMEGAS_ANALYTICS_ADMINS"`).
+    pub async fn new(config: OidcConfig, admin_var: &str) -> Result<Self> {
         if config.issuers.is_empty() {
             return Err(anyhow!("At least one OIDC issuer must be configured"));
         }
@@ -370,7 +378,7 @@ impl OidcAuthProvider {
             .build();
 
         // Load admin users from environment
-        let admin_users = load_admin_users();
+        let admin_users = load_admin_users(admin_var);
 
         Ok(Self {
             clients,
