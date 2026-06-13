@@ -27,9 +27,11 @@ use micromegas::ingestion::web_ingestion_service::WebIngestionService;
 use micromegas::micromegas_main;
 use micromegas::servers;
 use micromegas::servers::axum_utils::observability_middleware;
+use micromegas::servers::shutdown::{serve_axum_with_graceful_shutdown, wait_for_sigterm};
 use micromegas::tracing::prelude::*;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 use tower_http::limit::RequestBodyLimitLayer;
 
 #[derive(Parser, Debug)]
@@ -42,6 +44,14 @@ struct Cli {
     /// Disable authentication (development mode only)
     #[clap(long)]
     disable_auth: bool,
+
+    /// Seconds to wait for in-flight requests to complete after SIGTERM
+    #[clap(
+        long,
+        default_value = "25",
+        env = "MICROMEGAS_SHUTDOWN_GRACE_PERIOD_SECONDS"
+    )]
+    shutdown_grace_period_seconds: u64,
 }
 
 /// Serves the HTTP ingestion service.
@@ -91,17 +101,19 @@ async fn serve_http(
 
     let listener = tokio::net::TcpListener::bind(args.listen_endpoint_http)
         .await
-        .unwrap();
+        .with_context(|| format!("binding to {}", args.listen_endpoint_http))?;
     info!(
         "serving on {} with authentication={}",
         args.listen_endpoint_http, auth_enabled
     );
-    axum::serve(
+    let grace = Duration::from_secs(args.shutdown_grace_period_seconds);
+    serve_axum_with_graceful_shutdown(
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),
+        wait_for_sigterm(),
+        grace,
     )
-    .await
-    .unwrap();
+    .await?;
 
     Ok(())
 }

@@ -25,6 +25,7 @@ use clap::Parser;
 use http::{HeaderValue, Method, header};
 use micromegas::micromegas_main;
 use micromegas::servers::axum_utils::observability_middleware;
+use micromegas::servers::shutdown::{serve_axum_with_graceful_shutdown, wait_for_sigterm};
 use micromegas::tracing::prelude::*;
 #[allow(unused_imports)]
 use micromegas_auth::{axum::auth_middleware, types::AuthProvider};
@@ -47,6 +48,14 @@ struct Args {
     /// Disable authentication (development only)
     #[arg(long)]
     disable_auth: bool,
+
+    /// Seconds to wait for in-flight requests to complete after SIGTERM
+    #[arg(
+        long,
+        default_value = "25",
+        env = "MICROMEGAS_SHUTDOWN_GRACE_PERIOD_SECONDS"
+    )]
+    shutdown_grace_period_seconds: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -454,11 +463,14 @@ async fn main() -> Result<()> {
     );
 
     let listener = tokio::net::TcpListener::bind(&addr).await?;
-    axum::serve(
+    let grace = std::time::Duration::from_secs(args.shutdown_grace_period_seconds);
+    serve_axum_with_graceful_shutdown(
         listener,
         ServiceExt::<axum::extract::Request>::into_make_service_with_connect_info::<
             std::net::SocketAddr,
         >(app),
+        wait_for_sigterm(),
+        grace,
     )
     .await?;
 
