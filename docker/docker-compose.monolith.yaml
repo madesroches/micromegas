@@ -7,6 +7,7 @@ services:
       POSTGRES_DB: micromegas
     volumes:
       - pgdata:/var/lib/postgresql/data
+      - ./init-databases.sh:/docker-entrypoint-initdb.d/init-databases.sh
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U micromegas"]
       interval: 5s
@@ -32,7 +33,7 @@ services:
       - "3000:3000"
     environment:
       MICROMEGAS_SQL_CONNECTION_STRING: "postgres://micromegas:micromegas@postgres:5432/micromegas"
-      MICROMEGAS_APP_SQL_CONNECTION_STRING: "postgres://micromegas:micromegas@postgres:5432/micromegas"
+      MICROMEGAS_APP_SQL_CONNECTION_STRING: "postgres://micromegas:micromegas@postgres:5432/micromegas_app"
       MICROMEGAS_OBJECT_STORE_URI: "file:///data"
       # Always required by the web role, even with --disable-auth
       MICROMEGAS_WEB_CORS_ORIGIN: "http://localhost:3000"
