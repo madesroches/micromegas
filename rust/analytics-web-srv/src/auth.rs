@@ -145,6 +145,12 @@ pub struct AuthState {
     pub state_signing_secret: Vec<u8>,
     /// Base path for cookies (e.g., "/micromegas"), defaults to "/"
     pub base_path: String,
+    /// Environment variable name used to load the OIDC admin list.
+    ///
+    /// Defaults to `"MICROMEGAS_ADMINS"` for standalone deployments.
+    /// The monolith sets this to `"MICROMEGAS_ANALYTICS_ADMINS"` (with fallback
+    /// already resolved) so the web role's admin list matches the FlightSQL role.
+    pub admin_var_name: String,
 }
 
 impl AuthState {
@@ -192,16 +198,17 @@ impl AuthState {
         .set_redirect_uri(provider.redirect_uri.clone())
     }
 
-    /// Get or initialize the OIDC auth provider for JWT validation
+    /// Get or initialize the OIDC auth provider for JWT validation.
     ///
     /// The auth provider is lazy-initialized on first use and cached.
-    /// It uses the MICROMEGAS_OIDC_CONFIG environment variable for configuration,
-    /// which is the same format used by the FlightSQL server.
+    /// The admin list is loaded from the var named by `self.admin_var_name`
+    /// (defaults to `MICROMEGAS_ADMINS`; the monolith may set a role-scoped name).
     pub async fn get_auth_provider(&self) -> Result<&Arc<OidcAuthProvider>> {
+        let admin_var = self.admin_var_name.clone();
         self.auth_provider
-            .get_or_try_init(|| async {
+            .get_or_try_init(|| async move {
                 let config = OidcConfig::from_env()?;
-                let provider = OidcAuthProvider::new(config).await?;
+                let provider = OidcAuthProvider::new(config, &admin_var).await?;
                 Ok(Arc::new(provider))
             })
             .await

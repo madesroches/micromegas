@@ -415,7 +415,9 @@ mod native {
 
                     if let Some(url) = telemetry_sink_url {
                         let metadata_retry = self.telemetry_metadata_retry.unwrap_or_else(|| {
-                            tokio_retry::strategy::ExponentialBackoff::from_millis(10).take(3)
+                            // 10 retries: up to ~5s total — enough for a co-located ingestion
+                            // server (e.g. monolith) to finish its startup before giving up.
+                            tokio_retry::strategy::ExponentialBackoff::from_millis(10).take(10)
                         });
                         let blocks_retry = self.telemetry_blocks_retry.unwrap_or_else(|| {
                             tokio_retry::strategy::ExponentialBackoff::from_millis(10).take(3)

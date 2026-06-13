@@ -23,6 +23,7 @@ fn create_test_auth_state() -> AuthState {
         secure_cookies: false,
         state_signing_secret: b"test-secret-32-bytes-for-testing".to_vec(),
         base_path: String::new(),
+        admin_var_name: "MICROMEGAS_ADMINS".to_string(),
     }
 }
 

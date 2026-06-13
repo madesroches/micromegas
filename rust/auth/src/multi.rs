@@ -38,7 +38,7 @@ use std::sync::Arc;
 ///     token_cache_size: 1000,
 ///     token_cache_ttl_secs: 300,
 /// };
-/// let oidc_provider = Arc::new(OidcAuthProvider::new(oidc_config).await?);
+/// let oidc_provider = Arc::new(OidcAuthProvider::new(oidc_config, "MICROMEGAS_ADMINS").await?);
 ///
 /// // Create multi-provider with builder pattern
 /// let multi = MultiAuthProvider::new()

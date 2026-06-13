@@ -3520,6 +3520,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "micromegas-monolith"
+version = "0.26.0"
+dependencies = [
+ "analytics-web-srv",
+ "anyhow",
+ "clap",
+ "micromegas",
+ "serde_json",
+ "sqlx",
+ "tikv-jemallocator",
+ "tokio",
+]
+
+[[package]]
 name = "micromegas-otel-ingestion"
 version = "0.26.0"
 dependencies = [
@@ -5738,12 +5752,10 @@ name = "telemetry-ingestion-srv"
 version = "0.26.0"
 dependencies = [
  "anyhow",
- "axum 0.8.9",
  "clap",
  "micromegas",
  "tikv-jemallocator",
  "tokio",
- "tower-http",
 ]
 
 [[package]]

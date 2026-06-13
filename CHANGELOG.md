@@ -4,6 +4,8 @@ This file documents the historical progress of the Micromegas project. For curre
 
 ## Unreleased
 
+* **Deployment:**
+  * Add `micromegas-monolith` single-process binary that runs ingestion, FlightSQL, maintenance, and web in one Tokio runtime sharing a single data-lake connection; includes Docker image, docker-compose stack, `--monolith` start-script mode, per-role auth, and role selection via `--roles` / `MICROMEGAS_MONOLITH_ROLES` (#1139)
 * **Performance:**
   * Switch all production service binaries to jemalloc (`tikv-jemallocator`) as the global allocator; reduces allocation latency and memory fragmentation under multi-threaded workloads (#1129)
 * **Services:**

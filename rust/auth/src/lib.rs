@@ -52,7 +52,7 @@
 //!     token_cache_ttl_secs: 300,
 //! };
 //!
-//! let provider = OidcAuthProvider::new(config).await?;
+//! let provider = OidcAuthProvider::new(config, "MICROMEGAS_ADMINS").await?;
 //!
 //! // Create request parts with ID token
 //! let mut headers = http::HeaderMap::new();

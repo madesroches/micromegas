@@ -1,0 +1,53 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: micromegas
+      POSTGRES_PASSWORD: micromegas
+      POSTGRES_DB: micromegas
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./init-databases.sh:/docker-entrypoint-initdb.d/init-databases.sh
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U micromegas"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  micromegas:
+    image: marcantoinedesroches/micromegas-monolith:latest
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command:
+      - "--roles"
+      - "all"
+      - "--listen-endpoint-http"
+      - "0.0.0.0:9000"
+      - "--frontend-dir"
+      - "/app/frontend"
+      - "--disable-auth"
+    ports:
+      - "9000:9000"
+      - "50051:50051"
+      - "3000:3000"
+    environment:
+      MICROMEGAS_SQL_CONNECTION_STRING: "postgres://micromegas:micromegas@postgres:5432/micromegas"
+      MICROMEGAS_APP_SQL_CONNECTION_STRING: "postgres://micromegas:micromegas@postgres:5432/micromegas_app"
+      MICROMEGAS_TELEMETRY_URL: "http://micromegas:9000"
+      MICROMEGAS_FLUSH_PERIOD: "5"
+      MICROMEGAS_OBJECT_STORE_URI: "file:///data"
+      # Always required by the web role, even with --disable-auth
+      MICROMEGAS_WEB_CORS_ORIGIN: "http://localhost:3000"
+      MICROMEGAS_BASE_PATH: "/"
+      # With auth ON instead of --disable-auth, the web role additionally requires:
+      #   MICROMEGAS_STATE_SECRET, MICROMEGAS_OIDC_CONFIG, MICROMEGAS_AUTH_REDIRECT_URI
+      # Ingestion / FlightSQL auth (with auth ON):
+      #   MICROMEGAS_INGESTION_API_KEYS  or  MICROMEGAS_API_KEYS
+      #   MICROMEGAS_ANALYTICS_OIDC_CONFIG  or  MICROMEGAS_OIDC_CONFIG
+    volumes:
+      - lake:/data
+
+volumes:
+  pgdata:
+  lake:

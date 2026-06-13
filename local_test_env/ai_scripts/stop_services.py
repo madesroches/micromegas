@@ -44,14 +44,14 @@ def main():
             print("Warning: Could not parse PIDs file")
     
     # Kill any remaining services by name
-    services = ["telemetry-ingestion-srv", "flight-sql-srv", "telemetry-admin"]
+    services = ["telemetry-ingestion-srv", "flight-sql-srv", "telemetry-admin", "micromegas-monolith"]
     for service in services:
         kill_by_name(service)
-    
+
     print("✅ Services stopped")
-    
+
     # Clean up log files
-    log_files = ["/tmp/ingestion.log", "/tmp/analytics.log", "/tmp/admin.log"]
+    log_files = ["/tmp/ingestion.log", "/tmp/analytics.log", "/tmp/admin.log", "/tmp/monolith.log"]
     for log_file in log_files:
         try:
             os.remove(log_file)

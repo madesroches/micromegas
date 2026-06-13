@@ -1,6 +1,6 @@
 [package]
-name = "telemetry-ingestion-srv"
-description = "test ingestion http server, part of micromegas"
+name = "micromegas-monolith"
+description = "Single-process (monolith) deployment of all Micromegas roles"
 keywords.workspace = true
 version.workspace = true
 edition.workspace = true
@@ -8,22 +8,20 @@ homepage.workspace = true
 repository.workspace = true
 license.workspace = true
 authors.workspace = true
-default-run = "telemetry-ingestion-srv"
 
 [dependencies]
+analytics-web-srv = { path = "../analytics-web-srv" }
 micromegas = { workspace = true, features = ["server"] }
 
 anyhow.workspace = true
 clap.workspace = true
+serde_json.workspace = true
+sqlx.workspace = true
 tokio.workspace = true
 
 [target.'cfg(not(target_os = "windows"))'.dependencies]
 tikv-jemallocator.workspace = true
 
 [[bin]]
-name = "telemetry-ingestion-srv"
+name = "micromegas-monolith"
 path = "src/main.rs"
-
-[[bin]]
-name = "telemetry-generator"
-path = "test/generator.rs"

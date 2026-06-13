@@ -52,7 +52,7 @@ async fn test_oidc_provider_creation() {
         token_cache_ttl_secs: 300,
     };
 
-    let provider = OidcAuthProvider::new(config).await;
+    let provider = OidcAuthProvider::new(config, "MICROMEGAS_ADMINS").await;
     assert!(provider.is_ok());
 }
 
@@ -65,7 +65,7 @@ async fn test_oidc_provider_empty_issuers() {
         token_cache_ttl_secs: 300,
     };
 
-    let provider = OidcAuthProvider::new(config).await;
+    let provider = OidcAuthProvider::new(config, "MICROMEGAS_ADMINS").await;
     assert!(provider.is_err());
     assert!(
         provider

@@ -26,7 +26,7 @@ DOCKERHUB_REPO = "micromegas"
 
 # Shared WASM builder image (dependency for analytics-web and all-in-one)
 WASM_IMAGE = "micromegas-wasm-builder:latest"
-WASM_SERVICES = {"analytics-web", "all"}
+WASM_SERVICES = {"analytics-web", "all", "monolith"}
 
 # Service definitions: name -> (dockerfile, description)
 SERVICES = {
@@ -36,6 +36,7 @@ SERVICES = {
     "http-gateway": ("http-gateway.Dockerfile", "HTTP gateway server"),
     "analytics-web": ("analytics-web.Dockerfile", "Analytics web app"),
     "all": ("all-in-one.Dockerfile", "All services in one image (dev/test)"),
+    "monolith": ("monolith.Dockerfile", "Single-process monolith (all roles)"),
 }
 
 

@@ -14,25 +14,13 @@
 static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 use anyhow::{Context, Result};
-use axum::Extension;
-use axum::Router;
-use axum::extract::DefaultBodyLimit;
-use axum::middleware;
 use clap::Parser;
-use micromegas::auth::axum::auth_middleware;
-use micromegas::auth::types::AuthProvider;
-use micromegas::ingestion::data_lake_connection::DataLakeConnection;
 use micromegas::ingestion::remote_data_lake::connect_to_remote_data_lake;
-use micromegas::ingestion::web_ingestion_service::WebIngestionService;
 use micromegas::micromegas_main;
-use micromegas::servers;
-use micromegas::servers::axum_utils::observability_middleware;
-use micromegas::servers::shutdown::{serve_axum_with_graceful_shutdown, wait_for_sigterm};
+use micromegas::servers::ingestion::serve_ingestion;
 use micromegas::tracing::prelude::*;
 use std::net::SocketAddr;
-use std::sync::Arc;
 use std::time::Duration;
-use tower_http::limit::RequestBodyLimitLayer;
 
 #[derive(Parser, Debug)]
 #[clap(name = "Telemetry Ingestion Server")]
@@ -54,70 +42,6 @@ struct Cli {
     shutdown_grace_period_seconds: u64,
 }
 
-/// Serves the HTTP ingestion service.
-///
-/// This function sets up the Axum router, applies middleware, and starts the HTTP server.
-async fn serve_http(
-    args: &Cli,
-    lake: DataLakeConnection,
-    auth_provider: Option<Arc<dyn AuthProvider>>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    use axum::routing::get;
-
-    let service = Arc::new(WebIngestionService::new(lake));
-
-    // Health check endpoint (no auth required)
-    let health_router =
-        Router::new().route("/health", get(|| async { axum::http::StatusCode::OK }));
-
-    // Protected routes (require auth)
-    //
-    // OTLP routes ride on a separate sub-Router that carries its own 20 MiB body limit
-    // plus gzip request decompression. We `.merge()` it BEFORE applying the outer
-    // 100 MiB limit so per-route layers stay scoped — the outer limit applies to
-    // `/ingestion/insert_block` and friends; OTLP routes keep the tighter cap.
-    let mut protected_app = servers::ingestion::register_routes(Router::new())
-        .merge(servers::otlp::otlp_router())
-        .layer(DefaultBodyLimit::disable())
-        .layer(RequestBodyLimitLayer::new(100 * 1024 * 1024))
-        .layer(Extension(service));
-
-    // Add authentication middleware if enabled
-    let auth_enabled = auth_provider.is_some();
-    if let Some(provider) = auth_provider {
-        info!("Authentication enabled - API key and/or OIDC");
-        protected_app = protected_app.layer(middleware::from_fn(move |req, next| {
-            auth_middleware(provider.clone(), req, next)
-        }));
-    } else {
-        warn!("Authentication disabled - development mode only!");
-    }
-
-    // Merge health check (public) with protected routes
-    let mut app = health_router.merge(protected_app);
-
-    // Add observability middleware last (outer layer)
-    app = app.layer(middleware::from_fn(observability_middleware));
-
-    let listener = tokio::net::TcpListener::bind(args.listen_endpoint_http)
-        .await
-        .with_context(|| format!("binding to {}", args.listen_endpoint_http))?;
-    info!(
-        "serving on {} with authentication={}",
-        args.listen_endpoint_http, auth_enabled
-    );
-    let grace = Duration::from_secs(args.shutdown_grace_period_seconds);
-    serve_axum_with_graceful_shutdown(
-        listener,
-        app.into_make_service_with_connect_info::<SocketAddr>(),
-        wait_for_sigterm(),
-        grace,
-    )
-    .await?;
-
-    Ok(())
-}
-
 #[micromegas_main(interop_max_level = "info")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Cli::parse();
@@ -127,11 +51,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
     let data_lake = connect_to_remote_data_lake(&connection_string, &object_store_uri).await?;
 
-    // Initialize authentication providers (same pattern as flight-sql-srv)
-    let auth_required = !args.disable_auth;
-    let auth_provider: Option<Arc<dyn AuthProvider>> = if auth_required {
+    let auth_provider = if args.disable_auth {
+        info!("Authentication disabled (--disable-auth)");
+        None
+    } else {
         match micromegas::auth::default_provider::provider().await? {
-            Some(provider) => Some(provider),
+            Some(p) => Some(p),
             None => {
                 return Err("Authentication required but no auth providers configured. \
                      Set MICROMEGAS_API_KEYS or MICROMEGAS_OIDC_CONFIG, \
@@ -139,11 +64,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .into());
             }
         }
-    } else {
-        info!("Authentication disabled (--disable_auth)");
-        None
     };
 
-    serve_http(&args, data_lake, auth_provider).await?;
+    let grace = Duration::from_secs(args.shutdown_grace_period_seconds);
+    serve_ingestion(
+        args.listen_endpoint_http,
+        data_lake,
+        auth_provider,
+        micromegas::servers::shutdown::wait_for_sigterm(),
+        grace,
+    )
+    .await?;
     Ok(())
 }
