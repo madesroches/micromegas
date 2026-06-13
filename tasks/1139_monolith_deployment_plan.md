@@ -191,8 +191,8 @@ out of scope for this unification.
 ```text
 1. parse CLI + env (roles, listen addrs, grace, disable_auth, web config)
 2. if any of {ingestion, flightsql, maintenance}:
-     conn = connect_to_remote_data_lake(SQL_CONN, OBJECT_STORE_URI)   // runs migrate_db
-     lakehouse = LakehouseContext::new(conn, make_runtime_env())      // + migrate_lakehouse
+     conn = connect_to_remote_data_lake(SQL_CONN, OBJECT_STORE_URI).await?   // runs migrate_db
+     lakehouse = LakehouseContext::from_connection(Arc::new(conn)).await?    // runs migrate_lakehouse
      // single connection shared by all three lake-backed roles
 3. if not disable_auth:
      if ingestion enabled: ingestion_auth = provider_with_prefix("MICROMEGAS_INGESTION")?
@@ -253,20 +253,29 @@ goal. The monolith needs its own image whose **default entrypoint runs all roles
    `/usr/local/bin/`, the frontend to `/app/frontend`, then:
    ```dockerfile
    EXPOSE 9000 50051 3000
+   # Defaults for the two web vars analytics-web-srv reads unconditionally (even with
+   # --disable-auth); override via -e for real deployments.
+   ENV MICROMEGAS_WEB_CORS_ORIGIN=http://localhost:3000 \
+       MICROMEGAS_BASE_PATH=/
    ENTRYPOINT ["micromegas-monolith"]
    CMD ["--roles", "all", \
         "--listen-endpoint-http", "0.0.0.0:9000", \
         "--frontend-dir", "/app/frontend"]
    ```
    (FlightSQL already binds `0.0.0.0:50051`; the web role binds `0.0.0.0:3000`. Config — both DB
-   strings, object store URI, auth env, grace — is supplied via `-e`/env, as with every other image.)
+   strings, object store URI, grace — is supplied via `-e`/env, as with every other image. The web
+   role hard-requires `MICROMEGAS_WEB_CORS_ORIGIN` + `MICROMEGAS_BASE_PATH` always, and with auth ON
+   also `MICROMEGAS_STATE_SECRET` / `MICROMEGAS_OIDC_CONFIG` / `MICROMEGAS_AUTH_REDIRECT_URI`; pass
+   `--disable-auth` to skip the latter three.)
 
 **Wire into the build system** — add one row to the `SERVICES` dict in
 `build/build_docker_images.py` (`:33`):
 ```python
 "monolith": ("monolith.Dockerfile", "Single-process monolith (all roles)"),
 ```
-The script's `ensure_wasm_builder()` dependency applies here too (frontend stage). Update
+The frontend stage depends on the WASM build, but `ensure_wasm_builder()` only runs for services
+in the separate `WASM_SERVICES` set (`:29`, currently `{"analytics-web", "all"}`) — so also add
+`"monolith"` there, otherwise the build proceeds without the WASM dependency. Update
 `docker/README.md` with the new image and a run example.
 
 **`docker-compose` example** — `docker/docker-compose.monolith.yaml`, pairing the monolith with a
@@ -277,14 +286,22 @@ part of this work (not optional):
 services:
   postgres: { image: postgres:16, environment: [ ... ], volumes: [pgdata:/var/lib/postgresql/data] }
   micromegas:
-    image: madesroches/micromegas-monolith:latest
+    image: marcantoinedesroches/micromegas-monolith:latest  # matches DOCKERHUB_USER in build/build_docker_images.py
     depends_on: [postgres]
+    command: ["--roles", "all", "--listen-endpoint-http", "0.0.0.0:9000",
+              "--frontend-dir", "/app/frontend", "--disable-auth"]
     ports: ["9000:9000", "50051:50051", "3000:3000"]
     environment:
       MICROMEGAS_SQL_CONNECTION_STRING: postgres://.../telemetry
       MICROMEGAS_APP_SQL_CONNECTION_STRING: postgres://.../micromegas_app
       MICROMEGAS_OBJECT_STORE_URI: file:///data
-      # auth: MICROMEGAS_INGESTION_API_KEYS / MICROMEGAS_ANALYTICS_OIDC_CONFIG, or --disable-auth
+      # Always required by the web role, even with --disable-auth
+      # (analytics-web-srv/src/main.rs reads both unconditionally):
+      MICROMEGAS_WEB_CORS_ORIGIN: http://localhost:3000
+      MICROMEGAS_BASE_PATH: /
+      # With auth ON instead of --disable-auth, the web role additionally requires
+      # MICROMEGAS_STATE_SECRET, MICROMEGAS_OIDC_CONFIG, and MICROMEGAS_AUTH_REDIRECT_URI;
+      # ingestion/FlightSQL auth: MICROMEGAS_INGESTION_API_KEYS / MICROMEGAS_ANALYTICS_OIDC_CONFIG.
     volumes: ["lake:/data"]
 ```
 
@@ -321,7 +338,8 @@ with the real single-process entrypoint.
 ### Phase 3 — Packaging, tooling, tests, docs
 12. Add `docker/monolith.Dockerfile` (4-stage: WASM → frontend → rust `--bin micromegas-monolith` →
     slim runtime with default entrypoint `--roles all`). Add the `"monolith"` row to the `SERVICES`
-    dict in `build/build_docker_images.py`; update `docker/README.md`. Optionally add a
+    dict and `"monolith"` to the `WASM_SERVICES` set in `build/build_docker_images.py`; update
+    `docker/README.md`. Optionally add a
     `docker/docker-compose.monolith.yaml` (monolith + Postgres + local object store volume) — the
     one-command low-cost stack.
 13. Add a `--monolith` path to `local_test_env/ai_scripts/start_services.py` (and `stop_services.py`)
@@ -350,7 +368,8 @@ with the real single-process entrypoint.
 - `rust/analytics-web-srv/src/lib.rs` + `src/main.rs` — extract `run_web_server`, move modules
 - `rust/Cargo.toml` — workspace member if needed; new workspace deps if any
 - `local_test_env/ai_scripts/start_services.py`, `stop_services.py` — monolith mode
-- `build/build_docker_images.py` — add `"monolith"` to `SERVICES`; `docker/README.md` — document it
+- `build/build_docker_images.py` — add `"monolith"` to `SERVICES` and to `WASM_SERVICES`;
+  `docker/README.md` — document it
 - `mkdocs/mkdocs.yml` — nav entry; `mkdocs/docs/admin/service-lifecycle.md` — note monolith
 - `CLAUDE.md` — add monolith run command under Service Management
 
