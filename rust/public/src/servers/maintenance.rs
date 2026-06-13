@@ -253,6 +253,28 @@ where
                 }
                 Err(e) => warn!("{e:?}"),
             }
+        } else {
+            // No sleep needed, but still poll the shutdown future so the loop
+            // can exit even when tasks run longer than their period.
+            tokio::select! {
+                biased;
+                _ = &mut shutdown => {
+                    while let Some(res) = task_set.join_next().await {
+                        match res {
+                            Ok(res) => match res {
+                                Ok(res) => match res {
+                                    Ok(()) => {}
+                                    Err(e) => error!("{e:?}"),
+                                },
+                                Err(e) => error!("{e:?}"),
+                            },
+                            Err(e) => error!("{e:?}"),
+                        }
+                    }
+                    return;
+                }
+                _ = tokio::task::yield_now() => {}
+            }
         }
     }
 }
