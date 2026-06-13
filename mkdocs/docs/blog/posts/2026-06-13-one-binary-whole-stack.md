@@ -16,14 +16,14 @@ tags:
 
 The full Micromegas stack — ingestion, analytics, maintenance, web UI — now fits in a free-tier VM. One binary, one Postgres, one object store. That's it.
 
-This is the `micromegas-monolith`: a single process that runs all four roles on one tokio runtime, sharing a data-lake connection, a cache, and a SIGTERM fanout. Spin it up on a $0/month Oracle ARM instance, or your laptop, or whatever throwaway VM your cloud provider gives away. Point your instrumented app at it. Get logs, metrics, and traces with a full SQL query interface and a web UI, for essentially zero running cost.
+This is the `micromegas-monolith`: a single process that runs all four roles on one tokio runtime, sharing a data-lake connection, a cache, and a SIGTERM fanout. Spin it up on a free-tier VM, your laptop, or whatever throwaway instance your cloud provider gives away. Point your instrumented app at it. Get logs, metrics, and traces with a full SQL query interface and a web UI, for essentially zero running cost.
 
-That's the pitch for personal telemetry. For teams it's also the fastest demo path: one `docker compose up`, no orchestration.
+That's the pitch for personal telemetry. For teams it's also the fastest demo path: one compose file, no orchestration.
 
 <!-- more -->
 
 ```
-docker compose up
+docker compose -f docker-compose.monolith.yaml up
 ```
 
 Postgres + local-volume object store + the monolith. The shipped `docker-compose.monolith.yaml` does the wiring.
@@ -37,7 +37,7 @@ cargo run --bin micromegas-monolith -- --roles all \
   --disable-auth
 ```
 
-Ingestion on :9000, FlightSQL on :50051, web on :3000, maintenance daemon compacting the lake — all in the same process.
+Ingestion on :9000, FlightSQL on :50051, web on :3000, maintenance daemon materializing views — all in the same process.
 
 ## Why one process beats four containers
 
