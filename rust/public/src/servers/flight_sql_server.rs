@@ -12,6 +12,7 @@ use std::future::Future;
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Duration;
 
 use arrow_flight::flight_service_server::FlightServiceServer;
 use datafusion::execution::runtime_env::RuntimeEnv;
@@ -66,6 +67,7 @@ pub struct FlightSqlServerBuilder {
     use_default_auth: bool,
     max_decoding_message_size: usize,
     listen_addr: SocketAddr,
+    shutdown_grace: Duration,
 }
 
 impl Default for FlightSqlServerBuilder {
@@ -79,6 +81,7 @@ impl Default for FlightSqlServerBuilder {
             listen_addr: "0.0.0.0:50051"
                 .parse()
                 .expect("valid default listen address"),
+            shutdown_grace: Duration::from_secs(25),
         }
     }
 }
@@ -130,6 +133,12 @@ impl FlightSqlServerBuilder {
     /// Set the listen address (default: `0.0.0.0:50051`).
     pub fn with_listen_addr(mut self, addr: SocketAddr) -> Self {
         self.listen_addr = addr;
+        self
+    }
+
+    /// Set the grace period for graceful shutdown on SIGTERM (default: 25s).
+    pub fn with_shutdown_grace(mut self, grace: Duration) -> Self {
+        self.shutdown_grace = grace;
         self
     }
 
@@ -199,15 +208,38 @@ impl FlightSqlServerBuilder {
             }))
             .into_inner();
 
+        use super::shutdown::{ShutdownFanout, wait_for_sigterm};
+
         info!("Listening on {:?}", self.listen_addr);
         let listener = std::net::TcpListener::bind(self.listen_addr)?;
         let incoming = ConnectedIncoming::from_std_listener(listener)?;
 
-        Server::builder()
+        let fanout = ShutdownFanout::new(wait_for_sigterm());
+        let grace_secs = self.shutdown_grace.as_secs();
+        let grace = self.shutdown_grace;
+
+        let serve = Server::builder()
             .layer(layer)
             .add_service(svc)
-            .serve_with_incoming(incoming)
-            .await?;
+            .serve_with_incoming_shutdown(incoming, fanout.subscribe());
+
+        let deadline = {
+            let d = fanout.subscribe();
+            async move {
+                d.await;
+                tokio::time::sleep(grace).await;
+            }
+        };
+
+        tokio::select! {
+            res = serve => {
+                info!("drain completed");
+                res?;
+            }
+            _ = deadline => {
+                warn!("grace period of {grace_secs}s elapsed with work still in flight");
+            }
+        }
 
         info!("bye");
         Ok(())

@@ -12,7 +12,9 @@ use micromegas_analytics::lakehouse::view_factory::ViewFactory;
 use micromegas_analytics::response_writer::ResponseWriter;
 use micromegas_analytics::time::TimeRange;
 use micromegas_tracing::prelude::*;
+use std::future::Future;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::task::JoinSet;
 
 use super::cron_task::{CronTask, TaskCallback};
@@ -169,11 +171,15 @@ impl TaskCallback for EverySecondTask {
     }
 }
 
-/// Runs a collection of `CronTask`s indefinitely.
+/// Runs a collection of `CronTask`s until `shutdown` fires.
 ///
-/// This function continuously checks for tasks that are due to run, spawns them,
-/// and manages their execution, ensuring that `max_parallelism` is not exceeded.
-pub async fn run_tasks_forever(mut tasks: Vec<CronTask>, max_parallelism: usize) {
+/// When `shutdown` completes, the loop stops scheduling new tasks and drains
+/// any currently running tasks before returning.
+pub async fn run_tasks_forever<F>(mut tasks: Vec<CronTask>, max_parallelism: usize, shutdown: F)
+where
+    F: Future<Output = ()>,
+{
+    tokio::pin!(shutdown);
     let mut task_set = JoinSet::new();
     loop {
         let mut next_task_run = Utc::now() + TimeDelta::days(2);
@@ -206,7 +212,26 @@ pub async fn run_tasks_forever(mut tasks: Vec<CronTask>, max_parallelism: usize)
                 .to_std()
                 .with_context(|| "delay.to_std")
             {
-                Ok(wait) => tokio::time::sleep(wait).await,
+                Ok(wait) => {
+                    tokio::select! {
+                        _ = tokio::time::sleep(wait) => {}
+                        _ = &mut shutdown => {
+                            while let Some(res) = task_set.join_next().await {
+                                match res {
+                                    Ok(res) => match res {
+                                        Ok(res) => match res {
+                                            Ok(()) => {}
+                                            Err(e) => error!("{e:?}"),
+                                        },
+                                        Err(e) => error!("{e:?}"),
+                                    },
+                                    Err(e) => error!("{e:?}"),
+                                }
+                            }
+                            return;
+                        }
+                    }
+                }
                 Err(e) => warn!("{e:?}"),
             }
         }
@@ -230,15 +255,26 @@ pub fn get_global_views_with_update_group(view_factory: &ViewFactory) -> Vec<Arc
 ///
 /// This function initializes and spawns several `CronTask`s for daily, hourly, minute,
 /// and second-based maintenance operations, such as data materialization and cleanup.
+/// All four runner loops react to `shutdown`: they stop scheduling and drain in-flight
+/// tasks. A deadline arm forces return after `grace` even if tasks haven't drained.
 ///
 /// # Arguments
 ///
 /// * `lakehouse` - The lakehouse context with shared metadata cache.
 /// * `views_to_update` - A vector of views that need to be updated by the daemon.
-pub async fn daemon(
+/// * `shutdown` - Future that completes when the process should begin shutting down.
+/// * `grace` - Maximum time to wait for in-flight tasks after the shutdown signal.
+pub async fn daemon<F>(
     lakehouse: Arc<LakehouseContext>,
     mut views_to_update: Vec<Arc<dyn View>>,
-) -> Result<()> {
+    shutdown: F,
+    grace: Duration,
+) -> Result<()>
+where
+    F: Future<Output = ()> + Send + 'static,
+{
+    use super::shutdown::ShutdownFanout;
+
     views_to_update.sort_by_key(|v| v.get_update_group().unwrap_or(i32::MAX));
     let views = Arc::new(views_to_update);
 
@@ -276,11 +312,30 @@ pub async fn daemon(
         Arc::new(EverySecondTask { lakehouse, views }),
     )?;
 
+    let fanout = ShutdownFanout::new(shutdown);
+    let grace_secs = grace.as_secs();
+
     let mut runners = tokio::task::JoinSet::new();
-    runners.spawn(async move { run_tasks_forever(vec![every_day], 1).await });
-    runners.spawn(async move { run_tasks_forever(vec![every_hour], 1).await });
-    runners.spawn(async move { run_tasks_forever(vec![every_minute], 5).await });
-    runners.spawn(async move { run_tasks_forever(vec![every_second], 5).await });
-    runners.join_all().await;
+    runners.spawn(run_tasks_forever(vec![every_day], 1, fanout.subscribe()));
+    runners.spawn(run_tasks_forever(vec![every_hour], 1, fanout.subscribe()));
+    runners.spawn(run_tasks_forever(vec![every_minute], 5, fanout.subscribe()));
+    runners.spawn(run_tasks_forever(vec![every_second], 5, fanout.subscribe()));
+
+    let deadline = {
+        let d = fanout.subscribe();
+        async move {
+            d.await;
+            tokio::time::sleep(grace).await;
+        }
+    };
+
+    tokio::select! {
+        _ = runners.join_all() => {
+            info!("daemon drain completed");
+        }
+        _ = deadline => {
+            warn!("daemon grace period of {grace_secs}s elapsed with work still in flight");
+        }
+    }
     Ok(())
 }

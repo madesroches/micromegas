@@ -44,3 +44,6 @@ pub mod tonic_auth_interceptor;
 
 /// health check service for gRPC servers
 pub mod grpc_health_service;
+
+/// SIGTERM-driven graceful shutdown primitives shared by all services
+pub mod shutdown;

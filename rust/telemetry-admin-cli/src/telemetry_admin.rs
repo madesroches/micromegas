@@ -21,7 +21,9 @@ use micromegas::chrono::TimeDelta;
 use micromegas::chrono::Utc;
 use micromegas::micromegas_main;
 use micromegas::servers::maintenance::get_global_views_with_update_group;
+use micromegas::servers::shutdown::wait_for_sigterm;
 use std::sync::Arc;
+use std::time::Duration;
 
 #[derive(Parser, Debug)]
 #[clap(name = "Micromegas Telemetry Admin")]
@@ -59,7 +61,11 @@ enum Commands {
     },
 
     #[clap(name = "crond")]
-    CronDaemon,
+    CronDaemon {
+        /// Seconds to wait for in-flight tasks to complete after SIGTERM
+        #[clap(long, default_value = "25")]
+        shutdown_grace_period_seconds: u64,
+    },
 }
 
 #[micromegas_main(interop_max_level = "info")]
@@ -123,9 +129,18 @@ async fn main() -> Result<()> {
             tr.commit().await.with_context(|| "commit")?;
         }
 
-        Commands::CronDaemon => {
+        Commands::CronDaemon {
+            shutdown_grace_period_seconds,
+        } => {
             let views_to_update = get_global_views_with_update_group(&view_factory);
-            micromegas::servers::maintenance::daemon(lakehouse, views_to_update).await?
+            let grace = Duration::from_secs(shutdown_grace_period_seconds);
+            micromegas::servers::maintenance::daemon(
+                lakehouse,
+                views_to_update,
+                wait_for_sigterm(),
+                grace,
+            )
+            .await?
         }
     }
     Ok(())

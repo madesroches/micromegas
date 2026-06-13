@@ -82,7 +82,7 @@ thiserror = "2"
 thrift = "0.17"
 thread-id = "4.0"
 tikv-jemallocator = "0.7"
-tokio = { version = "1.47", features = ["macros","rt-multi-thread","tracing","io-util"]}
+tokio = { version = "1.47", features = ["io-util","macros","rt-multi-thread","signal","time","tracing"]}
 tokio-retry2 = "0.6"
 tonic = { version = "0.14", features = ["server", "tls-ring", "tls-native-roots"] }
 tower = { version = "0.5" }
