@@ -89,6 +89,10 @@ Ingestion HTTP (`--listen-endpoint-http`, default `127.0.0.1:8081`), FlightSQL g
 (`0.0.0.0:50051`), web HTTP (`--port`, default `3000`). The monolith keeps all three distinct
 listeners on the one process (single-port fronting is out of scope — see Trade-offs).
 
+> Note: `8081` is the **binary default**. The shipped Docker image deliberately overrides ingestion
+> via its `CMD` to `0.0.0.0:9000` (matching the existing image convention — see Docker / packaging),
+> so the diagram and Docker artifacts below reference `9000` rather than the binary default.
+
 ## Design
 
 ### New crate: `rust/monolith/`
@@ -110,11 +114,12 @@ A binary crate `micromegas-monolith` (bin name `micromegas-monolith`) depending 
   │                                                                              │
   │   ┌──────────┐   ┌───────────┐   ┌──────────────┐   ┌────────────────────┐  │
   │   │ingestion │   │ flightsql │   │  maintenance │   │  web app (own DB,   │  │
-  │   │ :8081 H  │   │ :50051 g  │◀──│   daemon     │   │  :3000) ── FlightSQL │  │
+  │   │ :8081 H* │   │ :50051 g  │◀──│   daemon     │   │  :3000) ── FlightSQL │  │
   │   └──────────┘   └───────────┘   └──────────────┘   │  client → loopback  │  │
   │        ▲              ▲                ▲             └────────────────────┘  │
   │        └── each role gets fanout.subscribe(); global deadline arm           │
   └───────────────────────────────────────────────────────────────────────────┘
+  * ingestion binary default is 127.0.0.1:8081; the Docker image's CMD overrides it to 0.0.0.0:9000.
 ```
 
 ### Refactor existing serve logic into reusable functions
@@ -382,7 +387,14 @@ with the real single-process entrypoint.
     that builds/runs the single binary instead of four processes.
 14. Integration test: boot the monolith with `--disable-auth` against a test DB + local object store
     (`file://`), assert ingestion `/health`, a FlightSQL query, and a web `/api/health` all succeed
-    in one process; assert SIGTERM drains and exits within grace.
+    in one process; assert SIGTERM drains and exits within grace. The FlightSQL assertion must
+    account for materialization lag — the global `log_entries` view is only updated by the
+    maintenance daemon (its `jit_update()` is a no-op for the `"global"` instance and the query path
+    reads only materialized `lakehouse_partitions`, not raw blocks), so a query issued right after the
+    POST races the daemon's next per-second tick and can return empty. Either query immediately-available
+    data (the raw `blocks` metadata, or a process-scoped JIT view) or poll/retry the `log_entries`
+    query with a bounded timeout until the daemon materializes the row, rather than asserting a single
+    immediate result.
 15. Documentation (see below).
 
 ## Files to Modify / Create
@@ -456,7 +468,13 @@ with the real single-process entrypoint.
 - **Integration (the key test):** boot the monolith with `--disable-auth`, a throwaway Postgres, and
   a `file://` object store; then in one process:
   1. `POST` a block to ingestion, `GET /health` → 200;
-  2. run a FlightSQL query that returns the just-ingested data;
+  2. run a FlightSQL query that returns the just-ingested data — but **not** as a single immediate
+     shot against the global `log_entries` view, which the maintenance daemon only materializes on its
+     per-second tick (the view's `jit_update()` is a no-op for the `"global"` instance and the query
+     path reads only materialized `lakehouse_partitions`, not raw blocks), so an immediate query races
+     the next tick and can return empty. Either query immediately-available data (raw `blocks`
+     metadata or a process-scoped JIT view) or poll/retry the `log_entries` query with a bounded
+     timeout until the row materializes;
   3. `GET /api/health` on the web role → 200;
   4. send SIGTERM, assert clean drain + exit within grace.
 - **Role subset:** boot with `--roles web` and assert only the web listener is up (others absent).
