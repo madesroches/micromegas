@@ -15,7 +15,7 @@ use micromegas_tracing::prelude::*;
 use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::task::JoinSet;
+use tokio::task::{JoinError, JoinSet};
 
 use super::cron_task::{CronTask, TaskCallback};
 
@@ -171,6 +171,31 @@ impl TaskCallback for EverySecondTask {
     }
 }
 
+/// Logs the outcome of a completed cron task.
+///
+/// The result is triply nested: the outer `JoinError` reports a panicked or
+/// cancelled task, the inner `JoinError` comes from the spawned future, and the
+/// innermost `Result` is the task callback's own outcome. Any error at any layer
+/// is logged; a fully successful run is a no-op.
+fn log_task_result(res: Result<Result<Result<()>, JoinError>, JoinError>) {
+    match res {
+        Ok(Ok(Ok(()))) => {}
+        Ok(Ok(Err(e))) => error!("{e:?}"),
+        Ok(Err(e)) => error!("{e:?}"),
+        Err(e) => error!("{e:?}"),
+    }
+}
+
+/// Awaits and logs every in-flight task, returning once the set is empty.
+///
+/// Used to drain currently running tasks before the loop exits on shutdown, so
+/// their work completes rather than being dropped.
+async fn drain_task_set(task_set: &mut JoinSet<Result<Result<()>, JoinError>>) {
+    while let Some(res) = task_set.join_next().await {
+        log_task_result(res);
+    }
+}
+
 /// Runs a collection of `CronTask`s until `shutdown` fires.
 ///
 /// When `shutdown` completes, the loop stops scheduling new tasks and drains
@@ -190,31 +215,11 @@ where
                     tokio::select! {
                         res = task_set.join_next() => {
                             if let Some(res) = res {
-                                match res {
-                                    Ok(res) => match res {
-                                        Ok(res) => match res {
-                                            Ok(()) => {}
-                                            Err(e) => error!("{e:?}"),
-                                        },
-                                        Err(e) => error!("{e:?}"),
-                                    },
-                                    Err(e) => error!("{e:?}"),
-                                }
+                                log_task_result(res);
                             }
                         }
                         _ = &mut shutdown => {
-                            while let Some(res) = task_set.join_next().await {
-                                match res {
-                                    Ok(res) => match res {
-                                        Ok(res) => match res {
-                                            Ok(()) => {}
-                                            Err(e) => error!("{e:?}"),
-                                        },
-                                        Err(e) => error!("{e:?}"),
-                                    },
-                                    Err(e) => error!("{e:?}"),
-                                }
-                            }
+                            drain_task_set(&mut task_set).await;
                             return;
                         }
                     }
@@ -235,18 +240,7 @@ where
                     tokio::select! {
                         _ = tokio::time::sleep(wait) => {}
                         _ = &mut shutdown => {
-                            while let Some(res) = task_set.join_next().await {
-                                match res {
-                                    Ok(res) => match res {
-                                        Ok(res) => match res {
-                                            Ok(()) => {}
-                                            Err(e) => error!("{e:?}"),
-                                        },
-                                        Err(e) => error!("{e:?}"),
-                                    },
-                                    Err(e) => error!("{e:?}"),
-                                }
-                            }
+                            drain_task_set(&mut task_set).await;
                             return;
                         }
                     }
@@ -259,18 +253,7 @@ where
             tokio::select! {
                 biased;
                 _ = &mut shutdown => {
-                    while let Some(res) = task_set.join_next().await {
-                        match res {
-                            Ok(res) => match res {
-                                Ok(res) => match res {
-                                    Ok(()) => {}
-                                    Err(e) => error!("{e:?}"),
-                                },
-                                Err(e) => error!("{e:?}"),
-                            },
-                            Err(e) => error!("{e:?}"),
-                        }
-                    }
+                    drain_task_set(&mut task_set).await;
                     return;
                 }
                 _ = tokio::task::yield_now() => {}
