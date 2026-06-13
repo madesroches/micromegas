@@ -18,6 +18,7 @@
     "reveal.js": "^5.2.1"
   },
   "resolutions": {
+    "esbuild": "0.28.1",
     "postcss": "^8.5.10",
     "rollup": "^4.59.0"
   },
