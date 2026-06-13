@@ -205,7 +205,7 @@ def start_monolith_mode(rust_dir, target_dir, postgres_pid):
     print("📥 Ingestion: http://127.0.0.1:9000")
     print("📊 FlightSQL: port 50051")
     base_path = env.get("MICROMEGAS_BASE_PATH", "/").rstrip("/")
-    web_url = f"http://127.0.0.1:{web_port}{base_path}/"
+    web_url = f"http://localhost:{web_port}{base_path}/"
     print(f"🌐 Web app:   \033]8;;{web_url}\033\\{web_url}\033]8;;\033\\")
     print()
     print("PIDs:")
