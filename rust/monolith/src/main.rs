@@ -143,6 +143,10 @@ struct Cli {
     #[clap(long)]
     disable_auth: bool,
 
+    /// Disable authentication for the ingestion role only (useful when web uses OIDC)
+    #[clap(long)]
+    disable_ingestion_auth: bool,
+
     /// Seconds to wait for in-flight requests to complete after shutdown signal
     #[clap(
         long,
@@ -187,7 +191,7 @@ async fn main() -> Result<()> {
     };
 
     // Role-scoped auth providers (ingestion = machine-to-machine, analytics = human/tooling)
-    let ingestion_auth = if roles.ingestion && !args.disable_auth {
+    let ingestion_auth = if roles.ingestion && !args.disable_auth && !args.disable_ingestion_auth {
         match provider_with_prefix("MICROMEGAS_INGESTION").await? {
             Some(p) => Some(p),
             None => {
@@ -239,9 +243,9 @@ async fn main() -> Result<()> {
         let listen_addr = args.listen_endpoint_http;
         let grace_c = grace;
         let auth = ingestion_auth;
-        join_set.spawn(async move {
-            serve_ingestion(listen_addr, lake, auth, shutdown, grace_c).await
-        });
+        join_set.spawn(
+            async move { serve_ingestion(listen_addr, lake, auth, shutdown, grace_c).await },
+        );
     }
 
     // ── FlightSQL ──────────────────────────────────────────────────────────

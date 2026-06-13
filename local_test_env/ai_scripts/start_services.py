@@ -166,11 +166,14 @@ def start_monolith_mode(rust_dir, target_dir, postgres_pid):
         else:
             print("⚠️  MICROMEGAS_APP_SQL_CONNECTION_STRING not set (screens feature disabled)")
 
+    has_oidc = "MICROMEGAS_OIDC_CONFIG" in env or "MICROMEGAS_ANALYTICS_OIDC_CONFIG" in env
+    auth_flag = "--disable-ingestion-auth" if has_oidc else "--disable-auth"
+
     cmd = [
         str(target_dir / "micromegas-monolith"),
         "--roles", "all",
         "--listen-endpoint-http", "127.0.0.1:9000",
-        "--disable-auth",
+        auth_flag,
     ]
     if frontend_dir.exists():
         cmd += ["--frontend-dir", str(frontend_dir)]
