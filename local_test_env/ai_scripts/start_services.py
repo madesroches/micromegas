@@ -167,6 +167,11 @@ def start_monolith_mode(rust_dir, target_dir, postgres_pid):
             print("⚠️  MICROMEGAS_APP_SQL_CONNECTION_STRING not set (screens feature disabled)")
 
     has_oidc = "MICROMEGAS_OIDC_CONFIG" in env or "MICROMEGAS_ANALYTICS_OIDC_CONFIG" in env
+    if has_oidc and "MICROMEGAS_AUTH_REDIRECT_URI" not in env:
+        base_path = env.get("MICROMEGAS_BASE_PATH", "/").rstrip("/")
+        redirect_uri = f"http://localhost:{web_port}{base_path}/auth/callback"
+        env["MICROMEGAS_AUTH_REDIRECT_URI"] = redirect_uri
+        print(f"Set MICROMEGAS_AUTH_REDIRECT_URI={redirect_uri}")
     auth_flag = "--disable-ingestion-auth" if has_oidc else "--disable-auth"
 
     cmd = [
