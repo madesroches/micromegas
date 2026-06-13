@@ -128,6 +128,7 @@ nav:
     - Administration:
         - Authentication: admin/authentication.md
         - Web App Deployment: admin/web-app.md
+        - Service Lifecycle & Shutdown: admin/service-lifecycle.md
         - Admin SQL Functions: admin/functions-reference.md
     - Development:
         - Contributing: contributing.md
