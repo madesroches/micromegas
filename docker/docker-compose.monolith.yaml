@@ -34,6 +34,8 @@ services:
     environment:
       MICROMEGAS_SQL_CONNECTION_STRING: "postgres://micromegas:micromegas@postgres:5432/micromegas"
       MICROMEGAS_APP_SQL_CONNECTION_STRING: "postgres://micromegas:micromegas@postgres:5432/micromegas_app"
+      MICROMEGAS_TELEMETRY_URL: "http://micromegas:9000"
+      MICROMEGAS_FLUSH_PERIOD: "5"
       MICROMEGAS_OBJECT_STORE_URI: "file:///data"
       # Always required by the web role, even with --disable-auth
       MICROMEGAS_WEB_CORS_ORIGIN: "http://localhost:3000"
