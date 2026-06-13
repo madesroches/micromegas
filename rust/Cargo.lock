@@ -5752,12 +5752,10 @@ name = "telemetry-ingestion-srv"
 version = "0.26.0"
 dependencies = [
  "anyhow",
- "axum 0.8.9",
  "clap",
  "micromegas",
  "tikv-jemallocator",
  "tokio",
- "tower-http",
 ]
 
 [[package]]

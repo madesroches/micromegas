@@ -14,10 +14,8 @@ default-run = "telemetry-ingestion-srv"
 micromegas = { workspace = true, features = ["server"] }
 
 anyhow.workspace = true
-axum.workspace = true
 clap.workspace = true
 tokio.workspace = true
-tower-http.workspace = true
 
 [target.'cfg(not(target_os = "windows"))'.dependencies]
 tikv-jemallocator.workspace = true
