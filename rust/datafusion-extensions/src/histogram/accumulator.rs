@@ -3,7 +3,7 @@ use std::sync::Arc;
 use datafusion::{
     arrow::{
         array::{
-            Array, ArrayBuilder, ArrayRef, Float64Array, ListBuilder, PrimitiveBuilder,
+            Array, ArrayBuilder, ArrayRef, Float64Array, Int64Array, ListBuilder, PrimitiveBuilder,
             StructBuilder, UInt64Builder,
         },
         datatypes::{DataType, Field, Float64Type, UInt64Type},
@@ -56,18 +56,51 @@ impl HistogramAccumulator {
         }
     }
 
-    /// if not configured, will take the first instance of the array as a template
-    /// if already configured or if the array is empty, will do nothing
+    /// Validates and sets histogram bounds from scalar parameters.
+    pub fn configure_from_params(
+        &mut self,
+        start: f64,
+        end: f64,
+        nb_bins: i64,
+    ) -> datafusion::error::Result<()> {
+        if nb_bins < 1 {
+            return Err(DataFusionError::Execution(format!(
+                "make_histogram: nb_bins must be >= 1, got {nb_bins}"
+            )));
+        }
+        if !start.is_finite() {
+            return Err(DataFusionError::Execution(format!(
+                "make_histogram: start must be finite, got {start}"
+            )));
+        }
+        if !end.is_finite() {
+            return Err(DataFusionError::Execution(format!(
+                "make_histogram: end must be finite, got {end}"
+            )));
+        }
+        if start > end {
+            return Err(DataFusionError::Execution(format!(
+                "make_histogram: start ({start}) must be <= end ({end})"
+            )));
+        }
+        self.start = Some(start);
+        self.end = Some(end);
+        self.bins.resize(nb_bins as usize, 0);
+        Ok(())
+    }
+
+    /// If not configured, scans for the first non-null row and uses it as a template.
+    /// If already configured or if all rows are null, does nothing.
     pub fn configure(&mut self, histo_array: &HistogramArray) -> datafusion::error::Result<()> {
         if self.start.is_some() {
             return Ok(());
         }
-        if histo_array.is_empty() {
+        let Some(idx) = (0..histo_array.len()).find(|&i| !histo_array.is_null_at(i)) else {
             return Ok(());
-        }
-        self.start = Some(histo_array.get_start(0)?);
-        self.end = Some(histo_array.get_end(0)?);
-        self.bins.resize(histo_array.get_bins(0)?.len(), 0);
+        };
+        self.start = Some(histo_array.get_start(idx)?);
+        self.end = Some(histo_array.get_end(idx)?);
+        self.bins.resize(histo_array.get_bins(idx)?.len(), 0);
         Ok(())
     }
 
@@ -105,6 +138,9 @@ impl HistogramAccumulator {
     ) -> datafusion::error::Result<()> {
         self.configure(histo_array)?;
         for index_histo in 0..histo_array.len() {
+            if histo_array.is_null_at(index_histo) {
+                continue;
+            }
             let start = histo_array.get_start(index_histo)?;
             if self.start.unwrap() != start {
                 return Err(DataFusionError::Execution(
@@ -152,11 +188,55 @@ impl Accumulator for HistogramAccumulator {
 
         match values.len() {
             4 => {
+                if values[0].is_empty() {
+                    return Ok(());
+                }
+                for (i, name) in [(0usize, "start"), (1, "end"), (2, "nb_bins")] {
+                    if values[i].is_null(0) {
+                        return Err(DataFusionError::Execution(format!(
+                            "make_histogram: {name} argument is null"
+                        )));
+                    }
+                }
+                let batch_start = values[0]
+                    .as_any()
+                    .downcast_ref::<Float64Array>()
+                    .ok_or_else(|| {
+                        DataFusionError::Execution("values[0] should be a Float64Array".into())
+                    })?
+                    .value(0);
+                let batch_end = values[1]
+                    .as_any()
+                    .downcast_ref::<Float64Array>()
+                    .ok_or_else(|| {
+                        DataFusionError::Execution("values[1] should be a Float64Array".into())
+                    })?
+                    .value(0);
+                let batch_nb_bins = values[2]
+                    .as_any()
+                    .downcast_ref::<Int64Array>()
+                    .ok_or_else(|| {
+                        DataFusionError::Execution("values[2] should be an Int64Array".into())
+                    })?
+                    .value(0);
+                if let Some(configured_start) = self.start {
+                    let configured_end = self.end.expect("end is set whenever start is set");
+                    if configured_start != batch_start
+                        || configured_end != batch_end
+                        || self.bins.len() != batch_nb_bins as usize
+                    {
+                        return Err(DataFusionError::Execution(
+                            "make_histogram: bounds/bins changed between batches".into(),
+                        ));
+                    }
+                } else {
+                    self.configure_from_params(batch_start, batch_end, batch_nb_bins)?;
+                }
                 let scalars = values[3]
                     .as_any()
                     .downcast_ref::<Float64Array>()
                     .ok_or_else(|| {
-                        DataFusionError::Execution("values[3] should ne a Float64Array".into())
+                        DataFusionError::Execution("values[3] should be a Float64Array".into())
                     })?;
                 self.update_batch_scalars(scalars)
             }
@@ -177,20 +257,12 @@ impl Accumulator for HistogramAccumulator {
         let start_builder = struct_builder
             .field_builder::<PrimitiveBuilder<Float64Type>>(0)
             .ok_or_else(|| DataFusionError::Execution("Error accessing to start builder".into()))?;
-        if let Some(start) = self.start {
-            start_builder.append_value(start);
-        } else {
-            start_builder.append_null();
-        }
+        start_builder.append_value(self.start.unwrap_or(0.0));
 
         let end_builder = struct_builder
             .field_builder::<PrimitiveBuilder<Float64Type>>(1)
             .ok_or_else(|| DataFusionError::Execution("Error accessing to end builder".into()))?;
-        if let Some(end) = self.end {
-            end_builder.append_value(end);
-        } else {
-            end_builder.append_null();
-        }
+        end_builder.append_value(self.end.unwrap_or(0.0));
 
         let min_builder = struct_builder
             .field_builder::<PrimitiveBuilder<Float64Type>>(2)
@@ -231,7 +303,7 @@ impl Accumulator for HistogramAccumulator {
             })?;
         bin_array_builder.append_slice(&self.bins);
         bins_builder.append(true);
-        struct_builder.append(true);
+        struct_builder.append(self.start.is_some());
         Ok(ScalarValue::Struct(Arc::new(struct_builder.finish())))
     }
 

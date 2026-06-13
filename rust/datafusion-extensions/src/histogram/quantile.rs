@@ -50,6 +50,10 @@ fn quantile_from_histogram(values: &[ColumnarValue]) -> Result<ColumnarValue, Da
     let histo_array: HistogramArray = (&values[0]).try_into()?;
     let mut result_builder = Float64Builder::with_capacity(histo_array.len());
     for index_histo in 0..histo_array.len() {
+        if histo_array.is_null_at(index_histo) {
+            result_builder.append_null();
+            continue;
+        }
         let ratio = match &values[1] {
             ColumnarValue::Array(array) => array
                 .as_any()

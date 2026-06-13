@@ -21,6 +21,7 @@ This file documents the historical progress of the Micromegas project. For curre
   * Add resizable columns to the log cell via draggable inline dividers; drag to pin a column width, right-click a divider to reset to auto or reset all, "Reset widths" button in bottom bar; pinned widths persist in cell options (#1130)
   * Add one-click copy icon to log rows; appears on hover, copies tab-separated row text to clipboard, briefly shows a green checkmark on success (#1131)
 * **Analytics:**
+  * Accept runtime scalar expressions (CTEs, subqueries, CROSS JOIN columns) as `make_histogram` bounds; literal bounds continue to validate eagerly; NULL histogram rows propagate correctly through all consumers (#1135)
   * Replace SELECT+DELETE pairs in `delete_expired_blocks_batch` with atomic `DELETE … RETURNING` queries; eliminates double-counting and phantom deletes under concurrent writers (#1116)
   * Batch `retire_expired_partitions` to bound memory and transaction size on large backlogs; uses `DELETE … RETURNING` with a row-tuple subquery, matching the established batch pattern (#1111)
   * Prevent phantom empty partitions and detached writer tasks when span builds fail (crossing spans, net-span tree errors, merge stream errors); poison the write channel so `insert_partition` is skipped and the original error propagates to the query; surface full anyhow error chain at the DataFusion boundary
