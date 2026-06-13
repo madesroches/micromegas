@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["make_bin_center_udf"],"struct":["BinCenterUdf"]};

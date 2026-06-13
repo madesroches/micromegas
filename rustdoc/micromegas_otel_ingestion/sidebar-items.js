@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["FORMAT_OTLP_LOGS","FORMAT_OTLP_METRICS","FORMAT_OTLP_TRACES","OTLP_TICKS_PER_SECOND","TAG_LOGS","TAG_METRICS","TAG_TRACES"],"mod":["block","error","handler","identity","proto"]};

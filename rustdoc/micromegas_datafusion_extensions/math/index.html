@@ -1,0 +1,33 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Scalar math UDFs (lerp, unlerp) Scalar math UDFs for 1D remapping and related helpers."><title>micromegas_datafusion_extensions::math - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-77263533.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="micromegas_datafusion_extensions" data-themes="" data-resource-suffix="" data-rustdoc-version="1.94.0 (4a4ef493e 2026-03-02)" data-channel="1.94.0" data-search-js="search-9e2438ea.js" data-stringdex-js="stringdex-b897f86f.js" data-settings-js="settings-c38705f0.js" ><script src="../../static.files/storage-e2aeef58.js"></script><script defer src="../sidebar-items.js"></script><script defer src="../../static.files/main-7bab91a1.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-ffcac47a.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"></head><body class="rustdoc mod"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">Module math</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../../micromegas_datafusion_extensions/index.html">micromegas_<wbr>datafusion_<wbr>extensions</a><span class="version">0.26.0</span></h2></div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">Module math</a></h2><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#api-conventions" title="API conventions">API conventions</a></li></ul><h3><a href="#modules">Module Items</a></h3><ul class="block"><li><a href="#modules" title="Modules">Modules</a></li></ul></section><div id="rustdoc-modnav"><h2 class="in-crate"><a href="../index.html">In crate micromegas_<wbr>datafusion_<wbr>extensions</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../index.html">micromegas_datafusion_extensions</a></div><h1>Module <span>math</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../../src/micromegas_datafusion_extensions/math/mod.rs.html#1-36">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Scalar math UDFs (lerp, unlerp)
+Scalar math UDFs for 1D remapping and related helpers.</p>
+<h2 id="api-conventions"><a class="doc-anchor" href="#api-conventions">§</a>API conventions</h2>
+<p>These conventions apply to every math UDF in this crate. Once external
+SQL exists in the wild they are effectively frozen — any new math UDF
+must honour them, and behaviour-changing variants must adopt a distinct
+name.</p>
+<ul>
+<li><strong>No clamping.</strong> <code>lerp(a, b, t)</code> with <code>t</code> outside <code>[0, 1]</code> extrapolates;
+<code>unlerp(a, b, x)</code> with <code>x</code> outside <code>[a, b]</code> returns a value outside
+<code>[0, 1]</code>. Callers who want clamping wrap with
+<code>LEAST(GREATEST(t, 0.0), 1.0)</code>.</li>
+<li><strong>IEEE-754 propagation, not errors.</strong> <code>NaN</code>/<code>±∞</code> inputs propagate via
+float math. Degenerate inputs (e.g. <code>unlerp(a, a, x)</code>) produce <code>NaN</code>
+or <code>±Inf</code> rather than per-row errors. Callers who want a fallback
+wrap with the existing <code>nanvl(...)</code> built-in.</li>
+<li><strong>Nulls propagate.</strong> If any input is <code>NULL</code>, the row’s result is
+<code>NULL</code>. Matches every other scalar UDF in this crate.</li>
+<li><strong>Float64 only.</strong> All signatures use <code>Signature::exact(vec![Float64; N], …)</code>.
+DataFusion’s implicit numeric coercion lets callers write integer
+literals (<code>lerp(0, 1, 0.5)</code>) without explicit casts.</li>
+</ul>
+<p>Future-extension naming reservations (recorded so the API stays coherent
+as it grows):</p>
+<ul>
+<li><code>smoothstep(edge0, edge1, x) -&gt; Float64</code> — HLSL/GLSL-style smooth
+Hermite interpolation. Composes with <code>lerp</code> the same way <code>unlerp</code> does.</li>
+<li><code>map_range(x, a, b, c, d) -&gt; Float64</code> — one-shot remap. Currently
+superseded by <code>lerp(c, d, unlerp(a, b, x))</code>; name reserved.</li>
+<li><code>saturate(x) -&gt; Float64</code> — HLSL-style <code>clamp(x, 0, 1)</code>. Sibling to
+wrap around <code>unlerp</code> results when callers want <code>[0, 1]</code>-clamped output.</li>
+</ul>
+</div></details><h2 id="modules" class="section-header">Modules<a href="#modules" class="anchor">§</a></h2><dl class="item-table"><dt><a class="mod" href="lerp/index.html" title="mod micromegas_datafusion_extensions::math::lerp">lerp</a></dt><dd><code>lerp(a, b, t) -&gt; Float64</code></dd><dt><a class="mod" href="unlerp/index.html" title="mod micromegas_datafusion_extensions::math::unlerp">unlerp</a></dt><dd><code>unlerp(a, b, x) -&gt; Float64</code></dd></dl></section></div></main></body></html>

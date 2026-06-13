@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["AuthApiError"],"fn":["auth_callback","auth_login","auth_logout","auth_me","auth_refresh","clear_cookie","cookie_auth_middleware","create_cookie","require_admin"],"struct":["AdminRequired","AdminUser","AuthState","AuthToken","CallbackQuery","LoginQuery","OidcClientConfig","OidcProviderInfo","UserInfo","ValidatedUser"]};

@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["property_get"],"struct":["PROPERTY_SET_DEP_TYPE_NAME","Property","PropertySet","PropertySetDependency"]};

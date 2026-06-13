@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["DataSourceError"],"fn":["create_data_source","delete_data_source","get_data_source","list_data_sources","update_data_source"],"struct":["ErrorResponse"]};

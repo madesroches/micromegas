@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["ScreenError"],"fn":["create_screen","delete_screen","get_default_config","get_screen","list_screen_types","list_screens","update_screen"],"struct":["ErrorResponse"]};

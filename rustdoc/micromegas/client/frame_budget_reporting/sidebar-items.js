@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["GroupBy"],"fn":["budget_map_to_properties","compute_frame_stats_for_batch","extract_top_offenders","fetch_spans_batch","gen_frame_batches","gen_span_batches","get_frames","get_main_thread_stream_id","get_process_start_time","get_record_batch_time_range","get_stream_time_range","merge_top_offenders","process_frame_batch"]};

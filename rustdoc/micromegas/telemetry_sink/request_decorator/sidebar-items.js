@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["RequestDecoratorError"],"struct":["TrivialRequestDecorator"],"trait":["RequestDecorator"],"type":["Result"]};

@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["for_each_measure_in_block","measure_from_value"],"struct":["Measure"]};
