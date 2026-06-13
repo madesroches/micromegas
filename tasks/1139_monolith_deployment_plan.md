@@ -181,15 +181,36 @@ Auth-crate changes (additive, open/closed — standalone binaries keep using the
   returns `Ok(None)` when neither prefixed nor fallback config exists (auth disabled for that role).
 - `OidcConfig::from_env_var(name: &str)` — generalize today's `from_env()` (which hardcodes
   `MICROMEGAS_OIDC_CONFIG`, `oidc.rs:151`) so the prefix path can target a different var.
-- `parse_key_ring` already takes the JSON string, so only the var lookup needs prefixing.
-- `MICROMEGAS_ADMINS` (OIDC admin list, `oidc.rs:260`) gets the same prefixed-with-fallback
-  treatment so analytics can scope admins separately from ingestion.
+- `parse_key_ring` already takes the JSON string, so for API keys only the var lookup needs prefixing.
+- `MICROMEGAS_ADMINS` (OIDC admin list) is **not** a simple var lookup. It is read by the
+  parameterless free function `load_admin_users()` (`oidc.rs:259`), called *inside*
+  `OidcAuthProvider::new(config)` (`oidc.rs:373`) — there is no seam for a prefix at the call
+  site. Supporting a prefixed admin list means changing `load_admin_users` to take a var name
+  (`load_admin_users(name: &str)`) and threading that name through `OidcAuthProvider::new`'s
+  signature, updating **every** call site of `new` (FlightSQL via the provider builder, and the
+  web app at `analytics-web-srv/src/auth.rs:204`). This is more work than the API-key/OIDC-config
+  prefixing above; do not treat it as a trivial var lookup. Note the admin concept is OIDC-only:
+  ingestion authenticates with API keys (`telemetry-ingestion-srv/src/main.rs:133`) and has no
+  admin notion, so there is no "ingestion vs analytics" admin distinction to scope. The only
+  admin-scoping that exists is between the two analytics surfaces — FlightSQL and web (see below).
 
 `default_provider::provider()` becomes `provider_with_prefix` with an empty/unprefixed lookup, so the
 existing callers and behavior are untouched. The two providers are injected via the serve functions'
 existing seams: ingestion's `serve_ingestion(..., auth_provider)` and the FlightSQL builder's
 `with_auth_provider(...)`. The web app's cookie/OIDC `AuthState` remains its own separate config —
 out of scope for this unification.
+
+**Caveat — admin scoping does not reach the web role.** The web app builds its own
+`OidcAuthProvider::new(config)` directly (`analytics-web-srv/src/auth.rs:204`), which calls the same
+parameterless `load_admin_users()` reading **unprefixed** `MICROMEGAS_ADMINS`. It does not go through
+`provider_with_prefix`, so any analytics prefix added there never reaches it. The two analytics
+surfaces in one process therefore diverge: if an operator sets `MICROMEGAS_ANALYTICS_ADMINS`, the
+FlightSQL role honors it but the web role silently keeps reading unprefixed `MICROMEGAS_ADMINS`. For
+v1 the web role's admin list **stays on unprefixed `MICROMEGAS_ADMINS`** (web auth is out of scope per
+above); this is an intentional, documented limitation. Either keep `MICROMEGAS_ADMINS` set as the
+shared admin list both roles read, or, if scoping FlightSQL admins matters, thread the analytics var
+name through the web app's `OidcAuthProvider::new` call too (the same plumbing the admin bullet above
+requires) so the two surfaces gate admins consistently.
 
 ### Shared resource construction (monolith `main`)
 
@@ -214,11 +235,16 @@ per-role overrides (`--disable-ingestion-auth`, `--disable-analytics-auth`); see
 
 A small refactor of `LakehouseContext` may be needed so it can be built from an
 **already-connected** `DataLakeConnection` that has had **both** migrations applied (today
-`from_env` connects fresh and only runs `migrate_lakehouse`). Plan: add
+`from_env` connects fresh via `connect_to_data_lake` and only runs `migrate_lakehouse`). Plan: add
 `LakehouseContext::from_connection(Arc<DataLakeConnection>) -> Result<Arc<Self>>` (runs
-`migrate_lakehouse`, builds caches + runtime), and have `from_env` call it after
-`connect_to_remote_data_lake` so ingestion's `migrate_db` also runs there. Verify migration
-idempotency (both are additive/`IF NOT EXISTS`-style today) so running both against one DB is safe.
+`migrate_lakehouse`, builds caches + runtime). The **monolith** is the only path that runs both
+migrations: it calls `connect_to_remote_data_lake` (which runs `migrate_db`) and then
+`from_connection` (which runs `migrate_lakehouse`). `from_env` is left **as-is** — it keeps using
+`connect_to_data_lake` and only `migrate_lakehouse`, so standalone `flight-sql-srv` continues to run
+**no** `migrate_db` on startup (preserving the Phase 1 "no behavior change to standalone binaries"
+guarantee; if `from_env` is refactored to delegate to `from_connection` for code reuse, it must keep
+calling `connect_to_data_lake` so this behavior is unchanged). Verify migration idempotency (both are
+additive/`IF NOT EXISTS`-style today) so running both against one DB is safe.
 
 ### Composition & failure semantics
 
@@ -326,8 +352,10 @@ with the real single-process entrypoint.
 4. Extract `analytics-web-srv` serve logic into `analytics_web_srv::run_web_server(config, shutdown,
    grace)`; move `data_sources`/`screens` modules into the lib; reduce the binary `main` to wiring.
 5. Add role-scoped auth to the auth crate: `default_provider::provider_with_prefix(prefix)` (with
-   unprefixed fallback), `OidcConfig::from_env_var(name)`, and prefixed `MICROMEGAS_ADMINS` lookup;
-   reduce `provider()` to the unprefixed call so existing callers are unchanged.
+   unprefixed fallback), `OidcConfig::from_env_var(name)`, and prefixed admins (thread an admin-var
+   name through `load_admin_users` and `OidcAuthProvider::new`, updating all `new` call sites incl.
+   the web app); reduce `provider()` to the unprefixed call so existing callers are unchanged. Note
+   the web role keeps reading unprefixed `MICROMEGAS_ADMINS` for v1 (see per-role auth caveat).
 6. Run full test suite + `cargo clippy --workspace -- -D warnings`; confirm the four standalone
    binaries behave identically.
 
@@ -368,7 +396,10 @@ with the real single-process entrypoint.
 - `rust/public/src/servers/flight_sql_server.rs` — `with_lakehouse`, `with_shutdown`
 - `rust/auth/src/default_provider.rs` — `provider_with_prefix(prefix)` (unprefixed fallback);
   `provider()` delegates to it
-- `rust/auth/src/oidc.rs` — `OidcConfig::from_env_var(name)`; prefixed `MICROMEGAS_ADMINS` lookup
+- `rust/auth/src/oidc.rs` — `OidcConfig::from_env_var(name)`; for prefixed admins, change
+  `load_admin_users()` to `load_admin_users(name: &str)` and add an admin-var-name parameter to
+  `OidcAuthProvider::new` (thread it through), updating all `new` call sites (FlightSQL via the
+  provider builder; web app at `analytics-web-srv/src/auth.rs:204`)
 - `rust/analytics/src/lakehouse/lakehouse_context.rs` — `from_connection(...)`; route `from_env`
 - `rust/analytics-web-srv/src/lib.rs` + `src/main.rs` — extract `run_web_server`, move modules
 - `rust/Cargo.toml` — workspace member if needed; new workspace deps if any
