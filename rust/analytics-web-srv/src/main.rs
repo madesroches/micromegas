@@ -50,7 +50,11 @@ struct Args {
     disable_auth: bool,
 
     /// Seconds to wait for in-flight requests to complete after SIGTERM
-    #[arg(long, default_value = "25")]
+    #[arg(
+        long,
+        default_value = "25",
+        env = "MICROMEGAS_SHUTDOWN_GRACE_PERIOD_SECONDS"
+    )]
     shutdown_grace_period_seconds: u64,
 }
 
