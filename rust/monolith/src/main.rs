@@ -211,7 +211,8 @@ async fn main() -> Result<()> {
             None => {
                 anyhow::bail!(
                     "Analytics auth required but no providers configured. \
-                     Set MICROMEGAS_ANALYTICS_OIDC_CONFIG, MICROMEGAS_OIDC_CONFIG, or --disable-auth"
+                     Set MICROMEGAS_ANALYTICS_OIDC_CONFIG, MICROMEGAS_OIDC_CONFIG, or --disable-auth. \
+                     To also disable analytics auth, pass `--disable-auth` instead of `--disable-ingestion-auth`."
                 );
             }
         }
