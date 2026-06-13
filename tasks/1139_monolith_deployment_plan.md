@@ -7,6 +7,11 @@ across four binaries — `telemetry-ingestion-srv`, `flight-sql-srv`, `telemetry
 and `analytics-web-srv` — so a small/demo/cost-sensitive deployment can run the whole stack
 on a single small instance instead of four. The split deployment must remain fully supported.
 
+A second goal falls out of the same single-process design: a **local telemetry stack that's
+easy to spin up**. One binary (plus Postgres and an object store) gives a developer the whole
+observability pipeline — ingestion, query, maintenance, and web UI — with a single command,
+instead of orchestrating four services by hand.
+
 The work is **mostly a refactor-to-extract-then-compose**, not new functionality. Each role's
 serve logic is lifted out of its binary `main` into a reusable function in a library crate, and
 a new `micromegas-monolith` binary wires them onto one tokio runtime, one data-lake connection,
