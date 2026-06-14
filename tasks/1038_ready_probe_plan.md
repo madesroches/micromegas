@@ -104,22 +104,21 @@ The `DataLakeConnection` is available via `lakehouse.lake()`. A `ReadinessProbe`
 
 **Probe**: `SELECT 1` on `app_db_pool` with a 2 s timeout. Blob storage for maps is optional (already returns 503 when unconfigured) and is out of scope for readiness here — the app DB is the critical dependency.
 
-**Implementation**: `build_public_routes()` accepts `app_db_pool: PgPool` and adds the pool as an Extension:
+**Implementation**: `build_public_routes()` accepts `Arc<ReadinessState>` and layers it as an Extension. `ReadinessState` already holds the `PgPool`, so no separate `Extension(pool)` is needed on this router:
 ```rust
-fn build_public_routes(base_path: &str, app_db_pool: PgPool) -> Router {
+fn build_public_routes(base_path: &str, readiness_state: Arc<ReadinessState>) -> Router {
     Router::new()
         .route(&format!("{base_path}/api/health"), get(health_check))
         .route(&format!("{base_path}/api/ready"), get(ready_check))
-        .layer(Extension(app_db_pool))
+        .layer(Extension(readiness_state))
 }
 ```
 
-**Caching**: same 1 s cache pattern. Hold the cache in a small `Arc<ReadinessState>` Extension rather than in a service struct (there is no service struct in `web_server.rs` — the pool is passed directly).
+**Caching**: same 1 s cache pattern. Hold the cache in a small `Arc<ReadinessState>` Extension rather than in a service struct (there is no service struct in `web_server.rs` — the pool is passed directly). `ReadinessState` owns the `PgPool` and `Mutex<Option<Instant>>`.
 
 **Ready handler**:
 ```rust
 async fn ready_check(
-    Extension(pool): Extension<PgPool>,
     Extension(state): Extension<Arc<ReadinessState>>,
 ) -> StatusCode { ... }
 ```
@@ -154,6 +153,7 @@ Both the FlightSQL sidecar and the ingestion service can use it. `WebIngestionSe
 5. **`rust/public/src/servers/ingestion.rs`**:
    - Add `ready_handler`.
    - Add `.route("/ready", get(ready_handler))` to `health_router`.
+   - Layer `Extension(service.clone())` onto `health_router` **before** merging with `protected_app`. `serve_ingestion` applies `.layer(Extension(service))` only to `protected_app`; Axum's `merge()` does not propagate Extensions between sub-routers, so any handler on `health_router` that extracts `Extension<Arc<WebIngestionService>>` will panic at runtime without this explicit layer.
 
 6. **`rust/public/src/servers/flight_sql_server.rs`**:
    - Add `health_listen_addr: Option<SocketAddr>` to `FlightSqlServerBuilder`.
@@ -164,9 +164,9 @@ Both the FlightSQL sidecar and the ingestion service can use it. `WebIngestionSe
 
 8. **`rust/analytics-web-srv/src/web_server.rs`**:
    - Introduce `ReadinessState` (holding `PgPool` + `Mutex<Option<Instant>>`).
-   - Add `ready_check` handler.
-   - Update `build_public_routes()` signature.
-   - Wire it up in `run_web_server()`.
+   - Add `ready_check` handler (extracts `Extension<Arc<ReadinessState>>` only; pool is accessed via `state.pool`).
+   - Update `build_public_routes(base_path, Arc<ReadinessState>)` signature; layer the state with `.layer(Extension(readiness_state.clone()))` inside `build_public_routes`.
+   - In `run_web_server()`, after the pool is created, construct `let readiness_state = Arc::new(ReadinessState::new(app_db_pool.clone()));` and pass it to `build_public_routes`. No additional `.layer()` call is needed on the merged app router — the Extension is scoped to the public routes sub-router where the handler lives.
 
 9. **Tests**: add `rust/ingestion/tests/readiness.rs` (integration, requires env vars). Add unit test for caching logic (can be done without a real DB by using a fake `Instant`).
 
