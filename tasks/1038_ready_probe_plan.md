@@ -138,7 +138,7 @@ No dedicated changes. The monolith inherits:
 - `ReadinessProbe::new(lake: Arc<DataLakeConnection>) -> Self` constructor that initializes the cache to `Mutex::new(None)`
 - `check_ready()` async method (timeout + join)
 
-Both the FlightSQL sidecar and the ingestion service can use it. `WebIngestionService.check_ready()` can delegate to it, or it can be inlined if the coupling is too tight.
+Only the FlightSQL sidecar uses `ReadinessProbe`. `WebIngestionService.check_ready()` must inline the logic — it cannot delegate, because `ReadinessProbe` lives in the public crate and `micromegas-ingestion` must not depend on it (the dependency runs the other way). This matches step 4 and the Trade-offs section.
 
 ## Implementation Steps
 
@@ -161,7 +161,7 @@ Both the FlightSQL sidecar and the ingestion service can use it. `WebIngestionSe
    - Add `health_listen_addr: Option<SocketAddr>` to `FlightSqlServerBuilder`.
    - Add `pub fn with_health_addr(mut self, addr: SocketAddr) -> Self`.
    - In `build_and_serve()`, capture `let probe_lake = lakehouse.lake().clone();` before `lakehouse` is moved into `FlightSqlServiceImpl::new` (~line 201).
-   - After `let fanout = ShutdownFanout::new(...)` is created (~line 246): if `health_listen_addr` is set, spawn a sidecar Axum task with `/health` and `/ready` using `ReadinessProbe::new(probe_lake)` (moving `probe_lake` in), passing `fanout.subscribe()` for shutdown.
+   - After `let fanout = ShutdownFanout::new(...)` is created (~line 246): if `health_listen_addr` is set, bind the sidecar listener with `TcpListener::bind(addr).await?` **before** spawning — so a bind error fails `build_and_serve()` fast via `?`, consistent with the gRPC listener, rather than being silently swallowed inside the task. Then `tokio::spawn` only the serve loop, serving the Axum router (`/health` and `/ready` using `ReadinessProbe::new(probe_lake)`, moving `probe_lake` in) on the already-bound listener, passing `fanout.subscribe()` for shutdown.
 
 7. **`rust/flight-sql-srv/src/flight_sql_srv.rs`**: add `--health-listen-addr` CLI flag, pass to `FlightSqlServerBuilder::with_health_addr`.
 
