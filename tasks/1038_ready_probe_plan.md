@@ -144,7 +144,7 @@ Both the FlightSQL sidecar and the ingestion service can use it. `WebIngestionSe
 
 1. **`rust/telemetry/src/blob_storage.rs`**: add `BlobStorage::probe()`.
 
-2. **`rust/public/src/servers/readiness.rs`** (new): `ReadinessProbe` struct with `check_ready()`.
+2. **`rust/public/src/servers/readiness.rs`** (new): `ReadinessProbe` struct with `check_ready()`. Also add `pub mod readiness;` to `rust/public/src/servers/mod.rs` so the new module is reachable (without it the file is inert and step 6's `ReadinessProbe::new` reference won't compile).
 
 3. **`rust/ingestion/Cargo.toml`**: add `tokio = { workspace = true, features = ["time"] }`.
 
@@ -168,7 +168,7 @@ Both the FlightSQL sidecar and the ingestion service can use it. `WebIngestionSe
    - Introduce `ReadinessState` (holding `PgPool` + `Mutex<Option<Instant>>`).
    - Add `ready_check` handler (extracts `Extension<Arc<ReadinessState>>` only; pool is accessed via `state.pool`).
    - Update `build_public_routes(base_path, Arc<ReadinessState>)` signature; layer the state with `.layer(Extension(readiness_state.clone()))` inside `build_public_routes`.
-   - In `run_web_server()`, after the pool is created, construct `let readiness_state = Arc::new(ReadinessState::new(app_db_pool.clone()));` and pass it to `build_public_routes`. No additional `.layer()` call is needed on the merged app router — the Extension is scoped to the public routes sub-router where the handler lives.
+   - In `run_web_server()`, after the pool is created and **before** the `Router::new().merge(...)` chain that moves `app_db_pool` into `build_protected_routes`, bind `let readiness_state = Arc::new(ReadinessState::new(app_db_pool.clone()));`. The clone must precede the merge so the original `app_db_pool` still moves cleanly into `build_protected_routes`. Pass `readiness_state` to `build_public_routes`. No additional `.layer()` call is needed on the merged app router — the Extension is scoped to the public routes sub-router where the handler lives.
 
 9. **Tests**: add `rust/ingestion/tests/readiness.rs` (integration, requires env vars). Add unit test for caching logic (can be done without a real DB by using a fake `Instant`).
 
