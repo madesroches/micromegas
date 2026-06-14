@@ -196,6 +196,32 @@ The probe logic is 10 lines; a shared module is only worth it if both callers us
 **analytics-web-srv: blob storage not probed**
 Maps blob storage is optional — the service already returns 503 for maps routes when unconfigured, so it's never a hard dependency. Only the app DB (always required) is probed.
 
+## HA / Operational Considerations
+
+The endpoint design is correct, but readiness probes have fleet-level behaviors that the code alone doesn't capture. These are operational notes, not code changes.
+
+**Correlated failure — readiness is a shared signal, not a per-task one.**
+Every task's `/ready` probes the *same* dependencies (Aurora, object store). During an Aurora failover or an object-store outage, **all** tasks fail readiness simultaneously — this is a fleet-wide event, not a per-task one. The probe only delivers its intended benefit when *some* tasks are healthy and others are not (e.g. one AZ's egress path to S3 is degraded, a single task with a poisoned connection pool). It does **not** protect against a total dependency outage; nothing routing-based can.
+
+**ALB fail-open during total outage.**
+When every target in a target group is unhealthy, ALB fails open and routes to all targets anyway rather than black-holing traffic. So a full Aurora failover does not cause a hard outage via the probe — clients still reach a task (which will then serve its own 5xx until the dependency recovers). The readiness probe's real value is shedding *individual* bad tasks, not surviving a shared-dependency failure. Document this so on-call doesn't expect `/ready` to mask a database outage.
+
+**Avoid flapping during failover — ALB health-check tuning matters as much as the endpoint.**
+A 30–60 s Aurora failover combined with an aggressive health-check config will drain and re-add the whole fleet, churning connections. Recommended ALB target-group settings:
+- `HealthCheckIntervalSeconds`: 10
+- `HealthyThresholdCount`: 2–3
+- `UnhealthyThresholdCount`: 3–5 (tolerate a brief failover without immediate drain)
+- `HealthCheckTimeoutSeconds`: 3 (≥ the probe's 2 s internal timeout)
+- ECS task `healthCheckGracePeriodSeconds`: long enough for cold start + first lake connection
+
+The 1 s success cache means rapid ALB polling won't amplify load on the dependencies.
+
+**Per-role draining on the monolith is not possible.**
+The monolith is a single process, so readiness is all-or-nothing across its roles. The plan's choice to omit a separate FlightSQL health port there is fine — the ingestion `/ready` already covers the shared lake — but note that you cannot drain one role independently in monolith mode.
+
+**Scope of the FlightSQL probe.**
+The sidecar probes the lake (DB + blob), not the gRPC server's own ability to serve. A FlightSQL-internal fault with a healthy lake won't show up in readiness. This is an accepted boundary, not a gap to close — server-internal faults are liveness territory.
+
 ## Testing Strategy
 
 - `cargo test` in `rust/` after each step.
