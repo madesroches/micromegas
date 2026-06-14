@@ -68,7 +68,7 @@ pub async fn probe(&self) -> anyhow::Result<()> {
 ```rust
 pub struct WebIngestionService {
     lake: DataLakeConnection,
-    ready_ok_until: std::sync::Mutex<Option<std::time::Instant>>,
+    ready_ok_until: Arc<std::sync::Mutex<Option<std::time::Instant>>>,
 }
 
 // check_ready():
@@ -77,6 +77,8 @@ pub struct WebIngestionService {
 //   3. Success: update cache, return true.
 //   4. Failure / timeout: clear cache, return false.
 ```
+
+`ready_ok_until` is wrapped in `Arc` so that `#[derive(Clone)]` on `WebIngestionService` continues to compile (`std::sync::Mutex` alone does not implement `Clone`; `Arc<Mutex<_>>` does).
 
 `tokio` with the `time` feature must be added as a direct dependency of `micromegas-ingestion`.
 
@@ -146,8 +148,8 @@ Both the FlightSQL sidecar and the ingestion service can use it. `WebIngestionSe
 3. **`rust/ingestion/Cargo.toml`**: add `tokio = { workspace = true, features = ["time"] }`.
 
 4. **`rust/ingestion/src/web_ingestion_service.rs`**:
-   - Add `ready_ok_until` field; update `new()`.
-   - Add `pub async fn check_ready(&self) -> bool` (delegating to `ReadinessProbe` or inlined).
+   - Add `ready_ok_until: Arc<Mutex<Option<Instant>>>` field; update `new()`.
+   - Add `pub async fn check_ready(&self) -> bool` with the 10-line logic inlined (do **not** delegate to `ReadinessProbe` — that lives in the public crate and `micromegas-ingestion` must not depend on it).
 
 5. **`rust/public/src/servers/ingestion.rs`**:
    - Add `ready_handler`.
@@ -187,7 +189,7 @@ Both the FlightSQL sidecar and the ingestion service can use it. `WebIngestionSe
 The ALB health check protocol doesn't need to match the service protocol. A sidecar HTTP endpoint keeps all services on the same operational pattern (plain HTTP health checks), requires no new dependency, and is simpler to reason about. `tonic-health` would be the right call if gRPC-native health tooling (service meshes, `grpc-health-probe`) was a requirement, but it isn't here.
 
 **Shared `ReadinessProbe` module vs. per-service structs**
-The probe logic is 10 lines; a shared module is only worth it if both callers use it. Introducing it up front avoids duplication between the FlightSQL sidecar and ingestion, but adds a cross-crate dependency from `micromegas-ingestion` to `micromegas` (the public crate). If that coupling is undesirable, inline the logic in each service instead.
+The probe logic is 10 lines; a shared module is only worth it if both callers use it. `micromegas-ingestion` does **not** depend on `micromegas` (the public crate) — the dependency is the other way around — so `WebIngestionService.check_ready()` must inline the logic rather than delegate to `ReadinessProbe`. `ReadinessProbe` in `rust/public/src/servers/readiness.rs` is therefore used only by the FlightSQL sidecar. The small duplication is preferable to reversing the existing layering.
 
 **analytics-web-srv: blob storage not probed**
 Maps blob storage is optional — the service already returns 503 for maps routes when unconfigured, so it's never a hard dependency. Only the app DB (always required) is probed.
