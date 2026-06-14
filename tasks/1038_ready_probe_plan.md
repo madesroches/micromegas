@@ -134,6 +134,7 @@ No dedicated changes. The monolith inherits:
 
 `rust/public/src/servers/readiness.rs` — new file that houses the reusable:
 - `ReadinessProbe` struct (lake + cache)
+- `ReadinessProbe::new(lake: Arc<DataLakeConnection>) -> Self` constructor that initializes the cache to `Mutex::new(None)`
 - `check_ready()` async method (timeout + join)
 
 Both the FlightSQL sidecar and the ingestion service can use it. `WebIngestionService.check_ready()` can delegate to it, or it can be inlined if the coupling is too tight.
@@ -158,7 +159,7 @@ Both the FlightSQL sidecar and the ingestion service can use it. `WebIngestionSe
 6. **`rust/public/src/servers/flight_sql_server.rs`**:
    - Add `health_listen_addr: Option<SocketAddr>` to `FlightSqlServerBuilder`.
    - Add `pub fn with_health_addr(mut self, addr: SocketAddr) -> Self`.
-   - In `build_and_serve()`: if `health_listen_addr` is set, spawn a sidecar Axum task with `/health` and `/ready` using `ReadinessProbe(lakehouse.lake().clone())`.
+   - In `build_and_serve()`: if `health_listen_addr` is set, spawn a sidecar Axum task with `/health` and `/ready` using `ReadinessProbe::new(lakehouse.lake().clone())`.
 
 7. **`rust/flight-sql-srv/src/flight_sql_srv.rs`**: add `--health-listen-addr` CLI flag, pass to `FlightSqlServerBuilder::with_health_addr`.
 
