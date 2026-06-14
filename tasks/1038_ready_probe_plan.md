@@ -91,7 +91,7 @@ The ALB health check protocol doesn't need to match the service protocol — a p
 ```rust
 pub fn with_health_addr(mut self, addr: SocketAddr) -> Self
 ```
-If set, `build_and_serve()` spawns a minimal Axum router (`/health` unconditional, `/ready` DB + blob probe) on that address alongside the gRPC server, both under the same `ShutdownFanout`.
+If set, `build_and_serve()` spawns a minimal Axum router (`/health` unconditional, `/ready` DB + blob probe) on that address alongside the gRPC server. The sidecar is spawned after the `ShutdownFanout` is created and subscribes to it, so it shares the gRPC server's shutdown.
 
 The `DataLakeConnection` is available via `lakehouse.lake()`. A `ReadinessProbe` struct (see below) holds the lake reference and 1 s cache.
 
@@ -160,7 +160,8 @@ Both the FlightSQL sidecar and the ingestion service can use it. `WebIngestionSe
 6. **`rust/public/src/servers/flight_sql_server.rs`**:
    - Add `health_listen_addr: Option<SocketAddr>` to `FlightSqlServerBuilder`.
    - Add `pub fn with_health_addr(mut self, addr: SocketAddr) -> Self`.
-   - In `build_and_serve()`: before `lakehouse` is moved into `FlightSqlServiceImpl::new`, capture `let probe_lake = lakehouse.lake().clone();`. Then, if `health_listen_addr` is set, spawn a sidecar Axum task with `/health` and `/ready` using `ReadinessProbe::new(probe_lake)`.
+   - In `build_and_serve()`, capture `let probe_lake = lakehouse.lake().clone();` before `lakehouse` is moved into `FlightSqlServiceImpl::new` (~line 201).
+   - After `let fanout = ShutdownFanout::new(...)` is created (~line 246): if `health_listen_addr` is set, spawn a sidecar Axum task with `/health` and `/ready` using `ReadinessProbe::new(probe_lake)` (moving `probe_lake` in), passing `fanout.subscribe()` for shutdown.
 
 7. **`rust/flight-sql-srv/src/flight_sql_srv.rs`**: add `--health-listen-addr` CLI flag, pass to `FlightSqlServerBuilder::with_health_addr`.
 
