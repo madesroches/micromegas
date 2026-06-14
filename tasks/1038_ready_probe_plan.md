@@ -149,13 +149,13 @@ Only the FlightSQL sidecar uses `ReadinessProbe`. `WebIngestionService.check_rea
 3. **`rust/ingestion/Cargo.toml`**: add `tokio = { workspace = true, features = ["macros", "time"] }` (`macros` is required for the `tokio::join!` used in `check_ready`).
 
 4. **`rust/ingestion/src/web_ingestion_service.rs`**:
-   - Add `ready_ok_until: Arc<Mutex<Option<Instant>>>` field; update `new()`.
+   - Add `ready_ok_until: Arc<Mutex<Option<Instant>>>` field; update `new()`. Add `use std::sync::Mutex;` and `use std::time::Instant;` — the file currently imports only `Arc`/`LazyLock`.
    - Add `pub async fn check_ready(&self) -> bool` with the 10-line logic inlined (do **not** delegate to `ReadinessProbe` — that lives in the public crate and `micromegas-ingestion` must not depend on it).
 
 5. **`rust/public/src/servers/ingestion.rs`**:
    - Add `ready_handler`.
    - Add `.route("/ready", get(ready_handler))` to `health_router`.
-   - Layer `Extension(service.clone())` onto `health_router` **before** merging with `protected_app`. `serve_ingestion` applies `.layer(Extension(service))` only to `protected_app`; Axum's `merge()` does not propagate Extensions between sub-routers, so any handler on `health_router` that extracts `Extension<Arc<WebIngestionService>>` will panic at runtime without this explicit layer.
+   - Layer `Extension(service.clone())` onto `health_router` **before** merging with `protected_app`. The clone must precede the merge so the original `service` still moves cleanly into `protected_app`'s Extension layer. `serve_ingestion` applies `.layer(Extension(service))` only to `protected_app`; Axum's `merge()` does not propagate Extensions between sub-routers, so any handler on `health_router` that extracts `Extension<Arc<WebIngestionService>>` will panic at runtime without this explicit layer.
 
 6. **`rust/public/src/servers/flight_sql_server.rs`**:
    - Add `health_listen_addr: Option<SocketAddr>` to `FlightSqlServerBuilder`.
@@ -163,7 +163,7 @@ Only the FlightSQL sidecar uses `ReadinessProbe`. `WebIngestionService.check_rea
    - In `build_and_serve()`, capture `let probe_lake = lakehouse.lake().clone();` before `lakehouse` is moved into `FlightSqlServiceImpl::new` (~line 201).
    - After `let fanout = ShutdownFanout::new(...)` is created (~line 246): if `health_listen_addr` is set, bind the sidecar listener with `TcpListener::bind(addr).await?` **before** spawning — so a bind error fails `build_and_serve()` fast via `?`, consistent with the gRPC listener, rather than being silently swallowed inside the task. Then `tokio::spawn` only the serve loop, serving the Axum router (`/health` and `/ready` using `ReadinessProbe::new(probe_lake)`, moving `probe_lake` in) on the already-bound listener, passing `fanout.subscribe()` for shutdown.
 
-7. **`rust/flight-sql-srv/src/flight_sql_srv.rs`**: add `--health-listen-addr` CLI flag, pass to `FlightSqlServerBuilder::with_health_addr`.
+7. **`rust/flight-sql-srv/src/flight_sql_srv.rs`**: add `--health-listen-addr` CLI flag (typed `Option<SocketAddr>`, so add `use std::net::SocketAddr;`), pass to `FlightSqlServerBuilder::with_health_addr`.
 
 8. **`rust/analytics-web-srv/src/web_server.rs`**:
    - Introduce `ReadinessState` (holding `PgPool` + `Mutex<Option<Instant>>`).
@@ -171,7 +171,7 @@ Only the FlightSQL sidecar uses `ReadinessProbe`. `WebIngestionService.check_rea
    - Update `build_public_routes(base_path, Arc<ReadinessState>)` signature; layer the state with `.layer(Extension(readiness_state.clone()))` inside `build_public_routes`.
    - In `run_web_server()`, after the pool is created and **before** the `Router::new().merge(...)` chain that moves `app_db_pool` into `build_protected_routes`, bind `let readiness_state = Arc::new(ReadinessState::new(app_db_pool.clone()));`. The clone must precede the merge so the original `app_db_pool` still moves cleanly into `build_protected_routes`. Pass `readiness_state` to `build_public_routes`. No additional `.layer()` call is needed on the merged app router — the Extension is scoped to the public routes sub-router where the handler lives.
 
-9. **Tests**: add `rust/ingestion/tests/readiness.rs` (integration, requires env vars). Add unit test for caching logic (can be done without a real DB by using a fake `Instant`).
+9. **Tests**: add `rust/ingestion/tests/readiness.rs` (integration, requires env vars). Add a unit test covering only the cache-hit short-circuit: pre-seed `ready_ok_until` to a future `Instant` and assert `check_ready()` returns true without probing. The cache-miss/probe path hits the real DB/blob (there is no trait/injection seam on `WebIngestionService`), so it is left to the integration test — testing the miss path in isolation would require introducing a probe seam.
 
 ## Files to Modify
 
