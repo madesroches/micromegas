@@ -47,7 +47,7 @@ fn build_public_routes(base_path: &str) -> Router {
 
 ### 1. telemetry-ingestion-srv
 
-**New endpoint**: `GET /ready` on the existing HTTP port (8081).
+**New endpoint**: `GET /ready` on the existing HTTP port. The code default in `rust/telemetry-ingestion-srv/src/main.rs` is `127.0.0.1:8081`, but deployments and the local test environment override it via `--listen-endpoint-http` — `start_services.py` launches ingestion on `127.0.0.1:9000`, which is the port the Testing Strategy curls.
 
 Added to the `health_router` (outside auth middleware, same as `/health`).
 
@@ -97,7 +97,7 @@ The `DataLakeConnection` is available via `lakehouse.lake()`. A `ReadinessProbe`
 
 `GrpcHealthService` stays unchanged — it continues to serve the unconditional gRPC liveness response for any gRPC tooling that uses it.
 
-`--health-listen-addr` is added to `rust/flight-sql-srv/src/flight_sql_srv.rs`. The monolith omits it for its FlightSQL role — the shared lake is already covered by the ingestion role's `/ready` at 8081.
+`--health-listen-addr` is added to `rust/flight-sql-srv/src/flight_sql_srv.rs`. The monolith omits it for its FlightSQL role — the shared lake is already covered by the ingestion role's `/ready` (port 8081 by default, overridden to 9000 by `start_services.py`).
 
 ### 3. analytics-web-srv
 
@@ -127,7 +127,7 @@ async fn ready_check(
 ### 4. monolith
 
 No dedicated changes. The monolith inherits:
-- `/ready` at port 8081 from the ingestion role
+- `/ready` from the ingestion role on the HTTP port (`127.0.0.1:8081` is the code default in `rust/monolith/src/main.rs`, but `start_services.py` runs the monolith with `--listen-endpoint-http 127.0.0.1:9000`, which is the port the Testing Strategy curls)
 - `/api/ready` at port 3000 from the web role
 - No FlightSQL health port (not set by default; the ingestion `/ready` covers the shared lake)
 
