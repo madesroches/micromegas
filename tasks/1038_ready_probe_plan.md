@@ -51,16 +51,17 @@ fn build_public_routes(base_path: &str) -> Router {
 
 Added to the `health_router` (outside auth middleware, same as `/health`).
 
-**Probe**: `tokio::join!` (DB `SELECT 1` + blob `list(None).try_next()`) under a 2 s `tokio::time::timeout`. Returns 503 on any failure or timeout.
+**Probe**: `tokio::join!` (DB `SELECT 1` + blob `list(None).next().await`) under a 2 s `tokio::time::timeout`. Returns 503 on any failure or timeout.
 
 **Caching**: Cache last-success `Instant` for 1 s inside `WebIngestionService`. `std::sync::Mutex<Option<std::time::Instant>>` — the critical section is nanosecond-range, no async work inside.
 
 **BlobStorage probe helper**: Add `BlobStorage::probe()` to `rust/telemetry/src/blob_storage.rs` to keep `object_store` types out of `micromegas-ingestion`'s dependency surface:
 ```rust
 pub async fn probe(&self) -> anyhow::Result<()> {
-    use futures::TryStreamExt as _;
-    self.blob_store.list(None).try_next().await?;
-    Ok(())
+    match self.blob_store.list(None).next().await {
+        Some(Ok(_)) | None => Ok(()),
+        Some(Err(e)) => Err(e.into()),
+    }
 }
 ```
 
