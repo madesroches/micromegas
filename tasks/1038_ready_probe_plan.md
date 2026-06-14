@@ -81,7 +81,7 @@ pub struct WebIngestionService {
 
 `ready_ok_until` is wrapped in `Arc` so that `#[derive(Clone)]` on `WebIngestionService` continues to compile (`std::sync::Mutex` alone does not implement `Clone`; `Arc<Mutex<_>>` does).
 
-`tokio` with the `time` feature must be added as a direct dependency of `micromegas-ingestion`.
+`tokio` with the `macros` and `time` features must be added as a direct dependency of `micromegas-ingestion` (`macros` is needed for the `tokio::join!` in `check_ready`).
 
 ### 2. flight-sql-srv
 
@@ -146,7 +146,7 @@ Only the FlightSQL sidecar uses `ReadinessProbe`. `WebIngestionService.check_rea
 
 2. **`rust/public/src/servers/readiness.rs`** (new): `ReadinessProbe` struct with `check_ready()`. Also add `pub mod readiness;` to `rust/public/src/servers/mod.rs` so the new module is reachable (without it the file is inert and step 6's `ReadinessProbe::new` reference won't compile).
 
-3. **`rust/ingestion/Cargo.toml`**: add `tokio = { workspace = true, features = ["time"] }`.
+3. **`rust/ingestion/Cargo.toml`**: add `tokio = { workspace = true, features = ["macros", "time"] }` (`macros` is required for the `tokio::join!` used in `check_ready`).
 
 4. **`rust/ingestion/src/web_ingestion_service.rs`**:
    - Add `ready_ok_until: Arc<Mutex<Option<Instant>>>` field; update `new()`.
