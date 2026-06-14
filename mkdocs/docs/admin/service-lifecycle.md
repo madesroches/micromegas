@@ -110,3 +110,68 @@ Graceful shutdown is what keeps a rolling deploy from losing telemetry:
 The residual risk is a client that cannot complete its request within the grace
 period *and* does not retry. If you need end-to-end guarantees under load, raise
 the grace period and ensure your producers retry on connection errors.
+
+## Readiness probes
+
+In addition to graceful shutdown, every service exposes a `/ready` endpoint so
+ALBs (or any load-balancer) can stop routing to tasks whose dependencies are
+unavailable. Liveness checks (`/health`) remain unconditional and are separate
+from readiness.
+
+| Service | Endpoint | Port | What is probed |
+|---------|----------|------|----------------|
+| `telemetry-ingestion-srv` | `GET /ready` | same as ingestion (default 8081) | PostgreSQL `SELECT 1` + blob storage `list` |
+| `flight-sql-srv` (optional sidecar) | `GET /ready` | `--health-listen-addr` | PostgreSQL `SELECT 1` + blob storage `list` |
+| `analytics-web-srv` | `GET {base_path}/api/ready` | 3000 | PostgreSQL `SELECT 1` |
+| `micromegas-monolith` | `/ready` on HTTP port, `/api/ready` on port 3000 | inherited from above | same as the respective roles |
+
+Each probe runs under a **2-second internal timeout** and caches a successful
+result for **1 second**, so rapid ALB polling does not amplify load on the
+database or object store.
+
+### FlightSQL health sidecar
+
+The FlightSQL gRPC server does not itself expose an HTTP endpoint. Pass
+`--health-listen-addr` to start a lightweight HTTP sidecar alongside it:
+
+```bash
+flight-sql-srv --health-listen-addr 127.0.0.1:8082
+```
+
+The sidecar serves `/health` (unconditional 200) and `/ready` (probed) on that
+address. If the flag is omitted, no sidecar is started. In monolith mode the
+flag is not needed — the ingestion role's `/ready` already covers the shared
+lake.
+
+### ALB target-group settings
+
+A mis-tuned health-check config can drain and re-add the whole fleet during a
+brief Aurora failover. Recommended settings:
+
+| Setting | Value |
+|---------|-------|
+| `HealthCheckIntervalSeconds` | 10 |
+| `HealthyThresholdCount` | 2–3 |
+| `UnhealthyThresholdCount` | 3–5 |
+| `HealthCheckTimeoutSeconds` | 3 (≥ the 2 s internal probe timeout) |
+| ECS `healthCheckGracePeriodSeconds` | long enough for cold start + first DB connection |
+
+### Operational notes
+
+**Correlated failure.** Every task probes the same dependencies (Aurora, object
+store). During a full outage all tasks fail readiness simultaneously — that is a
+shared-dependency event, not a per-task one. The probe's value is shedding
+*individual* bad tasks (e.g. a task with a poisoned connection pool in a single
+AZ), not masking a total dependency outage.
+
+**ALB fail-open.** When every target in a target group is unhealthy, ALB fails
+open and routes to all targets anyway rather than black-holing traffic. A full
+Aurora failover therefore does not cause a hard outage via the probe — clients
+still reach a task, which serves its own 5xx until the dependency recovers.
+
+**Monolith.** The monolith is a single process, so readiness is all-or-nothing
+across all roles. Per-role draining is not possible in monolith mode.
+
+**FlightSQL probe scope.** The sidecar probes the lake (DB + blob), not the
+gRPC server's internal ability to serve. A FlightSQL-internal fault with a
+healthy lake will not appear in readiness; such faults are liveness territory.
