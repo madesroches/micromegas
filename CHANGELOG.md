@@ -9,6 +9,7 @@ This file documents the historical progress of the Micromegas project. For curre
 * **Performance:**
   * Switch all production service binaries to jemalloc (`tikv-jemallocator`) as the global allocator; reduces allocation latency and memory fragmentation under multi-threaded workloads (#1129)
 * **Services:**
+  * Add deep `/ready` readiness probe to `telemetry-ingestion-srv`, `flight-sql-srv` (via sidecar HTTP listener on `--health-listen-addr`), and `analytics-web-srv`; each probe verifies its hard dependencies (PostgreSQL pool ping, blob storage list) with a 1s success cache and returns 503 when any dependency is unhealthy so ALBs can drain individual bad tasks during Aurora failover or object-store outages (#1038)
   * Add SIGTERM-driven graceful shutdown to `telemetry-ingestion-srv`, `flight-sql-srv`, `analytics-web-srv`, and `telemetry-admin crond`; in-flight requests, queries, and cron tasks drain within a configurable grace period (default 25s, `--shutdown-grace-period-seconds` or `MICROMEGAS_SHUTDOWN_GRACE_PERIOD_SECONDS`) instead of being killed on ECS task replacement. Note: the `daemon()` and `run_tasks_forever` signatures in the public crate changed (#1037)
   * Add optional `color` column to swimlane cells; per-segment colors support packed RGBA u32, `#rrggbb`/`#rrggbbaa` strings, and 4-byte binary values; falls back to the default theme color when absent (#1127)
   * Add optional `label` column to swimlane cells; labels render as truncated text inside each bar and appear in a hover tooltip alongside the lane name and time range
