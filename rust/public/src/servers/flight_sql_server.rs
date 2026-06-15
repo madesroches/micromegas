@@ -70,6 +70,7 @@ pub struct FlightSqlServerBuilder {
     shutdown_grace: Duration,
     injected_lakehouse: Option<Arc<LakehouseContext>>,
     injected_shutdown: Option<Pin<Box<dyn Future<Output = ()> + Send + 'static>>>,
+    health_listen_addr: Option<SocketAddr>,
 }
 
 impl Default for FlightSqlServerBuilder {
@@ -86,6 +87,7 @@ impl Default for FlightSqlServerBuilder {
             shutdown_grace: Duration::from_secs(25),
             injected_lakehouse: None,
             injected_shutdown: None,
+            health_listen_addr: None,
         }
     }
 }
@@ -162,6 +164,15 @@ impl FlightSqlServerBuilder {
         self
     }
 
+    /// Spawn a lightweight HTTP sidecar (`/health`, `/ready`) on `addr`.
+    ///
+    /// Enables plain-HTTP ALB health checks without changing the gRPC protocol.
+    /// If not set, no sidecar is started.
+    pub fn with_health_addr(mut self, addr: SocketAddr) -> Self {
+        self.health_listen_addr = Some(addr);
+        self
+    }
+
     /// Build and run the FlightSQL server.
     ///
     /// Runs the full setup sequence and blocks until the server shuts down.
@@ -173,6 +184,7 @@ impl FlightSqlServerBuilder {
             LakehouseContext::from_env().await?
         };
         let data_lake = lakehouse.lake().clone();
+        let probe_lake = lakehouse.lake().clone();
         info!(
             "created lakehouse context with metadata cache: {:?}",
             lakehouse.metadata_cache()
@@ -246,6 +258,38 @@ impl FlightSqlServerBuilder {
         let fanout = ShutdownFanout::new(shutdown_future);
         let grace_secs = self.shutdown_grace.as_secs();
         let grace = self.shutdown_grace;
+
+        if let Some(health_addr) = self.health_listen_addr {
+            use super::readiness::ReadinessProbe;
+            use axum::Extension;
+            use axum::Router;
+            use axum::routing::get;
+            use tokio::net::TcpListener;
+
+            let probe = std::sync::Arc::new(ReadinessProbe::new(probe_lake));
+            let sidecar_listener = TcpListener::bind(health_addr).await?;
+            let shutdown_rx = fanout.subscribe();
+            tokio::spawn(async move {
+                async fn sidecar_ready(
+                    Extension(p): Extension<std::sync::Arc<ReadinessProbe>>,
+                ) -> axum::http::StatusCode {
+                    if p.check_ready().await {
+                        axum::http::StatusCode::OK
+                    } else {
+                        axum::http::StatusCode::SERVICE_UNAVAILABLE
+                    }
+                }
+                let sidecar_app = Router::new()
+                    .route("/health", get(|| async { axum::http::StatusCode::OK }))
+                    .route("/ready", get(sidecar_ready))
+                    .layer(Extension(probe));
+                let _ = axum::serve(sidecar_listener, sidecar_app)
+                    .with_graceful_shutdown(shutdown_rx)
+                    .await;
+                info!("FlightSQL health sidecar stopped");
+            });
+            info!("FlightSQL health sidecar listening on {health_addr}");
+        }
 
         let serve = Server::builder()
             .layer(layer)

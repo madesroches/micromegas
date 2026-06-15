@@ -9,7 +9,8 @@ use micromegas_telemetry::stream_info::StreamInfo;
 use micromegas_telemetry::wire_format::encode_cbor;
 use micromegas_tracing::prelude::*;
 use micromegas_tracing::property_set;
-use std::sync::{Arc, LazyLock};
+use std::sync::{Arc, LazyLock, Mutex};
+use std::time::Instant;
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -60,11 +61,55 @@ pub enum IngestionServiceError {
 #[derive(Clone)]
 pub struct WebIngestionService {
     lake: DataLakeConnection,
+    ready_ok_until: Arc<Mutex<Option<Instant>>>,
 }
 
 impl WebIngestionService {
     pub fn new(lake: DataLakeConnection) -> Self {
-        Self { lake }
+        Self {
+            lake,
+            ready_ok_until: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    pub async fn check_ready(&self) -> bool {
+        let now = Instant::now();
+        {
+            let guard = self.ready_ok_until.lock().expect("readiness cache lock");
+            if let Some(ok_until) = *guard
+                && ok_until > now
+            {
+                return true;
+            }
+        }
+
+        let probe_db = sqlx::query("SELECT 1").execute(&self.lake.db_pool);
+        let probe_blob = self.lake.blob_storage.probe();
+
+        let result = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            tokio::join!(probe_db, probe_blob)
+        })
+        .await;
+
+        match result {
+            Ok((Ok(_), Ok(()))) => {
+                let mut guard = self.ready_ok_until.lock().expect("readiness cache lock");
+                *guard = Some(Instant::now() + std::time::Duration::from_secs(1));
+                true
+            }
+            _ => {
+                let mut guard = self.ready_ok_until.lock().expect("readiness cache lock");
+                *guard = None;
+                false
+            }
+        }
+    }
+
+    /// Pre-seeds the readiness cache to `until`. Intended for testing only.
+    #[doc(hidden)]
+    pub fn set_ready_until(&self, until: Instant) {
+        let mut guard = self.ready_ok_until.lock().expect("readiness cache lock");
+        *guard = Some(until);
     }
 
     /// Reads MICROMEGAS_SQL_CONNECTION_STRING and MICROMEGAS_OBJECT_STORE_URI,

@@ -81,6 +81,14 @@ pub async fn insert_block_request(
     service.insert_block(body).await.map_err(Into::into)
 }
 
+async fn ready_handler(Extension(service): Extension<Arc<WebIngestionService>>) -> StatusCode {
+    if service.check_ready().await {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    }
+}
+
 /// Registers the ingestion routes with the given Axum `Router`.
 ///
 /// This function adds routes for `/ingestion/insert_process`,
@@ -115,8 +123,10 @@ pub async fn serve_ingestion(
 
     let service = Arc::new(WebIngestionService::new(lake));
 
-    let health_router =
-        Router::new().route("/health", get(|| async { axum::http::StatusCode::OK }));
+    let health_router = Router::new()
+        .route("/health", get(|| async { axum::http::StatusCode::OK }))
+        .route("/ready", get(ready_handler))
+        .layer(Extension(service.clone()));
 
     let mut protected_app = register_routes(Router::new())
         .merge(super::otlp::otlp_router())

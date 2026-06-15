@@ -3514,8 +3514,10 @@ dependencies = [
  "ciborium",
  "micromegas-telemetry",
  "micromegas-tracing",
+ "object_store",
  "sqlx",
  "thiserror 2.0.18",
+ "tokio",
  "uuid",
 ]
 

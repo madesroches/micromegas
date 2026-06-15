@@ -47,3 +47,6 @@ pub mod grpc_health_service;
 
 /// SIGTERM-driven graceful shutdown primitives shared by all services
 pub mod shutdown;
+
+/// shared readiness probe logic (DB + blob, 1 s success cache)
+pub mod readiness;

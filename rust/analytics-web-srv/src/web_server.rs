@@ -113,11 +113,63 @@ fn build_auth_routes(base_path: &str, auth_state: &Option<AuthState>) -> Router 
 }
 
 // ---------------------------------------------------------------------------
+// Readiness state
+// ---------------------------------------------------------------------------
+
+struct ReadinessState {
+    pool: PgPool,
+    ready_ok_until: std::sync::Mutex<Option<std::time::Instant>>,
+}
+
+impl ReadinessState {
+    fn new(pool: PgPool) -> Self {
+        Self {
+            pool,
+            ready_ok_until: std::sync::Mutex::new(None),
+        }
+    }
+
+    async fn check_ready(&self) -> bool {
+        let now = std::time::Instant::now();
+        {
+            let guard = self.ready_ok_until.lock().expect("readiness cache lock");
+            if let Some(ok_until) = *guard
+                && ok_until > now
+            {
+                return true;
+            }
+        }
+
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            sqlx::query("SELECT 1").execute(&self.pool),
+        )
+        .await;
+
+        match result {
+            Ok(Ok(_)) => {
+                let mut guard = self.ready_ok_until.lock().expect("readiness cache lock");
+                *guard = Some(std::time::Instant::now() + std::time::Duration::from_secs(1));
+                true
+            }
+            _ => {
+                let mut guard = self.ready_ok_until.lock().expect("readiness cache lock");
+                *guard = None;
+                false
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // API routes
 // ---------------------------------------------------------------------------
 
-fn build_public_routes(base_path: &str) -> Router {
-    Router::new().route(&format!("{base_path}/api/health"), get(health_check))
+fn build_public_routes(base_path: &str, readiness_state: Arc<ReadinessState>) -> Router {
+    Router::new()
+        .route(&format!("{base_path}/api/health"), get(health_check))
+        .route(&format!("{base_path}/api/ready"), get(ready_check))
+        .layer(Extension(readiness_state))
 }
 
 fn build_protected_routes(
@@ -325,6 +377,14 @@ fn build_cors_layer(cors_origin: &str) -> Result<CorsLayer> {
 // Simple handlers
 // ---------------------------------------------------------------------------
 
+async fn ready_check(Extension(state): Extension<Arc<ReadinessState>>) -> StatusCode {
+    if state.check_ready().await {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    }
+}
+
 #[derive(Debug, Serialize)]
 struct HealthCheck {
     status: String,
@@ -404,8 +464,10 @@ pub async fn run_web_server(
         build_auth_state(&config)?
     };
 
+    let readiness_state = Arc::new(ReadinessState::new(app_db_pool.clone()));
+
     let app = Router::new()
-        .merge(build_public_routes(&config.base_path))
+        .merge(build_public_routes(&config.base_path, readiness_state))
         .merge(build_protected_routes(
             &config.base_path,
             &auth_state,

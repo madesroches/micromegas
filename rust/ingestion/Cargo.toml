@@ -18,5 +18,8 @@ bytes.workspace = true
 ciborium.workspace = true
 sqlx.workspace = true
 thiserror.workspace = true
+tokio.workspace = true
 uuid.workspace = true
 
+[dev-dependencies]
+object_store.workspace = true

@@ -5,6 +5,7 @@ static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 use clap::Parser;
 use micromegas::micromegas_main;
 use micromegas::servers::flight_sql_server::FlightSqlServer;
+use std::net::SocketAddr;
 use std::time::Duration;
 
 #[derive(Parser, Debug)]
@@ -21,6 +22,10 @@ struct Cli {
         env = "MICROMEGAS_SHUTDOWN_GRACE_PERIOD_SECONDS"
     )]
     shutdown_grace_period_seconds: u64,
+
+    /// Optional address for the HTTP health/readiness sidecar (e.g. 127.0.0.1:8082)
+    #[clap(long)]
+    health_listen_addr: Option<SocketAddr>,
 }
 
 #[micromegas_main(interop_max_level = "info", max_level_override = "debug")]
@@ -32,6 +37,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if !args.disable_auth {
         builder = builder.with_default_auth();
+    }
+
+    if let Some(addr) = args.health_listen_addr {
+        builder = builder.with_health_addr(addr);
     }
 
     builder.build_and_serve().await?;
