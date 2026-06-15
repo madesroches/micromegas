@@ -58,9 +58,9 @@ impl BlobStorage {
         Ok(())
     }
 
-    /// Probes blob storage reachability by listing the first entry.
+    /// Probes blob storage reachability and credentials by fetching the first
+    /// page of a bucket listing (a single request; does not enumerate the bucket).
     pub async fn probe(&self) -> anyhow::Result<()> {
-        use futures::StreamExt;
         match self.blob_store.list(None).next().await {
             Some(Ok(_)) | None => Ok(()),
             Some(Err(e)) => Err(e.into()),
