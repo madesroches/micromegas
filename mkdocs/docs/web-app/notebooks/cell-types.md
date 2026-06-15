@@ -222,7 +222,7 @@ The renderer auto-classifies columns by name:
 - `target` — logger target/module
 - `msg` — log message
 
-Additional columns render as fixed-width monospace and truncate at 200px — hover to see the full value in a tooltip.
+Additional columns are sized to their content (up to the page width) — hover to see the full value in a tooltip. Columns are resizable by dragging the column header dividers. Each row has a one-click copy icon to copy the full row as JSON.
 
 - Results registered in the [local WASM query engine](execution.md#local-wasm-query-engine) under the cell name for downstream queries
 

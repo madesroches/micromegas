@@ -908,9 +908,9 @@ make_histogram(start, end, bins, values)
 
 **Parameters:**
 
-- `start` (`Float64`): Histogram minimum value
+- `start` (`Float64`): Histogram minimum value — accepts a literal or any runtime scalar expression (e.g. `MIN(value)`)
 
-- `end` (`Float64`): Histogram maximum value
+- `end` (`Float64`): Histogram maximum value — accepts a literal or any runtime scalar expression (e.g. `MAX(value)`)
 
 - `bins` (`Int64`): Number of histogram bins
 

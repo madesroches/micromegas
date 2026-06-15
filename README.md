@@ -70,6 +70,21 @@ To get started with Micromegas, please refer to the [Getting Started](https://mi
 
 ## Current Status & Roadmap
 
+### Unreleased
+* `micromegas-monolith`: single-process deployment running all roles (`ingestion`, `analytics`, `web`, `admin`) in one binary — simplifies self-hosted and single-machine deployments
+* Graceful shutdown for all services
+* Deep `/ready` readiness probe for all services
+* OTLP/JSON content-type support alongside existing protobuf ingestion
+* jemalloc global allocator for production services
+* Chart threshold indicators: reference lines, per-row colors, series color assignment
+* Map cell: orthographic camera mode, camera-relative keyboard controls, hover tooltip preview for markers
+* Swimlane cell: optional color column, label text on bars
+* Log cell: resizable columns, one-click copy for log rows
+* `make_histogram` accepts runtime scalar bounds
+* `format_value()` template function for adaptive unit formatting in detail templates
+* Batched expiry pipeline: bounded memory and transaction sizes for partition retirement, block deletion, and temporary-file cleanup
+* DataFusion 53.1; react-router 6.30.4 (CVE), esbuild 0.28.1 (security)
+
 ### v0.25.0 (May 2026)
 * Native OTLP/HTTP ingestion for logs, metrics, and traces with `otel_spans` JIT view
 * Map notebook cell: GLB models, native UE coordinates, primitive overlays with column-bound visual channels, admin Maps management UI
@@ -124,11 +139,6 @@ To get started with Micromegas, please refer to the [Getting Started](https://mi
 * Drag-to-zoom on charts, config diff modal, per-cell data sources
 * Client-side Perfetto trace generation with gzip compression
 * Parquet content cache and parallelized query planning
-
-### v0.19.0 (January 2026)
-* User-defined screens — JSON-configured notebooks, tables, and dashboards
-* Analytics web app with syntax-highlighted SQL editors
-* `expand_histogram` table function
 
 For the full history, see [CHANGELOG.md](./CHANGELOG.md).
 
