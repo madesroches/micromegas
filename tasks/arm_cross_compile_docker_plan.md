@@ -89,16 +89,17 @@ RUN if [ "$TARGETARCH" = "arm64" ]; then \
       rustup target add aarch64-unknown-linux-gnu; \
     fi
 
-# Persist OPENSSL_DIR as a layer-level ENV so cargo build.rs subprocesses see it.
-# Matches the working pattern in local_test_env/arm64/Dockerfile.
-# (Inline shell assignment is not visible to subprocesses spawned by build.rs.)
-ENV OPENSSL_DIR=/opt/openssl-aarch64
+# OPENSSL_DIR must NOT be an unconditional ENV: on x86 native builds the
+# /opt/openssl-aarch64 directory is never created, which breaks any crate that
+# uses openssl-sys.  Pass it inline on the cargo command instead (env vars set
+# in the same RUN step are visible to build.rs subprocesses).
 
 WORKDIR /build
 COPY rust/ ./rust/
 WORKDIR /build/rust
 
 RUN if [ "$TARGETARCH" = "arm64" ]; then \
+      OPENSSL_DIR=/opt/openssl-aarch64 \
       CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
       cargo build --release --target aarch64-unknown-linux-gnu --bin <name>; \
     else \
@@ -123,8 +124,17 @@ Because Docker `COPY` doesn't support shell variable expansion, a `RUN cp` is us
 linker = "aarch64-linux-gnu-gcc"
 ```
 
-This makes `cargo build --target aarch64-unknown-linux-gnu` work inside the containers and
-in the `local_test_env/arm64` environment without needing environment variables.
+This is useful for **local cross-compilation** (developer machine or `local_test_env/arm64`),
+where the repo root `.cargo/config.toml` is present on disk and Cargo picks it up automatically.
+
+**Inside Docker containers the file has no effect.** All production Dockerfiles copy only
+`rust/` into the image (`COPY rust/ ./rust/`); the repo-root `.cargo/` directory is never
+added to the build context. The linker is therefore configured via the inline
+`CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc` env var in the `RUN`
+command shown above — that is the authoritative mechanism for Docker builds.
+
+If `.cargo/config.toml` is ever needed inside Docker (e.g. for additional target settings),
+add `COPY .cargo/ /build/.cargo/` to each Dockerfile before the `cargo build` step.
 
 ### Monolith / all-in-one — Node frontend stage
 
@@ -160,7 +170,7 @@ must use `docker buildx build --platform linux/amd64,linux/arm64` when `--arm64`
 
 ### Phase 1 — `.cargo/config.toml` and simple service Dockerfiles
 
-1. **`.cargo/config.toml`** — add `[target.aarch64-unknown-linux-gnu]` linker entry.
+1. **`.cargo/config.toml`** — add `[target.aarch64-unknown-linux-gnu]` linker entry (for local cross-compilation; Docker builds rely on the inline env var instead — see design section).
 2. **`docker/ingestion.Dockerfile`** — apply the cross-compile pattern to the builder stage.
 3. **`docker/flight-sql.Dockerfile`** — same.
 4. **`docker/http-gateway.Dockerfile`** — same.
