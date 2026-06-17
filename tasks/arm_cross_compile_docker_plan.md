@@ -44,13 +44,13 @@ runs a plain amd64 `docker build`), not when that image is later **consumed** vi
 `FROM ${WASM_IMAGE} AS wasm-builder`. So `dpkg`/binaryen selection is already settled at
 wasm-builder build time and is unaffected by how the consuming Dockerfiles resolve the stage.
 The three WASM-service Dockerfiles currently use a plain, unpinned
-`FROM ${WASM_IMAGE} AS wasm-builder` — this design **adds** a `--platform=$BUILDPLATFORM` pin
-to that stage (see Design and Phase steps). `${WASM_IMAGE}` is a concrete, already-built
-single-arch (amd64) tag; the pin makes BuildKit resolve that existing amd64 image even under
-`docker buildx build --platform linux/arm64`, instead of looking up a non-existent arm64
-variant of the tag and failing with a manifest-not-found error. No change to
-`wasm-builder.Dockerfile` itself is needed — the WASM output is arch-neutral
-(`wasm32-unknown-unknown`) and consumed only via `COPY --from=wasm-builder`.
+`FROM ${WASM_IMAGE} AS wasm-builder` that references a prebuilt shared image across build
+invocations — this design **replaces** that with an inlined, `--platform=$BUILDPLATFORM`-pinned
+`wasm-builder` stage carrying the body of `wasm-builder.Dockerfile` (see Design and Phase
+steps). Inlining avoids the cross-build image-resolution problem on the arm64 path (the buildx
+`docker-container` driver cannot read the daemon image store as a `FROM` base — see Design). The
+WASM output is arch-neutral (`wasm32-unknown-unknown`) and consumed only via
+`COPY --from=wasm-builder`.
 
 The `node:20-alpine` `frontend-builder` stage in those three Dockerfiles is likewise currently
 unpinned, so under `docker buildx build --platform linux/arm64` it would resolve to arm64 and
@@ -169,9 +169,8 @@ runtime stage via `COPY --from=rust-builder` from the normalized `/build/<name>`
 
 Both pre-Rust stages must be pinned to the build host to keep the no-QEMU goal. Today both are
 unpinned in `docker/monolith.Dockerfile`, `docker/all-in-one.Dockerfile`, and
-`docker/analytics-web.Dockerfile`, so this design changes:
+`docker/analytics-web.Dockerfile`. For the frontend stage this design changes:
 
-- `FROM ${WASM_IMAGE} AS wasm-builder` → `FROM --platform=$BUILDPLATFORM ${WASM_IMAGE} AS wasm-builder`
 - `FROM node:20-alpine AS frontend-builder` → `FROM --platform=$BUILDPLATFORM node:20-alpine AS frontend-builder`
 
 The Node pin is the no-QEMU mechanism for the frontend stage: `yarn install`/`yarn build` run
@@ -179,40 +178,54 @@ natively on the amd64 host and emit arch-neutral static assets consumed via
 `COPY --from=frontend-builder`. Without the pin, `docker buildx build --platform linux/arm64`
 would resolve the unpinned stage to arm64 and run yarn under QEMU (correct output, but slow).
 
-`build_docker_images.py` defines `WASM_SERVICES = {"analytics-web", "all", "monolith"}` —
-all three services depend on the wasm-builder image via the `wasm-builder` stage. `${WASM_IMAGE}`
-is a concrete, already-built single-arch (amd64) tag. With the `--platform=$BUILDPLATFORM` pin
-added, BuildKit resolves that existing amd64 image even under `--platform linux/arm64`, instead
-of looking up a non-existent arm64 variant of the tag and failing with a manifest-not-found
-error. The WASM output is arch-neutral (`wasm32-unknown-unknown`) and is
-consumed only via `COPY --from=wasm-builder`, so the arm64 runtime image still gets correct
-artifacts.
+For the wasm stage, this design replaces the cross-invocation
+`FROM ${WASM_IMAGE} AS wasm-builder` reference with an **inlined**
+`FROM --platform=$BUILDPLATFORM rust:1-bookworm AS wasm-builder` stage carrying the full body of
+`docker/wasm-builder.Dockerfile` (see the Fix paragraph below). This avoids the cross-build
+image-resolution problem on the arm64 path (the `docker-container` driver cannot read the daemon
+image store as a `FROM` base — see Fix). The stage is `--platform=$BUILDPLATFORM`-pinned so the
+wasm build runs natively on the amd64 host (no QEMU), and its output is arch-neutral
+(`wasm32-unknown-unknown`), consumed only via `COPY --from=wasm-builder`. `build_docker_images.py`
+defines `WASM_SERVICES = {"analytics-web", "all", "monolith"}` — all three services produce the
+wasm artifacts via this inlined stage.
 
 The `--platform=$BUILDPLATFORM` pin fixes **arch resolution** (it stops BuildKit from
-looking up a non-existent arm64 variant of the tag), but it does **not** make the locally-built
-image reachable from the buildx builder. The arm64 path runs under a `docker buildx` builder
-using the `docker-container` driver (see Prerequisites), which runs BuildKit in an isolated
-container that does **not** share the host Docker daemon's image store. A
-`micromegas-wasm-builder:latest` image built via plain `docker build` lives only in the daemon
-store, so `FROM ${WASM_IMAGE}` inside the buildx build is resolved by attempting a registry
-pull — which fails. **`ensure_wasm_builder()` therefore DOES need a change for the arm64 path.**
+looking up a non-existent arm64 variant of the tag), but on the arm64 path it does **not** make
+a prebuilt wasm-builder image reachable from the buildx builder. The arm64 path runs under a
+`docker buildx` builder using the `docker-container` driver (see Prerequisites), which runs
+BuildKit in an isolated container that does **not** share the host Docker daemon's image store.
+A `micromegas-wasm-builder:latest` image built ahead of time (whether via plain `docker build`
+or `docker buildx build --load`) lives only in the daemon store; with the `docker-container`
+driver, `FROM ${WASM_IMAGE}` is resolved from a registry, not the daemon store, so a later
+separate service build still fails with manifest-not-found. `--load` cannot fix this — it
+exports to the daemon store, which is exactly the store this driver cannot read as a `FROM`
+base.
 
-Fix (simplest workable approach, consistent with the single-arch `--load` decision): when
-building for arm64, `ensure_wasm_builder()` builds the wasm-builder with `docker buildx build`
-**on the same builder** that the service build uses, with `--load` so the resulting
-`micromegas-wasm-builder:latest` is loaded back into the daemon store AND is resolvable by that
-builder's cache. Concretely, the arm64 branch builds the wasm-builder BUILDPLATFORM-pinned
-(amd64, no QEMU) via:
+Fix (chosen approach — inline the wasm stage): instead of referencing a prebuilt image across
+build invocations, the three WASM-service Dockerfiles **inline the wasm-builder body as their
+own first stage** (a single multi-stage build). There is no cross-invocation `FROM ${WASM_IMAGE}`
+left to resolve — the wasm artifacts are produced in-build and consumed via
+`COPY --from=wasm-builder` exactly as today. This removes the cross-build image-resolution
+problem entirely.
 
+```dockerfile
+# Stage 1: WASM query engine (inlined from wasm-builder.Dockerfile)
+FROM --platform=$BUILDPLATFORM rust:1-bookworm AS wasm-builder
+# ... full body of docker/wasm-builder.Dockerfile (binaryen, wasm-bindgen-cli,
+#     cargo build --target wasm32-unknown-unknown, wasm-opt, pkg/package.json) ...
 ```
-docker buildx build --load -t micromegas-wasm-builder:latest \
-  -f docker/wasm-builder.Dockerfile .
-```
 
-(The native amd64 path keeps the existing plain `docker build`.) The `_built` memo stays a
-simple boolean since the wasm output is arch-neutral and the same `:latest` tag is reused. No
-arch-suffixed tag and no `--build-arg WASM_IMAGE=...` are needed — only the build command for
-the wasm-builder changes on the arm64 path.
+The stage is `--platform=$BUILDPLATFORM`-pinned, so the wasm build still runs natively on the
+amd64 host (no QEMU) under `docker buildx build --platform linux/arm64`, and the WASM output is
+arch-neutral (`wasm32-unknown-unknown`). The tradeoff: the wasm build now runs as part of each
+service build rather than being prebuilt once. To avoid a new source of drift, the inlined
+stage should be kept in sync with `docker/wasm-builder.Dockerfile`.
+
+Because the wasm stage is inlined, `ensure_wasm_builder()` is **no longer needed for the arm64
+path** — there is no shared image to prebuild. The native amd64 path may keep referencing the
+prebuilt `${WASM_IMAGE}` (where the daemon store is the build's store and the existing
+`ensure_wasm_builder()` + plain `docker build` work fine), or it may use the same inlined stage;
+either way the arm64 path does not call `ensure_wasm_builder()`.
 
 Note: multi-arch manifest creation and pushing are out of scope for the build script — the
 script only needs to produce a single-arch image matching the requested target platform.
@@ -256,18 +269,15 @@ docker buildx build --platform linux/arm64 --load \
 Multi-arch manifest publishing (a `--platform linux/amd64,linux/arm64 --push` fat manifest)
 is out of scope; see Trade-offs for deferred future work.
 
-Key invariant: the WASM artifacts are arch-neutral and the wasm-builder stage gains a
-`FROM --platform=$BUILDPLATFORM ${WASM_IMAGE}` pin (see Design), so BuildKit resolves the
-concrete, already-built amd64 wasm-builder image even under `--platform linux/arm64` instead of
-failing on a non-existent arm64 variant of the tag. The same bare
-`micromegas-wasm-builder:latest` tag and a simple boolean `_built` memo are reused (no
-arch-suffixed tag, arch-keyed memo, or `--build-arg WASM_IMAGE=...` is required). However, on
-the arm64 path `ensure_wasm_builder()` **does** need a change: the buildx `docker-container`
-driver does not share the host daemon's image store, so a wasm-builder image built with plain
-`docker build` is unreachable from the service build's `FROM ${WASM_IMAGE}` (it falls back to a
-failing registry pull). The arm64 branch instead builds the wasm-builder via
-`docker buildx build --load` (BUILDPLATFORM-pinned amd64, no QEMU) so the `:latest` image is
-resolvable by the buildx builder. See the Design section for the exact command.
+Key invariant: the WASM artifacts are arch-neutral, and on the arm64 path the wasm-builder is
+**inlined as a `--platform=$BUILDPLATFORM`-pinned first stage** in each WASM-service Dockerfile
+(see Design). There is no cross-invocation `FROM ${WASM_IMAGE}` to resolve, so the
+`docker-container` driver's isolated image store is a non-issue: the wasm artifacts are produced
+in-build and consumed via `COPY --from=wasm-builder`. Consequently `ensure_wasm_builder()` is
+**not called on the arm64 path** — there is no shared image to prebuild, no arch-suffixed tag,
+arch-keyed memo, or `--build-arg WASM_IMAGE=...`. The native amd64 path is unchanged (it may
+keep using the prebuilt `${WASM_IMAGE}` via the existing `ensure_wasm_builder()`). See the
+Design section.
 
 ## Implementation Steps
 
@@ -279,14 +289,16 @@ resolvable by the buildx builder. See the Design section for the exact command.
 4. **`docker/http-gateway.Dockerfile`** — same.
 5. **`docker/admin.Dockerfile`** — same.
 6. **`docker/analytics-web.Dockerfile`** — apply the cross-compile pattern to the
-   `rust-builder` stage (compiles `analytics-web-srv`), and add the `--platform=$BUILDPLATFORM`
-   pin to both the `wasm-builder` and `frontend-builder` stage `FROM` lines (see Design).
+   `rust-builder` stage (compiles `analytics-web-srv`), inline the wasm-builder body as a
+   `--platform=$BUILDPLATFORM`-pinned `wasm-builder` stage, and add the
+   `--platform=$BUILDPLATFORM` pin to the `frontend-builder` stage `FROM` line (see Design).
 
 ### Phase 2 — Complex Dockerfiles
 
 7. **`docker/monolith.Dockerfile`** — apply the cross-compile pattern to the `rust-builder`
-   stage, and add the `--platform=$BUILDPLATFORM` pin to both the `wasm-builder` and
-   `frontend-builder` stage `FROM` lines (see Design).
+   stage, inline the wasm-builder body as a `--platform=$BUILDPLATFORM`-pinned `wasm-builder`
+   stage, and add the `--platform=$BUILDPLATFORM` pin to the `frontend-builder` stage `FROM`
+   line (see Design).
 8. **`docker/all-in-one.Dockerfile`** — same cross-compile pattern and pins as monolith, but the
    `cargo build` command has five `--bin` flags and the runtime stage keeps its five
    `COPY --from=rust-builder` lines (retargeted to the normalized `/build/<name>` paths). The
@@ -377,17 +389,18 @@ Before running the `--arm64` build or the runtime smoke test on an x86-64 host:
 | `docker/flight-sql.Dockerfile` | Same |
 | `docker/http-gateway.Dockerfile` | Same |
 | `docker/admin.Dockerfile` | Same |
-| `docker/analytics-web.Dockerfile` | Cross-compile pattern in `rust-builder` stage; add `--platform=$BUILDPLATFORM` pin to `wasm-builder` and `frontend-builder` stages |
-| `docker/monolith.Dockerfile` | Cross-compile pattern in `rust-builder` stage; add `--platform=$BUILDPLATFORM` pin to `wasm-builder` and `frontend-builder` stages |
+| `docker/analytics-web.Dockerfile` | Cross-compile pattern in `rust-builder` stage; inline wasm-builder as a `--platform=$BUILDPLATFORM`-pinned `wasm-builder` stage; add `--platform=$BUILDPLATFORM` pin to `frontend-builder` stage |
+| `docker/monolith.Dockerfile` | Cross-compile pattern in `rust-builder` stage; inline wasm-builder as a `--platform=$BUILDPLATFORM`-pinned `wasm-builder` stage; add `--platform=$BUILDPLATFORM` pin to `frontend-builder` stage |
 | `docker/all-in-one.Dockerfile` | Same |
 | `build/build_docker_images.py` | `--arm64` flag, `docker buildx` integration |
 
-The three WASM-service Dockerfiles gain a `--platform=$BUILDPLATFORM` pin on their
-`wasm-builder` and `frontend-builder` `FROM` lines (currently unpinned). With those pins,
-`wasm-builder.Dockerfile` itself needs no changes. `ensure_wasm_builder()` is unchanged on the
-native amd64 path but **does** change on the arm64 path: it must build the wasm-builder via
-`docker buildx build --load` (instead of plain `docker build`) so the `:latest` image is
-reachable from the buildx `docker-container` builder (see Design).
+The three WASM-service Dockerfiles inline the wasm-builder body as a
+`--platform=$BUILDPLATFORM`-pinned first stage (see Design), and add a `--platform=$BUILDPLATFORM`
+pin on their `frontend-builder` `FROM` line (currently unpinned). With the wasm stage inlined,
+there is no cross-invocation `FROM ${WASM_IMAGE}` to resolve, so `ensure_wasm_builder()` is
+**not called on the arm64 path** (no shared image to prebuild). The inlined stage should be kept
+in sync with `docker/wasm-builder.Dockerfile`. The native amd64 path is unchanged
+(`ensure_wasm_builder()` + the prebuilt `${WASM_IMAGE}`).
 
 ## Trade-offs
 
