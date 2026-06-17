@@ -13,9 +13,42 @@
 #include "MicromegasTracing/Fwd.h"
 #include "SamplingController.h"
 #include "Templates/SharedPointer.h"
+#include <atomic>
 #include <functional>
 
 class FlushMonitor;
+
+// HTTP private dependency — full definition in HttpEventSink.cpp
+namespace FHttpRetrySystem
+{
+	class FManager;
+}
+
+enum class EUploadPriority : uint8
+{
+	Metadata = 0,
+	Logs     = 1,
+	Metrics  = 2,
+	Traces   = 3,
+};
+
+struct FCompletionState
+{
+	std::atomic<int64> HttpInFlightRequests{ 0 };
+	FEventRef          WakeupThread;
+};
+
+struct FQueuedWork
+{
+	std::function<void()> Work;
+	int32                 PayloadBytes = 0;
+
+	FQueuedWork() = default;
+	FQueuedWork(std::function<void()> InWork, int32 InPayloadBytes)
+		: Work(MoveTemp(InWork))
+		, PayloadBytes(InPayloadBytes)
+	{}
+};
 
 class HttpEventSink : public MicromegasTracing::EventSink, public FRunnable
 {
@@ -49,21 +82,43 @@ public:
 	virtual uint32 Run() override;
 
 private:
-	void IncrementQueueSize();
-	void SendBinaryRequest(const TCHAR* Command, const TArray<uint8>& Content, float TimeoutSeconds);
-
 	typedef std::function<void()> Callback;
-	typedef TQueue<Callback, EQueueMode::Mpsc> WorkQueue;
+	typedef TQueue<FQueuedWork, EQueueMode::Mpsc> WorkQueue;
+
+	void IncrementQueueSize();
+	void DecrementQueueSize();
+	bool DrainOneItem();
+	void EnqueueWithPriority(EUploadPriority Priority, int32 PayloadBytes, Callback Work);
+	WorkQueue& QueueForPriority(EUploadPriority UploadPriority);
+	void SendBinaryRequest(const TCHAR* Command, const TArray<uint8>& Content, EUploadPriority Priority);
+
+	template <typename BlockPtrT>
+	void EnqueueBlock(const BlockPtrT& Block, EUploadPriority Priority);
+
+	void EnqueueStreamInit(
+		EUploadPriority Priority,
+		TFunction<TArray<uint8>()> FormatFn);
+
 	FString BaseUrl;
 	MicromegasTracing::ProcessInfoPtr Process;
 	SharedTelemetryAuthenticator Auth;
 	SharedSamplingController Sampling;
-	WorkQueue Queue;
-	volatile int32 QueueSize;
-	volatile bool RequestShutdown;
-	FEventRef WakeupThread;
+
+	WorkQueue MetadataQueue;
+	WorkQueue LogQueue;
+	WorkQueue MetricQueue;
+	WorkQueue TraceQueue;
+
+	std::atomic<int32> QueueSize{ 0 };
+	std::atomic<int64> QueueSizeBytes{ 0 };
+	std::atomic<int64> DroppedUploads{ 0 };
+
+	std::atomic<bool> RequestShutdown{ false };
 	TUniquePtr<FRunnableThread> Thread;
 	SharedFlushMonitor Flusher;
+
+	TSharedPtr<FCompletionState, ESPMode::ThreadSafe> State;
+	TSharedPtr<FHttpRetrySystem::FManager> RetryManager;
 };
 
 MICROMEGASTELEMETRYSINK_API TSharedPtr<MicromegasTracing::EventSink> InitHttpEventSink(

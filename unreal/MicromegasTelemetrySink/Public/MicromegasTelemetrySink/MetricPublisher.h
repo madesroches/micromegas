@@ -27,6 +27,8 @@ private:
 	static void EmitVSyncStatus(IConsoleVariable* CVar);
 
 	FName CurrentWorldName;
+	// Slate's last-interaction time is 0 until the first input; fall back to this so idle time reads from boot, not full uptime.
+	double BootTime;
 };
 
 typedef TSharedPtr<MetricPublisher, ESPMode::ThreadSafe> SharedMetricPublisher;

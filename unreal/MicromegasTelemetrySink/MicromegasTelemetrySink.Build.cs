@@ -14,6 +14,7 @@ public class MicromegasTelemetrySink : ModuleRules
 			"HTTP",
 			"RenderCore",
 			"RHI",
+			"Slate",
 		]);
 
 		PrivateIncludePaths.Add( Path.Combine(ModuleDirectory, "ThirdParty/jsoncons-0.173.4") );
