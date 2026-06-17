@@ -4,7 +4,7 @@
 
 Add `linux/arm64` support to all production Dockerfiles so that an x86-64 developer can build
 ARM64 images without QEMU emulation. The build relies on a Debian cross-compile toolchain
-(`g++-aarch64-linux-gnu`) and a statically compiled OpenSSL for aarch64 — a pattern already
+(`g++-aarch64-linux-gnu`) — a pattern already
 proven in `local_test_env/arm64/Dockerfile`. The build script gains an `--arm64` flag that
 drives `docker buildx` for multi-arch manifest publishing.
 
@@ -40,8 +40,11 @@ the wrong binary. The file must be updated to use `$TARGETARCH` instead (mapping
 `local_test_env/arm64/Dockerfile` already solved the hard parts:
 - Installs `g++-aarch64-linux-gnu` and `libc6-dev-arm64-cross`
 - Adds `rustup target add aarch64-unknown-linux-gnu`
-- Statically compiles OpenSSL 3.3.0 for aarch64 into `/opt/openssl-3.3.0`
-- Sets `OPENSSL_DIR=/opt/openssl-3.3.0`
+
+The workspace links no OpenSSL: `rust/Cargo.lock` has no `openssl-sys`/`openssl` entry
+(only the unrelated `openssl-probe` CA-cert locator), and `rust/Cargo.toml` configures
+`reqwest` with `rustls-tls` and `tonic` with `tls-ring`/`tls-native-roots`. No OpenSSL
+cross-build is needed.
 
 ### `.cargo/config.toml`
 
@@ -73,41 +76,15 @@ RUN if [ "$TARGETARCH" = "arm64" ]; then \
       rm -rf /var/lib/apt/lists/*; \
     fi
 
-# Build static OpenSSL for aarch64 (skipped for x86 builds)
-RUN if [ "$TARGETARCH" = "arm64" ]; then \
-      apt-get update && apt-get install -y --no-install-recommends wget && \
-      rm -rf /var/lib/apt/lists/* && \
-      wget -q https://www.openssl.org/source/openssl-3.3.0.tar.gz && \
-      tar zxf openssl-3.3.0.tar.gz && \
-      cd openssl-3.3.0 && \
-      ./Configure linux-aarch64 \
-        --cross-compile-prefix=/usr/bin/aarch64-linux-gnu- \
-        --prefix=/opt/openssl-aarch64 \
-        --openssldir=/opt/openssl-aarch64 -static && \
-      make -j$(nproc) install && \
-      cd .. && rm -rf openssl-3.3.0 openssl-3.3.0.tar.gz; \
-    fi
-
 RUN if [ "$TARGETARCH" = "arm64" ]; then \
       rustup target add aarch64-unknown-linux-gnu; \
     fi
-
-# OPENSSL_DIR must NOT be an unconditional ENV: on x86 native builds the
-# /opt/openssl-aarch64 directory is never created, which breaks any crate that
-# uses openssl-sys.  Pass it inline on the cargo command instead (env vars set
-# in the same RUN step are visible to build.rs subprocesses).
-#
-# NOTE: the canonical install prefix for all production Dockerfiles is
-# /opt/openssl-aarch64.  local_test_env/arm64/Dockerfile currently uses
-# /opt/openssl-3.3.0 (an older convention); that file must be updated to
-# /opt/openssl-aarch64 when this plan is implemented so all Dockerfiles agree.
 
 WORKDIR /build
 COPY rust/ ./rust/
 WORKDIR /build/rust
 
 RUN if [ "$TARGETARCH" = "arm64" ]; then \
-      OPENSSL_DIR=/opt/openssl-aarch64 \
       CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
       cargo build --release --target aarch64-unknown-linux-gnu --bin <name>; \
     else \
@@ -115,15 +92,16 @@ RUN if [ "$TARGETARCH" = "arm64" ]; then \
     fi
 ```
 
-The `COPY --from=builder` step must reference the correct path:
+The runtime stage must re-declare `ARG TARGETARCH` (Docker does not carry an `ARG` across a
+`FROM` boundary), then reference the correct path. Because Docker `COPY` doesn't support
+shell variable expansion, a `RUN cp` is used instead:
 
 ```dockerfile
+FROM debian:bookworm-slim
+ARG TARGETARCH
 RUN if [ "$TARGETARCH" = "arm64" ]; then ARCH_PATH="aarch64-unknown-linux-gnu/"; else ARCH_PATH=""; fi && \
     cp /build/rust/target/${ARCH_PATH}release/<name> /usr/local/bin/<name>
 ```
-
-Because Docker `COPY` doesn't support shell variable expansion, a `RUN cp` is used instead
-(or a fixed `ARG`-driven path with BuildKit `--mount`).
 
 ### `.cargo/config.toml` addition
 
@@ -206,7 +184,6 @@ matching the pattern for all other services).
 
    ```dockerfile
    RUN if [ "$TARGETARCH" = "arm64" ]; then \
-         OPENSSL_DIR=/opt/openssl-aarch64 \
          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
          cargo build --release --target aarch64-unknown-linux-gnu \
            --bin telemetry-ingestion-srv \
@@ -224,9 +201,12 @@ matching the pattern for all other services).
        fi
    ```
 
-   And each of the five `COPY --from=rust-builder` lines becomes a `RUN cp` block:
+   And each of the five `COPY --from=rust-builder` lines becomes a `RUN cp` block in the
+   runtime stage, which must re-declare `ARG TARGETARCH` after its `FROM` line:
 
    ```dockerfile
+   FROM debian:bookworm-slim
+   ARG TARGETARCH
    RUN if [ "$TARGETARCH" = "arm64" ]; then ARCH_PATH="aarch64-unknown-linux-gnu/"; else ARCH_PATH=""; fi && \
        cp /build/rust/target/${ARCH_PATH}release/telemetry-ingestion-srv /usr/local/bin/telemetry-ingestion-srv && \
        cp /build/rust/target/${ARCH_PATH}release/flight-sql-srv /usr/local/bin/flight-sql-srv && \
@@ -265,7 +245,6 @@ matching the pattern for all other services).
 | `docker/monolith.Dockerfile` | Cross-compile pattern in `rust-builder` stage |
 | `docker/all-in-one.Dockerfile` | Same |
 | `build/build_docker_images.py` | `--arm64` flag, `docker buildx` integration |
-| `local_test_env/arm64/Dockerfile` | Update OpenSSL prefix from `/opt/openssl-3.3.0` to `/opt/openssl-aarch64` |
 | `docker/wasm-builder.Dockerfile` | Replace `dpkg --print-architecture` with `$TARGETARCH` (mapping `arm64` → `aarch64` for the binaryen archive name) so cross-platform builds fetch the correct binary |
 
 `ensure_wasm_builder()` in the build script must build a single-arch `linux/arm64` image
@@ -280,13 +259,6 @@ to `docker build`. It works but Rust compilation under QEMU is 5–10× slower (
 full build vs ~8 min native). Chosen approach: cross-compilation (approach B), because
 `local_test_env/arm64/Dockerfile` already demonstrated it works and the build time stays
 acceptable for a daily-use workflow.
-
-**Static vs dynamic OpenSSL**
-
-The proof-of-concept uses a statically linked OpenSSL. An alternative is `openssl-sys` with
-`OPENSSL_STATIC=1` pointing at a pkg-config sysroot, but static linking sidesteps sysroot
-complexity and produces a self-contained binary that runs in the slim runtime image without
-additional library dependencies.
 
 **Single-arch vs fat manifest**
 
@@ -307,8 +279,6 @@ deliverable.
 
 ## Decisions
 
-- **OpenSSL version**: Pinned at 3.3.0 (consistent with `local_test_env/arm64/Dockerfile`).
-  No `ARG` — update both files together when upgrading.
 - **CI**: No ARM CI runner for now. Cross-compilation on x86 is the only supported path.
 - **`all-in-one`**: Included — its Rust builder stage is structurally identical to
   `monolith.Dockerfile` (same cross-compile pattern, five binaries instead of one).
