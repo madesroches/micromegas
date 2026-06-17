@@ -12,7 +12,7 @@ drives `docker buildx` for multi-arch manifest publishing.
 
 ### Production Dockerfiles (all x86-native today)
 
-All five service Dockerfiles follow the same two-stage pattern:
+All four service Dockerfiles follow the same two-stage pattern:
 
 ```
 FROM rust:1-bookworm AS builder
@@ -26,17 +26,29 @@ COPY --from=builder /build/rust/target/release/<name> /usr/local/bin/
 Files: `docker/ingestion.Dockerfile`, `docker/flight-sql.Dockerfile`,
 `docker/http-gateway.Dockerfile`, `docker/admin.Dockerfile`.
 
+These four files name the build stage `AS builder` and copy via `COPY --from=builder ...`. The
+cross-compile pattern below uses `AS rust-builder`/`COPY --from=rust-builder ...` only as an
+illustrative template — implementers must apply it to **whatever each file's existing builder
+stage is named** (these four keep `builder`; the multi-stage Dockerfiles already use
+`rust-builder`), using that actual name in both the `FROM ... AS <stage>` and the matching
+`COPY --from=<stage>` references. No stage rename is implied.
+
 The monolith adds WASM and Node stages before the Rust stage:
 `docker/monolith.Dockerfile` (4 stages), `docker/all-in-one.Dockerfile` (4 stages).
 
 `wasm-builder.Dockerfile` uses `dpkg --print-architecture` to select the Binaryen binary
-(line 17-24). This reports the architecture of the **container the stage resolves to**, not
-the host. The three WASM-service Dockerfiles currently use a plain, unpinned
+(line 17-24). This reports the architecture of the stage it runs in — but that logic only
+executes when the `micromegas-wasm-builder:latest` image is **built** (`ensure_wasm_builder()`
+runs a plain amd64 `docker build`), not when that image is later **consumed** via
+`FROM ${WASM_IMAGE} AS wasm-builder`. So `dpkg`/binaryen selection is already settled at
+wasm-builder build time and is unaffected by how the consuming Dockerfiles resolve the stage.
+The three WASM-service Dockerfiles currently use a plain, unpinned
 `FROM ${WASM_IMAGE} AS wasm-builder` — this design **adds** a `--platform=$BUILDPLATFORM` pin
-to that stage (see Design and Phase steps). Once pinned, the wasm-builder stage runs on the
-amd64 build host and `dpkg --print-architecture` correctly returns `amd64`, fetching the
-runnable x86_64 binaryen. The existing AARCH64 branch already covers arm-resolved stages. No
-change to `wasm-builder.Dockerfile` itself is needed — the WASM output is arch-neutral
+to that stage (see Design and Phase steps). `${WASM_IMAGE}` is a concrete, already-built
+single-arch (amd64) tag; the pin makes BuildKit resolve that existing amd64 image even under
+`docker buildx build --platform linux/arm64`, instead of looking up a non-existent arm64
+variant of the tag and failing with a manifest-not-found error. No change to
+`wasm-builder.Dockerfile` itself is needed — the WASM output is arch-neutral
 (`wasm32-unknown-unknown`) and consumed only via `COPY --from=wasm-builder`.
 
 The `node:20-alpine` `frontend-builder` stage in those three Dockerfiles is likewise currently
@@ -170,10 +182,11 @@ natively on the amd64 host and emit arch-neutral static assets consumed via
 would resolve the unpinned stage to arm64 and run yarn under QEMU (correct output, but slow).
 
 `build_docker_images.py` defines `WASM_SERVICES = {"analytics-web", "all", "monolith"}` —
-all three services depend on the wasm-builder image via the `wasm-builder` stage. With the
-`--platform=$BUILDPLATFORM` pin added, BuildKit resolves the wasm-builder stage to the amd64
-build host even under `--platform linux/arm64`, so the existing single `amd64` wasm-builder
-image works unchanged. The WASM output is arch-neutral (`wasm32-unknown-unknown`) and is
+all three services depend on the wasm-builder image via the `wasm-builder` stage. `${WASM_IMAGE}`
+is a concrete, already-built single-arch (amd64) tag. With the `--platform=$BUILDPLATFORM` pin
+added, BuildKit resolves that existing amd64 image even under `--platform linux/arm64`, instead
+of looking up a non-existent arm64 variant of the tag and failing with a manifest-not-found
+error. The WASM output is arch-neutral (`wasm32-unknown-unknown`) and is
 consumed only via `COPY --from=wasm-builder`, so the arm64 runtime image still gets correct
 artifacts.
 
@@ -198,8 +211,9 @@ Add `--arm64` flag. When set, the script:
    DockerHub gets a fat manifest automatically.
 
 Key invariant: the WASM artifacts are arch-neutral and the wasm-builder stage gains a
-`FROM --platform=$BUILDPLATFORM ${WASM_IMAGE}` pin (see Design), so BuildKit resolves it to
-the amd64 build host even under `--platform linux/arm64`. `ensure_wasm_builder()` therefore
+`FROM --platform=$BUILDPLATFORM ${WASM_IMAGE}` pin (see Design), so BuildKit resolves the
+concrete, already-built amd64 wasm-builder image even under `--platform linux/arm64` instead of
+failing on a non-existent arm64 variant of the tag. `ensure_wasm_builder()` therefore
 needs no change:
 it keeps building a single `amd64` image with plain `docker build` under the bare
 `micromegas-wasm-builder:latest` tag, and the existing `_built` memo stays as-is. No
