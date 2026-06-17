@@ -76,17 +76,13 @@ export function MapInstancedMarkers({
     return new THREE.SphereGeometry(1, 16, 16)
   }, [shape])
 
-  // Material flags differ per shape:
-  //  - sphere: depth-disabled, transparent (always visible regardless of Z;
-  //    per-row alpha blends with background — sort order is draw order).
-  //  - box:    depth-tested, transparent (per-row alpha contributes to
-  //    blending; occlusion against the GLB is correct).
+  // Depth test disabled: markers are overlays and must always be visible above the map.
   const material = useMemo(() => {
     const mat =
       shape === 'box'
         ? new THREE.MeshBasicMaterial({
             transparent: true,
-            depthTest: true,
+            depthTest: false,
             depthWrite: false,
           })
         : new THREE.MeshBasicMaterial({
