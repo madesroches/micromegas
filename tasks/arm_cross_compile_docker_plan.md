@@ -204,8 +204,11 @@ script only needs to produce a single-arch image matching the requested target p
 Add `--arm64` flag. When set, the script:
 
 1. Uses `docker buildx build --platform linux/arm64` instead of `docker build`.
-2. Tags images with `<name>:latest-arm64` (and version tag) locally, or pushes a multi-arch
-   manifest if `--push` is also passed.
+2. Tags images with `<name>:latest-arm64` (and version tag). For the single-arch local path
+   (`--arm64` without `--push`), it **must** pass `--load` so the tagged image is written into
+   the local docker image store (the `docker-container` buildx driver otherwise only populates
+   the build cache, leaving nothing for `docker run` to find). With `--push` it pushes a
+   multi-arch manifest instead (see item 3).
 3. For the `--push` + `--arm64` path, builds both `linux/amd64` and `linux/arm64` and uses
    `docker buildx build --platform linux/amd64,linux/arm64 --push` in a single pass so
    DockerHub gets a fat manifest automatically.
@@ -289,11 +292,25 @@ arch-suffixed wasm-builder tag, arch-keyed memo, or `--build-arg WASM_IMAGE=...`
 
 9. **`build/build_docker_images.py`** — add `--arm64` flag, switch from `docker build` to
    `docker buildx build --platform` when set. Handle single-arch local build vs multi-arch
-   push.
+   push. The single-arch local path (`--arm64` without `--push`) must include `--load` so the
+   built image lands in the local docker image store for the smoke test; the `--push` path uses
+   `--push` instead (the two are mutually exclusive in buildx).
+
+### Prerequisites (one-time, per build host)
+
+Before running the `--arm64` build or the runtime smoke test on an x86-64 host:
+
+- **buildx builder**: `docker buildx build --platform ...` requires a `docker-container`
+  builder; the default `docker` driver does not support `--platform`. Create and select one
+  once with `docker buildx create --use` (idempotent — reuse the existing builder on later runs).
+- **QEMU/binfmt** (only for the runtime smoke test, not the cross-compiled build): register the
+  arm64 emulator so the x86 host can *run* the arm64 image, via
+  `docker run --privileged --rm tonistiigi/binfmt --install all`. This is a one-time host setup;
+  Docker Desktop registers binfmt automatically.
 
 ### Phase 4 — Smoke test
 
-10. On an x86-64 machine, run:
+10. On an x86-64 machine (after the Prerequisites above), run:
    ```
    python build/build_docker_images.py --arm64 ingestion
    docker run --rm --platform linux/arm64 \
