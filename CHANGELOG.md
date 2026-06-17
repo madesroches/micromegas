@@ -4,6 +4,11 @@ This file documents the historical progress of the Micromegas project. For curre
 
 ## Unreleased
 
+* **Unreal:**
+  * Replace manual HTTP retry with `FHttpRetrySystem` (exponential backoff, per-priority retry budgets); add four priority queues (Metadata/Logs/Metrics/Traces) with configurable soft/hard byte-cap drop logic; gate concurrent uploads via `telemetry.max_in_flight_requests` CVar (#56, #43)
+  * Add idle-aware spike sampling: suppress spike recording after `telemetry.sampling.interaction_timeout` seconds of no user input; add periodic heartbeat captures every `telemetry.sampling.heartbeat_interval` seconds of active time
+  * Emit `TimeSinceLastInput` metric from `FSlateApplication` each frame, with a `BootTime` fallback so the value reads from boot instead of full uptime when no input has occurred yet
+  * Replace `volatile` members in `HttpEventSink` with `std::atomic`; remove `QueueSize` and `RequestShutdown` volatile fields (#43)
 * **Deployment:**
   * Add `micromegas-monolith` single-process binary that runs ingestion, FlightSQL, maintenance, and web in one Tokio runtime sharing a single data-lake connection; includes Docker image, docker-compose stack, `--monolith` start-script mode, per-role auth, and role selection via `--roles` / `MICROMEGAS_MONOLITH_ROLES` (#1139)
 * **Performance:**
