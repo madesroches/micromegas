@@ -141,6 +141,16 @@ resolve every `FROM` stage to that platform; it will fail (or fall back to QEMU)
 `docker buildx build --platform linux/arm64 --load` so BuildKit can resolve the stage for
 that platform. The WASM artifacts themselves are arch-neutral and work unchanged.
 
+Because the current `WASM_IMAGE = "micromegas-wasm-builder:latest"` tag has no arch suffix and
+`ensure_wasm_builder()` memoizes success via `ensure_wasm_builder._built = True`, a mixed or
+back-to-back amd64+arm64 run would resolve the `FROM ${WASM_IMAGE}` stage to a stale-arch image
+(or skip the arm64 build entirely). The wasm-builder tag must therefore be arch-suffixed (e.g.
+`micromegas-wasm-builder:latest-arm64`) and the `_built` memo must be arch-keyed so the arm64
+wasm-builder is built and resolved independently of the amd64 one. The frontend-stage
+Dockerfiles' `FROM ${WASM_IMAGE} AS wasm-builder` reference must receive the arch-correct tag
+(passed via `--build-arg WASM_IMAGE=...`) so the frontend stage uses the matching wasm-builder
+image.
+
 Note: multi-arch manifest creation and pushing are out of scope for the build script — the
 script only needs to produce a single-arch image matching the requested target platform.
 
@@ -159,7 +169,12 @@ Key invariant: the WASM artifacts are arch-neutral, but the wasm-builder image m
 `linux/arm64` manifest available so BuildKit can resolve the `FROM ${WASM_IMAGE}` stage when
 targeting arm64. `ensure_wasm_builder()` must use
 `docker buildx build --platform linux/arm64 --load` when `--arm64` is active (single-arch,
-matching the pattern for all other services).
+matching the pattern for all other services). Tag the arm64 wasm-builder with an arch-suffixed
+tag (e.g. `micromegas-wasm-builder:latest-arm64`) rather than the bare
+`micromegas-wasm-builder:latest`, and arch-key the `ensure_wasm_builder._built` memo so the
+arm64 build is not skipped because an amd64 build already ran in the same session. Pass the
+arch-correct tag into the WASM-service Dockerfiles via `--build-arg WASM_IMAGE=...` so their
+`FROM ${WASM_IMAGE} AS wasm-builder` stage resolves to the matching image.
 
 ## Implementation Steps
 
