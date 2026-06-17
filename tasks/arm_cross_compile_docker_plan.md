@@ -6,7 +6,8 @@ Add `linux/arm64` support to all production Dockerfiles so that an x86-64 develo
 ARM64 images without QEMU emulation. The build relies on a Debian cross-compile toolchain
 (`g++-aarch64-linux-gnu`) — a pattern already
 proven in `local_test_env/arm64/Dockerfile`. The build script gains an `--arm64` flag that
-drives `docker buildx` for multi-arch manifest publishing.
+drives `docker buildx` to produce a single-arch arm64 image loaded into the local docker
+image store. Multi-arch manifest publishing is out of scope (see Trade-offs).
 
 ## Current State
 
@@ -122,12 +123,9 @@ RUN if [ "$TARGETARCH" = "arm64" ]; then \
 
 The runtime stage starts fresh `FROM debian:bookworm-slim`, so it has no `/build/rust/target`
 of its own — artifacts must be pulled across the stage boundary with `COPY --from=rust-builder`.
-The runtime stage re-declares `ARG TARGETARCH` (Docker does not carry an `ARG` across a `FROM`
-boundary). `COPY` *does* expand build `ARG`s in its source path when the `ARG` is declared in
-the stage, so a `RUN cp` is unnecessary. Because Dockerfile `ARG` defaults don't support
-shell-style conditional expansion, the builder stage first materializes the binary at a single
-arch-independent path with a `RUN cp`, then the runtime stage `COPY`s from there — keeping the
-runtime `COPY` source free of variables:
+Because Dockerfile `ARG` defaults don't support shell-style conditional expansion, the builder
+stage first materializes the binary at a single arch-independent path with a `RUN cp`, then the
+runtime stage `COPY`s from there — keeping the runtime `COPY` source free of variables:
 
 ```dockerfile
 # --- end of rust-builder stage ---
@@ -201,17 +199,31 @@ script only needs to produce a single-arch image matching the requested target p
 
 ### build_docker_images.py
 
-Add `--arm64` flag. When set, the script:
+`build_image(service, version, push=False)` currently builds with two `-t` tags
+(`<name>:{version}` and `<name>:latest`) via plain `docker build`. Add an `arm64: bool`
+parameter so the signature becomes `build_image(service, version, push=False, arm64=False)`.
+`main()` parses an `--arm64` flag and passes it through to `build_image()`.
+
+When `arm64` is set, the script:
 
 1. Uses `docker buildx build --platform linux/arm64` instead of `docker build`.
-2. Tags images with `<name>:latest-arm64` (and version tag). For the single-arch local path
-   (`--arm64` without `--push`), it **must** pass `--load` so the tagged image is written into
-   the local docker image store (the `docker-container` buildx driver otherwise only populates
-   the build cache, leaving nothing for `docker run` to find). With `--push` it pushes a
-   multi-arch manifest instead (see item 3).
-3. For the `--push` + `--arm64` path, builds both `linux/amd64` and `linux/arm64` and uses
-   `docker buildx build --platform linux/amd64,linux/arm64 --push` in a single pass so
-   DockerHub gets a fat manifest automatically.
+2. Tags the image with both `<name>:{version}-arm64` and `<name>:latest-arm64` (the same
+   two-`-t` pattern as the native path, with the `-arm64` suffix added to each tag).
+3. Passes `--load` so the tagged single-arch image is written into the local docker image
+   store (the `docker-container` buildx driver otherwise only populates the build cache,
+   leaving nothing for `docker run` to find). `--load` and `--push` are mutually exclusive in
+   buildx; this path is `--load`-only.
+
+The assembled command is a single invocation, e.g.:
+
+```
+docker buildx build --platform linux/arm64 --load \
+  -t <name>:{version}-arm64 -t <name>:latest-arm64 \
+  -f docker/<service>.Dockerfile .
+```
+
+Multi-arch manifest publishing (a `--platform linux/amd64,linux/arm64 --push` fat manifest)
+is out of scope; see Trade-offs for deferred future work.
 
 Key invariant: the WASM artifacts are arch-neutral and the wasm-builder stage gains a
 `FROM --platform=$BUILDPLATFORM ${WASM_IMAGE}` pin (see Design), so BuildKit resolves the
@@ -290,11 +302,13 @@ arch-suffixed wasm-builder tag, arch-keyed memo, or `--build-arg WASM_IMAGE=...`
 
 ### Phase 3 — Build script
 
-9. **`build/build_docker_images.py`** — add `--arm64` flag, switch from `docker build` to
-   `docker buildx build --platform` when set. Handle single-arch local build vs multi-arch
-   push. The single-arch local path (`--arm64` without `--push`) must include `--load` so the
-   built image lands in the local docker image store for the smoke test; the `--push` path uses
-   `--push` instead (the two are mutually exclusive in buildx).
+9. **`build/build_docker_images.py`** — add an `--arm64` flag parsed in `main()` and threaded
+   into `build_image(service, version, push=False, arm64=False)`. When `arm64` is set, switch
+   from `docker build` to `docker buildx build --platform linux/arm64 --load`, tagging the
+   image with both `<name>:{version}-arm64` and `<name>:latest-arm64` (two `-t` flags on the
+   single buildx invocation, mirroring the native two-tag pattern). `--load` writes the
+   single-arch image into the local docker store for the smoke test. Multi-arch manifest
+   publishing is out of scope (see Trade-offs).
 
 ### Prerequisites (one-time, per build host)
 
@@ -350,10 +364,11 @@ acceptable for a daily-use workflow.
 
 **Single-arch vs fat manifest**
 
-For local development, building only `linux/arm64` is sufficient. Multi-arch fat manifests
-(pushed to DockerHub) are driven by `--push --arm64` in the build script and benefit CI
-and DockerHub consumers. This is optional — the Dockerfiles themselves are the primary
-deliverable.
+For local development, building only `linux/arm64` is sufficient, and that is all the build
+script does (`--arm64` → single-arch `--load`). Multi-arch fat manifests (a single
+`--platform linux/amd64,linux/arm64 --push` pass to DockerHub) would benefit CI and DockerHub
+consumers, but are explicitly **out of scope / deferred future work** — the Dockerfiles
+themselves are the primary deliverable.
 
 ## Testing Strategy
 
