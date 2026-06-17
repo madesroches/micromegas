@@ -44,7 +44,7 @@ function LoadingIndicator() {
 export interface MapLoadPayload {
   scene: THREE.Object3D
   bounds: THREE.Box3
-  glbCamera: THREE.PerspectiveCamera | null
+  glbCamera: THREE.PerspectiveCamera | THREE.OrthographicCamera | null
   ambientLight: MMAmbientLight | null
 }
 
@@ -69,7 +69,10 @@ function MapModel({ url, onLoaded }: MapModelProps) {
     gltf.scene.updateMatrixWorld(true)
 
     const cam = gltf.cameras[0]
-    const glbCamera = cam instanceof THREE.PerspectiveCamera ? cam : null
+    const glbCamera =
+      cam instanceof THREE.PerspectiveCamera || cam instanceof THREE.OrthographicCamera
+        ? cam
+        : null
 
     const ambientExt = gltf.parser.json.extensions?.MM_ambient_light as
       | { color?: unknown; intensity?: unknown }
@@ -121,7 +124,7 @@ export function MapViewer({
 
   const [mapBounds, setMapBounds] = useState<THREE.Box3 | null>(null)
   const [mapScene, setMapScene] = useState<THREE.Object3D | null>(null)
-  const [glbCamera, setGlbCamera] = useState<THREE.PerspectiveCamera | null>(null)
+  const [glbCamera, setGlbCamera] = useState<THREE.PerspectiveCamera | THREE.OrthographicCamera | null>(null)
   const [ambientLight, setAmbientLight] = useState<MMAmbientLight | null>(null)
   const [contractErrors, setContractErrors] = useState<string[]>([])
 
