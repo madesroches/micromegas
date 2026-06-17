@@ -76,27 +76,16 @@ export function MapInstancedMarkers({
     return new THREE.SphereGeometry(1, 16, 16)
   }, [shape])
 
-  // Material flags differ per shape:
-  //  - sphere: depth-disabled, transparent (always visible regardless of Z;
-  //    per-row alpha blends with background — sort order is draw order).
-  //  - box:    depth-tested, transparent (per-row alpha contributes to
-  //    blending; occlusion against the GLB is correct).
+  // Depth test disabled: markers are overlays and must always be visible above the map.
   const material = useMemo(() => {
-    const mat =
-      shape === 'box'
-        ? new THREE.MeshBasicMaterial({
-            transparent: true,
-            depthTest: true,
-            depthWrite: false,
-          })
-        : new THREE.MeshBasicMaterial({
-            transparent: true,
-            depthTest: false,
-            depthWrite: false,
-          })
+    const mat = new THREE.MeshBasicMaterial({
+      transparent: true,
+      depthTest: false,
+      depthWrite: false,
+    })
     patchInstanceColorRGBA(mat)
     return mat
-  }, [shape])
+  }, [])
 
   // Runtime per-instance RGBA buffer the GPU reads. We never write through
   // overlay.colorsRGBA directly — it's the immutable baseline that the

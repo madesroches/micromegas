@@ -135,7 +135,9 @@ export function PerspectiveCameraController({
     zoomFactorRef.current = 1.0
 
     // Copy intrinsics onto the scene camera.
-    camera.fov = glbCamera.fov
+    if (glbCamera instanceof THREE.PerspectiveCamera) {
+      camera.fov = glbCamera.fov
+    }
     camera.near = glbCamera.near
     camera.far = glbCamera.far
     camera.updateProjectionMatrix()

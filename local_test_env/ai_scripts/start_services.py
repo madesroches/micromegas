@@ -251,10 +251,33 @@ def main():
     os.environ["MICROMEGAS_ENABLE_CPU_TRACING"] = "true"
     print("🔧 CPU tracing enabled for development")
 
+    # Default maps object store to a maps/ sibling of the telemetry lake
+    if (
+        "MICROMEGAS_MAPS_OBJECT_STORE_URI" not in os.environ
+        and "MICROMEGAS_OBJECT_STORE_URI" in os.environ
+    ):
+        lake_uri = os.environ["MICROMEGAS_OBJECT_STORE_URI"].rstrip("/")
+        os.environ["MICROMEGAS_MAPS_OBJECT_STORE_URI"] = f"{lake_uri}/maps/"
+        print(f"Set MICROMEGAS_MAPS_OBJECT_STORE_URI={lake_uri}/maps/")
+
     if args.monolith:
         print(f"🔧 Building monolith ({mode})...")
         os.chdir(rust_dir)
         run_command(f"cargo build --bin micromegas-monolith{release_flag}")
+
+        repo_root = rust_dir.parent
+        wasm_crate_dir = rust_dir / "datafusion-wasm"
+        wasm_out_dir = repo_root / "analytics-web-app" / "src" / "lib" / "datafusion-wasm"
+        print("🔧 Building datafusion WASM (debug)...")
+        os.chdir(wasm_crate_dir)
+        run_command(
+            f"wasm-pack build --target web --dev --out-dir {wasm_out_dir} --out-name micromegas_datafusion_wasm"
+        )
+
+        web_app_dir = repo_root / "analytics-web-app"
+        print("🔧 Building web app...")
+        os.chdir(web_app_dir)
+        run_command("yarn build")
     else:
         print(f"🔧 Building all services ({mode})...")
         os.chdir(rust_dir)

@@ -16,7 +16,7 @@ export interface MapModeRenderProps {
   // and `glbCamera` are set together in `handleMapLoaded`, so the gate checks
   // all three inline. A missing camera is a contract violation that surfaces
   // as a red error banner with no map content rendered.
-  glbCamera: THREE.PerspectiveCamera
+  glbCamera: THREE.PerspectiveCamera | THREE.OrthographicCamera
   mapScene: THREE.Object3D
   mapBounds: THREE.Box3
   resetViewTrigger: number
