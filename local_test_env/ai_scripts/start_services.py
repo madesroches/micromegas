@@ -264,6 +264,20 @@ def main():
         print(f"🔧 Building monolith ({mode})...")
         os.chdir(rust_dir)
         run_command(f"cargo build --bin micromegas-monolith{release_flag}")
+
+        repo_root = rust_dir.parent
+        wasm_crate_dir = rust_dir / "datafusion-wasm"
+        wasm_out_dir = repo_root / "analytics-web-app" / "src" / "lib" / "datafusion-wasm"
+        print("🔧 Building datafusion WASM (debug)...")
+        os.chdir(wasm_crate_dir)
+        run_command(
+            f"wasm-pack build --target web --dev --out-dir {wasm_out_dir} --out-name micromegas_datafusion_wasm"
+        )
+
+        web_app_dir = repo_root / "analytics-web-app"
+        print("🔧 Building web app...")
+        os.chdir(web_app_dir)
+        run_command("yarn build")
     else:
         print(f"🔧 Building all services ({mode})...")
         os.chdir(rust_dir)
