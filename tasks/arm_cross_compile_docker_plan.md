@@ -200,7 +200,40 @@ matching the pattern for all other services).
 
 7. **`docker/monolith.Dockerfile`** — update only the `rust-builder` stage; leave WASM and
    Node stages unchanged.
-8. **`docker/all-in-one.Dockerfile`** — same as monolith.
+8. **`docker/all-in-one.Dockerfile`** — same cross-compile pattern as monolith, but the
+   `cargo build` command has five `--bin` flags and the runtime stage has five `COPY` lines
+   that each become a `RUN cp` block. The conditional `cargo build` snippet:
+
+   ```dockerfile
+   RUN if [ "$TARGETARCH" = "arm64" ]; then \
+         OPENSSL_DIR=/opt/openssl-aarch64 \
+         CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
+         cargo build --release --target aarch64-unknown-linux-gnu \
+           --bin telemetry-ingestion-srv \
+           --bin flight-sql-srv \
+           --bin telemetry-admin \
+           --bin http-gateway-srv \
+           --bin analytics-web-srv; \
+       else \
+         cargo build --release \
+           --bin telemetry-ingestion-srv \
+           --bin flight-sql-srv \
+           --bin telemetry-admin \
+           --bin http-gateway-srv \
+           --bin analytics-web-srv; \
+       fi
+   ```
+
+   And each of the five `COPY --from=rust-builder` lines becomes a `RUN cp` block:
+
+   ```dockerfile
+   RUN if [ "$TARGETARCH" = "arm64" ]; then ARCH_PATH="aarch64-unknown-linux-gnu/"; else ARCH_PATH=""; fi && \
+       cp /build/rust/target/${ARCH_PATH}release/telemetry-ingestion-srv /usr/local/bin/telemetry-ingestion-srv && \
+       cp /build/rust/target/${ARCH_PATH}release/flight-sql-srv /usr/local/bin/flight-sql-srv && \
+       cp /build/rust/target/${ARCH_PATH}release/telemetry-admin /usr/local/bin/telemetry-admin && \
+       cp /build/rust/target/${ARCH_PATH}release/http-gateway-srv /usr/local/bin/http-gateway-srv && \
+       cp /build/rust/target/${ARCH_PATH}release/analytics-web-srv /usr/local/bin/analytics-web-srv
+   ```
 
 ### Phase 3 — Build script
 
