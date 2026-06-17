@@ -20,6 +20,7 @@ This file documents the historical progress of the Micromegas project. For curre
   * Add optional `label` column to swimlane cells; labels render as truncated text inside each bar and appear in a hover tooltip alongside the lane name and time range
   * Route `formatDuration` through `formatTimeValue` so flamegraph tooltips show minutes, hours, and days for long spans instead of capping at seconds
   * Add per-row colors, user-selectable series colors, and reference line threshold indicators to XYChart; reference lines support named labels, units, dashed/solid style, and per-line color (#1043)
+  * Accept orthographic GLB cameras in the map renderer; GLBs with an embedded `OrthographicCamera` no longer trigger the contract-error banner (#1145)
   * Add a per-Map-cell **Camera** setting with `perspective` (default) and `orthographic` modes; orthographic fits the camera to the projected map silhouette and maps Q/E to zoom (#1065)
   * Add a hover tooltip preview for map markers that renders the cell's `detailTemplate` as a small floating panel following the cursor, with a per-cell show/hide option (#1080)
   * Add `format_value(value, unit)` template function for adaptive unit formatting in Markdown templates (Map detail panel, Markdown cells, and table column overrides); surface unresolved-arg and unresolved-macro warnings via a banner (Map/Markdown) or column-header icon (tables) (#1086)
