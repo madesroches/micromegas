@@ -37,8 +37,8 @@ downloads the correct Binaryen binary for x86_64 or aarch64, line 17-24). No cha
 `local_test_env/arm64/Dockerfile` already solved the hard parts:
 - Installs `g++-aarch64-linux-gnu` and `libc6-dev-arm64-cross`
 - Adds `rustup target add aarch64-unknown-linux-gnu`
-- Statically compiles OpenSSL 3.3.0 for aarch64 into `/opt/openssl-aarch64`
-- Sets `OPENSSL_DIR`
+- Statically compiles OpenSSL 3.3.0 for aarch64 into `/opt/openssl-3.3.0`
+- Sets `OPENSSL_DIR=/opt/openssl-3.3.0`
 
 ### `.cargo/config.toml`
 
@@ -93,6 +93,11 @@ RUN if [ "$TARGETARCH" = "arm64" ]; then \
 # /opt/openssl-aarch64 directory is never created, which breaks any crate that
 # uses openssl-sys.  Pass it inline on the cargo command instead (env vars set
 # in the same RUN step are visible to build.rs subprocesses).
+#
+# NOTE: the canonical install prefix for all production Dockerfiles is
+# /opt/openssl-aarch64.  local_test_env/arm64/Dockerfile currently uses
+# /opt/openssl-3.3.0 (an older convention); that file must be updated to
+# /opt/openssl-aarch64 when this plan is implemented so all Dockerfiles agree.
 
 WORKDIR /build
 COPY rust/ ./rust/
@@ -136,10 +141,15 @@ command shown above — that is the authoritative mechanism for Docker builds.
 If `.cargo/config.toml` is ever needed inside Docker (e.g. for additional target settings),
 add `COPY .cargo/ /build/.cargo/` to each Dockerfile before the `cargo build` step.
 
-### Monolith / all-in-one — Node frontend stage
+### Monolith / all-in-one / analytics-web — Node frontend stage
 
 `node:20-alpine` supports arm64 natively. The Rust builder stage follows the same pattern
 above; the binary copy in the runtime stage must use `RUN cp` as above.
+
+`build_docker_images.py` defines `WASM_SERVICES = {"analytics-web", "all", "monolith"}` —
+all three services depend on the wasm-builder image via a `FROM ${WASM_IMAGE} AS wasm-builder`
+stage. Therefore, when `--arm64` is active, **all three** require a multiarch wasm-builder
+image, not just monolith/all-in-one.
 
 `wasm-builder` is already arch-aware at runtime, but `ensure_wasm_builder()` in
 `build_docker_images.py` calls plain `docker build` with no `--platform`, producing only an
