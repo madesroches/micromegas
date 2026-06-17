@@ -31,11 +31,19 @@ The monolith adds WASM and Node stages before the Rust stage:
 
 `wasm-builder.Dockerfile` uses `dpkg --print-architecture` to select the Binaryen binary
 (line 17-24). This reports the architecture of the **container the stage resolves to**, not
-the host. Because the wasm-builder stage is pinned `FROM --platform=$BUILDPLATFORM` (see
-Design), it runs on the amd64 build host and `dpkg --print-architecture` correctly returns
-`amd64`, fetching the runnable x86_64 binaryen. The existing AARCH64 branch already covers
-arm-resolved stages. No change to this Dockerfile is needed — the WASM output is arch-neutral
+the host. The three WASM-service Dockerfiles currently use a plain, unpinned
+`FROM ${WASM_IMAGE} AS wasm-builder` — this design **adds** a `--platform=$BUILDPLATFORM` pin
+to that stage (see Design and Phase steps). Once pinned, the wasm-builder stage runs on the
+amd64 build host and `dpkg --print-architecture` correctly returns `amd64`, fetching the
+runnable x86_64 binaryen. The existing AARCH64 branch already covers arm-resolved stages. No
+change to `wasm-builder.Dockerfile` itself is needed — the WASM output is arch-neutral
 (`wasm32-unknown-unknown`) and consumed only via `COPY --from=wasm-builder`.
+
+The `node:20-alpine` `frontend-builder` stage in those three Dockerfiles is likewise currently
+unpinned, so under `docker buildx build --platform linux/arm64` it would resolve to arm64 and
+run `yarn install`/`yarn build` under QEMU. This design also adds a `--platform=$BUILDPLATFORM`
+pin to the `frontend-builder` stage so yarn runs natively on the amd64 host (its output is
+arch-neutral static assets).
 
 ### Cross-compile proof-of-concept
 
@@ -100,16 +108,30 @@ RUN if [ "$TARGETARCH" = "arm64" ]; then \
     fi
 ```
 
-The runtime stage must re-declare `ARG TARGETARCH` (Docker does not carry an `ARG` across a
-`FROM` boundary), then reference the correct path. Because Docker `COPY` doesn't support
-shell variable expansion, a `RUN cp` is used instead:
+The runtime stage starts fresh `FROM debian:bookworm-slim`, so it has no `/build/rust/target`
+of its own — artifacts must be pulled across the stage boundary with `COPY --from=rust-builder`.
+The runtime stage re-declares `ARG TARGETARCH` (Docker does not carry an `ARG` across a `FROM`
+boundary). `COPY` *does* expand build `ARG`s in its source path when the `ARG` is declared in
+the stage, so a `RUN cp` is unnecessary. Because Dockerfile `ARG` defaults don't support
+shell-style conditional expansion, the builder stage first materializes the binary at a single
+arch-independent path with a `RUN cp`, then the runtime stage `COPY`s from there — keeping the
+runtime `COPY` source free of variables:
 
 ```dockerfile
-FROM debian:bookworm-slim
+# --- end of rust-builder stage ---
 ARG TARGETARCH
 RUN if [ "$TARGETARCH" = "arm64" ]; then ARCH_PATH="aarch64-unknown-linux-gnu/"; else ARCH_PATH=""; fi && \
-    cp /build/rust/target/${ARCH_PATH}release/<name> /usr/local/bin/<name>
+    cp /build/rust/target/${ARCH_PATH}release/<name> /build/<name>
+
+# --- runtime stage ---
+FROM debian:bookworm-slim
+COPY --from=rust-builder /build/<name> /usr/local/bin/<name>
 ```
+
+The `RUN cp` runs inside the builder stage (which *does* have `/build/rust/target/...`),
+normalizing the per-arch path to `/build/<name>`. The runtime `COPY --from=rust-builder` then
+crosses the stage boundary with a static source path and no shell expansion. The native amd64
+build (plain `docker build`, no `TARGETARCH`) takes the empty-`ARCH_PATH` branch.
 
 ### `.cargo/config.toml` addition
 
@@ -130,19 +152,30 @@ command shown above — that is the authoritative mechanism for Docker builds.
 If `.cargo/config.toml` is ever needed inside Docker (e.g. for additional target settings),
 add `COPY .cargo/ /build/.cargo/` to each Dockerfile before the `cargo build` step.
 
-### Monolith / all-in-one / analytics-web — Node frontend stage
+### Monolith / all-in-one / analytics-web — WASM and Node frontend stages
 
-`node:20-alpine` supports arm64 natively. The Rust builder stage follows the same pattern
-above; the binary copy in the runtime stage must use `RUN cp` as above.
+The Rust builder stage follows the same pattern above; the binary copy crosses into the
+runtime stage via `COPY --from=rust-builder` from the normalized `/build/<name>` path as above.
+
+Both pre-Rust stages must be pinned to the build host to keep the no-QEMU goal. Today both are
+unpinned in `docker/monolith.Dockerfile`, `docker/all-in-one.Dockerfile`, and
+`docker/analytics-web.Dockerfile`, so this design changes:
+
+- `FROM ${WASM_IMAGE} AS wasm-builder` → `FROM --platform=$BUILDPLATFORM ${WASM_IMAGE} AS wasm-builder`
+- `FROM node:20-alpine AS frontend-builder` → `FROM --platform=$BUILDPLATFORM node:20-alpine AS frontend-builder`
+
+The Node pin is the no-QEMU mechanism for the frontend stage: `yarn install`/`yarn build` run
+natively on the amd64 host and emit arch-neutral static assets consumed via
+`COPY --from=frontend-builder`. Without the pin, `docker buildx build --platform linux/arm64`
+would resolve the unpinned stage to arm64 and run yarn under QEMU (correct output, but slow).
 
 `build_docker_images.py` defines `WASM_SERVICES = {"analytics-web", "all", "monolith"}` —
-all three services depend on the wasm-builder image via a `FROM ${WASM_IMAGE} AS wasm-builder`
-stage. That stage is pinned `FROM --platform=$BUILDPLATFORM ${WASM_IMAGE}`, consistent with
-the Rust builder pin above and with the no-QEMU goal. The pin makes BuildKit resolve the
-wasm-builder stage to the amd64 build host even under `--platform linux/arm64`, so the
-existing single `amd64` wasm-builder image works unchanged. The WASM output is arch-neutral
-(`wasm32-unknown-unknown`) and is consumed only via `COPY --from=wasm-builder`, so the arm64
-runtime image still gets correct artifacts.
+all three services depend on the wasm-builder image via the `wasm-builder` stage. With the
+`--platform=$BUILDPLATFORM` pin added, BuildKit resolves the wasm-builder stage to the amd64
+build host even under `--platform linux/arm64`, so the existing single `amd64` wasm-builder
+image works unchanged. The WASM output is arch-neutral (`wasm32-unknown-unknown`) and is
+consumed only via `COPY --from=wasm-builder`, so the arm64 runtime image still gets correct
+artifacts.
 
 Because the stage is BUILDPLATFORM-pinned, `ensure_wasm_builder()` keeps building a single
 `amd64` image with plain `docker build` and the bare `micromegas-wasm-builder:latest` tag.
@@ -164,9 +197,10 @@ Add `--arm64` flag. When set, the script:
    `docker buildx build --platform linux/amd64,linux/arm64 --push` in a single pass so
    DockerHub gets a fat manifest automatically.
 
-Key invariant: the WASM artifacts are arch-neutral and the wasm-builder stage is pinned
-`FROM --platform=$BUILDPLATFORM ${WASM_IMAGE}`, so BuildKit resolves it to the amd64 build
-host even under `--platform linux/arm64`. `ensure_wasm_builder()` therefore needs no change:
+Key invariant: the WASM artifacts are arch-neutral and the wasm-builder stage gains a
+`FROM --platform=$BUILDPLATFORM ${WASM_IMAGE}` pin (see Design), so BuildKit resolves it to
+the amd64 build host even under `--platform linux/arm64`. `ensure_wasm_builder()` therefore
+needs no change:
 it keeps building a single `amd64` image with plain `docker build` under the bare
 `micromegas-wasm-builder:latest` tag, and the existing `_built` memo stays as-is. No
 arch-suffixed wasm-builder tag, arch-keyed memo, or `--build-arg WASM_IMAGE=...` is required.
@@ -181,16 +215,18 @@ arch-suffixed wasm-builder tag, arch-keyed memo, or `--build-arg WASM_IMAGE=...`
 4. **`docker/http-gateway.Dockerfile`** — same.
 5. **`docker/admin.Dockerfile`** — same.
 6. **`docker/analytics-web.Dockerfile`** — apply the cross-compile pattern to the
-   `rust-builder` stage (compiles `analytics-web-srv`); leave the WASM and Node stages
-   unchanged.
+   `rust-builder` stage (compiles `analytics-web-srv`), and add the `--platform=$BUILDPLATFORM`
+   pin to both the `wasm-builder` and `frontend-builder` stage `FROM` lines (see Design).
 
 ### Phase 2 — Complex Dockerfiles
 
-7. **`docker/monolith.Dockerfile`** — update only the `rust-builder` stage; leave WASM and
-   Node stages unchanged.
-8. **`docker/all-in-one.Dockerfile`** — same cross-compile pattern as monolith, but the
-   `cargo build` command has five `--bin` flags and the runtime stage has five `COPY` lines
-   that each become a `RUN cp` block. The conditional `cargo build` snippet:
+7. **`docker/monolith.Dockerfile`** — apply the cross-compile pattern to the `rust-builder`
+   stage, and add the `--platform=$BUILDPLATFORM` pin to both the `wasm-builder` and
+   `frontend-builder` stage `FROM` lines (see Design).
+8. **`docker/all-in-one.Dockerfile`** — same cross-compile pattern and pins as monolith, but the
+   `cargo build` command has five `--bin` flags and the runtime stage keeps its five
+   `COPY --from=rust-builder` lines (retargeted to the normalized `/build/<name>` paths). The
+   conditional `cargo build` snippet:
 
    ```dockerfile
    RUN if [ "$TARGETARCH" = "arm64" ]; then \
@@ -211,18 +247,28 @@ arch-suffixed wasm-builder tag, arch-keyed memo, or `--build-arg WASM_IMAGE=...`
        fi
    ```
 
-   And each of the five `COPY --from=rust-builder` lines becomes a `RUN cp` block in the
-   runtime stage, which must re-declare `ARG TARGETARCH` after its `FROM` line:
+   To normalize the per-arch path, the `rust-builder` stage ends with a single `RUN cp` block
+   (re-declaring `ARG TARGETARCH`) that stages all five binaries at static `/build/` paths;
+   the runtime stage then uses five plain `COPY --from=rust-builder` lines with no variable
+   expansion (so no `RUN cp` is needed in the runtime stage):
 
    ```dockerfile
-   FROM debian:bookworm-slim
+   # --- end of rust-builder stage ---
    ARG TARGETARCH
    RUN if [ "$TARGETARCH" = "arm64" ]; then ARCH_PATH="aarch64-unknown-linux-gnu/"; else ARCH_PATH=""; fi && \
-       cp /build/rust/target/${ARCH_PATH}release/telemetry-ingestion-srv /usr/local/bin/telemetry-ingestion-srv && \
-       cp /build/rust/target/${ARCH_PATH}release/flight-sql-srv /usr/local/bin/flight-sql-srv && \
-       cp /build/rust/target/${ARCH_PATH}release/telemetry-admin /usr/local/bin/telemetry-admin && \
-       cp /build/rust/target/${ARCH_PATH}release/http-gateway-srv /usr/local/bin/http-gateway-srv && \
-       cp /build/rust/target/${ARCH_PATH}release/analytics-web-srv /usr/local/bin/analytics-web-srv
+       cp /build/rust/target/${ARCH_PATH}release/telemetry-ingestion-srv /build/telemetry-ingestion-srv && \
+       cp /build/rust/target/${ARCH_PATH}release/flight-sql-srv /build/flight-sql-srv && \
+       cp /build/rust/target/${ARCH_PATH}release/telemetry-admin /build/telemetry-admin && \
+       cp /build/rust/target/${ARCH_PATH}release/http-gateway-srv /build/http-gateway-srv && \
+       cp /build/rust/target/${ARCH_PATH}release/analytics-web-srv /build/analytics-web-srv
+
+   # --- runtime stage ---
+   FROM debian:bookworm-slim
+   COPY --from=rust-builder /build/telemetry-ingestion-srv /usr/local/bin/telemetry-ingestion-srv
+   COPY --from=rust-builder /build/flight-sql-srv /usr/local/bin/flight-sql-srv
+   COPY --from=rust-builder /build/telemetry-admin /usr/local/bin/telemetry-admin
+   COPY --from=rust-builder /build/http-gateway-srv /usr/local/bin/http-gateway-srv
+   COPY --from=rust-builder /build/analytics-web-srv /usr/local/bin/analytics-web-srv
    ```
 
 ### Phase 3 — Build script
@@ -251,14 +297,15 @@ arch-suffixed wasm-builder tag, arch-keyed memo, or `--build-arg WASM_IMAGE=...`
 | `docker/flight-sql.Dockerfile` | Same |
 | `docker/http-gateway.Dockerfile` | Same |
 | `docker/admin.Dockerfile` | Same |
-| `docker/analytics-web.Dockerfile` | Cross-compile pattern in `rust-builder` stage |
-| `docker/monolith.Dockerfile` | Cross-compile pattern in `rust-builder` stage |
+| `docker/analytics-web.Dockerfile` | Cross-compile pattern in `rust-builder` stage; add `--platform=$BUILDPLATFORM` pin to `wasm-builder` and `frontend-builder` stages |
+| `docker/monolith.Dockerfile` | Cross-compile pattern in `rust-builder` stage; add `--platform=$BUILDPLATFORM` pin to `wasm-builder` and `frontend-builder` stages |
 | `docker/all-in-one.Dockerfile` | Same |
 | `build/build_docker_images.py` | `--arm64` flag, `docker buildx` integration |
 
-The WASM-service builder stages pin `FROM --platform=$BUILDPLATFORM ${WASM_IMAGE}`, so
-`wasm-builder.Dockerfile` and `ensure_wasm_builder()` need no changes — the existing
-single `amd64` wasm-builder image is reused unchanged (see Design).
+The three WASM-service Dockerfiles gain a `--platform=$BUILDPLATFORM` pin on their
+`wasm-builder` and `frontend-builder` `FROM` lines (currently unpinned). With those pins,
+`wasm-builder.Dockerfile` and `ensure_wasm_builder()` need no changes — the existing single
+`amd64` wasm-builder image is reused unchanged (see Design).
 
 ## Trade-offs
 
@@ -281,8 +328,9 @@ deliverable.
 
 1. Build `ingestion` with `--arm64` on an x86-64 Linux machine and confirm the image
    runs with `docker run --platform linux/arm64 ... --help`.
-2. Build `monolith` with `--arm64` and verify the web UI is reachable (the Node stage is
-   unchanged, so this mainly validates binary copying).
+2. Build `monolith` with `--arm64` and verify the web UI is reachable (the Node/WASM stages
+   are BUILDPLATFORM-pinned, so this mainly validates binary copying and arch-neutral asset
+   reuse).
 3. Confirm the existing x86 build still works after Dockerfile changes (regression test).
 4. On an actual ARM64 machine (or CI runner), run `docker build` without `--arm64` and
    confirm it falls back to the native path.
