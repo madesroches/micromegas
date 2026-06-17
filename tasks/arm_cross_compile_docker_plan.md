@@ -188,11 +188,31 @@ error. The WASM output is arch-neutral (`wasm32-unknown-unknown`) and is
 consumed only via `COPY --from=wasm-builder`, so the arm64 runtime image still gets correct
 artifacts.
 
-Because the stage is BUILDPLATFORM-pinned, `ensure_wasm_builder()` keeps building a single
-`amd64` image with plain `docker build` and the bare `micromegas-wasm-builder:latest` tag.
-No arch-suffixed tag, no arch-keyed `_built` memo, and no `--build-arg WASM_IMAGE=...` is
-needed — that multi-arch machinery would only be required if the wasm-builder stage resolved
-to the arm64 target platform, which the pin deliberately avoids.
+The `--platform=$BUILDPLATFORM` pin fixes **arch resolution** (it stops BuildKit from
+looking up a non-existent arm64 variant of the tag), but it does **not** make the locally-built
+image reachable from the buildx builder. The arm64 path runs under a `docker buildx` builder
+using the `docker-container` driver (see Prerequisites), which runs BuildKit in an isolated
+container that does **not** share the host Docker daemon's image store. A
+`micromegas-wasm-builder:latest` image built via plain `docker build` lives only in the daemon
+store, so `FROM ${WASM_IMAGE}` inside the buildx build is resolved by attempting a registry
+pull — which fails. **`ensure_wasm_builder()` therefore DOES need a change for the arm64 path.**
+
+Fix (simplest workable approach, consistent with the single-arch `--load` decision): when
+building for arm64, `ensure_wasm_builder()` builds the wasm-builder with `docker buildx build`
+**on the same builder** that the service build uses, with `--load` so the resulting
+`micromegas-wasm-builder:latest` is loaded back into the daemon store AND is resolvable by that
+builder's cache. Concretely, the arm64 branch builds the wasm-builder BUILDPLATFORM-pinned
+(amd64, no QEMU) via:
+
+```
+docker buildx build --load -t micromegas-wasm-builder:latest \
+  -f docker/wasm-builder.Dockerfile .
+```
+
+(The native amd64 path keeps the existing plain `docker build`.) The `_built` memo stays a
+simple boolean since the wasm output is arch-neutral and the same `:latest` tag is reused. No
+arch-suffixed tag and no `--build-arg WASM_IMAGE=...` are needed — only the build command for
+the wasm-builder changes on the arm64 path.
 
 Note: multi-arch manifest creation and pushing are out of scope for the build script — the
 script only needs to produce a single-arch image matching the requested target platform.
@@ -214,6 +234,17 @@ When `arm64` is set, the script:
    leaving nothing for `docker run` to find). `--load` and `--push` are mutually exclusive in
    buildx; this path is `--load`-only.
 
+`main()` guards against the contradictory `--arm64 --push` combination: because the arm64
+path is `--load`-only and `--load`/`--push` cannot coexist, `main()` errors out early with a
+clear message (e.g. `--push is not supported with --arm64; multi-arch publishing is out of
+scope`) rather than assembling an invalid buildx command. (Multi-arch fat-manifest publishing
+is the deferred future work; see Trade-offs.)
+
+`build_image()` returns the actual tags it applied so the run summary is accurate. The result
+dict records the `-arm64`-suffixed tags when `arm64=True` (rather than the hardcoded bare
+`:{version}` / `:latest`), and `main()`'s summary prints those recorded tags — otherwise the
+summary would advertise non-suffixed tags that were never created on the arm64 path.
+
 The assembled command is a single invocation, e.g.:
 
 ```
@@ -228,11 +259,15 @@ is out of scope; see Trade-offs for deferred future work.
 Key invariant: the WASM artifacts are arch-neutral and the wasm-builder stage gains a
 `FROM --platform=$BUILDPLATFORM ${WASM_IMAGE}` pin (see Design), so BuildKit resolves the
 concrete, already-built amd64 wasm-builder image even under `--platform linux/arm64` instead of
-failing on a non-existent arm64 variant of the tag. `ensure_wasm_builder()` therefore
-needs no change:
-it keeps building a single `amd64` image with plain `docker build` under the bare
-`micromegas-wasm-builder:latest` tag, and the existing `_built` memo stays as-is. No
-arch-suffixed wasm-builder tag, arch-keyed memo, or `--build-arg WASM_IMAGE=...` is required.
+failing on a non-existent arm64 variant of the tag. The same bare
+`micromegas-wasm-builder:latest` tag and a simple boolean `_built` memo are reused (no
+arch-suffixed tag, arch-keyed memo, or `--build-arg WASM_IMAGE=...` is required). However, on
+the arm64 path `ensure_wasm_builder()` **does** need a change: the buildx `docker-container`
+driver does not share the host daemon's image store, so a wasm-builder image built with plain
+`docker build` is unreachable from the service build's `FROM ${WASM_IMAGE}` (it falls back to a
+failing registry pull). The arm64 branch instead builds the wasm-builder via
+`docker buildx build --load` (BUILDPLATFORM-pinned amd64, no QEMU) so the `:latest` image is
+resolvable by the buildx builder. See the Design section for the exact command.
 
 ## Implementation Steps
 
@@ -349,8 +384,10 @@ Before running the `--arm64` build or the runtime smoke test on an x86-64 host:
 
 The three WASM-service Dockerfiles gain a `--platform=$BUILDPLATFORM` pin on their
 `wasm-builder` and `frontend-builder` `FROM` lines (currently unpinned). With those pins,
-`wasm-builder.Dockerfile` and `ensure_wasm_builder()` need no changes — the existing single
-`amd64` wasm-builder image is reused unchanged (see Design).
+`wasm-builder.Dockerfile` itself needs no changes. `ensure_wasm_builder()` is unchanged on the
+native amd64 path but **does** change on the arm64 path: it must build the wasm-builder via
+`docker buildx build --load` (instead of plain `docker build`) so the `:latest` image is
+reachable from the buildx `docker-container` builder (see Design).
 
 ## Trade-offs
 
