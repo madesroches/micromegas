@@ -30,19 +30,24 @@ public:
 private:
 	void OnNetVerbosityChanged(IConsoleVariable* Var);
 
+	void RecordSampledRange(const TimeRange& NewRange);
+
 	SharedFlushMonitor FlushMonitor;
 	FRunningAverage FrameTimeRunningAvg;
 	FDateTime LastFrameDateTime;
+	FDateTime LastCaptureDateTime;
 	double SpikeFactor;
-	
+
 	mutable UE::FMutex SampledTimeRangesMutex;
 	TRingBuffer<TimeRange> SampledTimeRanges;
-	
+
 	TUniquePtr<TAutoConsoleVariable<bool>> CVarLogEnable;
 	TUniquePtr<TAutoConsoleVariable<bool>> CVarMetricsEnable;
 	TUniquePtr<TAutoConsoleVariable<bool>> CVarSpansEnable;
 	TUniquePtr<TAutoConsoleVariable<bool>> CVarSpansAll;
 	TUniquePtr<TAutoConsoleVariable<int32>> CVarNetVerbosity;
+	TUniquePtr<TAutoConsoleVariable<float>> CVarInteractionTimeout;
+	TUniquePtr<TAutoConsoleVariable<float>> CVarHeartbeatInterval;
 };
 
 typedef TSharedPtr<FSamplingController, ESPMode::ThreadSafe> SharedSamplingController;

@@ -4,6 +4,7 @@
 #include "MicromegasTelemetrySink/MetricPublisher.h"
 
 #include "Engine/World.h"
+#include "Framework/Application/SlateApplication.h"
 #include "HAL/PlatformTime.h"
 #include "MicromegasTracing/DefaultContext.h"
 #include "MicromegasTracing/Macros.h"
@@ -15,6 +16,7 @@
 #include "UnrealClient.h"
 
 MetricPublisher::MetricPublisher()
+	: BootTime(FPlatformTime::Seconds()) // shares Slate's GetCurrentTime() epoch; the "active on boot" baseline for TimeSinceLastInput
 {
 	FWorldDelegates::OnPreWorldInitialization.AddRaw(this, &MetricPublisher::OnWorldInit);
 	FWorldDelegates::OnWorldBeginTearDown.AddRaw(this, &MetricPublisher::OnWorldTornDown);
@@ -131,6 +133,17 @@ void MetricPublisher::Tick()
 		MICROMEGAS_FMETRIC("Frame", MicromegasTracing::Verbosity::Med, TEXT("GPUTime"), TEXT("seconds"), FPlatformTime::ToSeconds(RHIGetGPUFrameCycles(0)));
 		MICROMEGAS_IMETRIC("Frame", MicromegasTracing::Verbosity::Med, TEXT("DrawCalls"), TEXT("count"), GNumDrawCallsRHI[0]);
 		MICROMEGAS_IMETRIC("Frame", MicromegasTracing::Verbosity::Med, TEXT("PrimitivesDrawn"), TEXT("count"), GNumPrimitivesDrawnRHI[0]);
+
+		// Slate tracks the last keyboard/mouse/touch/controller interaction below the gameplay layer,
+		// so this works in any game and in the editor
+		if (FSlateApplication::IsInitialized())
+		{
+			const FSlateApplication& SlateApp = FSlateApplication::Get();
+			// LastUserInteractionTime is 0 until the first input; fall back to BootTime so the metric reads from boot rather than full uptime.
+			const double LastUserInteractionTime = FMath::Max(SlateApp.GetLastUserInteractionTime(), BootTime);
+			const double TimeSinceLastInput = SlateApp.GetCurrentTime() - LastUserInteractionTime;
+			MICROMEGAS_FMETRIC("Frame", MicromegasTracing::Verbosity::Med, TEXT("TimeSinceLastInput"), TEXT("seconds"), TimeSinceLastInput);
+		}
 	}
 
 	const FPlatformMemoryStats MemStats = FPlatformMemory::GetStats();

@@ -4,6 +4,7 @@
 #include "MicromegasTracing/EventBlock.h"
 #include "MicromegasTracing/Macros.h"
 #include "MicromegasTracing/NetTraceWriter.h"
+#include "Framework/Application/SlateApplication.h"
 #include "Misc/App.h"
 #include "Misc/CoreDelegates.h"
 #include "Misc/Parse.h"
@@ -36,6 +37,7 @@ FSamplingController::FSamplingController(const SharedFlushMonitor& InFlushMonito
 	: FlushMonitor(InFlushMonitor)
 	, FrameTimeRunningAvg(RUNNING_AVERAGE_WINDOW_SIZE, RUNNING_AVERAGE_INITIAL_VALUE) // init with a large value to avoid triggering on the first frames, but not so large to get into numerical instability
 	, LastFrameDateTime(FDateTime::UtcNow())
+	, LastCaptureDateTime(FDateTime::UtcNow())
 	, SpikeFactor(INITIAL_SPIKE_FACTOR)
 	, CVarLogEnable(new TAutoConsoleVariable<bool>(
 		  TEXT("telemetry.log.enable"),
@@ -57,6 +59,14 @@ FSamplingController::FSamplingController(const SharedFlushMonitor& InFlushMonito
 		  TEXT("telemetry.net.verbosity"),
 		  2,
 		  TEXT("Net trace verbosity: 0=off, 1=packets, 2=+root objects, 3=+all objects, 4=+properties/RPCs")))
+	, CVarInteractionTimeout(new TAutoConsoleVariable<float>(
+		  TEXT("telemetry.sampling.interaction_timeout"),
+		  2.0f,
+		  TEXT("Seconds since last user input before spike recording is suppressed; 0 disables the gate")))
+	, CVarHeartbeatInterval(new TAutoConsoleVariable<float>(
+		  TEXT("telemetry.sampling.heartbeat_interval"),
+		  120.0f,
+		  TEXT("Seconds of active user time between heartbeat captures; 0 disables")))
 {
 	// Command-line override for net verbosity
 	int32 NetVerbosityOverride = -1;
@@ -81,6 +91,18 @@ FSamplingController::~FSamplingController()
 	FCoreDelegates::OnBeginFrame.RemoveAll(this);
 }
 
+void FSamplingController::RecordSampledRange(const TimeRange& NewRange)
+{
+	FDateTime SampleExpiration = NewRange.Get<1>() - FTimespan(static_cast<int64>(FlushMonitor->GetFlushPeriodSeconds() * ETimespan::TicksPerSecond));
+	UE::TUniqueLock<UE::FMutex> Lock(SampledTimeRangesMutex);
+	SampledTimeRanges.Add(NewRange);
+	// check for out of date samples only when adding a new one to avoid acquiring the lock every frame
+	while (!SampledTimeRanges.IsEmpty() && SampledTimeRanges[0].Get<1>() < SampleExpiration)
+	{
+		SampledTimeRanges.PopFront();
+	}
+}
+
 void FSamplingController::Tick()
 {
 	MICROMEGAS_SPAN_FUNCTION("MicromegasTelemetrySink");
@@ -94,21 +116,39 @@ void FSamplingController::Tick()
 	double LastFrameDeltaTime = FApp::GetDeltaTime(); // we could compute it, but I prefer to rely on the same number that is fed as a metric
 	FrameTimeRunningAvg.Add(LastFrameDeltaTime);
 
+	const float InteractionTimeout = CVarInteractionTimeout->GetValueOnGameThread();
+	if (InteractionTimeout > 0.f && FSlateApplication::IsInitialized())
+	{
+		const FSlateApplication& SlateApp = FSlateApplication::Get();
+		const double TimeSinceLastInput = SlateApp.GetCurrentTime() - SlateApp.GetLastUserInteractionTime();
+		if (TimeSinceLastInput > static_cast<double>(InteractionTimeout))
+		{
+			LastFrameDateTime = Now;
+			return;
+		}
+	}
+
 	double RunningAvg = FrameTimeRunningAvg.Get();
 	if (LastFrameDeltaTime >= RunningAvg * SpikeFactor)
 	{
-		FDateTime SampleExpiration = Now - FTimespan(static_cast<int64>(FlushMonitor->GetFlushPeriodSeconds() * ETimespan::TicksPerSecond));
 		TimeRange NewRange(LastFrameDateTime, Now);
 		UE_LOG(LogMicromegasTelemetrySink, Verbose, TEXT("Spike detected: range=%s factor=%f delta=%f RunningAvg=%f"), *FormatTimeRange(NewRange), SpikeFactor, LastFrameDeltaTime, RunningAvg);
-
-		UE::TUniqueLock<UE::FMutex> Lock(SampledTimeRangesMutex);
-		SampledTimeRanges.Add(NewRange);
-		// check for out of date samples only when adding a new one to avoid acquiring the lock every frame
-		while (!SampledTimeRanges.IsEmpty() && SampledTimeRanges[0].Get<1>() < SampleExpiration)
-		{
-			SampledTimeRanges.PopFront();
-		}
+		RecordSampledRange(NewRange);
+		LastCaptureDateTime = Now;
 		SpikeFactor *= SPIKE_FACTOR_INFLATION; // making the spike detector less sensitive as we collect spikes
+	}
+
+	const float HeartbeatInterval = CVarHeartbeatInterval->GetValueOnGameThread();
+	if (HeartbeatInterval > 0.f)
+	{
+		const double SecondsSinceLastCapture = (Now - LastCaptureDateTime).GetTotalSeconds();
+		if (SecondsSinceLastCapture >= static_cast<double>(HeartbeatInterval))
+		{
+			TimeRange NewRange(LastFrameDateTime, Now);
+			UE_LOG(LogMicromegasTelemetrySink, Verbose, TEXT("Heartbeat capture: range=%s"), *FormatTimeRange(NewRange));
+			RecordSampledRange(NewRange);
+			LastCaptureDateTime = Now;
+		}
 	}
 
 	LastFrameDateTime = Now;
