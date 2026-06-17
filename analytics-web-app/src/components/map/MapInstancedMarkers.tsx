@@ -78,21 +78,14 @@ export function MapInstancedMarkers({
 
   // Depth test disabled: markers are overlays and must always be visible above the map.
   const material = useMemo(() => {
-    const mat =
-      shape === 'box'
-        ? new THREE.MeshBasicMaterial({
-            transparent: true,
-            depthTest: false,
-            depthWrite: false,
-          })
-        : new THREE.MeshBasicMaterial({
-            transparent: true,
-            depthTest: false,
-            depthWrite: false,
-          })
+    const mat = new THREE.MeshBasicMaterial({
+      transparent: true,
+      depthTest: false,
+      depthWrite: false,
+    })
     patchInstanceColorRGBA(mat)
     return mat
-  }, [shape])
+  }, [])
 
   // Runtime per-instance RGBA buffer the GPU reads. We never write through
   // overlay.colorsRGBA directly — it's the immutable baseline that the
