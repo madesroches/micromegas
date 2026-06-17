@@ -89,12 +89,16 @@ RUN if [ "$TARGETARCH" = "arm64" ]; then \
       rustup target add aarch64-unknown-linux-gnu; \
     fi
 
+# Persist OPENSSL_DIR as a layer-level ENV so cargo build.rs subprocesses see it.
+# Matches the working pattern in local_test_env/arm64/Dockerfile.
+# (Inline shell assignment is not visible to subprocesses spawned by build.rs.)
+ENV OPENSSL_DIR=/opt/openssl-aarch64
+
 WORKDIR /build
 COPY rust/ ./rust/
 WORKDIR /build/rust
 
 RUN if [ "$TARGETARCH" = "arm64" ]; then \
-      OPENSSL_DIR=/opt/openssl-aarch64 \
       CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
       cargo build --release --target aarch64-unknown-linux-gnu --bin <name>; \
     else \
@@ -124,9 +128,17 @@ in the `local_test_env/arm64` environment without needing environment variables.
 
 ### Monolith / all-in-one — Node frontend stage
 
-`node:20-alpine` supports arm64 natively; `wasm-builder` is already arch-aware. No changes
-needed in those stages. The Rust builder stage follows the same pattern above; the binary
-copy in the runtime stage must use `RUN cp` as above.
+`node:20-alpine` supports arm64 natively. The Rust builder stage follows the same pattern
+above; the binary copy in the runtime stage must use `RUN cp` as above.
+
+`wasm-builder` is already arch-aware at runtime, but `ensure_wasm_builder()` in
+`build_docker_images.py` calls plain `docker build` with no `--platform`, producing only an
+`amd64` local image. When BuildKit processes a `--platform linux/arm64` build it attempts to
+resolve every `FROM` stage to that platform; it will fail (or fall back to QEMU) because no
+`linux/arm64` manifest exists for the wasm-builder image. When `--arm64` is active,
+`ensure_wasm_builder()` must therefore be updated to call
+`docker buildx build --platform linux/amd64,linux/arm64` so BuildKit can resolve the stage
+for both platforms. The WASM artifacts themselves are arch-neutral and work unchanged.
 
 ### build_docker_images.py
 
@@ -139,8 +151,10 @@ Add `--arm64` flag. When set, the script:
    `docker buildx build --platform linux/amd64,linux/arm64 --push` in a single pass so
    DockerHub gets a fat manifest automatically.
 
-Key invariant: the wasm-builder is always built for the **build machine** architecture
-(it runs on the builder, not inside the target container), so it never needs `--platform`.
+Key invariant: the WASM artifacts are arch-neutral, but the wasm-builder image must have a
+`linux/arm64` manifest available so BuildKit can resolve the `FROM ${WASM_IMAGE}` stage when
+targeting arm64. `ensure_wasm_builder()` (or a new `ensure_wasm_builder_multiarch()` variant)
+must use `docker buildx build --platform linux/amd64,linux/arm64` when `--arm64` is active.
 
 ## Implementation Steps
 
@@ -151,22 +165,25 @@ Key invariant: the wasm-builder is always built for the **build machine** archit
 3. **`docker/flight-sql.Dockerfile`** — same.
 4. **`docker/http-gateway.Dockerfile`** — same.
 5. **`docker/admin.Dockerfile`** — same.
+6. **`docker/analytics-web.Dockerfile`** — apply the cross-compile pattern to the
+   `rust-builder` stage (compiles `analytics-web-srv`); leave the WASM and Node stages
+   unchanged.
 
 ### Phase 2 — Complex Dockerfiles
 
-6. **`docker/monolith.Dockerfile`** — update only the `rust-builder` stage; leave WASM and
+7. **`docker/monolith.Dockerfile`** — update only the `rust-builder` stage; leave WASM and
    Node stages unchanged.
-7. **`docker/all-in-one.Dockerfile`** — same as monolith.
+8. **`docker/all-in-one.Dockerfile`** — same as monolith.
 
 ### Phase 3 — Build script
 
-8. **`build/build_docker_images.py`** — add `--arm64` flag, switch from `docker build` to
+9. **`build/build_docker_images.py`** — add `--arm64` flag, switch from `docker build` to
    `docker buildx build --platform` when set. Handle single-arch local build vs multi-arch
    push.
 
 ### Phase 4 — Smoke test
 
-9. On an x86-64 machine, run:
+10. On an x86-64 machine, run:
    ```
    python build/build_docker_images.py --arm64 ingestion
    docker run --rm --platform linux/arm64 \
@@ -184,12 +201,15 @@ Key invariant: the wasm-builder is always built for the **build machine** archit
 | `docker/flight-sql.Dockerfile` | Same |
 | `docker/http-gateway.Dockerfile` | Same |
 | `docker/admin.Dockerfile` | Same |
+| `docker/analytics-web.Dockerfile` | Cross-compile pattern in `rust-builder` stage |
 | `docker/monolith.Dockerfile` | Cross-compile pattern in `rust-builder` stage |
 | `docker/all-in-one.Dockerfile` | Same |
 | `build/build_docker_images.py` | `--arm64` flag, `docker buildx` integration |
 
 `local_test_env/arm64/Dockerfile` — no changes needed (already works).  
-`docker/wasm-builder.Dockerfile` — no changes needed (already arch-aware).
+`docker/wasm-builder.Dockerfile` — no changes needed to the Dockerfile itself (already
+arch-aware), but `ensure_wasm_builder()` in the build script must build a multiarch image
+when `--arm64` is active (see `build_docker_images.py` row above).
 
 ## Trade-offs
 
