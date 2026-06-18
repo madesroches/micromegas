@@ -13,12 +13,26 @@ into the git repo, then review the diff and commit.
 import os
 import pathlib
 import shutil
+import subprocess
+
+
+def has_untracked_files(directory: pathlib.Path) -> bool:
+    result = subprocess.run(
+        ["git", "ls-files", "--others", "--exclude-standard", str(directory)],
+        capture_output=True,
+        text=True,
+    )
+    return bool(result.stdout.strip())
 
 
 def copy_tree(src: pathlib.Path, dst: pathlib.Path) -> None:
     if not src.exists():
         raise FileNotFoundError(f"source not found: {src}")
     if dst.exists():
+        if has_untracked_files(dst):
+            raise RuntimeError(
+                f"untracked files found in {dst} — commit or remove them before copying"
+            )
         shutil.rmtree(dst)
     shutil.copytree(src, dst, ignore=shutil.ignore_patterns("*.~*", "*~"))
     print(f"copied {src}\n     → {dst}")
@@ -28,9 +42,9 @@ unreal_root_dir = os.environ.get("MICROMEGAS_UNREAL_ROOT_DIR")
 telemetry_module_dir = os.environ.get("MICROMEGAS_UNREAL_TELEMETRY_MODULE_DIR")
 
 if not unreal_root_dir:
-    raise EnvironmentError("MICROMEGAS_UNREAL_ROOT_DIR is not set")
+    raise ValueError("MICROMEGAS_UNREAL_ROOT_DIR is not set")
 if not telemetry_module_dir:
-    raise EnvironmentError("MICROMEGAS_UNREAL_TELEMETRY_MODULE_DIR is not set")
+    raise ValueError("MICROMEGAS_UNREAL_TELEMETRY_MODULE_DIR is not set")
 
 core_dir = pathlib.Path(unreal_root_dir) / "Engine" / "Source" / "Runtime" / "Core"
 repo_unreal = pathlib.Path(__file__).parent.parent / "unreal"
