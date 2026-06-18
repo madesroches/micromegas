@@ -269,15 +269,14 @@ docker buildx build --platform linux/arm64 --load \
 Multi-arch manifest publishing (a `--platform linux/amd64,linux/arm64 --push` fat manifest)
 is out of scope; see Trade-offs for deferred future work.
 
-Key invariant: the WASM artifacts are arch-neutral, and on the arm64 path the wasm-builder is
-**inlined as a `--platform=$BUILDPLATFORM`-pinned first stage** in each WASM-service Dockerfile
-(see Design). There is no cross-invocation `FROM ${WASM_IMAGE}` to resolve, so the
-`docker-container` driver's isolated image store is a non-issue: the wasm artifacts are produced
-in-build and consumed via `COPY --from=wasm-builder`. Consequently `ensure_wasm_builder()` is
-**not called on the arm64 path** — there is no shared image to prebuild, no arch-suffixed tag,
-arch-keyed memo, or `--build-arg WASM_IMAGE=...`. The native amd64 path is unchanged (it may
-keep using the prebuilt `${WASM_IMAGE}` via the existing `ensure_wasm_builder()`). See the
-Design section.
+Key invariant: the WASM artifacts are arch-neutral, and on **both** the amd64 and arm64 paths the
+wasm-builder is **inlined as a `--platform=$BUILDPLATFORM`-pinned first stage** in each
+WASM-service Dockerfile (see Design). There is no cross-invocation `FROM ${WASM_IMAGE}` to resolve,
+so the `docker-container` driver's isolated image store is a non-issue: the wasm artifacts are
+produced in-build and consumed via `COPY --from=wasm-builder`. Consequently `ensure_wasm_builder()`,
+the `${WASM_IMAGE}` ARG, and the `WASM_IMAGE` constant are **removed entirely for both arches** —
+there is no shared image to prebuild, no arch-suffixed tag, arch-keyed memo, or
+`--build-arg WASM_IMAGE=...`. See the Design section.
 
 ## Implementation Steps
 
@@ -400,10 +399,10 @@ Before running the `--arm64` build or the runtime smoke test on an x86-64 host:
 The three WASM-service Dockerfiles inline the wasm-builder body as a
 `--platform=$BUILDPLATFORM`-pinned first stage (see Design), and add a `--platform=$BUILDPLATFORM`
 pin on their `frontend-builder` `FROM` line (currently unpinned). With the wasm stage inlined,
-there is no cross-invocation `FROM ${WASM_IMAGE}` to resolve, so `ensure_wasm_builder()` is
-**not called on the arm64 path** (no shared image to prebuild). The inlined stage should be kept
-in sync with `docker/wasm-builder.Dockerfile`. The native amd64 path is unchanged
-(`ensure_wasm_builder()` + the prebuilt `${WASM_IMAGE}`).
+there is no cross-invocation `FROM ${WASM_IMAGE}` to resolve, so `ensure_wasm_builder()`, the
+`${WASM_IMAGE}` ARG, and the `WASM_IMAGE` constant are **removed entirely for both arches** (no
+shared image to prebuild). Both the amd64 and arm64 paths build wasm via the inlined stage, which
+should be kept in sync with `docker/wasm-builder.Dockerfile`.
 
 ## Trade-offs
 
