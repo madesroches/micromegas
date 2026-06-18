@@ -1,0 +1,53 @@
+"""
+Copy Unreal Engine modules from a local Perforce workspace into this git repo.
+
+Environment variables:
+  MICROMEGAS_UNREAL_ROOT_DIR             - root of the Unreal Engine source tree
+  MICROMEGAS_UNREAL_TELEMETRY_MODULE_DIR - directory that contains MicromegasTelemetrySink
+                                           (may be inside a plugin folder)
+
+Run this script whenever the Perforce workspace has changes you want to bring
+into the git repo, then review the diff and commit.
+"""
+
+import os
+import pathlib
+import shutil
+
+
+def copy_tree(src: pathlib.Path, dst: pathlib.Path) -> None:
+    if not src.exists():
+        raise FileNotFoundError(f"source not found: {src}")
+    if dst.exists():
+        shutil.rmtree(dst)
+    shutil.copytree(src, dst, ignore=shutil.ignore_patterns("*.~*", "*~"))
+    print(f"copied {src}\n     → {dst}")
+
+
+unreal_root_dir = os.environ.get("MICROMEGAS_UNREAL_ROOT_DIR")
+telemetry_module_dir = os.environ.get("MICROMEGAS_UNREAL_TELEMETRY_MODULE_DIR")
+
+if not unreal_root_dir:
+    raise EnvironmentError("MICROMEGAS_UNREAL_ROOT_DIR is not set")
+if not telemetry_module_dir:
+    raise EnvironmentError("MICROMEGAS_UNREAL_TELEMETRY_MODULE_DIR is not set")
+
+core_dir = pathlib.Path(unreal_root_dir) / "Engine" / "Source" / "Runtime" / "Core"
+repo_unreal = pathlib.Path(__file__).parent.parent / "unreal"
+
+copy_tree(
+    core_dir / "Public" / "MicromegasTracing",
+    repo_unreal / "MicromegasTracing" / "Public" / "MicromegasTracing",
+)
+
+copy_tree(
+    core_dir / "Private" / "MicromegasTracing",
+    repo_unreal / "MicromegasTracing" / "Private",
+)
+
+copy_tree(
+    pathlib.Path(telemetry_module_dir) / "MicromegasTelemetrySink",
+    repo_unreal / "MicromegasTelemetrySink",
+)
+
+print("\nDone. Review `git diff unreal/` and commit.")

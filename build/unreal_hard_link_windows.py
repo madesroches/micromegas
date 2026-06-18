@@ -1,3 +1,6 @@
+# DEPRECATED - use copy_unreal_from_workspace.py instead.
+# This script created junction links from a Perforce workspace into the git repo.
+# The copy script is the replacement: it copies files one-way (Perforce → git).
 import os
 import pathlib
 import subprocess
