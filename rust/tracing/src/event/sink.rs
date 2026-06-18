@@ -1,7 +1,8 @@
 use std::{fmt, sync::Arc};
 
+#[cfg(not(target_arch = "wasm32"))]
+use crate::images::{ImageBlock, ImageStream};
 use crate::{
-    images::{ImageBlock, ImageStream},
     logs::{LogBlock, LogMetadata, LogStream},
     metrics::{MetricsBlock, MetricsStream},
     prelude::*,
@@ -35,7 +36,9 @@ pub trait EventSink: Send + Sync {
 
     fn is_busy(&self) -> bool; // sink is busy writing to disk or network, avoid extra flushing
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn on_init_image_stream(&self, _stream: &ImageStream) {}
+    #[cfg(not(target_arch = "wasm32"))]
     fn on_process_image_block(&self, _block: Arc<ImageBlock>) {}
 }
 

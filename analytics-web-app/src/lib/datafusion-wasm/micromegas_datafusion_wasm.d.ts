@@ -57,15 +57,16 @@ export interface InitOutput {
     readonly rust_zstd_wasm_shim_memmove: (a: number, b: number, c: number) => number;
     readonly rust_zstd_wasm_shim_memset: (a: number, b: number, c: number) => number;
     readonly rust_zstd_wasm_shim_qsort: (a: number, b: number, c: number, d: number) => void;
-    readonly wasm_bindgen__closure__destroy__h7fa30e67ab1c4a31: (a: number, b: number) => void;
-    readonly wasm_bindgen__convert__closures_____invoke__h207fec4f218bf05f: (a: number, b: number, c: any) => [number, number];
-    readonly wasm_bindgen__convert__closures_____invoke__h25079147ce791426: (a: number, b: number, c: any, d: any) => void;
+    readonly wasm_bindgen__closure__destroy__hcbbb6d39f6d3ab33: (a: number, b: number) => void;
+    readonly wasm_bindgen__convert__closures_____invoke__hd1dc654c3d1c0ab7: (a: number, b: number, c: any) => [number, number];
+    readonly wasm_bindgen__convert__closures_____invoke__h9db16ebf99d37f0f: (a: number, b: number, c: any, d: any) => void;
+    readonly wasm_bindgen__convert__closures_____invoke__h36fef01d8ed2dde5: (a: number, b: number) => number;
+    readonly __wbindgen_malloc: (a: number, b: number) => number;
+    readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
     readonly __wbindgen_exn_store: (a: number) => void;
     readonly __externref_table_alloc: () => number;
     readonly __wbindgen_externrefs: WebAssembly.Table;
     readonly __wbindgen_free: (a: number, b: number, c: number) => void;
-    readonly __wbindgen_malloc: (a: number, b: number) => number;
-    readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
     readonly __externref_table_dealloc: (a: number) => void;
     readonly __wbindgen_start: () => void;
 }

@@ -111,6 +111,7 @@ pub mod dispatch;
 pub mod errors;
 pub mod event;
 pub mod guards;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod images;
 pub mod levels;
 pub mod logs;
