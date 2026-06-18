@@ -26,6 +26,10 @@ pub mod export_log_view;
 pub mod file_cache;
 /// Fetch payload from the object store using SQL
 pub mod get_payload_function;
+/// Implementation of `BlockProcessor` for images
+pub mod image_block_processor;
+/// Materializable view of images accessible through datafusion
+pub mod images_view;
 /// Management of process-specific partitions built on demand
 pub mod jit_partitions;
 /// Bundles runtime resources for lakehouse query execution

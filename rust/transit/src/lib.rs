@@ -9,6 +9,7 @@
     clippy::inline_always
 )]
 
+mod dyn_blob;
 mod dyn_string;
 mod heterogeneous_queue;
 mod parser;
@@ -22,6 +23,7 @@ pub mod uuid_utils;
 /// json-like variant
 pub mod value;
 
+pub use dyn_blob::*;
 pub use dyn_string::*;
 pub use heterogeneous_queue::*;
 pub use parser::*;

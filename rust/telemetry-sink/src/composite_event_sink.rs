@@ -1,5 +1,6 @@
 use micromegas_tracing::{
     event::{BoxedEventSink, EventSink},
+    images::{ImageBlock, ImageStream},
     logs::{LogBlock, LogMetadata, LogStream},
     metrics::{MetricsBlock, MetricsStream},
     prelude::*,
@@ -151,6 +152,18 @@ impl EventSink for CompositeSink {
         self.sinks
             .iter()
             .for_each(|(_, sink)| sink.on_process_thread_block(old_event_block.clone()));
+    }
+
+    fn on_init_image_stream(&self, stream: &ImageStream) {
+        self.sinks
+            .iter()
+            .for_each(|(_, sink)| sink.on_init_image_stream(stream));
+    }
+
+    fn on_process_image_block(&self, block: Arc<ImageBlock>) {
+        self.sinks
+            .iter()
+            .for_each(|(_, sink)| sink.on_process_image_block(block.clone()));
     }
 
     fn is_busy(&self) -> bool {

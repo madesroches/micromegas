@@ -1,5 +1,6 @@
 use super::{EventSink, StreamDesc, TracingBlock};
 use crate::{
+    images::{ImageBlock, ImageStream},
     logs::{LogBlock, LogMetadata, LogStream},
     metrics::{MetricsBlock, MetricsStream},
     prelude::*,
@@ -13,6 +14,8 @@ use std::{
 
 pub struct MemSinkState {
     pub process_info: Option<Arc<ProcessInfo>>,
+    pub image_stream_desc: Option<Arc<StreamDesc>>,
+    pub image_blocks: Vec<Arc<ImageBlock>>,
     pub log_stream_desc: Option<Arc<StreamDesc>>,
     pub metrics_stream_desc: Option<Arc<StreamDesc>>,
     pub thread_stream_descs: Vec<Arc<StreamDesc>>,
@@ -30,6 +33,8 @@ impl InMemorySink {
     pub fn new() -> Self {
         let state = MemSinkState {
             process_info: None,
+            image_stream_desc: None,
+            image_blocks: vec![],
             log_stream_desc: None,
             metrics_stream_desc: None,
             thread_stream_descs: vec![],
@@ -91,6 +96,14 @@ impl EventSink for InMemorySink {
             .push(metrics_block);
     }
 
+    fn on_init_image_stream(&self, image_stream: &ImageStream) {
+        self.state.lock().unwrap().image_stream_desc = Some(image_stream.desc());
+    }
+
+    fn on_process_image_block(&self, image_block: Arc<ImageBlock>) {
+        self.state.lock().unwrap().image_blocks.push(image_block);
+    }
+
     fn on_init_thread_stream(&self, thread_stream: &ThreadStream) {
         self.state
             .lock()
@@ -109,6 +122,11 @@ impl EventSink for InMemorySink {
 }
 
 impl InMemorySink {
+    /// Get the total number of image blocks collected
+    pub fn image_block_count(&self) -> usize {
+        self.state.lock().unwrap().image_blocks.len()
+    }
+
     /// Get the total number of thread blocks collected
     pub fn thread_block_count(&self) -> usize {
         self.state.lock().unwrap().thread_blocks.len()

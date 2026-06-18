@@ -4,6 +4,8 @@ This file documents the historical progress of the Micromegas project. For curre
 
 ## Unreleased
 
+* **Tracing:**
+  * Add image streams: instrumented applications can send screenshots or other images as telemetry via `send_image()`; images are queryable via the `images` SQL table with a `data Binary` column holding raw bytes
 * **Unreal:**
   * Replace manual HTTP retry with `FHttpRetrySystem` (exponential backoff, per-priority retry budgets); add four priority queues (Metadata/Logs/Metrics/Traces) with configurable soft/hard byte-cap drop logic; gate concurrent uploads via `telemetry.max_in_flight_requests` CVar (#56, #43)
   * Add idle-aware spike sampling: suppress spike recording after `telemetry.sampling.interaction_timeout` seconds of no user input; add periodic heartbeat captures every `telemetry.sampling.heartbeat_interval` seconds of active time

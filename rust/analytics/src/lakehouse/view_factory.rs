@@ -195,7 +195,7 @@ use super::log_stats_view::make_log_stats_view;
 use super::processes_view::make_processes_view;
 use super::streams_view::make_streams_view;
 use super::{
-    async_events_view::AsyncEventsViewMaker, log_view::LogViewMaker,
+    async_events_view::AsyncEventsViewMaker, images_view::ImagesViewMaker, log_view::LogViewMaker,
     metrics_view::MetricsViewMaker, net_spans_view::NetSpansViewMaker,
     otel::spans_view::OtelSpansViewMaker, thread_spans_view::ThreadSpansViewMaker, view::View,
 };
@@ -287,6 +287,7 @@ pub async fn default_view_factory(
         )
         .await?,
     );
+    let images_view_maker = Arc::new(ImagesViewMaker {});
     let log_view_maker = Arc::new(LogViewMaker {});
     let metrics_view_maker = Arc::new(MetricsViewMaker {});
 
@@ -299,6 +300,7 @@ pub async fn default_view_factory(
         blocks_view,
     ];
     let mut factory = ViewFactory::new(global_views);
+    factory.add_view_set(String::from("images"), images_view_maker);
     factory.add_view_set(String::from("log_entries"), log_view_maker.clone());
     factory.add_view_set(String::from("measures"), metrics_view_maker);
     factory.add_view_set(

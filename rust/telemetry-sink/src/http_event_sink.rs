@@ -3,6 +3,7 @@ use micromegas_telemetry::wire_format::encode_cbor;
 use micromegas_tracing::{
     event::EventSink,
     flush_monitor::FlushMonitor,
+    images::{ImageBlock, ImageStream},
     logs::{LogBlock, LogMetadata, LogStream},
     metrics::{MetricsBlock, MetricsStream},
     prelude::*,
@@ -62,6 +63,7 @@ impl IngestionClientError {
 enum SinkEvent {
     Startup(Arc<ProcessInfo>),
     InitStream(Arc<StreamInfo>),
+    ProcessImageBlock(Arc<ImageBlock>),
     ProcessLogBlock(Arc<LogBlock>),
     ProcessMetricsBlock(Arc<MetricsBlock>),
     ProcessThreadBlock(Arc<ThreadBlock>),
@@ -360,6 +362,26 @@ impl HttpEventSink {
                     error!("error sending stream: {e}");
                 }
             }
+            SinkEvent::ProcessImageBlock(buffer) => {
+                if let Some(process_info) = opt_process_info {
+                    if let Err(e) = Self::push_block(
+                        client,
+                        addr,
+                        &*buffer,
+                        queue_size,
+                        max_queue_size,
+                        blocks_retry,
+                        decorator,
+                        process_info,
+                    )
+                    .await
+                    {
+                        error!("error sending image block: {e}");
+                    }
+                } else {
+                    error!("trying to send blocks before Startup message");
+                }
+            }
             SinkEvent::ProcessLogBlock(buffer) => {
                 if let Some(process_info) = opt_process_info {
                     if let Err(e) = Self::push_block(
@@ -616,6 +638,14 @@ impl EventSink for HttpEventSink {
 
     fn on_process_thread_block(&self, thread_block: Arc<ThreadBlock>) {
         self.send(SinkEvent::ProcessThreadBlock(thread_block));
+    }
+
+    fn on_init_image_stream(&self, stream: &ImageStream) {
+        self.send(SinkEvent::InitStream(Arc::new(make_stream_info(stream))));
+    }
+
+    fn on_process_image_block(&self, block: Arc<ImageBlock>) {
+        self.send(SinkEvent::ProcessImageBlock(block));
     }
 
     fn is_busy(&self) -> bool {
