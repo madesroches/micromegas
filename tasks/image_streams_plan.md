@@ -124,8 +124,8 @@ This is a module-level free function backed by the global `Dispatch`, mirroring 
 with tag `["image"]`).
 
 Since images are large and infrequent, the block should be flushed **immediately** after each
-`send_image` call rather than waiting for the buffer to fill. `ImageStream::hint_max_obj_size()`
-can return `usize::MAX` to make `is_full()` return true after every push.
+`send_image` call rather than waiting for the buffer to fill. `send_image` calls
+`flush_image_buffer` unconditionally after pushing the event.
 
 ### EventSink extension
 
@@ -136,8 +136,13 @@ fn on_init_image_stream(&self, _stream: &ImageStream) {}
 fn on_process_image_block(&self, _block: Arc<ImageBlock>) {}
 ```
 
-Default no-op bodies mean existing `EventSink` implementors (including `NullEventSink`,
-`SplitEventSink`, and Unreal's sink) need zero changes.
+Default no-op bodies mean most existing `EventSink` implementors (`NullEventSink`,
+`SplitEventSink`, Unreal's sink) need zero changes. **`CompositeSink` is the exception**: it
+explicitly fans out every stream method to its contained sinks and does not inherit default
+bodies. Without explicit forwarding methods, image events would be silently dropped instead of
+reaching the contained `HttpEventSink`. `CompositeSink` must therefore add
+`on_init_image_stream` and `on_process_image_block` forwarding methods, mirroring the existing
+log/metrics/thread fan-out pattern.
 
 ### HttpEventSink
 
@@ -236,7 +241,9 @@ updated_factory.add_view_set(String::from("images"), images_view_maker);
 ### Phase 3 — EventSink + dispatch
 
 7. Add `on_init_image_stream` and `on_process_image_block` to `EventSink` trait with default
-   no-op bodies (`rust/tracing/src/event/sink.rs`).
+   no-op bodies (`rust/tracing/src/event/sink.rs`). Add explicit forwarding overrides for both
+   methods in `CompositeSink` (`rust/telemetry-sink/src/composite_event_sink.rs`), mirroring
+   the existing log/metrics/thread fan-out pattern.
 8. Add `image_stream` field to `Dispatch` struct (`rust/tracing/src/dispatch.rs`).
 9. In `Dispatch::new()`: create `ImageStream::new(…, &["image"], …)` and call
    `on_init_image_stream`. Use a small hardcoded buffer size (e.g. 1 MB) for
@@ -245,8 +252,8 @@ updated_factory.add_view_set(String::from("images"), images_view_maker);
    not need a new parameter.
 10. Add `send_image(name, format, data)` to dispatch module and expose as free function
     in `rust/tracing/src/lib.rs` (e.g. `micromegas_tracing::send_image`).
-11. Flush after every `send_image` (set `hint_max_obj_size` to `usize::MAX` on `ImageBlock`
-    or flush unconditionally in `send_image`).
+11. Flush unconditionally in `send_image` by calling `flush_image_buffer` immediately after
+    pushing the event to the queue.
 
 ### Phase 4 — Telemetry sink
 
@@ -255,6 +262,7 @@ updated_factory.add_view_set(String::from("images"), images_view_maker);
 13. Add match arm in `handle_sink_event` calling `push_block`.
 14. Implement `StreamBlock for ImageBlock` in `rust/telemetry-sink/src/stream_block.rs`.
 15. Wire `on_init_image_stream` / `on_process_image_block` in `HttpEventSink`'s `EventSink` impl.
+    Add forwarding overrides for both methods in `CompositeSink` (see Step 7).
 
 ### Phase 5 — Analytics
 
@@ -283,6 +291,7 @@ updated_factory.add_view_set(String::from("images"), images_view_maker);
 | `rust/tracing/src/images/mod.rs` | **New** |
 | `rust/tracing/src/images/image_events.rs` | **New** — `ImageEvent`, `DynBlob` InProcSerialize |
 | `rust/tracing/src/images/block.rs` | **New** — queues, `ImageBlock`, `ImageStream` |
+| `rust/telemetry-sink/src/composite_event_sink.rs` | Add `on_init_image_stream` + `on_process_image_block` forwarding to all contained sinks |
 | `rust/telemetry-sink/src/http_event_sink.rs` | Add `SinkEvent` variants + match arms |
 | `rust/telemetry-sink/src/stream_block.rs` | `StreamBlock for ImageBlock` |
 | `rust/analytics/src/lib.rs` | Expose `images_table` module |
