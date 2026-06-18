@@ -51,6 +51,7 @@ This file documents the historical progress of the Micromegas project. For curre
 * **Security:**
   * Bump react-router to 6.30.4 and @remix-run/router to 1.23.3 to fix open redirect CVE
   * Bump qs to 6.15.2 and js-cookie to 3.0.7 to fix Dependabot alerts (#256, #257)
+  * Upgrade `dompurify` to 3.4.11 (prototype pollution CVE) and `@opentelemetry/core` to 2.8.0
 * **Dependencies:**
   * Update DataFusion to 53.1 and rebuild the datafusion-wasm bindings (#1090)
 
