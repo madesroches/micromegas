@@ -356,6 +356,9 @@ Design section.
    single buildx invocation, mirroring the native two-tag pattern). `--load` writes the
    single-arch image into the local docker store for the smoke test. Multi-arch manifest
    publishing is out of scope (see Trade-offs).
+   - Skip the WASM prebuild on the arm64 path: guard the `if service in WASM_SERVICES`
+     `ensure_wasm_builder()` call with `and not arm64`, since the wasm-builder is inlined as a
+     build stage for arm64 (see Design) and prebuilding into the daemon store would be unused.
 
 ### Prerequisites (one-time, per build host)
 
