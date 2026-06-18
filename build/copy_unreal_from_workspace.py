@@ -14,6 +14,7 @@ import os
 import pathlib
 import shutil
 import subprocess
+import tempfile
 
 
 def has_untracked_files(directory: pathlib.Path) -> bool:
@@ -21,6 +22,7 @@ def has_untracked_files(directory: pathlib.Path) -> bool:
         ["git", "ls-files", "--others", "--exclude-standard", str(directory)],
         capture_output=True,
         text=True,
+        check=True,
     )
     return bool(result.stdout.strip())
 
@@ -33,8 +35,17 @@ def copy_tree(src: pathlib.Path, dst: pathlib.Path) -> None:
             raise RuntimeError(
                 f"untracked files found in {dst} — commit or remove them before copying"
             )
+    tmp = dst.parent / (dst.name + ".tmp")
+    if tmp.exists():
+        shutil.rmtree(tmp)
+    try:
+        shutil.copytree(src, tmp, ignore=shutil.ignore_patterns("*.~*", "*~"))
+    except Exception:
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise
+    if dst.exists():
         shutil.rmtree(dst)
-    shutil.copytree(src, dst, ignore=shutil.ignore_patterns("*.~*", "*~"))
+    tmp.rename(dst)
     print(f"copied {src}\n     → {dst}")
 
 
