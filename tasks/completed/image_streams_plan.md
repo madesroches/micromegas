@@ -15,6 +15,7 @@ All phases are complete. See commits on the `images` branch.
 ### Post-implementation fixes (branch review)
 - **`send_image` batching**: Revised from "always flush" to "flush only when `is_full()`", matching the log/metrics pattern. `flush_image_buffer()` is now also exposed as a public free function (like `flush_log_buffer()`). Tests updated to call `flush_image_buffer()` explicitly when they need to observe a block before the buffer fills.
 - **`ImagesRecordBuilder::get_time_range`**: Changed from `slice[0]`/`slice[last]` (assumes sorted order) to explicit `min_time`/`max_time` fields updated on each `append` call, matching `NetSpanRecordBuilder`.
+- **Process-specific JIT only**: Removed the global `images` view and batch processing. Images are never eagerly processed across all processes. Query via `view_instance('images', process_id)` only — mirrors `thread_spans`/`net_spans` rather than `log_entries`/`measures`.
 
 ## Current State (pre-implementation reference)
 
