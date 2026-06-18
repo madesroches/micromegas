@@ -268,15 +268,21 @@ updated_factory.add_view_set(String::from("images"), images_view_maker);
 
 16. Create `rust/analytics/src/images_table.rs` with `images_table_schema()` and
     `ImagesRecordBuilder`.
-17. Create `rust/analytics/src/lakehouse/image_block_processor.rs` with `ImageBlockProcessor`.
-18. Create `rust/analytics/src/lakehouse/images_view.rs` with `ImagesViewMaker` / `ImagesView`.
-19. Register in `default_view_factory` (`rust/analytics/src/lakehouse/view_factory.rs`).
-20. Expose new modules in `rust/analytics/src/lib.rs`.
+17. Add `parse_image_event` custom reader to `rust/tracing/src/parsing.rs` and register it as
+    `"ImageEvent"` in `make_custom_readers()`, following the `parse_log_string_event_v2` pattern.
+    The reader calls `read_advance_string` twice (for `name` and `format`) and reads the blob with
+    `read_consume_pod::<u32>` for the length followed by `advance_window` for the raw bytes
+    (no codec byte, unlike `DynString`). Return a `Value::Object` with members `time`, `name`,
+    `format`, and `data` (as `Value::Bytes` or equivalent).
+18. Create `rust/analytics/src/lakehouse/image_block_processor.rs` with `ImageBlockProcessor`.
+19. Create `rust/analytics/src/lakehouse/images_view.rs` with `ImagesViewMaker` / `ImagesView`.
+20. Register in `default_view_factory` (`rust/analytics/src/lakehouse/view_factory.rs`).
+21. Expose new modules in `rust/analytics/src/lib.rs`.
 
 ### Phase 6 — Tests
 
-21. Unit test in `rust/tracing/tests/` — call `send_image`, verify block bytes round-trip.
-22. Integration test or example binary — start a local monolith, send a PNG, query
+22. Unit test in `rust/tracing/tests/` — call `send_image`, verify block bytes round-trip.
+23. Integration test or example binary — start a local monolith, send a PNG, query
     `SELECT name, format, length(data) FROM images LIMIT 5`.
 
 ## Files to Modify
@@ -296,6 +302,7 @@ updated_factory.add_view_set(String::from("images"), images_view_maker);
 | `rust/telemetry-sink/src/stream_block.rs` | `StreamBlock for ImageBlock` |
 | `rust/analytics/src/lib.rs` | Expose `images_table` module |
 | `rust/analytics/src/images_table.rs` | **New** — Arrow schema + record builder |
+| `rust/tracing/src/parsing.rs` | Add `parse_image_event` reader; register as `"ImageEvent"` in `make_custom_readers()` |
 | `rust/analytics/src/lakehouse/image_block_processor.rs` | **New** — `ImageBlockProcessor` |
 | `rust/analytics/src/lakehouse/images_view.rs` | **New** — `ImagesViewMaker`, `ImagesView` |
 | `rust/analytics/src/lakehouse/view_factory.rs` | Register images view maker and global instance |
