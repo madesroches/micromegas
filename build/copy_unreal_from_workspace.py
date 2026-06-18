@@ -18,11 +18,25 @@ import tempfile
 
 
 def has_untracked_files(directory: pathlib.Path) -> bool:
+    repo_root = pathlib.Path(__file__).parent.parent
     result = subprocess.run(
         ["git", "ls-files", "--others", "--exclude-standard", str(directory)],
         capture_output=True,
         text=True,
         check=True,
+        cwd=repo_root,
+    )
+    return bool(result.stdout.strip())
+
+
+def has_dirty_files(directory: pathlib.Path) -> bool:
+    repo_root = pathlib.Path(__file__).parent.parent
+    result = subprocess.run(
+        ["git", "status", "--porcelain", str(directory)],
+        capture_output=True,
+        text=True,
+        check=True,
+        cwd=repo_root,
     )
     return bool(result.stdout.strip())
 
@@ -34,6 +48,10 @@ def copy_tree(src: pathlib.Path, dst: pathlib.Path) -> None:
         if has_untracked_files(dst):
             raise RuntimeError(
                 f"untracked files found in {dst} — commit or remove them before copying"
+            )
+        if has_dirty_files(dst):
+            raise RuntimeError(
+                f"locally modified files found in {dst} — commit or stash them before copying"
             )
     tmp = dst.parent / (dst.name + ".tmp")
     if tmp.exists():
