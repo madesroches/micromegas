@@ -6,8 +6,7 @@ Add a new `images` stream type to Micromegas so instrumented applications can se
 other images as telemetry. Each image is one block on one dedicated stream, carrying a transit event
 (`ImageEvent`) that holds the image name, format (e.g. `"png"`, `"jpeg"`), and raw pixel data as a
 `Vec<u8>`. The analytics layer materializes a queryable `images` table with one row per image — the
-row stores metadata and a blob path for raw-bytes retrieval; the pixel data itself stays in object
-storage. The design follows the existing logs/metrics pattern end-to-end.
+row stores metadata and the raw image bytes in a `data Binary` column. The design follows the existing logs/metrics pattern end-to-end.
 
 ## Current State
 
@@ -82,8 +81,7 @@ pub struct ImageEvent {
 
 `DynBlob` is a new newtype `pub struct DynBlob(pub Vec<u8>)` in `rust/transit/src/` (or inline in
 the tracing crate), serialized like `DynString` but without a string codec byte — just `u32` length
-followed by raw bytes. Alternatively, reuse a `u32`-length-prefixed byte slice pattern modelled
-exactly on `DynString::write_value` / `read_value`.
+followed by raw bytes. The `get_value_size` overhead for `DynBlob` is 4 bytes (no codec byte, unlike `DynString` which adds a 1-byte codec prefix).
 
 `ImageEvent` implements `InProcSerialize` manually (same pattern as `LogStringEvent`):
 - `IN_PROC_SIZE = InProcSize::Dynamic`
@@ -215,8 +213,8 @@ Registered in `default_view_factory`:
 
 ```rust
 let images_view_maker = Arc::new(ImagesViewMaker {});
-global_views.push(images_view_maker.make_view("global")?);
-factory.add_view_set("images", images_view_maker);
+updated_factory.add_global_view(images_view_maker.make_view("global")?);
+updated_factory.add_view_set(String::from("images"), images_view_maker);
 ```
 
 ## Implementation Steps
@@ -241,7 +239,10 @@ factory.add_view_set("images", images_view_maker);
    no-op bodies (`rust/tracing/src/event/sink.rs`).
 8. Add `image_stream` field to `Dispatch` struct (`rust/tracing/src/dispatch.rs`).
 9. In `Dispatch::new()`: create `ImageStream::new(…, &["image"], …)` and call
-   `on_init_image_stream`.
+   `on_init_image_stream`. Use a small hardcoded buffer size (e.g. 1 MB) for
+   `ImageStream` — since each `send_image` flushes immediately the buffer size
+   never needs external tuning, so `init_event_dispatch`'s public signature does
+   not need a new parameter.
 10. Add `send_image(name, format, data)` to dispatch module and expose as free function
     in `rust/tracing/src/lib.rs` (e.g. `micromegas_tracing::send_image`).
 11. Flush after every `send_image` (set `hint_max_obj_size` to `usize::MAX` on `ImageBlock`
@@ -268,7 +269,7 @@ factory.add_view_set("images", images_view_maker);
 
 21. Unit test in `rust/tracing/tests/` — call `send_image`, verify block bytes round-trip.
 22. Integration test or example binary — start a local monolith, send a PNG, query
-    `SELECT name, format, blob_path FROM images LIMIT 5`.
+    `SELECT name, format, length(data) FROM images LIMIT 5`.
 
 ## Files to Modify
 
