@@ -7,6 +7,7 @@ Usage:
     python build_docker_images.py ingestion flight   # Build specific services
     python build_docker_images.py --push             # Build and push all
     python build_docker_images.py --push ingestion   # Build and push specific service
+    python build_docker_images.py --arm64            # Build arm64 images (cross-compiled, no push)
     python build_docker_images.py --list             # List available services
 """
 
@@ -23,10 +24,6 @@ DOCKER_DIR = REPO_ROOT / "docker"
 # DockerHub configuration
 DOCKERHUB_USER = "marcantoinedesroches"
 DOCKERHUB_REPO = "micromegas"
-
-# Shared WASM builder image (dependency for analytics-web and all-in-one)
-WASM_IMAGE = "micromegas-wasm-builder:latest"
-WASM_SERVICES = {"analytics-web", "all", "monolith"}
 
 # Service definitions: name -> (dockerfile, description)
 SERVICES = {
@@ -65,43 +62,20 @@ def run_command(cmd: list[str], cwd: Path = REPO_ROOT) -> bool:
     return result.returncode == 0
 
 
-def ensure_wasm_builder() -> bool:
-    """Build the shared WASM builder image if not already built this session."""
-    if getattr(ensure_wasm_builder, "_built", False):
-        return True
-
-    print(f"\n{'='*60}")
-    print("Building WASM builder (shared dependency)")
-    print(f"{'='*60}\n")
-
-    cmd = [
-        "docker", "build",
-        "-f", str(DOCKER_DIR / "wasm-builder.Dockerfile"),
-        "-t", WASM_IMAGE,
-        "."
-    ]
-    if not run_command(cmd):
-        print("Failed to build WASM builder image")
-        return False
-
-    ensure_wasm_builder._built = True
-    return True
-
-
-def build_image(service: str, version: str, push: bool = False) -> dict:
+def build_image(service: str, version: str, push: bool = False, arm64: bool = False) -> dict:
     """Build a Docker image for a service.
 
     Returns a dict with build results:
         - 'service': service name
         - 'image': full image name
-        - 'version': version tag
+        - 'tags': list of tags applied
         - 'built': True if build succeeded
         - 'pushed': True if push succeeded (only if push=True)
     """
     result = {
         'service': service,
         'image': None,
-        'version': version,
+        'tags': [],
         'built': False,
         'pushed': False,
     }
@@ -110,28 +84,42 @@ def build_image(service: str, version: str, push: bool = False) -> dict:
         print(f"Unknown service: {service}")
         return result
 
-    # Build WASM dependency first if needed
-    if service in WASM_SERVICES:
-        if not ensure_wasm_builder():
-            return result
-
     dockerfile, description = SERVICES[service]
     image_name = f"{DOCKERHUB_USER}/{DOCKERHUB_REPO}-{service}"
     result['image'] = image_name
 
+    if arm64:
+        version_tag = f"{version}-arm64"
+        latest_tag = "latest-arm64"
+    else:
+        version_tag = version
+        latest_tag = "latest"
+
+    result['tags'] = [version_tag, latest_tag]
+
     print(f"\n{'='*60}")
     print(f"Building {service}: {description}")
-    print(f"Image: {image_name}:{version}")
+    print(f"Image: {image_name}:{version_tag}")
     print(f"{'='*60}\n")
 
-    # Build with version tag and latest tag
-    cmd = [
-        "docker", "build",
-        "-f", str(DOCKER_DIR / dockerfile),
-        "-t", f"{image_name}:{version}",
-        "-t", f"{image_name}:latest",
-        "."
-    ]
+    if arm64:
+        cmd = [
+            "docker", "buildx", "build",
+            "--platform", "linux/arm64",
+            "--load",
+            "-f", str(DOCKER_DIR / dockerfile),
+            "-t", f"{image_name}:{version_tag}",
+            "-t", f"{image_name}:{latest_tag}",
+            "."
+        ]
+    else:
+        cmd = [
+            "docker", "build",
+            "-f", str(DOCKER_DIR / dockerfile),
+            "-t", f"{image_name}:{version_tag}",
+            "-t", f"{image_name}:{latest_tag}",
+            "."
+        ]
 
     if not run_command(cmd):
         print(f"Failed to build {service}")
@@ -141,9 +129,9 @@ def build_image(service: str, version: str, push: bool = False) -> dict:
 
     if push:
         print(f"\nPushing {image_name}...")
-        if not run_command(["docker", "push", f"{image_name}:{version}"]):
+        if not run_command(["docker", "push", f"{image_name}:{version_tag}"]):
             return result
-        if not run_command(["docker", "push", f"{image_name}:latest"]):
+        if not run_command(["docker", "push", f"{image_name}:{latest_tag}"]):
             return result
         result['pushed'] = True
 
@@ -167,6 +155,11 @@ def main():
         help="Push images to DockerHub after building"
     )
     parser.add_argument(
+        "--arm64",
+        action="store_true",
+        help="Build linux/arm64 images via cross-compilation (uses docker buildx, --load only)"
+    )
+    parser.add_argument(
         "--list",
         action="store_true",
         help="List available services"
@@ -177,6 +170,10 @@ def main():
     )
 
     args = parser.parse_args()
+
+    if args.arm64 and args.push:
+        print("error: --push is not supported with --arm64; multi-arch publishing is out of scope")
+        return 1
 
     if args.list:
         print("Available services:")
@@ -200,7 +197,7 @@ def main():
     # Build each service
     results = []
     for service in services:
-        result = build_image(service, version, args.push)
+        result = build_image(service, version, args.push, args.arm64)
         results.append(result)
 
     # Print summary
@@ -218,8 +215,8 @@ def main():
         print("Built images:")
         for r in built:
             status = " (pushed)" if r['pushed'] else ""
-            print(f"  {r['image']}:{r['version']}{status}")
-            print(f"  {r['image']}:latest{status}")
+            for tag in r['tags']:
+                print(f"  {r['image']}:{tag}{status}")
 
     if failed:
         print("\nFailed:")

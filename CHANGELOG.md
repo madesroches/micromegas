@@ -10,6 +10,7 @@ This file documents the historical progress of the Micromegas project. For curre
   * Emit `TimeSinceLastInput` metric from `FSlateApplication` each frame, with a `BootTime` fallback so the value reads from boot instead of full uptime when no input has occurred yet
   * Replace `volatile` members in `HttpEventSink` with `std::atomic`; remove `QueueSize` and `RequestShutdown` volatile fields (#43)
 * **Deployment:**
+  * Add `linux/arm64` cross-compilation support to all production Dockerfiles and build script; builder stages pin to `$BUILDPLATFORM` and install the `aarch64-linux-gnu` cross toolchain so ARM64 images build natively without QEMU; `build_docker_images.py` gains an `--arm64` flag that drives `docker buildx build --platform linux/arm64 --load`; inline the wasm-builder stage to avoid buildx image-store isolation issues
   * Add `micromegas-monolith` single-process binary that runs ingestion, FlightSQL, maintenance, and web in one Tokio runtime sharing a single data-lake connection; includes Docker image, docker-compose stack, `--monolith` start-script mode, per-role auth, and role selection via `--roles` / `MICROMEGAS_MONOLITH_ROLES` (#1139)
 * **Performance:**
   * Switch all production service binaries to jemalloc (`tikv-jemallocator`) as the global allocator; reduces allocation latency and memory fragmentation under multi-threaded workloads (#1129)
