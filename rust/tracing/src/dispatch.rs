@@ -1,5 +1,6 @@
 //! Where events are recorded and eventually sent to a sink
 pub use crate::errors::{Error, Result};
+use crate::images::{ImageBlock, ImageEvent, ImageStream};
 use crate::intern_string::intern_string;
 use crate::logs::TaggedLogString;
 use crate::metrics::{TaggedFloatMetricEvent, TaggedIntegerMetricEvent};
@@ -23,6 +24,8 @@ use crate::{
     },
     warn,
 };
+
+const IMAGE_BUFFER_SIZE: usize = 1024 * 1024;
 use chrono::Utc;
 use std::cell::OnceCell;
 use std::cell::UnsafeCell;
@@ -158,6 +161,12 @@ pub fn log_enabled(metadata: &LogMetadata) -> bool {
 pub fn flush_log_buffer() {
     if let Some(d) = G_DISPATCH.get() {
         d.flush_log_buffer();
+    }
+}
+
+pub fn send_image(name: &str, format: &str, data: Vec<u8>) {
+    if let Some(d) = G_DISPATCH.get() {
+        d.send_image(name, format, data);
     }
 }
 
@@ -402,6 +411,7 @@ struct Dispatch {
     metrics_buffer_size: usize,
     threads_buffer_size: usize,
     cpu_tracing_enabled: bool,
+    image_stream: Mutex<ImageStream>,
     log_stream: Mutex<LogStream>,
     metrics_stream: Mutex<MetricsStream>,
     thread_streams: Mutex<Vec<*mut ThreadStream>>, // very very unsafe - threads would need to be unregistered before they are destroyed
@@ -424,6 +434,12 @@ impl Dispatch {
             metrics_buffer_size,
             threads_buffer_size,
             cpu_tracing_enabled,
+            image_stream: Mutex::new(ImageStream::new(
+                IMAGE_BUFFER_SIZE,
+                process_id,
+                &[String::from("image")],
+                HashMap::new(),
+            )),
             log_stream: Mutex::new(LogStream::new(
                 logs_buffer_size,
                 process_id,
@@ -440,6 +456,7 @@ impl Dispatch {
             sink: RwLock::new(sink),
         };
         obj.startup(process_properties);
+        obj.init_image_stream();
         obj.init_log_stream();
         obj.init_metrics_stream();
         obj
@@ -501,9 +518,48 @@ impl Dispatch {
         self.get_sink().on_init_log_stream(&log_stream);
     }
 
+    fn init_image_stream(&self) {
+        let image_stream = self.image_stream.lock().expect("image_stream lock");
+        self.get_sink().on_init_image_stream(&image_stream);
+    }
+
     fn init_metrics_stream(&self) {
         let metrics_stream = self.metrics_stream.lock().unwrap();
         self.get_sink().on_init_metrics_stream(&metrics_stream);
+    }
+
+    pub fn send_image(&self, name: &str, format: &str, data: Vec<u8>) {
+        let time = now();
+        let mut image_stream = self.image_stream.lock().expect("image_stream lock");
+        image_stream.get_events_mut().push(ImageEvent {
+            time,
+            name: micromegas_transit::DynString(name.to_owned()),
+            format: micromegas_transit::DynString(format.to_owned()),
+            data: micromegas_transit::DynBlob(data),
+        });
+        drop(image_stream);
+        self.flush_image_buffer();
+    }
+
+    fn flush_image_buffer(&self) {
+        let mut image_stream = self.image_stream.lock().expect("image_stream lock");
+        if image_stream.is_empty() {
+            return;
+        }
+        let stream_id = image_stream.stream_id();
+        let next_offset = image_stream.get_block_ref().object_offset()
+            + image_stream.get_block_ref().nb_objects();
+        let mut old_event_block = image_stream.replace_block(Arc::new(ImageBlock::new(
+            IMAGE_BUFFER_SIZE,
+            self.process_id,
+            stream_id,
+            next_offset,
+        )));
+        assert!(!image_stream.is_full());
+        Arc::get_mut(&mut old_event_block)
+            .expect("image block exclusive ref")
+            .close();
+        self.get_sink().on_process_image_block(old_event_block);
     }
 
     fn init_thread_stream(&self, cell: &Cell<Option<ThreadStream>>) {

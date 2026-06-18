@@ -63,6 +63,9 @@ pub fn transit_value_to_jsonb(value: &TransitValue) -> JsonbValue<'_> {
         TransitValue::I64(v) => JsonbValue::Number(jsonb::Number::Int64(*v)),
         TransitValue::F64(v) => JsonbValue::Number(jsonb::Number::Float64(*v)),
         TransitValue::None => JsonbValue::Null,
+        TransitValue::Bytes(b) => {
+            JsonbValue::String(Cow::Owned(format!("<binary {} bytes>", b.len())))
+        }
     }
 }
 

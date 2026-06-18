@@ -10,12 +10,15 @@ use std::{collections::HashMap, sync::Arc};
 use crate::property_set::PROPERTY_SET_DEP_TYPE_NAME;
 
 lazy_static::lazy_static! {
-    static ref TIME: Arc<String> = Arc::new("time".into());
-    static ref LEVEL: Arc<String> = Arc::new("level".into());
-    static ref TARGET: Arc<String> = Arc::new("target".into());
-    static ref MSG: Arc<String> = Arc::new("msg".into());
+    static ref DATA: Arc<String> = Arc::new("data".into());
     static ref DESC: Arc<String> = Arc::new("desc".into());
+    static ref FORMAT: Arc<String> = Arc::new("format".into());
+    static ref LEVEL: Arc<String> = Arc::new("level".into());
+    static ref MSG: Arc<String> = Arc::new("msg".into());
+    static ref NAME: Arc<String> = Arc::new("name".into());
     static ref PROPERTIES: Arc<String> = Arc::new("properties".into());
+    static ref TARGET: Arc<String> = Arc::new("target".into());
+    static ref TIME: Arc<String> = Arc::new("time".into());
 }
 
 fn parse_log_string_event(
@@ -256,9 +259,33 @@ fn parse_property_set(
     })))
 }
 
+fn parse_image_event(
+    udt: &UserDefinedType,
+    _udts: &[UserDefinedType],
+    _dependencies: &HashMap<u64, Value>,
+    mut object_window: &[u8],
+) -> Result<Value> {
+    let time: i64 = read_consume_pod(&mut object_window);
+    let name = read_advance_string(&mut object_window).with_context(|| "parsing image name")?;
+    let format = read_advance_string(&mut object_window).with_context(|| "parsing image format")?;
+    let len: u32 = read_consume_pod(&mut object_window);
+    let data = Arc::new(object_window[..len as usize].to_vec());
+    let members = vec![
+        (TIME.clone(), Value::I64(time)),
+        (NAME.clone(), Value::String(Arc::new(name))),
+        (FORMAT.clone(), Value::String(Arc::new(format))),
+        (DATA.clone(), Value::Bytes(data)),
+    ];
+    Ok(Value::Object(Arc::new(Object {
+        type_name: udt.name.clone(),
+        members,
+    })))
+}
+
 /// Dictionnary of custom readers for dynamically sized events
 pub fn make_custom_readers() -> CustomReaderMap {
     let mut custom_readers: CustomReaderMap = HashMap::new();
+    custom_readers.insert("ImageEvent".into(), Arc::new(parse_image_event));
     custom_readers.insert("LogStringEvent".into(), Arc::new(parse_log_string_event));
     custom_readers.insert(
         "LogStringEventV2".into(),

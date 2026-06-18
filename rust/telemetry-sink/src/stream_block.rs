@@ -2,6 +2,7 @@ use anyhow::Result;
 use micromegas_telemetry::{block_wire_format, compression::compress, wire_format::encode_cbor};
 use micromegas_tracing::{
     event::{EventBlock, ExtractDeps, TracingBlock},
+    images::ImageBlock,
     logs::LogBlock,
     metrics::MetricsBlock,
     prelude::*,
@@ -53,6 +54,12 @@ where
         object_offset: block.object_offset() as i64,
     };
     encode_cbor(&block)
+}
+
+impl StreamBlock for ImageBlock {
+    fn encode_bin(&self, process_info: &ProcessInfo) -> Result<Vec<u8>> {
+        encode_block(self, process_info)
+    }
 }
 
 impl StreamBlock for LogBlock {

@@ -1,6 +1,7 @@
 use std::{fmt, sync::Arc};
 
 use crate::{
+    images::{ImageBlock, ImageStream},
     logs::{LogBlock, LogMetadata, LogStream},
     metrics::{MetricsBlock, MetricsStream},
     prelude::*,
@@ -33,6 +34,9 @@ pub trait EventSink: Send + Sync {
     fn on_process_thread_block(&self, thread_block: Arc<ThreadBlock>);
 
     fn is_busy(&self) -> bool; // sink is busy writing to disk or network, avoid extra flushing
+
+    fn on_init_image_stream(&self, _stream: &ImageStream) {}
+    fn on_process_image_block(&self, _block: Arc<ImageBlock>) {}
 }
 
 /// for tests where the data can be dropped
@@ -65,4 +69,7 @@ impl EventSink for NullEventSink {
     fn is_busy(&self) -> bool {
         false
     }
+
+    fn on_init_image_stream(&self, _: &ImageStream) {}
+    fn on_process_image_block(&self, _: Arc<ImageBlock>) {}
 }

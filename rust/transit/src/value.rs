@@ -113,16 +113,27 @@ impl TransitValue for Arc<Object> {
     }
 }
 
+impl TransitValue for Arc<Vec<u8>> {
+    fn get(value: &Value) -> Result<Self> {
+        if let Value::Bytes(val) = value {
+            Ok(val.clone())
+        } else {
+            bail!("bad type cast Vec<u8> for value {:?}", value);
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum Value {
-    String(Arc<String>),
+    Bytes(Arc<Vec<u8>>),
+    F64(f64),
+    I64(i64),
+    None,
     Object(Arc<Object>),
+    String(Arc<String>),
     U8(u8),
     U32(u32),
     U64(u64),
-    I64(i64),
-    F64(f64),
-    None,
 }
 
 impl Value {

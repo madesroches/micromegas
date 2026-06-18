@@ -111,6 +111,7 @@ pub mod dispatch;
 pub mod errors;
 pub mod event;
 pub mod guards;
+pub mod images;
 pub mod levels;
 pub mod logs;
 pub mod metrics;
@@ -132,6 +133,8 @@ pub mod property_set {
 }
 
 // Native-only modules (entirely transit-dependent)
+#[cfg(not(target_arch = "wasm32"))]
+pub use dispatch::send_image;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod flush_monitor;
 #[cfg(not(target_arch = "wasm32"))]
