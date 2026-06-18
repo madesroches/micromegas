@@ -1,6 +1,6 @@
 use super::{
     batch_update::PartitionCreationStrategy,
-    block_partition_spec::{BlockPartitionSpec, BlockProcessor, BlockProcessorMap},
+    block_partition_spec::{BlockProcessor, BlockProcessorMap},
     blocks_view::BlocksView,
     dataframe_time_bounds::{DataFrameTimeBounds, NamedColumnsTimeBounds},
     image_block_processor::ImageBlockProcessor,
@@ -10,7 +10,6 @@ use super::{
     },
     lakehouse_context::LakehouseContext,
     partition_cache::PartitionCache,
-    partition_source_data::fetch_partition_source_data,
     view::{PartitionSpec, View, ViewMetadata},
     view_factory::ViewMaker,
 };
@@ -69,16 +68,15 @@ impl ViewMaker for ImagesViewMaker {
 pub struct ImagesView {
     view_set_name: Arc<String>,
     view_instance_id: Arc<String>,
-    process_id: Option<sqlx::types::Uuid>,
+    process_id: sqlx::types::Uuid,
 }
 
 impl ImagesView {
     pub fn new(view_instance_id: &str) -> Result<Self> {
-        let process_id = if view_instance_id == "global" {
-            None
-        } else {
-            Some(Uuid::parse_str(view_instance_id).with_context(|| "Uuid::parse_str")?)
-        };
+        if view_instance_id == "global" {
+            anyhow::bail!("ImagesView does not support global view access");
+        }
+        let process_id = Uuid::parse_str(view_instance_id).with_context(|| "Uuid::parse_str")?;
         Ok(Self {
             view_set_name: Arc::new(String::from(VIEW_SET_NAME)),
             view_instance_id: Arc::new(view_instance_id.into()),
@@ -99,34 +97,11 @@ impl View for ImagesView {
 
     async fn make_batch_partition_spec(
         &self,
-        lakehouse: Arc<LakehouseContext>,
-        existing_partitions: Arc<PartitionCache>,
-        insert_range: TimeRange,
+        _lakehouse: Arc<LakehouseContext>,
+        _existing_partitions: Arc<PartitionCache>,
+        _insert_range: TimeRange,
     ) -> Result<Arc<dyn PartitionSpec>> {
-        if *self.view_instance_id != "global" {
-            anyhow::bail!("batch partition spec only supported for global instance");
-        }
-        let source_data = Arc::new(
-            fetch_partition_source_data(
-                lakehouse.clone(),
-                existing_partitions,
-                insert_range,
-                "image",
-            )
-            .await
-            .with_context(|| "fetch_partition_source_data")?,
-        );
-        Ok(Arc::new(BlockPartitionSpec {
-            view_metadata: ViewMetadata {
-                view_set_name: self.view_set_name.clone(),
-                view_instance_id: self.view_instance_id.clone(),
-                file_schema_hash: self.get_file_schema_hash(),
-            },
-            schema: self.get_file_schema(),
-            insert_range,
-            source_data,
-            block_processors: image_processors(),
-        }))
+        anyhow::bail!("ImagesView does not support batch partition specs")
     }
 
     fn get_file_schema_hash(&self) -> Vec<u8> {
@@ -143,18 +118,10 @@ impl View for ImagesView {
         lakehouse: Arc<LakehouseContext>,
         query_range: Option<TimeRange>,
     ) -> Result<()> {
-        if *self.view_instance_id == "global" {
-            return Ok(());
-        }
         let process = Arc::new(
-            find_process(
-                &lakehouse.lake().db_pool,
-                &self
-                    .process_id
-                    .with_context(|| "getting a view's process_id")?,
-            )
-            .await
-            .with_context(|| "find_process")?,
+            find_process(&lakehouse.lake().db_pool, &self.process_id)
+                .await
+                .with_context(|| "find_process")?,
         );
         let query_range =
             query_range.unwrap_or_else(|| TimeRange::new(process.start_time, chrono::Utc::now()));
@@ -210,11 +177,7 @@ impl View for ImagesView {
     }
 
     fn get_update_group(&self) -> Option<i32> {
-        if *(self.get_view_instance_id()) == "global" {
-            Some(2000)
-        } else {
-            None
-        }
+        None
     }
 
     fn get_max_partition_time_delta(&self, _strategy: &PartitionCreationStrategy) -> TimeDelta {

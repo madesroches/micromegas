@@ -293,7 +293,6 @@ pub async fn default_view_factory(
 
     // Create base views first
     let global_views = vec![
-        images_view_maker.make_view("global")?,
         log_view_maker.make_view("global")?,
         metrics_view_maker.make_view("global")?,
         processes_view,
