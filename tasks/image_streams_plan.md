@@ -229,6 +229,10 @@ updated_factory.add_view_set(String::from("images"), images_view_maker);
 1. Add `DynBlob` to `rust/transit/src/` (new file `dyn_blob.rs` or inline in `lib.rs`).
    - `pub struct DynBlob(pub Vec<u8>)` with `InProcSerialize` using `u32` length prefix.
    - Re-export from `rust/transit/src/lib.rs`.
+2. Add `Value::Bytes(Arc<Vec<u8>>)` variant to the `Value` enum in `rust/transit/src/value.rs`
+   and a corresponding `impl TransitValue for Arc<Vec<u8>>` that matches `Value::Bytes`. This
+   variant is required by `parse_image_event` (Phase 5, Step 18) to return the raw image bytes
+   from the parsed transit object. Renumber subsequent Phase 1 steps if any are added later.
 
 ### Phase 2 — Tracing crate: images module
 
@@ -273,7 +277,7 @@ updated_factory.add_view_set(String::from("images"), images_view_maker);
     The reader calls `read_advance_string` twice (for `name` and `format`) and reads the blob with
     `read_consume_pod::<u32>` for the length followed by `advance_window` for the raw bytes
     (no codec byte, unlike `DynString`). Return a `Value::Object` with members `time`, `name`,
-    `format`, and `data` (as `Value::Bytes` or equivalent).
+    `format`, and `data` (as `Value::Bytes(Arc<Vec<u8>>)`, added in Phase 1 Step 2).
 18. Create `rust/analytics/src/lakehouse/image_block_processor.rs` with `ImageBlockProcessor`.
 19. Create `rust/analytics/src/lakehouse/images_view.rs` with `ImagesViewMaker` / `ImagesView`.
 20. Register in `default_view_factory` (`rust/analytics/src/lakehouse/view_factory.rs`).
@@ -291,6 +295,7 @@ updated_factory.add_view_set(String::from("images"), images_view_maker);
 |------|--------|
 | `rust/transit/src/lib.rs` | Re-export `DynBlob` |
 | `rust/transit/src/dyn_blob.rs` | **New** — `DynBlob` type |
+| `rust/transit/src/value.rs` | Add `Value::Bytes(Arc<Vec<u8>>)` variant and `impl TransitValue for Arc<Vec<u8>>` |
 | `rust/tracing/src/lib.rs` | Add `pub mod images;`, expose `send_image` |
 | `rust/tracing/src/event/sink.rs` | Add default `on_init_image_stream`, `on_process_image_block` |
 | `rust/tracing/src/dispatch.rs` | Add image stream field, `send_image` dispatch |
