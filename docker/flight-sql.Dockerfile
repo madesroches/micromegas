@@ -10,15 +10,12 @@ RUN if [ "$TARGETARCH" = "arm64" ]; then \
       rm -rf /var/lib/apt/lists/*; \
     fi
 
-RUN if [ "$TARGETARCH" = "arm64" ]; then \
-      rustup target add aarch64-unknown-linux-gnu; \
-    fi
-
 WORKDIR /build
 COPY rust/ ./rust/
 
 WORKDIR /build/rust
 RUN if [ "$TARGETARCH" = "arm64" ]; then \
+      rustup target add aarch64-unknown-linux-gnu && \
       CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
       cargo build --release --target aarch64-unknown-linux-gnu --bin flight-sql-srv; \
     else \
