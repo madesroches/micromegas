@@ -1,4 +1,4 @@
-use crate::{InProcSerialize, InProcSize, advance_window, read_consume_pod, write_any};
+use crate::{InProcSerialize, InProcSize, read_consume_pod, write_any};
 
 #[derive(Debug)]
 pub struct DynBlob(pub Vec<u8>);
@@ -20,7 +20,6 @@ impl InProcSerialize for DynBlob {
     unsafe fn read_value(mut window: &[u8]) -> Self {
         let len: u32 = read_consume_pod(&mut window);
         let data = window[..len as usize].to_vec();
-        let _ = advance_window(window, len as usize);
         Self(data)
     }
 }

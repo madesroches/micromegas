@@ -69,7 +69,4 @@ impl EventSink for NullEventSink {
     fn is_busy(&self) -> bool {
         false
     }
-
-    fn on_init_image_stream(&self, _: &ImageStream) {}
-    fn on_process_image_block(&self, _: Arc<ImageBlock>) {}
 }
