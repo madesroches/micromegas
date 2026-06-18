@@ -221,11 +221,11 @@ arch-neutral (`wasm32-unknown-unknown`). The tradeoff: the wasm build now runs a
 service build rather than being prebuilt once. To avoid a new source of drift, the inlined
 stage should be kept in sync with `docker/wasm-builder.Dockerfile`.
 
-Because the wasm stage is inlined, `ensure_wasm_builder()` is **no longer needed for the arm64
-path** — there is no shared image to prebuild. The native amd64 path may keep referencing the
-prebuilt `${WASM_IMAGE}` (where the daemon store is the build's store and the existing
-`ensure_wasm_builder()` + plain `docker build` work fine), or it may use the same inlined stage;
-either way the arm64 path does not call `ensure_wasm_builder()`.
+Inlining replaces `FROM ${WASM_IMAGE}` for **both arches** — `build_docker_images.py` selects
+one Dockerfile per service with no arch variant, so the single inlined Dockerfile is used for
+amd64 and arm64 alike. With nothing left to consume a prebuilt image, `ensure_wasm_builder()`,
+`${WASM_IMAGE}`, and the `WASM_IMAGE` constant are removed entirely; the amd64 path also builds
+the wasm artifacts via the inlined stage rather than prebuilding a shared image.
 
 Note: multi-arch manifest creation and pushing are out of scope for the build script — the
 script only needs to produce a single-arch image matching the requested target platform.
@@ -356,9 +356,9 @@ Design section.
    single buildx invocation, mirroring the native two-tag pattern). `--load` writes the
    single-arch image into the local docker store for the smoke test. Multi-arch manifest
    publishing is out of scope (see Trade-offs).
-   - Skip the WASM prebuild on the arm64 path: guard the `if service in WASM_SERVICES`
-     `ensure_wasm_builder()` call with `and not arm64`, since the wasm-builder is inlined as a
-     build stage for arm64 (see Design) and prebuilding into the daemon store would be unused.
+   - Remove the WASM prebuild entirely: delete the `ensure_wasm_builder()` call (and the
+     `WASM_IMAGE` constant) for **both** arches, since the wasm-builder is now inlined as a
+     build stage for every WASM service (see Design) and nothing consumes a prebuilt image.
 
 ### Prerequisites (one-time, per build host)
 
