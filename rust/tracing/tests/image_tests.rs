@@ -10,6 +10,7 @@ fn test_send_image_captured_in_memory() {
     let guard = init_in_memory_tracing();
     let image_data = vec![0xAB_u8, 0xCD, 0xEF, 0x01, 0x02];
     micromegas_tracing::dispatch::send_image("screenshot_001", "png", image_data.clone());
+    micromegas_tracing::dispatch::flush_image_buffer();
 
     let state = guard.sink.state.lock().expect("lock sink state");
     assert!(

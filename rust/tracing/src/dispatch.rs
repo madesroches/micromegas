@@ -171,6 +171,13 @@ pub fn send_image(name: &str, format: &str, data: Vec<u8>) {
 }
 
 #[inline(always)]
+pub fn flush_image_buffer() {
+    if let Some(d) = G_DISPATCH.get() {
+        d.flush_image_buffer();
+    }
+}
+
+#[inline(always)]
 pub fn flush_metrics_buffer() {
     if let Some(d) = G_DISPATCH.get() {
         d.flush_metrics_buffer();
@@ -537,8 +544,10 @@ impl Dispatch {
             format: micromegas_transit::DynString(format.to_owned()),
             data: micromegas_transit::DynBlob(data),
         });
-        drop(image_stream);
-        self.flush_image_buffer();
+        if image_stream.is_full() {
+            drop(image_stream);
+            self.flush_image_buffer();
+        }
     }
 
     fn flush_image_buffer(&self) {
@@ -559,6 +568,7 @@ impl Dispatch {
         Arc::get_mut(&mut old_event_block)
             .expect("image block exclusive ref")
             .close();
+        drop(image_stream);
         self.get_sink().on_process_image_block(old_event_block);
     }
 

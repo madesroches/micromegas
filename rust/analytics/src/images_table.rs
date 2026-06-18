@@ -77,6 +77,8 @@ pub struct ImagesRecordBuilder {
     formats: StringDictionaryBuilder<Int16Type>,
     payload_sizes: PrimitiveBuilder<Int64Type>,
     data: BinaryBuilder,
+    min_time: Option<i64>,
+    max_time: Option<i64>,
 }
 
 impl Default for ImagesRecordBuilder {
@@ -100,6 +102,8 @@ impl ImagesRecordBuilder {
             formats: StringDictionaryBuilder::new(),
             payload_sizes: PrimitiveBuilder::new(),
             data: BinaryBuilder::new(),
+            min_time: None,
+            max_time: None,
         }
     }
 
@@ -108,14 +112,13 @@ impl ImagesRecordBuilder {
     }
 
     pub fn get_time_range(&self) -> Option<TimeRange> {
-        if self.is_empty() {
-            return None;
+        match (self.min_time, self.max_time) {
+            (Some(min_ns), Some(max_ns)) => Some(TimeRange::new(
+                DateTime::from_timestamp_nanos(min_ns),
+                DateTime::from_timestamp_nanos(max_ns),
+            )),
+            _ => None,
         }
-        let slice = self.times.values_slice();
-        Some(TimeRange::new(
-            DateTime::from_timestamp_nanos(slice[0]),
-            DateTime::from_timestamp_nanos(slice[slice.len() - 1]),
-        ))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -144,6 +147,8 @@ impl ImagesRecordBuilder {
         self.formats.append_value(format);
         self.payload_sizes.append_value(payload_size);
         self.data.append_value(image_data);
+        self.min_time = Some(self.min_time.map(|m| m.min(time_ns)).unwrap_or(time_ns));
+        self.max_time = Some(self.max_time.map(|m| m.max(time_ns)).unwrap_or(time_ns));
         Ok(())
     }
 

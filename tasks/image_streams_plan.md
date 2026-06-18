@@ -8,7 +8,15 @@ other images as telemetry. Each image is one block on one dedicated stream, carr
 `Vec<u8>`. The analytics layer materializes a queryable `images` table with one row per image — the
 row stores metadata and the raw image bytes in a `data Binary` column. The design follows the existing logs/metrics pattern end-to-end.
 
-## Current State
+## Status: Implemented
+
+All phases are complete. See commits on the `images` branch.
+
+### Post-implementation fixes (branch review)
+- **`send_image` batching**: Revised from "always flush" to "flush only when `is_full()`", matching the log/metrics pattern. `flush_image_buffer()` is now also exposed as a public free function (like `flush_log_buffer()`). Tests updated to call `flush_image_buffer()` explicitly when they need to observe a block before the buffer fills.
+- **`ImagesRecordBuilder::get_time_range`**: Changed from `slice[0]`/`slice[last]` (assumes sorted order) to explicit `min_time`/`max_time` fields updated on each `append` call, matching `NetSpanRecordBuilder`.
+
+## Current State (pre-implementation reference)
 
 ### Stream type pattern
 
@@ -256,8 +264,9 @@ updated_factory.add_view_set(String::from("images"), images_view_maker);
    not need a new parameter.
 10. Add `send_image(name, format, data)` to dispatch module and expose as free function
     in `rust/tracing/src/lib.rs` (e.g. `micromegas_tracing::send_image`).
-11. Flush unconditionally in `send_image` by calling `flush_image_buffer` immediately after
-    pushing the event to the queue.
+11. In `send_image`, push the event then flush only when `is_full()` (same pattern as logs/metrics),
+    allowing multiple small images to batch into one block. Expose `flush_image_buffer()` as a
+    public free function for callers that need to force a flush (e.g. on shutdown or in tests).
 
 ### Phase 4 — Telemetry sink
 
@@ -319,10 +328,11 @@ bespoke CBOR envelope because the schema is self-describing via `objects_metadat
 layer uses `parse_block` generically and gets the event fields without hard-coding offsets. Schema
 evolution is free: add `ImageAnnotatedEvent` later without breaking the existing decoder.
 
-**One image per block vs. batching**: Images are large and captures are infrequent; there is no
-meaningful gain from batching multiple images in one block. Flushing immediately keeps latency low,
-simplifies the block processor (always exactly one row per block), and means `nb_objects = 1` is
-a reliable invariant.
+**Batching vs. immediate flush**: The implementation uses the same "flush when full" pattern as
+logs and metrics — `send_image` only calls `flush_image_buffer` when `is_full()`. This allows
+small images to batch into one block, keeping per-block overhead low. For cases that need
+immediate delivery (shutdown, tests), callers invoke the public `flush_image_buffer()`.
+The block processor handles any number of events per block; there is no `nb_objects = 1` invariant.
 
 **Pixel data in Parquet rows**: Images are embedded directly in the `data` Binary column so the
 web app can retrieve them via a normal FlightSQL query without needing direct object-store access.
