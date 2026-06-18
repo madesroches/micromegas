@@ -92,6 +92,12 @@ The stage gains an `ARG TARGETARCH` that Docker BuildKit sets automatically. Whe
 `TARGETARCH=arm64` the stage installs the cross toolchain and builds for
 `aarch64-unknown-linux-gnu`; otherwise it builds natively.
 
+`$BUILDPLATFORM` and `TARGETARCH` are BuildKit-only automatic ARGs. The native amd64 path uses
+plain `docker build` (not buildx), so it relies on the BuildKit backend being active — the
+default on Docker Engine 23.0+ — for `$BUILDPLATFORM` to resolve. If BuildKit is disabled
+(`DOCKER_BUILDKIT=0`) or on legacy Docker, `$BUILDPLATFORM` resolves to empty, yielding an
+invalid `FROM --platform= rust:1-bookworm` (see Prerequisites).
+
 ```dockerfile
 FROM --platform=$BUILDPLATFORM rust:1-bookworm AS rust-builder
 
@@ -225,7 +231,11 @@ Inlining replaces `FROM ${WASM_IMAGE}` for **both arches** — `build_docker_ima
 one Dockerfile per service with no arch variant, so the single inlined Dockerfile is used for
 amd64 and arm64 alike. With nothing left to consume a prebuilt image, `ensure_wasm_builder()`,
 `${WASM_IMAGE}`, and the `WASM_IMAGE` constant are removed entirely; the amd64 path also builds
-the wasm artifacts via the inlined stage rather than prebuilding a shared image.
+the wasm artifacts via the inlined stage rather than prebuilding a shared image. Because the
+`if service in WASM_SERVICES: ensure_wasm_builder()` guard in `build_image()` is the only caller
+of the prebuild and the only reader of `WASM_SERVICES`, that guard block and the now-unused
+`WASM_SERVICES` constant are also removed (otherwise the guard calls a deleted function, or
+`WASM_SERVICES` becomes dead code).
 
 Note: multi-arch manifest creation and pushing are out of scope for the build script — the
 script only needs to produce a single-arch image matching the requested target platform.
@@ -355,14 +365,19 @@ there is no shared image to prebuild, no arch-suffixed tag, arch-keyed memo, or
    single buildx invocation, mirroring the native two-tag pattern). `--load` writes the
    single-arch image into the local docker store for the smoke test. Multi-arch manifest
    publishing is out of scope (see Trade-offs).
-   - Remove the WASM prebuild entirely: delete the `ensure_wasm_builder()` call (and the
-     `WASM_IMAGE` constant) for **both** arches, since the wasm-builder is now inlined as a
-     build stage for every WASM service (see Design) and nothing consumes a prebuilt image.
+   - Remove the WASM prebuild entirely: delete the `if service in WASM_SERVICES:
+     ensure_wasm_builder()` guard block in `build_image()`, the `ensure_wasm_builder()`
+     function, and the now-unused `WASM_SERVICES` and `WASM_IMAGE` constants for **both**
+     arches, since the wasm-builder is now inlined as a build stage for every WASM service
+     (see Design) and nothing consumes a prebuilt image.
 
 ### Prerequisites (one-time, per build host)
 
 Before running the `--arm64` build or the runtime smoke test on an x86-64 host:
 
+- **BuildKit backend** (native `docker build` path): the `FROM --platform=$BUILDPLATFORM`
+  pin requires the BuildKit backend so `$BUILDPLATFORM` resolves. This is the default on Docker
+  Engine 23.0+; do not disable it (`DOCKER_BUILDKIT=0`) or `$BUILDPLATFORM` resolves to empty.
 - **buildx builder**: `docker buildx build --platform ...` requires a `docker-container`
   builder; the default `docker` driver does not support `--platform`. Create and select one
   once with `docker buildx create --use` (idempotent — reuse the existing builder on later runs).
