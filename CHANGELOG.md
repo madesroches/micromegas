@@ -4,6 +4,8 @@ This file documents the historical progress of the Micromegas project. For curre
 
 ## Unreleased
 
+* **Security:**
+  * Fix 20 Dependabot alerts: bump protobufjs (≥7.6.3), tar (7.5.16), js-yaml (4.2.0), @babel/core (≥7.29.6), ws (8.21.0) across all npm workspaces; bump vite (≥7.3.5) in doc workspaces; bump cryptography (49.0.0) in Python; bump chi (5.2.4) in Grafana backend (#311, #310, #309, #308, #307, #306, #305, #304, #303, #302, #301, #300, #299, #298, #297, #296, #295, #294, #293, #292)
 * **Tracing:**
   * Add image streams: instrumented applications can send screenshots or other images as telemetry via `send_image()`; images are queryable via the `images` SQL table with a `data Binary` column holding raw bytes
 * **Unreal:**
