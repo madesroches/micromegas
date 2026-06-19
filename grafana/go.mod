@@ -4,7 +4,7 @@ go 1.25.0
 
 require (
 	github.com/apache/arrow/go/v12 v12.0.0-20230215210516-4550c9b35e67
-	github.com/go-chi/chi/v5 v5.2.2
+	github.com/go-chi/chi/v5 v5.2.4
 	github.com/google/go-cmp v0.7.0
 	github.com/grafana/grafana-plugin-sdk-go v0.281.0
 	github.com/magefile/mage v1.15.0
