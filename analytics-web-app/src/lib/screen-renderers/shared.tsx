@@ -94,8 +94,8 @@ export function AddCellModal({ isOpen, onClose, onAdd, title = 'Add Cell', exclu
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
       <div className="absolute inset-0 bg-black/50" onClick={onClose} />
-      <div className="relative w-full max-w-sm bg-app-panel border border-theme-border rounded-lg shadow-xl">
-        <div className="flex items-center justify-between px-4 py-3 border-b border-theme-border">
+      <div className="relative flex max-h-[80vh] w-full max-w-sm flex-col bg-app-panel border border-theme-border rounded-lg shadow-xl">
+        <div className="flex flex-shrink-0 items-center justify-between px-4 py-3 border-b border-theme-border">
           <h2 className="text-lg font-medium text-theme-text-primary">{title}</h2>
           <button
             onClick={onClose}
@@ -104,7 +104,7 @@ export function AddCellModal({ isOpen, onClose, onAdd, title = 'Add Cell', exclu
             <X className="w-5 h-5" />
           </button>
         </div>
-        <div className="p-2">
+        <div className="overflow-y-auto p-2">
           {options.map((option) => (
             <button
               key={option.type}
