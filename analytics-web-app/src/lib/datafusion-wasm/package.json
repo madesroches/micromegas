@@ -1,30 +1,8 @@
 {
   "name": "micromegas-datafusion-wasm",
+  "version": "0.1.0",
+  "private": true,
   "type": "module",
-  "collaborators": [
-    "Marc-Antoine Desroches <madesroches@gmail.com>"
-  ],
-  "description": "DataFusion compiled to WebAssembly for in-browser SQL query execution, part of micromegas",
-  "version": "0.26.0",
-  "license": "Apache-2.0",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/madesroches/micromegas/"
-  },
-  "files": [
-    "micromegas_datafusion_wasm_bg.wasm",
-    "micromegas_datafusion_wasm.js",
-    "micromegas_datafusion_wasm.d.ts"
-  ],
   "main": "micromegas_datafusion_wasm.js",
-  "homepage": "https://micromegas.info/",
-  "types": "micromegas_datafusion_wasm.d.ts",
-  "sideEffects": [
-    "./snippets/*"
-  ],
-  "keywords": [
-    "observability",
-    "telemetry",
-    "analytics"
-  ]
+  "types": "micromegas_datafusion_wasm.d.ts"
 }
