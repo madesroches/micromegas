@@ -1,6 +1,6 @@
 # Cell Types Reference
 
-Notebooks support 13 cell types. Each cell has a `name` (unique within the notebook), a `type`, and a `layout` controlling its display height and collapsed state.
+Notebooks support 14 cell types. Each cell has a `name` (unique within the notebook), a `type`, and a `layout` controlling its display height and collapsed state.
 
 Data cells (table, chart, log, etc.) execute SQL queries and register their results in the [local WASM query engine](execution.md#local-wasm-query-engine), making them available for downstream cells to query.
 
@@ -193,6 +193,46 @@ A container cell that arranges its children side by side in a horizontal layout.
 Place two related charts side by side — one showing CPU usage and another showing memory usage — for a compact comparison view.
 
 ![Horizontal group with table, chart, and log cells side by side](../../assets/images/notebooks/horizontal_group.png){ .screenshot }
+
+---
+
+## ![Image](../../assets/images/cell-icons/image.svg){ .cell-icon } Image
+
+Screenshot carousel that queries the `images` view and steps through the resulting frames one at a time. Each row is one image — a timestamp, a name, a format, and the raw image bytes.
+
+**Configuration:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `sql` | string | SQL query returning image rows |
+| `dataSource` | string | Data source override |
+
+**Required columns:**
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `time` | timestamp | Capture time, shown in the footer |
+| `name` | string | Image label, shown in the footer |
+| `format` | string | Image MIME type (e.g. `image/png`, `image/jpeg`) — used directly as the blob type |
+| `data` | binary | Raw image bytes |
+
+**Features:**
+
+- Navigable carousel with first / previous / next / last controls and a position indicator
+- Footer shows the current image's name, timestamp, and format
+- The `format` value is used as the image MIME type; the browser decodes any format it natively supports (PNG, JPEG, GIF, WebP, etc.)
+- Decode failures (unsupported format, malformed `format`, or corrupt data) surface a meaningful error in place of the image; null/empty `format` and null `data` are reported explicitly
+- Does not register results in the WASM engine (binary image data is not a queryable table)
+
+**Example SQL:**
+
+```sql
+SELECT time, name, format, data
+FROM view_instance('images', '$process_id')
+ORDER BY time
+```
+
+The `images` view is a per-process JIT materialized view populated by applications that emit image telemetry (e.g. screenshots via `send_image`).
 
 ---
 

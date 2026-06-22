@@ -35,6 +35,7 @@ This file documents the historical progress of the Micromegas project. For curre
   * Size non-fixed log columns (including `msg`) to their longest formatted value on the current page, capped and truncated with full text on hover; `msg` is no longer a special case
   * Add resizable columns to the log cell via draggable inline dividers; drag to pin a column width, right-click a divider to reset to auto or reset all, "Reset widths" button in bottom bar; pinned widths persist in cell options (#1130)
   * Add one-click copy icon to log rows; appears on hover, copies tab-separated row text to clipboard, briefly shows a green checkmark on success (#1131)
+  * Add an `image` notebook cell that queries the `images` view and displays results as a navigable carousel; the `format` column is used as the image MIME type and decode failures surface a meaningful error message
 * **Analytics:**
   * Accept runtime scalar expressions (CTEs, subqueries, CROSS JOIN columns) as `make_histogram` bounds; literal bounds continue to validate eagerly; NULL histogram rows propagate correctly through all consumers (#1135)
   * Replace SELECT+DELETE pairs in `delete_expired_blocks_batch` with atomic `DELETE … RETURNING` queries; eliminates double-counting and phantom deletes under concurrent writers (#1116)
