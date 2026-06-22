@@ -452,11 +452,19 @@ export function NotebookRenderer({
   const datasourceVariables = useMemo(() => {
     if (selectedCellIndex === null) return undefined
     const result: string[] = []
-    forEachCell(cells.slice(0, selectedCellIndex), (cell) => {
+    const collect = (cell: CellConfig) => {
       if (cell.type === 'variable' && (cell as VariableCellConfig).variableType === 'datasource') {
         result.push(cell.name)
       }
-    })
+    }
+    forEachCell(cells.slice(0, selectedCellIndex), collect)
+    // When editing inside a group, include the group's own datasource-variable
+    // children so a sibling cell can reference them (e.g. "$source"). The group
+    // itself is excluded by the slice above.
+    const selected = cells[selectedCellIndex]
+    if (selected?.type === 'hg') {
+      (selected as HorizontalGroupCellConfig).children.forEach(collect)
+    }
     return result
   }, [cells, selectedCellIndex])
 

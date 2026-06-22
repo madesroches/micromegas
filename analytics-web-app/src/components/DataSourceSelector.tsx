@@ -82,6 +82,11 @@ export function DataSourceSelector({ value, onChange, datasourceVariables, showN
   // Only run after sources have loaded to avoid overwriting valid values during async fetch.
   useEffect(() => {
     if (!sourcesLoaded) return
+    // Never auto-rewrite a variable reference ($var). The set of known variables
+    // is context-dependent (e.g. it may not list siblings while editing inside a
+    // group), and rewriting would silently destroy the user's binding. Variable
+    // references are resolved gracefully at render time instead.
+    if (value.startsWith('$')) return
     if (optionValues.length > 0 && !optionValues.includes(value)) {
       onChangeRef.current(optionValues[0])
     }
