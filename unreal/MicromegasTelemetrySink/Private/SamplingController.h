@@ -24,6 +24,7 @@ public:
 	bool ShouldSampleBlock(const MicromegasTracing::MetricsBlockPtr& Block) const;
 	bool ShouldSampleBlock(const MicromegasTracing::ThreadBlockPtr& Block) const;
 	bool ShouldSampleBlock(const MicromegasTracing::NetBlockPtr& Block) const;
+	bool ShouldSampleBlock(const MicromegasTracing::ImageBlockPtr& Block) const;
 
 	MicromegasTracing::ENetTraceVerbosity GetNetVerbosity() const;
 
@@ -43,6 +44,7 @@ private:
 
 	TUniquePtr<TAutoConsoleVariable<bool>> CVarLogEnable;
 	TUniquePtr<TAutoConsoleVariable<bool>> CVarMetricsEnable;
+	TUniquePtr<TAutoConsoleVariable<bool>> CVarImagesEnable;
 	TUniquePtr<TAutoConsoleVariable<bool>> CVarSpansEnable;
 	TUniquePtr<TAutoConsoleVariable<bool>> CVarSpansAll;
 	TUniquePtr<TAutoConsoleVariable<int32>> CVarNetVerbosity;

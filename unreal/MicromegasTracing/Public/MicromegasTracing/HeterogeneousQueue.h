@@ -127,7 +127,7 @@ namespace MicromegasTracing
 
 		const uint8* GetPtr() const
 		{
-			return &Buffer[0];
+			return Buffer.GetData();
 		}
 
 		CheckPoint Snapshot() const

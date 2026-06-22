@@ -8,12 +8,14 @@ std::vector<uint8> CompressBuffer(const void* src, size_t size)
 {
 	MICROMEGAS_SPAN_FUNCTION("MicromegasTelemetrySink");
 	std::vector<uint8> buffer;
+	const uint8 dummy = 0;
+	const void* srcOrDummy = (src && size > 0) ? src : &dummy;
 	const int32 compressedBound = LZ4F_compressFrameBound(size, nullptr);
 	buffer.resize(compressedBound);
 	uint32 compressedSize = LZ4F_compressFrame(
 		&buffer[0],
 		compressedBound,
-		const_cast<void*>(src),
+		const_cast<void*>(srcOrDummy),
 		size,
 		nullptr);
 	buffer.resize(compressedSize);
@@ -50,4 +52,9 @@ TUniquePtr<ExtractNetDependencies> ExtractBlockDependencies(const MicromegasTrac
 	TUniquePtr<ExtractNetDependencies> extractDependencies(new ExtractNetDependencies());
 	block.GetEvents().ForEach(*extractDependencies);
 	return extractDependencies;
+}
+
+TUniquePtr<ExtractImageDependencies> ExtractBlockDependencies(const MicromegasTracing::ImageBlock& /*block*/)
+{
+	return TUniquePtr<ExtractImageDependencies>{};
 }

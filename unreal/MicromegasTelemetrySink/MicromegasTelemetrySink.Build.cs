@@ -9,13 +9,18 @@ public class MicromegasTelemetrySink : ModuleRules
 			"BuildSettings",
 			"Core",
 			"CoreUObject",
-			"Engine", 
+			"Engine",
 			"Json",
 			"HTTP",
 			"RenderCore",
 			"RHI",
 			"Slate",
 		]);
+
+		if (Target.bBuildEditor)
+		{
+			PrivateDependencyModuleNames.Add("UnrealEd");
+		}
 
 		PrivateIncludePaths.Add( Path.Combine(ModuleDirectory, "ThirdParty/jsoncons-0.173.4") );
 		PrivateIncludePaths.Add( Path.Combine(ModuleDirectory, "ThirdParty") );

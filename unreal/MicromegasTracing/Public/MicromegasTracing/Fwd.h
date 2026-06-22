@@ -54,6 +54,12 @@ namespace MicromegasTracing
 	typedef TSharedPtr<NetBlock, ESPMode::ThreadSafe> NetBlockPtr;
 	typedef EventStreamImpl<NetBlock, 256> NetStream;
 	typedef TSharedPtr<NetStream, ESPMode::ThreadSafe> NetStreamPtr;
+	struct ImageEvent;
+	typedef HeterogeneousQueue<ImageEvent> ImageEventQueue;
+	typedef EventBlock<ImageEventQueue> ImageBlock;
+	typedef TSharedPtr<ImageBlock, ESPMode::ThreadSafe> ImageBlockPtr;
+	typedef EventStreamImpl<ImageBlock, 128> ImageStream;
+	typedef TSharedPtr<ImageStream, ESPMode::ThreadSafe> ImageStreamPtr;
 	class NetTraceWriter;
 	enum class ENetTraceVerbosity : uint8;
 	class PropertySetStore;

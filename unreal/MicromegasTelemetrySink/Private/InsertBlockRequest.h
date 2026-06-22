@@ -4,11 +4,13 @@
 //
 #include "CborUtils.h"
 #include "FormatTime.h"
+#include "ImageDependencies.h"
 #include "LogDependencies.h"
 #include "MicromegasTracing/Macros.h"
 #include "MetricDependencies.h"
 #include "NetDependencies.h"
 #include "MicromegasTelemetrySink/Log.h"
+#include "MicromegasTracing/ImageBlock.h"
 #include "MicromegasTracing/LogBlock.h"
 #include "MicromegasTracing/MetricBlock.h"
 #include "MicromegasTracing/NetBlock.h"
@@ -22,6 +24,7 @@ TUniquePtr<ExtractLogDependencies> ExtractBlockDependencies(const MicromegasTrac
 TUniquePtr<ExtractMetricDependencies> ExtractBlockDependencies(const MicromegasTracing::MetricBlock& block);
 TUniquePtr<ExtractThreadDependencies> ExtractBlockDependencies(const MicromegasTracing::ThreadBlock& block);
 TUniquePtr<ExtractNetDependencies> ExtractBlockDependencies(const MicromegasTracing::NetBlock& block);
+TUniquePtr<ExtractImageDependencies> ExtractBlockDependencies(const MicromegasTracing::ImageBlock& block);
 
 template <typename BlockT>
 inline TArray<uint8> FormatBlockRequest(const MicromegasTracing::ProcessInfo& processInfo, const BlockT& block)
@@ -30,14 +33,14 @@ inline TArray<uint8> FormatBlockRequest(const MicromegasTracing::ProcessInfo& pr
 	using namespace MicromegasTracing;
 	auto& queue = block.GetEvents();
 
-	auto depExtrator = ExtractBlockDependencies(block);
+	auto depExtractor = ExtractBlockDependencies(block);
 
 	FString blockId = FGuid::NewGuid().ToString(EGuidFormats::DigitsWithHyphens);
 	MICROMEGAS_LOG("LogMicromegasTelemetrySink", MicromegasTracing::LogLevel::Debug, FString::Printf(TEXT("Sending block %s"), *blockId));
 
-	std::vector<uint8> compressedDep = CompressBuffer(
-		depExtrator->Dependencies.GetPtr(),
-		depExtrator->Dependencies.GetSizeBytes());
+	const void* depPtr = depExtractor ? depExtractor->Dependencies.GetPtr() : nullptr;
+	size_t depSize = depExtractor ? depExtractor->Dependencies.GetSizeBytes() : 0;
+	std::vector<uint8> compressedDep = CompressBuffer(depPtr, depSize);
 	std::vector<uint8> compressedObj = CompressBuffer(queue.GetPtr(), queue.GetSizeBytes());
 
 	std::vector<uint8> buffer;
