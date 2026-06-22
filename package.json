@@ -38,6 +38,7 @@
     "react-router": "^6.30.4",
     "serialize-javascript": "^7.0.5",
     "tar": "^7.5.16",
+    "undici": ">=6.27.0",
     "uuid": "^14.0.0",
     "ws": "^8.21.0"
   }
