@@ -28,6 +28,7 @@
     "lodash-es": "^4.17.23",
     "rollup": "^4.59.0",
     "tar": "^7.5.16",
+    "undici": ">=6.27.0",
     "uuid": "^14.0.0"
   },
   "packageManager": "yarn@4.14.1"

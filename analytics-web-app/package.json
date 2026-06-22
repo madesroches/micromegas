@@ -58,6 +58,7 @@
     "postcss": "^8.5.10",
     "rollup": "^4.59.0",
     "tar": "^7.5.16",
+    "undici": ">=6.27.0",
     "ws": "^8.21.0"
   },
   "devDependencies": {
