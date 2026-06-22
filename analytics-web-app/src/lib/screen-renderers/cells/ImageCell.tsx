@@ -72,7 +72,7 @@ export function ImageCell({ data, status }: CellRendererProps) {
       return
     }
 
-    const blob = new Blob([new Uint8Array(bytes as Uint8Array)], { type: `image/${fmt}` })
+    const blob = new Blob([new Uint8Array(bytes as Uint8Array)], { type: fmt })
     const url = URL.createObjectURL(blob)
     setBlobUrl(url)
 
@@ -138,6 +138,11 @@ export function ImageCell({ data, status }: CellRendererProps) {
             src={blobUrl}
             alt={currentName}
             className="max-w-full max-h-full object-contain"
+            onError={() =>
+              setRowError(
+                `Failed to decode image — the browser does not support this format or the data is invalid (format: "${currentFormat}")`,
+              )
+            }
           />
         ) : null}
       </div>
