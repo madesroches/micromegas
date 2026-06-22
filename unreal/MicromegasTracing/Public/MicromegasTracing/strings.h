@@ -125,11 +125,49 @@ namespace MicromegasTracing
 		{
 			StringCodec::Type codec = details::ReadPOD<StringCodec::Type>(buffer, cursor);
 			uint32 bufferSize = details::ReadPOD<uint32>(buffer, cursor);
-			const void* ptr = &buffer[0] + cursor;
+			const void* ptr = buffer.GetData() + cursor;
 			cursor += bufferSize;
 
 			DynamicString dynStr(StringReference(ptr, bufferSize, codec));
 			callback(dynStr);
+		}
+	};
+
+	// DynamicBlob points to a temporary buffer; serializing copies the whole buffer.
+	struct DynamicBlob
+	{
+		const uint8* Ptr;
+		uint32 SizeBytes;
+
+		DynamicBlob(const uint8* InPtr, uint32 InSizeBytes)
+			: Ptr(InPtr)
+			, SizeBytes(InSizeBytes)
+		{
+		}
+	};
+
+	template <>
+	struct Serializer<DynamicBlob>
+	{
+		static uint32 GetSize(const DynamicBlob& value)
+		{
+			return sizeof(uint32)   // length prefix
+				+ value.SizeBytes;  // raw bytes (no codec)
+		}
+
+		static void Write(const DynamicBlob& value, TArray<uint8>& buffer)
+		{
+			details::WritePOD(value.SizeBytes, buffer);
+			buffer.Append(value.Ptr, value.SizeBytes);
+		}
+
+		template <typename Callback>
+		static void Read(Callback callback, const TArray<uint8>& buffer, size_t& cursor)
+		{
+			uint32 bufferSize = details::ReadPOD<uint32>(buffer, cursor);
+			const uint8* ptr = buffer.GetData() + cursor;
+			cursor += bufferSize;
+			callback(DynamicBlob(ptr, bufferSize));
 		}
 	};
 

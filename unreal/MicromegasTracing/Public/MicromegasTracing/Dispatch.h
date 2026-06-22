@@ -28,6 +28,7 @@ namespace MicromegasTracing
 			size_t MetricBufferSize,
 			size_t ThreadBufferSize,
 			size_t NetBufferSize,
+			size_t ImageBufferSize,
 			ENetTraceVerbosity NetVerbosity);
 		~Dispatch();
 
@@ -36,6 +37,7 @@ namespace MicromegasTracing
 		static void FlushLogStream();
 		static void FlushMetricStream();
 		static void FlushNetStream();
+		static void FlushImageStream();
 		static void ShutdownNetStream();
 		static void FlushCurrentThreadStream();
 		static void LogInterop(uint64 Timestamp, LogLevel::Type InLevel, const StaticStringRef& InTarget, const DynamicString& Msg);
@@ -45,6 +47,7 @@ namespace MicromegasTracing
 		static void IntMetric(const MetricMetadata* Desc, const PropertySet* Properties, uint64 Value, uint64 Timestamp);
 		static void FloatMetric(const MetricMetadata* Desc, double Value, uint64 Timestamp);
 		static void FloatMetric(const MetricMetadata* Desc, const PropertySet* Properties, double Value, uint64 Timestamp);
+		static void SendImage(const TCHAR* Name, const TCHAR* Format, const uint8* Data, uint32 DataBytes);
 		static void BeginScope(const BeginThreadSpanEvent& Event);
 		static void EndScope(const EndThreadSpanEvent& Event);
 		static void BeginNamedSpan(const BeginThreadNamedSpanEvent& Event);
@@ -92,10 +95,12 @@ namespace MicromegasTracing
 			size_t MetricBufferSize,
 			size_t ThreadBufferSize,
 			size_t NetBufferSize,
+			size_t ImageBufferSize,
 			ENetTraceVerbosity NetVerbosity);
 
 		void FlushLogStreamImpl(UE::FMutex& Mutex);
 		void FlushMetricStreamImpl(UE::FMutex& Mutex);
+		void FlushImageStreamImpl(UE::FMutex& Mutex);
 		void FlushThreadStream(ThreadStream* Stream);
 		ThreadStream* AllocThreadStream();
 		void PublishThreadStream(ThreadStream* Stream);
@@ -112,6 +117,10 @@ namespace MicromegasTracing
 		UE::FMutex MetricMutex;
 		MetricStreamPtr Metrics;
 		size_t MetricBufferSize;
+
+		UE::FMutex ImageMutex;
+		ImageStreamPtr Images;
+		size_t ImageBufferSize;
 
 		UE::FMutex ThreadStreamsMutex;
 		TArray<ThreadStream*> ThreadStreams;

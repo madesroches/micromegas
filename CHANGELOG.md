@@ -9,6 +9,7 @@ This file documents the historical progress of the Micromegas project. For curre
 * **Tracing:**
   * Add image streams: instrumented applications can send screenshots or other images as telemetry via `send_image()`; images are queryable via the `images` SQL table with a `data Binary` column holding raw bytes
 * **Unreal:**
+  * Add image stream support to the Unreal telemetry sink: wire `ImageStream`/`ImageBlock` into `Dispatch`, `EventSink`, and `HttpEventSink`; add `telemetry.screenshot` console command that captures the game viewport (or editor viewport via `WITH_EDITOR`) as a PNG and sends it as a telemetry image; gate capture with `telemetry.images.enable` CVar
   * Replace manual HTTP retry with `FHttpRetrySystem` (exponential backoff, per-priority retry budgets); add four priority queues (Metadata/Logs/Metrics/Traces) with configurable soft/hard byte-cap drop logic; gate concurrent uploads via `telemetry.max_in_flight_requests` CVar (#56, #43)
   * Add idle-aware spike sampling: suppress spike recording after `telemetry.sampling.interaction_timeout` seconds of no user input; add periodic heartbeat captures every `telemetry.sampling.heartbeat_interval` seconds of active time
   * Emit `TimeSinceLastInput` metric from `FSlateApplication` each frame, with a `BootTime` fallback so the value reads from boot instead of full uptime when no input has occurred yet

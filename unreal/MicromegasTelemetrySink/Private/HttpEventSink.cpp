@@ -198,6 +198,14 @@ void HttpEventSink::OnInitNetStream(const MicromegasTracing::NetStreamPtr& Strea
 		});
 }
 
+void HttpEventSink::OnInitImageStream(const MicromegasTracing::ImageStreamPtr& Stream)
+{
+	EnqueueStreamInit(EUploadPriority::Metadata, [this, Stream]() -> TArray<uint8>
+		{
+			return FormatInsertImageStreamRequest(*Stream);
+		});
+}
+
 void HttpEventSink::OnInitThreadStream(MicromegasTracing::ThreadStream* Stream)
 {
 	const uint32 ThreadId = FPlatformTLS::GetCurrentThreadId();
@@ -234,6 +242,11 @@ void HttpEventSink::OnProcessThreadBlock(const MicromegasTracing::ThreadBlockPtr
 }
 
 void HttpEventSink::OnProcessNetBlock(const MicromegasTracing::NetBlockPtr& Block)
+{
+	EnqueueBlock(Block, EUploadPriority::Traces);
+}
+
+void HttpEventSink::OnProcessImageBlock(const MicromegasTracing::ImageBlockPtr& Block)
 {
 	EnqueueBlock(Block, EUploadPriority::Traces);
 }
@@ -527,8 +540,9 @@ TSharedPtr<MicromegasTracing::EventSink> InitHttpEventSink(
 	constexpr size_t MetricsBufferSize = 10 * 1024 * 1024;
 	constexpr size_t ThreadBufferSize = 10 * 1024 * 1024;
 	constexpr size_t NetBufferSize = 8 * 1024 * 1024;
+	constexpr size_t ImageBufferSize = 256; // minimum pre-alloc; buffer grows on demand when screenshots are captured
 
-	Dispatch::Init(&CreateGuid, Process, Sink, LogBufferSize, MetricsBufferSize, ThreadBufferSize, NetBufferSize, Sampling->GetNetVerbosity());
+	Dispatch::Init(&CreateGuid, Process, Sink, LogBufferSize, MetricsBufferSize, ThreadBufferSize, NetBufferSize, ImageBufferSize, Sampling->GetNetVerbosity());
 	UE_LOG(LogMicromegasTelemetrySink, Log, TEXT("Initializing Micromegas Telemetry process_id=%s"), *Process->ProcessId);
 	return Sink;
 }

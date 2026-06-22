@@ -47,6 +47,10 @@ FSamplingController::FSamplingController(const SharedFlushMonitor& InFlushMonito
 		  TEXT("telemetry.metrics.enable"),
 		  true,
 		  TEXT("Record the frame metrics")))
+	, CVarImagesEnable(new TAutoConsoleVariable<bool>(
+		  TEXT("telemetry.images.enable"),
+		  true,
+		  TEXT("Record images sent via SendImage")))
 	, CVarSpansEnable(new TAutoConsoleVariable<bool>(
 		  TEXT("telemetry.spans.enable"),
 		  SPANS_SAMPLING_ENABLED_BY_DEFAULT,
@@ -190,6 +194,11 @@ bool FSamplingController::ShouldSampleBlock(const MicromegasTracing::ThreadBlock
 bool FSamplingController::ShouldSampleBlock(const MicromegasTracing::NetBlockPtr& Block) const
 {
 	return MicromegasTracing::Dispatch::GetNetTraceVerbosity() != MicromegasTracing::ENetTraceVerbosity::Off;
+}
+
+bool FSamplingController::ShouldSampleBlock(const MicromegasTracing::ImageBlockPtr& Block) const
+{
+	return CVarImagesEnable->GetValueOnAnyThread();
 }
 
 MicromegasTracing::ENetTraceVerbosity FSamplingController::GetNetVerbosity() const

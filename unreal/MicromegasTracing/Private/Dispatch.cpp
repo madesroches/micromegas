@@ -8,6 +8,8 @@
 #include "MicromegasTracing/EventSink.h"
 #include "MicromegasTracing/NetTraceWriter.h"
 #include "MicromegasTracing/EventStream.h"
+#include "MicromegasTracing/ImageBlock.h"
+#include "MicromegasTracing/ImageEvents.h"
 #include "MicromegasTracing/LogBlock.h"
 #include "MicromegasTracing/Macros.h"
 #include "MicromegasTracing/MetricEvents.h"
@@ -28,12 +30,14 @@ namespace MicromegasTracing
 		size_t InMetricBufferSize,
 		size_t InThreadBufferSize,
 		size_t InNetBufferSize,
+		size_t InImageBufferSize,
 		ENetTraceVerbosity InNetVerbosity)
 		: AllocNewGuid(InAllocNewGuid)
 		, Sink(InSink)
 		, CurrentProcessInfo(ProcessInfo)
 		, LogBufferSize(InLogBufferSize)
 		, MetricBufferSize(InMetricBufferSize)
+		, ImageBufferSize(InImageBufferSize)
 		, ThreadBufferSize(InThreadBufferSize)
 		, NetWriter(MakeUnique<NetTraceWriter>(InSink, InNetBufferSize, InNetVerbosity))
 		, PropertySets(new PropertySetStore())
@@ -58,6 +62,16 @@ namespace MicromegasTracing
 			MetricStreamId,
 			NewMetricBlock,
 			TArray<FString>({ TEXT("metrics") }));
+
+		FString ImageStreamId = AllocNewGuid();
+		ImageBlockPtr NewImageBlock = MakeShared<ImageBlock>(ImageStreamId,
+			ProcessInfo->StartTime,
+			ImageBufferSize,
+			0);
+		Images = MakeShared<ImageStream>(CurrentProcessInfo->ProcessId,
+			ImageStreamId,
+			NewImageBlock,
+			TArray<FString>({ TEXT("image") }));
 	}
 
 	Dispatch::~Dispatch()
@@ -71,19 +85,21 @@ namespace MicromegasTracing
 		size_t MetricBufferSize,
 		size_t ThreadBufferSize,
 		size_t NetBufferSize,
+		size_t ImageBufferSize,
 		ENetTraceVerbosity NetVerbosity)
 	{
 		if (GDispatch)
 		{
 			return;
 		}
-		GDispatch = new Dispatch(AllocNewGuid, ProcessInfo, Sink, LogBufferSize, MetricBufferSize, ThreadBufferSize, NetBufferSize, NetVerbosity);
+		GDispatch = new Dispatch(AllocNewGuid, ProcessInfo, Sink, LogBufferSize, MetricBufferSize, ThreadBufferSize, NetBufferSize, ImageBufferSize, NetVerbosity);
 		GDispatch->NetWriter->InitStream(ProcessInfo->ProcessId, AllocNewGuid(), ProcessInfo->StartTime);
 
 		Sink->OnStartup(ProcessInfo);
 		Sink->OnInitLogStream(GDispatch->LogEntries);
 		Sink->OnInitMetricStream(GDispatch->Metrics);
 		Sink->OnInitNetStream(GDispatch->NetWriter->GetStream());
+		Sink->OnInitImageStream(GDispatch->Images);
 	}
 
 	void Dispatch::FlushLogStreamImpl(UE::FMutex& Mutex)
@@ -124,6 +140,58 @@ namespace MicromegasTracing
 		FullBlock->Close(Now);
 		Mutex.Unlock();
 		Sink->OnProcessMetricBlock(FullBlock);
+	}
+
+	void Dispatch::FlushImageStreamImpl(UE::FMutex& Mutex)
+	{
+		MICROMEGAS_SPAN_FUNCTION("MicromegasTracing");
+		if (Images->GetCurrentBlock().IsEmpty())
+		{
+			Mutex.Unlock();
+			return;
+		}
+		DualTime Now = DualTime::Now();
+		size_t NewOffset = Images->GetCurrentBlock().GetOffset() + Images->GetCurrentBlock().GetEvents().GetNbEvents();
+		ImageBlockPtr NewBlock = MakeShared<ImageBlock>(Images->GetStreamId(),
+			Now,
+			ImageBufferSize,
+			NewOffset);
+		ImageBlockPtr FullBlock = Images->SwapBlocks(NewBlock);
+		FullBlock->Close(Now);
+		Mutex.Unlock();
+		Sink->OnProcessImageBlock(FullBlock);
+	}
+
+	void Dispatch::FlushImageStream()
+	{
+		Dispatch* Dispatch = GDispatch;
+		if (!Dispatch)
+		{
+			return;
+		}
+		Dispatch->ImageMutex.Lock();
+		Dispatch->FlushImageStreamImpl(Dispatch->ImageMutex); // unlocks the mutex
+	}
+
+	void Dispatch::SendImage(const TCHAR* Name, const TCHAR* Format, const uint8* Data, uint32 DataBytes)
+	{
+		Dispatch* Dispatch = GDispatch;
+		if (!Dispatch)
+		{
+			return;
+		}
+		uint64 Timestamp = DualTime::Now().Timestamp;
+		ImageEvent Event(Timestamp, DynamicString(Name), DynamicString(Format), DynamicBlob(Data, DataBytes));
+		Dispatch->ImageMutex.Lock();
+		Dispatch->Images->GetCurrentBlock().GetEvents().Push(Event);
+		if (Dispatch->Images->IsFull())
+		{
+			Dispatch->FlushImageStreamImpl(Dispatch->ImageMutex); // unlocks the mutex
+		}
+		else
+		{
+			Dispatch->ImageMutex.Unlock();
+		}
 	}
 
 	void Dispatch::FlushThreadStream(ThreadStream* Stream)

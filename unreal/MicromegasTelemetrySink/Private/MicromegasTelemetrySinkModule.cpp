@@ -9,6 +9,7 @@
 #include "MicromegasTracing/Dispatch.h"
 #include "Misc/CoreDelegates.h"
 #include "SamplingController.h"
+#include "ScreenshotSender.h"
 #include "SystemErrorReporter.h"
 #include "Templates/UniquePtr.h"
 
@@ -35,6 +36,7 @@ private:
 
 	TUniquePtr<FAutoConsoleCommand> CmdEnable;
 	TUniquePtr<FAutoConsoleCommand> CmdFlush;
+	FScreenshotSender ScreenshotSender;
 	FString UploadBaseUrl;
 	SharedTelemetryAuthenticator Authenticator;
 	SharedSamplingController SamplingController;
@@ -79,6 +81,7 @@ void FMicromegasTelemetrySinkModule::OnEnable()
 
 void FMicromegasTelemetrySinkModule::OnFlush() const
 {
+	MICROMEGAS_SPAN_FUNCTION("MicromegasTelemetrySink");
 	if (Flusher.IsValid())
 	{
 		Flusher->Flush();
