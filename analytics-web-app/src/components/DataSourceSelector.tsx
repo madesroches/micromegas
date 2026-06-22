@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect } from 'react'
 import { Database, AlertCircle } from 'lucide-react'
 import { getDataSourceList, DataSourceSummary } from '@/lib/data-sources-api'
 
@@ -64,33 +64,28 @@ export function DataSourceSelector({ value, onChange, datasourceVariables, showN
 
   const hasVariables = datasourceVariables && datasourceVariables.length > 0
 
-  // Keep a ref to onChange so the sync effect always calls the latest callback
-  const onChangeRef = useRef(onChange)
-  onChangeRef.current = onChange
-
-  // Build the flat list of option values so we can detect mismatches
+  // Build the flat list of known option values so we can detect a value that
+  // isn't among them (a $var whose variable isn't in scope, or a literal data
+  // source that no longer exists).
   const optionValues: string[] = []
   if (showNotebookOption) optionValues.push('notebook')
   if (hasVariables) {
     for (const name of datasourceVariables) optionValues.push(`$${name}`)
   }
   for (const s of sources) optionValues.push(s.name)
-  const optionValuesKey = optionValues.join('\0')
 
-  // If the current value doesn't match any option, the <select> silently shows
-  // the first option without firing onChange. Sync the config to match.
-  // Only run after sources have loaded to avoid overwriting valid values during async fetch.
-  useEffect(() => {
-    if (!sourcesLoaded) return
-    // Never auto-rewrite a variable reference ($var). The set of known variables
-    // is context-dependent (e.g. it may not list siblings while editing inside a
-    // group), and rewriting would silently destroy the user's binding. Variable
-    // references are resolved gracefully at render time instead.
-    if (value.startsWith('$')) return
-    if (optionValues.length > 0 && !optionValues.includes(value)) {
-      onChangeRef.current(optionValues[0])
-    }
-  }, [value, optionValuesKey, sourcesLoaded]) // eslint-disable-line react-hooks/exhaustive-deps
+  // A controlled <select> whose value matches no <option> silently displays the
+  // first option, hiding the real config. Rather than rewrite the config to match
+  // the display (which silently destroys the user's binding — a deleted source or
+  // an out-of-scope $var), surface the current value as its own option so the
+  // control shows the truth and the mismatch stays visible. Only treat the value
+  // as unknown once sources have loaded, to avoid flashing it during the fetch.
+  const isUnknownValue = sourcesLoaded && !!value && !optionValues.includes(value)
+  const currentValueOption = isUnknownValue ? (
+    <option key="__current__" value={value}>
+      {value.startsWith('$') ? value : `${value} (unavailable)`}
+    </option>
+  ) : null
 
   if (error) {
     return (
@@ -118,6 +113,7 @@ export function DataSourceSelector({ value, onChange, datasourceVariables, showN
         value={value}
         onChange={(e) => onChange(e.target.value)}
       >
+        {currentValueOption}
         {hasVariables ? (
           <>
             {notebookOption}

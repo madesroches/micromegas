@@ -51,9 +51,9 @@ describe('DataSourceSelector value sync', () => {
     expect(onChange).not.toHaveBeenCalled()
   })
 
-  it('rewrites a literal data source that no longer exists to the first option', async () => {
+  it('surfaces a literal data source that no longer exists instead of rewriting it', async () => {
     const onChange = jest.fn()
-    render(
+    const { findByText } = render(
       <DataSourceSelector
         value="deleted-source"
         onChange={onChange}
@@ -61,6 +61,25 @@ describe('DataSourceSelector value sync', () => {
         showNotebookOption
       />,
     )
-    await waitFor(() => expect(onChange).toHaveBeenCalledWith('notebook'))
+    // The unknown value is shown as its own option, marked unavailable...
+    expect(await findByText('deleted-source (unavailable)')).toBeInTheDocument()
+    // ...and the config is never silently rewritten.
+    await new Promise((r) => setTimeout(r, 0))
+    expect(onChange).not.toHaveBeenCalled()
+  })
+
+  it('surfaces an out-of-scope variable reference as a selectable option', async () => {
+    const onChange = jest.fn()
+    const { findByText } = render(
+      <DataSourceSelector
+        value="$source"
+        onChange={onChange}
+        datasourceVariables={[]}
+        showNotebookOption
+      />,
+    )
+    expect(await findByText('$source')).toBeInTheDocument()
+    await new Promise((r) => setTimeout(r, 0))
+    expect(onChange).not.toHaveBeenCalled()
   })
 })
