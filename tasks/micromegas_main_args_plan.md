@@ -67,7 +67,7 @@ Build `builder_calls: Vec<TokenStream>` (current pattern), driven by the parsed 
 
 1. `with_ctrlc_handling()` — emit only when `ctrlc_handling != false`
 2. `with_local_sink_enabled(false)` — emit only when `local_sink_enabled == false`
-3. `with_local_sink_max_level(…)` — always emit (default `LevelFilter::Debug`)
+3. `with_local_sink_max_level(…)` — always emit (default `LevelFilter::Debug`); note this is an intentional macro-level override of `TelemetryGuardBuilder::default()`'s `LevelFilter::Info`, preserving the current hardcoded behavior rather than silently changing it
 4. `with_install_log_capture(true)` — emit only when `install_log_capture == true`
 5. `with_system_metrics_enabled(false)` — emit only when `system_metrics == false`
 6. `with_telemetry_sink_url(…)` — emit when `telemetry_url` is set
@@ -106,8 +106,8 @@ No additional re-exports needed.
   - Each bool flag flipped from its default
   - `local_sink_max_level = "info"`
   - `telemetry_url` set
-  - `api_key` set (verify `with_auth_from_env` is NOT emitted)
   - `api_key` + `telemetry_url` together
+- Add a `macrotest` expansion snapshot test for the `api_key` case: run `macrotest::expand` on a fixture that sets `api_key`, then assert that the snapshot contains `ApiKeyRequestDecorator` and does **not** contain `with_auth_from_env`. This is the correct tool for inspecting expanded token streams; `trybuild` only validates compilation success/failure and cannot make that assertion.
 - Run `cargo test` in `rust/micromegas-proc-macros/` and in `rust/` (workspace) after the change.
 - Run `cargo clippy --workspace -- -D warnings` and `cargo fmt --check`.
 
