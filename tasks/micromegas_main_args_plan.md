@@ -65,7 +65,9 @@ parameters.
 
 ### Code-generation approach
 
-Build `builder_calls: Vec<TokenStream>` (current pattern), driven by the parsed values:
+Build `builder_calls: Vec<TokenStream>` (current pattern), driven by the parsed values. The
+vec is seeded with `with_process_property("version"…)` (unconditional, preserved from today)
+*before* the calls below:
 
 1. `with_ctrlc_handling()` — emit only when `ctrlc_handling != false`
 2. `with_local_sink_enabled(false)` — emit only when `local_sink_enabled == false`
@@ -85,6 +87,9 @@ Build `builder_calls: Vec<TokenStream>` (current pattern), driven by the parsed 
    whole emitted chain (not just the `api_key` branch) only compiles on non-wasm targets.
    Full wasm support for the macro is out of scope; no per-branch cfg gating is needed.
    When `api_key` is absent, emit `with_auth_from_env()` unconditionally (as today).
+8. After the auth branch, the chain ends with the existing unconditional
+   `with_max_level_override(…)` and `with_interop_max_level_override(…)` calls driven by the
+   two pre-existing parameters.
 
 The `ApiKeyRequestDecorator` is referenced fully-qualified in generated code:
 `micromegas::telemetry_sink::api_key_decorator::ApiKeyRequestDecorator`
@@ -96,7 +101,7 @@ No additional re-exports needed.
 ## Files to Modify
 
 - `rust/micromegas-proc-macros/src/lib.rs` — all parsing and code-gen changes, plus
-  updating the public rustdoc on `micromegas_main` (lines 24–51): add the 7 new attributes
+  updating the public rustdoc on `micromegas_main` (lines 9–64): add the 7 new attributes
   to the `# Parameters` section (with type/default) and extend the `# Examples` block to
   demonstrate at least one new parameter (e.g., `telemetry_url`/`api_key`). *(done)*
 
@@ -113,12 +118,12 @@ No additional re-exports needed.
 ## Testing Strategy
 
 - Before writing any tests:
-  - Install `cargo-expand` if not already present: `cargo install --locked cargo-expand` (required by `macrotest` at runtime). A `cargo install --locked cargo-expand` step must be added to the `native` job in `.github/workflows/rust.yml`, following the same pattern as the existing `cargo-machete` install step — `--locked` alone is sufficient for reproducibility, and no explicit `--version` pin is needed — without it, `macrotest` tests crash on fresh GitHub-hosted runners.
+  - Install `cargo-expand` if not already present: `cargo install --locked cargo-expand` (required by `macrotest` at runtime). A `cargo install --locked cargo-expand` step must be added to the `native` job in `.github/workflows/rust.yml`, alongside the existing `cargo-machete` install step (note cargo-expand adds `--locked`, which the cargo-machete step does not use) — `--locked` alone is sufficient for reproducibility, and no explicit `--version` pin is needed — without it, `macrotest` tests crash on fresh GitHub-hosted runners.
   - Create `rust/micromegas-proc-macros/tests/` (the project convention in CLAUDE.md requires tests under the crate's `tests/` folder — inline `#[test]` in `src/lib.rs` is not allowed).
   - Add to `[dev-dependencies]` in `rust/micromegas-proc-macros/Cargo.toml` (none are present today; trybuild and macrotest compile fixture crates that resolve paths like `micromegas_telemetry_sink::api_key_decorator::…` and `tokio::runtime::Builder` against the host crate's dev-dependencies). List them alphabetically per the Cargo.toml convention:
     - `macrotest = "1"` — explicit version, since it is not in `[workspace.dependencies]` (matching the existing `wiremock = "0.6"` pattern in `public/Cargo.toml`).
     - `micromegas-telemetry-sink.workspace = true` — already in `[workspace.dependencies]`. Depend on `micromegas-telemetry-sink` directly (not the umbrella `micromegas` crate) to avoid the dev-dependency cycle `proc-macros → micromegas (dev) → proc-macros (normal)`, since `micromegas` depends on `micromegas-proc-macros` (`rust/public/Cargo.toml:46`). The fixtures' own imports therefore use `micromegas_telemetry_sink::…` rather than `micromegas::telemetry_sink::…`. Note this is independent of the macro's generated output, which must keep resolving against the end user's crate as `micromegas::telemetry_sink::…` (see the Code-generation section); only the test fixtures resolve against these dev-dependencies.
-    - `micromegas-tracing = { workspace = true, features = ["tokio"] }` — already in `[workspace.dependencies]`. Required for trybuild fixtures to compile: the fixtures declare a `mod micromegas` preamble that re-exports `micromegas_tracing::runtime`, which `micromegas-telemetry-sink` does not re-export transitively.
+    - `micromegas-tracing = { workspace = true, features = ["tokio"] }` — already in `[workspace.dependencies]`. Required for trybuild fixtures to compile: the fixtures declare a `mod micromegas` preamble that re-exports `telemetry_sink`, `tracing::levels`, and `tracing::runtime`; the `levels` and `runtime` modules come from `micromegas-tracing`, which `micromegas-telemetry-sink` does not re-export transitively.
     - `tokio = { workspace = true }` — already in `[workspace.dependencies]`.
     - `trybuild = "1"` — explicit version, same rationale as `macrotest`.
 - Add a compile-test (using `trybuild`) covering:
@@ -127,6 +132,7 @@ No additional re-exports needed.
   - `local_sink_max_level = "info"`
   - `telemetry_url` set
   - `api_key` + `telemetry_url` together
+  - Compile-fail cases: an invalid bool type (`bad_ctrlc_type.rs`) and an unknown argument (`bad_unknown_arg.rs`)
 - Add a `macrotest` expansion snapshot test for the `api_key` case: write a `.rs` fixture that sets `api_key`, then run `cargo test` once to let `macrotest::expand` generate the corresponding `.expanded.rs` snapshot file. The test calls only `macrotest::expand` on the fixture; correctness of the expansion (that it contains `ApiKeyRequestDecorator` and not `with_auth_from_env`) is enforced by the checked-in `.expanded.rs` snapshot, which `macrotest` compares the full expanded output against on every run. This is the correct `macrotest` workflow; `macrotest` has no API to assert on snapshot contents directly — it only compares against the saved file.
 - Run `cargo test` in `rust/micromegas-proc-macros/` and in `rust/` (workspace) after the change.
 - Run `cargo clippy --workspace -- -D warnings` and `cargo fmt --check`.
