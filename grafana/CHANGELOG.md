@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.26.0 (2026-06-23)
+
+Version sync release. Security fixes from Dependabot dependency bumps (#1157, #1152, #1150).
+
 ## 0.25.0 (2026-05-23)
 
 Version sync release. Yarn 1 → Yarn 4 (Berry) migration via corepack (#1046). Security fixes from Dependabot dependency bumps (#1040).

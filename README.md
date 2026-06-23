@@ -71,19 +71,26 @@ To get started with Micromegas, please refer to the [Getting Started](https://mi
 ## Current Status & Roadmap
 
 ### Unreleased
+
+### v0.26.0 (June 2026)
 * `micromegas-monolith`: single-process deployment running all roles (`ingestion`, `analytics`, `web`, `admin`) in one binary — simplifies self-hosted and single-machine deployments
-* Graceful shutdown for all services
-* Deep `/ready` readiness probe for all services
-* OTLP/JSON content-type support alongside existing protobuf ingestion
-* jemalloc global allocator for production services
+* Image streams: instrumented apps can send screenshots as telemetry via `send_image()`; queryable via the `images` SQL table; Unreal `telemetry.screenshot` console command with `telemetry.images.enable` CVar
+* `#[micromegas_main]` extended with optional arguments (`ctrlc_handling`, `local_sink_enabled`, `local_sink_max_level`, `install_log_capture`, `system_metrics`, `telemetry_url`, `api_key`) for inline `TelemetryGuardBuilder` configuration
+* Resilient Unreal telemetry sink: `FHttpRetrySystem` with exponential backoff, four priority queues (Metadata/Logs/Metrics/Traces), idle-aware spike sampling, `TimeSinceLastInput` metric
+* ARM64 cross-compilation support in all production Dockerfiles; `build_docker_images.py --arm64` flag
+* Deep `/ready` readiness probe for all services (PostgreSQL pool + blob storage verification, 503 on unhealthy)
+* Graceful SIGTERM shutdown for all services with configurable drain period
+* jemalloc global allocator for all production service binaries
+* Image notebook cell: carousel viewer for images stored in the `images` view
 * Chart threshold indicators: reference lines, per-row colors, series color assignment
 * Map cell: orthographic camera mode, camera-relative keyboard controls, hover tooltip preview for markers
-* Swimlane cell: optional color column, label text on bars
-* Log cell: resizable columns, one-click copy for log rows
-* `make_histogram` accepts runtime scalar bounds
-* `format_value()` template function for adaptive unit formatting in detail templates
-* Batched expiry pipeline: bounded memory and transaction sizes for partition retirement, block deletion, and temporary-file cleanup
-* DataFusion 53.1; react-router 6.30.4 (CVE), esbuild 0.28.1 (security)
+* Swimlane cell: optional color and label columns
+* Log cell: resizable columns, one-click copy icon
+* OTLP/JSON content-type support (`application/json`) on all three OTLP/HTTP routes
+* `make_histogram` accepts runtime scalar bounds (CTEs, subqueries, CROSS JOIN columns)
+* `format_value(value, unit)` template function for adaptive unit formatting in detail templates
+* Batched expiry pipeline: bounded memory and transaction sizes for partition retirement, block deletion, and temporary-file cleanup; `DELETE…RETURNING` for atomic operation
+* DataFusion 53.1; react-router 6.30.4 (CVE), esbuild 0.28.1, dompurify 3.4.11, undici ≥6.27.0 security updates
 
 ### v0.25.0 (May 2026)
 * Native OTLP/HTTP ingestion for logs, metrics, and traces with `otel_spans` JIT view
