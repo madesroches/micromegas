@@ -4,6 +4,8 @@ This file documents the historical progress of the Micromegas project. For curre
 
 ## Unreleased
 
+## June 2026 - v0.26.0
+
 * **Security:**
   * Fix 24 Dependabot alerts: bump undici to ≥6.27.0 (resolves to 8.5.0) across all yarn workspaces (analytics-web-app, welcome, doc/intro-micromegas, doc/notebooks, doc/unified-observability-for-games, root) (#335, #334, #333, #332, #331, #330, #329, #328, #327, #326, #325, #324, #323, #322, #321, #320, #319, #318, #317, #316, #315, #314, #313, #312)
   * Fix 20 Dependabot alerts: bump protobufjs (≥7.6.3), tar (7.5.16), js-yaml (4.2.0), @babel/core (≥7.29.6), ws (8.21.0) across all npm workspaces; bump vite (≥7.3.5) in doc workspaces; bump cryptography (49.0.0) in Python; bump chi (5.2.4) in Grafana backend (#311, #310, #309, #308, #307, #306, #305, #304, #303, #302, #301, #300, #299, #298, #297, #296, #295, #294, #293, #292)
