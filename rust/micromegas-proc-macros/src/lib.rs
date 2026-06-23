@@ -68,34 +68,44 @@ pub fn micromegas_main(
     args: proc_macro::TokenStream,
     input: proc_macro::TokenStream,
 ) -> proc_macro::TokenStream {
-    expand_micromegas_main(args.into(), input.into()).into()
+    expand_micromegas_main(args.into(), input.into())
+        .unwrap_or_else(|err| err.to_compile_error())
+        .into()
 }
 
-fn expand_micromegas_main(args: TokenStream, input: TokenStream) -> TokenStream {
+fn expand_micromegas_main(
+    args: TokenStream,
+    input: TokenStream,
+) -> Result<TokenStream, syn::Error> {
     use syn::parse::Parser;
 
     let args: Vec<NestedMeta> =
         syn::punctuated::Punctuated::<NestedMeta, syn::Token![,]>::parse_terminated
-            .parse2(args)
-            .expect("Failed to parse macro arguments")
+            .parse2(args)?
             .into_iter()
             .collect();
 
-    let function: ItemFn = syn::parse2(input).expect("Failed to parse function");
+    let function: ItemFn = syn::parse2(input)?;
 
     if function.sig.asyncness.is_none() {
-        panic!("micromegas_main can only be applied to async functions");
+        return Err(syn::Error::new_spanned(
+            function.sig.fn_token,
+            "micromegas_main can only be applied to async functions",
+        ));
     }
 
     if function.sig.ident != "main" {
-        panic!("micromegas_main can only be applied to the main function");
+        return Err(syn::Error::new_spanned(
+            &function.sig.ident,
+            "micromegas_main can only be applied to the main function",
+        ));
     }
 
-    let mut interop_max_level: Option<String> = None;
-    let mut max_level_override: Option<String> = None;
+    let mut interop_max_level: Option<syn::LitStr> = None;
+    let mut max_level_override: Option<syn::LitStr> = None;
     let mut ctrlc_handling: bool = true;
     let mut local_sink_enabled: bool = true;
-    let mut local_sink_max_level: Option<String> = None;
+    let mut local_sink_max_level: Option<syn::LitStr> = None;
     let mut install_log_capture: bool = false;
     let mut system_metrics: bool = true;
     let mut telemetry_url: Option<String> = None;
@@ -104,79 +114,109 @@ fn expand_micromegas_main(args: TokenStream, input: TokenStream) -> TokenStream 
     for arg in args {
         match arg {
             NestedMeta::Meta(Meta::NameValue(nv)) if nv.path.is_ident("interop_max_level") => {
-                if let Lit::Str(lit_str) = nv.lit {
-                    interop_max_level = Some(lit_str.value());
+                if let Lit::Str(lit_str) = &nv.lit {
+                    interop_max_level = Some(lit_str.clone());
                 } else {
-                    panic!("interop_max_level must be a string literal");
+                    return Err(syn::Error::new_spanned(
+                        &nv.lit,
+                        "interop_max_level must be a string literal",
+                    ));
                 }
             }
             NestedMeta::Meta(Meta::NameValue(nv)) if nv.path.is_ident("max_level_override") => {
-                if let Lit::Str(lit_str) = nv.lit {
-                    max_level_override = Some(lit_str.value());
+                if let Lit::Str(lit_str) = &nv.lit {
+                    max_level_override = Some(lit_str.clone());
                 } else {
-                    panic!("max_level_override must be a string literal");
+                    return Err(syn::Error::new_spanned(
+                        &nv.lit,
+                        "max_level_override must be a string literal",
+                    ));
                 }
             }
             NestedMeta::Meta(Meta::NameValue(nv)) if nv.path.is_ident("ctrlc_handling") => {
-                if let Lit::Bool(lit_bool) = nv.lit {
+                if let Lit::Bool(lit_bool) = &nv.lit {
                     ctrlc_handling = lit_bool.value();
                 } else {
-                    panic!("ctrlc_handling must be a bool literal");
+                    return Err(syn::Error::new_spanned(
+                        &nv.lit,
+                        "ctrlc_handling must be a bool literal",
+                    ));
                 }
             }
             NestedMeta::Meta(Meta::NameValue(nv)) if nv.path.is_ident("local_sink_enabled") => {
-                if let Lit::Bool(lit_bool) = nv.lit {
+                if let Lit::Bool(lit_bool) = &nv.lit {
                     local_sink_enabled = lit_bool.value();
                 } else {
-                    panic!("local_sink_enabled must be a bool literal");
+                    return Err(syn::Error::new_spanned(
+                        &nv.lit,
+                        "local_sink_enabled must be a bool literal",
+                    ));
                 }
             }
             NestedMeta::Meta(Meta::NameValue(nv)) if nv.path.is_ident("local_sink_max_level") => {
-                if let Lit::Str(lit_str) = nv.lit {
-                    local_sink_max_level = Some(lit_str.value());
+                if let Lit::Str(lit_str) = &nv.lit {
+                    local_sink_max_level = Some(lit_str.clone());
                 } else {
-                    panic!("local_sink_max_level must be a string literal");
+                    return Err(syn::Error::new_spanned(
+                        &nv.lit,
+                        "local_sink_max_level must be a string literal",
+                    ));
                 }
             }
             NestedMeta::Meta(Meta::NameValue(nv)) if nv.path.is_ident("install_log_capture") => {
-                if let Lit::Bool(lit_bool) = nv.lit {
+                if let Lit::Bool(lit_bool) = &nv.lit {
                     install_log_capture = lit_bool.value();
                 } else {
-                    panic!("install_log_capture must be a bool literal");
+                    return Err(syn::Error::new_spanned(
+                        &nv.lit,
+                        "install_log_capture must be a bool literal",
+                    ));
                 }
             }
             NestedMeta::Meta(Meta::NameValue(nv)) if nv.path.is_ident("system_metrics") => {
-                if let Lit::Bool(lit_bool) = nv.lit {
+                if let Lit::Bool(lit_bool) = &nv.lit {
                     system_metrics = lit_bool.value();
                 } else {
-                    panic!("system_metrics must be a bool literal");
+                    return Err(syn::Error::new_spanned(
+                        &nv.lit,
+                        "system_metrics must be a bool literal",
+                    ));
                 }
             }
             NestedMeta::Meta(Meta::NameValue(nv)) if nv.path.is_ident("telemetry_url") => {
-                if let Lit::Str(lit_str) = nv.lit {
+                if let Lit::Str(lit_str) = &nv.lit {
                     telemetry_url = Some(lit_str.value());
                 } else {
-                    panic!("telemetry_url must be a string literal");
+                    return Err(syn::Error::new_spanned(
+                        &nv.lit,
+                        "telemetry_url must be a string literal",
+                    ));
                 }
             }
             NestedMeta::Meta(Meta::NameValue(nv)) if nv.path.is_ident("api_key") => {
-                if let Lit::Str(lit_str) = nv.lit {
+                if let Lit::Str(lit_str) = &nv.lit {
                     api_key = Some(lit_str.value());
                 } else {
-                    panic!("api_key must be a string literal");
+                    return Err(syn::Error::new_spanned(
+                        &nv.lit,
+                        "api_key must be a string literal",
+                    ));
                 }
             }
-            _ => panic!(
-                "Unsupported attribute argument. Supported: api_key, ctrlc_handling, install_log_capture, interop_max_level, local_sink_enabled, local_sink_max_level, max_level_override, system_metrics, telemetry_url"
-            ),
+            other => {
+                return Err(syn::Error::new_spanned(
+                    &other,
+                    "Unsupported attribute argument. Supported: api_key, ctrlc_handling, install_log_capture, interop_max_level, local_sink_enabled, local_sink_max_level, max_level_override, system_metrics, telemetry_url",
+                ));
+            }
         }
     }
 
     let original_block = &function.block;
     let return_type = &function.sig.output;
 
-    let level_to_filter = |level: &str| -> TokenStream {
-        match level.to_lowercase().as_str() {
+    let level_to_filter = |lit: &syn::LitStr| -> Result<TokenStream, syn::Error> {
+        Ok(match lit.value().to_lowercase().as_str() {
             "trace" => quote! { micromegas::tracing::levels::LevelFilter::Trace },
             "debug" => quote! { micromegas::tracing::levels::LevelFilter::Debug },
             "info" => quote! { micromegas::tracing::levels::LevelFilter::Info },
@@ -184,9 +224,12 @@ fn expand_micromegas_main(args: TokenStream, input: TokenStream) -> TokenStream 
             "error" => quote! { micromegas::tracing::levels::LevelFilter::Error },
             "off" => quote! { micromegas::tracing::levels::LevelFilter::Off },
             _ => {
-                panic!("Invalid level value. Must be one of: trace, debug, info, warn, error, off")
+                return Err(syn::Error::new_spanned(
+                    lit,
+                    "Invalid level value. Must be one of: trace, debug, info, warn, error, off",
+                ));
             }
-        }
+        })
     };
 
     let mut builder_calls = vec![quote! {
@@ -202,8 +245,10 @@ fn expand_micromegas_main(args: TokenStream, input: TokenStream) -> TokenStream 
     }
 
     {
-        let level_str = local_sink_max_level.as_deref().unwrap_or("debug");
-        let level_filter = level_to_filter(level_str);
+        let level_filter = match &local_sink_max_level {
+            Some(lit) => level_to_filter(lit)?,
+            None => quote! { micromegas::tracing::levels::LevelFilter::Debug },
+        };
         builder_calls.push(quote! { .with_local_sink_max_level(#level_filter) });
     }
 
@@ -229,13 +274,13 @@ fn expand_micromegas_main(args: TokenStream, input: TokenStream) -> TokenStream 
         builder_calls.push(quote! { .with_auth_from_env() });
     }
 
-    if let Some(level) = max_level_override {
-        let level_filter = level_to_filter(&level);
+    if let Some(lit) = &max_level_override {
+        let level_filter = level_to_filter(lit)?;
         builder_calls.push(quote! { .with_max_level_override(#level_filter) });
     }
 
-    if let Some(level) = interop_max_level {
-        let level_filter = level_to_filter(&level);
+    if let Some(lit) = &interop_max_level {
+        let level_filter = level_to_filter(lit)?;
         builder_calls.push(quote! { .with_interop_max_level_override(#level_filter) });
     }
 
@@ -245,7 +290,7 @@ fn expand_micromegas_main(args: TokenStream, input: TokenStream) -> TokenStream 
             .build()
     };
 
-    quote! {
+    Ok(quote! {
         fn main() #return_type {
             let cpu_tracing_enabled = std::env::var("MICROMEGAS_ENABLE_CPU_TRACING")
                 .map(|v| v == "true")
@@ -268,7 +313,7 @@ fn expand_micromegas_main(args: TokenStream, input: TokenStream) -> TokenStream 
                 #original_block
             })
         }
-    }
+    })
 }
 
 #[cfg(test)]
@@ -278,7 +323,9 @@ mod tests {
 
     fn expand(args: proc_macro2::TokenStream) -> String {
         let input = quote! { async fn main() {} };
-        expand_micromegas_main(args, input).to_string()
+        expand_micromegas_main(args, input)
+            .expect("expansion should succeed")
+            .to_string()
     }
 
     #[test]
@@ -332,15 +379,42 @@ mod tests {
         assert!(out.contains("LevelFilter :: Info"));
     }
 
-    #[test]
-    #[should_panic(expected = "ctrlc_handling must be a bool literal")]
-    fn bad_ctrlc_type_panics() {
-        expand(quote! { ctrlc_handling = "not_a_bool" });
+    fn expand_err(args: proc_macro2::TokenStream) -> syn::Error {
+        let input = quote! { async fn main() {} };
+        expand_micromegas_main(args, input).expect_err("expansion should fail")
     }
 
     #[test]
-    #[should_panic(expected = "Unsupported attribute argument")]
-    fn unknown_arg_panics() {
-        expand(quote! { unknown_arg = true });
+    fn bad_ctrlc_type_is_error() {
+        let err = expand_err(quote! { ctrlc_handling = "not_a_bool" });
+        assert_eq!(err.to_string(), "ctrlc_handling must be a bool literal");
+    }
+
+    #[test]
+    fn unknown_arg_is_error() {
+        let err = expand_err(quote! { unknown_arg = true });
+        assert!(err.to_string().contains("Unsupported attribute argument"));
+    }
+
+    #[test]
+    fn invalid_level_is_error() {
+        let err = expand_err(quote! { max_level_override = "verbose" });
+        assert!(err.to_string().contains("Invalid level value"));
+    }
+
+    #[test]
+    fn non_async_fn_is_error() {
+        let err = expand_micromegas_main(quote! {}, quote! { fn main() {} })
+            .expect_err("non-async main should fail");
+        assert!(err.to_string().contains("async functions"));
+    }
+
+    #[test]
+    fn malformed_args_is_error() {
+        // Garbage tokens that are not valid attribute meta items.
+        let err = expand_micromegas_main(quote! { = = = }, quote! { async fn main() {} })
+            .expect_err("malformed args should fail");
+        // A parse error carries a span-anchored message rather than a panic.
+        assert!(!err.to_string().is_empty());
     }
 }
