@@ -71,8 +71,9 @@ Build `builder_calls: Vec<TokenStream>` (current pattern), driven by the parsed 
 4. `with_install_log_capture(true)` — emit only when `install_log_capture == true`
 5. `with_system_metrics_enabled(false)` — emit only when `system_metrics == false`
 6. `with_telemetry_sink_url(…)` — emit when `telemetry_url` is set
-7. Auth — emit `with_request_decorator(ApiKeyRequestDecorator::new(…))` when `api_key`
-   is set, else emit `with_auth_from_env()`
+7. Auth — when `api_key` is set, emit
+   `.with_request_decorator(Box::new(move || Arc::new(micromegas::telemetry_sink::api_key_decorator::ApiKeyRequestDecorator::new(#api_key.to_string()))))`
+   else emit `with_auth_from_env()`
 
 The `ApiKeyRequestDecorator` import path in generated code:
 `micromegas::telemetry_sink::api_key_decorator::ApiKeyRequestDecorator`
@@ -97,7 +98,10 @@ No additional re-exports needed.
 
 ## Testing Strategy
 
-- Add a compile-test (using `trybuild` or a simple `#[test]` that expands the macro) covering:
+- Before writing any tests:
+  - Create `rust/micromegas-proc-macros/tests/` (the project convention in CLAUDE.md requires tests under the crate's `tests/` folder — inline `#[test]` in `src/lib.rs` is not allowed).
+  - Add `trybuild` to `[dev-dependencies]` in `rust/micromegas-proc-macros/Cargo.toml` (it is not present today).
+- Add a compile-test (using `trybuild`) covering:
   - Default (no args) — existing behaviour unchanged
   - Each bool flag flipped from its default
   - `local_sink_max_level = "info"`
