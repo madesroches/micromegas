@@ -9,7 +9,7 @@ Give the team visibility into Blender stability and performance by emitting logs
 - `micromegas` (`rust/public/`) is the sanctioned user-facing crate. Its **default feature set pulls in only the producer side** — `micromegas-telemetry`, `micromegas-telemetry-sink`, `micromegas-tracing` (`rust/public/Cargo.toml:43-49`). The analytics/DataFusion/object_store/server stack is entirely behind the optional `server` feature (`rust/public/Cargo.toml:15-41`), so a `default-features` dependency does **not** drag the query engine into a shipped library.
 - Initialization is an RAII guard: `TelemetryGuardBuilder` → `TelemetryGuard` (`rust/telemetry-sink/src/lib.rs`). Builder options include `.with_telemetry_sink_url()`, `.with_auth_from_env()` (API key or OIDC from env), `.with_process_properties()`, `.with_system_metrics_enabled()`. Dropping the guard flushes buffers and shuts down the background thread.
 - Transport already runs on its **own OS thread**: `HttpEventSink` spawns `std::thread` that owns a private `tokio::runtime::Runtime` (`rust/telemetry-sink/src/http_event_sink.rs:562`). Event recording (`dispatch::log`, `dispatch::int_metric`, `dispatch::float_metric`, `dispatch::on_begin_named_scope`/`on_end_named_scope` in `rust/tracing/src/dispatch.rs`) is **fully synchronous and thread-safe** — callers need no async runtime. This is the "embed a native part that owns its own thread" property we want, already implemented.
-- Event metadata uses `&'static str` (`LogMetadata` in `rust/tracing/src/logs/events.rs`, `StaticMetricMetadata` in `rust/tracing/src/metrics/events.rs`, `SpanMetadata` in `rust/tracing/src/spans/events.rs`). Log *message* bodies are passed as `fmt::Arguments` and may be runtime strings; only the *metadata* (target, metric/span name, unit) must be `'static`. This shapes the FFI design (see below).
+- Event metadata uses `&'static str` (`LogMetadata` in `rust/tracing/src/logs/events.rs`, `StaticMetricMetadata` in `rust/tracing/src/metrics/events.rs`). Log *message* bodies are passed as `fmt::Arguments` and may be runtime strings; only the *metadata* (target, metric name, unit) must be `'static`. This shapes the FFI design (see below).
 
 ### What does not exist yet
 - **No FFI / C ABI in the repo.** No `extern "C"`, `#[no_mangle]`, or cbindgen usage. The only `cdylib` is `rust/datafusion-wasm/` (WASM, unrelated). This is greenfield.
@@ -64,14 +64,16 @@ void       mm_shutdown(mm_handle*);         // drops guard -> flush + join bg th
 void mm_log   (mm_handle*, int level, const char* target, const char* msg);
 void mm_metric_i(mm_handle*, const char* name, const char* unit, uint64_t value);
 void mm_metric_f(mm_handle*, const char* name, const char* unit, double  value);
-void mm_span_begin(mm_handle*, const char* name);
-void mm_span_end  (mm_handle*, const char* name);
 void mm_breadcrumb(mm_handle*, const char* kind, const char* payload); // phase 2: durable
 void mm_flush  (mm_handle*);
 ```
 `mm_config` carries sink URL, optional auth fields, and process properties (key/value array); the shim maps it to `TelemetryGuardBuilder` calls.
 
-**Static-string handling (the one real wrinkle).** `dispatch::log`/`int_metric`/`span` require `&'static` metadata, but Python passes runtime strings. The shim maintains a small interner (`Mutex<HashMap<…, &'static …>>` using `Box::leak`) for `target`, metric `name`/`unit`, and span `name`. Log message bodies need no interning — they go through `format_args!("{}", msg)`. Interning is safe **because these are low-cardinality by design** (a bounded set of operator names, metric names, units); the cardinality discipline below is what keeps the leak bounded. The shim should expose this contract clearly so callers don't intern unbounded values.
+**Static-metadata handling (the one real wrinkle).** The metric dispatch entry points do not take loose `&'static str` — they take a whole leaked `&'static` metadata struct: `dispatch::int_metric`/`float_metric` take `&'static StaticMetricMetadata` (`rust/tracing/src/metrics/events.rs:5-12`: `lod/name/unit/target/file/line`). So the shim cannot just intern strings; for **metrics** it must construct and `Box::leak` the *entire* metadata struct (filling the non-string fields — `lod`, synthetic `file`/`line`) and cache it behind a `Mutex<HashMap<…, &'static StaticMetricMetadata>>` keyed by the struct's string fields (`(name, unit, target)`). Interning is safe **because these are low-cardinality by design** (a bounded set of metric names, units); the cardinality discipline below is what keeps the leak bounded. The shim should expose this contract clearly so callers don't intern unbounded values. (Spans are out of scope — see below — so no `SpanLocation` leaking is required.)
+
+**Logs avoid the leak entirely.** `dispatch::log_interop(metadata: &LogMetadata, args)` (`rust/tracing/src/dispatch.rs:145`) takes a **non-`'static`** `&LogMetadata`, which is exactly how the Unreal sink ships runtime log level/category/message. For `mm_log` — where `level`/`target`/`message` are all runtime values — the shim builds a `LogMetadata` on the stack and calls `log_interop`, so **no per-log metadata is leaked** and the awkward `LogMetadata<'a>` lifetime parameter (`rust/tracing/src/logs/events.rs:5-13`, which also carries an `AtomicU32 level_filter`) never has to be coerced to `'static`. Message bodies go through `format_args!("{}", msg)`. Interning/leaking is reserved for metrics only.
+
+**Spans are out of scope.** This extension emits **logs and metrics only**; there is no span FFI (`mm_span_begin`/`mm_span_end`) and no span Python API. Span support — which would require constructing and leaking `&'static SpanLocation` (`rust/tracing/src/spans/events.rs:4-10`) and pairing it with the dispatch scope API (`dispatch::on_begin_named_scope`/`on_end_named_scope`, `rust/tracing/src/dispatch.rs:275,284`) — is deferred to Future Work.
 
 Metrics are handled by this same interner — there is no need for a dynamic per-measurement property API. The set of distinct metrics is small and bounded, so any dimension a metric needs is either baked into a bounded set of metric names or carried as an interned property string; both are bounded and safe to leak. Metric emission is therefore just `int_metric`/`float_metric` over interned `(name, unit)`, identical in spirit to interned log targets.
 
@@ -97,7 +99,7 @@ Phased, gated on evidence:
 ### Phase 1 — Native SDK foundation
 1. Create `rust/capi/` crate (`micromegas-capi`), `crate-type = ["cdylib","staticlib"]`, dep `micromegas` default features. Register in `rust/Cargo.toml` workspace members.
 2. Implement `mm_init`/`mm_shutdown` over `TelemetryGuardBuilder`/`TelemetryGuard`, storing the guard behind the opaque handle.
-3. Implement the string interner and `mm_log`/`mm_metric_i`/`mm_metric_f`/`mm_span_begin`/`mm_span_end`/`mm_flush` over the `dispatch::*` functions.
+3. Implement `mm_log` over `dispatch::log_interop` (stack-built `LogMetadata`, no leak); implement the metadata interner (leaked `&'static StaticMetricMetadata` cached by string key) and `mm_metric_i`/`mm_metric_f`/`mm_flush` over the `dispatch::*` functions. (Spans are out of scope — no span FFI.)
 4. Generate a C header (cbindgen) and add a minimal C smoke test that inits, logs, and shuts down against a local ingestion server.
 
 ### Phase 2 — Blender add-on (logs + metrics)
@@ -133,7 +135,7 @@ Phased, gated on evidence:
 - New mkdocs page: the Blender add-on (install, configuration, what is captured, privacy/cardinality guarantees).
 
 ## Testing Strategy
-- **Rust C ABI:** unit tests in `rust/capi/tests/` plus a C smoke test linking the staticlib; init → log/metric/span → shutdown against a local ingestion server started via `local_test_env/ai_scripts/start_services.py`. Verify rows land via `micromegas-query`.
+- **Rust C ABI:** unit tests in `rust/capi/tests/` plus a C smoke test linking the staticlib; init → log/metric → shutdown against a local ingestion server started via `local_test_env/ai_scripts/start_services.py`. Verify rows land via `micromegas-query`.
 - **Add-on:** run Blender headless (`blender --background --python`) to exercise the binding, emit synthetic actions/metrics, and confirm ingestion. Manual interactive session to validate the modal recorder and handler coverage.
 - **Crash path:** force an abnormal exit, restart, confirm the harvester ships the prior crash file + breadcrumbs keyed to the right session fingerprint.
 - **Privacy:** test that the dimension allowlist drops disallowed/high-cardinality keys and that verbose params stay off by default.
@@ -150,5 +152,6 @@ Phased, gated on evidence:
 1. **Add-on location in the repo** — new top-level `blender/` directory (mirroring `unreal/`) vs elsewhere.
 
 ## Future Work (out of scope)
+- **Spans / scoped timings:** a span FFI (`mm_span_begin`/`mm_span_end`) and Python API, requiring leaked `&'static SpanLocation` paired with `dispatch::on_begin_named_scope`/`on_end_named_scope`. This extension ships logs + metrics only; spans are deferred.
 - **Native crash capture (Phase 2):** mmap'd durable breadcrumb ring buffer + out-of-process Crashpad minidumps with immediate upload. Pursued only if Phase-1 harvesting proves too lossy.
 - **Symbol server:** a symbol/PDB store keyed by Blender build hash, required to re-symbolize the minidumps from the Phase 2 work above. Deferred with that work.
