@@ -111,11 +111,12 @@ No additional re-exports needed.
 ## Testing Strategy
 
 - Before writing any tests:
-  - Install `cargo-expand` if not already present: `cargo install --locked cargo-expand` (required by `macrotest` at runtime; pin the version in CI).
+  - Install `cargo-expand` if not already present: `cargo install --locked cargo-expand` (required by `macrotest` at runtime; pin the version in CI). A `cargo install --locked cargo-expand --version <pinned>` step must be added to the `native` job in `.github/workflows/rust.yml`, following the same pattern as the existing `cargo-machete` install step — without it, `macrotest` tests crash on fresh GitHub-hosted runners.
   - Create `rust/micromegas-proc-macros/tests/` (the project convention in CLAUDE.md requires tests under the crate's `tests/` folder — inline `#[test]` in `src/lib.rs` is not allowed).
   - Add to `[dev-dependencies]` in `rust/micromegas-proc-macros/Cargo.toml` (none are present today; trybuild and macrotest compile fixture crates that resolve paths like `micromegas_telemetry_sink::api_key_decorator::…` and `tokio::runtime::Builder` against the host crate's dev-dependencies). List them alphabetically per the Cargo.toml convention:
     - `macrotest = "1"` — explicit version, since it is not in `[workspace.dependencies]` (matching the existing `wiremock = "0.6"` pattern in `public/Cargo.toml`).
     - `micromegas-telemetry-sink.workspace = true` — already in `[workspace.dependencies]`. Depend on `micromegas-telemetry-sink` directly (not the umbrella `micromegas` crate) to avoid the dev-dependency cycle `proc-macros → micromegas (dev) → proc-macros (normal)`, since `micromegas` depends on `micromegas-proc-macros` (`rust/public/Cargo.toml:46`). The fixtures' own imports therefore use `micromegas_telemetry_sink::…` rather than `micromegas::telemetry_sink::…`. Note this is independent of the macro's generated output, which must keep resolving against the end user's crate as `micromegas::telemetry_sink::…` (see the Code-generation section); only the test fixtures resolve against these dev-dependencies.
+    - `micromegas-tracing = { workspace = true, features = ["tokio"] }` — already in `[workspace.dependencies]`. Required for trybuild fixtures to compile: the fixtures declare a `mod micromegas` preamble that re-exports `micromegas_tracing::runtime`, which `micromegas-telemetry-sink` does not re-export transitively.
     - `tokio = { workspace = true }` — already in `[workspace.dependencies]`.
     - `trybuild = "1"` — explicit version, same rationale as `macrotest`.
 - Add a compile-test (using `trybuild`) covering:
