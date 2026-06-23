@@ -12,9 +12,9 @@ Give the team visibility into Blender stability and performance by emitting logs
 - Event metadata uses `&'static str` (`LogMetadata` in `rust/tracing/src/logs/events.rs`, `StaticMetricMetadata` in `rust/tracing/src/metrics/events.rs`). Log *message* bodies are passed as `fmt::Arguments` and may be runtime strings; only the *metadata* (target, metric name, unit) must be `'static`. This shapes the FFI design (see below).
 
 ### What does not exist yet
-- **No FFI / C ABI in the repo.** No `extern "C"`, `#[no_mangle]`, or cbindgen usage. The only `cdylib` is `rust/datafusion-wasm/` (WASM, unrelated). This is greenfield.
+- **No exported C ABI in the repo.** No `#[no_mangle]` exports and no cbindgen usage (the only `extern "C"` is an internal level-change callback typedef in `rust/tracing/src/levels.rs`). The only `cdylib` is `rust/datafusion-wasm/` (WASM, unrelated). This is greenfield.
 - **No crash/minidump ingestion.** The Unreal sink (`unreal/MicromegasTelemetrySink/.../SystemErrorReporter.cpp`) captures symbolized stack traces as log entries on `OnHandleSystemError`, but there is no minidump/Breakpad/Crashpad support anywhere.
-- The Python client (`python/micromegas/`) is **query-only** — no telemetry production API.
+- The Python client (`python/micromegas/`) is **query + bulk-ingest only** (`bulk_ingest()` is an Arrow-table loader for replication/admin) — no telemetry event-production (logs/metrics) API.
 
 ## Design
 
@@ -97,7 +97,7 @@ Phased, gated on evidence:
 ## Implementation Steps
 
 ### Phase 1 — Native SDK foundation
-1. Create `rust/capi/` crate (`micromegas-capi`), `crate-type = ["cdylib","staticlib"]`, dep `micromegas` default features. Register in `rust/Cargo.toml` workspace members.
+1. Create `rust/capi/` crate (`micromegas-capi`), `crate-type = ["cdylib","staticlib"]`, dep `micromegas` default features. No `rust/Cargo.toml` edit needed — the `members = ["*"]` glob auto-includes it.
 2. Implement `mm_init`/`mm_shutdown` over `TelemetryGuardBuilder`/`TelemetryGuard`, storing the guard behind the opaque handle.
 3. Implement `mm_log` over `dispatch::log_interop` (stack-built `LogMetadata`, no leak); implement the metadata interner (leaked `&'static StaticMetricMetadata` cached by string key) and `mm_metric_i`/`mm_metric_f`/`mm_flush` over the `dispatch::*` functions. (Spans are out of scope — no span FFI.)
 4. Generate a C header (cbindgen) and add a minimal C smoke test that inits, logs, and shuts down against a local ingestion server.
@@ -115,7 +115,7 @@ Phased, gated on evidence:
 
 ## Files to Create / Modify
 - Create `rust/capi/Cargo.toml`, `rust/capi/src/lib.rs`, `rust/capi/cbindgen.toml`, generated `rust/capi/include/micromegas.h`, `rust/capi/tests/`.
-- Modify `rust/Cargo.toml` (add `capi` workspace member if `members = ["*", …]` does not already glob it — confirm; the workspace currently uses a `*` glob plus explicit entries).
+- No `rust/Cargo.toml` edit needed: the workspace `members = ["*", …]` glob auto-includes `rust/capi/` and no `exclude` pattern matches it (verify `capi` is not added to `exclude`).
 - Create the Blender add-on tree (location TBD — likely a new top-level `blender/` directory mirroring `unreal/`): Python package, ctypes binding, modal recorder, handlers, packaging.
 - Docs: new page under `mkdocs/docs/` for native/embedded integration and the Blender add-on.
 
