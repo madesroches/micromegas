@@ -8,6 +8,8 @@ inline without falling back to a manual builder.
 
 ## Current State
 
+*(Pre-implementation baseline — the changes described in this plan have been applied.)*
+
 The macro lives in `rust/micromegas-proc-macros/src/lib.rs` and accepts two parameters today:
 
 - `interop_max_level = "…"` → `with_interop_max_level_override()`
@@ -96,7 +98,7 @@ No additional re-exports needed.
 - `rust/micromegas-proc-macros/src/lib.rs` — all parsing and code-gen changes, plus
   updating the public rustdoc on `micromegas_main` (lines 24–51): add the 7 new attributes
   to the `# Parameters` section (with type/default) and extend the `# Examples` block to
-  demonstrate at least one new parameter (e.g., `telemetry_url`/`api_key`).
+  demonstrate at least one new parameter (e.g., `telemetry_url`/`api_key`). *(done)*
 
 ## Trade-offs
 
@@ -111,7 +113,7 @@ No additional re-exports needed.
 ## Testing Strategy
 
 - Before writing any tests:
-  - Install `cargo-expand` if not already present: `cargo install --locked cargo-expand` (required by `macrotest` at runtime; pin the version in CI). A `cargo install --locked cargo-expand --version <pinned>` step must be added to the `native` job in `.github/workflows/rust.yml`, following the same pattern as the existing `cargo-machete` install step — without it, `macrotest` tests crash on fresh GitHub-hosted runners.
+  - Install `cargo-expand` if not already present: `cargo install --locked cargo-expand` (required by `macrotest` at runtime). A `cargo install --locked cargo-expand` step must be added to the `native` job in `.github/workflows/rust.yml`, following the same pattern as the existing `cargo-machete` install step — `--locked` alone is sufficient for reproducibility, and no explicit `--version` pin is needed — without it, `macrotest` tests crash on fresh GitHub-hosted runners.
   - Create `rust/micromegas-proc-macros/tests/` (the project convention in CLAUDE.md requires tests under the crate's `tests/` folder — inline `#[test]` in `src/lib.rs` is not allowed).
   - Add to `[dev-dependencies]` in `rust/micromegas-proc-macros/Cargo.toml` (none are present today; trybuild and macrotest compile fixture crates that resolve paths like `micromegas_telemetry_sink::api_key_decorator::…` and `tokio::runtime::Builder` against the host crate's dev-dependencies). List them alphabetically per the Cargo.toml convention:
     - `macrotest = "1"` — explicit version, since it is not in `[workspace.dependencies]` (matching the existing `wiremock = "0.6"` pattern in `public/Cargo.toml`).
