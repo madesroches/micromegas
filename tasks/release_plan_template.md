@@ -1,7 +1,17 @@
 # Release Plan Template for Micromegas
 
 This template is updated after each release with lessons learned.
-Last updated: v0.22.0 (2026-03-13)
+Last updated: v0.26.0 (2026-06-23)
+
+---
+
+## Lessons Learned from v0.26.0
+
+### Do NOT bump versions before Phase 1 completes
+
+`cargo release` reads the workspace `Cargo.toml` from the working tree and commits whatever version it finds as its own "chore: Release" commit. If you bump to X.Z.0 before Phase 1 finishes, `cargo release` will commit the bumped version and then fail when it tries to publish — because `rust/tracing/Cargo.toml` still references `^X.Y` for proc-macros but the local proc-macros crate is now at X.Z.0. **Wait until all crates in Phase 1 are published before doing the Phase 4 version bump.**
+
+If `cargo release` creates a spurious "chore: Release" commit due to a premature bump: `git reset HEAD~1` to undo it, restore Cargo.toml files with `git checkout -- <files>`, and re-run cleanly.
 
 ---
 
@@ -127,6 +137,8 @@ gh release create vX.Y.0 \
 ```
 
 ### Phase 4: Post-Release Version Bump to X.Z.0
+
+> **WARNING**: Do not start this phase until Phase 1 (all Rust crate publishes) is fully complete. `cargo release` reads the workspace version from disk — a premature bump will cause it to commit and then fail mid-run.
 
 #### Rust (`rust/Cargo.toml`):
 - Workspace version to X.Z.0
