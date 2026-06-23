@@ -40,7 +40,7 @@ below but they are unreachable through the macro.
 | `install_log_capture` | `bool` | `false` | `with_install_log_capture(true)` |
 | `system_metrics` | `bool` | `true` | `with_system_metrics_enabled(false)` |
 | `telemetry_url` | string | — | `with_telemetry_sink_url(…)` |
-| `api_key` | string | — | `with_request_decorator(…)` (non-wasm only — see note in Code-generation approach) |
+| `api_key` | string | — | `with_request_decorator(…)` |
 
 The two existing parameters (`interop_max_level`, `max_level_override`) are unchanged.
 
@@ -71,17 +71,20 @@ Build `builder_calls: Vec<TokenStream>` (current pattern), driven by the parsed 
 4. `with_install_log_capture(true)` — emit only when `install_log_capture == true`
 5. `with_system_metrics_enabled(false)` — emit only when `system_metrics == false`
 6. `with_telemetry_sink_url(…)` — emit when `telemetry_url` is set
-7. Auth — when `api_key` is set, emit a `#[cfg(not(target_arch = "wasm32"))]`-gated block:
+7. Auth — when `api_key` is set, emit:
    ```
-   #[cfg(not(target_arch = "wasm32"))]
-   .with_request_decorator(Box::new(move || Arc::new(micromegas::telemetry_sink::api_key_decorator::ApiKeyRequestDecorator::new(#api_key.to_string()))))
+   .with_request_decorator(std::boxed::Box::new(move || std::sync::Arc::new(micromegas::telemetry_sink::api_key_decorator::ApiKeyRequestDecorator::new(#api_key.to_string()))))
    ```
-   `api_key_decorator` is gated `#[cfg(not(target_arch = "wasm32"))]` in
-   `telemetry-sink/src/lib.rs:15`, so the generated code must carry the same guard or a
-   wasm build with `api_key = "…"` will fail to compile with an unresolved path.
+   The token stream must fully-qualify `std::sync::Arc` (and `std::boxed::Box`): the macro
+   expands into the user's `main()` body and emits no `use` statements, and `Arc` is not in
+   the std prelude (nor re-exported by the tracing prelude), so a bare `Arc::new(…)` would
+   fail to resolve. The macro is native-only — `TelemetryGuardBuilder` lives entirely inside
+   `#[cfg(not(target_arch = "wasm32"))] mod native` in `telemetry-sink/src/lib.rs`, so the
+   whole emitted chain (not just the `api_key` branch) only compiles on non-wasm targets.
+   Full wasm support for the macro is out of scope; no per-branch cfg gating is needed.
    When `api_key` is absent, emit `with_auth_from_env()` unconditionally (as today).
 
-The `ApiKeyRequestDecorator` import path in generated code:
+The `ApiKeyRequestDecorator` is referenced fully-qualified in generated code:
 `micromegas::telemetry_sink::api_key_decorator::ApiKeyRequestDecorator`
 
 `api_key_decorator` is already `pub mod` in `telemetry-sink/src/lib.rs` and reaches the
