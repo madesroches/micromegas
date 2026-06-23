@@ -100,7 +100,7 @@ No additional re-exports needed.
 
 - Before writing any tests:
   - Create `rust/micromegas-proc-macros/tests/` (the project convention in CLAUDE.md requires tests under the crate's `tests/` folder — inline `#[test]` in `src/lib.rs` is not allowed).
-  - Add `trybuild` to `[dev-dependencies]` in `rust/micromegas-proc-macros/Cargo.toml` (it is not present today).
+  - Add `trybuild` and `macrotest` to `[dev-dependencies]` in `rust/micromegas-proc-macros/Cargo.toml` (neither is present today).
 - Add a compile-test (using `trybuild`) covering:
   - Default (no args) — existing behaviour unchanged
   - Each bool flag flipped from its default
