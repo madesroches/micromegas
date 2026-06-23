@@ -36,11 +36,11 @@ below but they are unreachable through the macro.
 |---|---|---|---|
 | `ctrlc_handling` | `bool` | `true` | `with_ctrlc_handling()` (conditionally) |
 | `local_sink_enabled` | `bool` | `true` | `with_local_sink_enabled(false)` |
-| `local_sink_max_level` | level string | `"debug"` | `with_local_sink_max_level(…)` |
+| `local_sink_max_level` | level string | `"debug"` (macro override; builder default is `Info`) | `with_local_sink_max_level(…)` |
 | `install_log_capture` | `bool` | `false` | `with_install_log_capture(true)` |
 | `system_metrics` | `bool` | `true` | `with_system_metrics_enabled(false)` |
 | `telemetry_url` | string | — | `with_telemetry_sink_url(…)` |
-| `api_key` | string | — | `with_request_decorator(ApiKeyRequestDecorator::new(…))` |
+| `api_key` | string | — | `with_request_decorator(…)` (non-wasm only — see note in Code-generation approach) |
 
 The two existing parameters (`interop_max_level`, `max_level_override`) are unchanged.
 
@@ -71,9 +71,15 @@ Build `builder_calls: Vec<TokenStream>` (current pattern), driven by the parsed 
 4. `with_install_log_capture(true)` — emit only when `install_log_capture == true`
 5. `with_system_metrics_enabled(false)` — emit only when `system_metrics == false`
 6. `with_telemetry_sink_url(…)` — emit when `telemetry_url` is set
-7. Auth — when `api_key` is set, emit
-   `.with_request_decorator(Box::new(move || Arc::new(micromegas::telemetry_sink::api_key_decorator::ApiKeyRequestDecorator::new(#api_key.to_string()))))`
-   else emit `with_auth_from_env()`
+7. Auth — when `api_key` is set, emit a `#[cfg(not(target_arch = "wasm32"))]`-gated block:
+   ```
+   #[cfg(not(target_arch = "wasm32"))]
+   .with_request_decorator(Box::new(move || Arc::new(micromegas::telemetry_sink::api_key_decorator::ApiKeyRequestDecorator::new(#api_key.to_string()))))
+   ```
+   `api_key_decorator` is gated `#[cfg(not(target_arch = "wasm32"))]` in
+   `telemetry-sink/src/lib.rs:15`, so the generated code must carry the same guard or a
+   wasm build with `api_key = "…"` will fail to compile with an unresolved path.
+   When `api_key` is absent, emit `with_auth_from_env()` unconditionally (as today).
 
 The `ApiKeyRequestDecorator` import path in generated code:
 `micromegas::telemetry_sink::api_key_decorator::ApiKeyRequestDecorator`
@@ -99,8 +105,9 @@ No additional re-exports needed.
 ## Testing Strategy
 
 - Before writing any tests:
+  - Install `cargo-expand` if not already present: `cargo install --locked cargo-expand` (required by `macrotest` at runtime; pin the version in CI).
   - Create `rust/micromegas-proc-macros/tests/` (the project convention in CLAUDE.md requires tests under the crate's `tests/` folder — inline `#[test]` in `src/lib.rs` is not allowed).
-  - Add `trybuild` and `macrotest` to `[dev-dependencies]` in `rust/micromegas-proc-macros/Cargo.toml` (neither is present today).
+  - Add `trybuild`, `macrotest`, `micromegas`, and `tokio` (with `rt-multi-thread` feature) to `[dev-dependencies]` in `rust/micromegas-proc-macros/Cargo.toml` (none are present today; trybuild and macrotest compile fixture crates that resolve paths like `micromegas::telemetry_sink::…` and `tokio::runtime::Builder` against the host crate's dev-dependencies).
 - Add a compile-test (using `trybuild`) covering:
   - Default (no args) — existing behaviour unchanged
   - Each bool flag flipped from its default
