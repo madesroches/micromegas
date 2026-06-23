@@ -93,7 +93,10 @@ No additional re-exports needed.
 
 ## Files to Modify
 
-- `rust/micromegas-proc-macros/src/lib.rs` — all parsing and code-gen changes
+- `rust/micromegas-proc-macros/src/lib.rs` — all parsing and code-gen changes, plus
+  updating the public rustdoc on `micromegas_main` (lines 24–51): add the 7 new attributes
+  to the `# Parameters` section (with type/default) and extend the `# Examples` block to
+  demonstrate at least one new parameter (e.g., `telemetry_url`/`api_key`).
 
 ## Trade-offs
 
