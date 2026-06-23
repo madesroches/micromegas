@@ -15,10 +15,10 @@ The macro lives in `rust/micromegas-proc-macros/src/lib.rs` and accepts two para
 - `interop_max_level = "…"` → `with_interop_max_level_override()`
 - `max_level_override = "…"` → `with_max_level_override()`
 
-Everything else is hardcoded in the expanded output:
+Everything else was hardcoded in the expanded output *(snippet from pre-implementation state)*:
 
 ```rust
-// rust/micromegas-proc-macros/src/lib.rs:114-119
+// rust/micromegas-proc-macros/src/lib.rs:114-119 (pre-implementation)
 let mut builder_calls = vec![
     quote! { .with_ctrlc_handling() },
     quote! { .with_local_sink_max_level(LevelFilter::Debug) },
@@ -28,7 +28,7 @@ let mut builder_calls = vec![
 ```
 
 `TelemetryGuardBuilder` (`rust/telemetry-sink/src/lib.rs`) already supports all the options
-below but they are unreachable through the macro.
+below but they were unreachable through the macro.
 
 ## Design
 
