@@ -321,6 +321,18 @@ mod tests {
     }
 
     #[test]
+    fn install_log_capture_true_emits_call() {
+        let out = expand(quote! { install_log_capture = true });
+        assert!(out.contains("with_install_log_capture"));
+    }
+
+    #[test]
+    fn local_sink_max_level_custom_emits_correct_filter() {
+        let out = expand(quote! { local_sink_max_level = "info" });
+        assert!(out.contains("LevelFilter :: Info"));
+    }
+
+    #[test]
     #[should_panic(expected = "ctrlc_handling must be a bool literal")]
     fn bad_ctrlc_type_panics() {
         expand(quote! { ctrlc_handling = "not_a_bool" });
