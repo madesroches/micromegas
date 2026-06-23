@@ -61,9 +61,6 @@ jobs:
       if: needs.check-runner.outputs.runner == 'ubuntu-latest'
       run: cargo install cargo-machete
 
-    - name: Install cargo-expand
-      run: cargo install --locked cargo-expand
-
     - name: Run native CI
       run: |
         if [ -z "$CARGO_BUILD_JOBS" ]; then unset CARGO_BUILD_JOBS; fi

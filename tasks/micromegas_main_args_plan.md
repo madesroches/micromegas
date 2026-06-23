@@ -117,25 +117,28 @@ No additional re-exports needed.
 
 ## Testing Strategy
 
-- Before writing any tests:
-  - Install `cargo-expand` if not already present: `cargo install --locked cargo-expand` (required by `macrotest` at runtime). A `cargo install --locked cargo-expand` step must be added to the `native` job in `.github/workflows/rust.yml`, alongside the existing `cargo-machete` install step (note cargo-expand adds `--locked`, which the cargo-machete step does not use) — `--locked` alone is sufficient for reproducibility, and no explicit `--version` pin is needed — without it, `macrotest` tests crash on fresh GitHub-hosted runners.
-  - Create `rust/micromegas-proc-macros/tests/` (the project convention in CLAUDE.md requires tests under the crate's `tests/` folder — inline `#[test]` in `src/lib.rs` is not allowed).
-  - Add to `[dev-dependencies]` in `rust/micromegas-proc-macros/Cargo.toml` (none are present today; trybuild and macrotest compile fixture crates that resolve paths like `micromegas_telemetry_sink::api_key_decorator::…` and `tokio::runtime::Builder` against the host crate's dev-dependencies). List them alphabetically per the Cargo.toml convention:
-    - `macrotest = "1"` — explicit version, since it is not in `[workspace.dependencies]` (matching the existing `wiremock = "0.6"` pattern in `public/Cargo.toml`).
-    - `micromegas-telemetry-sink.workspace = true` — already in `[workspace.dependencies]`. Depend on `micromegas-telemetry-sink` directly (not the umbrella `micromegas` crate) to avoid the dev-dependency cycle `proc-macros → micromegas (dev) → proc-macros (normal)`, since `micromegas` depends on `micromegas-proc-macros` (`rust/public/Cargo.toml:46`). The fixtures' own imports therefore use `micromegas_telemetry_sink::…` rather than `micromegas::telemetry_sink::…`. Note this is independent of the macro's generated output, which must keep resolving against the end user's crate as `micromegas::telemetry_sink::…` (see the Code-generation section); only the test fixtures resolve against these dev-dependencies.
-    - `micromegas-tracing = { workspace = true, features = ["tokio"] }` — already in `[workspace.dependencies]`. Required for trybuild fixtures to compile: the fixtures declare a `mod micromegas` preamble that re-exports `telemetry_sink`, `tracing::levels`, and `tracing::runtime`; the `levels` and `runtime` modules come from `micromegas-tracing`, which `micromegas-telemetry-sink` does not re-export transitively.
-    - `tokio = { workspace = true }` — already in `[workspace.dependencies]`.
-    - `trybuild = "1"` — explicit version, same rationale as `macrotest`.
-- Add a compile-test (using `trybuild`) covering:
-  - Default (no args) — existing behaviour unchanged
-  - Each bool flag flipped from its default
-  - `local_sink_max_level = "info"`
-  - `telemetry_url` set
-  - `api_key` + `telemetry_url` together
-  - Compile-fail cases: an invalid bool type (`bad_ctrlc_type.rs`) and an unknown argument (`bad_unknown_arg.rs`)
-- Add a `macrotest` expansion snapshot test for the `api_key` case: write a `.rs` fixture that sets `api_key`, then run `cargo test` once to let `macrotest::expand` generate the corresponding `.expanded.rs` snapshot file. The test calls only `macrotest::expand` on the fixture; correctness of the expansion (that it contains `ApiKeyRequestDecorator` and not `with_auth_from_env`) is enforced by the checked-in `.expanded.rs` snapshot, which `macrotest` compares the full expanded output against on every run. This is the correct `macrotest` workflow; `macrotest` has no API to assert on snapshot contents directly — it only compares against the saved file.
-- Run `cargo test` in `rust/micromegas-proc-macros/` and in `rust/` (workspace) after the change.
-- Run `cargo clippy --workspace -- -D warnings` and `cargo fmt --check`.
+*(Implemented — see `rust/micromegas-proc-macros/src/lib.rs`.)*
+
+Tests use inline `#[cfg(test)]` in `src/lib.rs` rather than a `tests/` folder or external test harnesses.
+Proc-macro crates only export proc-macro items; integration tests in `tests/` cannot call internal helper
+functions, so inline tests are the only way to unit-test token generation without spawning cargo.
+
+The core logic is extracted into `fn expand_micromegas_main(args: TokenStream, input: TokenStream) -> TokenStream`
+(using `proc_macro2` types), which is directly callable from the inline test module via `use super::*`.
+The public `#[proc_macro_attribute]` entry point converts `proc_macro::TokenStream` ↔ `proc_macro2::TokenStream`
+and delegates. No dev-dependencies are needed.
+
+Tests (all run in-process, sub-millisecond):
+- `default_produces_standard_calls` — `with_auth_from_env`, `with_ctrlc_handling`, `with_local_sink_max_level` present
+- `api_key_replaces_env_auth` — `ApiKeyRequestDecorator` present, `with_auth_from_env` absent
+- `ctrlc_handling_false_omits_call` — `with_ctrlc_handling` absent
+- `telemetry_url_emits_call` — `with_telemetry_sink_url` present
+- `local_sink_disabled_emits_call` — `with_local_sink_enabled` present
+- `system_metrics_false_emits_call` — `with_system_metrics_enabled` present
+- `bad_ctrlc_type_panics` — `#[should_panic(expected = "ctrlc_handling must be a bool literal")]`
+- `unknown_arg_panics` — `#[should_panic(expected = "Unsupported attribute argument")]`
+
+The `cargo-expand` CI step and all trybuild/macrotest dev-dependencies have been removed as they are no longer needed.
 
 ## Open Questions
 

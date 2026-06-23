@@ -3,8 +3,9 @@
 //! This crate provides high-level procedural macros that integrate multiple
 //! micromegas components for a seamless developer experience.
 
+use proc_macro2::TokenStream;
 use quote::quote;
-use syn::{AttributeArgs, ItemFn, Lit, Meta, NestedMeta, parse_macro_input};
+use syn::{ItemFn, Lit, Meta, NestedMeta};
 
 /// micromegas_main: Creates a tokio runtime with proper micromegas tracing callbacks and telemetry setup
 ///
@@ -67,10 +68,21 @@ pub fn micromegas_main(
     args: proc_macro::TokenStream,
     input: proc_macro::TokenStream,
 ) -> proc_macro::TokenStream {
-    let args = parse_macro_input!(args as AttributeArgs);
-    let function = parse_macro_input!(input as ItemFn);
+    expand_micromegas_main(args.into(), input.into()).into()
+}
 
-    // Ensure the function is async and named main
+fn expand_micromegas_main(args: TokenStream, input: TokenStream) -> TokenStream {
+    use syn::parse::Parser;
+
+    let args: Vec<NestedMeta> =
+        syn::punctuated::Punctuated::<NestedMeta, syn::Token![,]>::parse_terminated
+            .parse2(args)
+            .expect("Failed to parse macro arguments")
+            .into_iter()
+            .collect();
+
+    let function: ItemFn = syn::parse2(input).expect("Failed to parse function");
+
     if function.sig.asyncness.is_none() {
         panic!("micromegas_main can only be applied to async functions");
     }
@@ -79,7 +91,6 @@ pub fn micromegas_main(
         panic!("micromegas_main can only be applied to the main function");
     }
 
-    // Parse attribute parameters
     let mut interop_max_level: Option<String> = None;
     let mut max_level_override: Option<String> = None;
     let mut ctrlc_handling: bool = true;
@@ -164,8 +175,7 @@ pub fn micromegas_main(
     let original_block = &function.block;
     let return_type = &function.sig.output;
 
-    // Helper function to convert level string to LevelFilter token
-    let level_to_filter = |level: &str| -> proc_macro2::TokenStream {
+    let level_to_filter = |level: &str| -> TokenStream {
         match level.to_lowercase().as_str() {
             "trace" => quote! { micromegas::tracing::levels::LevelFilter::Trace },
             "debug" => quote! { micromegas::tracing::levels::LevelFilter::Debug },
@@ -179,7 +189,6 @@ pub fn micromegas_main(
         }
     };
 
-    // Generate the telemetry guard builder
     let mut builder_calls = vec![quote! {
         .with_process_property("version".to_string(), env!("CARGO_PKG_VERSION").to_string())
     }];
@@ -236,18 +245,14 @@ pub fn micromegas_main(
             .build()
     };
 
-    let expanded = quote! {
+    quote! {
         fn main() #return_type {
-            // Check CPU tracing setting before building runtime
             let cpu_tracing_enabled = std::env::var("MICROMEGAS_ENABLE_CPU_TRACING")
                 .map(|v| v == "true")
-                .unwrap_or(false); // Default to disabled for minimal overhead
+                .unwrap_or(false);
 
-            // Set up telemetry guard BEFORE building tokio runtime
-            // This ensures dispatch is initialized before worker threads start
             let _telemetry_guard = #telemetry_guard_builder;
 
-            // Build the runtime with conditional tracing callbacks
             let runtime = {
                 use micromegas::tracing::runtime::TracingRuntimeExt;
                 let mut builder = tokio::runtime::Builder::new_multi_thread();
@@ -260,11 +265,70 @@ pub fn micromegas_main(
             };
 
             runtime.block_on(async move {
-                // Execute the original main function body
                 #original_block
             })
         }
-    };
+    }
+}
 
-    proc_macro::TokenStream::from(expanded)
+#[cfg(test)]
+mod tests {
+    use super::expand_micromegas_main;
+    use quote::quote;
+
+    fn expand(args: proc_macro2::TokenStream) -> String {
+        let input = quote! { async fn main() {} };
+        expand_micromegas_main(args, input).to_string()
+    }
+
+    #[test]
+    fn default_produces_standard_calls() {
+        let out = expand(quote! {});
+        assert!(out.contains("with_auth_from_env"));
+        assert!(out.contains("with_ctrlc_handling"));
+        assert!(out.contains("with_local_sink_max_level"));
+    }
+
+    #[test]
+    fn api_key_replaces_env_auth() {
+        let out = expand(quote! { api_key = "secret" });
+        assert!(out.contains("ApiKeyRequestDecorator"));
+        assert!(!out.contains("with_auth_from_env"));
+    }
+
+    #[test]
+    fn ctrlc_handling_false_omits_call() {
+        let out = expand(quote! { ctrlc_handling = false });
+        assert!(!out.contains("with_ctrlc_handling"));
+    }
+
+    #[test]
+    fn telemetry_url_emits_call() {
+        let out = expand(quote! { telemetry_url = "http://localhost:9000" });
+        assert!(out.contains("with_telemetry_sink_url"));
+    }
+
+    #[test]
+    fn local_sink_disabled_emits_call() {
+        let out = expand(quote! { local_sink_enabled = false });
+        assert!(out.contains("with_local_sink_enabled"));
+    }
+
+    #[test]
+    fn system_metrics_false_emits_call() {
+        let out = expand(quote! { system_metrics = false });
+        assert!(out.contains("with_system_metrics_enabled"));
+    }
+
+    #[test]
+    #[should_panic(expected = "ctrlc_handling must be a bool literal")]
+    fn bad_ctrlc_type_panics() {
+        expand(quote! { ctrlc_handling = "not_a_bool" });
+    }
+
+    #[test]
+    #[should_panic(expected = "Unsupported attribute argument")]
+    fn unknown_arg_panics() {
+        expand(quote! { unknown_arg = true });
+    }
 }

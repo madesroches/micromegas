@@ -17,9 +17,3 @@ proc-macro2.workspace = true
 quote.workspace = true
 syn.workspace = true
 
-[dev-dependencies]
-macrotest = "1"
-micromegas-telemetry-sink.workspace = true
-micromegas-tracing = { workspace = true, features = ["tokio"] }
-tokio = { workspace = true }
-trybuild = "1"
