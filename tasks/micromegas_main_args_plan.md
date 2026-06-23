@@ -1,0 +1,112 @@
+# `#[micromegas_main]` Optional Arguments Plan
+
+## Overview
+
+Extend the `#[micromegas_main]` proc macro to expose the full set of commonly needed
+`TelemetryGuardBuilder` options as attribute parameters, so callers can configure telemetry
+inline without falling back to a manual builder.
+
+## Current State
+
+The macro lives in `rust/micromegas-proc-macros/src/lib.rs` and accepts two parameters today:
+
+- `interop_max_level = "…"` → `with_interop_max_level_override()`
+- `max_level_override = "…"` → `with_max_level_override()`
+
+Everything else is hardcoded in the expanded output:
+
+```rust
+// rust/micromegas-proc-macros/src/lib.rs:114-119
+let mut builder_calls = vec![
+    quote! { .with_ctrlc_handling() },
+    quote! { .with_local_sink_max_level(LevelFilter::Debug) },
+    quote! { .with_process_property("version"…) },
+    quote! { .with_auth_from_env() },
+];
+```
+
+`TelemetryGuardBuilder` (`rust/telemetry-sink/src/lib.rs`) already supports all the options
+below but they are unreachable through the macro.
+
+## Design
+
+### New parameters
+
+| Parameter | Rust type | Default | Builder call |
+|---|---|---|---|
+| `ctrlc_handling` | `bool` | `true` | `with_ctrlc_handling()` (conditionally) |
+| `local_sink_enabled` | `bool` | `true` | `with_local_sink_enabled(false)` |
+| `local_sink_max_level` | level string | `"debug"` | `with_local_sink_max_level(…)` |
+| `install_log_capture` | `bool` | `false` | `with_install_log_capture(true)` |
+| `system_metrics` | `bool` | `true` | `with_system_metrics_enabled(false)` |
+| `telemetry_url` | string | — | `with_telemetry_sink_url(…)` |
+| `api_key` | string | — | `with_request_decorator(ApiKeyRequestDecorator::new(…))` |
+
+The two existing parameters (`interop_max_level`, `max_level_override`) are unchanged.
+
+### `api_key` precedence
+
+When `api_key` is provided as an attribute argument it must win over the env-var lookup.
+Implementation: emit `with_request_decorator(…)` **instead of** `with_auth_from_env()`.
+When `api_key` is absent, keep `with_auth_from_env()` as today.
+
+### Parsing approach
+
+The macro already parses `AttributeArgs` with a `match` on `NestedMeta`. Extend the same
+loop with new arms:
+
+- `Lit::Bool` for the four bool parameters
+- `Lit::Str` for `local_sink_max_level`, `telemetry_url`, and `api_key`
+
+The error message in the catch-all `_ => panic!(…)` must be updated to list all supported
+parameters.
+
+### Code-generation approach
+
+Build `builder_calls: Vec<TokenStream>` (current pattern), driven by the parsed values:
+
+1. `with_ctrlc_handling()` — emit only when `ctrlc_handling != false`
+2. `with_local_sink_enabled(false)` — emit only when `local_sink_enabled == false`
+3. `with_local_sink_max_level(…)` — always emit (default `LevelFilter::Debug`)
+4. `with_install_log_capture(true)` — emit only when `install_log_capture == true`
+5. `with_system_metrics_enabled(false)` — emit only when `system_metrics == false`
+6. `with_telemetry_sink_url(…)` — emit when `telemetry_url` is set
+7. Auth — emit `with_request_decorator(ApiKeyRequestDecorator::new(…))` when `api_key`
+   is set, else emit `with_auth_from_env()`
+
+The `ApiKeyRequestDecorator` import path in generated code:
+`micromegas::telemetry_sink::api_key_decorator::ApiKeyRequestDecorator`
+
+`api_key_decorator` is already `pub mod` in `telemetry-sink/src/lib.rs` and reaches the
+umbrella crate via `pub use micromegas_telemetry_sink::*` in `rust/public/src/lib.rs:127`.
+No additional re-exports needed.
+
+## Files to Modify
+
+- `rust/micromegas-proc-macros/src/lib.rs` — all parsing and code-gen changes
+
+## Trade-offs
+
+- **All-in-one attribute vs. separate config struct**: a config struct would be more ergonomic
+  for many parameters but requires stabilising a public type in a proc-macro crate, which adds
+  API surface. Attribute key-value pairs keep the macro self-contained and match the
+  `#[tokio::main]` precedent users already know.
+- **`api_key` in source code**: hardcoding a secret in source is acceptable for some
+  distribution scenarios (embedded keys, internal tools). The parameter name is deliberately
+  `api_key`, not `api_key_env`, to make it clear it is a literal value.
+
+## Testing Strategy
+
+- Add a compile-test (using `trybuild` or a simple `#[test]` that expands the macro) covering:
+  - Default (no args) — existing behaviour unchanged
+  - Each bool flag flipped from its default
+  - `local_sink_max_level = "info"`
+  - `telemetry_url` set
+  - `api_key` set (verify `with_auth_from_env` is NOT emitted)
+  - `api_key` + `telemetry_url` together
+- Run `cargo test` in `rust/micromegas-proc-macros/` and in `rust/` (workspace) after the change.
+- Run `cargo clippy --workspace -- -D warnings` and `cargo fmt --check`.
+
+## Open Questions
+
+None — design confirmed with user.
