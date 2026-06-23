@@ -38,7 +38,7 @@ void FScreenshotSender::OnCommand()
 	if (GEngine && GEngine->GameViewport)
 	{
 		Handle = UGameViewportClient::OnScreenshotCaptured().AddRaw(this, &FScreenshotSender::OnScreenshotCaptured);
-		FScreenshotRequest::RequestScreenshot(false);
+		FScreenshotRequest::RequestScreenshot(true);
 		return;
 	}
 
