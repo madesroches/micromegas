@@ -107,7 +107,7 @@ No additional re-exports needed.
   - `local_sink_max_level = "info"`
   - `telemetry_url` set
   - `api_key` + `telemetry_url` together
-- Add a `macrotest` expansion snapshot test for the `api_key` case: run `macrotest::expand` on a fixture that sets `api_key`, then assert that the snapshot contains `ApiKeyRequestDecorator` and does **not** contain `with_auth_from_env`. This is the correct tool for inspecting expanded token streams; `trybuild` only validates compilation success/failure and cannot make that assertion.
+- Add a `macrotest` expansion snapshot test for the `api_key` case: write a `.rs` fixture that sets `api_key`, then run `cargo test` once to let `macrotest::expand` generate the corresponding `.expanded.rs` snapshot file. After the snapshot is generated, inspect it (or use a separate `#[test]` that calls `std::fs::read_to_string` on the snapshot path) to assert that it contains `ApiKeyRequestDecorator` and does not contain `with_auth_from_env`. This is the correct `macrotest` workflow; `macrotest` has no API to assert on snapshot contents directly — it only compares the full expanded output against the saved file.
 - Run `cargo test` in `rust/micromegas-proc-macros/` and in `rust/` (workspace) after the change.
 - Run `cargo clippy --workspace -- -D warnings` and `cargo fmt --check`.
 
