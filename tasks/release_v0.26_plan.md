@@ -24,25 +24,25 @@ None — `micromegas-monolith` is a binary-only crate (no lib target), not publi
 ### 1. Code Quality & Testing
 
 #### Rust Workspace (from `rust/` directory)
-- [ ] Run full CI pipeline: `python3 ../build/rust_ci.py`
-- [ ] WASM: `cd rust/datafusion-wasm && python3 build.py --test`
+- [x] Run full CI pipeline: `python3 ../build/rust_ci.py` — PASSED
+- [x] WASM: included in rust_ci.py — PASSED
 
 #### Python Package (from `python/micromegas/` directory)
-- [ ] `poetry run black . --check`
-- [ ] `poetry run pytest`
+- [x] `poetry run black . --check` — PASSED (47 files unchanged)
+- [x] `poetry run pytest` — integration tests skipped (no server); unit tests PASSED
 
 #### Grafana Plugin (from `grafana/` directory)
-- [ ] `yarn install`
-- [ ] `yarn lint:fix`
-- [ ] `yarn test:ci`
-- [ ] `yarn build`
+- [x] `yarn install` — PASSED
+- [x] `yarn lint:fix` — PASSED
+- [x] `yarn test:ci` — PASSED
+- [x] `yarn build` — PASSED
 
 #### Analytics Web App (from `analytics-web-app/` directory)
-- [ ] `yarn install`
-- [ ] `yarn lint`
-- [ ] `yarn type-check`
-- [ ] `yarn test`
-- [ ] `yarn build`
+- [x] `yarn install` — PASSED
+- [x] `yarn lint` — PASSED
+- [x] `yarn type-check` — PASSED
+- [x] `yarn test` — PASSED
+- [x] `yarn build` — PASSED
 
 ### 2. Version Verification
 
@@ -54,29 +54,30 @@ None — `micromegas-monolith` is a binary-only crate (no lib target), not publi
 
 ### 3. Documentation Updates
 
-- [ ] Update `CHANGELOG.md` — move Unreleased entries to `## June 2026 - v0.26.0`
-- [ ] Update `grafana/CHANGELOG.md` with version sync entry
-- [ ] Update `README.md` roadmap: move Unreleased to `### v0.26.0 (June 2026)`
+- [x] Update `CHANGELOG.md` — moved Unreleased entries to `## June 2026 - v0.26.0`
+- [x] Update `grafana/CHANGELOG.md` — added 0.26.0 version sync entry
+- [x] Update `README.md` roadmap — moved Unreleased to `### v0.26.0 (June 2026)`
 
 ### 4. Grafana Plugin Preparation
 
-- [ ] Build plugin archive: `./build-plugin.sh` (from `grafana/`)
+- [x] Build plugin archive: `./build-plugin.sh` — BUILT (grafana/micromegas-micromegas-datasource.zip)
 
 ### 5. Git Preparation
 
-- [ ] Commit changelog and doc updates
-- [ ] Create release tag: `git tag v0.26.0`
-- [ ] Create grafana tag: `git tag grafana-v0.26.0`
-- [ ] Push: `git push origin release && git push origin v0.26.0 grafana-v0.26.0`
+- [x] Committed changelog and doc updates ("Release v0.26.0" commit 3d7ffc113)
+- [x] Created release tag: `git tag v0.26.0`
+- [x] Created grafana tag: `git tag grafana-v0.26.0`
+- [x] Pushed: branch and tags pushed to origin
+
+> **Note**: `cargo release` created a spurious "chore: Release" commit that prematurely bumped
+> workspace version to 0.27.0. This was reverted with `git reset HEAD~1`. Version bump to 0.27.0
+> must wait until Phase 1 (Rust crate publishing) completes.
 
 ## Release Process
 
 ### Phase 1: Rust Crates
 
-```bash
-cd /home/mad/micromegas/build
-python3 release.py
-```
+- [ ] Re-run `cd /home/mad/micromegas/build && python3 release.py` (previous run failed — workspace was premature at 0.27.0; now restored to 0.26.0)
 
 ### Phase 2: Python Library
 
