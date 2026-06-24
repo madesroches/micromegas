@@ -23,6 +23,9 @@ The infrastructure cost for Micromegas comes from standard cloud services:
 - **Analytics Service** (`flight-sql-srv`) - Serves SQL queries and dashboards
 - **Maintenance Daemon** (`telemetry-admin`) - Background data processing and rollups
 
+!!! tip "Simplified deployment"
+    For smaller deployments or local development, `micromegas-monolith` runs all roles (ingestion, analytics, web, maintenance) in a single process, eliminating the need to manage multiple services.
+
 ### Storage Services
 
 - **Database (PostgreSQL)** - Stores metadata about processes, streams, and data blocks

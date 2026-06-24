@@ -66,36 +66,37 @@ Install [Visual Studio Build Tools](https://visualstudio.microsoft.com/downloads
 
 ### 3. Start All Services
 
-#### Option A: Using tmux (Linux/macOS)
+#### Option A: Monolith (recommended)
 
-The easiest way to start all required services is using the development script with tmux:
+The simplest way to start everything is the monolith script, which builds and launches a single `micromegas-monolith` process running all roles (ingestion, analytics, web, admin):
 
 ```bash
-# Start all services in a tmux session (debug mode)
-python3 local_test_env/dev.py
-
-# Or in release mode for better performance
-python3 local_test_env/dev.py release
+python3 local_test_env/ai_scripts/start_services.py --monolith
 ```
 
 This will automatically:
 
-- Build all Rust services
-- Start PostgreSQL database
-- Start telemetry-ingestion-srv on port 9000
-- Start flight-sql-srv on port 50051
-- Start telemetry-admin service
-- Open a tmux session with all services running in separate panes
+- Build the monolith binary and the analytics web app (including DataFusion WASM)
+- Start PostgreSQL if not already running
+- Launch `micromegas-monolith --roles all` on port 9000 (HTTP/ingestion), port 50051 (FlightSQL), and port 3000 (web app)
+- Write all PIDs to `/tmp/micromegas_pids.txt`
 
-!!! tip "Managing Services with tmux"
-    - To switch between service panes: `Ctrl+B` then arrow keys
-    - To detach from tmux (leave services running): `Ctrl+B` then `D`
-    - To reattach to tmux: `tmux attach -t micromegas`
-    - To stop all services: `python3 local_test_env/stop-dev.py`
+```bash
+# Stop all services
+python3 local_test_env/ai_scripts/stop_services.py
+```
 
-#### Option B: Manual Startup (Windows or without tmux)
+#### Option B: Split Services
 
-If you're on Windows or prefer not to use tmux, start each service in a separate terminal:
+To run the four services separately (closer to a production topology):
+
+```bash
+python3 local_test_env/ai_scripts/start_services.py
+```
+
+#### Option C: Manual Startup
+
+If you prefer full control, start each service in a separate terminal:
 
 **Terminal 1: PostgreSQL Database**
 ```bash

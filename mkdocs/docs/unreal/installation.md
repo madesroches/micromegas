@@ -136,6 +136,7 @@ void UYourGameInstance::Init()
     IMicromegasTelemetrySinkModule::LoadModuleChecked().InitTelemetry(
         ServerUrl, 
         AuthProvider
+        // Optional third argument: TMap<FString, FString> of extra process properties
     );
     
     // Set default context properties
@@ -232,19 +233,34 @@ In `MicromegasTelemetrySinkModule.cpp`:
 // Enable telemetry on startup (default: 1)
 #define MICROMEGAS_ENABLE_TELEMETRY_ON_START 1
 
-// Enable crash reporting on Windows (default: 1 on Windows, 0 elsewhere)
-#define MICROMEGAS_CRASH_REPORTING 1
+// Enable crash reporting (default: 1 on Windows and Linux, 0 elsewhere)
+#if PLATFORM_WINDOWS || PLATFORM_LINUX
+    #define MICROMEGAS_CRASH_REPORTING 1
+#else
+    #define MICROMEGAS_CRASH_REPORTING 0
+#endif
 ```
 
-### Runtime Console Commands
+### Runtime Console Commands and CVars
 
-Available console commands for runtime control:
+Available commands for runtime control:
 
-- `telemetry.enable` - Initialize the telemetry system
-- `telemetry.flush` - Force flush all pending events
-- `telemetry.spans.enable 1` - Enable span recording (disabled by default)
-- `telemetry.spans.enable 0` - Disable span recording
-- `telemetry.spans.all 1` - Record all spans without sampling
+| Command / CVar | Default | Description |
+|---|---|---|
+| `telemetry.enable` | — | Initialize the telemetry system (only needed if `MICROMEGAS_ENABLE_TELEMETRY_ON_START` is 0) |
+| `telemetry.flush` | — | Force flush all pending events |
+| `telemetry.spans.enable` | `true` (game), `false` (editor) | Enable/disable span recording |
+| `telemetry.spans.all` | `false` | Record all spans without sampling (high bandwidth) |
+| `telemetry.log.enable` | `true` | Enable/disable log stream recording |
+| `telemetry.metrics.enable` | `true` | Enable/disable metrics stream recording |
+| `telemetry.images.enable` | `true` | Enable/disable images sent via `SendImage` |
+| `telemetry.screenshot` | — | Capture the game viewport and send it as a telemetry image |
+| `telemetry.net.verbosity` | `2` | Net trace verbosity: 0=off, 1=packets, 2=+root objects, 3=+all objects, 4=+properties/RPCs |
+| `telemetry.max_queue_bytes` | `134217728` (128 MB) | Soft queue cap; Traces are dropped above this threshold |
+| `telemetry.hard_queue_bytes` | `268435456` (256 MB) | Hard queue ceiling; Logs/Metrics also dropped above this |
+| `telemetry.max_in_flight_requests` | `3` | Max concurrent uploads; worker pauses draining above this |
+| `telemetry.sampling.interaction_timeout` | `2.0` s | Seconds since last user input before spike recording is suppressed; 0 disables |
+| `telemetry.sampling.heartbeat_interval` | `120.0` s | Seconds of active user time between heartbeat captures; 0 disables |
 
 ## Verifying Installation
 
@@ -285,6 +301,7 @@ void ATestActor::BeginPlay()
 - Windows Defender may flag the first network connection - add an exception if needed
 
 ### Linux
+- Crash reporting is enabled by default
 - Ensure your ingestion server is accessible from the game server
 - Check firewall rules for port 9000 (or your configured port)
 

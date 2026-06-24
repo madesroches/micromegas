@@ -70,9 +70,9 @@ SELECT
     depth,
     COUNT(*) as span_count,
     AVG(duration_ms) as avg_duration,
-    PERCENTILE(duration_ms, 0.5) as median_duration,
-    PERCENTILE(duration_ms, 0.95) as p95_duration,
-    PERCENTILE(duration_ms, 0.99) as p99_duration
+    approx_percentile_cont(duration_ms, 0.5) as median_duration,
+    approx_percentile_cont(duration_ms, 0.95) as p95_duration,
+    approx_percentile_cont(duration_ms, 0.99) as p99_duration
 FROM (
     SELECT
         begin_events.depth,
@@ -240,7 +240,7 @@ depth_summary AS (
         depth,
         COUNT(*) as operation_count,
         AVG(duration_ms) as avg_duration,
-        PERCENTILE(duration_ms, 0.95) as p95_duration
+        approx_percentile_cont(duration_ms, 0.95) as p95_duration
     FROM async_durations
     GROUP BY depth
 ),

@@ -58,7 +58,7 @@ The time range controls which time window is queried. It is managed at the page 
 
 ### Implicit Time Filtering
 
-When a query is sent to the server, the current time range is passed as **separate metadata** alongside the SQL. The server's query planner automatically injects time filters into the execution plan for all materialized views — you do not need to write `WHERE time >= '$begin' AND time < '$end'` in your SQL.
+When a query is sent to the server, the current time range is passed as **separate metadata** alongside the SQL. The server's query planner automatically injects time filters into the execution plan for all materialized views — you do not need to write `WHERE time >= '$from' AND time < '$to'` in your SQL.
 
 Each view defines which columns are filtered:
 
@@ -72,7 +72,7 @@ This means a simple query like `SELECT time, value FROM measures WHERE name = '$
 
 ### Explicit Time References
 
-The `$begin` and `$end` macros are still available for cases where you need the time range values explicitly — for example, in markdown content, link URLs, or `date_bin()` aggregations:
+The `$from` and `$to` macros are available for cases where you need the time range values explicitly — for example, in markdown content, link URLs, or `date_bin()` aggregations:
 
 ```sql
 SELECT

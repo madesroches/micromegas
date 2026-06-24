@@ -1,6 +1,6 @@
 # Cost Comparison: Micromegas vs. Dynatrace
 
-**Disclaimer:** These are estimates, not quotes. Dynatrace pricing varies based on negotiated enterprise agreements, region, and specific product usage.
+**Disclaimer:** These are estimates, not quotes. Dynatrace pricing varies based on negotiated enterprise agreements, region, and specific product usage. **Pricing figures were verified in early 2026 — confirm current rates at [dynatrace.com/pricing](https://www.dynatrace.com/pricing/) before use.**
 
 For shared methodology, workload definition, and Micromegas baseline cost, see the [Comparison Methodology](index.md) page.
 

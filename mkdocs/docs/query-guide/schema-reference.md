@@ -18,6 +18,7 @@ Micromegas organizes telemetry data into several views that can be queried using
 | [`async_events`](#async_events) | Asynchronous event lifecycle tracking | Async operation monitoring |
 | [`net_spans`](#net_spans) | Network bandwidth spans (Connection / Object / Property / RPC) | Replication bandwidth attribution, bit-axis flame charts |
 | [`otel_spans`](#otel_spans) | OpenTelemetry spans materialized from OTLP-ingested traces | Distributed tracing, OTel SDK interop |
+| [`images`](#images) | Screenshots and image data captured via `send_image()` | Visual telemetry, screenshot history |
 
 ## Core Views
 
@@ -567,6 +568,41 @@ SELECT COUNT(*) AS span_count
 FROM view_instance('otel_spans', '<process_id>')
 WHERE jsonb_as_string(jsonb_get(properties, 'otel.scope.name'))
       = 'opentelemetry.instrumentation.requests';
+```
+
+### `images`
+
+Screenshot and image data captured from instrumented processes via `send_image()`. The view is **JIT-only** and **parameterized by `process_id`** — there is no `global` instance.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `process_id` | `Dictionary(Int16, Utf8)` | Process id (the view parameter) |
+| `stream_id` | `Dictionary(Int16, Utf8)` | Source image stream |
+| `block_id` | `Dictionary(Int16, Utf8)` | Block identifier |
+| `insert_time` | `Timestamp(Nanosecond)` | When the block was ingested |
+| `exe` | `Dictionary(Int16, Utf8)` | Executable name |
+| `username` | `Dictionary(Int16, Utf8)` | User who ran the process |
+| `computer` | `Dictionary(Int16, Utf8)` | Computer/hostname |
+| `time` | `Timestamp(Nanosecond)` | Timestamp when the image was captured |
+| `name` | `Utf8` | Image name (e.g. `"screenshot"`) |
+| `format` | `Dictionary(Int16, Utf8)` | Image format string (e.g. `"png"`) |
+| `payload_size` | `Int64` | Compressed byte size of the image data |
+| `data` | `Binary` | Raw image bytes |
+
+**Example queries:**
+
+```sql
+-- List all screenshots captured by a process
+SELECT time, name, format, payload_size
+FROM view_instance('images', '<process_id>')
+ORDER BY time DESC;
+
+-- Count images per process in the last hour
+SELECT process_id, exe, COUNT(*) AS image_count
+FROM images
+WHERE time >= NOW() - INTERVAL '1 hour'
+GROUP BY process_id, exe
+ORDER BY image_count DESC;
 ```
 
 ## Data Types

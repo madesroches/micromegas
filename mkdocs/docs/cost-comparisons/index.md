@@ -1,6 +1,6 @@
 # Comparison Methodology
 
-*Last reviewed: February 2026*
+*Last reviewed: June 2026*
 
 This page describes the shared methodology used across all cost comparisons. Each individual comparison page references this methodology and focuses only on the competitor-specific pricing analysis.
 
@@ -37,9 +37,11 @@ Micromegas takes a fundamentally different approach. Instead of abstracting away
 As detailed in the [Cost Effectiveness overview](../cost-effectiveness.md), these costs are primarily:
 
 *   **Object Storage (S3, GCS):** Storing raw telemetry data and materialized views. Typically the largest portion of the cost.
-*   **Compute (Fargate, Kubernetes):** Running the ingestion, analytics, and daemon services.
+*   **Compute (Fargate, Kubernetes):** Running the ingestion, analytics, and daemon services. For smaller deployments, `micromegas-monolith` consolidates all roles into a single process, reducing operational overhead.
 *   **Database (PostgreSQL, Aurora):** Storing metadata.
 *   **Networking (Load Balancers, Data Transfer):** Routing traffic and moving data.
+
+Micromegas also supports **native OTLP/HTTP ingestion** (logs, metrics, and traces via the OpenTelemetry protocol), making it straightforward to migrate existing OpenTelemetry pipelines without re-instrumenting your code.
 
 ### Comparison of Philosophies
 

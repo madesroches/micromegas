@@ -1,6 +1,6 @@
 # Cost Comparison: Micromegas vs. Elastic Observability
 
-**Disclaimer:** These are estimates, not quotes. Actual costs vary based on usage patterns, cloud provider, region, and volume tiers.
+**Disclaimer:** These are estimates, not quotes. Actual costs vary based on usage patterns, cloud provider, region, and volume tiers. **Pricing figures reflect the November 2025 Elastic pricing update — confirm current rates at [elastic.co/pricing](https://www.elastic.co/pricing) before use.**
 
 For shared methodology, workload definition, and Micromegas baseline cost, see the [Comparison Methodology](index.md) page.
 

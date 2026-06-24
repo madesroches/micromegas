@@ -46,6 +46,7 @@ Micromegas organizes telemetry data into several queryable views:
 | `async_events` | Asynchronous event lifecycle tracking |
 | `net_spans` | Network bandwidth spans (Connection / Object / Property / RPC) |
 | `otel_spans` | OpenTelemetry spans materialized from OTLP-ingested traces |
+| `images` | Screenshots and image data captured via `send_image()` |
 
 ## Query Capabilities
 

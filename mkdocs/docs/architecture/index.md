@@ -219,12 +219,20 @@ flowchart TD
 - Dictionary compression reduces storage and improves query performance  
 - Predicate pushdown leverages Parquet metadata for fast data pruning
 
+## Deployment Modes
+
+Micromegas can be deployed as separate services or as a single process:
+
+**Split mode** (production): `telemetry-ingestion-srv`, `flight-sql-srv`, `telemetry-admin`, and `analytics-web-srv` run as independent services and scale independently.
+
+**Monolith mode** (v0.26.0+, recommended for development and single-machine deployments): `micromegas-monolith --roles all` runs all four roles in one process. This is the simplest way to get started and the default for local development via `start_services.py --monolith`.
+
 ## Analytics Web Application
 
 The analytics web app provides a modern web interface for exploring telemetry data. It consists of:
 
 - **Backend**: Rust-based web server (`analytics-web-srv`) using Axum framework
-- **Frontend**: Next.js React application with TypeScript  
+- **Frontend**: Vite + React 19 application with TypeScript
 - **Integration**: Direct FlightSQL connection to analytics service
 
 ### Key Features

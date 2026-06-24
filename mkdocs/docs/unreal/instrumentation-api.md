@@ -110,9 +110,9 @@ MICROMEGAS_IMETRIC(target, level, name, unit, expression)
 
 **Verbosity Levels:**
 
-- `MicromegasTracing::Verbosity::Low` - Critical metrics only
-- `MicromegasTracing::Verbosity::Med` - Standard metrics
-- `MicromegasTracing::Verbosity::High` - Detailed metrics
+- `MicromegasTracing::Verbosity::Min` - Low-frequency / critical metrics
+- `MicromegasTracing::Verbosity::Med` - Frame-frequency metrics
+- `MicromegasTracing::Verbosity::Max` - Many instances per frame
 
 **Common Units:**
 
@@ -128,7 +128,7 @@ MICROMEGAS_IMETRIC("Game", MicromegasTracing::Verbosity::Med,
                    TEXT("PlayerCount"), TEXT("count"), 
                    GetWorld()->GetNumPlayerControllers());
 
-MICROMEGAS_IMETRIC("Memory", MicromegasTracing::Verbosity::Low,
+MICROMEGAS_IMETRIC("Memory", MicromegasTracing::Verbosity::Min,
                    TEXT("TextureMemory"), TEXT("bytes"),
                    GetTextureMemoryUsage());
 ```
@@ -155,7 +155,7 @@ MICROMEGAS_FMETRIC("Performance", MicromegasTracing::Verbosity::Med,
                    TEXT("FrameTime"), TEXT("ms"), 
                    DeltaTime * 1000.0);
 
-MICROMEGAS_FMETRIC("Game", MicromegasTracing::Verbosity::High,
+MICROMEGAS_FMETRIC("Game", MicromegasTracing::Verbosity::Max,
                    TEXT("HealthPercent"), TEXT("percent"),
                    (Health / MaxHealth) * 100.0);
 ```
@@ -258,6 +258,29 @@ void AMyActor::Tick(float DeltaTime)
     MICROMEGAS_SPAN_UOBJECT("Game.Actors", this);
     Super::Tick(DeltaTime);
     // ... tick logic ...
+}
+```
+
+### MICROMEGAS_SPAN_UOBJECT_CONDITIONAL
+
+Creates a span named after a UObject, but only when a condition is true.
+
+```cpp
+MICROMEGAS_SPAN_UOBJECT_CONDITIONAL(target, condition, object)
+```
+
+**Parameters:**
+
+- `target` (const char*): Span target/category
+- `condition` (bool): Whether to create the span
+- `object` (UObject*): The UObject whose name to use if condition is true
+
+**Example:**
+```cpp
+void AMyActor::Tick(float DeltaTime)
+{
+    MICROMEGAS_SPAN_UOBJECT_CONDITIONAL("Game.Actors", bIsImportant, this);
+    Super::Tick(DeltaTime);
 }
 ```
 
@@ -577,6 +600,45 @@ Two integer metrics are emitted via `MICROMEGAS_IMETRIC` from the instrumented e
 
 These are **wire bits** including packet headers, bunch headers, NetGUID exports, control bunches, and voice. Compare against `sum(NetConnectionEndEvent.bit_size)` for content-vs-wire reconciliation — the gap is framing overhead.
 
+## Image API
+
+### Dispatch::SendImage
+
+Sends an image as a telemetry event. Images are stored in the `images` view and can be queried via SQL or viewed in the notebook Image cell.
+
+```cpp
+MicromegasTracing::Dispatch::SendImage(Name, Format, Data, DataBytes)
+```
+
+**Parameters:**
+
+- `Name` (const TCHAR*): Image name / label (e.g., `TEXT("screenshot")`)
+- `Format` (const TCHAR*): MIME type (e.g., `TEXT("image/png")`)
+- `Data` (const uint8*): Raw image bytes
+- `DataBytes` (uint32): Length of `Data` in bytes
+
+**Example — send a PNG from a byte array:**
+```cpp
+#include "MicromegasTracing/Dispatch.h"
+
+TArray64<uint8> PngBytes = EncodeAsPng(Width, Height, Pixels);
+MicromegasTracing::Dispatch::SendImage(
+    TEXT("heatmap"),
+    TEXT("image/png"),
+    PngBytes.GetData(),
+    static_cast<uint32>(PngBytes.Num()));
+```
+
+**Console command shortcut:**
+
+The `telemetry.screenshot` console command captures the game viewport and calls `SendImage` automatically:
+
+```
+telemetry.screenshot
+```
+
+This works in both game builds (via `UGameViewportClient::OnScreenshotCaptured`) and in the editor (via `GEditor->GetActiveViewport()->ReadPixels`). Use `telemetry.images.enable 0` to suppress image recording globally.
+
 ## Default Context API
 
 The Default Context allows setting global properties that are automatically attached to all telemetry.
@@ -650,47 +712,35 @@ Ctx->Copy(CurrentContext);
 
 ## Console Commands
 
-Runtime control commands available in the Unreal console:
+Runtime control commands and CVars available in the Unreal console:
 
-### telemetry.enable
-Initializes the telemetry system if not already enabled.
-
-```
-telemetry.enable
-```
-
-### telemetry.flush
-Forces immediate flush of all pending telemetry events.
-
-```
-telemetry.flush
-```
-
-### telemetry.spans.enable
-Enables or disables span recording.
-
-```
-telemetry.spans.enable 1  // Enable spans
-telemetry.spans.enable 0  // Disable spans
-```
-
-### telemetry.spans.all
-Enables recording of all spans without sampling.
-
-```
-telemetry.spans.all 1  // Record all spans
-telemetry.spans.all 0  // Use sampling
-```
+| Command / CVar | Default | Description |
+|---|---|---|
+| `telemetry.enable` | — | Initialize the telemetry system |
+| `telemetry.flush` | — | Force flush all pending events |
+| `telemetry.spans.enable` | `true` (game), `false` (editor) | Enable/disable span recording |
+| `telemetry.spans.all` | `false` | Record all spans without sampling |
+| `telemetry.log.enable` | `true` | Enable/disable log stream recording |
+| `telemetry.metrics.enable` | `true` | Enable/disable metrics stream recording |
+| `telemetry.images.enable` | `true` | Enable/disable images sent via `SendImage` |
+| `telemetry.screenshot` | — | Capture the game/editor viewport as a telemetry image |
+| `telemetry.net.verbosity` | `2` | Net trace verbosity: 0=off, 1=packets, 2=+root objects, 3=+all objects, 4=+properties/RPCs |
+| `telemetry.max_queue_bytes` | `134217728` | Soft queue cap in bytes; Traces dropped above this |
+| `telemetry.hard_queue_bytes` | `268435456` | Hard queue ceiling; Logs/Metrics also dropped above this |
+| `telemetry.max_in_flight_requests` | `3` | Max concurrent HTTP uploads in flight |
+| `telemetry.sampling.interaction_timeout` | `2.0` s | Seconds of idle before spike recording is suppressed; 0 disables |
+| `telemetry.sampling.heartbeat_interval` | `120.0` s | Seconds between heartbeat span captures; 0 disables |
 
 ## Best Practices
 
 ### Performance
 
-1. **Use sampling for high-frequency spans** - It's OK to keep spans enabled with reasonable sampling
-2. **Use appropriate verbosity** - Lower verbosity for high-frequency metrics
-3. **Batch operations** - Let the system batch; avoid frequent flushes
-4. **Static strings** - Use TEXT() macro for string literals
-5. **Limit context cardinality** - Context keys/values are never freed
+1. **Use sampling for high-frequency spans** — spike-based sampling (`telemetry.spans.all 0`) captures performance anomalies without recording every frame
+2. **Use appropriate verbosity** — `Verbosity::Min` for low-frequency events, `Verbosity::Med` for per-frame, `Verbosity::Max` for sub-frame
+3. **Batch operations** — let the system batch; avoid frequent manual flushes
+4. **Static strings** — use `TEXT()` macro for string literals in metric/span names
+5. **Limit context cardinality** — context keys/values are interned and never freed
+6. **Queue caps** — the HTTP sink has a soft cap (Traces dropped first) and hard cap (Logs/Metrics dropped too); adjust `telemetry.max_queue_bytes` if you see `DroppedUploads` metrics during outages
 
 
 ### Error Handling

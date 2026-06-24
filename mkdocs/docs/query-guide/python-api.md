@@ -409,7 +409,7 @@ if not streams.empty:
     # Query blocks in that stream
     blocks = client.query_blocks(begin, end, 100, stream_id)
     print(f"Found {len(blocks)} blocks")
-    print(f"Total events: {blocks['nb_events'].sum()}")
+    print(f"Total objects: {blocks['nb_objects'].sum()}")
     print(f"Total size: {blocks['payload_size'].sum()} bytes")
 ```
 

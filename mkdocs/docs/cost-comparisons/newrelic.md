@@ -1,6 +1,6 @@
 # Cost Comparison: Micromegas vs. New Relic
 
-**Disclaimer:** These are estimates, not quotes. Actual costs vary based on data volume, user count, plan type, and negotiated enterprise agreements.
+**Disclaimer:** These are estimates, not quotes. Actual costs vary based on data volume, user count, plan type, and negotiated enterprise agreements. **Pricing figures were verified in early 2026 — confirm current rates at [newrelic.com/pricing](https://newrelic.com/pricing) before use.**
 
 For shared methodology, workload definition, and Micromegas baseline cost, see the [Comparison Methodology](index.md) page.
 
