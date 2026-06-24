@@ -4,7 +4,7 @@ This guide covers installing the Micromegas Grafana datasource plugin.
 
 ## Prerequisites
 
-- **Grafana**: Version 9.0 or later
+- **Grafana**: Version 9.2.5 or later
 - **Micromegas Analytics Server**: flight-sql-srv running and accessible
 - **Authentication Credentials**: API key or OAuth 2.0 client credentials
 
@@ -58,6 +58,7 @@ This guide covers installing the Micromegas Grafana datasource plugin.
 
 2. Install dependencies:
    ```bash
+   corepack enable  # required once per machine (Yarn 4 / Berry)
    yarn install
    ```
 

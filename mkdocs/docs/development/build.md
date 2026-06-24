@@ -4,7 +4,7 @@ This guide covers building Micromegas from source and setting up a development e
 
 ## Prerequisites
 
-- **[Rust](https://rustup.rs/)** - Latest stable version
+- **[Rust](https://rustup.rs/)** - Toolchain version pinned in `rust/rust-toolchain.toml` (currently `1.96.0`); `rustup` will install it automatically on first build
 - **[Python 3.8+](https://www.python.org/downloads/)**
 - **[Docker](https://www.docker.com/get-started/)** - For running PostgreSQL
 - **[Git](https://git-scm.com/downloads)**
@@ -81,9 +81,69 @@ cargo build --profile release-debug
 # Profiling build
 cargo build --profile profiling
 
-# Cross-platform build
+# Cross-compile for Windows (from Linux)
 rustup target add x86_64-pc-windows-gnu
 cargo build --target x86_64-pc-windows-gnu
+```
+
+### ARM64 Cross-Compilation
+
+Production Docker images support ARM64 (aarch64) via a Docker-based cross-compilation environment. The toolchain lives in `local_test_env/arm64/`.
+
+```bash
+# Build the ARM64 cross-compilation Docker image
+cd local_test_env/arm64
+python3 build.py
+
+# Run the image to cross-compile (mounts the repo)
+python3 run.py
+```
+
+The `Dockerfile` installs `g++-aarch64-linux-gnu`, adds the `aarch64-unknown-linux-gnu` Rust target, and cross-compiles OpenSSL statically for ARM64. The `build_docker_images.py` script at the repo root also accepts `--arm64` to build production images for ARM64.
+
+```bash
+python3 build/build_docker_images.py --arm64
+```
+
+## JavaScript / TypeScript Development
+
+The repository has two independent JS/TS workspaces. Both use Yarn 4 (Berry) — run `corepack enable` once per machine to activate the pinned version.
+
+### Analytics Web App (`analytics-web-app/`)
+
+Vite + React 19 frontend for the analytics UI.
+
+```bash
+cd analytics-web-app
+
+corepack enable     # Once per machine
+yarn install        # Install dependencies
+
+yarn dev            # Vite dev server on port 3000
+yarn build          # Production build to dist/
+yarn lint           # ESLint
+yarn type-check     # TypeScript check (no emit)
+yarn test           # Jest unit tests
+```
+
+### Grafana Plugin (`grafana/`)
+
+Grafana datasource plugin (React frontend + Go backend).
+
+**Additional prerequisites**: Go 1.23+ and `mage` (`go install github.com/magefile/mage@latest`).
+
+```bash
+cd grafana
+
+corepack enable     # Once per machine
+yarn install        # Install Node dependencies
+
+mage -v build       # Build Go backend binaries
+yarn build          # Production bundle
+yarn dev            # Dev mode with hot reload
+yarn test:ci        # Tests
+yarn lint:fix       # Lint + autofix
+yarn server         # Start Grafana via docker compose at http://localhost:3000
 ```
 
 ## Python Development

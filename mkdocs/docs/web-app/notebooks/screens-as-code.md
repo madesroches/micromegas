@@ -123,7 +123,7 @@ Refresh local files from server. With no arguments, pulls all locally-tracked sc
 micromegas-screens plan [NAME...]
 ```
 
-Preview what `apply` would change. Shows creates, updates, deletes, and untracked screens. Read-only — no server mutations.
+Preview what `apply` would change. Shows creates, updates, deletes, and untracked screens, and prints a **unified diff** for each modified screen. Pass `--color` to get colored diff output in a terminal. Read-only — no server mutations.
 
 ### `apply`
 

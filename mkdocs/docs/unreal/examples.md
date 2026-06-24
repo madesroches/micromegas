@@ -483,6 +483,63 @@ void AMyPhysicsActor::SimulatePhysics(float DeltaTime)
 }
 ```
 
+## Image Capture
+
+### Sending a Screenshot via Console Command
+
+The quickest way to capture the current viewport as a telemetry image:
+
+```
+telemetry.screenshot
+```
+
+The image is stored in the `images` SQL table and can be viewed in the Micromegas notebook Image cell. Images can be disabled globally with `telemetry.images.enable 0`.
+
+### Sending a Custom Image Programmatically
+
+Use `Dispatch::SendImage` to send any PNG (or other format) from code:
+
+```cpp
+#include "MicromegasTracing/Dispatch.h"
+#include "ImageUtils.h"
+
+void AMyActor::CaptureAndSendMinimap()
+{
+    MICROMEGAS_SPAN_FUNCTION("Game.Minimap");
+
+    // Render minimap to a pixel array
+    TArray<FColor> Pixels;
+    const int32 Width = 512;
+    const int32 Height = 512;
+    RenderMinimapToPixels(Width, Height, Pixels);
+
+    // Compress to PNG
+    TArray64<uint8> PngBytes;
+    FImageUtils::PNGCompressImageArray(Width, Height,
+        TArrayView64<const FColor>(Pixels.GetData(), Pixels.Num()),
+        PngBytes);
+
+    // Send as telemetry image
+    MicromegasTracing::Dispatch::SendImage(
+        TEXT("minimap"),
+        TEXT("image/png"),
+        PngBytes.GetData(),
+        static_cast<uint32>(PngBytes.Num()));
+
+    MICROMEGAS_LOG("Game.Minimap", MicromegasTracing::LogLevel::Info,
+                   TEXT("Minimap image sent to telemetry"));
+}
+```
+
+Query images in SQL:
+
+```sql
+SELECT time, name, format, payload_size
+FROM view_instance('images', process_id => $process_id)
+ORDER BY time DESC
+LIMIT 20
+```
+
 ## Error Handling and Debugging
 
 ### Comprehensive Error Logging

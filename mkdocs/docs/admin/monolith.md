@@ -71,8 +71,8 @@ micromegas-monolith --disable-auth
 ### API keys for ingestion only, OIDC for analytics
 
 ```bash
-export MICROMEGAS_INGESTION_API_KEYS='["key1","key2"]'
-export MICROMEGAS_ANALYTICS_OIDC_CONFIG='{"issuer_url":"...","client_id":"...","audience":"..."}'
+export MICROMEGAS_INGESTION_API_KEYS='[{"name":"service-a","key":"key1"},{"name":"service-b","key":"key2"}]'
+export MICROMEGAS_ANALYTICS_OIDC_CONFIG='{"issuers":[{"issuer":"https://your-idp.example.com","audience":"your-client-id"}]}'
 ```
 
 The prefix fallback means `MICROMEGAS_API_KEYS` works for ingestion when `MICROMEGAS_INGESTION_API_KEYS` is not set, and `MICROMEGAS_OIDC_CONFIG` works for analytics when `MICROMEGAS_ANALYTICS_OIDC_CONFIG` is not set.
@@ -80,7 +80,7 @@ The prefix fallback means `MICROMEGAS_API_KEYS` works for ingestion when `MICROM
 ### Full OIDC (web + analytics, open ingestion)
 
 ```bash
-export MICROMEGAS_OIDC_CONFIG='{"issuer_url":"...","client_id":"...","audience":"..."}'
+export MICROMEGAS_OIDC_CONFIG='{"issuers":[{"issuer":"https://your-idp.example.com","audience":"your-client-id"}]}'
 export MICROMEGAS_STATE_SECRET="<random-secret>"
 export MICROMEGAS_AUTH_REDIRECT_URI="http://localhost:3000/api/auth/callback"
 micromegas-monolith --disable-ingestion-auth

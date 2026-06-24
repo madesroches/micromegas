@@ -17,7 +17,6 @@ Opens on `http://localhost:3000` with backend on `:8000`. Automatically sets loc
 
 ```bash
 # OIDC provider configuration (same format as FlightSQL server)
-# Note: Web app only supports a single issuer
 export MICROMEGAS_OIDC_CONFIG='{
   "issuers": [
     {
@@ -35,17 +34,16 @@ export MICROMEGAS_AUTH_REDIRECT_URI="http://localhost:3000/auth/callback"
 # Generate with: openssl rand -base64 32
 export MICROMEGAS_STATE_SECRET="your-random-secret-here"
 
-# FlightSQL connection
-export MICROMEGAS_FLIGHTSQL_URL="grpc://127.0.0.1:50051"
+# URL prefix (use "/" for root, "/analytics" for a sub-path)
+export MICROMEGAS_BASE_PATH="/"
+
+# PostgreSQL database for the web app (screens, data sources, maps catalog)
+export MICROMEGAS_APP_SQL_CONNECTION_STRING="postgres://user:pass@localhost/analytics_web"
 ```
 
 ### Optional
 
 ```bash
-# Base path for reverse proxy deployments (e.g., behind ALB)
-# All routes will be prefixed with this path
-export MICROMEGAS_BASE_PATH="/analytics"
-
 # Cookie settings (production)
 export MICROMEGAS_COOKIE_DOMAIN=".example.com"
 export MICROMEGAS_SECURE_COOKIES="true"  # HTTPS only
@@ -107,23 +105,30 @@ MICROMEGAS_WEB_CORS_ORIGIN="https://example.com"
 MICROMEGAS_AUTH_REDIRECT_URI="https://example.com/analytics/auth/callback"
 ```
 
-Routes become: `/analytics/health`, `/analytics/query`, `/analytics/auth/*`, etc.
+Routes become: `/analytics/api/health`, `/analytics/api/query-stream`, `/analytics/auth/*`, etc.
 The same container image works for any base path - no rebuild needed.
 
 ## API Routes
 
-Without `MICROMEGAS_BASE_PATH`:
-- `GET /health` - Health check
-- `POST /query` - Execute SQL query
-- `GET /perfetto/{process_id}/info` - Trace metadata
-- `POST /perfetto/{process_id}/generate` - Generate Perfetto trace
-- `GET /auth/login` - Initiate OAuth login
-- `GET /auth/callback` - OAuth callback
-- `POST /auth/refresh` - Refresh tokens
-- `POST /auth/logout` - Logout
-- `GET /auth/me` - Current user info
+Without `MICROMEGAS_BASE_PATH` (or with `"/"`):
+- `GET /api/health` — Health check (public)
+- `GET /api/ready` — Readiness check (public)
+- `POST /api/query-stream` — Execute SQL query (streaming NDJSON)
+- `GET /api/screen-types` — List screen types
+- `GET /api/screen-types/{type_name}/default` — Default config for a screen type
+- `GET /api/screens`, `POST /api/screens` — List / create screens
+- `GET /api/screens/{name}`, `PUT`, `DELETE` — Get / update / delete screen
+- `GET /api/data-sources`, `POST /api/data-sources` — List / create data sources
+- `GET /api/data-sources/{name}`, `PUT`, `DELETE` — Get / update / delete data source
+- `GET /api/maps/catalog` — List map assets
+- `GET /api/maps/blob/{filename}`, `PUT`, `DELETE` — Fetch / upload / delete map GLB
+- `GET /auth/login` — Initiate OAuth login
+- `GET /auth/callback` — OAuth callback
+- `POST /auth/refresh` — Refresh tokens
+- `POST /auth/logout` — Logout
+- `GET /auth/me` — Current user info
 
-With `MICROMEGAS_BASE_PATH="/analytics"`, all routes are prefixed (e.g., `/analytics/health`).
+With `MICROMEGAS_BASE_PATH="/analytics"`, all routes are prefixed (e.g., `/analytics/api/health`).
 
 **Configure OAuth redirect in your identity provider:**
 - Add the redirect URI to allowed callbacks
@@ -132,7 +137,7 @@ With `MICROMEGAS_BASE_PATH="/analytics"`, all routes are prefixed (e.g., `/analy
 ## Architecture
 
 - **Frontend**: Vite/React SPA on port 3000 (dev) or served by backend (prod)
-- **Backend**: Rust (`analytics-web-srv`) on port 8000
+- **Backend**: Rust (`analytics-web-srv`) on port 3000 (default); the dev start script uses 8000 to avoid conflicting with the Vite dev server
 - **Auth**: OIDC (ID tokens via httpOnly cookies)
 - **Data**: FlightSQL queries to analytics service
 

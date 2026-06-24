@@ -1,6 +1,6 @@
 # Cost Comparison: Micromegas vs. Datadog
 
-**Disclaimer:** These are estimates, not quotes. Datadog's pricing is complex and modular. Actual costs vary based on specific product usage, negotiated enterprise agreements, and region.
+**Disclaimer:** These are estimates, not quotes. Datadog's pricing is complex and modular. Actual costs vary based on specific product usage, negotiated enterprise agreements, and region. **Pricing figures were verified in early 2026 — confirm current rates at [datadoghq.com/pricing](https://www.datadoghq.com/pricing/) before use.**
 
 For shared methodology, workload definition, and Micromegas baseline cost, see the [Comparison Methodology](index.md) page.
 

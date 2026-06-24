@@ -52,6 +52,9 @@ micromegas/
 │   ├── telemetry-ingestion-srv/
 │   ├── flight-sql-srv/
 │   └── ...
+├── analytics-web-app/      # Analytics web UI (Vite + React 19)
+│   ├── package.json
+│   └── src/
 ├── grafana/                # Grafana datasource plugin
 │   ├── package.json
 │   ├── src/
@@ -94,15 +97,34 @@ poetry run pytest       # Run tests
 poetry run black <file> # Format code (REQUIRED before commit)
 ```
 
+### Analytics Web App
+
+The analytics web UI is a standalone Vite + React 19 application in `analytics-web-app/`.
+
+**Location**: `analytics-web-app/`
+
+**Prerequisites**: Run `corepack enable` once per machine to activate the pinned Yarn version.
+
+**Commands** (run from `analytics-web-app/`):
+```bash
+corepack enable         # Once per machine
+yarn install            # Install dependencies
+yarn dev                # Dev server on port 3000 (Vite)
+yarn build              # Production build to dist/
+yarn lint               # ESLint
+yarn type-check         # TypeScript type check (no emit)
+yarn test               # Jest unit tests
+```
+
 ### TypeScript/JavaScript Workspaces
 
-The repository uses Yarn workspaces to manage TypeScript/JavaScript packages.
+The repository uses Yarn workspaces to manage the Grafana plugin and shared TypeScript packages.
 
 - **Root workspace** (`package.json`): Defines workspaces and shared dev dependencies
 - **`grafana/`**: Grafana FlightSQL datasource plugin (React + Go backend)
 - **`typescript/types/`**: Shared TypeScript type definitions (`@micromegas/types`)
 
-**Important**: Always use `yarn`, not `npm`, to avoid lockfile conflicts.
+**Important**: Always use `yarn`, not `npm`, to avoid lockfile conflicts. Run `corepack enable` once per machine before running `yarn install`.
 
 ### Working with All Components
 
@@ -118,9 +140,14 @@ cargo build              # Fetches and compiles Rust dependencies
 poetry install           # Installs Python dependencies
 ```
 
-**TypeScript/JavaScript** (from repository root, use `yarn`):
+**TypeScript/JavaScript** (from repository root, use `yarn`; run `corepack enable` first if needed):
 ```bash
 yarn install             # Install all workspace dependencies (Grafana plugin, shared types)
+```
+
+**Analytics web app** (standalone workspace in `analytics-web-app/`):
+```bash
+cd analytics-web-app && yarn install
 ```
 
 **Go** (for Grafana backend, from `grafana/` directory):
@@ -147,11 +174,11 @@ cd grafana && yarn build                 # Grafana plugin only
 cd typescript/types && yarn build        # Shared types only
 ```
 
-For the Grafana plugin development:
+**Analytics web app:**
 ```bash
-cd grafana
-yarn build              # Production build
-yarn dev                # Development mode with hot reload
+cd analytics-web-app
+yarn build              # Production build to dist/
+yarn dev                # Vite dev server on port 3000
 ```
 
 #### Running Tests
@@ -173,6 +200,11 @@ yarn workspaces foreach -A run test      # Test all workspaces (from root)
 cd grafana && yarn test:ci               # Grafana plugin tests only
 ```
 
+**Analytics web app:**
+```bash
+cd analytics-web-app && yarn test        # Jest unit tests
+```
+
 #### Linting
 
 **Rust workspace:**
@@ -192,6 +224,12 @@ yarn workspaces foreach -A run lint      # Lint all workspaces (from root)
 cd grafana && yarn lint:fix              # Grafana plugin only
 ```
 
+**Analytics web app:**
+```bash
+cd analytics-web-app && yarn lint        # ESLint
+cd analytics-web-app && yarn type-check  # TypeScript check (no emit)
+```
+
 ### Grafana Plugin Development
 
 The Grafana plugin requires both Node.js and Go:
@@ -199,7 +237,7 @@ The Grafana plugin requires both Node.js and Go:
 **Prerequisites:**
 - Node.js 20+ (matches `.nvmrc` and all CI workflows; Yarn 4 requires ≥18.12)
 - Go 1.23+ (for backend plugin)
-- yarn (package manager for this repository)
+- `corepack enable` — activates the pinned Yarn version (run once per machine)
 - mage (for Go builds): `go install github.com/magefile/mage@latest`
 
 **Development workflow:**

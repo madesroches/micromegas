@@ -420,9 +420,9 @@ The same controls apply in both perspective and orthographic camera modes.
 | Left-drag | Pan (top-down XY translation) |
 | Right-drag | Orbit around the look-at point. Pitch is clamped to keep the camera above the horizon. |
 | Ctrl/Cmd + wheel | Zoom, anchored to the point under the cursor. Plain wheel scrolls the surrounding page. |
-| `W` / `S` | Pan forward / back (top-down — does not change elevation) |
-| `A` / `D` | Strafe left / right |
-| `Q` / `E` | Zoom in / out |
+| `W` / `S` | Pan along the camera-up vector (camera-relative — tilting the view changes the world direction) |
+| `A` / `D` | Strafe along the camera-right vector |
+| `Q` / `E` | Move along the camera-forward vector (perspective); zoom in / out (orthographic) |
 | `Z` | Reset view to the initial framing |
 
 Keyboard controls (WASD/QE/Z) require the pointer to be over the map — keeps multiple Map cells on the same page from moving together and ignores keystrokes typed into form inputs.
@@ -672,7 +672,7 @@ SQL query results displayed in a sortable, paginated table.
 Override how a column renders by providing a markdown format string with row macros:
 
 ```markdown
-[$row.exe](/process/$row.process_id?from=$begin&to=$end)
+[$row.exe](/process/$row.process_id?from=$from&to=$to)
 ```
 
 This renders the `exe` column as a link to the process page.

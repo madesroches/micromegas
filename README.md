@@ -68,9 +68,7 @@ Learn more about Micromegas through our technical presentations:
 
 To get started with Micromegas, please refer to the [Getting Started](https://micromegas.info/docs/getting-started/) guide.
 
-## Current Status & Roadmap
-
-### Unreleased
+## Recent Releases
 
 ### v0.26.0 (June 2026)
 * `micromegas-monolith`: single-process deployment running all roles (`ingestion`, `analytics`, `web`, `admin`) in one binary — simplifies self-hosted and single-machine deployments
@@ -131,21 +129,6 @@ To get started with Micromegas, please refer to the [Getting Started](https://mi
 * `process_spans` table function for cross-thread and async span analysis
 * Database migration: unique indexes on processes, streams, and blocks
 * DataFusion 52.3
-
-### v0.21.0 (February 2026)
-* Cross-cell notebook queries running DataFusion in the browser via WASM
-* Horizontal group cell with drag-and-drop reordering
-* WASM tracing support for `micromegas-tracing` and `micromegas-telemetry-sink`
-* `micromegas-datafusion-extensions` crate — shared WASM-compatible JSONB and histogram UDFs
-* Python CLI: `micromegas-query` and `micromegas-logout` via `pip install micromegas`
-* LZ4 Arrow IPC compression for smaller network transfers
-
-### v0.20.0 (February 2026)
-* Client-side WASM query execution with DataFusion in the browser
-* Swimlane, property timeline, and Perfetto export cell types
-* Drag-to-zoom on charts, config diff modal, per-cell data sources
-* Client-side Perfetto trace generation with gzip compression
-* Parquet content cache and parallelized query planning
 
 For the full history, see [CHANGELOG.md](./CHANGELOG.md).
 

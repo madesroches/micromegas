@@ -216,6 +216,7 @@ Now that you can run basic queries:
 - `measures` - Numeric metrics
 - `thread_spans` - Execution timing
 - `async_events` - Async operation tracking
+- `images` - Screenshots and image data
 
 ### Key Functions
 - `view_instance('view_name', 'process_id')` - Process-scoped views

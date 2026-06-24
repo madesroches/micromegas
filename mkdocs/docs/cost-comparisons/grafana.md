@@ -1,6 +1,6 @@
 # Cost Comparison: Micromegas vs. Grafana Cloud
 
-**Disclaimer:** These are estimates, not quotes. Actual costs vary based on usage patterns, active series count, scrape frequency, and negotiated agreements.
+**Disclaimer:** These are estimates, not quotes. Actual costs vary based on usage patterns, active series count, scrape frequency, and negotiated agreements. **Pricing figures were verified in early 2026 — confirm current rates at [grafana.com/pricing](https://grafana.com/pricing/) before use.**
 
 For shared methodology, workload definition, and Micromegas baseline cost, see the [Comparison Methodology](index.md) page.
 

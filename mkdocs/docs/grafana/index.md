@@ -19,7 +19,7 @@ The plugin provides:
 
 ### Prerequisites
 
-- Grafana 9.0 or later
+- Grafana 9.2.5 or later
 - Micromegas analytics server (flight-sql-srv) running
 - Authentication credentials (API key or OAuth 2.0 client credentials)
 

@@ -82,10 +82,12 @@ Once your game is running and generating telemetry:
 ### Automatic Telemetry
 
 - **UE_LOG statements**: All existing Unreal logs are automatically captured
-- **Frame metrics**: Delta time, frame rate (when MetricPublisher is active)
+- **Frame metrics**: Delta time, frame rate, game/render/RHI/GPU thread times, draw calls (when MetricPublisher is active)
 - **Memory metrics**: Physical and virtual memory usage
+- **Input metrics**: `TimeSinceLastInput` — seconds since last keyboard/mouse/touch/controller interaction
+- **Scalability metrics**: Quality levels emitted on change; VSync state tracked in context
 - **Map changes**: Current level/world tracked in context
-- **Crashes**: Stack traces and context on Windows (requires debug symbols)
+- **Crashes**: Stack traces and context on Windows and Linux (requires debug symbols)
 
 ### Manual Instrumentation
 
@@ -93,6 +95,7 @@ Once your game is running and generating telemetry:
 - **Business metrics**: Player counts, game state, performance indicators
 - **Custom logs**: Direct telemetry logging with structured properties
 - **Context properties**: Session IDs, user IDs, build versions
+- **Images**: Screenshots and custom images sent via `Dispatch::SendImage()`, queryable via the `images` SQL table
 
 ## Architecture
 
@@ -103,13 +106,17 @@ Game Code
     ├─ Logging API
     ├─ Metrics API
     ├─ Spans API
+    ├─ Image API (SendImage)
     └─ Default Context
          ↓
 [MicromegasTelemetrySink Plugin]
-    ├─ HTTP Event Sink
+    ├─ Sampling Controller (spike detection, idle-aware, heartbeat)
+    ├─ Priority Queues: Metadata / Logs / Metrics / Traces
+    │    └─ Soft cap: Traces dropped first; hard cap bounds memory during outages
+    ├─ HTTP Worker Thread
+    │    └─ FHttpRetrySystem (exponential backoff, per-priority retry budget)
     ├─ Flush Monitor
-    ├─ Sampling Controller
-    └─ Crash Reporter
+    └─ Crash Reporter (Windows + Linux)
          ↓
 [Telemetry Ingestion Server]
     ├─ PostgreSQL (metadata)
@@ -124,16 +131,16 @@ Game Code
 
 ## Performance Considerations
 
-- Spans are disabled by default (enable with `telemetry.spans.enable 1`)
+- Spans are **disabled by default in the editor**; enabled by default in non-editor (game) builds. Toggle with `telemetry.spans.enable 0/1`
 - Events are buffered in thread-local storage before async delivery
-- The HTTP sink runs on a dedicated thread
-- Use sampling for high-frequency spans to manage data volume
-- Default context operations are expensive - use for infrequent changes
+- The HTTP worker thread uses `FHttpRetrySystem` with exponential backoff and four priority queues (Metadata → Logs → Metrics → Traces); Traces are dropped first when the queue exceeds the soft cap (`telemetry.max_queue_bytes`)
+- Use `telemetry.spans.all 0` (default) to let spike-based sampling manage trace volume automatically
+- Default context operations are expensive — use for infrequent changes
 
 ## Platform Support
 
 - **Windows**: Full support including crash reporting
-- **Linux**: Full support
+- **Linux**: Full support including crash reporting
 - **Mac**: Full support
 - **Consoles**: Requires network configuration
 - **Mobile**: Consider battery and bandwidth optimization

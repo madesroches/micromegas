@@ -1,6 +1,6 @@
 # Cost Comparison: Micromegas vs. Splunk
 
-**Disclaimer:** These are estimates, not quotes. Splunk Cloud pricing is highly negotiable and not transparently published. Actual costs vary based on daily index volume, negotiated enterprise rates, and region.
+**Disclaimer:** These are estimates, not quotes. Splunk Cloud pricing is highly negotiable and not transparently published. Actual costs vary based on daily index volume, negotiated enterprise rates, and region. **Pricing figures are based on AWS Marketplace rates from early 2026 — verify current rates before use.**
 
 For shared methodology, workload definition, and Micromegas baseline cost, see the [Comparison Methodology](index.md) page.
 
@@ -25,7 +25,7 @@ Note: Splunk Cloud pricing is heavily volume-discounted at scale. The AWS Market
 
 ### Cisco Acquisition Context
 
-Cisco completed its acquisition of Splunk in March 2024 for ~$28 billion. Cisco is working on a "Data Fabric" approach that could affect future pricing, but as of February 2026, standard Splunk Cloud pricing has not materially changed.
+Cisco completed its acquisition of Splunk in March 2024 for ~$28 billion. Cisco is working on a "Data Fabric" approach that could affect future pricing. Verify current pricing directly with Splunk before making budget decisions.
 
 ---
 
