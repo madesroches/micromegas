@@ -2,4 +2,3 @@
  - sql jit view
  - async spans jit view based on async events view
  - grafana query param time filter
- - migrate off deprecated TableFunctionImpl::call to call_with_args (datafusion 54.0)
