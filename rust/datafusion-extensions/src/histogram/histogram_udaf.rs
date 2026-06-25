@@ -175,7 +175,7 @@ fn make_state(args: AccumulatorArgs) -> Result<Box<dyn Accumulator>, DataFusionE
     let start_literal = args
         .exprs
         .first()
-        .and_then(|e| e.as_any().downcast_ref::<Literal>())
+        .and_then(|e| e.downcast_ref::<Literal>())
         .and_then(|l| {
             if let ScalarValue::Float64(Some(v)) = l.value() {
                 Some(*v)
@@ -186,7 +186,7 @@ fn make_state(args: AccumulatorArgs) -> Result<Box<dyn Accumulator>, DataFusionE
     let end_literal = args
         .exprs
         .get(1)
-        .and_then(|e| e.as_any().downcast_ref::<Literal>())
+        .and_then(|e| e.downcast_ref::<Literal>())
         .and_then(|l| {
             if let ScalarValue::Float64(Some(v)) = l.value() {
                 Some(*v)
@@ -197,7 +197,7 @@ fn make_state(args: AccumulatorArgs) -> Result<Box<dyn Accumulator>, DataFusionE
     let nb_bins_literal = args
         .exprs
         .get(2)
-        .and_then(|e| e.as_any().downcast_ref::<Literal>())
+        .and_then(|e| e.downcast_ref::<Literal>())
         .and_then(|l| {
             if let ScalarValue::Int64(Some(v)) = l.value() {
                 Some(*v)

@@ -13,7 +13,6 @@ use datafusion::logical_expr::{LogicalPlan, LogicalPlanBuilder};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::Expr;
 use datafusion::scalar::ScalarValue;
-use std::any::Any;
 use std::sync::Arc;
 
 /// A DataFusion `TableFunctionImpl` that expands a histogram struct into rows of (bin_center, count).
@@ -162,10 +161,6 @@ impl ExpandHistogramTableProvider {
 
 #[async_trait]
 impl TableProvider for ExpandHistogramTableProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         output_schema()
     }

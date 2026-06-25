@@ -14,7 +14,7 @@ use datafusion::{
     physical_plan::ExecutionPlan,
 };
 use micromegas_tracing::prelude::*;
-use std::{any::Any, sync::Arc};
+use std::sync::Arc;
 
 /// A DataFusion `TableProvider` for materialized views.
 #[derive(Debug)]
@@ -50,10 +50,6 @@ impl MaterializedView {
 
 #[async_trait]
 impl TableProvider for MaterializedView {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         self.view.get_file_schema()
     }

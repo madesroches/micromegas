@@ -13,7 +13,6 @@ use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::Expr;
 use datafusion::scalar::ScalarValue;
 use jsonb::RawJsonb;
-use std::any::Any;
 use std::sync::Arc;
 
 /// A DataFusion `TableFunctionImpl` that expands a JSONB array into rows with a single `value` column.
@@ -191,10 +190,6 @@ impl JsonbArrayElementsTableProvider {
 
 #[async_trait]
 impl TableProvider for JsonbArrayElementsTableProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         output_schema()
     }

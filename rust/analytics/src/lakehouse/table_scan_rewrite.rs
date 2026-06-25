@@ -27,7 +27,6 @@ impl TableScanRewrite {
         if let LogicalPlan::TableScan(ts) = &plan {
             let table_source = ts
                 .source
-                .as_any()
                 .downcast_ref::<DefaultTableSource>()
                 .ok_or_else(|| {
                     DataFusionError::Execution(String::from(
@@ -37,7 +36,6 @@ impl TableScanRewrite {
             // Only rewrite MaterializedView tables, skip others (like table functions)
             let Some(mat_view) = table_source
                 .table_provider
-                .as_any()
                 .downcast_ref::<MaterializedView>()
             else {
                 // This is not a MaterializedView (e.g., a table function), skip rewriting

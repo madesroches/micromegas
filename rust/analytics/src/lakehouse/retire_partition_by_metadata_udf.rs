@@ -154,10 +154,6 @@ impl RetirePartitionByMetadata {
 }
 
 impl ScalarUDFImpl for RetirePartitionByMetadata {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "retire_partition_by_metadata"
     }

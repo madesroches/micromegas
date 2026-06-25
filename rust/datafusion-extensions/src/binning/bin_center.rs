@@ -5,7 +5,6 @@ use datafusion::error::DataFusionError;
 use datafusion::logical_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
 };
-use std::any::Any;
 use std::sync::Arc;
 
 /// `bin_center(coord, cell_size) -> Float64`
@@ -38,10 +37,6 @@ impl Default for BinCenterUdf {
 }
 
 impl ScalarUDFImpl for BinCenterUdf {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "bin_center"
     }

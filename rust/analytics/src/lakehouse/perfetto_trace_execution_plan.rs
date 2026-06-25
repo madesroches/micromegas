@@ -29,7 +29,6 @@ use futures::{StreamExt, TryStreamExt, stream};
 use micromegas_perfetto::{chunk_sender::ChunkSender, streaming_writer::PerfettoWriter};
 use micromegas_tracing::prelude::*;
 use std::{
-    any::Any,
     fmt::{self, Debug, Formatter},
     sync::Arc,
 };
@@ -101,10 +100,6 @@ impl DisplayAs for PerfettoTraceExecutionPlan {
 impl ExecutionPlan for PerfettoTraceExecutionPlan {
     fn name(&self) -> &str {
         "PerfettoTraceExecutionPlan"
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn schema(&self) -> SchemaRef {
@@ -510,10 +505,6 @@ impl PerfettoTraceTableProvider {
 
 #[async_trait::async_trait]
 impl TableProvider for PerfettoTraceTableProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         self.execution_plan.schema()
     }

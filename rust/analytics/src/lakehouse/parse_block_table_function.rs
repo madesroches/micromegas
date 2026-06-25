@@ -29,7 +29,7 @@ use jsonb::Value as JsonbValue;
 use micromegas_ingestion::web_ingestion_service::FORMAT_TRANSIT;
 use micromegas_tracing::prelude::*;
 use micromegas_transit::{UserDefinedType, value::Value as TransitValue};
-use std::{any::Any, borrow::Cow, collections::BTreeMap, sync::Arc};
+use std::{borrow::Cow, collections::BTreeMap, sync::Arc};
 use uuid::Uuid;
 
 use crate::dfext::expressions::exp_to_string;
@@ -258,10 +258,6 @@ struct ParseBlockProvider {
 
 #[async_trait]
 impl TableProvider for ParseBlockProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         output_schema()
     }

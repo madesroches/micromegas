@@ -15,7 +15,6 @@ use datafusion::datasource::memory::{DataSourceExec, MemorySourceConfig};
 use datafusion::error::DataFusionError;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::Expr;
-use std::any::Any;
 use std::sync::Arc;
 
 /// A DataFusion `TableFunctionImpl` for listing view sets with their current schema information.
@@ -49,10 +48,6 @@ pub struct ListViewSetsTableProvider {
 
 #[async_trait]
 impl TableProvider for ListViewSetsTableProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         Arc::new(Schema::new(vec![
             Field::new("view_set_name", DataType::Utf8, false),

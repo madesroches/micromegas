@@ -7,7 +7,6 @@ use datafusion::logical_expr::{
 };
 use jsonb::parse_value;
 use micromegas_tracing::warn;
-use std::any::Any;
 use std::sync::Arc;
 
 /// A scalar UDF that parses a JSON string into a JSONB value.
@@ -48,10 +47,6 @@ fn parse_json_to_jsonb(json_str: &str) -> Option<Vec<u8>> {
 }
 
 impl ScalarUDFImpl for JsonbParse {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "jsonb_parse"
     }

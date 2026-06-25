@@ -5,7 +5,6 @@ use datafusion::error::DataFusionError;
 use datafusion::logical_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
 };
-use std::any::Any;
 use std::sync::Arc;
 
 /// `lerp(a, b, t) -> Float64`
@@ -36,10 +35,6 @@ impl Default for LerpUdf {
 }
 
 impl ScalarUDFImpl for LerpUdf {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "lerp"
     }

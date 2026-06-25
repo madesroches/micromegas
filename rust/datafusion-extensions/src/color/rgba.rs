@@ -5,7 +5,6 @@ use datafusion::error::DataFusionError;
 use datafusion::logical_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
 };
-use std::any::Any;
 use std::sync::Arc;
 
 use super::{float_to_byte, pack_rgba};
@@ -43,10 +42,6 @@ impl Default for RgbaUdf {
 }
 
 impl ScalarUDFImpl for RgbaUdf {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "rgba"
     }

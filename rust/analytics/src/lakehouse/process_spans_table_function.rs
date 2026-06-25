@@ -26,7 +26,6 @@ use datafusion::{
 use futures::{StreamExt, TryStreamExt};
 use micromegas_tracing::prelude::*;
 use std::{
-    any::Any,
     fmt::{self, Debug, Formatter},
     sync::Arc,
 };
@@ -212,10 +211,6 @@ impl ExecutionPlan for ProcessSpansExecutionPlan {
         "ProcessSpansExecutionPlan"
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
     }
@@ -370,10 +365,6 @@ struct ProcessSpansTableProvider {
 
 #[async_trait::async_trait]
 impl TableProvider for ProcessSpansTableProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         self.execution_plan.schema()
     }

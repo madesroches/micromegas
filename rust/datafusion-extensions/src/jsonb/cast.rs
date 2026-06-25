@@ -8,7 +8,6 @@ use datafusion::logical_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
 };
 use jsonb::RawJsonb;
-use std::any::Any;
 use std::sync::Arc;
 
 /// A scalar UDF that casts a JSONB value to a string.
@@ -44,10 +43,6 @@ fn extract_string_from_jsonb(jsonb_bytes: &[u8]) -> Result<Option<String>> {
 }
 
 impl ScalarUDFImpl for JsonbAsString {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "jsonb_as_string"
     }
@@ -177,10 +172,6 @@ fn extract_f64_from_jsonb(jsonb_bytes: &[u8]) -> Result<Option<f64>> {
 }
 
 impl ScalarUDFImpl for JsonbAsF64 {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "jsonb_as_f64"
     }
@@ -307,10 +298,6 @@ fn extract_i64_from_jsonb(jsonb_bytes: &[u8]) -> Result<Option<i64>> {
 }
 
 impl ScalarUDFImpl for JsonbAsI64 {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "jsonb_as_i64"
     }

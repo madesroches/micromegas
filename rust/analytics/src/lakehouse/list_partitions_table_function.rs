@@ -14,7 +14,6 @@ use datafusion::error::DataFusionError;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::Expr;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
-use std::any::Any;
 use std::sync::Arc;
 
 /// A DataFusion `TableFunctionImpl` for listing lakehouse partitions.
@@ -48,10 +47,6 @@ pub struct ListPartitionsTableProvider {
 
 #[async_trait]
 impl TableProvider for ListPartitionsTableProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         Arc::new(Schema::new(vec![
             Field::new("view_set_name", DataType::Utf8, false),
