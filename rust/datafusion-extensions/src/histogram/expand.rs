@@ -4,6 +4,7 @@ use datafusion::arrow::array::{ArrayRef, Float64Array, StructArray, UInt64Array}
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::catalog::Session;
+use datafusion::catalog::TableFunctionArgs;
 use datafusion::catalog::TableFunctionImpl;
 use datafusion::catalog::TableProvider;
 use datafusion::datasource::TableType;
@@ -48,7 +49,11 @@ enum HistogramSource {
 }
 
 impl TableFunctionImpl for ExpandHistogramTableFunction {
-    fn call(&self, args: &[Expr]) -> datafusion::error::Result<Arc<dyn TableProvider>> {
+    fn call_with_args(
+        &self,
+        args: TableFunctionArgs,
+    ) -> datafusion::error::Result<Arc<dyn TableProvider>> {
+        let args = args.exprs();
         if args.len() != 1 {
             return Err(DataFusionError::Plan(
                 "expand_histogram requires exactly one argument (a histogram)".into(),

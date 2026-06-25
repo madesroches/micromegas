@@ -1,7 +1,7 @@
 use datafusion::arrow::array::{Array, BinaryArray, RecordBatch, StringArray};
 use datafusion::arrow::compute;
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
-use datafusion::catalog::{TableFunctionImpl, TableProvider};
+use datafusion::catalog::{TableFunctionArgs, TableFunctionImpl, TableProvider};
 use datafusion::logical_expr::Cast;
 use datafusion::prelude::{Expr, SessionContext};
 use datafusion::scalar::ScalarValue;
@@ -326,7 +326,8 @@ fn test_call_accepts_cast_expression() {
     let func = JsonbArrayElementsTableFunction::new();
     let inner = Expr::Literal(ScalarValue::Binary(Some(vec![])), None);
     let cast_expr = Expr::Cast(Cast::new(Box::new(inner), DataType::Binary));
-    let result = func.call(&[cast_expr]);
+    let ctx = SessionContext::new();
+    let result = func.call_with_args(TableFunctionArgs::new(&[cast_expr], &ctx.state()));
     assert!(
         result.is_ok(),
         "call() should accept Cast expression, got: {result:?}"

@@ -6,6 +6,7 @@ use datafusion::arrow::datatypes::Schema;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::datatypes::TimeUnit;
 use datafusion::catalog::Session;
+use datafusion::catalog::TableFunctionArgs;
 use datafusion::catalog::TableFunctionImpl;
 use datafusion::catalog::TableProvider;
 use datafusion::datasource::TableType;
@@ -29,9 +30,9 @@ impl ListPartitionsTableFunction {
 }
 
 impl TableFunctionImpl for ListPartitionsTableFunction {
-    fn call(
+    fn call_with_args(
         &self,
-        _args: &[datafusion::prelude::Expr],
+        _args: TableFunctionArgs,
     ) -> datafusion::error::Result<Arc<dyn TableProvider>> {
         Ok(Arc::new(ListPartitionsTableProvider {
             lake: self.lake.clone(),

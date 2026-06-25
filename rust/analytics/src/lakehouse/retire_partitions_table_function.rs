@@ -1,10 +1,10 @@
 use anyhow::Context;
 use chrono::DateTime;
 use chrono::Utc;
+use datafusion::catalog::TableFunctionArgs;
 use datafusion::catalog::TableFunctionImpl;
 use datafusion::catalog::TableProvider;
 use datafusion::common::plan_err;
-use datafusion::prelude::Expr;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_tracing::prelude::*;
 use std::sync::Arc;
@@ -53,7 +53,11 @@ async fn retire_partitions_impl(
 }
 
 impl TableFunctionImpl for RetirePartitionsTableFunction {
-    fn call(&self, args: &[Expr]) -> datafusion::error::Result<Arc<dyn TableProvider>> {
+    fn call_with_args(
+        &self,
+        args: TableFunctionArgs,
+    ) -> datafusion::error::Result<Arc<dyn TableProvider>> {
+        let args = args.exprs();
         // an alternative would be to use coerce & create_physical_expr
         let Some(view_set_name) = args.first().map(exp_to_string).transpose()? else {
             return plan_err!("Missing first argument, expected view_set_name: String");
