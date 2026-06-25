@@ -29,6 +29,11 @@ _handle = None
 _MOTION_THROTTLE_S: float = 1.0
 _last_motion_log: float = 0.0
 
+# True while the add-on is registered; running modals self-cancel when False.
+_registered: bool = False
+# True while a modal recorder instance is live (single-instance guard).
+_running: bool = False
+
 # Event types that are not interesting for session analysis.
 _SKIP_TYPES = {
     "MOUSEMOVE",
@@ -69,7 +74,12 @@ class MICROMEGAS_OT_recorder(bpy.types.Operator):
     bl_options = {"INTERNAL"}
 
     def modal(self, context, event):
-        global _last_motion_log
+        global _last_motion_log, _running
+
+        # Add-on was unregistered: stop this modal and clear the guard.
+        if not _registered:
+            _running = False
+            return {"CANCELLED"}
 
         if not _lib or not _handle:
             return {"PASS_THROUGH"}
@@ -105,6 +115,11 @@ class MICROMEGAS_OT_recorder(bpy.types.Operator):
         return {"PASS_THROUGH"}
 
     def invoke(self, context, event):
+        global _running
+        # Single-instance guard: refuse to start a second concurrent modal.
+        if _running:
+            return {"CANCELLED"}
+        _running = True
         context.window_manager.modal_handler_add(self)
         return {"RUNNING_MODAL"}
 
@@ -118,6 +133,8 @@ def _start_recorder(scene=None, depsgraph=None) -> None:
 
 
 def register() -> None:
+    global _registered
+    _registered = True
     bpy.utils.register_class(MICROMEGAS_OT_recorder)
     # Defer launch to load_post so a window context is available.
     if _start_recorder not in bpy.app.handlers.load_post:
@@ -130,6 +147,9 @@ def register() -> None:
 
 
 def unregister() -> None:
+    global _registered
+    # Signal any in-flight modal to self-cancel on its next event.
+    _registered = False
     if _start_recorder in bpy.app.handlers.load_post:
         bpy.app.handlers.load_post.remove(_start_recorder)
     try:

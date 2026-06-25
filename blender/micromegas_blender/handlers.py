@@ -80,6 +80,7 @@ def _on_render_pre(scene):
 
 
 def _on_render_post(scene):
+    global _render_start_time
     elapsed = time.monotonic() - _render_start_time if _render_start_time else 0.0
     _log(_b.LEVEL_INFO, "blender.render", f"render complete frame={scene.frame_current}")
     _metric_f("blender.render_duration_s", "s", elapsed)
@@ -87,6 +88,7 @@ def _on_render_post(scene):
 
 
 def _on_render_cancel(scene):
+    global _render_start_time
     _log(_b.LEVEL_WARN, "blender.render", f"render cancelled frame={scene.frame_current}")
     _render_start_time = 0.0
 

@@ -129,7 +129,10 @@ def register():
     try:
         import bpy
 
-        bpy.app.timers.register(_periodic_flush, first_interval=30.0, persistent=True)
+        if not bpy.app.timers.is_registered(_periodic_flush):
+            bpy.app.timers.register(
+                _periodic_flush, first_interval=30.0, persistent=True
+            )
     except Exception:
         pass
 
