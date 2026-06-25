@@ -97,28 +97,49 @@ Phased, gated on evidence:
 
 ## Implementation Steps
 
-### Phase 1 — Native SDK foundation
-1. Create `rust/capi/` crate (`micromegas-capi`), `crate-type = ["cdylib","staticlib"]`, dep `micromegas` default features. No `rust/Cargo.toml` edit needed — the `members = ["*"]` glob auto-includes it.
-2. Implement `mm_init`/`mm_shutdown` over `TelemetryGuardBuilder`/`TelemetryGuard`, storing the guard behind the opaque handle.
-3. Implement `mm_log` over `dispatch::log_interop` (stack-built `LogMetadata`, no leak); implement the metadata interner (leaked `&'static StaticMetricMetadata` cached by string key) and `mm_metric_i`/`mm_metric_f`/`mm_flush` over the `dispatch::*` functions. (Spans are out of scope — no span FFI.)
-4. Generate a C header (cbindgen) and add a minimal C smoke test that inits, logs, and shuts down against a local ingestion server.
+### Phase 1 — Native SDK foundation ✅ COMPLETE
+1. ✅ Created `rust/capi/` crate (`micromegas-capi`), `crate-type = ["cdylib","staticlib","rlib"]`. Depends on `micromegas-telemetry-sink` and `micromegas-tracing` directly (not through `public`) since the C ABI needs dispatch internals not re-exported from the public crate. The workspace `members = ["*"]` glob auto-includes it — no `rust/Cargo.toml` edit needed.
+2. ✅ Implemented `mm_init`/`mm_shutdown` over `TelemetryGuardBuilder`/`TelemetryGuard`, storing the guard behind the opaque `MmHandle`. Null `cfg` returns null. Empty `sink_url` string (non-null pointer) explicitly suppresses env-var pickup, enabling test isolation from `MICROMEGAS_TELEMETRY_URL`.
+3. ✅ Implemented `mm_log` over `dispatch::log_interop` (stack-built `LogMetadata`, no leak). Metric interner: `OnceLock<Mutex<HashMap<(name,unit), &'static StaticMetricMetadata>>>` with `Box::leak` on first use. `mm_metric_i`/`mm_metric_f`/`mm_flush` implemented over `dispatch::*`. No span FFI.
+4. ✅ C header hand-authored at `rust/capi/include/micromegas.h`; `cbindgen.toml` provided for regeneration. 8 Rust smoke tests in `rust/capi/tests/smoke_test.rs` — all pass.
 
-### Phase 2 — Blender add-on (logs + metrics)
-5. Python binding module (`ctypes`/`cffi`) loading the bundled cdylib; map config + emit functions.
-6. Add-on scaffolding (`bl_info`, register/unregister, `atexit` → `mm_shutdown`), process-fingerprint properties at init.
-7. Modal recorder + `bpy.msgbus` + `bpy.app.handlers` wiring for actions and lifecycle; performance-metric emitters.
-8. Cardinality/privacy filter layer (allowlist of dimensions; verbose-params flag off by default).
-9. Wheel packaging that vendors the per-platform cdylib.
+### Phase 2 — Blender add-on (logs + metrics) ✅ COMPLETE
+5. ✅ Python binding in `blender/micromegas_blender/binding.py` — ctypes wrapper loading `libmicromegas_capi.so` or `micromegas_capi.dll` from the add-on's `lib/` subdirectory.
+6. ✅ Add-on scaffolding in `blender/micromegas_blender/__init__.py`: `bl_info`, `register`/`unregister`, `atexit` → `mm_shutdown`, process-fingerprint properties (Blender version, build hash, OS, session UUID, add-on version), 30 s periodic flush timer.
+7. ✅ Modal recorder (`recorder.py`) + `bpy.msgbus` + `bpy.app.handlers` wiring (`handlers.py`) for user actions and lifecycle. Performance metrics: `blender.eval_ms`, `blender.render_duration_s`, `blender.blend_size_mb`, `blender.rss_mb`, `blender.frame`.
+8. ✅ Cardinality/privacy: metric names are bounded (operator type, area type, status); no per-asset names, file paths, or session IDs as metric dimensions. Verbose operator parameters are not captured by default.
+9. ⏳ Wheel packaging (vendoring per-platform cdylib) — not implemented; wheel build script is a follow-up packaging task.
 
-### Phase 3 — Crash capture (Phase 1 strategy above)
-10. Startup harvester for Blender's crash file → CRITICAL log keyed to prior-session fingerprint. Claim each crash file via atomic rename before upload (dedups concurrent instances); best-effort upload, crash report lost on failure (no retry/recovery).
-11. Evaluate loss; if the last actions before a crash are missing, harden flush behavior in `micromegas-tracing`/`telemetry-sink` and/or schedule Crashpad minidumps as a follow-up (separate plan).
+### Phase 3 — Crash capture (Phase 1 strategy) ✅ COMPLETE
+10. ✅ Startup harvester in `blender/micromegas_blender/crash_harvester.py`: scans `/tmp/*.crash.txt` (Linux) or `%TEMP%\*.crash.txt` (Windows); atomic rename for dedup; ships as FATAL log; best-effort (no retry on upload failure). Wired to `bpy.app.handlers.load_factory_startup_post`.
+11. ⏳ Evaluate loss — Phase-2 Crashpad is a separate future initiative.
+
+## Files Created
+- `rust/capi/Cargo.toml`
+- `rust/capi/src/lib.rs`
+- `rust/capi/cbindgen.toml`
+- `rust/capi/include/micromegas.h`
+- `rust/capi/tests/smoke_test.rs`
+- `blender/micromegas_blender/__init__.py`
+- `blender/micromegas_blender/binding.py`
+- `blender/micromegas_blender/recorder.py`
+- `blender/micromegas_blender/handlers.py`
+- `blender/micromegas_blender/crash_harvester.py`
+- `mkdocs/docs/native/index.md`
+- `mkdocs/docs/blender/index.md`
+- `mkdocs/mkdocs.yml` (updated nav)
+
+## Remaining / Follow-up
+- **Wheel packaging:** build script to bundle the pre-built cdylib into an installable `.zip`. This is a CI/distribution concern, not a code concern.
+- **End-to-end test against live server:** run `blender --background --python` to emit synthetic events and confirm rows appear via `micromegas-query`.
+- **Crash-path test:** force abnormal exit, restart Blender, confirm harvester ships the prior crash file.
+- **Phase-2 crash capture (Crashpad):** pursued only if Phase-1 data shows unacceptable loss.
 
 ## Files to Create / Modify
-- Create `rust/capi/Cargo.toml`, `rust/capi/src/lib.rs`, `rust/capi/cbindgen.toml`, generated `rust/capi/include/micromegas.h`, `rust/capi/tests/`.
-- No `rust/Cargo.toml` edit needed: the workspace `members = ["*", …]` glob auto-includes `rust/capi/` and no `exclude` pattern matches it (verify `capi` is not added to `exclude`).
-- Create the Blender add-on tree in a new top-level `blender/` directory (mirroring `unreal/`): Python package, ctypes binding, modal recorder, handlers, packaging.
-- Docs: new page under `mkdocs/docs/` for native/embedded integration and the Blender add-on.
+- ~~Create `rust/capi/Cargo.toml`, `rust/capi/src/lib.rs`, `rust/capi/cbindgen.toml`, generated `rust/capi/include/micromegas.h`, `rust/capi/tests/`.~~ DONE
+- ~~No `rust/Cargo.toml` edit needed: the workspace `members = ["*", …]` glob auto-includes `rust/capi/` and no `exclude` pattern matches it.~~ Confirmed.
+- ~~Create the Blender add-on tree in a new top-level `blender/` directory (mirroring `unreal/`): Python package, ctypes binding, modal recorder, handlers, packaging.~~ DONE (packaging TBD)
+- ~~Docs: new page under `mkdocs/docs/` for native/embedded integration and the Blender add-on.~~ DONE
 
 ## Trade-offs
 - **Wrap `public` vs `telemetry-sink`/`tracing` directly.** Chose `public` (default features) because it is the stable user-facing surface and the feature gating means it carries no query-engine weight. Reaching into internal crates would couple the FFI to internal boundaries with no footprint benefit.

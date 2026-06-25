@@ -1,0 +1,17 @@
+[package]
+name = "micromegas-capi"
+description = "C ABI for the Micromegas telemetry producer stack"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lib]
+name = "micromegas_capi"
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[dependencies]
+micromegas-telemetry-sink.workspace = true
+micromegas-tracing.workspace = true
