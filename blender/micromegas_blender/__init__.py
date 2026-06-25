@@ -133,7 +133,7 @@ def register():
     except Exception:
         pass
 
-    lib.log(handle, 2, "blender.addon", "Micromegas add-on registered")  # INFO=4
+    lib.log(handle, 4, "blender.addon", "Micromegas add-on registered")  # INFO=4
     # Use INFO level (4) for the startup log
     lib.log(handle, 4, "blender.addon", f"session_id={_session_id}")
 
