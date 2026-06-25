@@ -33,7 +33,6 @@ Blender process
         ├── flat C ABI (extern "C", #[no_mangle])
         ├── holds TelemetryGuard (init/shutdown)
         ├── string interner  (runtime str -> &'static, bounded)
-        ├── durable breadcrumb ring buffer (mmap'd file)   [phase 2]
         └── HttpEventSink  ── own OS thread + tokio runtime ──► ingestion-srv
 ```
 
@@ -64,7 +63,6 @@ void       mm_shutdown(mm_handle*);         // drops guard -> flush + join bg th
 void mm_log   (mm_handle*, int level, const char* target, const char* msg);
 void mm_metric_i(mm_handle*, const char* name, const char* unit, uint64_t value);
 void mm_metric_f(mm_handle*, const char* name, const char* unit, double  value);
-void mm_breadcrumb(mm_handle*, const char* kind, const char* payload); // phase 2: durable
 void mm_flush  (mm_handle*);
 ```
 `mm_config` carries sink URL, optional auth fields, and process properties (key/value array); the shim maps it to `TelemetryGuardBuilder` calls.
@@ -91,8 +89,9 @@ Captured signals:
 
 ### Component 3 — Crash capture
 Phased, gated on evidence:
-- **Phase 1 (cheap, pure Python): harvest on next launch.** On startup the add-on scans for (a) Blender's own `*.crash.txt`/debug output from a prior abnormal exit and (b) an unsent local breadcrumb file, ships them as a CRITICAL log keyed to the prior session's fingerprint, and marks them sent. This reuses the native backtrace Blender already writes — no native crash code required. It tells us how lossy the cheap path is.
-- **Phase 2 (native, only if Phase 1 proves too lossy): durable breadcrumbs + minidumps.** Move the breadcrumb ring buffer into an mmap'd file owned by `micromegas-capi` (each `mm_breadcrumb` is a cheap memory write that survives a hard crash because the OS flushes dirty pages). Add an out-of-process Crashpad handler that captures a full minidump and uploads immediately. This is justified by Phase-1 data, not built upfront.
+- **Phase 1 (cheap, pure Python): harvest on next launch.** On startup the add-on scans for Blender's own `*.crash.txt`/debug output from a prior abnormal exit, ships it as a CRITICAL log keyed to the prior session's fingerprint, and marks it sent. The last user actions before the crash come from the normal telemetry stream already ingested under that fingerprint — no parallel local store. This reuses the native backtrace Blender already writes — no native crash code required. It tells us how lossy the cheap path is.
+- **Phase 2 (native, only if Phase 1 proves too lossy): minidumps.** Add an out-of-process Crashpad handler that captures a full minidump and uploads immediately. This is justified by Phase-1 data, not built upfront.
+- **In-flight event loss is a tracing-crate problem, not a Blender one.** If Phase-1 data shows we are losing the last user actions before a crash — events buffered in the sink that never shipped — the fix belongs in the shared `micromegas-tracing`/`telemetry-sink` layer (e.g. tighter flush cadence or a flush-on-fatal-signal path), so every producer benefits. We deliberately do **not** build a parallel durable-breadcrumb store in the C ABI to paper over sink reliability.
 
 ## Implementation Steps
 
@@ -110,8 +109,8 @@ Phased, gated on evidence:
 9. Wheel packaging that vendors the per-platform cdylib.
 
 ### Phase 3 — Crash capture (Phase 1 strategy above)
-10. Startup harvester for Blender's crash file + local breadcrumb file → CRITICAL log keyed to prior-session fingerprint, with a sent-marker.
-11. Evaluate loss; if warranted, schedule native mmap breadcrumbs + Crashpad as a follow-up (separate plan).
+10. Startup harvester for Blender's crash file → CRITICAL log keyed to prior-session fingerprint, with a sent-marker.
+11. Evaluate loss; if the last actions before a crash are missing, harden flush behavior in `micromegas-tracing`/`telemetry-sink` and/or schedule Crashpad minidumps as a follow-up (separate plan).
 
 ## Files to Create / Modify
 - Create `rust/capi/Cargo.toml`, `rust/capi/src/lib.rs`, `rust/capi/cbindgen.toml`, generated `rust/capi/include/micromegas.h`, `rust/capi/tests/`.
@@ -122,12 +121,12 @@ Phased, gated on evidence:
 ## Trade-offs
 - **Wrap `public` vs `telemetry-sink`/`tracing` directly.** Chose `public` (default features) because it is the stable user-facing surface and the feature gating means it carries no query-engine weight. Reaching into internal crates would couple the FFI to internal boundaries with no footprint benefit.
 - **Rust core + C ABI vs a fresh C++ reimplementation (Unreal-style).** Chose Rust core. The protocol (transit/CBOR/LZ4), the transport, and the background-thread sink already exist and are exercised by every Rust service; a C++ reimplementation would be a second copy of the wire format to keep byte-compatible forever. The C++ path only wins if a hard constraint forbids a Rust staticlib in the native build pipeline (see Open Questions). The `staticlib` artifact leaves the door open for Unreal to converge onto this ABI later.
-- **Native SDK vs OTLP via the OpenTelemetry Python SDK.** Micromegas accepts OTLP (`/ingestion/otlp/v1/*`), which would be a faster pure-Python on-ramp. Rejected as the foundation because (a) OTLP's async batching loses in-flight breadcrumbs on a native crash — the exact data crash RCA needs — and (b) the native SDK is reusable across all native studio tools, not just Blender. OTLP remains a reasonable fallback if native packaging stalls.
+- **Native SDK vs OTLP via the OpenTelemetry Python SDK.** Micromegas accepts OTLP (`/ingestion/otlp/v1/*`), which would be a faster pure-Python on-ramp. Rejected as the foundation because (a) it runs through an external SDK we cannot harden — OTLP's async batching loses in-flight events on a native crash, and the fix for that has to live in the producer/transport layer, which with the native SDK is `micromegas-tracing` (ours to improve) — and (b) the native SDK is reusable across all native studio tools, not just Blender. OTLP remains a reasonable fallback if native packaging stalls.
 - **ctypes/cffi (plain cdylib) vs a CPython extension module.** Chose plain cdylib + ctypes so builds are per-platform, not per-Python-ABI, and work against stock Blender's bundled interpreter without a custom build.
 - **Crashpad now vs harvest-first.** Deferred Crashpad behind Phase-1 harvesting so the native investment is justified by measured loss rather than a hunch; Blender already writes a native backtrace we can collect for free.
 
 ## Dependencies
-- New build-time: `cbindgen` (header generation). Phase 2 native crash work (deferred) would add Crashpad and an mmap dependency.
+- New build-time: `cbindgen` (header generation). Phase 2 native crash work (deferred) would add a Crashpad dependency.
 - Python add-on: `ctypes`/`cffi` (stdlib/standard); no heavy runtime deps.
 
 ## Documentation
@@ -137,7 +136,7 @@ Phased, gated on evidence:
 ## Testing Strategy
 - **Rust C ABI:** unit tests in `rust/capi/tests/` plus a C smoke test linking the staticlib; init → log/metric → shutdown against a local ingestion server started via `local_test_env/ai_scripts/start_services.py`. Verify rows land via `micromegas-query`.
 - **Add-on:** run Blender headless (`blender --background --python`) to exercise the binding, emit synthetic actions/metrics, and confirm ingestion. Manual interactive session to validate the modal recorder and handler coverage.
-- **Crash path:** force an abnormal exit, restart, confirm the harvester ships the prior crash file + breadcrumbs keyed to the right session fingerprint.
+- **Crash path:** force an abnormal exit, restart, confirm the harvester ships the prior crash file keyed to the right session fingerprint.
 - **Privacy:** test that the dimension allowlist drops disallowed/high-cardinality keys and that verbose params stay off by default.
 
 ## Resolved Decisions
@@ -153,5 +152,5 @@ Phased, gated on evidence:
 
 ## Future Work (out of scope)
 - **Spans / scoped timings:** a span FFI (`mm_span_begin`/`mm_span_end`) and Python API, requiring leaked `&'static SpanLocation` paired with `dispatch::on_begin_named_scope`/`on_end_named_scope`. This extension ships logs + metrics only; spans are deferred.
-- **Native crash capture (Phase 2):** mmap'd durable breadcrumb ring buffer + out-of-process Crashpad minidumps with immediate upload. Pursued only if Phase-1 harvesting proves too lossy.
+- **Native crash capture (Phase 2):** out-of-process Crashpad minidumps with immediate upload. Pursued only if Phase-1 harvesting proves too lossy. Any loss of the last actions *before* the crash is addressed by hardening flush behavior in `micromegas-tracing`/`telemetry-sink`, not by a local store in the C ABI.
 - **Symbol server:** a symbol/PDB store keyed by Blender build hash, required to re-symbolize the minidumps from the Phase 2 work above. Deferred with that work.
