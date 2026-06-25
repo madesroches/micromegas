@@ -4,6 +4,9 @@ This file documents the historical progress of the Micromegas project. For curre
 
 ## Unreleased
 
+* **Dependencies:**
+  * Update DataFusion to 54.0 and rebuild the datafusion-wasm bindings
+
 ## June 2026 - v0.26.0
 
 * **Security:**
