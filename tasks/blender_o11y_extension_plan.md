@@ -89,7 +89,9 @@ Captured signals:
 
 ### Component 3 — Crash capture
 Phased, gated on evidence:
-- **Phase 1 (cheap, pure Python): harvest on next launch.** On startup the add-on scans for Blender's own `*.crash.txt`/debug output from a prior abnormal exit, ships it as a CRITICAL log keyed to the prior session's fingerprint, and marks it sent. The last user actions before the crash come from the normal telemetry stream already ingested under that fingerprint — no parallel local store. This reuses the native backtrace Blender already writes — no native crash code required. It tells us how lossy the cheap path is.
+- **Phase 1 (cheap, pure Python): harvest on next launch.** On startup the add-on scans for Blender's own `*.crash.txt`/debug output from a prior abnormal exit and ships it as a CRITICAL log keyed to the prior session's fingerprint. The last user actions before the crash come from the normal telemetry stream already ingested under that fingerprint — no parallel local store. This reuses the native backtrace Blender already writes — no native crash code required. It tells us how lossy the cheap path is.
+  - **Concurrent-launch safety + dedup via atomic rename.** Artists run several Blender instances at once, so two launches can see the same crash file simultaneously. Each harvester **claims** a crash file with an atomic rename (e.g. `*.crash.txt` → `*.crash.txt.claimed`) before uploading; only the instance that wins the rename ships it, so a crash is never reported twice. This rename is the only local bookkeeping — there is no sent-marker store.
+  - **Best-effort upload.** If the upload fails after the claim, that crash report is simply lost — no retry queue, no recovery, no re-scan of claimed files. Accepting this loss is what keeps the harvester stateless beyond the rename; it is consistent with Phase 1 being a cheap measurement of how lossy the free path is.
 - **Phase 2 (native, only if Phase 1 proves too lossy): minidumps.** Add an out-of-process Crashpad handler that captures a full minidump and uploads immediately. This is justified by Phase-1 data, not built upfront.
 - **In-flight event loss is a tracing-crate problem, not a Blender one.** If Phase-1 data shows we are losing the last user actions before a crash — events buffered in the sink that never shipped — the fix belongs in the shared `micromegas-tracing`/`telemetry-sink` layer (e.g. tighter flush cadence or a flush-on-fatal-signal path), so every producer benefits. We deliberately do **not** build a parallel durable-breadcrumb store in the C ABI to paper over sink reliability.
 
@@ -109,13 +111,13 @@ Phased, gated on evidence:
 9. Wheel packaging that vendors the per-platform cdylib.
 
 ### Phase 3 — Crash capture (Phase 1 strategy above)
-10. Startup harvester for Blender's crash file → CRITICAL log keyed to prior-session fingerprint, with a sent-marker.
+10. Startup harvester for Blender's crash file → CRITICAL log keyed to prior-session fingerprint. Claim each crash file via atomic rename before upload (dedups concurrent instances); best-effort upload, crash report lost on failure (no retry/recovery).
 11. Evaluate loss; if the last actions before a crash are missing, harden flush behavior in `micromegas-tracing`/`telemetry-sink` and/or schedule Crashpad minidumps as a follow-up (separate plan).
 
 ## Files to Create / Modify
 - Create `rust/capi/Cargo.toml`, `rust/capi/src/lib.rs`, `rust/capi/cbindgen.toml`, generated `rust/capi/include/micromegas.h`, `rust/capi/tests/`.
 - No `rust/Cargo.toml` edit needed: the workspace `members = ["*", …]` glob auto-includes `rust/capi/` and no `exclude` pattern matches it (verify `capi` is not added to `exclude`).
-- Create the Blender add-on tree (location TBD — likely a new top-level `blender/` directory mirroring `unreal/`): Python package, ctypes binding, modal recorder, handlers, packaging.
+- Create the Blender add-on tree in a new top-level `blender/` directory (mirroring `unreal/`): Python package, ctypes binding, modal recorder, handlers, packaging.
 - Docs: new page under `mkdocs/docs/` for native/embedded integration and the Blender add-on.
 
 ## Trade-offs
@@ -146,9 +148,7 @@ Phased, gated on evidence:
 - **Direct ingestion, no relay.** The ingestion server is reachable from all machines, so the add-on connects directly via `TelemetryGuardBuilder`; no store-and-forward/relay layer is needed.
 - **Auth via API key in an env var.** The add-on uses `.with_auth_from_env()`, which reads `MICROMEGAS_INGESTION_API_KEY` — no auth code to write. Deployment provisions that env var on artist machines (system-wide or via the launcher). The key is write-only ingestion access.
 - **Platform matrix: two targets.** x64 Windows (`x86_64-pc-windows-msvc` → `.dll`) and x64 WSL/Linux (`x86_64-unknown-linux-gnu` → `.so`). No macOS or arm64.
-
-## Open Questions
-1. **Add-on location in the repo** — new top-level `blender/` directory (mirroring `unreal/`) vs elsewhere.
+- **Add-on location: new top-level `blender/` directory**, mirroring `unreal/`.
 
 ## Future Work (out of scope)
 - **Spans / scoped timings:** a span FFI (`mm_span_begin`/`mm_span_end`) and Python API, requiring leaked `&'static SpanLocation` paired with `dispatch::on_begin_named_scope`/`on_end_named_scope`. This extension ships logs + metrics only; spans are deferred.
