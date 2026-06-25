@@ -160,11 +160,14 @@ pub unsafe extern "C" fn mm_shutdown(handle: *mut MmHandle) {
 /// (1=Fatal … 6=Trace).  Null `target` defaults to "capi".  Null `msg` is a no-op.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mm_log(
-    _handle: *mut MmHandle,
+    handle: *mut MmHandle,
     level: c_int,
     target: *const c_char,
     msg: *const c_char,
 ) {
+    if handle.is_null() {
+        return;
+    }
     if msg.is_null() {
         return;
     }
@@ -203,11 +206,14 @@ pub unsafe extern "C" fn mm_log(
 /// interned on first use — keep cardinality bounded.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mm_metric_i(
-    _handle: *mut MmHandle,
+    handle: *mut MmHandle,
     name: *const c_char,
     unit: *const c_char,
     value: u64,
 ) {
+    if handle.is_null() {
+        return;
+    }
     if name.is_null() {
         return;
     }
@@ -229,11 +235,14 @@ pub unsafe extern "C" fn mm_metric_i(
 /// Same cardinality contract as `mm_metric_i`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mm_metric_f(
-    _handle: *mut MmHandle,
+    handle: *mut MmHandle,
     name: *const c_char,
     unit: *const c_char,
     value: f64,
 ) {
+    if handle.is_null() {
+        return;
+    }
     if name.is_null() {
         return;
     }

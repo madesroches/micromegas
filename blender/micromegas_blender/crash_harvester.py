@@ -66,6 +66,7 @@ def _upload_crash(claimed_path: str) -> bool:
         _lib.flush(_handle)
         return True
     except Exception as exc:
+        print(f"[Micromegas] crash upload failed: {exc}")
         return False
 
 
