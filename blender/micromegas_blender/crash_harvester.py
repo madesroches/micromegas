@@ -92,20 +92,21 @@ def harvest() -> int:
     return reported
 
 
+def _harvest_handler(scene=None, depsgraph=None):
+    count = harvest()
+    if count and _lib and _handle:
+        _lib.log(
+            _handle,
+            _b.LEVEL_INFO,
+            "blender.crash",
+            f"harvested {count} prior crash report(s)",
+        )
+
+
 def register_startup_harvest() -> None:
     """Wire harvest() into bpy.app.handlers.load_factory_startup_post."""
     try:
         import bpy  # only available inside Blender
-
-        def _harvest_handler(scene=None, depsgraph=None):
-            count = harvest()
-            if count and _lib and _handle:
-                _lib.log(
-                    _handle,
-                    _b.LEVEL_INFO,
-                    "blender.crash",
-                    f"harvested {count} prior crash report(s)",
-                )
 
         if _harvest_handler not in bpy.app.handlers.load_factory_startup_post:
             bpy.app.handlers.load_factory_startup_post.append(_harvest_handler)
