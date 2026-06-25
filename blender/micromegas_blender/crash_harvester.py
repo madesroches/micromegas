@@ -47,6 +47,7 @@ def _get_crash_dirs() -> list[str]:
     # Blender also writes to the user temp dir.
     try:
         import tempfile
+
         dirs.append(tempfile.gettempdir())
     except Exception:
         pass
@@ -60,7 +61,7 @@ def _upload_crash(claimed_path: str) -> bool:
     try:
         with open(claimed_path, "r", encoding="utf-8", errors="replace") as f:
             content = f.read(_MAX_BYTES)
-        truncated = " [truncated]" if os.path.getsize(claimed_path) > _MAX_BYTES else ""
+        truncated = " [truncated]" if len(content) >= _MAX_BYTES else ""
         msg = f"prior_crash_report{truncated}: {content}"
         _lib.log(_handle, _b.LEVEL_FATAL, "blender.crash", msg)
         _lib.flush(_handle)
