@@ -46,11 +46,13 @@ def _metric_i(name: str, unit: str, value: int) -> None:
 # Lifecycle handlers
 # ---------------------------------------------------------------------------
 
+@bpy.app.handlers.persistent
 def _on_load_post(scene, depsgraph=None):
     _log(_b.LEVEL_INFO, "blender.lifecycle", "blend file loaded")
     _emit_memory_metric()
 
 
+@bpy.app.handlers.persistent
 def _on_save_post(scene, depsgraph=None):
     blend_path = bpy.data.filepath
     size_bytes = 0
@@ -65,20 +67,24 @@ def _on_save_post(scene, depsgraph=None):
         _metric_f("blender.blend_size_mb", "mb", size_bytes / (1024 * 1024))
 
 
+@bpy.app.handlers.persistent
 def _on_undo_post(scene, depsgraph=None):
     _log(_b.LEVEL_DEBUG, "blender.lifecycle", "undo")
 
 
+@bpy.app.handlers.persistent
 def _on_redo_post(scene, depsgraph=None):
     _log(_b.LEVEL_DEBUG, "blender.lifecycle", "redo")
 
 
+@bpy.app.handlers.persistent
 def _on_render_pre(scene):
     global _render_start_time
     _render_start_time = time.monotonic()
     _log(_b.LEVEL_INFO, "blender.render", f"render start frame={scene.frame_current}")
 
 
+@bpy.app.handlers.persistent
 def _on_render_post(scene):
     global _render_start_time
     elapsed = time.monotonic() - _render_start_time if _render_start_time else 0.0
@@ -87,16 +93,19 @@ def _on_render_post(scene):
     _render_start_time = 0.0
 
 
+@bpy.app.handlers.persistent
 def _on_render_cancel(scene):
     global _render_start_time
     _log(_b.LEVEL_WARN, "blender.render", f"render cancelled frame={scene.frame_current}")
     _render_start_time = 0.0
 
 
+@bpy.app.handlers.persistent
 def _on_frame_change_post(scene, depsgraph=None):
     _metric_i("blender.frame", "frame", int(scene.frame_current))
 
 
+@bpy.app.handlers.persistent
 def _on_depsgraph_update_post(scene, depsgraph):
     now = time.monotonic()
     global _last_depsgraph_time

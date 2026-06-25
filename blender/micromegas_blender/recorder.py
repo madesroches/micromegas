@@ -124,8 +124,13 @@ class MICROMEGAS_OT_recorder(bpy.types.Operator):
         return {"RUNNING_MODAL"}
 
 
+@bpy.app.handlers.persistent
 def _start_recorder(scene=None, depsgraph=None) -> None:
     """Launch the modal recorder from a load_post handler (has valid context)."""
+    global _running
+    # A file load silently cancels any in-flight modal without invoking its
+    # modal() callback, so clear the single-instance guard before relaunching.
+    _running = False
     try:
         bpy.ops.micromegas.recorder("INVOKE_DEFAULT")
     except Exception:
