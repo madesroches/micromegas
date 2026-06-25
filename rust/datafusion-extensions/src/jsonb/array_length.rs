@@ -6,7 +6,6 @@ use datafusion::logical_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
 };
 use jsonb::RawJsonb;
-use std::any::Any;
 use std::sync::Arc;
 
 /// A scalar UDF that returns the number of elements in a JSONB array.
@@ -42,10 +41,6 @@ fn extract_array_length_from_jsonb(jsonb_bytes: &[u8]) -> Result<Option<i64>> {
 }
 
 impl ScalarUDFImpl for JsonbArrayLength {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "jsonb_array_length"
     }

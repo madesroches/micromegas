@@ -10,7 +10,7 @@ use datafusion::{
         array::{ArrayRef, RecordBatch, StringDictionaryBuilder},
         datatypes::{DataType, Field, Int16Type, Schema, SchemaRef},
     },
-    catalog::{Session, TableFunctionImpl, TableProvider},
+    catalog::{Session, TableFunctionArgs, TableFunctionImpl, TableProvider},
     common::{Result as DFResult, plan_err},
     execution::{SendableRecordBatchStream, TaskContext},
     logical_expr::{Expr, TableType},
@@ -26,7 +26,6 @@ use datafusion::{
 use futures::{StreamExt, TryStreamExt};
 use micromegas_tracing::prelude::*;
 use std::{
-    any::Any,
     fmt::{self, Debug, Formatter},
     sync::Arc,
 };
@@ -103,7 +102,11 @@ impl ProcessSpansTableFunction {
 
 impl TableFunctionImpl for ProcessSpansTableFunction {
     #[span_fn]
-    fn call(&self, exprs: &[Expr]) -> datafusion::error::Result<Arc<dyn TableProvider>> {
+    fn call_with_args(
+        &self,
+        args: TableFunctionArgs,
+    ) -> datafusion::error::Result<Arc<dyn TableProvider>> {
+        let exprs = args.exprs();
         let arg1 = exprs.first().map(exp_to_string);
         let Some(Ok(process_id)) = arg1 else {
             return plan_err!(
@@ -210,10 +213,6 @@ impl DisplayAs for ProcessSpansExecutionPlan {
 impl ExecutionPlan for ProcessSpansExecutionPlan {
     fn name(&self) -> &str {
         "ProcessSpansExecutionPlan"
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn schema(&self) -> SchemaRef {
@@ -370,10 +369,6 @@ struct ProcessSpansTableProvider {
 
 #[async_trait::async_trait]
 impl TableProvider for ProcessSpansTableProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         self.execution_plan.schema()
     }

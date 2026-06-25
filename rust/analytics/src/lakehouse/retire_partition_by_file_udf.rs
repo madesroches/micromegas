@@ -100,10 +100,6 @@ impl RetirePartitionByFile {
 }
 
 impl ScalarUDFImpl for RetirePartitionByFile {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "retire_partition_by_file"
     }

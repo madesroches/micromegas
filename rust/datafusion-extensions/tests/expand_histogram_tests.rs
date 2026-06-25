@@ -1,7 +1,7 @@
 use datafusion::arrow::array::{Array, Float64Array, UInt64Array};
 use datafusion::arrow::datatypes::DataType;
 use datafusion::arrow::record_batch::RecordBatch;
-use datafusion::catalog::{TableFunctionImpl, TableProvider};
+use datafusion::catalog::{TableFunctionArgs, TableFunctionImpl, TableProvider};
 use datafusion::logical_expr::{Accumulator, Cast};
 use datafusion::prelude::{Expr, SessionContext};
 use datafusion::scalar::ScalarValue;
@@ -41,7 +41,8 @@ fn test_call_accepts_cast_expression() {
     let func = ExpandHistogramTableFunction::new();
     let inner = Expr::Literal(ScalarValue::Null, None);
     let cast_expr = Expr::Cast(Cast::new(Box::new(inner), DataType::Null));
-    let result = func.call(&[cast_expr]);
+    let ctx = SessionContext::new();
+    let result = func.call_with_args(TableFunctionArgs::new(&[cast_expr], &ctx.state()));
     assert!(
         result.is_ok(),
         "call() should accept Cast expression, got: {result:?}"
@@ -51,12 +52,13 @@ fn test_call_accepts_cast_expression() {
 #[test]
 fn test_call_rejects_wrong_arg_count() {
     let func = ExpandHistogramTableFunction::new();
-    let result = func.call(&[]);
+    let ctx = SessionContext::new();
+    let result = func.call_with_args(TableFunctionArgs::new(&[], &ctx.state()));
     assert!(result.is_err(), "call() should reject zero arguments");
 
     let a = Expr::Literal(ScalarValue::Null, None);
     let b = Expr::Literal(ScalarValue::Null, None);
-    let result = func.call(&[a, b]);
+    let result = func.call_with_args(TableFunctionArgs::new(&[a, b], &ctx.state()));
     assert!(result.is_err(), "call() should reject two arguments");
 }
 
@@ -125,12 +127,15 @@ async fn test_scalar_to_batch_dictionary_wrapped() {
     let func = ExpandHistogramTableFunction::new();
     let inner_scalar = make_test_histogram(0.0, 10.0, 2, &[3.0, 7.0]);
     let dict_scalar = ScalarValue::Dictionary(Box::new(DataType::Int32), Box::new(inner_scalar));
+    let ctx = SessionContext::new();
     let provider = func
-        .call(&[Expr::Literal(dict_scalar, None)])
+        .call_with_args(TableFunctionArgs::new(
+            &[Expr::Literal(dict_scalar, None)],
+            &ctx.state(),
+        ))
         .expect("call should accept dictionary-wrapped histogram");
     let batch = collect_expand(
         provider
-            .as_any()
             .downcast_ref::<ExpandHistogramTableProvider>()
             .expect("should be ExpandHistogramTableProvider"),
         None,

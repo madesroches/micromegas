@@ -4,10 +4,9 @@ use super::{
 };
 use crate::{dfext::expressions::exp_to_string, time::TimeRange};
 use datafusion::{
-    catalog::{TableFunctionImpl, TableProvider},
+    catalog::{TableFunctionArgs, TableFunctionImpl, TableProvider},
     common::plan_err,
     error::DataFusionError,
-    logical_expr::Expr,
 };
 use micromegas_tracing::prelude::*;
 use std::sync::Arc;
@@ -49,7 +48,11 @@ impl ViewInstanceTableFunction {
 
 impl TableFunctionImpl for ViewInstanceTableFunction {
     #[span_fn]
-    fn call(&self, exprs: &[Expr]) -> datafusion::error::Result<Arc<dyn TableProvider>> {
+    fn call_with_args(
+        &self,
+        args: TableFunctionArgs,
+    ) -> datafusion::error::Result<Arc<dyn TableProvider>> {
+        let exprs = args.exprs();
         let arg1 = exprs.first().map(exp_to_string);
         let Some(Ok(view_set_name)) = arg1 else {
             return plan_err!(

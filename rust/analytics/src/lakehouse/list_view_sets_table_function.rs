@@ -8,6 +8,7 @@ use datafusion::arrow::datatypes::Schema;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::catalog::Session;
+use datafusion::catalog::TableFunctionArgs;
 use datafusion::catalog::TableFunctionImpl;
 use datafusion::catalog::TableProvider;
 use datafusion::datasource::TableType;
@@ -15,7 +16,6 @@ use datafusion::datasource::memory::{DataSourceExec, MemorySourceConfig};
 use datafusion::error::DataFusionError;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::Expr;
-use std::any::Any;
 use std::sync::Arc;
 
 /// A DataFusion `TableFunctionImpl` for listing view sets with their current schema information.
@@ -31,9 +31,9 @@ impl ListViewSetsTableFunction {
 }
 
 impl TableFunctionImpl for ListViewSetsTableFunction {
-    fn call(
+    fn call_with_args(
         &self,
-        _args: &[datafusion::prelude::Expr],
+        _args: TableFunctionArgs,
     ) -> datafusion::error::Result<Arc<dyn TableProvider>> {
         Ok(Arc::new(ListViewSetsTableProvider {
             view_factory: self.view_factory.clone(),
@@ -49,10 +49,6 @@ pub struct ListViewSetsTableProvider {
 
 #[async_trait]
 impl TableProvider for ListViewSetsTableProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         Arc::new(Schema::new(vec![
             Field::new("view_set_name", DataType::Utf8, false),

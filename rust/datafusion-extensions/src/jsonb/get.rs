@@ -8,7 +8,6 @@ use datafusion::logical_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
 };
 use jsonb::RawJsonb;
-use std::any::Any;
 use std::sync::Arc;
 
 /// A scalar UDF that retrieves a value from a JSONB object by name.
@@ -44,10 +43,6 @@ fn extract_jsonb_value(jsonb_bytes: &[u8], name: &str) -> Result<Option<Vec<u8>>
 }
 
 impl ScalarUDFImpl for JsonbGet {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "jsonb_get"
     }

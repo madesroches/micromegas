@@ -6,6 +6,7 @@ use datafusion::arrow::datatypes::Schema;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::datatypes::TimeUnit;
 use datafusion::catalog::Session;
+use datafusion::catalog::TableFunctionArgs;
 use datafusion::catalog::TableFunctionImpl;
 use datafusion::catalog::TableProvider;
 use datafusion::datasource::TableType;
@@ -14,7 +15,6 @@ use datafusion::error::DataFusionError;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::Expr;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
-use std::any::Any;
 use std::sync::Arc;
 
 /// A DataFusion `TableFunctionImpl` for listing lakehouse partitions.
@@ -30,9 +30,9 @@ impl ListPartitionsTableFunction {
 }
 
 impl TableFunctionImpl for ListPartitionsTableFunction {
-    fn call(
+    fn call_with_args(
         &self,
-        _args: &[datafusion::prelude::Expr],
+        _args: TableFunctionArgs,
     ) -> datafusion::error::Result<Arc<dyn TableProvider>> {
         Ok(Arc::new(ListPartitionsTableProvider {
             lake: self.lake.clone(),
@@ -48,10 +48,6 @@ pub struct ListPartitionsTableProvider {
 
 #[async_trait]
 impl TableProvider for ListPartitionsTableProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         Arc::new(Schema::new(vec![
             Field::new("view_set_name", DataType::Utf8, false),

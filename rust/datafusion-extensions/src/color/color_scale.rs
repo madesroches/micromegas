@@ -6,7 +6,6 @@ use datafusion::logical_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion::scalar::ScalarValue;
-use std::any::Any;
 use std::sync::Arc;
 
 use super::{float_to_byte, pack_rgba};
@@ -74,10 +73,6 @@ impl Default for ColorScaleUdf {
 }
 
 impl ScalarUDFImpl for ColorScaleUdf {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "color_scale"
     }

@@ -16,7 +16,6 @@ use datafusion::datasource::TableType;
 use datafusion::datasource::memory::{DataSourceExec, MemorySourceConfig};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::*;
-use std::any::Any;
 use std::sync::Arc;
 
 /// Generate test data with the given number of rows
@@ -61,10 +60,6 @@ impl WithLimitTableProvider {
 
 #[async_trait::async_trait]
 impl TableProvider for WithLimitTableProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
     }
@@ -117,10 +112,6 @@ impl SliceWorkaroundTableProvider {
 
 #[async_trait::async_trait]
 impl TableProvider for SliceWorkaroundTableProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
     }

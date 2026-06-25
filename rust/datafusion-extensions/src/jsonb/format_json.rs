@@ -6,7 +6,6 @@ use datafusion::logical_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 use jsonb::RawJsonb;
-use std::any::Any;
 use std::sync::Arc;
 
 /// A scalar UDF that formats JSONB binary data as a JSON string.
@@ -34,10 +33,6 @@ impl Default for JsonbFormatJson {
 }
 
 impl ScalarUDFImpl for JsonbFormatJson {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "jsonb_format_json"
     }

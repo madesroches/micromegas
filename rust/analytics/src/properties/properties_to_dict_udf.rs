@@ -9,7 +9,6 @@ use datafusion::logical_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 use micromegas_datafusion_extensions::properties::properties_udf::extract_properties_as_vec;
-use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -43,10 +42,6 @@ impl Default for PropertiesToDict {
 }
 
 impl ScalarUDFImpl for PropertiesToDict {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "properties_to_dict"
     }

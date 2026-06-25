@@ -16,7 +16,6 @@ use datafusion::physical_plan::Partitioning;
 use datafusion::physical_plan::PlanProperties;
 use datafusion::physical_plan::execution_plan::Boundedness;
 use datafusion::physical_plan::execution_plan::EmissionType;
-use std::any::Any;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
@@ -84,10 +83,6 @@ impl ExecutionPlan for TaskLogExecPlan {
         "LogExecPlan"
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
     }
@@ -134,7 +129,7 @@ impl ExecutionPlan for TaskLogExecPlan {
     fn partition_statistics(
         &self,
         _partition: Option<usize>,
-    ) -> datafusion::error::Result<Statistics> {
-        Ok(Statistics::new_unknown(&self.schema))
+    ) -> datafusion::error::Result<Arc<Statistics>> {
+        Ok(Arc::new(Statistics::new_unknown(&self.schema)))
     }
 }

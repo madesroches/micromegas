@@ -8,7 +8,6 @@ use datafusion::logical_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 use jsonb::RawJsonb;
-use std::any::Any;
 use std::sync::Arc;
 
 pub fn extract_properties_as_vec(struct_array: &StructArray) -> Result<Vec<(String, String)>> {
@@ -73,10 +72,6 @@ impl Default for PropertiesToArray {
 }
 
 impl ScalarUDFImpl for PropertiesToArray {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "properties_to_array"
     }
@@ -148,10 +143,6 @@ impl Default for PropertiesLength {
 }
 
 impl ScalarUDFImpl for PropertiesLength {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "properties_length"
     }

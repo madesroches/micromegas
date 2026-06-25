@@ -11,7 +11,6 @@ use datafusion::logical_expr::{
 };
 use jsonb::Value;
 use micromegas_tracing::warn;
-use std::any::Any;
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -71,10 +70,6 @@ fn convert_properties_list_to_jsonb(properties: ArrayRef) -> anyhow::Result<Vec<
 }
 
 impl ScalarUDFImpl for PropertiesToJsonb {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "properties_to_jsonb"
     }

@@ -11,7 +11,7 @@ use datafusion::{
     physical_plan::ExecutionPlan,
     prelude::*,
 };
-use std::{any::Any, sync::Arc};
+use std::sync::Arc;
 
 /// A DataFusion `TableProvider` for a set of pre-defined partitions.
 pub struct PartitionedTableProvider {
@@ -45,10 +45,6 @@ impl PartitionedTableProvider {
 
 #[async_trait]
 impl TableProvider for PartitionedTableProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
     }

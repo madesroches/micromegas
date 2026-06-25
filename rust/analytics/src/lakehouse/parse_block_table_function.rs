@@ -15,7 +15,7 @@ use datafusion::{
         array::{BinaryBuilder, Int64Array, Int64Builder, RecordBatch, StringBuilder},
         datatypes::{DataType, Field, Schema, SchemaRef},
     },
-    catalog::{Session, TableFunctionImpl, TableProvider},
+    catalog::{Session, TableFunctionArgs, TableFunctionImpl, TableProvider},
     common::plan_err,
     datasource::{
         TableType,
@@ -29,7 +29,7 @@ use jsonb::Value as JsonbValue;
 use micromegas_ingestion::web_ingestion_service::FORMAT_TRANSIT;
 use micromegas_tracing::prelude::*;
 use micromegas_transit::{UserDefinedType, value::Value as TransitValue};
-use std::{any::Any, borrow::Cow, collections::BTreeMap, sync::Arc};
+use std::{borrow::Cow, collections::BTreeMap, sync::Arc};
 use uuid::Uuid;
 
 use crate::dfext::expressions::exp_to_string;
@@ -229,7 +229,11 @@ impl ParseBlockTableFunction {
 }
 
 impl TableFunctionImpl for ParseBlockTableFunction {
-    fn call(&self, exprs: &[Expr]) -> datafusion::error::Result<Arc<dyn TableProvider>> {
+    fn call_with_args(
+        &self,
+        args: TableFunctionArgs,
+    ) -> datafusion::error::Result<Arc<dyn TableProvider>> {
+        let exprs = args.exprs();
         let arg = exprs.first().map(exp_to_string);
         let Some(Ok(block_id)) = arg else {
             return plan_err!(
@@ -258,10 +262,6 @@ struct ParseBlockProvider {
 
 #[async_trait]
 impl TableProvider for ParseBlockProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         output_schema()
     }

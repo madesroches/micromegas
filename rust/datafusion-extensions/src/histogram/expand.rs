@@ -4,6 +4,7 @@ use datafusion::arrow::array::{ArrayRef, Float64Array, StructArray, UInt64Array}
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::catalog::Session;
+use datafusion::catalog::TableFunctionArgs;
 use datafusion::catalog::TableFunctionImpl;
 use datafusion::catalog::TableProvider;
 use datafusion::datasource::TableType;
@@ -13,7 +14,6 @@ use datafusion::logical_expr::{LogicalPlan, LogicalPlanBuilder};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::Expr;
 use datafusion::scalar::ScalarValue;
-use std::any::Any;
 use std::sync::Arc;
 
 /// A DataFusion `TableFunctionImpl` that expands a histogram struct into rows of (bin_center, count).
@@ -49,7 +49,11 @@ enum HistogramSource {
 }
 
 impl TableFunctionImpl for ExpandHistogramTableFunction {
-    fn call(&self, args: &[Expr]) -> datafusion::error::Result<Arc<dyn TableProvider>> {
+    fn call_with_args(
+        &self,
+        args: TableFunctionArgs,
+    ) -> datafusion::error::Result<Arc<dyn TableProvider>> {
+        let args = args.exprs();
         if args.len() != 1 {
             return Err(DataFusionError::Plan(
                 "expand_histogram requires exactly one argument (a histogram)".into(),
@@ -162,10 +166,6 @@ impl ExpandHistogramTableProvider {
 
 #[async_trait]
 impl TableProvider for ExpandHistogramTableProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         output_schema()
     }

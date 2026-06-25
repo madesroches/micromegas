@@ -8,7 +8,6 @@ use datafusion::logical_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
 };
 use jsonb::RawJsonb;
-use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -68,10 +67,6 @@ fn extract_keys_from_jsonb(jsonb_bytes: &[u8]) -> Result<Option<Vec<String>>> {
 }
 
 impl ScalarUDFImpl for JsonbObjectKeys {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "jsonb_object_keys"
     }

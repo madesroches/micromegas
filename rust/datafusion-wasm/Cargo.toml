@@ -17,7 +17,7 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 arrow = { version = "58.0", default-features = false, features = ["ipc"] }
 chrono = { version = "0.4", default-features = false, features = ["wasmbind"] }
-datafusion = { version = "53.1", default-features = false, features = ["nested_expressions", "sql"] }
+datafusion = { version = "54.0", default-features = false, features = ["nested_expressions", "sql"] }
 getrandom = { version = "0.3", features = ["wasm_js"] }
 micromegas-datafusion-extensions = { path = "../datafusion-extensions", version = "0.27.0" }
 micromegas-telemetry-sink = { path = "../telemetry-sink", version = "0.27.0", default-features = false }

@@ -3,6 +3,7 @@ use datafusion::arrow::array::{Array, ArrayRef, BinaryArray, DictionaryArray, Ge
 use datafusion::arrow::datatypes::{DataType, Field, Int32Type, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::catalog::Session;
+use datafusion::catalog::TableFunctionArgs;
 use datafusion::catalog::TableFunctionImpl;
 use datafusion::catalog::TableProvider;
 use datafusion::datasource::TableType;
@@ -13,7 +14,6 @@ use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::Expr;
 use datafusion::scalar::ScalarValue;
 use jsonb::RawJsonb;
-use std::any::Any;
 use std::sync::Arc;
 
 /// A DataFusion `TableFunctionImpl` that expands a JSONB object or array into rows of (key, value).
@@ -50,7 +50,11 @@ enum JsonbSource {
 }
 
 impl TableFunctionImpl for JsonbEachTableFunction {
-    fn call(&self, args: &[Expr]) -> datafusion::error::Result<Arc<dyn TableProvider>> {
+    fn call_with_args(
+        &self,
+        args: TableFunctionArgs,
+    ) -> datafusion::error::Result<Arc<dyn TableProvider>> {
+        let args = args.exprs();
         if args.len() != 1 {
             return Err(DataFusionError::Plan(
                 "jsonb_each requires exactly one argument (a JSONB object)".into(),
@@ -206,10 +210,6 @@ impl JsonbEachTableProvider {
 
 #[async_trait]
 impl TableProvider for JsonbEachTableProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         output_schema()
     }

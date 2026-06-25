@@ -8,9 +8,8 @@ use crate::{
 };
 use datafusion::{
     arrow::datatypes::{DataType, Field, Schema},
-    catalog::{TableFunctionImpl, TableProvider},
+    catalog::{TableFunctionArgs, TableFunctionImpl, TableProvider},
     common::plan_err,
-    logical_expr::Expr,
 };
 use micromegas_tracing::prelude::*;
 use std::sync::Arc;
@@ -63,7 +62,11 @@ impl PerfettoTraceTableFunction {
 
 impl TableFunctionImpl for PerfettoTraceTableFunction {
     #[span_fn]
-    fn call(&self, exprs: &[Expr]) -> datafusion::error::Result<Arc<dyn TableProvider>> {
+    fn call_with_args(
+        &self,
+        args: TableFunctionArgs,
+    ) -> datafusion::error::Result<Arc<dyn TableProvider>> {
+        let exprs = args.exprs();
         // Parse process_id (arg 1)
         let arg1 = exprs.first().map(exp_to_string);
         let Some(Ok(process_id)) = arg1 else {

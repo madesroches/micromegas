@@ -7,7 +7,6 @@ use datafusion::datasource::TableType;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::limit::GlobalLimitExec;
 use datafusion::prelude::Expr;
-use std::any::Any;
 use std::sync::Arc;
 
 /// A DataFusion `TableProvider` for a log stream.
@@ -19,10 +18,6 @@ pub struct LogStreamTableProvider {
 
 #[async_trait]
 impl TableProvider for LogStreamTableProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         self.log_stream.schema()
     }

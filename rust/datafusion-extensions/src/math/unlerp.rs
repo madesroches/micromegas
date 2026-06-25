@@ -5,7 +5,6 @@ use datafusion::error::DataFusionError;
 use datafusion::logical_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
 };
-use std::any::Any;
 use std::sync::Arc;
 
 /// `unlerp(a, b, x) -> Float64`
@@ -37,10 +36,6 @@ impl Default for UnlerpUdf {
 }
 
 impl ScalarUDFImpl for UnlerpUdf {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "unlerp"
     }

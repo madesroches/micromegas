@@ -5,7 +5,6 @@ use datafusion::error::DataFusionError;
 use datafusion::logical_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
 };
-use std::any::Any;
 use std::sync::Arc;
 
 use super::{pack_rgba, round_to_byte, unpack_rgba};
@@ -45,10 +44,6 @@ fn lerp_channel(a: u8, b: u8, t: f64) -> u8 {
 }
 
 impl ScalarUDFImpl for LerpColorUdf {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "lerp_color"
     }

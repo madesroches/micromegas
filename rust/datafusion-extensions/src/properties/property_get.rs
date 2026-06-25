@@ -11,7 +11,6 @@ use datafusion::logical_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 use jsonb::RawJsonb;
-use std::any::Any;
 use std::sync::Arc;
 
 /// A scalar UDF that retrieves a property from a list of properties.
@@ -79,9 +78,6 @@ fn extract_from_jsonb(jsonb_bytes: &[u8], name: &str) -> anyhow::Result<Option<S
 }
 
 impl ScalarUDFImpl for PropertyGet {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
     fn name(&self) -> &str {
         "property_get"
     }

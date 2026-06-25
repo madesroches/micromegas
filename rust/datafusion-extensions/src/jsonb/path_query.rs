@@ -8,7 +8,6 @@ use datafusion::logical_expr::{
 };
 use jsonb::RawJsonb;
 use jsonb::jsonpath::parse_json_path;
-use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -101,10 +100,6 @@ impl Default for JsonbPathQueryFirst {
 }
 
 impl ScalarUDFImpl for JsonbPathQueryFirst {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "jsonb_path_query_first"
     }
@@ -155,10 +150,6 @@ impl Default for JsonbPathQuery {
 }
 
 impl ScalarUDFImpl for JsonbPathQuery {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "jsonb_path_query"
     }

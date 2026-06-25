@@ -12,10 +12,10 @@ use crate::response_writer::Logger;
 use crate::time::TimeRange;
 use anyhow::Context;
 use chrono::TimeDelta;
+use datafusion::catalog::TableFunctionArgs;
 use datafusion::catalog::TableFunctionImpl;
 use datafusion::catalog::TableProvider;
 use datafusion::common::plan_err;
-use datafusion::prelude::Expr;
 use micromegas_tracing::prelude::*;
 use std::sync::Arc;
 
@@ -66,7 +66,11 @@ async fn materialize_partitions_impl(
 }
 
 impl TableFunctionImpl for MaterializePartitionsTableFunction {
-    fn call(&self, args: &[Expr]) -> datafusion::error::Result<Arc<dyn TableProvider>> {
+    fn call_with_args(
+        &self,
+        args: TableFunctionArgs,
+    ) -> datafusion::error::Result<Arc<dyn TableProvider>> {
+        let args = args.exprs();
         // an alternative would be to use coerce & create_physical_expr
         let Some(view_set_name) = args.first().map(exp_to_string).transpose()? else {
             return plan_err!("Missing first argument, expected view_set_name: String");
