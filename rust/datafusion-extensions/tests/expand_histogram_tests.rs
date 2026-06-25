@@ -130,7 +130,6 @@ async fn test_scalar_to_batch_dictionary_wrapped() {
         .expect("call should accept dictionary-wrapped histogram");
     let batch = collect_expand(
         provider
-            .as_any()
             .downcast_ref::<ExpandHistogramTableProvider>()
             .expect("should be ExpandHistogramTableProvider"),
         None,
