@@ -19,6 +19,17 @@ cargo build --package micromegas-capi --release
 # Windows: rust/target/<triple>/release/micromegas_capi.{dll,lib}
 ```
 
+### Prebuilt archives
+
+Tagged releases (`capi-v*`) publish per-platform archives — the shared library,
+static library, and `micromegas.h` — as GitHub Release assets, built by
+`.github/workflows/capi-release.yml`. To produce the same archive on demand
+(locally or via the workflow's manual "Run workflow" button):
+
+```bash
+python3 build/package_capi.py --build   # build + archive into dist/
+```
+
 ## Usage
 
 Include `include/micromegas.h` and load the library (via `dlopen`/`LoadLibrary`/

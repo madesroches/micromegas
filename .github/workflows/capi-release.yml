@@ -1,0 +1,87 @@
+name: capi-release
+
+# Build the micromegas-capi C ABI library for Linux and Windows and attach the
+# per-platform archives (shared lib + static lib + micromegas.h) to a GitHub
+# Release. Triggered by pushing a tag like `capi-v0.27.0`.
+#
+# Audience: C/C++ integrators who link against the C API to send telemetry to
+# their own Micromegas stack, without building a Rust project.
+
+on:
+  push:
+    tags:
+      - 'capi-v*'
+  # On-demand build from the Actions UI: produces downloadable artifacts but
+  # does NOT create a GitHub Release (the release job is tag-gated below).
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version label for the archive names (defaults to workspace version)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+          - os: windows-latest
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version argument
+        id: ver
+        shell: bash
+        run: |
+          # Tag push -> strip the capi-v prefix. Manual dispatch -> use the
+          # input if given, otherwise let package_capi.py default to the
+          # workspace version (empty arg).
+          if [[ "$GITHUB_REF" == refs/tags/capi-v* ]]; then
+            echo "arg=--version ${GITHUB_REF_NAME#capi-v}" >> "$GITHUB_OUTPUT"
+          elif [[ -n "${{ inputs.version }}" ]]; then
+            echo "arg=--version ${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "arg=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Package (build + archive)
+        run: python3 build/package_capi.py --build ${{ steps.ver.outputs.arg }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: capi-${{ matrix.os }}
+          path: dist/*.tar.gz
+          if-no-files-found: ignore
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: capi-${{ matrix.os }}-zip
+          path: dist/*.zip
+          if-no-files-found: ignore
+
+  release:
+    needs: build
+    # Only publish a GitHub Release for tag pushes; manual dispatch stops at
+    # uploaded artifacts.
+    if: startsWith(github.ref, 'refs/tags/capi-v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "micromegas-capi ${GITHUB_REF_NAME#capi-v}" \
+            --notes "C ABI prebuilt libraries for Linux and Windows. Each archive contains the shared library, static library, and include/micromegas.h." \
+            $(find artifacts -type f \( -name '*.tar.gz' -o -name '*.zip' \))
