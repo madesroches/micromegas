@@ -67,9 +67,6 @@ def _on_save_post(scene, depsgraph=None):
 
 def _on_undo_post(scene, depsgraph=None):
     _log(_b.LEVEL_DEBUG, "blender.lifecycle", "undo")
-    stack_depth = len(bpy.context.blend_data.scene.tool_settings.use_mesh_automerge.__class__.__mro__)
-    # Undo stack depth is not directly queryable; log the action only.
-    _ = stack_depth  # suppress unused warning
 
 
 def _on_redo_post(scene, depsgraph=None):
