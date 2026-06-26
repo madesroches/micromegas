@@ -267,12 +267,12 @@ def main():
 
         repo_root = rust_dir.parent
         wasm_crate_dir = rust_dir / "datafusion-wasm"
-        wasm_out_dir = repo_root / "analytics-web-app" / "src" / "lib" / "datafusion-wasm"
         print("🔧 Building datafusion WASM (debug)...")
         os.chdir(wasm_crate_dir)
-        run_command(
-            f"wasm-pack build --target web --dev --out-dir {wasm_out_dir} --out-name micromegas_datafusion_wasm"
-        )
+        # Use the canonical generator (build.py), not `wasm-pack build` directly:
+        # wasm-pack rewrites the tracked package.json/bindings and leaves stray
+        # files, causing git churn. See #1171. --debug skips wasm-opt for speed.
+        run_command(f"{sys.executable} build.py --debug")
 
         web_app_dir = repo_root / "analytics-web-app"
         print("🔧 Building web app...")
