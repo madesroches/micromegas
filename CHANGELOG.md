@@ -16,6 +16,8 @@ This file documents the historical progress of the Micromegas project. For curre
   * Add crash harvester: on startup scans for prior `*.crash.txt` files, claims each atomically via rename to prevent duplicate uploads, and ships as a CRITICAL log keyed to the prior session fingerprint (#1160)
   * Add `blender-extension` CI workflow: builds the cdylib for Linux and Windows, packages the extension zip, and uploads artifacts; add `capi-release` workflow: builds and publishes versioned `micromegas-capi` binaries (#1160)
   * Add docs for native C ABI integration (`mkdocs/docs/native/`) and the Blender add-on (`mkdocs/docs/blender/`) (#1160)
+  * Make Blender per-process memory cross-platform and periodically sampled, and fix the misleading `blender.eval_ms` metric (renamed, no longer spans the file-load boundary) (#1168)
+  * Expand the Blender process fingerprint and add Python exception capture via `sys.excepthook` plus semantic user-action capture, closing root-cause-analysis telemetry gaps (#1168)
 
 ## June 2026 - v0.26.0
 
