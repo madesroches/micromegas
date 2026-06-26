@@ -34,7 +34,7 @@ A `bpy.app.timers` callback fires every 30 s and only calls `_lib.flush(_handle)
 Lifecycle: load/save/undo/redo, render start/complete/cancel, frame change, depsgraph. User input: key/mouse/scroll/operator events via the modal recorder. **No capture of Python exceptions** raised inside the embedded interpreter (operator/timer/handler errors) — the single most useful signal for RCA of add-on and scripting issues.
 
 ### System-wide vs per-process
-`mm_init` spawns the Rust `system_monitor` (`rust/telemetry-sink/src/lib.rs:467`) which emits **machine-wide** `total_memory` / `used_memory` / `free_memory` / `cpu_usage`. These do **not** describe the Blender process — the add-on's own metrics are the only per-process signal.
+`mm_init` spawns the Rust `system_monitor` (spawned at `rust/telemetry-sink/src/lib.rs:468`; metric emission in `rust/telemetry-sink/src/system_monitor.rs`) which emits **machine-wide** `total_memory` / `used_memory` / `free_memory` / `cpu_usage`. These do **not** describe the Blender process — the add-on's own metrics are the only per-process signal.
 
 ### Build / platform reality (important for the macOS acceptance criterion)
 `build/build_blender_plugin.py` builds **only** `x86_64-unknown-linux-gnu` (`.so`) and `x86_64-pc-windows-gnu` (`.dll`). There is **no macOS `.dylib`**, so on macOS `binding._get_lib_path()` resolves to a `.so` that does not exist and the add-on stays inactive (`__init__.py:_load_lib` prints "native library not found"). See Open Questions.
@@ -257,12 +257,12 @@ All five parts are in scope (the objective is maximum RCA signal). Suggested bui
 
 ### Phase 5 — Docs
 12. Update `mkdocs/docs/blender/index.md` (see Documentation), including correcting the "Operator invocations" claim.
-13. Correct `recorder.py`'s module docstring (lines 15–17): drop the "operator `bl_idname` is logged" / `VERBOSE_PARAMS` claims — `modal()` logs only raw input events, no operator capture and no such preference exists.
+13. Correct `recorder.py`'s module docstring (lines 15–16): drop the "operator `bl_idname` is logged" / `VERBOSE_PARAMS` claims — `modal()` logs only raw input events, no operator capture and no such preference exists.
 
 ## Files to Modify
 - `blender/micromegas_blender/handlers.py` — RSS reader, `on_periodic`, depsgraph rename + reset.
 - `blender/micromegas_blender/__init__.py` — periodic hook call, fingerprint props, excepthook, action-poll timer registration.
-- `blender/micromegas_blender/recorder.py` (or new `actions.py`) — operator-history poller, mode/workspace/tool transitions; correct the module docstring's inaccurate operator-`bl_idname`/`VERBOSE_PARAMS` claim (lines 15–17).
+- `blender/micromegas_blender/recorder.py` (or new `actions.py`) — operator-history poller, mode/workspace/tool transitions; correct the module docstring's inaccurate operator-`bl_idname`/`VERBOSE_PARAMS` claim (lines 15–16).
 - `mkdocs/docs/blender/index.md` — metrics table, fingerprint list, semantic-action section, corrected "Operator invocations" claim, new sections.
 - Tests under the add-on's test location (see Testing).
 
