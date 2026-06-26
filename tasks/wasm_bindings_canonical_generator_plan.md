@@ -174,6 +174,14 @@ wasm-pack ── used ONLY by `build.py --test` (`wasm-pack test --headless --fi
 2. **Regenerate and commit the canonical bindings** so the committed form is unambiguously the
    build.py form: run `python3 rust/datafusion-wasm/build.py` and commit the resulting
    `.js`/`.d.ts`/`package.json` if they changed.
+
+   > **Commit step 1 and step 2 together in a single commit.** The `build.py` edit (version
+   > `0.1.0`→`0.0.0`) and the regenerated `.js`/`.d.ts`/`package.json` must land atomically. CI runs
+   > `build.py --check`, which rebuilds `package.json` and compares it to `HEAD` after
+   > `_normalize_symbol_hashes` — and that normalization only rewrites `__hXXXX`/`__wbg_..._XXXX` hash
+   > patterns, never version strings (`build.py:136-149`). If step 1 lands alone, the freshly built
+   > `package.json` says `0.0.0` while `HEAD` still says `0.1.0`, producing a real (non-hash) diff and
+   > a failing check until step 2's regenerated `package.json` is committed.
 3. **Clean up stray artifacts**: remove the untracked `README.md` and `.gitignore` (`*`) from
    `analytics-web-app/src/lib/datafusion-wasm/`.
 4. **`rust/datafusion-wasm/README.md`**: rewrite the build section to state build.py is canonical;
