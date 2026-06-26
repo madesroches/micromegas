@@ -119,13 +119,18 @@ fn string_encoded_timestamp_accepted() {
     );
 }
 
-/// Bare-number `timeUnixNano` (lenient proto3 JSON, not mandated by spec) is rejected.
-/// This locks in the documented limitation so a future dependency change is noticed.
+/// Bare-number `timeUnixNano` (lenient proto3 JSON, not mandated by spec) is now accepted
+/// as of opentelemetry-proto 0.32. Document the current behavior so a future change is noticed.
 #[test]
-fn bare_number_timestamp_rejected() {
+fn bare_number_timestamp_accepted() {
     let json = r#"{"resourceLogs":[{"resource":{},"scopeLogs":[{"logRecords":[{"timeUnixNano":1700000000000000000,"severityNumber":9,"body":{"stringValue":"ts-test"}}]}]}]}"#;
-    let result: Result<ExportLogsServiceRequest, _> = serde_json::from_str(json);
-    assert!(result.is_err(), "bare-number timeUnixNano must be rejected");
+    let req: ExportLogsServiceRequest = serde_json::from_str(json)
+        .expect("opentelemetry-proto 0.32 accepts bare-number timeUnixNano");
+    let blocks = split_logs(req).unwrap();
+    assert_eq!(
+        blocks[0].begin_time.timestamp_nanos_opt().unwrap(),
+        1_700_000_000_000_000_000
+    );
 }
 
 /// Empty `resourceLogs` / `resourceMetrics` / `resourceSpans` → no blocks, no error.

@@ -63,6 +63,8 @@ pub fn attr_to_string(v: &AnyValue) -> String {
         Some(any_value::Value::BoolValue(b)) => b.to_string(),
         Some(any_value::Value::DoubleValue(d)) => d.to_string(),
         Some(any_value::Value::BytesValue(b)) => format!("{b:?}"),
+        // String-interning index: we don't have the dictionary here, so emit the index.
+        Some(any_value::Value::StringValueStrindex(idx)) => idx.to_string(),
         Some(any_value::Value::ArrayValue(_)) | Some(any_value::Value::KvlistValue(_)) => {
             // Structured values shouldn't appear in identity-bearing fields. If one does,
             // hashing the Debug form is at least deterministic for a given prost version.

@@ -10,6 +10,7 @@ use micromegas_otel_ingestion::proto::{
 fn s_kv(k: &str, v: &str) -> KeyValue {
     KeyValue {
         key: k.into(),
+        key_strindex: 0,
         value: Some(AnyValue {
             value: Some(AvValue::StringValue(v.into())),
         }),

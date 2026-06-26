@@ -45,6 +45,8 @@ pub fn any_value_to_jsonb(v: &AnyValue) -> JsonbValue<'static> {
             }
             JsonbValue::Object(map)
         }
+        // String-interning index: we don't have the dictionary here, so emit the index as a string.
+        Some(Av::StringValueStrindex(idx)) => JsonbValue::String(Cow::Owned(idx.to_string())),
         None => JsonbValue::Null,
     }
 }
@@ -103,6 +105,8 @@ pub fn any_value_to_string(v: &AnyValue) -> String {
             let bytes = to_jsonb_bytes(JsonbValue::Object(map));
             jsonb::RawJsonb::new(&bytes).to_string()
         }
+        // String-interning index: we don't have the dictionary here, so emit the index as a string.
+        Some(Av::StringValueStrindex(idx)) => idx.to_string(),
         None => String::new(),
     }
 }

@@ -11,6 +11,7 @@ use uuid::Uuid;
 fn kv(key: &str, value: &str) -> KeyValue {
     KeyValue {
         key: key.to_string(),
+        key_strindex: 0,
         value: Some(AnyValue {
             value: Some(AvValue::StringValue(value.to_string())),
         }),
