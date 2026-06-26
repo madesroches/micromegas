@@ -216,6 +216,8 @@ def on_poll_operators() -> None:
         pass
 ```
 
+> **Helper/context note for the target module.** The snippet uses the `_log(...)` helper and the `_b` binding alias. These exist only in `handlers.py` (the `_log`/`_metric_f`/`_metric_i` helpers + `set_context` wiring, ~lines 30–42); `recorder.py` has no `_log` and calls `_lib.log(...)` directly, and a fresh `actions.py` would have neither. So the new action-capture module must either define/import a `_log` helper plus the `_b` alias and context wiring following the `handlers.py` pattern, or call `_lib.log(...)` directly the way `recorder.py` does — so the helpers actually exist where this code lives.
+
 **Adjacent semantic signals worth capturing** (all bounded, all answer "what state was the user in"):
 - **Mode changes** (`object`/`edit`/`sculpt`/`pose`) — derivable from `OBJECT_OT_mode_set` in the operator stream, or poll `bpy.context.mode` on a state-change basis. Log `blender.mode` transitions.
 - **Active workspace / editor focus change** — poll `bpy.context.workspace.name` (bounded) on change → `blender.workspace`.
@@ -245,9 +247,9 @@ All five parts are in scope (the objective is maximum RCA signal). Suggested bui
 6. `__init__.py:_build_process_properties`: add GPU (`gpu.platform.*`), `enabled_addons`, `cpu_count`, `python_version`, `background`, optional `total_ram_mb`. Each in its own try/except.
 
 ### Phase 3 — Semantic action capture
-7. New operator-history poller (in `recorder.py` or a new `actions.py`): ~1 s timer draining `bpy.context.window_manager.operators` → `blender.action` TRACE logs (always `bl_idname` + `name`; parameters via `as_keywords()` inside its own try/except, omitted when unavailable — validate availability on a real build; message capped ~4 KB). Anchor/diff logic with gap marker on overflow.
+7. New operator-history poller (in `recorder.py` or a new `actions.py`): ~1 s timer draining `bpy.context.window_manager.operators` → `blender.action` TRACE logs (always `bl_idname` + `name`; parameters via `as_keywords()` inside its own try/except, omitted when unavailable — validate availability on a real build; message capped ~4 KB). Anchor/diff logic with gap marker on overflow. Wire up logging in the chosen module: either define/import a `_log` helper plus the `_b` alias and context wiring per the `handlers.py` pattern, or call `_lib.log(...)` directly as `recorder.py` does (see the helper/context note in Part 5).
 8. Mode/workspace/tool transition logging; runtime add-on enable/disable.
-9. Register/unregister the new timer in `__init__.py` alongside `_periodic_flush`.
+9. Register/unregister the new timer in `__init__.py` alongside `_periodic_flush`. `unregister()` currently unregisters only `_periodic_flush`; it must also call `bpy.app.timers.unregister(<new_timer>)`, mirroring the existing `_periodic_flush` unregister — otherwise the ~1 s poll timer keeps firing after the add-on is disabled (zombie polling / duplicate timers on re-enable).
 
 ### Phase 4 — Exceptions + extra metrics
 10. `__init__.py`: install/restore `sys.excepthook` wrapper shipping full tracebacks as `blender.exception` ERROR logs (message capped ~4 KB).
