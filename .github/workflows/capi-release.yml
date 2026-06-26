@@ -57,6 +57,11 @@ jobs:
             echo "arg=" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
       - name: Package (build + archive)
         run: python3 build/package_capi.py --build ${{ steps.ver.outputs.arg }}
 
