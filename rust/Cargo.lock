@@ -3549,6 +3549,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "micromegas-capi"
+version = "0.27.0"
+dependencies = [
+ "micromegas-telemetry-sink",
+ "micromegas-tracing",
+]
+
+[[package]]
 name = "micromegas-datafusion-extensions"
 version = "0.27.0"
 dependencies = [

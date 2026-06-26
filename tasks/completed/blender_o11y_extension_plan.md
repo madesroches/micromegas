@@ -6,13 +6,13 @@ Give the team visibility into Blender stability and performance by emitting logs
 ## Current State
 
 ### Telemetry producer stack (reusable as-is)
-- `micromegas` (`rust/public/`) is the sanctioned user-facing crate. Its **default feature set pulls in only the producer side** — `micromegas-telemetry`, `micromegas-telemetry-sink`, `micromegas-tracing` (`rust/public/Cargo.toml:43-49`). The analytics/DataFusion/object_store/server stack is entirely behind the optional `server` feature (`rust/public/Cargo.toml:15-41`), so a `default-features` dependency does **not** drag the query engine into a shipped library.
+- `micromegas` (`rust/public/`) is the sanctioned user-facing crate. Its **default feature set is empty** (`default = []`, `rust/public/Cargo.toml:14`) and the producer crates — `micromegas-telemetry`, `micromegas-telemetry-sink`, `micromegas-tracing` — are non-optional, always-on dependencies (`rust/public/Cargo.toml:44-49`). The analytics/DataFusion/object_store/server stack is entirely behind the optional `server` feature (`rust/public/Cargo.toml:15-41`), so a `default-features` dependency does **not** drag the query engine into a shipped library.
 - Initialization is an RAII guard: `TelemetryGuardBuilder` → `TelemetryGuard` (`rust/telemetry-sink/src/lib.rs`). Builder options include `.with_telemetry_sink_url()`, `.with_auth_from_env()` (API key or OIDC from env), `.with_process_properties()`, `.with_system_metrics_enabled()`. Dropping the guard flushes buffers and shuts down the background thread.
-- Transport already runs on its **own OS thread**: `HttpEventSink` spawns `std::thread` that owns a private `tokio::runtime::Runtime` (`rust/telemetry-sink/src/http_event_sink.rs:562`). Event recording (`dispatch::log`, `dispatch::int_metric`, `dispatch::float_metric`, `dispatch::on_begin_named_scope`/`on_end_named_scope` in `rust/tracing/src/dispatch.rs`) is **fully synchronous and thread-safe** — callers need no async runtime. This is the "embed a native part that owns its own thread" property we want, already implemented.
+- Transport already runs on its **own OS thread**: `HttpEventSink` spawns a `std::thread` (`rust/telemetry-sink/src/http_event_sink.rs:128`) whose body owns a private `tokio::runtime::Runtime` (`rust/telemetry-sink/src/http_event_sink.rs:562`). Event recording (`dispatch::log`, `dispatch::int_metric`, `dispatch::float_metric`, `dispatch::on_begin_named_scope`/`on_end_named_scope` in `rust/tracing/src/dispatch.rs`) is **fully synchronous and thread-safe** — callers need no async runtime. This is the "embed a native part that owns its own thread" property we want, already implemented.
 - Event metadata uses `&'static str` (`LogMetadata` in `rust/tracing/src/logs/events.rs`, `StaticMetricMetadata` in `rust/tracing/src/metrics/events.rs`). Log *message* bodies are passed as `fmt::Arguments` and may be runtime strings; only the *metadata* (target, metric name, unit) must be `'static`. This shapes the FFI design (see below).
 
 ### What does not exist yet
-- **No exported C ABI in the repo.** No `#[no_mangle]` exports and no cbindgen usage (the only `extern "C"` is an internal level-change callback typedef in `rust/tracing/src/levels.rs`). The only `cdylib` is `rust/datafusion-wasm/` (WASM, unrelated). This is greenfield.
+- **No exported C ABI in the repo.** No `#[no_mangle]` exports and no cbindgen usage — there are no `extern "C"` exports anywhere in the repo. The only `cdylib` is `rust/datafusion-wasm/` (WASM, unrelated). This is greenfield.
 - **No crash/minidump ingestion.** The Unreal sink (`unreal/MicromegasTelemetrySink/.../SystemErrorReporter.cpp`) captures symbolized stack traces as log entries on `OnHandleSystemError`, but there is no minidump/Breakpad/Crashpad support anywhere.
 - The Python client (`python/micromegas/`) is **query + bulk-ingest only** (`bulk_ingest()` is an Arrow-table loader for replication/admin) — no telemetry event-production (logs/metrics) API.
 
@@ -33,7 +33,6 @@ Blender process
         ├── flat C ABI (extern "C", #[no_mangle])
         ├── holds TelemetryGuard (init/shutdown)
         ├── string interner  (runtime str -> &'static, bounded)
-        ├── durable breadcrumb ring buffer (mmap'd file)   [phase 2]
         └── HttpEventSink  ── own OS thread + tokio runtime ──► ingestion-srv
 ```
 
@@ -64,7 +63,6 @@ void       mm_shutdown(mm_handle*);         // drops guard -> flush + join bg th
 void mm_log   (mm_handle*, int level, const char* target, const char* msg);
 void mm_metric_i(mm_handle*, const char* name, const char* unit, uint64_t value);
 void mm_metric_f(mm_handle*, const char* name, const char* unit, double  value);
-void mm_breadcrumb(mm_handle*, const char* kind, const char* payload); // phase 2: durable
 void mm_flush  (mm_handle*);
 ```
 `mm_config` carries sink URL, optional auth fields, and process properties (key/value array); the shim maps it to `TelemetryGuardBuilder` calls.
@@ -91,43 +89,103 @@ Captured signals:
 
 ### Component 3 — Crash capture
 Phased, gated on evidence:
-- **Phase 1 (cheap, pure Python): harvest on next launch.** On startup the add-on scans for (a) Blender's own `*.crash.txt`/debug output from a prior abnormal exit and (b) an unsent local breadcrumb file, ships them as a CRITICAL log keyed to the prior session's fingerprint, and marks them sent. This reuses the native backtrace Blender already writes — no native crash code required. It tells us how lossy the cheap path is.
-- **Phase 2 (native, only if Phase 1 proves too lossy): durable breadcrumbs + minidumps.** Move the breadcrumb ring buffer into an mmap'd file owned by `micromegas-capi` (each `mm_breadcrumb` is a cheap memory write that survives a hard crash because the OS flushes dirty pages). Add an out-of-process Crashpad handler that captures a full minidump and uploads immediately. This is justified by Phase-1 data, not built upfront.
+- **Phase 1 (cheap, pure Python): harvest on next launch.** On startup the add-on scans for Blender's own `*.crash.txt`/debug output from a prior abnormal exit and ships it as a CRITICAL log keyed to the prior session's fingerprint. The last user actions before the crash come from the normal telemetry stream already ingested under that fingerprint — no parallel local store. This reuses the native backtrace Blender already writes — no native crash code required. It tells us how lossy the cheap path is.
+  - **Concurrent-launch safety + dedup via atomic rename.** Artists run several Blender instances at once, so two launches can see the same crash file simultaneously. Each harvester **claims** a crash file with an atomic rename (e.g. `*.crash.txt` → `*.crash.txt.claimed`) before uploading; only the instance that wins the rename ships it, so a crash is never reported twice. This rename is the only local bookkeeping — there is no sent-marker store.
+  - **Best-effort upload.** If the upload fails after the claim, that crash report is simply lost — no retry queue, no recovery, no re-scan of claimed files. Accepting this loss is what keeps the harvester stateless beyond the rename; it is consistent with Phase 1 being a cheap measurement of how lossy the free path is.
+- **Phase 2 (native, only if Phase 1 proves too lossy): minidumps.** Add an out-of-process Crashpad handler that captures a full minidump and uploads immediately. This is justified by Phase-1 data, not built upfront.
+- **In-flight event loss is a tracing-crate problem, not a Blender one.** If Phase-1 data shows we are losing the last user actions before a crash — events buffered in the sink that never shipped — the fix belongs in the shared `micromegas-tracing`/`telemetry-sink` layer (e.g. tighter flush cadence or a flush-on-fatal-signal path), so every producer benefits. We deliberately do **not** build a parallel durable-breadcrumb store in the C ABI to paper over sink reliability.
 
 ## Implementation Steps
 
-### Phase 1 — Native SDK foundation
-1. Create `rust/capi/` crate (`micromegas-capi`), `crate-type = ["cdylib","staticlib"]`, dep `micromegas` default features. No `rust/Cargo.toml` edit needed — the `members = ["*"]` glob auto-includes it.
-2. Implement `mm_init`/`mm_shutdown` over `TelemetryGuardBuilder`/`TelemetryGuard`, storing the guard behind the opaque handle.
-3. Implement `mm_log` over `dispatch::log_interop` (stack-built `LogMetadata`, no leak); implement the metadata interner (leaked `&'static StaticMetricMetadata` cached by string key) and `mm_metric_i`/`mm_metric_f`/`mm_flush` over the `dispatch::*` functions. (Spans are out of scope — no span FFI.)
-4. Generate a C header (cbindgen) and add a minimal C smoke test that inits, logs, and shuts down against a local ingestion server.
+### Phase 1 — Native SDK foundation ✅ COMPLETE
+1. ✅ Created `rust/capi/` crate (`micromegas-capi`), `crate-type = ["cdylib","staticlib","rlib"]`. Depends on `micromegas-telemetry-sink` and `micromegas-tracing` directly (not through `public`) since the C ABI needs dispatch internals not re-exported from the public crate. The workspace `members = ["*"]` glob auto-includes it — no `rust/Cargo.toml` edit needed.
+2. ✅ Implemented `mm_init`/`mm_shutdown` over `TelemetryGuardBuilder`/`TelemetryGuard`, storing the guard behind the opaque `MmHandle`. Null `cfg` returns null. Empty `sink_url` string (non-null pointer) explicitly suppresses env-var pickup, enabling test isolation from `MICROMEGAS_TELEMETRY_URL`.
+3. ✅ Implemented `mm_log` over `dispatch::log_interop` (stack-built `LogMetadata`, no leak). Metric interner: `OnceLock<Mutex<HashMap<(name,unit), &'static StaticMetricMetadata>>>` with `Box::leak` on first use. `mm_metric_i`/`mm_metric_f`/`mm_flush` implemented over `dispatch::*`. No span FFI.
+4. ✅ C header hand-authored at `rust/capi/include/micromegas.h`; `cbindgen.toml` provided for regeneration. 8 Rust smoke tests in `rust/capi/tests/smoke_test.rs` — all pass.
 
-### Phase 2 — Blender add-on (logs + metrics)
-5. Python binding module (`ctypes`/`cffi`) loading the bundled cdylib; map config + emit functions.
-6. Add-on scaffolding (`bl_info`, register/unregister, `atexit` → `mm_shutdown`), process-fingerprint properties at init.
-7. Modal recorder + `bpy.msgbus` + `bpy.app.handlers` wiring for actions and lifecycle; performance-metric emitters.
-8. Cardinality/privacy filter layer (allowlist of dimensions; verbose-params flag off by default).
-9. Wheel packaging that vendors the per-platform cdylib.
+### Phase 2 — Blender add-on (logs + metrics) ✅ COMPLETE (⚠️ needs Extension format migration)
+5. ✅ Python binding in `blender/micromegas_blender/binding.py` — ctypes wrapper loading `libmicromegas_capi.so` or `micromegas_capi.dll` from the add-on's `lib/` subdirectory.
+6. ✅ Add-on scaffolding in `blender/micromegas_blender/__init__.py`: `bl_info`, `register`/`unregister`, `atexit` → `mm_shutdown`, process-fingerprint properties (Blender version, build hash, OS, session UUID, add-on version), 30 s periodic flush timer.
+7. ✅ Modal recorder (`recorder.py`) + `bpy.msgbus` + `bpy.app.handlers` wiring (`handlers.py`) for user actions and lifecycle. Performance metrics: `blender.eval_ms`, `blender.render_duration_s`, `blender.blend_size_mb`, `blender.rss_mb`, `blender.frame`.
+8. ✅ Cardinality/privacy: metric names are bounded (operator type, area type, status); no per-asset names, file paths, or session IDs as metric dimensions. Verbose operator parameters are not captured by default.
+9. ✅ **Migrate to Blender 4.2+ Extension format** — the add-on currently uses the legacy `bl_info` dict. Blender 4.2 introduced an Extensions system (separate from the legacy Add-ons panel) that requires a `blender_manifest.toml`. This is the correct format for anything targeting 4.2+. See fix steps below.
+10. ⏳ Zip packaging (vendoring per-platform cdylib) — not implemented; build script is a follow-up packaging task.
 
-### Phase 3 — Crash capture (Phase 1 strategy above)
-10. Startup harvester for Blender's crash file + local breadcrumb file → CRITICAL log keyed to prior-session fingerprint, with a sent-marker.
-11. Evaluate loss; if warranted, schedule native mmap breadcrumbs + Crashpad as a follow-up (separate plan).
+#### Fix: migrate to Blender Extension format
+
+Blender 4.2+ added a proper Extensions system alongside (but separate from) the legacy Add-ons panel. Our add-on was written with the legacy `bl_info` API. The migration is purely mechanical — `register()`/`unregister()` and all hook code are unchanged.
+
+**Steps:**
+
+1. **Create `blender/micromegas_blender/blender_manifest.toml`** alongside `__init__.py`:
+   ```toml
+   schema_version = "1.0.0"
+   id = "micromegas_blender"
+   version = "1.0.0"
+   name = "Micromegas Telemetry"
+   tagline = "Captures Blender session telemetry and ships it to a Micromegas server"
+   maintainer = "Micromegas"
+   type = "add-on"
+   blender_version_min = "4.2.0"
+   license = ["SPDX:Apache-2.0"]
+   ```
+
+2. **Remove `bl_info` from `__init__.py`** — the dict is no longer needed. Replace the single usage of `bl_info["version"]` in `_build_process_properties()` with a hardcoded constant `_ADDON_VERSION = "1.0.0"`.
+
+3. **Update `blender/README.md` install instructions** — change "Add-ons → Install…" to "Extensions → Install from Disk…" (or drag the zip onto the Blender window). The zip structure is the same (directory at root of zip).
+
+4. **Update `blender/README.md` development symlink path** — for Extensions the user data path is `{user}/extensions/user_default/micromegas_blender/` rather than `scripts/addons/micromegas_blender/`.
+
+No changes required to `binding.py`, `handlers.py`, `recorder.py`, or `crash_harvester.py`.
+
+### Phase 3 — Crash capture (Phase 1 strategy) ✅ COMPLETE
+10. ✅ Startup harvester in `blender/micromegas_blender/crash_harvester.py`: scans `/tmp/*.crash.txt` (Linux) or `%TEMP%\*.crash.txt` (Windows); atomic rename for dedup; ships as FATAL log; best-effort (no retry on upload failure). Wired to `bpy.app.handlers.load_factory_startup_post`.
+11. ⏳ Evaluate loss — Phase-2 Crashpad is a separate future initiative.
+
+## Files Created
+- `rust/capi/Cargo.toml`
+- `rust/capi/src/lib.rs`
+- `rust/capi/cbindgen.toml`
+- `rust/capi/include/micromegas.h`
+- `rust/capi/tests/smoke_test.rs`
+- `blender/micromegas_blender/__init__.py`
+- `blender/micromegas_blender/binding.py`
+- `blender/micromegas_blender/recorder.py`
+- `blender/micromegas_blender/handlers.py`
+- `blender/micromegas_blender/crash_harvester.py`
+- `blender/.gitignore`
+- `blender/README.md`
+- `build/build_blender_plugin.py`
+- `mkdocs/docs/native/index.md`
+- `mkdocs/docs/blender/index.md`
+- `mkdocs/mkdocs.yml` (updated nav)
+
+### Files Created (Extension migration)
+- `blender/micromegas_blender/blender_manifest.toml` — created ✅
+
+## Remaining / Follow-up
+
+### Follow-up
+- **Zip packaging:** build script to bundle the pre-built cdylib into an installable `.zip`. This is a CI/distribution concern, not a code concern.
+- **End-to-end test against live server:** run `blender --background --python` to emit synthetic events and confirm rows appear via `micromegas-query`.
+- **Crash-path test:** force abnormal exit, restart Blender, confirm harvester ships the prior crash file.
+- **Phase-2 crash capture (Crashpad):** pursued only if Phase-1 data shows unacceptable loss.
 
 ## Files to Create / Modify
-- Create `rust/capi/Cargo.toml`, `rust/capi/src/lib.rs`, `rust/capi/cbindgen.toml`, generated `rust/capi/include/micromegas.h`, `rust/capi/tests/`.
-- No `rust/Cargo.toml` edit needed: the workspace `members = ["*", …]` glob auto-includes `rust/capi/` and no `exclude` pattern matches it (verify `capi` is not added to `exclude`).
-- Create the Blender add-on tree (location TBD — likely a new top-level `blender/` directory mirroring `unreal/`): Python package, ctypes binding, modal recorder, handlers, packaging.
-- Docs: new page under `mkdocs/docs/` for native/embedded integration and the Blender add-on.
+- ~~Create `rust/capi/Cargo.toml`, `rust/capi/src/lib.rs`, `rust/capi/cbindgen.toml`, generated `rust/capi/include/micromegas.h`, `rust/capi/tests/`.~~ DONE
+- ~~No `rust/Cargo.toml` edit needed: the workspace `members = ["*", …]` glob auto-includes `rust/capi/` and no `exclude` pattern matches it.~~ Confirmed.
+- ~~Create the Blender add-on tree in a new top-level `blender/` directory (mirroring `unreal/`): Python package, ctypes binding, modal recorder, handlers, packaging.~~ DONE (packaging TBD)
+- ~~Docs: new page under `mkdocs/docs/` for native/embedded integration and the Blender add-on.~~ DONE
 
 ## Trade-offs
 - **Wrap `public` vs `telemetry-sink`/`tracing` directly.** Chose `public` (default features) because it is the stable user-facing surface and the feature gating means it carries no query-engine weight. Reaching into internal crates would couple the FFI to internal boundaries with no footprint benefit.
 - **Rust core + C ABI vs a fresh C++ reimplementation (Unreal-style).** Chose Rust core. The protocol (transit/CBOR/LZ4), the transport, and the background-thread sink already exist and are exercised by every Rust service; a C++ reimplementation would be a second copy of the wire format to keep byte-compatible forever. The C++ path only wins if a hard constraint forbids a Rust staticlib in the native build pipeline (see Open Questions). The `staticlib` artifact leaves the door open for Unreal to converge onto this ABI later.
-- **Native SDK vs OTLP via the OpenTelemetry Python SDK.** Micromegas accepts OTLP (`/ingestion/otlp/v1/*`), which would be a faster pure-Python on-ramp. Rejected as the foundation because (a) OTLP's async batching loses in-flight breadcrumbs on a native crash — the exact data crash RCA needs — and (b) the native SDK is reusable across all native studio tools, not just Blender. OTLP remains a reasonable fallback if native packaging stalls.
+- **Native SDK vs OTLP via the OpenTelemetry Python SDK.** Micromegas accepts OTLP (`/ingestion/otlp/v1/*`), which would be a faster pure-Python on-ramp. Rejected as the foundation because (a) it runs through an external SDK we cannot harden — OTLP's async batching loses in-flight events on a native crash, and the fix for that has to live in the producer/transport layer, which with the native SDK is `micromegas-tracing` (ours to improve) — and (b) the native SDK is reusable across all native studio tools, not just Blender. OTLP remains a reasonable fallback if native packaging stalls.
 - **ctypes/cffi (plain cdylib) vs a CPython extension module.** Chose plain cdylib + ctypes so builds are per-platform, not per-Python-ABI, and work against stock Blender's bundled interpreter without a custom build.
 - **Crashpad now vs harvest-first.** Deferred Crashpad behind Phase-1 harvesting so the native investment is justified by measured loss rather than a hunch; Blender already writes a native backtrace we can collect for free.
 
 ## Dependencies
-- New build-time: `cbindgen` (header generation). Phase 2 native crash work (deferred) would add Crashpad and an mmap dependency.
+- New build-time: `cbindgen` (header generation). Phase 2 native crash work (deferred) would add a Crashpad dependency.
 - Python add-on: `ctypes`/`cffi` (stdlib/standard); no heavy runtime deps.
 
 ## Documentation
@@ -137,7 +195,7 @@ Phased, gated on evidence:
 ## Testing Strategy
 - **Rust C ABI:** unit tests in `rust/capi/tests/` plus a C smoke test linking the staticlib; init → log/metric → shutdown against a local ingestion server started via `local_test_env/ai_scripts/start_services.py`. Verify rows land via `micromegas-query`.
 - **Add-on:** run Blender headless (`blender --background --python`) to exercise the binding, emit synthetic actions/metrics, and confirm ingestion. Manual interactive session to validate the modal recorder and handler coverage.
-- **Crash path:** force an abnormal exit, restart, confirm the harvester ships the prior crash file + breadcrumbs keyed to the right session fingerprint.
+- **Crash path:** force an abnormal exit, restart, confirm the harvester ships the prior crash file keyed to the right session fingerprint.
 - **Privacy:** test that the dimension allowlist drops disallowed/high-cardinality keys and that verbose params stay off by default.
 
 ## Resolved Decisions
@@ -147,11 +205,9 @@ Phased, gated on evidence:
 - **Direct ingestion, no relay.** The ingestion server is reachable from all machines, so the add-on connects directly via `TelemetryGuardBuilder`; no store-and-forward/relay layer is needed.
 - **Auth via API key in an env var.** The add-on uses `.with_auth_from_env()`, which reads `MICROMEGAS_INGESTION_API_KEY` — no auth code to write. Deployment provisions that env var on artist machines (system-wide or via the launcher). The key is write-only ingestion access.
 - **Platform matrix: two targets.** x64 Windows (`x86_64-pc-windows-msvc` → `.dll`) and x64 WSL/Linux (`x86_64-unknown-linux-gnu` → `.so`). No macOS or arm64.
-
-## Open Questions
-1. **Add-on location in the repo** — new top-level `blender/` directory (mirroring `unreal/`) vs elsewhere.
+- **Add-on location: new top-level `blender/` directory**, mirroring `unreal/`.
 
 ## Future Work (out of scope)
 - **Spans / scoped timings:** a span FFI (`mm_span_begin`/`mm_span_end`) and Python API, requiring leaked `&'static SpanLocation` paired with `dispatch::on_begin_named_scope`/`on_end_named_scope`. This extension ships logs + metrics only; spans are deferred.
-- **Native crash capture (Phase 2):** mmap'd durable breadcrumb ring buffer + out-of-process Crashpad minidumps with immediate upload. Pursued only if Phase-1 harvesting proves too lossy.
+- **Native crash capture (Phase 2):** out-of-process Crashpad minidumps with immediate upload. Pursued only if Phase-1 harvesting proves too lossy. Any loss of the last actions *before* the crash is addressed by hardening flush behavior in `micromegas-tracing`/`telemetry-sink`, not by a local store in the C ABI.
 - **Symbol server:** a symbol/PDB store keyed by Blender build hash, required to re-symbolize the minidumps from the Phase 2 work above. Deferred with that work.

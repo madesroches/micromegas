@@ -123,6 +123,8 @@ nav:
         - Overview: gateway/index.md
         - Configuration: gateway/configuration.md
         - Examples: gateway/examples.md
+    - Blender Add-on: blender/index.md
+    - Native SDK (C ABI): native/index.md
   - Operations:
     - Architecture: architecture/index.md
     - Administration:

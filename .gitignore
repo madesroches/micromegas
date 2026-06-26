@@ -82,3 +82,6 @@ tmpclaude-*-cwd
 
 # 3D models
 *.glb
+
+# capi packaging output
+/dist/
