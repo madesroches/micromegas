@@ -5,7 +5,7 @@ tab_width = 4
 style = "Both"
 
 [export]
-include = ["MmConfig"]
+include = ["MmConfig", "MmHandle"]
 
 [fn]
 prefix = ""
