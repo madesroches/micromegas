@@ -1,6 +1,6 @@
 schema_version = "1.0.0"
 id = "micromegas_blender"
-version = "1.0.0"
+version = "0.27.0"
 name = "Micromegas Telemetry"
 tagline = "Captures Blender session telemetry and ships it to a Micromegas server"
 maintainer = "Micromegas"
