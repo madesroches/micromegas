@@ -17,10 +17,29 @@ in the distributed wheel.
 
 import atexit
 import os
+import re
 import sys
 import uuid
 
-_ADDON_VERSION = "1.0.0"
+
+def _read_addon_version() -> str:
+    """Read the add-on version from the bundled manifest so telemetry reports
+    the version that is actually installed. The manifest is stamped from the
+    workspace version at build time (see build/build_blender_plugin.py)."""
+    manifest = os.path.join(os.path.dirname(__file__), "blender_manifest.toml")
+    try:
+        with open(manifest, encoding="utf-8") as f:
+            for line in f:
+                # Matches the top-level `version` key, not `schema_version`.
+                m = re.match(r'\s*version\s*=\s*"([^"]+)"', line)
+                if m:
+                    return m.group(1)
+    except OSError:
+        pass
+    return "unknown"
+
+
+_ADDON_VERSION = _read_addon_version()
 
 # Module-level state — populated in register(), cleared in unregister().
 _lib = None
@@ -94,7 +113,12 @@ def register():
     sink_url = os.environ.get("MICROMEGAS_TELEMETRY_URL")
     handle = lib.init(sink_url=sink_url, properties=props)
     if handle is None:
-        print("[Micromegas] telemetry init failed; add-on will be inactive.")
+        print(
+            "[Micromegas] telemetry init failed; add-on will be inactive. "
+            "If you just disabled and re-enabled the add-on, restart Blender — "
+            "the native telemetry layer initializes once per process and "
+            "cannot be reinitialized within the same session."
+        )
         return
 
     _lib = lib

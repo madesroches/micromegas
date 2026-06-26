@@ -227,4 +227,5 @@ micromegas-query "SELECT time, level, target, msg FROM log_entries \
 | `native library not found` in console | `lib/` directory missing or wrong filename; rebuild and copy the `.so`/`.dll` |
 | `telemetry init failed` | `MICROMEGAS_TELEMETRY_URL` is unset or the server is unreachable at startup |
 | No rows in the server after a session | Server URL incorrect, or events are still buffered — wait 30 s for the periodic flush or restart Blender to trigger `mm_shutdown` |
-| Add-on not listed after install | Zip included an extra parent directory; the zip must contain `micromegas_blender/__init__.py` at its root |
+| Add-on inactive after disabling then re-enabling it in the same session | The native telemetry layer initializes once per process and cannot be reinitialized; restart Blender |
+| Add-on not listed after install | Zip wrapped the files in an extra parent directory; the zip must contain `blender_manifest.toml` and `__init__.py` at its root (not inside a `micromegas_blender/` folder) |
