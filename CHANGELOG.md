@@ -4,6 +4,8 @@ This file documents the historical progress of the Micromegas project. For curre
 
 ## Unreleased
 
+* **Build:**
+  * Make `build.py` the single canonical generator for committed datafusion-wasm bindings; prune known wasm-pack leftovers from the output dir after each build so the copy loop is self-healing; document that `wasm-pack build` must not be run into the output dir (#1169)
 * **Dependencies:**
   * Update DataFusion to 54.0 and rebuild the datafusion-wasm bindings
 
