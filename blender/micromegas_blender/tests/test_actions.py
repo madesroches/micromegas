@@ -57,12 +57,25 @@ def test_appended_entries_detected():
 
 
 def test_repeated_identical_operators_not_dropped():
-    # Last-occurrence anchoring would miss the new "G"; suffix alignment does not.
-    start, gap = actions._appended_start(
-        ["G", "G", "G", "G", "G"], ["G", "G", "G", "G"]
-    )
-    assert gap is False
-    assert ["G", "G", "G", "G", "G"][start:] == ["G"]
+    # All-identical entries make every drop count align, so the alignment is
+    # ambiguous. The conservative policy reports the MOST new entries (never
+    # silently drops) and flags the ambiguity as a possible gap.
+    current = ["G", "G", "G", "G", "G"]
+    start, gap = actions._appended_start(current, ["G", "G", "G", "G"])
+    assert gap is True
+    assert current[start:] == ["G", "G", "G", "G"]
+
+
+def test_repeated_boundary_pattern_not_dropped():
+    # bl_idname pattern repeats across the rotation boundary: prev[1:] and prev[3:]
+    # both prefix `current`, disagreeing on how many entries are new. The greedy
+    # smallest-d choice (start=3) would report only ["X", "Y"], silently dropping
+    # the other two. The conservative policy reports the most new entries and
+    # flags the ambiguity.
+    current = ["Y", "X", "Y", "X", "Y"]
+    start, gap = actions._appended_start(current, ["X", "Y", "X", "Y"])
+    assert gap is True
+    assert current[start:] == ["X", "Y", "X", "Y"]
 
 
 def test_ring_rotation_emits_only_new():

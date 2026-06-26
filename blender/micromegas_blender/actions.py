@@ -65,22 +65,38 @@ def _appended_start(current: "list[str]", prev: "list[str]") -> "tuple[int, bool
 
     The ring is oldest->newest. Between polls it appends new entries and may
     drop old ones, so ``current == prev[d:] + appended`` for some drop count d.
-    We find the smallest d whose retained suffix ``prev[d:]`` is a prefix of
-    ``current``; everything past it is new.
+    A retained suffix ``prev[d:]`` aligns when it is a prefix of ``current``;
+    everything past it is new.
 
-    Returns ``(start_index, gap)``. ``gap`` is True only when no non-empty
-    suffix of a non-empty ``prev`` aligns — i.e. the whole previous buffer
-    rotated out between polls, so entries may have been missed.
+    When a bl_idname pattern repeats across the rotation boundary, more than one
+    ``d`` aligns and the alignments disagree on how many entries are new. The
+    algorithm cannot tell which is correct, so to avoid *silently dropping*
+    genuinely-new operators we choose the alignment that reports the MOST new
+    entries (the largest valid ``d`` / shortest retained suffix), and flag the
+    ambiguity as a possible gap so the over-report is visible.
+
+    Returns ``(start_index, gap)``. ``gap`` is True when no non-empty suffix of
+    a non-empty ``prev`` aligns (the whole previous buffer rotated out), or when
+    the alignment is ambiguous (multiple valid ``d`` that disagree).
     """
     if not prev or not current:
         # First poll, or the buffer was cleared (Blender clears operator history
         # on file load) — nothing was missed, so this is not a gap.
         return 0, False
-    for d in range(len(prev)):
-        tail = prev[d:]
-        if current[: len(tail)] == tail:
-            return len(tail), False
-    return 0, True  # full turnover — possible gap
+    # Collect every valid drop count, smallest -> largest tail length.
+    starts = [
+        len(prev[d:])
+        for d in range(len(prev))
+        if current[: len(prev) - d] == prev[d:]
+    ]
+    if not starts:
+        return 0, True  # full turnover — possible gap
+    # Smallest start == shortest retained suffix == most entries reported new:
+    # the conservative choice (never drop). Ambiguity (>1 distinct start) means
+    # the boundary pattern repeats, so flag a possible gap.
+    start = min(starts)
+    ambiguous = len(set(starts)) > 1
+    return start, ambiguous
 
 
 def _format_op(op) -> str:
