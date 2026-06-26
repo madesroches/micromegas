@@ -18,6 +18,7 @@ use opentelemetry_proto::tonic::trace::v1::span;
 pub fn s_kv(k: &str, v: &str) -> KeyValue {
     KeyValue {
         key: k.into(),
+        key_strindex: 0,
         value: Some(AnyValue {
             value: Some(AnyVal::StringValue(v.into())),
         }),
@@ -27,6 +28,7 @@ pub fn s_kv(k: &str, v: &str) -> KeyValue {
 pub fn i_kv(k: &str, v: i64) -> KeyValue {
     KeyValue {
         key: k.into(),
+        key_strindex: 0,
         value: Some(AnyValue {
             value: Some(AnyVal::IntValue(v)),
         }),

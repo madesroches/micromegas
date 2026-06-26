@@ -4,6 +4,8 @@ This file documents the historical progress of the Micromegas project. For curre
 
 ## Unreleased
 
+* **Security:**
+  * Upgrade `opentelemetry-proto` to 0.32 to resolve GHSA-w9wp-h8wv-79jx; treat the new profiling-only string-interning fields (`*_strindex`) as absent on non-profiling OTLP signals, per the OTLP spec (#336)
 * **Build:**
   * Make `build.py` the single canonical generator for committed datafusion-wasm bindings; prune known wasm-pack leftovers from the output dir after each build so the copy loop is self-healing; document that `wasm-pack build` must not be run into the output dir (#1169)
 * **Dependencies:**

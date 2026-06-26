@@ -6,7 +6,23 @@
 //! load-bearing for cross-pod consistency.
 
 use crate::proto::{AnyValue, KeyValue, Resource, any_value};
+use micromegas_tracing::prelude::*;
+use std::sync::Once;
 use uuid::{Uuid, uuid};
+
+/// `AnyValue.string_value_strindex` / `KeyValue.key_strindex` reference a
+/// `ProfilesDictionary.string_table` that exists **only** for the Profiling signal. Per the
+/// OTLP spec, receivers of logs/metrics/traces MUST treat these as absent. Warn once per
+/// process so a misconfigured profiling producer is noticeable without flooding the logs.
+fn warn_unexpected_strindex() {
+    static WARNED: Once = Once::new();
+    WARNED.call_once(|| {
+        warn!(
+            "ignoring profiling-only string-interning field on a non-profiling OTLP signal; \
+             treating it as absent (OTLP spec)"
+        );
+    });
+}
 
 /// Namespace UUID for OTel-derived `process_id`. Generated 2026-05-01 via uuidgen.
 /// **Load-bearing — DO NOT change without bumping to `_V2`.**
@@ -41,6 +57,10 @@ impl SignalKey {
 }
 
 /// Convenience accessor — fetch one resource attribute by key, returning `None` when absent.
+///
+/// Matches on `kv.key` only; `kv.key_strindex` (profiling-only) is intentionally ignored, so an
+/// interned key (empty `key`) is treated as absent — the OTLP spec behavior for non-profiling
+/// signals.
 pub fn attr<'a>(attrs: &'a [KeyValue], key: &str) -> Option<&'a AnyValue> {
     attrs
         .iter()
@@ -63,6 +83,13 @@ pub fn attr_to_string(v: &AnyValue) -> String {
         Some(any_value::Value::BoolValue(b)) => b.to_string(),
         Some(any_value::Value::DoubleValue(d)) => d.to_string(),
         Some(any_value::Value::BytesValue(b)) => format!("{b:?}"),
+        // Profiling-only string-table reference: no dictionary exists for this signal, so the
+        // index is meaningless. Treat as absent (per OTLP spec). NOTE: this value feeds the
+        // load-bearing UUIDv5 identity hash — never stringify the index back into it.
+        Some(any_value::Value::StringValueStrindex(_)) => {
+            warn_unexpected_strindex();
+            String::new()
+        }
         Some(any_value::Value::ArrayValue(_)) | Some(any_value::Value::KvlistValue(_)) => {
             // Structured values shouldn't appear in identity-bearing fields. If one does,
             // hashing the Debug form is at least deterministic for a given prost version.

@@ -1,8 +1,8 @@
 //! Tests for OTel resource → micromegas identity synthesis.
 
 use micromegas_otel_ingestion::identity::{
-    SignalKey, block_id_from_payload, is_degenerate_resource, process_id_from_resource,
-    process_start_string, stream_id_from_process_signal,
+    SignalKey, attr_to_string, block_id_from_payload, is_degenerate_resource,
+    process_id_from_resource, process_start_string, stream_id_from_process_signal,
 };
 use micromegas_otel_ingestion::proto::any_value::Value as AvValue;
 use micromegas_otel_ingestion::proto::{AnyValue, KeyValue, Resource};
@@ -11,6 +11,7 @@ use uuid::Uuid;
 fn kv(key: &str, value: &str) -> KeyValue {
     KeyValue {
         key: key.to_string(),
+        key_strindex: 0,
         value: Some(AnyValue {
             value: Some(AvValue::StringValue(value.to_string())),
         }),
@@ -111,4 +112,61 @@ fn degenerate_resource_detected() {
     assert!(is_degenerate_resource(&empty.attributes));
     let with_host = resource_with(&[("service.name", "svc"), ("host.name", "h")]);
     assert!(!is_degenerate_resource(&with_host.attributes));
+}
+
+#[test]
+fn attr_to_string_ignores_profiling_strindex() {
+    // Profiling-only string-table reference — no dictionary here, so it must render empty,
+    // never the index stringified ("5").
+    let v = AnyValue {
+        value: Some(AvValue::StringValueStrindex(5)),
+    };
+    assert_eq!(attr_to_string(&v), "");
+}
+
+#[test]
+fn strindex_value_on_identity_key_hashes_as_absent() {
+    // `service.name` carried as a profiling-only string-table reference is meaningless for this
+    // signal; it must hash identically to omitting `service.name` entirely. Guards against
+    // contaminating the load-bearing process_id with a dictionary index.
+    let strindex_service = KeyValue {
+        key: "service.name".to_string(),
+        key_strindex: 0,
+        value: Some(AnyValue {
+            value: Some(AvValue::StringValueStrindex(3)),
+        }),
+    };
+    let with_strindex = Resource {
+        attributes: vec![kv("host.name", "h"), strindex_service],
+        dropped_attributes_count: 0,
+        entity_refs: vec![],
+    };
+    let without = resource_with(&[("host.name", "h")]);
+    assert_eq!(
+        process_id_from_resource(Some(&with_strindex)),
+        process_id_from_resource(Some(&without))
+    );
+}
+
+#[test]
+fn interned_key_is_ignored_in_identity() {
+    // `service.name` provided only via `key_strindex` (empty `key`) is not found by `attr`, so
+    // it hashes the same as a resource lacking `service.name`.
+    let interned_key = KeyValue {
+        key: String::new(),
+        key_strindex: 4,
+        value: Some(AnyValue {
+            value: Some(AvValue::StringValue("svc".to_string())),
+        }),
+    };
+    let with_interned = Resource {
+        attributes: vec![kv("host.name", "h"), interned_key],
+        dropped_attributes_count: 0,
+        entity_refs: vec![],
+    };
+    let without = resource_with(&[("host.name", "h")]);
+    assert_eq!(
+        process_id_from_resource(Some(&with_interned)),
+        process_id_from_resource(Some(&without))
+    );
 }

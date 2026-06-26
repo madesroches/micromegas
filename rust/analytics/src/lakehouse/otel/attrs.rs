@@ -11,11 +11,29 @@
 
 use base64::Engine;
 use jsonb::{Number as JsonbNumber, Value as JsonbValue};
+use micromegas_tracing::prelude::*;
 use opentelemetry_proto::tonic::common::v1::{
     AnyValue, InstrumentationScope, KeyValue, any_value::Value as Av,
 };
 use std::borrow::Cow;
 use std::collections::BTreeMap;
+use std::sync::Once;
+
+/// `AnyValue.string_value_strindex` / `KeyValue.key_strindex` reference a
+/// `ProfilesDictionary.string_table` that exists **only** for the Profiling signal. Per the
+/// OTLP spec, receivers of logs/metrics/traces MUST treat these as a non-fatal issue, log a
+/// warning, and process the data as if the value were absent. We warn once per process so a
+/// misconfigured profiling producer pointed at a non-profiling endpoint is noticeable without
+/// flooding the logs.
+fn warn_unexpected_strindex() {
+    static WARNED: Once = Once::new();
+    WARNED.call_once(|| {
+        warn!(
+            "ignoring profiling-only string-interning field on a non-profiling OTLP signal; \
+             treating it as absent (OTLP spec)"
+        );
+    });
+}
 
 /// Converts an `AnyValue` to a `jsonb::Value`. Recursively handles arrays and kvlists.
 pub fn any_value_to_jsonb(v: &AnyValue) -> JsonbValue<'static> {
@@ -41,9 +59,17 @@ pub fn any_value_to_jsonb(v: &AnyValue) -> JsonbValue<'static> {
                     .as_ref()
                     .map(any_value_to_jsonb)
                     .unwrap_or(JsonbValue::Null);
+                // `kv.key_strindex` (profiling-only) is intentionally ignored: keying off `kv.key`
+                // means an interned key (empty `key`) becomes an empty-key entry, i.e. absent.
                 map.insert(kv.key.clone(), value);
             }
             JsonbValue::Object(map)
+        }
+        // Profiling-only string-table reference: no dictionary exists for this signal, so the
+        // index has no meaning here. Treat as absent (per OTLP spec) — never as data.
+        Some(Av::StringValueStrindex(_)) => {
+            warn_unexpected_strindex();
+            JsonbValue::Null
         }
         None => JsonbValue::Null,
     }
@@ -66,6 +92,7 @@ pub fn attrs_to_jsonb(attrs: &[KeyValue], extras: &[(String, JsonbValue<'static>
             .as_ref()
             .map(any_value_to_jsonb)
             .unwrap_or(JsonbValue::Null);
+        // `kv.key_strindex` (profiling-only) is intentionally ignored — see `any_value_to_jsonb`.
         map.insert(kv.key.clone(), value);
     }
     for (k, v) in extras {
@@ -102,6 +129,12 @@ pub fn any_value_to_string(v: &AnyValue) -> String {
             }
             let bytes = to_jsonb_bytes(JsonbValue::Object(map));
             jsonb::RawJsonb::new(&bytes).to_string()
+        }
+        // Profiling-only string-table reference: no dictionary exists for this signal, so the
+        // index has no meaning here. Treat as absent (per OTLP spec) — never as data.
+        Some(Av::StringValueStrindex(_)) => {
+            warn_unexpected_strindex();
+            String::new()
         }
         None => String::new(),
     }
