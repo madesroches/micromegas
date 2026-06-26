@@ -1,5 +1,7 @@
 """Tests for the sys.excepthook wrapper in __init__.py."""
 
+import sys
+
 import micromegas_blender as mm
 
 
@@ -43,3 +45,31 @@ def test_excepthook_message_capped(rec_lib):
     finally:
         mm._lib = None
         mm._handle = None
+
+
+def test_excepthook_install_is_idempotent():
+    """A second register() must not capture the telemetry hook as its own
+    previous hook, which would cause infinite recursion on the next exception."""
+    saved_hook = sys.excepthook
+    saved_prev = mm._prev_excepthook
+    try:
+        original = object()
+        sys.excepthook = original  # type: ignore[assignment]
+        mm._prev_excepthook = None
+
+        # First install: capture the original and swap in the telemetry hook.
+        if sys.excepthook is not mm._telemetry_excepthook:
+            mm._prev_excepthook = sys.excepthook
+            sys.excepthook = mm._telemetry_excepthook
+        assert mm._prev_excepthook is original
+
+        # Second install (re-register without unregister): must be a no-op so
+        # _prev_excepthook does not become _telemetry_excepthook itself.
+        if sys.excepthook is not mm._telemetry_excepthook:
+            mm._prev_excepthook = sys.excepthook
+            sys.excepthook = mm._telemetry_excepthook
+        assert mm._prev_excepthook is original
+        assert mm._prev_excepthook is not mm._telemetry_excepthook
+    finally:
+        sys.excepthook = saved_hook
+        mm._prev_excepthook = saved_prev

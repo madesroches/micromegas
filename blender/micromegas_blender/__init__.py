@@ -279,8 +279,9 @@ def register():
     # this is a backstop, not the primary capture (the add-on's own callbacks
     # guard themselves).
     global _prev_excepthook
-    _prev_excepthook = sys.excepthook
-    sys.excepthook = _telemetry_excepthook
+    if sys.excepthook is not _telemetry_excepthook:
+        _prev_excepthook = sys.excepthook
+        sys.excepthook = _telemetry_excepthook
 
     # Flush on interpreter exit (belt-and-suspenders alongside mm_shutdown).
     atexit.register(_shutdown)
