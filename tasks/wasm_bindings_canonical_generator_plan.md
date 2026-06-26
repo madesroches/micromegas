@@ -73,7 +73,7 @@ footgun** that produces noisy diffs and a red CI, not something that can land cl
 ### Relevant commit history (decisions already made)
 
 - `fb31297d1` — stopped tracking the generated files, added them to `.gitignore`.
-- `50addbdee` — restored `package.json` because the yarn `file:` dependency / tsc need it.
+- `50addbdee` — restored `package.json` because the yarn `link:` dependency / tsc need it.
 - `7404ff0e4` — added `"private": true` specifically to **suppress a yarn workspace warning**.
 
 The minimal `private` `package.json` is thus an intentional, load-bearing shape — not an accident.
@@ -85,7 +85,7 @@ The wasm-pack form (no `private`) regresses the yarn-warning fix.
 
 `build.py` becomes the single supported generator. Rationale: CI already enforces it, the minimal
 `private` `package.json` is a deliberate fix for a real yarn warning, and the vite alias + yarn
-`file:` consumption never read the package version. `wasm-pack` is retained **only** for
+`link:` consumption never read the package version. `wasm-pack` is retained **only** for
 `build.py --test` (headless Firefox integration tests), which runs `wasm-pack test --headless
 --firefox` in the crate dir (`build.py:73-81`, `cwd=CRATE_DIR`). That command only compiles and runs
 tests via the wasm-bindgen-test-runner — it does **not** execute wasm-pack's artifact-generation
