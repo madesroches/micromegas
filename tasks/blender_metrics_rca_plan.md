@@ -227,7 +227,7 @@ All five parts are in scope (the objective is maximum RCA signal). Suggested bui
 2. `handlers.py`: add `on_periodic()` that emits `blender.rss_mb` from the reader.
 3. `__init__.py`: `_periodic_flush` calls `handlers.on_periodic()` before flush.
 4. `handlers.py`: rename `blender.eval_ms` → `blender.depsgraph_update_interval_ms`; reset `_last_depsgraph_time = 0.0` in `_on_load_post`.
-5. Update unit tests (see Testing).
+5. Create unit tests (see Testing).
 
 ### Phase 2 — Fingerprint
 6. `__init__.py:_build_process_properties`: add GPU (`gpu.platform.*`), `enabled_addons`, `cpu_count`, `python_version`, `background`, optional `total_ram_mb`. Each in its own try/except.
@@ -237,17 +237,18 @@ All five parts are in scope (the objective is maximum RCA signal). Suggested bui
 8. Mode/workspace/tool transition logging; runtime add-on enable/disable.
 9. Register/unregister the new timer in `__init__.py` alongside `_periodic_flush`.
 
-### Phase 4 — Exceptions + extra metrics (optional)
+### Phase 4 — Exceptions + extra metrics
 10. `__init__.py`: install/restore `sys.excepthook` wrapper shipping full tracebacks as `blender.exception` ERROR logs (message capped ~4 KB).
 11. `handlers.py:on_periodic`: add `blender.object_count`, `blender.undo_steps`.
 
 ### Phase 5 — Docs
 12. Update `mkdocs/docs/blender/index.md` (see Documentation), including correcting the "Operator invocations" claim.
+13. Correct `recorder.py`'s module docstring (lines 15–17): drop the "operator `bl_idname` is logged" / `VERBOSE_PARAMS` claims — `modal()` logs only raw input events, no operator capture and no such preference exists.
 
 ## Files to Modify
 - `blender/micromegas_blender/handlers.py` — RSS reader, `on_periodic`, depsgraph rename + reset.
 - `blender/micromegas_blender/__init__.py` — periodic hook call, fingerprint props, excepthook, action-poll timer registration.
-- `blender/micromegas_blender/recorder.py` (or new `actions.py`) — operator-history poller, mode/workspace/tool transitions.
+- `blender/micromegas_blender/recorder.py` (or new `actions.py`) — operator-history poller, mode/workspace/tool transitions; correct the module docstring's inaccurate operator-`bl_idname`/`VERBOSE_PARAMS` claim (lines 15–17).
 - `mkdocs/docs/blender/index.md` — metrics table, fingerprint list, semantic-action section, corrected "Operator invocations" claim, new sections.
 - Tests under the add-on's test location (see Testing).
 
@@ -299,17 +300,18 @@ Bottom line: **single-digit MB per artist per day**, dominated by the pre-existi
 `mkdocs/docs/blender/index.md`:
 - **Performance metrics table**: rename `blender.eval_ms` → `blender.depsgraph_update_interval_ms` with corrected description; change `blender.rss_mb` description from "at file load" to "sampled every ~30 s"; add any Part 3 metrics.
 - **Process fingerprint** section: add GPU/driver, enabled add-ons, CPU count, Python version, background-mode.
-- **User actions** section: correct the inaccurate "Operator invocations (type, area)" claim — today only raw input events are logged. Document the new `blender.action` operator-history stream (Part 5), the ~1 s poll, the ring-buffer gap caveat, and that operator parameters are included.
+- **User actions** section: correct the inaccurate "Operator invocations (type, area)" claim (line 88) — today only raw input events are logged. Also rewrite the "Coverage is high but not 100%" admonition (lines 91–95): drop the now-contradictory "Operator parameter values are not captured by default … sensitive scene/asset names" note, since the new approach captures parameters by default. Document the new `blender.action` operator-history stream (Part 5), the ~1 s poll, the ring-buffer gap caveat, and that operator parameters are included.
 - New subsection under "What is captured" for **Python exceptions** (if Part 4 ships) — full tracebacks shipped as `blender.exception` ERROR logs.
 - **Privacy and cardinality** section: rewrite — privacy gating is removed (corporate environment, telemetry wanted); the remaining rule is purely cardinality (bounded metric names / log targets; free-form values only in log bodies). Note the enabled-add-ons string and operator parameters are captured in full.
 
 ## Testing Strategy
+The add-on has no existing test harness — `blender/micromegas_blender/` has no `tests/` dir and nothing imports `micromegas_blender`/`binding`/`handlers`. These tests are created from scratch. Add a `tests/` directory under `blender/micromegas_blender/` (pure-pytest, `bpy`/`gpu` mocked) so the binding and handlers can be exercised out-of-Blender; no Blender runtime is required.
 - Unit-test `_read_process_rss_mb()` on Linux (CI) — returns `> 0` for the test process; assert MB magnitude is plausible. Windows branch verified manually or mocked.
 - Test the depsgraph reset: simulate two `_on_depsgraph_update_post` calls with a `_on_load_post` between them; assert the first post-load call emits nothing (no metric until a second sample).
 - Fingerprint: mock `bpy`/`gpu` and assert props dict contains the new keys and survives individual source failures (one raising doesn't drop the rest).
 - Operator-history poller: feed a mock `window_manager.operators` ring buffer across successive polls — assert only newly appended `bl_idname`s are emitted, no duplicates on a no-change poll, and an overflow (anchor not found) emits a gap marker rather than silently dropping.
 - excepthook: install, raise, assert an ERROR `blender.exception` log was emitted and the previous hook was chained.
-- Existing binding/handler tests must continue to pass; `binding.py` stays pure-ctypes and bpy-free for out-of-Blender testing.
+- `binding.py` stays pure-ctypes and bpy-free so the new tests can run out-of-Blender.
 
 ## Open Questions
 None outstanding — scope, macOS, and privacy are all resolved below.
