@@ -8,6 +8,12 @@ This file documents the historical progress of the Micromegas project. For curre
   * Make `build.py` the single canonical generator for committed datafusion-wasm bindings; prune known wasm-pack leftovers from the output dir after each build so the copy loop is self-healing; document that `wasm-pack build` must not be run into the output dir (#1169)
 * **Dependencies:**
   * Update DataFusion to 54.0 and rebuild the datafusion-wasm bindings
+* **Native / Blender:**
+  * Add `micromegas-capi` C ABI crate (`cdylib` + `staticlib`) exposing init/shutdown, log, and int/float metric FFI over the existing Rust telemetry producer stack; ships a hand-authored C header and 8 smoke tests (#1160)
+  * Add Blender Python extension (`blender/micromegas_blender/`) in Blender 4.2+ Extension format with `blender_manifest.toml`; captures user actions (modal recorder, `bpy.msgbus`, `bpy.app.handlers`), performance metrics, and process fingerprint via ctypes binding to `libmicromegas_capi` (#1160)
+  * Add crash harvester: on startup scans for prior `*.crash.txt` files, claims each atomically via rename to prevent duplicate uploads, and ships as a CRITICAL log keyed to the prior session fingerprint (#1160)
+  * Add `blender-extension` CI workflow: builds the cdylib for Linux and Windows, packages the extension zip, and uploads artifacts; add `capi-release` workflow: builds and publishes versioned `micromegas-capi` binaries (#1160)
+  * Add docs for native C ABI integration (`mkdocs/docs/native/`) and the Blender add-on (`mkdocs/docs/blender/`) (#1160)
 
 ## June 2026 - v0.26.0
 
