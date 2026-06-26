@@ -1,0 +1,9 @@
+schema_version = "1.0.0"
+id = "micromegas_blender"
+version = "1.0.0"
+name = "Micromegas Telemetry"
+tagline = "Captures Blender session telemetry and ships it to a Micromegas server"
+maintainer = "Micromegas"
+type = "add-on"
+blender_version_min = "4.2.0"
+license = ["SPDX:Apache-2.0"]

@@ -1,8 +1,9 @@
 #!/bin/python3
-"""Build micromegas-capi for Blender add-on distribution.
+"""Build micromegas-capi and package the Blender extension.
 
-Compiles release binaries for Linux and/or Windows and copies them into
-blender/micromegas_blender/lib/ so the add-on can load them immediately.
+Compiles release binaries for Linux and/or Windows, copies them into
+blender/micromegas_blender/lib/, and produces a ready-to-install
+blender/micromegas_blender.zip.
 
 Usage:
     python3 build/build_blender_plugin.py              # both platforms
@@ -24,6 +25,7 @@ import shutil
 import subprocess
 import sys
 import pathlib
+import zipfile
 
 REPO_ROOT = pathlib.Path(__file__).parent.parent.absolute()
 RUST_DIR = REPO_ROOT / "rust"
@@ -93,6 +95,30 @@ def build_windows_mingw() -> None:
     _copy(src, LIB_OUT / "micromegas_capi.dll")
 
 
+def build_zip() -> None:
+    # Blender Extensions expect files at the root of the zip (no wrapping
+    # directory). Blender creates extensions/user_default/<id>/ itself from
+    # the manifest id on install, so arcnames must be relative to addon_dir.
+    addon_dir = REPO_ROOT / "blender" / "micromegas_blender"
+    zip_path = REPO_ROOT / "blender" / "micromegas_blender.zip"
+    _SKIP_NAMES = {"__pycache__"}
+    _SKIP_SUFFIXES = {".pyc"}
+
+    print(f"\n=== Creating {zip_path.name} ===")
+    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for path in sorted(addon_dir.rglob("*")):
+            if path.is_dir():
+                continue
+            if any(part in _SKIP_NAMES for part in path.parts):
+                continue
+            if path.suffix in _SKIP_SUFFIXES:
+                continue
+            arcname = path.relative_to(addon_dir)
+            zf.write(path, arcname)
+            print(f"  + {arcname}")
+    print(f"zip: {zip_path}")
+
+
 def _copy(src: pathlib.Path, dst: pathlib.Path) -> None:
     if not src.exists():
         print(f"error: expected output not found: {src}", file=sys.stderr)
@@ -130,7 +156,8 @@ def main() -> None:
         else:
             build_windows_mingw()
 
-    print("\nDone. Libraries are in:", LIB_OUT)
+    build_zip()
+    print("\nDone.")
 
 
 if __name__ == "__main__":

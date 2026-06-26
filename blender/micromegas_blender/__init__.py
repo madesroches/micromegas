@@ -20,18 +20,7 @@ import os
 import sys
 import uuid
 
-bl_info = {
-    "name": "Micromegas Telemetry",
-    "author": "Micromegas",
-    "version": (1, 0, 0),
-    "blender": (4, 0, 0),
-    "location": "Preferences > Add-ons",
-    "description": (
-        "Captures Blender session telemetry (logs, metrics, user actions) "
-        "and ships it to a Micromegas observability server."
-    ),
-    "category": "Development",
-}
+_ADDON_VERSION = "1.0.0"
 
 # Module-level state — populated in register(), cleared in unregister().
 _lib = None
@@ -42,7 +31,7 @@ _session_id: str = ""
 def _build_process_properties() -> dict:
     props: dict[str, str] = {
         "session_id": _session_id,
-        "addon_version": "{}.{}.{}".format(*bl_info["version"]),
+        "addon_version": _ADDON_VERSION,
     }
     try:
         import bpy

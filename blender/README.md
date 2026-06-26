@@ -32,8 +32,8 @@ Blender process
 |------|---------|-------|
 | Rust + Cargo | stable ≥ 1.75 | via [rustup](https://rustup.rs) |
 | MinGW-w64 | any | only for Windows cross-compile from Linux (see below) |
-| Blender | ≥ 4.0 | stock public build |
-| Python | 3.10 – 3.12 | the one bundled with Blender |
+| Blender | ≥ 4.2 | stock public build (4.5 tested) |
+| Python | 3.11 | the one bundled with Blender (no separate install needed) |
 
 No build tools are required on the artist's machine — the native library is
 shipped prebuilt inside the add-on directory.
@@ -93,39 +93,37 @@ blender/
 
 ### Option A — Install from a zip
 
-1. Zip up the `micromegas_blender/` directory (including the populated `lib/`
-   subdirectory):
+1. Run the build script (see [Building the native library](#building-the-native-library) above).
+   It produces `blender/micromegas_blender.zip`.
 
-   ```bash
-   cd blender
-   zip -r micromegas_blender.zip micromegas_blender/
-   ```
+2. In Blender: **Edit → Preferences → Extensions → Install from Disk…**
+   Select `micromegas_blender.zip` and click **Install Extension**.
 
-2. In Blender: **Edit → Preferences → Add-ons → Install…**
-   Select `micromegas_blender.zip` and click **Install Add-on**.
+   Alternatively, drag the zip file onto the Blender window.
 
-3. Enable the add-on by checking the box next to
-   **Development: Micromegas Telemetry**.
+3. Enable the extension by checking the box next to
+   **Micromegas Telemetry**.
 
 ### Option B — Install from the source tree (development)
 
 Symlink or copy the `micromegas_blender/` directory (with `lib/` populated)
-into Blender's add-on search path:
+into Blender's user add-on scripts directory.  Replace `4.5` with your
+Blender version if different.
 
 ```bash
-# Linux / WSL — Blender 4.x user add-ons directory
+# Linux / WSL
 ln -s "$(pwd)/blender/micromegas_blender" \
-      "$HOME/.config/blender/4.x/scripts/addons/micromegas_blender"
+      "$HOME/.config/blender/4.5/extensions/user_default/micromegas_blender"
 ```
 
 ```powershell
 # Windows (run as administrator or with Developer Mode enabled)
 New-Item -ItemType Junction `
-  -Path "$env:APPDATA\Blender Foundation\Blender\4.x\scripts\addons\micromegas_blender" `
+  -Path "$env:APPDATA\Blender Foundation\Blender\4.5\extensions\user_default\micromegas_blender" `
   -Target "$PWD\blender\micromegas_blender"
 ```
 
-After linking, enable the add-on in Preferences → Add-ons.
+After linking, enable the extension in **Edit → Preferences → Extensions**.
 
 ---
 

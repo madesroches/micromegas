@@ -103,12 +103,40 @@ Phased, gated on evidence:
 3. ✅ Implemented `mm_log` over `dispatch::log_interop` (stack-built `LogMetadata`, no leak). Metric interner: `OnceLock<Mutex<HashMap<(name,unit), &'static StaticMetricMetadata>>>` with `Box::leak` on first use. `mm_metric_i`/`mm_metric_f`/`mm_flush` implemented over `dispatch::*`. No span FFI.
 4. ✅ C header hand-authored at `rust/capi/include/micromegas.h`; `cbindgen.toml` provided for regeneration. 8 Rust smoke tests in `rust/capi/tests/smoke_test.rs` — all pass.
 
-### Phase 2 — Blender add-on (logs + metrics) ✅ COMPLETE
+### Phase 2 — Blender add-on (logs + metrics) ✅ COMPLETE (⚠️ needs Extension format migration)
 5. ✅ Python binding in `blender/micromegas_blender/binding.py` — ctypes wrapper loading `libmicromegas_capi.so` or `micromegas_capi.dll` from the add-on's `lib/` subdirectory.
 6. ✅ Add-on scaffolding in `blender/micromegas_blender/__init__.py`: `bl_info`, `register`/`unregister`, `atexit` → `mm_shutdown`, process-fingerprint properties (Blender version, build hash, OS, session UUID, add-on version), 30 s periodic flush timer.
 7. ✅ Modal recorder (`recorder.py`) + `bpy.msgbus` + `bpy.app.handlers` wiring (`handlers.py`) for user actions and lifecycle. Performance metrics: `blender.eval_ms`, `blender.render_duration_s`, `blender.blend_size_mb`, `blender.rss_mb`, `blender.frame`.
 8. ✅ Cardinality/privacy: metric names are bounded (operator type, area type, status); no per-asset names, file paths, or session IDs as metric dimensions. Verbose operator parameters are not captured by default.
-9. ⏳ Wheel packaging (vendoring per-platform cdylib) — not implemented; wheel build script is a follow-up packaging task.
+9. ✅ **Migrate to Blender 4.2+ Extension format** — the add-on currently uses the legacy `bl_info` dict. Blender 4.2 introduced an Extensions system (separate from the legacy Add-ons panel) that requires a `blender_manifest.toml`. This is the correct format for anything targeting 4.2+. See fix steps below.
+10. ⏳ Zip packaging (vendoring per-platform cdylib) — not implemented; build script is a follow-up packaging task.
+
+#### Fix: migrate to Blender Extension format
+
+Blender 4.2+ added a proper Extensions system alongside (but separate from) the legacy Add-ons panel. Our add-on was written with the legacy `bl_info` API. The migration is purely mechanical — `register()`/`unregister()` and all hook code are unchanged.
+
+**Steps:**
+
+1. **Create `blender/micromegas_blender/blender_manifest.toml`** alongside `__init__.py`:
+   ```toml
+   schema_version = "1.0.0"
+   id = "micromegas_blender"
+   version = "1.0.0"
+   name = "Micromegas Telemetry"
+   tagline = "Captures Blender session telemetry and ships it to a Micromegas server"
+   maintainer = "Micromegas"
+   type = "add-on"
+   blender_version_min = "4.2.0"
+   license = ["SPDX:Apache-2.0"]
+   ```
+
+2. **Remove `bl_info` from `__init__.py`** — the dict is no longer needed. Replace the single usage of `bl_info["version"]` in `_build_process_properties()` with a hardcoded constant `_ADDON_VERSION = "1.0.0"`.
+
+3. **Update `blender/README.md` install instructions** — change "Add-ons → Install…" to "Extensions → Install from Disk…" (or drag the zip onto the Blender window). The zip structure is the same (directory at root of zip).
+
+4. **Update `blender/README.md` development symlink path** — for Extensions the user data path is `{user}/extensions/user_default/micromegas_blender/` rather than `scripts/addons/micromegas_blender/`.
+
+No changes required to `binding.py`, `handlers.py`, `recorder.py`, or `crash_harvester.py`.
 
 ### Phase 3 — Crash capture (Phase 1 strategy) ✅ COMPLETE
 10. ✅ Startup harvester in `blender/micromegas_blender/crash_harvester.py`: scans `/tmp/*.crash.txt` (Linux) or `%TEMP%\*.crash.txt` (Windows); atomic rename for dedup; ships as FATAL log; best-effort (no retry on upload failure). Wired to `bpy.app.handlers.load_factory_startup_post`.
@@ -125,12 +153,20 @@ Phased, gated on evidence:
 - `blender/micromegas_blender/recorder.py`
 - `blender/micromegas_blender/handlers.py`
 - `blender/micromegas_blender/crash_harvester.py`
+- `blender/.gitignore`
+- `blender/README.md`
+- `build/build_blender_plugin.py`
 - `mkdocs/docs/native/index.md`
 - `mkdocs/docs/blender/index.md`
 - `mkdocs/mkdocs.yml` (updated nav)
 
+### Files Created (Extension migration)
+- `blender/micromegas_blender/blender_manifest.toml` — created ✅
+
 ## Remaining / Follow-up
-- **Wheel packaging:** build script to bundle the pre-built cdylib into an installable `.zip`. This is a CI/distribution concern, not a code concern.
+
+### Follow-up
+- **Zip packaging:** build script to bundle the pre-built cdylib into an installable `.zip`. This is a CI/distribution concern, not a code concern.
 - **End-to-end test against live server:** run `blender --background --python` to emit synthetic events and confirm rows appear via `micromegas-query`.
 - **Crash-path test:** force abnormal exit, restart Blender, confirm harvester ships the prior crash file.
 - **Phase-2 crash capture (Crashpad):** pursued only if Phase-1 data shows unacceptable loss.
