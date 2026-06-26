@@ -21,24 +21,31 @@ import subprocess
 import sys
 
 
-def lib_patterns():
-    """Return (matched-by-suffix, exact-names) the cdylib/staticlib/import-lib
-    artifacts cargo emits for the current platform."""
-    if sys.platform == "win32":
-        # cdylib -> micromegas_capi.dll, its import lib -> micromegas_capi.dll.lib
-        # staticlib -> micromegas_capi.lib
-        return [".dll", ".dll.lib", ".lib"]
-    if sys.platform == "darwin":
-        return [".dylib", ".a"]
-    return [".so", ".a"]
+def target_profile(target):
+    """Return (lib-suffixes, platform-tag) for a cargo target triple. When
+    target is None, profile the host platform instead.
 
-
-def platform_tag():
-    if sys.platform == "win32":
-        return "windows-x86_64"
-    if sys.platform == "darwin":
-        return "macos-x86_64"
-    return "linux-x86_64"
+    The lib suffixes select the cdylib/staticlib/import-lib artifacts cargo
+    emits for that platform; everything else in the target dir (.rlib, .d, ...)
+    is ignored.
+    """
+    if target is None:
+        if sys.platform == "win32":
+            return [".dll", ".dll.lib", ".lib"], "windows-x86_64"
+        if sys.platform == "darwin":
+            return [".dylib", ".a"], "macos-x86_64"
+        return [".so", ".a"], "linux-x86_64"
+    # Cross-compilation: select by target triple, not the host.
+    if "windows-gnu" in target:
+        # mingw: cdylib -> micromegas_capi.dll, import lib ->
+        # libmicromegas_capi.dll.a, staticlib -> libmicromegas_capi.a
+        return [".dll", ".dll.a", ".a"], "windows-x86_64"
+    if "windows" in target:
+        # MSVC: cdylib -> .dll, import lib -> .dll.lib, staticlib -> .lib
+        return [".dll", ".dll.lib", ".lib"], "windows-x86_64"
+    if "darwin" in target:
+        return [".dylib", ".a"], "macos-x86_64"
+    return [".so", ".a"], "linux-x86_64"
 
 
 def workspace_version(repo_root):
@@ -71,11 +78,14 @@ def main():
         help="run `cargo build -p micromegas-capi --release` before packaging",
     )
     parser.add_argument(
+        "--target",
+        help="cargo target triple to (cross-)build and package for, e.g. "
+        "x86_64-pc-windows-gnu (defaults to the host target)",
+    )
+    parser.add_argument(
         "--target-dir",
-        default=os.path.join(
-            os.path.dirname(__file__), "..", "rust", "target", "release"
-        ),
-        help="cargo release output directory containing the built libraries",
+        help="cargo release output directory containing the built libraries "
+        "(defaults to rust/target[/<target>]/release)",
     )
     parser.add_argument(
         "--out-dir",
@@ -85,19 +95,39 @@ def main():
     args = parser.parse_args()
 
     repo_root = os.path.normpath(os.path.join(os.path.dirname(__file__), ".."))
-    target_dir = os.path.normpath(args.target_dir)
+    cargo_cwd = os.path.join(repo_root, "rust")
+    if args.target_dir:
+        base = args.target_dir
+    else:
+        # Honor CARGO_TARGET_DIR (the dev-worker points it at a persistent
+        # cache outside rust/target); cargo resolves a relative value against
+        # its working directory. Otherwise default to rust/target.
+        env_dir = os.environ.get("CARGO_TARGET_DIR")
+        if env_dir:
+            base = (
+                env_dir if os.path.isabs(env_dir) else os.path.join(cargo_cwd, env_dir)
+            )
+        else:
+            base = os.path.join(cargo_cwd, "target")
+    # cargo nests cross-compiled output under <base>/<triple>/release.
+    parts = [base, args.target, "release"] if args.target else [base, "release"]
+    target_dir = os.path.normpath(os.path.join(*parts))
     out_dir = os.path.normpath(args.out_dir)
     header = os.path.join(repo_root, "rust", "capi", "include", "micromegas.h")
     version = args.version or workspace_version(repo_root)
 
     if args.build:
+        cmd = ["cargo", "build", "-p", "micromegas-capi", "--release"]
+        if args.target:
+            cmd += ["--target", args.target]
         subprocess.run(
-            ["cargo", "build", "-p", "micromegas-capi", "--release"],
-            cwd=os.path.join(repo_root, "rust"),
+            cmd,
+            cwd=cargo_cwd,
             check=True,
         )
 
-    name = f"micromegas-capi-{version}-{platform_tag()}"
+    suffixes, tag = target_profile(args.target)
+    name = f"micromegas-capi-{version}-{tag}"
     stage = os.path.join(out_dir, name)
     if os.path.isdir(stage):
         shutil.rmtree(stage)
@@ -107,7 +137,6 @@ def main():
     # Header is checked in (cbindgen-generated); ship it as-is.
     shutil.copy2(header, os.path.join(stage, "include", "micromegas.h"))
 
-    suffixes = lib_patterns()
     copied = []
     for entry in sorted(os.listdir(target_dir)):
         if not entry.startswith(("libmicromegas_capi", "micromegas_capi")):
@@ -125,7 +154,7 @@ def main():
         )
         return 1
 
-    fmt = "zip" if sys.platform == "win32" else "gztar"
+    fmt = "zip" if tag.startswith("windows") else "gztar"
     archive = shutil.make_archive(stage, fmt, root_dir=out_dir, base_dir=name)
 
     print(f"staged libraries: {', '.join(copied)}")

@@ -32,6 +32,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     jq \
     libicu-dev \
     libssl-dev \
+    mingw-w64 \
     mold \
     pkg-config \
     python3 \
@@ -99,8 +100,9 @@ USER runner
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
 ENV PATH="/home/runner/.cargo/bin:${PATH}"
 
-# Rust WASM target and cargo tools
+# Rust targets (WASM; windows-gnu for the capi-release cross-build) and cargo tools
 RUN rustup target add wasm32-unknown-unknown \
+    && rustup target add x86_64-pc-windows-gnu \
     && cargo install cargo-machete \
     && cargo install wasm-pack
 
