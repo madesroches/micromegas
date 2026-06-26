@@ -86,8 +86,11 @@ The wasm-pack form (no `private`) regresses the yarn-warning fix.
 `build.py` becomes the single supported generator. Rationale: CI already enforces it, the minimal
 `private` `package.json` is a deliberate fix for a real yarn warning, and the vite alias + yarn
 `file:` consumption never read the package version. `wasm-pack` is retained **only** for
-`build.py --test` (headless Firefox integration tests), which builds to its own temp dir and never
-touches the committed bindings.
+`build.py --test` (headless Firefox integration tests), which runs `wasm-pack test` in the crate dir
+(`build.py:80`, `cwd=CRATE_DIR`) and may populate `rust/datafusion-wasm/pkg/`, but never writes the
+committed bindings in `OUTPUT_DIR`. Note this interacts with the copy loop: if a `--test` run leaves
+a `README.md`/`.gitignore` in `pkg/`, the next `build()` copies them into `OUTPUT_DIR` (see step 2
+hardening).
 
 ### `package.json` shape
 
@@ -125,6 +128,12 @@ We cannot stop a human from typing `wasm-pack build`, so the defense is layered:
 3. **CI** (already in place): `build.py --check` fails any commit whose bindings don't match
    build.py output, so divergence cannot land on `main` regardless.
 
+Note the most likely real-world churn vector is not a manual `wasm-pack build` but the **supported**
+`build.py --test` flow: it runs `wasm-pack test` in the crate dir and can itself seed `pkg/` with a
+`README.md`/`.gitignore`, which the next `build()` then copies into `OUTPUT_DIR`. So `build()` should
+sanitize what it copies out of `pkg/` (prune known wasm-pack leftovers from `OUTPUT_DIR`, per step 2)
+regardless of how `pkg/` got populated — documentation alone does not cover this path.
+
 ### Flow (after change)
 
 ```
@@ -135,7 +144,9 @@ rust/datafusion-wasm/build.py            (the ONLY generator of committed bindin
   └─ copy .js/.d.ts/_bg.wasm/_bg.wasm.d.ts -> analytics-web-app/src/lib/datafusion-wasm/
   └─ write package.json (single intentional shape)
 
-wasm-pack ── used ONLY by `build.py --test` (headless Firefox) ── never writes committed bindings
+wasm-pack ── used ONLY by `build.py --test` (headless Firefox), runs in the crate dir and may
+             populate pkg/ ── never writes committed bindings in OUTPUT_DIR (but pkg/ leftovers can
+             be copied into OUTPUT_DIR by the next build())
 ```
 
 ## Implementation Steps
@@ -146,10 +157,13 @@ wasm-pack ── used ONLY by `build.py --test` (headless Firefox) ── never 
    - Update `WASM_PACKAGE_JSON` to the agreed final shape (static placeholder version + a comment
      explaining it's a private path-consumed package), *or* implement Cargo.toml version stamping if
      the alternative is chosen.
-   - (Optional hardening) In `build()`, after copying from `pkg/`, prune any files that aren't part
-     of the intended output (e.g. a `README.md` or `.gitignore` that a prior `wasm-pack` left in
-     `pkg/`), so a stale `pkg/` can't reintroduce stray artifacts. Keep this conservative — only
-     remove known wasm-pack leftovers, not developer files.
+   - (Optional hardening) In `build()`, after copying from `pkg/` into `OUTPUT_DIR`, prune known
+     wasm-pack leftovers (`README.md`, `.gitignore`) **from `OUTPUT_DIR`** — not just from `pkg/`.
+     The copy loop (`build.py:114-119`) is additive and never deletes pre-existing files in
+     `OUTPUT_DIR`, so pruning `pkg/` alone would leave already-copied strays in place and the loop
+     would re-propagate any such file from `pkg/` on every build. Targeting `OUTPUT_DIR` (or making
+     `OUTPUT_DIR` an exact mirror of the intended file set) makes the step self-healing. Keep this
+     conservative — only remove known wasm-pack leftovers, not developer files.
 3. **Regenerate and commit the canonical bindings** so the committed form is unambiguously the
    build.py form: run `python3 rust/datafusion-wasm/build.py` and commit the resulting
    `.js`/`.d.ts`/`package.json` if they changed.
@@ -158,7 +172,9 @@ wasm-pack ── used ONLY by `build.py --test` (headless Firefox) ── never 
 5. **`rust/datafusion-wasm/README.md`**: rewrite the build section to state build.py is canonical;
    reframe "Manual Build" as a debugging aid that produces the *same* `wasm-bindgen --target web`
    output (and note it does **not** write `package.json`); add an explicit "do not run
-   `wasm-pack build` into the output dir — `wasm-pack` is for tests only" note.
+   `wasm-pack build` into the output dir — `wasm-pack` is for tests only" note. Also flag that even
+   the supported `build.py --test` flow can seed `pkg/` with wasm-pack strays, so `build()` must
+   sanitize what it copies (step 2 hardening) rather than relying on documentation alone.
 6. **Verify reproducibility**: from a clean working tree, run `build.py`, confirm `git diff` is empty
    (or only expected hash churn), then run `build.py --check` and confirm it passes.
 
@@ -221,4 +237,6 @@ No changes expected to root `.gitignore` (the tracked/ignored split is correct) 
    release coupling) vs. stamp the crate version from `Cargo.toml` (single source of truth, but
    requires regenerating bindings on every wasm-crate release and a toolchain on the release box)?
 2. **`build.py` output-pruning** (step 2, optional): do we want build.py to actively delete known
-   wasm-pack leftovers from `pkg/`/output, or is documentation + the existing CI check sufficient?
+   wasm-pack leftovers from `OUTPUT_DIR` after the copy (the strays live there, not in `pkg/`, and
+   the additive copy loop re-propagates any present in `pkg/`), or is documentation + the existing
+   CI check sufficient?
