@@ -161,7 +161,11 @@ Numeric metric values are unbounded scalars (fine) — only metric *names* must 
 **Per-process CPU% deliberately excluded.** It would be process-specific (the Rust `system_monitor`'s `cpu_usage` is `global_cpu_usage()` — the whole machine, all processes), so it is *not* strictly redundant. But it duplicates the system metric closely on a typical single-Blender workstation, and would cost platform-specific code (`/proc/self/stat`, `GetProcessTimes`) plus cached delta state across timer ticks. RSS is the per-process signal that is genuinely irreplaceable, and Part 1 already covers it.
 
 ### Part 4 — Python exception capture (high value, slightly more involved)
-Install a `sys.excepthook` wrapper in `register()` that ships unhandled exceptions in the embedded interpreter as `ERROR`-level logs to a `blender.exception` target, then chains to the previous hook. Blender routes uncaught operator/timer/handler exceptions through the interpreter, so this captures the actual failures artists hit. Restore the original hook in `unregister()`. Ship the **full traceback** (including file paths and locals-free frames) — privacy is a non-issue in the target environment (see Resolved Decisions); cap the message at ~4 KB.
+Install a `sys.excepthook` wrapper in `register()` that ships unhandled exceptions in the embedded interpreter as `ERROR`-level logs to a `blender.exception` target, then chains to the previous hook. Restore the original hook in `unregister()`. Ship the **full traceback** (including file paths and locals-free frames) — privacy is a non-issue in the target environment (see Resolved Decisions); cap the message at ~4 KB.
+
+**Limitation — `sys.excepthook` will not catch most operator/handler/timer exceptions.** Blender installs its own C-level execution wrappers around operators, `bpy.app.handlers`, and `bpy.app.timers`: when those raise, Blender catches the exception internally and reports it via its own console/report mechanism — it never propagates to the top of the main interpreter loop, so `sys.excepthook` does not fire. The hook therefore fires only for the comparatively rare exceptions that do reach the interpreter top level, **not** for the operator/timer/handler failures this plan most wants to capture. Keep the hook as a backstop, but do not rely on it for the RCA targets.
+
+**Complementary capture for the sites the add-on owns.** The realistic mechanism is to wrap the add-on's *own* registered callbacks — the handlers and timers it installs (e.g. `_periodic_flush`, the operator-history poll timer, the lifecycle/depsgraph handlers in `handlers.py`) and any operators the add-on itself defines — in a try/except that logs the exception to `blender.exception` (ERROR, full traceback, ~4 KB cap) and re-raises or returns as appropriate. This catches failures inside the code the add-on controls (where Blender's own wrapper would otherwise swallow them), which is the coverage the plan actually needs. It does not capture exceptions inside *other* add-ons' callbacks — those remain only in Blender's own report stream — and the plan does not claim to.
 
 ```python
 # __init__.py
@@ -186,7 +190,8 @@ Blender records nearly every button/menu/shortcut action as a **registered opera
 **Design — operator-history poller** (new `handlers.on_poll_operators()` or a small module):
 - The buffer is a small ordered ring (oldest→newest, historically ~last 10). It must be drained faster than the 30 s flush or rapid clicking overflows it between polls. Use a dedicated `bpy.app.timers` callback at ~1 s.
 - Track the tail seen last poll by the `bl_idname` sequence of the most recent few entries. On each poll, locate that anchor in the current buffer and emit everything after it as `blender.action` logs (TRACE). If the anchor can't be found (overflowed since last poll), emit the whole buffer and log a "possible gap" marker — never silently drop.
-- Message body: `bl_idname` (+ `name`), **plus operator parameters** from `as_keywords()` (e.g. `wm.open_mainfile(filepath=...)`). Privacy is a non-issue in the target corporate environment (users want the telemetry — see Resolved Decisions), so capture parameters by default for maximum RCA signal. Cardinality is not a concern here either: parameters go in the log *message body*, not a metric dimension or log target, so they don't intern/leak. Cap message length (e.g. ~4 KB) to bound payload size.
+- Message body: `bl_idname` (+ `name`), **plus operator parameters** when available (e.g. `wm.open_mainfile(filepath=...)`). Privacy is a non-issue in the target corporate environment (users want the telemetry — see Resolved Decisions), so capture parameters by default for maximum RCA signal. Cardinality is not a concern here either: parameters go in the log *message body*, not a metric dimension or log target, so they don't intern/leak. Cap message length (e.g. ~4 KB) to bound payload size.
+- **Open risk — parameter extraction on stored history entries.** `bl_idname` and `name` are reliably present on the stored `window_manager.operators` entries, but parameter extraction is not guaranteed: those entries are `OperatorProperties`/macro instances, and `as_keywords()` (or equivalent) is reliable on a *live* operator instance, less so on stored history entries. **Validate this against a real Blender build during implementation.** Defensive fallback regardless of outcome: always log `bl_idname`, attempt parameter extraction inside its own try/except, and omit parameters (logging just `bl_idname`/`name`) when they are unavailable — never assume the extraction call succeeds.
 
 ```python
 # new operator-history drain, called from a ~1s timer
@@ -198,7 +203,14 @@ def on_poll_operators() -> None:
         idnames = [op.bl_idname for op in ops]
         new = _diff_since_anchor(idnames, _last_action_anchor)  # entries after anchor
         for op in ops[len(idnames) - len(new):]:
-            _log(_b.LEVEL_TRACE, "blender.action", op.bl_idname)   # name bounded, safe
+            msg = op.bl_idname                                   # always available, bounded
+            try:                                                 # params: open risk, may be absent
+                params = dict(op.as_keywords())
+                if params:
+                    msg = f"{msg} {params}"[:4096]
+            except Exception:
+                pass                                             # omit params, keep bl_idname
+            _log(_b.LEVEL_TRACE, "blender.action", msg)
         _set_anchor(idnames)
     except Exception:
         pass
@@ -233,7 +245,7 @@ All five parts are in scope (the objective is maximum RCA signal). Suggested bui
 6. `__init__.py:_build_process_properties`: add GPU (`gpu.platform.*`), `enabled_addons`, `cpu_count`, `python_version`, `background`, optional `total_ram_mb`. Each in its own try/except.
 
 ### Phase 3 — Semantic action capture
-7. New operator-history poller (in `recorder.py` or a new `actions.py`): ~1 s timer draining `bpy.context.window_manager.operators` → `blender.action` TRACE logs (bl_idname + `name` + parameters from `as_keywords()`, message capped ~4 KB). Anchor/diff logic with gap marker on overflow.
+7. New operator-history poller (in `recorder.py` or a new `actions.py`): ~1 s timer draining `bpy.context.window_manager.operators` → `blender.action` TRACE logs (always `bl_idname` + `name`; parameters via `as_keywords()` inside its own try/except, omitted when unavailable — validate availability on a real build; message capped ~4 KB). Anchor/diff logic with gap marker on overflow.
 8. Mode/workspace/tool transition logging; runtime add-on enable/disable.
 9. Register/unregister the new timer in `__init__.py` alongside `_periodic_flush`.
 
