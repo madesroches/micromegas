@@ -14,8 +14,9 @@ Blender process
 └── Embedded CPython
     └── micromegas_blender add-on
         ├── crash_harvester  (ships prior crash files on next launch)
-        ├── handlers         (bpy.app.handlers + bpy.msgbus)
-        ├── recorder         (persistent modal operator)
+        ├── handlers         (bpy.app.handlers + bpy.msgbus + periodic metrics)
+        ├── recorder         (persistent modal operator — raw input events)
+        ├── actions          (operator-history poller — semantic actions)
         └── binding          (ctypes → libmicromegas_capi)
                                        │
                          libmicromegas_capi.{so,dll}
@@ -79,20 +80,47 @@ that make stability and performance analysis possible:
 - OS version, platform
 - Per-launch session UUID
 - Add-on version
+- GPU renderer, vendor, backend, and driver/GL version (`gpu_renderer`,
+  `gpu_vendor`, `gpu_backend`, `gpu_driver`) — the #1 crash dimension for a DCC
+  tool (skipped in `--background` mode where no GPU context exists)
+- Enabled third-party add-ons as a sorted `name@version` list (`enabled_addons`,
+  capped ~2 KB) — a leading cause of Blender instability
+- CPU core count, total RAM (`cpu_count`, `total_ram_mb`)
+- Embedded Python version (`python_version`)
+- Active render engine (`render_engine`)
+- Headless vs interactive (`background`)
 
 ### User actions (continuous)
 
-Captured via a persistent modal operator + `bpy.app.handlers`:
+Two complementary streams:
+
+**Raw input events** — captured via a persistent modal operator (`recorder`):
 
 - Discrete key/mouse events (type, area) — logged at TRACE level
-- Operator invocations (type, area) — logged at TRACE level
 - Throttled mouse motion (at most once per second) — logged at TRACE level
+
+**Semantic actions** — captured by the operator-history poller (`actions`):
+
+- Each operator the user invoked (`bl_idname`, name, **and parameters** when
+  available) drained from `bpy.context.window_manager.operators` and logged to
+  `blender.action` at TRACE level. This is the "what did the user click" stream
+  — adding a cube, switching to edit mode, running a modifier.
+- Mode / workspace / active-tool transitions → `blender.mode`,
+  `blender.workspace`, `blender.tool` (TRACE).
+- Runtime add-on enable/disable → `blender.addon_state` (INFO) — a mid-session
+  enable is a prime crash trigger.
+
+The poller runs on a ~1 s timer so it drains the ring buffer well before the
+30 s flush. The ring is small and ordered (oldest→newest); each poll emits only
+the operators appended since the last poll. If the buffer turned over entirely
+between polls (rapid clicking), a `possible gap` marker is logged rather than
+silently dropping — actions are never lost without a signal.
 
 !!! note "Coverage is high but not 100%"
     The modal operator can be suspended while a full-screen sub-modal is
-    running.  Operator parameter values are not captured by default
-    (only `bl_idname` / event type to avoid logging potentially sensitive
-    scene/asset names).
+    running. Operator parameter extraction from stored history entries is
+    best-effort: when parameters are unavailable the action is still logged with
+    its `bl_idname` and name.
 
 ### Lifecycle events (logged at INFO)
 
@@ -101,14 +129,28 @@ Captured via a persistent modal operator + `bpy.app.handlers`:
 - Render start / complete / cancel
 - Frame change
 
+### Python exceptions
+
+Unhandled exceptions that reach the embedded interpreter's top level are shipped
+as ERROR-level logs to the `blender.exception` target with the full traceback
+(capped ~4 KB), then chained to the previous `sys.excepthook`.
+
+!!! note "Backstop, not full coverage"
+    Blender wraps operators, `bpy.app.handlers`, and `bpy.app.timers` in its own
+    C-level execution handlers and reports their exceptions through its console,
+    so those never reach `sys.excepthook`. The add-on's *own* timers and
+    handlers guard themselves; this hook catches the comparatively rare
+    exceptions that do propagate to the interpreter top level.
+
 ### Performance metrics
 
 | Metric | Unit | Description |
 |---|---|---|
-| `blender.eval_ms` | ms | Scene evaluation time between depsgraph updates |
+| `blender.depsgraph_update_interval_ms` | ms | Wall-clock interval between consecutive depsgraph updates (includes idle time between edits — not pure evaluation time; Blender exposes no pre-eval hook) |
 | `blender.render_duration_s` | s | Wall time per render |
 | `blender.blend_size_mb` | mb | `.blend` file size at save |
-| `blender.rss_mb` | mb | Process resident memory at file load |
+| `blender.rss_mb` | mb | Process resident memory, sampled every ~30 s (Linux + Windows) |
+| `blender.object_count` | count | Objects in the active scene, sampled every ~30 s |
 | `blender.frame` | frame | Current frame number at frame-change |
 
 ### Crash capture (Phase 1: harvest on next launch)
@@ -125,17 +167,20 @@ This approach is:
   retry queue).  This is intentional — Phase 1 measures how lossy the free
   path is before investing in a Crashpad-based Phase 2.
 
-## Privacy and cardinality
+## Cardinality
 
-The add-on enforces strict cardinality and privacy rules:
+The add-on is built for environments where the telemetry is wanted in full, so
+there is no privacy gating, scrubbing, or opt-in: full Python tracebacks,
+operator parameters, and the enabled-add-on list (with real names) are all
+captured by default. The one remaining discipline is **cardinality**, a
+producer-side constraint unrelated to privacy:
 
-- Metric property values are always from a **bounded, low-cardinality set**
-  (event type, area type, status — never per-asset names, session IDs, or
-  file paths).
-- Scene and asset names, file paths, and operator parameter values are
-  **never emitted** as metric dimensions or log targets.
-- Log messages for lifecycle events name the *type* of event, not the content
-  (e.g. `"blend file saved"`, not the file path).
+- Metric **names** and log **targets** are always from a bounded, low-cardinality
+  set (e.g. `blender.action`, `blender.rss_mb`) — never per-asset names, file
+  paths, or session IDs.
+- Free-form, high-cardinality values (operator parameters, file paths,
+  tracebacks, the add-on list) go only in the log **message body**, which is
+  unbounded-safe.
 
 ## Querying the data
 
@@ -164,6 +209,15 @@ FROM log_entries
 WHERE target = 'blender.crash'
   AND level = 1  -- FATAL
 ORDER BY time DESC;
+
+-- Reconstruct one session's action sequence (what the user clicked).
+-- Scope to the process with view_instance so only that session's blocks are
+-- read, instead of scanning the whole log_entries view.
+SELECT time, msg
+FROM view_instance('log_entries', 'my_process_id')
+WHERE target = 'blender.action'
+ORDER BY time DESC
+LIMIT 100;
 ```
 
 ## Troubleshooting

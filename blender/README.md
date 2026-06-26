@@ -14,8 +14,9 @@ never held by the transport, so uploads continue even while Python is blocked.
 Blender process
 ├── Embedded CPython
 │   └── micromegas_blender (add-on)
-│       ├── modal recorder   — operator invocations, key/mouse events
-│       ├── bpy.app.handlers — load/save, undo/redo, render, frame change
+│       ├── modal recorder   — raw key/mouse/scroll input events
+│       ├── actions poller    — semantic operator history (what was clicked)
+│       ├── bpy.app.handlers — load/save, undo/redo, render, frame, metrics
 │       ├── bpy.msgbus       — active-object property edits
 │       └── ctypes binding
 │                 │
@@ -157,25 +158,46 @@ blender
 ### Process fingerprint (set at startup, attached to every event)
 
 - Blender version and build hash
-- Operating system and version
+- Operating system and version, platform
 - Per-launch UUID (session ID)
 - Add-on version
+- GPU renderer / vendor / backend / driver version (skipped in `--background`)
+- Enabled third-party add-ons (`name@version` list)
+- CPU core count, total RAM, embedded Python version
+- Active render engine, headless-vs-interactive flag
 
-### User actions (via modal recorder + `bpy.app.handlers` + `bpy.msgbus`)
+### User actions
 
-- Operator invocations (type and area, not parameters)
-- Key and mouse-button events (throttled, continuous motion not recorded)
-- Active-object type changes
-- File load, save, undo, redo
+Raw input (modal recorder):
+
+- Key, mouse-button, and scroll events (throttled; continuous motion sampled)
+
+Semantic actions (operator-history poller, ~1 s):
+
+- Each invoked operator (`bl_idname`, name, and parameters when available) →
+  `blender.action`
+- Mode / workspace / tool transitions → `blender.mode` / `.workspace` / `.tool`
+- Runtime add-on enable/disable → `blender.addon_state`
+
+Lifecycle (`bpy.app.handlers` + `bpy.msgbus`): file load/save, undo/redo,
+render start/complete/cancel, frame change, active-object type changes.
+
+### Python exceptions
+
+Exceptions reaching the interpreter top level are shipped as `ERROR` logs to
+`blender.exception` with the full traceback (capped ~4 KB). Blender swallows
+most operator/handler/timer exceptions before they get here, so this is a
+backstop; the add-on's own callbacks guard themselves.
 
 ### Performance metrics
 
 | Metric | Unit | Source |
 |--------|------|--------|
-| `blender.eval_ms` | ms | Depsgraph update interval |
+| `blender.depsgraph_update_interval_ms` | ms | Wall-clock interval between depsgraph updates (not pure eval time) |
 | `blender.render_duration_s` | s | render_pre → render_post |
 | `blender.blend_size_mb` | mb | File size on save |
-| `blender.rss_mb` | mb | `/proc/self/status` (Linux) |
+| `blender.rss_mb` | mb | Resident memory, sampled every ~30 s (Linux + Windows) |
+| `blender.object_count` | count | Objects in active scene, sampled every ~30 s |
 | `blender.frame` | frame | frame_change_post |
 
 ### Crash reports (on next launch)
@@ -189,15 +211,20 @@ is maintained.
 
 ---
 
-## Privacy and cardinality
+## Cardinality
 
-- **No file paths, scene names, or asset names** are emitted as metric
-  dimensions or log fields.
-- Operator parameters are not captured by default (only the operator type).
-- Metric dimension values are bounded (operator type, area type) — no
-  per-session or per-asset values as dimensions.
-- The session UUID is used only as a process property for fingerprinting, not
-  as a metric dimension.
+This add-on targets environments where the telemetry is wanted in full — there
+is no privacy gating: full tracebacks, operator parameters, and the enabled
+add-on list are all captured by default. The remaining discipline is purely
+cardinality (a producer-side constraint):
+
+- Metric **names** and log **targets** come from a bounded, low-cardinality set
+  (e.g. `blender.action`, `blender.rss_mb`) — never per-asset or per-session.
+- High-cardinality, free-form values (operator parameters, file paths,
+  tracebacks, the add-on list) go only in the log **message body**, which is
+  unbounded-safe.
+- The session UUID is a process property for fingerprinting, not a metric
+  dimension.
 
 ---
 

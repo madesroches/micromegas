@@ -7,6 +7,7 @@ frame change, depsgraph update) and emits performance metrics at each hook site.
 All handlers are idempotent — safe to register/unregister multiple times.
 """
 
+import sys
 import time
 
 import bpy
@@ -49,8 +50,12 @@ def _metric_i(name: str, unit: str, value: int) -> None:
 
 @bpy.app.handlers.persistent
 def _on_load_post(scene, depsgraph=None):
+    global _last_depsgraph_time
+    # Skip the first post-load interval sample: the stored timestamp predates the
+    # file load, so the interval would span the load boundary and be inflated.
+    _last_depsgraph_time = 0.0
     _log(_b.LEVEL_INFO, "blender.lifecycle", "blend file loaded")
-    _emit_memory_metric()
+    # Memory is now sampled by the periodic timer (see on_periodic), not here.
 
 
 @bpy.app.handlers.persistent
@@ -117,31 +122,82 @@ def _on_depsgraph_update_post(scene, depsgraph):
     global _last_depsgraph_time
     if _last_depsgraph_time > 0.0:
         elapsed_ms = (now - _last_depsgraph_time) * 1000.0
-        _metric_f("blender.eval_ms", "ms", elapsed_ms)
+        _metric_f("blender.depsgraph_update_interval_ms", "ms", elapsed_ms)
     _last_depsgraph_time = now
 
 
 # ---------------------------------------------------------------------------
-# Memory helper
+# Periodic sampling (driven by the flush timer in __init__.py)
 # ---------------------------------------------------------------------------
 
 
-def _emit_memory_metric() -> None:
+def _read_process_rss_mb() -> float:
+    """Resident set size of THIS process in MB, or 0.0 if unavailable.
+
+    Linux + Windows only; macOS is descoped (the add-on ships no .dylib, so it
+    is dormant there anyway). Any failure returns 0.0 so callers stay silent.
+    """
     try:
-        memory_mb = 0.0
-        try:
-            # sysinfo not available in Blender Python; use /proc/self/status on Linux
+        if sys.platform == "linux":
             with open("/proc/self/status") as f:
                 for line in f:
                     if line.startswith("VmRSS:"):
-                        memory_mb = int(line.split()[1]) / 1024.0
-                        break
-        except Exception:
-            pass
-        if memory_mb > 0:
-            _metric_f("blender.rss_mb", "mb", memory_mb)
+                        return int(line.split()[1]) / 1024.0  # kB -> MB
+            return 0.0
+        if sys.platform == "win32":
+            import ctypes
+            from ctypes import wintypes
+
+            class _PMC(ctypes.Structure):
+                _fields_ = [
+                    ("cb", wintypes.DWORD),
+                    ("PageFaultCount", wintypes.DWORD),
+                    ("PeakWorkingSetSize", ctypes.c_size_t),
+                    ("WorkingSetSize", ctypes.c_size_t),
+                    ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+                    ("QuotaPagedPoolUsage", ctypes.c_size_t),
+                    ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+                    ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+                    ("PagefileUsage", ctypes.c_size_t),
+                    ("PeakPagefileUsage", ctypes.c_size_t),
+                ]
+
+            counters = _PMC()
+            counters.cb = ctypes.sizeof(_PMC)
+            # K32GetProcessMemoryInfo lives in kernel32 on Win7+ (no psapi import).
+            if ctypes.windll.kernel32.K32GetProcessMemoryInfo(
+                ctypes.windll.kernel32.GetCurrentProcess(),
+                ctypes.byref(counters),
+                counters.cb,
+            ):
+                return counters.WorkingSetSize / (1024 * 1024)
+            return 0.0
     except Exception:
-        pass
+        return 0.0
+    return 0.0  # macOS / other — descoped
+
+
+def _read_object_count() -> int:
+    """Number of objects in the active scene, or -1 if unavailable."""
+    try:
+        return len(bpy.context.scene.objects)
+    except Exception:
+        return -1
+
+
+def on_periodic() -> None:
+    """Sample per-process metrics. Called from the ~30 s flush timer.
+
+    New periodic metrics are added here (open/closed): the timer in __init__.py
+    stays a thin flush+sample dispatcher.
+    """
+    rss = _read_process_rss_mb()
+    if rss > 0:
+        _metric_f("blender.rss_mb", "mb", rss)
+
+    obj_count = _read_object_count()
+    if obj_count >= 0:
+        _metric_i("blender.object_count", "count", obj_count)
 
 
 # ---------------------------------------------------------------------------
