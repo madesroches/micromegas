@@ -18,14 +18,21 @@ OUTPUT_DIR = (
     CRATE_DIR.parent.parent / "analytics-web-app" / "src" / "lib" / "datafusion-wasm"
 )
 WASM_FILE = "micromegas_datafusion_wasm.wasm"
+# Static placeholder: private, path-consumed package — nothing reads the version.
+# Deliberately not stamped from Cargo.toml to avoid release-time CI coupling.
 WASM_PACKAGE_JSON = {
     "name": "micromegas-datafusion-wasm",
-    "version": "0.1.0",
+    "version": "0.0.0",
     "private": True,
     "type": "module",
     "main": "micromegas_datafusion_wasm.js",
     "types": "micromegas_datafusion_wasm.d.ts",
 }
+
+# Files emitted by `wasm-pack build` that must never appear in OUTPUT_DIR.
+# The copy loop is additive and never deletes pre-existing files, so prune
+# known wasm-pack leftovers after every build() to keep OUTPUT_DIR self-healing.
+WASM_PACK_LEFTOVERS = ["README.md", ".gitignore"]
 
 
 def run(cmd: list[str], **kwargs) -> None:
@@ -117,6 +124,12 @@ def build(skip_opt: bool = False) -> None:
         dest = OUTPUT_DIR / f.name
         shutil.copy2(f, dest)
         print(f"  {f.name}")
+
+    for name in WASM_PACK_LEFTOVERS:
+        stray = OUTPUT_DIR / name
+        if stray.exists():
+            stray.unlink()
+            print(f"  removed wasm-pack leftover: {name}")
 
     # Write a package.json so this can be used as a local dependency
     package_json = OUTPUT_DIR / "package.json"
