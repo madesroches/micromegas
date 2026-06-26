@@ -12,18 +12,18 @@ This guide covers installing the Micromegas Grafana datasource plugin.
 
 ### Option 1: From Release (Recommended)
 
-1. Download the latest plugin release from GitHub:
+1. Download the latest plugin release from the [GitHub releases page](https://github.com/madesroches/micromegas/releases/latest):
    ```bash
-   wget https://github.com/madesroches/micromegas/releases/download/grafana-vX.Y.Z/micromegas-micromegas-datasource-X.Y.Z.zip
+   wget https://github.com/madesroches/micromegas/releases/latest/download/micromegas-micromegas-datasource.zip
    ```
 
 2. Extract to your Grafana plugins directory:
    ```bash
    # Default plugin directory
-   unzip micromegas-micromegas-datasource-X.Y.Z.zip -d /var/lib/grafana/plugins/
+   unzip micromegas-micromegas-datasource.zip -d /var/lib/grafana/plugins/
 
    # Or custom plugin directory
-   unzip micromegas-micromegas-datasource-X.Y.Z.zip -d /path/to/grafana/plugins/
+   unzip micromegas-micromegas-datasource.zip -d /path/to/grafana/plugins/
    ```
 
 3. Set proper permissions:
