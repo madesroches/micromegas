@@ -58,7 +58,11 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y mold mingw-w64
 
+      # Run from rust/ so rustup honors rust-toolchain.toml and adds the target
+      # to the *pinned* toolchain that cargo actually builds with — not the
+      # default `stable`, which the build never uses.
       - name: Add Rust target
+        working-directory: rust
         run: rustup target add ${{ matrix.target }}
 
       - name: Resolve version argument
