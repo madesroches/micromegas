@@ -46,6 +46,7 @@ def _metric_i(name: str, unit: str, value: int) -> None:
 # Lifecycle handlers
 # ---------------------------------------------------------------------------
 
+
 @bpy.app.handlers.persistent
 def _on_load_post(scene, depsgraph=None):
     _log(_b.LEVEL_INFO, "blender.lifecycle", "blend file loaded")
@@ -59,6 +60,7 @@ def _on_save_post(scene, depsgraph=None):
     if blend_path:
         try:
             import os
+
             size_bytes = os.path.getsize(blend_path)
         except OSError:
             pass
@@ -88,7 +90,9 @@ def _on_render_pre(scene):
 def _on_render_post(scene):
     global _render_start_time
     elapsed = time.monotonic() - _render_start_time if _render_start_time else 0.0
-    _log(_b.LEVEL_INFO, "blender.render", f"render complete frame={scene.frame_current}")
+    _log(
+        _b.LEVEL_INFO, "blender.render", f"render complete frame={scene.frame_current}"
+    )
     _metric_f("blender.render_duration_s", "s", elapsed)
     _render_start_time = 0.0
 
@@ -96,7 +100,9 @@ def _on_render_post(scene):
 @bpy.app.handlers.persistent
 def _on_render_cancel(scene):
     global _render_start_time
-    _log(_b.LEVEL_WARN, "blender.render", f"render cancelled frame={scene.frame_current}")
+    _log(
+        _b.LEVEL_WARN, "blender.render", f"render cancelled frame={scene.frame_current}"
+    )
     _render_start_time = 0.0
 
 
@@ -119,9 +125,9 @@ def _on_depsgraph_update_post(scene, depsgraph):
 # Memory helper
 # ---------------------------------------------------------------------------
 
+
 def _emit_memory_metric() -> None:
     try:
-        import sys
         memory_mb = 0.0
         try:
             # sysinfo not available in Blender Python; use /proc/self/status on Linux

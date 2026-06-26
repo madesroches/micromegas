@@ -59,9 +59,11 @@ def _upload_crash(claimed_path: str) -> bool:
     if not _lib or not _handle:
         return False
     try:
-        with open(claimed_path, "r", encoding="utf-8", errors="replace") as f:
-            content = f.read(_MAX_BYTES)
-        truncated = " [truncated]" if len(content) >= _MAX_BYTES else ""
+        with open(claimed_path, "rb") as f:
+            # One extra byte distinguishes "exactly at cap" from "truncated".
+            raw = f.read(_MAX_BYTES + 1)
+        truncated = " [truncated]" if len(raw) > _MAX_BYTES else ""
+        content = raw[:_MAX_BYTES].decode("utf-8", errors="replace")
         msg = f"prior_crash_report{truncated}: {content}"
         _lib.log(_handle, _b.LEVEL_FATAL, "blender.crash", msg)
         _lib.flush(_handle)
@@ -106,7 +108,15 @@ def _harvest_handler(scene=None, depsgraph=None):
 
 
 def register_startup_harvest() -> None:
-    """Wire harvest() into bpy.app.handlers.load_factory_startup_post."""
+    """Harvest prior crash files now, and wire harvest() into
+    load_factory_startup_post for later factory-default reloads.
+
+    The immediate call is essential: on a normal launch the add-on is enabled
+    *after* the startup file has loaded, so load_factory_startup_post will not
+    fire again this session. Relying on the handler alone would leave prior
+    *.crash.txt files uncollected on every normal launch.
+    """
+    _harvest_handler()
     try:
         import bpy  # only available inside Blender
 

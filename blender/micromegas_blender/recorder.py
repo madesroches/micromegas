@@ -31,8 +31,11 @@ _last_motion_log: float = 0.0
 
 # True while the add-on is registered; running modals self-cancel when False.
 _registered: bool = False
-# True while a modal recorder instance is live (single-instance guard).
-_running: bool = False
+# Bumped each time a recorder modal is launched. A modal whose stamped
+# generation no longer matches the latest is stale and self-cancels, so a
+# relaunch (e.g. after a file load) never leaves two modals logging the same
+# events.
+_generation: int = 0
 
 # Event types that are not interesting for session analysis.
 _SKIP_TYPES = {
@@ -74,11 +77,12 @@ class MICROMEGAS_OT_recorder(bpy.types.Operator):
     bl_options = {"INTERNAL"}
 
     def modal(self, context, event):
-        global _last_motion_log, _running
+        global _last_motion_log
 
-        # Add-on was unregistered: stop this modal and clear the guard.
-        if not _registered:
-            _running = False
+        # Stop if the add-on was unregistered, or if a newer modal instance has
+        # superseded this one (e.g. after a file-load relaunch). Checked before
+        # any logging so a stale modal never records duplicate events.
+        if not _registered or self._generation != _generation:
             return {"CANCELLED"}
 
         if not _lib or not _handle:
@@ -115,22 +119,22 @@ class MICROMEGAS_OT_recorder(bpy.types.Operator):
         return {"PASS_THROUGH"}
 
     def invoke(self, context, event):
-        global _running
-        # Single-instance guard: refuse to start a second concurrent modal.
-        if _running:
-            return {"CANCELLED"}
-        _running = True
+        global _generation
+        # Stamp this instance with a fresh generation; any older modal still
+        # alive becomes stale and self-cancels on its next event.
+        _generation += 1
+        self._generation = _generation
         context.window_manager.modal_handler_add(self)
         return {"RUNNING_MODAL"}
 
 
 @bpy.app.handlers.persistent
 def _start_recorder(scene=None, depsgraph=None) -> None:
-    """Launch the modal recorder from a load_post handler (has valid context)."""
-    global _running
-    # A file load silently cancels any in-flight modal without invoking its
-    # modal() callback, so clear the single-instance guard before relaunching.
-    _running = False
+    """Launch the modal recorder from a load_post handler (has valid context).
+
+    Each launch bumps the generation token, so any modal left alive from before
+    a file load self-cancels on its next event instead of double-logging.
+    """
     try:
         bpy.ops.micromegas.recorder("INVOKE_DEFAULT")
     except Exception:

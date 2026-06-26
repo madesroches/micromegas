@@ -45,14 +45,17 @@ jobs:
           # input if given, otherwise let package_capi.py default to the
           # workspace version (empty arg).
           if [[ "$GITHUB_REF" == refs/tags/capi-v* ]]; then
-            echo "arg=--version ${GITHUB_REF_NAME#capi-v}" >> "$GITHUB_OUTPUT"
-          elif [[ -n "$VERSION" ]]; then
+            ver="${GITHUB_REF_NAME#capi-v}"
+          else
+            ver="$VERSION"
+          fi
+          if [[ -n "$ver" ]]; then
             # Validate against a safe charset to avoid shell/script injection.
-            if [[ ! "$VERSION" =~ ^[0-9A-Za-z._-]+$ ]]; then
-              echo "Invalid version label: '$VERSION' (allowed: [0-9A-Za-z._-])" >&2
+            if [[ ! "$ver" =~ ^[0-9A-Za-z._-]+$ ]]; then
+              echo "Invalid version label: '$ver' (allowed: [0-9A-Za-z._-])" >&2
               exit 1
             fi
-            echo "arg=--version $VERSION" >> "$GITHUB_OUTPUT"
+            echo "arg=--version $ver" >> "$GITHUB_OUTPUT"
           else
             echo "arg=" >> "$GITHUB_OUTPUT"
           fi
