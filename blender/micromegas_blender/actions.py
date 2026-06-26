@@ -85,9 +85,7 @@ def _appended_start(current: "list[str]", prev: "list[str]") -> "tuple[int, bool
         return 0, False
     # Collect every valid drop count, smallest -> largest tail length.
     starts = [
-        len(prev[d:])
-        for d in range(len(prev))
-        if current[: len(prev) - d] == prev[d:]
+        len(prev[d:]) for d in range(len(prev)) if current[: len(prev) - d] == prev[d:]
     ]
     if not starts:
         return 0, True  # full turnover — possible gap
