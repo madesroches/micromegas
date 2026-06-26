@@ -101,12 +101,8 @@ class MicromegasLib:
         count = len(props)
 
         if count:
-            keys_arr = (ctypes.c_char_p * count)(
-                *(k.encode() for k in props.keys())
-            )
-            vals_arr = (ctypes.c_char_p * count)(
-                *(v.encode() for v in props.values())
-            )
+            keys_arr = (ctypes.c_char_p * count)(*(k.encode() for k in props.keys()))
+            vals_arr = (ctypes.c_char_p * count)(*(v.encode() for v in props.values()))
             cfg = MmConfig(
                 sink_url=url_bytes,
                 property_keys=keys_arr,

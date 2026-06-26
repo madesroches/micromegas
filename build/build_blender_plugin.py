@@ -163,7 +163,7 @@ def build_zip() -> None:
     # the manifest id on install, so arcnames must be relative to addon_dir.
     addon_dir = REPO_ROOT / "blender" / "micromegas_blender"
     zip_path = REPO_ROOT / "blender" / "micromegas_blender.zip"
-    _SKIP_NAMES = {"__pycache__"}
+    _SKIP_NAMES = {"__pycache__", "tests"}
     _SKIP_SUFFIXES = {".pyc"}
 
     print(f"\n=== Creating {zip_path.name} ===")

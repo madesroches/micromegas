@@ -9,11 +9,13 @@ avoid flooding the telemetry stream.
 The operator passes all events through (PASS_THROUGH) so it does not
 interfere with normal Blender operation.
 
+This module logs only raw input events. Semantic actions (which operator the
+user actually invoked, with parameters) are captured separately by actions.py,
+which drains Blender's operator-history ring buffer.
+
 Limitations:
 - Coverage is high but not 100%: the modal operator can be suspended in
   some states (e.g., while a sub-modal is running full-screen).
-- Does not capture operator parameter values by default; only operator
-  bl_idname is logged (see VERBOSE_PARAMS preference).
 """
 
 import time
