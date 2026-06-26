@@ -21,6 +21,7 @@ import glob
 import os
 import platform
 import sys
+import uuid
 
 from . import binding as _b
 
@@ -83,11 +84,16 @@ def harvest() -> int:
             if real in seen:
                 continue
             seen.add(real)
-            claimed = crash_file + ".claimed"
+            # Unique claim target: mutual exclusion comes from the atomic rename
+            # of the source (only one process can move crash_file), so the
+            # destination must not be a fixed name — on Windows os.rename won't
+            # overwrite, and a leftover *.claimed from a prior run would
+            # otherwise permanently shadow a new crash sharing the same path.
+            claimed = f"{crash_file}.{uuid.uuid4().hex}.claimed"
             try:
                 os.rename(crash_file, claimed)
             except OSError:
-                # Another instance claimed it — skip.
+                # Source already gone — another instance claimed it. Skip.
                 continue
             if _upload_crash(claimed):
                 reported += 1

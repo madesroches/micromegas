@@ -145,6 +145,19 @@ def sync_manifest_version() -> None:
 
 def build_zip() -> None:
     sync_manifest_version()
+    # Warn if a platform library is absent — a single-platform local build
+    # (or a partial lib/) produces a zip that won't load on the missing OS.
+    missing = [
+        name
+        for name in ("libmicromegas_capi.so", "micromegas_capi.dll")
+        if not (LIB_OUT / name).exists()
+    ]
+    if missing:
+        print(
+            f"warning: lib/ is missing {', '.join(missing)}; the zip will not "
+            "support the corresponding platform(s)",
+            file=sys.stderr,
+        )
     # Blender Extensions expect files at the root of the zip (no wrapping
     # directory). Blender creates extensions/user_default/<id>/ itself from
     # the manifest id on install, so arcnames must be relative to addon_dir.
