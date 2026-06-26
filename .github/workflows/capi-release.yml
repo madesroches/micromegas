@@ -24,22 +24,32 @@ permissions:
   contents: write
 
 jobs:
+  check-runner:
+    uses: ./.github/workflows/check-runner.yml
+    secrets: inherit
+
   build:
+    needs: check-runner
     strategy:
       matrix:
         include:
           - os: ubuntu-latest
           - os: windows-latest
-    runs-on: ${{ matrix.os }}
+    # The Linux leg routes to the dev-worker custom runner when it's online
+    # (trusted authors only), otherwise falls back to ubuntu-latest. Windows
+    # always uses the GitHub-hosted runner. matrix.os stays a stable identity
+    # label used for naming/conditionals regardless of the actual runner.
+    runs-on: ${{ matrix.os == 'windows-latest' && 'windows-latest' || needs.check-runner.outputs.runner }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
       # .cargo/config.toml forces the mold linker for x86_64-unknown-linux-gnu
       # (clang -fuse-ld=mold), so it must be present before any cargo build on
-      # Linux. Mirrors the install step in rust.yml. Not needed on Windows.
+      # Linux. The dev-worker image already ships mold; only the GitHub-hosted
+      # fallback needs the apt install. Mirrors rust.yml. Not needed on Windows.
       - name: Install mold linker
-        if: runner.os == 'Linux'
+        if: matrix.os == 'ubuntu-latest' && needs.check-runner.outputs.runner == 'ubuntu-latest'
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y mold
