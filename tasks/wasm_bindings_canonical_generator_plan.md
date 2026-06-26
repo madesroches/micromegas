@@ -183,7 +183,11 @@ wasm-pack ── used ONLY by `build.py --test` (`wasm-pack test --headless --fi
    > `package.json` says `0.0.0` while `HEAD` still says `0.1.0`, producing a real (non-hash) diff and
    > a failing check until step 2's regenerated `package.json` is committed.
 3. **Clean up stray artifacts**: remove the untracked `README.md` and `.gitignore` (`*`) from
-   `analytics-web-app/src/lib/datafusion-wasm/`.
+   `analytics-web-app/src/lib/datafusion-wasm/`. Note the local `*` `.gitignore` is currently what
+   suppresses `git status` for that dir; the root `.gitignore:72-75` only ignores `_bg.wasm`/
+   `_bg.wasm.d.ts`, not `README.md`. So after deleting the local `.gitignore`, any unexpected stray
+   other than the root-ignored `_bg.wasm*` files (notably a regenerated `README.md`) becomes visible
+   in `git status` — acceptable, since step 1's pruning removes those leftovers on every `build()`.
 4. **`rust/datafusion-wasm/README.md`**: rewrite the build section to state build.py is canonical;
    reframe "Manual Build" as a debugging aid that produces the *same* `wasm-bindgen --target web`
    output (and note it does **not** write `package.json`); add an explicit "do not run
