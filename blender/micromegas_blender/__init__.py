@@ -12,7 +12,7 @@ Configuration (all via environment variables):
 
 The native library (libmicromegas_capi.so / micromegas_capi.dll) must be
 present in the add-on's lib/ subdirectory.  Pre-built binaries are bundled
-in the distributed wheel.
+in the distributed extension zip.
 """
 
 import atexit

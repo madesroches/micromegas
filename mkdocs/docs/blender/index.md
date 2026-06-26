@@ -29,15 +29,15 @@ Python code never blocks on the network.
 
 ### Prerequisites
 
-- Blender 4.0 or later (stock public build, x86-64)
+- Blender 4.2 or later (stock public build, x86-64)
 - A running [Micromegas ingestion server](../getting-started.md)
 
 ### Install the add-on
 
-1. Download the pre-built wheel for your platform from the releases page.
-2. The wheel bundles the pre-compiled `libmicromegas_capi.so` / `micromegas_capi.dll`.
-3. In Blender: **Edit → Preferences → Add-ons → Install…** → select the `.zip` file.
-4. Enable **Development: Micromegas Telemetry**.
+1. Download the pre-built extension zip from the releases page.
+2. The extension zip bundles the pre-compiled `libmicromegas_capi.so` / `micromegas_capi.dll` for both platforms.
+3. In Blender: **Edit → Preferences → Extensions → Install from Disk…** → select the `.zip` file.
+4. Enable **Micromegas Telemetry**.
 
 ### Manual install (development)
 
@@ -50,9 +50,9 @@ cargo build --package micromegas-capi --release
 cp target/release/libmicromegas_capi.so \
    ../blender/micromegas_blender/lib/
 
-# 3. Symlink or copy the add-on directory into Blender's scripts path
+# 3. Symlink or copy the add-on directory into Blender's extensions path
 ln -s $(pwd)/../blender/micromegas_blender \
-   ~/.config/blender/4.x/scripts/addons/micromegas_blender
+   ~/.config/blender/4.x/extensions/user_default/micromegas_blender
 ```
 
 ## Configuration
@@ -177,8 +177,8 @@ ORDER BY time DESC;
 **"native library not found" in the system console**
 
 The prebuilt `libmicromegas_capi.so` / `micromegas_capi.dll` is missing from the
-add-on's `lib/` directory.  Re-install from the wheel, or follow the manual
-install steps above.
+add-on's `lib/` directory.  Re-install from the extension zip, or follow the
+manual install steps above.
 
 **Multiple Blender instances — will they conflict?**
 
