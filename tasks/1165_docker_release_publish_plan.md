@@ -208,7 +208,10 @@ git tag vX.Y.0 grafana-vX.Y.0 capi-vX.Y.0 blender-vX.Y.0   (push all)
 1. **Edit `build/build_docker_images.py`** — replace the `--arm64 + --push`
    rejection with an arm64 buildx `--push` path (tags `…:{version}-arm64` /
    `…:latest-arm64`, already computed). Preserve the existing amd64 `--push` and
-   `--arm64 --load` (local, no push) behaviour.
+   `--arm64 --load` (local, no push) behaviour. Also update the now-stale help
+   text: the module docstring ("no push") and the `--arm64` argparse help
+   ("uses docker buildx, --load only") must be reworded to state that
+   `--arm64 --push` is now supported.
 2. **Update `tasks/release_plan_template.md`**:
    - New "Phase: Docker Images" with the local both-arch publish (two
      invocations) + inspect verification.
@@ -232,6 +235,10 @@ git tag vX.Y.0 grafana-vX.Y.0 capi-vX.Y.0 blender-vX.Y.0   (push all)
    Leave `all`/`micromegas-all` (all-in-one, dev/test) and
    `micromegas-github-runner` (self-hosted CI runner) unprefixed — they are not
    published to Docker Hub.
+   - Remove or correct the `python build/build_docker_images.py --push all`
+     example in the README "Building" section — it instructs publishing the
+     dev/test-only all-in-one image, which contradicts the decision that `all`
+     is never published.
 
 No change is required to `release.py` (crate coverage is complete) or to the
 Dockerfiles/compose (monolith already covered, registry already Docker Hub).
