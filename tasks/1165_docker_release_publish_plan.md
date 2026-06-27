@@ -157,7 +157,18 @@ in one step with `docker buildx build --platform linux/arm64 --push -t …:{vers
 `--arm64 --load` (no push) local path stays for single-arch local testing, and
 the amd64 `--push` path is unchanged.
 
-Release-time usage (local) — two invocations, one per arch:
+**`--all-arches` flag for a single release command.** Add an `--all-arches` flag
+that publishes both architectures in one invocation: for each requested service
+it runs the amd64 push path (`:X.Y.0` / `:latest`) and then the arm64 push path
+(`:X.Y.0-arm64` / `:latest-arm64`). It is a thin convenience wrapper over the two
+single-arch paths above — same per-platform tag scheme, no fused manifest — so
+the release runs one command instead of two. `--all-arches` implies `--push`
+(both-arch *building* without publishing has no release use case); pairing it with
+an explicit `--arm64` is redundant and rejected with a clear error. The existing
+single-arch invocations (`--push`, `--arm64 --push`, `--arm64 --load`) all stay
+as-is for partial/local builds.
+
+Release-time usage (local) — one invocation:
 
 ```bash
 # one-time on the maintainer's machine:
@@ -166,10 +177,9 @@ docker run --privileged --rm tonistiigi/binfmt --install arm64   # qemu for arm6
 docker login                                                     # Docker Hub
 
 SVCS="ingestion flight-sql admin http-gateway analytics-web monolith"
-# amd64 → :X.Y.0 / :latest  (run pre-bump; --version defaults to the workspace version)
-python3 build/build_docker_images.py $SVCS --push --version X.Y.0
-# arm64 → :X.Y.0-arm64 / :latest-arm64
-python3 build/build_docker_images.py $SVCS --arm64 --push --version X.Y.0
+# both arches → :X.Y.0 / :latest (amd64) and :X.Y.0-arm64 / :latest-arm64
+# (run pre-bump; --version defaults to the workspace version)
+python3 build/build_docker_images.py $SVCS --all-arches --version X.Y.0
 ```
 
 ### Release-process sync
@@ -193,8 +203,8 @@ the C API and Blender automation already exist.
   at build time (the `blender-v` ref is used only for the GitHub Release title).
   Each triggers its existing workflow which builds the native
   libs and attaches the archives to a GitHub Release.
-- Add a new **Docker images** phase running the local `build_docker_images.py`
-  command above, with a verification step
+- Add a new **Docker images** phase running the single local
+  `build_docker_images.py --all-arches` command above, with a verification step
   (`docker buildx imagetools inspect marcantoinedesroches/micromegas-monolith:X.Y.0`
   shows both platforms). Insert it **before** the Phase 4 post-release bump
   (e.g. as "Phase 3.5", immediately after Phase 3), so it runs while the
@@ -218,7 +228,7 @@ git tag vX.Y.0 grafana-vX.Y.0 capi-vX.Y.0 blender-vX.Y.0   (push all)
                    built locally,
                    attached to release
         +
-   release.py (crates) · poetry (PyPI) · build_docker_images.py --push (Docker Hub)   ← local
+   release.py (crates) · poetry (PyPI) · build_docker_images.py --all-arches (Docker Hub)   ← local
 ```
 
 ## Implementation Steps
@@ -226,13 +236,16 @@ git tag vX.Y.0 grafana-vX.Y.0 capi-vX.Y.0 blender-vX.Y.0   (push all)
 1. **Edit `build/build_docker_images.py`** — replace the `--arm64 + --push`
    rejection with an arm64 buildx `--push` path (tags `…:{version}-arm64` /
    `…:latest-arm64`, already computed). Preserve the existing amd64 `--push` and
-   `--arm64 --load` (local, no push) behaviour. Also update the now-stale help
-   text: the module docstring ("no push") and the `--arm64` argparse help
-   ("uses docker buildx, --load only") must be reworded to state that
-   `--arm64 --push` is now supported.
+   `--arm64 --load` (local, no push) behaviour. Add an `--all-arches` flag that
+   publishes both arches in one run (amd64 push path then arm64 push path per
+   service); it implies `--push` and rejects an explicit `--arm64` as redundant.
+   Also update the now-stale help text: the module docstring ("no push"), the
+   `--arm64` argparse help ("uses docker buildx, --load only"), and the new
+   `--all-arches` help must state that `--arm64 --push` / `--all-arches` publish
+   to Docker Hub.
 2. **Update `tasks/release_plan_template.md`**:
-   - New "Phase: Docker Images" with the local both-arch publish (two
-     invocations) + inspect verification. Insert it **before** the Phase 4
+   - New "Phase: Docker Images" with the local both-arch publish (single
+     `--all-arches` invocation) + inspect verification. Insert it **before** the Phase 4
      post-release bump (e.g. as "Phase 3.5", immediately after Phase 3) so it
      runs while the workspace is at `X.Y.0`; `build_docker_images.py`
      `get_version()` reads `[workspace.package].version`, so placing it after the
@@ -255,9 +268,9 @@ git tag vX.Y.0 grafana-vX.Y.0 capi-vX.Y.0 blender-vX.Y.0   (push all)
      in Blender's Extensions UI, so confirming it catches drift.
    - Phase 0: add "new server binary → add to `SERVICES` + Dockerfile" alongside
      the existing new-crate check.
-3. **Update `docker/README.md`** — document the published images, the two
-   per-arch publish commands, the one-time buildx/qemu/login setup, and the
-   tag scheme (`X.Y.Z` / `latest` for amd64, `X.Y.Z-arm64` / `latest-arm64` for
+3. **Update `docker/README.md`** — document the published images, the single
+   `--all-arches` publish command (and the underlying per-arch flags), the
+   one-time buildx/qemu/login setup, and the tag scheme (`X.Y.Z` / `latest` for amd64, `X.Y.Z-arm64` / `latest-arm64` for
    arm64). Also prefix the README's Images table entries for the 6 published
    services (`ingestion`, `flight-sql`, `admin`, `http-gateway`, `analytics-web`,
    `monolith`) with `marcantoinedesroches/` and note the published tag scheme
@@ -284,7 +297,8 @@ Dockerfiles/compose (monolith already covered, registry already Docker Hub).
 ## Files to Modify
 
 - `build/build_docker_images.py` — replace the `--arm64 + --push` guard with an
-  arm64 buildx `--push` path.
+  arm64 buildx `--push` path, and add an `--all-arches` flag that publishes both
+  arches in one run.
 - `tasks/release_plan_template.md` — Docker phase (both arches), capi/blender tag
   steps, new-binary check.
 - `docker/README.md` — published-image docs, both-arch publish commands, tag
@@ -336,7 +350,9 @@ concern — see open questions.
 
 - **Script behaviour**: a plain build, `--push` (amd64), and `--arm64 --load`
   (local, no push) must all still work (existing behaviour intact); `--arm64
-  --push` now builds and pushes the `-arm64`-suffixed tags instead of erroring.
+  --push` now builds and pushes the `-arm64`-suffixed tags instead of erroring;
+  `--all-arches` publishes both arches in one run (and rejects an explicit
+  `--arm64` as redundant).
 - **Both-arch publish dry run**: push `monolith` for both arches with a throwaway
   version, then confirm `…/micromegas-monolith:<v>` (amd64) and
   `…/micromegas-monolith:<v>-arm64` both exist and report the expected
