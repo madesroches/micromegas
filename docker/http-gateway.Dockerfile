@@ -34,5 +34,5 @@ RUN apt-get update && \
 
 COPY --from=builder /build/http-gateway-srv /usr/local/bin/
 
-EXPOSE 8080
+EXPOSE 3000
 ENTRYPOINT ["http-gateway-srv"]

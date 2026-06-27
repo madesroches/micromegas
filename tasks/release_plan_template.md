@@ -39,10 +39,11 @@ When a new crate is added to the workspace that other crates depend on (e.g. `mi
 
 ## Pre-Release Checklist
 
-### 0. Fix release.py (if new crates were added)
+### 0. Fix release.py (if new crates or services were added)
 
 - [ ] Verify any new published crates are in `build/release.py` in the correct dependency order
 - [ ] Verify new crates in the wasm workspace have explicit `version = "^X.Y"` on all micromegas path deps
+- [ ] If a new server binary was added: add it to `SERVICES` in `build/build_docker_images.py` and create its Dockerfile in `docker/`
 
 ### 1. Code Quality & Testing
 
@@ -75,6 +76,7 @@ All versions should already be at X.Y.0 from the previous post-release bump:
 - [ ] Verify Python version in `python/micromegas/pyproject.toml`
 - [ ] Verify Grafana plugin version in `grafana/package.json`
 - [ ] Verify analytics web app version in `analytics-web-app/package.json`
+- [ ] (Optional) Verify `blender/micromegas_blender/blender_manifest.toml` `version` equals X.Y.0 — the released artifact always gets the workspace version stamped in at build time, but a stale hardcoded value mis-labels the version shown in Blender's Extensions UI
 
 ### 3. Documentation Updates
 
@@ -89,10 +91,15 @@ All versions should already be at X.Y.0 from the previous post-release bump:
 
 ### 5. Git Preparation
 
+All four tags must point to the **same release commit** (workspace at X.Y.0, before the Phase 4 bump):
+
 - [ ] Commit changelog and doc updates
-- [ ] Create release tag: `git tag vX.Y.0`
-- [ ] Create grafana tag: `git tag grafana-vX.Y.0`
-- [ ] Push release branch and tags: `git push origin release && git push origin vX.Y.0 grafana-vX.Y.0`
+- [ ] Create release tags: `git tag vX.Y.0 grafana-vX.Y.0 capi-vX.Y.0 blender-vX.Y.0`
+  - `vX.Y.0` — main GitHub release (created in Phase 3)
+  - `grafana-vX.Y.0` — no tag-triggered workflow; the Grafana archive is built locally and attached to the release in Phase 3
+  - `capi-vX.Y.0` — triggers `capi-release.yml`, which builds Linux/Windows C API libs and attaches them to a GitHub Release
+  - `blender-vX.Y.0` — triggers `blender-extension.yml`, which zips the Blender extension (version stamped from workspace) and attaches it to a GitHub Release
+- [ ] Push release branch and all tags: `git push origin release && git push origin vX.Y.0 grafana-vX.Y.0 capi-vX.Y.0 blender-vX.Y.0`
 
 ---
 
@@ -127,7 +134,7 @@ poetry publish
 
 ### Phase 3: Grafana Plugin Release
 
-The `grafana-vX.Y.0` tag push triggers GitHub Actions. Also create the main GitHub release:
+The `grafana-vX.Y.0` tag fires **no** GitHub Actions workflow (the Grafana plugin workflow only triggers on branch/PR events, not tags). Build and attach the archive locally:
 
 ```bash
 gh release create vX.Y.0 \
@@ -135,6 +142,34 @@ gh release create vX.Y.0 \
   --notes "..." \
   grafana/micromegas-micromegas-datasource.zip
 ```
+
+### Phase 3.5: Docker Images
+
+> **Run this before Phase 4** — `build_docker_images.py` reads the workspace version from `rust/Cargo.toml`. Running it after the Phase 4 bump would tag images with the next dev version.
+
+One-time setup (if not already done on this machine):
+
+```bash
+docker buildx create --use
+docker run --privileged --rm tonistiigi/binfmt --install arm64
+docker login
+```
+
+Publish all 6 services for both architectures:
+
+```bash
+python3 build/build_docker_images.py \
+  ingestion flight-sql admin http-gateway analytics-web monolith \
+  --all-arches --version X.Y.0
+```
+
+Verify both platforms were pushed:
+
+```bash
+docker buildx imagetools inspect marcantoinedesroches/micromegas-monolith:X.Y.0
+```
+
+Expected output shows both `linux/amd64` and `linux/arm64` platforms.
 
 ### Phase 4: Post-Release Version Bump to X.Z.0
 

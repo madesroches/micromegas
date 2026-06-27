@@ -3,12 +3,14 @@
 Build and push Docker images for micromegas services.
 
 Usage:
-    python build_docker_images.py                    # Build all services
-    python build_docker_images.py ingestion flight   # Build specific services
-    python build_docker_images.py --push             # Build and push all
-    python build_docker_images.py --push ingestion   # Build and push specific service
-    python build_docker_images.py --arm64            # Build arm64 images (cross-compiled, no push)
-    python build_docker_images.py --list             # List available services
+    python build_docker_images.py                         # Build all services (amd64)
+    python build_docker_images.py ingestion flight-sql    # Build specific services
+    python build_docker_images.py --push                  # Build and push amd64 images to Docker Hub
+    python build_docker_images.py --push ingestion        # Build and push specific service
+    python build_docker_images.py --arm64                 # Build arm64 locally (cross-compiled, no push)
+    python build_docker_images.py --arm64 --push          # Build and push arm64 images to Docker Hub
+    python build_docker_images.py --all-arches            # Build and push both amd64 and arm64 (release)
+    python build_docker_images.py --list                  # List available services
 """
 
 import argparse
@@ -103,15 +105,36 @@ def build_image(service: str, version: str, push: bool = False, arm64: bool = Fa
     print(f"{'='*60}\n")
 
     if arm64:
-        cmd = [
-            "docker", "buildx", "build",
-            "--platform", "linux/arm64",
-            "--load",
-            "-f", str(DOCKER_DIR / dockerfile),
-            "-t", f"{image_name}:{version_tag}",
-            "-t", f"{image_name}:{latest_tag}",
-            "."
-        ]
+        if push:
+            # Build and push directly via buildx (no separate docker push step needed)
+            cmd = [
+                "docker", "buildx", "build",
+                "--platform", "linux/arm64",
+                "--push",
+                "-f", str(DOCKER_DIR / dockerfile),
+                "-t", f"{image_name}:{version_tag}",
+                "-t", f"{image_name}:{latest_tag}",
+                "."
+            ]
+            if not run_command(cmd):
+                print(f"Failed to build/push {service} (arm64)")
+                return result
+            result['built'] = True
+            result['pushed'] = True
+        else:
+            cmd = [
+                "docker", "buildx", "build",
+                "--platform", "linux/arm64",
+                "--load",
+                "-f", str(DOCKER_DIR / dockerfile),
+                "-t", f"{image_name}:{version_tag}",
+                "-t", f"{image_name}:{latest_tag}",
+                "."
+            ]
+            if not run_command(cmd):
+                print(f"Failed to build {service} (arm64)")
+                return result
+            result['built'] = True
     else:
         cmd = [
             "docker", "build",
@@ -121,19 +144,19 @@ def build_image(service: str, version: str, push: bool = False, arm64: bool = Fa
             "."
         ]
 
-    if not run_command(cmd):
-        print(f"Failed to build {service}")
-        return result
-
-    result['built'] = True
-
-    if push:
-        print(f"\nPushing {image_name}...")
-        if not run_command(["docker", "push", f"{image_name}:{version_tag}"]):
+        if not run_command(cmd):
+            print(f"Failed to build {service}")
             return result
-        if not run_command(["docker", "push", f"{image_name}:{latest_tag}"]):
-            return result
-        result['pushed'] = True
+
+        result['built'] = True
+
+        if push:
+            print(f"\nPushing {image_name}...")
+            if not run_command(["docker", "push", f"{image_name}:{version_tag}"]):
+                return result
+            if not run_command(["docker", "push", f"{image_name}:{latest_tag}"]):
+                return result
+            result['pushed'] = True
 
     return result
 
@@ -157,7 +180,12 @@ def main():
     parser.add_argument(
         "--arm64",
         action="store_true",
-        help="Build linux/arm64 images via cross-compilation (uses docker buildx, --load only)"
+        help="Build linux/arm64 images via cross-compilation (uses docker buildx; add --push to publish to Docker Hub)"
+    )
+    parser.add_argument(
+        "--all-arches",
+        action="store_true",
+        help="Build and push both amd64 and arm64 images in one run (implies --push; rejects --arm64 as redundant)"
     )
     parser.add_argument(
         "--list",
@@ -171,8 +199,8 @@ def main():
 
     args = parser.parse_args()
 
-    if args.arm64 and args.push:
-        print("error: --push is not supported with --arm64; multi-arch publishing is out of scope")
+    if args.all_arches and args.arm64:
+        print("error: --all-arches already includes arm64; --arm64 is redundant")
         return 1
 
     if args.list:
@@ -184,7 +212,7 @@ def main():
     version = args.version or get_version()
     print(f"Version: {version}")
 
-    # Default: build all individual services but not 'all' (redundant)
+    # Default: build all individual services but not 'all' (dev/test only, not published)
     services = args.services or [s for s in SERVICES.keys() if s != "all"]
 
     # Validate services
@@ -194,11 +222,19 @@ def main():
             print(f"Available: {', '.join(SERVICES.keys())}")
             return 1
 
-    # Build each service
-    results = []
-    for service in services:
-        result = build_image(service, version, args.push, args.arm64)
-        results.append(result)
+    # --all-arches: push amd64 then arm64 for each service
+    if args.all_arches:
+        results = []
+        for service in services:
+            result_amd64 = build_image(service, version, push=True, arm64=False)
+            results.append(result_amd64)
+            result_arm64 = build_image(service, version, push=True, arm64=True)
+            results.append(result_arm64)
+    else:
+        results = []
+        for service in services:
+            result = build_image(service, version, args.push, args.arm64)
+            results.append(result)
 
     # Print summary
     print(f"\n{'='*60}")
@@ -225,7 +261,7 @@ def main():
 
     print()
     print(f"Total: {len(built)}/{len(results)} built", end="")
-    if args.push:
+    if args.push or args.all_arches:
         print(f", {len(pushed)}/{len(results)} pushed", end="")
     print()
 
