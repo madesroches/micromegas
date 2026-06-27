@@ -39,7 +39,7 @@ tags.
 | Grafana plugin | `grafana/build-plugin.sh` (local) | archive attached to `gh release create vX.Y.0` (the `grafana-vX.Y.0` tag triggers no workflow) | ✅ Phase 3 |
 | GitHub release (main) | — | `gh release create vX.Y.0` (local) | ✅ Phase 3 |
 | **C API** libs (Linux/Windows) | `build/package_capi.py` | `capi-vX.Y.0` tag → `capi-release.yml` | ❌ **missing** |
-| **Blender extension** zip | `build/build_blender_plugin.py` | `blender-vX.Y.0` tag → `blender-extension.yml` | ❌ **missing** |
+| **Blender extension** zip (version from workspace `Cargo.toml`, stamped into the manifest at build time) | `build/build_blender_plugin.py` | `blender-vX.Y.0` tag → `blender-extension.yml` | ❌ **missing** |
 | **Docker images** | `build/build_docker_images.py` | nothing yet | ❌ **this issue** |
 
 So a maintainer following the runbook to the letter today would **not** release
@@ -102,10 +102,16 @@ libs via `capi-release.yml` (and is re-bundled into the Blender extension);
 
 Post-release bump (runbook Phase 4) lists `rust/Cargo.toml`,
 `rust/datafusion-wasm/Cargo.toml`, `python/.../pyproject.toml`,
-`grafana/package.json`, `analytics-web-app/package.json`. It **omits**
-`blender/micromegas_blender/blender_manifest.toml`, whose `version` is currently
-a hardcoded `0.27.0` (manually kept in sync with the workspace). `capi` and
-`monolith` use `version.workspace = true`, so they bump automatically.
+`grafana/package.json`, `analytics-web-app/package.json`. `capi` and
+`monolith` use `version.workspace = true`, so they bump automatically. The
+Blender manifest needs **no** bump: although
+`blender/micromegas_blender/blender_manifest.toml` carries a hardcoded `version`
+(currently `0.27.0`), `sync_manifest_version()` unconditionally overwrites it
+with the workspace version on every zip build, so the hardcoded value is
+transient and not the source of truth. The only real requirement is that the
+workspace is at `X.Y.0` when `blender-vX.Y.0` is tagged — which the runbook
+already guarantees, since that tag is pushed in Pre-Release § 5 on the release
+commit (workspace at `X.Y.0`), before the Phase 4 post-release bump.
 
 ## Design
 
@@ -178,16 +184,24 @@ the C API and Blender automation already exist.
   `blender-vX.Y.0` are created on the **same commit as `vX.Y.0`** (the release
   commit, where the workspace version is `X.Y.0`, before the Phase 4 post-release
   bump) — add them to the existing `git tag` / `git push origin` lines. This is
-  required because `capi-release.yml` / `blender-extension.yml` build from the
-  tagged commit and derive the version by stripping the `capi-v` / `blender-v`
-  prefix from the ref. Each triggers its existing workflow which builds the native
+  required because both workflows build from the tagged commit, but they derive
+  the artifact version differently: `capi-release.yml` passes the stripped
+  `capi-v` ref to `package_capi.py --version`, whereas `blender-extension.yml`
+  runs `build_blender_plugin.py --zip-only` with no version argument — the
+  Blender artifact's version comes from the workspace `[workspace.package].version`
+  in `rust/Cargo.toml`, which `sync_manifest_version()` stamps into the manifest
+  at build time (the `blender-v` ref is used only for the GitHub Release title).
+  Each triggers its existing workflow which builds the native
   libs and attaches the archives to a GitHub Release.
 - Add a new **Docker images** phase running the local `build_docker_images.py`
   command above, with a verification step
   (`docker buildx imagetools inspect marcantoinedesroches/micromegas-monolith:X.Y.0`
   shows both platforms).
-- Add `blender/micromegas_blender/blender_manifest.toml` `version` to the Phase 4
-  bump list.
+- No Phase 4 bump line for the Blender manifest: its `version` is overwritten
+  from the workspace at build time, so a manual bump has no effect on the
+  released artifact. The runbook already ensures the workspace is at `X.Y.0` when
+  `blender-vX.Y.0` is tagged (§ 5, before the Phase 4 bump), which is the only
+  requirement.
 - Keep the standing Phase 0 crate-audit check (already present) and extend its
   spirit to "also check for new server binaries → add to
   `build_docker_images.py` `SERVICES` and a Dockerfile."
@@ -222,7 +236,9 @@ git tag vX.Y.0 grafana-vX.Y.0 capi-vX.Y.0 blender-vX.Y.0   (push all)
      fires only on branch pushes/PRs, not `grafana-v*` tags. Reword so it states
      the Grafana plugin archive is built/attached locally and the `grafana-v*`
      tag fires no workflow (matching the Current State table).
-   - Phase 4 bump list: add `blender/micromegas_blender/blender_manifest.toml`.
+   - Phase 4 bump list: no Blender manifest entry — its `version` is stamped from
+     the workspace at build time; ensuring the workspace is at `X.Y.0` at
+     blender-tag-push time (already done in § 5) is the only requirement.
    - Phase 0: add "new server binary → add to `SERVICES` + Dockerfile" alongside
      the existing new-crate check.
 3. **Update `docker/README.md`** — document the published images, the two
@@ -248,7 +264,7 @@ Dockerfiles/compose (monolith already covered, registry already Docker Hub).
 - `build/build_docker_images.py` — replace the `--arm64 + --push` guard with an
   arm64 buildx `--push` path.
 - `tasks/release_plan_template.md` — Docker phase (both arches), capi/blender tag
-  steps, blender-manifest bump, new-binary check.
+  steps, new-binary check.
 - `docker/README.md` — published-image docs, both-arch publish commands, tag
   scheme (incl. the `-arm64` suffix).
 
