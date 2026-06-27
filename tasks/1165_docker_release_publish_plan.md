@@ -214,6 +214,11 @@ git tag vX.Y.0 grafana-vX.Y.0 capi-vX.Y.0 blender-vX.Y.0   (push all)
      invocations) + inspect verification.
    - Pre-Release Checklist § 5 (Git Prep) + Release Process: push `capi-vX.Y.0` and
      `blender-vX.Y.0`; note each triggers its workflow.
+   - Fix the stale Phase 3 line (`release_plan_template.md:130`) that claims the
+     `grafana-vX.Y.0` tag push triggers GitHub Actions — `grafana-plugin.yml`
+     fires only on branch pushes/PRs, not `grafana-v*` tags. Reword so it states
+     the Grafana plugin archive is built/attached locally and the `grafana-v*`
+     tag fires no workflow (matching the Current State table).
    - Phase 4 bump list: add `blender/micromegas_blender/blender_manifest.toml`.
    - Phase 0: add "new server binary → add to `SERVICES` + Dockerfile" alongside
      the existing new-crate check.
