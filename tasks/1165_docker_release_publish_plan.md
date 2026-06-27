@@ -174,9 +174,14 @@ the C API and Blender automation already exist.
 - Add the missing release tags to runbook Pre-Release Checklist § 5 (Git
   Preparation) and a note
   in the Release Process: push `capi-vX.Y.0` and `blender-vX.Y.0` alongside
-  `vX.Y.0` / `grafana-vX.Y.0`. Each triggers its existing workflow
-  (`capi-release.yml`, `blender-extension.yml`) which builds the native libs and
-  attaches the archives to a GitHub Release.
+  `vX.Y.0` / `grafana-vX.Y.0`. State in § 5 that `capi-vX.Y.0` and
+  `blender-vX.Y.0` are created on the **same commit as `vX.Y.0`** (the release
+  commit, where the workspace version is `X.Y.0`, before the Phase 4 post-release
+  bump) — add them to the existing `git tag` / `git push origin` lines. This is
+  required because `capi-release.yml` / `blender-extension.yml` build from the
+  tagged commit and derive the version by stripping the `capi-v` / `blender-v`
+  prefix from the ref. Each triggers its existing workflow which builds the native
+  libs and attaches the archives to a GitHub Release.
 - Add a new **Docker images** phase running the local `build_docker_images.py`
   command above, with a verification step
   (`docker buildx imagetools inspect marcantoinedesroches/micromegas-monolith:X.Y.0`
@@ -215,9 +220,13 @@ git tag vX.Y.0 grafana-vX.Y.0 capi-vX.Y.0 blender-vX.Y.0   (push all)
 3. **Update `docker/README.md`** — document the published images, the two
    per-arch publish commands, the one-time buildx/qemu/login setup, and the
    tag scheme (`X.Y.Z` / `latest` for amd64, `X.Y.Z-arm64` / `latest-arm64` for
-   arm64). Also prefix the README's Images table entries with
-   `marcantoinedesroches/` and note the published tag scheme (the `docker run`
-   examples and compose file already point to Docker Hub).
+   arm64). Also prefix the README's Images table entries for the 6 published
+   services (`ingestion`, `flight-sql`, `admin`, `http-gateway`, `analytics-web`,
+   `monolith`) with `marcantoinedesroches/` and note the published tag scheme
+   (the `docker run` examples and compose file already point to Docker Hub).
+   Leave `all`/`micromegas-all` (all-in-one, dev/test) and
+   `micromegas-github-runner` (self-hosted CI runner) unprefixed — they are not
+   published to Docker Hub.
 
 No change is required to `release.py` (crate coverage is complete) or to the
 Dockerfiles/compose (monolith already covered, registry already Docker Hub).
