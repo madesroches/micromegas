@@ -36,7 +36,7 @@ tags.
 |---|---|---|---|
 | 15 Rust crates → crates.io | `cargo release` | `build/release.py` (local) | ✅ Phase 1 |
 | Python library → PyPI | `poetry build` | `poetry publish` (local) | ✅ Phase 2 |
-| Grafana plugin | `grafana/build-plugin.sh` | `grafana-vX.Y.0` tag → `grafana-plugin.yml` + `gh release create` | ✅ Phase 3 |
+| Grafana plugin | `grafana/build-plugin.sh` (local) | archive attached to `gh release create vX.Y.0` (the `grafana-vX.Y.0` tag triggers no workflow) | ✅ Phase 3 |
 | GitHub release (main) | — | `gh release create vX.Y.0` (local) | ✅ Phase 3 |
 | **C API** libs (Linux/Windows) | `build/package_capi.py` | `capi-vX.Y.0` tag → `capi-release.yml` | ❌ **missing** |
 | **Blender extension** zip | `build/build_blender_plugin.py` | `blender-vX.Y.0` tag → `blender-extension.yml` | ❌ **missing** |
@@ -81,9 +81,11 @@ image, which is correct.
 - `--push` only on the native amd64 `docker build` path; `--arm64` does buildx
   `--load` and refuses `--push`. **No multi-arch push path exists.**
 
-`docker/docker-compose.monolith.yaml` and `docker/README.md` already reference
-`marcantoinedesroches/micromegas-*` — Docker Hub — so the registry choice below
-needs no migration.
+`docker/docker-compose.monolith.yaml` and the `docker run` examples in
+`docker/README.md` already reference `marcantoinedesroches/micromegas-*` —
+Docker Hub — so the registry choice below needs no migration. (The README's
+Images table still lists bare names without the `marcantoinedesroches/` prefix;
+that table is updated as part of the docker/README.md work below.)
 
 ### Crate-coverage audit (release.py)
 
@@ -166,7 +168,8 @@ python3 build/build_docker_images.py $SVCS --arm64 --push --version 0.26.0
 The fix is mostly **documentation in the runbook**, plus one version-bump line —
 the C API and Blender automation already exist.
 
-- Add the missing release tags to runbook Phase 5 (Git Preparation) and a note
+- Add the missing release tags to runbook Pre-Release Checklist § 5 (Git
+  Preparation) and a note
   in the Release Process: push `capi-vX.Y.0` and `blender-vX.Y.0` alongside
   `vX.Y.0` / `grafana-vX.Y.0`. Each triggers its existing workflow
   (`capi-release.yml`, `blender-extension.yml`) which builds the native libs and
@@ -184,8 +187,10 @@ the C API and Blender automation already exist.
 ```
 git tag vX.Y.0 grafana-vX.Y.0 capi-vX.Y.0 blender-vX.Y.0   (push all)
         │                │            │             │
-   gh release      grafana CI    capi CI       blender CI
-   (local)         + assets      + assets      + assets
+   gh release      (no tag CI)   capi CI       blender CI
+   (local)         grafana asset + assets      + assets
+                   built locally,
+                   attached to release
         +
    release.py (crates) · poetry (PyPI) · build_docker_images.py --push (Docker Hub)   ← local
 ```
@@ -199,7 +204,7 @@ git tag vX.Y.0 grafana-vX.Y.0 capi-vX.Y.0 blender-vX.Y.0   (push all)
 2. **Update `tasks/release_plan_template.md`**:
    - New "Phase: Docker Images" with the local both-arch publish (two
      invocations) + inspect verification.
-   - Phase 5 (Git Prep) + Release Process: push `capi-vX.Y.0` and
+   - Pre-Release Checklist § 5 (Git Prep) + Release Process: push `capi-vX.Y.0` and
      `blender-vX.Y.0`; note each triggers its workflow.
    - Phase 4 bump list: add `blender/micromegas_blender/blender_manifest.toml`.
    - Phase 0: add "new server binary → add to `SERVICES` + Dockerfile" alongside
@@ -207,7 +212,9 @@ git tag vX.Y.0 grafana-vX.Y.0 capi-vX.Y.0 blender-vX.Y.0   (push all)
 3. **Update `docker/README.md`** — document the published images, the two
    per-arch publish commands, the one-time buildx/qemu/login setup, and the
    tag scheme (`X.Y.Z` / `latest` for amd64, `X.Y.Z-arm64` / `latest-arm64` for
-   arm64). (Image references already point to Docker Hub; no change needed there.)
+   arm64). Also prefix the README's Images table entries with
+   `marcantoinedesroches/` and note the published tag scheme (the `docker run`
+   examples and compose file already point to Docker Hub).
 
 No change is required to `release.py` (crate coverage is complete) or to the
 Dockerfiles/compose (monolith already covered, registry already Docker Hub).
