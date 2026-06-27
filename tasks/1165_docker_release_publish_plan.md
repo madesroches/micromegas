@@ -166,10 +166,10 @@ docker run --privileged --rm tonistiigi/binfmt --install arm64   # qemu for arm6
 docker login                                                     # Docker Hub
 
 SVCS="ingestion flight-sql admin http-gateway analytics-web monolith"
-# amd64 → :0.26.0 / :latest
-python3 build/build_docker_images.py $SVCS --push --version 0.26.0
-# arm64 → :0.26.0-arm64 / :latest-arm64
-python3 build/build_docker_images.py $SVCS --arm64 --push --version 0.26.0
+# amd64 → :X.Y.0 / :latest  (run pre-bump; --version defaults to the workspace version)
+python3 build/build_docker_images.py $SVCS --push --version X.Y.0
+# arm64 → :X.Y.0-arm64 / :latest-arm64
+python3 build/build_docker_images.py $SVCS --arm64 --push --version X.Y.0
 ```
 
 ### Release-process sync
@@ -247,6 +247,12 @@ git tag vX.Y.0 grafana-vX.Y.0 capi-vX.Y.0 blender-vX.Y.0   (push all)
    - Phase 4 bump list: no Blender manifest entry — its `version` is stamped from
      the workspace at build time; ensuring the workspace is at `X.Y.0` at
      blender-tag-push time (already done in § 5) is the only requirement.
+   - § 2 Version Verification: add a cosmetic/optional check that
+     `blender/micromegas_blender/blender_manifest.toml` `version` equals `X.Y.0`.
+     The released artifact version always comes from the workspace
+     (`sync_manifest_version()` overwrites the manifest at build time), so this is
+     not a required bump — but a stale hardcoded value mis-labels the version shown
+     in Blender's Extensions UI, so confirming it catches drift.
    - Phase 0: add "new server binary → add to `SERVICES` + Dockerfile" alongside
      the existing new-crate check.
 3. **Update `docker/README.md`** — document the published images, the two
@@ -263,6 +269,14 @@ git tag vX.Y.0 grafana-vX.Y.0 capi-vX.Y.0 blender-vX.Y.0   (push all)
      example in the README "Building" section — it instructs publishing the
      dev/test-only all-in-one image, which contradicts the decision that `all`
      is never published.
+   - Fix the stale HTTP Gateway port: the README "Ports" table lists `8080`,
+     but `http_gateway_srv.rs` defaults to `0.0.0.0:3000`. Correct the table to
+     `3000` and align `http-gateway.Dockerfile`'s `EXPOSE 8080` to `EXPOSE 3000`
+     to match the actual default.
+   - Add brief production `docker run` examples for the newly-promoted published
+     services that currently lack them (`admin`, `http-gateway`, `monolith`);
+     today only `ingestion`, `flight-sql`, and `analytics-web` have examples. The
+     `monolith` example can simply reference `docker-compose.monolith.yaml`.
 
 No change is required to `release.py` (crate coverage is complete) or to the
 Dockerfiles/compose (monolith already covered, registry already Docker Hub).
@@ -329,6 +343,10 @@ concern — see open questions.
   architecture (`docker buildx imagetools inspect` / `docker image inspect`).
 - **Smoke test**: `docker compose -f docker/docker-compose.monolith.yaml up`
   against the pushed image; hit `http://localhost:3000`.
+- **arm64 local note**: `--arm64 --load` loads a `linux/arm64` image into the
+  local daemon, so smoke-*running* it is only meaningful on an arm64 host (or
+  under emulation). Release publishing uses `--arm64 --push`, which builds and
+  pushes regardless of host arch and is unaffected by this.
 - **Runbook dry-run review**: walk the updated template and confirm every row in
   the "what ships today" table maps to a concrete step (crates, Python, Grafana,
   GitHub release, C API tag, Blender tag, Docker push).
