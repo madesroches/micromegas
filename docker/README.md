@@ -47,8 +47,11 @@ python build/build_docker_images.py --arm64
 # Build and push arm64 images to Docker Hub
 python build/build_docker_images.py --arm64 --push
 
-# Build and push both amd64 and arm64 in one run (release)
+# Build both amd64 and arm64 locally (no push)
 python build/build_docker_images.py --all-arches
+
+# Build and push both amd64 and arm64 in one run (release)
+python build/build_docker_images.py --all-arches --push
 ```
 
 ### One-time setup (required for arm64 builds)
@@ -68,7 +71,7 @@ docker login
 
 ```bash
 SVCS="ingestion flight-sql admin http-gateway analytics-web monolith"
-python build/build_docker_images.py $SVCS --all-arches --version X.Y.0
+python build/build_docker_images.py $SVCS --all-arches --push --version X.Y.0
 ```
 
 Verify after pushing:

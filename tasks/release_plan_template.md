@@ -160,7 +160,7 @@ Publish all 6 services for both architectures:
 ```bash
 python3 build/build_docker_images.py \
   ingestion flight-sql admin http-gateway analytics-web monolith \
-  --all-arches --version X.Y.0
+  --all-arches --push --version X.Y.0
 ```
 
 Verify both platforms were pushed:

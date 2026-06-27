@@ -9,7 +9,8 @@ Usage:
     python build_docker_images.py --push ingestion        # Build and push specific service
     python build_docker_images.py --arm64                 # Build arm64 locally (cross-compiled, no push)
     python build_docker_images.py --arm64 --push          # Build and push arm64 images to Docker Hub
-    python build_docker_images.py --all-arches            # Build and push both amd64 and arm64 (release)
+    python build_docker_images.py --all-arches            # Build both amd64 and arm64 locally
+    python build_docker_images.py --all-arches --push     # Build and push both amd64 and arm64 (release)
     python build_docker_images.py --list                  # List available services
 """
 
@@ -185,7 +186,7 @@ def main():
     parser.add_argument(
         "--all-arches",
         action="store_true",
-        help="Build and push both amd64 and arm64 images in one run (always pushes both arches; rejects --arm64 as redundant)"
+        help="Build both amd64 and arm64 images in one run (add --push to publish; rejects --arm64 as redundant)"
     )
     parser.add_argument(
         "--list",
@@ -222,19 +223,13 @@ def main():
             print(f"Available: {', '.join(SERVICES.keys())}")
             return 1
 
-    # --all-arches: push amd64 then arm64 for each service
-    if args.all_arches:
-        results = []
-        for service in services:
-            result_amd64 = build_image(service, version, push=True, arm64=False)
-            results.append(result_amd64)
-            result_arm64 = build_image(service, version, push=True, arm64=True)
-            results.append(result_arm64)
-    else:
-        results = []
-        for service in services:
-            result = build_image(service, version, args.push, args.arm64)
-            results.append(result)
+    # --all-arches builds both arches; otherwise build the single selected arch.
+    # --push controls publishing independently of arch selection.
+    arches = [False, True] if args.all_arches else [args.arm64]
+    results = []
+    for service in services:
+        for arm64 in arches:
+            results.append(build_image(service, version, args.push, arm64))
 
     # Print summary
     print(f"\n{'='*60}")
@@ -261,7 +256,7 @@ def main():
 
     print()
     print(f"Total: {len(built)}/{len(results)} built", end="")
-    if args.push or args.all_arches:
+    if args.push:
         print(f", {len(pushed)}/{len(results)} pushed", end="")
     print()
 
