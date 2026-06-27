@@ -185,7 +185,7 @@ def main():
     parser.add_argument(
         "--all-arches",
         action="store_true",
-        help="Build and push both amd64 and arm64 images in one run (implies --push; rejects --arm64 as redundant)"
+        help="Build and push both amd64 and arm64 images in one run (always pushes both arches; rejects --arm64 as redundant)"
     )
     parser.add_argument(
         "--list",
