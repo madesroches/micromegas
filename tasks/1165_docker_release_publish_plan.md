@@ -196,7 +196,11 @@ the C API and Blender automation already exist.
 - Add a new **Docker images** phase running the local `build_docker_images.py`
   command above, with a verification step
   (`docker buildx imagetools inspect marcantoinedesroches/micromegas-monolith:X.Y.0`
-  shows both platforms).
+  shows both platforms). Insert it **before** the Phase 4 post-release bump
+  (e.g. as "Phase 3.5", immediately after Phase 3), so it runs while the
+  workspace is still at `X.Y.0` — `build_docker_images.py` `get_version()` reads
+  `[workspace.package].version`, so running it after the Phase 4 bump would tag
+  images with the next dev version.
 - No Phase 4 bump line for the Blender manifest: its `version` is overwritten
   from the workspace at build time, so a manual bump has no effect on the
   released artifact. The runbook already ensures the workspace is at `X.Y.0` when
@@ -228,7 +232,11 @@ git tag vX.Y.0 grafana-vX.Y.0 capi-vX.Y.0 blender-vX.Y.0   (push all)
    `--arm64 --push` is now supported.
 2. **Update `tasks/release_plan_template.md`**:
    - New "Phase: Docker Images" with the local both-arch publish (two
-     invocations) + inspect verification.
+     invocations) + inspect verification. Insert it **before** the Phase 4
+     post-release bump (e.g. as "Phase 3.5", immediately after Phase 3) so it
+     runs while the workspace is at `X.Y.0`; `build_docker_images.py`
+     `get_version()` reads `[workspace.package].version`, so placing it after the
+     bump would tag images with the next dev version.
    - Pre-Release Checklist § 5 (Git Prep) + Release Process: push `capi-vX.Y.0` and
      `blender-vX.Y.0`; note each triggers its workflow.
    - Fix the stale Phase 3 line (`release_plan_template.md:130`) that claims the
