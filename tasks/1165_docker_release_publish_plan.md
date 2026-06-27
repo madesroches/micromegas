@@ -133,8 +133,11 @@ chosen scheme encodes the platform in the tag.
 
 **Minimal change to `build/build_docker_images.py`** (open/closed; the
 service→Dockerfile map and tag computation are untouched): the script can already
-build both arches and push amd64; the *only* thing blocking arm64 publish is the
-explicit guard
+build both arches and push amd64, but the arm64 branch currently builds with
+`docker buildx build --platform linux/arm64 --load` and is gated by an explicit
+guard against `--push`. The arm64 branch must switch from `--load` to `--push`
+(build-and-push in one buildx invocation) when `--push` is given, and the guard
+that rejects `--arm64 --push` is removed:
 
 ```python
 if args.arm64 and args.push:
