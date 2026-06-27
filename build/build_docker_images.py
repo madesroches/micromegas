@@ -3,12 +3,15 @@
 Build and push Docker images for micromegas services.
 
 Usage:
-    python build_docker_images.py                    # Build all services
-    python build_docker_images.py ingestion flight   # Build specific services
-    python build_docker_images.py --push             # Build and push all
-    python build_docker_images.py --push ingestion   # Build and push specific service
-    python build_docker_images.py --arm64            # Build arm64 images (cross-compiled, no push)
-    python build_docker_images.py --list             # List available services
+    python build_docker_images.py                         # Build all services (amd64)
+    python build_docker_images.py ingestion flight-sql    # Build specific services
+    python build_docker_images.py --push                  # Build and push amd64 images to Docker Hub
+    python build_docker_images.py --push ingestion        # Build and push specific service
+    python build_docker_images.py --arm64                 # Build arm64 locally (cross-compiled, no push)
+    python build_docker_images.py --arm64 --push          # Build and push arm64 images to Docker Hub
+    python build_docker_images.py --all-arches            # Build both amd64 and arm64 locally
+    python build_docker_images.py --all-arches --push     # Build and push both amd64 and arm64 (release)
+    python build_docker_images.py --list                  # List available services
 """
 
 import argparse
@@ -43,7 +46,9 @@ def get_version() -> str:
     content = cargo_toml.read_text()
 
     # Find version in [workspace.package] section
-    match = re.search(r'\[workspace\.package\].*?version\s*=\s*"([^"]+)"', content, re.DOTALL)
+    match = re.search(
+        r'\[workspace\.package\].*?version\s*=\s*"([^"]+)"', content, re.DOTALL
+    )
     if match:
         return match.group(1)
 
@@ -62,7 +67,9 @@ def run_command(cmd: list[str], cwd: Path = REPO_ROOT) -> bool:
     return result.returncode == 0
 
 
-def build_image(service: str, version: str, push: bool = False, arm64: bool = False) -> dict:
+def build_image(
+    service: str, version: str, push: bool = False, arm64: bool = False
+) -> dict:
     """Build a Docker image for a service.
 
     Returns a dict with build results:
@@ -73,11 +80,11 @@ def build_image(service: str, version: str, push: bool = False, arm64: bool = Fa
         - 'pushed': True if push succeeded (only if push=True)
     """
     result = {
-        'service': service,
-        'image': None,
-        'tags': [],
-        'built': False,
-        'pushed': False,
+        "service": service,
+        "image": None,
+        "tags": [],
+        "built": False,
+        "pushed": False,
     }
 
     if service not in SERVICES:
@@ -86,7 +93,7 @@ def build_image(service: str, version: str, push: bool = False, arm64: bool = Fa
 
     dockerfile, description = SERVICES[service]
     image_name = f"{DOCKERHUB_USER}/{DOCKERHUB_REPO}-{service}"
-    result['image'] = image_name
+    result["image"] = image_name
 
     if arm64:
         version_tag = f"{version}-arm64"
@@ -95,7 +102,7 @@ def build_image(service: str, version: str, push: bool = False, arm64: bool = Fa
         version_tag = version
         latest_tag = "latest"
 
-    result['tags'] = [version_tag, latest_tag]
+    result["tags"] = [version_tag, latest_tag]
 
     print(f"\n{'='*60}")
     print(f"Building {service}: {description}")
@@ -103,37 +110,74 @@ def build_image(service: str, version: str, push: bool = False, arm64: bool = Fa
     print(f"{'='*60}\n")
 
     if arm64:
-        cmd = [
-            "docker", "buildx", "build",
-            "--platform", "linux/arm64",
-            "--load",
-            "-f", str(DOCKER_DIR / dockerfile),
-            "-t", f"{image_name}:{version_tag}",
-            "-t", f"{image_name}:{latest_tag}",
-            "."
-        ]
+        if push:
+            # Build and push directly via buildx (no separate docker push step needed)
+            cmd = [
+                "docker",
+                "buildx",
+                "build",
+                "--platform",
+                "linux/arm64",
+                "--push",
+                "-f",
+                str(DOCKER_DIR / dockerfile),
+                "-t",
+                f"{image_name}:{version_tag}",
+                "-t",
+                f"{image_name}:{latest_tag}",
+                ".",
+            ]
+            if not run_command(cmd):
+                print(f"Failed to build/push {service} (arm64)")
+                return result
+            result["built"] = True
+            result["pushed"] = True
+        else:
+            cmd = [
+                "docker",
+                "buildx",
+                "build",
+                "--platform",
+                "linux/arm64",
+                "--load",
+                "-f",
+                str(DOCKER_DIR / dockerfile),
+                "-t",
+                f"{image_name}:{version_tag}",
+                "-t",
+                f"{image_name}:{latest_tag}",
+                ".",
+            ]
+            if not run_command(cmd):
+                print(f"Failed to build {service} (arm64)")
+                return result
+            result["built"] = True
     else:
         cmd = [
-            "docker", "build",
-            "-f", str(DOCKER_DIR / dockerfile),
-            "-t", f"{image_name}:{version_tag}",
-            "-t", f"{image_name}:{latest_tag}",
-            "."
+            "docker",
+            "build",
+            "-f",
+            str(DOCKER_DIR / dockerfile),
+            "-t",
+            f"{image_name}:{version_tag}",
+            "-t",
+            f"{image_name}:{latest_tag}",
+            ".",
         ]
 
-    if not run_command(cmd):
-        print(f"Failed to build {service}")
-        return result
-
-    result['built'] = True
-
-    if push:
-        print(f"\nPushing {image_name}...")
-        if not run_command(["docker", "push", f"{image_name}:{version_tag}"]):
+        if not run_command(cmd):
+            print(f"Failed to build {service}")
             return result
-        if not run_command(["docker", "push", f"{image_name}:{latest_tag}"]):
-            return result
-        result['pushed'] = True
+
+        result["built"] = True
+
+        if push:
+            print(f"\nPushing {image_name}...")
+            if not run_command(["docker", "push", f"{image_name}:{version_tag}"]):
+                return result
+            if not run_command(["docker", "push", f"{image_name}:{latest_tag}"]):
+                return result
+            result["pushed"] = True
 
     return result
 
@@ -142,37 +186,29 @@ def main():
     parser = argparse.ArgumentParser(
         description="Build Docker images for micromegas services",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=__doc__
+        epilog=__doc__,
     )
+    parser.add_argument("services", nargs="*", help="Services to build (default: all)")
     parser.add_argument(
-        "services",
-        nargs="*",
-        help="Services to build (default: all)"
-    )
-    parser.add_argument(
-        "--push",
-        action="store_true",
-        help="Push images to DockerHub after building"
+        "--push", action="store_true", help="Push images to DockerHub after building"
     )
     parser.add_argument(
         "--arm64",
         action="store_true",
-        help="Build linux/arm64 images via cross-compilation (uses docker buildx, --load only)"
+        help="Build linux/arm64 images via cross-compilation (uses docker buildx; add --push to publish to Docker Hub)",
     )
     parser.add_argument(
-        "--list",
+        "--all-arches",
         action="store_true",
-        help="List available services"
+        help="Build both amd64 and arm64 images in one run (add --push to publish; rejects --arm64 as redundant)",
     )
-    parser.add_argument(
-        "--version",
-        help="Override version (default: from Cargo.toml)"
-    )
+    parser.add_argument("--list", action="store_true", help="List available services")
+    parser.add_argument("--version", help="Override version (default: from Cargo.toml)")
 
     args = parser.parse_args()
 
-    if args.arm64 and args.push:
-        print("error: --push is not supported with --arm64; multi-arch publishing is out of scope")
+    if args.all_arches and args.arm64:
+        print("error: --all-arches already includes arm64; --arm64 is redundant")
         return 1
 
     if args.list:
@@ -184,7 +220,7 @@ def main():
     version = args.version or get_version()
     print(f"Version: {version}")
 
-    # Default: build all individual services but not 'all' (redundant)
+    # Default: build all individual services but not 'all' (dev/test only, not published)
     services = args.services or [s for s in SERVICES.keys() if s != "all"]
 
     # Validate services
@@ -194,11 +230,13 @@ def main():
             print(f"Available: {', '.join(SERVICES.keys())}")
             return 1
 
-    # Build each service
+    # --all-arches builds both arches; otherwise build the single selected arch.
+    # --push controls publishing independently of arch selection.
+    arches = [False, True] if args.all_arches else [args.arm64]
     results = []
     for service in services:
-        result = build_image(service, version, args.push, args.arm64)
-        results.append(result)
+        for arm64 in arches:
+            results.append(build_image(service, version, args.push, arm64))
 
     # Print summary
     print(f"\n{'='*60}")
@@ -207,15 +245,15 @@ def main():
     print(f"Version: {version}")
     print()
 
-    built = [r for r in results if r['built']]
-    failed = [r for r in results if not r['built']]
-    pushed = [r for r in results if r['pushed']]
+    built = [r for r in results if r["built"]]
+    failed = [r for r in results if not r["built"]]
+    pushed = [r for r in results if r["pushed"]]
 
     if built:
         print("Built images:")
         for r in built:
-            status = " (pushed)" if r['pushed'] else ""
-            for tag in r['tags']:
+            status = " (pushed)" if r["pushed"] else ""
+            for tag in r["tags"]:
                 print(f"  {r['image']}:{tag}{status}")
 
     if failed:
