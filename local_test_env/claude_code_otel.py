@@ -4,7 +4,9 @@ does not emit.
 
 Without these, our `process_id_from_resource` formula collapses every Claude
 session onto one process_id (host.id, host.name, process.pid, and
-service.instance.id are all empty in Claude's default Resource).
+service.instance.id are all empty in Claude's default Resource). We also inject
+process.owner so the `processes.username` column is populated — Claude's
+detector does not emit it.
 
 Re-running this script produces a fresh service.instance.id per invocation —
 putting the same export in a shell rc file would not, because $(uuidgen)
@@ -45,6 +47,7 @@ Verbose telemetry:
 Works on Linux, macOS, and Windows (PowerShell or cmd).
 """
 
+import getpass
 import os
 import shutil
 import socket
@@ -67,12 +70,20 @@ def main() -> int:
         verbose = True
         args = [a for a in args if a != VERBOSE_FLAG]
 
-    base_url = os.environ.get("MICROMEGAS_TELEMETRY_URL", "http://localhost:9000").rstrip("/")
+    base_url = os.environ.get(
+        "MICROMEGAS_TELEMETRY_URL", "http://localhost:9000"
+    ).rstrip("/")
     api_key = os.environ.get("MICROMEGAS_INGESTION_API_KEY", "")
 
-    identity_attrs = f"service.instance.id={uuid.uuid4()},host.name={socket.gethostname()}"
+    identity_attrs = (
+        f"service.instance.id={uuid.uuid4()}"
+        f",host.name={socket.gethostname()}"
+        f",process.owner={getpass.getuser()}"
+    )
     existing_attrs = os.environ.get("OTEL_RESOURCE_ATTRIBUTES", "")
-    resource_attrs = f"{identity_attrs},{existing_attrs}" if existing_attrs else identity_attrs
+    resource_attrs = (
+        f"{identity_attrs},{existing_attrs}" if existing_attrs else identity_attrs
+    )
 
     env = os.environ.copy()
     env["OTEL_RESOURCE_ATTRIBUTES"] = resource_attrs
@@ -92,7 +103,11 @@ def main() -> int:
         env["OTEL_LOG_RAW_API_BODIES"] = "1"
         env["OTEL_LOG_TOOL_CONTENT"] = "1"
 
-    claude = shutil.which("claude") or shutil.which("claude.cmd") or shutil.which("claude.exe")
+    claude = (
+        shutil.which("claude")
+        or shutil.which("claude.cmd")
+        or shutil.which("claude.exe")
+    )
     if claude is None:
         print("claude_code_otel.py: 'claude' not found on PATH", file=sys.stderr)
         return 127

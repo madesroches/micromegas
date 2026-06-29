@@ -408,11 +408,7 @@ impl ProcessFromResource {
         };
         let exe = truncate_for_db(exe);
 
-        let username = truncate_for_db(
-            crate::identity::attr(attrs, "user.name")
-                .map(crate::identity::attr_to_string)
-                .unwrap_or_default(),
-        );
+        let username = truncate_for_db(crate::identity::process_owner_string(attrs));
         let computer = truncate_for_db(
             crate::identity::attr(attrs, "host.name")
                 .map(crate::identity::attr_to_string)
