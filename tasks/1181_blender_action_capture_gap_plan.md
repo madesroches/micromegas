@@ -173,8 +173,12 @@ input event ─► recorder.modal() ─(non-motion)─► actions.drain_operator
      poll emitted nothing, which is the common case on the per-event path).
 2. **`recorder.py` — event callback.**
    - Add `_on_event` global + `set_event_callback(cb)`.
-   - In `modal()`, for events not in `_SKIP_TYPES`, call `_on_event()` inside a
-     try/except before/after the existing input log (order irrelevant).
+   - In `modal()`, place the `_on_event()` call (in a try/except) after the
+     `if etype in _SKIP_TYPES:` early-return block but **outside** the
+     `if value in {"PRESS","CLICK","DOUBLE_CLICK"}:` block, so it runs once for
+     every non-`_SKIP_TYPES` event regardless of `value` — including RELEASE
+     (matching Design #1 / Open Question 1). Do not nest it inside the
+     value-gated input-log block, which would skip RELEASE-driven draining.
    - Clear `_on_event` in `unregister()` (or leave to setter; reset to None).
 3. **`__init__.py` — wire it.**
    - In `register()`: `recorder.set_event_callback(actions.drain_operators)`
@@ -223,6 +227,11 @@ input event ─► recorder.modal() ─(non-motion)─► actions.drain_operator
   (event + timer) and the cross-wiring.
 
 ## Testing Strategy
+- **Test isolation:** `_ring_capacity` accumulates via `max(...)` and is reset
+  only in `unregister()`, which the autouse `_wire` fixture (`test_actions.py`
+  lines 20-29) does not call. Add `actions._ring_capacity = 0` to that fixture's
+  reset block (alongside `_prev_op_idnames`, `_last_mode`, etc.) so the capacity
+  does not leak its max value across tests and inflate capacity-related assertions.
 - **Unit (`test_actions.py`, extend):**
   - `drain_operators()` emits the same actions as `_poll_operators()` (delegation).
   - Overflow now emits the `blender.action_gap` metric and the WARN message
