@@ -280,6 +280,7 @@ def register():
 
     crash_harvester.register_startup_harvest()
     handlers.register()
+    recorder.set_event_callback(actions.drain_operators)
     recorder.register()
     actions.register()
 
@@ -306,7 +307,12 @@ def register():
     except Exception:
         pass
 
-    lib.log(handle, 4, "blender.addon", f"Micromegas add-on registered version={_ADDON_VERSION} commit={_COMMIT}")  # INFO=4
+    lib.log(
+        handle,
+        4,
+        "blender.addon",
+        f"Micromegas add-on registered version={_ADDON_VERSION} commit={_COMMIT}",
+    )  # INFO=4
     # Use INFO level (4) for the startup log
     lib.log(handle, 4, "blender.addon", f"session_id={_session_id}")
 
@@ -340,6 +346,7 @@ def unregister():
         from . import actions, crash_harvester, handlers, recorder
 
         actions.unregister()
+        recorder.set_event_callback(None)
         recorder.unregister()
         handlers.unregister()
         crash_harvester.unregister_startup_harvest()

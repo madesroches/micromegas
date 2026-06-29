@@ -172,10 +172,13 @@ Raw input (modal recorder):
 
 - Key, mouse-button, and scroll events (throttled; continuous motion sampled)
 
-Semantic actions (operator-history poller, ~1 s):
+Semantic actions (operator-history drain, event-driven + ~1 s backstop):
 
 - Each invoked operator (`bl_idname`, name, and parameters when available) →
-  `blender.action`
+  `blender.action`; drained on every discrete input event via the recorder modal
+  so the 32-entry ring does not overflow between drains under normal use
+- `blender.action_captured` (count metric) — operators logged per drain (gated on n > 0)
+- `blender.action_gap` (count metric) — ring-overflow events (burst/macro driven)
 - Mode / workspace / tool transitions → `blender.mode` / `.workspace` / `.tool`
 - Runtime add-on enable/disable → `blender.addon_state`
 

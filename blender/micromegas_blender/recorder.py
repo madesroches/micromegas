@@ -9,9 +9,15 @@ avoid flooding the telemetry stream.
 The operator passes all events through (PASS_THROUGH) so it does not
 interfere with normal Blender operation.
 
-This module logs only raw input events. Semantic actions (which operator the
-user actually invoked, with parameters) are captured separately by actions.py,
-which drains Blender's operator-history ring buffer.
+This module logs raw input events and drives event-driven operator-history
+draining via an injected callback (set by __init__.py). On every discrete
+(non-_SKIP_TYPES) event the callback — actions.drain_operators — is invoked
+so the operator-history ring is drained at per-keystroke cadence rather than
+once per second. A raising callback never breaks event pass-through.
+
+Semantic actions (which operator the user actually invoked, with parameters)
+are captured separately by actions.py, which drains Blender's operator-history
+ring buffer on each call.
 
 Limitations:
 - Coverage is high but not 100%: the modal operator can be suspended in
@@ -38,6 +44,16 @@ _registered: bool = False
 # relaunch (e.g. after a file load) never leaves two modals logging the same
 # events.
 _generation: int = 0
+
+# Injected by __init__.py: called on every discrete event to drain the
+# operator-history ring (actions.drain_operators). None when not wired.
+_on_event: "callable | None" = None
+
+
+def set_event_callback(cb: "callable | None") -> None:
+    global _on_event
+    _on_event = cb
+
 
 # Event types that are not interesting for session analysis.
 _SKIP_TYPES = {
@@ -106,6 +122,12 @@ class MICROMEGAS_OT_recorder(bpy.types.Operator):
                     )
             return {"PASS_THROUGH"}
 
+        if _on_event is not None:
+            try:
+                _on_event()
+            except Exception:
+                pass
+
         category = _CATEGORY_MAP.get(etype, "key")
         value = event.value  # PRESS / RELEASE / CLICK / DOUBLE_CLICK / NOTHING
 
@@ -161,6 +183,7 @@ def unregister() -> None:
     global _registered
     # Signal any in-flight modal to self-cancel on its next event.
     _registered = False
+    set_event_callback(None)
     if _start_recorder in bpy.app.handlers.load_post:
         bpy.app.handlers.load_post.remove(_start_recorder)
     try:

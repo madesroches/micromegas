@@ -9,10 +9,15 @@ input events (which only the recorder sees) into a semantic action stream
 cardinality: the operator-name set is fixed, and free-form parameters go only in
 the log *message body*, never a metric dimension or log target.
 
-A dedicated ~1 s timer drains the ring faster than the 30 s flush so rapid
-clicking does not overflow it between polls. Alongside the action stream this
-module also logs mode / workspace / tool transitions and runtime add-on
-enable/disable — the bounded "what state was the user in" signals.
+Draining is event-driven: ``recorder.py`` calls ``drain_operators()`` on every
+discrete input event via an injected callback, so the ring is drained at
+per-keystroke cadence rather than once per second. A ~1 s timer remains as a
+backstop for periods when the recorder modal is suspended (e.g. while a
+full-screen sub-modal is running) or receiving only motion events.
+
+Alongside the action stream this module also logs mode / workspace / tool
+transitions and runtime add-on enable/disable — the bounded "what state was the
+user in" signals.
 
 This module is wired with the active lib + handle by __init__.py (set_context)
 and owns its own bpy.app.timers callback (register / unregister).
@@ -38,6 +43,11 @@ _MAX_MSG_LEN: int = 4096
 # _appended_start) — robust to ring rotation and repeated identical operators.
 _prev_op_idnames: "list[str] | None" = None
 
+# Maximum len(wm.operators) ever observed across polls — the ring's effective
+# capacity, discovered at runtime (Blender hard-caps it at 32; no Python API to
+# resize). Included in gap WARNs and reset in unregister().
+_ring_capacity: int = 0
+
 # Last observed editor-state values; transitions are logged on change.
 _last_mode: "str | None" = None
 _last_workspace: "str | None" = None
@@ -53,6 +63,11 @@ def set_context(lib: "_b.MicromegasLib", handle) -> None:
 def _log(level: int, target: str, msg: str) -> None:
     if _lib and _handle:
         _lib.log(_handle, level, target, msg)
+
+
+def _metric_i(name: str, unit: str, value: int) -> None:
+    if _lib and _handle:
+        _lib.metric_i(_handle, name, unit, value)
 
 
 # ---------------------------------------------------------------------------
@@ -122,25 +137,37 @@ def _format_op(op) -> str:
 
 
 def _poll_operators() -> None:
-    global _prev_op_idnames
+    global _prev_op_idnames, _ring_capacity
     try:
         ops = list(bpy.context.window_manager.operators)  # oldest -> newest
     except Exception:
         return
     idnames = [op.bl_idname for op in ops]
+    _ring_capacity = max(_ring_capacity, len(idnames))
     start, gap = _appended_start(idnames, _prev_op_idnames or [])
     if gap:
+        cap = _ring_capacity
         _log(
             _b.LEVEL_WARN,
             "blender.action",
-            "possible gap: operator history overflowed between polls",
+            f"possible gap: operator history overflowed between polls (ring_capacity={cap})",
         )
+        _metric_i("blender.action_gap", "count", 1)
+    n = 0
     for op in ops[start:]:
         try:
             _log(_b.LEVEL_TRACE, "blender.action", _format_op(op))
+            n += 1
         except Exception:
             pass
+    if n > 0:
+        _metric_i("blender.action_captured", "count", n)
     _prev_op_idnames = idnames
+
+
+def drain_operators() -> None:
+    """Drain the operator-history ring; called by the recorder modal on each discrete event."""
+    _poll_operators()
 
 
 # ---------------------------------------------------------------------------
@@ -224,7 +251,7 @@ def register() -> None:
 
 
 def unregister() -> None:
-    global _prev_op_idnames, _last_mode, _last_workspace, _last_tool, _last_addons
+    global _prev_op_idnames, _last_mode, _last_workspace, _last_tool, _last_addons, _ring_capacity
     try:
         if bpy.app.timers.is_registered(_poll_timer):
             bpy.app.timers.unregister(_poll_timer)
@@ -236,3 +263,4 @@ def unregister() -> None:
     _last_workspace = None
     _last_tool = None
     _last_addons = None
+    _ring_capacity = 0
