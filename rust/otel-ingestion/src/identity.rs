@@ -117,6 +117,18 @@ fn attr_raw(attrs: &[KeyValue], key: &str) -> String {
     attr(attrs, key).map(attr_to_string).unwrap_or_default()
 }
 
+/// Resolves the process owner's username.
+///
+/// `process.owner` is the OTel semantic-conventions attribute emitted by process resource
+/// detectors; `user.name` is accepted as a fallback for producers that set it explicitly.
+pub fn process_owner_string(attrs: &[KeyValue]) -> String {
+    let s = attr_raw(attrs, "process.owner");
+    if !s.is_empty() {
+        return s;
+    }
+    attr_raw(attrs, "user.name")
+}
+
 /// Resolves the OTel process-creation timestamp.
 ///
 /// `process.creation.time` is the stable OTel semantic-conventions attribute and is
@@ -142,11 +154,15 @@ pub fn is_degenerate_resource(attrs: &[KeyValue]) -> bool {
 
 /// Derives `process_id` from a resource. Stable for the lifetime of the formula —
 /// shipping a change here requires bumping `NS_OTEL_PROCESS_V1` to `_V2`.
+///
+/// The owner (`process.owner` / `user.name`) is part of the formula: processes are still
+/// new enough that re-deriving ids under the same namespace is acceptable, so this field
+/// was added without a `_V2` bump. Any further change must bump the namespace.
 pub fn process_id_from_resource(resource: Option<&Resource>) -> Uuid {
     let attrs = resource.map(|r| r.attributes.as_slice()).unwrap_or(&[]);
 
     let key = format!(
-        "{host_id}{s}{host_name}{s}{pid}{s}{start}{s}{ns}{s}{name}{s}{instance}",
+        "{host_id}{s}{host_name}{s}{pid}{s}{start}{s}{ns}{s}{name}{s}{instance}{s}{owner}",
         s = SEPARATOR,
         host_id = attr_norm(attrs, "host.id"),
         host_name = attr_norm(attrs, "host.name"),
@@ -155,6 +171,7 @@ pub fn process_id_from_resource(resource: Option<&Resource>) -> Uuid {
         ns = attr_norm(attrs, "service.namespace"),
         name = attr_norm(attrs, "service.name"),
         instance = attr_norm(attrs, "service.instance.id"),
+        owner = norm(&process_owner_string(attrs)),
     );
     Uuid::new_v5(&NS_OTEL_PROCESS_V1, key.as_bytes())
 }

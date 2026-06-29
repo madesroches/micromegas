@@ -58,6 +58,36 @@ fn process_id_differs_per_pid() {
 }
 
 #[test]
+fn process_id_differs_per_owner() {
+    let a = resource_with(&[
+        ("host.name", "h"),
+        ("process.pid", "1"),
+        ("process.owner", "alice"),
+    ]);
+    let b = resource_with(&[
+        ("host.name", "h"),
+        ("process.pid", "1"),
+        ("process.owner", "bob"),
+    ]);
+    assert_ne!(
+        process_id_from_resource(Some(&a)),
+        process_id_from_resource(Some(&b))
+    );
+}
+
+#[test]
+fn process_id_owner_uses_user_name_fallback() {
+    // `process.owner` and `user.name` resolve to the same owner string, so they must
+    // produce the same process_id.
+    let canonical = resource_with(&[("host.name", "h"), ("process.owner", "alice")]);
+    let fallback = resource_with(&[("host.name", "h"), ("user.name", "alice")]);
+    assert_eq!(
+        process_id_from_resource(Some(&canonical)),
+        process_id_from_resource(Some(&fallback))
+    );
+}
+
+#[test]
 fn process_id_normalizes_host_case() {
     let a = resource_with(&[("host.name", "Foo"), ("service.name", "svc")]);
     let b = resource_with(&[("host.name", "FOO"), ("service.name", "svc")]);
