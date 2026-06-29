@@ -261,17 +261,28 @@ input event ─► recorder.modal() ─(non-motion)─► actions.drain_operator
   on changed Python files before commit.
 
 ## Open Questions
-1. **Drain on every non-motion event, or only on PRESS/CLICK?** Plan drains on
-   all non-`_SKIP_TYPES` events (includes RELEASE) for maximum coverage; the
-   cost is negligible. Confirm there's no objection to the slightly higher drain
-   frequency.
-2. **Keep `blender.action_captured` metric?** It makes the fix's effect
-   measurable. Because the per-event drain (Design #1) runs `_poll_operators()`
-   on every keystroke, the metric is gated on `n > 0` (Design #3 /
-   Implementation Step 1) so it fires only when operators are actually captured
-   — i.e. roughly at operator-registration frequency (a few per interactive
-   action), **not** on every event. Without that gate it would emit on every
-   keystroke. Drop it if the gap counter alone is considered sufficient.
-3. **Ring capacity verification** (item #4) requires a running Blender to
-   confirm no resize API exists — fine to do during implementation, but flagging
-   it as the one fact not verifiable from the repo alone.
+
+**Decision (record all if possible):** capture as much as the design allows —
+both behavioral questions below are resolved in favor of maximum coverage.
+
+1. **Drain on every non-motion event, or only on PRESS/CLICK?** *Resolved:*
+   drain on all non-`_SKIP_TYPES` events (includes RELEASE) for maximum
+   coverage; the cost is negligible.
+2. **Keep `blender.action_captured` metric?** *Resolved:* keep it — it makes the
+   fix's effect measurable. Because the per-event drain (Design #1) runs
+   `_poll_operators()` on every keystroke, the metric is gated on `n > 0`
+   (Design #3 / Implementation Step 1) so it fires only when operators are
+   actually captured — i.e. roughly at operator-registration frequency (a few
+   per interactive action), **not** on every event.
+3. **Ring capacity verification** (item #4). *Resolved via Blender source:* the
+   list backing `wm.operators` (`wm->runtime->operators`) is hard-capped at
+   **32** registered operators by the compile-time constant
+   `#define MAX_OP_REGISTERED 32` in
+   `source/blender/windowmanager/intern/wm.cc`. The cap is enforced inline in
+   `wm_operator_register()` — once more than 32 `OPTYPE_REGISTER` operators are
+   present, the oldest is unlinked (`BLI_remlink`) and freed (`WM_operator_free`)
+   FIFO. There is **no** Python/preferences API to resize it (and it is distinct
+   from the user-facing "Undo Steps" limit, which is a separate system). This
+   confirms the gap cannot be mitigated by enlarging the ring; polling more
+   frequently before the ring overflows (the per-event drain, Design #1) is the
+   only available mitigation.
