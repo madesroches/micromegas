@@ -243,6 +243,12 @@ input event ─► recorder.modal() ─(non-motion)─► actions.drain_operator
   (e.g. `type="A", value="PRESS"`) and does **not** fire for `_SKIP_TYPES`
   events (`MOUSEMOVE`, `TIMER`); assert a raising callback does not break
   pass-through.
+  - Note: `modal()` (recorder.py:81-121) returns early unless its guards are
+    satisfied, so the test must set up the recorder before invoking it: set
+    `recorder._registered = True`, align the instance `self._generation` with
+    `recorder._generation` (or construct the instance via the existing
+    `invoke()`/generation machinery), and wire `_lib`/`_handle` via
+    `set_context` so the callback path reaches `_on_event()`.
 - **Integration sanity:** a test that drives `drain_operators()` repeatedly
   (simulating per-event draining) over an op sequence that would overflow a 1 s
   poll, and confirms no gap is reported and all ops are captured.
