@@ -2,7 +2,8 @@
 
 use micromegas_otel_ingestion::identity::{
     SignalKey, attr_to_string, block_id_from_payload, is_degenerate_resource,
-    process_id_from_resource, process_start_string, stream_id_from_process_signal,
+    process_id_from_resource, process_owner_string, process_start_string,
+    stream_id_from_process_signal,
 };
 use micromegas_otel_ingestion::proto::any_value::Value as AvValue;
 use micromegas_otel_ingestion::proto::{AnyValue, KeyValue, Resource};
@@ -85,6 +86,37 @@ fn process_id_owner_uses_user_name_fallback() {
         process_id_from_resource(Some(&canonical)),
         process_id_from_resource(Some(&fallback))
     );
+}
+
+#[test]
+fn process_owner_prefers_keys_in_priority_order() {
+    // process.owner > process.user.name > process.real_user.name > user.name.
+    let all = resource_with(&[
+        ("process.owner", "owner"),
+        ("process.user.name", "euser"),
+        ("process.real_user.name", "ruser"),
+        ("user.name", "generic"),
+    ]);
+    assert_eq!(process_owner_string(&all.attributes), "owner");
+
+    let no_owner = resource_with(&[
+        ("process.user.name", "euser"),
+        ("process.real_user.name", "ruser"),
+        ("user.name", "generic"),
+    ]);
+    assert_eq!(process_owner_string(&no_owner.attributes), "euser");
+
+    let real_only = resource_with(&[
+        ("process.real_user.name", "ruser"),
+        ("user.name", "generic"),
+    ]);
+    assert_eq!(process_owner_string(&real_only.attributes), "ruser");
+
+    let generic_only = resource_with(&[("user.name", "generic")]);
+    assert_eq!(process_owner_string(&generic_only.attributes), "generic");
+
+    let none = resource_with(&[("host.name", "h")]);
+    assert_eq!(process_owner_string(&none.attributes), "");
 }
 
 #[test]

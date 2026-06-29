@@ -120,13 +120,22 @@ fn attr_raw(attrs: &[KeyValue], key: &str) -> String {
 /// Resolves the process owner's username.
 ///
 /// `process.owner` is the OTel semantic-conventions attribute emitted by process resource
-/// detectors; `user.name` is accepted as a fallback for producers that set it explicitly.
+/// detectors. When it is absent we fall back, in decreasing semantic closeness, to the
+/// process-scoped effective (`process.user.name`) and real (`process.real_user.name`) user
+/// names, then to the generic `user.name` for producers that only set that.
 pub fn process_owner_string(attrs: &[KeyValue]) -> String {
-    let s = attr_raw(attrs, "process.owner");
-    if !s.is_empty() {
-        return s;
+    for key in [
+        "process.owner",
+        "process.user.name",
+        "process.real_user.name",
+        "user.name",
+    ] {
+        let s = attr_raw(attrs, key);
+        if !s.is_empty() {
+            return s;
+        }
     }
-    attr_raw(attrs, "user.name")
+    String::new()
 }
 
 /// Resolves the OTel process-creation timestamp.
