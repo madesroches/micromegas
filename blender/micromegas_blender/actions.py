@@ -31,9 +31,11 @@ from . import binding as _b
 _lib: "_b.MicromegasLib | None" = None
 _handle = None
 
-# Poll cadence for the operator-history ring buffer. Must be well under the
-# 30 s flush so rapid clicking does not overflow the (small) ring between polls.
-_POLL_INTERVAL_S: float = 1.0
+# Poll cadence for the operator-history ring buffer backstop. Event-driven
+# draining (via the recorder modal) is the primary path; this timer fires during
+# periods when the modal is suspended or receiving only motion events. Kept short
+# (0.1 s) so script/macro bursts don't overflow the 32-slot ring between events.
+_POLL_INTERVAL_S: float = 0.1
 
 # Cap on a single action log message (bl_idname + name + params).
 _MAX_MSG_LEN: int = 4096
@@ -43,10 +45,8 @@ _MAX_MSG_LEN: int = 4096
 # _appended_start) — robust to ring rotation and repeated identical operators.
 _prev_op_idnames: "list[str] | None" = None
 
-# Maximum len(wm.operators) ever observed across polls — the ring's effective
-# capacity, discovered at runtime (Blender hard-caps it at 32; no Python API to
-# resize). Included in gap WARNs and reset in unregister().
-_ring_capacity: int = 0
+# Blender hard-caps wm.operators at 32 entries; no Python API to resize.
+_ring_capacity: int = 32
 
 # Last observed editor-state values; transitions are logged on change.
 _last_mode: "str | None" = None
@@ -137,13 +137,12 @@ def _format_op(op) -> str:
 
 
 def _poll_operators() -> None:
-    global _prev_op_idnames, _ring_capacity
+    global _prev_op_idnames
     try:
         ops = list(bpy.context.window_manager.operators)  # oldest -> newest
     except Exception:
         return
     idnames = [op.bl_idname for op in ops]
-    _ring_capacity = max(_ring_capacity, len(idnames))
     start, gap = _appended_start(idnames, _prev_op_idnames or [])
     if gap:
         cap = _ring_capacity
@@ -251,7 +250,7 @@ def register() -> None:
 
 
 def unregister() -> None:
-    global _prev_op_idnames, _last_mode, _last_workspace, _last_tool, _last_addons, _ring_capacity
+    global _prev_op_idnames, _last_mode, _last_workspace, _last_tool, _last_addons
     try:
         if bpy.app.timers.is_registered(_poll_timer):
             bpy.app.timers.unregister(_poll_timer)
@@ -263,4 +262,3 @@ def unregister() -> None:
     _last_workspace = None
     _last_tool = None
     _last_addons = None
-    _ring_capacity = 0

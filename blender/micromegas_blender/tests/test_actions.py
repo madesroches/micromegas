@@ -21,7 +21,6 @@ class FakeOp:
 def _wire(rec_lib, fake_bpy):
     actions.set_context(rec_lib, object())
     actions._prev_op_idnames = None
-    actions._ring_capacity = 0
     actions._last_mode = None
     actions._last_workspace = None
     actions._last_tool = None
@@ -185,20 +184,7 @@ def test_gap_warn_includes_ring_capacity(rec_lib, fake_bpy):
 
     gap_logs = [m for _l, t, m in rec_lib.logs if t == "blender.action" and "gap" in m]
     assert gap_logs
-    assert "ring_capacity=2" in gap_logs[0]
-
-
-def test_ring_capacity_tracks_max(rec_lib, fake_bpy):
-    _set_ops(fake_bpy, [FakeOp("A")])
-    actions._poll_operators()
-    assert actions._ring_capacity == 1
-    _set_ops(fake_bpy, [FakeOp("A"), FakeOp("B"), FakeOp("C")])
-    actions._poll_operators()
-    assert actions._ring_capacity == 3
-    # A shorter ring does not reduce the tracked max.
-    _set_ops(fake_bpy, [FakeOp("C")])
-    actions._poll_operators()
-    assert actions._ring_capacity == 3
+    assert "ring_capacity=32" in gap_logs[0]
 
 
 def test_action_captured_metric_on_new_ops(rec_lib, fake_bpy):
