@@ -21,6 +21,15 @@ import re
 import sys
 import uuid
 
+try:
+    from . import _build_info
+
+    _COMMIT = _build_info.COMMIT
+except ImportError:
+    # _build_info.py is generated at build time (see build/build_blender_plugin.py)
+    # and is not tracked in git; running from source before a build is fine.
+    _COMMIT = "unknown"
+
 
 def _read_addon_version() -> str:
     """Read the add-on version from the bundled manifest so telemetry reports
@@ -297,7 +306,7 @@ def register():
     except Exception:
         pass
 
-    lib.log(handle, 4, "blender.addon", "Micromegas add-on registered")  # INFO=4
+    lib.log(handle, 4, "blender.addon", f"Micromegas add-on registered version={_ADDON_VERSION} commit={_COMMIT}")  # INFO=4
     # Use INFO level (4) for the startup log
     lib.log(handle, 4, "blender.addon", f"session_id={_session_id}")
 
