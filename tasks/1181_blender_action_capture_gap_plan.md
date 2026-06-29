@@ -126,9 +126,13 @@ signals instead of a bare log line:
   frequency becomes a time series, and enrich the existing WARN message with the
   observed capacity:
   `f"possible gap: operator history overflowed between polls (ring_capacity={cap})"`.
-- Emit `_metric_i("blender.action_captured", "count", n)` each poll where `n` is
-  the number of actions emitted this poll, so capture rate is queryable and the
-  effectiveness of the event-driven fix is measurable from telemetry.
+- Emit `_metric_i("blender.action_captured", "count", n)` **only when `n > 0`**
+  (actions were actually emitted this poll) — `n` is the number of actions
+  emitted. Since the per-event path (Design #1) calls `_poll_operators()` on
+  every keystroke and the common case is `n == 0` (no new operators), gating on
+  `n > 0` keeps the metric tied to real capture activity instead of firing on
+  every event. Capture rate stays queryable and the effectiveness of the
+  event-driven fix is measurable from telemetry.
 
 Metric names are a fixed, bounded set (cardinality discipline preserved).
 
@@ -165,7 +169,8 @@ input event ─► recorder.modal() ─(non-motion)─► actions.drain_operator
    - In `_poll_operators()`: update `_ring_capacity = max(_ring_capacity,
      len(idnames))`; include `ring_capacity` in the gap WARN; emit
      `blender.action_gap` on gap and `blender.action_captured` with the count of
-     emitted actions.
+     emitted actions **only when that count is > 0** (skip the metric when the
+     poll emitted nothing, which is the common case on the per-event path).
 2. **`recorder.py` — event callback.**
    - Add `_on_event` global + `set_event_callback(cb)`.
    - In `modal()`, for events not in `_SKIP_TYPES`, call `_on_event()` inside a
@@ -245,9 +250,13 @@ input event ─► recorder.modal() ─(non-motion)─► actions.drain_operator
    all non-`_SKIP_TYPES` events (includes RELEASE) for maximum coverage; the
    cost is negligible. Confirm there's no objection to the slightly higher drain
    frequency.
-2. **Keep `blender.action_captured` per-poll metric?** It makes the fix's effect
-   measurable but adds a steady low-rate metric stream. Drop it if the gap
-   counter alone is considered sufficient.
+2. **Keep `blender.action_captured` metric?** It makes the fix's effect
+   measurable. Because the per-event drain (Design #1) runs `_poll_operators()`
+   on every keystroke, the metric is gated on `n > 0` (Design #3 /
+   Implementation Step 1) so it fires only when operators are actually captured
+   — i.e. roughly at operator-registration frequency (a few per interactive
+   action), **not** on every event. Without that gate it would emit on every
+   keystroke. Drop it if the gap counter alone is considered sufficient.
 3. **Ring capacity verification** (item #4) requires a running Blender to
    confirm no resize API exists — fine to do during implementation, but flagging
    it as the one fact not verifiable from the repo alone.
