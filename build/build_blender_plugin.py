@@ -48,9 +48,10 @@ def run(cmd: list[str], cwd: pathlib.Path, extra_env: dict | None = None) -> Non
 
 
 def cargo_output_dir(target: str | None) -> pathlib.Path:
+    base = pathlib.Path(os.environ.get("CARGO_TARGET_DIR", RUST_DIR / "target"))
     if target:
-        return RUST_DIR / "target" / target / "release"
-    return RUST_DIR / "target" / "release"
+        return base / target / "release"
+    return base / "release"
 
 
 def build_linux() -> None:
