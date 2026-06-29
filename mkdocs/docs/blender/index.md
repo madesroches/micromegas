@@ -110,17 +110,30 @@ Two complementary streams:
 - Runtime add-on enable/disable → `blender.addon_state` (INFO) — a mid-session
   enable is a prime crash trigger.
 
-The poller runs on a ~1 s timer so it drains the ring buffer well before the
-30 s flush. The ring is small and ordered (oldest→newest); each poll emits only
-the operators appended since the last poll. If the buffer turned over entirely
-between polls (rapid clicking), a `possible gap` marker is logged rather than
-silently dropping — actions are never lost without a signal.
+Draining is **event-driven**: on every discrete input event (key/mouse/scroll)
+the recorder modal calls `drain_operators()` so the ring is drained at
+per-keystroke cadence, well within the 32-operator hard cap. A ~1 s timer runs
+as a backstop for periods when the recorder modal is suspended or receiving only
+motion events.
+
+The ring is small and ordered (oldest→newest); each drain emits only the
+operators appended since the last drain. If the ring turned over entirely between
+two consecutive recorder events (e.g. a script/macro burst), a `possible gap`
+marker is logged rather than silently dropping — actions are never lost without a
+signal. Two metrics track capture health:
+
+| Metric | Unit | Description |
+|---|---|---|
+| `blender.action_captured` | count | Operators successfully logged (emitted only when > 0) |
+| `blender.action_gap` | count | Ring-overflow events between drains |
 
 !!! note "Coverage is high but not 100%"
-    The modal operator can be suspended while a full-screen sub-modal is
-    running. Operator parameter extraction from stored history entries is
-    best-effort: when parameters are unavailable the action is still logged with
-    its `bl_idname` and name.
+    The recorder modal is suspended while a full-screen sub-modal (knife, grab, …)
+    is running; the timer backstop covers that window. The ring is hard-capped at
+    32 entries by Blender (`MAX_OP_REGISTERED`) and cannot be resized via Python.
+    Operator parameter extraction from stored history entries is best-effort:
+    when parameters are unavailable the action is still logged with its `bl_idname`
+    and name.
 
 ### Lifecycle events (logged at INFO)
 

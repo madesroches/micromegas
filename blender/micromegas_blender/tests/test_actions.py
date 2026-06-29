@@ -149,3 +149,63 @@ def test_poll_overflow_logs_gap_marker(rec_lib, fake_bpy):
     assert gap_logs
     # All three new entries are still emitted (never silently dropped).
     assert any("X" in m for m in _action_msgs(rec_lib))
+
+
+# --- drain_operators (public delegation) -----------------------------------
+
+
+def test_drain_operators_delegates_to_poll(rec_lib, fake_bpy):
+    _set_ops(fake_bpy, [FakeOp("OBJECT_OT_delete")])
+    actions.drain_operators()
+    assert any("OBJECT_OT_delete" in m for m in _action_msgs(rec_lib))
+
+
+# --- metrics ---------------------------------------------------------------
+
+
+def test_gap_emits_action_gap_metric(rec_lib, fake_bpy):
+    _set_ops(fake_bpy, [FakeOp("A"), FakeOp("B")])
+    actions._poll_operators()
+    _set_ops(fake_bpy, [FakeOp("X"), FakeOp("Y")])
+    actions._poll_operators()
+
+    gap_metrics = [
+        (n, u, v) for n, u, v in rec_lib.metrics if n == "blender.action_gap"
+    ]
+    assert gap_metrics, "blender.action_gap metric not emitted on overflow"
+    assert gap_metrics[0] == ("blender.action_gap", "count", 1)
+
+
+def test_gap_warn_includes_ring_capacity(rec_lib, fake_bpy):
+    _set_ops(fake_bpy, [FakeOp("A"), FakeOp("B")])
+    actions._poll_operators()
+    _set_ops(fake_bpy, [FakeOp("X"), FakeOp("Y")])
+    actions._poll_operators()
+
+    gap_logs = [m for _l, t, m in rec_lib.logs if t == "blender.action" and "gap" in m]
+    assert gap_logs
+    assert "ring_capacity=32" in gap_logs[0]
+
+
+def test_action_captured_metric_on_new_ops(rec_lib, fake_bpy):
+    _set_ops(fake_bpy, [])
+    actions._poll_operators()
+    _set_ops(fake_bpy, [FakeOp("OBJECT_OT_delete"), FakeOp("MESH_OT_extrude_region")])
+    actions._poll_operators()
+
+    captured = [
+        (n, u, v) for n, u, v in rec_lib.metrics if n == "blender.action_captured"
+    ]
+    assert captured, "blender.action_captured metric not emitted when ops were logged"
+    assert captured[0] == ("blender.action_captured", "count", 2)
+
+
+def test_action_captured_metric_not_emitted_when_no_new_ops(rec_lib, fake_bpy):
+    _set_ops(fake_bpy, [FakeOp("OBJECT_OT_delete")])
+    actions._poll_operators()
+    before = len(rec_lib.metrics)
+    actions._poll_operators()  # same state — no new ops
+    captured_after = [
+        m for m in rec_lib.metrics[before:] if m[0] == "blender.action_captured"
+    ]
+    assert not captured_after, "blender.action_captured must not fire when n == 0"

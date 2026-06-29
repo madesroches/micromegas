@@ -9,10 +9,15 @@ input events (which only the recorder sees) into a semantic action stream
 cardinality: the operator-name set is fixed, and free-form parameters go only in
 the log *message body*, never a metric dimension or log target.
 
-A dedicated ~1 s timer drains the ring faster than the 30 s flush so rapid
-clicking does not overflow it between polls. Alongside the action stream this
-module also logs mode / workspace / tool transitions and runtime add-on
-enable/disable — the bounded "what state was the user in" signals.
+Draining is event-driven: ``recorder.py`` calls ``drain_operators()`` on every
+discrete input event via an injected callback, so the ring is drained at
+per-keystroke cadence rather than once per second. A ~1 s timer remains as a
+backstop for periods when the recorder modal is suspended (e.g. while a
+full-screen sub-modal is running) or receiving only motion events.
+
+Alongside the action stream this module also logs mode / workspace / tool
+transitions and runtime add-on enable/disable — the bounded "what state was the
+user in" signals.
 
 This module is wired with the active lib + handle by __init__.py (set_context)
 and owns its own bpy.app.timers callback (register / unregister).
@@ -26,9 +31,11 @@ from . import binding as _b
 _lib: "_b.MicromegasLib | None" = None
 _handle = None
 
-# Poll cadence for the operator-history ring buffer. Must be well under the
-# 30 s flush so rapid clicking does not overflow the (small) ring between polls.
-_POLL_INTERVAL_S: float = 1.0
+# Poll cadence for the operator-history ring buffer backstop. Event-driven
+# draining (via the recorder modal) is the primary path; this timer fires during
+# periods when the modal is suspended or receiving only motion events. Kept short
+# (0.1 s) so script/macro bursts don't overflow the 32-slot ring between events.
+_POLL_INTERVAL_S: float = 0.1
 
 # Cap on a single action log message (bl_idname + name + params).
 _MAX_MSG_LEN: int = 4096
@@ -37,6 +44,9 @@ _MAX_MSG_LEN: int = 4096
 # first poll. Used to compute which entries were appended since (see
 # _appended_start) — robust to ring rotation and repeated identical operators.
 _prev_op_idnames: "list[str] | None" = None
+
+# Blender hard-caps wm.operators at 32 entries; no Python API to resize.
+_ring_capacity: int = 32
 
 # Last observed editor-state values; transitions are logged on change.
 _last_mode: "str | None" = None
@@ -53,6 +63,11 @@ def set_context(lib: "_b.MicromegasLib", handle) -> None:
 def _log(level: int, target: str, msg: str) -> None:
     if _lib and _handle:
         _lib.log(_handle, level, target, msg)
+
+
+def _metric_i(name: str, unit: str, value: int) -> None:
+    if _lib and _handle:
+        _lib.metric_i(_handle, name, unit, value)
 
 
 # ---------------------------------------------------------------------------
@@ -130,17 +145,28 @@ def _poll_operators() -> None:
     idnames = [op.bl_idname for op in ops]
     start, gap = _appended_start(idnames, _prev_op_idnames or [])
     if gap:
+        cap = _ring_capacity
         _log(
             _b.LEVEL_WARN,
             "blender.action",
-            "possible gap: operator history overflowed between polls",
+            f"possible gap: operator history overflowed between polls (ring_capacity={cap})",
         )
+        _metric_i("blender.action_gap", "count", 1)
+    n = 0
     for op in ops[start:]:
         try:
             _log(_b.LEVEL_TRACE, "blender.action", _format_op(op))
+            n += 1
         except Exception:
             pass
+    if n > 0:
+        _metric_i("blender.action_captured", "count", n)
     _prev_op_idnames = idnames
+
+
+def drain_operators() -> None:
+    """Drain the operator-history ring; called by the recorder modal on each discrete event."""
+    _poll_operators()
 
 
 # ---------------------------------------------------------------------------
