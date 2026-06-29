@@ -95,6 +95,28 @@ fn block_id_changes_when_payload_changes() {
 }
 
 #[test]
+fn username_comes_from_process_owner_with_user_name_fallback() {
+    // Standard OTel process resource detector emits `process.owner`.
+    let p = ProcessFromResource::build(&[s_kv("process.owner", "alice")], Utc::now());
+    assert_eq!(p.username, "alice");
+
+    // `user.name` is accepted as a fallback for producers that set it explicitly.
+    let p = ProcessFromResource::build(&[s_kv("user.name", "bob")], Utc::now());
+    assert_eq!(p.username, "bob");
+
+    // `process.owner` wins when both are present.
+    let p = ProcessFromResource::build(
+        &[s_kv("user.name", "bob"), s_kv("process.owner", "alice")],
+        Utc::now(),
+    );
+    assert_eq!(p.username, "alice");
+
+    // Neither present → empty.
+    let p = ProcessFromResource::build(&[s_kv("service.name", "svc")], Utc::now());
+    assert_eq!(p.username, "");
+}
+
+#[test]
 fn process_field_truncation_caps_at_255_chars_without_splitting_codepoints() {
     // 300 ASCII chars → truncated to 255.
     let long_ascii = "a".repeat(300);

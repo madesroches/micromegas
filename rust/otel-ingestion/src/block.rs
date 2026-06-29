@@ -408,8 +408,13 @@ impl ProcessFromResource {
         };
         let exe = truncate_for_db(exe);
 
+        // `process.owner` is the OTel semantic-conventions attribute that process resource
+        // detectors emit for the owning user; `user.name` is a general identity attribute that
+        // nothing populates as a resource attribute by default. Prefer the standard, accept
+        // `user.name` as a fallback for producers that set it explicitly.
         let username = truncate_for_db(
-            crate::identity::attr(attrs, "user.name")
+            crate::identity::attr(attrs, "process.owner")
+                .or_else(|| crate::identity::attr(attrs, "user.name"))
                 .map(crate::identity::attr_to_string)
                 .unwrap_or_default(),
         );
