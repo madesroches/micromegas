@@ -156,8 +156,11 @@ input event ─► recorder.modal() ─(non-motion)─► actions.drain_operator
 
 1. **`actions.py` — public drain + metrics + capacity.**
    - Add `drain_operators()` → `_poll_operators()`.
-   - Add module globals `_ring_capacity` (init 0) and reset it in
-     `unregister()` alongside the other state resets.
+   - Add module global `_ring_capacity` (init 0) and reset it in
+     `unregister()` alongside the other state resets. Add `_ring_capacity` to
+     the `global` declarations in both `_poll_operators()` (`actions.py:125`)
+     and `unregister()` (`actions.py:227`) so the assignments mutate the module
+     global rather than creating throwaway locals.
    - Add `_metric_i(name, unit, value)` helper (guarded by `_lib`/`_handle`).
    - In `_poll_operators()`: update `_ring_capacity = max(_ring_capacity,
      len(idnames))`; include `ring_capacity` in the gap WARN; emit
