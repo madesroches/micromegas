@@ -2,6 +2,7 @@
 //
 //  MicromegasTelemetrySink/HttpEventSink.h
 //
+#include "Async/Mutex.h"
 #include "Containers/Map.h"
 #include "Containers/Queue.h"
 #include "Containers/UnrealString.h"
@@ -101,6 +102,9 @@ private:
 		EUploadPriority Priority,
 		TFunction<TArray<uint8>()> FormatFn);
 
+	void StorePendingStreamMeta(const FString& StreamId, TFunction<TArray<uint8>()> FormatFn);
+	void FlushPendingStreamMeta(const FString& StreamId);
+
 	FString BaseUrl;
 	MicromegasTracing::ProcessInfoPtr Process;
 	SharedTelemetryAuthenticator Auth;
@@ -121,6 +125,9 @@ private:
 
 	TSharedPtr<FCompletionState, ESPMode::ThreadSafe> State;
 	TSharedPtr<FHttpRetrySystem::FManager> RetryManager;
+
+	TMap<FString, TFunction<TArray<uint8>()>> PendingStreamMeta;
+	UE::FMutex PendingStreamMetaMutex;
 };
 
 MICROMEGASTELEMETRYSINK_API TSharedPtr<MicromegasTracing::EventSink> InitHttpEventSink(

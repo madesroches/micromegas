@@ -1,4 +1,5 @@
 #include "MicromegasTelemetrySink/HttpEventSink.h"
+#include "Async/UniqueLock.h"
 #include "BuildSettings.h"
 #include "HAL/PlatformProcess.h"
 #include "HAL/Runnable.h"
@@ -176,34 +177,26 @@ void HttpEventSink::OnShutdown()
 
 void HttpEventSink::OnInitLogStream(const MicromegasTracing::LogStreamPtr& Stream)
 {
-	EnqueueStreamInit(EUploadPriority::Metadata, [this, Stream]() -> TArray<uint8>
-		{
-			return FormatInsertLogStreamRequest(*Stream);
-		});
+	StorePendingStreamMeta(Stream->GetStreamId(), [Stream]() -> TArray<uint8>
+		{ return FormatInsertLogStreamRequest(*Stream); });
 }
 
 void HttpEventSink::OnInitMetricStream(const MicromegasTracing::MetricStreamPtr& Stream)
 {
-	EnqueueStreamInit(EUploadPriority::Metadata, [this, Stream]() -> TArray<uint8>
-		{
-			return FormatInsertMetricStreamRequest(*Stream);
-		});
+	StorePendingStreamMeta(Stream->GetStreamId(), [Stream]() -> TArray<uint8>
+		{ return FormatInsertMetricStreamRequest(*Stream); });
 }
 
 void HttpEventSink::OnInitNetStream(const MicromegasTracing::NetStreamPtr& Stream)
 {
-	EnqueueStreamInit(EUploadPriority::Metadata, [this, Stream]() -> TArray<uint8>
-		{
-			return FormatInsertNetStreamRequest(*Stream);
-		});
+	StorePendingStreamMeta(Stream->GetStreamId(), [Stream]() -> TArray<uint8>
+		{ return FormatInsertNetStreamRequest(*Stream); });
 }
 
 void HttpEventSink::OnInitImageStream(const MicromegasTracing::ImageStreamPtr& Stream)
 {
-	EnqueueStreamInit(EUploadPriority::Metadata, [this, Stream]() -> TArray<uint8>
-		{
-			return FormatInsertImageStreamRequest(*Stream);
-		});
+	StorePendingStreamMeta(Stream->GetStreamId(), [Stream]() -> TArray<uint8>
+		{ return FormatInsertImageStreamRequest(*Stream); });
 }
 
 void HttpEventSink::OnInitThreadStream(MicromegasTracing::ThreadStream* Stream)
@@ -219,11 +212,8 @@ void HttpEventSink::OnInitThreadStream(MicromegasTracing::ThreadStream* Stream)
 	Stream->SetProperty(TEXT("thread-name"), *ThreadName);
 	Stream->SetProperty(TEXT("thread-id"), FString::Format(TEXT("{0}"), { ThreadId }));
 
-	EnqueueWithPriority(EUploadPriority::Metadata, 0, [this, Stream]()
-		{
-			const TArray<uint8> Body = FormatInsertThreadStreamRequest(*Stream);
-			SendBinaryRequest(TEXT("insert_stream"), Body, EUploadPriority::Metadata);
-		});
+	StorePendingStreamMeta(Stream->GetStreamId(), [Stream]() -> TArray<uint8>
+		{ return FormatInsertThreadStreamRequest(*Stream); });
 }
 
 void HttpEventSink::OnProcessLogBlock(const MicromegasTracing::LogBlockPtr& Block)
@@ -373,6 +363,25 @@ void HttpEventSink::EnqueueStreamInit(EUploadPriority Priority, TFunction<TArray
 		});
 }
 
+void HttpEventSink::StorePendingStreamMeta(const FString& StreamId, TFunction<TArray<uint8>()> FormatFn)
+{
+	UE::TUniqueLock<UE::FMutex> Lock(PendingStreamMetaMutex);
+	PendingStreamMeta.Add(StreamId, MoveTemp(FormatFn));
+}
+
+void HttpEventSink::FlushPendingStreamMeta(const FString& StreamId)
+{
+	TFunction<TArray<uint8>()> FormatFn;
+	{
+		UE::TUniqueLock<UE::FMutex> Lock(PendingStreamMetaMutex);
+		if (!PendingStreamMeta.RemoveAndCopyValue(StreamId, FormatFn))
+		{
+			return;
+		}
+	}
+	EnqueueStreamInit(EUploadPriority::Metadata, MoveTemp(FormatFn));
+}
+
 template <typename BlockPtrT>
 void HttpEventSink::EnqueueBlock(const BlockPtrT& Block, EUploadPriority Priority)
 {
@@ -381,6 +390,7 @@ void HttpEventSink::EnqueueBlock(const BlockPtrT& Block, EUploadPriority Priorit
 	{
 		return;
 	}
+	FlushPendingStreamMeta(Block->GetStreamId());
 	const int32 PayloadBytes = static_cast<int32>(Block->GetEvents().GetSizeBytes());
 	EnqueueWithPriority(Priority, PayloadBytes, [this, Block, Priority]()
 		{
