@@ -3,8 +3,12 @@
 //
 #include "MicromegasTelemetrySink/MetricPublisher.h"
 
+#include "Camera/PlayerCameraManager.h"
+#include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "Framework/Application/SlateApplication.h"
+#include "GameFramework/Pawn.h"
+#include "GameFramework/PlayerController.h"
 #include "HAL/PlatformTime.h"
 #include "MicromegasTracing/DefaultContext.h"
 #include "MicromegasTracing/Macros.h"
@@ -96,6 +100,11 @@ void MetricPublisher::OnWorldTornDown(UWorld* World)
 
 void MetricPublisher::UpdateMapInContext(UWorld* World)
 {
+	// Always refresh the weak pointer, before any early-return and outside the name-change guard below.
+	// A same-name map reload (PIE restart, same-level travel) constructs a new UWorld with the same package
+	// name, so gating this assignment would leave CurrentWorld resolving to the destroyed old world.
+	CurrentWorld = World;
+
 	MicromegasTracing::DefaultContext* Ctx = MicromegasTracing::Dispatch::GetDefaultContext();
 	if (!Ctx)
 	{
@@ -108,6 +117,43 @@ void MetricPublisher::UpdateMapInContext(UWorld* World)
 		CurrentWorldName = WorldName;
 		static const FName MapProperty("map");
 		Ctx->Set(MapProperty, CurrentWorldName);
+	}
+}
+
+void MetricPublisher::EmitCameraAndPlayerMetrics(UWorld* World)
+{
+	if (!World->IsGameWorld())
+	{
+		return;
+	}
+
+	APlayerController* PC = GEngine->GetFirstLocalPlayerController(World);
+	if (!PC)
+	{
+		return;
+	}
+
+	if (const APawn* Pawn = PC->GetPawn())
+	{
+		const FVector PosCm = Pawn->GetActorLocation();   // native UE units (cm)
+		MICROMEGAS_FMETRIC("PlayerPosition", MicromegasTracing::Verbosity::Med, TEXT("PlayerPosition.X"), TEXT("cm"), PosCm.X);
+		MICROMEGAS_FMETRIC("PlayerPosition", MicromegasTracing::Verbosity::Med, TEXT("PlayerPosition.Y"), TEXT("cm"), PosCm.Y);
+		MICROMEGAS_FMETRIC("PlayerPosition", MicromegasTracing::Verbosity::Med, TEXT("PlayerPosition.Z"), TEXT("cm"), PosCm.Z);
+	}
+
+	if (const APlayerCameraManager* Cam = PC->PlayerCameraManager)
+	{
+		const FVector CamCm = Cam->GetCameraLocation();   // native UE units (cm)
+		MICROMEGAS_FMETRIC("CameraPosition", MicromegasTracing::Verbosity::Med, TEXT("CameraPosition.X"), TEXT("cm"), CamCm.X);
+		MICROMEGAS_FMETRIC("CameraPosition", MicromegasTracing::Verbosity::Med, TEXT("CameraPosition.Y"), TEXT("cm"), CamCm.Y);
+		MICROMEGAS_FMETRIC("CameraPosition", MicromegasTracing::Verbosity::Med, TEXT("CameraPosition.Z"), TEXT("cm"), CamCm.Z);
+
+		const FRotator Rot = Cam->GetCameraRotation();
+		const float FOV = Cam->GetFOVAngle();
+		MICROMEGAS_FMETRIC("CameraOrientation", MicromegasTracing::Verbosity::Med, TEXT("CameraOrientation.Pitch"), TEXT("deg"), Rot.Pitch);
+		MICROMEGAS_FMETRIC("CameraOrientation", MicromegasTracing::Verbosity::Med, TEXT("CameraOrientation.Yaw"), TEXT("deg"), Rot.Yaw);
+		MICROMEGAS_FMETRIC("CameraOrientation", MicromegasTracing::Verbosity::Med, TEXT("CameraOrientation.Roll"), TEXT("deg"), Rot.Roll);
+		MICROMEGAS_FMETRIC("CameraOrientation", MicromegasTracing::Verbosity::Med, TEXT("CameraOrientation.FOV"), TEXT("deg"), FOV);
 	}
 }
 
@@ -151,4 +197,9 @@ void MetricPublisher::Tick()
 	MICROMEGAS_IMETRIC("Memory", MicromegasTracing::Verbosity::Med, TEXT("PeakUsedPhysical"), TEXT("bytes"), MemStats.PeakUsedPhysical);
 	MICROMEGAS_IMETRIC("Memory", MicromegasTracing::Verbosity::Med, TEXT("UsedVirtual"), TEXT("bytes"), MemStats.UsedVirtual);
 	MICROMEGAS_IMETRIC("Memory", MicromegasTracing::Verbosity::Med, TEXT("PeakUsedVirtual"), TEXT("bytes"), MemStats.PeakUsedVirtual);
+
+	if (!IsRunningDedicatedServer() && CurrentWorld.IsValid())
+	{
+		EmitCameraAndPlayerMetrics(CurrentWorld.Get());
+	}
 }

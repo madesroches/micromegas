@@ -20,6 +20,7 @@ public:
 private:
 	void Tick();
 	void UpdateMapInContext(UWorld* World);
+	void EmitCameraAndPlayerMetrics(UWorld* World);
 
 	void OnWorldInit(UWorld* /*World*/, const UWorld::InitializationValues /*IVS*/);
 	void OnWorldTornDown(UWorld* World);
@@ -27,6 +28,7 @@ private:
 	static void EmitVSyncStatus(IConsoleVariable* CVar);
 
 	FName CurrentWorldName;
+	TWeakObjectPtr<UWorld> CurrentWorld;   // kept in sync with CurrentWorldName inside UpdateMapInContext
 	// Slate's last-interaction time is 0 until the first input; fall back to this so idle time reads from boot, not full uptime.
 	double BootTime;
 };
