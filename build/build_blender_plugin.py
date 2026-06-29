@@ -128,6 +128,24 @@ def workspace_version() -> str:
     raise RuntimeError(f"could not find [workspace.package] version in {cargo_toml}")
 
 
+def stamp_build_info() -> None:
+    """Write the current git commit hash into _build_info.py."""
+    result = subprocess.run(
+        ["git", "rev-parse", "--short", "HEAD"],
+        cwd=REPO_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    commit = result.stdout.strip()
+    build_info = REPO_ROOT / "blender" / "micromegas_blender" / "_build_info.py"
+    build_info.write_text(
+        f"# Stamped at build time by build/build_blender_plugin.py.\nCOMMIT = \"{commit}\"\n",
+        encoding="utf-8",
+    )
+    print(f"build info: commit={commit}")
+
+
 def sync_manifest_version() -> None:
     """Stamp blender_manifest.toml's version to the workspace version so the
     add-on ships the same version as the rest of the workspace."""
@@ -145,6 +163,7 @@ def sync_manifest_version() -> None:
 
 
 def build_zip() -> None:
+    stamp_build_info()
     sync_manifest_version()
     # Warn if a platform library is absent — a single-platform local build
     # (or a partial lib/) produces a zip that won't load on the missing OS.
