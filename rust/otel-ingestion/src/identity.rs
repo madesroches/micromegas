@@ -1,9 +1,9 @@
 //! Synthesizing micromegas Process / Stream / Block identity from OTLP `Resource` attributes.
 //!
 //! OTel has no `Process` object; just a `Resource` carrying `repeated KeyValue attributes`.
-//! We hash an OS-honest tuple of identifying attributes to a stable UUIDv5. Once the
-//! formula ships it cannot change without a `_V2` namespace UUID — that constraint is
-//! load-bearing for cross-pod consistency.
+//! We hash an OS-honest tuple of identifying attributes to a UUIDv5. Long-term stability of
+//! `process_id` values across upgrades is not a design goal — re-deriving existing ids is
+//! always acceptable, so the formula can be extended in-place when needed.
 
 use crate::proto::{AnyValue, KeyValue, Resource, any_value};
 use micromegas_tracing::prelude::*;
@@ -161,27 +161,67 @@ pub fn is_degenerate_resource(attrs: &[KeyValue]) -> bool {
         && attr_norm(attrs, "service.instance.id").is_empty()
 }
 
-/// Derives `process_id` from a resource. Stable for the lifetime of the formula —
-/// shipping a change here requires bumping `NS_OTEL_PROCESS_V1` to `_V2`.
+/// Derives `process_id` from a resource by hashing the identifying tuple under `NS_OTEL_PROCESS_V1`.
 ///
-/// The owner (`process.owner` / `user.name`) is part of the formula: processes are still
-/// new enough that re-deriving ids under the same namespace is acceptable, so this field
-/// was added without a `_V2` bump. Any further change must bump the namespace.
+/// All fields pass through `attr_norm` (lower-case + trim) except `process.pid` and
+/// `process.creation.time` which are `attr_raw`. Field order (separated by `\x1F`):
+///
+///   host.id · host.name · process.pid · process.creation.time ·
+///   service.namespace · service.name · service.instance.id · process.owner ·
+///   os.type · os.version · os.name · os.description · os.build_id ·
+///   host.arch · host.type ·
+///   host.image.id · host.image.name · host.image.version ·
+///   host.cpu.model.id · host.cpu.model.name · host.cpu.family ·
+///   host.cpu.vendor.id · host.cpu.stepping · host.cpu.cache.l2.size ·
+///   service.version ·
+///   telemetry.sdk.name · telemetry.sdk.language · telemetry.sdk.version ·
+///   process.runtime.name · process.runtime.version · process.runtime.description
+///
+/// Fields are appended in-place under the same namespace UUID rather than bumping to `_V2` —
+/// the same pattern used when `process.owner` was added. Long-term stability of `process_id`
+/// values is not a design goal; re-deriving existing ids is always acceptable.
 pub fn process_id_from_resource(resource: Option<&Resource>) -> Uuid {
     let attrs = resource.map(|r| r.attributes.as_slice()).unwrap_or(&[]);
 
-    let key = format!(
-        "{host_id}{s}{host_name}{s}{pid}{s}{start}{s}{ns}{s}{name}{s}{instance}{s}{owner}",
-        s = SEPARATOR,
-        host_id = attr_norm(attrs, "host.id"),
-        host_name = attr_norm(attrs, "host.name"),
-        pid = attr_raw(attrs, "process.pid"),
-        start = process_start_string(attrs),
-        ns = attr_norm(attrs, "service.namespace"),
-        name = attr_norm(attrs, "service.name"),
-        instance = attr_norm(attrs, "service.instance.id"),
-        owner = norm(&process_owner_string(attrs)),
-    );
+    let fields = [
+        attr_norm(attrs, "host.id"),
+        attr_norm(attrs, "host.name"),
+        attr_raw(attrs, "process.pid"),
+        process_start_string(attrs),
+        attr_norm(attrs, "service.namespace"),
+        attr_norm(attrs, "service.name"),
+        attr_norm(attrs, "service.instance.id"),
+        norm(&process_owner_string(attrs)),
+        // OS identity
+        attr_norm(attrs, "os.type"),
+        attr_norm(attrs, "os.version"),
+        attr_norm(attrs, "os.name"),
+        attr_norm(attrs, "os.description"),
+        attr_norm(attrs, "os.build_id"),
+        // Host hardware
+        attr_norm(attrs, "host.arch"),
+        attr_norm(attrs, "host.type"),
+        attr_norm(attrs, "host.image.id"),
+        attr_norm(attrs, "host.image.name"),
+        attr_norm(attrs, "host.image.version"),
+        attr_norm(attrs, "host.cpu.model.id"),
+        attr_norm(attrs, "host.cpu.model.name"),
+        attr_norm(attrs, "host.cpu.family"),
+        attr_norm(attrs, "host.cpu.vendor.id"),
+        attr_norm(attrs, "host.cpu.stepping"),
+        attr_norm(attrs, "host.cpu.cache.l2.size"),
+        // Service / SDK
+        attr_norm(attrs, "service.version"),
+        attr_norm(attrs, "telemetry.sdk.name"),
+        attr_norm(attrs, "telemetry.sdk.language"),
+        attr_norm(attrs, "telemetry.sdk.version"),
+        // Runtime
+        attr_norm(attrs, "process.runtime.name"),
+        attr_norm(attrs, "process.runtime.version"),
+        attr_norm(attrs, "process.runtime.description"),
+    ];
+
+    let key = fields.join(&SEPARATOR.to_string());
     Uuid::new_v5(&NS_OTEL_PROCESS_V1, key.as_bytes())
 }
 

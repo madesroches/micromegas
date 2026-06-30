@@ -211,6 +211,49 @@ fn strindex_value_on_identity_key_hashes_as_absent() {
 }
 
 #[test]
+fn windows_and_wsl_differ() {
+    // Motivating case: Windows + WSL sibling processes on the same machine sharing all base
+    // V1 fields but differing in os.type must not collapse onto the same process_id.
+    let windows = resource_with(&[
+        ("host.id", "machine-1"),
+        ("host.name", "my-machine"),
+        ("service.name", "claude-code"),
+        ("os.type", "windows"),
+    ]);
+    let wsl = resource_with(&[
+        ("host.id", "machine-1"),
+        ("host.name", "my-machine"),
+        ("service.name", "claude-code"),
+        ("os.type", "linux"),
+    ]);
+    assert_ne!(
+        process_id_from_resource(Some(&windows)),
+        process_id_from_resource(Some(&wsl))
+    );
+}
+
+#[test]
+fn process_id_is_stable_with_new_fields() {
+    // Regression lock: a canonical resource with known values must always hash to this UUID.
+    // Update this constant only if the formula is intentionally changed.
+    let r = resource_with(&[
+        ("host.name", "my-host"),
+        ("service.name", "my-service"),
+        ("os.type", "linux"),
+        ("os.version", "5.15.0"),
+        ("host.arch", "x86_64"),
+        ("service.version", "2.3.1"),
+        ("telemetry.sdk.name", "opentelemetry"),
+        ("telemetry.sdk.language", "rust"),
+        ("telemetry.sdk.version", "0.28.0"),
+        ("process.runtime.name", "rustc"),
+        ("process.runtime.version", "1.88.0"),
+    ]);
+    let id = process_id_from_resource(Some(&r));
+    assert_eq!(id.to_string(), "92267645-021b-5d0f-960b-c74719552658");
+}
+
+#[test]
 fn interned_key_is_ignored_in_identity() {
     // `service.name` provided only via `key_strindex` (empty `key`) is not found by `attr`, so
     // it hashes the same as a resource lacking `service.name`.
