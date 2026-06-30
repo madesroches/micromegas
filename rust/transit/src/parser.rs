@@ -1,19 +1,33 @@
 use crate::{
-    UserDefinedType, advance_window, read_advance_string, read_any, read_consume_pod,
+    UserDefinedType, advance_window, read_advance_string_in, read_any, read_consume_pod,
     value::{Object, Value},
 };
 use anyhow::{Context, Result, bail};
+use bumpalo::Bump;
 use std::{collections::HashMap, sync::Arc};
 
-pub type CustomReader =
-    Arc<dyn Fn(&UserDefinedType, &[UserDefinedType], &HashMap<u64, Value>, &[u8]) -> Result<Value>>;
+/// A reader for a custom (dynamically-sized) transit type.
+///
+/// Two higher-ranked lifetimes keep the returned `Value<'a>` (which borrows the
+/// arena and source buffer) independent of the `&'dep` borrow of the dependency
+/// map, so the caller can insert the result back into the map afterwards.
+pub type CustomReader = Arc<
+    dyn for<'a, 'dep> Fn(
+        &'a Bump,
+        &'a UserDefinedType,
+        &'a [UserDefinedType],
+        &'dep HashMap<u64, Value<'a>>,
+        &'a [u8],
+    ) -> Result<Value<'a>>,
+>;
 pub type CustomReaderMap = HashMap<String, CustomReader>;
 
-pub fn read_dependencies(
+pub fn read_dependencies<'a>(
+    bump: &'a Bump,
     custom_readers: &CustomReaderMap,
-    udts: &[UserDefinedType],
-    buffer: &[u8],
-) -> Result<HashMap<u64, Value>> {
+    udts: &'a [UserDefinedType],
+    buffer: &'a [u8],
+) -> Result<HashMap<u64, Value<'a>>> {
     let mut hash = HashMap::new();
     let mut offset = 0;
     while offset < buffer.len() {
@@ -29,49 +43,44 @@ pub fn read_dependencies(
         let object_size = match udt.size {
             0 => {
                 //dynamic size
-                unsafe {
-                    let size_ptr = buffer.as_ptr().add(offset);
-                    let obj_size = read_any::<u32>(size_ptr);
-                    offset += std::mem::size_of::<u32>();
-                    obj_size as usize
-                }
+                let obj_size = unsafe { read_any::<u32>(buffer.as_ptr().add(offset)) };
+                offset += std::mem::size_of::<u32>();
+                obj_size as usize
             }
             static_size => static_size,
         };
 
         match udt.name.as_str() {
-            "StaticString" => unsafe {
-                let id_ptr = buffer.as_ptr().add(offset);
-                let string_id = read_any::<u64>(id_ptr);
+            "StaticString" => {
+                // zero-copy: the string borrows the (whole-block) source buffer.
+                let string_id = unsafe { read_any::<u64>(buffer.as_ptr().add(offset)) };
                 let nb_utf8_bytes = object_size - std::mem::size_of::<usize>();
-                let utf8_ptr = buffer.as_ptr().add(offset + std::mem::size_of::<usize>());
-                let slice = std::ptr::slice_from_raw_parts(utf8_ptr, nb_utf8_bytes);
-                let string =
-                    String::from(std::str::from_utf8(&*slice).with_context(|| "str::from_utf8")?);
-                let insert_res = hash.insert(string_id, Value::String(Arc::new(string)));
+                let str_start = offset + std::mem::size_of::<usize>();
+                let s = std::str::from_utf8(&buffer[str_start..str_start + nb_utf8_bytes])
+                    .with_context(|| "str::from_utf8")?;
+                let insert_res = hash.insert(string_id, Value::String(s));
                 assert!(insert_res.is_none());
-            },
+            }
             "StaticStringDependency" => {
                 let mut window = advance_window(buffer, offset);
                 let string_id: u64 = read_consume_pod(&mut window);
-                let string = read_advance_string(&mut window).with_context(|| "parsing string")?;
-
-                let insert_res = hash.insert(string_id, Value::String(Arc::new(string)));
+                let s =
+                    read_advance_string_in(bump, &mut window).with_context(|| "parsing string")?;
+                let insert_res = hash.insert(string_id, Value::String(s));
                 assert!(insert_res.is_none());
             }
             type_name => {
                 if let Some(reader) = custom_readers.get(type_name) {
                     let window = advance_window(buffer, offset);
-                    if let Value::Object(obj) = (*reader)(udt, udts, &hash, window)
+                    if let Value::Object(obj) = (*reader)(bump, udt, udts, &hash, window)
                         .with_context(|| "parsing custom dependency")?
                     {
                         let id: u64 = obj
                             .get("id")
                             .with_context(|| "reading id of custom dependency")?;
-                        let value = obj
+                        let value = *obj
                             .get_ref("value")
-                            .with_context(|| "reading value of custom dependency")?
-                            .clone();
+                            .with_context(|| "reading value of custom dependency")?;
                         let insert_res = hash.insert(id, value);
                         assert!(insert_res.is_none());
                     } else {
@@ -81,9 +90,14 @@ pub fn read_dependencies(
                     if udt.size == 0 {
                         anyhow::bail!("invalid user-defined type {:?}", udt);
                     }
-                    let instance =
-                        parse_pod_instance(udt, udts, &hash, &buffer[offset..offset + udt.size])
-                            .with_context(|| "parse_pod_instance")?;
+                    let instance = parse_pod_instance(
+                        bump,
+                        udt,
+                        udts,
+                        &hash,
+                        &buffer[offset..offset + udt.size],
+                    )
+                    .with_context(|| "parse_pod_instance")?;
                     if let Value::Object(obj) = instance {
                         let insert_res = hash.insert(obj.get::<u64>("id")?, Value::Object(obj));
                         assert!(insert_res.is_none());
@@ -97,34 +111,35 @@ pub fn read_dependencies(
     Ok(hash)
 }
 
-fn parse_custom_instance(
+fn parse_custom_instance<'a>(
+    bump: &'a Bump,
     custom_readers: &CustomReaderMap,
-    udt: &UserDefinedType,
-    udts: &[UserDefinedType],
-    dependencies: &HashMap<u64, Value>,
-    object_window: &[u8],
-) -> Result<Value> {
+    udt: &'a UserDefinedType,
+    udts: &'a [UserDefinedType],
+    dependencies: &HashMap<u64, Value<'a>>,
+    object_window: &'a [u8],
+) -> Result<Value<'a>> {
     if let Some(reader) = custom_readers.get(&*udt.name) {
-        (*reader)(udt, udts, dependencies, object_window)
+        (*reader)(bump, udt, udts, dependencies, object_window)
     } else {
         log::warn!("unknown custom object {}", &udt.name);
-        Ok(Value::Object(Arc::new(Object {
-            type_name: udt.name.clone(),
-            members: vec![],
+        Ok(Value::Object(bump.alloc(Object {
+            type_name: udt.name.as_str(),
+            members: &[],
         })))
     }
 }
 
-pub fn parse_pod_instance(
-    udt: &UserDefinedType,
-    udts: &[UserDefinedType],
-    dependencies: &HashMap<u64, Value>,
-    object_window: &[u8],
-) -> Result<Value> {
-    let mut members: Vec<(Arc<String>, Value)> = vec![];
+pub fn parse_pod_instance<'a>(
+    bump: &'a Bump,
+    udt: &'a UserDefinedType,
+    udts: &'a [UserDefinedType],
+    dependencies: &HashMap<u64, Value<'a>>,
+    object_window: &'a [u8],
+) -> Result<Value<'a>> {
+    let mut members = bumpalo::collections::Vec::with_capacity_in(udt.members.len(), bump);
     for member_meta in &udt.members {
-        let name = member_meta.name.clone();
-        let type_name = member_meta.type_name.clone();
+        let name: &'a str = member_meta.name.as_str();
         let value = if member_meta.is_reference {
             if member_meta.size < std::mem::size_of::<u64>() {
                 bail!(
@@ -134,12 +149,12 @@ pub fn parse_pod_instance(
             }
             let key = unsafe { read_any::<u64>(object_window.as_ptr().add(member_meta.offset)) };
             if let Some(v) = dependencies.get(&key) {
-                v.clone()
+                *v
             } else {
                 bail!("dependency not found: member={member_meta:?} key={key}");
             }
         } else {
-            match type_name.as_str() {
+            match member_meta.type_name.as_str() {
                 "u8" | "uint8" => {
                     assert_eq!(std::mem::size_of::<u8>(), member_meta.size);
                     unsafe {
@@ -187,6 +202,7 @@ pub fn parse_pod_instance(
                     {
                         let member_udt = &udts[index];
                         parse_pod_instance(
+                            bump,
                             member_udt,
                             udts,
                             dependencies,
@@ -205,29 +221,30 @@ pub fn parse_pod_instance(
 
     if udt.is_reference {
         // reference objects need a member called 'id' which is the key to the dependency
-        if let Some(id_index) = members.iter().position(|m| *m.0 == "id") {
-            return Ok(members[id_index].1.clone());
+        if let Some(id_index) = members.iter().position(|m| m.0 == "id") {
+            return Ok(members[id_index].1);
         }
         bail!("reference object has no 'id' member");
     }
 
-    Ok(Value::Object(Arc::new(Object {
-        type_name: udt.name.clone(),
-        members,
+    Ok(Value::Object(bump.alloc(Object {
+        type_name: udt.name.as_str(),
+        members: members.into_bump_slice(),
     })))
 }
 
 // parse_object_buffer calls fun for each object in the buffer until fun returns
 // `false`
-pub fn parse_object_buffer<F>(
+pub fn parse_object_buffer<'a, F>(
+    bump: &'a Bump,
     custom_readers: &CustomReaderMap,
-    dependencies: &HashMap<u64, Value>,
-    udts: &[UserDefinedType],
-    buffer: &[u8],
+    dependencies: &HashMap<u64, Value<'a>>,
+    udts: &'a [UserDefinedType],
+    buffer: &'a [u8],
     mut fun: F,
 ) -> Result<bool>
 where
-    F: FnMut(Value) -> Result<bool>,
+    F: FnMut(Value<'a>) -> Result<bool>,
 {
     let mut offset = 0;
     while offset < buffer.len() {
@@ -240,17 +257,15 @@ where
         let (object_size, is_size_dynamic) = match udt.size {
             0 => {
                 //dynamic size
-                unsafe {
-                    let size_ptr = buffer.as_ptr().add(offset);
-                    let obj_size = read_any::<u32>(size_ptr);
-                    offset += std::mem::size_of::<u32>();
-                    (obj_size as usize, true)
-                }
+                let obj_size = unsafe { read_any::<u32>(buffer.as_ptr().add(offset)) };
+                offset += std::mem::size_of::<u32>();
+                (obj_size as usize, true)
             }
             static_size => (static_size, false),
         };
         let instance = if is_size_dynamic {
             parse_custom_instance(
+                bump,
                 custom_readers,
                 udt,
                 udts,
@@ -259,8 +274,14 @@ where
             )
             .with_context(|| "parse_custom_instance")?
         } else {
-            parse_pod_instance(udt, udts, dependencies, &buffer[offset..offset + udt.size])
-                .with_context(|| "parse_pod_instance")?
+            parse_pod_instance(
+                bump,
+                udt,
+                udts,
+                dependencies,
+                &buffer[offset..offset + udt.size],
+            )
+            .with_context(|| "parse_pod_instance")?
         };
         if !fun(instance)? {
             return Ok(false);

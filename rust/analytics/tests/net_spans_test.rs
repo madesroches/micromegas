@@ -16,8 +16,8 @@ fn make_builder_ctx() -> (NetSpanRecordBuilder, Arc<String>, Arc<String>, Conver
     )
 }
 
-fn s(value: &str) -> Arc<String> {
-    Arc::new(String::from(value))
+fn s(value: &str) -> &str {
+    value
 }
 
 fn collect_rows(builder: NetSpanRecordBuilder) -> Vec<NetRow> {

@@ -3829,6 +3829,7 @@ dependencies = [
  "async-stream",
  "async-trait",
  "base64 0.22.1",
+ "bumpalo",
  "bytes",
  "chrono",
  "ciborium",
@@ -4085,6 +4086,7 @@ name = "micromegas-tracing"
 version = "0.27.0"
 dependencies = [
  "anyhow",
+ "bumpalo",
  "chrono",
  "criterion",
  "futures",
@@ -4123,6 +4125,7 @@ name = "micromegas-transit"
 version = "0.27.0"
 dependencies = [
  "anyhow",
+ "bumpalo",
  "lazy_static",
  "log",
  "memoffset",

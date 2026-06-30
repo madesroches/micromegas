@@ -1,6 +1,6 @@
 use crate::metadata::StreamMetadata;
 use crate::payload::{fetch_block_payload, parse_block};
-use crate::scope::ScopeDesc;
+use crate::scope::BorrowedScopeDesc;
 use anyhow::{Context, Result};
 use micromegas_telemetry::blob_storage::BlobStorage;
 use micromegas_tracing::prelude::*;
@@ -14,34 +14,34 @@ pub trait ThreadBlockProcessor {
         &mut self,
         block_id: &str,
         event_id: i64,
-        scope: ScopeDesc,
+        scope: BorrowedScopeDesc<'_>,
         ts: i64,
     ) -> Result<bool>;
     fn on_end_thread_scope(
         &mut self,
         block_id: &str,
         event_id: i64,
-        scope: ScopeDesc,
+        scope: BorrowedScopeDesc<'_>,
         ts: i64,
     ) -> Result<bool>;
 }
 
-fn on_thread_event<F>(obj: &Object, mut fun: F) -> Result<bool>
+fn on_thread_event<'a, F>(obj: &Object<'a>, mut fun: F) -> Result<bool>
 where
-    F: FnMut(Arc<Object>, i64) -> Result<bool>,
+    F: FnMut(&'a Object<'a>, i64) -> Result<bool>,
 {
     let tick = obj.get::<i64>("time")?;
-    let scope = obj.get::<Arc<Object>>("thread_span_desc")?;
+    let scope = obj.get::<&Object>("thread_span_desc")?;
     fun(scope, tick)
 }
 
-fn on_thread_named_event<F>(obj: &Object, mut fun: F) -> Result<bool>
+fn on_thread_named_event<'a, F>(obj: &Object<'a>, mut fun: F) -> Result<bool>
 where
-    F: FnMut(Arc<Object>, Arc<String>, i64) -> Result<bool>,
+    F: FnMut(&'a Object<'a>, &'a str, i64) -> Result<bool>,
 {
     let tick = obj.get::<i64>("time")?;
-    let scope = obj.get::<Arc<Object>>("thread_span_location")?;
-    let name = obj.get::<Arc<String>>("name")?;
+    let scope = obj.get::<&Object>("thread_span_location")?;
+    let name = obj.get::<&str>("name")?;
     fun(scope, name, tick)
 }
 
@@ -57,38 +57,38 @@ pub fn parse_thread_block_payload<Proc: ThreadBlockProcessor>(
     let mut event_id = object_offset;
     parse_block(stream, payload, |val| {
         let res = if let Value::Object(obj) = val {
-            match obj.type_name.as_str() {
-                "BeginThreadSpanEvent" => on_thread_event(&obj, |scope, ts| {
-                    let name = scope.get::<Arc<String>>("name")?;
-                    let filename = scope.get::<Arc<String>>("file")?;
-                    let target = scope.get::<Arc<String>>("target")?;
+            match obj.type_name {
+                "BeginThreadSpanEvent" => on_thread_event(obj, |scope, ts| {
+                    let name = scope.get::<&str>("name")?;
+                    let filename = scope.get::<&str>("file")?;
+                    let target = scope.get::<&str>("target")?;
                     let line = scope.get::<u32>("line")?;
-                    let scope_desc = ScopeDesc::new(name, filename, target, line);
+                    let scope_desc = BorrowedScopeDesc::new(name, filename, target, line);
                     processor.on_begin_thread_scope(block_id, event_id, scope_desc, ts)
                 })
                 .with_context(|| "reading BeginThreadSpanEvent"),
-                "EndThreadSpanEvent" => on_thread_event(&obj, |scope, ts| {
-                    let name = scope.get::<Arc<String>>("name")?;
-                    let filename = scope.get::<Arc<String>>("file")?;
-                    let target = scope.get::<Arc<String>>("target")?;
+                "EndThreadSpanEvent" => on_thread_event(obj, |scope, ts| {
+                    let name = scope.get::<&str>("name")?;
+                    let filename = scope.get::<&str>("file")?;
+                    let target = scope.get::<&str>("target")?;
                     let line = scope.get::<u32>("line")?;
-                    let scope_desc = ScopeDesc::new(name, filename, target, line);
+                    let scope_desc = BorrowedScopeDesc::new(name, filename, target, line);
                     processor.on_end_thread_scope(block_id, event_id, scope_desc, ts)
                 })
                 .with_context(|| "reading EndThreadSpanEvent"),
-                "BeginThreadNamedSpanEvent" => on_thread_named_event(&obj, |scope, name, ts| {
-                    let filename = scope.get::<Arc<String>>("file")?;
-                    let target = scope.get::<Arc<String>>("target")?;
+                "BeginThreadNamedSpanEvent" => on_thread_named_event(obj, |scope, name, ts| {
+                    let filename = scope.get::<&str>("file")?;
+                    let target = scope.get::<&str>("target")?;
                     let line = scope.get::<u32>("line")?;
-                    let scope_desc = ScopeDesc::new(name, filename, target, line);
+                    let scope_desc = BorrowedScopeDesc::new(name, filename, target, line);
                     processor.on_begin_thread_scope(block_id, event_id, scope_desc, ts)
                 })
                 .with_context(|| "reading BeginThreadNamedSpanEvent"),
-                "EndThreadNamedSpanEvent" => on_thread_named_event(&obj, |scope, name, ts| {
-                    let filename = scope.get::<Arc<String>>("file")?;
-                    let target = scope.get::<Arc<String>>("target")?;
+                "EndThreadNamedSpanEvent" => on_thread_named_event(obj, |scope, name, ts| {
+                    let filename = scope.get::<&str>("file")?;
+                    let target = scope.get::<&str>("target")?;
                     let line = scope.get::<u32>("line")?;
-                    let scope_desc = ScopeDesc::new(name, filename, target, line);
+                    let scope_desc = BorrowedScopeDesc::new(name, filename, target, line);
                     processor.on_end_thread_scope(block_id, event_id, scope_desc, ts)
                 })
                 .with_context(|| "reading EndThreadNamedSpanEvent"),

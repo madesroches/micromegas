@@ -171,10 +171,12 @@ impl<'a> NetBlockProcessor for NetSpanTreeBuilder<'a> {
         &mut self,
         event_id: i64,
         time: i64,
-        connection_name: Arc<String>,
+        connection_name: &str,
         is_outgoing: bool,
     ) -> Result<bool> {
         let begin_time_ns = self.convert_ticks.ticks_to_nanoseconds(time);
+        // Owned once at push: the open-span stack outlives the per-block arena.
+        let connection_name = Arc::new(connection_name.to_owned());
         self.stack.push(OpenSpan {
             span_id: event_id,
             parent_span_id: ROOT_PARENT_SPAN_ID,
@@ -194,12 +196,7 @@ impl<'a> NetBlockProcessor for NetSpanTreeBuilder<'a> {
         self.close_span(&KIND_CONNECTION, end_time_ns, bit_size)
     }
 
-    fn on_object_begin(
-        &mut self,
-        event_id: i64,
-        time: i64,
-        object_name: Arc<String>,
-    ) -> Result<bool> {
+    fn on_object_begin(&mut self, event_id: i64, time: i64, object_name: &str) -> Result<bool> {
         let begin_time_ns = self.convert_ticks.ticks_to_nanoseconds(time);
         let (parent_span_id, depth, _) = self.parent_of_new_child();
         let (connection_name, is_outgoing) = self.connection_context();
@@ -208,7 +205,7 @@ impl<'a> NetBlockProcessor for NetSpanTreeBuilder<'a> {
             parent_span_id,
             depth,
             kind: KIND_OBJECT.clone(),
-            name: object_name,
+            name: Arc::new(object_name.to_owned()),
             connection_name,
             is_outgoing,
             begin_time_ns,
@@ -226,7 +223,7 @@ impl<'a> NetBlockProcessor for NetSpanTreeBuilder<'a> {
         &mut self,
         event_id: i64,
         time: i64,
-        property_name: Arc<String>,
+        property_name: &str,
         bit_size: i64,
     ) -> Result<bool> {
         let event_time_ns = self.convert_ticks.ticks_to_nanoseconds(time);
@@ -240,7 +237,7 @@ impl<'a> NetBlockProcessor for NetSpanTreeBuilder<'a> {
             parent_span_id,
             depth,
             kind: KIND_PROPERTY.clone(),
-            name: property_name,
+            name: Arc::new(property_name.to_owned()),
             connection_name,
             is_outgoing,
             begin_bits,
@@ -256,12 +253,7 @@ impl<'a> NetBlockProcessor for NetSpanTreeBuilder<'a> {
         Ok(true)
     }
 
-    fn on_rpc_begin(
-        &mut self,
-        event_id: i64,
-        time: i64,
-        function_name: Arc<String>,
-    ) -> Result<bool> {
+    fn on_rpc_begin(&mut self, event_id: i64, time: i64, function_name: &str) -> Result<bool> {
         let begin_time_ns = self.convert_ticks.ticks_to_nanoseconds(time);
         let (parent_span_id, depth, _) = self.parent_of_new_child();
         let (connection_name, is_outgoing) = self.connection_context();
@@ -270,7 +262,7 @@ impl<'a> NetBlockProcessor for NetSpanTreeBuilder<'a> {
             parent_span_id,
             depth,
             kind: KIND_RPC.clone(),
-            name: function_name,
+            name: Arc::new(function_name.to_owned()),
             connection_name,
             is_outgoing,
             begin_time_ns,

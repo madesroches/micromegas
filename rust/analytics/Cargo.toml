@@ -22,6 +22,7 @@ arrow-flight.workspace = true
 async-stream.workspace = true
 async-trait.workspace = true
 base64.workspace = true
+bumpalo.workspace = true
 bytes.workspace = true
 chrono.workspace = true
 ciborium.workspace = true
@@ -52,4 +53,8 @@ criterion = { version = "0.5", features = ["html_reports"] }
 
 [[bench]]
 name = "property_get"
+harness = false
+
+[[bench]]
+name = "parse_block"
 harness = false

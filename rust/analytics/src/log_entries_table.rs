@@ -150,9 +150,9 @@ impl LogEntriesRecordBuilder {
         self.usernames.append_value(&row.process.username);
         self.computers.append_value(&row.process.computer);
         self.times.append_value(row.time);
-        self.targets.append_value(&*row.target);
+        self.targets.append_value(row.target);
         self.levels.append_value(row.level);
-        self.msgs.append_value(&*row.msg);
+        self.msgs.append_value(row.msg);
         self.properties.append_property_set(&row.properties)?;
         self.process_properties
             .append_value(&*row.process.properties);
@@ -163,9 +163,9 @@ impl LogEntriesRecordBuilder {
     pub fn append_entry_only(&mut self, row: &LogEntry) -> Result<()> {
         // Only append fields that truly vary per log entry
         self.times.append_value(row.time);
-        self.targets.append_value(&*row.target);
+        self.targets.append_value(row.target);
         self.levels.append_value(row.level);
-        self.msgs.append_value(&*row.msg);
+        self.msgs.append_value(row.msg);
         self.properties.append_property_set(&row.properties)?;
         Ok(())
     }

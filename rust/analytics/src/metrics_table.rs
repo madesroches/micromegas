@@ -155,9 +155,9 @@ impl MetricsRecordBuilder {
         self.usernames.append_value(&row.process.username);
         self.computers.append_value(&row.process.computer);
         self.times.append_value(row.time);
-        self.targets.append_value(&*row.target);
-        self.names.append_value(&*row.name);
-        self.units.append_value(&*row.unit);
+        self.targets.append_value(row.target);
+        self.names.append_value(row.name);
+        self.units.append_value(row.unit);
         self.values.append_value(row.value);
         self.properties.append_property_set(&row.properties)?;
         self.process_properties
@@ -169,9 +169,9 @@ impl MetricsRecordBuilder {
     pub fn append_entry_only(&mut self, row: &Measure) -> Result<()> {
         // Only append fields that truly vary per metrics entry
         self.times.append_value(row.time);
-        self.targets.append_value(&*row.target);
-        self.names.append_value(&*row.name);
-        self.units.append_value(&*row.unit);
+        self.targets.append_value(row.target);
+        self.names.append_value(row.name);
+        self.units.append_value(row.unit);
         self.values.append_value(row.value);
         self.properties.append_property_set(&row.properties)?;
         Ok(())

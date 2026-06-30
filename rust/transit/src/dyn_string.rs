@@ -3,6 +3,8 @@ use crate::{
     write_any,
 };
 use anyhow::Result;
+use bumpalo::Bump;
+use std::borrow::Cow;
 
 #[derive(Debug)]
 pub struct LegacyDynString(pub String);
@@ -79,6 +81,40 @@ pub fn read_advance_string(window: &mut &[u8]) -> Result<String> {
                 Ok(String::from_utf16_lossy(&*wide_slice))
             }
             StringCodec::Utf8 => Ok(String::from_utf8_lossy(string_buffer).to_string()),
+        }
+    }
+}
+
+/// Parse a string from the buffer, moving the buffer pointer forward.
+///
+/// Borrows the source buffer (`'a`) where possible: a valid-UTF-8 string is
+/// returned as a zero-copy slice of the buffer. Only the transcoded cases
+/// (UTF-16 wide, or lossy replacement of invalid bytes) allocate into the arena.
+pub fn read_advance_string_in<'a>(bump: &'a Bump, window: &mut &'a [u8]) -> Result<&'a str> {
+    let codec = StringCodec::try_from(read_consume_pod::<u8>(window))?;
+    let string_len_bytes: u32 = read_consume_pod(window);
+    let string_buffer = &window[0..(string_len_bytes as usize)];
+    *window = advance_window(window, string_len_bytes as usize);
+    match codec {
+        // Treat ANSI (windows-1252/latin1) as utf8, matching read_advance_string.
+        StringCodec::Ansi | StringCodec::Utf8 => match String::from_utf8_lossy(string_buffer) {
+            // Valid UTF-8: borrow the source buffer directly (zero-copy).
+            Cow::Borrowed(s) => Ok(s),
+            // Invalid bytes were replaced: the transcoded result lives in the arena.
+            Cow::Owned(s) => Ok(bump.alloc_str(&s)),
+        },
+        StringCodec::Wide => {
+            if !string_len_bytes.is_multiple_of(2) {
+                anyhow::bail!("wrong utf-16 buffer size");
+            }
+            // Decode UTF-16 LE without assuming the source bytes are 2-byte aligned.
+            let units = string_buffer
+                .chunks_exact(2)
+                .map(|pair| u16::from_le_bytes([pair[0], pair[1]]));
+            let s: String = char::decode_utf16(units)
+                .map(|r| r.unwrap_or(char::REPLACEMENT_CHARACTER))
+                .collect();
+            Ok(bump.alloc_str(&s))
         }
     }
 }

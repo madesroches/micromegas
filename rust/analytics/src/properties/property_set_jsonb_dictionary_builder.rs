@@ -4,7 +4,6 @@ use anyhow::Result;
 use datafusion::arrow::array::{BinaryArray, DictionaryArray, Int32Array};
 use datafusion::arrow::datatypes::Int32Type;
 use datafusion::common::DataFusionError;
-use micromegas_transit::value::Object;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -13,19 +12,15 @@ use std::sync::Arc;
 /// This is safe because:
 /// 1. We only use the pointer for identity comparison (equality/hashing)
 /// 2. We never dereference the pointer
-/// 3. We keep the actual Arc<Object> alive in _property_refs
+/// 3. The parse arena keeps the underlying objects alive for the whole block,
+///    so addresses stay stable and unique while comparisons happen; after the
+///    block is parsed the pointers are never touched again.
 /// 4. The cache is scoped to single block processing (no cross-thread sharing)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-struct ObjectPointer(*const Object);
+struct ObjectPointer(*const ());
 
 unsafe impl Send for ObjectPointer {}
 unsafe impl Sync for ObjectPointer {}
-
-impl ObjectPointer {
-    fn new(arc_obj: &Arc<Object>) -> Self {
-        Self(Arc::as_ptr(arc_obj))
-    }
-}
 
 /// Custom dictionary builder for PropertySet → JSONB encoding with pointer-based deduplication.
 ///
@@ -44,8 +39,6 @@ pub struct PropertySetJsonbDictionaryBuilder {
     jsonb_values: Vec<Vec<u8>>,
     /// Dictionary keys (indices) for each appended entry
     keys: Vec<Option<i32>>,
-    /// Keep PropertySet references alive for pointer safety
-    _property_refs: Vec<Arc<Object>>,
 }
 
 impl PropertySetJsonbDictionaryBuilder {
@@ -55,7 +48,6 @@ impl PropertySetJsonbDictionaryBuilder {
             pointer_to_index: HashMap::with_capacity(capacity),
             jsonb_values: Vec::with_capacity(capacity),
             keys: Vec::with_capacity(capacity),
-            _property_refs: Vec::with_capacity(capacity),
         }
     }
 
@@ -63,9 +55,8 @@ impl PropertySetJsonbDictionaryBuilder {
     ///
     /// For cache hits: reuses existing dictionary index (no serialization)
     /// For cache misses: serializes once and stores in dictionary
-    pub fn append_property_set(&mut self, property_set: &PropertySet) -> Result<()> {
-        let arc_obj = property_set.as_arc_object();
-        let ptr = ObjectPointer::new(arc_obj);
+    pub fn append_property_set(&mut self, property_set: &PropertySet<'_>) -> Result<()> {
+        let ptr = ObjectPointer(property_set.object_ptr());
 
         match self.pointer_to_index.get(&ptr) {
             Some(&index) => {
@@ -80,8 +71,6 @@ impl PropertySetJsonbDictionaryBuilder {
                 self.jsonb_values.push(jsonb_bytes);
                 self.pointer_to_index.insert(ptr, new_index);
                 self.keys.push(Some(new_index));
-                // Keep Arc reference alive to ensure pointer validity
-                self._property_refs.push(Arc::clone(arc_obj));
             }
         }
         Ok(())

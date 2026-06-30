@@ -47,29 +47,25 @@ fn test_image_block_round_trip() {
 
     let mut events_parsed = 0;
     parse_block(&stream_metadata, &received_block.payload, |val| {
-        if let Value::Object(obj) = &val {
-            assert_eq!(
-                obj.type_name.as_str(),
-                "ImageEvent",
-                "unexpected object type"
-            );
+        if let Value::Object(obj) = val {
+            assert_eq!(obj.type_name, "ImageEvent", "unexpected object type");
             assert_eq!(
                 obj.get::<i64>("time").expect("reading time"),
                 42,
                 "time mismatch"
             );
             assert_eq!(
-                &*obj.get::<Arc<String>>("name").expect("reading name"),
+                obj.get::<&str>("name").expect("reading name"),
                 "heatmap",
                 "name mismatch"
             );
             assert_eq!(
-                &*obj.get::<Arc<String>>("format").expect("reading format"),
+                obj.get::<&str>("format").expect("reading format"),
                 "png",
                 "format mismatch"
             );
-            let parsed_data = obj.get::<Arc<Vec<u8>>>("data").expect("reading data");
-            assert_eq!(*parsed_data, image_data, "image data mismatch");
+            let parsed_data = obj.get::<&[u8]>("data").expect("reading data");
+            assert_eq!(parsed_data, image_data.as_slice(), "image data mismatch");
             events_parsed += 1;
         }
         Ok(true)

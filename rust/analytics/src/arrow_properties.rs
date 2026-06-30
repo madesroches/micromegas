@@ -65,19 +65,19 @@ pub fn add_properties_to_builder(
 ///
 /// The properties are added as a new entry in the list builder.
 pub fn add_property_set_to_builder(
-    properties: &PropertySet,
+    properties: &PropertySet<'_>,
     property_list_builder: &mut ListBuilder<StructBuilder>,
 ) -> Result<()> {
     let properties_builder = property_list_builder.values();
-    properties.for_each_property(|prop| {
+    properties.for_each_property(|key, value| {
         let key_builder = properties_builder
             .field_builder::<StringBuilder>(0)
             .with_context(|| "getting key field builder")?;
-        key_builder.append_value(prop.key_str());
+        key_builder.append_value(key);
         let value_builder = properties_builder
             .field_builder::<StringBuilder>(1)
             .with_context(|| "getting value field builder")?;
-        value_builder.append_value(prop.value_str());
+        value_builder.append_value(value);
         properties_builder.append(true);
         Ok(())
     })?;
@@ -101,7 +101,7 @@ pub fn add_properties_to_jsonb_builder(
 ///
 /// The properties are converted to JSONB format and added as a new entry in the dictionary builder.
 pub fn add_property_set_to_jsonb_builder(
-    properties: &PropertySet,
+    properties: &PropertySet<'_>,
     jsonb_builder: &mut BinaryDictionaryBuilder<Int32Type>,
 ) -> Result<()> {
     let jsonb_bytes = serialize_property_set_to_jsonb(properties)?;
@@ -113,13 +113,13 @@ pub fn add_property_set_to_jsonb_builder(
 ///
 /// This function converts a PropertySet to JSONB binary format
 /// using the same serialization approach as `add_property_set_to_jsonb_builder`.
-pub fn serialize_property_set_to_jsonb(properties: &PropertySet) -> Result<Vec<u8>> {
+pub fn serialize_property_set_to_jsonb(properties: &PropertySet<'_>) -> Result<Vec<u8>> {
     let mut btree_map = BTreeMap::new();
 
-    properties.for_each_property(|prop| {
+    properties.for_each_property(|key, value| {
         btree_map.insert(
-            prop.key_str().to_string(),
-            Value::String(Cow::Owned(prop.value_str().to_string())),
+            key.to_string(),
+            Value::String(Cow::Owned(value.to_string())),
         );
         Ok(())
     })?;
