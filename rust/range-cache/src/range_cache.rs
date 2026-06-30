@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
 use bytes::Bytes;
+use futures::stream::{self, StreamExt, TryStreamExt};
 use micromegas_tracing::prelude::*;
 use moka::future::Cache;
 use object_store::{ObjectStore, ObjectStoreExt, path::Path};
@@ -22,7 +23,23 @@ pub enum RangeError {
 pub const DEFAULT_BLOCK_SIZE: u64 = 1024 * 1024;
 const MOKA_BLOCK_CAPACITY_BYTES: u64 = 128 * 1024 * 1024;
 const MOKA_SIZE_CAPACITY: u64 = 100_000;
+/// Upper bound on the number of origin block fetches issued concurrently for a
+/// single `get_range`/`get_ranges` call. Without this cap a large read (e.g.
+/// 512 MiB at 1 MiB blocks) would fan out to hundreds of simultaneous origin
+/// GETs, overwhelming the origin store.
+const MAX_CONCURRENT_BLOCK_FETCHES: usize = 16;
 
+/// Range-aware read cache over an origin object store.
+///
+/// # Cache invalidation
+///
+/// This cache assumes object keys are **write-once and content-addressed**: a
+/// given key always maps to the same bytes for the lifetime of the object. The
+/// size and block caches therefore carry no TTL, etag, or generation in their
+/// keys and are never invalidated. Overwriting an existing key with different
+/// content would cause stale size/block data to be served indefinitely. This is
+/// safe for micromegas lake objects (blocks, parquet) which are never
+/// overwritten; do not point this cache at a mutable namespace.
 #[derive(Clone)]
 pub struct RangeCache {
     origin: Arc<dyn ObjectStore>,
@@ -56,6 +73,9 @@ impl RangeCache {
     }
 
     pub async fn size(&self, key: &str) -> Result<u64> {
+        // The cache key carries no etag/version: see `RangeCache` docs — keys
+        // are assumed write-once and content-addressed, so a cached size is
+        // never invalidated.
         let meta_key = format!("meta:{}:{key}", self.ns);
 
         if let Some(size) = self.size_cache.get(&meta_key).await {
@@ -81,6 +101,9 @@ impl RangeCache {
     }
 
     async fn get_block(&self, key: &str, block_idx: u64, file_size: u64) -> Result<Bytes> {
+        // The block key carries no etag/version: see `RangeCache` docs — keys
+        // are assumed write-once and content-addressed, so a cached block is
+        // never invalidated.
         let block_key = format!("blk:{}:{key}:{block_idx}", self.ns);
         let backend = self.backend.clone();
         let origin = self.origin.clone();
@@ -132,22 +155,23 @@ impl RangeCache {
         }
 
         let blk_indices = blocks_for_range(start, end, self.block_size);
-        let mut block_futures = Vec::new();
 
-        for block_idx in blk_indices.start..blk_indices.end {
-            let cache = self.clone();
-            let key_owned = key.to_string();
-            block_futures.push(tokio::spawn(async move {
-                let data = cache.get_block(&key_owned, block_idx, file_size).await?;
-                Ok::<(u64, Bytes), anyhow::Error>((block_idx, data))
-            }));
-        }
-
-        let mut blocks = Vec::with_capacity(block_futures.len());
-        for fut in block_futures {
-            let (block_idx, data) = fut.await.map_err(|e| anyhow!("join error: {e}"))??;
-            blocks.push((block_idx, data));
-        }
+        // Fetch missing blocks with bounded concurrency to avoid fanning out to
+        // hundreds of simultaneous origin GETs on a large read. Any block
+        // failure aborts the whole call (`try_collect`); ordering is restored by
+        // the sort below since `buffer_unordered` yields out of order.
+        let mut blocks: Vec<(u64, Bytes)> = stream::iter(blk_indices.start..blk_indices.end)
+            .map(|block_idx| {
+                let cache = self.clone();
+                let key_owned = key.to_string();
+                async move {
+                    let data = cache.get_block(&key_owned, block_idx, file_size).await?;
+                    Ok::<(u64, Bytes), anyhow::Error>((block_idx, data))
+                }
+            })
+            .buffer_unordered(MAX_CONCURRENT_BLOCK_FETCHES)
+            .try_collect()
+            .await?;
 
         blocks.sort_by_key(|(idx, _)| *idx);
         Ok(assemble_range(&blocks, self.block_size, start, end))
@@ -182,22 +206,22 @@ impl RangeCache {
             }
         }
 
-        let mut block_futures = Vec::new();
-        for block_idx in &all_block_indices {
-            let cache = self.clone();
-            let key_owned = key.to_string();
-            let block_idx = *block_idx;
-            block_futures.push(tokio::spawn(async move {
-                let data = cache.get_block(&key_owned, block_idx, file_size).await?;
-                Ok::<(u64, Bytes), anyhow::Error>((block_idx, data))
-            }));
-        }
-
-        let mut block_map: HashMap<u64, Bytes> = HashMap::new();
-        for fut in block_futures {
-            let (idx, data) = fut.await.map_err(|e| anyhow!("join error: {e}"))??;
-            block_map.insert(idx, data);
-        }
+        // Fetch all distinct blocks with bounded concurrency (same cap as
+        // `get_range`). Any block failure aborts the whole call; results are
+        // keyed by block index so out-of-order completion is fine.
+        let fetched: Vec<(u64, Bytes)> = stream::iter(all_block_indices)
+            .map(|block_idx| {
+                let cache = self.clone();
+                let key_owned = key.to_string();
+                async move {
+                    let data = cache.get_block(&key_owned, block_idx, file_size).await?;
+                    Ok::<(u64, Bytes), anyhow::Error>((block_idx, data))
+                }
+            })
+            .buffer_unordered(MAX_CONCURRENT_BLOCK_FETCHES)
+            .try_collect()
+            .await?;
+        let block_map: HashMap<u64, Bytes> = fetched.into_iter().collect();
 
         let mut result = Vec::with_capacity(ranges.len());
         for r in ranges {

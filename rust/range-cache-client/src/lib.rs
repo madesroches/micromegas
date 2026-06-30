@@ -63,9 +63,27 @@ impl CacheClientStore {
         }
     }
 
-    async fn get_range_bytes(&self, location: &Path, range: Range<u64>) -> Result<Bytes> {
+    /// Issue a range GET and return the body bytes along with the full object
+    /// size parsed from the `Content-Range: bytes {start}-{end}/{size}` response
+    /// header. The 206 response already carries the full size, so callers can
+    /// avoid a separate HEAD round-trip. When the header is absent or
+    /// unparseable, the size is returned as `None` and the caller should fall
+    /// back to a `head_size` lookup.
+    ///
+    /// An open-ended `end` (`None`) requests `bytes={start}-`, i.e. from `start`
+    /// to the end of the object, which the cache server resolves against the
+    /// true object size.
+    async fn get_range_bytes(
+        &self,
+        location: &Path,
+        start: u64,
+        end: Option<u64>,
+    ) -> Result<(Bytes, Option<u64>)> {
         let url = self.obj_url(location);
-        let range_header = format!("bytes={}-{}", range.start, range.end.saturating_sub(1));
+        let range_header = match end {
+            Some(end) => format!("bytes={}-{}", start, end.saturating_sub(1)),
+            None => format!("bytes={start}-"),
+        };
         let resp = self
             .add_auth(self.http.get(&url))
             .header("Range", range_header)
@@ -75,7 +93,19 @@ impl CacheClientStore {
         if !resp.status().is_success() {
             return Err(anyhow!("cache GET {url} status {}", resp.status()));
         }
-        resp.bytes().await.with_context(|| "reading GET response")
+        let object_size = parse_content_range_size(resp.headers());
+        let data = resp.bytes().await.with_context(|| "reading GET response")?;
+        Ok((data, object_size))
+    }
+
+    /// Resolve the full object size for a ranged read, preferring the size from
+    /// the GET's `Content-Range` header and falling back to a HEAD only when the
+    /// header was missing or unparseable.
+    async fn resolve_size(&self, location: &Path, from_range: Option<u64>) -> Result<u64> {
+        match from_range {
+            Some(size) => Ok(size),
+            None => self.head_size(location).await,
+        }
     }
 
     async fn get_full_bytes(&self, location: &Path) -> Result<Bytes> {
@@ -107,6 +137,17 @@ impl CacheClientStore {
             .and_then(|s| s.parse::<u64>().ok())
             .ok_or_else(|| anyhow!("missing Content-Length in HEAD response"))
     }
+}
+
+/// Parse the full object size from a `Content-Range: bytes {start}-{end}/{size}`
+/// header (the suffix after `/`). Returns `None` when the header is absent or
+/// not in the expected form (e.g. `bytes */size` or an unparseable value).
+fn parse_content_range_size(headers: &reqwest::header::HeaderMap) -> Option<u64> {
+    headers
+        .get(reqwest::header::CONTENT_RANGE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.rsplit('/').next())
+        .and_then(|size| size.trim().parse::<u64>().ok())
 }
 
 impl std::fmt::Display for CacheClientStore {
@@ -220,34 +261,51 @@ impl ObjectStore for CacheClientStore {
                 .get_full_bytes(location)
                 .await
                 .map(|data| full_get_result(location, data)),
-            Some(GetRange::Bounded(r)) => match self.head_size(location).await {
-                Ok(size) => self
-                    .get_range_bytes(location, r.start..r.end)
-                    .await
-                    .map(|data| {
-                        let len = data.len() as u64;
-                        ranged_get_result(location, data, r.start..r.start + len, size)
-                    }),
-                Err(e) => Err(e),
-            },
-            Some(GetRange::Offset(offset)) => match self.head_size(location).await {
-                Ok(size) => {
-                    let start = *offset;
-                    self.get_range_bytes(location, start..size)
-                        .await
-                        .map(|data| {
+            // Issue the range GET first and read the full object size from the
+            // 206 `Content-Range` header, avoiding a preceding HEAD round-trip.
+            // `resolve_size` only falls back to a HEAD if that header was absent
+            // or unparseable.
+            Some(GetRange::Bounded(r)) => {
+                match self.get_range_bytes(location, r.start, Some(r.end)).await {
+                    Ok((data, size_hint)) => match self.resolve_size(location, size_hint).await {
+                        Ok(size) => {
                             let len = data.len() as u64;
-                            ranged_get_result(location, data, start..start + len, size)
-                        })
+                            Ok(ranged_get_result(
+                                location,
+                                data,
+                                r.start..r.start + len,
+                                size,
+                            ))
+                        }
+                        Err(e) => Err(e),
+                    },
+                    Err(e) => Err(e),
                 }
-                Err(e) => Err(e),
-            },
+            }
+            Some(GetRange::Offset(offset)) => {
+                let start = *offset;
+                // Open-ended range: the server resolves `-` against the true
+                // object size, returned to us via `Content-Range`.
+                match self.get_range_bytes(location, start, None).await {
+                    Ok((data, size_hint)) => match self.resolve_size(location, size_hint).await {
+                        Ok(size) => {
+                            let len = data.len() as u64;
+                            Ok(ranged_get_result(location, data, start..start + len, size))
+                        }
+                        Err(e) => Err(e),
+                    },
+                    Err(e) => Err(e),
+                }
+            }
+            // Suffix reads need the object size up front to compute the start
+            // offset, since the cache server's Range parser does not accept the
+            // `bytes=-N` suffix form. A HEAD is unavoidable here.
             Some(GetRange::Suffix(suffix)) => match self.head_size(location).await {
                 Ok(size) => {
                     let start = size.saturating_sub(*suffix);
-                    self.get_range_bytes(location, start..size)
+                    self.get_range_bytes(location, start, Some(size))
                         .await
-                        .map(|data| {
+                        .map(|(data, _)| {
                             let len = data.len() as u64;
                             ranged_get_result(location, data, start..start + len, size)
                         })

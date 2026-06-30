@@ -4022,6 +4022,7 @@ dependencies = [
  "async-trait",
  "bytes",
  "foyer",
+ "futures",
  "micromegas-tracing",
  "moka",
  "object_store",
