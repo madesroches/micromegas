@@ -118,15 +118,23 @@ These supersede the matching statements elsewhere in this doc:
   errors to precise status codes; the write-once / content-addressed assumption
   is documented at the cache boundary (no TTL/invalidation by design).
 
+### Phase 4 — done on this branch
+- **Container image** — `docker/object-cache.Dockerfile` builds
+  `micromegas-object-cache-srv`; wired into `build/build_docker_images.py` and
+  documented in `docker/README.md`.
+- **Local test stack** — `local_test_env/ai_scripts/start_minio.py` /
+  `stop_minio.py` stand up MinIO-backed object storage, and
+  `start_services.py` / `stop_services.py` run the cache server locally.
+- **Docs** — `mkdocs/docs/admin/object-cache.md` (service overview, env vars,
+  deployment notes), linked from the admin nav and service-lifecycle pages.
+
 ### Not yet done
-- **Phase 4** — container image, deployment manifests (SSD volume), pointing
-  `flight-sql-srv` / daemon at the cache Service.
+- **Deployment manifests** — production manifests (SSD volume) and pointing
+  `flight-sql-srv` / daemon at the cache Service in a deployed environment.
 - **End-to-end verification** — running the binary + `flight-sql-srv` against the
   local stack and confirming identical `pytest` results + rising hit-rate metrics
   (the test *strategy* below is largely realized at the unit/integration level;
   the live end-to-end run is outstanding).
-- **Docs** — `CLAUDE.md`, `AI_GUIDELINES.md`, `mkdocs/docs/` service + env-var +
-  deployment notes.
 - **Phase 5** — in-process `FileCache`/`CachingReader` consolidation (deferred).
 
 **Cost comparison.** Approximate us-east-1 list prices (illustrative — verify
