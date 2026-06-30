@@ -3929,7 +3929,7 @@ dependencies = [
  "anyhow",
  "bytes",
  "ciborium",
- "micromegas-range-cache-client",
+ "micromegas-object-cache",
  "micromegas-telemetry",
  "micromegas-tracing",
  "object_store",
@@ -3954,6 +3954,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "micromegas-object-cache"
+version = "0.27.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "bytes",
+ "chrono",
+ "foyer",
+ "futures",
+ "micromegas-tracing",
+ "moka",
+ "object_store",
+ "reqwest",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
 name = "micromegas-object-cache-srv"
 version = "0.27.0"
 dependencies = [
@@ -3964,7 +3983,7 @@ dependencies = [
  "http 1.4.2",
  "micromegas",
  "micromegas-auth",
- "micromegas-range-cache",
+ "micromegas-object-cache",
  "micromegas-tracing",
  "object_store",
  "serde",
@@ -4012,37 +4031,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 1.0.109",
-]
-
-[[package]]
-name = "micromegas-range-cache"
-version = "0.27.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "bytes",
- "foyer",
- "futures",
- "micromegas-tracing",
- "moka",
- "object_store",
- "thiserror 2.0.18",
- "tokio",
-]
-
-[[package]]
-name = "micromegas-range-cache-client"
-version = "0.27.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "bytes",
- "chrono",
- "futures",
- "micromegas-tracing",
- "object_store",
- "reqwest",
- "serde_json",
 ]
 
 [[package]]

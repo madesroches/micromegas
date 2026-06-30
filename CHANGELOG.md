@@ -5,7 +5,7 @@ This file documents the historical progress of the Micromegas project. For curre
 ## Unreleased
 
 * **Caching:**
-  * Add a standalone range-aware S3 read cache (`micromegas-object-cache-srv`) backed by local SSD (Foyer RAM+disk): new `range-cache` core, `object-cache-srv` HTTP binary, and `range-cache-client` `ObjectStore` layer wired into `BlobStorage`; clients fall back to the direct store on miss/error. Adds an `object-cache.Dockerfile`, MinIO-backed local test scripts, and admin docs (#1122)
+  * Add a standalone range-aware S3 read cache (`micromegas-object-cache-srv`) backed by local SSD (Foyer RAM+disk): new `micromegas-object-cache` crate (cache engine + client `ObjectStore` layer) and `object-cache-srv` HTTP binary, wired into `BlobStorage`; clients fall back to the direct store on miss/error. Adds an `object-cache.Dockerfile`, MinIO-backed local test scripts, and admin docs (#1122)
 * **OTLP:**
   * Populate the `processes.username` column from `process.owner` (falling back through `process.user.name`, `process.real_user.name`, then `user.name`) and fold the resolved owner into the `process_id` derivation so processes that differ only by owning user get distinct ids; re-derivation stays under the existing `NS_OTEL_PROCESS_V1` namespace
 * **Security:**

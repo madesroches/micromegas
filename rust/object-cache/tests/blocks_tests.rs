@@ -1,5 +1,5 @@
 use bytes::Bytes;
-use micromegas_range_cache::blocks::{assemble_range, block_byte_range, blocks_for_range};
+use micromegas_object_cache::blocks::{assemble_range, block_byte_range, blocks_for_range};
 
 #[test]
 fn single_block_range() {

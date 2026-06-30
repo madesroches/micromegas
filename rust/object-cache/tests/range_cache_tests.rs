@@ -5,9 +5,9 @@ use object_store::memory::InMemory;
 use object_store::path::Path;
 use object_store::{ObjectStore, ObjectStoreExt};
 
-use micromegas_range_cache::backend::RangeCacheBackend;
-use micromegas_range_cache::memory_backend::MemoryBackend;
-use micromegas_range_cache::range_cache::{DEFAULT_BLOCK_SIZE, RangeCache};
+use micromegas_object_cache::backend::RangeCacheBackend;
+use micromegas_object_cache::memory_backend::MemoryBackend;
+use micromegas_object_cache::range_cache::{DEFAULT_BLOCK_SIZE, RangeCache};
 
 fn make_cache(origin: Arc<dyn ObjectStore>) -> RangeCache {
     let backend = Arc::new(MemoryBackend::new());

@@ -7,7 +7,7 @@ cache, so that many query workers share a single warm cache of frequently read
 objects (parquet column chunks, blocks) instead of each re-reading from the
 origin.
 
-The cache layer is backed by [`micromegas-range-cache`](../range-cache) with a
+The cache layer is backed by [`micromegas-object-cache`](../object-cache) with a
 foyer RAM/disk backend.
 
 ## HTTP API

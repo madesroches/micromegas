@@ -23,8 +23,8 @@ use micromegas::servers::shutdown::{serve_axum_with_graceful_shutdown, wait_for_
 use micromegas_auth::api_key::{ApiKeyAuthProvider, parse_key_ring};
 use micromegas_auth::axum::auth_middleware;
 use micromegas_auth::types::AuthProvider;
-use micromegas_range_cache::foyer_backend::FoyerBackend;
-use micromegas_range_cache::range_cache::RangeCache;
+use micromegas_object_cache::foyer_backend::FoyerBackend;
+use micromegas_object_cache::range_cache::RangeCache;
 use micromegas_tracing::prelude::*;
 use object_store::parse_url_opts;
 use object_store::prefix::PrefixStore;

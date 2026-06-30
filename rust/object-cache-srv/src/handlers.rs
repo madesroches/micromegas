@@ -7,7 +7,7 @@ use axum::{
     response::Response,
 };
 use bytes::{BufMut, Bytes, BytesMut};
-use micromegas_range_cache::range_cache::RangeError;
+use micromegas_object_cache::range_cache::RangeError;
 use micromegas_tracing::prelude::*;
 use serde::Deserialize;
 

@@ -13,7 +13,7 @@ default-run = "micromegas-object-cache-srv"
 [dependencies]
 micromegas = { workspace = true, features = ["server"] }
 micromegas-auth.workspace = true
-micromegas-range-cache = { path = "../range-cache", features = ["foyer"] }
+micromegas-object-cache = { workspace = true, features = ["foyer"] }
 micromegas-tracing.workspace = true
 
 anyhow.workspace = true

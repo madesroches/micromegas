@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use micromegas_range_cache_client::CacheClientStore;
+use micromegas_object_cache::CacheClientStore;
 use micromegas_telemetry::blob_storage::BlobStorage;
 use micromegas_tracing::{info, warn};
 use object_store::ObjectStore;

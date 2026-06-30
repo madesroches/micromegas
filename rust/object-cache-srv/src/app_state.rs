@@ -1,4 +1,4 @@
-use micromegas_range_cache::range_cache::RangeCache;
+use micromegas_object_cache::range_cache::RangeCache;
 
 #[derive(Clone)]
 pub(crate) struct AppState {

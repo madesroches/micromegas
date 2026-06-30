@@ -10,7 +10,7 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
-micromegas-range-cache-client = { workspace = true }
+micromegas-object-cache = { workspace = true }
 micromegas-telemetry = { workspace = true, features = ["server"] }
 micromegas-tracing.workspace = true
 
