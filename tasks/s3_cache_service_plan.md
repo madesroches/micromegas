@@ -54,6 +54,81 @@ per-request cost; S3 (Standard or Express) remains the durable, shared backing
 store hit only on miss. The cache complements Express rather than competing with
 it — Express lowers cold-miss latency, the SSD removes it on hits.
 
+## Implementation Status
+
+**Phases 1–3 are implemented and merged on the `s3` branch** (initial landing in
+`Implement range-aware S3 read cache service`, then 15 hardening commits from a
+12-round review loop). All three crates build; `cargo clippy --workspace -- -D
+warnings` is clean; `range-cache` unit/integration tests pass; the binary starts
+and binds (verified by launching it, not just compiling). Phase 4 (deploy
+manifests, docs) and Phase 5 (in-process consolidation) remain **not done**.
+
+### What was built
+- `rust/range-cache/` — `RangeCache` core (block model, single-flight via moka,
+  graceful fallback), `RangeCacheBackend` trait, `FoyerBackend` (RAM+SSD),
+  `MemoryBackend` (tests), `blocks.rs` math. Tests in `range-cache/tests/`.
+- `rust/object-cache-srv/` — axum binary over `RangeCache`. **Entry file is
+  `src/object_cache_srv.rs`** (named after the binary via `[[bin]] path`, not
+  `main.rs`).
+- `rust/range-cache-client/` — `CacheClientStore: ObjectStore` (HTTP reads with
+  fallback, write delegation), wired via `BlobStorage::connect_with_layer` and
+  the env-driven layer in `data_lake_connection.rs` / `remote_data_lake.rs`.
+
+### How the implementation diverged from / refined this plan
+These supersede the matching statements elsewhere in this doc:
+
+- **Multi-range route is `POST /ranges/{*key}`, not `POST /obj/{key}/ranges`.**
+  A catch-all path param must be the terminal route segment, so
+  `/obj/{*key}/ranges` made axum/matchit **panic at router construction** — the
+  service never started. The endpoint was moved to `/ranges/{*key}` (GET/HEAD
+  stay on `/obj/{*key}`); the client posts to `{base}/ranges/{key}`.
+- **Auth is fail-closed by default.** The server **refuses to start** when no
+  `MICROMEGAS_API_KEYS` are configured unless `--disable-auth` is passed
+  explicitly — matching `telemetry-ingestion-srv` / `flight-sql-srv`. (The plan's
+  "unset ⇒ auth disabled" is no longer accurate.) On the client side, if the
+  cache URL is set but `MICROMEGAS_OBJECT_CACHE_API_KEY` is missing, the client
+  **bypasses to the direct store** rather than calling the cache unauthenticated.
+- **Origin URI must be bucket-only** — validated at startup. The lake-root prefix
+  already arrives inside each request key (the client layer sits *inside*
+  `PrefixStore`), so a non-empty path in `MICROMEGAS_OBJECT_CACHE_ORIGIN_URI` is
+  rejected to prevent silent double-prefixing.
+- **No per-read HEAD on ranged GETs.** The client parses the full object size
+  from the `Content-Range: …/<size>` header on the 206, eliminating the extra
+  HEAD round trip (Suffix reads and genuine `head:true` still HEAD).
+- **Bounded fan-out & request limits.** Per-request block fetches are capped at
+  `MAX_CONCURRENT_BLOCK_FETCHES = 16` (`buffer_unordered`). The server caps
+  `MAX_RANGES_PER_REQUEST = 4096` and `MAX_TOTAL_REQUESTED_BYTES = 512 MiB`
+  (applied to both the multi-range POST and the single GET; oversized ⇒ 413).
+- **HTTP client timeouts** (connect 2 s, request 15 s) so a hung cache fails fast
+  and falls back to direct instead of stalling queries.
+- **Conditional/versioned reads bypass the cache.** `get_opts` delegates straight
+  to the direct store when any `if_match`/`if_none_match`/`if_modified_since`/
+  `if_unmodified_since`/`version` option is set (the HTTP protocol can't convey
+  preconditions).
+- **HTTP status semantics:** 416 for out-of-bounds ranges, 413 for oversized
+  in-bounds spans, 400 for inverted/degenerate ranges, 404 for missing objects
+  (GET and POST consistent), 200 + empty body for zero-byte objects and
+  open-ended reads at EOF. Range-header parsing uses `checked_add` (no overflow
+  panic on `bytes=0-<u64::MAX>`).
+- **`validate_key` enforces a path-segment boundary** after the allowed prefix
+  (so `telemetry` does not admit `telemetry-secrets/…`), in addition to rejecting
+  empty / `..` / leading-`/` keys.
+- **`block_size = 0` is rejected at startup** (would otherwise divide-by-zero).
+- **`RangeError` (thiserror)** carries `OutOfBounds`, letting handlers map cache
+  errors to precise status codes; the write-once / content-addressed assumption
+  is documented at the cache boundary (no TTL/invalidation by design).
+
+### Not yet done
+- **Phase 4** — container image, deployment manifests (SSD volume), pointing
+  `flight-sql-srv` / daemon at the cache Service.
+- **End-to-end verification** — running the binary + `flight-sql-srv` against the
+  local stack and confirming identical `pytest` results + rising hit-rate metrics
+  (the test *strategy* below is largely realized at the unit/integration level;
+  the live end-to-end run is outstanding).
+- **Docs** — `CLAUDE.md`, `AI_GUIDELINES.md`, `mkdocs/docs/` service + env-var +
+  deployment notes.
+- **Phase 5** — in-process `FileCache`/`CachingReader` consolidation (deferred).
+
 **Cost comparison.** Approximate us-east-1 list prices (illustrative — verify
 current pricing per region):
 
@@ -116,7 +191,8 @@ rust/object-cache-srv/     (binary — the shared cache process, built now)
   axum HTTP server over RangeCache:
     GET  /obj/{key}  (Range: bytes=a-b)  -> 206 + bytes
     HEAD /obj/{key}                      -> Content-Length = size
-    POST /obj/{key}/ranges  (JSON ranges)-> length-framed concatenated bytes
+    POST /ranges/{key}  (JSON ranges)    -> length-framed concatenated bytes
+      (catch-all must be terminal; see Implementation Status)
   origin = object_store AmazonS3 -> real S3;  backend = Foyer on local SSD
 
 rust/range-cache-client/   (client lib — used in flight-sql + daemon)
@@ -228,7 +304,7 @@ cache binary.
   over HTTP; on any transport/5xx error, fall back to `direct` (so a cache
   outage degrades to direct-S3 reads). Overriding `get_opts` ensures every read
   path goes through the cache rather than just the convenience methods.
-- `get_ranges` (overridden) → one `POST /obj/{key}/ranges` call; parse the
+- `get_ranges` (overridden) → one `POST /ranges/{key}` call; parse the
   length-framed response back into `Vec<Bytes>`. Single round trip for the
   Parquet footer + row-group batch.
 - Required write/metadata methods — `put_opts`, `put_multipart_opts`,
@@ -281,7 +357,10 @@ Cache binary:
   keys (default: whole bucket).
 - `MICROMEGAS_API_KEYS` — JSON keyring (same convention as flight-sql and
   telemetry-ingestion-srv) for the `ApiKeyAuthProvider` behind the axum
-  `auth_middleware`; unset ⇒ auth disabled (trusted-network/test only).
+  `auth_middleware`. **Fail-closed:** if unset, the server refuses to start
+  unless `--disable-auth` is passed explicitly (dev/test only).
+- `--disable-auth` — CLI flag to start without authentication (development only).
+- `MICROMEGAS_OBJECT_CACHE_BLOCK_SIZE` — rejected at startup if `0`.
 
 Clients: `MICROMEGAS_OBJECT_CACHE_URL` — unset ⇒ direct S3 (current behavior);
 `MICROMEGAS_OBJECT_CACHE_API_KEY` — bearer key attached on outbound requests to
