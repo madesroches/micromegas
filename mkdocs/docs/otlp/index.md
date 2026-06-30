@@ -66,13 +66,27 @@ OTLP has no "process" concept; it has a `Resource` (key/value attributes) attach
 
 ```
 process_id = uuid_v5(NS_OTEL_PROCESS_V1,
-    host.id  + "\x1F" + host.name + "\x1F" +
-    process.pid + "\x1F" + process.creation.time + "\x1F" +
-    service.namespace + "\x1F" + service.name + "\x1F" +
-    service.instance.id)
+    host.id · host.name ·
+    process.pid · process.creation.time ·
+    service.namespace · service.name · service.instance.id · process.owner ·
+    os.type · os.version · os.name · os.description · os.build_id ·
+    host.arch · host.type ·
+    host.image.id · host.image.name · host.image.version ·
+    host.cpu.model.id · host.cpu.model.name · host.cpu.family ·
+    host.cpu.vendor.id · host.cpu.stepping · host.cpu.cache.l2.size ·
+    service.version ·
+    telemetry.sdk.name · telemetry.sdk.language · telemetry.sdk.version ·
+    process.runtime.name · process.runtime.version · process.runtime.description)
 ```
 
-Missing fields are treated as empty strings. The formula is stable across batches as long as the SDK's Resource is immutable for the lifetime of the process — which is what the OTel spec requires.
+`·` denotes `\x1F` (ASCII unit separator). All fields pass through lower-case + trim except
+`process.pid` and `process.creation.time` which are used verbatim. Missing fields are treated
+as empty strings.
+
+The formula was extended in-place under the same `NS_OTEL_PROCESS_V1` namespace UUID —
+re-deriving existing `process_id`s is always acceptable, so no namespace bump is needed.
+In-flight processes receive a new `process_id` on their next batch; existing rows are unaffected
+and decay under the normal retention policy.
 
 The first time a `process_id` is observed, a row is inserted into `processes` with these mappings:
 
