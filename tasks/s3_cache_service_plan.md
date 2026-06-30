@@ -33,6 +33,27 @@ footer cold-misses hit a cheap SSD-backed cache instead of Postgres.
 - **Writes bypass the cache:** write sites are few; the client delegates
   `put`/`delete`/`list` to a direct-S3 store, so the binary needs no write path.
 
+### Local SSD vs S3 Express One Zone (why cache at all)
+
+S3 Express One Zone narrows the gap to S3 Standard but a local-SSD cache is still
+~1–2 orders of magnitude faster per read and carries no per-request fee, which is
+what makes a read-through cache worthwhile even in front of Express. Approximate
+characteristics (order-of-magnitude, not benchmarks):
+
+| Characteristic        | Local NVMe SSD                     | S3 Express One Zone                          |
+|-----------------------|------------------------------------|----------------------------------------------|
+| Read latency (per op) | ~50–150 µs                         | ~1–5 ms first byte (single-digit ms)         |
+| Throughput            | multiple GB/s per device           | very high aggregate, scales horizontally; per-connection bounded |
+| IOPS / request rate   | 10⁵–10⁶ IOPS, no request charge    | high, but billed per request (GET/PUT)       |
+| Cost model            | included in instance (no per-op)   | per-request + per-GB data + single-AZ storage |
+| Durability            | ephemeral — lost on stop/terminate | durable within one AZ                         |
+| Sharing               | per-pod, not shared                | shared, networked                            |
+
+Implication: the SSD tier absorbs hot/repeat reads at µs latency with zero
+per-request cost; S3 (Standard or Express) remains the durable, shared backing
+store hit only on miss. The cache complements Express rather than competing with
+it — Express lowers cold-miss latency, the SSD removes it on hits.
+
 ## Current State
 
 All lake access funnels through one object store via `blob_storage.inner()`:
@@ -183,13 +204,19 @@ An `ObjectStore` impl wired in at `blob_storage.inner()` via a layer closure
 (below). Holds the direct real-S3 store it wraps plus a reqwest client to the
 cache binary.
 
-- `get` / `get_range` / `head` → HTTP to the binary; on any transport/5xx error,
-  fall back to `direct` (so a cache outage degrades to direct-S3 reads).
-- `get_ranges` → one `POST /obj/{key}/ranges` call; parse the length-framed
-  response back into `Vec<Bytes>`. Single round trip for the Parquet
-  footer + row-group batch.
-- `put` / `delete` / `list` / multipart / `copy` → delegate to `direct`. Writes
-  never touch the cache; no write surface in the binary.
+- `get_opts` (the required read method; `get`/`get_range`/`head` are default
+  impls that delegate to it) is **the** read interception point. It honors the
+  incoming `GetOptions` (including the byte `range`) and routes to the binary
+  over HTTP; on any transport/5xx error, fall back to `direct` (so a cache
+  outage degrades to direct-S3 reads). Overriding `get_opts` ensures every read
+  path goes through the cache rather than just the convenience methods.
+- `get_ranges` (overridden) → one `POST /obj/{key}/ranges` call; parse the
+  length-framed response back into `Vec<Bytes>`. Single round trip for the
+  Parquet footer + row-group batch.
+- Required write/metadata methods — `put_opts`, `put_multipart_opts`,
+  `delete` / `delete_stream`, `list`, `list_with_delimiter`, `copy`,
+  `copy_if_not_exists` — delegate to `direct`. Writes never touch the cache;
+  no write surface in the binary.
 
 ### Wiring (keeps `reqwest`/cache deps out of `telemetry`)
 
@@ -280,7 +307,7 @@ the cache.
 14. Tests (below); docs.
 
 ### Phase 5 — In-process consolidation (later, optional)
-14. Replace `FileCache`/`CachingReader` with an in-process `RangeCache` (RAM
+15. Replace `FileCache`/`CachingReader` with an in-process `RangeCache` (RAM
     backend) reusing the same core, for DRY. Deferred — not required to ship the
     service.
 
