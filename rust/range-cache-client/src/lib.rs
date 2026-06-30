@@ -224,7 +224,10 @@ impl ObjectStore for CacheClientStore {
                 Ok(size) => self
                     .get_range_bytes(location, r.start..r.end)
                     .await
-                    .map(|data| ranged_get_result(location, data, r.start..r.end, size)),
+                    .map(|data| {
+                        let len = data.len() as u64;
+                        ranged_get_result(location, data, r.start..r.start + len, size)
+                    }),
                 Err(e) => Err(e),
             },
             Some(GetRange::Offset(offset)) => match self.head_size(location).await {

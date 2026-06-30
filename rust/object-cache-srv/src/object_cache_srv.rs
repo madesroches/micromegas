@@ -119,7 +119,8 @@ fn parse_range_header(header_value: &str, file_size: u64) -> Result<std::ops::Ra
         end_str
             .parse::<u64>()
             .with_context(|| "parsing range end")?
-            + 1
+            .checked_add(1)
+            .ok_or_else(|| anyhow!("range end overflow in Range header: {header_value}"))?
     };
     // Reject inverted/degenerate ranges (e.g. `bytes=100-50`): an empty or
     // backwards range cannot produce a valid 206 Content-Range.
@@ -243,6 +244,16 @@ async fn get_range_handler(
     }
 }
 
+/// Maximum number of ranges accepted in a single multi-range request. A
+/// parquet/block reader fetches at most a few thousand column chunks per file,
+/// so this is comfortably above legitimate use while bounding per-request work.
+const MAX_RANGES_PER_REQUEST: usize = 4096;
+
+/// Maximum total requested bytes (summed across all ranges) for a single
+/// multi-range request. The handler assembles all results in memory, so this
+/// caps peak allocation regardless of how many ranges overlap the same bytes.
+const MAX_TOTAL_REQUESTED_BYTES: u64 = 512 * 1024 * 1024; // 512 MiB
+
 #[derive(Deserialize)]
 struct RangesRequest {
     ranges: Vec<[u64; 2]>,
@@ -266,13 +277,33 @@ async fn post_ranges_handler(
         }
     };
 
+    // Bound the number of ranges to cap per-request work on this public
+    // authenticated endpoint.
+    if req.ranges.len() > MAX_RANGES_PER_REQUEST {
+        warn!(
+            "rejected {n} ranges for {key}: exceeds max {MAX_RANGES_PER_REQUEST}",
+            n = req.ranges.len()
+        );
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
     // Reject inverted/degenerate ranges (e.g. `[100, 50]` or `[50, 50]`),
     // matching the single-range path's `parse_range_header` validation. An
     // empty or backwards range would otherwise silently yield 0-length data.
+    // While iterating, sum the requested bytes to bound the in-memory assembled
+    // response (overlapping ranges can otherwise amplify allocation).
+    let mut total_requested: u64 = 0;
     for &[s, e] in &req.ranges {
         if s >= e {
             warn!("rejected inverted range [{s}, {e}] for {key}");
             return Err(StatusCode::BAD_REQUEST);
+        }
+        total_requested = total_requested.saturating_add(e - s);
+        if total_requested > MAX_TOTAL_REQUESTED_BYTES {
+            warn!(
+                "rejected ranges for {key}: total requested bytes exceeds max {MAX_TOTAL_REQUESTED_BYTES}"
+            );
+            return Err(StatusCode::PAYLOAD_TOO_LARGE);
         }
     }
 

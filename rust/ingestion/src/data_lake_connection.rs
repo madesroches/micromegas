@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use micromegas_range_cache_client::CacheClientStore;
 use micromegas_telemetry::blob_storage::BlobStorage;
-use micromegas_tracing::info;
+use micromegas_tracing::{info, warn};
 use object_store::ObjectStore;
 use sqlx::PgPool;
 use std::sync::Arc;
@@ -27,6 +27,11 @@ pub(crate) fn make_cache_layer() -> impl FnOnce(Arc<dyn ObjectStore>) -> Arc<dyn
         let cache_url = std::env::var("MICROMEGAS_OBJECT_CACHE_URL").ok();
         let api_key = std::env::var("MICROMEGAS_OBJECT_CACHE_API_KEY").ok();
         if let Some(url) = cache_url {
+            if api_key.is_none() {
+                warn!(
+                    "MICROMEGAS_OBJECT_CACHE_URL is set ({url}) but MICROMEGAS_OBJECT_CACHE_API_KEY is missing: the object cache will be bypassed and requests will go directly to the store"
+                );
+            }
             Arc::new(CacheClientStore::new(url, api_key, direct)) as Arc<dyn ObjectStore>
         } else {
             direct
