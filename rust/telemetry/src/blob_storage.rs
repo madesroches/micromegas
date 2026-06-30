@@ -24,12 +24,23 @@ impl BlobStorage {
 
     /// Connects to a blob storage service using the provided URL.
     pub fn connect(object_store_url: &str) -> Result<Self> {
+        Self::connect_with_layer(object_store_url, |s| s)
+    }
+
+    /// Connects to a blob storage service and applies a layer to the raw store before
+    /// wrapping it in `PrefixStore`. The layer receives the full-bucket store so its
+    /// keys are bucket-relative (including the lake root prefix).
+    pub fn connect_with_layer(
+        object_store_url: &str,
+        layer: impl FnOnce(Arc<dyn ObjectStore>) -> Arc<dyn ObjectStore>,
+    ) -> Result<Self> {
         let (blob_store, blob_store_root) = object_store::parse_url_opts(
             &url::Url::parse(object_store_url)?,
             std::env::vars().map(|(k, v)| (k.to_lowercase(), v)),
         )?;
+        let layered = layer(Arc::new(blob_store) as Arc<dyn ObjectStore>);
         Ok(Self {
-            blob_store: Arc::new(PrefixStore::new(blob_store, blob_store_root)),
+            blob_store: Arc::new(PrefixStore::new(layered, blob_store_root)),
         })
     }
 

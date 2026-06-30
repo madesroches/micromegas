@@ -1,6 +1,8 @@
 use anyhow::{Context, Result};
+use micromegas_range_cache_client::CacheClientStore;
 use micromegas_telemetry::blob_storage::BlobStorage;
 use micromegas_tracing::info;
+use object_store::ObjectStore;
 use sqlx::PgPool;
 use std::sync::Arc;
 
@@ -20,6 +22,18 @@ impl DataLakeConnection {
     }
 }
 
+pub(crate) fn make_cache_layer() -> impl FnOnce(Arc<dyn ObjectStore>) -> Arc<dyn ObjectStore> {
+    move |direct: Arc<dyn ObjectStore>| {
+        let cache_url = std::env::var("MICROMEGAS_OBJECT_CACHE_URL").ok();
+        let api_key = std::env::var("MICROMEGAS_OBJECT_CACHE_API_KEY").ok();
+        if let Some(url) = cache_url {
+            Arc::new(CacheClientStore::new(url, api_key, direct)) as Arc<dyn ObjectStore>
+        } else {
+            direct
+        }
+    }
+}
+
 /// Connects to the data lake.
 pub async fn connect_to_data_lake(
     db_uri: &str,
@@ -27,7 +41,8 @@ pub async fn connect_to_data_lake(
 ) -> Result<DataLakeConnection> {
     info!("connecting to blob storage");
     let blob_storage = Arc::new(
-        BlobStorage::connect(object_store_url).with_context(|| "connecting to blob storage")?,
+        BlobStorage::connect_with_layer(object_store_url, make_cache_layer())
+            .with_context(|| "connecting to blob storage")?,
     );
     let pool = sqlx::postgres::PgPoolOptions::new()
         .connect(db_uri)

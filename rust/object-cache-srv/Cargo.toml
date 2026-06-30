@@ -1,0 +1,35 @@
+[package]
+name = "micromegas-object-cache-srv"
+description = "shared object range cache service for micromegas"
+keywords.workspace = true
+version.workspace = true
+edition.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+authors.workspace = true
+default-run = "micromegas-object-cache-srv"
+
+[dependencies]
+micromegas = { workspace = true, features = ["server"] }
+micromegas-auth.workspace = true
+micromegas-range-cache = { path = "../range-cache", features = ["foyer"] }
+micromegas-tracing.workspace = true
+
+anyhow.workspace = true
+axum.workspace = true
+bytes.workspace = true
+clap.workspace = true
+http.workspace = true
+object_store.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+url.workspace = true
+
+[target.'cfg(not(target_os = "windows"))'.dependencies]
+tikv-jemallocator.workspace = true
+
+[[bin]]
+name = "micromegas-object-cache-srv"
+path = "src/main.rs"
