@@ -207,6 +207,72 @@ def stop_container():
         subprocess.run(["docker", "stop", *ids], capture_output=True)
 
 
+def get_volume_size():
+    """Return the human-readable size of the cache volume, or None if unknown.
+
+    Parses `docker system df -v`, whose VOLUMES section lists each volume's
+    name, link count, and size.
+    """
+    result = subprocess.run(
+        ["docker", "system", "df", "-v"],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        return None
+    for line in result.stdout.splitlines():
+        fields = line.split()
+        if fields and fields[0] == CACHE_VOLUME:
+            return fields[-1]
+    return None
+
+
+def print_sizes():
+    """Print the size of the running runner container(s) and the cache volume."""
+    result = subprocess.run(
+        [
+            "docker",
+            "ps",
+            "-s",
+            "--filter",
+            f"label={CONTAINER_LABEL}",
+            "--format",
+            "{{.Names}}: {{.Size}}",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        print(f"Container(s): error querying docker: {result.stderr.strip()}")
+    else:
+        lines = [line for line in result.stdout.splitlines() if line.strip()]
+        if lines:
+            print("Container(s):")
+            for line in lines:
+                print(f"  {line}")
+        else:
+            print("Container(s): none running")
+
+    volume_size = get_volume_size()
+    if volume_size is not None:
+        print(f"Cache volume ({CACHE_VOLUME}): {volume_size}")
+    else:
+        print(f"Cache volume ({CACHE_VOLUME}): not found")
+
+
+def delete_cache_volume():
+    """Delete the cache volume. No-op if it doesn't exist or is still in use."""
+    result = subprocess.run(
+        ["docker", "volume", "rm", CACHE_VOLUME],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode == 0:
+        print(f"Deleted cache volume: {CACHE_VOLUME}")
+    else:
+        print(f"Could not delete cache volume {CACHE_VOLUME}: {result.stderr.strip()}")
+
+
 def cleanup_offline_runners(pat):
     """Remove any offline dev-worker runners from the repository."""
     try:
@@ -280,7 +346,12 @@ def main():
     parser.add_argument(
         "--cleanup",
         action="store_true",
-        help="Remove offline dev-worker runners from GitHub and exit",
+        help="Remove offline dev-worker runners from GitHub, delete the cache volume, and exit",
+    )
+    parser.add_argument(
+        "--size",
+        action="store_true",
+        help="Print the size of the runner container and cache volume, then exit",
     )
     args = parser.parse_args()
 
@@ -288,10 +359,15 @@ def main():
         build_image()
         return
 
+    if args.size:
+        print_sizes()
+        return
+
     pat = get_pat()
 
     if args.cleanup:
         cleanup_offline_runners(pat)
+        delete_cache_volume()
         return
 
     cleanup_offline_runners(pat)
