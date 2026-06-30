@@ -118,6 +118,11 @@ fn parse_range_header(header_value: &str, file_size: u64) -> Result<std::ops::Ra
             .with_context(|| "parsing range end")?
             + 1
     };
+    // Reject inverted/degenerate ranges (e.g. `bytes=100-50`): an empty or
+    // backwards range cannot produce a valid 206 Content-Range.
+    if start >= end {
+        bail!("invalid Range header: start {start} not before end {end}");
+    }
     Ok(start..end)
 }
 

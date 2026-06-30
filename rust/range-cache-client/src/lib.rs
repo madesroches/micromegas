@@ -11,6 +11,14 @@ use reqwest::Client;
 use serde_json::json;
 use std::ops::Range;
 use std::sync::Arc;
+use std::time::Duration;
+
+/// Fail fast if the cache server can't be reached, so reads fall back to the
+/// direct store instead of stalling on a hung connection.
+const CACHE_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
+/// Overall per-request timeout; a slow cache surfaces as an error and triggers
+/// the existing fallback-to-direct path.
+const CACHE_REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[derive(Debug)]
 pub struct CacheClientStore {
@@ -26,7 +34,11 @@ impl CacheClientStore {
         api_key: Option<String>,
         direct: Arc<dyn ObjectStore>,
     ) -> Self {
-        let http = Client::builder().build().expect("building reqwest client");
+        let http = Client::builder()
+            .connect_timeout(CACHE_CONNECT_TIMEOUT)
+            .timeout(CACHE_REQUEST_TIMEOUT)
+            .build()
+            .expect("building reqwest client");
         Self {
             http,
             cache_base_url,
