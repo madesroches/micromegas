@@ -108,7 +108,9 @@ def start_object_cache(target_dir):
         return None
     origin, prefix = split_object_store_uri(lake_uri)
     if not origin:
-        print(f"⚠️  Cannot derive a bucket-only origin from {lake_uri}; skipping object cache")
+        print(
+            f"⚠️  Cannot derive a bucket-only origin from {lake_uri}; skipping object cache"
+        )
         return None
 
     disk_path = "/tmp/micromegas_object_cache"
@@ -170,7 +172,9 @@ def start_split_mode(rust_dir, target_dir, postgres_pid, enable_object_cache=Tru
     ingestion_pid = ingestion_process.pid
     print(f"Ingestion Server PID: {ingestion_pid}")
 
-    if not wait_for_service("http://127.0.0.1:9000/health", service_name="Ingestion Server"):
+    if not wait_for_service(
+        "http://127.0.0.1:9000/health", service_name="Ingestion Server"
+    ):
         sys.exit(1)
 
     # Start Analytics Server
@@ -253,7 +257,9 @@ def start_monolith_mode(rust_dir, target_dir, postgres_pid):
             env["MICROMEGAS_APP_SQL_CONNECTION_STRING"] = conn
             print("Set MICROMEGAS_APP_SQL_CONNECTION_STRING (micromegas_app)")
         else:
-            print("⚠️  MICROMEGAS_APP_SQL_CONNECTION_STRING not set (screens feature disabled)")
+            print(
+                "⚠️  MICROMEGAS_APP_SQL_CONNECTION_STRING not set (screens feature disabled)"
+            )
 
     if not env.get("MICROMEGAS_TELEMETRY_URL"):
         env["MICROMEGAS_TELEMETRY_URL"] = "http://127.0.0.1:9000"
@@ -262,7 +268,9 @@ def start_monolith_mode(rust_dir, target_dir, postgres_pid):
         env["MICROMEGAS_FLUSH_PERIOD"] = "5"
         print("Set MICROMEGAS_FLUSH_PERIOD=5")
 
-    has_oidc = "MICROMEGAS_OIDC_CONFIG" in env or "MICROMEGAS_ANALYTICS_OIDC_CONFIG" in env
+    has_oidc = (
+        "MICROMEGAS_OIDC_CONFIG" in env or "MICROMEGAS_ANALYTICS_OIDC_CONFIG" in env
+    )
     if has_oidc and "MICROMEGAS_STATE_SECRET" not in env:
         env["MICROMEGAS_STATE_SECRET"] = secrets.token_hex(32)
         print("Set MICROMEGAS_STATE_SECRET (generated)")
@@ -275,8 +283,10 @@ def start_monolith_mode(rust_dir, target_dir, postgres_pid):
 
     cmd = [
         str(target_dir / "micromegas-monolith"),
-        "--roles", "all",
-        "--listen-endpoint-http", "127.0.0.1:9000",
+        "--roles",
+        "all",
+        "--listen-endpoint-http",
+        "127.0.0.1:9000",
         auth_flag,
     ]
     if frontend_dir.exists():
@@ -292,7 +302,9 @@ def start_monolith_mode(rust_dir, target_dir, postgres_pid):
     monolith_pid = monolith_process.pid
     print(f"Monolith PID: {monolith_pid}")
 
-    if not wait_for_service("http://127.0.0.1:9000/health", service_name="Monolith (ingestion)"):
+    if not wait_for_service(
+        "http://127.0.0.1:9000/health", service_name="Monolith (ingestion)"
+    ):
         sys.exit(1)
 
     print()
@@ -324,12 +336,14 @@ def main():
         "--release", action="store_true", help="Build and run in release mode"
     )
     parser.add_argument(
-        "--monolith", action="store_true",
-        help="Start a single micromegas-monolith process instead of four separate services"
+        "--monolith",
+        action="store_true",
+        help="Start a single micromegas-monolith process instead of four separate services",
     )
     parser.add_argument(
-        "--no-object-cache", action="store_true",
-        help="Don't start the shared object cache in split mode (reads go directly to S3)"
+        "--no-object-cache",
+        action="store_true",
+        help="Don't start the shared object cache in split mode (reads go directly to S3)",
     )
     args = parser.parse_args()
 
@@ -408,7 +422,9 @@ def main():
         pids = start_monolith_mode(rust_dir, target_dir, postgres_pid)
     else:
         pids = start_split_mode(
-            rust_dir, target_dir, postgres_pid,
+            rust_dir,
+            target_dir,
+            postgres_pid,
             enable_object_cache=not args.no_object_cache,
         )
 
