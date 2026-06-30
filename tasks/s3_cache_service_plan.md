@@ -103,7 +103,10 @@ space is bounded. Entries:
   may be short.
 
 `{ns}` namespace (default derived from origin bucket/prefix) lets one SSD hold
-multiple origins without collisions.
+multiple origins without collisions. `{key}` is always a **full bucket-relative
+key** (including the lake root prefix): the client injects the cache layer
+*inside* `PrefixStore` (see Wiring), so keys reaching the cache are not
+prefix-relative and match the binary's origin and prefix validation.
 
 `get_range(key, start..end)`:
 1. Resolve `size` (cache → `origin.head`); store on miss.
@@ -152,12 +155,16 @@ the same trait.
 
 axum server, plaintext HTTP in-cluster. Two read routes only (`GET` with `Range`,
 `HEAD`); plain HTTP status codes for errors (404 missing, 5xx), no S3 XML. Origin
-bucket is fixed per deployment, so the client sends only the key (URL-encoded).
-The handler validates the key against the allowed lake prefix and rejects
+bucket is fixed per deployment (`s3://bucket`, no prefix), so the client sends
+only the key (URL-encoded), which is the **full bucket-relative key** (the client
+injects its layer inside `PrefixStore`, so the lake root prefix is already part
+of the key — see Wiring). The handler validates the key against the allowed lake
+prefix (`MICROMEGAS_OBJECT_CACHE_PREFIX`) and rejects
 empty / `..` / leading-`/` / out-of-prefix keys, so the binary can't be turned
 into a general bucket proxy. Caller authentication reuses the existing
-`micromegas-auth` `ApiKeyAuthProvider` axum middleware (bearer key, named
-keyring, constant-time compare) — a drop-in layer, not "trusted network only";
+`micromegas-auth` `ApiKeyAuthProvider` and the axum `auth_middleware` already
+used by telemetry-ingestion-srv (bearer key, named keyring, constant-time
+compare) — a drop-in layer, not "trusted network only";
 see Security. `#[micromegas_main]`
 tracing, health/readiness probe, graceful shutdown to match existing services.
 
@@ -194,7 +201,11 @@ cache binary.
        layer: impl FnOnce(Arc<dyn ObjectStore>) -> Arc<dyn ObjectStore>,
    ) -> Result<Self>;
    ```
-   `connect(url)` becomes `connect_with_layer(url, |s| s)`.
+   `connect(url)` becomes `connect_with_layer(url, |s| s)`. **Layer ordering:**
+   the layer wraps the **raw** parsed store *inside* `PrefixStore` —
+   `PrefixStore::new(layer(blob_store), blob_store_root)` — so the cache client
+   sees **full bucket-relative keys** (including the lake root prefix), matching
+   the binary's origin (`s3://bucket`, no prefix) and its prefix validation.
 2. `connect_to_data_lake` / `connect_to_remote_data_lake` (ingestion crate,
    depends on `range-cache-client`) build the layer from env: if
    `MICROMEGAS_OBJECT_CACHE_URL` is set, wrap the store in `CacheClientStore`;
@@ -223,9 +234,9 @@ Cache binary:
 - `MICROMEGAS_OBJECT_CACHE_NAMESPACE` — default derived from origin.
 - `MICROMEGAS_OBJECT_CACHE_PREFIX` — allowed key prefix; reject out-of-prefix
   keys (default: whole bucket).
-- `MICROMEGAS_API_KEYS` — JSON keyring (same convention as flight-sql) for the
-  `ApiKeyAuthProvider` middleware; unset ⇒ auth disabled (trusted-network/test
-  only).
+- `MICROMEGAS_API_KEYS` — JSON keyring (same convention as flight-sql and
+  telemetry-ingestion-srv) for the `ApiKeyAuthProvider` behind the axum
+  `auth_middleware`; unset ⇒ auth disabled (trusted-network/test only).
 
 Clients: `MICROMEGAS_OBJECT_CACHE_URL` — unset ⇒ direct S3 (current behavior);
 `MICROMEGAS_OBJECT_CACHE_API_KEY` — bearer key attached on outbound requests to
@@ -249,9 +260,10 @@ the cache.
    JSON ranges, emit `206`/`Content-Length`/length-framed bytes. Validate the
    key against the allowed lake prefix (reject empty / `..` / leading-`/` /
    out-of-prefix) before serving.
-8. Add the existing `micromegas-auth` `ApiKeyAuthProvider` + `auth_middleware` as
-   an axum layer (keyring from `MICROMEGAS_API_KEYS`) on the `/obj` routes; exempt
-   health/readiness. Add the `micromegas-auth` dep.
+8. Add the existing `micromegas-auth` `ApiKeyAuthProvider` + axum `auth_middleware`
+   (the same pairing telemetry-ingestion-srv uses) as an axum layer (keyring from
+   `MICROMEGAS_API_KEYS`) on the `/obj` routes; exempt health/readiness. Add the
+   `micromegas-auth` dep.
 9. Health/readiness, `#[micromegas_main]`, graceful shutdown.
 
 ### Phase 3 — `range-cache-client` + wiring
@@ -338,7 +350,8 @@ and *contain the blast radius* of the credentials it holds.
    bearer API key per request, so the control survives a pivot or a header-less
    SSRF from an allowed host and distinguishes cache clients from the rest of the
    coarse shared SG. **Reuse the existing `micromegas-auth` `ApiKeyAuthProvider`
-   + axum `auth_middleware`** that flight-sql already uses — a named **keyring**
+   + axum `auth_middleware`** already used by telemetry-ingestion-srv
+   (`rust/public/src/servers/ingestion.rs`) — a named **keyring**
    (list of keys) compared in constant time, bearer token, `401` on failure, the
    key *name* (not the key) logged for audit. Same `MICROMEGAS_API_KEYS` JSON
    keyring convention as the other services; flight-sql and the daemon each
