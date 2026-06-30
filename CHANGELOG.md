@@ -11,6 +11,7 @@ This file documents the historical progress of the Micromegas project. For curre
 * **Security:**
   * Upgrade `opentelemetry-proto` to 0.32 to resolve GHSA-w9wp-h8wv-79jx; treat the new profiling-only string-interning fields (`*_strindex`) as absent on non-profiling OTLP signals, per the OTLP spec (#336)
 * **Build:**
+  * Add `dev_worker.py --size` to report the runner container and cache volume sizes, and make `--cleanup` also delete the cache volume
   * Fix `build_blender_plugin.py` artifact lookup when `CARGO_TARGET_DIR` is set; add `x86_64-pc-windows-gnu` to the pinned toolchain so the Windows cross-target installs automatically on fresh checkouts
   * Add Docker Hub publish pipeline for release: `build_docker_images.py` gains an arm64 buildx `--push` path and an `--all-arches` flag that builds both architectures in one run, with `--push` independently controlling publishing; sync the release runbook with a both-arch Docker Images phase (#1165)
   * Make `build.py` the single canonical generator for committed datafusion-wasm bindings; prune known wasm-pack leftovers from the output dir after each build so the copy loop is self-healing; document that `wasm-pack build` must not be run into the output dir (#1169)
