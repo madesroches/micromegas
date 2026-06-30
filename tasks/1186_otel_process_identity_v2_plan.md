@@ -38,7 +38,7 @@ the `resource_with(&[("k","v"), ...])` helper. Pattern to follow for V2 tests.
 
 ### Docs
 
-`mkdocs/docs/otlp/index.md:68` — quotes the V1 formula literally. Needs updating to V2.
+`mkdocs/docs/otlp/index.md:68` — quotes the V1 formula literally, but `process.owner` is already absent (the doc was never updated when that field was added in-place). The formula in the doc has seven fields, not eight. Step 4 is therefore replacing a seven-field formula, not an eight-field one.
 
 ## Design
 
@@ -54,7 +54,8 @@ No new constant is needed. The V1 namespace UUID is already load-bearing and sta
 
 ### Extended formula
 
-All fields pass through `attr_norm` (lower-case + trim). Fields are appended after the current
+All new fields pass through `attr_norm` (lower-case + trim); `process.pid` and
+`process.creation.time` remain `attr_raw` as before. Fields are appended after the current
 eight (host.id, host.name, process.pid, process.creation.time, service.namespace, service.name,
 service.instance.id, process.owner):
 
@@ -102,6 +103,10 @@ the normal retention policy.
    replace it with a note that long-term stability of `process_id` values is not a design goal,
    so the formula can be extended in-place whenever re-deriving existing `process_id`s is
    operationally acceptable.
+   Also update the module-level doc comment at `identity.rs:4-6`: replace the "Once the formula
+   ships it cannot change without a `_V2` namespace UUID" claim with the same "long-term
+   stability is not a design goal" note, so the module header no longer contradicts the new
+   design philosophy.
 
 3. **Add unit tests** in `rust/otel-ingestion/tests/identity_tests.rs`:
    - `windows_and_wsl_differ` — two resources with identical host/pid/service/owner but
