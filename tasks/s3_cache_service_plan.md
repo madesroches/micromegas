@@ -129,13 +129,16 @@ These supersede the matching statements elsewhere in this doc:
   deployment notes), linked from the admin nav and service-lifecycle pages.
 
 ### Not yet done
-- **Deployment manifests** — production manifests (SSD volume) and pointing
-  `flight-sql-srv` / daemon at the cache Service in a deployed environment.
 - **End-to-end verification** — running the binary + `flight-sql-srv` against the
   local stack and confirming identical `pytest` results + rising hit-rate metrics
   (the test *strategy* below is largely realized at the unit/integration level;
   the live end-to-end run is outstanding).
 - **Phase 5** — in-process `FileCache`/`CachingReader` consolidation (deferred).
+
+Production deployment (manifests, SSD volume, pointing `flight-sql-srv` / the
+daemon at the cache Service via `MICROMEGAS_OBJECT_CACHE_*` env vars) lives in
+the external infra repo, not here — this repo ships the container image and the
+env-var contract.
 
 **Cost comparison.** Approximate us-east-1 list prices (illustrative — verify
 current pricing per region):
@@ -407,8 +410,9 @@ the cache.
     `connect_to_remote_data_lake`; add ingestion dep on `range-cache-client`.
 
 ### Phase 4 — Deploy, verify, document
-13. Container + deployment manifest (SSD volume); point `flight-sql-srv` and the
-    daemon at the cache Service.
+13. Container image for the cache binary. (Production deployment — manifests, SSD
+    volume, pointing `flight-sql-srv` / the daemon at the cache Service — lives in
+    the external infra repo, not here.)
 14. Tests (below); docs.
 
 ### Phase 5 — In-process consolidation (later, optional)
@@ -423,7 +427,7 @@ the cache.
 - `rust/telemetry/src/blob_storage.rs` — `connect_with_layer`.
 - `rust/ingestion/Cargo.toml` — dep on `range-cache-client`.
 - `rust/ingestion/src/{data_lake_connection,remote_data_lake}.rs` — wire layer.
-- Deployment manifests / container build for the cache binary.
+- Container build for the cache binary (deployment manifests live in external infra).
 - `CLAUDE.md`, `AI_GUIDELINES.md`, `mkdocs/docs/` — service + env vars +
   SSD/stateless deployment notes.
 
