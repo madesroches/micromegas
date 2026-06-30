@@ -276,6 +276,10 @@ async fn post_ranges_handler(
             Ok(response)
         }
         Err(e) => {
+            if let Some(RangeError::OutOfBounds { .. }) = e.downcast_ref::<RangeError>() {
+                warn!("ranges {ranges:?} out of bounds for {key}: {e}");
+                return Err(StatusCode::RANGE_NOT_SATISFIABLE);
+            }
             error!("get_ranges {key}: {e:?}");
             Err(StatusCode::INTERNAL_SERVER_ERROR)
         }
@@ -299,8 +303,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::env::vars().map(|(k, v)| (k.to_lowercase(), v)),
     )
     .with_context(|| "building origin object store")?;
-    // Re-apply the URI path prefix so an origin like s3://bucket/lakeroot resolves
-    // keys under bucket/lakeroot/<key> instead of bucket/<key>.
+    // ORIGIN_URI must be bucket-only (no path component): the client wraps the
+    // cache layer INSIDE its PrefixStore, so every request key already carries the
+    // lake-root prefix (e.g. lakeroot/blocks/xyz). If ORIGIN_URI also carried that
+    // path, the server's PrefixStore would prepend it AGAIN (lakeroot/lakeroot/...),
+    // producing silent 404s. We therefore require the parsed prefix to be empty.
+    if !prefix.as_ref().is_empty() {
+        return Err(anyhow!(
+            "ORIGIN_URI must be bucket-only with no path component (got prefix {:?}); \
+             the lake-root prefix arrives inside each request key, so a path here \
+             would be applied twice",
+            prefix.as_ref()
+        )
+        .into());
+    }
     let origin_store: Arc<dyn object_store::ObjectStore> =
         Arc::new(PrefixStore::new(origin_store, prefix));
 
