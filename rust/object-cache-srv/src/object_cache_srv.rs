@@ -306,8 +306,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Cli::parse();
 
     let ns = if args.namespace.is_empty() {
+        // Strip any `scheme://` prefix so the namespace is stable regardless of
+        // the origin scheme (s3://, gs://, file://, ...).
         args.origin_uri
-            .trim_start_matches("s3://")
+            .split_once("://")
+            .map_or(args.origin_uri.as_str(), |(_scheme, rest)| rest)
             .replace('/', "_")
     } else {
         args.namespace.clone()
