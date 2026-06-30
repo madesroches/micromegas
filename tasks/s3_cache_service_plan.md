@@ -54,6 +54,23 @@ per-request cost; S3 (Standard or Express) remains the durable, shared backing
 store hit only on miss. The cache complements Express rather than competing with
 it — Express lowers cold-miss latency, the SSD removes it on hits.
 
+**Cost comparison.** Approximate us-east-1 list prices (illustrative — verify
+current pricing per region):
+
+| Cost axis            | Local SSD                                  | S3 Express One Zone                                  |
+|----------------------|--------------------------------------------|-----------------------------------------------------|
+| Capacity / storage   | EBS gp3 ~$0.08/GB-mo, or "free" with instance-store NVMe (bundled in instance hours) | ~$0.16/GB-mo (single-AZ)            |
+| Per-read request fee | none                                       | ~$0.0002 per 1,000 GETs                              |
+| Per-read data fee    | none                                       | ~$0.0015/GB retrieved (portion above 512 KB per GET) |
+| Scaling driver       | fixed monthly $ regardless of read count   | scales with request count × bytes read              |
+
+The cache's cost lever is the per-read fees: it turns *N* repeat reads of a hot
+object into **one** origin GET plus *N* free local-SSD reads. Express storage is
+~2× the SSD's per-GB cost, but the decisive term at observability read volumes is
+the request + retrieval fees S3 bills on every GET — which the SSD eliminates on
+hits while the cache footprint stays a bounded, fixed monthly cost. S3 (Standard
+or Express) still backs every byte durably; the SSD only fronts the hot set.
+
 ## Current State
 
 All lake access funnels through one object store via `blob_storage.inner()`:
@@ -204,8 +221,9 @@ An `ObjectStore` impl wired in at `blob_storage.inner()` via a layer closure
 (below). Holds the direct real-S3 store it wraps plus a reqwest client to the
 cache binary.
 
-- `get_opts` (the required read method; `get`/`get_range`/`head` are default
-  impls that delegate to it) is **the** read interception point. It honors the
+- `get_opts` (the only required read method on `ObjectStore`; `get`/`get_range`/
+  `head` are `ObjectStoreExt` convenience methods that delegate to it) is **the**
+  read interception point. It honors the
   incoming `GetOptions` (including the byte `range`) and routes to the binary
   over HTTP; on any transport/5xx error, fall back to `direct` (so a cache
   outage degrades to direct-S3 reads). Overriding `get_opts` ensures every read
