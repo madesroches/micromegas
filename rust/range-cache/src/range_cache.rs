@@ -11,6 +11,14 @@ use object_store::{ObjectStore, ObjectStoreExt, path::Path};
 use super::backend::RangeCacheBackend;
 use super::blocks::{assemble_range, block_byte_range, blocks_for_range};
 
+/// Errors returned by [`RangeCache`] that callers may want to handle distinctly.
+#[derive(Debug, thiserror::Error)]
+pub enum RangeError {
+    /// The requested range extends past the end of the object.
+    #[error("requested range end {requested_end} exceeds object size {file_size}")]
+    OutOfBounds { requested_end: u64, file_size: u64 },
+}
+
 pub const DEFAULT_BLOCK_SIZE: u64 = 1024 * 1024;
 const MOKA_BLOCK_CAPACITY_BYTES: u64 = 128 * 1024 * 1024;
 const MOKA_SIZE_CAPACITY: u64 = 100_000;
@@ -63,7 +71,7 @@ impl RangeCache {
         }
 
         let object_meta = self.origin.head(&Path::from(key)).await?;
-        let size = object_meta.size as u64;
+        let size = object_meta.size;
 
         let size_bytes = Bytes::from(size.to_le_bytes().to_vec());
         self.backend.put(meta_key.clone(), size_bytes).await;
@@ -108,7 +116,16 @@ impl RangeCache {
         };
 
         let start = range.start;
-        let end = range.end.min(file_size);
+        let end = range.end;
+
+        if end > file_size {
+            imetric!("range_cache_miss", "count", 1_u64);
+            return Err(RangeError::OutOfBounds {
+                requested_end: end,
+                file_size,
+            }
+            .into());
+        }
 
         if start >= end {
             return Ok(Bytes::new());

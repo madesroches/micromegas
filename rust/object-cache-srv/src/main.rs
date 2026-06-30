@@ -20,7 +20,7 @@ use micromegas_auth::api_key::{ApiKeyAuthProvider, parse_key_ring};
 use micromegas_auth::axum::auth_middleware;
 use micromegas_auth::types::AuthProvider;
 use micromegas_range_cache::foyer_backend::FoyerBackend;
-use micromegas_range_cache::range_cache::RangeCache;
+use micromegas_range_cache::range_cache::{RangeCache, RangeError};
 use micromegas_tracing::prelude::*;
 use object_store::parse_url_opts;
 use object_store::prefix::PrefixStore;
@@ -67,6 +67,10 @@ struct Cli {
 
     #[clap(long, env = "MICROMEGAS_API_KEYS", default_value = "")]
     api_keys: String,
+
+    /// Disable authentication (development mode only)
+    #[clap(long)]
+    disable_auth: bool,
 
     #[clap(
         long,
@@ -208,6 +212,10 @@ async fn get_range_handler(
             Ok(response)
         }
         Err(e) => {
+            if let Some(RangeError::OutOfBounds { .. }) = e.downcast_ref::<RangeError>() {
+                warn!("range {byte_range:?} out of bounds for {key}: {e}");
+                return Err(StatusCode::RANGE_NOT_SATISFIABLE);
+            }
             error!("get_range {key} {byte_range:?}: {e:?}");
             Err(StatusCode::INTERNAL_SERVER_ERROR)
         }
@@ -297,9 +305,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         allowed_prefix: args.allowed_prefix.clone(),
     };
 
-    let auth_provider: Option<Arc<dyn AuthProvider>> = if args.api_keys.is_empty() {
-        warn!("MICROMEGAS_API_KEYS not set — authentication disabled");
+    let auth_provider: Option<Arc<dyn AuthProvider>> = if args.disable_auth {
+        info!("Authentication disabled (--disable-auth)");
         None
+    } else if args.api_keys.is_empty() {
+        return Err("Authentication required but no API keys configured. \
+             Set MICROMEGAS_API_KEYS, or use --disable-auth for development"
+            .into());
     } else {
         let keyring =
             parse_key_ring(&args.api_keys).with_context(|| "parsing MICROMEGAS_API_KEYS")?;

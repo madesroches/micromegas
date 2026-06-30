@@ -21,6 +21,7 @@ async-trait.workspace = true
 bytes.workspace = true
 moka.workspace = true
 object_store.workspace = true
+thiserror.workspace = true
 tokio.workspace = true
 
 foyer = { workspace = true, optional = true }
