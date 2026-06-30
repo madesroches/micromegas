@@ -264,6 +264,16 @@ async fn post_ranges_handler(
         }
     };
 
+    // Reject inverted/degenerate ranges (e.g. `[100, 50]` or `[50, 50]`),
+    // matching the single-range path's `parse_range_header` validation. An
+    // empty or backwards range would otherwise silently yield 0-length data.
+    for &[s, e] in &req.ranges {
+        if s >= e {
+            warn!("rejected inverted range [{s}, {e}] for {key}");
+            return Err(StatusCode::BAD_REQUEST);
+        }
+    }
+
     let ranges: Vec<std::ops::Range<u64>> = req.ranges.iter().map(|&[s, e]| s..e).collect();
 
     match state.cache.get_ranges(&key, &ranges).await {
