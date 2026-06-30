@@ -4,13 +4,14 @@ This directory contains Dockerfiles for building micromegas services.
 
 ## Images
 
-Six services are published to Docker Hub under `marcantoinedesroches/`:
+Seven services are published to Docker Hub under `marcantoinedesroches/`:
 
 | Dockerfile | Image | Description |
 |------------|-------|-------------|
 | `ingestion.Dockerfile` | `marcantoinedesroches/micromegas-ingestion` | Telemetry ingestion server (HTTP) |
 | `flight-sql.Dockerfile` | `marcantoinedesroches/micromegas-flight-sql` | FlightSQL analytics server |
 | `admin.Dockerfile` | `marcantoinedesroches/micromegas-admin` | Telemetry admin CLI |
+| `object-cache.Dockerfile` | `marcantoinedesroches/micromegas-object-cache` | Shared object range cache service |
 | `http-gateway.Dockerfile` | `marcantoinedesroches/micromegas-http-gateway` | HTTP gateway server |
 | `analytics-web.Dockerfile` | `marcantoinedesroches/micromegas-analytics-web` | Analytics web app (frontend + backend) |
 | `monolith.Dockerfile` | `marcantoinedesroches/micromegas-monolith` | Single-process monolith (all roles in one binary) |
@@ -70,7 +71,7 @@ docker login
 ### Release publish (both arches, all services)
 
 ```bash
-SVCS="ingestion flight-sql admin http-gateway analytics-web monolith"
+SVCS="ingestion flight-sql admin object-cache http-gateway analytics-web monolith"
 python build/build_docker_images.py $SVCS --all-arches --push --version X.Y.0
 ```
 
@@ -121,6 +122,14 @@ docker run -d \
   -e MICROMEGAS_OBJECT_STORE_URI \
   marcantoinedesroches/micromegas-admin:latest \
   crond
+
+# Object cache (fronts a bucket-only S3/GCS origin; see Environment Variables below)
+docker run -d -p 8080:8080 \
+  -e MICROMEGAS_OBJECT_CACHE_ORIGIN_URI \
+  -e MICROMEGAS_OBJECT_CACHE_DISK_PATH=/data \
+  -e MICROMEGAS_API_KEYS \
+  -v object-cache-data:/data \
+  marcantoinedesroches/micromegas-object-cache:latest
 
 # HTTP gateway
 docker run -d -p 3000:3000 \
@@ -188,6 +197,19 @@ docker run -d --name analytics-web \
 | `MICROMEGAS_SQL_CONNECTION_STRING` | Yes | PostgreSQL connection string |
 | `MICROMEGAS_OBJECT_STORE_URI` | Yes | S3/GCS bucket URI for payloads |
 
+### Object Cache
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `MICROMEGAS_OBJECT_CACHE_ORIGIN_URI` | Yes | Bucket-only origin URI (e.g. `s3://my-bucket`, no path — the lake-root prefix arrives inside each request key) |
+| `MICROMEGAS_OBJECT_CACHE_DISK_PATH` | Yes | Local disk path for the cache backend |
+| `MICROMEGAS_API_KEYS` | Yes* | JSON array of `{"name":"...","key":"..."}` |
+| `MICROMEGAS_OBJECT_CACHE_RAM_MB` | No | In-memory cache size (default `512`) |
+| `MICROMEGAS_OBJECT_CACHE_DISK_GB` | No | On-disk cache size (default `50`) |
+| `MICROMEGAS_OBJECT_CACHE_BLOCK_SIZE` | No | Cache block size in bytes (default `1048576`) |
+| `MICROMEGAS_OBJECT_CACHE_PREFIX` | No | Restrict access to a single key prefix |
+
+*Required unless running with `--disable-auth` (development mode only)
+
 ### Analytics Web App
 | Variable | Required | Description |
 |----------|----------|-------------|
@@ -207,5 +229,6 @@ docker run -d --name analytics-web \
 |---------|------|----------|
 | Ingestion | 9000 | HTTP |
 | FlightSQL | 50051 | gRPC |
+| Object Cache | 8080 | HTTP |
 | HTTP Gateway | 3000 | HTTP |
 | Analytics Web | 3000 | HTTP |
