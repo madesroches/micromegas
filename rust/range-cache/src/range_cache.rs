@@ -158,12 +158,10 @@ impl RangeCache {
             return Ok(vec![]);
         }
 
-        let file_size = match self.size(key).await {
-            Ok(s) => s,
-            Err(e) => {
-                return Err(anyhow!("size lookup failed: {e}"));
-            }
-        };
+        // Propagate the size-lookup error unwrapped so the underlying
+        // `object_store::Error` (notably `NotFound`) survives the downcast in
+        // callers, matching `get_range` and the single-GET endpoint.
+        let file_size = self.size(key).await?;
 
         let mut all_block_indices = BTreeSet::new();
         for r in ranges {

@@ -96,7 +96,10 @@ fn validate_key(key: &str, allowed_prefix: &str) -> Result<()> {
     if key.split('/').any(|seg| seg == "..") {
         bail!("key must not contain ..");
     }
-    if !allowed_prefix.is_empty() && !key.starts_with(allowed_prefix) {
+    if !allowed_prefix.is_empty()
+        && key != allowed_prefix
+        && !key.starts_with(&format!("{allowed_prefix}/"))
+    {
         bail!("key {key} is outside allowed prefix {allowed_prefix}");
     }
     Ok(())
@@ -183,15 +186,14 @@ async fn get_range_handler(
         }
     };
 
-    // A zero-byte object cannot be expressed as a satisfiable byte range, so
-    // serve it as an empty success rather than constructing a 0..1 range that
-    // would be rejected as out of bounds.
+    // A zero-byte object cannot be expressed as a satisfiable byte range, and
+    // `Content-Range: bytes 0-0/0` is not RFC 7233-valid for an empty entity.
+    // Serve it as a plain 200 with an empty body instead of a 206.
     if file_size == 0 {
         let response = Response::builder()
-            .status(StatusCode::PARTIAL_CONTENT)
+            .status(StatusCode::OK)
             .header("Content-Type", "application/octet-stream")
             .header("Content-Length", "0")
-            .header("Content-Range", "bytes 0-0/0")
             .body(Body::empty())
             .expect("build empty GET response");
         return Ok(response);
@@ -294,6 +296,9 @@ async fn post_ranges_handler(
             if let Some(RangeError::OutOfBounds { .. }) = e.downcast_ref::<RangeError>() {
                 warn!("ranges {ranges:?} out of bounds for {key}: {e}");
                 return Err(StatusCode::RANGE_NOT_SATISFIABLE);
+            }
+            if is_not_found(&e) {
+                return Err(StatusCode::NOT_FOUND);
             }
             error!("get_ranges {key}: {e:?}");
             Err(StatusCode::INTERNAL_SERVER_ERROR)
