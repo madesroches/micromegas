@@ -1,0 +1,109 @@
+# Object Cache Deployment
+
+`micromegas-object-cache-srv` is a shared HTTP range cache that sits in front of the data lake's object store. Split-mode services (FlightSQL, the maintenance daemon, ingestion) read overlapping byte ranges of the same Parquet/block files; routing those reads through one shared cache avoids re-fetching the same bytes from S3/GCS on every process, cutting egress cost and read latency.
+
+It only caches **reads**. Writes, deletes, and listings always go straight to the origin store — see [What gets cached](#what-gets-cached) below.
+
+## Quick start with the local helper script
+
+```bash
+python3 local_test_env/ai_scripts/start_minio.py
+```
+
+Starts a local MinIO container as an S3-compatible origin, creates a test bucket, and launches the rest of the services with the cache wired in front of it. `--no-launch` sets up MinIO only; `--monolith` forwards through to monolith mode. See `local_test_env/ai_scripts/stop_minio.py` for teardown.
+
+This is the only way to exercise the cache locally: it requires a bucket-style origin (`s3://`/`gs://`), and `start_services.py`'s default `file://` lake can't provide one.
+
+## Quick start with Docker
+
+```bash
+docker run -d -p 8080:8080 \
+  -e MICROMEGAS_OBJECT_CACHE_ORIGIN_URI=s3://my-bucket \
+  -e MICROMEGAS_OBJECT_CACHE_DISK_PATH=/data \
+  -e MICROMEGAS_API_KEYS='[{"name":"flight-sql","key":"<random>"}]' \
+  -v object-cache-data:/data \
+  marcantoinedesroches/micromegas-object-cache:latest
+```
+
+## Origin URI must be bucket-only
+
+`MICROMEGAS_OBJECT_CACHE_ORIGIN_URI` must have **no path component** — `s3://my-bucket`, not `s3://my-bucket/lake-root`. The lake-root prefix already arrives inside each request key (clients wrap the cache client *inside* their own `PrefixStore`), so a path on the origin would be applied twice and produce silent 404s. The server refuses to start if it parses a non-empty prefix out of the origin URI.
+
+## Environment variables
+
+| Variable | Required | Description |
+|---|---|---|
+| `MICROMEGAS_OBJECT_CACHE_ORIGIN_URI` | Yes | Bucket-only origin (`s3://bucket`, `gs://bucket`) |
+| `MICROMEGAS_OBJECT_CACHE_DISK_PATH` | Yes | Local disk path for the on-disk cache tier |
+| `MICROMEGAS_API_KEYS` | Yes, unless `--disable-auth` | JSON array of `{"name":"...","key":"..."}` |
+| `MICROMEGAS_OBJECT_CACHE_LISTEN` | No | Bind address (default `0.0.0.0:8080`) |
+| `MICROMEGAS_OBJECT_CACHE_RAM_MB` | No | In-memory cache tier size (default `512`) |
+| `MICROMEGAS_OBJECT_CACHE_DISK_GB` | No | On-disk cache tier size (default `50`) |
+| `MICROMEGAS_OBJECT_CACHE_BLOCK_SIZE` | No | Cache block size in bytes (default `1048576`); must be > 0 |
+| `MICROMEGAS_OBJECT_CACHE_NAMESPACE` | No | Cache namespace (default: derived from the origin URI) |
+| `MICROMEGAS_OBJECT_CACHE_PREFIX` | No | Restrict served keys to this prefix |
+| `MICROMEGAS_SHUTDOWN_GRACE_PERIOD_SECONDS` | No | Drain timeout on `SIGTERM` (default `25`) |
+
+Authenticating *against the origin* (e.g. AWS credentials) uses the same environment variables as every other Micromegas service's `MICROMEGAS_OBJECT_STORE_URI` — standard `object_store` crate variables such as `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_ENDPOINT`, `AWS_REGION`, `AWS_ALLOW_HTTP`.
+
+## CLI flags
+
+| Flag | Default | Description |
+|---|---|---|
+| `--listen` | `0.0.0.0:8080` | Bind address |
+| `--origin-uri` | — | Bucket-only origin URI (required) |
+| `--disk-path` | — | Local disk path for the cache (required) |
+| `--ram-mb` | `512` | In-memory cache tier size |
+| `--disk-gb` | `50` | On-disk cache tier size |
+| `--block-size` | `1048576` | Cache block size in bytes |
+| `--namespace` | derived from origin | Cache namespace |
+| `--allowed-prefix` | none | Restrict served keys to this prefix |
+| `--disable-auth` | off | Disable authentication (development only) |
+| `--shutdown-grace-period-seconds` | `25` | Seconds to drain before hard exit on `SIGTERM` |
+
+## Client opt-in
+
+The cache is opt-in per client. Each split-mode service (ingestion, FlightSQL, the maintenance daemon) reads through it only when both of these are set in *its own* environment:
+
+```bash
+export MICROMEGAS_OBJECT_CACHE_URL=http://object-cache:8080
+export MICROMEGAS_OBJECT_CACHE_API_KEY=<one of the keys in MICROMEGAS_API_KEYS>
+```
+
+If `MICROMEGAS_OBJECT_CACHE_URL` is set but the API key is missing, the client logs a warning and bypasses the cache entirely rather than sending unauthenticated requests. If neither is set, the client reads directly from the origin store, same as without a cache deployed at all.
+
+## What gets cached
+
+Only reads. The client falls back transparently to the direct store on any cache error, non-2xx response, or oversized request, so an unreachable or misbehaving cache degrades to direct reads rather than failing requests:
+
+| Operation | Path |
+|---|---|
+| Range/whole-object reads (`get`, `get_ranges`) | Through the cache, with fallback to the origin store |
+| Writes (`put`, multipart upload) | Always direct to the origin store |
+| Deletes, listing, copy | Always direct to the origin store |
+
+This works because the lake is **write-once**: blocks are written to a deterministic path exactly once and never modified in place, so a cached range never goes stale and the cache never needs invalidation.
+
+## Authentication
+
+The cache supports API keys only (no OIDC). Configure a key ring with `MICROMEGAS_API_KEYS` and give each client service its own named key, or pass `--disable-auth` for local development — matching the `--disable-auth` convention used by the other services.
+
+## Health and readiness
+
+`/health` and `/ready` both return an unconditional `200`; unlike the other services (see [Readiness probes](service-lifecycle.md#readiness-probes)), `/ready` does not probe the origin store. A load balancer can use either endpoint as a liveness check, but neither will catch the cache being unable to reach its origin — that surfaces as elevated client-side fallback-to-direct traffic instead.
+
+## Monitoring
+
+The cache emits metrics through the standard micromegas tracing sink (queryable like any other process telemetry). The key signals:
+
+| Metric | Where | Meaning |
+|---|---|---|
+| `range_cache_block_request` | cache server | Every block lookup. Denominator for hit rate. |
+| `range_cache_origin_block_fetch` | cache server | Blocks fetched from the origin (misses). **Hit rate = `1 - origin_block_fetch / block_request`** — this should fall over time as the cache warms. |
+| `range_cache_origin_block_bytes` | cache server | Bytes pulled from the origin — the per-request S3 cost the cache exists to avoid. |
+| `range_cache_origin_head` | cache server | `head` calls to the origin to resolve object sizes (once per object, then cached). |
+| `range_cache_backend_error` | cache server | SSD/IO faults in the disk backend. Should be ~0; a sustained non-zero rate means a degraded volume silently inflating origin traffic. |
+| `object_cache_get_bytes_served` / `object_cache_ranges_bytes_served` | cache server | Bytes served to clients over the wire. |
+| `range_cache_client_fallback` | each client | Reads that fell back to the direct store (cache unreachable, non-2xx, or bad response). **A rising rate is the primary "cache unhealthy" alert** — routine fallback logs at `debug` precisely so it doesn't flood, leaving this metric as the signal. |
+
+Routine fallback-to-direct is by-design graceful degradation and is logged at `debug` (not `warn`). Genuinely unexpected conditions — a truncated cache response, a backend IO fault, an internal server error — log at `warn`/`error`.

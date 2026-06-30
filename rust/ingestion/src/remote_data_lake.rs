@@ -1,4 +1,5 @@
 use crate::data_lake_connection::DataLakeConnection;
+use crate::data_lake_connection::make_cache_layer;
 use crate::sql_migration::LATEST_DATA_LAKE_SCHEMA_VERSION;
 use crate::sql_migration::execute_migration;
 use crate::sql_migration::read_data_lake_schema_version;
@@ -46,7 +47,8 @@ pub async fn connect_to_remote_data_lake(
 ) -> Result<DataLakeConnection> {
     info!("connecting to blob storage");
     let blob_storage = Arc::new(
-        BlobStorage::connect(object_store_url).with_context(|| "connecting to blob storage")?,
+        BlobStorage::connect_with_layer(object_store_url, make_cache_layer())
+            .with_context(|| "connecting to blob storage")?,
     );
     let pool = sqlx::postgres::PgPoolOptions::new()
         .connect(db_uri)

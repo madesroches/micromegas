@@ -20,6 +20,8 @@ micromegas-analytics = { path = "analytics", version = "0.27.0" }
 micromegas-auth = { path = "auth", version = "0.27.0" }
 micromegas-datafusion-extensions = { path = "datafusion-extensions", version = "0.27.0" }
 micromegas-ingestion = { path = "ingestion", version = "0.27.0" }
+micromegas-object-cache = { path = "object-cache", version = "0.27.0" }
+micromegas-object-cache-srv = { path = "object-cache-srv", version = "0.27.0" }
 micromegas-otel-ingestion = { path = "otel-ingestion", version = "0.27.0" }
 micromegas-perfetto = { path = "perfetto", version = "0.27.0" }
 micromegas-proc-macros = { path = "micromegas-proc-macros", version = "0.27.0" }
@@ -46,6 +48,7 @@ colorous = "1.0"
 ctrlc = "3.2.0"
 datafusion = "54.0"
 flate2 = "1.0"
+foyer = "0.14"
 futures = "0.3"
 hex = "0.4"
 hmac = "0.12"
