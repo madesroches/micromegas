@@ -15,14 +15,16 @@ Graceful shutdown applies to every long-running service:
 | FlightSQL | `flight-sql-srv` | In-flight query RPCs |
 | Analytics web app | `analytics-web-srv` | In-flight HTTP requests |
 | Maintenance daemon | `telemetry-admin crond` | Running materialization / retention tasks |
+| Object cache | `micromegas-object-cache-srv` | In-flight range/object read requests |
 
 Each accepts a `--shutdown-grace-period-seconds` flag (default: **25**):
 
 ```bash
-telemetry-ingestion-srv --shutdown-grace-period-seconds 25
-flight-sql-srv          --shutdown-grace-period-seconds 25
-analytics-web-srv       --shutdown-grace-period-seconds 25
-telemetry-admin crond   --shutdown-grace-period-seconds 25
+telemetry-ingestion-srv      --shutdown-grace-period-seconds 25
+flight-sql-srv               --shutdown-grace-period-seconds 25
+analytics-web-srv            --shutdown-grace-period-seconds 25
+telemetry-admin crond        --shutdown-grace-period-seconds 25
+micromegas-object-cache-srv  --shutdown-grace-period-seconds 25
 ```
 
 The same value can be set with the `MICROMEGAS_SHUTDOWN_GRACE_PERIOD_SECONDS`
@@ -124,6 +126,7 @@ from readiness.
 | `flight-sql-srv` (optional sidecar) | `GET /ready` | `--health-listen-addr` | PostgreSQL `SELECT 1` + blob storage `list` |
 | `analytics-web-srv` | `GET {base_path}/api/ready` | 3000 | PostgreSQL `SELECT 1` |
 | `micromegas-monolith` | `/ready` on HTTP port, `/api/ready` on port 3000 | inherited from above | same as the respective roles |
+| `micromegas-object-cache-srv` | `GET /ready` | same as cache (default 8080) | nothing — unconditional `200`, see [Object Cache Deployment](object-cache.md#health-and-readiness) |
 
 Each probe runs under a **2-second internal timeout** and caches a successful
 result for **1 second**, so rapid ALB polling does not amplify load on the

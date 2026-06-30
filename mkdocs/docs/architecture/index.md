@@ -223,7 +223,7 @@ flowchart TD
 
 Micromegas can be deployed as separate services or as a single process:
 
-**Split mode** (production): `telemetry-ingestion-srv`, `flight-sql-srv`, `telemetry-admin`, and `analytics-web-srv` run as independent services and scale independently.
+**Split mode** (production): `telemetry-ingestion-srv`, `flight-sql-srv`, `telemetry-admin`, and `analytics-web-srv` run as independent services and scale independently. An optional `micromegas-object-cache-srv` can front the object store to share range reads across these services — see [Object Cache Deployment](../admin/object-cache.md).
 
 **Monolith mode** (v0.26.0+, recommended for development and single-machine deployments): `micromegas-monolith --roles all` runs all four roles in one process. This is the simplest way to get started and the default for local development via `start_services.py --monolith`.
 
