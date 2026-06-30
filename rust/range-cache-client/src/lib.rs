@@ -103,13 +103,34 @@ impl std::fmt::Display for CacheClientStore {
     }
 }
 
-fn bytes_to_get_result(location: &Path, data: Bytes, range: Option<Range<u64>>) -> GetResult {
+/// Build a `GetResult` for an unranged GET, where the returned bytes span the
+/// whole object so `meta.size` and `range` both equal the body length.
+fn full_get_result(location: &Path, data: Bytes) -> GetResult {
     let size = data.len() as u64;
-    let actual_range = range.unwrap_or(0..size);
+    build_get_result(location, data, 0..size, size)
+}
+
+/// Build a `GetResult` for a ranged GET. `range` is the slice actually returned
+/// while `object_size` is the full object size (per the `ObjectMeta` contract).
+fn ranged_get_result(
+    location: &Path,
+    data: Bytes,
+    range: Range<u64>,
+    object_size: u64,
+) -> GetResult {
+    build_get_result(location, data, range, object_size)
+}
+
+fn build_get_result(
+    location: &Path,
+    data: Bytes,
+    range: Range<u64>,
+    object_size: u64,
+) -> GetResult {
     let meta = ObjectMeta {
         location: location.clone(),
         last_modified: chrono::Utc::now(),
-        size,
+        size: object_size,
         e_tag: None,
         version: None,
     };
@@ -117,7 +138,7 @@ fn bytes_to_get_result(location: &Path, data: Bytes, range: Option<Range<u64>>) 
     GetResult {
         payload,
         meta,
-        range: actual_range,
+        range,
         attributes: Attributes::default(),
     }
 }
@@ -148,15 +169,34 @@ impl ObjectStore for CacheClientStore {
     ) -> object_store::Result<GetResult> {
         use object_store::GetRange;
 
+        // A head-only request needs metadata, not the body: return an empty
+        // payload with the true object size instead of streaming the object.
+        if options.head {
+            let result: Result<GetResult> = match self.head_size(location).await {
+                Ok(size) => Ok(ranged_get_result(location, Bytes::new(), 0..0, size)),
+                Err(e) => Err(e),
+            };
+            return match result {
+                Ok(r) => Ok(r),
+                Err(e) => {
+                    warn!("cache miss for {location} (head), falling back to direct: {e}");
+                    self.direct.get_opts(location, options).await
+                }
+            };
+        }
+
         let result: Result<GetResult> = match &options.range {
             None => self
                 .get_full_bytes(location)
                 .await
-                .map(|data| bytes_to_get_result(location, data, None)),
-            Some(GetRange::Bounded(r)) => self
-                .get_range_bytes(location, r.start..r.end)
-                .await
-                .map(|data| bytes_to_get_result(location, data, Some(r.start..r.end))),
+                .map(|data| full_get_result(location, data)),
+            Some(GetRange::Bounded(r)) => match self.head_size(location).await {
+                Ok(size) => self
+                    .get_range_bytes(location, r.start..r.end)
+                    .await
+                    .map(|data| ranged_get_result(location, data, r.start..r.end, size)),
+                Err(e) => Err(e),
+            },
             Some(GetRange::Offset(offset)) => match self.head_size(location).await {
                 Ok(size) => {
                     let start = *offset;
@@ -164,7 +204,7 @@ impl ObjectStore for CacheClientStore {
                         .await
                         .map(|data| {
                             let len = data.len() as u64;
-                            bytes_to_get_result(location, data, Some(start..start + len))
+                            ranged_get_result(location, data, start..start + len, size)
                         })
                 }
                 Err(e) => Err(e),
@@ -176,7 +216,7 @@ impl ObjectStore for CacheClientStore {
                         .await
                         .map(|data| {
                             let len = data.len() as u64;
-                            bytes_to_get_result(location, data, Some(start..start + len))
+                            ranged_get_result(location, data, start..start + len, size)
                         })
                 }
                 Err(e) => Err(e),

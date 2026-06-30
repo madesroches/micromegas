@@ -23,6 +23,7 @@ use micromegas_range_cache::foyer_backend::FoyerBackend;
 use micromegas_range_cache::range_cache::RangeCache;
 use micromegas_tracing::prelude::*;
 use object_store::parse_url_opts;
+use object_store::prefix::PrefixStore;
 use serde::Deserialize;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -271,11 +272,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         args.namespace.clone()
     };
 
-    let (origin_store, _prefix) = parse_url_opts(
+    let (origin_store, prefix) = parse_url_opts(
         &url::Url::parse(&args.origin_uri).with_context(|| "parsing origin URI")?,
         std::env::vars().map(|(k, v)| (k.to_lowercase(), v)),
     )
     .with_context(|| "building origin object store")?;
+    // Re-apply the URI path prefix so an origin like s3://bucket/lakeroot resolves
+    // keys under bucket/lakeroot/<key> instead of bucket/<key>.
+    let origin_store: Arc<dyn object_store::ObjectStore> =
+        Arc::new(PrefixStore::new(origin_store, prefix));
 
     let foyer = FoyerBackend::new(
         &args.disk_path,
@@ -285,7 +290,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .await
     .with_context(|| "building FoyerBackend")?;
 
-    let cache = RangeCache::new(Arc::new(origin_store), Arc::new(foyer), args.block_size, ns);
+    let cache = RangeCache::new(origin_store, Arc::new(foyer), args.block_size, ns);
 
     let state = AppState {
         cache,
