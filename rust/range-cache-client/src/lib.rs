@@ -124,12 +124,18 @@ fn full_get_result(location: &Path, data: Bytes) -> GetResult {
 
 /// Build a `GetResult` for a ranged GET. `range` is the slice actually returned
 /// while `object_size` is the full object size (per the `ObjectMeta` contract).
+///
+/// When no bytes are returned (e.g. a 0-byte object, or a range starting at or
+/// beyond EOF), the requested `range` may lie outside the object; report an
+/// empty `0..0` range so it always matches `data.len()` and stays within
+/// `object_size`, satisfying the `GetResult` invariant.
 fn ranged_get_result(
     location: &Path,
     data: Bytes,
     range: Range<u64>,
     object_size: u64,
 ) -> GetResult {
+    let range = if data.is_empty() { 0..0 } else { range };
     build_get_result(location, data, range, object_size)
 }
 
@@ -180,6 +186,18 @@ impl ObjectStore for CacheClientStore {
         options: GetOptions,
     ) -> object_store::Result<GetResult> {
         use object_store::GetRange;
+
+        // The cache HTTP protocol can't convey conditional/version preconditions,
+        // so any such request must go straight to the direct store to preserve
+        // the expected 412/304 semantics.
+        if options.if_match.is_some()
+            || options.if_none_match.is_some()
+            || options.if_modified_since.is_some()
+            || options.if_unmodified_since.is_some()
+            || options.version.is_some()
+        {
+            return self.direct.get_opts(location, options).await;
+        }
 
         // A head-only request needs metadata, not the body: return an empty
         // payload with the true object size instead of streaming the object.
