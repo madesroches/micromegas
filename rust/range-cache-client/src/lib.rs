@@ -1,6 +1,7 @@
 use anyhow::{Context, Result, anyhow};
 use async_trait::async_trait;
 use bytes::{Buf, Bytes};
+use futures::stream::TryStreamExt;
 use futures::stream::{self, BoxStream};
 use micromegas_tracing::prelude::*;
 use object_store::{
@@ -108,7 +109,12 @@ impl CacheClientStore {
         }
     }
 
-    async fn get_full_bytes(&self, location: &Path) -> Result<Bytes> {
+    /// Issue an unranged GET and build a streaming `GetResult`, mapping the
+    /// response body to `GetResultPayload::Stream` so the whole object is never
+    /// buffered in memory (matching how the direct store streams the body). The
+    /// object size comes from the `Content-Length` header, which is required to
+    /// populate `meta.size` and the `0..size` range without reading the body.
+    async fn get_full_stream(&self, location: &Path) -> Result<GetResult> {
         let url = self.obj_url(location);
         let resp = self
             .add_auth(self.http.get(&url))
@@ -118,7 +124,10 @@ impl CacheClientStore {
         if !resp.status().is_success() {
             return Err(anyhow!("cache GET {url} status {}", resp.status()));
         }
-        resp.bytes().await.with_context(|| "reading GET response")
+        let size = resp
+            .content_length()
+            .ok_or_else(|| anyhow!("missing Content-Length in GET response"))?;
+        Ok(stream_get_result(location, resp, size))
     }
 
     async fn head_size(&self, location: &Path) -> Result<u64> {
@@ -156,11 +165,30 @@ impl std::fmt::Display for CacheClientStore {
     }
 }
 
-/// Build a `GetResult` for an unranged GET, where the returned bytes span the
-/// whole object so `meta.size` and `range` both equal the body length.
-fn full_get_result(location: &Path, data: Bytes) -> GetResult {
-    let size = data.len() as u64;
-    build_get_result(location, data, 0..size, size)
+/// Build a streaming `GetResult` for an unranged GET, wrapping the reqwest
+/// response body in `GetResultPayload::Stream` so the object is delivered in
+/// chunks rather than buffered whole. `object_size` (from `Content-Length`)
+/// populates `meta.size` and the `0..object_size` range.
+fn stream_get_result(location: &Path, resp: reqwest::Response, object_size: u64) -> GetResult {
+    let meta = ObjectMeta {
+        location: location.clone(),
+        last_modified: chrono::Utc::now(),
+        size: object_size,
+        e_tag: None,
+        version: None,
+    };
+    let body = resp
+        .bytes_stream()
+        .map_err(|e| object_store::Error::Generic {
+            store: "CacheClientStore",
+            source: Box::new(e),
+        });
+    GetResult {
+        payload: GetResultPayload::Stream(Box::pin(body)),
+        meta,
+        range: 0..object_size,
+        attributes: Attributes::default(),
+    }
 }
 
 /// Build a `GetResult` for a ranged GET. `range` is the slice actually returned
@@ -263,10 +291,7 @@ impl ObjectStore for CacheClientStore {
         }
 
         let result: Result<GetResult> = match &options.range {
-            None => self
-                .get_full_bytes(location)
-                .await
-                .map(|data| full_get_result(location, data)),
+            None => self.get_full_stream(location).await,
             // Issue the range GET first and read the full object size from the
             // 206 `Content-Range` header, avoiding a preceding HEAD round-trip.
             // `resolve_size` only falls back to a HEAD if that header was absent
