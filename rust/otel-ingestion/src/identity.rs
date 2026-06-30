@@ -37,6 +37,7 @@ pub const NS_OTEL_BLOCK_V1: Uuid = uuid!("5829a6f7-0577-4c8c-862f-cf4fdab445cc")
 /// ASCII unit separator — used between concatenated string fields in identity formulas
 /// to prevent tuple-boundary collisions like `("abc", "")` vs `("ab", "c")`.
 const SEPARATOR: char = '\x1F';
+const SEPARATOR_STR: &str = "\x1F";
 
 /// OTel signal label used in stream-id derivation.
 #[derive(Debug, Clone, Copy)]
@@ -221,7 +222,7 @@ pub fn process_id_from_resource(resource: Option<&Resource>) -> Uuid {
         attr_norm(attrs, "process.runtime.description"),
     ];
 
-    let key = fields.join(&SEPARATOR.to_string());
+    let key = fields.join(SEPARATOR_STR);
     Uuid::new_v5(&NS_OTEL_PROCESS_V1, key.as_bytes())
 }
 
