@@ -32,4 +32,4 @@ tikv-jemallocator.workspace = true
 
 [[bin]]
 name = "micromegas-object-cache-srv"
-path = "src/main.rs"
+path = "src/object_cache_srv.rs"
