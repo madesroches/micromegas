@@ -242,13 +242,16 @@ def print_sizes():
         capture_output=True,
         text=True,
     )
-    lines = [line for line in result.stdout.splitlines() if line.strip()]
-    if lines:
-        print("Container(s):")
-        for line in lines:
-            print(f"  {line}")
+    if result.returncode != 0:
+        print(f"Container(s): error querying docker: {result.stderr.strip()}")
     else:
-        print("Container(s): none running")
+        lines = [line for line in result.stdout.splitlines() if line.strip()]
+        if lines:
+            print("Container(s):")
+            for line in lines:
+                print(f"  {line}")
+        else:
+            print("Container(s): none running")
 
     volume_size = get_volume_size()
     if volume_size is not None:
