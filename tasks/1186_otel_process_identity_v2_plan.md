@@ -101,6 +101,11 @@ the normal retention policy.
 
 2. **Update the doc-comment** on `process_id_from_resource` to list the full extended field set
    and note that fields were added in-place (same pattern as the `process.owner` precedent).
+   Remove the "Any further change must bump the namespace" sentence from `identity.rs:169` and
+   replace it with a description of the in-place extension policy and its conditions: in-place
+   extension is acceptable only while the feature is pre-GA and re-deriving existing
+   `process_id`s is acceptable; once the feature is GA a formula change requires a new namespace
+   UUID.
 
 3. **Add unit tests** in `rust/otel-ingestion/tests/identity_tests.rs`:
    - `windows_and_wsl_differ` — two resources with identical host/pid/service/owner but
@@ -148,9 +153,9 @@ the normal retention policy.
   changes in the future.
 - **Semantic test** (`windows_and_wsl_differ`): directly exercises the motivating scenario from
   the issue.
-- **Existing tests** in `identity_tests.rs` continue to pass — they call
-  `process_id_from_resource` and implicitly cover the extended formula for the empty-new-fields
-  case.
+- **Existing tests** in `identity_tests.rs` verify relative behavior only (equality, inequality,
+  normalization); the regression-lock test in step 3 is the actual guard against accidental
+  formula changes.
 
 ## Open Questions
 
