@@ -408,7 +408,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let obj_router = Router::new()
         .route("/obj/{*key}", get(get_range_handler).head(head_handler))
-        .route("/obj/{*key}/ranges", post(post_ranges_handler))
+        .route("/ranges/{*key}", post(post_ranges_handler))
         .with_state(state);
 
     let obj_router = if let Some(provider) = auth_provider {

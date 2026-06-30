@@ -275,7 +275,7 @@ impl ObjectStore for CacheClientStore {
         }
 
         let url = format!(
-            "{}/obj/{}/ranges",
+            "{}/ranges/{}",
             self.cache_base_url.trim_end_matches('/'),
             location.as_ref()
         );
