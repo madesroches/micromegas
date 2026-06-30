@@ -24,9 +24,6 @@ All fields are passed through `attr_norm` (lower-case + trim) except `process.pi
 `process.creation.time` which are `attr_raw`. `process.owner` was added after initial shipment
 without a V2 bump, as documented in the comment at `identity.rs:169`.
 
-The comment at `identity.rs:5` makes the invariant explicit: "Once the formula ships it cannot
-change without a `_V2` namespace UUID".
-
 ### Why V1 can't cover the Windows/WSL case
 
 A native Windows process and its WSL/Linux counterpart on the same machine can share all eight
@@ -48,9 +45,9 @@ the `resource_with(&[("k","v"), ...])` helper. Pattern to follow for V2 tests.
 ### Principle: extend the formula in-place, no namespace bump
 
 Adding new fields under the same `NS_OTEL_PROCESS_V1` namespace is the same approach used when
-`process.owner` was added after initial shipment (see `identity.rs:169`). The prerequisite is
-that the OTLP ingestion feature is new enough that re-deriving existing `process_id`s is
-acceptable — any in-flight processes get a new `process_id` on their next batch, which is a
+`process.owner` was added after initial shipment (see `identity.rs:169`). Long-term stability of
+`process_id` values across upgrades is not a design goal — re-deriving existing `process_id`s is
+always acceptable. Any in-flight processes get a new `process_id` on their next batch, which is a
 one-time break rather than an ongoing inconsistency.
 
 No new constant is needed. The V1 namespace UUID is already load-bearing and stays as-is.
@@ -102,10 +99,9 @@ the normal retention policy.
 2. **Update the doc-comment** on `process_id_from_resource` to list the full extended field set
    and note that fields were added in-place (same pattern as the `process.owner` precedent).
    Remove the "Any further change must bump the namespace" sentence from `identity.rs:169` and
-   replace it with a description of the in-place extension policy and its conditions: in-place
-   extension is acceptable only while the feature is pre-GA and re-deriving existing
-   `process_id`s is acceptable; once the feature is GA a formula change requires a new namespace
-   UUID.
+   replace it with a note that long-term stability of `process_id` values is not a design goal,
+   so the formula can be extended in-place whenever re-deriving existing `process_id`s is
+   operationally acceptable.
 
 3. **Add unit tests** in `rust/otel-ingestion/tests/identity_tests.rs`:
    - `windows_and_wsl_differ` — two resources with identical host/pid/service/owner but
