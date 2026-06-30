@@ -91,3 +91,19 @@ The cache supports API keys only (no OIDC). Configure a key ring with `MICROMEGA
 ## Health and readiness
 
 `/health` and `/ready` both return an unconditional `200`; unlike the other services (see [Readiness probes](service-lifecycle.md#readiness-probes)), `/ready` does not probe the origin store. A load balancer can use either endpoint as a liveness check, but neither will catch the cache being unable to reach its origin — that surfaces as elevated client-side fallback-to-direct traffic instead.
+
+## Monitoring
+
+The cache emits metrics through the standard micromegas tracing sink (queryable like any other process telemetry). The key signals:
+
+| Metric | Where | Meaning |
+|---|---|---|
+| `range_cache_block_request` | cache server | Every block lookup. Denominator for hit rate. |
+| `range_cache_origin_block_fetch` | cache server | Blocks fetched from the origin (misses). **Hit rate = `1 - origin_block_fetch / block_request`** — this should fall over time as the cache warms. |
+| `range_cache_origin_block_bytes` | cache server | Bytes pulled from the origin — the per-request S3 cost the cache exists to avoid. |
+| `range_cache_origin_head` | cache server | `head` calls to the origin to resolve object sizes (once per object, then cached). |
+| `range_cache_backend_error` | cache server | SSD/IO faults in the disk backend. Should be ~0; a sustained non-zero rate means a degraded volume silently inflating origin traffic. |
+| `object_cache_get_bytes_served` / `object_cache_ranges_bytes_served` | cache server | Bytes served to clients over the wire. |
+| `range_cache_client_fallback` | each client | Reads that fell back to the direct store (cache unreachable, non-2xx, or bad response). **A rising rate is the primary "cache unhealthy" alert** — routine fallback logs at `debug` precisely so it doesn't flood, leaving this metric as the signal. |
+
+Routine fallback-to-direct is by-design graceful degradation and is logged at `debug` (not `warn`). Genuinely unexpected conditions — a truncated cache response, a backend IO fault, an internal server error — log at `warn`/`error`.

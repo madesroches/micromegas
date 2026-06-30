@@ -127,12 +127,39 @@ These supersede the matching statements elsewhere in this doc:
   `start_services.py` / `stop_services.py` run the cache server locally.
 - **Docs** — `mkdocs/docs/admin/object-cache.md` (service overview, env vars,
   deployment notes), linked from the admin nav and service-lifecycle pages.
+- **End-to-end verification** — ran the cache binary + `flight-sql-srv` against
+  the local stack; `pytest` results matched the direct-S3 baseline. Hit-rate is
+  now observable via the metrics in the Observability section below.
+
+### Observability — done on this branch
+Metrics and logging were added so hit-rate and degradation are observable on
+dashboards (`imetric!`, surfaced through the standard micromegas tracing sink):
+
+- **Core (`range-cache`)** — `range_cache_block_request` (every block lookup),
+  `range_cache_block_backend_hit` (served from SSD), `range_cache_origin_block_fetch`
+  + `range_cache_origin_block_bytes` (misses fetched from S3), so hit rate is
+  `1 - origin_block_fetch / block_request`. Size path:
+  `range_cache_size_mem_hit`, `range_cache_size_backend_hit`,
+  `range_cache_origin_head`. `range_cache_backend_error` on a backend (SSD/IO)
+  fault — counted as a miss with a `warn!` so a degraded volume is visible rather
+  than silently inflating origin traffic. `get_range`/`get_ranges`/`size` carry
+  `#[span_fn]` latency spans. Error counters:
+  `range_cache_get_range_error` / `range_cache_get_ranges_error` (replaces the
+  previously misnamed `range_cache_miss`, which fired on errors, not misses).
+- **Server (`object-cache-srv`)** — `object_cache_get_requests` /
+  `object_cache_get_bytes_served`, `object_cache_ranges_requests` /
+  `object_cache_ranges_count` / `object_cache_ranges_bytes_served`, plus a `debug!`
+  audit line per served request. Validation rejections (bad key/range/oversized)
+  stay `warn!` (anomalous, security-relevant, low-volume); genuine internal
+  failures stay `error!`.
+- **Client (`range-cache-client`)** — `range_cache_client_fallback` on every
+  fall-through to the direct store. **Log levels follow "warnings are for the
+  truly unexpected"**: routine fallback (cache unreachable/non-2xx) is by-design
+  graceful degradation and logs at `debug!` (the metric carries the dashboard
+  signal, so a cache outage doesn't flood logs); a truncated/garbled cache
+  response is a protocol violation and stays `warn!`.
 
 ### Not yet done
-- **End-to-end verification** — running the binary + `flight-sql-srv` against the
-  local stack and confirming identical `pytest` results + rising hit-rate metrics
-  (the test *strategy* below is largely realized at the unit/integration level;
-  the live end-to-end run is outstanding).
 - **Phase 5** — in-process `FileCache`/`CachingReader` consolidation (deferred).
 
 Production deployment (manifests, SSD volume, pointing `flight-sql-srv` / the

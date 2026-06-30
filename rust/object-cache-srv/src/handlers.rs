@@ -134,6 +134,17 @@ pub(crate) async fn get_range_handler(
     match state.cache.get_range(&key, byte_range.clone()).await {
         Ok(data) => {
             let content_length = data.len();
+            imetric!("object_cache_get_requests", "count", 1_u64);
+            imetric!(
+                "object_cache_get_bytes_served",
+                "bytes",
+                content_length as u64
+            );
+            debug!(
+                "GET {key} {}-{} served {content_length} bytes",
+                byte_range.start,
+                byte_range.end.saturating_sub(1)
+            );
             let response = Response::builder()
                 .status(StatusCode::PARTIAL_CONTENT)
                 .header("Content-Type", "application/octet-stream")
@@ -224,6 +235,18 @@ pub(crate) async fn post_ranges_handler(
                 buf.put_u64_le(chunk.len() as u64);
                 buf.put_slice(chunk);
             }
+            let bytes_served = buf.len();
+            imetric!("object_cache_ranges_requests", "count", 1_u64);
+            imetric!("object_cache_ranges_count", "count", ranges.len() as u64);
+            imetric!(
+                "object_cache_ranges_bytes_served",
+                "bytes",
+                bytes_served as u64
+            );
+            debug!(
+                "POST ranges {key}: {} ranges served {bytes_served} bytes",
+                ranges.len()
+            );
             let response = Response::builder()
                 .status(StatusCode::OK)
                 .header("Content-Type", "application/octet-stream")

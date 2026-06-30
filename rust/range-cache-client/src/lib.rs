@@ -250,7 +250,13 @@ impl ObjectStore for CacheClientStore {
             return match result {
                 Ok(r) => Ok(r),
                 Err(e) => {
-                    warn!("cache miss for {location} (head), falling back to direct: {e}");
+                    // Falling back to the direct store is a by-design graceful
+                    // degradation path (cache restarting/unreachable), not an
+                    // error: keep it at debug and let the fallback metric (which
+                    // is what dashboards alert on) carry the signal, so a cache
+                    // outage doesn't flood logs with one warning per read.
+                    imetric!("range_cache_client_fallback", "count", 1_u64);
+                    debug!("cache miss for {location} (head), falling back to direct: {e}");
                     self.direct.get_opts(location, options).await
                 }
             };
@@ -317,7 +323,8 @@ impl ObjectStore for CacheClientStore {
         match result {
             Ok(r) => Ok(r),
             Err(e) => {
-                warn!("cache miss for {location}, falling back to direct: {e}");
+                imetric!("range_cache_client_fallback", "count", 1_u64);
+                debug!("cache miss for {location}, falling back to direct: {e}");
                 self.direct.get_opts(location, options).await
             }
         }
@@ -352,11 +359,13 @@ impl ObjectStore for CacheClientStore {
         {
             Ok(r) if r.status().is_success() => r,
             Ok(r) => {
-                warn!("cache ranges {url} status {}, falling back", r.status());
+                imetric!("range_cache_client_fallback", "count", 1_u64);
+                debug!("cache ranges {url} status {}, falling back", r.status());
                 return self.direct.get_ranges(location, ranges).await;
             }
             Err(e) => {
-                warn!("cache ranges request failed: {e}, falling back to direct");
+                imetric!("range_cache_client_fallback", "count", 1_u64);
+                debug!("cache ranges request failed: {e}, falling back to direct");
                 return self.direct.get_ranges(location, ranges).await;
             }
         };
@@ -364,7 +373,8 @@ impl ObjectStore for CacheClientStore {
         let mut data = match resp.bytes().await {
             Ok(b) => b,
             Err(e) => {
-                warn!("reading ranges response failed: {e}, falling back to direct");
+                imetric!("range_cache_client_fallback", "count", 1_u64);
+                debug!("reading ranges response failed: {e}, falling back to direct");
                 return self.direct.get_ranges(location, ranges).await;
             }
         };
@@ -372,11 +382,16 @@ impl ObjectStore for CacheClientStore {
         let mut results = Vec::with_capacity(ranges.len());
         for _ in 0..ranges.len() {
             if data.remaining() < 8 {
+                // A truncated/garbled framing from our own cache is a protocol
+                // violation (unexpected), unlike the clean miss/outage paths
+                // above — keep this at warn.
+                imetric!("range_cache_client_fallback", "count", 1_u64);
                 warn!("truncated ranges response, falling back to direct");
                 return self.direct.get_ranges(location, ranges).await;
             }
             let len = data.get_u64_le() as usize;
             if data.remaining() < len {
+                imetric!("range_cache_client_fallback", "count", 1_u64);
                 warn!("truncated ranges response body, falling back to direct");
                 return self.direct.get_ranges(location, ranges).await;
             }

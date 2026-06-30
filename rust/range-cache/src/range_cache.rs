@@ -72,6 +72,7 @@ impl RangeCache {
         }
     }
 
+    #[span_fn]
     pub async fn size(&self, key: &str) -> Result<u64> {
         // The cache key carries no etag/version: see `RangeCache` docs — keys
         // are assumed write-once and content-addressed, so a cached size is
@@ -79,19 +80,25 @@ impl RangeCache {
         let meta_key = format!("meta:{}:{key}", self.ns);
 
         if let Some(size) = self.size_cache.get(&meta_key).await {
+            imetric!("range_cache_size_mem_hit", "count", 1_u64);
             return Ok(size);
         }
 
         if let Some(data) = self.backend.get(&meta_key).await
             && data.len() == 8
         {
+            imetric!("range_cache_size_backend_hit", "count", 1_u64);
             let size = u64::from_le_bytes(data[..8].try_into().expect("8-byte size slice"));
             self.size_cache.insert(meta_key, size).await;
             return Ok(size);
         }
 
+        // Size miss: resolve from origin (one `head` per object, then cached
+        // forever since objects are write-once).
+        imetric!("range_cache_origin_head", "count", 1_u64);
         let object_meta = self.origin.head(&Path::from(key)).await?;
         let size = object_meta.size;
+        debug!("range_cache origin head key={key} size={size}");
 
         let size_bytes = Bytes::from(size.to_le_bytes().to_vec());
         self.backend.put(meta_key.clone(), size_bytes).await;
@@ -104,6 +111,11 @@ impl RangeCache {
         // The block key carries no etag/version: see `RangeCache` docs — keys
         // are assumed write-once and content-addressed, so a cached block is
         // never invalidated.
+        //
+        // Every block request is counted here; the origin-fetch counter below
+        // counts only the misses, so the hit rate is derivable as
+        // `1 - range_cache_origin_block_fetch / range_cache_block_request`.
+        imetric!("range_cache_block_request", "count", 1_u64);
         let block_key = format!("blk:{}:{key}:{block_idx}", self.ns);
         let backend = self.backend.clone();
         let origin = self.origin.clone();
@@ -114,14 +126,23 @@ impl RangeCache {
         self.block_cache
             .try_get_with(block_key, async move {
                 if let Some(data) = backend.get(&block_key_clone).await {
+                    imetric!("range_cache_block_backend_hit", "count", 1_u64);
                     return Ok(data);
                 }
+                // Backend miss: fetch the block from origin, the expensive path
+                // this cache exists to avoid. Count it and the bytes pulled.
                 let blk_range = block_byte_range(block_idx, block_size, file_size);
                 let path = Path::from(key_owned.as_str());
                 let data = origin
                     .get_range(&path, blk_range)
                     .await
                     .map_err(|e| anyhow!("origin fetch block {block_idx}: {e}"))?;
+                imetric!("range_cache_origin_block_fetch", "count", 1_u64);
+                imetric!("range_cache_origin_block_bytes", "bytes", data.len() as u64);
+                debug!(
+                    "range_cache origin fetch key={key_owned} block={block_idx} bytes={}",
+                    data.len()
+                );
                 backend.put(block_key_clone, data.clone()).await;
                 Ok::<Bytes, anyhow::Error>(data)
             })
@@ -129,11 +150,12 @@ impl RangeCache {
             .map_err(|e: Arc<anyhow::Error>| anyhow!("{e}"))
     }
 
+    #[span_fn]
     pub async fn get_range(&self, key: &str, range: Range<u64>) -> Result<Bytes> {
         let file_size = match self.size(key).await {
             Ok(s) => s,
             Err(e) => {
-                imetric!("range_cache_miss", "count", 1_u64);
+                imetric!("range_cache_get_range_error", "count", 1_u64);
                 return Err(e);
             }
         };
@@ -142,7 +164,7 @@ impl RangeCache {
         let end = range.end;
 
         if end > file_size {
-            imetric!("range_cache_miss", "count", 1_u64);
+            imetric!("range_cache_get_range_error", "count", 1_u64);
             return Err(RangeError::OutOfBounds {
                 requested_end: end,
                 file_size,
@@ -177,6 +199,7 @@ impl RangeCache {
         Ok(assemble_range(&blocks, self.block_size, start, end))
     }
 
+    #[span_fn]
     pub async fn get_ranges(&self, key: &str, ranges: &[Range<u64>]) -> Result<Vec<Bytes>> {
         if ranges.is_empty() {
             return Ok(vec![]);
@@ -185,13 +208,20 @@ impl RangeCache {
         // Propagate the size-lookup error unwrapped so the underlying
         // `object_store::Error` (notably `NotFound`) survives the downcast in
         // callers, matching `get_range` and the single-GET endpoint.
-        let file_size = self.size(key).await?;
+        let file_size = match self.size(key).await {
+            Ok(s) => s,
+            Err(e) => {
+                imetric!("range_cache_get_ranges_error", "count", 1_u64);
+                return Err(e);
+            }
+        };
 
         let mut all_block_indices = BTreeSet::new();
         for r in ranges {
             let start = r.start;
             let end = r.end;
             if end > file_size {
+                imetric!("range_cache_get_ranges_error", "count", 1_u64);
                 return Err(RangeError::OutOfBounds {
                     requested_end: end,
                     file_size,
