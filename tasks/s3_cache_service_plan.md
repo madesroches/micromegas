@@ -62,6 +62,12 @@ Workspace already has `axum 0.8`, `reqwest 0.12` (rustls), `bytes`, `moka`,
 
 ### Three crates
 
+Package names take the `micromegas-` prefix (lib convention; binary matches
+`micromegas-monolith`); directories are unprefixed:
+`micromegas-range-cache` (`rust/range-cache/`),
+`micromegas-object-cache-srv` (`rust/object-cache-srv/`),
+`micromegas-range-cache-client` (`rust/range-cache-client/`).
+
 ```
 rust/range-cache/          (core lib — reusable, no HTTP)
   RangeCache { origin: Arc<dyn ObjectStore>, backend, block_size, ns }
@@ -110,9 +116,26 @@ multiple origins without collisions.
 
 `get_ranges` unions block indices across ranges, fills once, assembles each.
 
+**Fill policy (patchwork reads).** A single large read over a partially-cached
+range yields *several* missing contiguous runs interleaved with cached blocks.
+The runs are independent, so **fetch them concurrently** — wall-clock latency is
+then the slowest single GET, not the sum, and only the genuinely missing bytes
+are fetched (cached blocks are never refetched). Two bounds keep this sane: a
+**max coalesced GET size** so one wide run doesn't become a giant fetch (split
+oversized runs, also fetched concurrently), and a **per-request concurrency cap**
+(semaphore) so a heavily fragmented patchwork doesn't open hundreds of
+simultaneous connections. Gap-tolerant merging (refetch a small cached gap to
+join two runs into one GET) is *not* the primary lever — concurrency already
+removes the latency cost of separate runs; it's a measure-and-tune guard only for
+pathological fragmentation where the simultaneous-connection / S3 per-prefix
+request rate, not latency, is the limit.
+
 **Single-flight:** concurrent fetches of the same block coalesce via a
 `moka::future::Cache` (the pattern `FileCache` already uses), so a cold row group
-hits S3 once even under concurrent scans.
+hits S3 once even under concurrent scans. A run-GET resolves the per-block
+single-flight entries for *every* block it covers (not the run as an opaque
+unit), so two concurrent large reads over overlapping patchworks still dedupe at
+the block level rather than each issuing its own run fetch.
 
 **Graceful degradation (required):** any backend error is a miss + a metric, and
 the read falls back to origin. A read never fails because the cache is down.
@@ -130,9 +153,13 @@ the same trait.
 axum server, plaintext HTTP in-cluster. Two read routes only (`GET` with `Range`,
 `HEAD`); plain HTTP status codes for errors (404 missing, 5xx), no S3 XML. Origin
 bucket is fixed per deployment, so the client sends only the key (URL-encoded).
-No client auth in v1 (trusted network); a shared bearer token is an easy later
-add. `#[micromegas_main]` tracing, health/readiness probe, graceful shutdown to
-match existing services.
+The handler validates the key against the allowed lake prefix and rejects
+empty / `..` / leading-`/` / out-of-prefix keys, so the binary can't be turned
+into a general bucket proxy. Caller authentication reuses the existing
+`micromegas-auth` `ApiKeyAuthProvider` axum middleware (bearer key, named
+keyring, constant-time compare) — a drop-in layer, not "trusted network only";
+see Security. `#[micromegas_main]`
+tracing, health/readiness probe, graceful shutdown to match existing services.
 
 The `ranges` endpoint takes a JSON body `{"ranges": [[start,end], ...]}` and
 returns a **length-framed** response: for each requested range, in order, an
@@ -194,9 +221,15 @@ Cache binary:
 - `MICROMEGAS_OBJECT_CACHE_DISK_PATH`, `MICROMEGAS_OBJECT_CACHE_DISK_GB` — SSD.
 - `MICROMEGAS_OBJECT_CACHE_BLOCK_SIZE` — default `1048576` (1 MiB).
 - `MICROMEGAS_OBJECT_CACHE_NAMESPACE` — default derived from origin.
+- `MICROMEGAS_OBJECT_CACHE_PREFIX` — allowed key prefix; reject out-of-prefix
+  keys (default: whole bucket).
+- `MICROMEGAS_API_KEYS` — JSON keyring (same convention as flight-sql) for the
+  `ApiKeyAuthProvider` middleware; unset ⇒ auth disabled (trusted-network/test
+  only).
 
-Clients (no code change beyond wiring): `MICROMEGAS_OBJECT_CACHE_URL` — unset ⇒
-direct S3 (current behavior).
+Clients: `MICROMEGAS_OBJECT_CACHE_URL` — unset ⇒ direct S3 (current behavior);
+`MICROMEGAS_OBJECT_CACHE_API_KEY` — bearer key attached on outbound requests to
+the cache.
 
 ## Implementation Steps
 
@@ -210,23 +243,29 @@ direct S3 (current behavior).
 
 ### Phase 2 — `object-cache-srv` binary
 5. Create `rust/object-cache-srv/` (`axum`, `tokio`, `object_store`,
-   `range-cache`, tracing/telemetry).
+   `range-cache`, `micromegas-auth`, tracing/telemetry).
 6. Build origin `AmazonS3` from `MICROMEGAS_OBJECT_CACHE_ORIGIN_URI`.
 7. `GET`/`HEAD`/`POST …/ranges` handlers → `RangeCache`; parse `Range` /
-   JSON ranges, emit `206`/`Content-Length`/length-framed bytes.
-8. Health/readiness, `#[micromegas_main]`, graceful shutdown.
+   JSON ranges, emit `206`/`Content-Length`/length-framed bytes. Validate the
+   key against the allowed lake prefix (reject empty / `..` / leading-`/` /
+   out-of-prefix) before serving.
+8. Add the existing `micromegas-auth` `ApiKeyAuthProvider` + `auth_middleware` as
+   an axum layer (keyring from `MICROMEGAS_API_KEYS`) on the `/obj` routes; exempt
+   health/readiness. Add the `micromegas-auth` dep.
+9. Health/readiness, `#[micromegas_main]`, graceful shutdown.
 
 ### Phase 3 — `range-cache-client` + wiring
-9. Create `rust/range-cache-client/`; `CacheClientStore: ObjectStore` (reqwest
-   reads + fallback; write delegation).
-10. Add `BlobStorage::connect_with_layer`; refactor `connect` to use it.
-11. Build the layer from env in `connect_to_data_lake` /
+10. Create `rust/range-cache-client/`; `CacheClientStore: ObjectStore` (reqwest
+    reads + fallback; write delegation). Attaches `MICROMEGAS_OBJECT_CACHE_API_KEY`
+    as a bearer token on outbound requests.
+11. Add `BlobStorage::connect_with_layer`; refactor `connect` to use it.
+12. Build the layer from env in `connect_to_data_lake` /
     `connect_to_remote_data_lake`; add ingestion dep on `range-cache-client`.
 
 ### Phase 4 — Deploy, verify, document
-12. Container + deployment manifest (SSD volume); point `flight-sql-srv` and the
+13. Container + deployment manifest (SSD volume); point `flight-sql-srv` and the
     daemon at the cache Service.
-13. Tests (below); docs.
+14. Tests (below); docs.
 
 ### Phase 5 — In-process consolidation (later, optional)
 14. Replace `FileCache`/`CachingReader` with an in-process `RangeCache` (RAM
@@ -263,11 +302,82 @@ direct S3 (current behavior).
 - **Block size 1 MiB.** Footer granularity vs key/round-trip count; tunable.
 
 ## Security
-- Cache pod holds a read-scoped IAM role; treat as a credentialed service.
-- In-cluster plaintext HTTP is acceptable behind the Service; client→cache auth
-  is optional in v1 (trusted network). The binary must not be exposed outside the
-  cluster without adding a shared token. SSD holds cached object bytes — same
-  sensitivity as S3; don't share the volume across tenants.
+
+The cache is a **confused-deputy risk**: it holds S3 read credentials and will
+return the bytes of any key it's asked for. Anyone who can reach it and name a
+key reads that slice of the lake, bypassing every check FlightSQL makes. The
+asset to protect is the *credentialed read path*, not the SSD. Defense in depth
+means *independent* layers, so no single failure — a leaked token, an SSRF in a
+neighboring pod, a compromised replica — exposes the lake.
+
+### Why a security group isn't enough
+A security group authenticates *network position*, not the *request*: "this
+packet came from an allowed SG," not "this is flight-sql making a legitimate
+read." It therefore falls to anything that can act from an allowed host — a
+compromised flight-sql/daemon pod, an SSRF or request-forgery bug in any service
+on the allowed SG, a malicious sidecar, a pod that later reuses the SG. Keep it
+(it's necessary), but it's one positional layer, not the whole story.
+
+### What the cache can and can't enforce
+Per-user data authorization can't live here: the daemon has no end user, and by
+the time a request is "key X, bytes a–b," FlightSQL's table/row decision is
+already made — the cache has no basis to re-decide it. So **user-level authz
+stays in FlightSQL, where it already lives.** Trying to "follow FlightSQL auth"
+into the cache buys nothing for the daemon and duplicates an upstream decision.
+The cache's narrower job: authenticate that the *caller is one of our services*,
+and *contain the blast radius* of the credentials it holds.
+
+### Layers (each independent)
+1. **Network position.** Restrict ingress at the orchestrator's security group
+   so only the flight-sql and daemon services can reach the cache; keep it in
+   private subnets and never publish it through a public load-balancer listener.
+   (Note: a platform may still assign an instance a public IP for egress — the
+   ingress security group, not the IP, is the control that matters.) Necessary,
+   not sufficient (see above).
+2. **Request-level API key (the key addition).** On top of the SG, require a
+   bearer API key per request, so the control survives a pivot or a header-less
+   SSRF from an allowed host and distinguishes cache clients from the rest of the
+   coarse shared SG. **Reuse the existing `micromegas-auth` `ApiKeyAuthProvider`
+   + axum `auth_middleware`** that flight-sql already uses — a named **keyring**
+   (list of keys) compared in constant time, bearer token, `401` on failure, the
+   key *name* (not the key) logged for audit. Same `MICROMEGAS_API_KEYS` JSON
+   keyring convention as the other services; flight-sql and the daemon each
+   present a key. Because the checker holds a *list*, rotation is zero-downtime —
+   add the new key, roll the clients, drop the old — so the key needs no expiry.
+   This does **not** defend against full compromise of an allowed caller (the
+   attacker reads the key and already holds that task's stronger read/write IAM
+   role); that exposure is bounded by layer 4, not here.
+3. **Blast-radius containment at the cache.** The binary is structurally
+   read-only — no put/delete/list code path exists — so even a trusted-then-
+   compromised caller can only *read ranges*, never mutate or enumerate.
+   Additionally the cache serves only keys under the configured lake prefix
+   (reject empty keys, `..`, leading `/`, out-of-prefix keys), so it can't be
+   turned into a general proxy for the rest of the bucket.
+4. **Blast-radius containment at the object store (highest-leverage lever).** The
+   cache's role is read-only — `GetObject` only, no Put/Delete/List — and scoped
+   to the single lake bucket/prefix. This is *strictly narrower* than the
+   read/write/delete role the lake query services run with today, so a fully
+   compromised cache yields less reach than compromising those services: no
+   writes, no deletes, no enumeration, read-only on exactly the lake data.
+5. **Audit (detection).** Log (authenticated caller identity, key, range, bytes
+   served) and emit metrics; optionally forward the FlightSQL end-user identity
+   as an *advisory* header for the audit trail only — never for an authz
+   decision.
+
+### v1 posture
+Layers 1, 3, and 4 are mandatory for v1 — all cheap and structural, and layer 4
+in particular is the single biggest risk reduction (read-only, scoped role).
+Request-level API key (layer 2) via the existing `micromegas-auth` middleware is
+included in v1 — a drop-in layer, not new machinery. Identity-level schemes
+(mTLS, VPC Lattice/IAM) are deferred as over-engineered for this threat model:
+given the read-only scoped role (layer 4) and that compromising a caller already
+yields stronger credentials than the cache holds, a rotatable shared API key
+behind the SG is the right altitude.
+
+### Data at rest
+SSD holds cached object bytes — same sensitivity as the lake. It's a scratch
+volume (not backed up, not synced); don't share it across tenants, and enable
+volume encryption-at-rest where the platform offers it cheaply.
 
 ## Testing Strategy
 - **`blocks.rs` units:** single/multi-block, boundary-spanning, partial last
@@ -284,6 +394,9 @@ direct S3 (current behavior).
   reqwest; assert `GET`+`Range` → `206` correctness, `HEAD` size, and that
   `POST …/ranges` round-trips a multi-range request (framing decodes to the same
   `Vec<Bytes>` as per-range reads, including an EOF-clamped final range).
+- **Auth tests:** with a keyring configured, a request with no / wrong bearer key
+  → `401`; a valid key → served; an out-of-prefix key request → rejected; the
+  health/readiness probe needs no key.
 - **Client store tests:** reads hit a fake/real cache server; **writes go to the
   inner store, not HTTP** (assert via a counting inner store); cache-unreachable
   → reads fall back to inner.
@@ -293,8 +406,9 @@ direct S3 (current behavior).
 - `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `python3 build/rust_ci.py`.
 
 ## Open Questions
-1. **Crate / binary names:** `range-cache`, `object-cache-srv`,
-   `range-cache-client` — confirm (`micromegas-` prefixes).
+- None blocking. Crate/binary names resolved:
+  `micromegas-range-cache`, `micromegas-object-cache-srv`,
+  `micromegas-range-cache-client`.
 
 ## Deferred / Future
 - **In-process `FileCache` consolidation — follow-up.** `FileCache` /
@@ -307,4 +421,18 @@ direct S3 (current behavior).
   routing so each node owns a key slice (better aggregate hit rate and SSD use)
   rather than round-robin. No code change in the cache or client — purely a
   deployment concern.
-- **Batch `ranges` optimizations** and a client→cache auth token.
+- **Multi-object footer prefetch (ties into #1121) — deferred, not now.** Not a
+  transparent `ObjectStore` optimization: DataFusion's read path is strictly
+  per-file (`ParquetFileReaderFactory::create_reader` is per `PartitionedFile`,
+  `AsyncFileReader`/`ObjectStore::get_ranges` are per-object), so it would never
+  call a cross-object endpoint. The opening is explicit prefetch from the query
+  layer, which already resolves the full partition set before the scan: footers
+  are read for every file regardless of pruning, so one batched call warms all
+  partition footers (the tail range of N keys) in a single round trip — letting
+  the per-file readers hit a warm cache and helping retire the Postgres
+  `partition_metadata` footer cache. Requires a multi-key extension of the
+  `/ranges` endpoint plus a query-layer prefetch hook. (Row-group data prefetch
+  is not worth it — ranges are runtime-pruning-dependent, already covered by
+  within-file block coalescing + DataFusion's cross-file concurrency.)
+- **Identity-level caller auth (mTLS / VPC Lattice + IAM).** Deferred — see the
+  Security v1 posture; only if the shared API key proves insufficient.
