@@ -29,8 +29,9 @@ pub(crate) fn make_cache_layer() -> impl FnOnce(Arc<dyn ObjectStore>) -> Arc<dyn
         if let Some(url) = cache_url {
             if api_key.is_none() {
                 warn!(
-                    "MICROMEGAS_OBJECT_CACHE_URL is set ({url}) but MICROMEGAS_OBJECT_CACHE_API_KEY is missing: the object cache will be bypassed and requests will go directly to the store"
+                    "MICROMEGAS_OBJECT_CACHE_URL is set ({url}) but MICROMEGAS_OBJECT_CACHE_API_KEY is missing: the object cache is disabled and requests will go directly to the store"
                 );
+                return direct;
             }
             Arc::new(CacheClientStore::new(url, api_key, direct)) as Arc<dyn ObjectStore>
         } else {

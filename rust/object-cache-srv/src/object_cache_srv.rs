@@ -213,6 +213,17 @@ async fn get_range_handler(
         }
     };
 
+    // The cache assembles the requested span contiguously in memory, so cap the
+    // single-range read at the same limit as the multi-range POST path to bound
+    // peak allocation. The client falls back to the direct store on any non-2xx,
+    // so an oversized read still succeeds (just uncached).
+    if byte_range.end - byte_range.start > MAX_TOTAL_REQUESTED_BYTES {
+        warn!(
+            "rejected range {byte_range:?} for {key}: requested bytes exceed max {MAX_TOTAL_REQUESTED_BYTES}"
+        );
+        return Err(StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
     match state.cache.get_range(&key, byte_range.clone()).await {
         Ok(data) => {
             let content_length = data.len();
