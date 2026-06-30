@@ -113,21 +113,26 @@ fn parse_range_header(header_value: &str, file_size: u64) -> Result<std::ops::Ra
         .split_once('-')
         .ok_or_else(|| anyhow!("invalid Range header format: {header_value}"))?;
     let start: u64 = start_str.parse().with_context(|| "parsing range start")?;
-    let end: u64 = if end_str.is_empty() {
-        file_size
+    if end_str.is_empty() {
+        // Open-ended range (`bytes=<start>-`): read from `start` to EOF. An
+        // offset exactly at EOF is a legitimate zero-length read in
+        // `object_store::GetRange::Offset` semantics, so allow `start == file_size`
+        // to yield an empty range rather than rejecting it. Note `end > file_size`
+        // (i.e. `start > file_size`) is left for the caller's OutOfBounds→416 path.
+        Ok(start..file_size)
     } else {
-        end_str
+        let end = end_str
             .parse::<u64>()
             .with_context(|| "parsing range end")?
             .checked_add(1)
-            .ok_or_else(|| anyhow!("range end overflow in Range header: {header_value}"))?
-    };
-    // Reject inverted/degenerate ranges (e.g. `bytes=100-50`): an empty or
-    // backwards range cannot produce a valid 206 Content-Range.
-    if start >= end {
-        bail!("invalid Range header: start {start} not before end {end}");
+            .ok_or_else(|| anyhow!("range end overflow in Range header: {header_value}"))?;
+        // Reject inverted/degenerate explicit ranges (e.g. `bytes=100-50`): an
+        // empty or backwards range cannot produce a valid 206 Content-Range.
+        if start >= end {
+            bail!("invalid Range header: start {start} not before end {end}");
+        }
+        Ok(start..end)
     }
-    Ok(start..end)
 }
 
 fn is_not_found(e: &anyhow::Error) -> bool {
@@ -212,6 +217,30 @@ async fn get_range_handler(
             return Err(StatusCode::BAD_REQUEST);
         }
     };
+
+    // An explicit range whose end exceeds the object size (or an open-ended
+    // range whose start is past EOF) is unsatisfiable per RFC 7233 and must be
+    // 416, not 413. This is checked before the 512 MiB span cap so an
+    // out-of-bounds request is never misreported as too large.
+    if byte_range.end > file_size || byte_range.start > file_size {
+        warn!("range {byte_range:?} out of bounds for {key} (file_size {file_size})");
+        return Err(StatusCode::RANGE_NOT_SATISFIABLE);
+    }
+
+    // An open-ended range at exactly EOF (`bytes=<file_size>-`) is a valid
+    // zero-length read. A zero-length entity has no satisfiable byte position to
+    // express in a 206 `Content-Range`, so serve it as a plain 200 with an empty
+    // body, mirroring the zero-byte-object case above, rather than falling
+    // through to `get_range` (which would build a malformed 206 header).
+    if byte_range.start == byte_range.end {
+        let response = Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Type", "application/octet-stream")
+            .header("Content-Length", "0")
+            .body(Body::empty())
+            .expect("build empty range response");
+        return Ok(response);
+    }
 
     // The cache assembles the requested span contiguously in memory, so cap the
     // single-range read at the same limit as the multi-range POST path to bound
@@ -351,6 +380,13 @@ async fn post_ranges_handler(
 #[micromegas_main(interop_max_level = "info")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Cli::parse();
+
+    // `block_size` is the divisor for block-index math (`start / block_size`);
+    // a value of 0 would panic on the first range read. Reject it at the startup
+    // boundary as a fatal config error rather than letting it reach the cache.
+    if args.block_size == 0 {
+        return Err(anyhow!("MICROMEGAS_OBJECT_CACHE_BLOCK_SIZE must be greater than 0").into());
+    }
 
     let ns = if args.namespace.is_empty() {
         // Strip any `scheme://` prefix so the namespace is stable regardless of
