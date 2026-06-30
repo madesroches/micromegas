@@ -47,9 +47,9 @@ def ensure_minio_running(s3_port, console_port):
             container.reload()
         else:
             print(f"✅ {CONTAINER_NAME} container already running")
-        bound_port = container.attrs["NetworkSettings"]["Ports"][f"{CONTAINER_S3_PORT}/tcp"][0][
-            "HostPort"
-        ]
+        bound_port = container.attrs["NetworkSettings"]["Ports"][
+            f"{CONTAINER_S3_PORT}/tcp"
+        ][0]["HostPort"]
         return int(bound_port)
     except docker.errors.NotFound:
         print(f"\U0001f195 Creating {CONTAINER_NAME} container...")
