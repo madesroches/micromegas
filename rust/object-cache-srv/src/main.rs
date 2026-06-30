@@ -178,6 +178,20 @@ async fn get_range_handler(
         }
     };
 
+    // A zero-byte object cannot be expressed as a satisfiable byte range, so
+    // serve it as an empty success rather than constructing a 0..1 range that
+    // would be rejected as out of bounds.
+    if file_size == 0 {
+        let response = Response::builder()
+            .status(StatusCode::PARTIAL_CONTENT)
+            .header("Content-Type", "application/octet-stream")
+            .header("Content-Length", "0")
+            .header("Content-Range", "bytes 0-0/0")
+            .body(Body::empty())
+            .expect("build empty GET response");
+        return Ok(response);
+    }
+
     let range_header = match headers.get("range").or_else(|| headers.get("Range")) {
         Some(h) => h.to_str().unwrap_or("").to_string(),
         None => format!("bytes=0-{}", file_size.saturating_sub(1)),

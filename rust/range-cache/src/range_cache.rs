@@ -168,7 +168,14 @@ impl RangeCache {
         let mut all_block_indices = BTreeSet::new();
         for r in ranges {
             let start = r.start;
-            let end = r.end.min(file_size);
+            let end = r.end;
+            if end > file_size {
+                return Err(RangeError::OutOfBounds {
+                    requested_end: end,
+                    file_size,
+                }
+                .into());
+            }
             if start < end {
                 let blk = blocks_for_range(start, end, self.block_size);
                 for idx in blk.start..blk.end {
@@ -197,7 +204,7 @@ impl RangeCache {
         let mut result = Vec::with_capacity(ranges.len());
         for r in ranges {
             let start = r.start;
-            let end = r.end.min(file_size);
+            let end = r.end;
             if start >= end {
                 result.push(Bytes::new());
                 continue;
