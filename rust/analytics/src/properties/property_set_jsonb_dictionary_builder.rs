@@ -32,6 +32,16 @@ unsafe impl Sync for ObjectPointer {}
 /// - Pointer-based deduplication: O(1) pointer comparison vs O(n) content hash
 /// - Serialization only when needed: Only serialize PropertySet on first encounter
 /// - Memory efficiency: Shared PropertySet references, single JSONB copy per unique set
+///
+/// # Invariant (must not outlive a single parse arena)
+///
+/// The pointer keys are only unique while every appended `PropertySet` borrows the
+/// same parse arena. A dropped arena's address can be recycled by the next block's
+/// arena, so a builder instance must be fed exactly one block / one arena: construct
+/// it fresh in each block processor and `finish()` it before the arena is dropped.
+/// Reusing one builder across arenas would let a recycled address alias a stale
+/// entry and emit the wrong JSONB. `append_property_set` debug-asserts this
+/// invariant so any future cross-arena reuse fails loudly in debug/test builds.
 pub struct PropertySetJsonbDictionaryBuilder {
     /// Maps `Arc<Object>` pointer to dictionary index (avoids content hashing)
     pointer_to_index: HashMap<ObjectPointer, i32>,
@@ -60,7 +70,20 @@ impl PropertySetJsonbDictionaryBuilder {
 
         match self.pointer_to_index.get(&ptr) {
             Some(&index) => {
-                // Cache hit: reuse existing dictionary index (no serialization)
+                // Cache hit: reuse existing dictionary index (no serialization).
+                // Invariant: an equal pointer must mean equal content. This holds only
+                // while all appended sets come from the same parse arena; if a builder
+                // is ever reused across arenas, a recycled address could alias a stale
+                // entry here. Verify in debug builds so that misuse fails loudly instead
+                // of silently emitting the wrong JSONB. Compiled out of release builds.
+                #[cfg(debug_assertions)]
+                {
+                    let expected = serialize_property_set_to_jsonb(property_set)?;
+                    debug_assert_eq!(
+                        expected, self.jsonb_values[index as usize],
+                        "pointer-dedup collision: arena address reused across blocks"
+                    );
+                }
                 self.keys.push(Some(index));
             }
             None => {
