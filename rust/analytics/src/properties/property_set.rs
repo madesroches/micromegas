@@ -1,51 +1,54 @@
 use anyhow::Result;
-use micromegas_telemetry::property::Property;
 use micromegas_transit::value::{Object, Value};
-use std::sync::Arc;
 
-/// A set of properties, backed by a `transit` object.
-#[derive(Debug, Clone)]
-pub struct PropertySet {
-    obj: Arc<Object>,
+/// A set of properties, backed by an arena-allocated `transit` object.
+///
+/// Borrows the parse arena, so it is valid only within a single `parse_block`
+/// call; consumers must serialize/copy it out before the arena is dropped.
+#[derive(Debug, Clone, Copy)]
+pub struct PropertySet<'a> {
+    obj: &'a Object<'a>,
 }
 
-impl PropertySet {
-    pub fn new(obj: Arc<Object>) -> Self {
+impl<'a> PropertySet<'a> {
+    pub fn new(obj: &'a Object<'a>) -> Self {
         Self { obj }
     }
 
-    pub fn empty() -> Self {
-        lazy_static::lazy_static! {
-            static ref TYPE_NAME: Arc<String> = Arc::new("EmptyPropertySet".into());
-            static ref EMPTY_SET: PropertySet = PropertySet::new( Arc::new( Object{ type_name: TYPE_NAME.clone(), members: vec![] }) );
-        }
-        EMPTY_SET.clone()
+    pub fn empty() -> PropertySet<'static> {
+        static EMPTY: Object<'static> = Object {
+            type_name: "EmptyPropertySet",
+            members: &[],
+        };
+        PropertySet { obj: &EMPTY }
     }
 
-    /// Iterates over the properties in the set.
-    pub fn for_each_property<Fun: FnMut(Property) -> Result<()>>(
+    /// Iterates over the string-valued properties in the set as `(key, value)` pairs.
+    pub fn for_each_property<Fun: FnMut(&'a str, &'a str) -> Result<()>>(
         &self,
         mut fun: Fun,
     ) -> Result<()> {
-        for (key, value) in &self.obj.members {
+        for &(key, value) in self.obj.members {
             if let Value::String(value_str) = value {
-                fun(Property::new(key.clone(), value_str.clone()))?;
+                fun(key, value_str)?;
             }
         }
         Ok(())
     }
 
-    /// Get a reference to the underlying `Arc<Object>` for pointer-based operations.
+    /// Stable identity pointer to the underlying arena object.
     ///
-    /// This is used by custom dictionary builders for efficient deduplication
-    /// based on Arc pointer addresses rather than content hashing.
-    pub fn as_arc_object(&self) -> &Arc<Object> {
-        &self.obj
+    /// Used by the dictionary builder for pointer-based deduplication: within a
+    /// single block, every event referencing the same property-set dependency
+    /// shares one arena `Object`, so identical sets compare equal by address.
+    /// The pointer is only ever compared, never dereferenced.
+    pub fn object_ptr(&self) -> *const () {
+        self.obj as *const Object as *const ()
     }
 }
 
-impl From<Arc<Object>> for PropertySet {
-    fn from(value: Arc<Object>) -> Self {
+impl<'a> From<&'a Object<'a>> for PropertySet<'a> {
+    fn from(value: &'a Object<'a>) -> Self {
         Self::new(value)
     }
 }

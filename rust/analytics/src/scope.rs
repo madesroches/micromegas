@@ -28,6 +28,44 @@ impl ScopeDesc {
     }
 }
 
+/// A borrowed scope description handed to block processors per event.
+///
+/// Borrows the parse arena, so it costs no allocation to construct; the owning
+/// [`ScopeDesc`] is materialized only when a scope is first inserted into a
+/// long-lived [`ScopeHashMap`] (once per distinct scope, not per event).
+#[derive(Debug, Clone, Copy)]
+pub struct BorrowedScopeDesc<'a> {
+    pub name: &'a str,
+    pub filename: &'a str,
+    pub target: &'a str,
+    pub line: u32,
+    pub hash: u32,
+}
+
+impl<'a> BorrowedScopeDesc<'a> {
+    pub fn new(name: &'a str, filename: &'a str, target: &'a str, line: u32) -> Self {
+        let hash = compute_scope_hash(name, filename, target, line);
+        Self {
+            name,
+            filename,
+            target,
+            line,
+            hash,
+        }
+    }
+
+    /// Materializes an owned `ScopeDesc` (allocates the strings).
+    pub fn to_owned(self) -> ScopeDesc {
+        ScopeDesc {
+            name: Arc::new(self.name.to_owned()),
+            filename: Arc::new(self.filename.to_owned()),
+            target: Arc::new(self.target.to_owned()),
+            line: self.line,
+            hash: self.hash,
+        }
+    }
+}
+
 /// Computes the hash of a scope.
 pub fn compute_scope_hash(name: &str, filename: &str, target: &str, line: u32) -> u32 {
     let hash_name = xxh32(name.as_bytes(), 0);

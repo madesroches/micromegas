@@ -38,6 +38,7 @@ async-stream = "0.3"
 async-trait = "0.1"
 axum = "0.8"
 base64 = "0.22"
+bumpalo = { version = "3", features = ["collections"] }
 bytes = "1.11.1"
 cfg-if = "1.0"
 chrono = { version = "0.4", features = ["serde"] }

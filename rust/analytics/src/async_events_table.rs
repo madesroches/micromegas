@@ -19,19 +19,22 @@ use crate::time::TimeRange;
 
 /// Represents a single async span event record.
 /// Optimized for high-frequency data - process info can be joined when needed.
+///
+/// `name`/`filename`/`target` borrow the per-block parse arena; the record is
+/// appended to Arrow (which copies the strings) within the parse callback.
 #[derive(Debug, Clone)]
-pub struct AsyncEventRecord {
+pub struct AsyncEventRecord<'a> {
     pub stream_id: Arc<String>,
     pub block_id: Arc<String>,
     pub time: i64,
-    pub event_type: Arc<String>,
+    pub event_type: &'static str,
     pub span_id: i64,
     pub parent_span_id: i64,
     pub depth: u32,
     pub hash: u32,
-    pub name: Arc<String>,
-    pub filename: Arc<String>,
-    pub target: Arc<String>,
+    pub name: &'a str,
+    pub filename: &'a str,
+    pub target: &'a str,
     pub line: u32,
 }
 
@@ -136,18 +139,18 @@ impl AsyncEventRecordBuilder {
         self.times.len() == 0
     }
 
-    pub fn append(&mut self, record: &AsyncEventRecord) -> Result<()> {
+    pub fn append(&mut self, record: &AsyncEventRecord<'_>) -> Result<()> {
         self.stream_ids.append_value(&*record.stream_id);
         self.block_ids.append_value(&*record.block_id);
         self.times.append_value(record.time);
-        self.event_types.append_value(&*record.event_type);
+        self.event_types.append_value(record.event_type);
         self.span_ids.append_value(record.span_id);
         self.parent_span_ids.append_value(record.parent_span_id);
         self.depths.append_value(record.depth);
         self.hashes.append_value(record.hash);
-        self.names.append_value(&*record.name);
-        self.filenames.append_value(&*record.filename);
-        self.targets.append_value(&*record.target);
+        self.names.append_value(record.name);
+        self.filenames.append_value(record.filename);
+        self.targets.append_value(record.target);
         self.lines.append_value(record.line);
         Ok(())
     }

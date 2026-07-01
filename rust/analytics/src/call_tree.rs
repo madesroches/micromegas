@@ -1,4 +1,5 @@
 use crate::metadata::{StreamMetadata, get_thread_name_from_stream_metadata};
+use crate::scope::BorrowedScopeDesc;
 use crate::scope::ScopeDesc;
 use crate::scope::ScopeHashMap;
 use crate::thread_block_processor::ThreadBlockProcessor;
@@ -114,10 +115,12 @@ impl CallTreeBuilder {
         }
     }
 
-    fn record_scope_desc(&mut self, scope_desc: ScopeDesc) {
+    fn record_scope_desc(&mut self, scope_desc: BorrowedScopeDesc<'_>) {
+        // Own the scope strings only on first encounter (once per distinct scope),
+        // not per event — the borrowed scope comes from the per-block arena.
         self.scopes
             .entry(scope_desc.hash)
-            .or_insert_with(|| scope_desc);
+            .or_insert_with(|| scope_desc.to_owned());
     }
 }
 
@@ -126,7 +129,7 @@ impl ThreadBlockProcessor for CallTreeBuilder {
         &mut self,
         _block_id: &str,
         event_id: i64,
-        scope: ScopeDesc,
+        scope: BorrowedScopeDesc<'_>,
         ts: i64,
     ) -> Result<bool> {
         if self.limit.is_some() && self.nb_spans >= self.limit.unwrap() {
@@ -157,7 +160,7 @@ impl ThreadBlockProcessor for CallTreeBuilder {
         &mut self,
         _block_id: &str,
         event_id: i64,
-        scope: ScopeDesc,
+        scope: BorrowedScopeDesc<'_>,
         ts: i64,
     ) -> Result<bool> {
         let time = self.convert_ticks.ticks_to_nanoseconds(ts);

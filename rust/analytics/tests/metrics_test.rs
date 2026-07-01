@@ -177,7 +177,9 @@ fn test_tagged_measures() {
     let stream_info = make_stream_info(&stream);
     let stream_metadata = StreamMetadata::from_stream_info(&stream_info).unwrap();
     let convert_ticks = ConvertTicks::from_meta_data(0, 0, 1).unwrap();
-    let mut measures = vec![];
+    // Measures borrow the per-block arena, so we assert inside the callback rather
+    // than collecting them (the higher-ranked closure forbids escaping the arena).
+    let mut nb_measures = 0;
     parse_block(&stream_metadata, &received_block.payload, |val| {
         let measure = measure_from_value(
             process_info.clone(),
@@ -185,18 +187,18 @@ fn test_tagged_measures() {
             received_block.block_id.to_string().into(),
             0,
             &convert_ticks,
-            &val,
+            val,
         )
         .unwrap()
         .unwrap();
-        assert_eq!(measure.name.as_str(), "override_name");
-        assert_eq!(measure.unit.as_str(), "override_unit");
-        assert_eq!(measure.target.as_str(), "override_target");
-        measures.push(measure);
+        assert_eq!(measure.name, "override_name");
+        assert_eq!(measure.unit, "override_unit");
+        assert_eq!(measure.target, "override_target");
+        nb_measures += 1;
         Ok(true)
     })
     .unwrap();
-    assert_eq!(measures.len(), 2);
+    assert_eq!(nb_measures, 2);
 
     let guard = init_in_memory_tracing();
     imetric!("tagged_int", "count", 100);

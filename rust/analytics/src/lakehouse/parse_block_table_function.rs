@@ -43,25 +43,25 @@ fn output_schema() -> SchemaRef {
 }
 
 /// Converts a `transit::Value` to a `jsonb::Value`.
-pub fn transit_value_to_jsonb(value: &TransitValue) -> JsonbValue<'_> {
+pub fn transit_value_to_jsonb(value: TransitValue<'_>) -> JsonbValue<'_> {
     match value {
-        TransitValue::String(s) => JsonbValue::String(Cow::Borrowed(s.as_str())),
+        TransitValue::String(s) => JsonbValue::String(Cow::Borrowed(s)),
         TransitValue::Object(obj) => {
             let mut map = BTreeMap::new();
             map.insert(
                 "__type".to_string(),
-                JsonbValue::String(Cow::Borrowed(obj.type_name.as_str())),
+                JsonbValue::String(Cow::Borrowed(obj.type_name)),
             );
-            for (name, val) in &obj.members {
-                map.insert(name.as_ref().clone(), transit_value_to_jsonb(val));
+            for &(name, val) in obj.members {
+                map.insert(name.to_string(), transit_value_to_jsonb(val));
             }
             JsonbValue::Object(map)
         }
-        TransitValue::U8(v) => JsonbValue::Number(jsonb::Number::UInt64(u64::from(*v))),
-        TransitValue::U32(v) => JsonbValue::Number(jsonb::Number::UInt64(u64::from(*v))),
-        TransitValue::U64(v) => JsonbValue::Number(jsonb::Number::UInt64(*v)),
-        TransitValue::I64(v) => JsonbValue::Number(jsonb::Number::Int64(*v)),
-        TransitValue::F64(v) => JsonbValue::Number(jsonb::Number::Float64(*v)),
+        TransitValue::U8(v) => JsonbValue::Number(jsonb::Number::UInt64(u64::from(v))),
+        TransitValue::U32(v) => JsonbValue::Number(jsonb::Number::UInt64(u64::from(v))),
+        TransitValue::U64(v) => JsonbValue::Number(jsonb::Number::UInt64(v)),
+        TransitValue::I64(v) => JsonbValue::Number(jsonb::Number::Int64(v)),
+        TransitValue::F64(v) => JsonbValue::Number(jsonb::Number::Float64(v)),
         TransitValue::None => JsonbValue::Null,
         TransitValue::Bytes(b) => {
             JsonbValue::String(Cow::Owned(format!("<binary {} bytes>", b.len())))
@@ -168,13 +168,13 @@ fn parse_block_objects(
     let mut nb_objects: usize = 0;
 
     parse_block(stream_metadata, payload, |value| {
-        if let TransitValue::Object(obj) = &value {
-            let jsonb_val = transit_value_to_jsonb(&value);
+        if let TransitValue::Object(obj) = value {
+            let jsonb_val = transit_value_to_jsonb(value);
             let mut buf = Vec::new();
             jsonb_val.write_to_vec(&mut buf);
 
             index_builder.append_value(object_offset + local_index);
-            name_builder.append_value(obj.type_name.as_ref());
+            name_builder.append_value(obj.type_name);
             value_builder.append_value(&buf);
             nb_objects += 1;
         } else {

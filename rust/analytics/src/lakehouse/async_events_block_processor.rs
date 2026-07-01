@@ -6,7 +6,7 @@ use crate::{
     async_block_processing::{AsyncBlockProcessor, parse_async_block_payload},
     async_events_table::{AsyncEventRecord, AsyncEventRecordBuilder},
     payload::fetch_block_payload,
-    scope::ScopeDesc,
+    scope::BorrowedScopeDesc,
     time::ConvertTicks,
 };
 use anyhow::{Context, Result};
@@ -15,10 +15,8 @@ use micromegas_telemetry::blob_storage::BlobStorage;
 use micromegas_tracing::prelude::*;
 use std::sync::Arc;
 
-lazy_static::lazy_static! {
-    static ref BEGIN_EVENT_TYPE: Arc<String> = Arc::new("begin".to_string());
-    static ref END_EVENT_TYPE: Arc<String> = Arc::new("end".to_string());
-}
+const BEGIN_EVENT_TYPE: &str = "begin";
+const END_EVENT_TYPE: &str = "end";
 
 /// A `BlockProcessor` implementation for processing async event blocks.
 #[derive(Debug)]
@@ -60,7 +58,7 @@ impl AsyncBlockProcessor for AsyncEventCollector {
     fn on_begin_async_scope(
         &mut self,
         _block_id: &str,
-        scope: ScopeDesc,
+        scope: BorrowedScopeDesc<'_>,
         ts: i64,
         span_id: i64,
         parent_span_id: i64,
@@ -71,7 +69,7 @@ impl AsyncBlockProcessor for AsyncEventCollector {
             stream_id: self.stream_id.clone(),
             block_id: self.block_id.clone(),
             time: time_ns,
-            event_type: BEGIN_EVENT_TYPE.clone(),
+            event_type: BEGIN_EVENT_TYPE,
             span_id,
             parent_span_id,
             depth,
@@ -88,7 +86,7 @@ impl AsyncBlockProcessor for AsyncEventCollector {
     fn on_end_async_scope(
         &mut self,
         _block_id: &str,
-        scope: ScopeDesc,
+        scope: BorrowedScopeDesc<'_>,
         ts: i64,
         span_id: i64,
         parent_span_id: i64,
@@ -99,7 +97,7 @@ impl AsyncBlockProcessor for AsyncEventCollector {
             stream_id: self.stream_id.clone(),
             block_id: self.block_id.clone(),
             time: time_ns,
-            event_type: END_EVENT_TYPE.clone(),
+            event_type: END_EVENT_TYPE,
             span_id,
             parent_span_id,
             depth,

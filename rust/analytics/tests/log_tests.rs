@@ -72,11 +72,11 @@ fn test_log_encode_static() {
 
     parse_block(&stream_metadata, &received_block.payload, |val| {
         if let Value::Object(obj) = val {
-            assert_eq!(obj.type_name.as_str(), "LogStaticStrInteropEvent");
+            assert_eq!(obj.type_name, "LogStaticStrInteropEvent");
             assert_eq!(obj.get::<i64>("time").unwrap(), 1);
             assert_eq!(obj.get::<u32>("level").unwrap(), 2);
-            assert_eq!(&*obj.get::<Arc<String>>("target").unwrap(), "target_name");
-            assert_eq!(&*obj.get::<Arc<String>>("msg").unwrap(), "my message");
+            assert_eq!(obj.get::<&str>("target").unwrap(), "target_name");
+            assert_eq!(obj.get::<&str>("msg").unwrap(), "my message");
         } else {
             panic!("log entry not an object");
         }
@@ -128,12 +128,12 @@ fn test_log_encode_dynamic() {
 
     parse_block(&stream_metadata, &received_block.payload, |val| {
         if let Value::Object(obj) = val {
-            assert_eq!(obj.type_name.as_str(), "LogStringEventV2");
+            assert_eq!(obj.type_name, "LogStringEventV2");
             assert_eq!(obj.get::<i64>("time").unwrap(), 1);
-            let desc = obj.get::<Arc<Object>>("desc").unwrap();
+            let desc = obj.get::<&Object>("desc").unwrap();
             assert_eq!(desc.get::<u32>("level").unwrap(), 4);
-            assert_eq!(&*desc.get::<Arc<String>>("target").unwrap(), "target_name");
-            assert_eq!(&*obj.get::<Arc<String>>("msg").unwrap(), "my message");
+            assert_eq!(desc.get::<&str>("target").unwrap(), "target_name");
+            assert_eq!(obj.get::<&str>("msg").unwrap(), "my message");
         } else {
             panic!("log entry not an object");
         }
@@ -195,7 +195,7 @@ fn test_parse_log_interops() {
             stream_id.to_string().into(),
             received_block.block_id.to_string().into(),
             0,
-            &val,
+            val,
         )
         .unwrap()
         .is_some()
@@ -268,7 +268,7 @@ fn test_tagged_log_entries() {
             stream_id.to_string().into(),
             received_block.block_id.to_string().into(),
             0,
-            &val,
+            val,
         )
         .unwrap()
         .unwrap();

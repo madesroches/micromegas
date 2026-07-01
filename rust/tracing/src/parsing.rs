@@ -1,79 +1,86 @@
 //! Manual parsing of dynamically sized events
 use anyhow::{Context, Result};
+use bumpalo::Bump;
 use micromegas_transit::{
-    CustomReaderMap, InProcSerialize, LegacyDynString, UserDefinedType, advance_window,
-    parse_pod_instance, read_advance_string, read_consume_pod,
+    CustomReaderMap, UserDefinedType, advance_window, parse_pod_instance, read_advance_string_in,
+    read_consume_pod,
     value::{Object, Value},
 };
 use std::{collections::HashMap, sync::Arc};
 
 use crate::property_set::PROPERTY_SET_DEP_TYPE_NAME;
 
-lazy_static::lazy_static! {
-    static ref DATA: Arc<String> = Arc::new("data".into());
-    static ref DESC: Arc<String> = Arc::new("desc".into());
-    static ref FORMAT: Arc<String> = Arc::new("format".into());
-    static ref LEVEL: Arc<String> = Arc::new("level".into());
-    static ref MSG: Arc<String> = Arc::new("msg".into());
-    static ref NAME: Arc<String> = Arc::new("name".into());
-    static ref PROPERTIES: Arc<String> = Arc::new("properties".into());
-    static ref TARGET: Arc<String> = Arc::new("target".into());
-    static ref TIME: Arc<String> = Arc::new("time".into());
-}
+// Member names: 'static string literals reborrow into the parse arena lifetime for free.
+const DATA: &str = "data";
+const DESC: &str = "desc";
+const FORMAT: &str = "format";
+const ID: &str = "id";
+const LEVEL: &str = "level";
+const MSG: &str = "msg";
+const NAME: &str = "name";
+const PROPERTIES: &str = "properties";
+const TARGET: &str = "target";
+const TIME: &str = "time";
+const VALUE: &str = "value";
 
-fn parse_log_string_event(
-    udt: &UserDefinedType,
-    _udts: &[UserDefinedType],
-    dependencies: &HashMap<u64, Value>,
-    mut object_window: &[u8],
-) -> Result<Value> {
+const PROPERTY_SET_TYPE_NAME: &str = "property_set";
+
+fn parse_log_string_event<'a>(
+    bump: &'a Bump,
+    udt: &'a UserDefinedType,
+    _udts: &'a [UserDefinedType],
+    dependencies: &HashMap<u64, Value<'a>>,
+    mut object_window: &'a [u8],
+) -> Result<Value<'a>> {
     let desc_id: u64 = read_consume_pod(&mut object_window);
     let time: i64 = read_consume_pod(&mut object_window);
-    let msg = String::from_utf8(object_window.to_vec()).with_context(|| "parsing legacy string")?;
-    let desc = dependencies
+    // legacy format: the remaining bytes are the (utf8) message
+    let msg = std::str::from_utf8(object_window).with_context(|| "parsing legacy string")?;
+    let desc = *dependencies
         .get(&desc_id)
         .with_context(|| format!("desc member {desc_id} of LogStringEvent not found"))?;
-    let members = vec![
-        (TIME.clone(), Value::I64(time)),
-        (MSG.clone(), Value::String(Arc::new(msg))),
-        (DESC.clone(), desc.clone()),
-    ];
-    Ok(Value::Object(Arc::new(Object {
-        type_name: udt.name.clone(),
+    let members = bump.alloc_slice_copy(&[
+        (TIME, Value::I64(time)),
+        (MSG, Value::String(msg)),
+        (DESC, desc),
+    ]);
+    Ok(Value::Object(bump.alloc(Object {
+        type_name: udt.name.as_str(),
         members,
     })))
 }
 
-fn parse_log_string_event_v2(
-    udt: &UserDefinedType,
-    _udts: &[UserDefinedType],
-    dependencies: &HashMap<u64, Value>,
-    mut object_window: &[u8],
-) -> Result<Value> {
+fn parse_log_string_event_v2<'a>(
+    bump: &'a Bump,
+    udt: &'a UserDefinedType,
+    _udts: &'a [UserDefinedType],
+    dependencies: &HashMap<u64, Value<'a>>,
+    mut object_window: &'a [u8],
+) -> Result<Value<'a>> {
     let desc_id: u64 = read_consume_pod(&mut object_window);
     let time: i64 = read_consume_pod(&mut object_window);
-    let msg = read_advance_string(&mut object_window).with_context(|| "parsing string")?;
-    let desc: Value = dependencies
+    let msg = read_advance_string_in(bump, &mut object_window).with_context(|| "parsing string")?;
+    let desc = *dependencies
         .get(&desc_id)
-        .with_context(|| format!("desc member {desc_id} of LogStringEvent not found"))?
-        .clone();
-    let members = vec![
-        (TIME.clone(), Value::I64(time)),
-        (MSG.clone(), Value::String(Arc::new(msg))),
-        (DESC.clone(), desc),
-    ];
-    Ok(Value::Object(Arc::new(Object {
-        type_name: udt.name.clone(),
+        .with_context(|| format!("desc member {desc_id} of LogStringEvent not found"))?;
+    let members = bump.alloc_slice_copy(&[
+        (TIME, Value::I64(time)),
+        (MSG, Value::String(msg)),
+        (DESC, desc),
+    ]);
+    Ok(Value::Object(bump.alloc(Object {
+        type_name: udt.name.as_str(),
         members,
     })))
 }
 
-fn parse_log_string_interop_event_v3(
-    udt: &UserDefinedType,
-    udts: &[UserDefinedType],
-    dependencies: &HashMap<u64, Value>,
-    mut object_window: &[u8],
-) -> Result<Value> {
+fn parse_log_string_interop_event_v3<'a>(
+    bump: &'a Bump,
+    udt: &'a UserDefinedType,
+    udts: &'a [UserDefinedType],
+    dependencies: &HashMap<u64, Value<'a>>,
+    mut object_window: &'a [u8],
+) -> Result<Value<'a>> {
     let string_ref_metadata = udts
         .iter()
         .find(|t| *t.name == "StaticStringRef")
@@ -83,6 +90,7 @@ fn parse_log_string_interop_event_v3(
     let time: i64 = read_consume_pod(&mut object_window);
     let level: u8 = read_consume_pod(&mut object_window);
     let target = parse_pod_instance(
+        bump,
         string_ref_metadata,
         udts,
         dependencies,
@@ -90,25 +98,26 @@ fn parse_log_string_interop_event_v3(
     )
     .with_context(|| "parse_pod_instance")?;
     object_window = advance_window(object_window, string_ref_metadata.size);
-    let msg = read_advance_string(&mut object_window)?;
-    let members = vec![
-        (TIME.clone(), Value::I64(time)),
-        (LEVEL.clone(), Value::U8(level)),
-        (TARGET.clone(), target),
-        (MSG.clone(), Value::String(Arc::new(msg))),
-    ];
-    Ok(Value::Object(Arc::new(Object {
-        type_name: udt.name.clone(),
+    let msg = read_advance_string_in(bump, &mut object_window)?;
+    let members = bump.alloc_slice_copy(&[
+        (TIME, Value::I64(time)),
+        (LEVEL, Value::U8(level)),
+        (TARGET, target),
+        (MSG, Value::String(msg)),
+    ]);
+    Ok(Value::Object(bump.alloc(Object {
+        type_name: udt.name.as_str(),
         members,
     })))
 }
 
-fn parse_tagged_log_interop_event(
-    udt: &UserDefinedType,
-    udts: &[UserDefinedType],
-    dependencies: &HashMap<u64, Value>,
-    mut object_window: &[u8],
-) -> Result<Value> {
+fn parse_tagged_log_interop_event<'a>(
+    bump: &'a Bump,
+    udt: &'a UserDefinedType,
+    udts: &'a [UserDefinedType],
+    dependencies: &HashMap<u64, Value<'a>>,
+    mut object_window: &'a [u8],
+) -> Result<Value<'a>> {
     let string_ref_metadata = udts
         .iter()
         .find(|t| *t.name == "StaticStringRef")
@@ -118,6 +127,7 @@ fn parse_tagged_log_interop_event(
     let time: i64 = read_consume_pod(&mut object_window);
     let level: u8 = read_consume_pod(&mut object_window);
     let target = parse_pod_instance(
+        bump,
         string_ref_metadata,
         udts,
         dependencies,
@@ -126,158 +136,165 @@ fn parse_tagged_log_interop_event(
     .with_context(|| "parse_pod_instance")?;
     object_window = advance_window(object_window, string_ref_metadata.size);
     let properties_id: u64 = read_consume_pod(&mut object_window);
-    let properties = dependencies
+    let properties = *dependencies
         .get(&properties_id)
-        .with_context(|| "fetching properties in parse_tagged_log_interop_event")?
-        .clone();
-    let msg = read_advance_string(&mut object_window)?;
-    let members = vec![
-        (TIME.clone(), Value::I64(time)),
-        (LEVEL.clone(), Value::U8(level)),
-        (TARGET.clone(), target),
-        (PROPERTIES.clone(), properties),
-        (MSG.clone(), Value::String(Arc::new(msg))),
-    ];
-    Ok(Value::Object(Arc::new(Object {
-        type_name: udt.name.clone(),
+        .with_context(|| "fetching properties in parse_tagged_log_interop_event")?;
+    let msg = read_advance_string_in(bump, &mut object_window)?;
+    let members = bump.alloc_slice_copy(&[
+        (TIME, Value::I64(time)),
+        (LEVEL, Value::U8(level)),
+        (TARGET, target),
+        (PROPERTIES, properties),
+        (MSG, Value::String(msg)),
+    ]);
+    Ok(Value::Object(bump.alloc(Object {
+        type_name: udt.name.as_str(),
         members,
     })))
 }
 
-fn parse_tagged_log_string(
-    udt: &UserDefinedType,
-    _udts: &[UserDefinedType],
-    dependencies: &HashMap<u64, Value>,
-    mut object_window: &[u8],
-) -> Result<Value> {
+fn parse_tagged_log_string<'a>(
+    bump: &'a Bump,
+    udt: &'a UserDefinedType,
+    _udts: &'a [UserDefinedType],
+    dependencies: &HashMap<u64, Value<'a>>,
+    mut object_window: &'a [u8],
+) -> Result<Value<'a>> {
     let desc_id: u64 = read_consume_pod(&mut object_window);
-    let desc = dependencies
+    let desc = *dependencies
         .get(&desc_id)
-        .with_context(|| "fetching desc in parse_tagged_log_string")?
-        .clone();
+        .with_context(|| "fetching desc in parse_tagged_log_string")?;
     let properties_id: u64 = read_consume_pod(&mut object_window);
-    let properties = dependencies
+    let properties = *dependencies
         .get(&properties_id)
-        .with_context(|| "fetching property set in parse_tagged_log_string")?
-        .clone();
+        .with_context(|| "fetching property set in parse_tagged_log_string")?;
     let time: i64 = read_consume_pod(&mut object_window);
-    let msg = read_advance_string(&mut object_window)?;
+    let msg = read_advance_string_in(bump, &mut object_window)?;
 
-    let members = vec![
-        (TIME.clone(), Value::I64(time)),
-        (DESC.clone(), desc),
-        (PROPERTIES.clone(), properties),
-        (MSG.clone(), Value::String(Arc::new(msg))),
-    ];
-    Ok(Value::Object(Arc::new(Object {
-        type_name: udt.name.clone(),
+    let members = bump.alloc_slice_copy(&[
+        (TIME, Value::I64(time)),
+        (DESC, desc),
+        (PROPERTIES, properties),
+        (MSG, Value::String(msg)),
+    ]);
+    Ok(Value::Object(bump.alloc(Object {
+        type_name: udt.name.as_str(),
         members,
     })))
 }
 
-fn parse_log_string_interop_event(
-    udt: &UserDefinedType,
-    udts: &[UserDefinedType],
-    dependencies: &HashMap<u64, Value>,
-    mut object_window: &[u8],
-) -> Result<Value> {
+fn parse_log_string_interop_event<'a>(
+    bump: &'a Bump,
+    udt: &'a UserDefinedType,
+    udts: &'a [UserDefinedType],
+    dependencies: &HashMap<u64, Value<'a>>,
+    mut object_window: &'a [u8],
+) -> Result<Value<'a>> {
     let stringid_metadata = udts
         .iter()
         .find(|t| *t.name == "StringId")
         .with_context(|| "Can't parse log string interop event with no metadata for StringId")?;
-    unsafe {
-        let time: i64 = read_consume_pod(&mut object_window);
-        let level: u32 = read_consume_pod(&mut object_window);
-        let target = parse_pod_instance(
-            stringid_metadata,
-            udts,
-            dependencies,
-            &object_window[0..stringid_metadata.size],
-        )
-        .with_context(|| "parse_pod_instance")?;
-        object_window = advance_window(object_window, stringid_metadata.size);
-        let msg = <LegacyDynString as InProcSerialize>::read_value(object_window);
-        let members = vec![
-            (TIME.clone(), Value::I64(time)),
-            (LEVEL.clone(), Value::U32(level)),
-            (TARGET.clone(), target),
-            (MSG.clone(), Value::String(Arc::new(msg.0))),
-        ];
-        Ok(Value::Object(Arc::new(Object {
-            type_name: udt.name.clone(),
-            members,
-        })))
-    }
+    let time: i64 = read_consume_pod(&mut object_window);
+    let level: u32 = read_consume_pod(&mut object_window);
+    let target = parse_pod_instance(
+        bump,
+        stringid_metadata,
+        udts,
+        dependencies,
+        &object_window[0..stringid_metadata.size],
+    )
+    .with_context(|| "parse_pod_instance")?;
+    object_window = advance_window(object_window, stringid_metadata.size);
+    // legacy dyn string: the remaining bytes are the (utf8) message
+    let msg =
+        std::str::from_utf8(object_window).with_context(|| "parsing legacy interop string")?;
+    let members = bump.alloc_slice_copy(&[
+        (TIME, Value::I64(time)),
+        (LEVEL, Value::U32(level)),
+        (TARGET, target),
+        (MSG, Value::String(msg)),
+    ]);
+    Ok(Value::Object(bump.alloc(Object {
+        type_name: udt.name.as_str(),
+        members,
+    })))
 }
 
-fn parse_property_set(
-    _udt: &UserDefinedType,
-    udts: &[UserDefinedType],
-    dependencies: &HashMap<u64, Value>,
-    mut window: &[u8],
-) -> Result<Value> {
+fn parse_property_set<'a>(
+    bump: &'a Bump,
+    _udt: &'a UserDefinedType,
+    udts: &'a [UserDefinedType],
+    dependencies: &HashMap<u64, Value<'a>>,
+    mut window: &'a [u8],
+) -> Result<Value<'a>> {
     let property_layout = udts
         .iter()
         .find(|t| *t.name == "Property")
         .with_context(|| "could not find Property layout")?;
 
     let object_id: u64 = read_consume_pod(&mut window);
-    let nb_properties: u32 = read_consume_pod(&mut window);
-    let mut members = vec![];
+    let nb_properties = read_consume_pod::<u32>(&mut window) as usize;
+    let property_size = property_layout.size;
+    // Reject a corrupt count before reserving arena capacity: a real block holds
+    // at most window.len()/property_size properties, so a bogus large count must
+    // not trigger a huge (process-aborting) bump reservation.
+    if property_size == 0 || nb_properties > window.len() / property_size {
+        anyhow::bail!(
+            "invalid property_set: nb_properties={nb_properties} exceeds {}-byte window",
+            window.len()
+        );
+    }
+    let mut members = bumpalo::collections::Vec::with_capacity_in(nb_properties, bump);
     for i in 0..nb_properties {
-        let property_size = property_layout.size;
-        let begin = i as usize * property_size;
+        let begin = i * property_size;
         let property_window = &window[begin..begin + property_size];
         if let Value::Object(obj) =
-            parse_pod_instance(property_layout, udts, dependencies, property_window)?
+            parse_pod_instance(bump, property_layout, udts, dependencies, property_window)?
         {
             members.push((
-                obj.get::<Arc<String>>("name")?,
-                Value::String(obj.get::<Arc<String>>("value")?),
+                obj.get::<&str>("name")?,
+                Value::String(obj.get::<&str>("value")?),
             ));
         } else {
             anyhow::bail!("invalid property in propertyset");
         }
     }
 
-    lazy_static! {
-        static ref PROPERTY_SET_TYPE_NAME: Arc<String> = Arc::new("property_set".into());
-        static ref ID: Arc<String> = Arc::new("id".into());
-        static ref VALUE: Arc<String> = Arc::new("value".into());
-    }
-
-    let set = Arc::new(Object {
-        type_name: PROPERTY_SET_TYPE_NAME.clone(),
-        members,
+    let set: &Object = bump.alloc(Object {
+        type_name: PROPERTY_SET_TYPE_NAME,
+        members: members.into_bump_slice(),
     });
-    Ok(Value::Object(Arc::new(Object {
-        type_name: PROPERTY_SET_DEP_TYPE_NAME.clone(),
-        members: vec![
-            (ID.clone(), Value::U64(object_id)),
-            (VALUE.clone(), Value::Object(set)),
-        ],
+    let outer = bump.alloc_slice_copy(&[(ID, Value::U64(object_id)), (VALUE, Value::Object(set))]);
+    Ok(Value::Object(bump.alloc(Object {
+        type_name: PROPERTY_SET_DEP_TYPE_NAME.as_str(),
+        members: outer,
     })))
 }
 
-fn parse_image_event(
-    udt: &UserDefinedType,
-    _udts: &[UserDefinedType],
-    _dependencies: &HashMap<u64, Value>,
-    mut object_window: &[u8],
-) -> Result<Value> {
+fn parse_image_event<'a>(
+    bump: &'a Bump,
+    udt: &'a UserDefinedType,
+    _udts: &'a [UserDefinedType],
+    _dependencies: &HashMap<u64, Value<'a>>,
+    mut object_window: &'a [u8],
+) -> Result<Value<'a>> {
     let time: i64 = read_consume_pod(&mut object_window);
-    let name = read_advance_string(&mut object_window).with_context(|| "parsing image name")?;
-    let format = read_advance_string(&mut object_window).with_context(|| "parsing image format")?;
+    let name =
+        read_advance_string_in(bump, &mut object_window).with_context(|| "parsing image name")?;
+    let format =
+        read_advance_string_in(bump, &mut object_window).with_context(|| "parsing image format")?;
     let len: u32 = read_consume_pod(&mut object_window);
-    let data = Arc::new(object_window[..len as usize].to_vec());
-    let members = vec![
-        (TIME.clone(), Value::I64(time)),
-        (NAME.clone(), Value::String(Arc::new(name))),
-        (FORMAT.clone(), Value::String(Arc::new(format))),
-        (DATA.clone(), Value::Bytes(data)),
-    ];
-    Ok(Value::Object(Arc::new(Object {
-        type_name: udt.name.clone(),
+    // zero-copy: the blob borrows the (whole-block) source buffer; the consumer
+    // copies it into Arrow inside the parse_block callback.
+    let data: &[u8] = &object_window[..len as usize];
+    let members = bump.alloc_slice_copy(&[
+        (TIME, Value::I64(time)),
+        (NAME, Value::String(name)),
+        (FORMAT, Value::String(format)),
+        (DATA, Value::Bytes(data)),
+    ]);
+    Ok(Value::Object(bump.alloc(Object {
+        type_name: udt.name.as_str(),
         members,
     })))
 }

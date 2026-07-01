@@ -3,7 +3,7 @@ use micromegas_analytics::{
     async_block_processing::AsyncBlockProcessor,
     async_events_table::{AsyncEventRecord, AsyncEventRecordBuilder, async_events_table_schema},
     lakehouse::{async_events_view::AsyncEventsView, view::View, view_factory::ViewFactory},
-    scope::ScopeDesc,
+    scope::{BorrowedScopeDesc, ScopeDesc},
 };
 use std::sync::Arc;
 
@@ -40,7 +40,7 @@ impl AsyncBlockProcessor for TestAsyncProcessor {
     fn on_begin_async_scope(
         &mut self,
         block_id: &str,
-        scope: ScopeDesc,
+        scope: BorrowedScopeDesc<'_>,
         ts: i64,
         span_id: i64,
         parent_span_id: i64,
@@ -63,7 +63,7 @@ impl AsyncBlockProcessor for TestAsyncProcessor {
     fn on_end_async_scope(
         &mut self,
         block_id: &str,
-        scope: ScopeDesc,
+        scope: BorrowedScopeDesc<'_>,
         ts: i64,
         span_id: i64,
         parent_span_id: i64,
@@ -117,14 +117,14 @@ fn test_async_event_record_builder() {
         stream_id: Arc::new("stream1".to_string()),
         block_id: Arc::new("block1".to_string()),
         time: 2000000000,
-        event_type: Arc::new("begin".to_string()),
+        event_type: "begin",
         span_id: 1,
         parent_span_id: 0,
         depth: 0,
         hash: 0,
-        name: Arc::new("test_function".to_string()),
-        filename: Arc::new("test.rs".to_string()),
-        target: Arc::new("test_target".to_string()),
+        name: "test_function",
+        filename: "test.rs",
+        target: "test_target",
         line: 42,
     };
 
@@ -132,14 +132,14 @@ fn test_async_event_record_builder() {
         stream_id: Arc::new("stream1".to_string()),
         block_id: Arc::new("block1".to_string()),
         time: 3000000000,
-        event_type: Arc::new("end".to_string()),
+        event_type: "end",
         span_id: 1,
         parent_span_id: 0,
         depth: 0,
         hash: 0,
-        name: Arc::new("test_function".to_string()),
-        filename: Arc::new("test.rs".to_string()),
-        target: Arc::new("test_target".to_string()),
+        name: "test_function",
+        filename: "test.rs",
+        target: "test_target",
         line: 42,
     };
 
@@ -205,12 +205,7 @@ fn test_async_block_processor_trait() {
     processor
         .on_begin_async_scope(
             "block123",
-            ScopeDesc::new(
-                Arc::new("test_function".to_string()),
-                Arc::new("test.rs".to_string()),
-                Arc::new("test_target".to_string()),
-                42,
-            ),
+            BorrowedScopeDesc::new("test_function", "test.rs", "test_target", 42),
             1000,
             1,
             0,
@@ -222,12 +217,7 @@ fn test_async_block_processor_trait() {
     processor
         .on_end_async_scope(
             "block123",
-            ScopeDesc::new(
-                Arc::new("test_function".to_string()),
-                Arc::new("test.rs".to_string()),
-                Arc::new("test_target".to_string()),
-                42,
-            ),
+            BorrowedScopeDesc::new("test_function", "test.rs", "test_target", 42),
             2000,
             1,
             0,
@@ -313,22 +303,21 @@ fn test_async_events_high_frequency_performance() {
 
     // Generate many records to test performance
     for i in 0..1000 {
+        let name = format!("async_fn_{}", i % 5);
+        let filename = format!("src/lib_{}.rs", i % 3);
+        let target = format!("module_{}", i % 7);
         let record = AsyncEventRecord {
             stream_id: Arc::new(format!("stream_{}", i % 10)),
             block_id: Arc::new(format!("block_{}", i / 100)),
             time: 1000000000 + i,
-            event_type: Arc::new(if i % 2 == 0 {
-                "begin".to_string()
-            } else {
-                "end".to_string()
-            }),
+            event_type: if i % 2 == 0 { "begin" } else { "end" },
             span_id: i / 2,
             parent_span_id: if i > 0 { i / 4 } else { 0 },
             depth: (i % 5) as u32, // Test different depth levels
             hash: 0,
-            name: Arc::new(format!("async_fn_{}", i % 5)),
-            filename: Arc::new(format!("src/lib_{}.rs", i % 3)),
-            target: Arc::new(format!("module_{}", i % 7)),
+            name: &name,
+            filename: &filename,
+            target: &target,
             line: (i % 1000) as u32 + 1,
         };
         builder
@@ -363,14 +352,14 @@ fn test_async_events_cross_stream_scenarios() {
             stream_id: Arc::new("stream_001".to_string()),
             block_id: Arc::new("block_a".to_string()),
             time: 1000,
-            event_type: Arc::new("begin".to_string()),
+            event_type: "begin",
             span_id: 100,
             parent_span_id: 0,
             depth: 0,
             hash: 0,
-            name: Arc::new("async_task".to_string()),
-            filename: Arc::new("worker.rs".to_string()),
-            target: Arc::new("worker".to_string()),
+            name: "async_task",
+            filename: "worker.rs",
+            target: "worker",
             line: 42,
         },
         // Subtask starts on stream 2 (work stealing)
@@ -378,14 +367,14 @@ fn test_async_events_cross_stream_scenarios() {
             stream_id: Arc::new("stream_002".to_string()),
             block_id: Arc::new("block_b".to_string()),
             time: 1100,
-            event_type: Arc::new("begin".to_string()),
+            event_type: "begin",
             span_id: 101,
             parent_span_id: 100,
             depth: 1,
             hash: 0,
-            name: Arc::new("subtask".to_string()),
-            filename: Arc::new("worker.rs".to_string()),
-            target: Arc::new("worker".to_string()),
+            name: "subtask",
+            filename: "worker.rs",
+            target: "worker",
             line: 55,
         },
         // Subtask ends on stream 2
@@ -393,14 +382,14 @@ fn test_async_events_cross_stream_scenarios() {
             stream_id: Arc::new("stream_002".to_string()),
             block_id: Arc::new("block_c".to_string()),
             time: 1200,
-            event_type: Arc::new("end".to_string()),
+            event_type: "end",
             span_id: 101,
             parent_span_id: 100,
             depth: 1,
             hash: 0,
-            name: Arc::new("subtask".to_string()),
-            filename: Arc::new("worker.rs".to_string()),
-            target: Arc::new("worker".to_string()),
+            name: "subtask",
+            filename: "worker.rs",
+            target: "worker",
             line: 55,
         },
         // Main task continues on stream 1
@@ -408,14 +397,14 @@ fn test_async_events_cross_stream_scenarios() {
             stream_id: Arc::new("stream_001".to_string()),
             block_id: Arc::new("block_d".to_string()),
             time: 1300,
-            event_type: Arc::new("end".to_string()),
+            event_type: "end",
             span_id: 100,
             parent_span_id: 0,
             depth: 0,
             hash: 0,
-            name: Arc::new("async_task".to_string()),
-            filename: Arc::new("worker.rs".to_string()),
-            target: Arc::new("worker".to_string()),
+            name: "async_task",
+            filename: "worker.rs",
+            target: "worker",
             line: 42,
         },
     ];

@@ -48,19 +48,15 @@ impl BlockProcessor for ImageBlockProcessor {
         let mut record_builder = ImagesRecordBuilder::new();
 
         parse_block(&src_block.stream, &payload, |val| {
-            if let Value::Object(obj) = &val
-                && obj.type_name.as_str() == "ImageEvent"
+            if let Value::Object(obj) = val
+                && obj.type_name == "ImageEvent"
             {
                 let ticks = obj.get::<i64>("time").with_context(|| "reading time")?;
-                let name = obj
-                    .get::<Arc<String>>("name")
-                    .with_context(|| "reading name")?;
+                let name = obj.get::<&str>("name").with_context(|| "reading name")?;
                 let format = obj
-                    .get::<Arc<String>>("format")
+                    .get::<&str>("format")
                     .with_context(|| "reading format")?;
-                let image_data = obj
-                    .get::<Arc<Vec<u8>>>("data")
-                    .with_context(|| "reading data")?;
+                let image_data = obj.get::<&[u8]>("data").with_context(|| "reading data")?;
                 let time_ns = convert_ticks.ticks_to_nanoseconds(ticks);
                 let payload_size = image_data.len() as i64;
                 record_builder.append(
@@ -70,10 +66,10 @@ impl BlockProcessor for ImageBlockProcessor {
                     &block_id_str,
                     insert_time_nanos,
                     time_ns,
-                    &name,
-                    &format,
+                    name,
+                    format,
                     payload_size,
-                    &image_data,
+                    image_data,
                 )?;
             }
             Ok(true)

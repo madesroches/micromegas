@@ -11,23 +11,21 @@ use std::sync::Arc;
 ///
 /// Implementors receive one callback per decoded net event. Returning `Ok(true)`
 /// continues iteration; returning `Ok(false)` stops parsing the current block.
+///
+/// The string arguments borrow the per-block parse arena; an implementor that
+/// retains them across blocks (e.g. an open-span stack) must copy them out.
 pub trait NetBlockProcessor {
     fn on_connection_begin(
         &mut self,
         event_id: i64,
         time: i64,
-        connection_name: Arc<String>,
+        connection_name: &str,
         is_outgoing: bool,
     ) -> Result<bool>;
 
     fn on_connection_end(&mut self, event_id: i64, time: i64, bit_size: i64) -> Result<bool>;
 
-    fn on_object_begin(
-        &mut self,
-        event_id: i64,
-        time: i64,
-        object_name: Arc<String>,
-    ) -> Result<bool>;
+    fn on_object_begin(&mut self, event_id: i64, time: i64, object_name: &str) -> Result<bool>;
 
     fn on_object_end(&mut self, event_id: i64, time: i64, bit_size: i64) -> Result<bool>;
 
@@ -35,25 +33,20 @@ pub trait NetBlockProcessor {
         &mut self,
         event_id: i64,
         time: i64,
-        property_name: Arc<String>,
+        property_name: &str,
         bit_size: i64,
     ) -> Result<bool>;
 
-    fn on_rpc_begin(
-        &mut self,
-        event_id: i64,
-        time: i64,
-        function_name: Arc<String>,
-    ) -> Result<bool>;
+    fn on_rpc_begin(&mut self, event_id: i64, time: i64, function_name: &str) -> Result<bool>;
 
     fn on_rpc_end(&mut self, event_id: i64, time: i64, bit_size: i64) -> Result<bool>;
 }
 
-fn read_time(obj: &Object) -> Result<i64> {
+fn read_time(obj: &Object<'_>) -> Result<i64> {
     obj.get::<i64>("time")
 }
 
-fn read_bit_size(obj: &Object) -> Result<i64> {
+fn read_bit_size(obj: &Object<'_>) -> Result<i64> {
     Ok(obj.get::<u32>("bit_size")? as i64)
 }
 
@@ -68,11 +61,11 @@ pub fn parse_net_block_payload<Proc: NetBlockProcessor>(
     let mut event_id = object_offset;
     parse_block(stream, payload, |val| {
         let res = if let Value::Object(obj) = val {
-            match obj.type_name.as_str() {
+            match obj.type_name {
                 "NetConnectionBeginEvent" => {
-                    let time = read_time(&obj).with_context(|| "NetConnectionBeginEvent.time")?;
+                    let time = read_time(obj).with_context(|| "NetConnectionBeginEvent.time")?;
                     let connection_name = obj
-                        .get::<Arc<String>>("connection_name")
+                        .get::<&str>("connection_name")
                         .with_context(|| "NetConnectionBeginEvent.connection_name")?;
                     let is_outgoing = obj
                         .get::<u8>("is_outgoing")
@@ -81,44 +74,43 @@ pub fn parse_net_block_payload<Proc: NetBlockProcessor>(
                     processor.on_connection_begin(event_id, time, connection_name, is_outgoing)
                 }
                 "NetConnectionEndEvent" => {
-                    let time = read_time(&obj).with_context(|| "NetConnectionEndEvent.time")?;
+                    let time = read_time(obj).with_context(|| "NetConnectionEndEvent.time")?;
                     let bit_size =
-                        read_bit_size(&obj).with_context(|| "NetConnectionEndEvent.bit_size")?;
+                        read_bit_size(obj).with_context(|| "NetConnectionEndEvent.bit_size")?;
                     processor.on_connection_end(event_id, time, bit_size)
                 }
                 "NetObjectBeginEvent" => {
-                    let time = read_time(&obj).with_context(|| "NetObjectBeginEvent.time")?;
+                    let time = read_time(obj).with_context(|| "NetObjectBeginEvent.time")?;
                     let object_name = obj
-                        .get::<Arc<String>>("object_name")
+                        .get::<&str>("object_name")
                         .with_context(|| "NetObjectBeginEvent.object_name")?;
                     processor.on_object_begin(event_id, time, object_name)
                 }
                 "NetObjectEndEvent" => {
-                    let time = read_time(&obj).with_context(|| "NetObjectEndEvent.time")?;
+                    let time = read_time(obj).with_context(|| "NetObjectEndEvent.time")?;
                     let bit_size =
-                        read_bit_size(&obj).with_context(|| "NetObjectEndEvent.bit_size")?;
+                        read_bit_size(obj).with_context(|| "NetObjectEndEvent.bit_size")?;
                     processor.on_object_end(event_id, time, bit_size)
                 }
                 "NetPropertyEvent" => {
-                    let time = read_time(&obj).with_context(|| "NetPropertyEvent.time")?;
+                    let time = read_time(obj).with_context(|| "NetPropertyEvent.time")?;
                     let property_name = obj
-                        .get::<Arc<String>>("property_name")
+                        .get::<&str>("property_name")
                         .with_context(|| "NetPropertyEvent.property_name")?;
                     let bit_size =
-                        read_bit_size(&obj).with_context(|| "NetPropertyEvent.bit_size")?;
+                        read_bit_size(obj).with_context(|| "NetPropertyEvent.bit_size")?;
                     processor.on_property(event_id, time, property_name, bit_size)
                 }
                 "NetRPCBeginEvent" => {
-                    let time = read_time(&obj).with_context(|| "NetRPCBeginEvent.time")?;
+                    let time = read_time(obj).with_context(|| "NetRPCBeginEvent.time")?;
                     let function_name = obj
-                        .get::<Arc<String>>("function_name")
+                        .get::<&str>("function_name")
                         .with_context(|| "NetRPCBeginEvent.function_name")?;
                     processor.on_rpc_begin(event_id, time, function_name)
                 }
                 "NetRPCEndEvent" => {
-                    let time = read_time(&obj).with_context(|| "NetRPCEndEvent.time")?;
-                    let bit_size =
-                        read_bit_size(&obj).with_context(|| "NetRPCEndEvent.bit_size")?;
+                    let time = read_time(obj).with_context(|| "NetRPCEndEvent.time")?;
+                    let bit_size = read_bit_size(obj).with_context(|| "NetRPCEndEvent.bit_size")?;
                     processor.on_rpc_end(event_id, time, bit_size)
                 }
                 event_type => {

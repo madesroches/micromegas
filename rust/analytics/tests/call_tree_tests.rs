@@ -1,20 +1,14 @@
 use micromegas_analytics::call_tree::CallTreeBuilder;
-use micromegas_analytics::scope::ScopeDesc;
+use micromegas_analytics::scope::BorrowedScopeDesc;
 use micromegas_analytics::thread_block_processor::ThreadBlockProcessor;
 use micromegas_analytics::time::ConvertTicks;
-use std::sync::Arc;
 
 fn make_convert_ticks() -> ConvertTicks {
     ConvertTicks::from_meta_data(0, 0, 1_000_000_000).expect("ConvertTicks::from_meta_data")
 }
 
-fn scope(name: &str) -> ScopeDesc {
-    ScopeDesc::new(
-        Arc::new(name.to_string()),
-        Arc::new(String::new()),
-        Arc::new(String::new()),
-        0,
-    )
+fn scope(name: &str) -> BorrowedScopeDesc<'_> {
+    BorrowedScopeDesc::new(name, "", "", 0)
 }
 
 #[test]

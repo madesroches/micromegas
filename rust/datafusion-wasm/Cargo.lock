@@ -2461,6 +2461,7 @@ name = "micromegas-tracing"
 version = "0.27.0"
 dependencies = [
  "anyhow",
+ "bumpalo",
  "chrono",
  "getrandom 0.3.4",
  "internment",
@@ -2493,6 +2494,7 @@ name = "micromegas-transit"
 version = "0.27.0"
 dependencies = [
  "anyhow",
+ "bumpalo",
  "lazy_static",
  "log",
  "micromegas-derive-transit",

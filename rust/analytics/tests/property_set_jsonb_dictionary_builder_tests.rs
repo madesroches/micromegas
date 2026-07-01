@@ -1,26 +1,22 @@
 use anyhow::Result;
+use bumpalo::Bump;
 use datafusion::arrow::array::Array;
 use micromegas_analytics::properties::property_set::PropertySet;
 use micromegas_analytics::properties::property_set_jsonb_dictionary_builder::PropertySetJsonbDictionaryBuilder;
 use micromegas_transit::value::{Object, Value};
-use std::sync::Arc;
 
-fn create_test_property_set(props: Vec<(&str, &str)>) -> PropertySet {
-    let members = props
-        .into_iter()
-        .map(|(k, v)| {
-            (
-                Arc::new(k.to_string()),
-                Value::String(Arc::new(v.to_string())),
-            )
-        })
+/// Allocates a `PropertySet` in `bump`, mirroring how the parser produces them.
+/// Each call allocates a distinct arena object, so two calls with identical
+/// content still get distinct identity pointers (matching real per-block dedup).
+fn create_test_property_set<'a>(bump: &'a Bump, props: &[(&str, &str)]) -> PropertySet<'a> {
+    let members: Vec<(&'a str, Value<'a>)> = props
+        .iter()
+        .map(|(k, v)| (&*bump.alloc_str(k), Value::String(bump.alloc_str(v))))
         .collect();
-
-    let obj = Arc::new(Object {
-        type_name: Arc::new("TestPropertySet".to_string()),
-        members,
+    let obj: &Object = bump.alloc(Object {
+        type_name: "TestPropertySet",
+        members: bump.alloc_slice_copy(&members),
     });
-
     PropertySet::new(obj)
 }
 
@@ -33,8 +29,9 @@ fn test_empty_builder() {
 
 #[test]
 fn test_single_property_set() -> Result<()> {
+    let bump = Bump::new();
     let mut builder = PropertySetJsonbDictionaryBuilder::new(1);
-    let props = create_test_property_set(vec![("key1", "value1")]);
+    let props = create_test_property_set(&bump, &[("key1", "value1")]);
 
     builder.append_property_set(&props)?;
 
@@ -47,10 +44,11 @@ fn test_single_property_set() -> Result<()> {
 
 #[test]
 fn test_duplicate_property_sets() -> Result<()> {
+    let bump = Bump::new();
     let mut builder = PropertySetJsonbDictionaryBuilder::new(3);
-    let props1 = create_test_property_set(vec![("key1", "value1")]);
-    let props2 = create_test_property_set(vec![("key2", "value2")]);
-    let props1_again = props1.clone(); // Same Arc<Object> pointer
+    let props1 = create_test_property_set(&bump, &[("key1", "value1")]);
+    let props2 = create_test_property_set(&bump, &[("key2", "value2")]);
+    let props1_again = props1; // Same arena object pointer (PropertySet is Copy)
 
     builder.append_property_set(&props1)?;
     builder.append_property_set(&props2)?;
@@ -71,8 +69,9 @@ fn test_duplicate_property_sets() -> Result<()> {
 
 #[test]
 fn test_null_values() -> Result<()> {
+    let bump = Bump::new();
     let mut builder = PropertySetJsonbDictionaryBuilder::new(2);
-    let props = create_test_property_set(vec![("key1", "value1")]);
+    let props = create_test_property_set(&bump, &[("key1", "value1")]);
 
     builder.append_null();
     builder.append_property_set(&props)?;
@@ -90,11 +89,12 @@ fn test_null_values() -> Result<()> {
 
 #[test]
 fn test_pointer_based_deduplication() -> Result<()> {
+    let bump = Bump::new();
     let mut builder = PropertySetJsonbDictionaryBuilder::new(4);
 
-    // Create two PropertySets with same content but different Arc<Object> instances
-    let props1 = create_test_property_set(vec![("key1", "value1")]);
-    let props2 = create_test_property_set(vec![("key1", "value1")]); // Same content, different Arc
+    // Create two PropertySets with same content but distinct arena objects
+    let props1 = create_test_property_set(&bump, &[("key1", "value1")]);
+    let props2 = create_test_property_set(&bump, &[("key1", "value1")]); // Same content, different object
 
     builder.append_property_set(&props1)?;
     builder.append_property_set(&props2)?;

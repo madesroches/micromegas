@@ -10,31 +10,36 @@ use micromegas_tracing::prelude::*;
 use micromegas_transit::value::{Object, Value};
 use std::sync::Arc;
 
+/// Unit substituted for integer "ticks" metrics once converted to seconds.
+const SECONDS_METRIC_UNIT: &str = "seconds";
+
 /// Represents a single metric measurement.
-pub struct Measure {
+///
+/// String fields borrow the per-block parse arena (see [`crate::log_entry::LogEntry`]).
+pub struct Measure<'a> {
     pub process: Arc<ProcessMetadata>,
     pub stream_id: Arc<String>,
     pub block_id: Arc<String>,
     pub insert_time: i64, // nanoseconds
     pub time: i64,        // nanoseconds
-    pub target: Arc<String>,
-    pub name: Arc<String>,
-    pub unit: Arc<String>,
+    pub target: &'a str,
+    pub name: &'a str,
+    pub unit: &'a str,
     pub value: f64,
-    pub properties: PropertySet,
+    pub properties: PropertySet<'a>,
 }
 
 /// Creates a `Measure` from a `Value`.
-pub fn measure_from_value(
+pub fn measure_from_value<'a>(
     process: Arc<ProcessMetadata>,
     stream_id: Arc<String>,
     block_id: Arc<String>,
     block_insert_time_ns: i64,
     convert_ticks: &ConvertTicks,
-    val: &Value,
-) -> Result<Option<Measure>> {
+    val: Value<'a>,
+) -> Result<Option<Measure<'a>>> {
     if let Value::Object(obj) = val {
-        match obj.type_name.as_str() {
+        match obj.type_name {
             "FloatMetricEvent" => {
                 let ticks = obj
                     .get::<i64>("time")
@@ -43,16 +48,16 @@ pub fn measure_from_value(
                     .get::<f64>("value")
                     .with_context(|| "reading value from FloatMetricEvent")?;
                 let desc = obj
-                    .get::<Arc<Object>>("desc")
+                    .get::<&Object>("desc")
                     .with_context(|| "reading desc from FloatMetricEvent")?;
                 let target = desc
-                    .get::<Arc<String>>("target")
+                    .get::<&str>("target")
                     .with_context(|| "reading target from FloatMetricEvent")?;
                 let name = desc
-                    .get::<Arc<String>>("name")
+                    .get::<&str>("name")
                     .with_context(|| "reading name from FloatMetricEvent")?;
                 let unit = desc
-                    .get::<Arc<String>>("unit")
+                    .get::<&str>("unit")
                     .with_context(|| "reading unit from FloatMetricEvent")?;
                 Ok(Some(Measure {
                     process,
@@ -76,21 +81,18 @@ pub fn measure_from_value(
                     .get::<u64>("value")
                     .with_context(|| "reading value from IntegerMetricEvent")?;
                 let desc = obj
-                    .get::<Arc<Object>>("desc")
+                    .get::<&Object>("desc")
                     .with_context(|| "reading desc from IntegerMetricEvent")?;
                 let target = desc
-                    .get::<Arc<String>>("target")
+                    .get::<&str>("target")
                     .with_context(|| "reading target from IntegerMetricEvent")?;
                 let name = desc
-                    .get::<Arc<String>>("name")
+                    .get::<&str>("name")
                     .with_context(|| "reading name from IntegerMetricEvent")?;
                 let unit = desc
-                    .get::<Arc<String>>("unit")
+                    .get::<&str>("unit")
                     .with_context(|| "reading unit from IntegerMetricEvent")?;
-                if *unit == "ticks" {
-                    lazy_static::lazy_static! {
-                        static ref SECONDS_METRIC_UNIT: Arc<String> = Arc::new( String::from("seconds"));
-                    }
+                if unit == "ticks" {
                     Ok(Some(Measure {
                         process,
                         stream_id,
@@ -99,7 +101,7 @@ pub fn measure_from_value(
                         time,
                         target,
                         name,
-                        unit: SECONDS_METRIC_UNIT.clone(),
+                        unit: SECONDS_METRIC_UNIT,
                         value: convert_ticks.delta_ticks_to_ms(value as i64) / 1000.0,
                         properties: PropertySet::empty(),
                     }))
@@ -127,39 +129,36 @@ pub fn measure_from_value(
                     .get::<u64>("value")
                     .with_context(|| "reading value from TaggedIntegerMetricEvent")?;
                 let desc = obj
-                    .get::<Arc<Object>>("desc")
+                    .get::<&Object>("desc")
                     .with_context(|| "reading desc from IntegerMetricEvent")?;
                 let mut target = desc
-                    .get::<Arc<String>>("target")
+                    .get::<&str>("target")
                     .with_context(|| "reading target from IntegerMetricEvent")?;
                 let mut name = desc
-                    .get::<Arc<String>>("name")
+                    .get::<&str>("name")
                     .with_context(|| "reading name from IntegerMetricEvent")?;
                 let mut unit = desc
-                    .get::<Arc<String>>("unit")
+                    .get::<&str>("unit")
                     .with_context(|| "reading unit from IntegerMetricEvent")?;
                 let properties = obj
-                    .get::<Arc<Object>>("properties")
+                    .get::<&Object>("properties")
                     .with_context(|| "reading properties from TaggedIntegerMetricEvent")?;
-                for (prop_name, prop_value) in &properties.members {
-                    match (prop_name.as_str(), prop_value) {
+                for &(prop_name, prop_value) in properties.members {
+                    match (prop_name, prop_value) {
                         ("target", Value::String(value_str)) => {
-                            target = value_str.clone();
+                            target = value_str;
                         }
                         ("name", Value::String(value_str)) => {
-                            name = value_str.clone();
+                            name = value_str;
                         }
                         ("unit", Value::String(value_str)) => {
-                            unit = value_str.clone();
+                            unit = value_str;
                         }
-                        (&_, _) => {}
+                        (_, _) => {}
                     }
                 }
 
-                if *unit == "ticks" {
-                    lazy_static::lazy_static! {
-                        static ref SECONDS_METRIC_UNIT: Arc<String> = Arc::new( String::from("seconds"));
-                    }
+                if unit == "ticks" {
                     Ok(Some(Measure {
                         process,
                         stream_id,
@@ -168,7 +167,7 @@ pub fn measure_from_value(
                         time,
                         target,
                         name,
-                        unit: SECONDS_METRIC_UNIT.clone(),
+                        unit: SECONDS_METRIC_UNIT,
                         value: convert_ticks.delta_ticks_to_ms(value as i64) / 1000.0,
                         properties: properties.into(),
                     }))
@@ -196,32 +195,32 @@ pub fn measure_from_value(
                     .get::<f64>("value")
                     .with_context(|| "reading value from TaggedFloatMetricEvent")?;
                 let desc = obj
-                    .get::<Arc<Object>>("desc")
+                    .get::<&Object>("desc")
                     .with_context(|| "reading desc from TaggedFloatMetricEvent")?;
                 let mut target = desc
-                    .get::<Arc<String>>("target")
+                    .get::<&str>("target")
                     .with_context(|| "reading target from TaggedFloatMetricEvent")?;
                 let mut name = desc
-                    .get::<Arc<String>>("name")
+                    .get::<&str>("name")
                     .with_context(|| "reading name from TaggedFloatMetricEvent")?;
                 let mut unit = desc
-                    .get::<Arc<String>>("unit")
+                    .get::<&str>("unit")
                     .with_context(|| "reading unit from TaggedFloatMetricEvent")?;
                 let properties = obj
-                    .get::<Arc<Object>>("properties")
+                    .get::<&Object>("properties")
                     .with_context(|| "reading properties from TaggedFloatMetricEvent")?;
-                for (prop_name, prop_value) in &properties.members {
-                    match (prop_name.as_str(), prop_value) {
+                for &(prop_name, prop_value) in properties.members {
+                    match (prop_name, prop_value) {
                         ("target", Value::String(value_str)) => {
-                            target = value_str.clone();
+                            target = value_str;
                         }
                         ("name", Value::String(value_str)) => {
-                            name = value_str.clone();
+                            name = value_str;
                         }
                         ("unit", Value::String(value_str)) => {
-                            unit = value_str.clone();
+                            unit = value_str;
                         }
-                        (&_, _) => {}
+                        (_, _) => {}
                     }
                 }
                 Ok(Some(Measure {
@@ -250,14 +249,17 @@ pub fn measure_from_value(
 
 /// Iterates over each metric measurement in a block.
 #[span_fn]
-pub async fn for_each_measure_in_block<Predicate: FnMut(Measure) -> Result<bool>>(
+pub async fn for_each_measure_in_block<Predicate>(
     blob_storage: Arc<BlobStorage>,
     convert_ticks: &ConvertTicks,
     process: Arc<ProcessMetadata>,
     stream: &StreamMetadata,
     block: &BlockMetadata,
     mut fun: Predicate,
-) -> Result<bool> {
+) -> Result<bool>
+where
+    Predicate: for<'a> FnMut(Measure<'a>) -> Result<bool>,
+{
     let payload = fetch_block_payload(
         blob_storage,
         stream.process_id,
@@ -275,7 +277,7 @@ pub async fn for_each_measure_in_block<Predicate: FnMut(Measure) -> Result<bool>
             block_id.clone(),
             block_insert_time_ns,
             convert_ticks,
-            &val,
+            val,
         )
         .with_context(|| "measure_from_value")?
             && !fun(measure)?
