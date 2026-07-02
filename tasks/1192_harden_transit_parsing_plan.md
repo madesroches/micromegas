@@ -198,7 +198,11 @@ Two layers, both deterministic (run in normal CI — no nightly/fuzzing infra re
 **Transit unit tests** (`rust/transit/tests/test_corrupt_input.rs`, new): direct tests of
 the helpers and string decoders with hostile inputs — empty window, window shorter than the
 declared length, odd wide-string byte count, invalid codec byte, `object_size` smaller than
-the `StaticString` header. Assert `is_err()` on each.
+the `StaticString` header. Assert `is_err()` on each. Wide (UTF-16, `StringCodec::Wide`)
+decode coverage lives here, via hand-built buffers with a `Wide` codec byte (valid,
+odd-length, and truncated variants) — no Rust write path emits `StringCodec::Wide`
+(`DynString::write_value` and the static string ref both hard-code UTF-8; `Wide` is
+produced only by non-Rust interop clients), so sink-built blocks cannot exercise it.
 
 **Analytics corruption sweep** (`rust/analytics/tests/parse_corrupt_block_tests.rs`, new):
 reuse the block-builder pattern from `rust/analytics/tests/parse_alloc_test.rs` (build real
@@ -216,8 +220,6 @@ sweep in the milliseconds range:
 - **Corruption sweep**: seeded deterministic corruption (simple xorshift/LCG inline — no
   new dependency): flip random bytes, overwrite length/count fields with large values,
   duplicate dependency ids. Parse must return `Ok` or `Err`, never panic.
-
-Include a wide (UTF-16) string event in one block so the wide-decode path is exercised.
 
 UB coverage: the checked helpers make the bounds violations unreachable, and the wide
 decode no longer does unaligned loads. Optionally run the transit unit tests under
@@ -303,10 +305,11 @@ may use the panicking variants; payload-derived data must use `try_*`).
 
 - `cargo test` from `rust/` — existing parse tests (`parse_alloc_test`, `log_tests`,
   `span_tests`, `metrics_test`, `image_tests`) prove valid blocks still parse.
-- New transit unit tests prove each helper/decoder rejects hostile inputs with `Err`.
+- New transit unit tests prove each helper/decoder rejects hostile inputs with `Err`,
+  including the wide (UTF-16) decode path via hand-built `StringCodec::Wide` buffers.
 - New analytics sweep tests prove `read_dependencies`/`parse_object_buffer` never panic on
-  truncated or corrupted real-world block buffers (log, span, property-set, image,
-  wide-string variants).
+  truncated or corrupted real-world block buffers (log, span, property-set, image
+  variants).
 - One-time local `miri` run of the transit corrupt-input tests to confirm the UB class is
   closed.
 - `cargo bench --bench parse_block` before/after to confirm no perf regression.
