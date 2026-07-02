@@ -201,7 +201,11 @@ reuse the block-builder pattern from `rust/analytics/tests/parse_alloc_test.rs` 
 log / span / property-set / image blocks via the sink streams, `encode_bin`, decode wire
 format, `decompress` the dependencies and objects buffers), then drive
 `read_dependencies` + `parse_object_buffer` directly (bypassing compression so each
-iteration is cheap):
+iteration is cheap). Unlike `parse_alloc_test` (N = 4096 events, ~130–200 KB decompressed),
+the sweep blocks must be built with a **small event count (N ≈ 8–32, just enough to
+include one of each event kind)** — the truncation sweep is O(len²), and a
+4096-event buffer would take far too long under `cargo test`; a few-KB buffer keeps the
+sweep in the milliseconds range:
 
 - **Truncation sweep**: for every prefix length `0..buf.len()` of both buffers, parse and
   require a `Result` (any panic fails the test).
@@ -244,7 +248,8 @@ regression, and note the numbers in the PR.
    `rust/analytics/src/payload.rs` per Design §6.
 6. **Transit tests** — new `rust/transit/tests/test_corrupt_input.rs` per Design §7.
 7. **Analytics tests** — new `rust/analytics/tests/parse_corrupt_block_tests.rs` with the
-   truncation and corruption sweeps per Design §7.
+   truncation and corruption sweeps per Design §7 (small event count, N ≈ 8–32, to keep
+   the O(len²) truncation sweep fast).
 8. **Verify** — `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `cargo test`
    (workspace) from `rust/`; run `cargo bench --bench parse_block -p micromegas-analytics`
    before/after and compare.
