@@ -111,8 +111,12 @@ struct InFlight {
 - **Error classification must survive the shared slot**: the `Arc<anyhow::Error>` a joiner pulls out
   of `result` must still let `is_not_found` (`validation.rs:36-42`) `downcast_ref::<object_store::Error>()`
   and see `NotFound`, so a missing key stays a 404. The owner therefore stores the origin error
-  wrapped such that the `object_store::Error` remains downcastable (e.g. `anyhow::Error::from(origin_err)`),
-  and joiners must reuse the shared `Arc` directly — **not** stringify it. The
+  wrapped such that the `object_store::Error` remains downcastable (e.g. `anyhow::Error::from(origin_err)`).
+  A joiner cannot move the owned `anyhow::Error` out of the shared `Arc` (`anyhow::Error` is not
+  `Clone`), so it reconstructs an owned error from the shared one: `downcast_ref::<object_store::Error>()`
+  on the `Arc`, and if it is `object_store::Error::NotFound`, rebuild a `NotFound` and return
+  `anyhow::Error::from(it)` so the 404 downcast survives; other errors get a generic reconstructed
+  `anyhow::Error`. Joiners must **not** stringify the shared error. The
   `.map_err(|e| anyhow!("{e}"))` pattern in `get_block` (`range_cache.rs:150`) flattens the error to a
   string and drops the `NotFound` downcast; it must **not** be reused for error propagation here.
 
@@ -328,7 +332,11 @@ async fn fetch_blocks(&self, key, file_size, indices: &[u64], prio: Priority)
     and move the owned guard into the response `Body` wrapper. Reject requests larger than the whole
     budget with 413.
 14. Extend `RangeCacheBackend::put` with `FillHint`; `FoyerBackend` maps `Prefetch → CacheHint::Low`.
-    Update `tests/foyer_backend_tests.rs`'s three `backend.put(...)` calls to pass a `FillHint`.
+    Thread the hint through the in-source `backend.put` call sites in `range_cache.rs`: `fetch_blocks`
+    passes `FillHint::Demand` on the demand path and `FillHint::Prefetch` on the prefetch path at its
+    per-run put sites, and `size()`'s put passes `FillHint::Demand`. (Without this the hint is a no-op —
+    every fill would land as `Demand`.) Update `tests/foyer_backend_tests.rs`'s three `backend.put(...)`
+    calls to pass a `FillHint`.
 15. Tests: concurrent large reads block on the budget rather than OOM; body drop releases permits;
     oversize-vs-budget → 413.
 
@@ -357,7 +365,8 @@ against measurement.
 ## Files to Modify
 
 - `rust/object-cache/src/range_cache.rs` — remove moka; add `FetchScheduler`, `InFlight`, `Priority`,
-  `fetch_blocks`, coalescing wiring, prefetch core, size single-flight.
+  `fetch_blocks`, coalescing wiring, prefetch core, size single-flight; thread `FillHint` through its
+  `backend.put` call sites (`fetch_blocks` demand/prefetch puts, `size`'s put).
 - `rust/object-cache/src/blocks.rs` — add `coalesce_runs`.
 - `rust/object-cache/tests/blocks_tests.rs` — `coalesce_runs` unit tests.
 - `rust/object-cache/src/backend.rs` — `FillHint` param on `put`.
