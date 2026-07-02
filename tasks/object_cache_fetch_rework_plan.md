@@ -71,9 +71,15 @@ RangeCache (Clone; Arc fields)
       ├─ inflight: Mutex<HashMap<String, Arc<InFlight>>>   (per-block AND per-meta single-flight)
       ├─ shared_permits:  Semaphore(total)                 (bounds total concurrent origin GETs)
       └─ prefetch_permits: Semaphore(total - demand_reserved)  (caps prefetch fan-out)
+
+AppState (object-cache-srv)
+ └─ mem_permits: Arc<Semaphore(memory_budget_mb)>   (NEW — cross-request assembled-bytes bound; §5)
 ```
 
-The two moka caches are deleted. `moka` is removed from `object-cache/Cargo.toml`.
+The two moka caches are deleted. `moka` is removed from `object-cache/Cargo.toml`. The
+cross-request memory bound (`mem_permits`, §5) lives at the server layer, not in `FetchScheduler`:
+its guard is an owned permit the handler moves into the axum response `Body`, so it belongs where the
+body is built.
 
 ### 1. In-flight map (single-flight primitive)
 
@@ -183,11 +189,12 @@ Both sub-parts are required (building only one silently stalls demand reads):
 | **In flight** (origin GET executing) | Attach to the entry, ride it to completion. An in-flight S3 GET can't be preempted or accelerated — nothing to move. |
 | **Queued, not started** | **Promote**: set `priority = Demand`, `promote.notify_one()`. The owner's loop re-evaluates, drops the prefetch-class requirement, competes for a reserved demand permit, and starts now. |
 
-Concrete payoff (issue's example): prefetch submits 100 scattered blocks, 12 prefetch permits → 12
-in flight, 88 queued. A demand read hits a queued block:
+Concrete payoff (issue's example): prefetch submits 100 scattered blocks; with the shipped defaults
+(`total=32`, `demand_reserved=8`) `prefetch_permits = 24` → 24 in flight, 76 queued. A demand read
+hits a queued block:
 - *With promotion*: block flips to Demand, takes a reserved permit, starts now — latency ≈ one GET.
 - *Reserved-only, no promotion*: the reserved permits sit idle (no demand-*classified* fetch exists
-  to use them) and the block waits behind up to 88 prefetch blocks.
+  to use them) and the block waits behind up to 76 prefetch blocks.
 
 **Promotion granularity policy** (`promote_whole_batch`, default `false`):
 - Default (precise): promote only the run(s) covering the demanded block. Because coalescing bounds a
@@ -201,9 +208,12 @@ promotion is run-scoped, not batch-scoped.)
 
 ### 5. Cross-request memory bound
 
-Add a global assembled-bytes budget, quantized to blocks to keep permit counts small:
+Add a global assembled-bytes budget, quantized to blocks to keep permit counts small. It lives on the
+server `AppState` (not `FetchScheduler`): the guard is an owned permit the handler moves into the
+response `Body`, so it belongs at the HTTP layer where the body is assembled — and this keeps it off
+the `RangeCache::new` constructor:
 
-- `mem_permits: Semaphore(memory_budget_mb)` where 1 permit ≈ 1 MiB.
+- `mem_permits: Arc<Semaphore(memory_budget_mb)>` where 1 permit ≈ 1 MiB.
 - A request acquires `ceil(assembled_bytes / 1 MiB)` permits **before** assembling and holds them
   until the assembled `Bytes` is fully sent. The guard is moved into the response `Body` (a wrapper
   that owns the permit and drops it when the body is flushed) so the bound covers the true peak, not
@@ -289,7 +299,10 @@ async fn fetch_blocks(&self, key, file_size, indices: &[u64], prio: Priority)
    gap split, oversize split, single block, scattered) — per the project convention that unit tests
    live under the crate's `tests/` folder.
 7. `fetch_blocks`: compute missing → own → coalesce owned runs → one GET per run → split → put +
-   fulfill per block. Route `get_range`/`get_ranges` through `fetch_blocks`.
+   fulfill per block. Route `get_range`/`get_ranges` through `fetch_blocks`. This deletes the last
+   uses of `MAX_CONCURRENT_BLOCK_FETCHES` (the `buffer_unordered` calls at `range_cache.rs:194`/`:251`),
+   so remove the const at `range_cache.rs:30` in this step to avoid a `clippy -D warnings` dead_code
+   failure.
 8. Tests: cold contiguous read = few coalesced GETs (assert GET count/spans on the counting store);
    partially-cached read never refetches cached blocks; scattered read stays per-block.
 
@@ -309,8 +322,10 @@ async fn fetch_blocks(&self, key, file_size, indices: &[u64], prio: Priority)
     total concurrency never exceeds `total` (instrumented semaphore/counter).
 
 ### Phase 4 — Memory bound + fill hint
-13. Add `mem_permits` to `FetchScheduler`; acquire in handlers (or `RangeCache`) sized to assembled
-    bytes; move the guard into the response `Body` wrapper. Reject requests larger than the whole
+13. Add `mem_permits: Arc<Semaphore>` to the server `AppState` (object-cache-srv), sized from
+    `memory_budget_mb` — **not** to `FetchScheduler` or `RangeCache::new` (keeps the Phase 3 four-param
+    constructor and its call sites unchanged). Handlers acquire from it sized to the assembled bytes
+    and move the owned guard into the response `Body` wrapper. Reject requests larger than the whole
     budget with 413.
 14. Extend `RangeCacheBackend::put` with `FillHint`; `FoyerBackend` maps `Prefetch → CacheHint::Low`.
     Update `tests/foyer_backend_tests.rs`'s three `backend.put(...)` calls to pass a `FillHint`.
@@ -320,7 +335,7 @@ async fn fetch_blocks(&self, key, file_size, indices: &[u64], prio: Priority)
 ### Phase 5 — Config + docs
 16. `object-cache-srv/src/cli.rs`: add env/CLI flags (defaults below), and update `object_cache_srv.rs`
     to source the `RangeCache::new` config values from those flags instead of the Phase 3 hardcoded
-    defaults. Remove the `MAX_CONCURRENT_BLOCK_FETCHES` const.
+    defaults.
 17. Update `mkdocs/docs/admin/object-cache.md` env table and `object-cache-srv/README.md`.
 18. `python3 ../build/rust_ci.py`; local MinIO smoke test (`start_minio.py` + `start_services.py`).
 
