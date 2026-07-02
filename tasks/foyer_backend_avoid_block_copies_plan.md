@@ -184,10 +184,14 @@ off by default and the disk tier needs a temp dir). Verification:
    path (the main new correctness risk), the read must miss the RAM tier: in foyer
    0.14.1 `insert` writes to memory and serializes to disk in the background, and a
    `get` right after `insert` is served from RAM without ever calling
-   `storage.load`. So force a memory miss before reading — either set `ram_bytes`
-   smaller than the block so the entry is evicted from RAM (leaving only the disk
-   copy), or close/reopen the cache so the read comes from disk. Only then does the
-   `bytes`/bincode deserialize half of the round-trip run. Use a small
+   `storage.load`. So force a memory miss before reading by closing/reopening the
+   cache so the read comes from disk. Note that `ram_bytes` is not a byte budget
+   here: `FoyerBackend::new` installs no weighter, and foyer's default per-entry
+   weighter is `Arc::new(|_, _| 1)`, so `ram_bytes` acts as a max *entry count* — a
+   single small `ram_bytes` will not evict one inserted block, and the read would
+   still be served from RAM. Close/reopen is the reliable trigger (inserting more
+   entries than the count-based capacity would also work). Only after a memory miss
+   does the `bytes`/bincode deserialize half of the round-trip run. Use a small
    `ram_bytes`/`disk_bytes` so the test is cheap.
 3. **Full CI**: `python3 build/rust_ci.py` from `rust/`.
 
