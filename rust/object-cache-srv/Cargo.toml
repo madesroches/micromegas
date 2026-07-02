@@ -20,6 +20,7 @@ anyhow.workspace = true
 axum.workspace = true
 bytes.workspace = true
 clap.workspace = true
+futures.workspace = true
 http.workspace = true
 object_store.workspace = true
 serde.workspace = true
@@ -30,6 +31,15 @@ url.workspace = true
 [target.'cfg(not(target_os = "windows"))'.dependencies]
 tikv-jemallocator.workspace = true
 
+[lib]
+name = "micromegas_object_cache_srv"
+path = "src/lib.rs"
+
 [[bin]]
 name = "micromegas-object-cache-srv"
 path = "src/object_cache_srv.rs"
+
+[dev-dependencies]
+async-trait.workspace = true
+tempfile = "3.14"
+tokio.workspace = true

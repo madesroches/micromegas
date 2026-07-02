@@ -14,6 +14,32 @@ pub fn block_byte_range(block_idx: u64, block_size: u64, file_size: u64) -> Rang
     start..end
 }
 
+/// Group sorted, deduplicated, *owned* missing block indices into maximal
+/// contiguous runs, splitting any run whose byte span would exceed
+/// `max_coalesced_get_bytes` at block boundaries. Each returned block-index
+/// range becomes one `origin.get_range` call.
+pub fn coalesce_runs(
+    sorted_missing_owned: &[u64],
+    block_size: u64,
+    max_coalesced_get_bytes: u64,
+) -> Vec<Range<u64>> {
+    let max_blocks_per_run = (max_coalesced_get_bytes / block_size).max(1);
+    let mut runs = Vec::new();
+    let mut i = 0;
+    while i < sorted_missing_owned.len() {
+        let mut j = i;
+        while j + 1 < sorted_missing_owned.len()
+            && sorted_missing_owned[j + 1] == sorted_missing_owned[j] + 1
+            && sorted_missing_owned[j + 1] - sorted_missing_owned[i] < max_blocks_per_run
+        {
+            j += 1;
+        }
+        runs.push(sorted_missing_owned[i]..sorted_missing_owned[j] + 1);
+        i = j + 1;
+    }
+    runs
+}
+
 pub fn assemble_range(
     blocks: &[(u64, Bytes)],
     block_size: u64,

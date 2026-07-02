@@ -1,10 +1,10 @@
 use anyhow::{Result, ensure};
 use async_trait::async_trait;
 use bytes::Bytes;
-use foyer::{DirectFsDeviceOptions, Engine, HybridCache, HybridCacheBuilder};
+use foyer::{CacheHint, DirectFsDeviceOptions, Engine, HybridCache, HybridCacheBuilder, LruConfig};
 use micromegas_tracing::prelude::*;
 
-use super::backend::RangeCacheBackend;
+use super::backend::{FillHint, RangeCacheBackend};
 
 pub struct FoyerBackend {
     cache: HybridCache<String, Bytes>,
@@ -26,6 +26,12 @@ impl FoyerBackend {
             .memory(ram_bytes)
             .with_weighter(|_key: &String, value: &Bytes| value.len())
             .with_shards(shards)
+            // Pin the RAM tier to LRU explicitly: only LRU maps
+            // `CacheHint::Low` to a low-priority eviction hint in foyer 0.14.x
+            // (Lfu/S3Fifo/Fifo silently discard it). This is the crate's
+            // current default; pinning it defensively guards `FillHint`
+            // against a future foyer default change.
+            .with_eviction_config(LruConfig::default())
             .storage(Engine::Large)
             .with_device_options(DirectFsDeviceOptions::new(dir).with_capacity(disk_bytes))
             .build()
@@ -36,6 +42,15 @@ impl FoyerBackend {
     pub async fn close(&self) -> Result<()> {
         self.cache.close().await?;
         Ok(())
+    }
+}
+
+impl From<FillHint> for CacheHint {
+    fn from(hint: FillHint) -> Self {
+        match hint {
+            FillHint::Demand => CacheHint::Normal,
+            FillHint::Prefetch => CacheHint::Low,
+        }
     }
 }
 
@@ -57,7 +72,7 @@ impl RangeCacheBackend for FoyerBackend {
         }
     }
 
-    async fn put(&self, key: String, value: Bytes) {
-        self.cache.insert(key, value);
+    async fn put(&self, key: String, value: Bytes, hint: FillHint) {
+        self.cache.insert_with_hint(key, value, hint.into());
     }
 }

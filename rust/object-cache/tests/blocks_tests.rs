@@ -1,5 +1,7 @@
 use bytes::Bytes;
-use micromegas_object_cache::blocks::{assemble_range, block_byte_range, blocks_for_range};
+use micromegas_object_cache::blocks::{
+    assemble_range, block_byte_range, blocks_for_range, coalesce_runs,
+};
 
 #[test]
 fn single_block_range() {
@@ -66,4 +68,48 @@ fn blocks_for_range_starts_at_boundary() {
     let block_size = 1024_u64;
     let blks = blocks_for_range(1024, 2048, block_size);
     assert_eq!(blks, 1..2);
+}
+
+#[test]
+fn coalesce_contiguous_merge() {
+    let runs = coalesce_runs(&[0, 1, 2, 3], 1024, 8192);
+    assert_eq!(runs, vec![0..4]);
+}
+
+#[test]
+fn coalesce_gap_split() {
+    let runs = coalesce_runs(&[0, 1, 5, 6, 7], 1024, 8192);
+    assert_eq!(runs, vec![0..2, 5..8]);
+}
+
+#[test]
+fn coalesce_oversize_split() {
+    // block_size=1024, max_coalesced_get_bytes=4096 => 4 blocks per run max.
+    let runs = coalesce_runs(&[0, 1, 2, 3, 4, 5, 6], 1024, 4096);
+    assert_eq!(runs, vec![0..4, 4..7]);
+}
+
+#[test]
+fn coalesce_single_block() {
+    let runs = coalesce_runs(&[42], 1024, 8192);
+    assert_eq!(runs, vec![42..43]);
+}
+
+#[test]
+fn coalesce_scattered_no_merge() {
+    let runs = coalesce_runs(&[0, 2, 4, 6], 1024, 8192);
+    assert_eq!(runs, vec![0..1, 2..3, 4..5, 6..7]);
+}
+
+#[test]
+fn coalesce_empty_input() {
+    let runs = coalesce_runs(&[], 1024, 8192);
+    assert!(runs.is_empty());
+}
+
+#[test]
+fn coalesce_exact_boundary_run_not_split() {
+    // 4 contiguous blocks at exactly the max span should stay in one run.
+    let runs = coalesce_runs(&[0, 1, 2, 3], 1024, 4096);
+    assert_eq!(runs, vec![0..4]);
 }

@@ -1,9 +1,6 @@
 use anyhow::{Context, Result, anyhow, bail};
 
-pub(crate) fn parse_range_header(
-    header_value: &str,
-    file_size: u64,
-) -> Result<std::ops::Range<u64>> {
+pub fn parse_range_header(header_value: &str, file_size: u64) -> Result<std::ops::Range<u64>> {
     let value = header_value
         .strip_prefix("bytes=")
         .ok_or_else(|| anyhow!("invalid Range header: {header_value}"))?;

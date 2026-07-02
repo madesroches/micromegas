@@ -7,10 +7,14 @@ use axum::{
     response::Response,
 };
 use bytes::{BufMut, Bytes, BytesMut};
+use futures::Stream;
 use micromegas_object_cache::range_cache::RangeError;
 use micromegas_object_cache::validation::validate_key;
 use micromegas_tracing::prelude::*;
 use serde::Deserialize;
+use std::pin::Pin;
+use std::task::{Context as TaskContext, Poll};
+use tokio::sync::OwnedSemaphorePermit;
 
 /// Maximum number of ranges accepted in a single multi-range request. A
 /// parquet/block reader fetches at most a few thousand column chunks per file,
@@ -22,7 +26,40 @@ const MAX_RANGES_PER_REQUEST: usize = 4096;
 /// caps peak allocation regardless of how many ranges overlap the same bytes.
 const MAX_TOTAL_REQUESTED_BYTES: u64 = 512 * 1024 * 1024; // 512 MiB
 
-pub(crate) async fn head_handler(
+const BYTES_PER_MEM_PERMIT: u64 = 1024 * 1024;
+
+/// Number of `mem_permits` (1 MiB each) needed to cover `bytes`.
+fn permits_for_bytes(bytes: u64) -> u32 {
+    bytes.div_ceil(BYTES_PER_MEM_PERMIT) as u32
+}
+
+/// A one-shot response body that owns a memory-budget permit for its entire
+/// lifetime: the permit is released whenever this value is dropped, whether
+/// that's after the body was fully sent or because the connection was
+/// aborted mid-stream. This is what makes the memory-budget guard cover the
+/// response's full lifetime rather than just the assembly window (see
+/// `object_cache_fetch_rework_plan.md` §5).
+struct PermitBody {
+    data: Option<Bytes>,
+    _permit: OwnedSemaphorePermit,
+}
+
+impl Stream for PermitBody {
+    type Item = Result<Bytes, std::convert::Infallible>;
+
+    fn poll_next(self: Pin<&mut Self>, _cx: &mut TaskContext<'_>) -> Poll<Option<Self::Item>> {
+        Poll::Ready(self.get_mut().data.take().map(Ok))
+    }
+}
+
+fn permit_body(data: Bytes, permit: OwnedSemaphorePermit) -> Body {
+    Body::from_stream(PermitBody {
+        data: Some(data),
+        _permit: permit,
+    })
+}
+
+pub async fn head_handler(
     Path(key): Path<String>,
     State(state): State<AppState>,
 ) -> Result<Response, StatusCode> {
@@ -50,7 +87,7 @@ pub(crate) async fn head_handler(
     }
 }
 
-pub(crate) async fn get_range_handler(
+pub async fn get_range_handler(
     Path(key): Path<String>,
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -125,12 +162,29 @@ pub(crate) async fn get_range_handler(
     // single-range read at the same limit as the multi-range POST path to bound
     // peak allocation. The client falls back to the direct store on any non-2xx,
     // so an oversized read still succeeds (just uncached).
-    if byte_range.end - byte_range.start > MAX_TOTAL_REQUESTED_BYTES {
+    let requested_bytes = byte_range.end - byte_range.start;
+    if requested_bytes > MAX_TOTAL_REQUESTED_BYTES {
         warn!(
             "rejected range {byte_range:?} for {key}: requested bytes exceed max {MAX_TOTAL_REQUESTED_BYTES}"
         );
         return Err(StatusCode::PAYLOAD_TOO_LARGE);
     }
+
+    let permits_needed = permits_for_bytes(requested_bytes);
+    if permits_needed > state.memory_budget_mb {
+        warn!(
+            "rejected range {byte_range:?} for {key}: {requested_bytes} bytes exceeds the \
+             whole memory budget ({} MiB)",
+            state.memory_budget_mb
+        );
+        return Err(StatusCode::PAYLOAD_TOO_LARGE);
+    }
+    let mem_permit = state
+        .mem_permits
+        .clone()
+        .acquire_many_owned(permits_needed)
+        .await
+        .expect("mem_permits semaphore is never closed");
 
     match state.cache.get_range(&key, byte_range.clone()).await {
         Ok(data) => {
@@ -159,7 +213,7 @@ pub(crate) async fn get_range_handler(
                         file_size
                     ),
                 )
-                .body(Body::from(data))
+                .body(permit_body(data, mem_permit))
                 .expect("build GET response");
             Ok(response)
         }
@@ -179,7 +233,7 @@ struct RangesRequest {
     ranges: Vec<[u64; 2]>,
 }
 
-pub(crate) async fn post_ranges_handler(
+pub async fn post_ranges_handler(
     Path(key): Path<String>,
     State(state): State<AppState>,
     body: Bytes,
@@ -227,6 +281,22 @@ pub(crate) async fn post_ranges_handler(
         }
     }
 
+    let permits_needed = permits_for_bytes(total_requested);
+    if permits_needed > state.memory_budget_mb {
+        warn!(
+            "rejected ranges for {key}: {total_requested} bytes exceeds the whole memory \
+             budget ({} MiB)",
+            state.memory_budget_mb
+        );
+        return Err(StatusCode::PAYLOAD_TOO_LARGE);
+    }
+    let mem_permit = state
+        .mem_permits
+        .clone()
+        .acquire_many_owned(permits_needed)
+        .await
+        .expect("mem_permits semaphore is never closed");
+
     let ranges: Vec<std::ops::Range<u64>> = req.ranges.iter().map(|&[s, e]| s..e).collect();
 
     match state.cache.get_ranges(&key, &ranges).await {
@@ -251,7 +321,7 @@ pub(crate) async fn post_ranges_handler(
             let response = Response::builder()
                 .status(StatusCode::OK)
                 .header("Content-Type", "application/octet-stream")
-                .body(Body::from(buf.freeze()))
+                .body(permit_body(buf.freeze(), mem_permit))
                 .expect("build ranges response");
             Ok(response)
         }

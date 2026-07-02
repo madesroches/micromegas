@@ -2,7 +2,7 @@
 
 use bytes::Bytes;
 
-use micromegas_object_cache::backend::RangeCacheBackend;
+use micromegas_object_cache::backend::{FillHint, RangeCacheBackend};
 use micromegas_object_cache::foyer_backend::FoyerBackend;
 
 // Deliberately does not close/reopen the backend to force a disk read: foyer's
@@ -31,12 +31,22 @@ async fn round_trip_through_disk_tier() {
     let backend = FoyerBackend::new_with_shards(dir_path, 4096, 16 * 1024 * 1024, 1)
         .await
         .expect("create backend");
-    backend.put("key".to_string(), data.clone()).await;
     backend
-        .put("evict-1".to_string(), Bytes::from(vec![1u8; 16]))
+        .put("key".to_string(), data.clone(), FillHint::Demand)
         .await;
     backend
-        .put("evict-2".to_string(), Bytes::from(vec![2u8; 16]))
+        .put(
+            "evict-1".to_string(),
+            Bytes::from(vec![1u8; 16]),
+            FillHint::Demand,
+        )
+        .await;
+    backend
+        .put(
+            "evict-2".to_string(),
+            Bytes::from(vec![2u8; 16]),
+            FillHint::Demand,
+        )
         .await;
     // close() awaits the flusher, so the read below is guaranteed to see
     // "key" on disk rather than racing the background write.

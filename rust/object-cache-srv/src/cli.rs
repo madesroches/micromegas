@@ -1,4 +1,8 @@
 use clap::Parser;
+use micromegas_object_cache::range_cache::{
+    DEFAULT_DEMAND_RESERVED_FETCH_PERMITS, DEFAULT_MAX_COALESCED_GET_BYTES,
+    DEFAULT_PROMOTE_WHOLE_BATCH, DEFAULT_TOTAL_FETCH_PERMITS,
+};
 use std::net::SocketAddr;
 
 #[derive(Parser, Debug)]
@@ -63,4 +67,48 @@ pub(crate) struct Cli {
         env = "MICROMEGAS_SHUTDOWN_GRACE_PERIOD_SECONDS"
     )]
     pub(crate) shutdown_grace_period_seconds: u64,
+
+    /// Total number of origin GETs allowed to run concurrently.
+    #[clap(
+        long,
+        env = "MICROMEGAS_OBJECT_CACHE_MAX_CONCURRENT_FETCHES",
+        default_value_t = DEFAULT_TOTAL_FETCH_PERMITS
+    )]
+    pub(crate) max_concurrent_fetches: usize,
+
+    /// Origin-GET slots always available to demand reads; prefetch is capped
+    /// at `max_concurrent_fetches - demand_reserved_fetches`.
+    #[clap(
+        long,
+        env = "MICROMEGAS_OBJECT_CACHE_DEMAND_RESERVED_FETCHES",
+        default_value_t = DEFAULT_DEMAND_RESERVED_FETCH_PERMITS
+    )]
+    pub(crate) demand_reserved_fetches: usize,
+
+    /// Max byte span of one coalesced run GET; larger contiguous runs are
+    /// split at block boundaries.
+    #[clap(
+        long,
+        env = "MICROMEGAS_OBJECT_CACHE_MAX_COALESCED_GET_BYTES",
+        default_value_t = DEFAULT_MAX_COALESCED_GET_BYTES
+    )]
+    pub(crate) max_coalesced_get_bytes: u64,
+
+    /// Cross-request cap (MiB) on concurrently-assembled response bytes.
+    #[clap(
+        long,
+        env = "MICROMEGAS_OBJECT_CACHE_MEMORY_BUDGET_MB",
+        default_value = "1024"
+    )]
+    pub(crate) memory_budget_mb: u32,
+
+    /// On a demand hit into a prefetch batch, promote the whole batch
+    /// (anticipatory) instead of only the covering run (default, precise).
+    #[clap(
+        long,
+        env = "MICROMEGAS_OBJECT_CACHE_PROMOTE_WHOLE_BATCH",
+        default_value_t = DEFAULT_PROMOTE_WHOLE_BATCH,
+        action = clap::ArgAction::Set
+    )]
+    pub(crate) promote_whole_batch: bool,
 }

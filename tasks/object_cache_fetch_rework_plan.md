@@ -1,5 +1,17 @@
 # Object Cache Read-Path Fetch Rework Plan
 
+## Implementation status: DONE
+
+All five phases are implemented on this branch. `cd rust && cargo fmt && cargo clippy --workspace -- -D
+warnings` and the full `object-cache` / `object-cache-srv` test suites pass.
+
+One deviation from the plan as written: §7 and step 10 describe the prefetch entry point
+(`prefetch_ranges`/`prefetch_blocks`) as `pub(crate)`. It shipped as `pub` instead — `tests/` files
+compile as a separate crate from the lib they test, so a `pub(crate)` method is invisible to the
+Phase 3 integration tests (`demand_not_starved_under_prefetch_saturation`,
+`promotion_lets_demand_start_before_remaining_prefetch`) that this same plan calls for. The methods
+are still not wired to any HTTP route; that surface is still #1198.
+
 Tracking issue: [#1203](https://github.com/madesroches/micromegas/issues/1203). Consolidates the
 (now-closed) sub-issues #1193 (run coalescing), #1194 (drop moka), #1199 (priority scheduling),
 #1202 (raise/configure concurrency). Unblocks prefetch (#1197/#1198) and the size single-flight +

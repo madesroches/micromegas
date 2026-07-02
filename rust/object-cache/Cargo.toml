@@ -21,7 +21,6 @@ async-trait.workspace = true
 bytes.workspace = true
 chrono.workspace = true
 futures.workspace = true
-moka.workspace = true
 object_store.workspace = true
 reqwest.workspace = true
 serde_json.workspace = true

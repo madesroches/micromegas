@@ -43,6 +43,11 @@ docker run -d -p 8080:8080 \
 | `MICROMEGAS_OBJECT_CACHE_NAMESPACE` | No | Cache namespace (default: derived from the origin URI) |
 | `MICROMEGAS_OBJECT_CACHE_PREFIX` | Yes | Allowed key prefixes, comma-separated (e.g. `blobs,views`); only keys equal to or under a prefix are served. Required unless `--allow-all-prefixes` is set (development only) |
 | `MICROMEGAS_SHUTDOWN_GRACE_PERIOD_SECONDS` | No | Drain timeout on `SIGTERM` (default `25`) |
+| `MICROMEGAS_OBJECT_CACHE_MAX_CONCURRENT_FETCHES` | No | Total concurrent origin GETs (default `32`; NIC-sized starting point, tune against measurement) |
+| `MICROMEGAS_OBJECT_CACHE_DEMAND_RESERVED_FETCHES` | No | Origin-GET slots always available to demand reads; prefetch is capped at `total - reserved` (default `8`); must be less than `MAX_CONCURRENT_FETCHES` |
+| `MICROMEGAS_OBJECT_CACHE_MAX_COALESCED_GET_BYTES` | No | Max span of one coalesced run GET, in bytes (default `8388608`, 8 MiB); larger contiguous runs are split at block boundaries |
+| `MICROMEGAS_OBJECT_CACHE_MEMORY_BUDGET_MB` | No | Cross-request cap on concurrently-assembled response bytes, in MiB (default `1024`) |
+| `MICROMEGAS_OBJECT_CACHE_PROMOTE_WHOLE_BATCH` | No | On a demand hit into a prefetch batch, promote the whole batch (anticipatory) instead of only the covering run (default `false`, precise) |
 
 Authenticating *against the origin* (e.g. AWS credentials) uses the same environment variables as every other Micromegas service's `MICROMEGAS_OBJECT_STORE_URI` — standard `object_store` crate variables such as `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_ENDPOINT`, `AWS_REGION`, `AWS_ALLOW_HTTP`.
 
@@ -60,6 +65,36 @@ Authenticating *against the origin* (e.g. AWS credentials) uses the same environ
 | `--allowed-prefix` | none | Restrict served keys to this prefix |
 | `--disable-auth` | off | Disable authentication (development only) |
 | `--shutdown-grace-period-seconds` | `25` | Seconds to drain before hard exit on `SIGTERM` |
+| `--max-concurrent-fetches` | `32` | Total concurrent origin GETs |
+| `--demand-reserved-fetches` | `8` | Origin-GET slots reserved for demand reads |
+| `--max-coalesced-get-bytes` | `8388608` | Max span of one coalesced run GET, in bytes |
+| `--memory-budget-mb` | `1024` | Cross-request memory budget, in MiB |
+| `--promote-whole-batch` | `false` | Promote a whole prefetch batch (not just the covering run) on a demand hit |
+
+## Fetch scheduling & memory bounds
+
+Concurrent origin fetches share one global, priority-aware budget rather than a
+per-request cap:
+
+- **Demand over prefetch.** Every origin GET is either `Demand` (a client's
+  `GET`/`POST /ranges` request) or `Prefetch` (background warming, #1198).
+  `MICROMEGAS_OBJECT_CACHE_DEMAND_RESERVED_FETCHES` of the total budget is
+  always available to demand reads; prefetch is capped at the remainder, so a
+  demand read is never stuck behind a large prefetch batch.
+- **Promotion.** If a demand read arrives for a block a prefetch call already
+  queued (but hasn't started fetching), that block is promoted to demand
+  priority and competes for reserved capacity immediately, instead of waiting
+  behind the rest of the prefetch batch.
+- **Coalescing.** Contiguous missing blocks are merged into one origin GET
+  (bounded by `MICROMEGAS_OBJECT_CACHE_MAX_COALESCED_GET_BYTES`) rather than
+  one GET per block.
+- **Cross-request memory budget.** `MICROMEGAS_OBJECT_CACHE_MEMORY_BUDGET_MB`
+  bounds the sum of in-flight response bytes across *all* concurrent requests
+  (1 MiB per permit), separate from the existing 512 MiB per-request cap. A
+  request whose assembled size alone exceeds the whole budget is rejected with
+  `413` rather than blocking forever. Transient assembly overhead runs roughly
+  2-3x the counted bytes, so size this with that multiplier in mind alongside
+  the RAM cache tier.
 
 ## Client opt-in
 
