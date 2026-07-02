@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Result, ensure};
 use async_trait::async_trait;
 use bytes::Bytes;
 use foyer::{DirectFsDeviceOptions, Engine, HybridCache, HybridCacheBuilder};
@@ -21,6 +21,7 @@ impl FoyerBackend {
         disk_bytes: usize,
         shards: usize,
     ) -> Result<Self> {
+        ensure!(shards > 0, "shards must be > 0");
         let cache = HybridCacheBuilder::new()
             .memory(ram_bytes)
             .with_weighter(|_key: &String, value: &Bytes| value.len())
