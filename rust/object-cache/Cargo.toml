@@ -32,4 +32,5 @@ foyer = { workspace = true, optional = true }
 
 [dev-dependencies]
 object_store.workspace = true
+tempfile = "3.14"
 tokio.workspace = true
