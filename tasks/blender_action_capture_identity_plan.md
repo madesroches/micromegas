@@ -134,6 +134,14 @@ def _poll_operators():
 ```
 
 Why this is correct for every observed mutation mode of `wm.operators`:
+- **First poll** (`prev is None`, after register/re-register): baseline only,
+  **no emissions**. This is an intentional, observable behavior change: today
+  `_poll_operators` calls `_appended_start(idnames, _prev_op_idnames or [])`,
+  which returns `(0, False)` for an empty prev, so the first poll emits every
+  entry already in the ring — re-emitting pre-capture history, and pure
+  duplicates on a mid-session re-register. Establish-baseline-and-emit-nothing
+  is the correct "what is new" semantics; the affected test
+  (`test_poll_emits_new_actions_with_params`) is realigned in step 3.
 - **Stable buffer** (the storm case): all pointers already in `prev_set` →
   `new_ops == []`, `gap` false (partial/total overlap) → **zero emissions, zero
   WARNs**. Storm eliminated.
@@ -162,8 +170,10 @@ Why this is correct for every observed mutation mode of `wm.operators`:
 - `_format_op()`, the WARN text, both metric names/semantics
   (`blender.action_gap`, `blender.action_captured` gated on `n>0`),
   `_ring_capacity`, the timer, transition polling, `drain_operators()`, and all
-  `__init__.py`/`recorder.py` wiring. The public surface is identical; only the
-  new-entry/gap computation is replaced.
+  `__init__.py`/`recorder.py` wiring. Aside from the intentional first-poll
+  change documented above (the first poll now establishes the baseline and
+  emits nothing, where today it emits every ring entry), the observable
+  surface is identical; only the new-entry/gap computation is replaced.
 
 ### Flow (after)
 ```
@@ -195,16 +205,30 @@ input event ─► recorder.modal() ─(non-motion)─► actions.drain_operator
    `test_actions.py`; add the method there — see step 3.)
 3. **`tests/test_actions.py` — retarget tests to identity.**
    - Add `def as_pointer(self): return id(self)` to `FakeOp` (`:8-17`).
+   - Update the autouse `_wire` fixture (`:20-29`): change its per-test reset
+     line `actions._prev_op_idnames = None` (`:23`) to
+     `actions._prev_op_ptrs = None` — otherwise it resets a dead attribute and
+     `_prev_op_ptrs` leaks state across tests (order-dependent failures).
    - **Delete** the `_appended_start` unit tests (`:43-97`), including the two
      that encode the storm behavior (`test_repeated_identical_operators_not_
      dropped`, `test_repeated_boundary_pattern_not_dropped`).
+   - **Rewrite** `test_poll_emits_new_actions_with_params` (`:103-119`): the
+     first poll now emits nothing (baseline — see Design); reuse the same
+     `select_all` instance on the second poll so only `cube_add` is new →
+     expect exactly **one** emission (`cube_add`, with name and params), not two.
+   - **Rewrite** `test_poll_overflow_logs_gap_marker` (`:141-151`): its 3-entry
+     full turnover is a **non-gap** under the new design (ring not full).
+     Retarget it to the full-ring setup — it becomes the "True gap" regression
+     test listed below; its old small-buffer shape is covered by the new
+     non-full-turnover test.
    - Update `_set_ops`-driven integration tests to reuse the **same** `FakeOp`
      instances across polls where an entry is meant to *persist* (persistence =
      same pointer). Add regression tests:
      - **Stable buffer storm regression:** poll the identical list (same
-       instances) 10× → exactly one baseline's worth of emissions total after the
-       first poll is `0`, and **no** `blender.action_gap` and **no** duplicate
-       action logs. This is the direct guard against the production bug.
+       instances) 10× → **zero** `blender.action` emissions and **zero**
+       `blender.action_gap` across all 10 polls (the first poll only
+       establishes the baseline). This is the direct guard against the
+       production bug.
      - **Periodic tail:** a ring like `[s1,m1,t1,s2,m2,t2]` (distinct instances,
        repeating idnames) re-polled unchanged → no new emissions, no gap.
      - **Repeated identical clicks:** append N distinct `VIEW3D_OT_select`
@@ -218,8 +242,14 @@ input event ─► recorder.modal() ─(non-motion)─► actions.drain_operator
        capacity) → new entries emitted, **no** gap (it was a clear, not overflow).
    - Keep/adjust: `test_poll_no_change_emits_nothing`,
      `test_poll_params_unavailable_keeps_bl_idname`,
-     `test_drain_operators_delegates_to_poll`, the two metric tests, and
-     `test_gap_warn_includes_ring_capacity` (now driven by the true-gap setup).
+     `test_drain_operators_delegates_to_poll`, the three metric tests
+     (`test_gap_emits_action_gap_metric`, `test_action_captured_metric_on_new_
+     ops`, `test_action_captured_metric_not_emitted_when_no_new_ops`), and
+     `test_gap_warn_includes_ring_capacity`. Both gap tests
+     (`test_gap_emits_action_gap_metric` and
+     `test_gap_warn_includes_ring_capacity`) must switch to the true-gap setup
+     (full ring of `_ring_capacity` distinct instances fully replaced) — their
+     current 2-entry turnover is no longer a gap.
 4. **Docs** — `mkdocs/docs/blender/index.md:113-128` and `blender/README.md:
    175-181`: replace "emits only the operators *appended since* the last drain
    … if the ring turned over entirely … a gap marker" with the identity model:
