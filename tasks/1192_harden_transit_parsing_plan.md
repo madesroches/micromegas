@@ -153,8 +153,8 @@ Both loops get the same treatment:
 
 - At the top of the member loop, validate
   `member_meta.offset.checked_add(member_meta.size)` is `Some` and
-  `<= object_window.len()`; `bail!` otherwise. This covers the reference-key read, all
-  intrinsic reads, and the recursive slice for nested UDTs.
+  `<= object_window.len()`; `bail!` otherwise. This covers the reference-key read and all
+  intrinsic reads.
 - Replace the five `assert_eq!(std::mem::size_of::<T>(), member_meta.size)` with `bail!`
   (metadata is untrusted; an assert is a panic vector).
 - Replace the `unsafe { read_any::<T>(...) }` calls with `try_read_pod_at::<T>` — with the
