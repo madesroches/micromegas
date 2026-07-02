@@ -12,6 +12,7 @@ target/
 # emacs
 *~
 \#*\#
+.\#*
 
 # vscode
 .vscode/
