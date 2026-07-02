@@ -224,7 +224,11 @@ async fn put(&self, key: String, value: Bytes, hint: FillHint);
 ```
 
 - `FoyerBackend`: `Demand → insert`, `Prefetch → insert_with_hint(.., CacheHint::Low)` (both exist in
-  foyer 0.14). `get` unchanged.
+  foyer 0.14). `get` unchanged. **The RAM tier must be built with LRU eviction**
+  (`HybridCacheBuilder::memory().with_eviction_config(LruConfig::default())`): in foyer 0.14.1 only
+  LRU maps `CacheHint::Low → LruHint::LowPriority`; the default w-TinyLFU (Lfu), and also S3Fifo/Fifo,
+  silently discard the hint, so without this the prefetch fill hint is inert and prefetch fills still
+  compete equally to evict hot demand data.
 - `MemoryBackend`: ignores the hint. No single-flight needed here anymore (it lived in moka; now it
   lives in `FetchScheduler`).
 
@@ -261,8 +265,9 @@ async fn fetch_blocks(&self, key, file_size, indices: &[u64], prio: Priority)
 
 ### Phase 2 — Run coalescing
 6. Add `coalesce_runs(sorted_missing_owned: &[u64], block_size, max_coalesced_get_bytes)
-   -> Vec<Range<u64>>` in `blocks.rs`, with unit tests (contiguous merge, gap split, oversize split,
-   single block, scattered).
+   -> Vec<Range<u64>>` in `blocks.rs`, with unit tests in `tests/blocks_tests.rs` (contiguous merge,
+   gap split, oversize split, single block, scattered) — per the project convention that unit tests
+   live under the crate's `tests/` folder.
 7. `fetch_blocks`: compute missing → own → coalesce owned runs → one GET per run → split → put +
    fulfill per block. Route `get_range`/`get_ranges` through `fetch_blocks`.
 8. Tests: cold contiguous read = few coalesced GETs (assert GET count/spans on the counting store);
@@ -273,8 +278,11 @@ async fn fetch_blocks(&self, key, file_size, indices: &[u64], prio: Priority)
    acquisition loop. Owner acquires a run permit before the GET.
 10. Add `Priority` param to `fetch_blocks`; `get_range`/`get_ranges` pass `Demand`; add the
     `pub(crate)` prefetch core with `Prefetch`.
-11. Wire config (Phase 5) into `RangeCache::new` (`total`, `demand_reserved`, `max_coalesced_get_bytes`,
-    `promote_whole_batch`).
+11. Add the config params (`total`, `demand_reserved`, `max_coalesced_get_bytes`,
+    `promote_whole_batch`) to `RangeCache::new`, and update the one production caller
+    (`object-cache-srv/src/object_cache_srv.rs`) in this same phase — passing hardcoded default values
+    directly — so the workspace (and Phase 3's own tests) keeps compiling. Phase 5 only folds these
+    values behind CLI/env flags.
 12. Tests: demand not starved (saturate prefetch, assert a demand GET starts within reserved
     capacity); promotion (queued prefetch block flips to demand and starts before remaining prefetch);
     total concurrency never exceeds `total` (instrumented semaphore/counter).
@@ -288,8 +296,9 @@ async fn fetch_blocks(&self, key, file_size, indices: &[u64], prio: Priority)
     oversize-vs-budget → 413.
 
 ### Phase 5 — Config + docs
-16. `object-cache-srv/src/cli.rs`: add env/CLI flags (defaults below). Pass through
-    `object_cache_srv.rs` into `RangeCache::new`. Remove the `MAX_CONCURRENT_BLOCK_FETCHES` const.
+16. `object-cache-srv/src/cli.rs`: add env/CLI flags (defaults below), and update `object_cache_srv.rs`
+    to source the `RangeCache::new` config values from those flags instead of the Phase 3 hardcoded
+    defaults. Remove the `MAX_CONCURRENT_BLOCK_FETCHES` const.
 17. Update `mkdocs/docs/admin/object-cache.md` env table and `object-cache-srv/README.md`.
 18. `python3 ../build/rust_ci.py`; local MinIO smoke test (`start_minio.py` + `start_services.py`).
 
@@ -312,7 +321,8 @@ against measurement.
 
 - `rust/object-cache/src/range_cache.rs` — remove moka; add `FetchScheduler`, `InFlight`, `Priority`,
   `fetch_blocks`, coalescing wiring, prefetch core, size single-flight.
-- `rust/object-cache/src/blocks.rs` — add `coalesce_runs` (+ tests).
+- `rust/object-cache/src/blocks.rs` — add `coalesce_runs`.
+- `rust/object-cache/tests/blocks_tests.rs` — `coalesce_runs` unit tests.
 - `rust/object-cache/src/backend.rs` — `FillHint` param on `put`.
 - `rust/object-cache/src/foyer_backend.rs` — honor `FillHint` (`CacheHint::Low` for prefetch).
 - `rust/object-cache/src/memory_backend.rs` — `FillHint` signature (ignored).
@@ -350,7 +360,7 @@ against measurement.
 
 ## Testing Strategy
 
-- **Unit** (`blocks.rs`): `coalesce_runs` edge cases (merge, gap-split, oversize-split, scattered).
+- **Unit** (`tests/blocks_tests.rs`): `coalesce_runs` edge cases (merge, gap-split, oversize-split, scattered).
 - **Integration** (`range_cache_tests.rs`, with an instrumented origin store counting GETs/heads and
   recording spans):
   - Single-flight: N concurrent identical block reads → 1 GET; N concurrent `size()` misses → 1 head.
