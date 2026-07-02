@@ -128,6 +128,10 @@ Both loops get the same treatment:
 - `StaticString` branch: `string_id` via `try_read_pod_at::<u64>`;
   `object_size.checked_sub(std::mem::size_of::<usize>())` with `bail!` on `None`
   (the window-fits guard above already covers the slice end).
+- `StaticStringDependency` branch (`parser.rs:66`): the `string_id` read consumes from a
+  window covering the *entire* remaining buffer, so the window-fits guard does not
+  guarantee 8 bytes remain — convert `read_consume_pod::<u64>` to
+  `try_read_consume_pod::<u64>(...)?` (same treatment as the custom readers in §5).
 - Replace the four `assert!(insert_res.is_none())` with
   `bail!("duplicate dependency id {id}")`.
 
