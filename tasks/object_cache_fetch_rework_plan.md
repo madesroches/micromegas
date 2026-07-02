@@ -244,7 +244,12 @@ async fn fetch_blocks(&self, key, file_size, indices: &[u64], prio: Priority)
     -> Result<HashMap<u64, Bytes>>;
 ```
 
-- `get_range` / `get_ranges` call it with `Priority::Demand` (public signatures unchanged).
+- `get_range` / `get_ranges` call it with `Priority::Demand` (public signatures unchanged). Only the
+  `Demand` path accumulates the per-block bytes into the returned map for assembly.
+- On the `Prefetch` path the core does **not** accumulate: as each owned run completes it
+  `backend.put`s every block and drops the bytes immediately, returning an empty map. This is what
+  keeps the prefetch peak bounded by `prefetch_concurrency × max_coalesced_get_bytes` (§5) rather than
+  the full request size — a prefetch of N blocks never holds all N live at once.
 - A `pub(crate)` prefetch entry point (`prefetch_ranges`/`prefetch_blocks`) calls it with
   `Priority::Prefetch`, warms the cache, and returns no assembled bytes. The prefetch **endpoint and
   client method are #1198** — this plan defines the priority-carrying core they build on, not the
