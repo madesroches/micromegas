@@ -185,7 +185,17 @@ off by default and the disk tier needs a temp dir). Verification:
    0.14.1 `insert` writes to memory and serializes to disk in the background, and a
    `get` right after `insert` is served from RAM without ever calling
    `storage.load`. So force a memory miss before reading by closing/reopening the
-   cache so the read comes from disk. Note that `ram_bytes` is not a byte budget
+   cache so the read comes from disk. **Await the background flush before dropping
+   the first cache**: `insert` returns immediately and enqueues the disk write to a
+   background flusher, so if the cache is dropped before that flush completes the
+   region scan on reopen finds nothing for the key and `get` misses (an
+   intermittent failure). Call `HybridCache::close().await` (or `wait().await`) on
+   the first cache before dropping/reopening it. `FoyerBackend` currently exposes no
+   such method, so the test must either add a way to await the flush on the wrapper
+   or build the `HybridCache` directly. Disk recovery on reopen is on by default
+   (`RecoverMode::Quiet`) and re-indexes prior entries, and files are opened without
+   truncation, so the reopen path itself is sound once the flush has completed. Note
+   that `ram_bytes` is not a byte budget
    here: `FoyerBackend::new` installs no weighter, and foyer's default per-entry
    weighter is `Arc::new(|_, _| 1)`, so `ram_bytes` acts as a max *entry count* — a
    single small `ram_bytes` will not evict one inserted block, and the read would
