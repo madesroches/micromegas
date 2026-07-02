@@ -43,7 +43,7 @@ the existing constructor and `RangeCacheBackend` trait — no caller changes.
 ### Why `Bytes` satisfies Foyer's bounds
 
 Foyer's disk tier requires the value to be `StorageValue`
-(`foyer-common-0.14.1/src/code.rs:32`):
+(`foyer-common-0.14.1/src/code.rs:44`):
 
 ```rust
 pub trait StorageValue: Value + 'static + Serialize + DeserializeOwned {}
@@ -189,7 +189,7 @@ off by default and the disk tier needs a temp dir). Verification:
    the first cache**: `insert` returns immediately and enqueues the disk write to a
    background flusher, so if the cache is dropped before that flush completes the
    region scan on reopen finds nothing for the key and `get` misses (an
-   intermittent failure). Call `HybridCache::close().await` (or `wait().await`) on
+   intermittent failure). Call `HybridCache::close().await` on
    the first cache before dropping/reopening it. `FoyerBackend` currently exposes no
    such method, so the test must either add a way to await the flush on the wrapper
    or build the `HybridCache` directly. Disk recovery on reopen is on by default
