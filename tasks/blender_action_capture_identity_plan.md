@@ -126,11 +126,14 @@ def _poll_operators():
 
     n = 0
     for op in new_ops:
-        _log(TRACE, "blender.action", _format_op(op)); n += 1
+        try:                                  # per-op guard retained (as today):
+            _log(TRACE, "blender.action", _format_op(op)); n += 1
+        except Exception:
+            pass                              # _format_op can raise on a stored entry
     if n > 0:
         _metric_i("blender.action_captured", "count", n)
 
-    _prev_op_ptrs = set(cur_ptrs)
+    _prev_op_ptrs = set(cur_ptrs)             # must run unconditionally
 ```
 
 Why this is correct for every observed mutation mode of `wm.operators`:
@@ -195,7 +198,11 @@ input event ─► recorder.modal() ─(non-motion)─► actions.drain_operator
    - Rewrite `_poll_operators()` (`:139-164`) per the Design snippet: build
      `cur_ptrs` via `op.as_pointer()` inside the existing try/except that already
      guards `list(wm.operators)`; compute `new_ops` by pointer membership; compute
-     `gap` as *full-ring-and-disjoint*; emit and store `set(cur_ptrs)`.
+     `gap` as *full-ring-and-disjoint*; emit and store `set(cur_ptrs)`. Retain the
+     existing per-op try/except around emission (`:156-161`) — `_format_op` can
+     raise on a stored entry (`op.bl_idname` at `:123` is unguarded) — and the
+     `_prev_op_ptrs = set(cur_ptrs)` update must run unconditionally after the
+     loop, so a failed emission never re-emits already-seen ops on the next poll.
    - Delete `_appended_start()` (`:78-112`) and remove it from the `global`
      declaration; keep `_ring_capacity` in `unregister()`'s reset list, and swap
      `_prev_op_idnames` → `_prev_op_ptrs` there (`:253, :260`).
@@ -221,6 +228,13 @@ input event ─► recorder.modal() ─(non-motion)─► actions.drain_operator
      Retarget it to the full-ring setup — it becomes the "True gap" regression
      test listed below; its old small-buffer shape is covered by the new
      non-full-turnover test.
+   - **Rewrite** `test_drain_operators_delegates_to_poll` (`:157-160`): it calls
+     `drain_operators()` exactly once with prev state reset to `None` by the
+     autouse `_wire` fixture, so under first-poll-baseline semantics that single
+     call emits nothing and the assertion fails. First perform a baseline poll
+     on an empty ring (`_set_ops(fake_bpy, [])`; `actions._poll_operators()`),
+     then set the `OBJECT_OT_delete` op and call `drain_operators()`; keep the
+     existing assertion.
    - Update `_set_ops`-driven integration tests to reuse the **same** `FakeOp`
      instances across polls where an entry is meant to *persist* (persistence =
      same pointer). Add regression tests:
@@ -242,7 +256,7 @@ input event ─► recorder.modal() ─(non-motion)─► actions.drain_operator
        capacity) → new entries emitted, **no** gap (it was a clear, not overflow).
    - Keep/adjust: `test_poll_no_change_emits_nothing`,
      `test_poll_params_unavailable_keeps_bl_idname`,
-     `test_drain_operators_delegates_to_poll`, the three metric tests
+     the three metric tests
      (`test_gap_emits_action_gap_metric`, `test_action_captured_metric_on_new_
      ops`, `test_action_captured_metric_not_emitted_when_no_new_ops`), and
      `test_gap_warn_includes_ring_capacity`. Both gap tests
