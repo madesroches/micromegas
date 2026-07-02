@@ -128,6 +128,10 @@ def _poll_operators() -> None:
     # none of last poll's entries survive, meaning entries were FIFO-dropped
     # before we ever saw them. Partial overlap proves we saw everything
     # appended since the newest retained entry, so it is NOT a gap.
+    # Note: an exactly-full turnover (precisely _ring_capacity new ops, so the
+    # old set is fully replaced with nothing lost) also trips this condition.
+    # The ring alone cannot distinguish it from a true overflow (>capacity),
+    # hence the WARN is hedged as a "possible" gap rather than a certain one.
     gap = (
         prev is not None
         and len(ops) >= _ring_capacity

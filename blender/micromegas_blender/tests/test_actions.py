@@ -1,4 +1,4 @@
-"""Tests for actions.py: operator-history drain + diff logic."""
+"""Tests for actions.py: operator-history drain (identity-based)."""
 
 import pytest
 
