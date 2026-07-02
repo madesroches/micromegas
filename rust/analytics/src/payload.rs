@@ -56,15 +56,30 @@ where
 {
     let dep_udts = &stream.dependencies_metadata;
     let obj_udts = &stream.objects_metadata;
+    let process_id = stream.process_id;
+    let stream_id = stream.stream_id;
+    // A corrupt block is unexpected enough to be a potential attack indicator,
+    // so every occurrence is logged here regardless of what the caller does
+    // with the propagated `Err`.
+    let log_decompress_err = |e: &anyhow::Error| {
+        error!("corrupt block payload: process_id={process_id} stream_id={stream_id} error={e:?}");
+    };
     // Bind the decompressed buffers and the arena to locals so every parsed
     // Value borrows from storage that outlives the parse below.
-    let deps_buf =
-        decompress(&payload.dependencies).with_context(|| "decompressing dependencies payload")?;
-    let objs_buf = decompress(&payload.objects).with_context(|| "decompressing objects payload")?;
+    let deps_buf = decompress(&payload.dependencies)
+        .with_context(|| "decompressing dependencies payload")
+        .inspect_err(log_decompress_err)?;
+    let objs_buf = decompress(&payload.objects)
+        .with_context(|| "decompressing objects payload")
+        .inspect_err(log_decompress_err)?;
     let bump = Bump::new();
     CUSTOM_READERS.with(|custom_readers| {
+        let log_parse_err = |e: &anyhow::Error| {
+            error!("corrupt block: process_id={process_id} stream_id={stream_id} error={e:?}");
+        };
         let dependencies = read_dependencies(&bump, custom_readers, dep_udts, &deps_buf)
-            .with_context(|| "reading dependencies")?;
+            .with_context(|| "reading dependencies")
+            .inspect_err(log_parse_err)?;
         let continue_iterating = parse_object_buffer(
             &bump,
             custom_readers,
@@ -73,7 +88,8 @@ where
             &objs_buf,
             &mut fun,
         )
-        .with_context(|| "parsing object buffer")?;
+        .with_context(|| "parsing object buffer")
+        .inspect_err(log_parse_err)?;
         Ok(continue_iterating)
     })
 }

@@ -2,8 +2,8 @@
 use anyhow::{Context, Result};
 use bumpalo::Bump;
 use micromegas_transit::{
-    CustomReaderMap, UserDefinedType, advance_window, parse_pod_instance, read_advance_string_in,
-    read_consume_pod,
+    CustomReaderMap, UserDefinedType, parse_pod_instance, read_advance_string_in,
+    try_advance_window, try_read_consume_pod,
     value::{Object, Value},
 };
 use std::{collections::HashMap, sync::Arc};
@@ -32,8 +32,8 @@ fn parse_log_string_event<'a>(
     dependencies: &HashMap<u64, Value<'a>>,
     mut object_window: &'a [u8],
 ) -> Result<Value<'a>> {
-    let desc_id: u64 = read_consume_pod(&mut object_window);
-    let time: i64 = read_consume_pod(&mut object_window);
+    let desc_id: u64 = try_read_consume_pod(&mut object_window).with_context(|| "desc_id")?;
+    let time: i64 = try_read_consume_pod(&mut object_window).with_context(|| "time")?;
     // legacy format: the remaining bytes are the (utf8) message
     let msg = std::str::from_utf8(object_window).with_context(|| "parsing legacy string")?;
     let desc = *dependencies
@@ -57,8 +57,8 @@ fn parse_log_string_event_v2<'a>(
     dependencies: &HashMap<u64, Value<'a>>,
     mut object_window: &'a [u8],
 ) -> Result<Value<'a>> {
-    let desc_id: u64 = read_consume_pod(&mut object_window);
-    let time: i64 = read_consume_pod(&mut object_window);
+    let desc_id: u64 = try_read_consume_pod(&mut object_window).with_context(|| "desc_id")?;
+    let time: i64 = try_read_consume_pod(&mut object_window).with_context(|| "time")?;
     let msg = read_advance_string_in(bump, &mut object_window).with_context(|| "parsing string")?;
     let desc = *dependencies
         .get(&desc_id)
@@ -87,17 +87,14 @@ fn parse_log_string_interop_event_v3<'a>(
         .with_context(
             || "Can't parse log string interop event with no metadata for StaticStringRef",
         )?;
-    let time: i64 = read_consume_pod(&mut object_window);
-    let level: u8 = read_consume_pod(&mut object_window);
-    let target = parse_pod_instance(
-        bump,
-        string_ref_metadata,
-        udts,
-        dependencies,
-        &object_window[0..string_ref_metadata.size],
-    )
-    .with_context(|| "parse_pod_instance")?;
-    object_window = advance_window(object_window, string_ref_metadata.size);
+    let time: i64 = try_read_consume_pod(&mut object_window).with_context(|| "time")?;
+    let level: u8 = try_read_consume_pod(&mut object_window).with_context(|| "level")?;
+    let target_window = object_window
+        .get(0..string_ref_metadata.size)
+        .with_context(|| "object window shorter than StaticStringRef metadata")?;
+    let target = parse_pod_instance(bump, string_ref_metadata, udts, dependencies, target_window)
+        .with_context(|| "parse_pod_instance")?;
+    object_window = try_advance_window(object_window, string_ref_metadata.size)?;
     let msg = read_advance_string_in(bump, &mut object_window)?;
     let members = bump.alloc_slice_copy(&[
         (TIME, Value::I64(time)),
@@ -124,18 +121,16 @@ fn parse_tagged_log_interop_event<'a>(
         .with_context(
             || "Can't parse log string interop event with no metadata for StaticStringRef",
         )?;
-    let time: i64 = read_consume_pod(&mut object_window);
-    let level: u8 = read_consume_pod(&mut object_window);
-    let target = parse_pod_instance(
-        bump,
-        string_ref_metadata,
-        udts,
-        dependencies,
-        &object_window[0..string_ref_metadata.size],
-    )
-    .with_context(|| "parse_pod_instance")?;
-    object_window = advance_window(object_window, string_ref_metadata.size);
-    let properties_id: u64 = read_consume_pod(&mut object_window);
+    let time: i64 = try_read_consume_pod(&mut object_window).with_context(|| "time")?;
+    let level: u8 = try_read_consume_pod(&mut object_window).with_context(|| "level")?;
+    let target_window = object_window
+        .get(0..string_ref_metadata.size)
+        .with_context(|| "object window shorter than StaticStringRef metadata")?;
+    let target = parse_pod_instance(bump, string_ref_metadata, udts, dependencies, target_window)
+        .with_context(|| "parse_pod_instance")?;
+    object_window = try_advance_window(object_window, string_ref_metadata.size)?;
+    let properties_id: u64 =
+        try_read_consume_pod(&mut object_window).with_context(|| "properties_id")?;
     let properties = *dependencies
         .get(&properties_id)
         .with_context(|| "fetching properties in parse_tagged_log_interop_event")?;
@@ -160,15 +155,16 @@ fn parse_tagged_log_string<'a>(
     dependencies: &HashMap<u64, Value<'a>>,
     mut object_window: &'a [u8],
 ) -> Result<Value<'a>> {
-    let desc_id: u64 = read_consume_pod(&mut object_window);
+    let desc_id: u64 = try_read_consume_pod(&mut object_window).with_context(|| "desc_id")?;
     let desc = *dependencies
         .get(&desc_id)
         .with_context(|| "fetching desc in parse_tagged_log_string")?;
-    let properties_id: u64 = read_consume_pod(&mut object_window);
+    let properties_id: u64 =
+        try_read_consume_pod(&mut object_window).with_context(|| "properties_id")?;
     let properties = *dependencies
         .get(&properties_id)
         .with_context(|| "fetching property set in parse_tagged_log_string")?;
-    let time: i64 = read_consume_pod(&mut object_window);
+    let time: i64 = try_read_consume_pod(&mut object_window).with_context(|| "time")?;
     let msg = read_advance_string_in(bump, &mut object_window)?;
 
     let members = bump.alloc_slice_copy(&[
@@ -194,17 +190,14 @@ fn parse_log_string_interop_event<'a>(
         .iter()
         .find(|t| *t.name == "StringId")
         .with_context(|| "Can't parse log string interop event with no metadata for StringId")?;
-    let time: i64 = read_consume_pod(&mut object_window);
-    let level: u32 = read_consume_pod(&mut object_window);
-    let target = parse_pod_instance(
-        bump,
-        stringid_metadata,
-        udts,
-        dependencies,
-        &object_window[0..stringid_metadata.size],
-    )
-    .with_context(|| "parse_pod_instance")?;
-    object_window = advance_window(object_window, stringid_metadata.size);
+    let time: i64 = try_read_consume_pod(&mut object_window).with_context(|| "time")?;
+    let level: u32 = try_read_consume_pod(&mut object_window).with_context(|| "level")?;
+    let target_window = object_window
+        .get(0..stringid_metadata.size)
+        .with_context(|| "object window shorter than StringId metadata")?;
+    let target = parse_pod_instance(bump, stringid_metadata, udts, dependencies, target_window)
+        .with_context(|| "parse_pod_instance")?;
+    object_window = try_advance_window(object_window, stringid_metadata.size)?;
     // legacy dyn string: the remaining bytes are the (utf8) message
     let msg =
         std::str::from_utf8(object_window).with_context(|| "parsing legacy interop string")?;
@@ -232,8 +225,9 @@ fn parse_property_set<'a>(
         .find(|t| *t.name == "Property")
         .with_context(|| "could not find Property layout")?;
 
-    let object_id: u64 = read_consume_pod(&mut window);
-    let nb_properties = read_consume_pod::<u32>(&mut window) as usize;
+    let object_id: u64 = try_read_consume_pod(&mut window).with_context(|| "object_id")?;
+    let nb_properties =
+        try_read_consume_pod::<u32>(&mut window).with_context(|| "nb_properties")? as usize;
     let property_size = property_layout.size;
     // Reject a corrupt count before reserving arena capacity: a real block holds
     // at most window.len()/property_size properties, so a bogus large count must
@@ -278,12 +272,18 @@ fn parse_image_event<'a>(
     _dependencies: &HashMap<u64, Value<'a>>,
     mut object_window: &'a [u8],
 ) -> Result<Value<'a>> {
-    let time: i64 = read_consume_pod(&mut object_window);
+    let time: i64 = try_read_consume_pod(&mut object_window).with_context(|| "time")?;
     let name =
         read_advance_string_in(bump, &mut object_window).with_context(|| "parsing image name")?;
     let format =
         read_advance_string_in(bump, &mut object_window).with_context(|| "parsing image format")?;
-    let len: u32 = read_consume_pod(&mut object_window);
+    let len: u32 = try_read_consume_pod(&mut object_window).with_context(|| "len")?;
+    if len as usize > object_window.len() {
+        anyhow::bail!(
+            "invalid image blob: len={len} exceeds {}-byte window",
+            object_window.len()
+        );
+    }
     // zero-copy: the blob borrows the (whole-block) source buffer; the consumer
     // copies it into Arrow inside the parse_block callback.
     let data: &[u8] = &object_window[..len as usize];
