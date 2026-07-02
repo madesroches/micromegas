@@ -105,9 +105,21 @@ struct InFlight {
   run GET completes it splits the bytes and fulfills each owned block's `result` slot. On error, all
   owned slots receive the shared `Err`. The entry is removed from the map once fulfilled (so a later
   read re-checks the backend cache, which the owner has by then populated).
+- **Owner cancellation must not strand joiners** (parity with moka's `try_get_with`, whose waiter
+  takeover retries when the initializing future is dropped): the owner runs inside an axum request
+  future that is dropped on client disconnect, and the `watch::Sender` lives in the map entry — so
+  a dropped owner would otherwise leave joiners awaiting a slot nobody will fill, on an entry that
+  leaks. Handle it one of two ways: run the origin GET as a detached task (`tokio::spawn`) so it
+  completes and fulfills the slots regardless of the requester's lifetime, or install an owner
+  drop-guard that removes the owner's unfulfilled entries and signals joiners to re-enter
+  own-or-join (one of them becomes the new owner).
 - **Watch vs. `Shared` future**: use `watch` (or `OnceCell<Result> + Notify`) rather than a
   `Shared` boxed future, because the fetch is not one-future-per-block — a run owner fulfills many
-  slots. `Bytes` is cheap to clone, so broadcasting the result to N waiters is fine.
+  slots. `Bytes` is cheap to clone, so broadcasting the result to N waiters is fine. Caveat:
+  `watch::Sender::subscribe()` marks the value current at subscribe time as already *seen*, so a
+  joiner that subscribes after the owner sent the result would hang in `changed().await`. Joiners
+  must check `borrow()` for an already-present result before awaiting `changed()` (or loop with
+  `borrow_and_update()`).
 - **Error classification must survive the shared slot**: the `Arc<anyhow::Error>` a joiner pulls out
   of `result` must still let `is_not_found` (`validation.rs:36-42`) `downcast_ref::<object_store::Error>()`
   and see `NotFound`, so a missing key stays a 404. The owner therefore stores the origin error
@@ -206,6 +218,11 @@ hits a queued block:
   readahead/coalescing tends to cover the neighbours anyway.
 - Optional (anticipatory): promote the entire prefetch *batch* (all blocks submitted in one prefetch
   call). Can re-elevate blocks the query never touches; off by default.
+- Mechanism for the batch case: every `InFlight` entry created by one prefetch call carries a shared
+  batch handle (`Arc<BatchState>` holding the sibling entries' keys or weak refs plus a shared
+  `Notify`); when `promote_whole_batch` is on, a demand joiner sets `priority = Demand` on each
+  sibling entry via the handle and fires the shared `Notify`, which the acquisition loop (§3)
+  selects on alongside the per-entry `promote`. Demand-created entries carry no handle.
 
 (Note: "batch" = the set of keys submitted in one prefetch call; "run" = one coalesced GET. Default
 promotion is run-scoped, not batch-scoped.)
@@ -220,8 +237,14 @@ the `RangeCache::new` constructor:
 - `mem_permits: Arc<Semaphore(memory_budget_mb)>` where 1 permit ≈ 1 MiB.
 - A request acquires `ceil(assembled_bytes / 1 MiB)` permits **before** assembling and holds them
   until the assembled `Bytes` is fully sent. The guard is moved into the response `Body` (a wrapper
-  that owns the permit and drops it when the body is flushed) so the bound covers the true peak, not
-  just the assembly window.
+  that owns the permit and drops it when the body is flushed) so the bound covers the response's
+  full lifetime, not just the assembly window.
+- **What the budget counts**: response-body bytes. The transient assembly peak is higher — ~2× for
+  `get_range` (the block map is live while `assemble_range` copies into the result) and ~3× for
+  `POST /ranges` (block map + per-range copies + the `BytesMut` framing buffer in
+  `post_ranges_handler`) — so worst-case RAM attributable to request assembly is ~2–3× the budget.
+  `memory_budget_mb` must be sized with that multiplier in mind (the 1024 MiB default → ~2–3 GiB
+  worst-case transient, still comfortable on an 8 GiB host next to the 512 MiB Foyer RAM tier).
 - The existing per-request `MAX_TOTAL_REQUESTED_BYTES` (512 MiB) stays as a per-request sanity cap;
   the new budget is the cross-request ceiling. A request larger than the whole budget is rejected
   (413) rather than deadlocking on unavailable permits.
@@ -296,6 +319,8 @@ async fn fetch_blocks(&self, key, file_size, indices: &[u64], prio: Priority)
 4. `MemoryBackend`: unchanged behaviourally (drop any single-flight assumption).
 5. Tests: add a counting/instrumented origin store; assert *N concurrent identical block reads → one
    origin GET*, and *N concurrent `size()` misses → one `head*` (replaces the moka-backed guarantee).
+   Also: *owner cancelled mid-fetch → joiner still completes* (drop the owning read future while a
+   joiner waits; the joiner must get bytes, not hang — covers the §1 cancellation handling).
 
 ### Phase 2 — Run coalescing
 6. Add `coalesce_runs(sorted_missing_owned: &[u64], block_size, max_coalesced_get_bytes)
@@ -303,7 +328,9 @@ async fn fetch_blocks(&self, key, file_size, indices: &[u64], prio: Priority)
    gap split, oversize split, single block, scattered) — per the project convention that unit tests
    live under the crate's `tests/` folder.
 7. `fetch_blocks`: compute missing → own → coalesce owned runs → one GET per run → split → put +
-   fulfill per block. Route `get_range`/`get_ranges` through `fetch_blocks`. This deletes the last
+   fulfill per block. In this phase `max_coalesced_get_bytes` is a hardcoded const (8 MiB, the
+   table default) — it becomes a `RangeCache::new` param in step 11 and a CLI flag in step 16.
+   Route `get_range`/`get_ranges` through `fetch_blocks`. This deletes the last
    uses of `MAX_CONCURRENT_BLOCK_FETCHES` (the `buffer_unordered` calls at `range_cache.rs:194`/`:251`),
    so remove the const at `range_cache.rs:30` in this step to avoid a `clippy -D warnings` dead_code
    failure.
@@ -343,7 +370,9 @@ async fn fetch_blocks(&self, key, file_size, indices: &[u64], prio: Priority)
 ### Phase 5 — Config + docs
 16. `object-cache-srv/src/cli.rs`: add env/CLI flags (defaults below), and update `object_cache_srv.rs`
     to source the `RangeCache::new` config values from those flags instead of the Phase 3 hardcoded
-    defaults.
+    defaults. Validate at startup (next to the existing `block_size == 0` check,
+    `object_cache_srv.rs:42`) that `demand_reserved < total` — `Semaphore::new(total -
+    demand_reserved)` would underflow and panic on a misconfigured pair — and that `total > 0`.
 17. Update `mkdocs/docs/admin/object-cache.md` env table and `object-cache-srv/README.md`.
 18. `python3 ../build/rust_ci.py`; local MinIO smoke test (`start_minio.py` + `start_services.py`).
 
@@ -389,9 +418,10 @@ against measurement.
 - **Two semaphores vs. one custom priority scheduler**: two semaphores give the reserved-demand
   guarantee with a provable ceiling and no hand-rolled fairness. Promotion needs a small re-check
   loop on top; a fully custom scheduler would be more flexible but far more error-prone.
-- **Memory-budget gate vs. streaming responses**: the gate is a localized change and bounds true
-  peak when the guard rides the response body. Streaming would remove the per-request cap entirely
-  and lower peak further, but reworks assembly and the HTTP body path — deferred as a follow-up.
+- **Memory-budget gate vs. streaming responses**: the gate is a localized change that bounds
+  response-body bytes for the response's full lifetime (transient assembly overhead runs ~2–3× the
+  counted bytes; see §5). Streaming would remove the per-request cap entirely and lower peak
+  further, but reworks assembly and the HTTP body path — deferred as a follow-up.
 - **Per-GET permits vs. per-block permits**: per-GET maps to NIC bandwidth (the real ceiling) and
   keeps coalescing meaningful; per-block would double-count coalesced runs.
 - **Run-scoped promotion default**: precise (won't warm untouched blocks) at the cost of not
@@ -410,7 +440,8 @@ against measurement.
 - **Unit** (`tests/blocks_tests.rs`): `coalesce_runs` edge cases (merge, gap-split, oversize-split, scattered).
 - **Integration** (`range_cache_tests.rs`, with an instrumented origin store counting GETs/heads and
   recording spans):
-  - Single-flight: N concurrent identical block reads → 1 GET; N concurrent `size()` misses → 1 head.
+  - Single-flight: N concurrent identical block reads → 1 GET; N concurrent `size()` misses → 1 head;
+    owner cancelled mid-fetch → joiner still completes (no hang, no leaked in-flight entry).
   - Coalescing: cold contiguous read → few GETs with expected spans; oversize run split at
     `max_coalesced_get_bytes`; partially-cached read never refetches cached blocks; scattered stays
     per-block.
@@ -428,6 +459,7 @@ against measurement.
   `memory_budget_mb=1024`): ship as configurable defaults and tune against measurement later — no
   pre-benchmark gate.
 - **size()**: dedup single-flight only (forced by moka removal). Negative caching stays out — #1196.
-- **Memory guard**: ride the permit on the response `Body` (tight, correct bound). No looser interim.
+- **Memory guard**: ride the permit on the response `Body` (bounds body bytes for their full
+  lifetime; assembly transients run ~2–3× the counted bytes, see §5). No looser interim.
 - **Prefetch surface**: keep `fetch_blocks` priority-parameterized; the `pub(crate)` prefetch entry
   point and HTTP surface land in #1198. This plan is the demand path + the primitives prefetch reuses.
