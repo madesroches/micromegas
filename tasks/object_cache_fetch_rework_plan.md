@@ -219,10 +219,16 @@ hits a queued block:
 - Optional (anticipatory): promote the entire prefetch *batch* (all blocks submitted in one prefetch
   call). Can re-elevate blocks the query never touches; off by default.
 - Mechanism for the batch case: every `InFlight` entry created by one prefetch call carries a shared
-  batch handle (`Arc<BatchState>` holding the sibling entries' keys or weak refs plus a shared
-  `Notify`); when `promote_whole_batch` is on, a demand joiner sets `priority = Demand` on each
-  sibling entry via the handle and fires the shared `Notify`, which the acquisition loop (§3)
-  selects on alongside the per-entry `promote`. Demand-created entries carry no handle.
+  batch handle (`Arc<BatchState>` holding the sibling entries' keys or weak refs); when
+  `promote_whole_batch` is on, a demand joiner sets `priority = Demand` on each sibling entry via
+  the handle and fires **each sibling's own per-entry `promote.notify_one()`** — not a batch-wide
+  shared `Notify`. One `Notify` shared by several parked run owners loses wakeups: `notify_one`
+  stores a permit for at most one waiter, and `notify_waiters` stores none, so an owner that read
+  `priority == Prefetch` just before the joiner's store and then parks on `notified()` would miss
+  the promotion until a prefetch permit happens to free. Per-entry `notify_one` is race-free —
+  each entry's promote signal has exactly one owner waiting on it, and the stored permit covers
+  the check-then-park window. The acquisition loop (§3) is unchanged: it only ever waits on its
+  own entries' promote signal. Demand-created entries carry no handle.
 
 (Note: "batch" = the set of keys submitted in one prefetch call; "run" = one coalesced GET. Default
 promotion is run-scoped, not batch-scoped.)
@@ -330,16 +336,21 @@ async fn fetch_blocks(&self, key, file_size, indices: &[u64], prio: Priority)
 7. `fetch_blocks`: compute missing → own → coalesce owned runs → one GET per run → split → put +
    fulfill per block. In this phase `max_coalesced_get_bytes` is a hardcoded const (8 MiB, the
    table default) — it becomes a `RangeCache::new` param in step 11 and a CLI flag in step 16.
-   Route `get_range`/`get_ranges` through `fetch_blocks`. This deletes the last
-   uses of `MAX_CONCURRENT_BLOCK_FETCHES` (the `buffer_unordered` calls at `range_cache.rs:194`/`:251`),
-   so remove the const at `range_cache.rs:30` in this step to avoid a `clippy -D warnings` dead_code
-   failure.
+   Route `get_range`/`get_ranges` through `fetch_blocks`. This deletes the `buffer_unordered`
+   calls at `range_cache.rs:194`/`:251`, but **keep `MAX_CONCURRENT_BLOCK_FETCHES` as an interim
+   cap** — execute the owned runs through `buffer_unordered(MAX_CONCURRENT_BLOCK_FETCHES)` — so a
+   scattered cold read (which doesn't coalesce and stays per-block) never fans out unbounded in
+   the Phase-2-only state; the global budget that supersedes it arrives in Phase 3 (the const and
+   its `buffer_unordered` are removed in step 9).
 8. Tests: cold contiguous read = few coalesced GETs (assert GET count/spans on the counting store);
    partially-cached read never refetches cached blocks; scattered read stays per-block.
 
 ### Phase 3 — Global priority budget
 9. `FetchScheduler`: add `shared_permits` and `prefetch_permits`; implement the promotion-aware
-   acquisition loop. Owner acquires a run permit before the GET.
+   acquisition loop. Owner acquires a run permit before the GET. Remove the interim
+   `MAX_CONCURRENT_BLOCK_FETCHES` cap from step 7 and the const at `range_cache.rs:30` in this
+   step — the budget now bounds fan-out, and leaving the const would fail `clippy -D warnings`
+   (dead_code).
 10. Add `Priority` param to `fetch_blocks`; `get_range`/`get_ranges` pass `Demand`; add the
     `pub(crate)` prefetch core with `Prefetch`.
 11. Add the config params (`total`, `demand_reserved`, `max_coalesced_get_bytes`,
@@ -365,7 +376,11 @@ async fn fetch_blocks(&self, key, file_size, indices: &[u64], prio: Priority)
     every fill would land as `Demand`.) Update `tests/foyer_backend_tests.rs`'s three `backend.put(...)`
     calls to pass a `FillHint`.
 15. Tests: concurrent large reads block on the budget rather than OOM; body drop releases permits;
-    oversize-vs-budget → 413.
+    oversize-vs-budget → 413. These are handler-level tests (the budget lives on the server
+    `AppState`, §5 — the object-cache crate never sees it), so they go in a new
+    `object-cache-srv/tests/memory_budget_tests.rs`; add a small `[lib]` target to object-cache-srv
+    exposing the handler/state modules so `tests/` can import them (mirrors `analytics-web-srv`'s
+    lib+bin split; the `[[bin]]` keeps its `object_cache_srv.rs` entry path).
 
 ### Phase 5 — Config + docs
 16. `object-cache-srv/src/cli.rs`: add env/CLI flags (defaults below), and update `object_cache_srv.rs`
@@ -403,8 +418,12 @@ against measurement.
 - `rust/object-cache/tests/foyer_backend_tests.rs` — pass `FillHint` to the three `put` calls.
 - `rust/object-cache/src/memory_backend.rs` — `FillHint` signature (ignored).
 - `rust/object-cache/Cargo.toml` — drop `moka`.
-- `rust/object-cache/tests/range_cache_tests.rs` — single-flight, coalescing, priority, memory-bound
-  tests (add a counting origin store helper).
+- `rust/object-cache/tests/range_cache_tests.rs` — single-flight, coalescing, priority tests (add a
+  counting origin store helper).
+- `rust/object-cache-srv/Cargo.toml` + `src/lib.rs` — NEW `[lib]` target exposing handler/state
+  modules to integration tests (mirrors `analytics-web-srv`; bin entry path unchanged).
+- `rust/object-cache-srv/tests/memory_budget_tests.rs` — NEW: memory-budget handler tests (gating,
+  permit release on body drop, oversize → 413).
 - `rust/object-cache-srv/src/cli.rs` — new flags/env.
 - `rust/object-cache-srv/src/object_cache_srv.rs` — pass config to `RangeCache::new`.
 - `rust/object-cache-srv/src/handlers.rs` — memory-budget acquisition + body-guard wrapper.
@@ -447,9 +466,10 @@ against measurement.
     per-block.
   - Priority: demand not starved under prefetch saturation; queued prefetch block promotes and starts
     before remaining prefetch; total concurrent GETs never exceed `total`.
-  - Memory bound: concurrent large reads gate rather than exceed the budget; permit released on body
-    drop; request larger than the whole budget → 413.
   - Correctness preserved: existing `get_range`/`get_ranges`/`size` byte-equality tests still pass.
+- **Server integration** (`object-cache-srv/tests/memory_budget_tests.rs`, handler-level via the new
+  `[lib]` target): concurrent large reads gate rather than exceed the budget; permit released on
+  body drop; request larger than the whole budget → 413.
 - **CI**: `cd rust && python3 ../build/rust_ci.py` (fmt, clippy `-D warnings`, tests).
 - **Smoke**: `start_minio.py` + `start_services.py`; identical query results cache-on vs. bypass.
 
