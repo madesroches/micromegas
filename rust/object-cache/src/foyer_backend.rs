@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Result, ensure};
 use async_trait::async_trait;
 use bytes::Bytes;
 use foyer::{DirectFsDeviceOptions, Engine, HybridCache, HybridCacheBuilder};
@@ -12,8 +12,20 @@ pub struct FoyerBackend {
 
 impl FoyerBackend {
     pub async fn new(dir: &str, ram_bytes: usize, disk_bytes: usize) -> Result<Self> {
+        Self::new_with_shards(dir, ram_bytes, disk_bytes, 8).await
+    }
+
+    pub async fn new_with_shards(
+        dir: &str,
+        ram_bytes: usize,
+        disk_bytes: usize,
+        shards: usize,
+    ) -> Result<Self> {
+        ensure!(shards > 0, "shards must be > 0");
         let cache = HybridCacheBuilder::new()
             .memory(ram_bytes)
+            .with_weighter(|_key: &String, value: &Bytes| value.len())
+            .with_shards(shards)
             .storage(Engine::Large)
             .with_device_options(DirectFsDeviceOptions::new(dir).with_capacity(disk_bytes))
             .build()
