@@ -21,7 +21,7 @@ which is an OOM risk under sustained load. This plan installs a byte weighter so
       .build()
       .await?;
   ```
-- `rust/object-cache-srv/src/object_cache_srv.rs:76-82` — the production caller
+- `rust/object-cache-srv/src/object_cache_srv.rs:79-85` — the production caller
   passes a byte budget into the entry-count parameter:
   ```rust
   let foyer = FoyerBackend::new(
