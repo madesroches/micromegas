@@ -18,7 +18,7 @@ micromegas-tracing.workspace = true
 
 anyhow.workspace = true
 async-trait.workspace = true
-bytes.workspace = true
+bytes = { workspace = true, features = ["serde"] }
 chrono.workspace = true
 futures.workspace = true
 moka.workspace = true
@@ -32,4 +32,5 @@ foyer = { workspace = true, optional = true }
 
 [dev-dependencies]
 object_store.workspace = true
+tempfile = "3.14"
 tokio.workspace = true
