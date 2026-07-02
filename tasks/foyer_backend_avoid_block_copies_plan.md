@@ -174,9 +174,15 @@ off by default and the disk tier needs a temp dir). Verification:
 2. **Round-trip test** (add to `rust/object-cache/tests/`, gated on
    `#[cfg(feature = "foyer")]`): construct a `FoyerBackend` against a `tempfile`
    directory, `put` a multi-byte block under a key, `get` it back, and assert the
-   returned `Bytes` equals the input. This exercises the new `Bytes` storage path
-   (RAM tier) and confirms serde/bincode round-trips through Foyer without touching
-   the value shape. Use a small `ram_bytes`/`disk_bytes` so the test is cheap.
+   returned `Bytes` equals the input. To actually exercise the disk serde/bincode
+   path (the main new correctness risk), the read must miss the RAM tier: in foyer
+   0.14.1 `insert` writes to memory and serializes to disk in the background, and a
+   `get` right after `insert` is served from RAM without ever calling
+   `storage.load`. So force a memory miss before reading — either set `ram_bytes`
+   smaller than the block so the entry is evicted from RAM (leaving only the disk
+   copy), or close/reopen the cache so the read comes from disk. Only then does the
+   `bytes`/bincode deserialize half of the round-trip run. Use a small
+   `ram_bytes`/`disk_bytes` so the test is cheap.
 3. **Full CI**: `python3 build/rust_ci.py` from `rust/`.
 
 ## Open Questions
