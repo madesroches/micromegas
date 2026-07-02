@@ -224,11 +224,14 @@ async fn put(&self, key: String, value: Bytes, hint: FillHint);
 ```
 
 - `FoyerBackend`: `Demand → insert`, `Prefetch → insert_with_hint(.., CacheHint::Low)` (both exist in
-  foyer 0.14). `get` unchanged. **The RAM tier must be built with LRU eviction**
+  foyer 0.14). `get` unchanged. **The RAM tier should be explicitly built with LRU eviction**
   (`HybridCacheBuilder::memory().with_eviction_config(LruConfig::default())`): in foyer 0.14.1 only
-  LRU maps `CacheHint::Low → LruHint::LowPriority`; the default w-TinyLFU (Lfu), and also S3Fifo/Fifo,
-  silently discard the hint, so without this the prefetch fill hint is inert and prefetch fills still
-  compete equally to evict hot demand data.
+  LRU maps `CacheHint::Low → LruHint::LowPriority`; Lfu (w-TinyLFU), S3Fifo, and Fifo silently discard
+  the hint. Foyer's *code* default is already LRU (`CacheBuilder::new` sets
+  `LruConfig::default()`; the doc-comment claiming a w-TinyLFU default is stale), and `FoyerBackend`
+  never overrides it — so the hint is already honored today. Setting `LruConfig` explicitly pins the
+  policy defensively (against a future foyer default change) rather than switching away from
+  w-TinyLFU.
 - `MemoryBackend`: ignores the hint. No single-flight needed here anymore (it lived in moka; now it
   lives in `FetchScheduler`).
 
@@ -292,6 +295,7 @@ async fn fetch_blocks(&self, key, file_size, indices: &[u64], prio: Priority)
     bytes; move the guard into the response `Body` wrapper. Reject requests larger than the whole
     budget with 413.
 14. Extend `RangeCacheBackend::put` with `FillHint`; `FoyerBackend` maps `Prefetch → CacheHint::Low`.
+    Update `tests/foyer_backend_tests.rs`'s three `backend.put(...)` calls to pass a `FillHint`.
 15. Tests: concurrent large reads block on the budget rather than OOM; body drop releases permits;
     oversize-vs-budget → 413.
 
@@ -325,6 +329,7 @@ against measurement.
 - `rust/object-cache/tests/blocks_tests.rs` — `coalesce_runs` unit tests.
 - `rust/object-cache/src/backend.rs` — `FillHint` param on `put`.
 - `rust/object-cache/src/foyer_backend.rs` — honor `FillHint` (`CacheHint::Low` for prefetch).
+- `rust/object-cache/tests/foyer_backend_tests.rs` — pass `FillHint` to the three `put` calls.
 - `rust/object-cache/src/memory_backend.rs` — `FillHint` signature (ignored).
 - `rust/object-cache/Cargo.toml` — drop `moka`.
 - `rust/object-cache/tests/range_cache_tests.rs` — single-flight, coalescing, priority, memory-bound
