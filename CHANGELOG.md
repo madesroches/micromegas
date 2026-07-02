@@ -12,6 +12,7 @@ This file documents the historical progress of the Micromegas project. For curre
 * **OTLP:**
   * Populate the `processes.username` column from `process.owner` (falling back through `process.user.name`, `process.real_user.name`, then `user.name`) and fold the resolved owner into the `process_id` derivation so processes that differ only by owning user get distinct ids; re-derivation stays under the existing `NS_OTEL_PROCESS_V1` namespace
 * **Security:**
+  * Fix Dependabot alerts: bump `golang.org/x/net` to 0.55.0 in the Grafana plugin backend and `joserfc` to 1.7.2 in the Python client (#338, #337)
   * Upgrade `opentelemetry-proto` to 0.32 to resolve GHSA-w9wp-h8wv-79jx; treat the new profiling-only string-interning fields (`*_strindex`) as absent on non-profiling OTLP signals, per the OTLP spec (#336)
   * Harden the transit block parsing path (`parser.rs`, `dyn_string.rs`, `serialize.rs`, `parsing.rs`) against malformed/truncated payloads: replace unchecked arithmetic, slicing, and raw-pointer reads with checked variants that return `Err` instead of panicking or triggering UB; add a choke-point error log on parse failure and extensive corrupt-input regression tests (#1192)
 * **Build:**
