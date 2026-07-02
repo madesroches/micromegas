@@ -1,5 +1,5 @@
 use crate::app_state::AppState;
-use crate::validation::{is_not_found, parse_range_header, validate_key};
+use crate::validation::{is_not_found, parse_range_header};
 use axum::{
     body::Body,
     extract::{Path, State},
@@ -8,6 +8,7 @@ use axum::{
 };
 use bytes::{BufMut, Bytes, BytesMut};
 use micromegas_object_cache::range_cache::RangeError;
+use micromegas_object_cache::validation::validate_key;
 use micromegas_tracing::prelude::*;
 use serde::Deserialize;
 
