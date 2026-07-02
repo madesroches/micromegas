@@ -86,8 +86,10 @@ input):
 The in-proc deserialization path (`InProcSerialize::read_value`, used by the heterogeneous
 queue to read events written by the *same process*, e.g. `logs/log_events.rs`,
 `images/image_events.rs`, `static_string.rs:60`) shares these helpers but operates on
-trusted buffers. It is **out of scope** except for the alignment UB fix in
-`read_advance_string`, which is incorrect even on trusted input.
+trusted buffers. It is **out of scope** except for `read_advance_string`, which gets both
+the alignment UB fix and the length-validation guard from Design §4 — both are correctness
+bugs independent of trust (a misaligned or under-length source buffer panics/UB regardless
+of whether the process trusts its own data).
 
 ## Design
 
@@ -109,8 +111,10 @@ pub fn try_read_pod_at<T>(window: &[u8], offset: usize) -> Result<T>;
 pub fn try_advance_window<'a>(window: &'a [u8], offset: usize) -> Result<&'a [u8]>;
 ```
 
-All three validate length with `checked_add` where offsets are involved, then perform the
-same `std::ptr::read_unaligned` as today. Error messages should identify the failure
+The two pod helpers (`try_read_consume_pod`, `try_read_pod_at`) validate length with
+`checked_add` where offsets are involved, then perform the same `std::ptr::read_unaligned`
+as today; `try_advance_window` just validates and re-slices — it performs no read. Error
+messages should identify the failure
 (`bail!("truncated window reading {}: need {need} bytes, have {have}", type_name)`), since
 these errors surface in service logs when a corrupt block is encountered.
 
@@ -132,8 +136,18 @@ Both loops get the same treatment:
   window covering the *entire* remaining buffer, so the window-fits guard does not
   guarantee 8 bytes remain — convert `read_consume_pod::<u64>` to
   `try_read_consume_pod::<u64>(...)?` (same treatment as the custom readers in §5).
-- Replace the four `assert!(insert_res.is_none())` with
-  `bail!("duplicate dependency id {id}")`.
+- The generic custom-reader branch (`parser.rs:72-88`) has the same unbounded-window
+  property: it hands the reader `advance_window(buffer, offset)` — the entire remaining
+  buffer, not a slice bounded to `object_size` — so the window-fits guard doesn't bound what
+  the reader sees either. This is safe once §5's checked reads are in place (the reader
+  itself validates every field it consumes), but is called out explicitly since it looks
+  identical to the `StaticStringDependency` case above.
+- Replace the four `assert!(insert_res.is_none())` with `bail!(...)`, using whatever id
+  variable is already in scope: `bail!("duplicate dependency id {string_id}")` at the two
+  `StaticString*` sites (`parser.rs:62,70`, which bind `string_id`), `bail!("duplicate
+  dependency id {id}")` at the custom-reader branch (`parser.rs:85`, already binds `id`),
+  and at the POD/UDT branch (`parser.rs:103`, which has no bound variable) add
+  `let id = obj.get::<u64>("id")?;` before the `bail!`.
 
 ### 3. `parse_pod_instance` (`rust/transit/src/parser.rs`)
 
@@ -166,9 +180,12 @@ All readers already return `Result`, so the changes are mechanical:
 
 - Replace every `read_consume_pod` on `object_window` with `try_read_consume_pod(...)?`
   (with `.with_context()` naming the field, matching the existing style).
-- Before the fixed-size sub-window slices (`&object_window[0..string_ref_metadata.size]`
-  in the three interop readers, `&window[begin..begin + property_size]` in
-  `parse_property_set`), validate the window length and `bail!` — or slice via
+- Before the fixed-size sub-window slices — `&object_window[0..string_ref_metadata.size]`
+  (`StaticStringRef` metadata) in the two log/span interop readers at `parsing.rs:97,134`,
+  `&object_window[0..stringid_metadata.size]` (`StringId` metadata) in
+  `parse_log_string_interop_event` at `parsing.rs:204`, and
+  `&window[begin..begin + property_size]` in `parse_property_set` at `parsing.rs:250` —
+  validate the window length and `bail!` — or slice via
   `object_window.get(..size).context(...)?`.
 - Replace `advance_window` with `try_advance_window` where the offset is payload-derived.
 - `parse_image_event`: validate `len as usize <= object_window.len()` before
@@ -192,7 +209,9 @@ and `StreamMetadata` carries the block's identity:
   callers (`log_entry.rs:246`, `measure.rs:289`) attach it via
   `.with_context(|| format!("parse_block {}", block.block_id))`; the rest
   (`async_block_processing.rs`, `net_block_processing.rs`, `thread_block_processor.rs`,
-  `image_block_processor.rs`, `parse_block_table_function.rs`) do not, so for those paths
+  `image_block_processor.rs`, `parse_block_table_function.rs`) do not attach the block id
+  (`image_block_processor.rs` wraps the call in a generic `.with_context(|| "parse_block")`,
+  but without the id; the other four attach no context at all), so for those paths
   the choke-point log's `stream.process_id`/`stream.stream_id` is the only identity that
   will appear in the logs — enough to locate the affected stream, but not the specific
   block. Threading block identity into `parse_block` itself would require plumbing it
@@ -253,7 +272,8 @@ regression, and note the numbers in the PR.
 ## Implementation Steps
 
 1. **Helpers** — add `try_read_consume_pod`, `try_read_pod_at`, `try_advance_window` to
-   `rust/transit/src/serialize.rs`; export them from `rust/transit/src/lib.rs`.
+   `rust/transit/src/serialize.rs` (automatically re-exported via `rust/transit/src/lib.rs`'s
+   existing `pub use serialize::*;`, so no lib.rs edit is needed).
 2. **Parser** — convert `read_dependencies`, `parse_object_buffer`, and
    `parse_pod_instance` in `rust/transit/src/parser.rs` to checked reads/slices and
    `bail!` per Design §2–3.
@@ -275,7 +295,6 @@ regression, and note the numbers in the PR.
 ## Files to Modify
 
 - `rust/transit/src/serialize.rs` — new fallible helpers
-- `rust/transit/src/lib.rs` — export new helpers
 - `rust/transit/src/parser.rs` — checked reads/slices, `bail!` instead of assert
 - `rust/transit/src/dyn_string.rs` — length guards, alignment-safe wide decode
 - `rust/tracing/src/parsing.rs` — checked consumes and sub-window guards in custom readers
@@ -308,8 +327,11 @@ regression, and note the numbers in the PR.
 
 ## Documentation
 
-No mkdocs pages document the transit wire format or parse internals (only passing mentions
-in `architecture/index.md`), so no documentation updates are needed. Rustdoc comments on
+The `parse_block(block_id)` SQL table function has a dedicated user-facing docs section
+(`mkdocs/docs/query-guide/functions-reference.md`) plus mentions in the Unreal and OTLP
+docs, but those describe only the query interface, which this change doesn't alter. No
+mkdocs page documents the transit wire format or the `read_dependencies`/parse internals, so
+no documentation updates are needed there. Rustdoc comments on
 the new `try_*` helpers should state the trusted-vs-untrusted split (in-proc queue reads
 may use the panicking variants; payload-derived data must use `try_*`).
 
