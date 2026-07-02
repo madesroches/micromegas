@@ -102,6 +102,13 @@ struct InFlight {
 - **Watch vs. `Shared` future**: use `watch` (or `OnceCell<Result> + Notify`) rather than a
   `Shared` boxed future, because the fetch is not one-future-per-block — a run owner fulfills many
   slots. `Bytes` is cheap to clone, so broadcasting the result to N waiters is fine.
+- **Error classification must survive the shared slot**: the `Arc<anyhow::Error>` a joiner pulls out
+  of `result` must still let `is_not_found` (`validation.rs:36-42`) `downcast_ref::<object_store::Error>()`
+  and see `NotFound`, so a missing key stays a 404. The owner therefore stores the origin error
+  wrapped such that the `object_store::Error` remains downcastable (e.g. `anyhow::Error::from(origin_err)`),
+  and joiners must reuse the shared `Arc` directly — **not** stringify it. The
+  `.map_err(|e| anyhow!("{e}"))` pattern in `get_block` (`range_cache.rs:150`) flattens the error to a
+  string and drops the `NotFound` downcast; it must **not** be reused for error propagation here.
 
 This is the concrete reason single-flight must be our own map: a joiner can mutate
 `priority`/`promote` on an existing entry. `Foyer::fetch` is a black box and cannot be re-tagged.
@@ -254,9 +261,14 @@ async fn fetch_blocks(&self, key, file_size, indices: &[u64], prio: Priority)
   `Priority::Prefetch`, warms the cache, and returns no assembled bytes. The prefetch **endpoint and
   client method are #1198** — this plan defines the priority-carrying core they build on, not the
   HTTP surface.
-- `size()` is wrapped in the same in-flight primitive (dedup concurrent `head`s). **Negative caching
-  of NotFound is deferred to #1196**; only dedup is done here (required because removing moka removes
-  `size_cache`).
+- `size()` is wrapped in the same in-flight primitive (dedup concurrent `head`s). **The single-flight
+  indirection must preserve `object_store::Error::NotFound` to every waiter** so `is_not_found`
+  (`validation.rs:36-42`, reached from `handlers.rs:43`/`:66`/`:263`) still downcasts it and returns
+  404 for a missing key — today `size()` propagates the origin error unwrapped (`range_cache.rs:99`),
+  and the shared-slot error must keep the `object_store::Error` downcastable (see §1). Do **not** reuse
+  `get_block`'s stringifying `.map_err(|e| anyhow!("{e}"))` (`range_cache.rs:150`) for `size()`, which
+  would turn a 404 into a 500. **Negative caching of NotFound is deferred to #1196**; only dedup and
+  error-fidelity are done here (dedup is required because removing moka removes `size_cache`).
 
 ## Implementation Steps
 
@@ -287,10 +299,11 @@ async fn fetch_blocks(&self, key, file_size, indices: &[u64], prio: Priority)
 10. Add `Priority` param to `fetch_blocks`; `get_range`/`get_ranges` pass `Demand`; add the
     `pub(crate)` prefetch core with `Prefetch`.
 11. Add the config params (`total`, `demand_reserved`, `max_coalesced_get_bytes`,
-    `promote_whole_batch`) to `RangeCache::new`, and update the one production caller
-    (`object-cache-srv/src/object_cache_srv.rs`) in this same phase — passing hardcoded default values
-    directly — so the workspace (and Phase 3's own tests) keeps compiling. Phase 5 only folds these
-    values behind CLI/env flags.
+    `promote_whole_batch`) to `RangeCache::new`, and update every existing caller in this same phase —
+    passing hardcoded default values directly — so the workspace (and Phase 3's own tests) keeps
+    compiling: the production caller (`object-cache-srv/src/object_cache_srv.rs`) and the three test
+    call sites in `object-cache/tests/range_cache_tests.rs` (the `make_cache` helper plus the two
+    inline `RangeCache::new` constructions). Phase 5 only folds these values behind CLI/env flags.
 12. Tests: demand not starved (saturate prefetch, assert a demand GET starts within reserved
     capacity); promotion (queued prefetch block flips to demand and starts before remaining prefetch);
     total concurrency never exceeds `total` (instrumented semaphore/counter).
