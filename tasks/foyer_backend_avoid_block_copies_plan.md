@@ -127,13 +127,19 @@ its own bytes, and the size-metadata `put` (`range_cache.rs:104`) builds a fresh
      `Some(entry.value().clone())`.
    - `put`: replace `self.cache.insert(key, value.to_vec())` with
      `self.cache.insert(key, value)`.
-3. Build with the foyer feature: `cargo build -p micromegas-object-cache --features foyer`
+3. **`rust/object-cache/Cargo.toml`** — add `tempfile = "3.14"` to
+   `[dev-dependencies]` (matching the version already used in `analytics/Cargo.toml`
+   and `analytics-web-srv/Cargo.toml`); it backs the round-trip test's temp disk-tier
+   directory. Keep alphabetical ordering within the block.
+4. Build with the foyer feature: `cargo build -p micromegas-object-cache --features foyer`
    and `cargo build -p micromegas-object-cache-srv`.
-4. `cargo fmt`, then `cargo clippy -p micromegas-object-cache --features foyer -- -D warnings`.
+5. `cargo fmt`, then `cargo clippy -p micromegas-object-cache --features foyer -- -D warnings`.
 
 ## Files to Modify
-- `rust/object-cache/Cargo.toml` — enable `bytes` `serde` feature.
+- `rust/object-cache/Cargo.toml` — enable `bytes` `serde` feature; add
+  `tempfile = "3.14"` to `[dev-dependencies]` for the round-trip test.
 - `rust/object-cache/src/foyer_backend.rs` — store `Bytes`, drop both copies.
+- `rust/object-cache/tests/` — new round-trip test (see Testing Strategy).
 
 ## Trade-offs
 
