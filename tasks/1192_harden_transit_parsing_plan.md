@@ -278,12 +278,16 @@ regression, and note the numbers in the PR.
    existing `pub use serialize::*;`, so no lib.rs edit is needed).
 2. **Parser** — convert `read_dependencies`, `parse_object_buffer`, and
    `parse_pod_instance` in `rust/transit/src/parser.rs` to checked reads/slices and
-   `bail!` per Design §2–3.
+   `bail!` per Design §2–3. This replaces every use of `read_any` and the sole
+   `read_consume_pod` use in the file, so remove those now-unused imports from
+   `parser.rs` (unused imports are hard errors under the Step 8 clippy gate).
 3. **Strings** — fix `read_advance_string` (alignment-safe wide decode + length guard) and
    `read_advance_string_in` (length guard, checked consumes) in
    `rust/transit/src/dyn_string.rs`.
 4. **Custom readers** — convert all readers in `rust/tracing/src/parsing.rs` to the checked
-   helpers; add the image-blob length guard per Design §5.
+   helpers; add the image-blob length guard per Design §5. This converts every
+   `read_consume_pod`/`advance_window` use in the file, so remove those now-unused imports
+   from `parsing.rs` (they would otherwise fail the Step 8 clippy gate).
 5. **Logging** — add the choke-point `error!` on parse failure in
    `rust/analytics/src/payload.rs` per Design §6.
 6. **Transit tests** — new `rust/transit/tests/test_corrupt_input.rs` per Design §7.
