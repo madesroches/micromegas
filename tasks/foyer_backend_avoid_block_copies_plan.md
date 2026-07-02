@@ -127,6 +127,10 @@ its own bytes, and the size-metadata `put` (`range_cache.rs:104`) builds a fresh
      `Some(entry.value().clone())`.
    - `put`: replace `self.cache.insert(key, value.to_vec())` with
      `self.cache.insert(key, value)`.
+   - Add `pub async fn close(&self) -> Result<()>` delegating to
+     `self.cache.close()` (`HybridCache::close`, foyer-0.14.1
+     `src/hybrid/cache.rs:393`), so the round-trip test can await the
+     background disk flush before reopening (see Testing Strategy).
 3. **`rust/object-cache/Cargo.toml`** — add `tempfile = "3.14"` to
    `[dev-dependencies]` (matching the version already used in `analytics/Cargo.toml`
    and `analytics-web-srv/Cargo.toml`); it backs the round-trip test's temp disk-tier
@@ -138,7 +142,8 @@ its own bytes, and the size-metadata `put` (`range_cache.rs:104`) builds a fresh
 ## Files to Modify
 - `rust/object-cache/Cargo.toml` — enable `bytes` `serde` feature; add
   `tempfile = "3.14"` to `[dev-dependencies]` for the round-trip test.
-- `rust/object-cache/src/foyer_backend.rs` — store `Bytes`, drop both copies.
+- `rust/object-cache/src/foyer_backend.rs` — store `Bytes`, drop both copies,
+  add `close()` for the test's flush-then-reopen sequence.
 - `rust/object-cache/tests/` — new round-trip test (see Testing Strategy).
 
 ## Trade-offs
@@ -189,10 +194,9 @@ off by default and the disk tier needs a temp dir). Verification:
    the first cache**: `insert` returns immediately and enqueues the disk write to a
    background flusher, so if the cache is dropped before that flush completes the
    region scan on reopen finds nothing for the key and `get` misses (an
-   intermittent failure). Call `HybridCache::close().await` on
-   the first cache before dropping/reopening it. `FoyerBackend` currently exposes no
-   such method, so the test must either add a way to await the flush on the wrapper
-   or build the `HybridCache` directly. Disk recovery on reopen is on by default
+   intermittent failure). Call `FoyerBackend::close().await` (the new method from
+   implementation step 2, which delegates to `HybridCache::close`) on the first
+   backend before dropping/reopening it. Disk recovery on reopen is on by default
    (`RecoverMode::Quiet`) and re-indexes prior entries, and files are opened without
    truncation, so the reopen path itself is sound once the flush has completed. Note
    that `ram_bytes` is not a byte budget
