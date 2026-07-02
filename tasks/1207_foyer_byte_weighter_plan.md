@@ -69,19 +69,42 @@ foyer's per-entry overhead, so real RSS will run modestly above `ram_bytes`;
 this matches how foyer byte budgets are normally used and is a large improvement
 over the effectively-unbounded status quo.)
 
+Note on sharding: foyer's memory tier defaults to 8 shards and divides
+`capacity` per shard (`shard_capacity = capacity / shards`) with eviction
+running per shard, so `ram_bytes` is a **total** byte budget spread across shards
+rather than a single flat bucket. This is fine for the 512 MB production bound.
+It does, however, break a small-capacity test: a byte payload is only evicted
+when a later key happens to hash into the same shard, and shard selection uses a
+per-process randomly-seeded `ahash::RandomState`, so eviction of any particular
+key is non-deterministic run-to-run. To make the test deterministic we expose a
+constructor that builds the memory tier with a single shard, so the byte budget
+is one bucket and the first over-budget put evicts `"key"`. Production keeps
+foyer's default sharding.
+
+Extract the builder into `new_with_shards(dir, ram_bytes, disk_bytes, shards)`
+which adds `.with_shards(shards)` after `.with_weighter(...)`; `new` delegates
+with foyer's default of `8` shards (equivalent to the current unset behavior),
+and the test uses `1`.
+
 ### Test update
 `round_trip_through_disk_tier` currently depends on `ram_bytes = 1` meaning "1
 entry". Under the byte weighter, `1` byte is smaller than any real payload, which
-would make every insert exceed capacity. Set the RAM capacity to exactly hold one
-4096-byte payload so the first `put("key", 4096 bytes)` fits and the following
-puts push it over the byte budget, evicting `"key"` to disk:
+would make every insert exceed capacity. Because foyer's memory tier defaults to
+8 shards and evicts per shard (with a per-process random shard seed), a small
+flat capacity would not deterministically evict `"key"` — the entry only leaves
+the RAM tier when a later key happens to hash into its shard. Build the backend
+with a single-shard memory tier (via `new_with_shards(..., 1)`) so the byte
+budget is one bucket, then set the RAM capacity to exactly hold one 4096-byte
+payload: the first `put("key", 4096 bytes)` fits and the following puts push the
+tier over the byte budget, deterministically evicting `"key"` to disk:
 
 ```rust
-// ram_bytes is a byte budget (a value.len() weighter is installed): capacity
-// 4096 exactly holds the first 4096-byte payload, so the subsequent puts push
-// the RAM tier over budget and evict "key", which enqueues it for the disk tier
+// ram_bytes is a byte budget (a value.len() weighter is installed) and the
+// memory tier uses a single shard, so the budget is one bucket: capacity 4096
+// exactly holds the first 4096-byte payload, so the subsequent puts push the
+// RAM tier over budget and evict "key", which enqueues it for the disk tier
 // (the disk write is triggered by memory eviction, not by insert itself).
-let backend = FoyerBackend::new(dir_path, 4096, 16 * 1024 * 1024)
+let backend = FoyerBackend::new_with_shards(dir_path, 4096, 16 * 1024 * 1024, 1)
     .await
     .expect("create backend");
 ```
@@ -91,16 +114,21 @@ The rest of the test (put/close/get, `close()` awaiting the flusher) is unchange
 ## Implementation Steps
 1. `rust/object-cache/src/foyer_backend.rs`: add `.with_weighter(|_key: &String, value: &Bytes| value.len())`
    immediately after `.memory(ram_bytes)`. `Bytes` is already imported (line 3).
-2. `rust/object-cache/tests/foyer_backend_tests.rs`: change the `FoyerBackend::new`
-   RAM argument from `1` to `4096` and rewrite the comment (lines 26-30) to
-   describe byte-budget eviction as above.
+   Extract the builder into `new_with_shards(dir, ram_bytes, disk_bytes, shards)`
+   that adds `.with_shards(shards)` after the weighter, and make `new` delegate to
+   it with the foyer default of `8` shards.
+2. `rust/object-cache/tests/foyer_backend_tests.rs`: switch the constructor call to
+   `FoyerBackend::new_with_shards(dir_path, 4096, 16 * 1024 * 1024, 1)` and rewrite
+   the comment (lines 26-30) to describe single-shard byte-budget eviction as above.
 3. From `rust/`: run `cargo fmt`, `cargo clippy --workspace -- -D warnings`, and
    `cargo test -p micromegas-object-cache --features foyer` (the test module is
    gated on `#![cfg(feature = "foyer")]`).
 
 ## Files to Modify
-- `rust/object-cache/src/foyer_backend.rs` — install byte weighter.
-- `rust/object-cache/tests/foyer_backend_tests.rs` — update RAM capacity arg + comment.
+- `rust/object-cache/src/foyer_backend.rs` — install byte weighter; add
+  `new_with_shards` helper and delegate `new` to it (default 8 shards).
+- `rust/object-cache/tests/foyer_backend_tests.rs` — use `new_with_shards(..., 1)`
+  + update comment.
 
 ## Trade-offs
 - **Chosen: install a byte weighter.** Makes the existing `ram_mb * 1024 * 1024`
