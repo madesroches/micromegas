@@ -86,9 +86,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let cache = RangeCache::new(origin_store, Arc::new(foyer), args.block_size, ns);
 
+    // Resolve the prefix allowlist. Fail-closed like auth: an empty list is a
+    // fatal config error unless `--allow-all-prefixes` is given (dev opt-out).
+    // Reject blank entries (e.g. a trailing comma in the env var) — a blank
+    // prefix would admit every key and silently defeat containment.
+    let allowed_prefixes = if args.allow_all_prefixes {
+        warn!("Object cache: serving ALL prefixes (--allow-all-prefixes)");
+        Vec::new()
+    } else {
+        let prefixes: Vec<String> = args
+            .allowed_prefixes
+            .iter()
+            .map(|p| p.trim().to_string())
+            .filter(|p| !p.is_empty())
+            .collect();
+        if prefixes.is_empty() {
+            return Err(
+                "No allowed prefixes configured. Set MICROMEGAS_OBJECT_CACHE_PREFIX \
+                 (comma-separated, e.g. `blobs,views`) or pass --prefix, \
+                 or use --allow-all-prefixes for development"
+                    .into(),
+            );
+        }
+        info!("Object cache: allowed prefixes {prefixes:?}");
+        prefixes
+    };
+
     let state = AppState {
         cache,
-        allowed_prefix: args.allowed_prefix.clone(),
+        allowed_prefixes,
     };
 
     let auth_provider: Option<Arc<dyn AuthProvider>> = if args.disable_auth {

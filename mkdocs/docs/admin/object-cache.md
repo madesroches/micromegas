@@ -41,7 +41,7 @@ docker run -d -p 8080:8080 \
 | `MICROMEGAS_OBJECT_CACHE_DISK_GB` | No | On-disk cache tier size (default `50`) |
 | `MICROMEGAS_OBJECT_CACHE_BLOCK_SIZE` | No | Cache block size in bytes (default `1048576`); must be > 0 |
 | `MICROMEGAS_OBJECT_CACHE_NAMESPACE` | No | Cache namespace (default: derived from the origin URI) |
-| `MICROMEGAS_OBJECT_CACHE_PREFIX` | No | Restrict served keys to this prefix |
+| `MICROMEGAS_OBJECT_CACHE_PREFIX` | Yes | Allowed key prefixes, comma-separated (e.g. `blobs,views`); only keys equal to or under a prefix are served. Required unless `--allow-all-prefixes` is set (development only) |
 | `MICROMEGAS_SHUTDOWN_GRACE_PERIOD_SECONDS` | No | Drain timeout on `SIGTERM` (default `25`) |
 
 Authenticating *against the origin* (e.g. AWS credentials) uses the same environment variables as every other Micromegas service's `MICROMEGAS_OBJECT_STORE_URI` — standard `object_store` crate variables such as `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_ENDPOINT`, `AWS_REGION`, `AWS_ALLOW_HTTP`.

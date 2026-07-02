@@ -206,9 +206,10 @@ docker run -d --name analytics-web \
 | `MICROMEGAS_OBJECT_CACHE_RAM_MB` | No | In-memory cache size (default `512`) |
 | `MICROMEGAS_OBJECT_CACHE_DISK_GB` | No | On-disk cache size (default `50`) |
 | `MICROMEGAS_OBJECT_CACHE_BLOCK_SIZE` | No | Cache block size in bytes (default `1048576`) |
-| `MICROMEGAS_OBJECT_CACHE_PREFIX` | No | Restrict access to a single key prefix |
+| `MICROMEGAS_OBJECT_CACHE_PREFIX` | Yes** | Allowed key prefixes, comma-separated (e.g. `blobs,views`); only matching keys are served |
 
 *Required unless running with `--disable-auth` (development mode only)
+**Required unless running with `--allow-all-prefixes` (development mode only)
 
 ### Analytics Web App
 | Variable | Required | Description |

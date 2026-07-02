@@ -7,6 +7,7 @@ This file documents the historical progress of the Micromegas project. For curre
 * **Caching:**
   * Add a standalone range-aware S3 read cache (`micromegas-object-cache-srv`) backed by local SSD (Foyer RAM+disk): new `micromegas-object-cache` crate (cache engine + client `ObjectStore` layer) and `object-cache-srv` HTTP binary, wired into `BlobStorage`; clients fall back to the direct store on miss/error. Adds an `object-cache.Dockerfile`, MinIO-backed local test scripts, and admin docs (#1122)
   * Store `FoyerBackend` cache values as `Bytes` instead of `Vec<u8>` to avoid full-block copies on every RAM-tier read hit and fill (#1195)
+  * Accept a list of allowed key prefixes in `object-cache-srv` (comma-separated `MICROMEGAS_OBJECT_CACHE_PREFIX` or repeated `--prefix`) so it can serve both `blobs/` and `views/`; the server now fails closed with no prefixes configured, requiring an explicit `--allow-all-prefixes` dev opt-out (#1204)
 * **OTLP:**
   * Populate the `processes.username` column from `process.owner` (falling back through `process.user.name`, `process.real_user.name`, then `user.name`) and fold the resolved owner into the `process_id` derivation so processes that differ only by owning user get distinct ids; re-derivation stays under the existing `NS_OTEL_PROCESS_V1` namespace
 * **Security:**

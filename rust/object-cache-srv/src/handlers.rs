@@ -1,5 +1,5 @@
 use crate::app_state::AppState;
-use crate::validation::{is_not_found, parse_range_header, validate_key};
+use crate::validation::{is_not_found, parse_range_header};
 use axum::{
     body::Body,
     extract::{Path, State},
@@ -8,6 +8,7 @@ use axum::{
 };
 use bytes::{BufMut, Bytes, BytesMut};
 use micromegas_object_cache::range_cache::RangeError;
+use micromegas_object_cache::validation::validate_key;
 use micromegas_tracing::prelude::*;
 use serde::Deserialize;
 
@@ -25,7 +26,7 @@ pub(crate) async fn head_handler(
     Path(key): Path<String>,
     State(state): State<AppState>,
 ) -> Result<Response, StatusCode> {
-    if let Err(e) = validate_key(&key, &state.allowed_prefix) {
+    if let Err(e) = validate_key(&key, &state.allowed_prefixes) {
         warn!("rejected key {key}: {e}");
         return Err(StatusCode::BAD_REQUEST);
     }
@@ -54,7 +55,7 @@ pub(crate) async fn get_range_handler(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Response, StatusCode> {
-    if let Err(e) = validate_key(&key, &state.allowed_prefix) {
+    if let Err(e) = validate_key(&key, &state.allowed_prefixes) {
         warn!("rejected key {key}: {e}");
         return Err(StatusCode::BAD_REQUEST);
     }
@@ -183,7 +184,7 @@ pub(crate) async fn post_ranges_handler(
     State(state): State<AppState>,
     body: Bytes,
 ) -> Result<Response, StatusCode> {
-    if let Err(e) = validate_key(&key, &state.allowed_prefix) {
+    if let Err(e) = validate_key(&key, &state.allowed_prefixes) {
         warn!("rejected key {key}: {e}");
         return Err(StatusCode::BAD_REQUEST);
     }

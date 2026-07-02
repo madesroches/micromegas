@@ -1,24 +1,5 @@
 use anyhow::{Context, Result, anyhow, bail};
 
-pub(crate) fn validate_key(key: &str, allowed_prefix: &str) -> Result<()> {
-    if key.is_empty() {
-        bail!("empty key");
-    }
-    if key.starts_with('/') {
-        bail!("key must not start with /");
-    }
-    if key.split('/').any(|seg| seg == "..") {
-        bail!("key must not contain ..");
-    }
-    if !allowed_prefix.is_empty()
-        && key != allowed_prefix
-        && !key.starts_with(&format!("{allowed_prefix}/"))
-    {
-        bail!("key {key} is outside allowed prefix {allowed_prefix}");
-    }
-    Ok(())
-}
-
 pub(crate) fn parse_range_header(
     header_value: &str,
     file_size: u64,

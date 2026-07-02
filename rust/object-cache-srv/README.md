@@ -48,7 +48,8 @@ All flags can be set via the listed environment variables.
 | `--disk-gb`                     | `MICROMEGAS_OBJECT_CACHE_DISK_GB`    | `50`           | Disk cache size, in GB.                                           |
 | `--block-size`                  | `MICROMEGAS_OBJECT_CACHE_BLOCK_SIZE` | `1048576`      | Cache block size, in bytes (must be > 0).                         |
 | `--namespace`                   | `MICROMEGAS_OBJECT_CACHE_NAMESPACE`  | _(derived)_    | Cache namespace. Defaults to the origin URI with the scheme stripped. |
-| `--allowed-prefix`              | `MICROMEGAS_OBJECT_CACHE_PREFIX`     | _(none)_       | If set, only keys under this prefix are served.                  |
+| `--prefix`                      | `MICROMEGAS_OBJECT_CACHE_PREFIX`     | _(required)_   | Allowed key prefixes. Repeat the flag or comma-separate the env var (e.g. `blobs,views`). Only keys equal to a prefix or under `{prefix}/` are served. The server refuses to start unless at least one is set or `--allow-all-prefixes` is passed. |
+| `--allow-all-prefixes`          |                                      | `false`        | Serve the entire bucket, bypassing prefix containment (development only). |
 | `--api-keys`                    | `MICROMEGAS_API_KEYS`                | _(none)_       | Key ring for request authentication.                             |
 | `--disable-auth`                |                                      | `false`        | Disable authentication (development only).                        |
 | `--shutdown-grace-period-seconds` | `MICROMEGAS_SHUTDOWN_GRACE_PERIOD_SECONDS` | `25`  | Graceful-shutdown grace period on `SIGTERM`.                     |
