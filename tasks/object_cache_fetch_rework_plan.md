@@ -190,7 +190,14 @@ loop {
 ```
 
 For a run owning multiple blocks, the run's effective priority is the most-urgent (min) of its
-blocks' priorities, and it selects on a promote signal shared across those blocks.
+blocks' priorities, and while parked it selects over **all of its owned blocks' per-entry `promote`
+signals** (merged, e.g. `select_all`/`FuturesUnordered`) — not a single signal shared across the
+run. Entries are created per block under the `inflight` mutex *before* coalescing partitions the
+owned blocks into runs, so run membership isn't known at entry creation; and a signal shared
+across several sub-run owners would lose wakeups exactly as §4 describes (`notify_one` stores one
+permit for at most one waiter). A joiner always fires the demanded block's own entry signal (§4),
+which wakes the owner of whichever run covers that block; the owner then re-evaluates its run's
+min priority.
 
 **Why per-GET, not per-block, permits**: the budget bounds concurrent *origin GETs* (a coalesced run
 is one GET), which is what maps to NIC bandwidth. This is what makes NIC-sizing meaningful.
