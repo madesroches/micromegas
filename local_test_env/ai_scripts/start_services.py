@@ -119,15 +119,23 @@ def start_object_cache(target_dir):
     listen = "127.0.0.1:8082"
     cache_url = f"http://{listen}"
 
+    # The cache serves exactly two datasets: lake blocks under `blobs/` and
+    # lakehouse partitions under `views/`, both carrying the lake-root prefix
+    # inside each request key. Allow just those two (server fails closed on an
+    # empty list), keeping local dev's containment aligned with production.
+    roots = ["blobs", "views"]
+    if prefix:
+        roots = [f"{prefix}/{r}" for r in roots]
+    allowed_prefixes = ",".join(roots)
+
     env = os.environ.copy()
     env["MICROMEGAS_OBJECT_CACHE_ORIGIN_URI"] = origin
-    if prefix:
-        env["MICROMEGAS_OBJECT_CACHE_PREFIX"] = prefix
+    env["MICROMEGAS_OBJECT_CACHE_PREFIX"] = allowed_prefixes
     env["MICROMEGAS_OBJECT_CACHE_DISK_PATH"] = disk_path
     env["MICROMEGAS_API_KEYS"] = json.dumps([{"name": "local-dev", "key": api_key}])
 
     print("🗄️  Starting Object Cache Server...")
-    print(f"   origin={origin} prefix={prefix or '(none)'} disk={disk_path}")
+    print(f"   origin={origin} prefixes={allowed_prefixes} disk={disk_path}")
     with open("/tmp/object_cache.log", "w") as log_file:
         cache_process = subprocess.Popen(
             [str(target_dir / "micromegas-object-cache-srv"), "--listen", listen],

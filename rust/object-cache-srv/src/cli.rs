@@ -34,8 +34,21 @@ pub(crate) struct Cli {
     #[clap(long, env = "MICROMEGAS_OBJECT_CACHE_NAMESPACE", default_value = "")]
     pub(crate) namespace: String,
 
-    #[clap(long, env = "MICROMEGAS_OBJECT_CACHE_PREFIX", default_value = "")]
-    pub(crate) allowed_prefix: String,
+    /// Allowed key prefixes (repeat `--prefix`, or comma-separate the env var,
+    /// e.g. `blobs,views`). A key is served only if it equals a prefix or lies
+    /// under `{prefix}/`. Empty by default: the server refuses to start unless
+    /// at least one prefix is set or `--allow-all-prefixes` is passed.
+    #[clap(
+        long = "prefix",
+        env = "MICROMEGAS_OBJECT_CACHE_PREFIX",
+        value_delimiter = ','
+    )]
+    pub(crate) allowed_prefixes: Vec<String>,
+
+    /// Serve the entire bucket, bypassing prefix containment (development mode
+    /// only). Mirrors `--disable-auth`: an explicit opt-out, never the default.
+    #[clap(long)]
+    pub(crate) allow_all_prefixes: bool,
 
     #[clap(long, env = "MICROMEGAS_API_KEYS", default_value = "")]
     pub(crate) api_keys: String,

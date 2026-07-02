@@ -25,7 +25,7 @@ pub(crate) async fn head_handler(
     Path(key): Path<String>,
     State(state): State<AppState>,
 ) -> Result<Response, StatusCode> {
-    if let Err(e) = validate_key(&key, &state.allowed_prefix) {
+    if let Err(e) = validate_key(&key, &state.allowed_prefixes) {
         warn!("rejected key {key}: {e}");
         return Err(StatusCode::BAD_REQUEST);
     }
@@ -54,7 +54,7 @@ pub(crate) async fn get_range_handler(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Response, StatusCode> {
-    if let Err(e) = validate_key(&key, &state.allowed_prefix) {
+    if let Err(e) = validate_key(&key, &state.allowed_prefixes) {
         warn!("rejected key {key}: {e}");
         return Err(StatusCode::BAD_REQUEST);
     }
@@ -183,7 +183,7 @@ pub(crate) async fn post_ranges_handler(
     State(state): State<AppState>,
     body: Bytes,
 ) -> Result<Response, StatusCode> {
-    if let Err(e) = validate_key(&key, &state.allowed_prefix) {
+    if let Err(e) = validate_key(&key, &state.allowed_prefixes) {
         warn!("rejected key {key}: {e}");
         return Err(StatusCode::BAD_REQUEST);
     }
