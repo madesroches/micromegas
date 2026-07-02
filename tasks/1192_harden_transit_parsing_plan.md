@@ -185,10 +185,19 @@ and `StreamMetadata` carries the block's identity:
 - In `parse_block`, on any `Err` from decompression, `read_dependencies`, or
   `parse_object_buffer`, emit an `error!` (via `micromegas_tracing::prelude::*`, already
   imported) including `stream.process_id`, `stream.stream_id`, and the error chain, then
-  propagate the `Err` unchanged. `parse_block` does not know the block id — callers that
-  do already attach it via `.with_context(|| format!("parse_block {}", block.block_id))`
-  (e.g. `log_entry.rs:246`, `measure.rs:289`), so the propagated error stays precise
-  while the choke-point log guarantees visibility.
+  propagate the `Err` unchanged. The two `decompress(...)` calls happen before
+  `CUSTOM_READERS.with(...)`, while `read_dependencies`/`parse_object_buffer` run inside
+  that closure, so this is two `error!` call sites (one per stage), not one — both log the
+  same fields. `parse_block` does not know the block id, and only two of the current
+  callers (`log_entry.rs:246`, `measure.rs:289`) attach it via
+  `.with_context(|| format!("parse_block {}", block.block_id))`; the rest
+  (`async_block_processing.rs`, `net_block_processing.rs`, `thread_block_processor.rs`,
+  `image_block_processor.rs`, `parse_block_table_function.rs`) do not, so for those paths
+  the choke-point log's `stream.process_id`/`stream.stream_id` is the only identity that
+  will appear in the logs — enough to locate the affected stream, but not the specific
+  block. Threading block identity into `parse_block` itself would require plumbing it
+  through several call chains that don't currently carry it down to that point, so that's
+  left out of scope here.
 - Error-path only: no logging is added to the hot success path.
 
 ### 7. Regression tests
@@ -205,9 +214,12 @@ odd-length, and truncated variants) — no Rust write path emits `StringCodec::W
 produced only by non-Rust interop clients), so sink-built blocks cannot exercise it.
 
 **Analytics corruption sweep** (`rust/analytics/tests/parse_corrupt_block_tests.rs`, new):
-reuse the block-builder pattern from `rust/analytics/tests/parse_alloc_test.rs` (build real
-log / span / property-set / image blocks via the sink streams, `encode_bin`, decode wire
-format, `decompress` the dependencies and objects buffers), then drive
+reuse the block-builder pattern from `rust/analytics/tests/parse_alloc_test.rs` (span and
+log blocks), `rust/analytics/tests/log_tests.rs` (property-set blocks, via
+`TaggedLogString`/`PropertySet::find_or_create`), and `rust/analytics/tests/image_tests.rs`
+(image blocks, via `ImageStream`/`ImageBlock`/`ImageEvent`) to build real log / span /
+property-set / image blocks via the sink streams, `encode_bin`, decode wire format,
+`decompress` the dependencies and objects buffers, then drive
 `read_dependencies` + `parse_object_buffer` directly (bypassing compression so each
 iteration is cheap). Unlike `parse_alloc_test` (N = 4096 events, ~130–200 KB decompressed),
 the sweep blocks must be built with a **small event count (N ≈ 8–32, just enough to
