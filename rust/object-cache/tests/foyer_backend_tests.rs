@@ -23,12 +23,12 @@ async fn round_trip_through_disk_tier() {
     let dir_path = dir.path().to_str().expect("utf8 path");
     let data = Bytes::from(vec![9u8; 4096]);
 
-    // ram_bytes is a max entry count here (no weighter is installed, so the
-    // default per-entry weight is 1): capacity 1 means each put below evicts
-    // the previous entry from the RAM tier, which is what enqueues it for the
-    // disk tier (the disk write is triggered by memory eviction, not by
-    // insert itself).
-    let backend = FoyerBackend::new(dir_path, 1, 16 * 1024 * 1024)
+    // ram_bytes is a byte budget (a value.len() weighter is installed) and the
+    // memory tier uses a single shard, so the budget is one bucket: capacity 4096
+    // exactly holds the first 4096-byte payload, so the subsequent puts push the
+    // RAM tier over budget and evict "key", which enqueues it for the disk tier
+    // (the disk write is triggered by memory eviction, not by insert itself).
+    let backend = FoyerBackend::new_with_shards(dir_path, 4096, 16 * 1024 * 1024, 1)
         .await
         .expect("create backend");
     backend.put("key".to_string(), data.clone()).await;
