@@ -189,7 +189,10 @@ All readers already return `Result`, so the changes are mechanical:
   needs no such guard: the existing count check at `parsing.rs:241-246` already bounds
   `begin + property_size` to `window.len()`. Its `read_consume_pod` header conversions
   still need the fallible treatment.)
-- Replace `advance_window` with `try_advance_window` where the offset is payload-derived.
+- Replace `advance_window` with `try_advance_window` where the offset is payload- or
+  metadata-derived (stream metadata is untrusted too — see Current State); this covers
+  every `advance_window` use in the file, including the three metadata-size advances at
+  `parsing.rs:100,137,207`.
 - `parse_image_event`: validate `len as usize <= object_window.len()` before
   `&object_window[..len as usize]`, mirroring the `parse_property_set` guard.
 
@@ -242,11 +245,14 @@ log blocks), `rust/analytics/tests/log_tests.rs` (property-set blocks, via
 property-set / image blocks via the sink streams, `encode_bin`, decode wire format,
 `decompress` the dependencies and objects buffers, then drive
 `read_dependencies` + `parse_object_buffer` directly (bypassing compression so each
-iteration is cheap). Unlike `parse_alloc_test` (N = 4096 events, ~130–200 KB decompressed),
-the sweep blocks must be built with a **small event count (N ≈ 8–32, just enough to
-include one of each event kind)** — the truncation sweep is O(len²), and a
-4096-event buffer would take far too long under `cargo test`; a few-KB buffer keeps the
-sweep in the milliseconds range:
+iteration is cheap). Note that what's reused from those files is the *block-builder*
+pattern only: `parse_alloc_test` drives parsing through the high-level `parse_block`,
+so the new test adds the decompress + direct-drive step itself, mirroring what
+`parse_block` does internally (`payload.rs:61-76`). Unlike `parse_alloc_test`
+(N = 4096 events), the sweep blocks must be built with a **small event count
+(N ≈ 8–32, just enough to include one of each event kind)** — the truncation sweep is
+O(len²), and a 4096-event buffer would take far too long under `cargo test`; a few-KB
+buffer keeps the sweep in the milliseconds range:
 
 - **Truncation sweep**: for every prefix length `0..buf.len()` of both buffers, parse and
   require a `Result` (any panic fails the test).
