@@ -281,7 +281,11 @@ pub async fn post_ranges_handler(
         }
     }
 
-    let permits_needed = permits_for_bytes(total_requested);
+    // Each range is written into the response body behind an 8-byte
+    // little-endian length prefix (see `buf.put_u64_le` below); account for
+    // that overhead so the permit budget matches the actual assembled size.
+    let response_bytes = total_requested.saturating_add(8 * req.ranges.len() as u64);
+    let permits_needed = permits_for_bytes(response_bytes);
     if permits_needed > state.memory_budget_mb {
         warn!(
             "rejected ranges for {key}: {total_requested} bytes exceeds the whole memory \

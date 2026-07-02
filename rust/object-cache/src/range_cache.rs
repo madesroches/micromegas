@@ -1,7 +1,7 @@
 use std::collections::{BTreeSet, HashMap};
 use std::ops::Range;
 use std::sync::atomic::{AtomicU8, Ordering};
-use std::sync::{Arc, Mutex as StdMutex};
+use std::sync::{Arc, Mutex as StdMutex, Weak};
 
 use anyhow::{Result, anyhow};
 use bytes::Bytes;
@@ -53,11 +53,17 @@ impl Priority {
     }
 }
 
-/// The set of keys submitted in one prefetch call. Used only when
+/// The set of entries submitted in one prefetch call. Used only when
 /// `promote_whole_batch` is enabled: a demand joiner into any sibling entry
 /// promotes every other entry in the batch, not just the one it joined.
+///
+/// Siblings are tracked by `Weak<InFlight>`, captured once each entry is
+/// created or joined, rather than by key string: a key can be removed from
+/// `FetchScheduler::inflight` and later reused by an unrelated fetch (e.g.
+/// after eviction), and promoting by key alone would then spuriously promote
+/// that new, logically unrelated `InFlight`.
 struct BatchState {
-    keys: Vec<String>,
+    entries: StdMutex<Vec<Weak<InFlight>>>,
 }
 
 type FetchResult = Result<Bytes, Arc<anyhow::Error>>;
@@ -69,6 +75,10 @@ struct InFlight {
     promote: Notify,
     result: watch::Sender<Option<FetchResult>>,
     batch: Option<Arc<BatchState>>,
+    /// Set by the first `fulfill()` call. Lets a `FulfillGuard`'s panic-path
+    /// fallback tell which entries in a partially-completed run already got
+    /// a real result, so it never clobbers one with a synthesized error.
+    fulfilled: std::sync::atomic::AtomicBool,
 }
 
 impl InFlight {
@@ -79,6 +89,7 @@ impl InFlight {
             promote: Notify::new(),
             result,
             batch,
+            fulfilled: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -92,10 +103,16 @@ impl InFlight {
         self.promote.notify_one();
     }
 
+    /// Deliver `result` to every joiner. Idempotent: only the first call
+    /// actually sends — later calls (notably a `FulfillGuard`'s panic-path
+    /// fallback racing a fetch that in fact completed normally) are no-ops,
+    /// so a real result is never overwritten by a synthesized error.
     fn fulfill(&self, result: FetchResult) {
-        // Only the owner (or its detached fetch task) ever calls this, and it
-        // does so at most once; a send error just means every waiter already
-        // dropped its receiver, which is harmless.
+        if self.fulfilled.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        // A send error just means every waiter already dropped its
+        // receiver, which is harmless.
         let _ = self.result.send(Some(result));
     }
 
@@ -163,14 +180,16 @@ impl FetchScheduler {
         prio: Priority,
         batch: Option<Arc<BatchState>>,
     ) -> Ownership {
-        let mut promote_batch: Option<Arc<BatchState>> = None;
+        let mut promote_batch: Option<(Arc<BatchState>, Arc<InFlight>)> = None;
         let ownership = {
             let mut map = self.inflight.lock().expect("inflight lock");
             if let Some(existing) = map.get(&key) {
                 if prio == Priority::Demand && existing.priority() == Priority::Prefetch {
                     existing.promote_to_demand();
-                    if self.promote_whole_batch {
-                        promote_batch = existing.batch.clone();
+                    if self.promote_whole_batch
+                        && let Some(bs) = existing.batch.clone()
+                    {
+                        promote_batch = Some((bs, existing.clone()));
                     }
                 }
                 Ownership::Joiner(existing.clone())
@@ -180,19 +199,23 @@ impl FetchScheduler {
                 Ownership::Owner(entry)
             }
         };
-        if let Some(bs) = promote_batch {
-            self.promote_batch_siblings(&bs, &key);
+        if let Some((bs, skip)) = promote_batch {
+            self.promote_batch_siblings(&bs, &skip);
         }
         ownership
     }
 
-    fn promote_batch_siblings(&self, batch: &BatchState, skip_key: &str) {
-        let map = self.inflight.lock().expect("inflight lock");
-        for k in &batch.keys {
-            if k == skip_key {
-                continue;
-            }
-            if let Some(entry) = map.get(k) {
+    /// Promote every sibling in `batch` other than `skip` to demand priority.
+    /// Siblings are resolved through `Weak<InFlight>` references captured at
+    /// batch-membership time, not by re-looking up their key in `inflight`:
+    /// the key may since have been removed and reused by an unrelated fetch,
+    /// and identity (not the key string) is what must match here.
+    fn promote_batch_siblings(&self, batch: &BatchState, skip: &Arc<InFlight>) {
+        let entries = batch.entries.lock().expect("batch lock");
+        for weak in entries.iter() {
+            if let Some(entry) = weak.upgrade()
+                && !Arc::ptr_eq(&entry, skip)
+            {
                 entry.promote_to_demand();
             }
         }
@@ -200,6 +223,60 @@ impl FetchScheduler {
 
     fn remove_entry(&self, key: &str) {
         self.inflight.lock().expect("inflight lock").remove(key);
+    }
+}
+
+/// Scope guard held by the task that owns one or more in-flight entries
+/// (either a single `size()` head or the members of one coalesced block
+/// run). If the owning task exits normally, it calls `disarm()` after
+/// fulfilling every entry and removing it from `FetchScheduler::inflight`.
+///
+/// If instead the task panics (e.g. `Bytes::slice` on a short origin read)
+/// tokio catches the unwind at the task boundary and silently drops the
+/// result, but this guard's `Drop` still runs during that unwind: it
+/// fulfills any not-yet-fulfilled entry with an error (the `fulfilled` flag
+/// on `InFlight` makes this a no-op for entries that already got a real
+/// result) and removes every entry from the map. Without this, a panicking
+/// owner would leave `fulfill()` never called, hanging every joiner
+/// (including the owner itself) forever and leaking the entry permanently.
+struct FulfillGuard {
+    scheduler: Arc<FetchScheduler>,
+    entries: Vec<(String, Arc<InFlight>)>,
+    armed: bool,
+}
+
+impl FulfillGuard {
+    fn new(scheduler: Arc<FetchScheduler>, entries: Vec<(String, Arc<InFlight>)>) -> Self {
+        Self {
+            scheduler,
+            entries,
+            armed: true,
+        }
+    }
+
+    /// Call once the normal completion path has fulfilled and removed every
+    /// entry, so the guard's `Drop` becomes a no-op.
+    fn disarm(mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for FulfillGuard {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        warn!(
+            "fetch task exited without completing normally (likely a panic); \
+             fulfilling {} in-flight entries with an error",
+            self.entries.len()
+        );
+        for (key, entry) in &self.entries {
+            entry.fulfill(Err(Arc::new(anyhow!(
+                "fetch task exited without producing a result (panic during fetch)"
+            ))));
+            self.scheduler.remove_entry(key);
+        }
     }
 }
 
@@ -383,6 +460,10 @@ impl RangeCache {
                 let meta_key_owned = meta_key.clone();
                 let task_entry = entry.clone();
                 tokio::spawn(async move {
+                    let guard = FulfillGuard::new(
+                        scheduler.clone(),
+                        vec![(meta_key_owned.clone(), task_entry.clone())],
+                    );
                     imetric!("range_cache_origin_head", "count", 1_u64);
                     match origin.head(&Path::from(key_owned.as_str())).await {
                         Ok(object_meta) => {
@@ -399,6 +480,7 @@ impl RangeCache {
                         }
                     }
                     scheduler.remove_entry(&meta_key_owned);
+                    guard.disarm();
                 });
                 let data = entry
                     .join()
@@ -458,10 +540,7 @@ impl RangeCache {
         // the one block it happened to touch (see `promote_whole_batch`).
         let batch = if prio == Priority::Prefetch {
             Some(Arc::new(BatchState {
-                keys: missing
-                    .iter()
-                    .map(|idx| format!("blk:{}:{key}:{idx}", self.ns))
-                    .collect(),
+                entries: StdMutex::new(Vec::with_capacity(missing.len())),
             }))
         } else {
             None
@@ -480,6 +559,12 @@ impl RangeCache {
                     entries.insert(idx, entry);
                 }
             }
+        }
+        // Record every member of this batch (owned or joined) as a promotion
+        // sibling, keyed by identity rather than by key string.
+        if let Some(bs) = &batch {
+            let mut list = bs.entries.lock().expect("batch lock");
+            list.extend(entries.values().map(Arc::downgrade));
         }
 
         let hint = match prio {
@@ -507,6 +592,14 @@ impl RangeCache {
             // request future dropped on client disconnect) can never strand
             // the other owned blocks or any joiners waiting on this run.
             tokio::spawn(async move {
+                let guard = FulfillGuard::new(
+                    scheduler.clone(),
+                    run_keys
+                        .iter()
+                        .cloned()
+                        .zip(run_entries.iter().cloned())
+                        .collect(),
+                );
                 let permit = acquire_run_permit(&scheduler, &run_entries).await;
                 let byte_start = run.start * block_size;
                 let byte_end = block_byte_range(run.end - 1, block_size, file_size).end;
@@ -541,6 +634,7 @@ impl RangeCache {
                 for k in &run_keys {
                     scheduler.remove_entry(k);
                 }
+                guard.disarm();
             });
         }
 
