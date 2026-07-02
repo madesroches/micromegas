@@ -271,3 +271,8 @@ off by default and the disk tier needs a temp dir). Verification:
 - Non-blocking, out of scope for #1195: should `FoyerBackend::new` accept a
   fixed hash builder so the disk tier survives process restarts by key? See
   "Why close/reopen doesn't work" above.
+- Non-blocking, out of scope for #1195: the RAM tier is bounded by entry count,
+  not bytes — `FoyerBackend::new` installs no weighter, so `.memory(ram_bytes)`
+  is a max entry count while the caller passes `ram_mb * 1024 * 1024`, leaving
+  the RAM tier effectively unbounded (OOM risk). Surfaced by the Testing
+  Strategy note above. Tracked in #1207.
