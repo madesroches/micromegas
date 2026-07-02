@@ -112,15 +112,18 @@ Two complementary streams:
 
 Draining is **event-driven**: on every discrete input event (key/mouse/scroll)
 the recorder modal calls `drain_operators()` so the ring is drained at
-per-keystroke cadence, well within the 32-operator hard cap. A ~1 s timer runs
+per-keystroke cadence, well within the 32-operator hard cap. A 0.1 s timer runs
 as a backstop for periods when the recorder modal is suspended or receiving only
 motion events.
 
-The ring is small and ordered (oldest→newest); each drain emits only the
-operators appended since the last drain. If the ring turned over entirely between
-two consecutive recorder events (e.g. a script/macro burst), a `possible gap`
-marker is logged rather than silently dropping — actions are never lost without a
-signal. Two metrics track capture health:
+The ring is small and ordered (oldest→newest); each drain emits the entries not
+seen on the previous drain, tracked by each entry's stable per-entry identity
+(`op.as_pointer()`, the address of the underlying Blender operator record)
+rather than by position — this is exact even when the recent operator history
+repeats a pattern. A gap is logged only when a *full* ring turns over entirely
+between two consecutive drains (e.g. a script/macro burst) — the sole condition
+that means entries were dropped before they could be seen — rather than
+silently dropping them. Two metrics track capture health:
 
 | Metric | Unit | Description |
 |---|---|---|

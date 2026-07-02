@@ -11,9 +11,16 @@ the log *message body*, never a metric dimension or log target.
 
 Draining is event-driven: ``recorder.py`` calls ``drain_operators()`` on every
 discrete input event via an injected callback, so the ring is drained at
-per-keystroke cadence rather than once per second. A ~1 s timer remains as a
-backstop for periods when the recorder modal is suspended (e.g. while a
+per-keystroke cadence rather than on a fixed schedule. A 0.1 s timer remains as
+a backstop for periods when the recorder modal is suspended (e.g. while a
 full-screen sub-modal is running) or receiving only motion events.
+
+New entries are identified by stable per-entry identity (``op.as_pointer()``),
+not by position: an entry's pointer is the address of its underlying
+``wmOperator`` node, which is allocated once and freed only when FIFO-dropped
+from the ring, so pointer-set membership across polls exactly determines what
+is new — including under a periodic or otherwise repeating operator history,
+where naive positional/string diffing is ambiguous.
 
 Alongside the action stream this module also logs mode / workspace / tool
 transitions and runtime add-on enable/disable — the bounded "what state was the
@@ -40,10 +47,11 @@ _POLL_INTERVAL_S: float = 0.1
 # Cap on a single action log message (bl_idname + name + params).
 _MAX_MSG_LEN: int = 4096
 
-# Full snapshot of operator bl_idnames seen on the previous poll. None until the
-# first poll. Used to compute which entries were appended since (see
-# _appended_start) — robust to ring rotation and repeated identical operators.
-_prev_op_idnames: "list[str] | None" = None
+# Set of op.as_pointer() values seen on the previous poll. None until the first
+# poll. A pointer is the stable identity of a wm.operators history entry (the
+# underlying wmOperator* node), so set membership across polls tells us exactly
+# which entries are new — no positional/string ambiguity.
+_prev_op_ptrs: "set[int] | None" = None
 
 # Blender hard-caps wm.operators at 32 entries; no Python API to resize.
 _ring_capacity: int = 32
@@ -75,43 +83,6 @@ def _metric_i(name: str, unit: str, value: int) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _appended_start(current: "list[str]", prev: "list[str]") -> "tuple[int, bool]":
-    """Index into ``current`` of the first operator appended since last poll.
-
-    The ring is oldest->newest. Between polls it appends new entries and may
-    drop old ones, so ``current == prev[d:] + appended`` for some drop count d.
-    A retained suffix ``prev[d:]`` aligns when it is a prefix of ``current``;
-    everything past it is new.
-
-    When a bl_idname pattern repeats across the rotation boundary, more than one
-    ``d`` aligns and the alignments disagree on how many entries are new. The
-    algorithm cannot tell which is correct, so to avoid *silently dropping*
-    genuinely-new operators we choose the alignment that reports the MOST new
-    entries (the largest valid ``d`` / shortest retained suffix), and flag the
-    ambiguity as a possible gap so the over-report is visible.
-
-    Returns ``(start_index, gap)``. ``gap`` is True when no non-empty suffix of
-    a non-empty ``prev`` aligns (the whole previous buffer rotated out), or when
-    the alignment is ambiguous (multiple valid ``d`` that disagree).
-    """
-    if not prev or not current:
-        # First poll, or the buffer was cleared (Blender clears operator history
-        # on file load) — nothing was missed, so this is not a gap.
-        return 0, False
-    # Collect every valid drop count, smallest -> largest tail length.
-    starts = [
-        len(prev[d:]) for d in range(len(prev)) if current[: len(prev) - d] == prev[d:]
-    ]
-    if not starts:
-        return 0, True  # full turnover — possible gap
-    # Smallest start == shortest retained suffix == most entries reported new:
-    # the conservative choice (never drop). Ambiguity (>1 distinct start) means
-    # the boundary pattern repeats, so flag a possible gap.
-    start = min(starts)
-    ambiguous = len(set(starts)) > 1
-    return start, ambiguous
-
-
 def _format_op(op) -> str:
     """`bl_idname (name) {params}` capped to _MAX_MSG_LEN.
 
@@ -137,13 +108,32 @@ def _format_op(op) -> str:
 
 
 def _poll_operators() -> None:
-    global _prev_op_idnames
+    global _prev_op_ptrs
     try:
         ops = list(bpy.context.window_manager.operators)  # oldest -> newest
     except Exception:
         return
-    idnames = [op.bl_idname for op in ops]
-    start, gap = _appended_start(idnames, _prev_op_idnames or [])
+    cur_ptrs = [op.as_pointer() for op in ops]
+    prev = _prev_op_ptrs
+
+    # New entries = those whose pointer was not present last poll, in buffer
+    # order. On the first poll (prev is None) nothing was missed, so we only
+    # establish the baseline and emit nothing.
+    if prev is None:
+        new_ops = []
+    else:
+        new_ops = [op for op, p in zip(ops, cur_ptrs) if p not in prev]
+
+    # Genuine loss (gap) — the ONLY real overflow condition: ring is full AND
+    # none of last poll's entries survive, meaning entries were FIFO-dropped
+    # before we ever saw them. Partial overlap proves we saw everything
+    # appended since the newest retained entry, so it is NOT a gap.
+    gap = (
+        prev is not None
+        and len(ops) >= _ring_capacity
+        and bool(prev)
+        and prev.isdisjoint(cur_ptrs)
+    )
     if gap:
         cap = _ring_capacity
         _log(
@@ -153,7 +143,7 @@ def _poll_operators() -> None:
         )
         _metric_i("blender.action_gap", "count", 1)
     n = 0
-    for op in ops[start:]:
+    for op in new_ops:
         try:
             _log(_b.LEVEL_TRACE, "blender.action", _format_op(op))
             n += 1
@@ -161,7 +151,7 @@ def _poll_operators() -> None:
             pass
     if n > 0:
         _metric_i("blender.action_captured", "count", n)
-    _prev_op_idnames = idnames
+    _prev_op_ptrs = set(cur_ptrs)
 
 
 def drain_operators() -> None:
@@ -250,14 +240,14 @@ def register() -> None:
 
 
 def unregister() -> None:
-    global _prev_op_idnames, _last_mode, _last_workspace, _last_tool, _last_addons
+    global _prev_op_ptrs, _last_mode, _last_workspace, _last_tool, _last_addons
     try:
         if bpy.app.timers.is_registered(_poll_timer):
             bpy.app.timers.unregister(_poll_timer)
     except Exception:
         pass
     # Reset state so a re-register starts clean (no stale anchor/transitions).
-    _prev_op_idnames = None
+    _prev_op_ptrs = None
     _last_mode = None
     _last_workspace = None
     _last_tool = None
