@@ -1,5 +1,12 @@
 # FoyerBackend: Avoid Full-Block Copies Plan
 
+## Status: Implemented
+Implemented in commit `3e13d12c3` on branch `cache`. The core change (store
+`Bytes`, drop both copies, enable `bytes/serde`) landed exactly as designed
+below. The round-trip test's synchronization strategy deviated from the
+original Testing Strategy — see the note at the top of that section for what
+changed and why.
+
 ## Overview
 `FoyerBackend` currently stores cache values as `Vec<u8>` and copies the entire
 block on every read hit and every fill. At the 1 MiB default block size this is
@@ -175,6 +182,15 @@ the existing `RangeCacheBackend` interface. The `RangeCache` doc comment
 
 ## Testing Strategy
 
+> **Deviation from the plan as written:** the close/reopen design below turned
+> out to be fundamentally broken and was not implementable as specified. See
+> "Why close/reopen doesn't work" underneath step 2 for the root cause, and
+> "What was actually implemented" for the replacement. This was discovered
+> empirically while writing the test — the storage-layer recovery machinery
+> (regions, indexer) works exactly as this section predicted, but a step above
+> that (key hashing) makes the recovered data unreachable by key across a
+> reopen, which the plan did not anticipate.
+
 There are currently no dedicated `FoyerBackend` tests (the `foyer` feature is
 off by default and the disk tier needs a temp dir). Verification:
 
@@ -207,8 +223,51 @@ off by default and the disk tier needs a temp dir). Verification:
    entries than the count-based capacity would also work). Only after a memory miss
    does the `bytes`/bincode deserialize half of the round-trip run. Use a small
    `ram_bytes`/`disk_bytes` so the test is cheap.
-3. **Full CI**: `python3 build/rust_ci.py` from `rust/`.
+
+   **Why close/reopen doesn't work:** `foyer::HybridCacheBuilder` defaults to
+   `ahash::RandomState::default()` as its hash builder, and `FoyerBackend::new`
+   never overrides it. ahash's default `RandomState` picks a **fresh random
+   seed per instance** — confirmed via ahash's own docs ("Each instance
+   created in this way will have a unique set of keys") and empirically: a
+   second `FoyerBackend::new()` against the same directory, in the same
+   process, hashes the identical key string to a different value than the
+   first instance did. The region/indexer recovery itself works exactly as
+   predicted above (recovery logs correctly report N regions and total
+   entries recovered), but `get`/`obtain` by key on the reopened instance
+   misses **100% of the time**, because the lookup hash never matches the
+   hash the entry was written under. This is not fixable from the test side
+   without adding a way to inject a fixed `with_hash_builder(...)` into
+   `FoyerBackend::new`, which is out of scope for #1195 (see Coordination).
+
+   **What was actually implemented:** the test forces the RAM-tier eviction
+   and disk read within a **single** `FoyerBackend` instance instead of
+   reopening a second one. Inserting past the count-based RAM capacity evicts
+   the earlier entry and enqueues it to the disk tier (the same mechanism
+   described above), and a subsequent `get` on that *same* instance misses
+   RAM and falls through to `storage.load`, exercising the identical
+   bytes/bincode serialize-deserialize path — without ever needing a second
+   instance or a hash-builder mismatch to appear. `FoyerBackend::close()` is
+   still used, but as a deterministic wait for the background flusher (so the
+   read can't race the write) rather than as a step before reopening. This
+   also means no `tokio::time::sleep` was needed anywhere in the test — the
+   original design's timing assumptions (and any sleep-based fallback) are
+   moot once synchronization is done via `close()`.
+
+   This also surfaces a **pre-existing, out-of-scope observation**: because
+   `FoyerBackend::new` never sets a fixed hash builder,
+   `FoyerBackend`'s disk tier is effectively unreachable by key after a real
+   process restart (not just in this test) — a fresh process gets a fresh
+   random seed on every startup. Whether that matters depends on whether
+   disk-tier persistence *across restarts* was ever an assumed benefit
+   elsewhere; it isn't exercised or claimed by this plan, and fixing it is not
+   part of #1195.
+3. **Full CI**: `python3 build/rust_ci.py` from `rust/`. Ran clean (native +
+   WASM pipelines) after implementation.
 
 ## Open Questions
-- None blocking. The `bytes` serde feature is confirmed available and Foyer's
-  `StorageValue` bounds are satisfied; the change is mechanical.
+- None blocking the core change. The `bytes` serde feature is confirmed
+  available and Foyer's `StorageValue` bounds are satisfied; the change is
+  mechanical.
+- Non-blocking, out of scope for #1195: should `FoyerBackend::new` accept a
+  fixed hash builder so the disk tier survives process restarts by key? See
+  "Why close/reopen doesn't work" above.
