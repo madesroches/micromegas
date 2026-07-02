@@ -76,9 +76,8 @@ input):
   dependency ids.
 - `rust/tracing/src/parsing.rs` — every custom reader consumes headers with the panicking
   `read_consume_pod` and slices fixed-size sub-windows
-  (`&object_window[0..string_ref_metadata.size]` at `parsing.rs:97,134,204`,
-  `&window[begin..begin + property_size]` at `parsing.rs:250`) without checking the window
-  is long enough.
+  (`&object_window[0..string_ref_metadata.size]` at `parsing.rs:97,134,204`) without
+  checking the window is long enough.
 - `rust/tracing/src/parsing.rs:241-246` (`parse_property_set`) already has the guard
   pattern we want to generalize: validate the payload-derived count against the remaining
   window and `bail!` on mismatch.
@@ -182,11 +181,14 @@ All readers already return `Result`, so the changes are mechanical:
   (with `.with_context()` naming the field, matching the existing style).
 - Before the fixed-size sub-window slices — `&object_window[0..string_ref_metadata.size]`
   (`StaticStringRef` metadata) in the two log/span interop readers at `parsing.rs:97,134`,
-  `&object_window[0..stringid_metadata.size]` (`StringId` metadata) in
-  `parse_log_string_interop_event` at `parsing.rs:204`, and
-  `&window[begin..begin + property_size]` in `parse_property_set` at `parsing.rs:250` —
+  and `&object_window[0..stringid_metadata.size]` (`StringId` metadata) in
+  `parse_log_string_interop_event` at `parsing.rs:204` —
   validate the window length and `bail!` — or slice via
   `object_window.get(..size).context(...)?`.
+  (`parse_property_set`'s `&window[begin..begin + property_size]` slice at `parsing.rs:250`
+  needs no such guard: the existing count check at `parsing.rs:241-246` already bounds
+  `begin + property_size` to `window.len()`. Its `read_consume_pod` header conversions
+  still need the fallible treatment.)
 - Replace `advance_window` with `try_advance_window` where the offset is payload-derived.
 - `parse_image_event`: validate `len as usize <= object_window.len()` before
   `&object_window[..len as usize]`, mirroring the `parse_property_set` guard.
