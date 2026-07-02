@@ -144,7 +144,7 @@ Why this is correct for every observed mutation mode of `wm.operators`:
   entry already in the ring — re-emitting pre-capture history, and pure
   duplicates on a mid-session re-register. Establish-baseline-and-emit-nothing
   is the correct "what is new" semantics; the affected test
-  (`test_poll_emits_new_actions_with_params`) is realigned in step 3.
+  (`test_poll_emits_new_actions_with_params`) is realigned in step 2.
 - **Stable buffer** (the storm case): all pointers already in `prev_set` →
   `new_ops == []`, `gap` false (partial/total overlap) → **zero emissions, zero
   WARNs**. Storm eliminated.
@@ -170,7 +170,10 @@ Why this is correct for every observed mutation mode of `wm.operators`:
 - `_appended_start()` and its `global` usages are **deleted**.
 
 ### What does not change
-- `_format_op()`, the WARN text, both metric names/semantics
+- `_format_op()`, the WARN text (kept verbatim — including the literal
+  "possible gap" wording, even though the new gap condition genuinely means
+  FIFO loss — so existing telemetry queries matching that message keep
+  working), both metric names/semantics
   (`blender.action_gap`, `blender.action_captured` gated on `n>0`),
   `_ring_capacity`, the timer, transition polling, `drain_operators()`, and all
   `__init__.py`/`recorder.py` wiring. Aside from the intentional first-poll
@@ -203,15 +206,14 @@ input event ─► recorder.modal() ─(non-motion)─► actions.drain_operator
      raise on a stored entry (`op.bl_idname` at `:123` is unguarded) — and the
      `_prev_op_ptrs = set(cur_ptrs)` update must run unconditionally after the
      loop, so a failed emission never re-emits already-seen ops on the next poll.
-   - Delete `_appended_start()` (`:78-112`) and remove it from the `global`
-     declaration; keep `_ring_capacity` in `unregister()`'s reset list, and swap
-     `_prev_op_idnames` → `_prev_op_ptrs` there (`:253, :260`).
-2. **`tests/conftest.py` — pointer-capable fake operators.** The fake ring holds
-   plain objects; give the test `FakeOp` a stable `as_pointer()` (e.g. return
-   `id(self)`) so identity semantics are exercised. (`FakeOp` lives in
-   `test_actions.py`; add the method there — see step 3.)
-3. **`tests/test_actions.py` — retarget tests to identity.**
-   - Add `def as_pointer(self): return id(self)` to `FakeOp` (`:8-17`).
+   - Delete `_appended_start()` (`:78-112`); update the `global
+     _prev_op_idnames` declaration in `_poll_operators()` (`:140`) to
+     `_prev_op_ptrs`; and swap `_prev_op_idnames` → `_prev_op_ptrs` in
+     `unregister()` (`:253, :260`).
+2. **`tests/test_actions.py` — retarget tests to identity.**
+   - Add `def as_pointer(self): return id(self)` to `FakeOp` (`:8-17`) — the
+     fake ring holds plain objects, and a stable per-instance pointer is what
+     lets the tests exercise identity semantics.
    - Update the autouse `_wire` fixture (`:20-29`): change its per-test reset
      line `actions._prev_op_idnames = None` (`:23`) to
      `actions._prev_op_ptrs = None` — otherwise it resets a dead attribute and
@@ -264,14 +266,19 @@ input event ─► recorder.modal() ─(non-motion)─► actions.drain_operator
      `test_gap_warn_includes_ring_capacity`) must switch to the true-gap setup
      (full ring of `_ring_capacity` distinct instances fully replaced) — their
      current 2-entry turnover is no longer a gap.
-4. **Docs** — `mkdocs/docs/blender/index.md:113-128` and `blender/README.md:
+3. **Docs** — `mkdocs/docs/blender/index.md:113-128` and `blender/README.md:
    175-181`: replace "emits only the operators *appended since* the last drain
    … if the ring turned over entirely … a gap marker" with the identity model:
    *each drain emits entries not seen on the previous drain (tracked by stable
    per-entry identity); a gap is logged only when a full ring turns over entirely
    between drains — the sole condition indicating true FIFO loss.* Update the
-   `actions.py` module docstring (`:1-24`) accordingly (it currently says the
-   drain "diffs against `_prev_op_idnames`").
+   `actions.py` module docstring (`:1-24`) accordingly (it currently describes
+   the event-driven drain with a timer backstop; extend it to state that new
+   entries are identified by stable per-entry identity). While rewriting these
+   three passages, also correct the stale "~1 s" backstop-timer claim to
+   "0.1 s" (`_POLL_INTERVAL_S = 0.1`, `actions.py:38`) in all three:
+   `mkdocs/docs/blender/index.md:115`, `blender/README.md:175`, and the module
+   docstring (`actions.py:14`).
 
 ## Files to Modify
 - `blender/micromegas_blender/actions.py`
@@ -310,11 +317,13 @@ input event ─► recorder.modal() ─(non-motion)─► actions.drain_operator
 - `mkdocs/docs/blender/index.md` (`:113-128`) — rewrite the drain description to
   the identity model; the metrics table is unchanged.
 - `blender/README.md` (`:175-181`) — same, briefer.
-- `actions.py` module docstring (`:1-24`) — describe identity-based draining;
-  drop the `_prev_op_idnames`/append-diff wording.
+- `actions.py` module docstring (`:1-24`) — describe identity-based draining
+  alongside the existing event-driven drain description.
+- All three passages above — correct the stale "~1 s" backstop-timer claim to
+  "0.1 s" while rewriting (see step 3).
 
 ## Testing Strategy
-- **Unit** (`test_actions.py`, rewritten per step 3): the storm-regression test
+- **Unit** (`test_actions.py`, rewritten per step 2): the storm-regression test
   (repoll a stable buffer many times → zero re-emission, zero gaps) is the
   primary guard; plus periodic-tail, repeated-clicks, append+drop, true-gap, and
   non-full-turnover cases. Metric tests (`action_gap`, `action_captured` gated on
