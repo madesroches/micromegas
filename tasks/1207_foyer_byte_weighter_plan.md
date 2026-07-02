@@ -146,9 +146,10 @@ The rest of the test (put/close/get, `close()` awaiting the flusher) is unchange
 
 ## Documentation
 No dedicated docs page covers `FoyerBackend` internals. The `ram_mb` semantics
-are described only in code comments and the CLI help; the CLI help text
-(`cli.rs:18`, `MICROMEGAS_OBJECT_CACHE_RAM_MB`) already implies a memory-size
-budget, which becomes accurate after this change. No doc updates required.
+are not documented in help text or code comments; the MB unit is implied only by
+the field/env-var name (`ram_mb` / `MICROMEGAS_OBJECT_CACHE_RAM_MB`, `cli.rs:18`),
+and that implied byte-budget meaning becomes accurate after this change. No doc
+updates required.
 
 ## Testing Strategy
 - Update and run `round_trip_through_disk_tier` (feature `foyer`) to confirm the
