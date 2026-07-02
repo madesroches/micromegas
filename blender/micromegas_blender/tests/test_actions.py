@@ -1,4 +1,4 @@
-"""Tests for actions.py: operator-history drain + diff logic."""
+"""Tests for actions.py: operator-history drain (identity-based)."""
 
 import pytest
 
@@ -16,11 +16,14 @@ class FakeOp:
             raise RuntimeError("params unavailable on stored history entry")
         return self._kw
 
+    def as_pointer(self):
+        return id(self)
+
 
 @pytest.fixture(autouse=True)
 def _wire(rec_lib, fake_bpy):
     actions.set_context(rec_lib, object())
-    actions._prev_op_idnames = None
+    actions._prev_op_ptrs = None
     actions._last_mode = None
     actions._last_workspace = None
     actions._last_tool = None
@@ -37,86 +40,27 @@ def _set_ops(fake_bpy, ops):
     fake_bpy.context.window_manager.operators = ops
 
 
-# --- _appended_start (pure diff logic) -------------------------------------
-
-
-def test_first_poll_treats_all_as_new_no_gap():
-    start, gap = actions._appended_start(["a", "b"], [])
-    assert (start, gap) == (0, False)
-
-
-def test_no_change_emits_nothing():
-    start, gap = actions._appended_start(["a", "b", "c"], ["a", "b", "c"])
-    assert (start, gap) == (3, False)
-
-
-def test_appended_entries_detected():
-    start, gap = actions._appended_start(["a", "b", "c", "d"], ["a", "b"])
-    assert (start, gap) == (2, False)
-    # new entries = current[start:] == ["c", "d"]
-
-
-def test_repeated_identical_operators_not_dropped():
-    # All-identical entries make every drop count align, so the alignment is
-    # ambiguous. The conservative policy reports the MOST new entries (never
-    # silently drops) and flags the ambiguity as a possible gap.
-    current = ["G", "G", "G", "G", "G"]
-    start, gap = actions._appended_start(current, ["G", "G", "G", "G"])
-    assert gap is True
-    assert current[start:] == ["G", "G", "G", "G"]
-
-
-def test_repeated_boundary_pattern_not_dropped():
-    # bl_idname pattern repeats across the rotation boundary: prev[1:] and prev[3:]
-    # both prefix `current`, disagreeing on how many entries are new. The greedy
-    # smallest-d choice (start=3) would report only ["X", "Y"], silently dropping
-    # the other two. The conservative policy reports the most new entries and
-    # flags the ambiguity.
-    current = ["Y", "X", "Y", "X", "Y"]
-    start, gap = actions._appended_start(current, ["X", "Y", "X", "Y"])
-    assert gap is True
-    assert current[start:] == ["X", "Y", "X", "Y"]
-
-
-def test_ring_rotation_emits_only_new():
-    # 'a' rotated out, 'e' appended.
-    start, gap = actions._appended_start(["b", "c", "d", "e"], ["a", "b", "c", "d"])
-    assert gap is False
-    assert ["b", "c", "d", "e"][start:] == ["e"]
-
-
-def test_full_turnover_flags_gap():
-    start, gap = actions._appended_start(["x", "y", "z"], ["a", "b", "c"])
-    assert gap is True
-    assert start == 0
-
-
-def test_cleared_buffer_is_not_a_gap():
-    # Blender clears operator history on file load — empty current, no gap.
-    start, gap = actions._appended_start([], ["a", "b", "c"])
-    assert (start, gap) == (0, False)
-
-
 # --- _poll_operators (integration over the fake ring) ----------------------
 
 
 def test_poll_emits_new_actions_with_params(rec_lib, fake_bpy):
-    _set_ops(fake_bpy, [FakeOp("OBJECT_OT_select_all")])
-    actions._poll_operators()
+    select_all = FakeOp("OBJECT_OT_select_all")
+    _set_ops(fake_bpy, [select_all])
+    actions._poll_operators()  # first poll: baseline only, nothing emitted
     _set_ops(
         fake_bpy,
         [
-            FakeOp("OBJECT_OT_select_all"),
+            select_all,
             FakeOp("MESH_OT_primitive_cube_add", name="Add Cube", kw={"size": 2.0}),
         ],
     )
     actions._poll_operators()
 
     msgs = _action_msgs(rec_lib)
-    assert len(msgs) == 2  # select_all on first poll, cube_add on second
-    assert "MESH_OT_primitive_cube_add" in msgs[1]
-    assert "Add Cube" in msgs[1]
-    assert "size" in msgs[1]  # parameters captured when available
+    assert len(msgs) == 1  # only cube_add is new; select_all was in the baseline
+    assert "MESH_OT_primitive_cube_add" in msgs[0]
+    assert "Add Cube" in msgs[0]
+    assert "size" in msgs[0]  # parameters captured when available
 
 
 def test_poll_no_change_emits_nothing(rec_lib, fake_bpy):
@@ -139,22 +83,115 @@ def test_poll_params_unavailable_keeps_bl_idname(rec_lib, fake_bpy):
 
 
 def test_poll_overflow_logs_gap_marker(rec_lib, fake_bpy):
-    _set_ops(fake_bpy, [FakeOp("A"), FakeOp("B"), FakeOp("C")])
+    # Full ring, entirely replaced by new instances between polls: the ONE
+    # genuine loss condition.
+    cap = actions._ring_capacity
+    _set_ops(fake_bpy, [FakeOp("A") for _ in range(cap)])
     actions._poll_operators()
-    # Entire buffer turned over between polls.
-    _set_ops(fake_bpy, [FakeOp("X"), FakeOp("Y"), FakeOp("Z")])
+    new_ops = [FakeOp("X") for _ in range(cap)]
+    _set_ops(fake_bpy, new_ops)
     actions._poll_operators()
 
     gap_logs = [m for _l, t, m in rec_lib.logs if t == "blender.action" and "gap" in m]
     assert gap_logs
-    # All three new entries are still emitted (never silently dropped).
+    # All new entries are still emitted (never silently dropped).
+    captured_msgs = [m for m in _action_msgs(rec_lib) if "gap" not in m]
+    assert len(captured_msgs) == cap
+
+
+def test_poll_non_full_turnover_is_not_a_gap(rec_lib, fake_bpy):
+    # Small buffer (below ring capacity) fully replaced between polls — this is
+    # a clear (or a very small session), not overflow, so no gap.
+    _set_ops(fake_bpy, [FakeOp("A"), FakeOp("B"), FakeOp("C")])
+    actions._poll_operators()
+    _set_ops(fake_bpy, [FakeOp("X"), FakeOp("Y"), FakeOp("Z")])
+    actions._poll_operators()
+
+    gap_logs = [m for _l, t, m in rec_lib.logs if t == "blender.action" and "gap" in m]
+    assert not gap_logs
     assert any("X" in m for m in _action_msgs(rec_lib))
+
+
+def test_poll_stable_buffer_storm_regression(rec_lib, fake_bpy):
+    # Same instances re-polled many times: this is the exact production bug
+    # (periodic/stable operator history polled by the backstop timer while the
+    # recorder modal is suspended). Must produce zero emissions and zero gaps
+    # after the baseline poll.
+    ops = [
+        FakeOp("VIEW3D_OT_select"),
+        FakeOp("TRANSFORM_OT_translate"),
+        FakeOp("OBJECT_OT_editmode_toggle"),
+    ]
+    _set_ops(fake_bpy, ops)
+    actions._poll_operators()  # baseline
+    for _ in range(10):
+        actions._poll_operators()
+
+    assert _action_msgs(rec_lib) == []
+    assert [
+        m for _l, t, m in rec_lib.logs if t == "blender.action" and "gap" in m
+    ] == []
+
+
+def test_poll_periodic_tail_no_false_gap(rec_lib, fake_bpy):
+    # Repeating idnames across distinct instances (what confused the old
+    # positional string diff) must not trigger re-emission or a false gap once
+    # stable.
+    ops = [
+        FakeOp("VIEW3D_OT_select"),
+        FakeOp("TRANSFORM_OT_translate"),
+        FakeOp("OBJECT_OT_editmode_toggle"),
+        FakeOp("VIEW3D_OT_select"),
+        FakeOp("TRANSFORM_OT_translate"),
+        FakeOp("OBJECT_OT_editmode_toggle"),
+    ]
+    _set_ops(fake_bpy, ops)
+    actions._poll_operators()  # baseline
+    actions._poll_operators()  # unchanged
+
+    assert _action_msgs(rec_lib) == []
+    assert [
+        m for _l, t, m in rec_lib.logs if t == "blender.action" and "gap" in m
+    ] == []
+
+
+def test_poll_repeated_identical_clicks_all_captured(rec_lib, fake_bpy):
+    # Distinct instances sharing a bl_idname must each be captured — the old
+    # string diff could not distinguish these.
+    _set_ops(fake_bpy, [])
+    actions._poll_operators()  # baseline
+
+    clicks = [FakeOp("VIEW3D_OT_select") for _ in range(5)]
+    accumulated = []
+    for click in clicks:
+        accumulated.append(click)
+        _set_ops(fake_bpy, list(accumulated))
+        actions._poll_operators()
+
+    msgs = _action_msgs(rec_lib)
+    assert len(msgs) == 5
+
+
+def test_poll_append_and_fifo_drop_emits_only_new(rec_lib, fake_bpy):
+    a, b, c = FakeOp("A"), FakeOp("B"), FakeOp("C")
+    _set_ops(fake_bpy, [a, b, c])
+    actions._poll_operators()  # baseline
+    d = FakeOp("D")
+    _set_ops(fake_bpy, [b, c, d])  # a dropped (FIFO), d appended
+    actions._poll_operators()
+
+    msgs = _action_msgs(rec_lib)
+    assert len(msgs) == 1
+    assert "D" in msgs[0]
+    assert not [m for _l, t, m in rec_lib.logs if t == "blender.action" and "gap" in m]
 
 
 # --- drain_operators (public delegation) -----------------------------------
 
 
 def test_drain_operators_delegates_to_poll(rec_lib, fake_bpy):
+    _set_ops(fake_bpy, [])
+    actions._poll_operators()  # baseline
     _set_ops(fake_bpy, [FakeOp("OBJECT_OT_delete")])
     actions.drain_operators()
     assert any("OBJECT_OT_delete" in m for m in _action_msgs(rec_lib))
@@ -164,9 +201,10 @@ def test_drain_operators_delegates_to_poll(rec_lib, fake_bpy):
 
 
 def test_gap_emits_action_gap_metric(rec_lib, fake_bpy):
-    _set_ops(fake_bpy, [FakeOp("A"), FakeOp("B")])
+    cap = actions._ring_capacity
+    _set_ops(fake_bpy, [FakeOp("A") for _ in range(cap)])
     actions._poll_operators()
-    _set_ops(fake_bpy, [FakeOp("X"), FakeOp("Y")])
+    _set_ops(fake_bpy, [FakeOp("X") for _ in range(cap)])
     actions._poll_operators()
 
     gap_metrics = [
@@ -177,9 +215,10 @@ def test_gap_emits_action_gap_metric(rec_lib, fake_bpy):
 
 
 def test_gap_warn_includes_ring_capacity(rec_lib, fake_bpy):
-    _set_ops(fake_bpy, [FakeOp("A"), FakeOp("B")])
+    cap = actions._ring_capacity
+    _set_ops(fake_bpy, [FakeOp("A") for _ in range(cap)])
     actions._poll_operators()
-    _set_ops(fake_bpy, [FakeOp("X"), FakeOp("Y")])
+    _set_ops(fake_bpy, [FakeOp("X") for _ in range(cap)])
     actions._poll_operators()
 
     gap_logs = [m for _l, t, m in rec_lib.logs if t == "blender.action" and "gap" in m]

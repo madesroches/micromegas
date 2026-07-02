@@ -28,6 +28,7 @@ This file documents the historical progress of the Micromegas project. For curre
   * Expand the Blender process fingerprint and add Python exception capture via `sys.excepthook` plus semantic user-action capture, closing root-cause-analysis telemetry gaps (#1168)
   * Log add-on version and git commit hash on registration for easier triaging of field reports
   * Fix operator-history overflow gaps: drain the ring on every discrete input event via the recorder modal callback (per-keystroke cadence), lower the timer backstop from 1 s to 0.1 s, and set ring capacity to the correct Blender hard-cap of 32; adds `blender.action_gap` and `blender.action_captured` metrics (#1181)
+  * Replace positional `bl_idname` string-diffing of the operator-history ring with per-entry object identity (`op.as_pointer()`) tracking, making new-entry detection exact and eliminating the false-gap WARN and duplicate action-log storm on repeating operator histories; gap detection reduces to a true full-ring turnover (#1181)
 
 ## June 2026 - v0.26.0
 
