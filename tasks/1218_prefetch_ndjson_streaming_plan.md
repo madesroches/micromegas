@@ -73,7 +73,9 @@ so `reqwest::Body::wrap_stream` would add complexity without reducing peak memor
 ## Implementation Steps
 
 1. `rust/object-cache/src/prefetch.rs`: delete `PrefetchRequest`; update module/type docs to
-   describe the NDJSON wire format.
+   describe the NDJSON wire format. Also update `rust/object-cache/tests/prefetch_tests.rs`:
+   drop the `PrefetchRequest` import and the `prefetch_request_round_trip` test (the
+   `PrefetchItem`/`PrefetchResponse` tests there stay valid).
 2. `rust/object-cache/src/client.rs`: `prefetch()` serializes items as NDJSON lines,
    `Content-Type: application/x-ndjson`; drop the `PrefetchRequest` import.
 3. `rust/object-cache-srv/src/handlers.rs`: rewrite `prefetch_handler` per the design —
@@ -90,6 +92,7 @@ so `reqwest::Body::wrap_stream` would add complexity without reducing peak memor
 ## Files to Modify
 
 - `rust/object-cache/src/prefetch.rs`
+- `rust/object-cache/tests/prefetch_tests.rs`
 - `rust/object-cache/src/client.rs`
 - `rust/object-cache-srv/src/handlers.rs`
 - `rust/object-cache-srv/tests/prefetch_tests.rs`
