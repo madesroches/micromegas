@@ -108,7 +108,10 @@ while let Some(item) = rx.recv().await {
     tokio::spawn(async move {
         let _permit = permit;
         let outcome = match item.ranges {
+            // None or empty = warm the whole object (matches §1 contract);
+            // an empty slice would otherwise no-op in prefetch_ranges.
             None => cache.prefetch_object(&item.key).await,
+            Some(rs) if rs.is_empty() => cache.prefetch_object(&item.key).await,
             Some(rs) => cache.prefetch_ranges(&item.key, &to_ranges(rs)).await,
         };
         if let Err(e) = outcome {
@@ -133,8 +136,10 @@ prefetch_handler(State(state), body: Bytes) -> Result<Response, StatusCode>
 2. Cap batch size: reject > `MAX_PREFETCH_KEYS_PER_REQUEST` with `400` (bounds per-request work on an
    authenticated endpoint). Cap ranges-per-key with the existing `MAX_RANGES_PER_REQUEST`.
 3. For each item: `validate_key(&item.key, &state.allowed_prefixes)`; reject inverted/degenerate
-   ranges (`s >= e`), matching the demand paths. A failing item is **skipped** (counted in
-   `rejected`), not fatal — a batch with one bad key still warms the rest.
+   ranges (`s >= e`), matching the demand paths. `ranges` absent or empty is **accepted** as a
+   whole-object warm (per the §1 contract; the consumer loop routes it to `prefetch_object`), not
+   rejected. A failing item is **skipped** (counted in `rejected`), not fatal — a batch with one bad
+   key still warms the rest.
 4. `try_send` each accepted item onto the queue:
    - `Ok` → `accepted += 1`
    - `Err(TrySendError::Full)` → `dropped += 1`, `imetric!("object_cache_prefetch_dropped", ..)`
