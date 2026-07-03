@@ -161,7 +161,26 @@ impl SharedQueue {
     /// Enqueues `item`, applying the graded byte-budget drop policy. Returns
     /// `false` if the item was dropped instead of queued.
     fn try_push(&self, item: QueuedItem) -> bool {
+        let current = self.queue_bytes.load(Ordering::Relaxed).max(0) as usize;
+        let should_drop = match item.priority {
+            UploadPriority::Metadata => false,
+            UploadPriority::Traces => current >= self.soft_bytes,
+            UploadPriority::Logs | UploadPriority::Metrics => current >= self.hard_bytes,
+        };
+        if should_drop {
+            record_dropped_metric(item.priority);
+            return false;
+        }
+        // The shutdown check and the push must happen under the same lock
+        // that guards `pop_highest`'s drain loop: otherwise an enqueuer could
+        // observe `shutdown == false`, get preempted, and push after the
+        // worker's final drain has already run to completion and signaled
+        // `shutdown_complete` — silently leaking the item into an abandoned
+        // queue. Checking here, inside the critical section, makes this
+        // mutually exclusive with the drain's emptiness check.
+        let mut guard = self.queues.lock().unwrap();
         if self.shutdown.load(Ordering::SeqCst) {
+            drop(guard);
             // The worker has committed to (or already finished) its final
             // drain and will never pop this item, so queuing it would leak
             // it forever. Reject and report instead, matching the old
@@ -173,20 +192,9 @@ impl SharedQueue {
             record_dropped_metric(item.priority);
             return false;
         }
-        let current = self.queue_bytes.load(Ordering::Relaxed).max(0) as usize;
-        let should_drop = match item.priority {
-            UploadPriority::Metadata => false,
-            UploadPriority::Traces => current >= self.soft_bytes,
-            UploadPriority::Logs | UploadPriority::Metrics => current >= self.hard_bytes,
-        };
-        if should_drop {
-            record_dropped_metric(item.priority);
-            return false;
-        }
         self.queue_bytes
             .fetch_add(item.bytes as isize, Ordering::Relaxed);
         self.queue_count.fetch_add(1, Ordering::Relaxed);
-        let mut guard = self.queues.lock().unwrap();
         guard[item.priority as usize].push_back(item);
         self.notify.notify_all();
         true
