@@ -145,7 +145,7 @@ if priority != Metadata && b >= hard { drop() }        // shed logs/metrics at t
 ```
 
 `drop()` increments `dropped[priority]`, emits an `imetric!` (see below), and
-returns. Otherwise charge `queue_bytes += b` and `queue_count += 1` *before*
+returns. Otherwise charge `queue_bytes += item.bytes` and `queue_count += 1` *before*
 pushing (matching the Unreal ordering note: charge before enqueue so a fast
 worker dequeue can't drive the counters negative), push to
 `queues[priority as usize]`, and signal the condvar. The worker de-charges on
@@ -225,11 +225,13 @@ Included in the first version (Unreal parity). Replace the two fixed
 
 Represented as `[Take<ExponentialBackoff>; 4]` in the config (each cloned per
 attempt, as the current code already clones its retry strategy). `send()`
-selects the strategy by the item's priority. The window doubles as the
-per-attempt request timeout on the `reqwest::Client` where practical (Unreal
-uses the window as the socket timeout — see cpp:35 comment); if per-request
-timeout granularity isn't available, apply the window as an overall bound and
-document the divergence.
+selects the strategy by the item's priority. Note that in Unreal the window is
+applied only as the total retry budget
+(`FRetryTimeoutRelativeSecondsSetting(RetryWindow)`, cpp:423), *not* as a
+socket/request timeout — despite the cpp:35 comment, no socket or request
+timeout is set. On the Rust side, decide independently whether to also map the
+window onto reqwest's per-request `.timeout()`; if so, document it as a
+deliberate Rust addition rather than Unreal parity.
 
 ### Configuration
 Replace the growing positional arg list (and the existing
@@ -317,7 +319,7 @@ drop path.
 - `rust/telemetry-sink/src/lib.rs` — `HttpSinkConfig`, builder setters, env
   fallbacks, construction site.
 - `rust/telemetry-sink/tests/` — new transport unit tests (see Testing).
-- `mkdocs/docs/native/index.md` — document new env vars / behavior.
+- `mkdocs/docs/getting-started.md` — document new env vars / behavior.
 
 ## Trade-offs
 - **Condvar + shared queue vs. keeping `mpsc` as a wakeup with side queues.**
@@ -344,10 +346,11 @@ drop path.
   retained only for `is_busy()`.
 
 ## Documentation
-- `mkdocs/docs/native/index.md` — add the three `MICROMEGAS_TELEMETRY_*` env
-  vars to the config table (near the existing `MICROMEGAS_TELEMETRY_URL` row,
-  line ~64) and a short note on the priority/byte-budget drop policy and lazy
-  stream metadata.
+- `mkdocs/docs/getting-started.md` — add the three `MICROMEGAS_TELEMETRY_*` env
+  vars near the existing env-var setup block (`MICROMEGAS_TELEMETRY_URL`,
+  line ~27) and a short note on the priority/byte-budget drop policy and lazy
+  stream metadata. (The `native/index.md` page documents the C-ABI `MmConfig`
+  struct fields, not the Rust sink env vars, so it is not the right target.)
 - Update the doc comment on `HttpEventSink::new` and `TelemetryGuardBuilder`
   setters (rustdoc) to describe the new knobs and defaults.
 
