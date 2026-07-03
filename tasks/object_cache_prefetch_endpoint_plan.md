@@ -112,9 +112,11 @@ while let Some(item) = rx.recv().await {
             // an empty slice would otherwise no-op in prefetch_ranges.
             None => cache.prefetch_object(&item.key).await,
             Some(rs) if rs.is_empty() => cache.prefetch_object(&item.key).await,
-            // Trivial [s, e] -> s..e mapping. No guard needed: prefetch_ranges
-            // re-validates bounds internally and returns Err on a bad pair,
-            // which is already counted as a fill error below.
+            // Trivial [s, e] -> s..e mapping. No guard needed here: inverted/
+            // degenerate pairs (s >= e) are already rejected by the handler
+            // (§4 step 3) before enqueue. prefetch_ranges itself only errors on
+            // out-of-bounds (end > file_size); it silently skips s >= e. An
+            // out-of-bounds Err is counted as a fill error below.
             Some(rs) => {
                 let ranges: Vec<Range<u64>> = rs.iter().map(|[s, e]| *s..*e).collect();
                 cache.prefetch_ranges(&item.key, &ranges).await
@@ -221,7 +223,10 @@ Reject `0` for either at startup (fatal config error), matching the existing gua
 3. Add `prefetch_queue` module (or inline in `handlers.rs`) with the bounded `mpsc` + consumer-loop
    builder returning `(Sender, JoinHandle)`.
 4. Extend `AppState` (`app_state.rs`) with `prefetch_tx: mpsc::Sender<PrefetchItem>` and the
-   per-request key cap constant.
+   per-request key cap constant. This changes the `AppState::new` signature, so update every
+   caller — including the `make_state` helper in `tests/memory_budget_tests.rs`, which must
+   construct and pass a throwaway `prefetch_tx`. (Alternatively, keep the existing 3-arg
+   constructor working via a builder/default so `make_state` is untouched.)
 5. Add `prefetch_handler` to `handlers.rs` (validation, cap, `try_send`, `202` + counts, no
    mem_permit).
 6. In `object_cache_srv.rs`: add the two CLI options + startup validation; build the queue/worker;
@@ -244,7 +249,10 @@ Reject `0` for either at startup (fatal config error), matching the existing gua
 - `rust/object-cache/src/lib.rs` — export the new module.
 - `rust/object-cache/src/range_cache.rs` — `prefetch_object`.
 - `rust/object-cache/src/client.rs` — `prefetch` method + trait impl.
-- `rust/object-cache-srv/src/app_state.rs` — queue sender + key cap.
+- `rust/object-cache-srv/src/app_state.rs` — queue sender + key cap (changes `AppState::new` signature).
+- `rust/object-cache-srv/tests/memory_budget_tests.rs` — update the `make_state` helper for the new
+  `AppState::new` signature (construct/pass a throwaway `prefetch_tx`), unless a builder/default keeps
+  the 3-arg path working.
 - `rust/object-cache-srv/src/handlers.rs` — `prefetch_handler` (+ queue/worker if inlined here).
 - `rust/object-cache-srv/src/cli.rs` — two new options.
 - `rust/object-cache-srv/src/object_cache_srv.rs` — startup validation, queue build, route.
@@ -278,8 +286,11 @@ Reject `0` for either at startup (fatal config error), matching the existing gua
 ## Testing Strategy
 - **Unit** (`object-cache`): `PrefetchRequest`/`PrefetchResponse` serde round-trip;
   `prefetch_object` on a zero-byte object is a no-op.
-- **Server integration** (`object-cache-srv/tests/prefetch_tests.rs`, using a counting/instrumented
-  origin store like `memory_budget_tests.rs`'s `DelayedStore`):
+- **Server integration** (`object-cache-srv/tests/prefetch_tests.rs`): these tests need a counting
+  origin-store wrapper (one that increments a counter on each origin GET) added for the suite.
+  `memory_budget_tests.rs`'s `DelayedStore` only gates via a `Semaphore` and counts nothing, so it
+  can be copied as a wrapping pattern but does not itself provide the request counter these
+  assertions require:
   - `POST /prefetch` for uncached keys → `202`; after the fill drains, the blocks are present in the
     backend and a subsequent demand `get_range` of the same key issues **no** new origin GET (served
     from cache).
