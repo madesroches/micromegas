@@ -244,6 +244,14 @@ struct WakeOnDrop {
 
 impl Drop for WakeOnDrop {
     fn drop(&mut self) {
+        // Release the permit BEFORE waking. `wake()` does `notify_all` under
+        // the queues lock and returns before drop-glue would drop `_permit`,
+        // so a worker that wasn't waiting at notify time could grab the lock
+        // in the gap between the notify and the permit release, read
+        // `available_permits() == 0` with the queue non-empty, and re-sleep
+        // until the next flush tick. Freeing the slot first makes it visible
+        // to any worker that evaluates its wait predicate after the notify.
+        drop(self._permit.take());
         self.queue.wake();
     }
 }
