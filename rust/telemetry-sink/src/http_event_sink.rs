@@ -134,6 +134,12 @@ struct SharedQueue {
     queues: Mutex<[VecDeque<QueuedItem>; NUM_PRIORITIES]>,
     queue_bytes: AtomicIsize,
     queue_count: AtomicIsize,
+    /// Number of items dispatched to a send task (via `spawn_item`) whose
+    /// task has not completed yet. Unlike `queue_count`, which drops as soon
+    /// as an item is popped off the deque, this stays elevated for the
+    /// entire lifetime of the HTTP send (including retries), so it reflects
+    /// genuine outstanding network activity.
+    in_flight_count: AtomicIsize,
     notify: Condvar,
     shutdown: AtomicBool,
     soft_bytes: usize,
@@ -151,6 +157,7 @@ impl SharedQueue {
             ]),
             queue_bytes: AtomicIsize::new(0),
             queue_count: AtomicIsize::new(0),
+            in_flight_count: AtomicIsize::new(0),
             notify: Condvar::new(),
             shutdown: AtomicBool::new(false),
             soft_bytes,
@@ -604,6 +611,11 @@ impl HttpEventSink {
         join_set: &mut tokio::task::JoinSet<()>,
         permit: Option<OwnedSemaphorePermit>,
     ) {
+        // Counted as outstanding from the moment it's handed to a send task
+        // until that task is reaped in one of the `run` loop's join-set
+        // drain points, so `is_busy()` stays true for the whole send
+        // (including retries), not just while the item sits in the deque.
+        queue.in_flight_count.fetch_add(1, Ordering::Relaxed);
         if let Payload::Process(ref info) = item.payload {
             *shared.process_info.lock().unwrap() = Some(info.clone());
         }
@@ -720,6 +732,7 @@ impl HttpEventSink {
             }
             // Reap finished sends so the JoinSet doesn't grow unbounded.
             while let Some(result) = join_set.try_join_next() {
+                queue.in_flight_count.fetch_sub(1, Ordering::Relaxed);
                 if let Err(e) = result {
                     error!("telemetry send task panicked: {e}");
                 }
@@ -749,6 +762,7 @@ impl HttpEventSink {
             Self::spawn_item(&shared, &queue, item, &mut join_set, None);
         }
         while let Some(result) = join_set.join_next().await {
+            queue.in_flight_count.fetch_sub(1, Ordering::Relaxed);
             if let Err(e) = result {
                 error!("telemetry send task panicked: {e}");
             }
@@ -897,8 +911,10 @@ impl EventSink for HttpEventSink {
     }
 
     fn is_busy(&self) -> bool {
-        let count = self.queue.queue_count.load(Ordering::Relaxed);
-        debug_assert!(count >= 0, "queue_count went negative: {count}");
-        count > 0
+        let queued = self.queue.queue_count.load(Ordering::Relaxed);
+        debug_assert!(queued >= 0, "queue_count went negative: {queued}");
+        let in_flight = self.queue.in_flight_count.load(Ordering::Relaxed);
+        debug_assert!(in_flight >= 0, "in_flight_count went negative: {in_flight}");
+        queued > 0 || in_flight > 0
     }
 }
