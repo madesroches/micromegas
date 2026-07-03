@@ -189,9 +189,13 @@ impl CacheClientStore {
 ```rust
 #[async_trait]
 pub trait ObjectPrefetch: Send + Sync {
-    async fn prefetch(&self, items: Vec<PrefetchItem>) -> anyhow::Result<()>;
+    async fn prefetch(&self, items: Vec<PrefetchItem>) -> anyhow::Result<PrefetchResponse>;
 }
 ```
+
+Returning `PrefetchResponse` (not `()`) matches the inherent method so dyn consumers
+(#1200/#1201) can observe the `accepted`/`rejected`/`dropped` counts — the load-shed
+observability the response body is justified by.
 
 Wiring an `Arc<dyn ObjectPrefetch>` into the analytics/daemon layers is #1200/#1201, not this issue;
 defining the trait here fixes the contract they depend on (open/closed).
