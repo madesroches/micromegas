@@ -115,6 +115,8 @@ per-request cap:
 
 `size` must be the object's exact current size, supplied by the caller — the server trusts it rather than issuing an origin HEAD, since prefetch targets objects that are typically cold. `ranges` is optional; when absent or empty the whole object `[0, size)` is warmed, otherwise only the listed `[start, end)` ranges are.
 
+A batch is capped at 4096 keys — a request with more is rejected outright with `400`. Within an accepted batch, an item whose `size` exceeds 512 MiB is rejected individually (counted in `rejected` below) rather than failing the whole request.
+
 The endpoint returns immediately with `202 Accepted` and a small JSON body:
 
 ```json
