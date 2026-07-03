@@ -65,6 +65,12 @@ pub struct PrefetchItem {
     /// drive fills through `prefetch_blocks(key, file_size, indices)` with no
     /// origin HEAD (prefetch targets cold objects, so a server-side `size()` would
     /// force an avoidable HEAD).
+    ///
+    /// Contract: this must be the object's exact current size. The server
+    /// trusts it without verification; an undersized value stores a truncated
+    /// final block under the same block key demand reads use (see §2's
+    /// size-trust guard for the hazard and its mitigation). An oversized value
+    /// is safe — the origin GET past EOF fails and nothing is stored.
     pub size: u64,
     /// None or empty = warm the whole object `[0, size)`. Present = warm only these
     /// ranges (validated against `size`).
@@ -105,6 +111,24 @@ If a size-carrying ranged convenience is later wanted, it should take `file_size
 compute block indices from that size (whole object) or from the supplied ranges, and call
 `prefetch_blocks` — it must **not** call `self.size()`.
 
+**Size-trust contract + hit-path length guard.** Trusting the caller's `size` opens a poisoning
+hazard the demand paths don't have: block cache keys are `blk:{ns}:{key}:{idx}`
+(`range_cache.rs:566`) with no size component, shared by prefetch and demand. A prefetch with an
+*undersized* `size` clamps the final block's GET to that wrong size (`block_byte_range` clamps
+`end` to `file_size`, `blocks.rs:13`) and stores the truncated block; a later demand read — which
+resolves the *true* size via `size()` — finds the short block on the hit path (used as-is, with no
+length validation, `range_cache.rs:584`) and `assemble_range` silently clips to the stored length
+(`blocks.rs:55-57`), returning fewer bytes than requested with **no error**. (An *oversized*
+`size` is safe: the final run's GET requests bytes past EOF, the origin errors, and nothing is
+stored.)
+
+Mitigation shipped with this issue: in `fetch_blocks`' backend-probe path, validate each hit's
+length against the expected `block_byte_range(idx, block_size, file_size).len()`; on a mismatch,
+bump `range_cache_block_len_mismatch`, treat the block as a miss, and refetch/overwrite it. This
+costs one length compare per hit, heals a poisoned entry on the next correctly-sized read, and
+also defends against origin objects that changed size. The trust contract is documented on
+`PrefetchItem::size` (§1).
+
 ### 3. Bounded prefetch queue + worker (backpressure)
 
 A large trace can enqueue many GB of keys. The origin-fetch concurrency is already bounded by the
@@ -122,7 +146,7 @@ write/query path.
 
 ```text
 // `fills` is the JoinSet the consumer loop owns for the deterministic drain
-// (see "Deterministic drain/completion signal" below and Implementation Step 4).
+// (see "Deterministic drain/completion signal" below and Implementation Step 5).
 while let Some(item) = rx.recv().await {
     // Reap completed fills: a JoinSet retains an entry per spawned task until
     // it is joined, and in production the channel never closes, so without
@@ -188,6 +212,18 @@ enqueued fills have completed their `prefetch_blocks` calls. This drain covers t
 only; because §7 routes prefetch through foyer's asynchronous SSD flush, tests must additionally
 `close()` the backend (the deterministic-flush mechanism) before asserting cache presence (see
 Testing Strategy).
+
+The sender-drop drain composes differently across the two test styles. Direct-handler tests (the
+`memory_budget_tests.rs` style, calling handlers with an owned `AppState`) own every sender clone,
+so dropping the state closes the channel directly. Tests that spawn the full axum app **cannot**
+drop the sender while the server runs — every `AppState` clone inside the router holds a
+`prefetch_tx` clone — so they instead retain a clone of the `RangeCache` (and the counting origin
+store) outside the server, and drain by shutting the server down (dropping all `AppState` clones,
+hence all senders), awaiting the worker `JoinHandle`, then `close()`-ing the backend; warming
+assertions and the follow-up demand read then run directly against the retained cache handle, not
+over HTTP. If a post-drain demand read ever must go over HTTP, switch the worker's completion
+signal to the `AtomicUsize` + `Notify` quiesce variant, which observes in-flight-reaches-zero
+without requiring the channel to close.
 
 ### 4. `POST /prefetch` handler
 
@@ -341,9 +377,13 @@ updated rationale that no longer references prefetch).
    kept with an updated rationale (§7). Also add the `pub fn ram_usage(&self) -> usize` accessor
    (delegating to `self.cache.memory().usage()`) so the SSD-only integration test can assert RAM-tier
    byte usage is unchanged (§7).
+4. Add the §2 size-trust guard in `fetch_blocks` (`rust/object-cache/src/range_cache.rs`):
+   validate each backend hit's length against `block_byte_range(idx, block_size, file_size).len()`,
+   treating a mismatch as a miss (refetch + overwrite) and bumping
+   `range_cache_block_len_mismatch`.
 
 ### Phase 2 — server endpoint + queue
-4. Add `prefetch_queue` module (or inline in `handlers.rs`) with the bounded `mpsc` + consumer-loop
+5. Add `prefetch_queue` module (or inline in `handlers.rs`) with the bounded `mpsc` + consumer-loop
    builder returning `(Sender, JoinHandle)`. The worker exposes a deterministic drain/completion
    signal for tests (§3): the consumer loop tracks spawned fills in a `JoinSet` (or an
    `AtomicUsize` + `tokio::sync::Notify`), reaping completed entries each iteration
@@ -351,7 +391,7 @@ updated rationale that no longer references prefetch).
    never closes), and on channel close it awaits every outstanding fill
    before the `JoinHandle` resolves — so a test that drops the sender and awaits the handle knows
    all fills are done, with no `tokio::time::sleep`.
-5. Extend `AppState` (`app_state.rs`) with `prefetch_tx: mpsc::Sender<PrefetchItem>` (only the
+6. Extend `AppState` (`app_state.rs`) with `prefetch_tx: mpsc::Sender<PrefetchItem>` (only the
    sender lives in `AppState`). Add `MAX_PREFETCH_KEYS_PER_REQUEST` (`4096`) as a module-level
    `const` in `handlers.rs`, alongside the existing per-request caps (`MAX_RANGES_PER_REQUEST`,
    `MAX_TOTAL_REQUESTED_BYTES`) — not as an `AppState` field. Adding `prefetch_tx` changes the
@@ -359,28 +399,31 @@ updated rationale that no longer references prefetch).
    `tests/memory_budget_tests.rs`, which must construct and pass a throwaway `prefetch_tx`.
    (Alternatively, keep the existing 3-arg constructor working via a builder/default so `make_state`
    is untouched.)
-6. Add `prefetch_handler` to `handlers.rs` (validation, cap, `try_send`, `202` + counts, no
+7. Add `prefetch_handler` to `handlers.rs` (validation, cap, `try_send`, `202` + counts, no
    mem_permit).
-7. In `object_cache_srv.rs`: add the two CLI options + startup validation; build the queue/worker;
+8. In `object_cache_srv.rs`: add the two CLI options + startup validation; build the queue/worker;
    store the sender in `AppState`; register `.route("/prefetch", post(prefetch_handler))` on
    `obj_router` (inside the auth layer).
 
 ### Phase 3 — client
-8. Add `CacheClientStore::prefetch` inherent method and `impl ObjectPrefetch for CacheClientStore`
+9. Add `CacheClientStore::prefetch` inherent method and `impl ObjectPrefetch for CacheClientStore`
    (`client.rs`).
 
 ### Phase 4 — metrics + docs + tests
-9. Metrics: `object_cache_prefetch_requests`, `object_cache_prefetch_keys_enqueued`,
-   `object_cache_prefetch_dropped`, `object_cache_prefetch_keys_warmed`,
-   `object_cache_prefetch_fill_error`, `range_cache_client_prefetch_error`.
-10. Docs (below).
-11. Tests (below).
+10. Metrics: `object_cache_prefetch_requests`, `object_cache_prefetch_keys_enqueued`,
+    `object_cache_prefetch_dropped`, `object_cache_prefetch_keys_warmed`,
+    `object_cache_prefetch_fill_error`, `range_cache_client_prefetch_error`,
+    `range_cache_block_len_mismatch` (§2 guard).
+11. Docs (below).
+12. Tests (below).
 
 ## Files to Modify
 - `rust/object-cache/Cargo.toml` — add `serde.workspace = true` (derive) in alphabetical order.
 - `rust/object-cache/src/prefetch.rs` (new) — shared types (`PrefetchItem` with required `size`) +
   `ObjectPrefetch` trait.
 - `rust/object-cache/src/lib.rs` — export the new module.
+- `rust/object-cache/src/range_cache.rs` — hit-path block-length validation in `fetch_blocks`
+  (§2 size-trust guard) + `range_cache_block_len_mismatch` metric.
 - `rust/object-cache/src/foyer_backend.rs` — `put` branches to SSD-only
   `storage_writer(key).force().insert(value)` for `FillHint::Prefetch` (§7); delete the whole
   `From<FillHint> for CacheHint` impl (`:48-55`, no comment; arm-only removal would not compile),
@@ -424,15 +467,21 @@ updated rationale that no longer references prefetch).
   the server never issues an origin HEAD to size a cold object (which prefetch targets by
   definition). Both triggers already have the size (`Partition.file_size` /
   `PartitionWriteResult.file_size`), so this is free for callers and removes a network round-trip per
-  key.
+  key. The cost is a trust contract: an undersized value would poison the final block's cache entry
+  with truncated bytes — mitigated by the §2 hit-path length guard, which detects and refetches
+  wrong-length blocks on the next correctly-sized read.
 - **No negative-cache coupling here.** Warming a key that doesn't exist yet just fails the fill
   quietly; the NotFound-TTL interaction is #1196/#1201, out of scope.
 
 ## Documentation
 - `mkdocs/docs/admin/object-cache.md`: add a prose `POST /prefetch` subsection (body shape, `202`
   semantics, load-shedding) — this page has no per-endpoint HTTP API table, so document it as prose;
-  add the two new knobs to **both** the Environment variables table and the CLI flags table (every
-  existing knob appears in both).
+  add the two new knobs to **both** the Environment variables table and the CLI flags table. (The
+  tables are not perfect mirrors today — `MICROMEGAS_API_KEYS` has no CLI row, and
+  `--disable-auth`/`--allow-all-prefixes` have no env rows — but every tunable knob appears in
+  both; keep that true for the two new ones.) Drive-by while editing that table: its
+  `--allowed-prefix` row is wrong — the actual flag is `--prefix` (`cli.rs:46`); fix the flag
+  name.
 - `rust/object-cache-srv/README.md`: add the `POST /prefetch` row to the HTTP API table alongside
   `/obj` and `/ranges`, and mirror the two new env/CLI knobs.
 - `PrefetchItem` doc comment (the required `size` contract) and the `FoyerBackend::put` SSD-only
@@ -442,6 +491,11 @@ updated rationale that no longer references prefetch).
 ## Testing Strategy
 - **Unit** (`object-cache`): `PrefetchRequest`/`PrefetchResponse`/`PrefetchItem` (with `size`) serde
   round-trip; a whole-object fill with `size == 0` yields an empty block-index set and is a no-op.
+- **Size-trust guard** (`object-cache`, `range_cache_tests.rs`): prefetch a key with an undersized
+  `size` (the fill stores a truncated final block), then a demand `get_range` at the true size —
+  the §2 hit-path guard detects the short block, refetches it (origin GET count increases),
+  returns the full correct bytes, and bumps `range_cache_block_len_mismatch`. An oversized `size`
+  fails the fill without storing anything, leaving a subsequent demand read unaffected.
 - **Server integration** (`object-cache-srv/tests/prefetch_tests.rs`): these tests need a counting
   origin-store wrapper (one that increments a counter on each origin GET) added for the suite.
   `memory_budget_tests.rs`'s `DelayedStore` only gates via a `Semaphore` and counts nothing, so it
@@ -450,9 +504,10 @@ updated rationale that no longer references prefetch).
   - **Deterministic completion, not `sleep`.** The prefetch pipeline is fully async (JoinSet-tracked
     fills in §3, async SSD flush in §7), so an assertion made "right after `202`" is racy. Every
     warming assertion below is gated on a two-step deterministic wait, never
-    `tokio::time::sleep`: (a) **drain the worker** — drop the `prefetch_tx` (or trigger the
-    shutdown handle) and `await` the consumer's `JoinHandle` (§3), which resolves only after all
-    spawned `prefetch_blocks` fills have completed; then (b) **flush the SSD tier** — `close()` the
+    `tokio::time::sleep`: (a) **drain the worker** — close the channel per §3's per-test-style
+    note (direct-handler tests drop the `prefetch_tx`; spawned-server tests shut the server down
+    so every `AppState` clone and its sender drops) and `await` the consumer's `JoinHandle` (§3),
+    which resolves only after all spawned `prefetch_blocks` fills have completed; then (b) **flush the SSD tier** — `close()` the
     backend, the deterministic-flush mechanism existing cache tests use (reads still work after
     `close()`), so the ephemeral RAM record's asynchronous SSD write is durable before reading. Only
     after (a) + (b) does the test assert presence / issue the demand
@@ -475,7 +530,10 @@ updated rationale that no longer references prefetch).
   - Prefetch acquires **no** `mem_permit`: a prefetch whose total bytes exceed `memory_budget_mb`
     still succeeds (contrast with the demand `413`).
 - **Client round-trip**: spawn the axum app on an ephemeral port, point a `CacheClientStore` at it,
-  call `prefetch`, assert warming as above; assert `prefetch` returns `Err` (and increments the
+  call `prefetch`; then drain per §3's spawned-server recipe (retain a `RangeCache`/counting-origin
+  clone outside the server, shut the server down to drop all senders, await the worker handle,
+  `close()` the backend) and assert warming directly on the retained cache handle; assert
+  `prefetch` returns `Err` (and increments the
   client error metric) when the server is unreachable, without panicking.
 - **CI**: `cd rust && python3 ../build/rust_ci.py` (fmt, clippy `-D warnings`, tests).
 - **Smoke**: `start_minio.py` + `start_services.py`; `curl -XPOST /prefetch`, then confirm the demand
