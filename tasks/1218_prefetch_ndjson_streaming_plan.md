@@ -30,9 +30,6 @@ Client side: `CacheClientStore::prefetch` (`rust/object-cache/src/client.rs:156-
 serializes `PrefetchRequest` as one JSON body. Best-effort contract: an `Err` means "the warm
 didn't happen", callers don't retry.
 
-`ingestion.rs` (`rust/public/src/servers/ingestion.rs:133`) is the repo precedent for
-`DefaultBodyLimit::disable()` on a streaming route.
-
 ## Design
 
 **Wire format.** `Content-Type: application/x-ndjson`; one `PrefetchItem` JSON object per
@@ -56,10 +53,12 @@ single `202` JSON body after the request stream is fully consumed.
 - Body read error (client disconnect) → abort; final partial line without trailing `\n` is
   processed as a line at end-of-stream.
 
-**Router.** `/prefetch` route gets `.layer(DefaultBodyLimit::disable())` (per-route, like
-`ingestion.rs`); axum's limit applies to streamed bodies too. `/ranges` keeps the default —
-its input (the ranges list, ≤ 4096 × ~20 bytes ≈ 80 KiB) sits far below 2 MiB and
-`MAX_RANGES_PER_REQUEST` is the real bound.
+**Router.** No change needed: axum's `DefaultBodyLimit` only applies to extractors that buffer
+the body (`Bytes`, `BytesMut`, `String`); the raw `axum::body::Body` extractor used by
+`prefetch_handler` returns the body unchanged and was never subject to that limit. The per-line
+`MAX_PREFETCH_LINE_BYTES` cap is the sole remaining guard. `/ranges` keeps using the `Bytes`
+extractor, so the default limit still applies there — its input (the ranges list, ≤ 4096 × ~20
+bytes ≈ 80 KiB) sits far below 2 MiB and `MAX_RANGES_PER_REQUEST` is the real bound.
 
 **Client.** `CacheClientStore::prefetch` serializes each item followed by `\n` into one buffer
 and sends it. No client-side streaming: the caller already holds `Vec<PrefetchItem>` in memory,
@@ -80,20 +79,19 @@ so `reqwest::Body::wrap_stream` would add complexity without reducing peak memor
 3. `rust/object-cache-srv/src/handlers.rs`: rewrite `prefetch_handler` per the design —
    `Body` extractor, line buffer with `MAX_PREFETCH_LINE_BYTES`, per-line
    parse/validate/`try_send` (loop body unchanged), same `202`/`PrefetchResponse` tail.
-4. `rust/object-cache-srv/src/object_cache_srv.rs`: add
-   `.layer(DefaultBodyLimit::disable())` to the `/prefetch` route.
-5. Update `rust/object-cache-srv/tests/prefetch_tests.rs` (bodies → NDJSON; both the direct
+4. Update `rust/object-cache-srv/tests/prefetch_tests.rs` (bodies → NDJSON; both the direct
    handler calls and the served-`Router` test at line 602) and add cases listed under Testing.
-6. Docs: `mkdocs/docs/admin/object-cache.md` (`POST /prefetch` body section, lines ~105-118 —
+5. Docs: `mkdocs/docs/admin/object-cache.md` (`POST /prefetch` body section, lines ~105-118 —
    replace the "bounded only by the server's default 2 MiB request-body limit" paragraph with
-   the NDJSON/per-line-cap story), `rust/object-cache-srv/README.md` endpoints table.
+   the NDJSON/per-line-cap story), `rust/object-cache-srv/README.md` endpoints table and the
+   `/prefetch` prose paragraph (lines 33-46, which currently asserts the "default 2 MiB
+   request-body limit" — rewrite to describe NDJSON and the per-line cap).
 
 ## Files to Modify
 
 - `rust/object-cache/src/prefetch.rs`
 - `rust/object-cache/src/client.rs`
 - `rust/object-cache-srv/src/handlers.rs`
-- `rust/object-cache-srv/src/object_cache_srv.rs`
 - `rust/object-cache-srv/tests/prefetch_tests.rs`
 - `mkdocs/docs/admin/object-cache.md`
 - `rust/object-cache-srv/README.md`
@@ -114,7 +112,8 @@ so `reqwest::Body::wrap_stream` would add complexity without reducing peak memor
 ## Documentation
 
 - `mkdocs/docs/admin/object-cache.md`: `/prefetch` body format + per-line cap.
-- `rust/object-cache-srv/README.md`: endpoints table.
+- `rust/object-cache-srv/README.md`: endpoints table and the `/prefetch` prose paragraph
+  (lines 33-46), which currently claims the "default 2 MiB request-body limit" applies.
 
 ## Testing Strategy
 
@@ -124,8 +123,8 @@ so `reqwest::Body::wrap_stream` would add complexity without reducing peak memor
 - New: blank lines skipped; final line without trailing `\n` processed; malformed line counted
   `rejected` while later lines still enqueue; line exceeding `MAX_PREFETCH_LINE_BYTES` → 400
   (and earlier items still enqueued); old-format `{"keys":[...]}` body → 202 with `rejected=1`;
-  body larger than 2 MiB total accepted through the served `Router` (proves the
-  `DefaultBodyLimit::disable()` wiring, not just the handler).
+  body larger than 2 MiB total (many small items) accepted through the served `Router`, confirming
+  no whole-body size ceiling remains on `/prefetch`.
 - Client round-trip: `CacheClientStore::prefetch` against the served router returns correct
   counts.
 - Full suite: `cargo test -p micromegas-object-cache -p micromegas-object-cache-srv`, then
