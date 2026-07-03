@@ -9,6 +9,7 @@ This file documents the historical progress of the Micromegas project. For curre
   * Store `FoyerBackend` cache values as `Bytes` instead of `Vec<u8>` to avoid full-block copies on every RAM-tier read hit and fill (#1195)
   * Accept a list of allowed key prefixes in `object-cache-srv` (comma-separated `MICROMEGAS_OBJECT_CACHE_PREFIX` or repeated `--prefix`) so it can serve both `blobs/` and `views/`; the server now fails closed with no prefixes configured, requiring an explicit `--allow-all-prefixes` dev opt-out (#1204)
   * Install a byte weighter on `FoyerBackend`'s RAM tier so `ram_mb` bounds resident bytes instead of entry count, fixing an OOM risk under sustained load (#1207)
+  * Rework the `object-cache` read path: single-flight fetch coalescing, a priority budget that lets demand reads jump ahead of prefetch, and a memory bound on in-flight prefetch; fixes a panic-leaking-a-held-permit bug, a batch-promotion race, and a permit undercount found in review (#1203)
 * **OTLP:**
   * Populate the `processes.username` column from `process.owner` (falling back through `process.user.name`, `process.real_user.name`, then `user.name`) and fold the resolved owner into the `process_id` derivation so processes that differ only by owning user get distinct ids; re-derivation stays under the existing `NS_OTEL_PROCESS_V1` namespace
 * **Security:**

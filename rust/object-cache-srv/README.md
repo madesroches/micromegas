@@ -53,6 +53,11 @@ All flags can be set via the listed environment variables.
 | `--api-keys`                    | `MICROMEGAS_API_KEYS`                | _(none)_       | Key ring for request authentication.                             |
 | `--disable-auth`                |                                      | `false`        | Disable authentication (development only).                        |
 | `--shutdown-grace-period-seconds` | `MICROMEGAS_SHUTDOWN_GRACE_PERIOD_SECONDS` | `25`  | Graceful-shutdown grace period on `SIGTERM`.                     |
+| `--max-concurrent-fetches`      | `MICROMEGAS_OBJECT_CACHE_MAX_CONCURRENT_FETCHES` | `32` | Total concurrent origin GETs.                              |
+| `--demand-reserved-fetches`     | `MICROMEGAS_OBJECT_CACHE_DEMAND_RESERVED_FETCHES` | `8` | Origin-GET slots always reserved for demand reads; must be less than `--max-concurrent-fetches`. |
+| `--max-coalesced-get-bytes`     | `MICROMEGAS_OBJECT_CACHE_MAX_COALESCED_GET_BYTES` | `8388608` | Max byte span of one coalesced run GET.                |
+| `--memory-budget-mb`            | `MICROMEGAS_OBJECT_CACHE_MEMORY_BUDGET_MB` | `1024`        | Cross-request cap on concurrently-assembled response bytes, in MiB. |
+| `--promote-whole-batch`         | `MICROMEGAS_OBJECT_CACHE_PROMOTE_WHOLE_BATCH` | `false`    | On a demand hit into a prefetch batch, promote the whole batch instead of only the covering run. |
 
 > **Note:** `--origin-uri` must point at the bucket root with no path
 > component. The lake-root prefix arrives inside each request key, so a path on

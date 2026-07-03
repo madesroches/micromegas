@@ -3,7 +3,7 @@ use bytes::Bytes;
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use super::backend::RangeCacheBackend;
+use super::backend::{FillHint, RangeCacheBackend};
 
 pub struct MemoryBackend {
     data: Mutex<HashMap<String, Bytes>>,
@@ -33,7 +33,7 @@ impl RangeCacheBackend for MemoryBackend {
             .cloned()
     }
 
-    async fn put(&self, key: String, value: Bytes) {
+    async fn put(&self, key: String, value: Bytes, _hint: FillHint) {
         self.data
             .lock()
             .expect("memory backend lock")

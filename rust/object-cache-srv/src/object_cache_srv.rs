@@ -2,13 +2,9 @@
 #[global_allocator]
 static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
-mod app_state;
 mod cli;
-mod handlers;
-mod validation;
 
 use anyhow::{Context, Result, anyhow};
-use app_state::AppState;
 use axum::{
     Router,
     http::StatusCode,
@@ -17,7 +13,6 @@ use axum::{
 };
 use clap::Parser;
 use cli::Cli;
-use handlers::{get_range_handler, head_handler, post_ranges_handler};
 use micromegas::micromegas_main;
 use micromegas::servers::shutdown::{serve_axum_with_graceful_shutdown, wait_for_sigterm};
 use micromegas_auth::api_key::{ApiKeyAuthProvider, parse_key_ring};
@@ -25,6 +20,8 @@ use micromegas_auth::axum::auth_middleware;
 use micromegas_auth::types::AuthProvider;
 use micromegas_object_cache::foyer_backend::FoyerBackend;
 use micromegas_object_cache::range_cache::RangeCache;
+use micromegas_object_cache_srv::app_state::AppState;
+use micromegas_object_cache_srv::handlers::{get_range_handler, head_handler, post_ranges_handler};
 use micromegas_tracing::prelude::*;
 use object_store::parse_url_opts;
 use object_store::prefix::PrefixStore;
@@ -41,6 +38,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // boundary as a fatal config error rather than letting it reach the cache.
     if args.block_size == 0 {
         return Err(anyhow!("MICROMEGAS_OBJECT_CACHE_BLOCK_SIZE must be greater than 0").into());
+    }
+
+    if args.max_concurrent_fetches == 0 {
+        return Err(anyhow!(
+            "MICROMEGAS_OBJECT_CACHE_MAX_CONCURRENT_FETCHES must be greater than 0"
+        )
+        .into());
+    }
+    // `FetchScheduler` computes `total - demand_reserved` as a plain
+    // subtraction; a misconfigured pair would panic deep inside the cache
+    // instead of at startup.
+    if args.demand_reserved_fetches >= args.max_concurrent_fetches {
+        return Err(anyhow!(
+            "MICROMEGAS_OBJECT_CACHE_DEMAND_RESERVED_FETCHES ({}) must be less than \
+             MICROMEGAS_OBJECT_CACHE_MAX_CONCURRENT_FETCHES ({})",
+            args.demand_reserved_fetches,
+            args.max_concurrent_fetches
+        )
+        .into());
+    }
+    // A zero budget would make the memory-guard reject every non-empty data
+    // request with 413 while /health and /ready still pass; fail at startup
+    // instead.
+    if args.memory_budget_mb == 0 {
+        return Err(
+            anyhow!("MICROMEGAS_OBJECT_CACHE_MEMORY_BUDGET_MB must be greater than 0").into(),
+        );
     }
 
     let ns = if args.namespace.is_empty() {
@@ -84,7 +108,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .await
     .with_context(|| "building FoyerBackend")?;
 
-    let cache = RangeCache::new(origin_store, Arc::new(foyer), args.block_size, ns);
+    let cache = RangeCache::new(
+        origin_store,
+        Arc::new(foyer),
+        args.block_size,
+        ns,
+        args.max_concurrent_fetches,
+        args.demand_reserved_fetches,
+        args.max_coalesced_get_bytes,
+        args.promote_whole_batch,
+    );
 
     // Resolve the prefix allowlist. Fail-closed like auth: an empty list is a
     // fatal config error unless `--allow-all-prefixes` is given (dev opt-out).
@@ -112,10 +145,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         prefixes
     };
 
-    let state = AppState {
-        cache,
-        allowed_prefixes,
-    };
+    let state = AppState::new(cache, allowed_prefixes, args.memory_budget_mb);
 
     let auth_provider: Option<Arc<dyn AuthProvider>> = if args.disable_auth {
         info!("Authentication disabled (--disable-auth)");

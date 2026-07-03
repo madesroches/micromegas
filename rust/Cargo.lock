@@ -3968,7 +3968,6 @@ dependencies = [
  "foyer",
  "futures",
  "micromegas-tracing",
- "moka",
  "object_store",
  "reqwest",
  "serde_json",
@@ -3982,9 +3981,11 @@ name = "micromegas-object-cache-srv"
 version = "0.27.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "axum 0.8.9",
  "bytes",
  "clap",
+ "futures",
  "http 1.4.2",
  "micromegas",
  "micromegas-auth",
@@ -3993,6 +3994,7 @@ dependencies = [
  "object_store",
  "serde",
  "serde_json",
+ "tempfile",
  "tikv-jemallocator",
  "tokio",
  "url",
