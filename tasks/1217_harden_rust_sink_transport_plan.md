@@ -202,10 +202,10 @@ pending_stream_meta: Mutex<HashMap<uuid::Uuid, Arc<StreamInfo>>>,
   No enqueue. Idle streams cost one map entry and nothing on the wire.
 - `on_process_*_block` → before enqueuing the block, `remove(block.stream_id)`;
   if present, enqueue it as a `Metadata`-priority `Payload::Stream` first, then
-  enqueue the block. This guarantees `insert_stream` reaches the server before
-  the first `insert_block` for that stream (server ordering requirement
-  preserved). Subsequent blocks find no pending entry and skip straight to
-  enqueue.
+  enqueue the block. This enqueues `insert_stream` ahead of the first
+  `insert_block` for that stream (submission order only; the server tolerates
+  out-of-order arrival, matching Unreal). Subsequent blocks find no pending entry
+  and skip straight to enqueue.
 
 The `on_startup` process send stays eager (it's the connection primer and must
 precede everything).
@@ -293,6 +293,17 @@ drop path.
    `HttpEventSink::new` signature; select retry strategy by priority in `send()`.
 8. Add `TelemetryGuardBuilder` setters + `MICROMEGAS_*` env fallbacks; remove the
    `max_queue_size` field. Update the construction site (`lib.rs:427`).
+8a. Retire the two-profile retry API on `TelemetryGuardBuilder`: remove the public
+   `with_telemetry_metadata_retry` / `with_telemetry_blocks_retry` setters
+   (lib.rs:192–208) and their `telemetry_metadata_retry` /
+   `telemetry_blocks_retry` fields (lib.rs:89–91). Their role is subsumed by the
+   4-entry `retry_by_priority` table on `HttpSinkConfig`; expose a single
+   `with_retry_by_priority` setter (defaulting to the per-priority table above)
+   in their place. Rework `build()` (lib.rs:417–434) to populate the
+   `retry_by_priority` table and pass `HttpSinkConfig` to `HttpEventSink::new`
+   instead of the two positional retry strategies. (Removing the two setters is a
+   breaking API change, accepted alongside the `HttpEventSink::new` signature
+   change already approved.)
 
 ### Phase 4 — In-flight gating + dropped metric
 9. Add the `tokio::sync::Semaphore` gate (default cap 3) and spawn sends
