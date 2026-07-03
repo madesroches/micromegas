@@ -161,6 +161,18 @@ impl SharedQueue {
     /// Enqueues `item`, applying the graded byte-budget drop policy. Returns
     /// `false` if the item was dropped instead of queued.
     fn try_push(&self, item: QueuedItem) -> bool {
+        if self.shutdown.load(Ordering::SeqCst) {
+            // The worker has committed to (or already finished) its final
+            // drain and will never pop this item, so queuing it would leak
+            // it forever. Reject and report instead, matching the old
+            // mpsc-based sink's behavior of logging a post-shutdown send.
+            error!(
+                "dropping telemetry item enqueued after shutdown, priority={:?}",
+                item.priority
+            );
+            record_dropped_metric(item.priority);
+            return false;
+        }
         let current = self.queue_bytes.load(Ordering::Relaxed).max(0) as usize;
         let should_drop = match item.priority {
             UploadPriority::Metadata => false,
@@ -699,7 +711,11 @@ impl HttpEventSink {
                 }
             }
             // Reap finished sends so the JoinSet doesn't grow unbounded.
-            while join_set.try_join_next().is_some() {}
+            while let Some(result) = join_set.try_join_next() {
+                if let Err(e) = result {
+                    error!("telemetry send task panicked: {e}");
+                }
+            }
 
             // clamp to zero as the original code did: time_to_flush_seconds() returns i64
             // and goes negative when a flush is overdue; a negative value cast to
@@ -724,7 +740,11 @@ impl HttpEventSink {
             drained += 1;
             Self::spawn_item(&shared, &queue, item, &mut join_set, None);
         }
-        while join_set.join_next().await.is_some() {}
+        while let Some(result) = join_set.join_next().await {
+            if let Err(e) = result {
+                error!("telemetry send task panicked: {e}");
+            }
+        }
         debug!("telemetry thread shutdown complete, drained {drained} remaining items");
 
         let (lock, cvar) = &*shutdown_complete;
