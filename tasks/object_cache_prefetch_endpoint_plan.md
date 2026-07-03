@@ -151,6 +151,19 @@ method on `RangeCache` is required.)
 
 Worker concurrency is a soft knob; the hard ceiling remains the scheduler's `prefetch_permits`.
 
+**Deterministic drain/completion signal (for tests).** The detached `tokio::spawn` above surfaces no
+join handle, so a test has no way to observe when the pipeline has finished — a demand read issued
+right after `202` can race an in-flight (or not-yet-started) fill. To make completion observable
+without `tokio::time::sleep`, the worker tracks its spawned fills instead of firing-and-forgetting:
+collect them in a `tokio::task::JoinSet` (or an `AtomicUsize` in-flight counter paired with a
+`tokio::sync::Notify`) owned by the consumer loop. When the channel closes (all `Sender`s dropped),
+`rx.recv()` returns `None`; the loop then awaits every outstanding fill in the `JoinSet` before the
+consumer's `JoinHandle` resolves. A test therefore drives a deterministic drain by dropping the
+sender (or via an explicit shutdown handle) and awaiting that `JoinHandle` — at which point all
+enqueued fills have completed their `prefetch_blocks` calls. This drain covers the *fill* completion
+only; because §7 routes prefetch through foyer's asynchronous SSD flush, tests must additionally
+force/await the foyer flush before asserting cache presence (see Testing Strategy).
+
 ### 4. `POST /prefetch` handler
 
 ```text
@@ -266,29 +279,33 @@ via `backend.put(.., hint)`; only the hint-based branch inside `put` is new.
    demand → unchanged `insert_with_hint` (§7).
 
 ### Phase 2 — server endpoint + queue
-3. Add `prefetch_queue` module (or inline in `handlers.rs`) with the bounded `mpsc` + consumer-loop
-   builder returning `(Sender, JoinHandle)`.
-4. Extend `AppState` (`app_state.rs`) with `prefetch_tx: mpsc::Sender<PrefetchItem>` and the
+4. Add `prefetch_queue` module (or inline in `handlers.rs`) with the bounded `mpsc` + consumer-loop
+   builder returning `(Sender, JoinHandle)`. The worker exposes a deterministic drain/completion
+   signal for tests (§3): the consumer loop tracks spawned fills in a `JoinSet` (or an
+   `AtomicUsize` + `tokio::sync::Notify`), and on channel close it awaits every outstanding fill
+   before the `JoinHandle` resolves — so a test that drops the sender and awaits the handle knows
+   all fills are done, with no `tokio::time::sleep`.
+5. Extend `AppState` (`app_state.rs`) with `prefetch_tx: mpsc::Sender<PrefetchItem>` and the
    per-request key cap constant. This changes the `AppState::new` signature, so update every
    caller — including the `make_state` helper in `tests/memory_budget_tests.rs`, which must
    construct and pass a throwaway `prefetch_tx`. (Alternatively, keep the existing 3-arg
    constructor working via a builder/default so `make_state` is untouched.)
-5. Add `prefetch_handler` to `handlers.rs` (validation, cap, `try_send`, `202` + counts, no
+6. Add `prefetch_handler` to `handlers.rs` (validation, cap, `try_send`, `202` + counts, no
    mem_permit).
-6. In `object_cache_srv.rs`: add the two CLI options + startup validation; build the queue/worker;
+7. In `object_cache_srv.rs`: add the two CLI options + startup validation; build the queue/worker;
    store the sender in `AppState`; register `.route("/prefetch", post(prefetch_handler))` on
    `obj_router` (inside the auth layer).
 
 ### Phase 3 — client
-7. Add `CacheClientStore::prefetch` inherent method and `impl ObjectPrefetch for CacheClientStore`
+8. Add `CacheClientStore::prefetch` inherent method and `impl ObjectPrefetch for CacheClientStore`
    (`client.rs`).
 
 ### Phase 4 — metrics + docs + tests
-8. Metrics: `object_cache_prefetch_requests`, `object_cache_prefetch_keys_enqueued`,
+9. Metrics: `object_cache_prefetch_requests`, `object_cache_prefetch_keys_enqueued`,
    `object_cache_prefetch_dropped`, `object_cache_prefetch_keys_warmed`,
    `object_cache_prefetch_fill_error`, `range_cache_client_prefetch_error`.
-9. Docs (below).
-10. Tests (below).
+10. Docs (below).
+11. Tests (below).
 
 ## Files to Modify
 - `rust/object-cache/Cargo.toml` — add `serde.workspace = true` (derive) in alphabetical order.
@@ -349,13 +366,24 @@ via `backend.put(.., hint)`; only the hint-based branch inside `put` is new.
   origin-store wrapper (one that increments a counter on each origin GET) added for the suite.
   `memory_budget_tests.rs`'s `DelayedStore` only gates via a `Semaphore` and counts nothing, so it
   can be copied as a wrapping pattern but does not itself provide the request counter these
-  assertions require:
-  - `POST /prefetch` for uncached keys → `202`; after the fill drains, the blocks are present in the
-    backend and a subsequent demand `get_range` of the same key issues **no** new origin GET (served
-    from cache).
-  - **SSD-only admission** (§7): after a prefetch fill drains, the RAM (memory) tier byte usage is
-    unchanged — the prefetched block is served from SSD, not RAM (contrast a demand fill, which does
-    populate the RAM tier). Since callers supply `size`, this fill also issues no origin HEAD.
+  assertions require.
+  - **Deterministic completion, not `sleep`.** The prefetch pipeline is fully async (detached
+    fills in §3, async SSD flush in §7), so an assertion made "right after `202`" is racy. Every
+    warming assertion below is gated on a two-step deterministic wait, never
+    `tokio::time::sleep`: (a) **drain the worker** — drop the `prefetch_tx` (or trigger the
+    shutdown handle) and `await` the consumer's `JoinHandle` (§3), which resolves only after all
+    spawned `prefetch_blocks` fills have completed; then (b) **flush the SSD tier** — force/await
+    the foyer flush (e.g. an explicit `close()`/flush of the backend, the same deterministic-flush
+    mechanism existing cache tests use) so the ephemeral RAM record's asynchronous SSD write is
+    durable before reading. Only after (a) + (b) does the test assert presence / issue the demand
+    read.
+  - `POST /prefetch` for uncached keys → `202`; after draining the worker and flushing the SSD tier
+    (per above), the blocks are present in the backend and a subsequent demand `get_range` of the
+    same key issues **no** new origin GET (served from cache).
+  - **SSD-only admission** (§7): after draining the worker and flushing the SSD tier, the RAM
+    (memory) tier byte usage is unchanged — the prefetched block is served from SSD, not RAM
+    (contrast a demand fill, which does populate the RAM tier). Since callers supply `size`, this
+    fill also issues no origin HEAD.
   - Fills run at prefetch priority: a saturating prefetch batch does not starve a concurrent demand
     read (reuse the priority assertions from the #1203 suite at the HTTP layer).
   - Queue full → excess items reported as `dropped`, `object_cache_prefetch_dropped` incremented,
