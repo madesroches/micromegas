@@ -4,6 +4,8 @@ This file documents the historical progress of the Micromegas project. For curre
 
 ## Unreleased
 
+* **Tracing:**
+  * Harden the Rust telemetry sink's HTTP transport: priority queues with graded byte-budget dropping, lazy stream metadata (no `insert_stream` for idle/short-lived streams), per-priority retry tuning, and in-flight request gating with concurrent sends, porting the Unreal sink's resilience under backpressure and network flakiness to Rust (#1217)
 * **Caching:**
   * Add a standalone range-aware S3 read cache (`micromegas-object-cache-srv`) backed by local SSD (Foyer RAM+disk): new `micromegas-object-cache` crate (cache engine + client `ObjectStore` layer) and `object-cache-srv` HTTP binary, wired into `BlobStorage`; clients fall back to the direct store on miss/error. Adds an `object-cache.Dockerfile`, MinIO-backed local test scripts, and admin docs (#1122)
   * Store `FoyerBackend` cache values as `Bytes` instead of `Vec<u8>` to avoid full-block copies on every RAM-tier read hit and fill (#1195)
