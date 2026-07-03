@@ -8,6 +8,7 @@ use axum::{
 };
 use bytes::{BufMut, Bytes, BytesMut};
 use futures::Stream;
+use micromegas_object_cache::blocks::blocks_for_range;
 use micromegas_object_cache::range_cache::RangeError;
 use micromegas_object_cache::validation::validate_key;
 use micromegas_tracing::prelude::*;
@@ -285,11 +286,28 @@ pub async fn post_ranges_handler(
     // little-endian length prefix (see `buf.put_u64_le` below); account for
     // that overhead so the permit budget matches the actual assembled size.
     let response_bytes = total_requested.saturating_add(8 * req.ranges.len() as u64);
-    let permits_needed = permits_for_bytes(response_bytes);
+
+    // `get_ranges` retains a full block for every distinct block the ranges
+    // touch, all held simultaneously until assembly completes — so scattered
+    // small ranges amplify well past the requested bytes (4096 one-byte
+    // ranges in distinct 1 MiB blocks retain ~4 GiB). Dedupe blocks the same
+    // way `get_ranges` does and charge the budget for whichever is larger:
+    // the retained blocks or the framed response body.
+    let block_size = state.cache.block_size();
+    let mut touched_blocks = std::collections::BTreeSet::new();
+    for &[s, e] in &req.ranges {
+        let blk = blocks_for_range(s, e, block_size);
+        touched_blocks.extend(blk.start..blk.end);
+    }
+    let block_bytes = touched_blocks.len() as u64 * block_size;
+
+    let charged_bytes = response_bytes.max(block_bytes);
+    let permits_needed = permits_for_bytes(charged_bytes);
     if permits_needed > state.memory_budget_mb {
         warn!(
-            "rejected ranges for {key}: {total_requested} bytes exceeds the whole memory \
-             budget ({} MiB)",
+            "rejected ranges for {key}: {charged_bytes} charged bytes (response \
+             {response_bytes}, blocks {block_bytes}) exceeds the whole memory budget \
+             ({} MiB)",
             state.memory_budget_mb
         );
         return Err(StatusCode::PAYLOAD_TOO_LARGE);

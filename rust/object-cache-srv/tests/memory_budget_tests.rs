@@ -19,7 +19,7 @@ use micromegas_object_cache::range_cache::{
     DEFAULT_PROMOTE_WHOLE_BATCH, DEFAULT_TOTAL_FETCH_PERMITS, RangeCache,
 };
 use micromegas_object_cache_srv::app_state::AppState;
-use micromegas_object_cache_srv::handlers::get_range_handler;
+use micromegas_object_cache_srv::handlers::{get_range_handler, post_ranges_handler};
 
 /// Wraps an `ObjectStore`, blocking every *ranged* `get_opts` call (i.e. every
 /// `get_range`) on a semaphore gate until the test calls `add_permits`. HEAD
@@ -231,6 +231,43 @@ async fn permit_released_on_body_drop() {
         2,
         "permits released once the body is dropped"
     );
+}
+
+#[tokio::test]
+async fn scattered_small_ranges_charge_blocks_touched() {
+    let inner = Arc::new(InMemory::new());
+    let data = vec![3u8; 3 * 1024 * 1024];
+    put_bytes(&inner, "obj/z", &data).await;
+
+    // Three 1-byte ranges in three distinct 1 MiB blocks retain three full
+    // blocks during assembly, so they must be charged 3 permits (blocks
+    // touched), not 1 (requested bytes) — exceeding a 2 MiB budget.
+    let body = Bytes::from_static(br#"{"ranges": [[0,1],[1048576,1048577],[2097152,2097153]]}"#);
+    let state = make_state(inner.clone() as Arc<dyn ObjectStore>, 2);
+    let err = post_ranges_handler(
+        AxumPath("obj/z".to_string()),
+        State(state.clone()),
+        body.clone(),
+    )
+    .await
+    .expect_err("blocks touched exceed the whole budget");
+    assert_eq!(err, StatusCode::PAYLOAD_TOO_LARGE);
+    assert_eq!(state.mem_permits.available_permits(), 2);
+
+    // With a 4 MiB budget the same request goes through, holding 3 permits
+    // for the response body's lifetime.
+    let state = make_state(inner as Arc<dyn ObjectStore>, 4);
+    let resp = post_ranges_handler(AxumPath("obj/z".to_string()), State(state.clone()), body)
+        .await
+        .expect("response");
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(
+        state.mem_permits.available_permits(),
+        1,
+        "permits charged for the three distinct blocks touched"
+    );
+    drop(resp.into_body());
+    assert_eq!(state.mem_permits.available_permits(), 4);
 }
 
 #[tokio::test]

@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex as StdMutex, Weak};
 use anyhow::{Result, anyhow};
 use bytes::Bytes;
 use futures::future::join_all;
+use futures::stream::{self, FuturesUnordered, StreamExt};
 use micromegas_tracing::prelude::*;
 use object_store::{ObjectStore, ObjectStoreExt, path::Path};
 use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore, watch};
@@ -34,6 +35,11 @@ pub const DEFAULT_MAX_COALESCED_GET_BYTES: u64 = 8 * 1024 * 1024;
 /// Default promotion granularity: promote only the run(s) covering a demanded
 /// block, not the whole prefetch batch.
 pub const DEFAULT_PROMOTE_WHOLE_BATCH: bool = false;
+
+/// Concurrency for probing the cache backend for block hits before going to
+/// origin. Backend probes do real disk I/O on a foyer RAM-tier miss, so a
+/// large read probed sequentially would serialize hundreds of disk reads.
+const BACKEND_PROBE_CONCURRENCY: usize = 16;
 
 /// Relative urgency of an origin fetch. Lower is more urgent.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -434,6 +440,14 @@ impl RangeCache {
         }
     }
 
+    /// Size in bytes of one cache block. Every distinct block a request
+    /// touches is fetched and held whole, so callers gating memory (e.g. the
+    /// server's cross-request budget) need this to account for amplification
+    /// from small scattered ranges.
+    pub fn block_size(&self) -> u64 {
+        self.block_size
+    }
+
     #[span_fn]
     pub async fn size(&self, key: &str) -> Result<u64> {
         // The cache key carries no etag/version: see the module docs — keys
@@ -518,14 +532,38 @@ impl RangeCache {
 
         let mut hits: HashMap<u64, Bytes> = HashMap::new();
         let mut missing: Vec<u64> = Vec::new();
-        for &idx in indices {
-            imetric!("range_cache_block_request", "count", 1_u64);
-            let block_key = format!("blk:{}:{key}:{idx}", self.ns);
-            if let Some(data) = self.backend.get(&block_key).await {
-                imetric!("range_cache_block_backend_hit", "count", 1_u64);
-                hits.insert(idx, data);
-            } else {
-                missing.push(idx);
+        {
+            // Probe the backend with bounded concurrency: a foyer RAM-tier
+            // miss falls through to async disk I/O, and probing a large read
+            // one block at a time would serialize those disk reads. The
+            // futures are collected eagerly (not mapped lazily inside the
+            // stream) so the resulting future stays `Send`-inferable across
+            // `tokio::spawn` (rustc's HRTB limitation with borrowed closures).
+            let probe_futs: Vec<_> = indices
+                .iter()
+                .map(|&idx| {
+                    let block_key = format!("blk:{}:{key}:{idx}", self.ns);
+                    let backend = self.backend.clone();
+                    async move {
+                        imetric!("range_cache_block_request", "count", 1_u64);
+                        (idx, backend.get(&block_key).await)
+                    }
+                })
+                .collect();
+            let mut probes = stream::iter(probe_futs).buffer_unordered(BACKEND_PROBE_CONCURRENCY);
+            while let Some((idx, probe)) = probes.next().await {
+                match probe {
+                    Some(data) => {
+                        imetric!("range_cache_block_backend_hit", "count", 1_u64);
+                        // A prefetch has nothing to do with an already-cached
+                        // block, so drop the bytes immediately instead of
+                        // accumulating every hit for the whole call.
+                        if prio == Priority::Demand {
+                            hits.insert(idx, data);
+                        }
+                    }
+                    None => missing.push(idx),
+                }
             }
         }
 
@@ -638,6 +676,28 @@ impl RangeCache {
             });
         }
 
+        if prio == Priority::Prefetch {
+            // Join entries as each completes (not in index order), dropping
+            // the joined bytes and the `Arc<InFlight>` right away. The watch
+            // channel inside an entry retains the fulfilled `Bytes` — a slice
+            // sharing its whole run's GET buffer — for as long as the entry
+            // is alive, so holding every entry until all runs finished (as
+            // the demand path's `join_all` does) would let the prefetch peak
+            // reach the full request size instead of the documented
+            // `prefetch_concurrency * max_coalesced_get_bytes` bound. Any
+            // demand joiner that registered before completion still gets the
+            // bytes: it holds its own `Arc<InFlight>` and reads the channel
+            // independently of this early drop.
+            let mut joins: FuturesUnordered<_> = entries
+                .into_values()
+                .map(|entry| async move { entry.join().await.map(|_bytes| ()) })
+                .collect();
+            while let Some(r) = joins.next().await {
+                r.map_err(|e| reconstruct_shared_error(&e))?;
+            }
+            return Ok(HashMap::new());
+        }
+
         let joined = join_all(missing.iter().map(|idx| {
             let entry = entries
                 .get(idx)
@@ -647,13 +707,6 @@ impl RangeCache {
             async move { (idx, entry.join().await) }
         }))
         .await;
-
-        if prio == Priority::Prefetch {
-            for (_, r) in joined {
-                r.map_err(|e| reconstruct_shared_error(&e))?;
-            }
-            return Ok(HashMap::new());
-        }
 
         for (idx, r) in joined {
             let data = r.map_err(|e| reconstruct_shared_error(&e))?;
