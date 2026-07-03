@@ -27,8 +27,9 @@ issue delivers the reusable surface they build on.
     `prefetch_concurrency * max_coalesced_get_bytes`, not the request size.
   - Priority is enforced by `FetchScheduler`: `prefetch_permits` = `total - demand_reserved`
     (`range_cache.rs:174-175`), and a demand joiner promotes a prefetch entry via `own_or_join`
-    (`range_cache.rs:200-206`). Prefetched blocks land in foyer at `CacheHint::Low`
-    (`foyer_backend.rs:48-54`).
+    (`range_cache.rs:200-206`). Prefetched blocks currently land in foyer's RAM tier at
+    `CacheHint::Low` (`FoyerBackend::put` → `insert_with_hint`, `foyer_backend.rs:75-77`); §7 of this
+    plan changes prefetch to SSD-only admission so it never resides in RAM.
 - **No HTTP surface.** The router exposes only `/obj/{*key}` (GET/HEAD) and `/ranges/{*key}` (POST)
   (`rust/object-cache-srv/src/object_cache_srv.rs:167-170`). There is no prefetch route and no
   client method on `CacheClientStore` (`rust/object-cache/src/client.rs`).
@@ -54,7 +55,16 @@ wire shape is defined once (DRY):
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PrefetchItem {
     pub key: String,
-    /// None or empty = warm the whole object. Present = warm only these ranges.
+    /// The object's file size, supplied by the caller. Both triggers already know
+    /// it: `Partition.file_size` (persisted in PostgreSQL, `partition.rs:20`) for
+    /// query/write warming, and `PartitionWriteResult.file_size`
+    /// (`write_partition.rs:514`) for the write path. Supplying it lets the server
+    /// drive fills through `prefetch_blocks(key, file_size, indices)` with no
+    /// origin HEAD (prefetch targets cold objects, so a server-side `size()` would
+    /// force an avoidable HEAD).
+    pub size: u64,
+    /// None or empty = warm the whole object `[0, size)`. Present = warm only these
+    /// ranges (validated against `size`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ranges: Option<Vec<[u64; 2]>>,
 }
@@ -73,20 +83,24 @@ pub struct PrefetchResponse {
 ```
 
 Whole-object vs ranged is expressed by `ranges` being absent/empty vs populated, matching the
-issue's "optionally with ranges" wording.
+issue's "optionally with ranges" wording. `size` is always caller-supplied, so the server never
+resolves size itself.
 
-### 2. Core convenience: whole-object prefetch
+The `#[derive(Serialize, Deserialize)]` requires a `serde` dependency, which the crate does not yet
+have (`rust/object-cache/Cargo.toml` only has `serde_json`). Add `serde.workspace = true` (the
+workspace pins the `derive` feature, `rust/Cargo.toml:78`) in alphabetical order.
 
-`prefetch_ranges` needs explicit ranges, but the whole-object case (used by #1201 write warming)
-doesn't know the size. Add one small method to `RangeCache` (keeps size resolution in the core, DRY):
+### 2. Fills go through the size-carrying core path
 
-```rust
-pub async fn prefetch_object(&self, key: &str) -> Result<()> {
-    let size = self.size(key).await?;
-    if size == 0 { return Ok(()); }
-    self.prefetch_ranges(key, &[0..size]).await
-}
-```
+Because callers always supply `size`, the server drives fills through the existing size-carrying
+core method `prefetch_blocks(key, file_size, indices)` (`range_cache.rs:892`) — it takes the
+caller-known size and skips the cold-miss origin HEAD. There is **no** `prefetch_object` and no
+call to `self.size()`: whole-object warming is just `prefetch_blocks` over the block indices covering
+`[0, size)`.
+
+If a size-carrying ranged convenience is later wanted, it should take `file_size` explicitly,
+compute block indices from that size (whole object) or from the supplied ranges, and call
+`prefetch_blocks` — it must **not** call `self.size()`.
 
 ### 3. Bounded prefetch queue + worker (backpressure)
 
@@ -99,7 +113,9 @@ write/query path.
 - `PrefetchQueue`: a bounded `tokio::sync::mpsc::channel::<PrefetchItem>(capacity)`. The `Sender`
   goes in `AppState`; the `Receiver` is drained by a consumer task spawned at startup.
 - Consumer loop drives fills at bounded concurrency (a `Semaphore` sized by
-  `prefetch_worker_concurrency`), each fill calling `prefetch_object` or `prefetch_ranges`:
+  `prefetch_worker_concurrency`). Each fill computes block indices from the caller-supplied
+  `item.size` (whole object when `ranges` is absent/empty) or from the supplied ranges, then calls
+  `cache.prefetch_blocks(&item.key, item.size, indices)` — no `size()` lookup, no origin HEAD:
 
 ```text
 while let Some(item) = rx.recv().await {
@@ -107,21 +123,18 @@ while let Some(item) = rx.recv().await {
     let cache = cache.clone();
     tokio::spawn(async move {
         let _permit = permit;
-        let outcome = match item.ranges {
-            // None or empty = warm the whole object (matches §1 contract);
-            // an empty slice would otherwise no-op in prefetch_ranges.
-            None => cache.prefetch_object(&item.key).await,
-            Some(rs) if rs.is_empty() => cache.prefetch_object(&item.key).await,
-            // Trivial [s, e] -> s..e mapping. No guard needed here: inverted/
-            // degenerate pairs (s >= e) are already rejected by the handler
-            // (§4 step 3) before enqueue. prefetch_ranges itself only errors on
-            // out-of-bounds (end > file_size); it silently skips s >= e. An
-            // out-of-bounds Err is counted as a fill error below.
-            Some(rs) => {
+        // None or empty = whole object [0, size) (matches §1 contract);
+        // present = only the supplied ranges. Ranges are already validated
+        // against item.size by the handler (§4 step 3), so map [s, e] -> s..e.
+        let indices = match item.ranges {
+            None => block_indices_for(0..item.size),
+            Some(ref rs) if rs.is_empty() => block_indices_for(0..item.size),
+            Some(ref rs) => {
                 let ranges: Vec<Range<u64>> = rs.iter().map(|[s, e]| *s..*e).collect();
-                cache.prefetch_ranges(&item.key, &ranges).await
+                block_indices_for_ranges(&ranges)
             }
         };
+        let outcome = cache.prefetch_blocks(&item.key, item.size, indices).await;
         if let Err(e) = outcome {
             imetric!("object_cache_prefetch_fill_error", "count", 1);
             debug!("prefetch fill failed key={} : {e:?}", item.key);
@@ -131,6 +144,10 @@ while let Some(item) = rx.recv().await {
     });
 }
 ```
+
+(`block_indices_for` / `block_indices_for_ranges` denote the block-index computation from a byte
+range using the cache's block size — the same mapping the existing core path uses; no new public
+method on `RangeCache` is required.)
 
 Worker concurrency is a soft knob; the hard ceiling remains the scheduler's `prefetch_permits`.
 
@@ -143,11 +160,12 @@ prefetch_handler(State(state), body: Bytes) -> Result<Response, StatusCode>
 1. Deserialize `PrefetchRequest`; malformed JSON → `400`.
 2. Cap batch size: reject > `MAX_PREFETCH_KEYS_PER_REQUEST` with `400` (bounds per-request work on an
    authenticated endpoint). Cap ranges-per-key with the existing `MAX_RANGES_PER_REQUEST`.
-3. For each item: `validate_key(&item.key, &state.allowed_prefixes)`; reject inverted/degenerate
-   ranges (`s >= e`), matching the demand paths. `ranges` absent or empty is **accepted** as a
-   whole-object warm (per the §1 contract; the consumer loop routes it to `prefetch_object`), not
-   rejected. A failing item is **skipped** (counted in `rejected`), not fatal — a batch with one bad
-   key still warms the rest.
+3. For each item: `validate_key(&item.key, &state.allowed_prefixes)`; validate each supplied range
+   against the caller-known `item.size` — reject inverted/degenerate ranges (`s >= e`) and
+   out-of-bounds ranges (`e > item.size`), matching the demand paths. `ranges` absent or empty is
+   **accepted** as a whole-object warm of `[0, item.size)` (per the §1 contract; the consumer loop
+   computes the block indices from `item.size`), not rejected. A failing item is **skipped**
+   (counted in `rejected`), not fatal — a batch with one bad key still warms the rest.
 4. `try_send` each accepted item onto the queue:
    - `Ok` → `accepted += 1`
    - `Err(TrySendError::Full)` → `dropped += 1`, `imetric!("object_cache_prefetch_dropped", ..)`
@@ -212,12 +230,40 @@ other numeric knobs in `object_cache_srv.rs:39-68`:
 
 Reject `0` for either at startup (fatal config error), matching the existing guards.
 
+### 7. Prefetch is SSD-only (no RAM residency)
+
+Prefetched bytes must never occupy the RAM tier or pressure its byte budget — a prefetch must not
+evict hot demand entries. Today `FoyerBackend::put` (`foyer_backend.rs:75-77`) always calls
+`self.cache.insert_with_hint(key, value, hint.into())`, which inserts into the RAM (memory) tier
+first, so prefetched blocks currently live in RAM as `CacheHint::Low` (first-to-evict) entries.
+
+Change `FoyerBackend::put` to branch on the fill hint:
+
+- `FillHint::Prefetch` → `self.cache.storage_writer(key).insert(value)` — foyer 0.14.1's disk-only
+  admission path. It writes directly to the SSD tier and holds only an *ephemeral* RAM record that
+  is dropped immediately (`foyer` `hybrid/writer.rs:138-146`, ephemeral drop at `foyer-memory`
+  `raw.rs:738-748`), so it neither retains RAM nor evicts hot demand data. (`.force()` is available
+  to bypass the disk admission picker if needed.)
+- demand fills → unchanged, `insert_with_hint` (RAM tier).
+
+This supersedes the old `CacheHint::Low` RAM-residency behavior for prefetch: prefetched blocks no
+longer live in RAM at all. The backend write for both paths still happens at `range_cache.rs:679`
+via `backend.put(.., hint)`; only the hint-based branch inside `put` is new.
+
 ## Implementation Steps
 
-### Phase 1 — shared types + core convenience
-1. Add `rust/object-cache/src/prefetch.rs` with `PrefetchItem`/`PrefetchRequest`/`PrefetchResponse`
-   and the `ObjectPrefetch` trait; export from `rust/object-cache/src/lib.rs`.
-2. Add `RangeCache::prefetch_object` (`range_cache.rs`).
+### Phase 1 — shared types + dependencies
+1. Add `serde.workspace = true` (derive feature) to `rust/object-cache/Cargo.toml` in alphabetical
+   order — required for the `#[derive(Serialize, Deserialize)]` in `prefetch.rs` (the crate currently
+   has only `serde_json`).
+2. Add `rust/object-cache/src/prefetch.rs` with `PrefetchItem` (with required `size`)
+   /`PrefetchRequest`/`PrefetchResponse` and the `ObjectPrefetch` trait; export from
+   `rust/object-cache/src/lib.rs`. No new method on `RangeCache` is needed — the consumer drives
+   fills through the existing `prefetch_blocks(key, file_size, indices)` using the caller-supplied
+   `size`.
+3. Change `FoyerBackend::put` (`rust/object-cache/src/foyer_backend.rs`) to branch on the fill hint:
+   `FillHint::Prefetch` → `storage_writer(key).insert(value)` (SSD-only, ephemeral RAM record);
+   demand → unchanged `insert_with_hint` (§7).
 
 ### Phase 2 — server endpoint + queue
 3. Add `prefetch_queue` module (or inline in `handlers.rs`) with the bounded `mpsc` + consumer-loop
@@ -245,9 +291,12 @@ Reject `0` for either at startup (fatal config error), matching the existing gua
 10. Tests (below).
 
 ## Files to Modify
-- `rust/object-cache/src/prefetch.rs` (new) — shared types + `ObjectPrefetch` trait.
+- `rust/object-cache/Cargo.toml` — add `serde.workspace = true` (derive) in alphabetical order.
+- `rust/object-cache/src/prefetch.rs` (new) — shared types (`PrefetchItem` with required `size`) +
+  `ObjectPrefetch` trait.
 - `rust/object-cache/src/lib.rs` — export the new module.
-- `rust/object-cache/src/range_cache.rs` — `prefetch_object`.
+- `rust/object-cache/src/foyer_backend.rs` — `put` branches to SSD-only `storage_writer` for
+  `FillHint::Prefetch` (§7).
 - `rust/object-cache/src/client.rs` — `prefetch` method + trait impl.
 - `rust/object-cache-srv/src/app_state.rs` — queue sender + key cap (changes `AppState::new` signature).
 - `rust/object-cache-srv/tests/memory_budget_tests.rs` — update the `make_state` helper for the new
@@ -273,6 +322,15 @@ Reject `0` for either at startup (fatal config error), matching the existing gua
 - **Separate queue vs bare `tokio::spawn` per request.** A bare spawn is simpler but unbounded — a
   burst enqueues unbounded `InFlight` entries. The bounded queue is the backpressure mechanism the
   issue calls for.
+- **SSD-only prefetch vs RAM residency.** Prefetch writes bypass the RAM tier (§7), so a subsequent
+  demand hit on a prefetched block reads from SSD, not RAM (slightly slower than a RAM hit). In
+  exchange, prefetch never pressures the RAM byte budget and never evicts hot demand entries — the
+  point of a best-effort background warm.
+- **Caller-supplied size vs server-side resolution.** Requiring `size` on each `PrefetchItem` means
+  the server never issues an origin HEAD to size a cold object (which prefetch targets by
+  definition). Both triggers already have the size (`Partition.file_size` /
+  `PartitionWriteResult.file_size`), so this is free for callers and removes a network round-trip per
+  key.
 - **No negative-cache coupling here.** Warming a key that doesn't exist yet just fails the fill
   quietly; the NotFound-TTL interaction is #1196/#1201, out of scope.
 
@@ -280,12 +338,13 @@ Reject `0` for either at startup (fatal config error), matching the existing gua
 - `mkdocs/docs/admin/object-cache.md`: document `POST /prefetch` (body shape, `202` semantics,
   load-shedding) and add the two new env vars to the config table.
 - `rust/object-cache-srv/README.md`: mirror the endpoint + env additions.
-- `RangeCache` module doc / `prefetch_object` doc comment.
+- `PrefetchItem` doc comment (the required `size` contract) and the `FoyerBackend::put` SSD-only
+  branch (§7).
 - Changelog entry.
 
 ## Testing Strategy
-- **Unit** (`object-cache`): `PrefetchRequest`/`PrefetchResponse` serde round-trip;
-  `prefetch_object` on a zero-byte object is a no-op.
+- **Unit** (`object-cache`): `PrefetchRequest`/`PrefetchResponse`/`PrefetchItem` (with `size`) serde
+  round-trip; a whole-object fill with `size == 0` yields an empty block-index set and is a no-op.
 - **Server integration** (`object-cache-srv/tests/prefetch_tests.rs`): these tests need a counting
   origin-store wrapper (one that increments a counter on each origin GET) added for the suite.
   `memory_budget_tests.rs`'s `DelayedStore` only gates via a `Semaphore` and counts nothing, so it
@@ -294,6 +353,9 @@ Reject `0` for either at startup (fatal config error), matching the existing gua
   - `POST /prefetch` for uncached keys → `202`; after the fill drains, the blocks are present in the
     backend and a subsequent demand `get_range` of the same key issues **no** new origin GET (served
     from cache).
+  - **SSD-only admission** (§7): after a prefetch fill drains, the RAM (memory) tier byte usage is
+    unchanged — the prefetched block is served from SSD, not RAM (contrast a demand fill, which does
+    populate the RAM tier). Since callers supply `size`, this fill also issues no origin HEAD.
   - Fills run at prefetch priority: a saturating prefetch batch does not starve a concurrent demand
     read (reuse the priority assertions from the #1203 suite at the HTTP layer).
   - Queue full → excess items reported as `dropped`, `object_cache_prefetch_dropped` incremented,
@@ -312,9 +374,10 @@ Reject `0` for either at startup (fatal config error), matching the existing gua
 1. **`ObjectPrefetch` trait now or with the first consumer?** Defining it here fixes the contract but
    adds unused surface until #1200/#1201. Recommendation: add it now (cheap, and it's the reuse
    point); acceptable to defer to #1200 if we'd rather not ship an unused trait.
-2. **Whole-object prefetch scope for large objects.** `prefetch_object` warms every block of an
-   object. For a multi-GB partition (#1201) that is a lot at once — do we want a per-object block cap
-   here, or leave bounding to the queue + scheduler? Leaning: leave it to the queue/scheduler for
-   #1198 and revisit caps in #1200 (which handles trace-sized enumeration).
+2. **Whole-object fill scope for large objects.** A whole-object item warms every block covering
+   `[0, size)` via `prefetch_blocks` (using the caller-supplied `size`). For a multi-GB partition
+   (#1201) that is a lot of blocks at once — do we want a per-object block cap here, or leave
+   bounding to the queue + scheduler? Leaning: leave it to the queue/scheduler for #1198 and revisit
+   caps in #1200 (which handles trace-sized enumeration).
 3. **Response detail.** Is the `accepted/rejected/dropped` body useful to callers, or is a bare `202`
    with the detail only in metrics enough? Leaning: keep the small body — cheap and observable.
