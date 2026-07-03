@@ -55,3 +55,33 @@ async fn round_trip_through_disk_tier() {
     let got = backend.get("key").await.expect("get from disk tier");
     assert_eq!(got, data);
 }
+
+// A prefetch fill must be admitted to the SSD tier deterministically (via
+// `.force()`, bypassing the disk admission picker) and must not retain RAM-tier
+// residency: only an ephemeral record is held during the write, dropped
+// immediately once the disk enqueue completes.
+#[tokio::test]
+async fn prefetch_fill_lands_on_disk_not_ram() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir_path = dir.path().to_str().expect("utf8 path");
+    let data = Bytes::from(vec![9u8; 4096]);
+
+    let backend = FoyerBackend::new_with_shards(dir_path, 16 * 1024 * 1024, 16 * 1024 * 1024, 1)
+        .await
+        .expect("create backend");
+
+    let ram_before = backend.ram_usage();
+    backend
+        .put("prefetched".to_string(), data.clone(), FillHint::Prefetch)
+        .await;
+    let ram_after = backend.ram_usage();
+    assert_eq!(
+        ram_after, ram_before,
+        "a prefetch fill must not grow RAM-tier usage"
+    );
+
+    // Flush the SSD tier so the async disk write is durable before reading.
+    backend.close().await.expect("close backend");
+    let got = backend.get("prefetched").await.expect("get from disk tier");
+    assert_eq!(got, data);
+}

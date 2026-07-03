@@ -128,7 +128,15 @@ fn make_state(origin: Arc<dyn ObjectStore>, memory_budget_mb: u32) -> AppState {
         DEFAULT_MAX_COALESCED_GET_BYTES,
         DEFAULT_PROMOTE_WHOLE_BATCH,
     );
-    AppState::new(cache, vec!["obj".to_string()], memory_budget_mb)
+    // These tests never exercise prefetch; a throwaway sender with a
+    // dropped receiver is enough to satisfy `AppState`'s shape.
+    let (prefetch_tx, _rx) = tokio::sync::mpsc::channel(1);
+    AppState::new(
+        cache,
+        vec!["obj".to_string()],
+        memory_budget_mb,
+        prefetch_tx,
+    )
 }
 
 fn range_header(start: u64, end_inclusive: u64) -> HeaderMap {

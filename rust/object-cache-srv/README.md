@@ -23,11 +23,20 @@ allowed prefix.
 | `HEAD` | `/obj/{key}`   | Returns the object size in `Content-Length`.                                |
 | `GET`  | `/obj/{key}`   | Reads a single byte range (standard `Range: bytes=start-end` header). Replies `206 Partial Content` with a `Content-Range` header. |
 | `POST` | `/ranges/{key}`| Reads many ranges at once. Body: `{"ranges": [[start, end), ...]}`. Replies with each chunk length-prefixed as a little-endian `u64` followed by its bytes. |
+| `POST` | `/prefetch`    | Warms a batch of keys at prefetch priority without returning bytes. Body: `{"keys": [{"key": ..., "size": ..., "ranges": [[start, end), ...]}, ...]}` (`ranges` optional; absent/empty warms the whole object). Replies immediately with `202 Accepted` and `{"accepted": n, "rejected": n, "dropped": n}`. |
 
 Range bounds use half-open `[start, end)` semantics in the `POST` body. Inverted
 or zero-length ranges are rejected with `400`. A single request is capped at
 4096 ranges and 512 MiB of total requested bytes (`413 Payload Too Large`
 beyond that). Out-of-bounds ranges return `416 Range Not Satisfiable`.
+
+`/prefetch` enqueues each key onto a bounded background queue and returns
+without waiting for the fetch to complete. `size` must be the object's exact
+current size — the server trusts it to avoid an origin HEAD, since prefetch
+targets cold objects. A bad key or an inverted/out-of-bounds range fails only
+that item (`rejected`); a full queue load-sheds the item (`dropped`) rather
+than blocking the caller. Neither failure mode affects the response status,
+which is always `202` once the request itself parses.
 
 ## Authentication
 
@@ -58,6 +67,8 @@ All flags can be set via the listed environment variables.
 | `--max-coalesced-get-bytes`     | `MICROMEGAS_OBJECT_CACHE_MAX_COALESCED_GET_BYTES` | `8388608` | Max byte span of one coalesced run GET.                |
 | `--memory-budget-mb`            | `MICROMEGAS_OBJECT_CACHE_MEMORY_BUDGET_MB` | `1024`        | Cross-request cap on concurrently-assembled response bytes, in MiB. |
 | `--promote-whole-batch`         | `MICROMEGAS_OBJECT_CACHE_PROMOTE_WHOLE_BATCH` | `false`    | On a demand hit into a prefetch batch, promote the whole batch instead of only the covering run. |
+| `--prefetch-queue-capacity`     | `MICROMEGAS_OBJECT_CACHE_PREFETCH_QUEUE_CAPACITY` | `4096` | Depth of the bounded `/prefetch` queue; items beyond this are load-shed. |
+| `--prefetch-worker-concurrency` | `MICROMEGAS_OBJECT_CACHE_PREFETCH_WORKER_CONCURRENCY` | `8` | Concurrent in-flight prefetch fills driven by the queue worker. |
 
 > **Note:** `--origin-uri` must point at the bucket root with no path
 > component. The lake-root prefix arrives inside each request key, so a path on

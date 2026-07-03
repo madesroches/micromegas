@@ -6,4 +6,5 @@
 
 pub mod app_state;
 pub mod handlers;
+pub mod prefetch_queue;
 pub mod validation;

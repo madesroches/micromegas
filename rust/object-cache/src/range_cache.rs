@@ -575,6 +575,24 @@ impl RangeCache {
             while let Some((idx, probe)) = probes.next().await {
                 match probe {
                     Some(data) => {
+                        // A hit's length must match the block's true byte span.
+                        // A mismatch means a prior prefetch stored this block
+                        // under an undersized caller-supplied `size` (or the
+                        // origin object changed size): treat it as a miss so
+                        // it gets refetched and overwritten with the correct
+                        // bytes, healing the poisoned entry.
+                        let expected_range = block_byte_range(idx, self.block_size, file_size);
+                        let expected_len = expected_range.end - expected_range.start;
+                        if data.len() as u64 != expected_len {
+                            imetric!("range_cache_block_len_mismatch", "count", 1_u64);
+                            warn!(
+                                "range_cache block length mismatch key={key} idx={idx} \
+                                 expected={expected_len} got={}",
+                                data.len()
+                            );
+                            missing.push(idx);
+                            continue;
+                        }
                         imetric!("range_cache_block_backend_hit", "count", 1_u64);
                         // A prefetch has nothing to do with an already-cached
                         // block, so drop the bytes immediately instead of
