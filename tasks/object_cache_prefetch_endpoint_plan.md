@@ -1,33 +1,31 @@
 # Object Cache Prefetch Endpoint + Client Method Plan
 
-## Implementation status: IMPLEMENTED (branch not merged)
+## Implementation status: IN PROGRESS (branch not merged)
 
-Every phase is implemented on this branch (`prefetch.rs`, `prefetch_queue.rs`, `prefetch_handler`,
-the `FoyerBackend::put` SSD-only branch, the size-trust guard, the client `prefetch` method/trait,
-CLI knobs, docs, tests). The streaming refactor called for in the previous revision of this status
-note is done: `prefetch_queue.rs`'s consumer streams lazy `WINDOW_BLOCKS`-sized block-index windows
-(§3) instead of collecting the full index list, the `item.size > MAX_TOTAL_REQUESTED_BYTES`
-rejection is deleted from `prefetch_handler` (§4), and the size-cap docs text and the "oversized
-`size` rejected" test case are replaced with streaming/stop-on-error coverage (§ Testing Strategy).
-There is now no per-item size ceiling anywhere in the request path.
+Confirmed against the current tree: the shared types (`prefetch.rs`), the streaming
+`prefetch_queue.rs` consumer (lazy `WINDOW_BLOCKS`-sized windows, `buffered`/`for_each_concurrent`,
+stop-on-first-error — no `JoinSet`, no eager index collection), the §2 size-trust hit-path length
+guard in `range_cache.rs` (bumps `range_cache_block_len_mismatch`), the §7 SSD-only
+`FoyerBackend::put` branch (`storage_writer().force().insert`, `ram_usage()` accessor,
+`range_cache_prefetch_admission_unexpected_none` metric, `From<FillHint> for CacheHint` deleted),
+the client `prefetch` method/trait, CLI knobs, and the `prefetch_tests.rs` suite are all implemented
+and match this plan. There is no per-item size ceiling anywhere in the request path, and no test
+enforces one.
 
-`FoyerBackend::put`'s prefetch branch bumps `range_cache_prefetch_admission_unexpected_none` and
-logs a warning on the defensive (should-never-fire) case where `.force().insert(value)` returns
-`None`; it is in the metrics list (§ Implementation Steps step 10) and the docs' metrics table.
+**Remaining before this is actually done — Open Question #4's resolution (drop
+`MAX_PREFETCH_KEYS_PER_REQUEST`) has not been carried into the code or docs yet:**
 
-**Open Questions #4 is resolved: `MAX_PREFETCH_KEYS_PER_REQUEST` (the 4096-key batch cap, §4 step 2)
-is not necessary and is being removed.** axum applies an implicit 2 MiB request-body limit by
-default (`axum-core`'s `with_limited_body`, `DEFAULT_LIMIT = 2_097_152`) unless a router adds a
-`DefaultBodyLimit` layer; `object_cache_srv.rs` never adds one for `obj_router`, so `/prefetch`'s
-`body: Bytes` extraction — like `/ranges`' — already runs under that 2 MiB cap. That bounds JSON
-parse cost and total item/range count far more tightly than a flat key-count check ever would, and
-the handler's own per-item loop (`validate_key`, range-bounds check, `try_send`) is O(1) and cheap
-per item, so there is no unbounded per-request cost left for the count cap to guard against — the
-same reasoning that removed the per-item `size` cap. Unlike that cap, this one's failure mode is
-rejecting a batch of many *small* items (e.g. write-time warming batching thousands of tiny
-partition keys) that would fit comfortably under 2 MiB and cost nothing to process. See "Superseded:
-the batch-size cap" below. **Plan updated; the code (`handlers.rs`) still has the constant and needs
-a follow-up change to match.**
+1. `rust/object-cache-srv/src/handlers.rs:32-34` still declares `MAX_PREFETCH_KEYS_PER_REQUEST: usize
+   = 4096` (with a doc comment describing it as an intentional, load-bearing cap), and `handlers.rs:
+   387-393` still rejects `req.keys.len() > MAX_PREFETCH_KEYS_PER_REQUEST` with `400`. Both need
+   deleting — see "Superseded: the batch-size cap" below for why.
+2. `mkdocs/docs/admin/object-cache.md:118` and `rust/object-cache-srv/README.md:36` still say "A
+   batch is capped at 4096 keys" — needs rewriting to state the batch size is bounded only by the
+   server's default 2 MiB request-body limit (unconfigured for this endpoint).
+3. Once the cap is removed, `prefetch_tests.rs` has no test asserting a >4096-key batch is accepted
+   (it does already assert no per-item `size` cap via `huge_declared_size_is_accepted_no_cap`) — worth
+   adding for symmetry, though not required for correctness since the handler's loop cost doesn't
+   scale badly with count either way.
 
 Tracking: [#1198](https://github.com/madesroches/micromegas/issues/1198) — part of
 [#1197](https://github.com/madesroches/micromegas/issues/1197) (prefetch support). Builds on the
