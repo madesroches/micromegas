@@ -115,7 +115,7 @@ per-request cap:
 
 `size` must be the object's exact current size, supplied by the caller — the server trusts it rather than issuing an origin HEAD, since prefetch targets objects that are typically cold. `ranges` is optional; when absent or empty the whole object `[0, size)` is warmed, otherwise only the listed `[start, end)` ranges are.
 
-A batch is capped at 4096 keys — a request with more is rejected outright with `400`. Within an accepted batch, an item whose `size` exceeds 512 MiB is rejected individually (counted in `rejected` below) rather than failing the whole request.
+A batch is capped at 4096 keys — a request with more is rejected outright with `400`. There is no per-item size limit: the fill worker streams the block-index space in bounded windows rather than materializing it, so warming an arbitrarily large (or even bogus) `size` costs constant per-item memory. An oversized `size` just stops warming at the first origin fetch past the object's real end.
 
 The endpoint returns immediately with `202 Accepted` and a small JSON body:
 
@@ -178,5 +178,6 @@ The cache emits metrics through the standard micromegas tracing sink (queryable 
 | `object_cache_prefetch_dropped` | cache server | Prefetch items load-shed because the queue was full. A sustained non-zero rate means prefetch volume exceeds `MICROMEGAS_OBJECT_CACHE_PREFETCH_QUEUE_CAPACITY` / worker throughput. |
 | `object_cache_prefetch_keys_warmed` / `object_cache_prefetch_fill_error` | cache server | Prefetch fills that completed successfully vs. failed (e.g. key not found at the origin). |
 | `range_cache_client_prefetch_error` | each client | `CacheClientStore::prefetch` calls that failed (transport error or non-2xx). Best-effort — callers do not retry. |
+| `range_cache_prefetch_admission_unexpected_none` | cache server | Defensive counter in the SSD-only prefetch admission path (`FoyerBackend::put`): bumped if `.force().insert(value)` unexpectedly returns `None`. Should never fire; a sustained non-zero rate points to an admission-path regression. |
 
 Routine fallback-to-direct is by-design graceful degradation and is logged at `debug` (not `warn`). Genuinely unexpected conditions — a truncated cache response, a backend IO fault, an internal server error — log at `warn`/`error`.

@@ -269,6 +269,37 @@ async fn prefetch_ssd_only_leaves_ram_usage_unchanged() {
 }
 
 #[tokio::test]
+async fn zero_size_prefetch_is_a_no_op() {
+    // Exercises the empty-span guard end-to-end: `blocks_for_range` underflows
+    // on `end == 0` (debug_assert! in test builds), so a broken guard would
+    // panic this test rather than silently pass.
+    let store = Arc::new(InMemory::new());
+    let counting = CountingStore::new(store as Arc<dyn ObjectStore>);
+    let cache = memory_cache(counting.clone() as Arc<dyn ObjectStore>, 1024);
+    let (prefetch_tx, worker) = spawn_prefetch_worker(cache.clone(), 16, 4);
+    let state = AppState::new(cache, vec!["obj".to_string()], 1024, prefetch_tx);
+
+    let req = PrefetchRequest {
+        keys: vec![PrefetchItem {
+            key: "obj/empty".to_string(),
+            size: 0,
+            ranges: None,
+        }],
+    };
+    let resp = call_prefetch(&state, &req).await;
+    assert_eq!(resp.accepted, 1);
+
+    drop(state);
+    worker.await.expect("worker task join");
+
+    assert_eq!(
+        counting.get_range_count(),
+        0,
+        "size == 0 must produce an empty window set, not an origin call"
+    );
+}
+
+#[tokio::test]
 async fn full_queue_load_sheds_excess_items() {
     // No consumer drains this channel, so its single buffer slot fills
     // immediately and every subsequent `try_send` observes `Full`
@@ -331,14 +362,6 @@ async fn invalid_items_are_rejected_valid_ones_still_enqueued() {
                 size: 10,
                 ranges: Some(vec![[0, 20]]),
             },
-            // Oversized whole-object size: must be rejected before it ever
-            // reaches `block_indices_for`, which would otherwise try to
-            // allocate one `u64` per block for a bogus multi-exabyte object.
-            PrefetchItem {
-                key: "obj/huge".to_string(),
-                size: u64::MAX,
-                ranges: None,
-            },
             // Valid.
             PrefetchItem {
                 key: "obj/valid".to_string(),
@@ -349,8 +372,84 @@ async fn invalid_items_are_rejected_valid_ones_still_enqueued() {
     };
     let resp = call_prefetch(&state, &req).await;
     assert_eq!(resp.accepted, 1);
-    assert_eq!(resp.rejected, 4);
+    assert_eq!(resp.rejected, 3);
     assert_eq!(resp.dropped, 0);
+}
+
+#[tokio::test]
+async fn huge_declared_size_is_accepted_no_cap() {
+    // There is no per-item size cap: the streaming worker (not the handler)
+    // is what bounds per-item work, so even a garbage `u64::MAX` size must be
+    // accepted rather than rejected.
+    let (prefetch_tx, _rx) = tokio::sync::mpsc::channel::<PrefetchItem>(16);
+    let store = Arc::new(InMemory::new());
+    let cache = memory_cache(store as Arc<dyn ObjectStore>, 1024);
+    let state = AppState::new(cache, vec!["obj".to_string()], 1024, prefetch_tx);
+
+    let req = PrefetchRequest {
+        keys: vec![PrefetchItem {
+            key: "obj/huge".to_string(),
+            size: u64::MAX,
+            ranges: None,
+        }],
+    };
+    let resp = call_prefetch(&state, &req).await;
+    assert_eq!(resp.accepted, 1);
+    assert_eq!(resp.rejected, 0);
+    assert_eq!(resp.dropped, 0);
+}
+
+#[tokio::test]
+async fn oversized_declared_size_streams_and_stops_at_true_eof() {
+    // The worker streams block-index windows in chunks of WINDOW_BLOCKS (64,
+    // `prefetch_queue.rs`). Picking a small block_size here keeps the test
+    // fast while still exercising several full windows before the declared
+    // size runs the stream off the end of the real object.
+    let block_size = 16u64;
+    let true_size = 5 * 64 * block_size; // exactly 5 full windows: bytes [0, 5120)
+    let store = Arc::new(InMemory::new());
+    let data: Vec<u8> = (0u8..=255).cycle().take(true_size as usize).collect();
+    put_bytes(&store, "obj/huge", &data).await;
+
+    let counting = CountingStore::new(store.clone() as Arc<dyn ObjectStore>);
+    let cache = memory_cache(counting.clone() as Arc<dyn ObjectStore>, block_size);
+    let (prefetch_tx, worker) = spawn_prefetch_worker(cache.clone(), 16, 4);
+    let state = AppState::new(cache.clone(), vec!["obj".to_string()], 1024, prefetch_tx);
+
+    // A garbage caller-supplied size: the handler applies no size cap, and the
+    // streaming worker must not OOM or hang -- it streams windows lazily and
+    // stops at the first origin error past the true EOF.
+    let req = PrefetchRequest {
+        keys: vec![PrefetchItem {
+            key: "obj/huge".to_string(),
+            size: u64::MAX,
+            ranges: None,
+        }],
+    };
+    let resp = call_prefetch(&state, &req).await;
+    assert_eq!(resp.accepted, 1);
+
+    drop(state);
+    worker.await.expect("worker task join");
+
+    // The windows fully inside the true object were warmed before the worker
+    // hit the first out-of-bounds window and stopped.
+    let gets_from_prefetch = counting.get_range_count();
+    assert!(
+        gets_from_prefetch > 0,
+        "the in-bounds windows must have been fetched"
+    );
+
+    let got = cache
+        .get_range("obj/huge", 0..true_size)
+        .await
+        .expect("demand read over the real object");
+    assert_eq!(&got[..], &data[..]);
+    assert_eq!(
+        counting.get_range_count(),
+        gets_from_prefetch,
+        "the real range must be served entirely from cache, not origin"
+    );
 }
 
 #[tokio::test]

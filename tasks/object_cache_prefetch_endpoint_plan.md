@@ -1,27 +1,23 @@
 # Object Cache Prefetch Endpoint + Client Method Plan
 
-## Implementation status: IN PROGRESS (branch not merged)
+## Implementation status: IMPLEMENTED (branch not merged)
 
-A first cut of every phase exists on this branch (`prefetch.rs`, `prefetch_queue.rs`,
-`prefetch_handler`, the `FoyerBackend::put` SSD-only branch, the size-trust guard, the client
-`prefetch` method/trait, CLI knobs, docs, tests). A branch review then surfaced that the
-whole-object fill path materializes the block-index list eagerly, which forced a stopgap 512 MiB
-per-item size cap. **That cap is being replaced, before merge, by a lazy-window streaming worker**
-— see §2/§3 and "Superseded: the size cap" below. This document now describes the streaming design
-as the target; the size cap and its `MAX_TOTAL_REQUESTED_BYTES` reuse are removed, not kept.
+Every phase is implemented on this branch (`prefetch.rs`, `prefetch_queue.rs`, `prefetch_handler`,
+the `FoyerBackend::put` SSD-only branch, the size-trust guard, the client `prefetch` method/trait,
+CLI knobs, docs, tests). The streaming refactor called for in the previous revision of this status
+note is done: `prefetch_queue.rs`'s consumer streams lazy `WINDOW_BLOCKS`-sized block-index windows
+(§3) instead of collecting the full index list, the `item.size > MAX_TOTAL_REQUESTED_BYTES`
+rejection is deleted from `prefetch_handler` (§4), and the size-cap docs text and the "oversized
+`size` rejected" test case are replaced with streaming/stop-on-error coverage (§ Testing Strategy).
+There is now no per-item size ceiling anywhere in the request path.
 
-Remaining work to land the refactor (tracked inline in the Implementation Steps):
-- Rewrite the `prefetch_queue.rs` consumer to stream lazy block-index windows (§3) instead of
-  collecting the full index list and issuing one `prefetch_blocks` call per item.
-- Delete the `item.size > MAX_TOTAL_REQUESTED_BYTES` rejection from `prefetch_handler` (§4) and the
-  docs text that states a per-item size cap.
-- Update tests: replace the "oversized `size` rejected" case with the streaming stop-on-error bound
-  (§ Testing Strategy).
+`FoyerBackend::put`'s prefetch branch bumps `range_cache_prefetch_admission_unexpected_none` and
+logs a warning on the defensive (should-never-fire) case where `.force().insert(value)` returns
+`None`; it is in the metrics list (§ Implementation Steps step 10) and the docs' metrics table.
 
-One small deviation already on the branch, kept: `FoyerBackend::put`'s prefetch branch bumps a
-metric, `range_cache_prefetch_admission_unexpected_none`, and logs a warning on the defensive
-(should-never-fire) case where `.force().insert(value)` returns `None`. Add it to the metrics list
-(§ Implementation Steps step 10) and the docs' metrics tables when finalizing.
+Before merge, see **Open Questions #4**: whether `MAX_PREFETCH_KEYS_PER_REQUEST` (the 4096-key batch
+cap, §4 step 2) is still a necessary limit now that streaming has removed the analogous per-item
+size cap, or whether it bounds a genuinely different cost that streaming doesn't touch.
 
 Tracking: [#1198](https://github.com/madesroches/micromegas/issues/1198) — part of
 [#1197](https://github.com/madesroches/micromegas/issues/1197) (prefetch support). Builds on the
@@ -497,7 +493,9 @@ updated rationale that no longer references prefetch).
 10. Metrics: `object_cache_prefetch_requests`, `object_cache_prefetch_keys_enqueued`,
     `object_cache_prefetch_dropped`, `object_cache_prefetch_keys_warmed`,
     `object_cache_prefetch_fill_error`, `range_cache_client_prefetch_error`,
-    `range_cache_block_len_mismatch` (§2 guard).
+    `range_cache_block_len_mismatch` (§2 guard), `range_cache_prefetch_admission_unexpected_none`
+    (§7's defensive `FoyerBackend::put` branch — should never fire; a sustained non-zero rate means
+    foyer's `.force().insert(value)` is returning `None` when it shouldn't).
 11. Docs (below).
 12. Tests (below).
 
@@ -691,3 +689,14 @@ round trip, negligible next to the actual I/O.
    undersized one by the §2 length guard.
 3. **Response detail.** Is the `accepted/rejected/dropped` body useful to callers, or is a bare `202`
    with the detail only in metrics enough? Leaning: keep the small body — cheap and observable.
+4. **Is `MAX_PREFETCH_KEYS_PER_REQUEST` (4096, §4 step 2) still a necessary limit, now that streaming
+   removes the analogous per-item size cap?** The size cap existed because per-item work was
+   proportional to `size`; streaming windows made that bound unconditional, so the size cap could be
+   deleted outright (§2/§3, "Superseded: the size cap"). The batch-size cap bounds something
+   different — the handler's own per-request loop over `req.keys` (validation, `try_send`) and the
+   JSON body size — not per-item fill work, so it isn't obviously fixed by the same streaming change.
+   Before landing, check whether the per-request loop itself has any cost that scales badly with an
+   unbounded key count (e.g., deserializing an arbitrarily large JSON body before any validation
+   runs) and whether that's better addressed by a body-size limit than a key-count cap. Leaning:
+   probably still worth keeping *some* batch cap independent of the streaming fix, since it bounds
+   request-parsing/handler-loop cost rather than fill cost — but confirm rather than assume.

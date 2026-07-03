@@ -34,11 +34,12 @@ beyond that). Out-of-bounds ranges return `416 Range Not Satisfiable`.
 without waiting for the fetch to complete. `size` must be the object's exact
 current size — the server trusts it to avoid an origin HEAD, since prefetch
 targets cold objects. A batch is capped at 4096 keys (`400` for the whole
-request beyond that). A bad key, a `size` over 512 MiB, or an
-inverted/out-of-bounds range fails only that item (`rejected`); a full queue
-load-sheds the item (`dropped`) rather than blocking the caller. Neither
-failure mode affects the response status, which is always `202` once the
-request itself parses.
+request beyond that); there is no per-item size limit, since the fill worker
+streams the block-index space in bounded windows rather than materializing
+it. A bad key or an inverted/out-of-bounds range fails only that item
+(`rejected`); a full queue load-sheds the item (`dropped`) rather than
+blocking the caller. Neither failure mode affects the response status, which
+is always `202` once the request itself parses.
 
 ## Authentication
 

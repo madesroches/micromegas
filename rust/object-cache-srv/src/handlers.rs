@@ -411,21 +411,11 @@ pub async fn prefetch_handler(
             rejected += 1;
             continue;
         }
-        // `item.size` is caller-supplied and, for a whole-object warm (no/empty
-        // ranges), flows straight into `block_indices_for(size, block_size)` in
-        // the worker, which eagerly collects one `u64` per block *before* any
-        // other bound applies. An unchecked size (e.g. `u64::MAX`) would blow up
-        // that allocation and abort the process. Cap it the same as the
-        // `/ranges` byte budget; since every range's end is already validated
-        // against `item.size` below, this also bounds explicit range spans.
-        if item.size > MAX_TOTAL_REQUESTED_BYTES {
-            warn!(
-                "rejected prefetch key {}: size {} exceeds max {MAX_TOTAL_REQUESTED_BYTES}",
-                item.key, item.size
-            );
-            rejected += 1;
-            continue;
-        }
+        // `item.size` is intentionally NOT capped: the worker streams the
+        // block-index space in bounded windows (`prefetch_queue.rs`) rather
+        // than materializing it, so per-item work is bounded regardless of
+        // `size`, and an over-claimed `size` is bounded by stop-on-first-error
+        // once fills start. This lets legitimate multi-GB partitions warm.
         // Absent/empty ranges = whole-object warm of [0, item.size), per the
         // shared-type contract; only present ranges need bounds validation.
         let has_invalid_range = item
