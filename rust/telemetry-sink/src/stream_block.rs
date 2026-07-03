@@ -10,7 +10,7 @@ use micromegas_tracing::{
 };
 use micromegas_transit::HeterogeneousQueue;
 
-pub trait StreamBlock {
+pub trait StreamBlock: Send + Sync {
     /// Encodes the stream block into a binary format.
     ///
     /// This function serializes the block data, compresses it, and then encodes it

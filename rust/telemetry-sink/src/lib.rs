@@ -60,7 +60,7 @@ mod native {
     };
 
     use crate::composite_event_sink::CompositeSink;
-    use crate::http_event_sink::HttpEventSink;
+    use crate::http_event_sink::{HttpEventSink, HttpSinkConfig};
     use crate::local_event_sink::LocalEventSink;
     use crate::system_monitor::spawn_system_monitor;
 
@@ -77,7 +77,6 @@ mod native {
         metrics_buffer_size: usize,
         threads_buffer_size: usize,
         target_max_levels: HashMap<String, String>,
-        max_queue_size: isize,
         max_level_override: Option<LevelFilter>,
         interop_max_level_override: Option<LevelFilter>,
         install_log_capture: bool,
@@ -86,9 +85,12 @@ mod native {
         local_sink_max_level: LevelFilter,
         telemetry_sink_url: Option<String>,
         telemetry_sink_max_level: LevelFilter,
-        telemetry_metadata_retry:
-            Option<core::iter::Take<tokio_retry::strategy::ExponentialBackoff>>,
-        telemetry_blocks_retry: Option<core::iter::Take<tokio_retry::strategy::ExponentialBackoff>>,
+        telemetry_max_queue_bytes: Option<usize>,
+        telemetry_hard_queue_bytes: Option<usize>,
+        telemetry_max_in_flight_requests: Option<usize>,
+        telemetry_request_timeout: Option<std::time::Duration>,
+        telemetry_retry_by_priority:
+            Option<[core::iter::Take<tokio_retry::strategy::ExponentialBackoff>; 4]>,
         telemetry_make_request_decorator: Box<dyn FnOnce() -> Arc<dyn RequestDecorator> + Send>,
         extra_sinks: HashMap<TypeId, (LevelFilter, BoxedEventSink)>,
         system_metrics_enabled: bool,
@@ -106,13 +108,15 @@ mod native {
                 local_sink_max_level: LevelFilter::Info,
                 telemetry_sink_url: None,
                 telemetry_sink_max_level: LevelFilter::Debug,
-                telemetry_metadata_retry: None,
-                telemetry_blocks_retry: None,
+                telemetry_max_queue_bytes: None,
+                telemetry_hard_queue_bytes: None,
+                telemetry_max_in_flight_requests: None,
+                telemetry_request_timeout: None,
+                telemetry_retry_by_priority: None,
                 telemetry_make_request_decorator: Box::new(|| {
                     Arc::new(crate::request_decorator::TrivialRequestDecorator {})
                 }),
                 target_max_levels: HashMap::default(),
-                max_queue_size: 16, //todo: change to nb_threads * 2
                 max_level_override: None,
                 interop_max_level_override: None,
                 install_log_capture: false,
@@ -189,21 +193,57 @@ mod native {
             self
         }
 
+        /// Soft byte cap for the telemetry upload queue: once reached, new
+        /// `Traces` items (thread and image blocks) are dropped first.
+        /// Falls back to `MICROMEGAS_TELEMETRY_MAX_QUEUE_BYTES`, then
+        /// [`HttpSinkConfig::DEFAULT_MAX_QUEUE_BYTES`].
         #[must_use]
-        pub fn with_telemetry_metadata_retry(
-            mut self,
-            retry_strategy: core::iter::Take<tokio_retry::strategy::ExponentialBackoff>,
-        ) -> Self {
-            self.telemetry_metadata_retry = Some(retry_strategy);
+        pub fn with_max_queue_bytes(mut self, bytes: usize) -> Self {
+            self.telemetry_max_queue_bytes = Some(bytes);
             self
         }
 
+        /// Hard byte cap for the telemetry upload queue: once reached, `Logs`
+        /// and `Metrics` items are dropped too (`Metadata` is never
+        /// dropped). Falls back to `MICROMEGAS_TELEMETRY_HARD_QUEUE_BYTES`,
+        /// then [`HttpSinkConfig::DEFAULT_HARD_QUEUE_BYTES`].
         #[must_use]
-        pub fn with_telemetry_blocks_retry(
+        pub fn with_hard_queue_bytes(mut self, bytes: usize) -> Self {
+            self.telemetry_hard_queue_bytes = Some(bytes);
+            self
+        }
+
+        /// Maximum number of `insert_*` HTTP requests in flight at once.
+        /// Falls back to `MICROMEGAS_TELEMETRY_MAX_IN_FLIGHT_REQUESTS`, then
+        /// [`HttpSinkConfig::DEFAULT_MAX_IN_FLIGHT_REQUESTS`].
+        #[must_use]
+        pub fn with_max_in_flight_requests(mut self, max_in_flight_requests: usize) -> Self {
+            self.telemetry_max_in_flight_requests = Some(max_in_flight_requests);
+            self
+        }
+
+        /// Per-request timeout (covers connect + send + receive for one
+        /// attempt). Bounds how long a single retry attempt can hang against
+        /// an ingestion service that accepts connections but never responds,
+        /// which otherwise would make shutdown block indefinitely (`Drop for
+        /// HttpEventSink` joins the worker thread). Falls back to
+        /// `MICROMEGAS_TELEMETRY_REQUEST_TIMEOUT_SECS`, then
+        /// [`HttpSinkConfig::DEFAULT_REQUEST_TIMEOUT`].
+        #[must_use]
+        pub fn with_request_timeout(mut self, timeout: std::time::Duration) -> Self {
+            self.telemetry_request_timeout = Some(timeout);
+            self
+        }
+
+        /// Retry strategy per upload priority (indexed by
+        /// `UploadPriority as usize`: Metadata, Logs, Metrics, Traces).
+        /// Defaults to [`HttpSinkConfig::default_retry_by_priority`].
+        #[must_use]
+        pub fn with_retry_by_priority(
             mut self,
-            retry_strategy: core::iter::Take<tokio_retry::strategy::ExponentialBackoff>,
+            retry_by_priority: [core::iter::Take<tokio_retry::strategy::ExponentialBackoff>; 4],
         ) -> Self {
-            self.telemetry_blocks_retry = Some(retry_strategy);
+            self.telemetry_retry_by_priority = Some(retry_by_priority);
             self
         }
 
@@ -414,21 +454,54 @@ mod native {
                         .filter(|url| !url.trim().is_empty());
 
                     if let Some(url) = telemetry_sink_url {
-                        let metadata_retry = self.telemetry_metadata_retry.unwrap_or_else(|| {
-                            // 10 retries: up to ~5s total — enough for a co-located ingestion
-                            // server (e.g. monolith) to finish its startup before giving up.
-                            tokio_retry::strategy::ExponentialBackoff::from_millis(10).take(10)
-                        });
-                        let blocks_retry = self.telemetry_blocks_retry.unwrap_or_else(|| {
-                            tokio_retry::strategy::ExponentialBackoff::from_millis(10).take(3)
-                        });
+                        let max_queue_bytes = self
+                            .telemetry_max_queue_bytes
+                            .or_else(|| {
+                                std::env::var("MICROMEGAS_TELEMETRY_MAX_QUEUE_BYTES")
+                                    .ok()
+                                    .and_then(|v| v.parse().ok())
+                            })
+                            .unwrap_or(HttpSinkConfig::DEFAULT_MAX_QUEUE_BYTES);
+                        let hard_queue_bytes = self
+                            .telemetry_hard_queue_bytes
+                            .or_else(|| {
+                                std::env::var("MICROMEGAS_TELEMETRY_HARD_QUEUE_BYTES")
+                                    .ok()
+                                    .and_then(|v| v.parse().ok())
+                            })
+                            .unwrap_or(HttpSinkConfig::DEFAULT_HARD_QUEUE_BYTES);
+                        let max_in_flight_requests = self
+                            .telemetry_max_in_flight_requests
+                            .or_else(|| {
+                                std::env::var("MICROMEGAS_TELEMETRY_MAX_IN_FLIGHT_REQUESTS")
+                                    .ok()
+                                    .and_then(|v| v.parse().ok())
+                            })
+                            .unwrap_or(HttpSinkConfig::DEFAULT_MAX_IN_FLIGHT_REQUESTS);
+                        let request_timeout = self
+                            .telemetry_request_timeout
+                            .or_else(|| {
+                                std::env::var("MICROMEGAS_TELEMETRY_REQUEST_TIMEOUT_SECS")
+                                    .ok()
+                                    .and_then(|v| v.parse().ok())
+                                    .map(std::time::Duration::from_secs)
+                            })
+                            .unwrap_or(HttpSinkConfig::DEFAULT_REQUEST_TIMEOUT);
+                        let retry_by_priority = self
+                            .telemetry_retry_by_priority
+                            .unwrap_or_else(HttpSinkConfig::default_retry_by_priority);
+                        let config = HttpSinkConfig {
+                            max_queue_bytes,
+                            hard_queue_bytes,
+                            max_in_flight_requests,
+                            request_timeout,
+                            retry_by_priority,
+                        };
                         sinks.push((
                             self.telemetry_sink_max_level,
                             Box::new(HttpEventSink::new(
                                 &url,
-                                self.max_queue_size,
-                                metadata_retry,
-                                blocks_retry,
+                                config,
                                 self.telemetry_make_request_decorator,
                             )),
                         ));

@@ -50,7 +50,7 @@ impl From<RequestDecoratorError> for tokio_retry2::RetryError<anyhow::Error> {
 pub type Result<T> = std::result::Result<T, RequestDecoratorError>;
 
 #[async_trait] // otherwise we get: cannot be made into an object
-pub trait RequestDecorator: Send {
+pub trait RequestDecorator: Send + Sync {
     /// Decorates the given `reqwest::Request`.
     ///
     /// This function can modify the request (e.g., add headers, sign the request)
