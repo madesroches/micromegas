@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["NameField","ProtoTypeDescriptor","Value"],"mod":["nested_value"],"struct":["NestedValue"]};

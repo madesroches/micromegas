@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["ALL_ROLES","ROLE_FLIGHTSQL","ROLE_INGESTION","ROLE_MAINTENANCE","ROLE_WEB"],"fn":["main","seed_local_data_source"],"static":["ALLOC"],"struct":["Cli","Roles"]};

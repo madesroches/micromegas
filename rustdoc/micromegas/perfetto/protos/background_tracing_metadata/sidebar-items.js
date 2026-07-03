@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"mod":["trigger_rule"],"struct":["TriggerRule"]};

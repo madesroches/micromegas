@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["Encoding"],"fn":["ingest_logs","ingest_metrics","ingest_traces"]};

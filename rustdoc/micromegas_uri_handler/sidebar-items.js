@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["execute_command","execute_uri_command","help","main","pause"]};

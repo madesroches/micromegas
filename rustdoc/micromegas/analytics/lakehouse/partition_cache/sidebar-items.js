@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["partition_with_metadata"],"struct":["LivePartitionProvider","NullPartitionProvider","PartitionCache","PartitionWithMetadata"],"trait":["QueryPartitionProvider"]};

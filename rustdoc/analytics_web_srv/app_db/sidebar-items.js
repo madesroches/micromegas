@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["execute_migration","normalize_name","validate_data_source_config","validate_name"],"struct":["CreateDataSourceRequest","CreateScreenRequest","DataSource","DataSourceConfig","DataSourceSummary","Screen","UpdateDataSourceRequest","UpdateScreenRequest","ValidationError"]};
