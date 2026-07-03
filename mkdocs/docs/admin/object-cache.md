@@ -102,20 +102,16 @@ per-request cap:
 
 ## Prefetch
 
-`POST /prefetch` warms the cache for a batch of keys at background priority, without serving any bytes back to the caller. The request body is:
+`POST /prefetch` warms the cache for a batch of keys at background priority, without serving any bytes back to the caller. The request body is `Content-Type: application/x-ndjson`: one JSON object per `\n`-terminated line, each describing a key to warm:
 
-```json
-{
-  "keys": [
-    {"key": "blobs/abc", "size": 123456},
-    {"key": "blobs/def", "size": 654321, "ranges": [[0, 65536]]}
-  ]
-}
+```
+{"key": "blobs/abc", "size": 123456}
+{"key": "blobs/def", "size": 654321, "ranges": [[0, 65536]]}
 ```
 
 `size` must be the object's exact current size, supplied by the caller — the server trusts it rather than issuing an origin HEAD, since prefetch targets objects that are typically cold. `ranges` is optional; when absent or empty the whole object `[0, size)` is warmed, otherwise only the listed `[start, end)` ranges are.
 
-Batch size is bounded only by the server's default 2 MiB request-body limit (unconfigured for this endpoint) — there is no key-count cap. There is also no per-item size limit: the fill worker streams the block-index space in bounded windows rather than materializing it, so warming an arbitrarily large (or even bogus) `size` costs constant per-item memory. An oversized `size` just stops warming at the first origin fetch past the object's real end.
+The body is parsed incrementally as it arrives, so there is no whole-batch size cap and no key-count cap. The only remaining ceiling is on a single NDJSON line (1 MiB) — a request with a line longer than that is rejected with `400`. There is also no per-item size limit: the fill worker streams the block-index space in bounded windows rather than materializing it, so warming an arbitrarily large (or even bogus) `size` costs constant per-item memory. An oversized `size` just stops warming at the first origin fetch past the object's real end. A malformed line is counted as `rejected` and does not abort the rest of the batch, since newline framing means one bad line can't desynchronize the ones that follow.
 
 The endpoint returns immediately with `202 Accepted` and a small JSON body:
 

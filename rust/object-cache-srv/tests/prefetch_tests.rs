@@ -3,10 +3,12 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use async_trait::async_trait;
 use axum::Router;
+use axum::body::Body;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::routing::post;
 use bytes::Bytes;
+use futures::stream;
 use futures::stream::BoxStream;
 use object_store::memory::InMemory;
 use object_store::path::Path;
@@ -17,7 +19,7 @@ use object_store::{
 
 use micromegas_object_cache::foyer_backend::FoyerBackend;
 use micromegas_object_cache::memory_backend::MemoryBackend;
-use micromegas_object_cache::prefetch::{PrefetchItem, PrefetchRequest, PrefetchResponse};
+use micromegas_object_cache::prefetch::{PrefetchItem, PrefetchResponse};
 use micromegas_object_cache::range_cache::{
     DEFAULT_DEMAND_RESERVED_FETCH_PERMITS, DEFAULT_MAX_COALESCED_GET_BYTES,
     DEFAULT_PROMOTE_WHOLE_BATCH, DEFAULT_TOTAL_FETCH_PERMITS, RangeCache,
@@ -144,9 +146,19 @@ fn memory_cache(origin: Arc<dyn ObjectStore>, block_size: u64) -> RangeCache {
     )
 }
 
-async fn call_prefetch(state: &AppState, req: &PrefetchRequest) -> PrefetchResponse {
-    let body = Bytes::from(serde_json::to_vec(req).expect("serialize PrefetchRequest"));
-    let resp = prefetch_handler(State(state.clone()), body)
+/// Serialize items as `application/x-ndjson`: one JSON object per
+/// `\n`-terminated line, matching the wire format `prefetch_handler` expects.
+fn ndjson_body(items: &[PrefetchItem]) -> Vec<u8> {
+    let mut buf = Vec::new();
+    for item in items {
+        serde_json::to_writer(&mut buf, item).expect("serialize PrefetchItem");
+        buf.push(b'\n');
+    }
+    buf
+}
+
+async fn call_prefetch(state: &AppState, items: Vec<PrefetchItem>) -> PrefetchResponse {
+    let resp = prefetch_handler(State(state.clone()), Body::from(ndjson_body(&items)))
         .await
         .expect("prefetch_handler response");
     assert_eq!(resp.status(), StatusCode::ACCEPTED);
@@ -168,14 +180,12 @@ async fn prefetch_warms_cache_for_later_demand_read() {
     let (prefetch_tx, worker) = spawn_prefetch_worker(cache.clone(), 16, 4);
     let state = AppState::new(cache.clone(), vec!["obj".to_string()], 1024, prefetch_tx);
 
-    let req = PrefetchRequest {
-        keys: vec![PrefetchItem {
-            key: "obj/a".to_string(),
-            size: data.len() as u64,
-            ranges: None,
-        }],
-    };
-    let resp = call_prefetch(&state, &req).await;
+    let items = vec![PrefetchItem {
+        key: "obj/a".to_string(),
+        size: data.len() as u64,
+        ranges: None,
+    }];
+    let resp = call_prefetch(&state, items).await;
     assert_eq!(resp.accepted, 1);
     assert_eq!(resp.rejected, 0);
     assert_eq!(resp.dropped, 0);
@@ -232,14 +242,12 @@ async fn prefetch_ssd_only_leaves_ram_usage_unchanged() {
 
     let ram_before = foyer.ram_usage();
 
-    let req = PrefetchRequest {
-        keys: vec![PrefetchItem {
-            key: "obj/b".to_string(),
-            size: data.len() as u64,
-            ranges: None,
-        }],
-    };
-    let resp = call_prefetch(&state, &req).await;
+    let items = vec![PrefetchItem {
+        key: "obj/b".to_string(),
+        size: data.len() as u64,
+        ranges: None,
+    }];
+    let resp = call_prefetch(&state, items).await;
     assert_eq!(resp.accepted, 1);
 
     drop(state);
@@ -279,14 +287,12 @@ async fn zero_size_prefetch_is_a_no_op() {
     let (prefetch_tx, worker) = spawn_prefetch_worker(cache.clone(), 16, 4);
     let state = AppState::new(cache, vec!["obj".to_string()], 1024, prefetch_tx);
 
-    let req = PrefetchRequest {
-        keys: vec![PrefetchItem {
-            key: "obj/empty".to_string(),
-            size: 0,
-            ranges: None,
-        }],
-    };
-    let resp = call_prefetch(&state, &req).await;
+    let items = vec![PrefetchItem {
+        key: "obj/empty".to_string(),
+        size: 0,
+        ranges: None,
+    }];
+    let resp = call_prefetch(&state, items).await;
     assert_eq!(resp.accepted, 1);
 
     drop(state);
@@ -310,26 +316,24 @@ async fn full_queue_load_sheds_excess_items() {
     let cache = memory_cache(store as Arc<dyn ObjectStore>, 1024);
     let state = AppState::new(cache, vec!["obj".to_string()], 1024, prefetch_tx);
 
-    let req = PrefetchRequest {
-        keys: vec![
-            PrefetchItem {
-                key: "obj/a".to_string(),
-                size: 10,
-                ranges: None,
-            },
-            PrefetchItem {
-                key: "obj/b".to_string(),
-                size: 10,
-                ranges: None,
-            },
-            PrefetchItem {
-                key: "obj/c".to_string(),
-                size: 10,
-                ranges: None,
-            },
-        ],
-    };
-    let resp = call_prefetch(&state, &req).await;
+    let items = vec![
+        PrefetchItem {
+            key: "obj/a".to_string(),
+            size: 10,
+            ranges: None,
+        },
+        PrefetchItem {
+            key: "obj/b".to_string(),
+            size: 10,
+            ranges: None,
+        },
+        PrefetchItem {
+            key: "obj/c".to_string(),
+            size: 10,
+            ranges: None,
+        },
+    ];
+    let resp = call_prefetch(&state, items).await;
     assert_eq!(resp.accepted, 1, "only the first item fits the queue");
     assert_eq!(resp.rejected, 0);
     assert_eq!(resp.dropped, 2, "the rest must be load-shed, not blocked");
@@ -342,35 +346,33 @@ async fn invalid_items_are_rejected_valid_ones_still_enqueued() {
     let cache = memory_cache(store as Arc<dyn ObjectStore>, 1024);
     let state = AppState::new(cache, vec!["obj".to_string()], 1024, prefetch_tx);
 
-    let req = PrefetchRequest {
-        keys: vec![
-            // Outside the allowed prefix.
-            PrefetchItem {
-                key: "secret/x".to_string(),
-                size: 10,
-                ranges: None,
-            },
-            // Inverted range.
-            PrefetchItem {
-                key: "obj/a".to_string(),
-                size: 10,
-                ranges: Some(vec![[5, 3]]),
-            },
-            // Out-of-bounds range.
-            PrefetchItem {
-                key: "obj/a".to_string(),
-                size: 10,
-                ranges: Some(vec![[0, 20]]),
-            },
-            // Valid.
-            PrefetchItem {
-                key: "obj/valid".to_string(),
-                size: 10,
-                ranges: None,
-            },
-        ],
-    };
-    let resp = call_prefetch(&state, &req).await;
+    let items = vec![
+        // Outside the allowed prefix.
+        PrefetchItem {
+            key: "secret/x".to_string(),
+            size: 10,
+            ranges: None,
+        },
+        // Inverted range.
+        PrefetchItem {
+            key: "obj/a".to_string(),
+            size: 10,
+            ranges: Some(vec![[5, 3]]),
+        },
+        // Out-of-bounds range.
+        PrefetchItem {
+            key: "obj/a".to_string(),
+            size: 10,
+            ranges: Some(vec![[0, 20]]),
+        },
+        // Valid.
+        PrefetchItem {
+            key: "obj/valid".to_string(),
+            size: 10,
+            ranges: None,
+        },
+    ];
+    let resp = call_prefetch(&state, items).await;
     assert_eq!(resp.accepted, 1);
     assert_eq!(resp.rejected, 3);
     assert_eq!(resp.dropped, 0);
@@ -386,14 +388,12 @@ async fn huge_declared_size_is_accepted_no_cap() {
     let cache = memory_cache(store as Arc<dyn ObjectStore>, 1024);
     let state = AppState::new(cache, vec!["obj".to_string()], 1024, prefetch_tx);
 
-    let req = PrefetchRequest {
-        keys: vec![PrefetchItem {
-            key: "obj/huge".to_string(),
-            size: u64::MAX,
-            ranges: None,
-        }],
-    };
-    let resp = call_prefetch(&state, &req).await;
+    let items = vec![PrefetchItem {
+        key: "obj/huge".to_string(),
+        size: u64::MAX,
+        ranges: None,
+    }];
+    let resp = call_prefetch(&state, items).await;
     assert_eq!(resp.accepted, 1);
     assert_eq!(resp.rejected, 0);
     assert_eq!(resp.dropped, 0);
@@ -401,26 +401,23 @@ async fn huge_declared_size_is_accepted_no_cap() {
 
 #[tokio::test]
 async fn batch_over_old_4096_key_cap_is_accepted_no_cap() {
-    // There is no batch-size (key-count) cap: a request is bounded only by
-    // the server's request-body size limit, not a fixed key count, so a
-    // batch larger than the old (removed) 4096-key cap must be accepted in
-    // full.
+    // There is no batch-size (key-count) cap: the body is streamed and parsed
+    // as NDJSON one line at a time, so a batch larger than the old (removed)
+    // 4096-key cap must be accepted in full.
     const KEY_COUNT: usize = 5000;
     let (prefetch_tx, _rx) = tokio::sync::mpsc::channel::<PrefetchItem>(KEY_COUNT);
     let store = Arc::new(InMemory::new());
     let cache = memory_cache(store as Arc<dyn ObjectStore>, 1024);
     let state = AppState::new(cache, vec!["obj".to_string()], 1024, prefetch_tx);
 
-    let req = PrefetchRequest {
-        keys: (0..KEY_COUNT)
-            .map(|i| PrefetchItem {
-                key: format!("obj/{i}"),
-                size: 10,
-                ranges: None,
-            })
-            .collect(),
-    };
-    let resp = call_prefetch(&state, &req).await;
+    let items: Vec<PrefetchItem> = (0..KEY_COUNT)
+        .map(|i| PrefetchItem {
+            key: format!("obj/{i}"),
+            size: 10,
+            ranges: None,
+        })
+        .collect();
+    let resp = call_prefetch(&state, items).await;
     assert_eq!(resp.accepted, KEY_COUNT);
     assert_eq!(resp.rejected, 0);
     assert_eq!(resp.dropped, 0);
@@ -446,14 +443,12 @@ async fn oversized_declared_size_streams_and_stops_at_true_eof() {
     // A garbage caller-supplied size: the handler applies no size cap, and the
     // streaming worker must not OOM or hang -- it streams windows lazily and
     // stops at the first origin error past the true EOF.
-    let req = PrefetchRequest {
-        keys: vec![PrefetchItem {
-            key: "obj/huge".to_string(),
-            size: u64::MAX,
-            ranges: None,
-        }],
-    };
-    let resp = call_prefetch(&state, &req).await;
+    let items = vec![PrefetchItem {
+        key: "obj/huge".to_string(),
+        size: u64::MAX,
+        ranges: None,
+    }];
+    let resp = call_prefetch(&state, items).await;
     assert_eq!(resp.accepted, 1);
 
     drop(state);
@@ -492,14 +487,12 @@ async fn prefetch_never_acquires_a_mem_permit() {
     let state = AppState::new(cache, vec!["obj".to_string()], 1, prefetch_tx);
     let permits_before = state.mem_permits.available_permits();
 
-    let req = PrefetchRequest {
-        keys: vec![PrefetchItem {
-            key: "obj/huge".to_string(),
-            size: 100 * 1024 * 1024, // 100 MiB, far past the 1 MiB budget
-            ranges: None,
-        }],
-    };
-    let resp = call_prefetch(&state, &req).await;
+    let items = vec![PrefetchItem {
+        key: "obj/huge".to_string(),
+        size: 100 * 1024 * 1024, // 100 MiB, far past the 1 MiB budget
+        ranges: None,
+    }];
+    let resp = call_prefetch(&state, items).await;
     assert_eq!(
         resp.accepted, 1,
         "prefetch must succeed regardless of the memory budget"
@@ -537,17 +530,15 @@ async fn prefetch_priority_does_not_starve_demand_read() {
     // 5 scattered (non-adjacent) single-block ranges -> 5 separate prefetch
     // runs, submitted as one batch.
     let scattered = [0u64, 2, 4, 6, 8];
-    let req = PrefetchRequest {
-        keys: scattered
-            .iter()
-            .map(|&idx| PrefetchItem {
-                key: "obj/x".to_string(),
-                size: file_size,
-                ranges: Some(vec![[idx * block_size, idx * block_size + 1]]),
-            })
-            .collect(),
-    };
-    let resp = call_prefetch(&state, &req).await;
+    let items: Vec<PrefetchItem> = scattered
+        .iter()
+        .map(|&idx| PrefetchItem {
+            key: "obj/x".to_string(),
+            size: file_size,
+            ranges: Some(vec![[idx * block_size, idx * block_size + 1]]),
+        })
+        .collect();
+    let resp = call_prefetch(&state, items).await;
     assert_eq!(resp.accepted, 5);
 
     // prefetch_permits = total - demand_reserved = 3: only 3 of the 5
@@ -676,4 +667,238 @@ async fn get_range_handler_still_works_alongside_prefetch_state() {
     .await
     .expect("get_range_handler response");
     assert_eq!(resp.status(), StatusCode::PARTIAL_CONTENT);
+}
+
+#[tokio::test]
+async fn closed_queue_returns_503() {
+    let (prefetch_tx, rx) = tokio::sync::mpsc::channel::<PrefetchItem>(16);
+    drop(rx);
+    let store = Arc::new(InMemory::new());
+    let cache = memory_cache(store as Arc<dyn ObjectStore>, 1024);
+    let state = AppState::new(cache, vec!["obj".to_string()], 1024, prefetch_tx);
+
+    let items = vec![PrefetchItem {
+        key: "obj/a".to_string(),
+        size: 10,
+        ranges: None,
+    }];
+    let err = prefetch_handler(State(state), Body::from(ndjson_body(&items)))
+        .await
+        .expect_err("closed queue must surface as an error response");
+    assert_eq!(err, StatusCode::SERVICE_UNAVAILABLE);
+}
+
+#[tokio::test]
+async fn blank_lines_are_skipped() {
+    let (prefetch_tx, _rx) = tokio::sync::mpsc::channel::<PrefetchItem>(16);
+    let store = Arc::new(InMemory::new());
+    let cache = memory_cache(store as Arc<dyn ObjectStore>, 1024);
+    let state = AppState::new(cache, vec!["obj".to_string()], 1024, prefetch_tx);
+
+    let mut body = Vec::new();
+    body.extend_from_slice(b"\n");
+    body.extend_from_slice(b"   \n");
+    serde_json::to_writer(
+        &mut body,
+        &PrefetchItem {
+            key: "obj/a".to_string(),
+            size: 10,
+            ranges: None,
+        },
+    )
+    .expect("serialize");
+    body.extend_from_slice(b"\n\n");
+
+    let resp = prefetch_handler(State(state), Body::from(body))
+        .await
+        .expect("prefetch_handler response");
+    let body_bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .expect("read prefetch response body");
+    let resp: PrefetchResponse = serde_json::from_slice(&body_bytes).expect("deserialize");
+    assert_eq!(resp.accepted, 1);
+    assert_eq!(resp.rejected, 0);
+    assert_eq!(resp.dropped, 0);
+}
+
+#[tokio::test]
+async fn final_line_without_trailing_newline_is_processed() {
+    let (prefetch_tx, _rx) = tokio::sync::mpsc::channel::<PrefetchItem>(16);
+    let store = Arc::new(InMemory::new());
+    let cache = memory_cache(store as Arc<dyn ObjectStore>, 1024);
+    let state = AppState::new(cache, vec!["obj".to_string()], 1024, prefetch_tx);
+
+    // No trailing `\n`: the item must still be parsed at end-of-stream.
+    let body = serde_json::to_vec(&PrefetchItem {
+        key: "obj/a".to_string(),
+        size: 10,
+        ranges: None,
+    })
+    .expect("serialize");
+
+    let resp = prefetch_handler(State(state), Body::from(body))
+        .await
+        .expect("prefetch_handler response");
+    let body_bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .expect("read prefetch response body");
+    let resp: PrefetchResponse = serde_json::from_slice(&body_bytes).expect("deserialize");
+    assert_eq!(resp.accepted, 1);
+}
+
+#[tokio::test]
+async fn malformed_line_is_rejected_later_lines_still_enqueue() {
+    let (prefetch_tx, _rx) = tokio::sync::mpsc::channel::<PrefetchItem>(16);
+    let store = Arc::new(InMemory::new());
+    let cache = memory_cache(store as Arc<dyn ObjectStore>, 1024);
+    let state = AppState::new(cache, vec!["obj".to_string()], 1024, prefetch_tx);
+
+    let mut body = Vec::new();
+    body.extend_from_slice(b"not valid json\n");
+    serde_json::to_writer(
+        &mut body,
+        &PrefetchItem {
+            key: "obj/valid".to_string(),
+            size: 10,
+            ranges: None,
+        },
+    )
+    .expect("serialize");
+    body.push(b'\n');
+
+    let resp = prefetch_handler(State(state), Body::from(body))
+        .await
+        .expect("prefetch_handler response");
+    let body_bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .expect("read prefetch response body");
+    let resp: PrefetchResponse = serde_json::from_slice(&body_bytes).expect("deserialize");
+    assert_eq!(resp.accepted, 1);
+    assert_eq!(resp.rejected, 1);
+    assert_eq!(resp.dropped, 0);
+}
+
+#[tokio::test]
+async fn oversized_line_returns_400_earlier_items_still_enqueued() {
+    let (prefetch_tx, mut rx) = tokio::sync::mpsc::channel::<PrefetchItem>(16);
+    let store = Arc::new(InMemory::new());
+    let cache = memory_cache(store as Arc<dyn ObjectStore>, 1024);
+    let state = AppState::new(cache, vec!["obj".to_string()], 1024, prefetch_tx);
+
+    let mut body = Vec::new();
+    serde_json::to_writer(
+        &mut body,
+        &PrefetchItem {
+            key: "obj/valid".to_string(),
+            size: 10,
+            ranges: None,
+        },
+    )
+    .expect("serialize");
+    body.push(b'\n');
+    // A single line with no newline, larger than the 1 MiB per-line cap.
+    body.extend(std::iter::repeat_n(b'a', 2 * 1024 * 1024));
+
+    let err = prefetch_handler(State(state), Body::from(body))
+        .await
+        .expect_err("oversized line must be rejected");
+    assert_eq!(err, StatusCode::BAD_REQUEST);
+
+    // The earlier, valid item was enqueued before the abort -- prefetch is
+    // best-effort, so a partially-processed request is not a bug.
+    let received = rx.recv().await.expect("earlier item still enqueued");
+    assert_eq!(received.key, "obj/valid");
+}
+
+#[tokio::test]
+async fn stream_read_error_mid_body_returns_202_with_partial_counts() {
+    // A body-read error (e.g. a mid-upload disconnect) is best-effort per the
+    // handler's documented contract: it must stop consuming the stream but
+    // still return 202 with the counts accumulated before the error, not an
+    // error response.
+    let (prefetch_tx, mut rx) = tokio::sync::mpsc::channel::<PrefetchItem>(16);
+    let store = Arc::new(InMemory::new());
+    let cache = memory_cache(store as Arc<dyn ObjectStore>, 1024);
+    let state = AppState::new(cache, vec!["obj".to_string()], 1024, prefetch_tx);
+
+    let mut valid_line = serde_json::to_vec(&PrefetchItem {
+        key: "obj/valid".to_string(),
+        size: 10,
+        ranges: None,
+    })
+    .expect("serialize");
+    valid_line.push(b'\n');
+
+    let chunks: Vec<Result<Bytes, std::io::Error>> = vec![
+        Ok(Bytes::from(valid_line)),
+        Err(std::io::Error::other("simulated mid-stream read error")),
+    ];
+    let body = Body::from_stream(stream::iter(chunks));
+
+    let resp = prefetch_handler(State(state), body)
+        .await
+        .expect("a body-read error must not surface as an error response");
+    assert_eq!(resp.status(), StatusCode::ACCEPTED);
+    let body_bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .expect("read prefetch response body");
+    let resp: PrefetchResponse = serde_json::from_slice(&body_bytes).expect("deserialize");
+    assert_eq!(
+        resp.accepted, 1,
+        "the item consumed before the read error must still be counted"
+    );
+    assert_eq!(resp.rejected, 0);
+    assert_eq!(resp.dropped, 0);
+
+    let received = rx.recv().await.expect("item enqueued before the error");
+    assert_eq!(received.key, "obj/valid");
+}
+
+#[tokio::test]
+async fn body_larger_than_2mib_total_accepted_via_router() {
+    // Confirms no whole-body size ceiling remains on `/prefetch`: many items
+    // summing to more than axum's old implicit 2 MiB `DefaultBodyLimit` must
+    // still be accepted in full when served through the real `Router`.
+    const ITEM_COUNT: usize = 40_000;
+    let (prefetch_tx, _rx) = tokio::sync::mpsc::channel::<PrefetchItem>(ITEM_COUNT);
+    let store = Arc::new(InMemory::new());
+    let cache = memory_cache(store as Arc<dyn ObjectStore>, 1024);
+    let state = AppState::new(cache, vec!["obj".to_string()], 1024, prefetch_tx);
+
+    let app = Router::new()
+        .route("/prefetch", post(prefetch_handler))
+        .with_state(state);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind ephemeral port");
+    let addr = listener.local_addr().expect("local_addr");
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("serve");
+    });
+
+    // Zero-padded keys pad each line out so the whole batch clears 2 MiB.
+    let items: Vec<PrefetchItem> = (0..ITEM_COUNT)
+        .map(|i| PrefetchItem {
+            key: format!("obj/{i:040}"),
+            size: 10,
+            ranges: None,
+        })
+        .collect();
+    assert!(
+        ndjson_body(&items).len() > 2 * 1024 * 1024,
+        "test body must exceed the old 2 MiB body limit"
+    );
+
+    let client = micromegas_object_cache::CacheClientStore::new(
+        format!("http://{addr}"),
+        None,
+        Arc::new(InMemory::new()),
+    );
+    let resp = client.prefetch(items).await.expect("prefetch over http");
+    assert_eq!(resp.accepted, ITEM_COUNT);
+    assert_eq!(resp.rejected, 0);
+    assert_eq!(resp.dropped, 0);
+
+    server.abort();
+    let _ = server.await;
 }

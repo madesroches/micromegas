@@ -23,7 +23,7 @@ allowed prefix.
 | `HEAD` | `/obj/{key}`   | Returns the object size in `Content-Length`.                                |
 | `GET`  | `/obj/{key}`   | Reads a single byte range (standard `Range: bytes=start-end` header). Replies `206 Partial Content` with a `Content-Range` header. |
 | `POST` | `/ranges/{key}`| Reads many ranges at once. Body: `{"ranges": [[start, end), ...]}`. Replies with each chunk length-prefixed as a little-endian `u64` followed by its bytes. |
-| `POST` | `/prefetch`    | Warms a batch of keys at prefetch priority without returning bytes. Body: `{"keys": [{"key": ..., "size": ..., "ranges": [[start, end), ...]}, ...]}` (`ranges` optional; absent/empty warms the whole object). Replies immediately with `202 Accepted` and `{"accepted": n, "rejected": n, "dropped": n}`. |
+| `POST` | `/prefetch`    | Warms a batch of keys at prefetch priority without returning bytes. Body: `application/x-ndjson`, one `{"key": ..., "size": ..., "ranges": [[start, end), ...]}` object per `\n`-terminated line (`ranges` optional; absent/empty warms the whole object). Replies immediately with `202 Accepted` and `{"accepted": n, "rejected": n, "dropped": n}`. |
 
 Range bounds use half-open `[start, end)` semantics in the `POST` body. Inverted
 or zero-length ranges are rejected with `400`. A single request is capped at
@@ -36,14 +36,15 @@ current size — the server trusts it to avoid an origin HEAD, since prefetch
 targets cold objects. An oversized value is safe (the origin GET past EOF fails
 and nothing is stored); an undersized value is the only harmful case, and it is
 mitigated by a hit-path length guard that detects and refetches a truncated
-block on the next correctly-sized read. Batch size is bounded only by the server's default
-2 MiB request-body limit (unconfigured for this endpoint) — there is no
-key-count cap; there is also no per-item size limit, since the fill worker
-streams the block-index space in bounded windows rather than materializing
-it. A bad key or an inverted/out-of-bounds range fails only that item
-(`rejected`); a full queue load-sheds the item (`dropped`) rather than
-blocking the caller. Neither failure mode affects the response status, which
-is always `202` once the request itself parses.
+block on the next correctly-sized read. The NDJSON body is parsed line by line
+as it streams in, so there is no whole-batch size cap and no key-count cap; the
+only remaining ceiling is 1 MiB on a single line (`400` if exceeded). There is
+also no per-item size limit, since the fill worker streams the block-index
+space in bounded windows rather than materializing it. A bad key, a malformed
+line, or an inverted/out-of-bounds range fails only that item (`rejected`); a
+full queue load-sheds the item (`dropped`) rather than blocking the caller.
+Neither failure mode affects the response status, which is always `202` once
+the request stream itself is consumed successfully.
 
 ## Authentication
 

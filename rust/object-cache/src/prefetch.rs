@@ -1,6 +1,11 @@
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
+/// Wire format for `POST /prefetch`: `Content-Type: application/x-ndjson`, one
+/// `PrefetchItem` JSON object per `\n`-terminated line. There is no wrapper
+/// type — the body is a stream of lines, parsed and enqueued incrementally so
+/// the server never buffers the whole batch.
+///
 /// One key to warm, whole-object or ranged.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PrefetchItem {
@@ -23,11 +28,6 @@ pub struct PrefetchItem {
     /// ranges (validated against `size`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ranges: Option<Vec<[u64; 2]>>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PrefetchRequest {
-    pub keys: Vec<PrefetchItem>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

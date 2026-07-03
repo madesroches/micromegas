@@ -14,7 +14,7 @@ use std::ops::Range;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::prefetch::{ObjectPrefetch, PrefetchItem, PrefetchRequest, PrefetchResponse};
+use crate::prefetch::{ObjectPrefetch, PrefetchItem, PrefetchResponse};
 
 /// Fail fast if the cache server can't be reached, so reads fall back to the
 /// direct store instead of stalling on a hung connection.
@@ -155,15 +155,18 @@ impl CacheClientStore {
     /// retrying inline.
     pub async fn prefetch(&self, items: Vec<PrefetchItem>) -> Result<PrefetchResponse> {
         let url = format!("{}/prefetch", self.cache_base_url.trim_end_matches('/'));
-        let body = serde_json::to_vec(&PrefetchRequest { keys: items })
-            .with_context(|| "serializing PrefetchRequest")?;
+        let mut body = Vec::new();
+        for item in &items {
+            serde_json::to_writer(&mut body, item).with_context(|| "serializing PrefetchItem")?;
+            body.push(b'\n');
+        }
 
         let result: Result<PrefetchResponse> = async {
             let resp = self
                 .add_auth(
                     self.http
                         .post(&url)
-                        .header("Content-Type", "application/json")
+                        .header("Content-Type", "application/x-ndjson")
                         .body(body),
                 )
                 .send()

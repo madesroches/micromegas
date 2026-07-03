@@ -7,9 +7,9 @@ use axum::{
     response::Response,
 };
 use bytes::{BufMut, Bytes, BytesMut};
-use futures::Stream;
+use futures::{Stream, StreamExt};
 use micromegas_object_cache::blocks::blocks_for_range;
-use micromegas_object_cache::prefetch::{PrefetchRequest, PrefetchResponse};
+use micromegas_object_cache::prefetch::{PrefetchItem, PrefetchResponse};
 use micromegas_object_cache::range_cache::RangeError;
 use micromegas_object_cache::validation::validate_key;
 use micromegas_tracing::prelude::*;
@@ -28,6 +28,12 @@ const MAX_RANGES_PER_REQUEST: usize = 4096;
 /// multi-range request. The handler assembles all results in memory, so this
 /// caps peak allocation regardless of how many ranges overlap the same bytes.
 const MAX_TOTAL_REQUESTED_BYTES: u64 = 512 * 1024 * 1024; // 512 MiB
+
+/// Maximum size of a single NDJSON line in a `POST /prefetch` body. An item at
+/// the `MAX_RANGES_PER_REQUEST` cap serializes to roughly 100 KiB, so this
+/// leaves about 10x headroom while still bounding per-line memory; unlike a
+/// whole-body cap, this doesn't limit how many items a client can batch.
+const MAX_PREFETCH_LINE_BYTES: usize = 1024 * 1024; // 1 MiB
 
 const BYTES_PER_MEM_PERMIT: u64 = 1024 * 1024;
 
@@ -363,74 +369,123 @@ pub async fn post_ranges_handler(
     }
 }
 
+/// Parse and process a single NDJSON line from a `POST /prefetch` body,
+/// updating the running counters. Returns `Err` only when the prefetch queue
+/// worker is gone, which aborts the whole request with `503`.
+fn process_prefetch_line(
+    line: &[u8],
+    state: &AppState,
+    accepted: &mut usize,
+    rejected: &mut usize,
+    dropped: &mut usize,
+) -> Result<(), StatusCode> {
+    if line.iter().all(|b| b.is_ascii_whitespace()) {
+        return Ok(());
+    }
+
+    let item: PrefetchItem = match serde_json::from_slice(line) {
+        Ok(item) => item,
+        Err(e) => {
+            warn!("bad prefetch line JSON: {e}");
+            *rejected += 1;
+            return Ok(());
+        }
+    };
+
+    if let Err(e) = validate_key(&item.key, &state.allowed_prefixes) {
+        warn!("rejected prefetch key {}: {e}", item.key);
+        *rejected += 1;
+        return Ok(());
+    }
+    let range_count = item.ranges.as_ref().map_or(0, |r| r.len());
+    if range_count > MAX_RANGES_PER_REQUEST {
+        warn!(
+            "rejected prefetch key {}: {range_count} ranges exceeds max {MAX_RANGES_PER_REQUEST}",
+            item.key
+        );
+        *rejected += 1;
+        return Ok(());
+    }
+    // `item.size` is intentionally NOT capped: the worker streams the
+    // block-index space in bounded windows (`prefetch_queue.rs`) rather
+    // than materializing it, so per-item work is bounded regardless of
+    // `size`, and an over-claimed `size` is bounded by stop-on-first-error
+    // once fills start. This lets legitimate multi-GB partitions warm.
+    // Absent/empty ranges = whole-object warm of [0, item.size), per the
+    // shared-type contract; only present ranges need bounds validation.
+    let has_invalid_range = item
+        .ranges
+        .iter()
+        .flatten()
+        .any(|&[s, e]| s >= e || e > item.size);
+    if has_invalid_range {
+        warn!(
+            "rejected prefetch key {}: inverted or out-of-bounds range for size {}",
+            item.key, item.size
+        );
+        *rejected += 1;
+        return Ok(());
+    }
+
+    match state.prefetch_tx.try_send(item) {
+        Ok(()) => *accepted += 1,
+        Err(TrySendError::Full(_)) => {
+            *dropped += 1;
+            imetric!("object_cache_prefetch_dropped", "count", 1_u64);
+        }
+        Err(TrySendError::Closed(_)) => {
+            error!("prefetch queue worker is gone");
+            return Err(StatusCode::SERVICE_UNAVAILABLE);
+        }
+    }
+    Ok(())
+}
+
 /// Accept a batch of keys to warm at prefetch priority and return
 /// immediately: fills are handed to the bounded queue in `AppState` and run
 /// asynchronously by the consumer task, so this handler never blocks on an
 /// origin fetch and never acquires a `mem_permit` (the response carries no
 /// object bytes; the fill's memory is already bounded by the scheduler).
+///
+/// The body is `application/x-ndjson`: one `PrefetchItem` JSON object per
+/// `\n`-terminated line, consumed incrementally as it arrives so the whole
+/// batch is never buffered. `MAX_PREFETCH_LINE_BYTES` bounds a single line;
+/// there is no whole-body size limit.
 pub async fn prefetch_handler(
     State(state): State<AppState>,
-    body: Bytes,
+    body: Body,
 ) -> Result<Response, StatusCode> {
-    let req: PrefetchRequest = match serde_json::from_slice(&body) {
-        Ok(r) => r,
-        Err(e) => {
-            warn!("bad prefetch JSON: {e}");
-            return Err(StatusCode::BAD_REQUEST);
-        }
-    };
-
+    let mut stream = body.into_data_stream();
+    let mut buf = BytesMut::new();
     let mut accepted = 0usize;
     let mut rejected = 0usize;
     let mut dropped = 0usize;
 
-    for item in req.keys {
-        if let Err(e) = validate_key(&item.key, &state.allowed_prefixes) {
-            warn!("rejected prefetch key {}: {e}", item.key);
-            rejected += 1;
-            continue;
+    loop {
+        let chunk = match stream.next().await {
+            Some(Ok(chunk)) => chunk,
+            Some(Err(e)) => {
+                warn!("error reading prefetch body: {e}");
+                break;
+            }
+            None => break,
+        };
+        buf.extend_from_slice(&chunk);
+        while let Some(pos) = buf.iter().position(|&b| b == b'\n') {
+            let mut line = buf.split_to(pos + 1);
+            line.truncate(pos);
+            process_prefetch_line(&line, &state, &mut accepted, &mut rejected, &mut dropped)?;
         }
-        let range_count = item.ranges.as_ref().map_or(0, |r| r.len());
-        if range_count > MAX_RANGES_PER_REQUEST {
-            warn!(
-                "rejected prefetch key {}: {range_count} ranges exceeds max {MAX_RANGES_PER_REQUEST}",
-                item.key
-            );
-            rejected += 1;
-            continue;
+        if buf.len() > MAX_PREFETCH_LINE_BYTES {
+            warn!("prefetch line exceeds max {MAX_PREFETCH_LINE_BYTES} bytes");
+            return Err(StatusCode::BAD_REQUEST);
         }
-        // `item.size` is intentionally NOT capped: the worker streams the
-        // block-index space in bounded windows (`prefetch_queue.rs`) rather
-        // than materializing it, so per-item work is bounded regardless of
-        // `size`, and an over-claimed `size` is bounded by stop-on-first-error
-        // once fills start. This lets legitimate multi-GB partitions warm.
-        // Absent/empty ranges = whole-object warm of [0, item.size), per the
-        // shared-type contract; only present ranges need bounds validation.
-        let has_invalid_range = item
-            .ranges
-            .iter()
-            .flatten()
-            .any(|&[s, e]| s >= e || e > item.size);
-        if has_invalid_range {
-            warn!(
-                "rejected prefetch key {}: inverted or out-of-bounds range for size {}",
-                item.key, item.size
-            );
-            rejected += 1;
-            continue;
-        }
+    }
 
-        match state.prefetch_tx.try_send(item) {
-            Ok(()) => accepted += 1,
-            Err(TrySendError::Full(_)) => {
-                dropped += 1;
-                imetric!("object_cache_prefetch_dropped", "count", 1_u64);
-            }
-            Err(TrySendError::Closed(_)) => {
-                error!("prefetch queue worker is gone");
-                return Err(StatusCode::SERVICE_UNAVAILABLE);
-            }
-        }
+    // A final line with no trailing newline is still processed; `buf` here
+    // is bounded by the same per-chunk check above.
+    if !buf.is_empty() {
+        process_prefetch_line(&buf, &state, &mut accepted, &mut rejected, &mut dropped)?;
     }
 
     imetric!("object_cache_prefetch_requests", "count", 1_u64);
