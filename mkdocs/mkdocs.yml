@@ -133,6 +133,7 @@ nav:
         - Monolith Deployment: admin/monolith.md
         - Object Cache Deployment: admin/object-cache.md
         - Service Lifecycle & Shutdown: admin/service-lifecycle.md
+        - Telemetry Sink Transport Tuning: admin/telemetry-sink-tuning.md
         - Admin SQL Functions: admin/functions-reference.md
     - Development:
         - Contributing: contributing.md
