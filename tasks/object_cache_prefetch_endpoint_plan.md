@@ -58,7 +58,7 @@ pub struct PrefetchItem {
     /// The object's file size, supplied by the caller. Both triggers already know
     /// it: `Partition.file_size` (persisted in PostgreSQL, `partition.rs:20`) for
     /// query/write warming, and `PartitionWriteResult.file_size`
-    /// (`write_partition.rs:514`) for the write path. Supplying it lets the server
+    /// (`write_partition.rs:407`) for the write path. Supplying it lets the server
     /// drive fills through `prefetch_blocks(key, file_size, indices)` with no
     /// origin HEAD (prefetch targets cold objects, so a server-side `size()` would
     /// force an avoidable HEAD).
@@ -148,6 +148,17 @@ while let Some(item) = rx.recv().await {
 (`block_indices_for` / `block_indices_for_ranges` denote the block-index computation from a byte
 range using the cache's block size — the same mapping the existing core path uses; no new public
 method on `RangeCache` is required.)
+
+**Empty-span guard (required before `blocks_for_range`).** The block-index computation must skip
+empty spans, mirroring the existing `start < end` guards in the demand paths (`get_range` returns
+early on `start >= end`, `range_cache.rs:758`; `prefetch_ranges` extends indices only `if start < e`,
+`range_cache.rs:878`). Specifically: for a whole-object warm, return an **empty index set when
+`item.size == 0`** (so `0..0` never reaches `blocks_for_range`); for supplied ranges, **skip any
+range where `s >= e`**. This is mandatory because `blocks_for_range(start, end, block_size)`
+(`blocks.rs:4-9`) computes `last = (end - 1) / block_size` — with `end == 0` the `u64` subtraction
+underflows to `u64::MAX / block_size`, producing an enormous bogus index range, and its
+`debug_assert!(start < end)` fires in test builds. An empty index set then no-ops safely in
+`fetch_blocks`/`prefetch_blocks` (matching the Testing Strategy's "`size == 0` → no-op" contract).
 
 Worker concurrency is a soft knob; the hard ceiling remains the scheduler's `prefetch_permits`.
 
