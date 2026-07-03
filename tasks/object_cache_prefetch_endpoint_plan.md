@@ -1,5 +1,27 @@
 # Object Cache Prefetch Endpoint + Client Method Plan
 
+## Implementation status: DONE
+
+All phases are implemented and merged (`prefetch.rs`, `prefetch_queue.rs`, `prefetch_handler`, the
+`FoyerBackend::put` SSD-only branch, the size-trust guard, the client `prefetch` method/trait, CLI
+knobs, docs, and the full test suite described below). Verified against the actual code: field
+names, constants (`MAX_PREFETCH_KEYS_PER_REQUEST = 4096`, `MAX_TOTAL_REQUESTED_BYTES = 512 MiB`),
+metric names, and every listed test all match what's described here.
+
+Two post-merge follow-ups from a branch review, not in the original design:
+- A stopgap per-item `size > MAX_TOTAL_REQUESTED_BYTES` rejection was added to `prefetch_handler`
+  (batch-size-exceeded is a whole-request `400`; an oversized item is instead counted in
+  `rejected`, batch continues) — see "Follow-up: size cap is a stopgap" below for why this should
+  be replaced, not treated as the final design.
+- Docs (`mkdocs`, `README.md`) were updated to state the 4096-key batch cap and 512 MiB per-item
+  cap alongside the existing `/ranges` limits text.
+
+One small deviation, not called out anywhere else in this doc: `FoyerBackend::put`'s prefetch
+branch bumps a metric, `range_cache_prefetch_admission_unexpected_none`, and logs a warning on the
+defensive (should-never-fire) case where `.force().insert(value)` returns `None`. It's not in this
+plan's metrics list (§ Implementation Steps step 10) or in the docs' metrics tables — a minor gap
+worth closing if anyone documents metrics exhaustively, but not user-facing behavior.
+
 Tracking: [#1198](https://github.com/madesroches/micromegas/issues/1198) — part of
 [#1197](https://github.com/madesroches/micromegas/issues/1197) (prefetch support). Builds on the
 now-merged read-path rework ([#1203](https://github.com/madesroches/micromegas/issues/1203) / PR
