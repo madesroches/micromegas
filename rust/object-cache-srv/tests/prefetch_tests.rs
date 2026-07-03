@@ -8,6 +8,7 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use axum::routing::post;
 use bytes::Bytes;
+use futures::stream;
 use futures::stream::BoxStream;
 use object_store::memory::InMemory;
 use object_store::path::Path;
@@ -806,6 +807,50 @@ async fn oversized_line_returns_400_earlier_items_still_enqueued() {
     // The earlier, valid item was enqueued before the abort -- prefetch is
     // best-effort, so a partially-processed request is not a bug.
     let received = rx.recv().await.expect("earlier item still enqueued");
+    assert_eq!(received.key, "obj/valid");
+}
+
+#[tokio::test]
+async fn stream_read_error_mid_body_returns_202_with_partial_counts() {
+    // A body-read error (e.g. a mid-upload disconnect) is best-effort per the
+    // handler's documented contract: it must stop consuming the stream but
+    // still return 202 with the counts accumulated before the error, not an
+    // error response.
+    let (prefetch_tx, mut rx) = tokio::sync::mpsc::channel::<PrefetchItem>(16);
+    let store = Arc::new(InMemory::new());
+    let cache = memory_cache(store as Arc<dyn ObjectStore>, 1024);
+    let state = AppState::new(cache, vec!["obj".to_string()], 1024, prefetch_tx);
+
+    let mut valid_line = serde_json::to_vec(&PrefetchItem {
+        key: "obj/valid".to_string(),
+        size: 10,
+        ranges: None,
+    })
+    .expect("serialize");
+    valid_line.push(b'\n');
+
+    let chunks: Vec<Result<Bytes, std::io::Error>> = vec![
+        Ok(Bytes::from(valid_line)),
+        Err(std::io::Error::other("simulated mid-stream read error")),
+    ];
+    let body = Body::from_stream(stream::iter(chunks));
+
+    let resp = prefetch_handler(State(state), body)
+        .await
+        .expect("a body-read error must not surface as an error response");
+    assert_eq!(resp.status(), StatusCode::ACCEPTED);
+    let body_bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .expect("read prefetch response body");
+    let resp: PrefetchResponse = serde_json::from_slice(&body_bytes).expect("deserialize");
+    assert_eq!(
+        resp.accepted, 1,
+        "the item consumed before the read error must still be counted"
+    );
+    assert_eq!(resp.rejected, 0);
+    assert_eq!(resp.dropped, 0);
+
+    let received = rx.recv().await.expect("item enqueued before the error");
     assert_eq!(received.key, "obj/valid");
 }
 
