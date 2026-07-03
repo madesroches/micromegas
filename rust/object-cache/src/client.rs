@@ -14,6 +14,8 @@ use std::ops::Range;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::prefetch::{ObjectPrefetch, PrefetchItem, PrefetchRequest, PrefetchResponse};
+
 /// Fail fast if the cache server can't be reached, so reads fall back to the
 /// direct store instead of stalling on a hung connection.
 const CACHE_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
@@ -145,6 +147,49 @@ impl CacheClientStore {
             .and_then(|v| v.to_str().ok())
             .and_then(|s| s.parse::<u64>().ok())
             .ok_or_else(|| anyhow!("missing Content-Length in HEAD response"))
+    }
+
+    /// POST a batch of keys to warm at the cache server's prefetch priority.
+    /// Best-effort: there is no demand read to fall back to, so callers should
+    /// treat an `Err` as "the warm didn't happen" and move on rather than
+    /// retrying inline.
+    pub async fn prefetch(&self, items: Vec<PrefetchItem>) -> Result<PrefetchResponse> {
+        let url = format!("{}/prefetch", self.cache_base_url.trim_end_matches('/'));
+        let body = serde_json::to_vec(&PrefetchRequest { keys: items })
+            .with_context(|| "serializing PrefetchRequest")?;
+
+        let result: Result<PrefetchResponse> = async {
+            let resp = self
+                .add_auth(
+                    self.http
+                        .post(&url)
+                        .header("Content-Type", "application/json")
+                        .body(body),
+                )
+                .send()
+                .await
+                .with_context(|| "sending POST to cache prefetch")?;
+            if !resp.status().is_success() {
+                return Err(anyhow!("cache prefetch {url} status {}", resp.status()));
+            }
+            resp.json::<PrefetchResponse>()
+                .await
+                .with_context(|| "reading prefetch response")
+        }
+        .await;
+
+        if let Err(e) = &result {
+            imetric!("range_cache_client_prefetch_error", "count", 1_u64);
+            debug!("prefetch request to {url} failed: {e}");
+        }
+        result
+    }
+}
+
+#[async_trait]
+impl ObjectPrefetch for CacheClientStore {
+    async fn prefetch(&self, items: Vec<PrefetchItem>) -> Result<PrefetchResponse> {
+        CacheClientStore::prefetch(self, items).await
     }
 }
 

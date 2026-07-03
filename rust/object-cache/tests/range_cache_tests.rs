@@ -731,6 +731,123 @@ async fn promotion_lets_demand_start_before_remaining_prefetch() {
 }
 
 #[tokio::test]
+async fn prefetch_blocks_with_empty_indices_is_a_no_op() {
+    let store = Arc::new(InMemory::new());
+    put_bytes(&store, "obj", &[0u8; 4096]).await;
+    let counting = CountingStore::new(store.clone() as Arc<dyn ObjectStore>);
+    let cache = RangeCache::new(
+        counting.clone() as Arc<dyn ObjectStore>,
+        Arc::new(MemoryBackend::new()),
+        DEFAULT_BLOCK_SIZE,
+        "ns".to_string(),
+        DEFAULT_TOTAL_FETCH_PERMITS,
+        DEFAULT_DEMAND_RESERVED_FETCH_PERMITS,
+        DEFAULT_MAX_COALESCED_GET_BYTES,
+        DEFAULT_PROMOTE_WHOLE_BATCH,
+    );
+    cache
+        .prefetch_blocks("obj", 0, &[])
+        .await
+        .expect("empty index set is a no-op");
+    assert_eq!(counting.get_range_count(), 0);
+    assert_eq!(counting.head_count(), 0);
+}
+
+// -- Size-trust guard --------------------------------------------------------
+
+#[tokio::test]
+async fn undersized_prefetch_size_is_healed_on_demand_read() {
+    let block_size = 1024u64;
+    let true_size = 2 * block_size; // 2048
+    let store = Arc::new(InMemory::new());
+    let data: Vec<u8> = (0u8..=255).cycle().take(true_size as usize).collect();
+    put_bytes(&store, "obj", &data).await;
+
+    let counting = CountingStore::new(store.clone() as Arc<dyn ObjectStore>);
+    let cache = RangeCache::new(
+        counting.clone() as Arc<dyn ObjectStore>,
+        Arc::new(MemoryBackend::new()),
+        block_size,
+        "ns".to_string(),
+        DEFAULT_TOTAL_FETCH_PERMITS,
+        DEFAULT_DEMAND_RESERVED_FETCH_PERMITS,
+        DEFAULT_MAX_COALESCED_GET_BYTES,
+        DEFAULT_PROMOTE_WHOLE_BATCH,
+    );
+
+    // Prefetch both blocks under an undersized caller-supplied size (1500):
+    // block 1's byte range clamps to 1024..1500 (476 bytes) instead of the
+    // true 1024..2048 (1024 bytes), storing a truncated final block.
+    let undersized_size = 1500u64;
+    cache
+        .prefetch_blocks("obj", undersized_size, &[0, 1])
+        .await
+        .expect("prefetch with undersized size should still succeed (in-bounds GET)");
+    assert_eq!(
+        counting.get_range_count(),
+        1,
+        "prefetch should have issued exactly one coalesced GET"
+    );
+
+    // A demand read at the true size must detect the short block, refetch
+    // it, and return the full correct bytes.
+    let got = cache
+        .get_range("obj", 1200..1600)
+        .await
+        .expect("demand get_range at the true size");
+    assert_eq!(&got[..], &data[1200..1600]);
+    assert_eq!(
+        counting.get_range_count(),
+        2,
+        "the mismatched block must be refetched from origin"
+    );
+}
+
+#[tokio::test]
+async fn oversized_prefetch_size_fails_fill_without_storing() {
+    use micromegas_object_cache::backend::RangeCacheBackend;
+
+    let block_size = 1024u64;
+    let true_size = 2 * block_size; // 2048
+    let store = Arc::new(InMemory::new());
+    let data: Vec<u8> = (0u8..=255).cycle().take(true_size as usize).collect();
+    put_bytes(&store, "obj2", &data).await;
+
+    let backend = Arc::new(MemoryBackend::new());
+    let counting = CountingStore::new(store.clone() as Arc<dyn ObjectStore>);
+    let cache = RangeCache::new(
+        counting.clone() as Arc<dyn ObjectStore>,
+        backend.clone(),
+        block_size,
+        "ns".to_string(),
+        DEFAULT_TOTAL_FETCH_PERMITS,
+        DEFAULT_DEMAND_RESERVED_FETCH_PERMITS,
+        DEFAULT_MAX_COALESCED_GET_BYTES,
+        DEFAULT_PROMOTE_WHOLE_BATCH,
+    );
+
+    // Prefetch block index 2 (bytes 2048..3000) under an oversized caller
+    // size of 3000: the object is really only 2048 bytes, so the origin GET
+    // past EOF must fail and nothing gets stored.
+    let oversized_size = 3000u64;
+    cache
+        .prefetch_blocks("obj2", oversized_size, &[2])
+        .await
+        .expect_err("origin GET past EOF must fail the fill");
+    assert!(
+        backend.get("blk:ns:obj2:2").await.is_none(),
+        "a failed prefetch fill must not store anything"
+    );
+
+    // A subsequent demand read at the true size is unaffected.
+    let got = cache
+        .get_range("obj2", 0..true_size)
+        .await
+        .expect("demand get_range at the true size");
+    assert_eq!(&got[..], &data[..]);
+}
+
+#[tokio::test]
 async fn total_concurrency_never_exceeds_total() {
     with_timeout(async move {
         let block_size = 1024u64;

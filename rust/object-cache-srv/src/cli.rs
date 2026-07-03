@@ -111,4 +111,22 @@ pub(crate) struct Cli {
         action = clap::ArgAction::Set
     )]
     pub(crate) promote_whole_batch: bool,
+
+    /// Depth of the bounded `/prefetch` queue; items beyond this are
+    /// load-shed (counted as `dropped`) rather than blocking the caller.
+    #[clap(
+        long,
+        env = "MICROMEGAS_OBJECT_CACHE_PREFETCH_QUEUE_CAPACITY",
+        default_value = "4096"
+    )]
+    pub(crate) prefetch_queue_capacity: usize,
+
+    /// Concurrent in-flight prefetch fills the queue worker drives. A soft
+    /// knob; the hard ceiling remains the scheduler's prefetch permits.
+    #[clap(
+        long,
+        env = "MICROMEGAS_OBJECT_CACHE_PREFETCH_WORKER_CONCURRENCY",
+        default_value = "8"
+    )]
+    pub(crate) prefetch_worker_concurrency: usize,
 }

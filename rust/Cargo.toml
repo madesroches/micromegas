@@ -88,6 +88,7 @@ thread-id = "4.0"
 tikv-jemallocator = "0.7"
 tokio = { version = "1.47", features = ["io-util","macros","rt-multi-thread","signal","time","tracing"]}
 tokio-retry2 = "0.6"
+tokio-stream = "0.1"
 tonic = { version = "0.14", features = ["server", "tls-ring", "tls-native-roots"] }
 tower = { version = "0.5" }
 tower-http = { version = "0.6.8", features = ["compression-gzip", "cors", "decompression-gzip", "limit", "timeout"] }

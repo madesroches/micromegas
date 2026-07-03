@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
+use micromegas_object_cache::prefetch::PrefetchItem;
 use micromegas_object_cache::range_cache::RangeCache;
-use tokio::sync::Semaphore;
+use tokio::sync::{Semaphore, mpsc};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -19,15 +20,26 @@ pub struct AppState {
     /// would exceed this outright is rejected (413) rather than acquired
     /// (which would otherwise block forever).
     pub memory_budget_mb: u32,
+    /// Sender side of the bounded prefetch queue; the consumer task (spawned
+    /// separately, see `prefetch_queue::spawn_prefetch_worker`) owns the
+    /// receiver. Every `AppState` clone (one per request) holds a clone of
+    /// this sender, so the channel closes only once the server shuts down.
+    pub prefetch_tx: mpsc::Sender<PrefetchItem>,
 }
 
 impl AppState {
-    pub fn new(cache: RangeCache, allowed_prefixes: Vec<String>, memory_budget_mb: u32) -> Self {
+    pub fn new(
+        cache: RangeCache,
+        allowed_prefixes: Vec<String>,
+        memory_budget_mb: u32,
+        prefetch_tx: mpsc::Sender<PrefetchItem>,
+    ) -> Self {
         Self {
             cache,
             allowed_prefixes,
             mem_permits: Arc::new(Semaphore::new(memory_budget_mb as usize)),
             memory_budget_mb,
+            prefetch_tx,
         }
     }
 }

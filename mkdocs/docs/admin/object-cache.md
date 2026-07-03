@@ -48,6 +48,8 @@ docker run -d -p 8080:8080 \
 | `MICROMEGAS_OBJECT_CACHE_MAX_COALESCED_GET_BYTES` | No | Max span of one coalesced run GET, in bytes (default `8388608`, 8 MiB); larger contiguous runs are split at block boundaries |
 | `MICROMEGAS_OBJECT_CACHE_MEMORY_BUDGET_MB` | No | Cross-request cap on concurrently-assembled response bytes, in MiB (default `1024`) |
 | `MICROMEGAS_OBJECT_CACHE_PROMOTE_WHOLE_BATCH` | No | On a demand hit into a prefetch batch, promote the whole batch (anticipatory) instead of only the covering run (default `false`, precise) |
+| `MICROMEGAS_OBJECT_CACHE_PREFETCH_QUEUE_CAPACITY` | No | Depth of the bounded `POST /prefetch` queue; items beyond this are load-shed (default `4096`); must be > 0 |
+| `MICROMEGAS_OBJECT_CACHE_PREFETCH_WORKER_CONCURRENCY` | No | Concurrent in-flight prefetch fills driven by the queue worker (default `8`); must be > 0 |
 
 Authenticating *against the origin* (e.g. AWS credentials) uses the same environment variables as every other Micromegas service's `MICROMEGAS_OBJECT_STORE_URI` — standard `object_store` crate variables such as `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_ENDPOINT`, `AWS_REGION`, `AWS_ALLOW_HTTP`.
 
@@ -62,7 +64,7 @@ Authenticating *against the origin* (e.g. AWS credentials) uses the same environ
 | `--disk-gb` | `50` | On-disk cache tier size |
 | `--block-size` | `1048576` | Cache block size in bytes |
 | `--namespace` | derived from origin | Cache namespace |
-| `--allowed-prefix` | none | Restrict served keys to this prefix |
+| `--prefix` | none | Restrict served keys to this prefix (repeatable) |
 | `--disable-auth` | off | Disable authentication (development only) |
 | `--shutdown-grace-period-seconds` | `25` | Seconds to drain before hard exit on `SIGTERM` |
 | `--max-concurrent-fetches` | `32` | Total concurrent origin GETs |
@@ -70,6 +72,8 @@ Authenticating *against the origin* (e.g. AWS credentials) uses the same environ
 | `--max-coalesced-get-bytes` | `8388608` | Max span of one coalesced run GET, in bytes |
 | `--memory-budget-mb` | `1024` | Cross-request memory budget, in MiB |
 | `--promote-whole-batch` | `false` | Promote a whole prefetch batch (not just the covering run) on a demand hit |
+| `--prefetch-queue-capacity` | `4096` | Depth of the bounded `POST /prefetch` queue |
+| `--prefetch-worker-concurrency` | `8` | Concurrent in-flight prefetch fills |
 
 ## Fetch scheduling & memory bounds
 
@@ -95,6 +99,35 @@ per-request cap:
   `413` rather than blocking forever. Transient assembly overhead runs roughly
   2-3x the counted bytes, so size this with that multiplier in mind alongside
   the RAM cache tier.
+
+## Prefetch
+
+`POST /prefetch` warms the cache for a batch of keys at background priority, without serving any bytes back to the caller. The request body is:
+
+```json
+{
+  "keys": [
+    {"key": "blobs/abc", "size": 123456},
+    {"key": "blobs/def", "size": 654321, "ranges": [[0, 65536]]}
+  ]
+}
+```
+
+`size` must be the object's exact current size, supplied by the caller — the server trusts it rather than issuing an origin HEAD, since prefetch targets objects that are typically cold. `ranges` is optional; when absent or empty the whole object `[0, size)` is warmed, otherwise only the listed `[start, end)` ranges are.
+
+Batch size is bounded only by the server's default 2 MiB request-body limit (unconfigured for this endpoint) — there is no key-count cap. There is also no per-item size limit: the fill worker streams the block-index space in bounded windows rather than materializing it, so warming an arbitrarily large (or even bogus) `size` costs constant per-item memory. An oversized `size` just stops warming at the first origin fetch past the object's real end.
+
+The endpoint returns immediately with `202 Accepted` and a small JSON body:
+
+```json
+{"accepted": 1, "rejected": 0, "dropped": 1}
+```
+
+- `accepted` — items enqueued onto the background fill queue.
+- `rejected` — items that failed key/prefix or range validation and were skipped; the rest of the batch still proceeds.
+- `dropped` — items load-shed because the queue (`MICROMEGAS_OBJECT_CACHE_PREFETCH_QUEUE_CAPACITY`) was full. Prefetch is best-effort: a full queue never blocks the caller or the response status.
+
+Fills run at the same `Prefetch` priority described in [Fetch scheduling & memory bounds](#fetch-scheduling--memory-bounds) above, so a large prefetch batch never starves a concurrent demand read. Prefetched blocks are admitted to the SSD tier only (not the RAM tier), so they don't compete with hot demand data for RAM residency; a later demand read against a prefetched block is served from SSD.
 
 ## Client opt-in
 
@@ -140,5 +173,11 @@ The cache emits metrics through the standard micromegas tracing sink (queryable 
 | `range_cache_backend_error` | cache server | SSD/IO faults in the disk backend. Should be ~0; a sustained non-zero rate means a degraded volume silently inflating origin traffic. |
 | `object_cache_get_bytes_served` / `object_cache_ranges_bytes_served` | cache server | Bytes served to clients over the wire. |
 | `range_cache_client_fallback` | each client | Reads that fell back to the direct store (cache unreachable, non-2xx, or bad response). **A rising rate is the primary "cache unhealthy" alert** — routine fallback logs at `debug` precisely so it doesn't flood, leaving this metric as the signal. |
+| `range_cache_block_len_mismatch` | cache server | A cached block's length didn't match its expected byte span (e.g. a poisoned entry from an undersized prefetch `size`, or the origin object changed size); the block is refetched and overwritten. Should be ~0. |
+| `object_cache_prefetch_requests` / `object_cache_prefetch_keys_enqueued` | cache server | `POST /prefetch` request and accepted-key counts. |
+| `object_cache_prefetch_dropped` | cache server | Prefetch items load-shed because the queue was full. A sustained non-zero rate means prefetch volume exceeds `MICROMEGAS_OBJECT_CACHE_PREFETCH_QUEUE_CAPACITY` / worker throughput. |
+| `object_cache_prefetch_keys_warmed` / `object_cache_prefetch_fill_error` | cache server | Prefetch fills that completed successfully vs. failed (e.g. key not found at the origin). |
+| `range_cache_client_prefetch_error` | each client | `CacheClientStore::prefetch` calls that failed (transport error or non-2xx). Best-effort — callers do not retry. |
+| `range_cache_prefetch_admission_unexpected_none` | cache server | Defensive counter in the SSD-only prefetch admission path (`FoyerBackend::put`): bumped if `.force().insert(value)` unexpectedly returns `None`. Should never fire; a sustained non-zero rate points to an admission-path regression. |
 
 Routine fallback-to-direct is by-design graceful degradation and is logged at `debug` (not `warn`). Genuinely unexpected conditions — a truncated cache response, a backend IO fault, an internal server error — log at `warn`/`error`.

@@ -21,7 +21,10 @@ use micromegas_auth::types::AuthProvider;
 use micromegas_object_cache::foyer_backend::FoyerBackend;
 use micromegas_object_cache::range_cache::RangeCache;
 use micromegas_object_cache_srv::app_state::AppState;
-use micromegas_object_cache_srv::handlers::{get_range_handler, head_handler, post_ranges_handler};
+use micromegas_object_cache_srv::handlers::{
+    get_range_handler, head_handler, post_ranges_handler, prefetch_handler,
+};
+use micromegas_object_cache_srv::prefetch_queue::spawn_prefetch_worker;
 use micromegas_tracing::prelude::*;
 use object_store::parse_url_opts;
 use object_store::prefix::PrefixStore;
@@ -65,6 +68,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err(
             anyhow!("MICROMEGAS_OBJECT_CACHE_MEMORY_BUDGET_MB must be greater than 0").into(),
         );
+    }
+    if args.prefetch_queue_capacity == 0 {
+        return Err(anyhow!(
+            "MICROMEGAS_OBJECT_CACHE_PREFETCH_QUEUE_CAPACITY must be greater than 0"
+        )
+        .into());
+    }
+    if args.prefetch_worker_concurrency == 0 {
+        return Err(anyhow!(
+            "MICROMEGAS_OBJECT_CACHE_PREFETCH_WORKER_CONCURRENCY must be greater than 0"
+        )
+        .into());
     }
 
     let ns = if args.namespace.is_empty() {
@@ -145,7 +160,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         prefixes
     };
 
-    let state = AppState::new(cache, allowed_prefixes, args.memory_budget_mb);
+    let (prefetch_tx, _prefetch_worker) = spawn_prefetch_worker(
+        cache.clone(),
+        args.prefetch_queue_capacity,
+        args.prefetch_worker_concurrency,
+    );
+
+    let state = AppState::new(cache, allowed_prefixes, args.memory_budget_mb, prefetch_tx);
 
     let auth_provider: Option<Arc<dyn AuthProvider>> = if args.disable_auth {
         info!("Authentication disabled (--disable-auth)");
@@ -167,6 +188,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let obj_router = Router::new()
         .route("/obj/{*key}", get(get_range_handler).head(head_handler))
         .route("/ranges/{*key}", post(post_ranges_handler))
+        .route("/prefetch", post(prefetch_handler))
         .with_state(state);
 
     let obj_router = if let Some(provider) = auth_provider {

@@ -26,11 +26,10 @@ impl FoyerBackend {
             .memory(ram_bytes)
             .with_weighter(|_key: &String, value: &Bytes| value.len())
             .with_shards(shards)
-            // Pin the RAM tier to LRU explicitly: only LRU maps
-            // `CacheHint::Low` to a low-priority eviction hint in foyer 0.14.x
-            // (Lfu/S3Fifo/Fifo silently discard it). This is the crate's
-            // current default; pinning it defensively guards `FillHint`
-            // against a future foyer default change.
+            // Pin the RAM tier to LRU explicitly: LRU is the crate's current
+            // default eviction policy; pinning it here guards against a
+            // future foyer default change silently altering RAM-tier
+            // eviction behavior for demand fills.
             .with_eviction_config(LruConfig::default())
             .storage(Engine::Large)
             .with_device_options(DirectFsDeviceOptions::new(dir).with_capacity(disk_bytes))
@@ -43,14 +42,12 @@ impl FoyerBackend {
         self.cache.close().await?;
         Ok(())
     }
-}
 
-impl From<FillHint> for CacheHint {
-    fn from(hint: FillHint) -> Self {
-        match hint {
-            FillHint::Demand => CacheHint::Normal,
-            FillHint::Prefetch => CacheHint::Low,
-        }
+    /// Current RAM-tier byte usage. Exposed so integration tests (which
+    /// compile as a separate crate and cannot reach the private `cache`
+    /// field) can assert prefetch fills do not grow RAM-tier residency.
+    pub fn ram_usage(&self) -> usize {
+        self.cache.memory().usage()
     }
 }
 
@@ -73,6 +70,27 @@ impl RangeCacheBackend for FoyerBackend {
     }
 
     async fn put(&self, key: String, value: Bytes, hint: FillHint) {
-        self.cache.insert_with_hint(key, value, hint.into());
+        match hint {
+            // SSD-only admission: `.force()` bypasses the disk admission
+            // picker so the block is always admitted deterministically (no
+            // silent decline). The write holds only an ephemeral RAM record
+            // that is dropped immediately (no eviction-structure residency),
+            // so a prefetch fill never retains RAM residency.
+            FillHint::Prefetch => {
+                let entry = self.cache.storage_writer(key).force().insert(value);
+                if entry.is_none() {
+                    // Should not occur under `.force()`, which always admits.
+                    imetric!(
+                        "range_cache_prefetch_admission_unexpected_none",
+                        "count",
+                        1_u64
+                    );
+                    warn!("prefetch storage_writer().force().insert() unexpectedly returned None");
+                }
+            }
+            FillHint::Demand => {
+                self.cache.insert_with_hint(key, value, CacheHint::Normal);
+            }
+        }
     }
 }
