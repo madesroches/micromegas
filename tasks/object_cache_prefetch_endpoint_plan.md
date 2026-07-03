@@ -284,6 +284,11 @@ This supersedes the old `CacheHint::Low` RAM-residency behavior for prefetch: pr
 longer live in RAM at all. The backend write for both paths still happens at `range_cache.rs:679`
 via `backend.put(.., hint)`; only the hint-based branch inside `put` is new.
 
+Because the prefetch branch now uses `storage_writer` (no `CacheHint`), only
+`FillHint::Demand => CacheHint::Normal` is ever reached in the `FillHint`→`CacheHint` conversion. As
+part of this change, **remove the now-dead `FillHint::Prefetch => CacheHint::Low` arm and its
+LRU-pinning comment** so the conversion doesn't carry a stale mapping.
+
 ## Implementation Steps
 
 ### Phase 1 — shared types + dependencies
@@ -296,8 +301,11 @@ via `backend.put(.., hint)`; only the hint-based branch inside `put` is new.
    fills through the existing `prefetch_blocks(key, file_size, indices)` using the caller-supplied
    `size`.
 3. Change `FoyerBackend::put` (`rust/object-cache/src/foyer_backend.rs`) to branch on the fill hint:
-   `FillHint::Prefetch` → `storage_writer(key).insert(value)` (SSD-only, ephemeral RAM record);
-   demand → unchanged `insert_with_hint` (§7).
+   `FillHint::Prefetch` → `storage_writer(key).force().insert(value)` (SSD-only, ephemeral RAM
+   record; `.force()` bypasses the disk admission picker for deterministic admission, per §7);
+   demand → unchanged `insert_with_hint` (§7). Also remove the now-dead
+   `FillHint::Prefetch => CacheHint::Low` arm (and its LRU-pinning comment) in `<FillHint as
+   Into<CacheHint>>`, since prefetch no longer flows through `insert_with_hint` (§7).
 
 ### Phase 2 — server endpoint + queue
 4. Add `prefetch_queue` module (or inline in `handlers.rs`) with the bounded `mpsc` + consumer-loop
@@ -306,11 +314,14 @@ via `backend.put(.., hint)`; only the hint-based branch inside `put` is new.
    `AtomicUsize` + `tokio::sync::Notify`), and on channel close it awaits every outstanding fill
    before the `JoinHandle` resolves — so a test that drops the sender and awaits the handle knows
    all fills are done, with no `tokio::time::sleep`.
-5. Extend `AppState` (`app_state.rs`) with `prefetch_tx: mpsc::Sender<PrefetchItem>` and the
-   per-request key cap constant. This changes the `AppState::new` signature, so update every
-   caller — including the `make_state` helper in `tests/memory_budget_tests.rs`, which must
-   construct and pass a throwaway `prefetch_tx`. (Alternatively, keep the existing 3-arg
-   constructor working via a builder/default so `make_state` is untouched.)
+5. Extend `AppState` (`app_state.rs`) with `prefetch_tx: mpsc::Sender<PrefetchItem>` (only the
+   sender lives in `AppState`). Add `MAX_PREFETCH_KEYS_PER_REQUEST` as a module-level `const` in
+   `handlers.rs`, alongside the existing per-request caps (`MAX_RANGES_PER_REQUEST`,
+   `MAX_TOTAL_REQUESTED_BYTES`) — not as an `AppState` field. Adding `prefetch_tx` changes the
+   `AppState::new` signature, so update every caller — including the `make_state` helper in
+   `tests/memory_budget_tests.rs`, which must construct and pass a throwaway `prefetch_tx`.
+   (Alternatively, keep the existing 3-arg constructor working via a builder/default so `make_state`
+   is untouched.)
 6. Add `prefetch_handler` to `handlers.rs` (validation, cap, `try_send`, `202` + counts, no
    mem_permit).
 7. In `object_cache_srv.rs`: add the two CLI options + startup validation; build the queue/worker;
@@ -333,14 +344,17 @@ via `backend.put(.., hint)`; only the hint-based branch inside `put` is new.
 - `rust/object-cache/src/prefetch.rs` (new) — shared types (`PrefetchItem` with required `size`) +
   `ObjectPrefetch` trait.
 - `rust/object-cache/src/lib.rs` — export the new module.
-- `rust/object-cache/src/foyer_backend.rs` — `put` branches to SSD-only `storage_writer` for
-  `FillHint::Prefetch` (§7).
+- `rust/object-cache/src/foyer_backend.rs` — `put` branches to SSD-only
+  `storage_writer(key).force().insert(value)` for `FillHint::Prefetch` (§7); also remove the now-dead
+  `FillHint::Prefetch => CacheHint::Low` arm and its LRU-pinning comment.
 - `rust/object-cache/src/client.rs` — `prefetch` method + trait impl.
-- `rust/object-cache-srv/src/app_state.rs` — queue sender + key cap (changes `AppState::new` signature).
+- `rust/object-cache-srv/src/app_state.rs` — queue sender `prefetch_tx` (changes `AppState::new`
+  signature); the `MAX_PREFETCH_KEYS_PER_REQUEST` cap is a module `const` in `handlers.rs`, not here.
 - `rust/object-cache-srv/tests/memory_budget_tests.rs` — update the `make_state` helper for the new
   `AppState::new` signature (construct/pass a throwaway `prefetch_tx`), unless a builder/default keeps
   the 3-arg path working.
-- `rust/object-cache-srv/src/handlers.rs` — `prefetch_handler` (+ queue/worker if inlined here).
+- `rust/object-cache-srv/src/handlers.rs` — `prefetch_handler`, `MAX_PREFETCH_KEYS_PER_REQUEST`
+  module `const` (alongside the existing caps) (+ queue/worker if inlined here).
 - `rust/object-cache-srv/src/cli.rs` — two new options.
 - `rust/object-cache-srv/src/object_cache_srv.rs` — startup validation, queue build, route.
 - `rust/object-cache-srv/tests/prefetch_tests.rs` (new) — handler + client integration tests.
