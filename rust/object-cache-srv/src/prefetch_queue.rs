@@ -88,14 +88,20 @@ async fn warm_item(cache: &RangeCache, item: PrefetchItem, block_size: u64) {
         })
         .buffered(WINDOW_CONCURRENCY);
 
+    let mut warmed_any = false;
     while let Some(res) = stream.next().await {
         if let Err(e) = res {
             imetric!("object_cache_prefetch_fill_error", "count", 1_u64);
             debug!("prefetch fill failed key={}: {e:?}", item.key);
             return;
         }
+        warmed_any = true;
     }
-    imetric!("object_cache_prefetch_keys_warmed", "count", 1_u64);
+    // A no-op item (size == 0 or all-empty ranges) yields no windows; don't
+    // count it as a warmed key.
+    if warmed_any {
+        imetric!("object_cache_prefetch_keys_warmed", "count", 1_u64);
+    }
 }
 
 /// Spawn the bounded-queue prefetch consumer. The returned `Sender` is what

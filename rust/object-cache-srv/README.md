@@ -31,9 +31,12 @@ or zero-length ranges are rejected with `400`. A single request is capped at
 beyond that). Out-of-bounds ranges return `416 Range Not Satisfiable`.
 
 `/prefetch` enqueues each key onto a bounded background queue and returns
-without waiting for the fetch to complete. `size` must be the object's exact
+without waiting for the fetch to complete. `size` should be the object's exact
 current size — the server trusts it to avoid an origin HEAD, since prefetch
-targets cold objects. Batch size is bounded only by the server's default
+targets cold objects. An oversized value is safe (the origin GET past EOF fails
+and nothing is stored); an undersized value is the only harmful case, and it is
+mitigated by a hit-path length guard that detects and refetches a truncated
+block on the next correctly-sized read. Batch size is bounded only by the server's default
 2 MiB request-body limit (unconfigured for this endpoint) — there is no
 key-count cap; there is also no per-item size limit, since the fill worker
 streams the block-index space in bounded windows rather than materializing
