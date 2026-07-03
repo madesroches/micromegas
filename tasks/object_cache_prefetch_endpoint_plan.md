@@ -124,6 +124,10 @@ write/query path.
 // `fills` is the JoinSet the consumer loop owns for the deterministic drain
 // (see "Deterministic drain/completion signal" below and Implementation Step 4).
 while let Some(item) = rx.recv().await {
+    // Reap completed fills: a JoinSet retains an entry per spawned task until
+    // it is joined, and in production the channel never closes, so without
+    // this the set grows for the server's lifetime.
+    while fills.try_join_next().is_some() {}
     let permit = worker_sem.clone().acquire_owned().await;   // bound in-flight fills
     let cache = cache.clone();
     fills.spawn(async move {
@@ -173,7 +177,10 @@ read issued right after `202` could race an in-flight (or not-yet-started) fill.
 observable without `tokio::time::sleep`, the worker tracks its spawned fills instead of
 firing-and-forgetting: the code block above collects them in the `tokio::task::JoinSet` (`fills`)
 owned by the consumer loop (an `AtomicUsize` in-flight counter paired with a `tokio::sync::Notify`
-would work equally well). When the channel closes (all `Sender`s dropped),
+would work equally well). Because a `JoinSet` retains completed tasks until they are joined — and in
+production the `Sender` lives in `AppState` so the channel never closes — the loop **must reap on
+each iteration** (`while fills.try_join_next().is_some() {}`, as in the code block above); otherwise
+the set grows unboundedly over the server's lifetime. When the channel closes (all `Sender`s dropped),
 `rx.recv()` returns `None`; the loop then awaits every outstanding fill in the `JoinSet` before the
 consumer's `JoinHandle` resolves. A test therefore drives a deterministic drain by dropping the
 sender (or via an explicit shutdown handle) and awaiting that `JoinHandle` — at which point all
@@ -189,7 +196,8 @@ prefetch_handler(State(state), body: Bytes) -> Result<Response, StatusCode>
 ```
 
 1. Deserialize `PrefetchRequest`; malformed JSON → `400`.
-2. Cap batch size: reject > `MAX_PREFETCH_KEYS_PER_REQUEST` with `400` (bounds per-request work on an
+2. Cap batch size: reject > `MAX_PREFETCH_KEYS_PER_REQUEST` (`4096`, matching
+   `MAX_RANGES_PER_REQUEST`) with `400` (bounds per-request work on an
    authenticated endpoint). Cap ranges-per-key with the existing `MAX_RANGES_PER_REQUEST`.
 3. For each item: `validate_key(&item.key, &state.allowed_prefixes)`; validate each supplied range
    against the caller-known `item.size` — reject inverted/degenerate ranges (`s >= e`) and
@@ -296,9 +304,12 @@ to `self.cache.memory().usage()` (foyer 0.14.1's `HybridCache::memory().usage()`
 a prefetch fill.
 
 Because the prefetch branch now uses `storage_writer` (no `CacheHint`), only
-`FillHint::Demand => CacheHint::Normal` is ever reached in the `FillHint`→`CacheHint` conversion. As
-part of this change, **remove the now-dead `FillHint::Prefetch => CacheHint::Low` arm** from the
-`From<FillHint> for CacheHint` impl (`foyer_backend.rs:48-55`, which has no adjacent comment) so the
+`FillHint::Demand => CacheHint::Normal` is ever reached in the `FillHint`→`CacheHint` conversion.
+Note the now-dead `FillHint::Prefetch => CacheHint::Low` arm **cannot simply be deleted** — the impl
+is a `match` over the two-variant `FillHint` enum, so removing one arm is a non-exhaustive-match
+compile error (E0004). Instead, **delete the whole `From<FillHint> for CacheHint` impl**
+(`foyer_backend.rs:48-55`, which has no adjacent comment; `put` is its only user in the crate) and
+have the demand branch call `insert_with_hint(key, value, CacheHint::Normal)` directly, so the
 conversion doesn't carry a stale mapping.
 
 Separately, the LRU-pinning comment lives elsewhere: on the `.with_eviction_config(LruConfig::default())`
@@ -322,10 +333,9 @@ updated rationale that no longer references prefetch).
 3. Change `FoyerBackend::put` (`rust/object-cache/src/foyer_backend.rs`) to branch on the fill hint:
    `FillHint::Prefetch` → `storage_writer(key).force().insert(value)` (SSD-only, ephemeral RAM
    record; `.force()` bypasses the disk admission picker for deterministic admission, per §7);
-   demand → unchanged `insert_with_hint` (§7). Also remove the now-dead
-   `FillHint::Prefetch => CacheHint::Low` arm from the `From<FillHint> for CacheHint` impl
-   (`foyer_backend.rs:48-55`, no adjacent comment), since prefetch no longer flows through
-   `insert_with_hint` (§7). Separately, update the LRU-pinning comment at `foyer_backend.rs:29-34`
+   demand → `insert_with_hint(key, value, CacheHint::Normal)` directly. Delete the whole
+   `From<FillHint> for CacheHint` impl (`foyer_backend.rs:48-55`, no adjacent comment; `put` is its
+   only user) — removing only the `Prefetch` arm would be a non-exhaustive-match compile error (§7). Separately, update the LRU-pinning comment at `foyer_backend.rs:29-34`
    (on `.with_eviction_config(LruConfig::default())`): with no `FillHint` mapping to `CacheHint::Low`,
    the defensive `LruConfig::default()` pinning no longer protects prefetch and may be removed or
    kept with an updated rationale (§7). Also add the `pub fn ram_usage(&self) -> usize` accessor
@@ -336,12 +346,14 @@ updated rationale that no longer references prefetch).
 4. Add `prefetch_queue` module (or inline in `handlers.rs`) with the bounded `mpsc` + consumer-loop
    builder returning `(Sender, JoinHandle)`. The worker exposes a deterministic drain/completion
    signal for tests (§3): the consumer loop tracks spawned fills in a `JoinSet` (or an
-   `AtomicUsize` + `tokio::sync::Notify`), and on channel close it awaits every outstanding fill
+   `AtomicUsize` + `tokio::sync::Notify`), reaping completed entries each iteration
+   (`try_join_next` — a `JoinSet` retains completed tasks until joined, and the production channel
+   never closes), and on channel close it awaits every outstanding fill
    before the `JoinHandle` resolves — so a test that drops the sender and awaits the handle knows
    all fills are done, with no `tokio::time::sleep`.
 5. Extend `AppState` (`app_state.rs`) with `prefetch_tx: mpsc::Sender<PrefetchItem>` (only the
-   sender lives in `AppState`). Add `MAX_PREFETCH_KEYS_PER_REQUEST` as a module-level `const` in
-   `handlers.rs`, alongside the existing per-request caps (`MAX_RANGES_PER_REQUEST`,
+   sender lives in `AppState`). Add `MAX_PREFETCH_KEYS_PER_REQUEST` (`4096`) as a module-level
+   `const` in `handlers.rs`, alongside the existing per-request caps (`MAX_RANGES_PER_REQUEST`,
    `MAX_TOTAL_REQUESTED_BYTES`) — not as an `AppState` field. Adding `prefetch_tx` changes the
    `AppState::new` signature, so update every caller — including the `make_state` helper in
    `tests/memory_budget_tests.rs`, which must construct and pass a throwaway `prefetch_tx`.
@@ -370,9 +382,10 @@ updated rationale that no longer references prefetch).
   `ObjectPrefetch` trait.
 - `rust/object-cache/src/lib.rs` — export the new module.
 - `rust/object-cache/src/foyer_backend.rs` — `put` branches to SSD-only
-  `storage_writer(key).force().insert(value)` for `FillHint::Prefetch` (§7); remove the now-dead
-  `FillHint::Prefetch => CacheHint::Low` arm from the `From<FillHint> for CacheHint` impl
-  (`:48-55`, no comment) and update the LRU-pinning comment at `:29-34`; add the
+  `storage_writer(key).force().insert(value)` for `FillHint::Prefetch` (§7); delete the whole
+  `From<FillHint> for CacheHint` impl (`:48-55`, no comment; arm-only removal would not compile),
+  inlining `CacheHint::Normal` in the demand branch, and update the LRU-pinning comment at `:29-34`;
+  add the
   `pub fn ram_usage(&self) -> usize` introspection accessor for the SSD-only test (§7).
 - `rust/object-cache/src/client.rs` — `prefetch` method + trait impl.
 - `rust/object-cache-srv/src/app_state.rs` — queue sender `prefetch_tx` (changes `AppState::new`
