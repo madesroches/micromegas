@@ -115,7 +115,7 @@ per-request cap:
 
 `size` must be the object's exact current size, supplied by the caller — the server trusts it rather than issuing an origin HEAD, since prefetch targets objects that are typically cold. `ranges` is optional; when absent or empty the whole object `[0, size)` is warmed, otherwise only the listed `[start, end)` ranges are.
 
-A batch is capped at 4096 keys — a request with more is rejected outright with `400`. There is no per-item size limit: the fill worker streams the block-index space in bounded windows rather than materializing it, so warming an arbitrarily large (or even bogus) `size` costs constant per-item memory. An oversized `size` just stops warming at the first origin fetch past the object's real end.
+Batch size is bounded only by the server's default 2 MiB request-body limit (unconfigured for this endpoint) — there is no key-count cap. There is also no per-item size limit: the fill worker streams the block-index space in bounded windows rather than materializing it, so warming an arbitrarily large (or even bogus) `size` costs constant per-item memory. An oversized `size` just stops warming at the first origin fetch past the object's real end.
 
 The endpoint returns immediately with `202 Accepted` and a small JSON body:
 

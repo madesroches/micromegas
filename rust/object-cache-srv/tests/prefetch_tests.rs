@@ -400,6 +400,33 @@ async fn huge_declared_size_is_accepted_no_cap() {
 }
 
 #[tokio::test]
+async fn batch_over_old_4096_key_cap_is_accepted_no_cap() {
+    // There is no batch-size (key-count) cap: a request is bounded only by
+    // the server's request-body size limit, not a fixed key count, so a
+    // batch larger than the old (removed) 4096-key cap must be accepted in
+    // full.
+    const KEY_COUNT: usize = 5000;
+    let (prefetch_tx, _rx) = tokio::sync::mpsc::channel::<PrefetchItem>(KEY_COUNT);
+    let store = Arc::new(InMemory::new());
+    let cache = memory_cache(store as Arc<dyn ObjectStore>, 1024);
+    let state = AppState::new(cache, vec!["obj".to_string()], 1024, prefetch_tx);
+
+    let req = PrefetchRequest {
+        keys: (0..KEY_COUNT)
+            .map(|i| PrefetchItem {
+                key: format!("obj/{i}"),
+                size: 10,
+                ranges: None,
+            })
+            .collect(),
+    };
+    let resp = call_prefetch(&state, &req).await;
+    assert_eq!(resp.accepted, KEY_COUNT);
+    assert_eq!(resp.rejected, 0);
+    assert_eq!(resp.dropped, 0);
+}
+
+#[tokio::test]
 async fn oversized_declared_size_streams_and_stops_at_true_eof() {
     // The worker streams block-index windows in chunks of WINDOW_BLOCKS (64,
     // `prefetch_queue.rs`). Picking a small block_size here keeps the test

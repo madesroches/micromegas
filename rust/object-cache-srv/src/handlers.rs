@@ -29,10 +29,6 @@ const MAX_RANGES_PER_REQUEST: usize = 4096;
 /// caps peak allocation regardless of how many ranges overlap the same bytes.
 const MAX_TOTAL_REQUESTED_BYTES: u64 = 512 * 1024 * 1024; // 512 MiB
 
-/// Maximum number of keys accepted in a single `/prefetch` request body,
-/// bounding per-request work on this authenticated endpoint.
-const MAX_PREFETCH_KEYS_PER_REQUEST: usize = 4096;
-
 const BYTES_PER_MEM_PERMIT: u64 = 1024 * 1024;
 
 /// Number of `mem_permits` (1 MiB each) needed to cover `bytes`.
@@ -383,14 +379,6 @@ pub async fn prefetch_handler(
             return Err(StatusCode::BAD_REQUEST);
         }
     };
-
-    if req.keys.len() > MAX_PREFETCH_KEYS_PER_REQUEST {
-        warn!(
-            "rejected prefetch batch of {n} keys: exceeds max {MAX_PREFETCH_KEYS_PER_REQUEST}",
-            n = req.keys.len()
-        );
-        return Err(StatusCode::BAD_REQUEST);
-    }
 
     let mut accepted = 0usize;
     let mut rejected = 0usize;

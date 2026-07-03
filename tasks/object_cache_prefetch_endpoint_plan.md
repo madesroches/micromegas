@@ -1,6 +1,6 @@
 # Object Cache Prefetch Endpoint + Client Method Plan
 
-## Implementation status: IN PROGRESS (branch not merged)
+## Implementation status: DONE (branch not yet merged)
 
 Confirmed against the current tree: the shared types (`prefetch.rs`), the streaming
 `prefetch_queue.rs` consumer (lazy `WINDOW_BLOCKS`-sized windows, `buffered`/`for_each_concurrent`,
@@ -12,20 +12,23 @@ the client `prefetch` method/trait, CLI knobs, and the `prefetch_tests.rs` suite
 and match this plan. There is no per-item size ceiling anywhere in the request path, and no test
 enforces one.
 
-**Remaining before this is actually done — Open Question #4's resolution (drop
-`MAX_PREFETCH_KEYS_PER_REQUEST`) has not been carried into the code or docs yet:**
+Open Question #4's resolution (drop `MAX_PREFETCH_KEYS_PER_REQUEST`) has now been carried into the
+code and docs:
 
-1. `rust/object-cache-srv/src/handlers.rs:32-34` still declares `MAX_PREFETCH_KEYS_PER_REQUEST: usize
-   = 4096` (with a doc comment describing it as an intentional, load-bearing cap), and `handlers.rs:
-   387-393` still rejects `req.keys.len() > MAX_PREFETCH_KEYS_PER_REQUEST` with `400`. Both need
-   deleting — see "Superseded: the batch-size cap" below for why.
-2. `mkdocs/docs/admin/object-cache.md:118` and `rust/object-cache-srv/README.md:36` still say "A
-   batch is capped at 4096 keys" — needs rewriting to state the batch size is bounded only by the
-   server's default 2 MiB request-body limit (unconfigured for this endpoint).
-3. Once the cap is removed, `prefetch_tests.rs` has no test asserting a >4096-key batch is accepted
-   (it does already assert no per-item `size` cap via `huge_declared_size_is_accepted_no_cap`) — worth
-   adding for symmetry, though not required for correctness since the handler's loop cost doesn't
-   scale badly with count either way.
+1. `rust/object-cache-srv/src/handlers.rs` no longer declares `MAX_PREFETCH_KEYS_PER_REQUEST` and no
+   longer rejects `req.keys.len() > ...` with `400` — both were deleted (see "Superseded: the
+   batch-size cap" below for why).
+2. `mkdocs/docs/admin/object-cache.md` and `rust/object-cache-srv/README.md` no longer say "A batch
+   is capped at 4096 keys" — both now state the batch size is bounded only by the server's default
+   2 MiB request-body limit (unconfigured for this endpoint).
+3. `prefetch_tests.rs` gained `batch_over_old_4096_key_cap_is_accepted_no_cap`, asserting a 5000-key
+   batch is accepted in full — the symmetry counterpart to `huge_declared_size_is_accepted_no_cap`.
+
+All object-cache-srv/object-cache tests pass (13/13 in `prefetch_tests.rs`); native CI
+(`cargo fmt --check`, `cargo clippy --workspace -- -D warnings`, `cargo test`) is green. The
+unrelated WASM browser-test step fails in this sandbox on headless Firefox port binding
+(`driver failed to bind port during startup`, a snapd mount-namespace issue) — pre-existing
+environment limitation, not caused by this change.
 
 Tracking: [#1198](https://github.com/madesroches/micromegas/issues/1198) — part of
 [#1197](https://github.com/madesroches/micromegas/issues/1197) (prefetch support). Builds on the
