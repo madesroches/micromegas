@@ -331,6 +331,14 @@ async fn invalid_items_are_rejected_valid_ones_still_enqueued() {
                 size: 10,
                 ranges: Some(vec![[0, 20]]),
             },
+            // Oversized whole-object size: must be rejected before it ever
+            // reaches `block_indices_for`, which would otherwise try to
+            // allocate one `u64` per block for a bogus multi-exabyte object.
+            PrefetchItem {
+                key: "obj/huge".to_string(),
+                size: u64::MAX,
+                ranges: None,
+            },
             // Valid.
             PrefetchItem {
                 key: "obj/valid".to_string(),
@@ -341,7 +349,7 @@ async fn invalid_items_are_rejected_valid_ones_still_enqueued() {
     };
     let resp = call_prefetch(&state, &req).await;
     assert_eq!(resp.accepted, 1);
-    assert_eq!(resp.rejected, 3);
+    assert_eq!(resp.rejected, 4);
     assert_eq!(resp.dropped, 0);
 }
 
