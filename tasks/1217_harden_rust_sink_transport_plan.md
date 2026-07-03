@@ -181,7 +181,10 @@ loop {
     // Take the `queues` lock, re-check the predicate under it (empty and no
     // freed slot pending), and only then wait_timeout on that same guard so a
     // signal racing between the drain above and the wait cannot be lost.
-    let timeout = flusher.time_to_flush_seconds();
+    // clamp to zero as today's code does: time_to_flush_seconds() returns i64
+    // and goes negative when a flush is overdue; a negative value cast to
+    // Duration::from_secs(u64) would wrap to ~u64::MAX and never wake.
+    let timeout = Duration::from_secs(flusher.time_to_flush_seconds().max(0) as u64);
     let guard = queues.lock();
     if all_empty(&guard) && !shutdown {
         notify.wait_timeout(guard, timeout);
@@ -218,7 +221,8 @@ Add a pending map to `HttpEventSink`:
 pending_stream_meta: Mutex<HashMap<uuid::Uuid, Arc<StreamInfo>>>,
 ```
 
-- `on_init_*_stream` → `pending_stream_meta.insert(stream_id, Arc::new(make_stream_info(...)))`.
+- `on_init_*_stream` (which receives `&LogStream` / `&MetricsStream` / etc., not a
+  bare id) → `pending_stream_meta.insert(stream.stream_id(), Arc::new(make_stream_info(stream)))`.
   No enqueue. Idle streams cost one map entry and nothing on the wire.
 - `on_process_*_block` → before enqueuing the block, `remove(block.stream_id)`;
   if present, enqueue it as a `Metadata`-priority `Payload::Stream` first, then
@@ -301,9 +305,11 @@ drop path.
    the `mpsc` sender/receiver and `AtomicIsize` queue_size with `SharedQueue`.
 3. Implement priority enqueue with the graded byte-budget drop; charge/de-charge
    `queue_bytes`. Wire `is_busy()` to `queue_count`.
-4. Rewrite the worker loop to pop by priority and `wait_timeout` on the condvar;
-   collapse the four `push_block` arms into one `Payload::Block` path. Sends stay
-   serial in this phase (the concurrency gate lands in Phase 4).
+4. Rewrite the worker loop to pop by priority and `wait_timeout` on the condvar
+   (preserving the existing `max(0, …)` clamp + `Duration` conversion on the
+   flush timeout when translating `recv_timeout` → `wait_timeout`); collapse the
+   four `push_block` arms into one `Payload::Block` path. Sends stay serial in
+   this phase (the concurrency gate lands in Phase 4).
 5. Preserve shutdown semantics (final drain + `shutdown_complete`).
 
 ### Phase 2 — Lazy stream metadata
@@ -347,6 +353,9 @@ drop path.
   examples (lines ~339–345 and ~365–371) to the new `HttpSinkConfig`-based
   signature (they currently pass the removed positional `max_queue_size`,
   `metadata_retry`, `blocks_retry` args).
+- *Intentionally not modified:* `tasks/completed/auth/ingestion_auth_plan.md` also
+  contains old positional `HttpEventSink::new(...)` snippets, but it is a historical
+  archive under `tasks/completed/` and is left as-is by convention.
 
 ## Trade-offs
 - **Condvar + shared queue vs. keeping `mpsc` as a wakeup with side queues.**
