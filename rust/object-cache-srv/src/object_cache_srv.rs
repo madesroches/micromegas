@@ -58,6 +58,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .into());
     }
+    // A zero budget would make the memory-guard reject every non-empty data
+    // request with 413 while /health and /ready still pass; fail at startup
+    // instead.
+    if args.memory_budget_mb == 0 {
+        return Err(
+            anyhow!("MICROMEGAS_OBJECT_CACHE_MEMORY_BUDGET_MB must be greater than 0").into(),
+        );
+    }
 
     let ns = if args.namespace.is_empty() {
         // Strip any `scheme://` prefix so the namespace is stable regardless of

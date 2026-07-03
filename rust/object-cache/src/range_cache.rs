@@ -163,9 +163,11 @@ struct FetchScheduler {
 impl FetchScheduler {
     fn new(total: usize, demand_reserved: usize, promote_whole_batch: bool) -> Self {
         assert!(total > 0, "fetch concurrency total must be > 0");
+        // Strictly less: `demand_reserved == total` would leave the prefetch
+        // semaphore with zero permits, hanging every prefetch run forever.
         assert!(
-            demand_reserved <= total,
-            "demand_reserved ({demand_reserved}) must be <= total ({total})"
+            demand_reserved < total,
+            "demand_reserved ({demand_reserved}) must be < total ({total})"
         );
         Self {
             inflight: StdMutex::new(HashMap::new()),
@@ -180,6 +182,11 @@ impl FetchScheduler {
     /// promotes it (and, if `promote_whole_batch`, its batch siblings) to
     /// demand so it competes for reserved capacity instead of sitting behind
     /// other prefetch work.
+    ///
+    /// The entry is registered in `batch` (owner or joiner alike) while the
+    /// inflight lock is still held, i.e. before any concurrent demand joiner
+    /// can find the entry and run `promote_batch_siblings` over a
+    /// partially-populated list.
     fn own_or_join(
         &self,
         key: String,
@@ -198,9 +205,21 @@ impl FetchScheduler {
                         promote_batch = Some((bs, existing.clone()));
                     }
                 }
+                if let Some(bs) = &batch {
+                    bs.entries
+                        .lock()
+                        .expect("batch lock")
+                        .push(Arc::downgrade(existing));
+                }
                 Ownership::Joiner(existing.clone())
             } else {
-                let entry = Arc::new(InFlight::new(prio, batch));
+                let entry = Arc::new(InFlight::new(prio, batch.clone()));
+                if let Some(bs) = &batch {
+                    bs.entries
+                        .lock()
+                        .expect("batch lock")
+                        .push(Arc::downgrade(&entry));
+                }
                 map.insert(key.clone(), entry.clone());
                 Ownership::Owner(entry)
             }
@@ -371,7 +390,9 @@ fn reconstruct_shared_error(shared: &Arc<anyhow::Error>) -> anyhow::Error {
         };
         return anyhow::Error::from(rebuilt);
     }
-    anyhow!("{shared}")
+    // `{shared:?}` keeps the full context chain (and backtrace, if captured)
+    // so joiners' 500 log lines are as informative as the owner's.
+    anyhow!("{shared:?}")
 }
 
 fn decode_size(data: &Bytes) -> Result<u64> {
@@ -598,12 +619,9 @@ impl RangeCache {
                 }
             }
         }
-        // Record every member of this batch (owned or joined) as a promotion
-        // sibling, keyed by identity rather than by key string.
-        if let Some(bs) = &batch {
-            let mut list = bs.entries.lock().expect("batch lock");
-            list.extend(entries.values().map(Arc::downgrade));
-        }
+        // Every member of this batch (owned or joined) was recorded as a
+        // promotion sibling inside `own_or_join`, under the inflight lock,
+        // so no entry became joinable before the batch list held it.
 
         let hint = match prio {
             Priority::Demand => FillHint::Demand,
