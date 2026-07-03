@@ -78,11 +78,13 @@ server are updated together and there is no old wire format in the wild to inter
    `Content-Type: application/x-ndjson`; drop the `PrefetchRequest` import.
 3. `rust/object-cache-srv/src/handlers.rs`: rewrite `prefetch_handler` per the design —
    `Body` extractor, line buffer with `MAX_PREFETCH_LINE_BYTES`, per-line
-   parse/validate/`try_send` (loop body unchanged), same `202`/`PrefetchResponse` tail.
+   parse/validate/`try_send` (loop body unchanged), same `202`/`PrefetchResponse` tail; drop the
+   now-dead `PrefetchRequest` import (line 12).
 4. Update `rust/object-cache-srv/tests/prefetch_tests.rs` (bodies → NDJSON; both the direct
    handler calls and the served-`Router` test at line 602) and add cases listed under Testing.
 5. Docs: `mkdocs/docs/admin/object-cache.md` (`POST /prefetch` body section, lines ~105-118 —
-   replace the "bounded only by the server's default 2 MiB request-body limit" paragraph with
+   rewrite the `{"keys":[...]}` JSON request-body example at lines 107-114 to an NDJSON example,
+   and replace the "bounded only by the server's default 2 MiB request-body limit" paragraph with
    the NDJSON/per-line-cap story), `rust/object-cache-srv/README.md` endpoints table and the
    `/prefetch` prose paragraph (lines 33-46, which currently asserts the "default 2 MiB
    request-body limit" — rewrite to describe NDJSON and the per-line cap).
