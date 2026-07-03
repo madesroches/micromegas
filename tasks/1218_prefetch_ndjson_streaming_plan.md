@@ -82,6 +82,9 @@ server are updated together and there is no old wire format in the wild to inter
    now-dead `PrefetchRequest` import (line 12).
 4. Update `rust/object-cache-srv/tests/prefetch_tests.rs` (bodies → NDJSON; both the direct
    handler calls and the served-`Router` test at line 602) and add cases listed under Testing.
+   Also update the now-stale comment in `batch_over_old_4096_key_cap_is_accepted_no_cap` (lines
+   ~402-427) that says the batch is "bounded only by the server's request-body size limit" — that
+   ceiling is being removed by this change.
 5. Docs: `mkdocs/docs/admin/object-cache.md` (`POST /prefetch` body section, lines ~105-118 —
    rewrite the `{"keys":[...]}` JSON request-body example at lines 107-114 to an NDJSON example,
    and replace the "bounded only by the server's default 2 MiB request-body limit" paragraph with
@@ -122,10 +125,11 @@ server are updated together and there is no old wire format in the wild to inter
 
 `object-cache-srv/tests/prefetch_tests.rs`:
 - Existing suite converted to NDJSON bodies (mixed valid/invalid items, queue-full `dropped`,
-  closed-queue 503, served-`Router` end-to-end test).
-- New: blank lines skipped; final line without trailing `\n` processed; malformed line counted
-  `rejected` while later lines still enqueue; line exceeding `MAX_PREFETCH_LINE_BYTES` → 400
-  (and earlier items still enqueued);
+  served-`Router` end-to-end test).
+- New: closed-queue 503 (drop the receiver so `try_send` hits `TrySendError::Closed`; no existing
+  test exercises this branch); blank lines skipped; final line without trailing `\n` processed;
+  malformed line counted `rejected` while later lines still enqueue; line exceeding
+  `MAX_PREFETCH_LINE_BYTES` → 400 (and earlier items still enqueued);
   body larger than 2 MiB total (many small items) accepted through the served `Router`, confirming
   no whole-body size ceiling remains on `/prefetch`.
 - Client round-trip: `CacheClientStore::prefetch` against the served router returns correct
