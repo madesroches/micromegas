@@ -26,7 +26,7 @@ issue delivers the reusable surface they build on.
     backend and drops the bytes as each run completes, so peak RAM is bounded by
     `prefetch_concurrency * max_coalesced_get_bytes`, not the request size.
   - Priority is enforced by `FetchScheduler`: `prefetch_permits` = `total - demand_reserved`
-    (`range_cache.rs:174-175`), and a demand joiner promotes a prefetch entry via `own_or_join`
+    (`range_cache.rs:175`), and a demand joiner promotes a prefetch entry via `own_or_join`
     (`range_cache.rs:200-206`). Prefetched blocks currently land in foyer's RAM tier at
     `CacheHint::Low` (`FoyerBackend::put` → `insert_with_hint`, `foyer_backend.rs:75-77`); §7 of this
     plan changes prefetch to SSD-only admission so it no longer persists in RAM.
@@ -39,8 +39,11 @@ issue delivers the reusable surface they build on.
   cache. The demand handlers must gate on memory because they buffer a contiguous response;
   **prefetch returns no body and must not take a `mem_permit`** (its memory is already bounded by the
   scheduler).
-- **Shared validation** already lives in the lib crate (`rust/object-cache/src/validation.rs`),
-  the reuse point for request-type sharing between server and client.
+- **Shared validation** already lives in the lib crate (`rust/object-cache/src/validation.rs`), but
+  it only shares `validate_key` — there is no pre-existing shared-request-type precedent. The `/ranges`
+  path does not share request types (its request struct is private in `handlers.rs`, and the client
+  hand-builds JSON). The shared request types (§1's `prefetch.rs`) are therefore a **new** pattern,
+  not reuse of an existing shared-type point.
 - **AppState** (`rust/object-cache-srv/src/app_state.rs`) is `Clone` and holds the cache, prefix
   allowlist, and memory-permit state — the place to add the prefetch queue handle.
 
@@ -176,7 +179,8 @@ consumer's `JoinHandle` resolves. A test therefore drives a deterministic drain 
 sender (or via an explicit shutdown handle) and awaiting that `JoinHandle` — at which point all
 enqueued fills have completed their `prefetch_blocks` calls. This drain covers the *fill* completion
 only; because §7 routes prefetch through foyer's asynchronous SSD flush, tests must additionally
-force/await the foyer flush before asserting cache presence (see Testing Strategy).
+`close()` the backend (the deterministic-flush mechanism) before asserting cache presence (see
+Testing Strategy).
 
 ### 4. `POST /prefetch` handler
 
@@ -284,10 +288,25 @@ This supersedes the old `CacheHint::Low` RAM-residency behavior for prefetch: pr
 longer live in RAM at all. The backend write for both paths still happens at `range_cache.rs:679`
 via `backend.put(.., hint)`; only the hint-based branch inside `put` is new.
 
+To make "RAM tier byte usage unchanged" observable from the integration test suite (which compiles
+as a separate crate and cannot reach the private `FoyerBackend.cache` field, `foyer_backend.rs:10`),
+add a public introspection accessor on `FoyerBackend`: `pub fn ram_usage(&self) -> usize` delegating
+to `self.cache.memory().usage()` (foyer 0.14.1's `HybridCache::memory().usage()`,
+`foyer-memory-0.14.1/src/cache.rs:656-663`). The SSD-only test asserts this value is unchanged across
+a prefetch fill.
+
 Because the prefetch branch now uses `storage_writer` (no `CacheHint`), only
 `FillHint::Demand => CacheHint::Normal` is ever reached in the `FillHint`→`CacheHint` conversion. As
-part of this change, **remove the now-dead `FillHint::Prefetch => CacheHint::Low` arm and its
-LRU-pinning comment** so the conversion doesn't carry a stale mapping.
+part of this change, **remove the now-dead `FillHint::Prefetch => CacheHint::Low` arm** from the
+`From<FillHint> for CacheHint` impl (`foyer_backend.rs:48-55`, which has no adjacent comment) so the
+conversion doesn't carry a stale mapping.
+
+Separately, the LRU-pinning comment lives elsewhere: on the `.with_eviction_config(LruConfig::default())`
+call in `new_with_shards` (`foyer_backend.rs:29-34`). Its rationale is that only LRU maps
+`CacheHint::Low`, so pinning LRU defended `FillHint::Prefetch` against a future foyer default change.
+Once no `FillHint` maps to `CacheHint::Low`, that defensive `LruConfig::default()` pinning no longer
+protects prefetch — update that comment accordingly (the pinning may be removed, or kept with an
+updated rationale that no longer references prefetch).
 
 ## Implementation Steps
 
@@ -304,8 +323,14 @@ LRU-pinning comment** so the conversion doesn't carry a stale mapping.
    `FillHint::Prefetch` → `storage_writer(key).force().insert(value)` (SSD-only, ephemeral RAM
    record; `.force()` bypasses the disk admission picker for deterministic admission, per §7);
    demand → unchanged `insert_with_hint` (§7). Also remove the now-dead
-   `FillHint::Prefetch => CacheHint::Low` arm (and its LRU-pinning comment) in `<FillHint as
-   Into<CacheHint>>`, since prefetch no longer flows through `insert_with_hint` (§7).
+   `FillHint::Prefetch => CacheHint::Low` arm from the `From<FillHint> for CacheHint` impl
+   (`foyer_backend.rs:48-55`, no adjacent comment), since prefetch no longer flows through
+   `insert_with_hint` (§7). Separately, update the LRU-pinning comment at `foyer_backend.rs:29-34`
+   (on `.with_eviction_config(LruConfig::default())`): with no `FillHint` mapping to `CacheHint::Low`,
+   the defensive `LruConfig::default()` pinning no longer protects prefetch and may be removed or
+   kept with an updated rationale (§7). Also add the `pub fn ram_usage(&self) -> usize` accessor
+   (delegating to `self.cache.memory().usage()`) so the SSD-only integration test can assert RAM-tier
+   byte usage is unchanged (§7).
 
 ### Phase 2 — server endpoint + queue
 4. Add `prefetch_queue` module (or inline in `handlers.rs`) with the bounded `mpsc` + consumer-loop
@@ -345,8 +370,10 @@ LRU-pinning comment** so the conversion doesn't carry a stale mapping.
   `ObjectPrefetch` trait.
 - `rust/object-cache/src/lib.rs` — export the new module.
 - `rust/object-cache/src/foyer_backend.rs` — `put` branches to SSD-only
-  `storage_writer(key).force().insert(value)` for `FillHint::Prefetch` (§7); also remove the now-dead
-  `FillHint::Prefetch => CacheHint::Low` arm and its LRU-pinning comment.
+  `storage_writer(key).force().insert(value)` for `FillHint::Prefetch` (§7); remove the now-dead
+  `FillHint::Prefetch => CacheHint::Low` arm from the `From<FillHint> for CacheHint` impl
+  (`:48-55`, no comment) and update the LRU-pinning comment at `:29-34`; add the
+  `pub fn ram_usage(&self) -> usize` introspection accessor for the SSD-only test (§7).
 - `rust/object-cache/src/client.rs` — `prefetch` method + trait impl.
 - `rust/object-cache-srv/src/app_state.rs` — queue sender `prefetch_tx` (changes `AppState::new`
   signature); the `MAX_PREFETCH_KEYS_PER_REQUEST` cap is a module `const` in `handlers.rs`, not here.
@@ -358,7 +385,9 @@ LRU-pinning comment** so the conversion doesn't carry a stale mapping.
 - `rust/object-cache-srv/src/cli.rs` — two new options.
 - `rust/object-cache-srv/src/object_cache_srv.rs` — startup validation, queue build, route.
 - `rust/object-cache-srv/tests/prefetch_tests.rs` (new) — handler + client integration tests.
-- `mkdocs/docs/admin/object-cache.md`, `rust/object-cache-srv/README.md` — endpoint + env docs.
+- `mkdocs/docs/admin/object-cache.md` — prose `POST /prefetch` subsection + two new knobs in both the
+  env-var and CLI-flags tables; `rust/object-cache-srv/README.md` — `POST /prefetch` row in the HTTP
+  API table + env/CLI knobs.
 
 ## Trade-offs
 - **Load-shed on overflow vs block/503.** Best-effort prefetch must never stall the caller, so a full
@@ -387,9 +416,12 @@ LRU-pinning comment** so the conversion doesn't carry a stale mapping.
   quietly; the NotFound-TTL interaction is #1196/#1201, out of scope.
 
 ## Documentation
-- `mkdocs/docs/admin/object-cache.md`: document `POST /prefetch` (body shape, `202` semantics,
-  load-shedding) and add the two new env vars to the config table.
-- `rust/object-cache-srv/README.md`: mirror the endpoint + env additions.
+- `mkdocs/docs/admin/object-cache.md`: add a prose `POST /prefetch` subsection (body shape, `202`
+  semantics, load-shedding) — this page has no per-endpoint HTTP API table, so document it as prose;
+  add the two new knobs to **both** the Environment variables table and the CLI flags table (every
+  existing knob appears in both).
+- `rust/object-cache-srv/README.md`: add the `POST /prefetch` row to the HTTP API table alongside
+  `/obj` and `/ranges`, and mirror the two new env/CLI knobs.
 - `PrefetchItem` doc comment (the required `size` contract) and the `FoyerBackend::put` SSD-only
   branch (§7).
 - Changelog entry.
@@ -407,10 +439,10 @@ LRU-pinning comment** so the conversion doesn't carry a stale mapping.
     warming assertion below is gated on a two-step deterministic wait, never
     `tokio::time::sleep`: (a) **drain the worker** — drop the `prefetch_tx` (or trigger the
     shutdown handle) and `await` the consumer's `JoinHandle` (§3), which resolves only after all
-    spawned `prefetch_blocks` fills have completed; then (b) **flush the SSD tier** — force/await
-    the foyer flush (e.g. an explicit `close()`/flush of the backend, the same deterministic-flush
-    mechanism existing cache tests use) so the ephemeral RAM record's asynchronous SSD write is
-    durable before reading. Only after (a) + (b) does the test assert presence / issue the demand
+    spawned `prefetch_blocks` fills have completed; then (b) **flush the SSD tier** — `close()` the
+    backend, the deterministic-flush mechanism existing cache tests use (reads still work after
+    `close()`), so the ephemeral RAM record's asynchronous SSD write is durable before reading. Only
+    after (a) + (b) does the test assert presence / issue the demand
     read. Presence is deterministic (not merely timing-dependent) because §7 uses `.force()` to
     bypass foyer's disk admission picker — the block is always admitted, so the picker can never
     silently decline the write and flake this assertion.
@@ -418,7 +450,8 @@ LRU-pinning comment** so the conversion doesn't carry a stale mapping.
     (per above), the blocks are present in the backend and a subsequent demand `get_range` of the
     same key issues **no** new origin GET (served from cache).
   - **SSD-only admission** (§7): after draining the worker and flushing the SSD tier, the RAM
-    (memory) tier byte usage is unchanged — the prefetched block is served from SSD, not RAM
+    (memory) tier byte usage — read via the new `FoyerBackend::ram_usage()` accessor (§7) — is
+    unchanged from before the prefetch fill; the prefetched block is served from SSD, not RAM
     (contrast a demand fill, which does populate the RAM tier). Since callers supply `size`, this
     fill also issues no origin HEAD.
   - Fills run at prefetch priority: a saturating prefetch batch does not starve a concurrent demand
