@@ -115,17 +115,24 @@ struct SharedQueue {
     queue_bytes: AtomicIsize,     // sum of QueuedItem.bytes currently queued
     queue_count: AtomicIsize,     // for is_busy()
     dropped: [AtomicU64; 4],      // dropped-block counter per priority
-    // wakeup: worker waits on this; enqueue + request-completion signal it
-    notify: (Mutex<()>, Condvar),
+    // wakeup: paired with the `queues` mutex above (NOT a separate mutex) so the
+    // worker can re-check the queue predicate under the same lock immediately
+    // before waiting; enqueue + request-completion signal it while holding that lock
+    notify: Condvar,
     shutdown: AtomicBool,
 }
 ```
 
 Rationale for a `Condvar` (vs. keeping `mpsc`): the worker must wake on *two*
 independent events — a new enqueue and a freed in-flight slot — and must also
-wake on a flush-monitor timeout. A `Mutex`+`Condvar` with `wait_timeout` covers
-all three cleanly and preserves the existing `FlushMonitor` cadence
-(`recv_timeout` → `wait_timeout`). Critical sections hold only the queue lock,
+wake on a flush-monitor timeout. A `Condvar` paired with the `queues` mutex (the
+same lock that guards the wake predicate) with `wait_timeout` covers all three
+cleanly and preserves the existing `FlushMonitor` cadence (`recv_timeout` →
+`wait_timeout`). Pairing the condvar with the queue-state lock — rather than a
+separate empty `Mutex<()>` — is what avoids lost wakeups: the worker holds the
+`queues` guard, re-checks the predicate (any deque non-empty / a slot freed),
+and only then `wait_timeout`s on that guard, so an enqueue that signals after the
+worker's check cannot be missed. Critical sections hold only the queue lock,
 never across an `.await`.
 
 `StreamBlock` gains `Send + Sync` supertraits (all impls are on plain data
@@ -170,9 +177,15 @@ loop {
             None => break,
         }
     }
-    // wait for: new work, a freed slot, shutdown, or flush interval
+    // wait for: new work, a freed slot, shutdown, or flush interval.
+    // Take the `queues` lock, re-check the predicate under it (empty and no
+    // freed slot pending), and only then wait_timeout on that same guard so a
+    // signal racing between the drain above and the wait cannot be lost.
     let timeout = flusher.time_to_flush_seconds();
-    notify.wait_timeout(timeout);
+    let guard = queues.lock();
+    if all_empty(&guard) && !shutdown {
+        notify.wait_timeout(guard, timeout);
+    }
     flusher.tick();
 }
 ```
