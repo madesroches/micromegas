@@ -70,7 +70,10 @@ pub struct PrefetchItem {
     /// trusts it without verification; an undersized value stores a truncated
     /// final block under the same block key demand reads use (see §2's
     /// size-trust guard for the hazard and its mitigation). An oversized value
-    /// is safe — the origin GET past EOF fails and nothing is stored.
+    /// is safe *for cache correctness* — the origin GET past EOF fails and
+    /// nothing is stored — but see the "oversized size" correction below §2:
+    /// it is not safe for *resource use*, because the block-index list is
+    /// sized to `size` and built eagerly, before any origin GET happens.
     pub size: u64,
     /// None or empty = warm the whole object `[0, size)`. Present = warm only these
     /// ranges (validated against `size`).
@@ -128,6 +131,21 @@ bump `range_cache_block_len_mismatch`, treat the block as a miss, and refetch/ov
 costs one length compare per hit, heals a poisoned entry on the next correctly-sized read, and
 also defends against origin objects that changed size. The trust contract is documented on
 `PrefetchItem::size` (§1).
+
+**Correction: an oversized `size` is not fully safe.** The claim above ("an oversized `size` is
+safe — the origin GET past EOF fails and nothing is stored") only considered cache-correctness —
+it did not account for the *in-process cost of computing which blocks to fetch* before any origin
+GET happens. `block_indices_for`/`block_indices_for_ranges` (§3) eagerly `.collect()` the full
+block-index range into a `Vec<u64>`, and `fetch_blocks` (`range_cache.rs`) builds `probe_futs`,
+`missing`, and an `entries: HashMap<u64, Arc<InFlight>>` all sized to that index count — none of
+this is bounded by `prefetch_worker_concurrency` or `max_coalesced_get_bytes`, both of which only
+bound the *origin-fetch* side. For a legitimate large object (e.g. a 2 GB partition, ~2000 blocks
+at 1 MiB) this is trivial (roughly 500 B/block ≈ ~1 MB total). For an adversarial or wrong `size`
+(`u64::MAX`, or any absurdly large value) it is not: the `Vec<u64>` alone would need on the order
+of 100+ TB, and Rust aborts the process on allocation failure rather than returning a catchable
+error — a real crash/DoS vector reachable from a single malformed or buggy caller. A post-merge
+branch review caught this; see "Follow-up: size cap is a stopgap" below for the shipped mitigation
+and the recommended real fix.
 
 ### 3. Bounded prefetch queue + worker (backpressure)
 
@@ -539,14 +557,57 @@ updated rationale that no longer references prefetch).
 - **Smoke**: `start_minio.py` + `start_services.py`; `curl -XPOST /prefetch`, then confirm the demand
   read is a cache hit.
 
+## Follow-up: size cap is a stopgap, not the real fix
+
+Shipped as part of this issue's branch review: `prefetch_handler` rejects any `PrefetchItem` whose
+`size` exceeds `MAX_TOTAL_REQUESTED_BYTES` (512 MiB), to stop a pathological caller-supplied `size`
+(e.g. `u64::MAX`) from making `block_indices_for`/`fetch_blocks` eagerly materialize a
+multi-hundred-terabyte `Vec<u64>` and abort the process (see the §2 "oversized size" correction and
+resolved Open Question #2 above).
+
+This is the wrong shape of fix and should be replaced:
+
+- **The root cause is eager, unbounded materialization of the block-index list**
+  (`block_indices_for`'s `.collect()`, plus `fetch_blocks`' `probe_futs`/`missing`/`entries`, all
+  sized to block count), not the caller-supplied `size` itself. A legitimate multi-GB object
+  produces a large but entirely manageable index list (~500 B/block; a 2 GB object is ~1 MB of
+  bookkeeping). Only absurd sizes (many orders of magnitude past any real partition) are actually
+  dangerous.
+- **512 MiB is too small for this endpoint's own stated purpose.** `PrefetchItem.size` is sourced
+  from `Partition.file_size`, and partition size in this codebase is time-window-driven, not
+  size-capped — a legitimate partition can exceed 512 MiB. The cap silently rejects whole-object
+  prefetch for exactly the multi-GB partitions #1201's write-time warming trigger exists to warm.
+  Reusing `MAX_TOTAL_REQUESTED_BYTES` also conflates two unrelated concerns: on `/ranges` it bounds
+  *buffered response bytes actually held in memory*; on `/prefetch` there is no response body to
+  buffer (§4 step 6), so the same constant is doing a different job than it was designed for.
+- **Recommended real fix:** chunk the block-index range into bounded windows (e.g. sized to
+  `max_coalesced_get_bytes`, or a flat blocks-per-call constant) and call `prefetch_blocks`
+  repeatedly per chunk instead of collecting the whole index list up front.
+  `prefetch_blocks(key, file_size, indices)` is stateless per call — nothing in `fetch_blocks`
+  persists state across calls beyond what it creates and tears down internally (the `FulfillGuard`
+  cleans up the scheduler's entries at the end of each call) — so calling it in a loop over index
+  chunks is a drop-in change in the consumer loop (`prefetch_queue.rs`), with per-chunk overhead
+  limited to one extra `HashMap`/scheduler-mutex round trip, negligible next to the actual I/O. This
+  bounds peak per-call memory to a small constant regardless of `size`, and removes the need for any
+  size ceiling on legitimate objects.
+- Once chunking ships, the `item.size > MAX_TOTAL_REQUESTED_BYTES` rejection in `prefetch_handler`
+  should be removed (or replaced with a much larger sanity ceiling purely against overflow/garbage
+  input, decoupled from any real object-size expectation).
+
 ## Open Questions
 1. **`ObjectPrefetch` trait now or with the first consumer?** Defining it here fixes the contract but
    adds unused surface until #1200/#1201. Recommendation: add it now (cheap, and it's the reuse
    point); acceptable to defer to #1200 if we'd rather not ship an unused trait.
-2. **Whole-object fill scope for large objects.** A whole-object item warms every block covering
-   `[0, size)` via `prefetch_blocks` (using the caller-supplied `size`). For a multi-GB partition
-   (#1201) that is a lot of blocks at once — do we want a per-object block cap here, or leave
-   bounding to the queue + scheduler? Leaning: leave it to the queue/scheduler for #1198 and revisit
-   caps in #1200 (which handles trace-sized enumeration).
+2. **Whole-object fill scope for large objects. Resolved — the queue/scheduler does not bound
+   this, and the shipped stopgap fix (a flat size cap) is too restrictive.** This question
+   correctly anticipated the problem but the "leave it to the queue/scheduler" answer turned out to
+   be wrong: the queue and `FetchScheduler` only bound *origin-fetch concurrency*, not the size of
+   the block-index list built per item, which is proportional to `item.size` and constructed
+   eagerly (see the "oversized size" correction in §2). A post-merge review found this exploitable
+   with a pathological `size` and a stopgap was shipped: `prefetch_handler` now rejects any item
+   whose `size` exceeds `MAX_TOTAL_REQUESTED_BYTES` (512 MiB). That cap is too blunt for this
+   endpoint's actual purpose — it caps legitimate multi-GB partition warming (#1201's stated use
+   case) at the same limit that exists for `/ranges`' buffered-response-bytes concern, which does
+   not apply to prefetch (prefetch never buffers response bytes; see "Follow-up" below).
 3. **Response detail.** Is the `accepted/rejected/dropped` body useful to callers, or is a bare `202`
    with the detail only in metrics enough? Leaning: keep the small body — cheap and observable.
