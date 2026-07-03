@@ -182,7 +182,14 @@ loop {
   completion so the drainer re-runs. Default `max_in_flight = 3` (Unreal
   parity, `CVarMaxInFlightRequests` cpp:53), so a slow request no longer stalls
   the backlog. This is a behavior change from today's strictly-serial sends,
-  chosen deliberately to match the Unreal transport.
+  chosen deliberately to match the Unreal transport. Because each send now runs
+  in a `tokio::spawn`'d `Send + 'static` future that moves an
+  `Arc<dyn RequestDecorator>`, the `RequestDecorator` trait must gain a `Sync`
+  supertrait (`pub trait RequestDecorator: Send + Sync`, request_decorator.rs:53)
+  so `Arc<dyn RequestDecorator>: Send`; both concrete impls
+  (`ApiKeyRequestDecorator`, `OidcClientCredentialsDecorator`) are already
+  `Sync`-compatible, so only the bound changes. Store/clone the decorator as
+  `Arc<dyn RequestDecorator>` per spawned send.
 - `send()` wraps the existing `push_process` / `push_stream` / `push_block`
   retry logic. The four duplicated `push_block` match arms (lines 365–444)
   collapse into a single call taking the `Arc<dyn StreamBlock ...>`.
@@ -309,7 +316,10 @@ drop path.
 
 ### Phase 4 — In-flight gating + dropped metric
 9. Add the `tokio::sync::Semaphore` gate (default cap 3) and spawn sends
-   concurrently; wake the drainer on completion.
+   concurrently; wake the drainer on completion. Change the `RequestDecorator`
+   trait to `pub trait RequestDecorator: Send + Sync` (request_decorator.rs:53)
+   and store/clone it as `Arc<dyn RequestDecorator>` per spawned send so the
+   `Send + 'static` future can move it.
 10. Emit `imetric!` dropped-block counters (by priority), unconditionally.
 
 ## Files to Modify
@@ -320,6 +330,10 @@ drop path.
   fallbacks, construction site.
 - `rust/telemetry-sink/tests/` — new transport unit tests (see Testing).
 - `mkdocs/docs/getting-started.md` — document new env vars / behavior.
+- `mkdocs/docs/admin/authentication.md` — update both `HttpEventSink::new`
+  examples (lines ~339–345 and ~365–371) to the new `HttpSinkConfig`-based
+  signature (they currently pass the removed positional `max_queue_size`,
+  `metadata_retry`, `blocks_retry` args).
 
 ## Trade-offs
 - **Condvar + shared queue vs. keeping `mpsc` as a wakeup with side queues.**
@@ -351,6 +365,11 @@ drop path.
   line ~27) and a short note on the priority/byte-budget drop policy and lazy
   stream metadata. (The `native/index.md` page documents the C-ABI `MmConfig`
   struct fields, not the Rust sink env vars, so it is not the right target.)
+- `mkdocs/docs/admin/authentication.md` — the two `HttpEventSink::new(...)`
+  examples (lines ~339–345 and ~365–371) pass the old positional
+  `max_queue_size`, `metadata_retry`, `blocks_retry` args; rewrite both to the
+  new `HttpEventSink::new(url, config, make_decorator)` `HttpSinkConfig`
+  signature so they stay accurate.
 - Update the doc comment on `HttpEventSink::new` and `TelemetryGuardBuilder`
   setters (rustdoc) to describe the new knobs and defaults.
 
