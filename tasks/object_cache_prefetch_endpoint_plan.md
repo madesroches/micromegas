@@ -15,9 +15,19 @@ There is now no per-item size ceiling anywhere in the request path.
 logs a warning on the defensive (should-never-fire) case where `.force().insert(value)` returns
 `None`; it is in the metrics list (§ Implementation Steps step 10) and the docs' metrics table.
 
-Before merge, see **Open Questions #4**: whether `MAX_PREFETCH_KEYS_PER_REQUEST` (the 4096-key batch
-cap, §4 step 2) is still a necessary limit now that streaming has removed the analogous per-item
-size cap, or whether it bounds a genuinely different cost that streaming doesn't touch.
+**Open Questions #4 is resolved: `MAX_PREFETCH_KEYS_PER_REQUEST` (the 4096-key batch cap, §4 step 2)
+is not necessary and is being removed.** axum applies an implicit 2 MiB request-body limit by
+default (`axum-core`'s `with_limited_body`, `DEFAULT_LIMIT = 2_097_152`) unless a router adds a
+`DefaultBodyLimit` layer; `object_cache_srv.rs` never adds one for `obj_router`, so `/prefetch`'s
+`body: Bytes` extraction — like `/ranges`' — already runs under that 2 MiB cap. That bounds JSON
+parse cost and total item/range count far more tightly than a flat key-count check ever would, and
+the handler's own per-item loop (`validate_key`, range-bounds check, `try_send`) is O(1) and cheap
+per item, so there is no unbounded per-request cost left for the count cap to guard against — the
+same reasoning that removed the per-item `size` cap. Unlike that cap, this one's failure mode is
+rejecting a batch of many *small* items (e.g. write-time warming batching thousands of tiny
+partition keys) that would fit comfortably under 2 MiB and cost nothing to process. See "Superseded:
+the batch-size cap" below. **Plan updated; the code (`handlers.rs`) still has the constant and needs
+a follow-up change to match.**
 
 Tracking: [#1198](https://github.com/madesroches/micromegas/issues/1198) — part of
 [#1197](https://github.com/madesroches/micromegas/issues/1197) (prefetch support). Builds on the
@@ -296,11 +306,13 @@ the follow-up demand read then run directly against the retained cache handle, n
 prefetch_handler(State(state), body: Bytes) -> Result<Response, StatusCode>
 ```
 
-1. Deserialize `PrefetchRequest`; malformed JSON → `400`.
-2. Cap batch size: reject > `MAX_PREFETCH_KEYS_PER_REQUEST` (`4096`, matching
-   `MAX_RANGES_PER_REQUEST`) with `400` (bounds per-request work on an
-   authenticated endpoint). Cap ranges-per-key with the existing `MAX_RANGES_PER_REQUEST`.
-3. For each item: `validate_key(&item.key, &state.allowed_prefixes)`; validate each supplied range
+1. Deserialize `PrefetchRequest`; malformed JSON → `400`. **No batch-size (key-count) cap** — the
+   implicit axum request-body limit (2 MiB by default; `object_cache_srv.rs` never overrides it via
+   `DefaultBodyLimit`) already bounds per-request parse/loop cost, so a flat key-count check would
+   only reject legitimate batches of many small items for no resource-safety benefit; see
+   "Superseded: the batch-size cap" below. Cap ranges-per-key with the existing
+   `MAX_RANGES_PER_REQUEST`.
+2. For each item: `validate_key(&item.key, &state.allowed_prefixes)`; validate each supplied range
    against the caller-known `item.size` — reject inverted/degenerate ranges (`s >= e`) and
    out-of-bounds ranges (`e > item.size`), matching the demand paths. `ranges` absent or empty is
    **accepted** as a whole-object warm of `[0, item.size)` (per the §1 contract; the consumer loop
@@ -310,12 +322,12 @@ prefetch_handler(State(state), body: Bytes) -> Result<Response, StatusCode>
    of size, and an over-claimed `size` is bounded by stop-on-first-error, so there is no
    `item.size > MAX_TOTAL_REQUESTED_BYTES` rejection (that stopgap is removed; see §2 and
    "Superseded: the size cap" below).
-4. `try_send` each accepted item onto the queue:
+3. `try_send` each accepted item onto the queue:
    - `Ok` → `accepted += 1`
    - `Err(TrySendError::Full)` → `dropped += 1`, `imetric!("object_cache_prefetch_dropped", ..)`
    - `Err(TrySendError::Closed)` → `503` (worker gone; should not happen in normal operation)
-5. Emit `object_cache_prefetch_requests` and `object_cache_prefetch_keys_enqueued`.
-6. Respond `202 Accepted` with `PrefetchResponse` JSON. **No `mem_permit` is acquired** — the
+4. Emit `object_cache_prefetch_requests` and `object_cache_prefetch_keys_enqueued`.
+5. Respond `202 Accepted` with `PrefetchResponse` JSON. **No `mem_permit` is acquired** — the
    response carries no object bytes.
 
 Route registration (behind the same auth middleware as the other data routes, in `obj_router`):
@@ -471,16 +483,15 @@ updated rationale that no longer references prefetch).
    crate needs `futures` and `tokio-stream` (for `ReceiverStream`) — add in alphabetical order if
    absent.
 6. Extend `AppState` (`app_state.rs`) with `prefetch_tx: mpsc::Sender<PrefetchItem>` (only the
-   sender lives in `AppState`). Add `MAX_PREFETCH_KEYS_PER_REQUEST` (`4096`) as a module-level
-   `const` in `handlers.rs`, alongside the existing per-request caps (`MAX_RANGES_PER_REQUEST`,
-   `MAX_TOTAL_REQUESTED_BYTES`) — not as an `AppState` field. Adding `prefetch_tx` changes the
-   `AppState::new` signature, so update every caller — including the `make_state` helper in
-   `tests/memory_budget_tests.rs`, which must construct and pass a throwaway `prefetch_tx`.
-   (Alternatively, keep the existing 3-arg constructor working via a builder/default so `make_state`
-   is untouched.)
+   sender lives in `AppState`). No new module-level cap constant is needed for batch size — see §4.
+   Adding `prefetch_tx` changes the `AppState::new` signature, so update every caller — including the
+   `make_state` helper in `tests/memory_budget_tests.rs`, which must construct and pass a throwaway
+   `prefetch_tx`. (Alternatively, keep the existing 3-arg constructor working via a builder/default so
+   `make_state` is untouched.)
 7. Add `prefetch_handler` to `handlers.rs` (validation, `try_send`, `202` + counts, no mem_permit).
-   Caps applied are the **batch-size** cap (`MAX_PREFETCH_KEYS_PER_REQUEST`) and **ranges-per-key**
-   cap (`MAX_RANGES_PER_REQUEST`) only — **no per-item `size` cap** (removed; §4/§2).
+   The only cap applied is **ranges-per-key** (`MAX_RANGES_PER_REQUEST`) — **no batch-size (key-count)
+   cap** and **no per-item `size` cap** (both removed; §4/§2, "Superseded: the batch-size cap",
+   "Superseded: the size cap").
 8. In `object_cache_srv.rs`: add the two CLI options + startup validation; build the queue/worker;
    store the sender in `AppState`; register `.route("/prefetch", post(prefetch_handler))` on
    `obj_router` (inside the auth layer).
@@ -514,12 +525,14 @@ updated rationale that no longer references prefetch).
   `pub fn ram_usage(&self) -> usize` introspection accessor for the SSD-only test (§7).
 - `rust/object-cache/src/client.rs` — `prefetch` method + trait impl.
 - `rust/object-cache-srv/src/app_state.rs` — queue sender `prefetch_tx` (changes `AppState::new`
-  signature); the `MAX_PREFETCH_KEYS_PER_REQUEST` cap is a module `const` in `handlers.rs`, not here.
+  signature); no batch-size cap constant is needed here or elsewhere (§4).
 - `rust/object-cache-srv/tests/memory_budget_tests.rs` — update the `make_state` helper for the new
   `AppState::new` signature (construct/pass a throwaway `prefetch_tx`), unless a builder/default keeps
   the 3-arg path working.
-- `rust/object-cache-srv/src/handlers.rs` — `prefetch_handler`, `MAX_PREFETCH_KEYS_PER_REQUEST`
-  module `const` (alongside the existing caps). **No per-item size cap.**
+- `rust/object-cache-srv/src/handlers.rs` — `prefetch_handler`; **remove the
+  `MAX_PREFETCH_KEYS_PER_REQUEST` module `const` and its rejection branch** (§4, "Superseded: the
+  batch-size cap") — the only remaining cap in `prefetch_handler` is ranges-per-key
+  (`MAX_RANGES_PER_REQUEST`). **No per-item size cap.**
 - `rust/object-cache-srv/src/prefetch_queue.rs` — bounded `mpsc` + streaming consumer
   (`for_each_concurrent` over items, per-item lazy `buffered` window stream, stop-on-error),
   `lazy_windows`, and the `WINDOW_BLOCKS`/`WINDOW_CONCURRENCY` consts (§3).
@@ -580,8 +593,11 @@ updated rationale that no longer references prefetch).
 - `rust/object-cache-srv/README.md`: add the `POST /prefetch` row to the HTTP API table alongside
   `/obj` and `/ranges`, and mirror the two new env/CLI knobs.
 - **Remove the 512 MiB per-item size-cap text** the branch already added to `mkdocs` and `README.md`
-  — the cap is gone (§2/§3). Keep the 4096-key batch-cap text. State instead that `/prefetch`
-  imposes no per-item size limit (whole-object warming of arbitrarily large partitions is supported).
+  — the cap is gone (§2/§3). State instead that `/prefetch` imposes no per-item size limit
+  (whole-object warming of arbitrarily large partitions is supported).
+- **Remove the 4096-key batch-cap text** as well — that cap is also gone (§4, "Superseded: the
+  batch-size cap"). Note instead that `/prefetch`'s batch size is bounded only by the server's
+  request-body size limit (2 MiB by default, unconfigured for this endpoint).
 - `PrefetchItem` doc comment (the required `size` contract) and the `FoyerBackend::put` SSD-only
   branch (§7).
 - Changelog entry.
@@ -676,6 +692,38 @@ Implementation note: `prefetch_blocks(key, file_size, indices)` is stateless per
 in a loop is a drop-in, with per-window overhead limited to one extra `HashMap`/scheduler-mutex
 round trip, negligible next to the actual I/O.
 
+## Superseded: the batch-size cap (removed before merge)
+
+The branch's second defense, alongside the per-item size cap above, was a `prefetch_handler`
+rejection of any request with `req.keys.len() > MAX_PREFETCH_KEYS_PER_REQUEST` (4096). **This is
+being removed** — it is recorded here only so the diff that deletes it is understood, not proposed
+again.
+
+Why the cap was wrong:
+
+- **The cost it was meant to bound is already bounded elsewhere, at a stricter level.** axum applies
+  an implicit request-body limit of 2 MiB by default (`axum-core`'s `with_limited_body`,
+  `DEFAULT_LIMIT = 2_097_152`) unless a router adds a `DefaultBodyLimit` layer. `object_cache_srv.rs`
+  never adds one for `obj_router`, so `/prefetch`'s `body: Bytes` extraction — like `/ranges`' —
+  already runs under that cap. Other servers in this codebase configure `DefaultBodyLimit` explicitly
+  when they need something other than the default (`otlp.rs` raises it to 300 MiB, `ingestion.rs`
+  disables it, `web_server.rs`/`maps.rs` set a custom byte cap), so its absence here is a known,
+  deliberate baseline, not an oversight.
+- **The per-item handler loop is O(1) and cheap regardless of count.** `validate_key` (a few string
+  compares), the range-bounds check, and `try_send` do no work proportional to `size` and allocate
+  nothing per item beyond what `serde_json` already allocated during deserialization. Even at the
+  largest item count a 2 MiB body could hold (tens of thousands of minimal
+  `{"key":..,"size":..}` items), the loop costs a fraction of a millisecond — nowhere near a
+  resource-exhaustion vector.
+- **A flat key-count cap rejects legitimate large *batches* of small items**, the same failure shape
+  as the removed size cap rejecting legitimate large *single* items. Write-time warming (#1201) or
+  query-layer warming (#1200) batching thousands of small partition keys into one call would fit
+  comfortably under 2 MiB and cost nothing to process, yet a 4096-key cap would reject it outright.
+
+Open Question #4 (below) originally left this cap in place pending confirmation that no
+per-request-loop cost scales badly with key count; that confirmation is now done — it doesn't, because
+the axum body limit already caps the input before the loop ever sees it.
+
 ## Open Questions
 1. **`ObjectPrefetch` trait now or with the first consumer?** Defining it here fixes the contract but
    adds unused surface until #1200/#1201. Recommendation: add it now (cheap, and it's the reuse
@@ -689,14 +737,12 @@ round trip, negligible next to the actual I/O.
    undersized one by the §2 length guard.
 3. **Response detail.** Is the `accepted/rejected/dropped` body useful to callers, or is a bare `202`
    with the detail only in metrics enough? Leaning: keep the small body — cheap and observable.
-4. **Is `MAX_PREFETCH_KEYS_PER_REQUEST` (4096, §4 step 2) still a necessary limit, now that streaming
-   removes the analogous per-item size cap?** The size cap existed because per-item work was
-   proportional to `size`; streaming windows made that bound unconditional, so the size cap could be
-   deleted outright (§2/§3, "Superseded: the size cap"). The batch-size cap bounds something
-   different — the handler's own per-request loop over `req.keys` (validation, `try_send`) and the
-   JSON body size — not per-item fill work, so it isn't obviously fixed by the same streaming change.
-   Before landing, check whether the per-request loop itself has any cost that scales badly with an
-   unbounded key count (e.g., deserializing an arbitrarily large JSON body before any validation
-   runs) and whether that's better addressed by a body-size limit than a key-count cap. Leaning:
-   probably still worth keeping *some* batch cap independent of the streaming fix, since it bounds
-   request-parsing/handler-loop cost rather than fill cost — but confirm rather than assume.
+4. **Resolved — `MAX_PREFETCH_KEYS_PER_REQUEST` (4096, §4) is not necessary and is removed.** It
+   bounded the handler's own per-request loop over `req.keys` (validation, `try_send`) and the JSON
+   body size, not per-item fill work, so it wasn't fixed by the streaming refactor that removed the
+   size cap. But that cost is already bounded elsewhere: axum's implicit 2 MiB default request-body
+   limit (never overridden for `obj_router`, confirmed in `axum-core`'s `with_limited_body`) caps the
+   JSON body before the handler's loop ever runs, and the loop itself is O(1) and cheap per item. A
+   flat key-count cap on top of that only rejects legitimate large batches of small items (mirroring
+   why the size cap was wrong for large single items) without bounding anything the body limit
+   doesn't already bound. See "Superseded: the batch-size cap" above.
