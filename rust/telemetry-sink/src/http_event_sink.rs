@@ -233,6 +233,21 @@ impl SharedQueue {
     }
 }
 
+/// Releases a semaphore permit and wakes the worker when a spawned send task
+/// finishes, whether it returns normally or panics — an ordinary statement at
+/// the end of the task body would be skipped on unwind, stranding the permit
+/// until the next timeout tick.
+struct WakeOnDrop {
+    queue: Arc<SharedQueue>,
+    _permit: Option<OwnedSemaphorePermit>,
+}
+
+impl Drop for WakeOnDrop {
+    fn drop(&mut self) {
+        self.queue.wake();
+    }
+}
+
 /// Configuration for [`HttpEventSink`]'s transport: how much to buffer, how
 /// aggressively to shed load under backpressure, how much concurrency to
 /// allow, and how hard to retry each priority class.
@@ -623,6 +638,14 @@ impl HttpEventSink {
         let queue = queue.clone();
         let retry_strategy = shared.retry_by_priority[item.priority as usize].clone();
         join_set.spawn(async move {
+            // Releases the permit and wakes the worker on both normal
+            // completion and panic/unwind, so a panicking send doesn't
+            // strand a semaphore permit or a waiting enqueuer until the
+            // next timeout tick.
+            let _wake_on_drop = WakeOnDrop {
+                queue,
+                _permit: permit,
+            };
             match item.payload {
                 Payload::Process(info) => {
                     if let Err(e) = Self::push_process(
@@ -670,8 +693,6 @@ impl HttpEventSink {
                     }
                 }
             }
-            drop(permit);
-            queue.wake();
         });
     }
 

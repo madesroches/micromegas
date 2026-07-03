@@ -64,6 +64,8 @@ export MICROMEGAS_TELEMETRY_REQUEST_TIMEOUT_SECS=10
 
 A stream's metadata (`insert_stream`) is only sent once that stream produces
 its first block, so short-lived or idle streams cost nothing on the wire.
+Each stream does retain a small pending-metadata entry in the sink's memory
+for its lifetime, even if it never produces a block.
 
 ## Installation Steps
 
