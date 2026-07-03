@@ -112,7 +112,13 @@ while let Some(item) = rx.recv().await {
             // an empty slice would otherwise no-op in prefetch_ranges.
             None => cache.prefetch_object(&item.key).await,
             Some(rs) if rs.is_empty() => cache.prefetch_object(&item.key).await,
-            Some(rs) => cache.prefetch_ranges(&item.key, &to_ranges(rs)).await,
+            // Trivial [s, e] -> s..e mapping. No guard needed: prefetch_ranges
+            // re-validates bounds internally and returns Err on a bad pair,
+            // which is already counted as a fill error below.
+            Some(rs) => {
+                let ranges: Vec<Range<u64>> = rs.iter().map(|[s, e]| *s..*e).collect();
+                cache.prefetch_ranges(&item.key, &ranges).await
+            }
         };
         if let Err(e) = outcome {
             imetric!("object_cache_prefetch_fill_error", "count", 1);
