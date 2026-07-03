@@ -29,7 +29,7 @@ issue delivers the reusable surface they build on.
     (`range_cache.rs:174-175`), and a demand joiner promotes a prefetch entry via `own_or_join`
     (`range_cache.rs:200-206`). Prefetched blocks currently land in foyer's RAM tier at
     `CacheHint::Low` (`FoyerBackend::put` → `insert_with_hint`, `foyer_backend.rs:75-77`); §7 of this
-    plan changes prefetch to SSD-only admission so it never resides in RAM.
+    plan changes prefetch to SSD-only admission so it no longer persists in RAM.
 - **No HTTP surface.** The router exposes only `/obj/{*key}` (GET/HEAD) and `/ranges/{*key}` (POST)
   (`rust/object-cache-srv/src/object_cache_srv.rs:167-170`). There is no prefetch route and no
   client method on `CacheClientStore` (`rust/object-cache/src/client.rs`).
@@ -118,10 +118,12 @@ write/query path.
   `cache.prefetch_blocks(&item.key, item.size, indices)` — no `size()` lookup, no origin HEAD:
 
 ```text
+// `fills` is the JoinSet the consumer loop owns for the deterministic drain
+// (see "Deterministic drain/completion signal" below and Implementation Step 4).
 while let Some(item) = rx.recv().await {
     let permit = worker_sem.clone().acquire_owned().await;   // bound in-flight fills
     let cache = cache.clone();
-    tokio::spawn(async move {
+    fills.spawn(async move {
         let _permit = permit;
         // None or empty = whole object [0, size) (matches §1 contract);
         // present = only the supplied ranges. Ranges are already validated
@@ -162,12 +164,13 @@ underflows to `u64::MAX / block_size`, producing an enormous bogus index range, 
 
 Worker concurrency is a soft knob; the hard ceiling remains the scheduler's `prefetch_permits`.
 
-**Deterministic drain/completion signal (for tests).** The detached `tokio::spawn` above surfaces no
-join handle, so a test has no way to observe when the pipeline has finished — a demand read issued
-right after `202` can race an in-flight (or not-yet-started) fill. To make completion observable
-without `tokio::time::sleep`, the worker tracks its spawned fills instead of firing-and-forgetting:
-collect them in a `tokio::task::JoinSet` (or an `AtomicUsize` in-flight counter paired with a
-`tokio::sync::Notify`) owned by the consumer loop. When the channel closes (all `Sender`s dropped),
+**Deterministic drain/completion signal (for tests).** A detached fire-and-forget spawn would
+surface no join handle, leaving a test no way to observe when the pipeline has finished — a demand
+read issued right after `202` could race an in-flight (or not-yet-started) fill. To make completion
+observable without `tokio::time::sleep`, the worker tracks its spawned fills instead of
+firing-and-forgetting: the code block above collects them in the `tokio::task::JoinSet` (`fills`)
+owned by the consumer loop (an `AtomicUsize` in-flight counter paired with a `tokio::sync::Notify`
+would work equally well). When the channel closes (all `Sender`s dropped),
 `rx.recv()` returns `None`; the loop then awaits every outstanding fill in the `JoinSet` before the
 consumer's `JoinHandle` resolves. A test therefore drives a deterministic drain by dropping the
 sender (or via an explicit shutdown handle) and awaiting that `JoinHandle` — at which point all
@@ -256,18 +259,25 @@ Reject `0` for either at startup (fatal config error), matching the existing gua
 
 ### 7. Prefetch is SSD-only (no RAM residency)
 
-Prefetched bytes must never occupy the RAM tier or pressure its byte budget — a prefetch must not
-evict hot demand entries. Today `FoyerBackend::put` (`foyer_backend.rs:75-77`) always calls
+Prefetched bytes must not *retain* RAM-tier residency — a prefetch fill is dropped immediately and
+does not persist in RAM to compete with hot demand entries. Today `FoyerBackend::put`
+(`foyer_backend.rs:75-77`) always calls
 `self.cache.insert_with_hint(key, value, hint.into())`, which inserts into the RAM (memory) tier
 first, so prefetched blocks currently live in RAM as `CacheHint::Low` (first-to-evict) entries.
 
 Change `FoyerBackend::put` to branch on the fill hint:
 
-- `FillHint::Prefetch` → `self.cache.storage_writer(key).insert(value)` — foyer 0.14.1's disk-only
-  admission path. It writes directly to the SSD tier and holds only an *ephemeral* RAM record that
-  is dropped immediately (`foyer` `hybrid/writer.rs:138-146`, ephemeral drop at `foyer-memory`
-  `raw.rs:738-748`), so it neither retains RAM nor evicts hot demand data. (`.force()` is available
-  to bypass the disk admission picker if needed.)
+- `FillHint::Prefetch` → `self.cache.storage_writer(key).force().insert(value)` — foyer 0.14.1's
+  disk-only admission path, with `.force()` so admission is **deterministic**. Without `.force()`,
+  `insert()` runs `insert_inner`, which consults the disk admission picker (`if !self.pick()`,
+  `hybrid/writer.rs:116-141`) and returns `None` (writing nothing) if the picker declines — that
+  would make prefetch presence nondeterministic and flake the Testing Strategy assertion.
+  `.force()` bypasses the picker so the block is always admitted to the SSD tier. The write holds
+  only an *ephemeral* RAM record that is dropped immediately (`foyer` `hybrid/writer.rs:138-146`,
+  ephemeral drop at `foyer-memory` `raw.rs:738-748`): it gains **no eviction-structure residency**
+  and is removed on drop, so prefetched blocks do not *retain* RAM residency. `put` drops the
+  returned `Option<HybridCacheEntry>` immediately; on an unexpected `None` (should not occur under
+  `.force()`) it logs / bumps a metric rather than assuming the write succeeded.
 - demand fills → unchanged, `insert_with_hint` (RAM tier).
 
 This supersedes the old `CacheHint::Low` RAM-residency behavior for prefetch: prefetched blocks no
@@ -352,8 +362,8 @@ via `backend.put(.., hint)`; only the hint-based branch inside `put` is new.
   issue calls for.
 - **SSD-only prefetch vs RAM residency.** Prefetch writes bypass the RAM tier (§7), so a subsequent
   demand hit on a prefetched block reads from SSD, not RAM (slightly slower than a RAM hit). In
-  exchange, prefetch never pressures the RAM byte budget and never evicts hot demand entries — the
-  point of a best-effort background warm.
+  exchange, a prefetch fill does not retain RAM residency — it is dropped immediately and never
+  persists in RAM to compete with hot demand entries — the point of a best-effort background warm.
 - **Caller-supplied size vs server-side resolution.** Requiring `size` on each `PrefetchItem` means
   the server never issues an origin HEAD to size a cold object (which prefetch targets by
   definition). Both triggers already have the size (`Partition.file_size` /
@@ -378,7 +388,7 @@ via `backend.put(.., hint)`; only the hint-based branch inside `put` is new.
   `memory_budget_tests.rs`'s `DelayedStore` only gates via a `Semaphore` and counts nothing, so it
   can be copied as a wrapping pattern but does not itself provide the request counter these
   assertions require.
-  - **Deterministic completion, not `sleep`.** The prefetch pipeline is fully async (detached
+  - **Deterministic completion, not `sleep`.** The prefetch pipeline is fully async (JoinSet-tracked
     fills in §3, async SSD flush in §7), so an assertion made "right after `202`" is racy. Every
     warming assertion below is gated on a two-step deterministic wait, never
     `tokio::time::sleep`: (a) **drain the worker** — drop the `prefetch_tx` (or trigger the
@@ -387,7 +397,9 @@ via `backend.put(.., hint)`; only the hint-based branch inside `put` is new.
     the foyer flush (e.g. an explicit `close()`/flush of the backend, the same deterministic-flush
     mechanism existing cache tests use) so the ephemeral RAM record's asynchronous SSD write is
     durable before reading. Only after (a) + (b) does the test assert presence / issue the demand
-    read.
+    read. Presence is deterministic (not merely timing-dependent) because §7 uses `.force()` to
+    bypass foyer's disk admission picker — the block is always admitted, so the picker can never
+    silently decline the write and flake this assertion.
   - `POST /prefetch` for uncached keys → `202`; after draining the worker and flushing the SSD tier
     (per above), the blocks are present in the backend and a subsequent demand `get_range` of the
     same key issues **no** new origin GET (served from cache).
