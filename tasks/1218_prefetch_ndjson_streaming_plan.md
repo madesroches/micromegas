@@ -64,11 +64,9 @@ bytes ≈ 80 KiB) sits far below 2 MiB and `MAX_RANGES_PER_REQUEST` is the real 
 and sends it. No client-side streaming: the caller already holds `Vec<PrefetchItem>` in memory,
 so `reqwest::Body::wrap_stream` would add complexity without reducing peak memory.
 
-**Version skew** (both directions degrade to "no warm", acceptable for a best-effort endpoint):
-- Old client → new server: the old body `{"keys":[...]}` is one line that fails to parse as
-  `PrefetchItem` → `202` with `rejected = 1`.
-- New client → old server: NDJSON fails the whole-body JSON parse → `400` → client debug-logs
-  and moves on (existing error path).
+**No backwards compatibility needed.** `object-cache-srv` has not been deployed, so client and
+server are updated together and there is no old wire format in the wild to interoperate with. The
+`PrefetchRequest` wrapper is deleted outright with no migration path.
 
 ## Implementation Steps
 
@@ -125,7 +123,7 @@ so `reqwest::Body::wrap_stream` would add complexity without reducing peak memor
   closed-queue 503, served-`Router` end-to-end test).
 - New: blank lines skipped; final line without trailing `\n` processed; malformed line counted
   `rejected` while later lines still enqueue; line exceeding `MAX_PREFETCH_LINE_BYTES` → 400
-  (and earlier items still enqueued); old-format `{"keys":[...]}` body → 202 with `rejected=1`;
+  (and earlier items still enqueued);
   body larger than 2 MiB total (many small items) accepted through the served `Router`, confirming
   no whole-body size ceiling remains on `/prefetch`.
 - Client round-trip: `CacheClientStore::prefetch` against the served router returns correct
