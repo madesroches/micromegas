@@ -16,7 +16,7 @@ use std::{
     fmt,
     sync::{
         Arc, Condvar, Mutex,
-        atomic::{AtomicBool, AtomicIsize, Ordering},
+        atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering},
     },
     time::Duration,
 };
@@ -88,19 +88,40 @@ const NUM_PRIORITIES: usize = 4;
 /// giving up on a graceful shutdown.
 const SHUTDOWN_WAIT_TIMEOUT: Duration = Duration::from_secs(5);
 
-fn record_dropped_metric(priority: UploadPriority) {
-    match priority {
-        UploadPriority::Metadata => {
-            imetric!("telemetry_dropped_metadata", "count", 1);
+/// Reports drops accumulated by [`SharedQueue::note_dropped`], emitting one
+/// metric and one log line per priority class that dropped anything since the
+/// last call.
+///
+/// Must only be called from the worker thread's top-level loop, never from
+/// inside an `EventSink` callback: dispatch invokes `on_process_*_block` while
+/// holding the global log/metrics stream mutex, so emitting telemetry from
+/// the enqueue path (`try_push` runs on the caller's thread) would re-enter
+/// that same non-reentrant mutex and deadlock the process.
+fn report_dropped_items(queue: &SharedQueue) {
+    for priority in [
+        UploadPriority::Metadata,
+        UploadPriority::Logs,
+        UploadPriority::Metrics,
+        UploadPriority::Traces,
+    ] {
+        let count = queue.dropped[priority as usize].swap(0, Ordering::Relaxed);
+        if count == 0 {
+            continue;
         }
-        UploadPriority::Logs => {
-            imetric!("telemetry_dropped_logs", "count", 1);
-        }
-        UploadPriority::Metrics => {
-            imetric!("telemetry_dropped_metrics", "count", 1);
-        }
-        UploadPriority::Traces => {
-            imetric!("telemetry_dropped_traces", "count", 1);
+        warn!("dropped {count} telemetry items, priority={priority:?}");
+        match priority {
+            UploadPriority::Metadata => {
+                imetric!("telemetry_dropped_metadata", "count", count);
+            }
+            UploadPriority::Logs => {
+                imetric!("telemetry_dropped_logs", "count", count);
+            }
+            UploadPriority::Metrics => {
+                imetric!("telemetry_dropped_metrics", "count", count);
+            }
+            UploadPriority::Traces => {
+                imetric!("telemetry_dropped_traces", "count", count);
+            }
         }
     }
 }
@@ -144,6 +165,11 @@ struct SharedQueue {
     shutdown: AtomicBool,
     soft_bytes: usize,
     hard_bytes: usize,
+    /// Per-priority count of items dropped since the worker last reported.
+    /// Incremented on the enqueue path and drained by the worker thread's
+    /// `report_dropped_items` — the enqueue path itself must never emit
+    /// telemetry (see `report_dropped_items`).
+    dropped: [AtomicU64; NUM_PRIORITIES],
 }
 
 impl SharedQueue {
@@ -162,7 +188,20 @@ impl SharedQueue {
             shutdown: AtomicBool::new(false),
             soft_bytes,
             hard_bytes: hard_bytes.max(soft_bytes),
+            dropped: [
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+            ],
         }
+    }
+
+    /// Records a dropped item for later reporting by the worker thread. Kept
+    /// to a plain atomic increment on purpose: this runs on the enqueue path,
+    /// inside dispatch callbacks that hold the global stream mutexes.
+    fn note_dropped(&self, priority: UploadPriority) {
+        self.dropped[priority as usize].fetch_add(1, Ordering::Relaxed);
     }
 
     /// Enqueues `item`, applying the graded byte-budget drop policy. Returns
@@ -175,7 +214,7 @@ impl SharedQueue {
             UploadPriority::Logs | UploadPriority::Metrics => current >= self.hard_bytes,
         };
         if should_drop {
-            record_dropped_metric(item.priority);
+            self.note_dropped(item.priority);
             return false;
         }
         // The shutdown check and the push must happen under the same lock
@@ -190,13 +229,11 @@ impl SharedQueue {
             drop(guard);
             // The worker has committed to (or already finished) its final
             // drain and will never pop this item, so queuing it would leak
-            // it forever. Reject and report instead, matching the old
-            // mpsc-based sink's behavior of logging a post-shutdown send.
-            error!(
-                "dropping telemetry item enqueued after shutdown, priority={:?}",
-                item.priority
-            );
-            record_dropped_metric(item.priority);
+            // it forever. Reject and count the drop instead. No log/metric
+            // is emitted here: this path can run inside a dispatch callback
+            // that holds the global stream mutex (see `report_dropped_items`),
+            // and post-shutdown the dispatch sink is gone anyway.
+            self.note_dropped(item.priority);
             return false;
         }
         self.queue_bytes
@@ -780,6 +817,7 @@ impl HttpEventSink {
                 }
             }
             flusher.tick();
+            report_dropped_items(&queue);
         }
 
         debug!("received shutdown signal, flushing remaining data");
@@ -797,6 +835,10 @@ impl HttpEventSink {
             }
         }
         debug!("telemetry thread shutdown complete, drained {drained} remaining items");
+        // Best-effort: post-shutdown the dispatch sink is usually already
+        // swapped out, but any drops still pending from the last window get
+        // one final chance to be reported.
+        report_dropped_items(&queue);
 
         let (lock, cvar) = &*shutdown_complete;
         let mut completed = lock.lock().unwrap();
