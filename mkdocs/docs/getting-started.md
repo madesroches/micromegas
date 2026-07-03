@@ -34,6 +34,11 @@ export MICROMEGAS_OBJECT_STORE_URI=file:///path/to/local/storage
 !!! tip "Object Storage Path"
     Choose a local directory for object storage, e.g., `/tmp/micromegas-storage` or `C:\temp\micromegas-storage` on Windows.
 
+!!! note "Advanced: transport tuning"
+    The Rust telemetry sink exposes environment variables for queue size limits,
+    concurrency, and timeouts if the ingestion service falls behind or becomes
+    unreachable. See [Telemetry Sink Transport Tuning](admin/telemetry-sink-tuning.md).
+
 ## Installation Steps
 
 ### 1. Clone the Repository

@@ -327,7 +327,7 @@ For applications not using `#[micromegas_main]`, configure authentication manual
 ##### API Key Authentication (Simple)
 
 ```rust
-use micromegas_telemetry_sink::http_event_sink::HttpEventSink;
+use micromegas_telemetry_sink::http_event_sink::{HttpEventSink, HttpSinkConfig};
 use micromegas_telemetry_sink::api_key_decorator::ApiKeyRequestDecorator;
 use std::sync::Arc;
 
@@ -338,9 +338,7 @@ let decorator = ApiKeyRequestDecorator::from_env().unwrap();
 // Configure HttpEventSink with authentication
 let sink = HttpEventSink::new(
     "http://localhost:9000",
-    max_queue_size,
-    metadata_retry,
-    blocks_retry,
+    HttpSinkConfig::default(),
     Box::new(move || Arc::new(decorator.clone())),
 );
 ```
@@ -348,7 +346,7 @@ let sink = HttpEventSink::new(
 ##### OIDC Client Credentials (Production)
 
 ```rust
-use micromegas_telemetry_sink::http_event_sink::HttpEventSink;
+use micromegas_telemetry_sink::http_event_sink::{HttpEventSink, HttpSinkConfig};
 use micromegas_telemetry_sink::oidc_client_credentials_decorator::OidcClientCredentialsDecorator;
 use std::sync::Arc;
 
@@ -364,9 +362,7 @@ let decorator = OidcClientCredentialsDecorator::from_env().unwrap();
 
 let sink = HttpEventSink::new(
     "http://localhost:9000",
-    max_queue_size,
-    metadata_retry,
-    blocks_retry,
+    HttpSinkConfig::default(),
     Box::new(move || Arc::new(decorator.clone())),
 );
 ```
