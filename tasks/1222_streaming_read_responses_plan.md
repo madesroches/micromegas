@@ -9,7 +9,8 @@ fetched instead of being assembled whole in memory. This removes `MAX_TOTAL_REQU
 fixed window (independent of request size) charged against the existing `mem_permits` budget.
 
 Phase 2 of the #1218 rework; phase 1 (`/prefetch` NDJSON ingestion, #1218,
-`tasks/1218_prefetch_ndjson_streaming_plan.md`) is independent and should land first.
+`tasks/completed/1218_prefetch_ndjson_streaming_plan.md`) has already landed (commit
+`c867c3134`) — this plan builds on it.
 
 ## Current State
 
@@ -47,7 +48,8 @@ pub async fn stream_ranges(&self, key: &str, ranges: Vec<Range<u64>>)
 ```
 
 - Takes `&self` only for the upfront lookup/validation; the `try_stream!` body is built from an
-  owned `self.clone()` (all-`Arc` fields, `RangeCache` is cheaply `Clone` — `range_cache.rs:428-434`)
+  owned `self.clone()` (`RangeCache` is cheaply `Clone` — `Arc`-shared handles plus small scalars —
+  `range_cache.rs:428-434`)
   moved into the stream, matching the pattern `prefetch_queue.rs:84,124` already use to get an
   owned, `'static` stream future. This is required because axum's `Body::from_stream` (used by
   the handlers below) needs `Send + 'static`, and a stream capturing `&self` cannot satisfy that.
@@ -57,8 +59,10 @@ pub async fn stream_ranges(&self, key: &str, ranges: Vec<Range<u64>>)
 - **Stream body** (via `async_stream::try_stream!`): iterate ranges in request order, skipping
   any degenerate `start >= end` range without calling `blocks_for_range` (which
   `debug_assert!(start < end)`s and computes `end - 1`, panicking/underflowing on such input) —
-  it simply yields nothing for that range, matching `get_range`/`get_ranges`/`prefetch_ranges`'s
-  existing `start >= end` short-circuits (`range_cache.rs:776,836,896`). For the remaining
+  it simply yields nothing for that range, matching the existing degenerate-range skips in
+  `get_range`/`get_ranges`/`prefetch_ranges` (`start >= end` return at `range_cache.rs:776`;
+  `start < end` inclusion guards at `range_cache.rs:836,896`; `get_ranges`'s actual
+  degenerate→`Bytes::new()` return is at `range_cache.rs:860`). For the remaining
   ranges, iterate lazy block windows of `DEMAND_WINDOW_BLOCKS = 8` (8 MiB at the default 1 MiB
   block size — one coalesced origin run at the default `max_coalesced_get_bytes`); per window,
   `fetch_blocks(Demand)` → assemble the window∩range slice → yield `Bytes`. Windows are
@@ -69,7 +73,10 @@ pub async fn stream_ranges(&self, key: &str, ranges: Vec<Range<u64>>)
   two ranges is re-requested, but the second request is a backend (RAM/SSD) hit or joins the
   in-flight fill via `own_or_join`, never a second origin GET.
 - `get_range` and `get_ranges` are reimplemented as collectors over `stream_ranges` (one fill
-  path, deletes their duplicated prologue) — except `get_ranges`'s `if ranges.is_empty() { return
+  path, deletes their duplicated prologue) — the `range_cache_get_range_error` /
+  `range_cache_get_ranges_error` `imetric!` emissions from that prologue
+  (`range_cache.rs:759,768,789` and `819,829,851`) are preserved, either inside `stream_ranges`
+  itself or in the two collectors — except `get_ranges`'s `if ranges.is_empty() { return
   Ok(vec![]) }` short-circuit (`range_cache.rs:809-811`), which must be kept as-is *before*
   calling `stream_ranges`: `stream_ranges` does its `size()` lookup upfront regardless of
   `ranges`, so dropping the short-circuit would turn an empty-ranges call against a missing or
@@ -115,16 +122,21 @@ pub async fn stream_ranges(&self, key: &str, ranges: Vec<Range<u64>>)
   re-chain it (`stream::once(...).chain(rest)`). A dead origin thus still surfaces as `500`
   rather than an aborted `200`. After the first byte is sent, a mid-stream fill error ends the
   stream with an error → hyper aborts the connection → the client sees truncated framing and
-  falls back to direct (`client.rs:452-467`) — the existing failure path, not a new error mode.
+  falls back to direct (`client.rs:457-472`) — the existing failure path, not a new error mode.
 - Metrics: all three existing metrics are preserved (`handlers.rs:340-346`).
   `object_cache_ranges_requests` and `object_cache_ranges_count` are emitted upfront (request
   received, range count known before the stream starts), and `object_cache_ranges_bytes_served`
   accumulates as chunks are yielded (count in the framing loop) and is emitted when the stream
-  completes.
+  completes. Accepted behavior change: a client that aborts mid-stream causes the stream to be
+  dropped before completion, so `object_cache_ranges_bytes_served` is skipped for that request —
+  a minor observability regression versus today's always-emitted total, accepted as intentional.
 
 **`get_range_handler` rework:** same stream with the single range and no framing. All existing
 header logic (206, `Content-Range`, zero-byte and empty-range 200 special cases) is unchanged
-and computed upfront; `Content-Length` is still set explicitly (span length is known). Delete
+and computed upfront; `Content-Length` is still set explicitly (span length is known). Metrics:
+mirroring `/ranges`, `object_cache_get_requests` is emitted upfront (request accepted, before the
+stream starts) and `object_cache_get_bytes_served` is emitted with the span length, which is
+known upfront (`end - start`) rather than accumulated from yielded chunks. Delete
 the 512 MiB check (`handlers.rs:175-180`) and the whole-budget check (`handlers.rs:182-190`);
 acquire the same fixed window permits. Like `post_ranges_handler`, the first window is awaited
 before the 206 (or 200) response is committed — same commit-before-stream pattern — so a dead
