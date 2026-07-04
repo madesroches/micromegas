@@ -43,9 +43,14 @@ same shape. `async-stream = "0.3"` is already a workspace dependency (`rust/Carg
 
 ```
 pub async fn stream_ranges(&self, key: &str, ranges: Vec<Range<u64>>)
-    -> Result<impl Stream<Item = Result<Bytes>> + Send>
+    -> Result<impl Stream<Item = Result<Bytes>> + Send + 'static>
 ```
 
+- Takes `&self` only for the upfront lookup/validation; the `try_stream!` body is built from an
+  owned `self.clone()` (all-`Arc` fields, `RangeCache` is cheaply `Clone` — `range_cache.rs:428-434`)
+  moved into the stream, matching the pattern `prefetch_queue.rs:84,124` already use to get an
+  owned, `'static` stream future. This is required because axum's `Body::from_stream` (used by
+  the handlers below) needs `Send + 'static`, and a stream capturing `&self` cannot satisfy that.
 - **Upfront (before the stream exists, so errors keep proper status codes):** `size()` lookup
   (→ 404 via `is_not_found`), out-of-bounds validation of every range (→ 416 via
   `RangeError::OutOfBounds`). Mirrors today's `get_ranges` prologue.
@@ -81,7 +86,12 @@ pub async fn stream_ranges(&self, key: &str, ranges: Vec<Range<u64>>)
   wrapper for the body's full lifetime — `PermitBody` generalizes from `Option<Bytes>` to
   wrapping the framed stream. `mem_permits` semantics shift from "assembled response bytes" to
   "in-flight window bytes"; `memory_budget_mb` (default 1024) then bounds concurrent streaming
-  requests (~64 at defaults) instead of concurrent buffered bytes.
+  requests (~64 at defaults) instead of concurrent buffered bytes. Guard against
+  under-provisioned budgets: at startup, clamp/validate `memory_budget_mb` so `mem_permits`'s
+  total is at least the fixed per-stream charge (`2 × DEMAND_WINDOW_BLOCKS × block_size`) —
+  `Semaphore::acquire_many_owned` never completes (and never errors) if the requested count
+  exceeds the semaphore's total permits, so without this floor any deployment configured with a
+  smaller `--memory-budget-mb` would hang every read instead of failing fast.
 - **Framing stays byte-identical on the wire:** every range's length is known upfront
   (`end - start`), so the handler emits the 8-byte LE prefix for each range, then forwards that
   range's data chunks, counting bytes to know when the next prefix is due. Old clients read new
@@ -91,18 +101,33 @@ pub async fn stream_ranges(&self, key: &str, ranges: Vec<Range<u64>>)
   rather than an aborted `200`. After the first byte is sent, a mid-stream fill error ends the
   stream with an error → hyper aborts the connection → the client sees truncated framing and
   falls back to direct (`client.rs:452-467`) — the existing failure path, not a new error mode.
-- Metrics: `object_cache_ranges_bytes_served` accumulates as chunks are yielded (count in the
-  framing loop) and is emitted when the stream completes.
+- Metrics: all three existing metrics are preserved (`handlers.rs:340-346`).
+  `object_cache_ranges_requests` and `object_cache_ranges_count` are emitted upfront (request
+  received, range count known before the stream starts), and `object_cache_ranges_bytes_served`
+  accumulates as chunks are yielded (count in the framing loop) and is emitted when the stream
+  completes.
 
 **`get_range_handler` rework:** same stream with the single range and no framing. All existing
 header logic (206, `Content-Range`, zero-byte and empty-range 200 special cases) is unchanged
 and computed upfront; `Content-Length` is still set explicitly (span length is known). Delete
 the 512 MiB check (`handlers.rs:175-180`) and the whole-budget check (`handlers.rs:182-190`);
-acquire the same fixed window permits.
+acquire the same fixed window permits. **Full-object (unranged) GETs are a genuinely new
+mid-stream failure mode, not a pre-existing one:** the handler synthesizes a full range for
+unranged requests (`handlers.rs:133-136`), and on the client side those flow through
+`get_full_stream` → `stream_get_result` (`client.rs:119-133,220-240`), which streams the body
+straight through and maps a mid-stream error to `object_store::Error::Generic` with no
+direct-store fallback — unlike the bounded single-range GET path, which buffers via
+`resp.bytes()` and falls back at `client.rs:396-403`. This plan keeps that gap explicit rather
+than silently introducing it: `get_full_stream` gets the same fallback-to-direct-store handling
+on stream error as the bounded-range path (retry the whole object against the origin once the
+partial stream is discarded), so both GET paths end up with equivalent mid-stream recovery.
 
-**Client:** no changes required. `object_store::ObjectStore::get_ranges` returns `Vec<Bytes>`,
-so the client materializes the response regardless; the win is server-side memory. Truncation
-handling already exists.
+**Client:** `object_store::ObjectStore::get_ranges` returns `Vec<Bytes>`, so the client
+materializes the response regardless; the win is server-side memory, and truncation handling
+already exists for that path. The one required change is `get_full_stream` (full, unranged GET):
+add a fallback to the direct store on mid-stream error, mirroring the bounded-range path
+(`client.rs:396-403`), since the handler rework makes full-object GETs stream from the same
+code path as ranged ones (see `get_range_handler` rework above).
 
 ## Acceptance Criteria
 
@@ -114,9 +139,13 @@ handling already exists.
 
 ## Implementation Steps
 
-1. `rust/object-cache/Cargo.toml`: add `async-stream` (workspace dep; alphabetical order).
+1. `rust/object-cache/Cargo.toml` and `rust/object-cache-srv/Cargo.toml`: add `async-stream`
+   (workspace dep; alphabetical order) — the srv crate needs it too since the framed-stream
+   handler rewrite (step 3) uses the `async_stream::try_stream!` macro and `object-cache-srv`'s
+   `Cargo.toml` doesn't currently depend on it.
 2. `rust/object-cache/src/range_cache.rs`: add `DEMAND_WINDOW_BLOCKS` and `stream_ranges`
-   (upfront validation + windowed `try_stream!` with `buffered(2)`); reimplement `get_range` /
+   (upfront validation on `&self`, then windowed `try_stream!` with `buffered(2)` built over an
+   owned `self.clone()` so the returned stream is `Send + 'static`); reimplement `get_range` /
    `get_ranges` over it.
 3. `rust/object-cache-srv/src/handlers.rs`:
    - Generalize `PermitBody` to wrap a stream (permit still dropped with the body).
@@ -124,17 +153,21 @@ handling already exists.
      with interleaved prefixes; first-item await before committing the response; delete
      `MAX_TOTAL_REQUESTED_BYTES` and the block-accounting section.
    - Rewrite `get_range_handler` body path on the same stream; delete its size caps.
-4. Rework `rust/object-cache-srv/tests/memory_budget_tests.rs` (see Testing — several 413
+4. `rust/object-cache/src/client.rs`: add mid-stream direct-store fallback to `get_full_stream`
+   (full, unranged GET), mirroring the bounded-range fallback at `client.rs:396-403`.
+5. Rework `rust/object-cache-srv/tests/memory_budget_tests.rs` (see Testing — several 413
    assertions become "now succeeds" assertions).
-5. Docs: `mkdocs/docs/admin/object-cache.md` ("Fetch scheduling & memory bounds" — describe the
+6. Docs: `mkdocs/docs/admin/object-cache.md` ("Fetch scheduling & memory bounds" — describe the
    per-stream window bound; remove 512 MiB mentions), `rust/object-cache-srv/README.md`
    (endpoints table note that `/ranges` responses are chunked/streamed).
 
 ## Files to Modify
 
 - `rust/object-cache/Cargo.toml`
+- `rust/object-cache-srv/Cargo.toml`
 - `rust/object-cache/src/range_cache.rs`
 - `rust/object-cache-srv/src/handlers.rs`
+- `rust/object-cache/src/client.rs` (mid-stream fallback for `get_full_stream`)
 - `rust/object-cache-srv/tests/memory_budget_tests.rs`
 - `rust/object-cache/tests/range_cache_tests.rs` (new `stream_ranges` coverage)
 - `mkdocs/docs/admin/object-cache.md`
@@ -157,7 +190,9 @@ handling already exists.
 - **Mid-stream fill error → connection abort (vs buffering to guarantee status codes):**
   buffering is exactly what this issue removes. Mitigated by upfront validation (all 4xx paths
   precede the first byte) and the first-window await (origin-down still yields 500); the
-  residual case degrades to the client's existing truncation → direct fallback.
+  residual case degrades to the client's existing truncation → direct fallback for `/ranges` and
+  bounded single-range GETs, and to the new `get_full_stream` fallback (added by this plan) for
+  full-object GETs.
 
 ## Documentation
 
@@ -175,6 +210,10 @@ handling already exists.
     replaced: requests that previously 413'd now stream successfully with byte-correct framing.
   - `permit_released_on_body_drop` → adapted to the stream-wrapping `PermitBody` (drop the body
     mid-stream, assert permits return).
+  - `concurrent_large_reads_gate_on_budget` → reworked: it currently asserts `PARTIAL_CONTENT`
+    under a small budget based on per-read-size permit accounting, which the fixed per-stream
+    charge replaces; adapt it to assert gating via the fixed charge (small `memory_budget_mb`
+    limits the number of concurrently in-flight streams) instead of per-request byte size.
   - New: concurrent streams gate on `memory_budget_mb` via the fixed per-stream charge;
     origin-down before first byte → 500; origin failure after the first window → truncated
     body, and `CacheClientStore::get_ranges` against the served router falls back to direct
