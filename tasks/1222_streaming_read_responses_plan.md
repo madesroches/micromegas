@@ -90,6 +90,10 @@ pub async fn stream_ranges(&self, key: &str, ranges: Vec<Range<u64>>)
 - Keep: key validation, `MAX_RANGES_PER_REQUEST` (bounds real per-request work), inverted-range
   rejection. The request body stays a buffered `Bytes` (≤ 4096 × ~20 bytes ≈ 80 KiB, far below
   the default body limit).
+- **Empty-ranges short-circuit:** mirror the `get_ranges` collector guard — if `req.ranges` is
+  empty, return the empty `200` directly without calling `stream_ranges`. `stream_ranges` does
+  its `size()` lookup upfront regardless of `ranges`, so without this guard a `{"ranges":[]}`
+  request against a missing key would flip from today's `200` (empty body) to `404`.
 - Delete: `MAX_TOTAL_REQUESTED_BYTES`, the `response_bytes`/`touched_blocks`/`charged_bytes`
   accounting (`handlers.rs:278-322`), and the whole-budget 413.
 - **Memory accounting:** acquire a fixed `permits_for_bytes(2 × DEMAND_WINDOW_BLOCKS ×
@@ -170,9 +174,10 @@ from the same code path as ranged ones (see `get_range_handler` rework above).
    `get_ranges` over it.
 3. `rust/object-cache-srv/src/handlers.rs`:
    - Generalize `PermitBody` to wrap a stream (permit still dropped with the body).
-   - Rewrite `post_ranges_handler`: keep input validation; fixed window permits; framed stream
-     with interleaved prefixes; first-item await before committing the response; delete
-     `MAX_TOTAL_REQUESTED_BYTES` and the block-accounting section.
+   - Rewrite `post_ranges_handler`: keep input validation; empty-ranges short-circuit (return
+     empty `200` before calling `stream_ranges`, preserving today's behavior for a missing key);
+     fixed window permits; framed stream with interleaved prefixes; first-item await before
+     committing the response; delete `MAX_TOTAL_REQUESTED_BYTES` and the block-accounting section.
    - Rewrite `get_range_handler` body path on the same stream; delete its size caps.
 4. `rust/object-cache-srv/src/object_cache_srv.rs`: add a startup clamp/validate check, next to
    the existing `memory_budget_mb == 0` guard (lines 64–71) and before `AppState::new(...)` is
