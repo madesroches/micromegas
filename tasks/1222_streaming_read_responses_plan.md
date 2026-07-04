@@ -49,7 +49,8 @@ pub async fn stream_ranges(&self, key: &str, ranges: Vec<Range<u64>>, caller: St
 ```
 
 `StreamRangesCaller` is a two-variant enum (`Range` / `Ranges`) selecting which of the two
-existing error-metric names `stream_ranges` emits on its upfront-validation failures — see below.
+existing error-metric names `stream_ranges` emits on its upfront-validation failures and on a
+mid-stream `fetch_blocks` failure — see below.
 
 - Takes `&self` only for the upfront lookup/validation; the `try_stream!` body is built from an
   owned `self.clone()` (`RangeCache` is cheaply `Clone` — `Arc`-shared handles plus small scalars —
@@ -85,8 +86,10 @@ existing error-metric names `stream_ranges` emits on its upfront-validation fail
   metrics from the production HTTP paths, which never touch the collectors. To keep the two
   distinct metric names, `stream_ranges` takes a `caller: StreamRangesCaller` tag and emits
   `range_cache_get_range_error` for `StreamRangesCaller::Range` or
-  `range_cache_get_ranges_error` for `StreamRangesCaller::Ranges` on its upfront `size()`/
-  out-of-bounds failures; `get_range`/`get_range_handler` pass `Range` and `get_ranges`/
+  `range_cache_get_ranges_error` for `StreamRangesCaller::Ranges` both on its upfront `size()`/
+  out-of-bounds failures and on a mid-stream window's `fetch_blocks` call returning `Err` (yielded
+  into the stream as the terminal item, matching `range_cache.rs:789,851` today); `get_range`/
+  `get_range_handler` pass `Range` and `get_ranges`/
   `post_ranges_handler` pass `Ranges`, so both metrics keep firing exactly as today on all four
   call sites — except `get_ranges`'s `if ranges.is_empty() { return
   Ok(vec![]) }` short-circuit (`range_cache.rs:809-811`), which must be kept as-is *before*
@@ -212,7 +215,8 @@ from the same code path as ranged ones (see `get_range_handler` rework above).
    (`Range` / `Ranges`), and `stream_ranges` (upfront validation on `&self`, emitting
    `range_cache_get_range_error`/`range_cache_get_ranges_error` per the `caller` tag on
    validation failure, then windowed `try_stream!` with `buffered(2)` built over an owned
-   `self.clone()` so the returned stream is `Send + 'static`); reimplement `get_range` /
+   `self.clone()` so the returned stream is `Send + 'static`, emitting the same `caller`-tagged
+   metric if a window's `fetch_blocks` call fails); reimplement `get_range` /
    `get_ranges` over it, passing their respective `StreamRangesCaller` variant.
 3. `rust/object-cache-srv/src/handlers.rs`:
    - Generalize `PermitBody` to wrap a stream (permit still dropped with the body).
