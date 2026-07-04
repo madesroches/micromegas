@@ -111,23 +111,33 @@ pub async fn stream_ranges(&self, key: &str, ranges: Vec<Range<u64>>)
 header logic (206, `Content-Range`, zero-byte and empty-range 200 special cases) is unchanged
 and computed upfront; `Content-Length` is still set explicitly (span length is known). Delete
 the 512 MiB check (`handlers.rs:175-180`) and the whole-budget check (`handlers.rs:182-190`);
-acquire the same fixed window permits. **Full-object (unranged) GETs are a genuinely new
-mid-stream failure mode, not a pre-existing one:** the handler synthesizes a full range for
-unranged requests (`handlers.rs:133-136`), and on the client side those flow through
-`get_full_stream` → `stream_get_result` (`client.rs:119-133,220-240`), which streams the body
-straight through and maps a mid-stream error to `object_store::Error::Generic` with no
+acquire the same fixed window permits. Like `post_ranges_handler`, the first window is awaited
+before the 206 (or 200) response is committed — same commit-before-stream pattern — so a dead
+origin surfaces as `500` here too, not just on the `/ranges` path. **Full-object (unranged) GETs
+are a genuinely new mid-stream failure mode, not a pre-existing one:** the handler synthesizes a
+full range for unranged requests (`handlers.rs:133-136`), and on the client side those flow
+through `get_full_stream` → `stream_get_result` (`client.rs:119-133,220-240`), which streams the
+body straight through and maps a mid-stream error to `object_store::Error::Generic` with no
 direct-store fallback — unlike the bounded single-range GET path, which buffers via
 `resp.bytes()` and falls back at `client.rs:396-403`. This plan keeps that gap explicit rather
-than silently introducing it: `get_full_stream` gets the same fallback-to-direct-store handling
-on stream error as the bounded-range path (retry the whole object against the origin once the
-partial stream is discarded), so both GET paths end up with equivalent mid-stream recovery.
+than silently introducing it, but the fallback `get_full_stream` gains is narrower than the
+bounded-range path's: `get_full_stream` buffers only up to the *first* chunk before handing
+anything to the consumer, so if the stream errors before that first chunk is yielded downstream,
+it retries the whole object against the origin (safe: zero bytes have reached the consumer yet,
+same precondition `get_range_bytes` relies on). Once a chunk has been yielded downstream, a
+retry is unsound (it would re-deliver already-emitted prefix bytes from offset 0), so a
+mid-stream error after the first chunk simply terminates the stream with an error — no retry.
+The two GET paths therefore do not have equivalent mid-stream recovery in general; they agree
+only on the pre-first-byte case, which is the one that matters for silently returning wrong data.
 
 **Client:** `object_store::ObjectStore::get_ranges` returns `Vec<Bytes>`, so the client
 materializes the response regardless; the win is server-side memory, and truncation handling
 already exists for that path. The one required change is `get_full_stream` (full, unranged GET):
-add a fallback to the direct store on mid-stream error, mirroring the bounded-range path
-(`client.rs:396-403`), since the handler rework makes full-object GETs stream from the same
-code path as ranged ones (see `get_range_handler` rework above).
+add a fallback to the direct store that fires only if the stream errors before its first chunk
+is yielded downstream (mirroring the buffered-then-fallback precondition of the bounded-range
+path at `client.rs:396-403`); once a chunk has reached the consumer, a mid-stream error must
+terminate the stream rather than retry, since the handler rework makes full-object GETs stream
+from the same code path as ranged ones (see `get_range_handler` rework above).
 
 ## Acceptance Criteria
 
@@ -191,8 +201,10 @@ code path as ranged ones (see `get_range_handler` rework above).
   buffering is exactly what this issue removes. Mitigated by upfront validation (all 4xx paths
   precede the first byte) and the first-window await (origin-down still yields 500); the
   residual case degrades to the client's existing truncation → direct fallback for `/ranges` and
-  bounded single-range GETs, and to the new `get_full_stream` fallback (added by this plan) for
-  full-object GETs.
+  bounded single-range GETs, and to the new `get_full_stream` fallback (added by this plan,
+  pre-first-chunk only — a failure after the first chunk has been yielded downstream ends the
+  stream in an error with no retry, since bytes already sent can't be un-sent) for full-object
+  GETs.
 
 ## Documentation
 
