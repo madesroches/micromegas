@@ -173,7 +173,9 @@ from the same code path as ranged ones (see `get_range_handler` rework above).
    assertions become "now succeeds" assertions).
 6. Docs: `mkdocs/docs/admin/object-cache.md` ("Fetch scheduling & memory bounds" — describe the
    per-stream window bound; remove 512 MiB mentions), `rust/object-cache-srv/README.md`
-   (endpoints table note that `/ranges` responses are chunked/streamed).
+   (endpoints table note that `/ranges` responses are chunked/streamed; also reword the
+   `--memory-budget-mb` Configuration-table row (line 76) — it currently describes "concurrently-
+   assembled response bytes" but must describe bounding concurrent in-flight streaming windows).
 
 ## Files to Modify
 
@@ -214,7 +216,9 @@ from the same code path as ranged ones (see `get_range_handler` rework above).
 
 - `mkdocs/docs/admin/object-cache.md`: memory-bounds section; remove 512 MiB / assembled-response
   mentions.
-- `rust/object-cache-srv/README.md`: endpoints table (chunked `/ranges` responses).
+- `rust/object-cache-srv/README.md`: endpoints table (chunked `/ranges` responses); Configuration
+  table `--memory-budget-mb` row — reword from "concurrently-assembled response bytes" to
+  bounding concurrent in-flight streaming windows.
 
 ## Testing Strategy
 
