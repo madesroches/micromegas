@@ -65,7 +65,11 @@ pub async fn stream_ranges(&self, key: &str, ranges: Vec<Range<u64>>)
   two ranges is re-requested, but the second request is a backend (RAM/SSD) hit or joins the
   in-flight fill via `own_or_join`, never a second origin GET.
 - `get_range` and `get_ranges` are reimplemented as collectors over `stream_ranges` (one fill
-  path, deletes their duplicated prologue). Their `Vec<Bytes>`/`Bytes` signatures and error
+  path, deletes their duplicated prologue) — except `get_ranges`'s `if ranges.is_empty() { return
+  Ok(vec![]) }` short-circuit (`range_cache.rs:809-811`), which must be kept as-is *before*
+  calling `stream_ranges`: `stream_ranges` does its `size()` lookup upfront regardless of
+  `ranges`, so dropping the short-circuit would turn an empty-ranges call against a missing or
+  failing key from `Ok(vec![])` into an error. Their `Vec<Bytes>`/`Bytes` signatures and error
   behavior are unchanged for library consumers and tests. Contract note: `get_ranges` must still
   return exactly one `Bytes` per input range (including `Bytes::new()` for a degenerate
   `start >= end` range, which today's `get_ranges` emits and its tests assert). Since
