@@ -115,7 +115,10 @@ mid-stream `fetch_blocks` failure — see below.
 - **Empty-ranges short-circuit:** mirror the `get_ranges` collector guard — if `req.ranges` is
   empty, return the empty `200` directly without calling `stream_ranges`. `stream_ranges` does
   its `size()` lookup upfront regardless of `ranges`, so without this guard a `{"ranges":[]}`
-  request against a missing key would flip from today's `200` (empty body) to `404`.
+  request against a missing key would flip from today's `200` (empty body) to `404`. The
+  short-circuit still emits `object_cache_ranges_requests=1`, `object_cache_ranges_count=0`, and
+  `object_cache_ranges_bytes_served=0` to match today's `Ok`-arm behavior (`handlers.rs:340-346`,
+  where an empty-ranges request already flows through and emits all three).
 - Delete: `MAX_TOTAL_REQUESTED_BYTES`, the `response_bytes`/`touched_blocks`/`charged_bytes`
   accounting (`handlers.rs:278-322`), and the whole-budget 413.
 - **Memory accounting:** acquire `permits_for_bytes(min(framed_response_size, 2 ×
@@ -257,7 +260,10 @@ from the same code path as ranged ones (see `get_range_handler` rework above).
    "concurrently-assembled" budget phrasing — remove or reword each occurrence, not just the ones
    called out below. This includes `rust/object-cache-srv/src/app_state.rs`'s `mem_permits` and
    `memory_budget_mb` doc comments, which currently describe "concurrently-assembled response
-   bytes" and a 413 rejection; reword both to the in-flight-window semantics. Concrete examples of
+   bytes" and a 413 rejection; reword both to the in-flight-window semantics. It also includes
+   `rust/object-cache-srv/src/cli.rs:97`'s `--memory-budget-mb` help text ("Cross-request cap
+   (MiB) on concurrently-assembled response bytes"), which is user-facing `--help` output; reword
+   it to the in-flight-window semantics. Concrete examples of
    the same sweep in the two doc files: in `rust/object-cache-srv/README.md`: the endpoints-table
    note (add that `/ranges` responses are chunked/streamed — keep this note), the request-limits
    prose (currently lines 29–31, "A single request is capped at 4096 ranges and 512 MiB of total
@@ -279,6 +285,8 @@ from the same code path as ranged ones (see `get_range_handler` rework above).
   floor, next to the existing `memory_budget_mb == 0` guard)
 - `rust/object-cache-srv/src/app_state.rs` (reword `mem_permits` / `memory_budget_mb` doc
   comments to the in-flight-window semantics)
+- `rust/object-cache-srv/src/cli.rs` (reword the `--memory-budget-mb` help text to the
+  in-flight-window semantics)
 - `rust/object-cache/src/client.rs` (mid-stream fallback for `get_full_stream`)
 - `rust/object-cache-srv/tests/memory_budget_tests.rs`
 - `rust/object-cache/tests/range_cache_tests.rs` (new `stream_ranges` coverage)
@@ -330,6 +338,9 @@ examples:
   `memory_budget_mb` doc comment ("A request whose assembled size would exceed this outright is
   rejected (413)") — reword both to the in-flight-window semantics (permits bound concurrent
   streaming windows, not assembled response bytes; there is no 413 for size).
+- `rust/object-cache-srv/src/cli.rs`: the `--memory-budget-mb` help text (line 97,
+  "Cross-request cap (MiB) on concurrently-assembled response bytes") — reword to the
+  in-flight-window semantics; this is user-facing `--help` output.
 - `mkdocs/docs/admin/object-cache.md`: Configuration/env-var table row and the "Fetch scheduling
   & memory bounds" section; remove 512 MiB total-requested-bytes cap, its `413 Payload Too
   Large`, and assembled-response mentions.
