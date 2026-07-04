@@ -1,8 +1,9 @@
 use anyhow::{Context, Result, anyhow};
+use async_stream::stream as gen_stream;
 use async_trait::async_trait;
 use bytes::{Buf, Bytes};
 use futures::stream::TryStreamExt;
-use futures::stream::{self, BoxStream};
+use futures::stream::{self, BoxStream, StreamExt};
 use micromegas_tracing::prelude::*;
 use object_store::{
     Attributes, CopyOptions, GetOptions, GetResult, GetResultPayload, ListResult, MultipartUpload,
@@ -116,7 +117,14 @@ impl CacheClientStore {
     /// buffered in memory (matching how the direct store streams the body). The
     /// object size comes from the `Content-Length` header, which is required to
     /// populate `meta.size` and the `0..size` range without reading the body.
-    async fn get_full_stream(&self, location: &Path) -> Result<GetResult> {
+    ///
+    /// The body is wrapped with `full_stream_with_fallback` so a stream error
+    /// before the first chunk reaches the consumer transparently falls back
+    /// to `self.direct`, mirroring the buffered-then-fallback precondition of
+    /// the bounded-range path (`get_range_bytes`) at the `GetResult` level
+    /// instead of the whole-response level, since this path streams rather
+    /// than buffers.
+    async fn get_full_stream(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
         let url = self.obj_url(location);
         let resp = self
             .add_auth(self.http.get(&url))
@@ -129,7 +137,15 @@ impl CacheClientStore {
         let size = resp
             .content_length()
             .ok_or_else(|| anyhow!("missing Content-Length in GET response"))?;
-        Ok(stream_get_result(location, resp, size))
+        let raw = resp
+            .bytes_stream()
+            .map_err(|e| object_store::Error::Generic {
+                store: "CacheClientStore",
+                source: Box::new(e),
+            })
+            .boxed();
+        let body = full_stream_with_fallback(self.direct.clone(), location.clone(), options, raw);
+        Ok(stream_get_result(location, body, size))
     }
 
     async fn head_size(&self, location: &Path) -> Result<u64> {
@@ -213,11 +229,15 @@ impl std::fmt::Display for CacheClientStore {
     }
 }
 
-/// Build a streaming `GetResult` for an unranged GET, wrapping the reqwest
-/// response body in `GetResultPayload::Stream` so the object is delivered in
-/// chunks rather than buffered whole. `object_size` (from `Content-Length`)
-/// populates `meta.size` and the `0..object_size` range.
-fn stream_get_result(location: &Path, resp: reqwest::Response, object_size: u64) -> GetResult {
+/// Build a streaming `GetResult` for an unranged GET from an already-built
+/// byte stream (see `full_stream_with_fallback`), so the object is delivered
+/// in chunks rather than buffered whole. `object_size` (from
+/// `Content-Length`) populates `meta.size` and the `0..object_size` range.
+fn stream_get_result(
+    location: &Path,
+    body: BoxStream<'static, object_store::Result<Bytes>>,
+    object_size: u64,
+) -> GetResult {
     let meta = ObjectMeta {
         location: location.clone(),
         last_modified: chrono::Utc::now(),
@@ -225,18 +245,57 @@ fn stream_get_result(location: &Path, resp: reqwest::Response, object_size: u64)
         e_tag: None,
         version: None,
     };
-    let body = resp
-        .bytes_stream()
-        .map_err(|e| object_store::Error::Generic {
-            store: "CacheClientStore",
-            source: Box::new(e),
-        });
     GetResult {
-        payload: GetResultPayload::Stream(Box::pin(body)),
+        payload: GetResultPayload::Stream(body),
         meta,
         range: 0..object_size,
         attributes: Attributes::default(),
     }
+}
+
+/// Wrap the raw byte stream for a full (unranged) GET so a stream error
+/// *before* any bytes reach the consumer transparently falls back to
+/// `direct`, mirroring the buffered-then-fallback precondition the
+/// bounded-range path relies on (`get_range_bytes` / `client.rs:396-403`):
+/// zero bytes have been yielded downstream yet, so retrying against the
+/// origin can't re-deliver a duplicate prefix. Once the first chunk has been
+/// yielded downstream, a later error simply ends the stream — retrying at
+/// that point would re-emit already-delivered bytes from offset 0, which is
+/// unsound.
+fn full_stream_with_fallback(
+    direct: Arc<dyn ObjectStore>,
+    location: Path,
+    options: GetOptions,
+    mut first: BoxStream<'static, object_store::Result<Bytes>>,
+) -> BoxStream<'static, object_store::Result<Bytes>> {
+    gen_stream! {
+        match first.next().await {
+            None => {}
+            Some(Ok(chunk)) => {
+                yield Ok(chunk);
+                while let Some(item) = first.next().await {
+                    yield item;
+                }
+            }
+            Some(Err(e)) => {
+                imetric!("range_cache_client_fallback", "count", 1_u64);
+                debug!(
+                    "cache GET stream for {location} failed before the first chunk, \
+                     falling back to direct: {e}"
+                );
+                match direct.get_opts(&location, options).await {
+                    Ok(result) => {
+                        let mut body = result.into_stream();
+                        while let Some(item) = body.next().await {
+                            yield item;
+                        }
+                    }
+                    Err(direct_err) => yield Err(direct_err),
+                }
+            }
+        }
+    }
+    .boxed()
 }
 
 /// Build a `GetResult` for a ranged GET. `range` is the slice actually returned
@@ -339,7 +398,7 @@ impl ObjectStore for CacheClientStore {
         }
 
         let result: Result<GetResult> = match &options.range {
-            None => self.get_full_stream(location).await,
+            None => self.get_full_stream(location, options.clone()).await,
             // Issue the range GET first and read the full object size from the
             // 206 `Content-Range` header, avoiding a preceding HEAD round-trip.
             // `resolve_size` only falls back to a HEAD if that header was absent

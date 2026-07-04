@@ -3962,6 +3962,7 @@ name = "micromegas-object-cache"
 version = "0.27.0"
 dependencies = [
  "anyhow",
+ "async-stream",
  "async-trait",
  "bytes",
  "chrono",
@@ -3982,6 +3983,7 @@ name = "micromegas-object-cache-srv"
 version = "0.27.0"
 dependencies = [
  "anyhow",
+ "async-stream",
  "async-trait",
  "axum 0.8.9",
  "bytes",

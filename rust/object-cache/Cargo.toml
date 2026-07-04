@@ -17,6 +17,7 @@ foyer = ["dep:foyer"]
 micromegas-tracing.workspace = true
 
 anyhow.workspace = true
+async-stream.workspace = true
 async-trait.workspace = true
 bytes.workspace = true
 chrono.workspace = true

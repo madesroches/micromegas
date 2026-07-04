@@ -94,7 +94,10 @@ pub(crate) struct Cli {
     )]
     pub(crate) max_coalesced_get_bytes: u64,
 
-    /// Cross-request cap (MiB) on concurrently-assembled response bytes.
+    /// Cross-request cap (MiB) on concurrent in-flight streaming windows: a
+    /// small response charges close to its actual size, while a large one
+    /// clamps to a fixed per-stream window, so this bounds concurrent
+    /// large-streaming-request memory rather than total response bytes.
     #[clap(
         long,
         env = "MICROMEGAS_OBJECT_CACHE_MEMORY_BUDGET_MB",
