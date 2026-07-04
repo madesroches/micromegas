@@ -151,26 +151,34 @@ mid-stream `fetch_blocks` failure — see below.
   falls back to direct (`client.rs:457-472`) — the existing failure path, not a new error mode.
 - Calls `stream_ranges(key, ranges, StreamRangesCaller::Ranges)`, so `range_cache_get_ranges_error`
   keeps firing on upfront `size()`/out-of-bounds failures for this path (see Design above).
-- Metrics: all three existing metrics are preserved (`handlers.rs:340-346`).
-  `object_cache_ranges_requests` and `object_cache_ranges_count` are emitted upfront (request
-  received, range count known before the stream starts), and `object_cache_ranges_bytes_served`
-  accumulates as chunks are yielded (count in the framing loop) and is emitted when the stream
-  completes. Accepted behavior change: a client that aborts mid-stream causes the stream to be
-  dropped before completion, so `object_cache_ranges_bytes_served` is skipped for that request —
-  a minor observability regression versus today's always-emitted total, accepted as intentional.
+- Metrics: all three existing metrics keep today's success-only semantics (`handlers.rs:340-346`
+  emits them only from the `Ok` arm; `Err` emits nothing). `object_cache_ranges_requests` and
+  `object_cache_ranges_count` are emitted at the same point the response is committed — right
+  after the stream's first item is successfully awaited (see commit-before-stream, above) — so a
+  `404`/`416` from the upfront `size()`/bounds checks, or a `500` from a dead origin on the first
+  window, never increments them, exactly as today. `object_cache_ranges_bytes_served` accumulates
+  as chunks are yielded (count in the framing loop) and is emitted when the stream completes.
+  Accepted behavior change: a client that aborts mid-stream causes the stream to be dropped before
+  completion, so `object_cache_ranges_bytes_served` is skipped for that request — a minor
+  observability regression versus today's always-emitted total, accepted as intentional.
 
 **`get_range_handler` rework:** same stream with the single range and no framing, calling
 `stream_ranges(key, vec![range], StreamRangesCaller::Range)` so `range_cache_get_range_error`
 keeps firing on upfront `size()`/out-of-bounds failures for this path (see Design above). All
 existing header logic (206, `Content-Range`, zero-byte and empty-range 200 special cases) is
 unchanged and computed upfront; `Content-Length` is still set explicitly (span length is known).
-Metrics: mirroring `/ranges`, `object_cache_get_requests` is emitted upfront (request accepted, before the
-stream starts) and `object_cache_get_bytes_served` is emitted with the span length, which is
-known upfront (`end - start`) rather than accumulated from yielded chunks. Delete
-the 512 MiB check (`handlers.rs:175-180`) and the whole-budget check (`handlers.rs:182-190`);
+Metrics: mirroring `/ranges`, `object_cache_get_requests` keeps today's success-only semantics
+(`handlers.rs:201` emits it only from the `Ok` arm): it's emitted at the same commit point as
+`post_ranges_handler` — right after the first window is successfully awaited, before the 206/200
+response is built — so a `404`/`416` from the upfront checks, or a `500` from a dead origin on
+that first window, never increments it. `object_cache_get_bytes_served` likewise accumulates from
+the bytes actually yielded (mirroring `object_cache_ranges_bytes_served`) rather than being
+emitted upfront with the full span length; a mid-stream abort under-reports it instead of
+over-reporting, the same accepted skew as `/ranges`'s bytes-served regression above, not a new
+one. Delete the 512 MiB check (`handlers.rs:175-180`) and the whole-budget check (`handlers.rs:182-190`);
 acquire the same proportional charge (`min(span length, window)`). Like `post_ranges_handler`,
 the first window is awaited before the 206 (or 200) response is committed — same
-commit-before-stream pattern — so a dead
+commit-before-stream pattern, and the point at which `object_cache_get_requests` fires — so a dead
 origin surfaces as `500` here too, not just on the `/ranges` path. **Full-object (unranged) GETs
 are a genuinely new mid-stream failure mode, not a pre-existing one:** the handler synthesizes a
 full range for unranged requests (`handlers.rs:133-136`), and on the client side those flow
