@@ -44,9 +44,12 @@ same shape. `async-stream = "0.3"` is already a workspace dependency (`rust/Carg
 **New core: `RangeCache::stream_ranges`** (in `range_cache.rs`):
 
 ```
-pub async fn stream_ranges(&self, key: &str, ranges: Vec<Range<u64>>)
+pub async fn stream_ranges(&self, key: &str, ranges: Vec<Range<u64>>, caller: StreamRangesCaller)
     -> Result<impl Stream<Item = Result<Bytes>> + Send + 'static>
 ```
+
+`StreamRangesCaller` is a two-variant enum (`Range` / `Ranges`) selecting which of the two
+existing error-metric names `stream_ranges` emits on its upfront-validation failures — see below.
 
 - Takes `&self` only for the upfront lookup/validation; the `try_stream!` body is built from an
   owned `self.clone()` (`RangeCache` is cheaply `Clone` — `Arc`-shared handles plus small scalars —
@@ -74,10 +77,18 @@ pub async fn stream_ranges(&self, key: &str, ranges: Vec<Range<u64>>)
   two ranges is re-requested, but the second request is a backend (RAM/SSD) hit or joins the
   in-flight fill via `own_or_join`, never a second origin GET.
 - `get_range` and `get_ranges` are reimplemented as collectors over `stream_ranges` (one fill
-  path, deletes their duplicated prologue) — the `range_cache_get_range_error` /
+  path, deletes their duplicated prologue). Both handlers below call `stream_ranges` directly
+  (not through these collectors), so the `range_cache_get_range_error` /
   `range_cache_get_ranges_error` `imetric!` emissions from that prologue
-  (`range_cache.rs:759,768,789` and `819,829,851`) are preserved, either inside `stream_ranges`
-  itself or in the two collectors — except `get_ranges`'s `if ranges.is_empty() { return
+  (`range_cache.rs:759,768,789` and `819,829,851`) must be emitted **inside `stream_ranges`
+  itself**, not in the two collectors — emitting only in the collectors would silently drop both
+  metrics from the production HTTP paths, which never touch the collectors. To keep the two
+  distinct metric names, `stream_ranges` takes a `caller: StreamRangesCaller` tag and emits
+  `range_cache_get_range_error` for `StreamRangesCaller::Range` or
+  `range_cache_get_ranges_error` for `StreamRangesCaller::Ranges` on its upfront `size()`/
+  out-of-bounds failures; `get_range`/`get_range_handler` pass `Range` and `get_ranges`/
+  `post_ranges_handler` pass `Ranges`, so both metrics keep firing exactly as today on all four
+  call sites — except `get_ranges`'s `if ranges.is_empty() { return
   Ok(vec![]) }` short-circuit (`range_cache.rs:809-811`), which must be kept as-is *before*
   calling `stream_ranges`: `stream_ranges` does its `size()` lookup upfront regardless of
   `ranges`, so dropping the short-circuit would turn an empty-ranges call against a missing or
@@ -135,6 +146,8 @@ pub async fn stream_ranges(&self, key: &str, ranges: Vec<Range<u64>>)
   rather than an aborted `200`. After the first byte is sent, a mid-stream fill error ends the
   stream with an error → hyper aborts the connection → the client sees truncated framing and
   falls back to direct (`client.rs:457-472`) — the existing failure path, not a new error mode.
+- Calls `stream_ranges(key, ranges, StreamRangesCaller::Ranges)`, so `range_cache_get_ranges_error`
+  keeps firing on upfront `size()`/out-of-bounds failures for this path (see Design above).
 - Metrics: all three existing metrics are preserved (`handlers.rs:340-346`).
   `object_cache_ranges_requests` and `object_cache_ranges_count` are emitted upfront (request
   received, range count known before the stream starts), and `object_cache_ranges_bytes_served`
@@ -143,10 +156,12 @@ pub async fn stream_ranges(&self, key: &str, ranges: Vec<Range<u64>>)
   dropped before completion, so `object_cache_ranges_bytes_served` is skipped for that request —
   a minor observability regression versus today's always-emitted total, accepted as intentional.
 
-**`get_range_handler` rework:** same stream with the single range and no framing. All existing
-header logic (206, `Content-Range`, zero-byte and empty-range 200 special cases) is unchanged
-and computed upfront; `Content-Length` is still set explicitly (span length is known). Metrics:
-mirroring `/ranges`, `object_cache_get_requests` is emitted upfront (request accepted, before the
+**`get_range_handler` rework:** same stream with the single range and no framing, calling
+`stream_ranges(key, vec![range], StreamRangesCaller::Range)` so `range_cache_get_range_error`
+keeps firing on upfront `size()`/out-of-bounds failures for this path (see Design above). All
+existing header logic (206, `Content-Range`, zero-byte and empty-range 200 special cases) is
+unchanged and computed upfront; `Content-Length` is still set explicitly (span length is known).
+Metrics: mirroring `/ranges`, `object_cache_get_requests` is emitted upfront (request accepted, before the
 stream starts) and `object_cache_get_bytes_served` is emitted with the span length, which is
 known upfront (`end - start`) rather than accumulated from yielded chunks. Delete
 the 512 MiB check (`handlers.rs:175-180`) and the whole-budget check (`handlers.rs:182-190`);
@@ -193,10 +208,12 @@ from the same code path as ranged ones (see `get_range_handler` rework above).
    (workspace dep; alphabetical order) — the srv crate needs it too since the framed-stream
    handler rewrite (step 3) uses the `async_stream::try_stream!` macro and `object-cache-srv`'s
    `Cargo.toml` doesn't currently depend on it.
-2. `rust/object-cache/src/range_cache.rs`: add `DEMAND_WINDOW_BLOCKS` and `stream_ranges`
-   (upfront validation on `&self`, then windowed `try_stream!` with `buffered(2)` built over an
-   owned `self.clone()` so the returned stream is `Send + 'static`); reimplement `get_range` /
-   `get_ranges` over it.
+2. `rust/object-cache/src/range_cache.rs`: add `DEMAND_WINDOW_BLOCKS`, `StreamRangesCaller`
+   (`Range` / `Ranges`), and `stream_ranges` (upfront validation on `&self`, emitting
+   `range_cache_get_range_error`/`range_cache_get_ranges_error` per the `caller` tag on
+   validation failure, then windowed `try_stream!` with `buffered(2)` built over an owned
+   `self.clone()` so the returned stream is `Send + 'static`); reimplement `get_range` /
+   `get_ranges` over it, passing their respective `StreamRangesCaller` variant.
 3. `rust/object-cache-srv/src/handlers.rs`:
    - Generalize `PermitBody` to wrap a stream (permit still dropped with the body).
    - Rewrite `post_ranges_handler`: keep input validation; empty-ranges short-circuit (return
