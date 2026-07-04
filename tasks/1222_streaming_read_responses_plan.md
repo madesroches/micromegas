@@ -54,8 +54,12 @@ pub async fn stream_ranges(&self, key: &str, ranges: Vec<Range<u64>>)
 - **Upfront (before the stream exists, so errors keep proper status codes):** `size()` lookup
   (→ 404 via `is_not_found`), out-of-bounds validation of every range (→ 416 via
   `RangeError::OutOfBounds`). Mirrors today's `get_ranges` prologue.
-- **Stream body** (via `async_stream::try_stream!`): iterate ranges in request order; per
-  range, iterate lazy block windows of `DEMAND_WINDOW_BLOCKS = 8` (8 MiB at the default 1 MiB
+- **Stream body** (via `async_stream::try_stream!`): iterate ranges in request order, skipping
+  any degenerate `start >= end` range without calling `blocks_for_range` (which
+  `debug_assert!(start < end)`s and computes `end - 1`, panicking/underflowing on such input) —
+  it simply yields nothing for that range, matching `get_range`/`get_ranges`/`prefetch_ranges`'s
+  existing `start >= end` short-circuits (`range_cache.rs:776,836,896`). For the remaining
+  ranges, iterate lazy block windows of `DEMAND_WINDOW_BLOCKS = 8` (8 MiB at the default 1 MiB
   block size — one coalesced origin run at the default `max_coalesced_get_bytes`); per window,
   `fetch_blocks(Demand)` → assemble the window∩range slice → yield `Bytes`. Windows are
   pipelined with `buffered(2)` (order-preserving) so the next window fetches while the previous
@@ -73,10 +77,13 @@ pub async fn stream_ranges(&self, key: &str, ranges: Vec<Range<u64>>)
   behavior are unchanged for library consumers and tests. Contract note: `get_ranges` must still
   return exactly one `Bytes` per input range (including `Bytes::new()` for a degenerate
   `start >= end` range, which today's `get_ranges` emits and its tests assert). Since
-  `stream_ranges` yields a flat chunk sequence in range order, the collector reconstructs the
-  per-range split from the known input range lengths — so `stream_ranges` must preserve range
-  ordering and either delimit ranges or emit them contiguously (the handler's framing loop relies
-  on the same property).
+  `stream_ranges` yields nothing for a degenerate range (see above), the `get_range`/`get_ranges`
+  collectors must special-case `start >= end` themselves and reinsert `Bytes::new()` at that
+  position rather than relying on a chunk from the stream — matching current behavior. For
+  non-degenerate ranges, `stream_ranges` yields a flat chunk sequence in range order, and the
+  collector reconstructs the per-range split from the known input range lengths — so
+  `stream_ranges` must preserve range ordering and either delimit ranges or emit them
+  contiguously (the handler's framing loop relies on the same property).
 
 **`post_ranges_handler` rework:**
 
