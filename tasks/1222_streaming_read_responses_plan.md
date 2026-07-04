@@ -5,8 +5,9 @@
 Rework `object-cache-srv`'s read path so response bytes are written to the socket as they are
 fetched instead of being assembled whole in memory. This removes `MAX_TOTAL_REQUESTED_BYTES`
 (512 MiB), both handlers' whole-budget rejections, and the fragile block-accounting in
-`post_ranges_handler` that duplicates `get_ranges`'s dedup math. Per-request memory becomes a
-fixed window (independent of request size) charged against the existing `mem_permits` budget.
+`post_ranges_handler` that duplicates `get_ranges`'s dedup math. Per-request memory is charged
+proportionally to the response size, capped at a fixed window, against the existing
+`mem_permits` budget.
 
 Phase 2 of the #1218 rework; phase 1 (`/prefetch` NDJSON ingestion, #1218,
 `tasks/completed/1218_prefetch_ndjson_streaming_plan.md`) has already landed (commit
@@ -103,17 +104,28 @@ pub async fn stream_ranges(&self, key: &str, ranges: Vec<Range<u64>>)
   request against a missing key would flip from today's `200` (empty body) to `404`.
 - Delete: `MAX_TOTAL_REQUESTED_BYTES`, the `response_bytes`/`touched_blocks`/`charged_bytes`
   accounting (`handlers.rs:278-322`), and the whole-budget 413.
-- **Memory accounting:** acquire a fixed `permits_for_bytes(2 × DEMAND_WINDOW_BLOCKS ×
-  block_size)` per streaming request (≈16 permits at defaults), held by the response-body
-  wrapper for the body's full lifetime — `PermitBody` generalizes from `Option<Bytes>` to
-  wrapping the framed stream. `mem_permits` semantics shift from "assembled response bytes" to
-  "in-flight window bytes"; `memory_budget_mb` (default 1024) then bounds concurrent streaming
-  requests (~64 at defaults) instead of concurrent buffered bytes. Guard against
-  under-provisioned budgets: at startup, clamp/validate `memory_budget_mb` so `mem_permits`'s
-  total is at least the fixed per-stream charge (`2 × DEMAND_WINDOW_BLOCKS × block_size`) —
+- **Memory accounting:** acquire `permits_for_bytes(min(framed_response_size, 2 ×
+  DEMAND_WINDOW_BLOCKS × block_size))` per streaming request — a proportional charge capped at
+  the window (≈16 permits at defaults) — held by the response-body wrapper for the body's full
+  lifetime — `PermitBody` generalizes from `Option<Bytes>` to wrapping the framed stream.
+  `framed_response_size` is already computed upfront during validation (the `/ranges` path sums
+  every range's length while validating; add the fixed per-range framing prefix overhead; the
+  single-range GET path knows the span length upfront), so this is a single `min()` over a value
+  already on hand, not new per-block accounting. `mem_permits` semantics shift from "assembled
+  response bytes" to "in-flight window bytes"; a small (≤1 MiB) read still charges ~1 permit, so
+  the default 1024-permit budget still allows ~1024 concurrent small reads, while a large stream
+  clamps to the window and `memory_budget_mb` (default 1024) bounds concurrent large streaming
+  requests (~64 at defaults) instead of concurrent buffered bytes. Block-granularity caveat: a
+  sub-block read transiently holds one whole block (`block_size`), but `permits_for_bytes`
+  rounds up (`div_ceil`), so any ≤1 MiB read → 1 permit = 1 MiB budget, which covers the fetched
+  block; only pathological scattered sub-block ranges (many tiny ranges in distinct blocks) could
+  under-count actual in-flight bytes, and that's bounded by `MAX_RANGES_PER_REQUEST` and
+  coalescing. Guard against under-provisioned budgets: at startup, clamp/validate
+  `memory_budget_mb` so `mem_permits`'s total is at least the window-sized charge (`2 ×
+  DEMAND_WINDOW_BLOCKS × block_size`) — a large read still charges the full window, and
   `Semaphore::acquire_many_owned` never completes (and never errors) if the requested count
   exceeds the semaphore's total permits, so without this floor any deployment configured with a
-  smaller `--memory-budget-mb` would hang every read instead of failing fast.
+  smaller `--memory-budget-mb` would hang every large read instead of failing fast.
 - **Framing stays byte-identical on the wire:** every range's length is known upfront
   (`end - start`), so the handler emits the 8-byte LE prefix for each range, then forwards that
   range's data chunks, counting bytes to know when the next prefix is due. Old clients read new
@@ -138,8 +150,9 @@ mirroring `/ranges`, `object_cache_get_requests` is emitted upfront (request acc
 stream starts) and `object_cache_get_bytes_served` is emitted with the span length, which is
 known upfront (`end - start`) rather than accumulated from yielded chunks. Delete
 the 512 MiB check (`handlers.rs:175-180`) and the whole-budget check (`handlers.rs:182-190`);
-acquire the same fixed window permits. Like `post_ranges_handler`, the first window is awaited
-before the 206 (or 200) response is committed — same commit-before-stream pattern — so a dead
+acquire the same proportional charge (`min(span length, window)`). Like `post_ranges_handler`,
+the first window is awaited before the 206 (or 200) response is committed — same
+commit-before-stream pattern — so a dead
 origin surfaces as `500` here too, not just on the `/ranges` path. **Full-object (unranged) GETs
 are a genuinely new mid-stream failure mode, not a pre-existing one:** the handler synthesizes a
 full range for unranged requests (`handlers.rs:133-136`), and on the client side those flow
@@ -188,21 +201,23 @@ from the same code path as ranged ones (see `get_range_handler` rework above).
    - Generalize `PermitBody` to wrap a stream (permit still dropped with the body).
    - Rewrite `post_ranges_handler`: keep input validation; empty-ranges short-circuit (return
      empty `200` before calling `stream_ranges`, preserving today's behavior for a missing key);
-     fixed window permits; framed stream with interleaved prefixes; first-item await before
-     committing the response; delete `MAX_TOTAL_REQUESTED_BYTES` and the block-accounting section.
+     proportional per-stream permit charge (`min(framed_response_size, window)`); framed stream
+     with interleaved prefixes; first-item await before committing the response; delete
+     `MAX_TOTAL_REQUESTED_BYTES` and the block-accounting section.
    - Rewrite `get_range_handler` body path on the same stream; delete its size caps.
    - Remove the now-unused `blocks_for_range` import (the block-accounting section being deleted
      was its only call site).
 4. `rust/object-cache-srv/src/object_cache_srv.rs`: add a startup clamp/validate check, next to
    the existing `memory_budget_mb == 0` guard (lines 64–71) and before `AppState::new(...)` is
-   constructed (line 169), ensuring `mem_permits`'s total is at least the fixed per-stream charge
-   (`2 × DEMAND_WINDOW_BLOCKS × block_size`) — otherwise a small `--memory-budget-mb` makes
-   `Semaphore::acquire_many_owned` hang forever instead of failing fast at startup. This requires
-   two items to be visible outside their defining modules: make `DEMAND_WINDOW_BLOCKS`
-   (`range_cache.rs`) `pub`, like `DEFAULT_MAX_COALESCED_GET_BYTES`; and expose the bytes→permits
-   conversion (`permits_for_bytes` / `BYTES_PER_MEM_PERMIT`, currently private in `handlers.rs`)
-   as a `pub` helper (or `pub const`) shared by both the startup floor check and the handler's
-   per-stream charge, so the two compute the same value from one formula.
+   constructed (line 169), ensuring `mem_permits`'s total is at least the window-sized charge
+   (`2 × DEMAND_WINDOW_BLOCKS × block_size`) that a large read still charges in full — otherwise
+   a small `--memory-budget-mb` makes `Semaphore::acquire_many_owned` hang forever instead of
+   failing fast at startup. This requires two items to be visible outside their defining modules:
+   make `DEMAND_WINDOW_BLOCKS` (`range_cache.rs`) `pub`, like `DEFAULT_MAX_COALESCED_GET_BYTES`;
+   and expose the bytes→permits conversion (`permits_for_bytes` / `BYTES_PER_MEM_PERMIT`,
+   currently private in `handlers.rs`) as a `pub` helper (or `pub const`) shared by both the
+   startup floor check and the handler's proportional per-stream charge, so the two compute the
+   same value from one formula.
 5. `rust/object-cache/src/client.rs`: add mid-stream direct-store fallback to `get_full_stream`
    (full, unranged GET), mirroring the bounded-range fallback at `client.rs:396-403`.
 6. Rework `rust/object-cache-srv/tests/memory_budget_tests.rs` (see Testing — several 413
@@ -254,16 +269,17 @@ from the same code path as ranged ones (see `get_range_handler` rework above).
 - **`get_range`/`get_ranges` reimplemented over the stream (vs kept as a parallel path):** one
   fill path (DRY) at the cost of the same parallelism note above for library consumers; their
   signatures and error contracts are preserved.
-- **Fixed per-stream permit charge (vs per-window acquire/release):** today, a small (≤1 MiB)
-  single-range GET charges `permits_for_bytes(requested_bytes)` — 1 permit — so the default
-  1024 budget allows ~1024 concurrent small reads. The fixed ~16-permit charge caps max
-  concurrent small reads at ~64 regardless of read size: a ~16x reduction, not "slightly
-  conservative" tail waste. For a shared cache fronting many query workers doing many small
-  parquet column-chunk reads, this is a material concurrency reduction. The plan keeps the
-  fixed charge anyway because it avoids permit churn per window and keeps the `PermitBody`
-  lifetime pattern that already covers abort-mid-body, and because response bodies are
-  short-lived (the budget hit is transient); see Open Questions for the mitigation
-  alternatives this trade-off leaves on the table.
+- **Proportional per-stream charge capped at the window (vs per-window acquire/release):** the
+  charge is `permits_for_bytes(min(framed_response_size, window))`, a single upfront `min()` over
+  a size the handler already has, not a per-block accounting scheme. A small (≤1 MiB) read still
+  charges ~1 permit, so the default 1024 budget still allows ~1024 concurrent small reads —
+  matching today. A large read clamps to the window (≈16 permits at defaults), so per-request
+  in-flight memory stays bounded and large-read concurrency gates at ~64 regardless of how much
+  bigger the response gets. The remaining trade-off is that this is still an upfront estimate
+  held for the whole body lifetime (one acquire, no per-window churn, same `PermitBody` pattern
+  that already covers abort-mid-body) rather than metering actual bytes fetched per window; the
+  block-granularity caveat above (sub-block reads, pathological scattered-range requests) is the
+  residual imprecision this leaves.
 - **Mid-stream fill error → connection abort (vs buffering to guarantee status codes):**
   buffering is exactly what this issue removes. Mitigated by upfront validation (all 4xx paths
   precede the first byte) and the first-window await (origin-down still yields 500); the
@@ -307,18 +323,21 @@ examples:
   - `permit_released_on_body_drop` → adapted to the stream-wrapping `PermitBody` (drop the body
     mid-stream, assert permits return).
   - `concurrent_large_reads_gate_on_budget` → reworked: it currently asserts `PARTIAL_CONTENT`
-    under a small budget based on per-read-size permit accounting, which the fixed per-stream
-    charge replaces; adapt it to assert gating via the fixed charge (small `memory_budget_mb`
-    limits the number of concurrently in-flight streams) instead of per-request byte size.
-  - New: concurrent streams gate on `memory_budget_mb` via the fixed per-stream charge;
+    under a small budget based on per-read-size permit accounting, which the proportional
+    `min(response, window)` charge replaces. Since small reads no longer charge the full window,
+    gating two concurrent streams now requires two *large* (≥ window) reads, each charging the
+    full window; set `memory_budget_mb` between one and two windows (e.g. ~16–31) so exactly two
+    large concurrent streams gate. Note small reads will *not* gate at these budgets — that's the
+    point of the proportional charge.
+  - New: two concurrent large reads gate on `memory_budget_mb` via the window-capped charge;
     origin-down before first byte → 500; origin failure after the first window → truncated
     body, and `CacheClientStore::get_ranges` against the served router falls back to direct
     and returns correct data.
-  - Reworked tests must set `memory_budget_mb` (via `make_state`) at or above the fixed
-    per-stream charge (e.g. 16–31 to gate exactly two concurrent streams) — `make_state`
-    constructs `AppState` directly and bypasses the startup floor guard in
-    `object_cache_srv.rs`, so a budget below the fixed charge (the existing tests use 1/2/4)
-    would make `acquire_many_owned` block forever instead of gating.
+  - Reworked tests must set `memory_budget_mb` (via `make_state`) at or above the window-sized
+    charge (e.g. 16–31 to gate exactly two concurrent large streams) — `make_state` constructs
+    `AppState` directly and bypasses the startup floor guard in `object_cache_srv.rs`, so a
+    budget below the window (the existing tests use 1/2/4) would make `acquire_many_owned` block
+    forever for a large read instead of gating.
 - Full suite: `cargo test -p micromegas-object-cache -p micromegas-object-cache-srv`, then
   `python3 ../build/rust_ci.py` before the PR.
 
@@ -330,10 +349,9 @@ examples:
    (Plan assumes constants.)
 2. Whether to also delete `MAX_RANGES_PER_REQUEST` is explicitly **out of scope** per #1218 —
    it bounds real per-request work, not body size.
-3. The fixed ~16-permit per-stream charge reduces max concurrent small (≤1 MiB) reads by
-   ~16x versus today (~1024 → ~64 at default `memory_budget_mb`), since small reads currently
-   charge as little as 1 permit (see Trade-offs). The plan proceeds with the fixed charge on
-   the assumption this is acceptable given response bodies are short-lived. If profiling or
-   production load shows this concurrency drop matters, alternatives to consider: a smaller
-   fixed charge, or a per-window acquire/release that charges small reads proportionally less
-   instead of the full fixed window.
+3. **Resolved:** an earlier draft of this plan charged a fixed ~16-permit window per stream
+   regardless of request size, which would have cut max concurrent small (≤1 MiB) reads by
+   ~16x versus today (~1024 → ~64 at default `memory_budget_mb`). The plan instead adopts a
+   proportional `permits_for_bytes(min(framed_response_size, window))` charge (see Memory
+   accounting and Trade-offs above): small reads keep today's ~1024 concurrency, while large
+   reads still clamp to the window so per-request memory stays bounded.
