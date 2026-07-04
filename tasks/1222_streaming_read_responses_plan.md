@@ -171,11 +171,20 @@ from the same code path as ranged ones (see `get_range_handler` rework above).
    (full, unranged GET), mirroring the bounded-range fallback at `client.rs:396-403`.
 5. Rework `rust/object-cache-srv/tests/memory_budget_tests.rs` (see Testing — several 413
    assertions become "now succeeds" assertions).
-6. Docs: `mkdocs/docs/admin/object-cache.md` ("Fetch scheduling & memory bounds" — describe the
-   per-stream window bound; remove 512 MiB mentions), `rust/object-cache-srv/README.md`
-   (endpoints table note that `/ranges` responses are chunked/streamed; also reword the
-   `--memory-budget-mb` Configuration-table row (line 76) — it currently describes "concurrently-
-   assembled response bytes" but must describe bounding concurrent in-flight streaming windows).
+6. Docs: exhaustive sweep of both doc files for every stale reference to
+   `MAX_TOTAL_REQUESTED_BYTES`, the 512 MiB total-requested-bytes cap, its `413 Payload Too
+   Large`, and "concurrently-assembled response bytes"/assembled-response phrasing — remove or
+   reword each occurrence, not just the ones called out below. In
+   `rust/object-cache-srv/README.md`: the endpoints-table note (add that `/ranges` responses are
+   chunked/streamed — keep this note), the request-limits prose (currently lines 29–31, "A single
+   request is capped at 4096 ranges and 512 MiB of total requested bytes..." — drop the 512 MiB /
+   413 clause, keep the `MAX_RANGES_PER_REQUEST` (4096-range) cap mention), and the
+   `--memory-budget-mb` Configuration-table row (line 76, reword from "concurrently-assembled
+   response bytes" to bounding concurrent in-flight streaming windows). In
+   `mkdocs/docs/admin/object-cache.md`: the Configuration/env-var table row and the "Fetch
+   scheduling & memory bounds" section (describe the per-stream window bound; remove 512 MiB /
+   413 / assembled-response mentions). `MAX_RANGES_PER_REQUEST` (4096-range cap) is retained and
+   should stay documented wherever it's mentioned.
 
 ## Files to Modify
 
@@ -214,10 +223,16 @@ from the same code path as ranged ones (see `get_range_handler` rework above).
 
 ## Documentation
 
-- `mkdocs/docs/admin/object-cache.md`: memory-bounds section; remove 512 MiB / assembled-response
-  mentions.
-- `rust/object-cache-srv/README.md`: endpoints table (chunked `/ranges` responses); Configuration
-  table `--memory-budget-mb` row — reword from "concurrently-assembled response bytes" to
+Exhaustive sweep required — grep both files for `MAX_TOTAL_REQUESTED_BYTES`, "512 MiB", "413",
+and "assembled" to catch every occurrence, not only the ones listed here:
+
+- `mkdocs/docs/admin/object-cache.md`: Configuration/env-var table row and the "Fetch scheduling
+  & memory bounds" section; remove 512 MiB total-requested-bytes cap, its `413 Payload Too
+  Large`, and assembled-response mentions.
+- `rust/object-cache-srv/README.md`: endpoints table (add note that `/ranges` responses are
+  chunked/streamed; keep this note); request-limits prose (lines 29–31) — drop the 512 MiB /
+  413 clause, keep the `MAX_RANGES_PER_REQUEST` (4096-range) cap mention; Configuration table
+  `--memory-budget-mb` row (line 76) — reword from "concurrently-assembled response bytes" to
   bounding concurrent in-flight streaming windows.
 
 ## Testing Strategy
