@@ -179,11 +179,18 @@ from the same code path as ranged ones (see `get_range_handler` rework above).
      fixed window permits; framed stream with interleaved prefixes; first-item await before
      committing the response; delete `MAX_TOTAL_REQUESTED_BYTES` and the block-accounting section.
    - Rewrite `get_range_handler` body path on the same stream; delete its size caps.
+   - Remove the now-unused `blocks_for_range` import (the block-accounting section being deleted
+     was its only call site).
 4. `rust/object-cache-srv/src/object_cache_srv.rs`: add a startup clamp/validate check, next to
    the existing `memory_budget_mb == 0` guard (lines 64–71) and before `AppState::new(...)` is
    constructed (line 169), ensuring `mem_permits`'s total is at least the fixed per-stream charge
    (`2 × DEMAND_WINDOW_BLOCKS × block_size`) — otherwise a small `--memory-budget-mb` makes
-   `Semaphore::acquire_many_owned` hang forever instead of failing fast at startup.
+   `Semaphore::acquire_many_owned` hang forever instead of failing fast at startup. This requires
+   two items to be visible outside their defining modules: make `DEMAND_WINDOW_BLOCKS`
+   (`range_cache.rs`) `pub`, like `DEFAULT_MAX_COALESCED_GET_BYTES`; and expose the bytes→permits
+   conversion (`permits_for_bytes` / `BYTES_PER_MEM_PERMIT`, currently private in `handlers.rs`)
+   as a `pub` helper (or `pub const`) shared by both the startup floor check and the handler's
+   per-stream charge, so the two compute the same value from one formula.
 5. `rust/object-cache/src/client.rs`: add mid-stream direct-store fallback to `get_full_stream`
    (full, unranged GET), mirroring the bounded-range fallback at `client.rs:396-403`.
 6. Rework `rust/object-cache-srv/tests/memory_budget_tests.rs` (see Testing — several 413
@@ -235,9 +242,16 @@ from the same code path as ranged ones (see `get_range_handler` rework above).
 - **`get_range`/`get_ranges` reimplemented over the stream (vs kept as a parallel path):** one
   fill path (DRY) at the cost of the same parallelism note above for library consumers; their
   signatures and error contracts are preserved.
-- **Fixed per-stream permit charge (vs per-window acquire/release):** slightly conservative
-  (a stream near completion still holds its full window charge) but avoids permit churn per
-  window and keeps the `PermitBody` lifetime pattern that already covers abort-mid-body.
+- **Fixed per-stream permit charge (vs per-window acquire/release):** today, a small (≤1 MiB)
+  single-range GET charges `permits_for_bytes(requested_bytes)` — 1 permit — so the default
+  1024 budget allows ~1024 concurrent small reads. The fixed ~16-permit charge caps max
+  concurrent small reads at ~64 regardless of read size: a ~16x reduction, not "slightly
+  conservative" tail waste. For a shared cache fronting many query workers doing many small
+  parquet column-chunk reads, this is a material concurrency reduction. The plan keeps the
+  fixed charge anyway because it avoids permit churn per window and keeps the `PermitBody`
+  lifetime pattern that already covers abort-mid-body, and because response bodies are
+  short-lived (the budget hit is transient); see Open Questions for the mitigation
+  alternatives this trade-off leaves on the table.
 - **Mid-stream fill error → connection abort (vs buffering to guarantee status codes):**
   buffering is exactly what this issue removes. Mitigated by upfront validation (all 4xx paths
   precede the first byte) and the first-window await (origin-down still yields 500); the
@@ -288,6 +302,11 @@ examples:
     origin-down before first byte → 500; origin failure after the first window → truncated
     body, and `CacheClientStore::get_ranges` against the served router falls back to direct
     and returns correct data.
+  - Reworked tests must set `memory_budget_mb` (via `make_state`) at or above the fixed
+    per-stream charge (e.g. 16–31 to gate exactly two concurrent streams) — `make_state`
+    constructs `AppState` directly and bypasses the startup floor guard in
+    `object_cache_srv.rs`, so a budget below the fixed charge (the existing tests use 1/2/4)
+    would make `acquire_many_owned` block forever instead of gating.
 - Full suite: `cargo test -p micromegas-object-cache -p micromegas-object-cache-srv`, then
   `python3 ../build/rust_ci.py` before the PR.
 
@@ -299,3 +318,10 @@ examples:
    (Plan assumes constants.)
 2. Whether to also delete `MAX_RANGES_PER_REQUEST` is explicitly **out of scope** per #1218 —
    it bounds real per-request work, not body size.
+3. The fixed ~16-permit per-stream charge reduces max concurrent small (≤1 MiB) reads by
+   ~16x versus today (~1024 → ~64 at default `memory_budget_mb`), since small reads currently
+   charge as little as 1 permit (see Trade-offs). The plan proceeds with the fixed charge on
+   the assumption this is acceptable given response bodies are short-lived. If profiling or
+   production load shows this concurrency drop matters, alternatives to consider: a smaller
+   fixed charge, or a per-window acquire/release that charges small reads proportionally less
+   instead of the full fixed window.
