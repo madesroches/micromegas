@@ -13,7 +13,7 @@ use reqwest::Client;
 use serde_json::json;
 use std::ops::Range;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::prefetch::{ObjectPrefetch, PrefetchItem, PrefetchResponse};
 
@@ -91,6 +91,7 @@ impl CacheClientStore {
         end: Option<u64>,
         options: GetOptions,
     ) -> Result<GetResult> {
+        let round_trip_start = Instant::now();
         let url = self.obj_url(location);
         let range_header = match end {
             Some(end) => format!("bytes={}-{}", start, end.saturating_sub(1)),
@@ -116,6 +117,11 @@ impl CacheClientStore {
                 .boxed();
             let body =
                 full_stream_with_fallback(self.direct.clone(), location.clone(), options, raw);
+            fmetric!(
+                "range_cache_client_roundtrip_ms",
+                "ms",
+                round_trip_start.elapsed().as_secs_f64() * 1000.0
+            );
             return Ok(stream_get_result(location, body, served_range, object_size));
         }
 
@@ -125,6 +131,11 @@ impl CacheClientStore {
         // `get_range_handler`), so there's nothing to stream. The full object
         // size still isn't known from this response; resolve it with a HEAD.
         let size = self.head_size(location).await?;
+        fmetric!(
+            "range_cache_client_roundtrip_ms",
+            "ms",
+            round_trip_start.elapsed().as_secs_f64() * 1000.0
+        );
         Ok(build_get_result(location, Bytes::new(), 0..0, size))
     }
 
@@ -141,6 +152,7 @@ impl CacheClientStore {
     /// (the ranged path, `get_range_stream`, uses the same helper for the
     /// same reason).
     async fn get_full_stream(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
+        let round_trip_start = Instant::now();
         let url = self.obj_url(location);
         let resp = self
             .add_auth(self.http.get(&url))
@@ -161,6 +173,11 @@ impl CacheClientStore {
             })
             .boxed();
         let body = full_stream_with_fallback(self.direct.clone(), location.clone(), options, raw);
+        fmetric!(
+            "range_cache_client_roundtrip_ms",
+            "ms",
+            round_trip_start.elapsed().as_secs_f64() * 1000.0
+        );
         Ok(stream_get_result(location, body, 0..size, size))
     }
 
@@ -304,7 +321,14 @@ fn full_stream_with_fallback(
                     "cache GET stream for {location} failed before the first chunk, \
                      falling back to direct: {e}"
                 );
-                match direct.get_opts(&location, options).await {
+                let direct_start = Instant::now();
+                let direct_result = direct.get_opts(&location, options).await;
+                fmetric!(
+                    "range_cache_client_direct_ms",
+                    "ms",
+                    direct_start.elapsed().as_secs_f64() * 1000.0
+                );
+                match direct_result {
                     Ok(result) => {
                         let mut body = result.into_stream();
                         while let Some(item) = body.next().await {
@@ -506,7 +530,14 @@ impl ObjectStore for CacheClientStore {
             Err(e) => {
                 imetric!("range_cache_client_fallback", "count", 1_u64);
                 debug!("cache miss for {location}, falling back to direct: {e}");
-                self.direct.get_opts(location, options).await
+                let direct_start = Instant::now();
+                let direct_result = self.direct.get_opts(location, options).await;
+                fmetric!(
+                    "range_cache_client_direct_ms",
+                    "ms",
+                    direct_start.elapsed().as_secs_f64() * 1000.0
+                );
+                direct_result
             }
         }
     }
@@ -520,6 +551,7 @@ impl ObjectStore for CacheClientStore {
             return Ok(vec![]);
         }
 
+        let round_trip_start = Instant::now();
         let url = format!(
             "{}/ranges/{}",
             self.cache_base_url.trim_end_matches('/'),
@@ -542,12 +574,26 @@ impl ObjectStore for CacheClientStore {
             Ok(r) => {
                 imetric!("range_cache_client_fallback", "count", 1_u64);
                 debug!("cache ranges {url} status {}, falling back", r.status());
-                return self.direct.get_ranges(location, ranges).await;
+                let direct_start = Instant::now();
+                let result = self.direct.get_ranges(location, ranges).await;
+                fmetric!(
+                    "range_cache_client_direct_ms",
+                    "ms",
+                    direct_start.elapsed().as_secs_f64() * 1000.0
+                );
+                return result;
             }
             Err(e) => {
                 imetric!("range_cache_client_fallback", "count", 1_u64);
                 debug!("cache ranges request failed: {e}, falling back to direct");
-                return self.direct.get_ranges(location, ranges).await;
+                let direct_start = Instant::now();
+                let result = self.direct.get_ranges(location, ranges).await;
+                fmetric!(
+                    "range_cache_client_direct_ms",
+                    "ms",
+                    direct_start.elapsed().as_secs_f64() * 1000.0
+                );
+                return result;
             }
         };
 
@@ -563,11 +609,25 @@ impl ObjectStore for CacheClientStore {
         // to `self.direct` here, exactly like the previous buffered
         // implementation.
         match read_framed_ranges(resp.bytes_stream().boxed(), ranges.len()).await {
-            Ok(results) => Ok(results),
+            Ok(results) => {
+                fmetric!(
+                    "range_cache_client_roundtrip_ms",
+                    "ms",
+                    round_trip_start.elapsed().as_secs_f64() * 1000.0
+                );
+                Ok(results)
+            }
             Err(RangesReadError::Transport(e)) => {
                 imetric!("range_cache_client_fallback", "count", 1_u64);
                 debug!("reading ranges response failed: {e}, falling back to direct");
-                self.direct.get_ranges(location, ranges).await
+                let direct_start = Instant::now();
+                let result = self.direct.get_ranges(location, ranges).await;
+                fmetric!(
+                    "range_cache_client_direct_ms",
+                    "ms",
+                    direct_start.elapsed().as_secs_f64() * 1000.0
+                );
+                result
             }
             Err(RangesReadError::Truncated) => {
                 // A truncated/garbled framing from our own cache is a protocol
@@ -575,7 +635,14 @@ impl ObjectStore for CacheClientStore {
                 // above — keep this at warn.
                 imetric!("range_cache_client_fallback", "count", 1_u64);
                 warn!("truncated ranges response, falling back to direct");
-                self.direct.get_ranges(location, ranges).await
+                let direct_start = Instant::now();
+                let result = self.direct.get_ranges(location, ranges).await;
+                fmetric!(
+                    "range_cache_client_direct_ms",
+                    "ms",
+                    direct_start.elapsed().as_secs_f64() * 1000.0
+                );
+                result
             }
         }
     }

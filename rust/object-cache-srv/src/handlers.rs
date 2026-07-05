@@ -15,10 +15,12 @@ use micromegas_object_cache::prefetch::{PrefetchItem, PrefetchResponse};
 use micromegas_object_cache::range_cache::{DEMAND_WINDOW_BLOCKS, RangeError, StreamRangesCaller};
 use micromegas_object_cache::validation::validate_key;
 use micromegas_tracing::prelude::*;
+use micromegas_tracing::property_set::{Property, PropertySet};
 use serde::Deserialize;
 use std::collections::HashSet;
 use std::pin::Pin;
 use std::task::{Context as TaskContext, Poll};
+use std::time::Instant;
 use tokio::sync::OwnedSemaphorePermit;
 use tokio::sync::mpsc::error::TrySendError;
 
@@ -141,6 +143,23 @@ fn frame_ranges_stream(
     .boxed()
 }
 
+/// Map a response status to the `status` metric-tag value. Deliberately a
+/// small closed set (`"other"` covers everything else) so the `status`
+/// dimension stays bounded per the tagged-metric cardinality contract.
+fn status_label(status: StatusCode) -> &'static str {
+    match status {
+        StatusCode::OK => "200",
+        StatusCode::PARTIAL_CONTENT => "206",
+        StatusCode::BAD_REQUEST => "400",
+        StatusCode::NOT_FOUND => "404",
+        StatusCode::RANGE_NOT_SATISFIABLE => "416",
+        StatusCode::INTERNAL_SERVER_ERROR => "500",
+        StatusCode::SERVICE_UNAVAILABLE => "503",
+        _ => "other",
+    }
+}
+
+#[span_fn]
 pub async fn head_handler(
     Path(key): Path<String>,
     State(state): State<AppState>,
@@ -169,11 +188,43 @@ pub async fn head_handler(
     }
 }
 
+/// Thin wrapper around `get_range_handler_inner` that counts every outcome
+/// the handler body can produce (not just the success path): runs the inner
+/// handler, derives the final `status` from its `Ok`/`Err` result, and emits
+/// `object_cache_get_requests` exactly once per call, tagged with `status`
+/// and `prefix`. This is what fixes the success-only undercounting bug (see
+/// the plan's "Correctness fixes") -- a `400`/`404`/`416`/`500` GET used to
+/// go uncounted entirely.
 pub async fn get_range_handler(
     Path(key): Path<String>,
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Response, StatusCode> {
+    let prefix = state.cache.classify(&key);
+    let result = get_range_handler_inner(key, state, headers).await;
+    let status = match &result {
+        Ok(resp) => resp.status(),
+        Err(code) => *code,
+    };
+    imetric!(
+        "object_cache_get_requests",
+        "count",
+        PropertySet::find_or_create(vec![
+            Property::new("status", status_label(status)),
+            Property::new("prefix", prefix),
+        ]),
+        1_u64
+    );
+    result
+}
+
+#[span_fn]
+async fn get_range_handler_inner(
+    key: String,
+    state: AppState,
+    headers: HeaderMap,
+) -> Result<Response, StatusCode> {
+    let request_start = Instant::now();
     if let Err(e) = validate_key(&key, &state.allowed_prefixes) {
         warn!("rejected key {key}: {e}");
         return Err(StatusCode::BAD_REQUEST);
@@ -246,16 +297,30 @@ pub async fn get_range_handler(
     let requested_bytes = byte_range.end - byte_range.start;
     let window = stream_window_bytes(state.cache.block_size());
     let permits_needed = permits_for_bytes(requested_bytes.min(window));
+    let mem_permit_wait_start = Instant::now();
     let mem_permit = state
         .mem_permits
         .clone()
         .acquire_many_owned(permits_needed)
         .await
         .expect("mem_permits semaphore is never closed");
+    fmetric!(
+        "object_cache_mem_permit_wait_ms",
+        "ms",
+        mem_permit_wait_start.elapsed().as_secs_f64() * 1000.0
+    );
 
+    // `_with_size` reuses the `file_size` already resolved above instead of
+    // resolving it again inside `stream_ranges`, so `range_cache_size_backend_hit`
+    // fires exactly once per ranged GET (see the plan's "Correctness fixes").
     let mut inner = match state
         .cache
-        .stream_ranges(&key, vec![byte_range.clone()], StreamRangesCaller::Range)
+        .stream_ranges_with_size(
+            &key,
+            vec![byte_range.clone()],
+            file_size,
+            StreamRangesCaller::Range,
+        )
         .await
     {
         Ok(s) => s.boxed(),
@@ -284,7 +349,14 @@ pub async fn get_range_handler(
         None => unreachable!("stream_ranges yielded no chunks for a non-degenerate range"),
     };
 
-    imetric!("object_cache_get_requests", "count", 1_u64);
+    // Time to first byte, now that streaming (#1189/#1222) has landed --
+    // measured from handler entry to the point the first chunk is in hand.
+    fmetric!(
+        "object_cache_ttfb_ms",
+        "ms",
+        PropertySet::find_or_create(vec![Property::new("prefix", state.cache.classify(&key))]),
+        request_start.elapsed().as_secs_f64() * 1000.0
+    );
 
     let key_for_log = key.clone();
     let range_for_log = byte_range.clone();
@@ -323,11 +395,44 @@ struct RangesRequest {
     ranges: Vec<[u64; 2]>,
 }
 
+/// Thin wrapper around `post_ranges_handler_inner`, mirroring
+/// `get_range_handler`'s wrapper: counts every outcome (not just success)
+/// with a `status`/`prefix`-tagged `object_cache_ranges_requests`. The
+/// empty-ranges short-circuit inside the inner handler emits
+/// `object_cache_ranges_count` / `_ranges_bytes_served` itself (they're
+/// meaningful only on that success path) but no longer emits
+/// `object_cache_ranges_requests` -- this wrapper is now its sole emitter,
+/// so a `{"ranges":[]}` request isn't double-counted.
 pub async fn post_ranges_handler(
     Path(key): Path<String>,
     State(state): State<AppState>,
     body: Bytes,
 ) -> Result<Response, StatusCode> {
+    let prefix = state.cache.classify(&key);
+    let result = post_ranges_handler_inner(key, state, body).await;
+    let status = match &result {
+        Ok(resp) => resp.status(),
+        Err(code) => *code,
+    };
+    imetric!(
+        "object_cache_ranges_requests",
+        "count",
+        PropertySet::find_or_create(vec![
+            Property::new("status", status_label(status)),
+            Property::new("prefix", prefix),
+        ]),
+        1_u64
+    );
+    result
+}
+
+#[span_fn]
+async fn post_ranges_handler_inner(
+    key: String,
+    state: AppState,
+    body: Bytes,
+) -> Result<Response, StatusCode> {
+    let request_start = Instant::now();
     if let Err(e) = validate_key(&key, &state.allowed_prefixes) {
         warn!("rejected key {key}: {e}");
         return Err(StatusCode::BAD_REQUEST);
@@ -374,10 +479,12 @@ pub async fn post_ranges_handler(
     // Empty-ranges short-circuit, mirroring `get_ranges`'s own guard:
     // `stream_ranges` always does a `size()` lookup up front regardless of
     // `ranges`, so without this a `{"ranges":[]}` request against a missing
-    // key would flip from today's 200 (empty body) to 404. Still emit all
-    // three metrics to match the Ok-arm behavior below.
+    // key would flip from today's 200 (empty body) to 404. `_ranges_count` /
+    // `_ranges_bytes_served` are still emitted here to match the Ok-arm
+    // behavior below; `object_cache_ranges_requests` is emitted once by the
+    // `post_ranges_handler` wrapper for every outcome, so it is not repeated
+    // here.
     if req.ranges.is_empty() {
-        imetric!("object_cache_ranges_requests", "count", 1_u64);
         imetric!("object_cache_ranges_count", "count", 0_u64);
         imetric!("object_cache_ranges_bytes_served", "bytes", 0_u64);
         let response = Response::builder()
@@ -402,12 +509,18 @@ pub async fn post_ranges_handler(
     let charge_bytes = framed_response_bytes.max(block_bytes);
     let window = stream_window_bytes(block_size);
     let permits_needed = permits_for_bytes(charge_bytes.min(window));
+    let mem_permit_wait_start = Instant::now();
     let mem_permit = state
         .mem_permits
         .clone()
         .acquire_many_owned(permits_needed)
         .await
         .expect("mem_permits semaphore is never closed");
+    fmetric!(
+        "object_cache_mem_permit_wait_ms",
+        "ms",
+        mem_permit_wait_start.elapsed().as_secs_f64() * 1000.0
+    );
 
     let ranges: Vec<std::ops::Range<u64>> = req.ranges.iter().map(|&[s, e]| s..e).collect();
     let range_lens: Vec<u64> = ranges.iter().map(|r| r.end - r.start).collect();
@@ -447,7 +560,13 @@ pub async fn post_ranges_handler(
         None => unreachable!("frame_ranges_stream always yields at least one prefix"),
     };
 
-    imetric!("object_cache_ranges_requests", "count", 1_u64);
+    fmetric!(
+        "object_cache_ttfb_ms",
+        "ms",
+        PropertySet::find_or_create(vec![Property::new("prefix", state.cache.classify(&key))]),
+        request_start.elapsed().as_secs_f64() * 1000.0
+    );
+
     imetric!("object_cache_ranges_count", "count", range_count);
 
     let key_for_log = key.clone();
@@ -549,6 +668,7 @@ fn process_prefetch_line(
 /// `\n`-terminated line, consumed incrementally as it arrives so the whole
 /// batch is never buffered. `MAX_PREFETCH_LINE_BYTES` bounds a single line;
 /// there is no whole-body size limit.
+#[span_fn]
 pub async fn prefetch_handler(
     State(state): State<AppState>,
     body: Body,

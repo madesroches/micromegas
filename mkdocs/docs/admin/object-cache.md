@@ -199,13 +199,20 @@ The cache supports API keys only (no OIDC). Configure a key ring with `MICROMEGA
 
 The cache emits metrics through the standard micromegas tracing sink (queryable like any other process telemetry). The key signals:
 
+**Dimensions.** Several metrics below carry small, closed-set tags: `status` (the response's HTTP status, e.g. `"200"`, `"404"`), `prefix` (the object-category label a key falls under, from the server's configured `--prefix`/`MICROMEGAS_OBJECT_CACHE_PREFIX` allowlist, or `"other"` on no match), `class` (`"demand"` vs `"prefetch"`, from the request's priority), and `tier` (`"backend"` vs `"origin"` — implied by which of a metric-name pair fired, e.g. `range_cache_block_backend_hit` is `tier="backend"` and `range_cache_origin_block_fetch` is `tier="origin"`, rather than an explicit tag). This lets hit rate, request volume, and latency be sliced per object category and per demand-vs-prefetch traffic, not just globally.
+
 | Metric | Where | Meaning |
 |---|---|---|
-| `range_cache_block_request` | cache server | Every block lookup. Denominator for hit rate. |
-| `range_cache_origin_block_fetch` | cache server | Blocks fetched from the origin (misses). **Hit rate = `1 - origin_block_fetch / block_request`** — this should fall over time as the cache warms. |
-| `range_cache_origin_block_bytes` | cache server | Bytes pulled from the origin — the per-request S3 cost the cache exists to avoid. |
-| `range_cache_origin_head` | cache server | `head` calls to the origin to resolve object sizes (once per object, then cached). |
+| `range_cache_block_request` (`+ prefix`) | cache server | Every block lookup. Denominator for hit rate. |
+| `range_cache_origin_block_fetch` (`+ prefix, class`) | cache server | Blocks fetched from the origin (misses). **Hit rate = `1 - origin_block_fetch / block_request`** — this should fall over time as the cache warms, and can now be computed per `prefix`. |
+| `range_cache_origin_block_bytes` (`+ prefix, class`) | cache server | Bytes pulled from the origin — the per-request S3 cost the cache exists to avoid. |
+| `range_cache_block_backend_hit` (`+ prefix`) | cache server | Block lookups served from the backend (foyer). The `tier="backend"` side of the hit-rate split. |
+| `range_cache_size_backend_hit` (`+ prefix`) | cache server | `size()` lookups served from the backend. Fires exactly once per ranged GET (a prior double-counting bug on the handler's own pre-resolved size has been fixed). |
+| `range_cache_origin_head` (`+ prefix`) | cache server | `head` calls to the origin to resolve object sizes (once per object, then cached). |
 | `range_cache_backend_error` | cache server | SSD/IO faults in the disk backend. Should be ~0; a sustained non-zero rate means a degraded volume silently inflating origin traffic. |
+| `object_cache_get_requests` (`status, prefix`) | cache server | Every `GET /obj/{key}` outcome — success and failure alike (a prior success-only bias has been fixed). Slice by `status` for the error-rate breakdown. |
+| `object_cache_ranges_requests` (`status, prefix`) | cache server | Every `POST /ranges/{key}` outcome, same fix/semantics as `object_cache_get_requests`. |
+| `object_cache_ranges_count` | cache server | Number of ranges in a `POST /ranges` request (success path only). |
 | `object_cache_get_bytes_served` / `object_cache_ranges_bytes_served` | cache server | Bytes served to clients over the wire. |
 | `range_cache_client_fallback` | each client | Reads that fell back to the direct store (cache unreachable, non-2xx, or bad response). **A rising rate is the primary "cache unhealthy" alert** — routine fallback logs at `debug` precisely so it doesn't flood, leaving this metric as the signal. |
 | `range_cache_block_len_mismatch` | cache server | A cached block's length didn't match its expected byte span (e.g. a poisoned entry from an undersized prefetch `size`, or the origin object changed size); the block is refetched and overwritten. Should be ~0. |
@@ -216,5 +223,32 @@ The cache emits metrics through the standard micromegas tracing sink (queryable 
 | `range_cache_client_prefetch_error` | each client | `CacheClientStore::prefetch` calls that failed (transport error or non-2xx). Best-effort — callers do not retry. |
 | `object_warm_requested` | writer (ingestion) | A cache warm was scheduled for a freshly-written object via `DataLakeConnection::warm_object` (e.g. a new partition; see [Write-time warming](#write-time-warming)). |
 | `range_cache_prefetch_admission_unexpected_none` | cache server | Defensive counter in the SSD-only prefetch admission path (`FoyerBackend::put`): bumped if `.force().insert(value)` unexpectedly returns `None`. Should never fire; a sustained non-zero rate points to an admission-path regression. |
+
+### Latency
+
+Spans (queryable in the spans table, correlatable with a trace) cover every fetch stage: `range_cache_origin_get`, `range_cache_origin_head_latency`, `range_cache_backend_read`, and `range_cache_fetch_permit_wait`. The highest-value stages additionally get a duration metric so they're trivially aggregatable/alertable and dimensionable by `class`:
+
+| Metric | Where | Meaning |
+|---|---|---|
+| `range_cache_fetch_permit_wait_ms` (`+ class`) | cache server | Time a coalesced origin fetch spent waiting for a fetch-budget permit before its `get_range` started. The highest-value signal for the #1203 scheduler — a rising `class="demand"` wait means demand is contending with prefetch (or with itself) for the shared budget. |
+| `range_cache_origin_get_ms` (`+ class`) | cache server | Duration of the origin `get_range` call itself, once a permit was held. |
+| `object_cache_mem_permit_wait_ms` | cache server | Time a request spent waiting to acquire its cross-request memory-budget permits (`--memory-budget-mb`) before it could start streaming. A rising value means the memory budget, not the fetch budget, is the bottleneck. |
+| `object_cache_ttfb_ms` (`+ prefix`) | cache server | Time to first byte: handler entry to the first chunk being ready to send, now that streaming (#1189/#1222) has landed. |
+| `range_cache_client_roundtrip_ms` | each client | Time for a cache-path read (`get_range`/`get_ranges`/`get_full_stream`) to get a usable response back from the cache server. |
+| `range_cache_client_direct_ms` | each client | Time for the direct-store fallback path taken on a cache miss/error. Compare against `range_cache_client_roundtrip_ms` to confirm the cache path is actually winning end-to-end. |
+
+### Saturation
+
+A background sampler (`object-cache-srv/src/saturation_monitor.rs`) emits these gauges on a fixed interval (5s by default), independent of request volume — the signals needed to tell *which* resource is the bottleneck, not just that requests are slow:
+
+| Metric | Meaning |
+|---|---|
+| `object_cache_fetch_shared_occupancy` / `object_cache_fetch_shared_available` | Occupied/available slots in the total origin-GET concurrency budget (`--max-concurrent-fetches`). |
+| `object_cache_fetch_prefetch_occupancy` / `object_cache_fetch_prefetch_available` | Occupied/available slots in the prefetch-only sub-budget (`--max-concurrent-fetches` minus `--demand-reserved-fetches`). |
+| `object_cache_inflight_entries` | Number of block/`size()` keys currently in flight to origin. A key signal for the #1203 scheduler alongside the permit-wait latency above. |
+| `object_cache_mem_budget_occupancy_mb` / `object_cache_mem_budget_available_mb` | Occupied/available MiB of the cross-request streaming memory budget (`--memory-budget-mb`). |
+| `object_cache_prefetch_queue_depth` | Items currently queued in the bounded `/prefetch` queue, waiting for a worker slot. |
+| `object_cache_nic_rx_bytes_per_sec` / `object_cache_nic_tx_bytes_per_sec` | Host-level network throughput. The expected ceiling on the target im4gn.large (#1197) instance type, and previously unmeasured. |
+| `object_cache_ssd_read_bytes_per_sec` / `object_cache_ssd_write_bytes_per_sec` | Host-level disk throughput for the foyer SSD tier. |
 
 Routine fallback-to-direct is by-design graceful degradation and is logged at `debug` (not `warn`). Genuinely unexpected conditions — a truncated cache response, a backend IO fault, an internal server error — log at `warn`/`error`.

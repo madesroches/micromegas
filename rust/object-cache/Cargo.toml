@@ -32,6 +32,9 @@ tokio.workspace = true
 foyer = { workspace = true, optional = true }
 
 [dev-dependencies]
+micromegas-transit.workspace = true
+
 object_store.workspace = true
+serial_test = "3.2"
 tempfile = "3.14"
 tokio.workspace = true

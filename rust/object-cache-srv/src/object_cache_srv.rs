@@ -178,6 +178,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         prefixes
     };
 
+    // Attach the `prefix` metric-tag classifier now that `allowed_prefixes`
+    // is resolved: labels are leaked to `'static` once here (bounded,
+    // low-cardinality, set once at startup) so the hot per-block emission
+    // sites in `fetch_blocks` can hold `&'static PropertySet`s without an
+    // allocation per call. `--allow-all-prefixes` leaves this list empty, so
+    // every key classifies as `"other"` (`RangeCache::new`'s own default).
+    let prefix_labels: Arc<[&'static str]> = allowed_prefixes
+        .iter()
+        .map(|p| -> &'static str { Box::leak(p.clone().into_boxed_str()) })
+        .collect::<Vec<_>>()
+        .into();
+    let cache = cache.with_prefix_labels(prefix_labels);
+
     let (prefetch_tx, _prefetch_worker) = spawn_prefetch_worker(
         cache.clone(),
         args.prefetch_queue_capacity,
@@ -185,6 +198,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     let state = AppState::new(cache, allowed_prefixes, args.memory_budget_mb, prefetch_tx);
+
+    // Periodic saturation gauges (fetch-budget occupancy, in-flight entries,
+    // memory-budget occupancy, prefetch queue depth, host NIC/SSD
+    // throughput) -- see `saturation_monitor` for what each signals. Spawned
+    // detached: the sampler runs for the process lifetime, like the
+    // prefetch worker above.
+    let _saturation_monitor =
+        micromegas_object_cache_srv::saturation_monitor::spawn_saturation_monitor(
+            state.cache.clone(),
+            state.mem_permits.clone(),
+            state.memory_budget_mb,
+            state.prefetch_tx.clone(),
+        );
 
     let auth_provider: Option<Arc<dyn AuthProvider>> = if args.disable_auth {
         info!("Authentication disabled (--disable-auth)");
