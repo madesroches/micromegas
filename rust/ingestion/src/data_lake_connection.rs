@@ -14,7 +14,7 @@ pub struct DataLakeConnection {
     pub db_pool: PgPool,
     pub blob_storage: Arc<BlobStorage>,
     /// `Some` when the object cache is configured for this connection; used to
-    /// fire-and-forget warm freshly-written partitions (`warm_partition`).
+    /// fire-and-forget warm freshly-written objects (`warm_object`).
     /// `None` when the cache is not configured.
     prefetch: Option<Arc<dyn ObjectPrefetch>>,
 }
@@ -29,7 +29,7 @@ impl DataLakeConnection {
     }
 
     /// Like `new`, but also wires the object cache's prefetch face for
-    /// write-time warming (see `warm_partition`).
+    /// write-time warming (see `warm_object`).
     pub fn new_with_prefetch(
         db_pool: PgPool,
         blob_storage: Arc<BlobStorage>,
@@ -42,24 +42,30 @@ impl DataLakeConnection {
         }
     }
 
-    /// Warm a freshly-written partition in the object cache. Fire-and-forget at
-    /// prefetch priority: spawns a detached task and returns immediately, so the
-    /// write/materialization path is never delayed or failed by a warm. No-op when
-    /// the cache is not configured or the partition is empty. Returns the spawned
-    /// task handle (or None) purely so tests can await completion deterministically;
-    /// production callers ignore it.
-    pub fn warm_partition(&self, file_path: &str, file_size: i64) -> Option<JoinHandle<()>> {
+    /// Warm a freshly-written object in the object cache by key. Fire-and-forget
+    /// at prefetch priority: spawns a detached task and returns immediately, so the
+    /// caller's write path is never delayed or failed by a warm. No-op when the
+    /// cache is not configured or `size <= 0`. Returns the spawned task handle (or
+    /// None) purely so tests can await completion deterministically; production
+    /// callers ignore it.
+    ///
+    /// This is a general "warm any object" primitive — the write-partition path is
+    /// its first caller, but nothing here is partition-specific (e.g. the ingestion
+    /// service could warm raw payloads the same way). `key` is the lake-root-relative
+    /// object key; the configured prefetch handle applies the lake root prefix so the
+    /// warmed key matches the key demand reads produce.
+    pub fn warm_object(&self, key: &str, size: i64) -> Option<JoinHandle<()>> {
         let prefetch = self.prefetch.as_ref()?.clone();
-        if file_size <= 0 {
-            return None; // empty partitions have no object to warm
+        if size <= 0 {
+            return None; // nothing to warm
         }
-        let key = file_path.to_string(); // owned copy: the spawned future must be 'static
+        let key = key.to_string(); // owned copy: the spawned future must be 'static
         let item = PrefetchItem {
             key: key.clone(),
-            size: file_size as u64,
+            size: size as u64,
             ranges: None,
         };
-        imetric!("write_time_partition_warm_requested", "count", 1_u64);
+        imetric!("object_warm_requested", "count", 1_u64);
         Some(spawn_with_context(async move {
             match prefetch.prefetch(vec![item]).await {
                 Ok(resp) => debug!(

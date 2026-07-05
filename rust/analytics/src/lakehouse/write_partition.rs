@@ -670,7 +670,7 @@ pub async fn write_partition_from_rows(
     // cache hit instead of a cold origin GET. Fire-and-forget: this must
     // never delay or fail the write/materialization path.
     if let Some(file_path) = &warm_file_path {
-        lake.warm_partition(file_path, result.file_size);
+        lake.warm_object(file_path, result.file_size);
     }
     Ok(())
 }

@@ -1,5 +1,5 @@
-// Tests for DataLakeConnection::warm_partition — the write-time cache warming
-// trigger (fire-and-forget at prefetch priority, #1201).
+// Tests for DataLakeConnection::warm_object — the fire-and-forget cache warming
+// primitive (prefetch priority, #1201); the write-partition path is its first caller.
 use async_trait::async_trait;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_object_cache::prefetch::{ObjectPrefetch, PrefetchItem, PrefetchResponse};
@@ -43,7 +43,7 @@ fn make_blob_storage() -> Arc<BlobStorage> {
 }
 
 #[tokio::test]
-async fn warm_partition_sends_one_item_when_cache_configured() {
+async fn warm_object_sends_one_item_when_cache_configured() {
     let mock = Arc::new(MockPrefetch::default());
     let lake = DataLakeConnection::new_with_prefetch(
         make_pool(),
@@ -52,8 +52,8 @@ async fn warm_partition_sends_one_item_when_cache_configured() {
     );
 
     let handle = lake
-        .warm_partition("views/foo/bar/2024-01-01/00-00-00_id.parquet", 4096)
-        .expect("warm_partition should schedule a task when the cache is configured");
+        .warm_object("views/foo/bar/2024-01-01/00-00-00_id.parquet", 4096)
+        .expect("warm_object should schedule a task when the cache is configured");
     handle.await.expect("warm task should not panic");
 
     let received = mock.received.lock().expect("lock");
@@ -67,7 +67,7 @@ async fn warm_partition_sends_one_item_when_cache_configured() {
 }
 
 #[tokio::test]
-async fn warm_partition_noop_when_file_size_is_zero() {
+async fn warm_object_noop_when_size_is_zero() {
     let mock = Arc::new(MockPrefetch::default());
     let lake = DataLakeConnection::new_with_prefetch(
         make_pool(),
@@ -75,24 +75,24 @@ async fn warm_partition_noop_when_file_size_is_zero() {
         Some(mock.clone() as Arc<dyn ObjectPrefetch>),
     );
 
-    let handle = lake.warm_partition("views/foo/bar/empty.parquet", 0);
-    assert!(handle.is_none(), "an empty partition has no object to warm");
+    let handle = lake.warm_object("views/foo/bar/empty.parquet", 0);
+    assert!(handle.is_none(), "nothing to warm when size is zero");
     assert!(mock.received.lock().expect("lock").is_empty());
 }
 
 #[tokio::test]
-async fn warm_partition_noop_when_cache_not_configured() {
+async fn warm_object_noop_when_cache_not_configured() {
     let lake = DataLakeConnection::new(make_pool(), make_blob_storage());
 
-    let handle = lake.warm_partition("views/foo/bar/2024-01-01/00-00-00_id.parquet", 4096);
+    let handle = lake.warm_object("views/foo/bar/2024-01-01/00-00-00_id.parquet", 4096);
     assert!(
         handle.is_none(),
-        "warm_partition must be a no-op when the cache is not configured"
+        "warm_object must be a no-op when the cache is not configured"
     );
 }
 
 #[tokio::test]
-async fn warm_partition_failure_does_not_propagate() {
+async fn warm_object_failure_does_not_propagate() {
     let mock = Arc::new(MockPrefetch {
         received: Mutex::new(Vec::new()),
         fail: true,
@@ -104,8 +104,8 @@ async fn warm_partition_failure_does_not_propagate() {
     );
 
     let handle = lake
-        .warm_partition("views/foo/bar/2024-01-01/00-00-00_id.parquet", 4096)
-        .expect("warm_partition should still schedule a task");
+        .warm_object("views/foo/bar/2024-01-01/00-00-00_id.parquet", 4096)
+        .expect("warm_object should still schedule a task");
     // The task itself must complete cleanly (no panic / no propagated error);
     // a failed warm just means the first read stays a cold miss.
     handle
