@@ -101,20 +101,15 @@ sweep are called out explicitly so they aren't re-flagged in a future audit.
 - **Confirmed genuine instance**: `rust/public/tests/large_message_tests.rs:150` has
   `tokio::time::sleep(Duration::from_millis(50))` immediately after spawning the server task, as a fixed
   wait for the server to start accepting connections — a "sleep and hope it's ready" pattern with no
-  readiness poll/retry. `telemetry-sink/tests/http_event_sink_transport_tests.rs` already has a
-  `wait_until`-style polling helper that could serve as a model for fixing this, but doing so is left as
-  a follow-up (see Open Questions) rather than an Implementation Step here.
+  readiness poll/retry. Fixed as part of this plan — see Implementation Steps.
 
 ### Coverage gaps
 
-- The Python suite's lack of a unit/integration split (see Current State) is a real gap: there is no
-  way to run *any* Python test without a live stack, and tests fail at execution time (inside
-  `client.query()`) with no clean skip mechanism rather than a clean per-test skip — `pytest
-  --collect-only` succeeds fine since `micromegas.connect()` only builds a lazy client at import time.
-  Fixing this well (a lazy-connecting fixture, explicit unit/integration markers) touches
-  the shared `test_utils.py` and, transitively, every file that imports it (~20 files) — a much larger,
-  separate effort with its own risk profile. Flagged as a follow-up, not implemented here (Open
-  Questions).
+- The Python suite requires a live stack to run any test (see Current State): `pytest --collect-only`
+  succeeds since `micromegas.connect()` only builds a lazy client at import time, but every test fails
+  at execution, inside `client.query()`, without one running. This is **by design, not a gap**: Python
+  tests are intended to remain integration tests exercising the real stack end-to-end, so no
+  unit/integration split is planned. No action needed.
 - No other coverage gaps were surfaced by static analysis; identifying *missing* coverage reliably
   needs domain knowledge of what the code is supposed to do, which is better exercised per-feature-PR
   than as a blanket grep-based audit.
@@ -178,9 +173,35 @@ since it's dead code.
      `try_create_service()`'s `Option`-returning env-var check. Remove `try_create_service` if it ends
      up unused.
 
-4. **Verify**: from `rust/`, run `cargo fmt`, `cargo clippy --workspace -- -D warnings`, and
+4. **Replace the fixed sleep in `large_message_tests.rs` with a readiness poll**
+   - In `rust/public/tests/large_message_tests.rs`, replace the comment/sleep pair
+     (`// Give the server a moment to start accepting connections` /
+     `tokio::time::sleep(std::time::Duration::from_millis(50)).await;`) at the end of `start_server()`
+     with a bounded connect-retry loop that polls the real socket instead of guessing a fixed delay,
+     e.g.:
+     ```rust
+     async fn wait_for_server_ready(addr: std::net::SocketAddr, timeout: std::time::Duration) {
+         let start = std::time::Instant::now();
+         loop {
+             if tokio::net::TcpStream::connect(addr).await.is_ok() {
+                 return;
+             }
+             if start.elapsed() > timeout {
+                 panic!("server did not become ready within {timeout:?}");
+             }
+             tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+         }
+     }
+     ```
+     and call `wait_for_server_ready(addr, std::time::Duration::from_secs(2)).await;` before returning
+     `addr` from `start_server()`. This mirrors the polling shape already used by
+     `telemetry-sink/tests/http_event_sink_transport_tests.rs`'s `wait_until` helper, without needing to
+     share code across crates for a single call site.
+
+5. **Verify**: from `rust/`, run `cargo fmt`, `cargo clippy --workspace -- -D warnings`, and
    `cargo test --workspace` (the relocated tests should still pass from their new locations; the
-   `ingestion` test should now show as ignored rather than passing).
+   `ingestion` test should now show as ignored rather than passing; `large_message_tests` should still
+   pass with the polling replacement).
 
 ## Files to Modify
 
@@ -196,6 +217,7 @@ since it's dead code.
 - `rust/tracing/src/string_id.rs` — remove inline test
 - `rust/tracing/tests/string_id_tests.rs` — new
 - `rust/ingestion/tests/readiness.rs` — convert to `#[ignore]`, drop dead helper if unused
+- `rust/public/tests/large_message_tests.rs` — replace fixed sleep with a readiness poll
 
 ## Trade-offs
 
@@ -205,9 +227,9 @@ since it's dead code.
   the crate doesn't use would just be more dead weight. If `http-gateway` ever needs logic of its own
   again, it should gain fresh code and fresh tests at that point.
 - Considered a broader Python test-harness rework (lazy-connect fixture, unit/integration pytest
-  markers) to close the coverage-gap finding directly. Rejected for this plan: no live bug motivates it,
-  the blast radius (~20 files) is out of proportion to a "review the suite" issue, and it deserves its
-  own scoped plan with its own review.
+  markers) to close the "requires a live server" finding. Rejected: confirmed with the maintainer that
+  Python tests are meant to stay integration tests exercising the real stack, so there is no gap to
+  close here.
 - Considered leaving `ingestion/tests/readiness.rs`'s silent-skip pattern alone since it never actually
   fails. Rejected: it currently reports as "passed" in CI without ever exercising the code path, which
   is a more misleading state than an honest `#[ignore]` (which shows up distinctly in test-run summaries)
@@ -217,21 +239,14 @@ since it's dead code.
 
 - `cargo test --workspace` (from `rust/`) after the moves: same pass count as before minus the one test
   newly marked `#[ignore]`, with the three relocated tests (`time_tests`, `log_events_tests`,
-  `string_id_tests`) passing from their new locations.
+  `string_id_tests`) passing from their new locations, and `large_message_tests` still passing with the
+  sleep replaced by a poll.
 - `cargo clippy --workspace -- -D warnings` and `cargo fmt` must stay clean (deleting a whole file
   shouldn't introduce new lints, but confirm).
 - No Python changes in this plan, so no Python test run is required beyond existing CI.
 
 ## Open Questions
 
-- Should `rust/public/tests/large_message_tests.rs:150`'s fixed 50ms sleep (waiting for the server to
-  start accepting connections) be replaced with a readiness poll, modeled on the `wait_until`-style
-  helper in `telemetry-sink/tests/http_event_sink_transport_tests.rs`? Flagged as a confirmed instance
-  of the flaky-sleep pattern (see Findings) but left as a follow-up rather than an Implementation Step
-  here.
-- Should the Python test suite's all-tests-require-a-live-server structure be split into a true
-  unit/integration tier as a follow-up issue? This plan documents the finding but does not implement a
-  fix, given the wide blast radius relative to this issue's scope.
 - Should a deeper, manual (non-grep) pass through individual Rust/Python test bodies be scheduled to
   catch dead/obsolete assertions that don't match trivial patterns (e.g. tests asserting on behavior for
   a code path that was since simplified away)? Nothing like that was found here, but grep-based
