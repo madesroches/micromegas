@@ -42,8 +42,11 @@ queryable like any other process telemetry.
   `&'static PropertySet` (`tracing/src/property_set.rs`). `PropertySet::find_or_create(vec![
   Property::new(name, value)])` interns and returns `&'static Self`. **Constraint**: property
   names *and values* must be `&'static str`, and "the user is expected to manage the cardinality"
-  (`property_set.rs:2`). No 4-arg tagged metric is used anywhere in the repo yet — this plan
-  introduces the first ones.
+  (`property_set.rs:2`). A 4-arg tagged metric is already used today —
+  `web_ingestion_service.rs:204` emits `imetric!("payload_size_inserted", "bytes",
+  PropertySet::find_or_create(vec![Property::new("target", "micromegas::ingestion")]), …)` — so
+  this plan follows that precedent for inline `find_or_create` tagging rather than introducing the
+  pattern.
 - **Async span macros**: `instrument_named!(fut, "name")` / `span_async_named!("name", async {…})`
   (`macros.rs:119`, `:142`) instrument a future — the correct tool inside the detached
   `tokio::spawn` fetch tasks, where thread-local `span_scope!` guards do not apply. `#[span_fn]`
@@ -106,7 +109,16 @@ churn the just-reworked hot path. Instead, inject the classifier at construction
 
 The server passes its resolved, leaked allowed-prefix list into `RangeCache::new`
 (`object_cache_srv.rs:144`); when `--allow-all-prefixes` is set the list is empty and every key
-classifies as `"other"`.
+classifies as `"other"`. **Ordering**: today `allowed_prefixes` is resolved/validated at
+`object_cache_srv.rs:159`–`179`, *after* the `RangeCache::new` call at `:144`. That resolution
+(and the leak-to-`'static`) must be moved above the `RangeCache::new` call so the leaked list
+exists before it is passed in.
+
+**Classify once per `fetch_blocks` call, not per block probe.** `classify(key)` does a
+longest-prefix string match; `fetch_blocks` probes multiple blocks per call (`range_cache.rs:602`).
+Resolve `&'static PropertySet` via `classify(key)` once at `fetch_blocks` entry and reuse that
+reference across all of that call's block probes — recomputing it per probe would reintroduce the
+per-block cost the precomputed-`PropertySet` design is meant to avoid.
 
 ### 1. Correctness fixes (`handlers.rs`, `range_cache.rs`)
 
@@ -186,9 +198,12 @@ Add a periodic sampler modeled on `system_monitor.rs`: a background task
 emits gauges. Give it read-only access to the state it samples via new accessors (open/closed —
 add getters, don't expose internals):
 
-- **Fetch budget** — add `RangeCache::fetch_budget_stats()` delegating to `FetchScheduler`:
-  returns `(shared_available, shared_total, prefetch_available, prefetch_total)` from
-  `Semaphore::available_permits()` and the configured totals. Emit
+- **Fetch budget** — `tokio::sync::Semaphore` has no capacity accessor, so `FetchScheduler`
+  (`range_cache.rs:185`–`194`), which today stores only the two `Semaphore`s, must also keep the
+  configured `shared_total` / `prefetch_total` as fields set at construction. Add
+  `RangeCache::fetch_budget_stats()` delegating to `FetchScheduler`: returns
+  `(shared_available, shared_total, prefetch_available, prefetch_total)` from
+  `Semaphore::available_permits()` plus those stored totals. Emit
   `object_cache_fetch_shared_occupancy` / `object_cache_fetch_prefetch_occupancy` (occupied =
   total − available) and their available counterparts.
 - **In-flight entries** — `FetchScheduler::inflight_len()` (map size under its lock) →
@@ -200,9 +215,12 @@ add getters, don't expose internals):
 - **NIC** — `sysinfo::Networks`, delta bytes since last sample / interval →
   `object_cache_nic_rx_bytes_per_sec` / `_tx_bytes_per_sec`. The NIC is the expected ceiling on the
   target im4gn.large (#1197) and is currently unmeasured.
-- **SSD bandwidth** — best-effort from `sysinfo` process/disk IO deltas →
-  `object_cache_ssd_read_bytes_per_sec` / `_write_bytes_per_sec` (documented as best-effort; drop if
-  `sysinfo` cannot attribute per-device IO on the target platform).
+- **SSD bandwidth** — `sysinfo` is pinned at `0.37.2` (`rust/Cargo.toml:84`, `Cargo.lock`) with the
+  `disk` feature on by default, which exposes per-device IO via `Disk::usage()` →
+  `DiskUsage { read_bytes, written_bytes, … }` (reads `/proc/diskstats` on Linux, per-device, delta
+  since last refresh). Use `Disk::usage()` with io-usage refresh enabled (it is disabled under
+  `DiskRefreshKind::nothing()`, so the sampler must request it explicitly) to emit
+  `object_cache_ssd_read_bytes_per_sec` / `_write_bytes_per_sec`.
 
 The sampler is spawned from `main` (`object_cache_srv.rs`) after `AppState` is built, holding a
 clone of the `RangeCache` and the `mem_permits` / `prefetch_tx` handles.
@@ -248,8 +266,9 @@ Phased, each independently shippable; ordered by value/risk.
 **Phase 2 — dimension plumbing.**
 3. New `object-cache/src/metric_tags.rs`: `Property`/`PropertySet` builders + `class_label`,
    `tier` constants; the leaked-prefix classifier helper.
-4. `RangeCache`: add `prefix_labels` + precomputed `PropertySet`s + `classify()`; wire
-   `RangeCache::new` and `object_cache_srv.rs` to pass the leaked allowed-prefix list.
+4. `RangeCache`: add `prefix_labels` + precomputed `PropertySet`s + `classify()`; in
+   `object_cache_srv.rs`, move the `allowed_prefixes` resolution + leak-to-`'static` (currently
+   `:159`–`179`) above the `RangeCache::new` call (`:144`) and wire it through.
 
 **Phase 3 — hit-rate dimensions + per-stage latency + class split (§2/§3/§4).**
 5. Apply `prefix`/`tier`/`class` tags to the hit-rate counters.
@@ -279,8 +298,9 @@ Phased, each independently shippable; ordered by value/risk.
   tags, `#[span_fn]`, TTFB, mem-permit-wait timing.
 - `rust/object-cache-srv/src/saturation_monitor.rs` — **new**: periodic gauge sampler.
 - `rust/object-cache-srv/src/lib.rs` — `pub mod saturation_monitor;`.
-- `rust/object-cache-srv/src/object_cache_srv.rs` — pass leaked prefixes to `RangeCache::new`; spawn
-  the saturation monitor.
+- `rust/object-cache-srv/src/object_cache_srv.rs` — move the `allowed_prefixes` resolution/leak
+  above the `RangeCache::new` call and pass the leaked prefixes into it; spawn the saturation
+  monitor.
 - `rust/object-cache-srv/src/app_state.rs` — expose handles the monitor needs (already holds
   `mem_permits`, `prefetch_tx`, `cache`).
 - `mkdocs/docs/admin/object-cache.md` — Monitoring table.
@@ -348,9 +368,6 @@ assert against `guard.sink` metric blocks.
 
 ## Open Questions
 
-- **SSD bandwidth source.** Whether `sysinfo` can attribute per-device read/write IO on the target
-  im4gn.large (Linux, NVMe) is unverified; if not, this gauge is dropped or sourced from foyer/
-  `/proc/diskstats`. Verify during Phase 4; the rest of the sampler does not depend on it.
 - **Sampler interval.** 5s (matching the coarse `sysinfo` CPU cadence) is proposed; a shorter
   interval gives finer saturation resolution at more telemetry volume. Default 5s unless there's a
   reason to go finer.
