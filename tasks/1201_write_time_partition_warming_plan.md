@@ -116,6 +116,7 @@ use object_store::path::Path;
 /// warm keyed by a lake-root-relative path (`views/…`) targets the same cache
 /// key a demand read produces through `object_store::PrefixStore` (`root/views/…`).
 /// This mirrors, for the prefetch path, what `PrefixStore` does for reads.
+#[derive(Debug)]
 pub struct PrefixPrefetch {
     inner: Arc<dyn ObjectPrefetch>,
     prefix: Path,
@@ -217,6 +218,19 @@ and additionally hands the root to `PrefixPrefetch` so warm keys line up with re
 
 **`DataLakeConnection` gains an optional prefetch field** (`data_lake_connection.rs:11`):
 
+`DataLakeConnection` is `#[derive(Debug, Clone)]`, but `ObjectPrefetch` currently has no `Debug`
+supertrait, so `Arc<dyn ObjectPrefetch>` isn't `Debug` and the derive would fail to compile. Add
+`std::fmt::Debug` as a supertrait of `ObjectPrefetch` (`rust/object-cache/src/prefetch.rs`):
+
+```rust
+pub trait ObjectPrefetch: Send + Sync + std::fmt::Debug {
+    async fn prefetch(&self, items: Vec<PrefetchItem>) -> anyhow::Result<PrefetchResponse>;
+}
+```
+
+`CacheClientStore` already derives `Debug`, so its impl is unaffected. `PrefixPrefetch` (§1) must
+also derive/implement `Debug` to satisfy the supertrait — add `#[derive(Debug)]` to its struct.
+
 ```rust
 pub struct DataLakeConnection {
     pub db_pool: PgPool,
@@ -243,7 +257,8 @@ Add a best-effort method on `DataLakeConnection`:
 pub fn warm_partition(&self, file_path: &str, file_size: i64) -> Option<JoinHandle<()>> {
     let prefetch = self.prefetch.as_ref()?.clone();
     if file_size <= 0 { return None; } // empty partitions have no object to warm
-    let item = PrefetchItem { key: file_path.to_string(), size: file_size as u64, ranges: None };
+    let key = file_path.to_string(); // owned copy: the spawned future must be 'static
+    let item = PrefetchItem { key: key.clone(), size: file_size as u64, ranges: None };
     imetric!("write_time_partition_warm_requested", "count", 1_u64);
     Some(spawn_with_context(async move {
         match prefetch.prefetch(vec![item]).await {
@@ -253,14 +268,19 @@ pub fn warm_partition(&self, file_path: &str, file_size: i64) -> Option<JoinHand
             ),
             // CacheClientStore::prefetch already bumps range_cache_client_prefetch_error;
             // keep this at debug — a failed warm just means the first read is a cold miss.
-            Err(e) => debug!("write-time warm failed for {file_path}: {e}"),
+            Err(e) => debug!("write-time warm failed for {key}: {e}"),
         }
     }))
 }
 ```
 
-`spawn_with_context` (`rust/tracing/src/spans/instrumented_future.rs:96`, reachable from
-`ingestion` via `micromegas_tracing`) keeps the warm inside the tracing span context, matching how
+`spawn_with_context` (`rust/tracing/src/spans/instrumented_future.rs:96`) is
+`#[cfg(feature = "tokio")]`, and `rust/ingestion/Cargo.toml` currently depends on
+`micromegas-tracing.workspace = true` with no features (the workspace sets
+`default-features = false`), so it isn't reachable from `ingestion` today except by relying on
+another workspace crate unifying the feature in a full build — fragile. Add
+`features = ["tokio"]` to the `micromegas-tracing` dependency in `rust/ingestion/Cargo.toml` so
+`ingestion` enables it directly. This keeps the warm inside the tracing span context, matching how
 the write itself is spawned.
 
 **Hook** in `write_partition_from_rows` (`write_partition.rs:649`), after `insert_partition`
@@ -304,24 +324,29 @@ negligible.
 ### Phase 2 — wiring (`telemetry` + `ingestion`)
 2. `rust/telemetry/src/blob_storage.rs`: add `pub fn parse_url_opts(url) -> Result<(Arc<dyn ObjectStore>, Path)>`;
    refactor `connect_with_layer` to use it.
-3. `rust/ingestion/src/data_lake_connection.rs`: replace `make_cache_layer` with `make_cache`
+3. `rust/ingestion/Cargo.toml`: add `features = ["tokio"]` to the `micromegas-tracing` dependency so
+   `spawn_with_context` is available in this crate.
+4. `rust/ingestion/src/data_lake_connection.rs`: replace `make_cache_layer` with `make_cache`
    (returns store + optional `ObjectPrefetch`); add `prefetch` field to `DataLakeConnection`; keep
    `new`, add `new_with_prefetch`; add `warm_partition`; rewrite `connect_to_data_lake` per §2.
-4. `rust/ingestion/src/remote_data_lake.rs`: rewrite `connect_to_remote_data_lake` the same way
+5. `rust/ingestion/src/remote_data_lake.rs`: rewrite `connect_to_remote_data_lake` the same way
    (keeps `migrate_db`).
 
 ### Phase 3 — hook the write path (`analytics`)
-5. `rust/analytics/src/lakehouse/write_partition.rs`: after `insert_partition` succeeds in
+6. `rust/analytics/src/lakehouse/write_partition.rs`: after `insert_partition` succeeds in
    `write_partition_from_rows`, call `lake.warm_partition(file_path, result.file_size)` for a
    non-empty partition (clone `file_path` before it moves into `Partition`).
 
 ### Phase 4 — metrics, docs, tests
-6. Metrics (below). 7. Docs (below). 8. Tests (below).
+7. Metrics (below). 8. Docs (below). 9. Tests (below).
 
 ## Files to Modify
-- `rust/object-cache/src/prefetch.rs` — `PrefixPrefetch` adapter.
+- `rust/object-cache/src/prefetch.rs` — `PrefixPrefetch` adapter (with `#[derive(Debug)]`); add
+  `std::fmt::Debug` as a supertrait of `ObjectPrefetch`.
 - `rust/object-cache/src/lib.rs` — export `PrefixPrefetch`.
 - `rust/telemetry/src/blob_storage.rs` — `parse_url_opts`; `connect_with_layer` uses it.
+- `rust/ingestion/Cargo.toml` — add `features = ["tokio"]` to `micromegas-tracing` so
+  `spawn_with_context` is available.
 - `rust/ingestion/src/data_lake_connection.rs` — `make_cache`, `prefetch` field,
   `new_with_prefetch`, `warm_partition`, `connect_to_data_lake` rewrite.
 - `rust/ingestion/src/remote_data_lake.rs` — `connect_to_remote_data_lake` rewrite.
