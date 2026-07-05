@@ -22,11 +22,13 @@ safe to review and merge as one PR.
   re-litigating it.
 - Rust has 18 crates with `tests/` directories; the bulk of the suite (by test count) lives in
   `analytics` (180) and `datafusion-extensions` (145), followed by `analytics-web-srv` (97).
-- Python (`python/micromegas/tests/`) has ~130 `def test_*` functions across 27 files. Every file that
+- Python (`python/micromegas/tests/`) has ~130 `def test_*` functions across 23 files. Every file that
   imports `python/micromegas/tests/test_utils.py` triggers `client = micromegas.connect()` at **module
-  import time**, so the whole suite fails at pytest *collection*, not just execution, unless a live
-  stack (`start_services.py`) is running. There is effectively no unit/integration split despite some
-  files being named `*_integration`/`*_e2e`.
+  import time**, but `micromegas.connect()` only builds a lazy client rather than performing a network
+  handshake, so `pytest --collect-only` succeeds cleanly. Tests instead fail at *execution* time, inside
+  a test's `client.query()` call (`FlightUnavailableError: Connection refused`), with no clean skip
+  mechanism, unless a live stack (`start_services.py`) is running. There is effectively no
+  unit/integration split despite some files being named `*_integration`/`*_e2e`.
 
 ## Findings
 
@@ -95,14 +97,20 @@ sweep are called out explicitly so they aren't re-flagged in a future audit.
 - `object-cache/tests/foyer_backend_tests.rs` already carries a self-authored comment (no actual sleep
   present) warning against introducing a hardcoded-sleep wait for background disk activity if one is
   ever needed — flagging so a future audit doesn't rediscover the same non-issue.
-- No genuine "sleep then assert on background/async state that might not have settled yet" pattern was
-  found that needs fixing.
+- **Confirmed genuine instance**: `rust/public/tests/large_message_tests.rs:150` has
+  `tokio::time::sleep(Duration::from_millis(50))` immediately after spawning the server task, as a fixed
+  wait for the server to start accepting connections — a "sleep and hope it's ready" pattern with no
+  readiness poll/retry. `telemetry-sink/tests/http_event_sink_transport_tests.rs` already has a
+  `wait_until`-style polling helper that could serve as a model for fixing this, but doing so is left as
+  a follow-up (see Open Questions) rather than an Implementation Step here.
 
 ### Coverage gaps
 
 - The Python suite's lack of a unit/integration split (see Current State) is a real gap: there is no
-  way to run *any* Python test without a live stack, and pytest fails at collection rather than a clean
-  per-test skip. Fixing this well (a lazy-connecting fixture, explicit unit/integration markers) touches
+  way to run *any* Python test without a live stack, and tests fail at execution time (inside
+  `client.query()`) with no clean skip mechanism rather than a clean per-test skip — `pytest
+  --collect-only` succeeds fine since `micromegas.connect()` only builds a lazy client at import time.
+  Fixing this well (a lazy-connecting fixture, explicit unit/integration markers) touches
   the shared `test_utils.py` and, transitively, every file that imports it (~20 files) — a much larger,
   separate effort with its own risk profile. Flagged as a follow-up, not implemented here (Open
   Questions).
@@ -112,7 +120,7 @@ sweep are called out explicitly so they aren't re-flagged in a future audit.
 
 ## Design — Convention Cleanup
 
-Beyond the dead file, 4 more files violate the CLAUDE.md "tests under `tests/`, not inline" convention.
+Beyond the dead file, 3 more files violate the CLAUDE.md "tests under `tests/`, not inline" convention.
 All of them test only items that are already `pub`, so the bodies can move unchanged apart from import
 paths:
 
@@ -121,7 +129,15 @@ paths:
 | `rust/tracing/src/time.rs` | `test_frequency` | Tests `pub fn frequency()` — move as-is. |
 | `rust/tracing/src/logs/events.rs` | `test_filter_levels` | Tests `LogMetadata`/`FilterState`/`FILTER_LEVEL_UNSET_VALUE` (all re-exported `pub` from `micromegas_tracing::logs`) and `Level`/`LevelFilter`. The existing test imports the latter two via the private path `crate::logs::events::{Level, LevelFilter}`; the moved version must import them from their real public home, `micromegas_tracing::levels::{Level, LevelFilter}`. |
 | `rust/tracing/src/string_id.rs` | `test_string_id` | Tests `pub struct StringId` and `InProcSerialize` (from `micromegas_transit`) — move as-is. |
-| `rust/micromegas-proc-macros/src/lib.rs` | 10 tests for `expand_micromegas_main` | `expand_micromegas_main` is currently a private `fn`. It must become `pub fn` (consistent with this project's preference for plain `pub` over `pub(crate)`) so an external `tests/` crate can call it. Only the `#[proc_macro] fn micromegas_main` entry point needs to stay macro-only; the token-stream-transform helper it delegates to is fine as a normal public function callable from integration tests. |
+
+`rust/micromegas-proc-macros/src/lib.rs` also has an inline `#[cfg(test)] mod tests` (13 tests, not 10 —
+corrected after counting) for `expand_micromegas_main`, and is technically the same violation, but it is
+**left inline, not moved**: `rust/micromegas-proc-macros/Cargo.toml` sets `proc-macro = true`, and Rust
+forbids any public item in such a crate other than functions tagged `#[proc_macro]`/
+`#[proc_macro_derive]`/`#[proc_macro_attribute]` — verified empirically that a plain helper `pub fn` in a
+proc-macro crate fails to compile. So `expand_micromegas_main` cannot be made `pub fn` for an external
+`tests/` crate to call without splitting this into two crates (a macro-only crate plus a plain crate
+holding the token-stream-transform logic), which is out of scope for this pass.
 
 `rust/http-gateway/src/config.rs` is **not** moved — see Implementation Steps, it's deleted outright
 since it's dead code.
@@ -145,15 +161,7 @@ since it's dead code.
      `rust/tracing/tests/string_id_tests.rs` with `test_string_id`, importing `StringId` from
      `micromegas_tracing::string_id::StringId` and `InProcSerialize` from `micromegas_transit`.
 
-3. **Move `micromegas-proc-macros` inline tests to `tests/`**
-   - In `rust/micromegas-proc-macros/src/lib.rs`, change `fn expand_micromegas_main` to
-     `pub fn expand_micromegas_main`.
-   - Remove the `#[cfg(test)] mod tests { ... }` block.
-   - Add `rust/micromegas-proc-macros/tests/expand_micromegas_main_tests.rs` with the same test bodies,
-     calling `micromegas_proc_macros::expand_micromegas_main` and importing `quote::quote` /
-     `proc_macro2::TokenStream` as the original did.
-
-4. **Fix inconsistent live-dependency gating in `ingestion`**
+3. **Fix inconsistent live-dependency gating in `ingestion`**
    - In `rust/ingestion/tests/readiness.rs`, mark `check_ready_returns_true_when_dependencies_healthy`
      with `#[ignore]` (short comment: requires `MICROMEGAS_SQL_CONNECTION_STRING`), matching
      `analytics/tests/sql_view_test.rs` / `histo_view_test.rs`. Drop the silent early-return: since
@@ -162,7 +170,7 @@ since it's dead code.
      `try_create_service()`'s `Option`-returning env-var check. Remove `try_create_service` if it ends
      up unused.
 
-5. **Verify**: from `rust/`, run `cargo fmt`, `cargo clippy --workspace -- -D warnings`, and
+4. **Verify**: from `rust/`, run `cargo fmt`, `cargo clippy --workspace -- -D warnings`, and
    `cargo test --workspace` (the relocated tests should still pass from their new locations; the
    `ingestion` test should now show as ignored rather than passing).
 
@@ -175,8 +183,6 @@ since it's dead code.
 - `rust/tracing/tests/log_events_tests.rs` — new
 - `rust/tracing/src/string_id.rs` — remove inline test
 - `rust/tracing/tests/string_id_tests.rs` — new
-- `rust/micromegas-proc-macros/src/lib.rs` — `pub fn`, remove inline tests
-- `rust/micromegas-proc-macros/tests/expand_micromegas_main_tests.rs` — new
 - `rust/ingestion/tests/readiness.rs` — convert to `#[ignore]`, drop dead helper if unused
 
 ## Trade-offs
@@ -198,14 +204,19 @@ since it's dead code.
 ## Testing Strategy
 
 - `cargo test --workspace` (from `rust/`) after the moves: same pass count as before minus the one test
-  newly marked `#[ignore]`, with the four relocated tests (`time_tests`, `log_events_tests`,
-  `string_id_tests`, `expand_micromegas_main_tests`) passing from their new locations.
-- `cargo clippy --workspace -- -D warnings` and `cargo fmt` must stay clean (deleting a whole file and
-  changing one `fn` to `pub fn` shouldn't introduce new lints, but confirm).
+  newly marked `#[ignore]`, with the three relocated tests (`time_tests`, `log_events_tests`,
+  `string_id_tests`) passing from their new locations.
+- `cargo clippy --workspace -- -D warnings` and `cargo fmt` must stay clean (deleting a whole file
+  shouldn't introduce new lints, but confirm).
 - No Python changes in this plan, so no Python test run is required beyond existing CI.
 
 ## Open Questions
 
+- Should `rust/public/tests/large_message_tests.rs:150`'s fixed 50ms sleep (waiting for the server to
+  start accepting connections) be replaced with a readiness poll, modeled on the `wait_until`-style
+  helper in `telemetry-sink/tests/http_event_sink_transport_tests.rs`? Flagged as a confirmed instance
+  of the flaky-sleep pattern (see Findings) but left as a follow-up rather than an Implementation Step
+  here.
 - Should the Python test suite's all-tests-require-a-live-server structure be split into a true
   unit/integration tier as a follow-up issue? This plan documents the finding but does not implement a
   fix, given the wide blast radius relative to this issue's scope.
