@@ -48,7 +48,7 @@ queryable like any other process telemetry.
   this plan follows that precedent for inline `find_or_create` tagging rather than introducing the
   pattern.
 - **Async span macros**: `instrument_named!(fut, "name")` / `span_async_named!("name", async {…})`
-  (`macros.rs:119`, `:142`) instrument a future — the correct tool inside the detached
+  (`macros.rs:142`, `:119`) instrument a future — the correct tool inside the detached
   `tokio::spawn` fetch tasks, where thread-local `span_scope!` guards do not apply. `#[span_fn]`
   works on async fns (already applied to the async methods above).
 - **Periodic gauge pattern**: `telemetry-sink/src/system_monitor.rs` runs a background thread that
@@ -63,8 +63,9 @@ queryable like any other process telemetry.
 ### The two correctness bugs
 
 1. **Success-only request counting.** `object_cache_get_requests` is emitted at `handlers.rs:287`,
-   only after the commit-before-stream first chunk succeeds — so every `400`/`404`/`413`/`416`/`500`
-   GET is uncounted, undercounting both request rate and (by omission) error rate. `/ranges` emits
+   only after the commit-before-stream first chunk succeeds — so every `400`/`404`/`416`/`500`
+   GET (`get_range_handler` has no request-body extractor, so it can never produce `413`) is
+   uncounted, undercounting both request rate and (by omission) error rate. `/ranges` emits
    `object_cache_ranges_requests` at `:450`, likewise only on the success path.
 2. **Double `size()` resolution double-counts the size hit-rate.** `get_range_handler` resolves size
    for range validation (`handlers.rs:182`), then calls `stream_ranges` (`:256`), which resolves
@@ -87,9 +88,12 @@ compile-time `&'static str`:
   (a foyer hit vs an origin GET). The RAM-vs-SSD split *within* foyer is **out of scope** (see
   Trade-offs) — foyer 0.14's `obtain` does not report which tier served a hit, and the clean L1
   split is #1205's job.
-- **`status`** — the HTTP status as a static literal (`"200"`, `"206"`, `"400"`, `"404"`, `"413"`,
+- **`status`** — the HTTP status as a static literal (`"200"`, `"206"`, `"400"`, `"404"`,
   `"416"`, `"500"`, `"503"`), via a `status_label(StatusCode) -> &'static str` match with an
-  `"other"` fallback.
+  `"other"` fallback. `"413"` is intentionally excluded: axum 0.8's `DefaultBodyLimit` rejects
+  oversized `/ranges` bodies with `413` at extraction time, before the handler function body (and
+  therefore the in-handler wrapper) ever runs, so that outcome is not observable by this mechanism —
+  counting it would require a tower response-observing layer instead, which is out of scope here.
 - **`prefix`** — an object-category label (`"blobs"`, `"views"`, … or `"other"`), resolved by
   matching a request key against the server's configured allowed prefixes.
 
@@ -107,12 +111,20 @@ churn the just-reworked hot path. Instead, inject the classifier at construction
   `(prefix, class)` sets the emission sites need. A tiny `metric_tags` module in `object-cache`
   owns the `Property`/`PropertySet` construction so the taxonomy lives in one place (DRY).
 
-The server passes its resolved, leaked allowed-prefix list into `RangeCache::new`
-(`object_cache_srv.rs:144`); when `--allow-all-prefixes` is set the list is empty and every key
-classifies as `"other"`. **Ordering**: today `allowed_prefixes` is resolved/validated at
-`object_cache_srv.rs:159`–`179`, *after* the `RangeCache::new` call at `:144`. That resolution
-(and the leak-to-`'static`) must be moved above the `RangeCache::new` call so the leaked list
-exists before it is passed in.
+**Non-breaking injection.** `RangeCache::new` (`range_cache.rs:473`) already takes 8 positional
+args and has ~20 existing call sites (16 in `object-cache/tests/range_cache_tests.rs`, 3 in
+`object-cache-srv/tests/prefetch_tests.rs`, 1 in `object-cache-srv/tests/memory_budget_tests.rs`).
+Rather than adding a 9th constructor parameter and updating all of them, add a builder-style
+`RangeCache::with_prefix_labels(self, labels: Arc<[&'static str]>) -> Self` that defaults to empty
+`prefix_labels` when unused (every key classifies as `"other"`). `RangeCache::new` itself is
+unchanged, so the ~20 existing callers/tests compile without modification; only
+`object_cache_srv.rs` opts in. The server calls `RangeCache::new(...).with_prefix_labels(...)`
+(`object_cache_srv.rs:144`) with its resolved, leaked allowed-prefix list; when
+`--allow-all-prefixes` is set, the server omits the call (or passes an empty list) and every key
+classifies as `"other"`. Because the setter is applied to the already-constructed `RangeCache`
+rather than passed into `new`, no reordering of the `allowed_prefixes` resolution/leak
+(`object_cache_srv.rs:159`–`179`) relative to the `RangeCache::new` call is required — the
+`with_prefix_labels` call is simply placed after that resolution completes.
 
 **Classify once per `fetch_blocks` call, not per block probe.** `classify(key)` does a
 longest-prefix string match; `fetch_blocks` probes multiple blocks per call (`range_cache.rs:602`).
@@ -123,8 +135,13 @@ per-block cost the precomputed-`PropertySet` design is meant to avoid.
 ### 1. Correctness fixes (`handlers.rs`, `range_cache.rs`)
 
 **Count all outcomes with a `status` dimension.** Wrap each data handler body so the request counter
-is emitted exactly once, on every return path, tagged with the final status — DRY and
-impossible to miss an arm. Concretely, split each handler into an inner
+is emitted exactly once, on every return path the handler body can take, tagged with the final
+status — DRY and impossible to miss an arm. This covers every status the handler body itself can
+produce (`get_range_handler`: `200`/`206`/`400`/`404`/`416`/`500`; `post_ranges_handler`:
+`200`/`400`/`404`/`416`/`500`); it does not cover extractor-level rejections that short-circuit
+before the handler body runs (e.g. axum's `DefaultBodyLimit` `413` on `/ranges`), since the wrapper
+only runs after all extractors succeed — see the `status` dimension note above. Concretely, split
+each handler into an inner
 `*_inner(...) -> Result<Response, StatusCode>` and a thin public wrapper that runs the inner, derives
 the status (`Ok(resp) => resp.status()`, `Err(code) => code`), emits
 `imetric!("object_cache_get_requests", "count", tags(status), 1)` (resp.
@@ -279,11 +296,13 @@ Phased, each independently shippable; ordered by value/risk.
 **Phase 2 — dimension plumbing.**
 3. New `object-cache/src/metric_tags.rs`: `Property`/`PropertySet` builders + `class_label`,
    `tier` constants; the leaked-prefix classifier helper.
-4. `RangeCache`: add `prefix_labels` + precomputed `PropertySet`s + `classify()`; in
-   `object_cache_srv.rs`, move the `allowed_prefixes` resolution + leak-to-`'static` (currently
-   `:159`–`179`) above the `RangeCache::new` call (`:144`) and wire it through. Add the `prefix` tag
-   to the Phase 1 wrapper's `object_cache_get_requests` / `object_cache_ranges_requests` emission now
-   that `classify()` is available.
+4. `RangeCache`: add `prefix_labels` + precomputed `PropertySet`s + `classify()`, plus the
+   non-breaking `with_prefix_labels` builder setter (`RangeCache::new` is unchanged); in
+   `object_cache_srv.rs`, chain `.with_prefix_labels(...)` onto the existing `RangeCache::new` call
+   (`:144`) using the already-resolved, leaked `allowed_prefixes` (`:159`–`179`) — no reordering of
+   that resolution is needed. Add the `prefix` tag to the Phase 1 wrapper's
+   `object_cache_get_requests` / `object_cache_ranges_requests` emission now that `classify()` is
+   available.
 
 **Phase 3 — hit-rate dimensions + per-stage latency + class split (§2/§3/§4).**
 5. Apply `prefix`/`tier`/`class` tags to the hit-rate counters.
@@ -305,7 +324,8 @@ Phased, each independently shippable; ordered by value/risk.
 ## Files to Modify
 
 - `rust/object-cache/src/range_cache.rs` — inner refactor, `_with_size` variants, dimensions, spans,
-  duration metrics, `classify`/`prefix_labels`, `fetch_budget_stats`, `inflight_len`.
+  duration metrics, `classify`/`prefix_labels`/`with_prefix_labels`, `fetch_budget_stats`,
+  `inflight_len`.
 - `rust/object-cache/src/metric_tags.rs` — **new**: tag/PropertySet builders + classifier.
 - `rust/object-cache/src/lib.rs` — `pub mod metric_tags;`.
 - `rust/object-cache/src/foyer_backend.rs` — (optional) `tier` context if backend errors get a tag.
@@ -355,8 +375,9 @@ Update `mkdocs/docs/admin/object-cache.md` **Monitoring** table (`:202`):
 - Add the latency signals (`range_cache_origin_get_ms`, `range_cache_fetch_permit_wait_ms`,
   `object_cache_mem_permit_wait_ms`, `object_cache_ttfb_ms`, `range_cache_client_roundtrip_ms` vs
   `range_cache_client_direct_ms`) and the per-stage spans.
-- Correct the implication that request/error counters are complete now that all outcomes are
-  counted.
+- Add rows for the request counters (`object_cache_get_requests`, `object_cache_ranges_requests`,
+  `object_cache_ranges_count`), now `status`/`prefix`-tagged and covering all outcomes, which are
+  currently absent from the table entirely.
 
 ## Testing Strategy
 
