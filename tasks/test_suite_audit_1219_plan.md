@@ -46,7 +46,8 @@ sweep are called out explicitly so they aren't re-flagged in a future audit.
   `micromegas` (`public`) crate instead, and does not reference `config.rs` at all — verified via
   `grep` for `mod config`/`#[path]` and reading `http_gateway_srv.rs`). This is an orphaned leftover,
   most likely from when the header-forwarding logic was consolidated into `public::servers::http_gateway`
-  (commit `44a39d6d4` added the original `http-gateway` crate). The file is not compiled into any
+  (commit `44a39d6d4` added `config.rs` to the already-existing `http-gateway` crate, which was
+  created earlier in commit `94696b17e`). The file is not compiled into any
   target — see Implementation Steps for the fix.
 - A deeper, non-grep pass through individual test bodies (to find assertions on behavior that's since
   been simplified away) was judged out of scope for a single audit pass — see Open Questions.
