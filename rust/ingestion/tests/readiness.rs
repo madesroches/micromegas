@@ -1,5 +1,5 @@
 // Integration tests for the ingestion readiness probe.
-// Tests that require a live DB/blob pass gracefully when env vars are absent.
+// Tests that require a live DB/blob store are marked #[ignore].
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_ingestion::web_ingestion_service::WebIngestionService;
 use micromegas_telemetry::blob_storage::BlobStorage;
@@ -19,13 +19,6 @@ fn make_test_service() -> Arc<WebIngestionService> {
     )))
 }
 
-async fn try_create_service() -> Option<Arc<WebIngestionService>> {
-    if std::env::var("MICROMEGAS_SQL_CONNECTION_STRING").is_err() {
-        return None;
-    }
-    WebIngestionService::from_env().await.ok()
-}
-
 #[tokio::test]
 async fn cache_hit_returns_true_without_probing() {
     let service = make_test_service();
@@ -36,12 +29,13 @@ async fn cache_hit_returns_true_without_probing() {
     );
 }
 
+// Requires MICROMEGAS_SQL_CONNECTION_STRING (and object store env vars) to point at a live stack.
+#[ignore]
 #[tokio::test]
 async fn check_ready_returns_true_when_dependencies_healthy() {
-    let Some(service) = try_create_service().await else {
-        eprintln!("skipping check_ready_returns_true_when_dependencies_healthy: env vars not set");
-        return;
-    };
+    let service = WebIngestionService::from_env()
+        .await
+        .expect("creating service from env");
     assert!(
         service.check_ready().await,
         "should return true when DB and blob storage are reachable"

@@ -123,6 +123,20 @@ impl FlightService for LargeResponseFlightService {
     }
 }
 
+/// Poll the given address until a TCP connection succeeds or the timeout elapses.
+async fn wait_for_server_ready(addr: std::net::SocketAddr, timeout: std::time::Duration) {
+    let start = std::time::Instant::now();
+    loop {
+        if tokio::net::TcpStream::connect(addr).await.is_ok() {
+            return;
+        }
+        if start.elapsed() > timeout {
+            panic!("server did not become ready within {timeout:?}");
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+}
+
 /// Start the mock server, returning the address it is listening on.
 async fn start_server() -> std::net::SocketAddr {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -146,8 +160,7 @@ async fn start_server() -> std::net::SocketAddr {
             .expect("server failed");
     });
 
-    // Give the server a moment to start accepting connections
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    wait_for_server_ready(addr, std::time::Duration::from_secs(2)).await;
     addr
 }
 

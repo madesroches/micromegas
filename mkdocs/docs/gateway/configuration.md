@@ -78,5 +78,5 @@ Default listen address: `0.0.0.0:3000`
 
 ## Reference
 
-- Implementation: `rust/http-gateway/src/config.rs`
+- Implementation: `rust/public/src/servers/http_gateway.rs`
 - Origin metadata: `rust/public/src/servers/http_gateway.rs`
