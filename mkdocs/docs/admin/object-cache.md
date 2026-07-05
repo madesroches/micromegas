@@ -167,6 +167,12 @@ export MICROMEGAS_OBJECT_CACHE_API_KEY=<one of the keys in MICROMEGAS_API_KEYS>
 
 If `MICROMEGAS_OBJECT_CACHE_URL` is set but the API key is missing, the client logs a warning and bypasses the cache entirely rather than sending unauthenticated requests. If neither is set, the client reads directly from the origin store, same as without a cache deployed at all.
 
+The **monolith** (`micromegas-monolith`) is a client too, not a cache host: it runs no in-process
+cache server, so both reads and write-time warming go to an *external* `object-cache-srv` over HTTP.
+Set the same two variables in the monolith's environment to enable them; leave them unset (the
+default) and the monolith reads directly from origin and every `warm_partition` call is a harmless
+no-op.
+
 ## What gets cached
 
 Only reads. The client falls back transparently to the direct store on any cache error, non-2xx response, or oversized request, so an unreachable or misbehaving cache degrades to direct reads rather than failing requests:

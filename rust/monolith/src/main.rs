@@ -10,6 +10,11 @@
 //!  - `MICROMEGAS_WEB_CORS_ORIGIN`            — required by web role
 //!  - `MICROMEGAS_BASE_PATH`                  — required by web role (e.g. `/`)
 //!  - `MICROMEGAS_MONOLITH_ROLES`             — comma-separated role list (default `all`)
+//!  - `MICROMEGAS_OBJECT_CACHE_URL`           — optional external object-cache base URL; the
+//!                                              monolith runs no in-process cache, so reads and
+//!                                              write-time partition warming use this if set
+//!  - `MICROMEGAS_OBJECT_CACHE_API_KEY`       — optional; required alongside the URL above, else
+//!                                              the cache is bypassed (reads go straight to origin)
 
 #[cfg(not(target_os = "windows"))]
 #[global_allocator]
