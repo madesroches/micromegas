@@ -1,5 +1,7 @@
 use async_trait::async_trait;
+use object_store::path::Path;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 /// Wire format for `POST /prefetch`: `Content-Type: application/x-ndjson`, one
 /// `PrefetchItem` JSON object per `\n`-terminated line. There is no wrapper
@@ -43,7 +45,44 @@ pub struct PrefetchResponse {
 /// Dyn-compatible capability seam so downstream consumers that hold
 /// `Arc<dyn ObjectStore>` (not `CacheClientStore` directly) can still drive
 /// prefetch without downcasting.
+///
+/// `Debug` is a supertrait so `Arc<dyn ObjectPrefetch>` can be embedded in a
+/// `#[derive(Debug)]` struct (e.g. `DataLakeConnection`).
 #[async_trait]
-pub trait ObjectPrefetch: Send + Sync {
+pub trait ObjectPrefetch: Send + Sync + std::fmt::Debug {
     async fn prefetch(&self, items: Vec<PrefetchItem>) -> anyhow::Result<PrefetchResponse>;
+}
+
+/// Prepends a root prefix to each `PrefetchItem`'s key before delegating, so a
+/// warm keyed by a lake-root-relative path (`views/…`) targets the same cache
+/// key a demand read produces through `object_store::PrefixStore` (`root/views/…`).
+/// This mirrors, for the prefetch path, what `PrefixStore` does for reads.
+#[derive(Debug)]
+pub struct PrefixPrefetch {
+    inner: Arc<dyn ObjectPrefetch>,
+    prefix: Path,
+}
+
+impl PrefixPrefetch {
+    pub fn new(inner: Arc<dyn ObjectPrefetch>, prefix: Path) -> Self {
+        Self { inner, prefix }
+    }
+}
+
+#[async_trait]
+impl ObjectPrefetch for PrefixPrefetch {
+    async fn prefetch(&self, mut items: Vec<PrefetchItem>) -> anyhow::Result<PrefetchResponse> {
+        for item in &mut items {
+            // Compose exactly as PrefixStore does: chain the prefix's path parts
+            // with the key's parts, so the resulting string equals the key
+            // CacheClientStore.get() sees for a demand read of the same object.
+            let full = Path::from_iter(
+                self.prefix
+                    .parts()
+                    .chain(Path::from(item.key.as_str()).parts()),
+            );
+            item.key = full.as_ref().to_string();
+        }
+        self.inner.prefetch(items).await
+    }
 }

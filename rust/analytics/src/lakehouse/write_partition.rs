@@ -646,6 +646,7 @@ pub async fn write_partition_from_rows(
     )
     .await?;
 
+    let warm_file_path = result.file_path.clone();
     insert_partition(
         &lake,
         &Partition {
@@ -663,5 +664,13 @@ pub async fn write_partition_from_rows(
     )
     .await
     .with_context(|| "insert_partition")?;
+
+    // The file is now durable in S3 and registered in PostgreSQL: warm the
+    // object cache with its key so the follow-up query's first read is a
+    // cache hit instead of a cold origin GET. Fire-and-forget: this must
+    // never delay or fail the write/materialization path.
+    if let Some(file_path) = &warm_file_path {
+        lake.warm_object(file_path, result.file_size);
+    }
     Ok(())
 }

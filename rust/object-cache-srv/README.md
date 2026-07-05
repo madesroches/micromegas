@@ -45,6 +45,13 @@ full queue load-sheds the item (`dropped`) rather than blocking the caller.
 Neither failure mode affects the response status, which is always `202` once
 the request stream itself is consumed successfully.
 
+One producer of `/prefetch` calls is write-time partition warming in
+`micromegas-ingestion`: once a writer durably commits a new Parquet partition,
+it fire-and-forget POSTs the partition's key here so the first demand read is
+a warm cache hit instead of a cold origin GET. See
+[`mkdocs/docs/admin/object-cache.md`](../../mkdocs/docs/admin/object-cache.md#write-time-warming)
+for details.
+
 ## Authentication
 
 Requests to the object endpoints are authenticated with API keys via

@@ -10,3 +10,4 @@ pub mod validation;
 pub mod foyer_backend;
 
 pub use client::CacheClientStore;
+pub use prefetch::PrefixPrefetch;

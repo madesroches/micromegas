@@ -10,6 +10,8 @@
 //!  - `MICROMEGAS_WEB_CORS_ORIGIN`            — required by web role
 //!  - `MICROMEGAS_BASE_PATH`                  — required by web role (e.g. `/`)
 //!  - `MICROMEGAS_MONOLITH_ROLES`             — comma-separated role list (default `all`)
+//!  - `MICROMEGAS_OBJECT_CACHE_URL`           — optional external object-cache; the monolith runs no in-process cache, so reads and write-time warming use this if set (with the API key below)
+//!  - `MICROMEGAS_OBJECT_CACHE_API_KEY`       — optional; required alongside the URL above, else the cache is bypassed
 
 #[cfg(not(target_os = "windows"))]
 #[global_allocator]

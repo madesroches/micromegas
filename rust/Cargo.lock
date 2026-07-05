@@ -3931,6 +3931,7 @@ name = "micromegas-ingestion"
 version = "0.27.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "bytes",
  "ciborium",
  "micromegas-object-cache",

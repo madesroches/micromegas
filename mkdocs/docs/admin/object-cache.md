@@ -131,6 +131,33 @@ The endpoint returns immediately with `202 Accepted` and a small JSON body:
 
 Fills run at the same `Prefetch` priority described in [Fetch scheduling & memory bounds](#fetch-scheduling--memory-bounds) above, so a large prefetch batch never starves a concurrent demand read. Prefetched blocks are admitted to the SSD tier only (not the RAM tier), so they don't compete with hot demand data for RAM residency; a later demand read against a prefetched block is served from SSD.
 
+## Write-time warming
+
+When a writer (the maintenance daemon, JIT materialization, or a merge) finishes writing a new
+Parquet partition durably to the origin store *and* commits its row to
+`lakehouse_partitions` in PostgreSQL, it POSTs the partition's key to `/prefetch` so the cache
+pulls it from origin at prefetch priority *before* the follow-up query asks for it. This turns the
+first read of a new partition from a cold origin GET into a warm cache hit.
+
+This is **notify-by-key**, not a write-through cache: the writer never pushes bytes into the
+cache — it only names the key that just became available, and the cache fetches it from origin
+itself, exactly like a prefetch triggered any other way. The write/materialization path is never
+delayed or failed by a warm: the POST is fired from a detached, fire-and-forget task, so a slow or
+unreachable cache has no effect on write latency or success.
+
+Write-time warming is enabled automatically whenever the writing service has the cache configured
+(`MICROMEGAS_OBJECT_CACHE_URL` + `MICROMEGAS_OBJECT_CACHE_API_KEY` set, per
+[Client opt-in](#client-opt-in) below) — there is no separate on/off switch. The cost is one extra
+origin GET per new partition, paid by the cache, off the write path.
+
+A warm is only ever requested for a non-empty partition (empty partitions have no object to warm).
+The underlying trigger is a general "warm any object by key" primitive (`DataLakeConnection::warm_object`),
+so nothing about it is partition-specific — the write-partition path is simply its first caller.
+The `object_warm_requested` metric counts scheduled warms; a failed warm (unreachable
+cache, non-2xx, etc.) surfaces through the existing `range_cache_client_prefetch_error` metric and
+simply means the first demand read of that object stays a cold miss rather than a hit — it does
+not raise an error anywhere.
+
 ## Client opt-in
 
 The cache is opt-in per client. Each split-mode service (ingestion, FlightSQL, the maintenance daemon) reads through it only when both of these are set in *its own* environment:
@@ -141,6 +168,12 @@ export MICROMEGAS_OBJECT_CACHE_API_KEY=<one of the keys in MICROMEGAS_API_KEYS>
 ```
 
 If `MICROMEGAS_OBJECT_CACHE_URL` is set but the API key is missing, the client logs a warning and bypasses the cache entirely rather than sending unauthenticated requests. If neither is set, the client reads directly from the origin store, same as without a cache deployed at all.
+
+The **monolith** (`micromegas-monolith`) is a client too, not a cache host: it runs no in-process
+cache server, so both reads and write-time warming go to an *external* `object-cache-srv` over HTTP.
+Set the same two variables in the monolith's environment to enable them; leave them unset (the
+default) and the monolith reads directly from origin and every `warm_object` call is a harmless
+no-op.
 
 ## What gets cached
 
@@ -181,6 +214,7 @@ The cache emits metrics through the standard micromegas tracing sink (queryable 
 | `object_cache_prefetch_dropped` | cache server | Prefetch items load-shed because the queue was full. A sustained non-zero rate means prefetch volume exceeds `MICROMEGAS_OBJECT_CACHE_PREFETCH_QUEUE_CAPACITY` / worker throughput. |
 | `object_cache_prefetch_keys_warmed` / `object_cache_prefetch_fill_error` | cache server | Prefetch fills that completed successfully vs. failed (e.g. key not found at the origin). |
 | `range_cache_client_prefetch_error` | each client | `CacheClientStore::prefetch` calls that failed (transport error or non-2xx). Best-effort — callers do not retry. |
+| `object_warm_requested` | writer (ingestion) | A cache warm was scheduled for a freshly-written object via `DataLakeConnection::warm_object` (e.g. a new partition; see [Write-time warming](#write-time-warming)). |
 | `range_cache_prefetch_admission_unexpected_none` | cache server | Defensive counter in the SSD-only prefetch admission path (`FoyerBackend::put`): bumped if `.force().insert(value)` unexpectedly returns `None`. Should never fire; a sustained non-zero rate points to an admission-path regression. |
 
 Routine fallback-to-direct is by-design graceful degradation and is logged at `debug` (not `warn`). Genuinely unexpected conditions — a truncated cache response, a backend IO fault, an internal server error — log at `warn`/`error`.

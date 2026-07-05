@@ -1,9 +1,10 @@
 use crate::data_lake_connection::DataLakeConnection;
-use crate::data_lake_connection::make_cache_layer;
+use crate::data_lake_connection::make_cache;
 use crate::sql_migration::LATEST_DATA_LAKE_SCHEMA_VERSION;
 use crate::sql_migration::execute_migration;
 use crate::sql_migration::read_data_lake_schema_version;
 use anyhow::{Context, Result};
+use micromegas_object_cache::prefetch::{ObjectPrefetch, PrefixPrefetch};
 use micromegas_telemetry::blob_storage::BlobStorage;
 use micromegas_tracing::prelude::*;
 use std::sync::Arc;
@@ -46,14 +47,20 @@ pub async fn connect_to_remote_data_lake(
     object_store_url: &str,
 ) -> Result<DataLakeConnection> {
     info!("connecting to blob storage");
-    let blob_storage = Arc::new(
-        BlobStorage::connect_with_layer(object_store_url, make_cache_layer())
-            .with_context(|| "connecting to blob storage")?,
-    );
+    let (raw_store, root) = BlobStorage::parse_url_opts(object_store_url)
+        .with_context(|| "connecting to blob storage")?;
+    let (layered, prefetch_client) = make_cache(raw_store);
+    let blob_storage = Arc::new(BlobStorage::new(layered, root.clone()));
+    let prefetch =
+        prefetch_client.map(|p| Arc::new(PrefixPrefetch::new(p, root)) as Arc<dyn ObjectPrefetch>);
     let pool = sqlx::postgres::PgPoolOptions::new()
         .connect(db_uri)
         .await
         .with_context(|| String::from("Connecting to telemetry database"))?;
     migrate_db(pool.clone()).await?;
-    Ok(DataLakeConnection::new(pool, blob_storage))
+    Ok(DataLakeConnection::new_with_prefetch(
+        pool,
+        blob_storage,
+        prefetch,
+    ))
 }
