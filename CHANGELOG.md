@@ -4,6 +4,8 @@ This file documents the historical progress of the Micromegas project. For curre
 
 ## Unreleased
 
+* **Tests:**
+  * Delete the orphaned, never-compiled `rust/http-gateway/src/config.rs` (duplicate of `HeaderForwardingConfig` in `public::servers::http_gateway`) and its dead tests; move three `tracing` crate inline `#[cfg(test)]` modules (`time.rs`, `logs/events.rs`, `string_id.rs`) into the crate's `tests/` folder per convention; mark `ingestion`'s `readiness.rs` live-dependency test `#[ignore]` instead of silently no-op-passing without a DB; replace a fixed 50ms sleep in `large_message_tests.rs` with a bounded TCP readiness poll (#1219)
 * **Tracing:**
   * Harden the Rust telemetry sink's HTTP transport: priority queues with graded byte-budget dropping, lazy stream metadata (no `insert_stream` for idle/short-lived streams), per-priority retry tuning, and in-flight request gating with concurrent sends, porting the Unreal sink's resilience under backpressure and network flakiness to Rust (#1217)
 * **Caching:**
