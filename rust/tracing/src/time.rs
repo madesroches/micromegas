@@ -99,14 +99,3 @@ pub fn frequency() -> i64 {
 pub fn frequency() -> i64 {
     1_000_000 // µs per second (matches now() which returns µs)
 }
-
-#[allow(unused_imports)]
-#[cfg(test)]
-mod tests {
-    use crate::time::frequency;
-
-    #[test]
-    fn test_frequency() {
-        eprintln!("cpu frequency: {}", frequency());
-    }
-}

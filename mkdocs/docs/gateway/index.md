@@ -360,4 +360,4 @@ Default configuration blocks sensitive headers:
 
 - Binary: `rust/http-gateway/src/http_gateway_srv.rs`
 - Implementation: `rust/public/src/servers/http_gateway.rs`
-- Configuration: `rust/http-gateway/src/config.rs`
+- Configuration: `rust/public/src/servers/http_gateway.rs`
