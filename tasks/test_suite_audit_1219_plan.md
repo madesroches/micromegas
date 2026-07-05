@@ -149,6 +149,13 @@ since it's dead code.
      impls, and its 4 tests) — confirmed unreferenced by any `mod` declaration or `#[path]` attribute
      in the crate; the binary uses `micromegas::servers::http_gateway::HeaderForwardingConfig` instead,
      which is already covered by `rust/public/tests/http_gateway_tests.rs`.
+   - Update the two mkdocs references that cite this file so deletion doesn't turn an already-stale
+     doc reference into a dangling one: `mkdocs/docs/gateway/configuration.md:81`
+     ("Implementation: `rust/http-gateway/src/config.rs`") and `mkdocs/docs/gateway/index.md:363`
+     ("Configuration: `rust/http-gateway/src/config.rs`") should both be changed to point to
+     `rust/public/src/servers/http_gateway.rs`, where `HeaderForwardingConfig` actually lives. (The
+     historical reference in `tasks/completed/http-gateway-auth-forwarding.md` is a completed-plan
+     record and is left untouched.)
 
 2. **Move `tracing` crate inline tests to `tests/`**
    - `rust/tracing/src/time.rs`: remove the `#[cfg(test)] mod tests` block; add
@@ -177,6 +184,10 @@ since it's dead code.
 ## Files to Modify
 
 - `rust/http-gateway/src/config.rs` — delete
+- `mkdocs/docs/gateway/configuration.md` — update stale path reference to
+  `rust/public/src/servers/http_gateway.rs`
+- `mkdocs/docs/gateway/index.md` — update stale path reference to
+  `rust/public/src/servers/http_gateway.rs`
 - `rust/tracing/src/time.rs` — remove inline test
 - `rust/tracing/tests/time_tests.rs` — new
 - `rust/tracing/src/logs/events.rs` — remove inline test
