@@ -57,8 +57,8 @@ queryable like any other process telemetry.
 - **Semaphore introspection**: `tokio::sync::Semaphore::available_permits()`; `mpsc::Sender`
   exposes `capacity()` / `max_capacity()` (queue depth = `max_capacity - capacity`).
 - **Test capture**: `tracing::test_utils::init_in_memory_tracing()` returns a guard whose
-  `sink.state.metrics_blocks` / `total_metrics_events()` let a `#[serial]` unit test assert exactly
-  which metrics fired (`tracing/src/event/in_memory_sink.rs`).
+  `sink.state.lock().unwrap().metrics_blocks` / `sink.total_metrics_events()` let a `#[serial]` unit
+  test assert exactly which metrics fired (`tracing/src/event/in_memory_sink.rs`).
 
 ### The two correctness bugs
 
@@ -225,8 +225,8 @@ add getters, don't expose internals):
 - **NIC** — `sysinfo::Networks`, delta bytes since last sample / interval →
   `object_cache_nic_rx_bytes_per_sec` / `_tx_bytes_per_sec`. The NIC is the expected ceiling on the
   target im4gn.large (#1197) and is currently unmeasured.
-- **SSD bandwidth** — `sysinfo` is pinned at `0.37.2` (`rust/Cargo.toml:84`, `Cargo.lock`) with the
-  `disk` feature on by default, which exposes per-device IO via `Disk::usage()` →
+- **SSD bandwidth** — `sysinfo = "0.37"` (manifest, `rust/Cargo.toml:84`), resolved to `0.37.2` in
+  `Cargo.lock`, with the `disk` feature on by default, which exposes per-device IO via `Disk::usage()` →
   `DiskUsage { read_bytes, written_bytes, … }` (reads `/proc/diskstats` on Linux, per-device, delta
   since last refresh). Use `Disk::usage()` with io-usage refresh enabled (it is disabled under
   `DiskRefreshKind::nothing()`, so the sampler must request it explicitly) to emit
@@ -385,6 +385,8 @@ assert against `guard.sink` metric blocks.
 
 ## Open Questions
 
-- **Sampler interval.** 5s (matching the coarse `sysinfo` CPU cadence) is proposed; a shorter
-  interval gives finer saturation resolution at more telemetry volume. Default 5s unless there's a
-  reason to go finer.
+- **Sampler interval.** The existing `sysinfo` sampler (`system_monitor.rs:16`) sleeps for
+  `sysinfo::MINIMUM_CPU_UPDATE_INTERVAL` (~200ms on Linux, the floor needed for a valid CPU-usage
+  delta) — there's no existing 5s cadence to match. 5s is proposed here on telemetry-volume
+  grounds instead; a shorter interval gives finer saturation resolution at more telemetry volume.
+  Default 5s unless there's a reason to go finer.
