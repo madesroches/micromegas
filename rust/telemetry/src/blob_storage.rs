@@ -27,6 +27,20 @@ impl BlobStorage {
         Self::connect_with_layer(object_store_url, |s| s)
     }
 
+    /// Parses an object store URL into the raw (unwrapped, un-prefixed) store and
+    /// the lake root path, using the same env-var-derived options as `connect` /
+    /// `connect_with_layer`. Exposed so callers that need to apply their own layer
+    /// (e.g. the object cache client) and also need the root prefix (e.g. to key a
+    /// write-time cache warm the same way `PrefixStore` keys a demand read) don't
+    /// have to re-parse the URL or duplicate the env-var lowercasing.
+    pub fn parse_url_opts(object_store_url: &str) -> Result<(Arc<dyn ObjectStore>, Path)> {
+        let (blob_store, blob_store_root) = object_store::parse_url_opts(
+            &url::Url::parse(object_store_url)?,
+            std::env::vars().map(|(k, v)| (k.to_lowercase(), v)),
+        )?;
+        Ok((Arc::new(blob_store), blob_store_root))
+    }
+
     /// Connects to a blob storage service and applies a layer to the raw store before
     /// wrapping it in `PrefixStore`. The layer receives the full-bucket store so its
     /// keys are bucket-relative (including the lake root prefix).
@@ -34,11 +48,8 @@ impl BlobStorage {
         object_store_url: &str,
         layer: impl FnOnce(Arc<dyn ObjectStore>) -> Arc<dyn ObjectStore>,
     ) -> Result<Self> {
-        let (blob_store, blob_store_root) = object_store::parse_url_opts(
-            &url::Url::parse(object_store_url)?,
-            std::env::vars().map(|(k, v)| (k.to_lowercase(), v)),
-        )?;
-        let layered = layer(Arc::new(blob_store) as Arc<dyn ObjectStore>);
+        let (blob_store, blob_store_root) = Self::parse_url_opts(object_store_url)?;
+        let layered = layer(blob_store);
         Ok(Self {
             blob_store: Arc::new(PrefixStore::new(layered, blob_store_root)),
         })

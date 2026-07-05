@@ -12,7 +12,7 @@ authors.workspace = true
 [dependencies]
 micromegas-object-cache = { workspace = true }
 micromegas-telemetry = { workspace = true, features = ["server"] }
-micromegas-tracing.workspace = true
+micromegas-tracing = { workspace = true, features = ["tokio"] }
 
 anyhow.workspace = true
 bytes.workspace = true
@@ -24,4 +24,5 @@ tokio.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+async-trait.workspace = true
 object_store.workspace = true
