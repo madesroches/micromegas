@@ -127,10 +127,20 @@ is emitted exactly once, on every return path, tagged with the final status — 
 impossible to miss an arm. Concretely, split each handler into an inner
 `*_inner(...) -> Result<Response, StatusCode>` and a thin public wrapper that runs the inner, derives
 the status (`Ok(resp) => resp.status()`, `Err(code) => code`), emits
-`imetric!("object_cache_get_requests", "count", tags(prefix, status), 1)` (resp.
+`imetric!("object_cache_get_requests", "count", tags(status), 1)` (resp.
 `object_cache_ranges_requests`), and returns. `object_cache_ranges_count` /
 `_bytes_served` stay where they are (they are meaningful only on the success path). This removes the
-success-only bias and adds the status/prefix breakdown in one place.
+success-only bias and adds the status breakdown in one place. **Phased rollout**: the wrapper ships in
+Phase 1 tagged with `status` only, so it is independently shippable — a `prefix` tag needs
+`&'static str` labels, and the only source of those (`metric_tags.rs`, `RangeCache::classify`,
+`prefix_labels`) is Phase 2. Phase 2 adds the `prefix` tag to these same two counters once the
+classifier lands.
+
+`post_ranges_handler`'s empty-ranges short-circuit (`handlers.rs:379`–`389`) already emits
+`object_cache_ranges_requests` itself before returning, in addition to `_count` / `_bytes_served`
+(`:380`–`382`). Once the wrapper becomes the sole emitter of `object_cache_ranges_requests`, that
+inner emission at `:380` must be dropped — leaving `_ranges_count` / `_ranges_bytes_served` in place
+at `:381`–`382` — so a `{"ranges":[]}` request isn't double-counted.
 
 **Remove the double size resolution.** Add size-carrying variants so the handler's already-resolved
 size is reused instead of re-resolved:
@@ -256,9 +266,12 @@ Comparing the two distributions answers whether the cache path beats going strai
 Phased, each independently shippable; ordered by value/risk.
 
 **Phase 1 — correctness fixes (highest value, low risk).**
-1. `handlers.rs`: add `status_label` + `prefix` classification at the handler boundary; split
+1. `handlers.rs`: add `status_label` at the handler boundary; split
    `get_range_handler` / `post_ranges_handler` into inner + counter-emitting wrapper; count all
-   outcomes with `status` + `prefix` tags.
+   outcomes with a `status` tag only (no `prefix` yet — the classifier is delivered in Phase 2, so
+   this step is independently shippable). Drop the inner's now-redundant
+   `object_cache_ranges_requests` emit in the empty-ranges short-circuit (`:380`), keeping its
+   `_ranges_count` / `_ranges_bytes_served` emits, so the wrapper is the sole emitter.
 2. `range_cache.rs`: refactor `stream_ranges` into a size-taking inner; add `stream_ranges_with_size`
    / `get_range_with_size` / `get_ranges_with_size`; route `get_range_handler` through the
    size-carrying variant so `range_cache_size_backend_hit` fires once.
@@ -268,7 +281,9 @@ Phased, each independently shippable; ordered by value/risk.
    `tier` constants; the leaked-prefix classifier helper.
 4. `RangeCache`: add `prefix_labels` + precomputed `PropertySet`s + `classify()`; in
    `object_cache_srv.rs`, move the `allowed_prefixes` resolution + leak-to-`'static` (currently
-   `:159`–`179`) above the `RangeCache::new` call (`:144`) and wire it through.
+   `:159`–`179`) above the `RangeCache::new` call (`:144`) and wire it through. Add the `prefix` tag
+   to the Phase 1 wrapper's `object_cache_get_requests` / `object_cache_ranges_requests` emission now
+   that `classify()` is available.
 
 **Phase 3 — hit-rate dimensions + per-stage latency + class split (§2/§3/§4).**
 5. Apply `prefix`/`tier`/`class` tags to the hit-rate counters.
@@ -296,6 +311,8 @@ Phased, each independently shippable; ordered by value/risk.
 - `rust/object-cache/src/foyer_backend.rs` — (optional) `tier` context if backend errors get a tag.
 - `rust/object-cache-srv/src/handlers.rs` — inner/wrapper split, all-outcome counting, status/prefix
   tags, `#[span_fn]`, TTFB, mem-permit-wait timing.
+- `rust/object-cache-srv/Cargo.toml` — add `sysinfo.workspace = true` (alphabetically ordered),
+  needed by `saturation_monitor.rs`'s `Networks`/`Disks` use.
 - `rust/object-cache-srv/src/saturation_monitor.rs` — **new**: periodic gauge sampler.
 - `rust/object-cache-srv/src/lib.rs` — `pub mod saturation_monitor;`.
 - `rust/object-cache-srv/src/object_cache_srv.rs` — move the `allowed_prefixes` resolution/leak
