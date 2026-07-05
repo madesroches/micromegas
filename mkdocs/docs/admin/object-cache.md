@@ -234,8 +234,9 @@ Spans (queryable in the spans table, correlatable with a trace) cover every fetc
 | `range_cache_origin_get_ms` (`+ class`) | cache server | Duration of the origin `get_range` call itself, once a permit was held. |
 | `object_cache_mem_permit_wait_ms` | cache server | Time a request spent waiting to acquire its cross-request memory-budget permits (`--memory-budget-mb`) before it could start streaming. A rising value means the memory budget, not the fetch budget, is the bottleneck. |
 | `object_cache_ttfb_ms` (`+ prefix`) | cache server | Time to first byte: handler entry to the first chunk being ready to send, now that streaming (#1189/#1222) has landed. |
-| `range_cache_client_roundtrip_ms` | each client | Time for a cache-path read (`get_range`/`get_ranges`/`get_full_stream`) to get a usable response back from the cache server. |
-| `range_cache_client_direct_ms` | each client | Time for the direct-store fallback path taken on a cache miss/error. Compare against `range_cache_client_roundtrip_ms` to confirm the cache path is actually winning end-to-end. |
+| `range_cache_client_roundtrip_ms` | each client | Time for a streaming cache-path read (`get_range`/`get_full_stream`) to get a usable stream back from the cache server, measured before any body bytes are read. |
+| `range_cache_client_ranges_ms` | each client | Time for a `get_ranges` cache-path read to fully read and reassemble the framed multi-range response body. Not directly comparable to `range_cache_client_roundtrip_ms`, which is measured at time-to-headers rather than time-to-full-body. |
+| `range_cache_client_direct_ms` | each client | Time for the direct-store fallback path taken on a cache miss/error, on any of the above paths. Compare against the corresponding cache-path metric to confirm the cache path is actually winning end-to-end. |
 
 ### Saturation
 

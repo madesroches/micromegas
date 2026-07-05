@@ -117,6 +117,10 @@ impl CacheClientStore {
                 .boxed();
             let body =
                 full_stream_with_fallback(self.direct.clone(), location.clone(), options, raw);
+            // Measured at time-to-usable-stream, i.e. before any body bytes
+            // are read (the body streams lazily) — distinct from
+            // `range_cache_client_ranges_ms`, which covers the buffered
+            // `/ranges` path and is measured after the full body is read.
             fmetric!(
                 "range_cache_client_roundtrip_ms",
                 "ms",
@@ -173,6 +177,8 @@ impl CacheClientStore {
             })
             .boxed();
         let body = full_stream_with_fallback(self.direct.clone(), location.clone(), options, raw);
+        // Measured at time-to-usable-stream, before any body bytes are read
+        // (see the matching comment in `get_range_stream`).
         fmetric!(
             "range_cache_client_roundtrip_ms",
             "ms",
@@ -491,7 +497,14 @@ impl ObjectStore for CacheClientStore {
                     // outage doesn't flood logs with one warning per read.
                     imetric!("range_cache_client_fallback", "count", 1_u64);
                     debug!("cache miss for {location} (head), falling back to direct: {e}");
-                    self.direct.get_opts(location, options).await
+                    let direct_start = Instant::now();
+                    let direct_result = self.direct.get_opts(location, options).await;
+                    fmetric!(
+                        "range_cache_client_direct_ms",
+                        "ms",
+                        direct_start.elapsed().as_secs_f64() * 1000.0
+                    );
+                    direct_result
                 }
             };
         }
@@ -610,8 +623,15 @@ impl ObjectStore for CacheClientStore {
         // implementation.
         match read_framed_ranges(resp.bytes_stream().boxed(), ranges.len()).await {
             Ok(results) => {
+                // Distinct from `range_cache_client_roundtrip_ms`: that metric
+                // covers the streaming GET paths and is measured at
+                // time-to-headers (before any body bytes are read), while this
+                // path buffers the full framed response body via
+                // `read_framed_ranges` before emitting, so it measures
+                // time-to-full-body. Keeping them under separate names avoids
+                // conflating two different quantities in one distribution.
                 fmetric!(
-                    "range_cache_client_roundtrip_ms",
+                    "range_cache_client_ranges_ms",
                     "ms",
                     round_trip_start.elapsed().as_secs_f64() * 1000.0
                 );
