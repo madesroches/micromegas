@@ -10,11 +10,13 @@ use axum::{
 use bytes::{BufMut, Bytes, BytesMut};
 use futures::stream::BoxStream;
 use futures::{Stream, StreamExt, stream};
+use micromegas_object_cache::blocks::blocks_for_range;
 use micromegas_object_cache::prefetch::{PrefetchItem, PrefetchResponse};
 use micromegas_object_cache::range_cache::{DEMAND_WINDOW_BLOCKS, RangeError, StreamRangesCaller};
 use micromegas_object_cache::validation::validate_key;
 use micromegas_tracing::prelude::*;
 use serde::Deserialize;
+use std::collections::HashSet;
 use std::pin::Pin;
 use std::task::{Context as TaskContext, Poll};
 use tokio::sync::OwnedSemaphorePermit;
@@ -353,14 +355,20 @@ pub async fn post_ranges_handler(
     // matching the single-range path's `parse_range_header` validation. An
     // empty or backwards range would otherwise silently yield 0-length data.
     // While iterating, sum the requested bytes for the proportional memory
-    // charge below.
+    // charge below, and track which blocks each range touches: a request
+    // with many scattered small ranges can transiently retain a whole block
+    // per range while charging only for the (much smaller) requested bytes,
+    // so the charge must also account for distinct blocks touched.
+    let block_size = state.cache.block_size();
     let mut total_requested: u64 = 0;
+    let mut touched_blocks: HashSet<u64> = HashSet::new();
     for &[s, e] in &req.ranges {
         if s >= e {
             warn!("rejected inverted range [{s}, {e}] for {key}");
             return Err(StatusCode::BAD_REQUEST);
         }
         total_requested = total_requested.saturating_add(e - s);
+        touched_blocks.extend(blocks_for_range(s, e, block_size));
     }
 
     // Empty-ranges short-circuit, mirroring `get_ranges`'s own guard:
@@ -386,9 +394,14 @@ pub async fn post_ranges_handler(
     let framed_response_bytes = total_requested.saturating_add(8 * req.ranges.len() as u64);
 
     // Proportional memory charge, capped at the fixed streaming window (see
-    // `get_range_handler` for the same pattern and its rationale).
-    let window = stream_window_bytes(state.cache.block_size());
-    let permits_needed = permits_for_bytes(framed_response_bytes.min(window));
+    // `get_range_handler` for the same pattern and its rationale). Charge for
+    // whichever is larger of the framed response size and the bytes backing
+    // the distinct blocks this request touches, so scattered small ranges
+    // spread across many blocks can't under-charge the shared memory budget.
+    let block_bytes = touched_blocks.len() as u64 * block_size;
+    let charge_bytes = framed_response_bytes.max(block_bytes);
+    let window = stream_window_bytes(block_size);
+    let permits_needed = permits_for_bytes(charge_bytes.min(window));
     let mem_permit = state
         .mem_permits
         .clone()

@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, anyhow};
 use async_stream::stream as gen_stream;
 use async_trait::async_trait;
-use bytes::{Buf, Bytes};
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 use futures::stream::TryStreamExt;
 use futures::stream::{self, BoxStream, StreamExt};
 use micromegas_tracing::prelude::*;
@@ -67,22 +67,30 @@ impl CacheClientStore {
         }
     }
 
-    /// Issue a range GET and return the body bytes along with the full object
-    /// size parsed from the `Content-Range: bytes {start}-{end}/{size}` response
-    /// header. The 206 response already carries the full size, so callers can
-    /// avoid a separate HEAD round-trip. When the header is absent or
-    /// unparseable, the size is returned as `None` and the caller should fall
-    /// back to a `head_size` lookup.
+    /// Issue a range GET and build a streaming `GetResult`, mirroring
+    /// `get_full_stream` but for ranged reads: the body is streamed rather
+    /// than buffered with `.bytes()`, which would otherwise materialize the
+    /// whole range (now unbounded, since the server no longer caps total
+    /// requested bytes) as one contiguous allocation before any of it is
+    /// used. The actual served byte range and the full object size both come
+    /// from the 206's `Content-Range: bytes {start}-{end}/{size}` header
+    /// rather than a buffered body length, avoiding a separate HEAD
+    /// round-trip in the common case.
     ///
     /// An open-ended `end` (`None`) requests `bytes={start}-`, i.e. from `start`
     /// to the end of the object, which the cache server resolves against the
     /// true object size.
-    async fn get_range_bytes(
+    ///
+    /// `options` (carrying the original requested range) is threaded through
+    /// so a stream error before the first chunk reaches the consumer can fall
+    /// back to `self.direct` for the same range, via `full_stream_with_fallback`.
+    async fn get_range_stream(
         &self,
         location: &Path,
         start: u64,
         end: Option<u64>,
-    ) -> Result<(Bytes, Option<u64>)> {
+        options: GetOptions,
+    ) -> Result<GetResult> {
         let url = self.obj_url(location);
         let range_header = match end {
             Some(end) => format!("bytes={}-{}", start, end.saturating_sub(1)),
@@ -97,19 +105,27 @@ impl CacheClientStore {
         if !resp.status().is_success() {
             return Err(anyhow!("cache GET {url} status {}", resp.status()));
         }
-        let object_size = parse_content_range_size(resp.headers());
-        let data = resp.bytes().await.with_context(|| "reading GET response")?;
-        Ok((data, object_size))
-    }
 
-    /// Resolve the full object size for a ranged read, preferring the size from
-    /// the GET's `Content-Range` header and falling back to a HEAD only when the
-    /// header was missing or unparseable.
-    async fn resolve_size(&self, location: &Path, from_range: Option<u64>) -> Result<u64> {
-        match from_range {
-            Some(size) => Ok(size),
-            None => self.head_size(location).await,
+        if let Some((served_range, object_size)) = parse_content_range(resp.headers()) {
+            let raw = resp
+                .bytes_stream()
+                .map_err(|e| object_store::Error::Generic {
+                    store: "CacheClientStore",
+                    source: Box::new(e),
+                })
+                .boxed();
+            let body =
+                full_stream_with_fallback(self.direct.clone(), location.clone(), options, raw);
+            return Ok(stream_get_result(location, body, served_range, object_size));
         }
+
+        // No `Content-Range`: the server serves a zero-length range (an
+        // empty/zero-byte object, or an open-ended range starting exactly at
+        // EOF) as a plain 200 with an empty body rather than a 206 (see
+        // `get_range_handler`), so there's nothing to stream. The full object
+        // size still isn't known from this response; resolve it with a HEAD.
+        let size = self.head_size(location).await?;
+        Ok(build_get_result(location, Bytes::new(), 0..0, size))
     }
 
     /// Issue an unranged GET and build a streaming `GetResult`, mapping the
@@ -120,10 +136,10 @@ impl CacheClientStore {
     ///
     /// The body is wrapped with `full_stream_with_fallback` so a stream error
     /// before the first chunk reaches the consumer transparently falls back
-    /// to `self.direct`, mirroring the buffered-then-fallback precondition of
-    /// the bounded-range path (`get_range_bytes`) at the `GetResult` level
-    /// instead of the whole-response level, since this path streams rather
-    /// than buffers.
+    /// to `self.direct`, at the `GetResult` level instead of the
+    /// whole-response level, since this path streams rather than buffers
+    /// (the ranged path, `get_range_stream`, uses the same helper for the
+    /// same reason).
     async fn get_full_stream(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
         let url = self.obj_url(location);
         let resp = self
@@ -145,7 +161,7 @@ impl CacheClientStore {
             })
             .boxed();
         let body = full_stream_with_fallback(self.direct.clone(), location.clone(), options, raw);
-        Ok(stream_get_result(location, body, size))
+        Ok(stream_get_result(location, body, 0..size, size))
     }
 
     async fn head_size(&self, location: &Path) -> Result<u64> {
@@ -212,15 +228,20 @@ impl ObjectPrefetch for CacheClientStore {
     }
 }
 
-/// Parse the full object size from a `Content-Range: bytes {start}-{end}/{size}`
-/// header (the suffix after `/`). Returns `None` when the header is absent or
-/// not in the expected form (e.g. `bytes */size` or an unparseable value).
-fn parse_content_range_size(headers: &reqwest::header::HeaderMap) -> Option<u64> {
-    headers
-        .get(reqwest::header::CONTENT_RANGE)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.rsplit('/').next())
-        .and_then(|size| size.trim().parse::<u64>().ok())
+/// Parse a `Content-Range: bytes {start}-{end}/{size}` response header,
+/// returning the actual byte range served (`start..end+1`) and the full
+/// object size. Returns `None` when the header is absent or not in the
+/// expected form (e.g. the unsatisfiable `bytes */size` form, or an
+/// unparseable value).
+fn parse_content_range(headers: &reqwest::header::HeaderMap) -> Option<(Range<u64>, u64)> {
+    let value = headers.get(reqwest::header::CONTENT_RANGE)?.to_str().ok()?;
+    let value = value.strip_prefix("bytes ")?;
+    let (span, size) = value.split_once('/')?;
+    let size: u64 = size.trim().parse().ok()?;
+    let (start, end) = span.split_once('-')?;
+    let start: u64 = start.trim().parse().ok()?;
+    let end: u64 = end.trim().parse().ok()?;
+    Some((start..end.saturating_add(1), size))
 }
 
 impl std::fmt::Display for CacheClientStore {
@@ -229,13 +250,15 @@ impl std::fmt::Display for CacheClientStore {
     }
 }
 
-/// Build a streaming `GetResult` for an unranged GET from an already-built
-/// byte stream (see `full_stream_with_fallback`), so the object is delivered
-/// in chunks rather than buffered whole. `object_size` (from
-/// `Content-Length`) populates `meta.size` and the `0..object_size` range.
+/// Build a streaming `GetResult` from an already-built byte stream (see
+/// `full_stream_with_fallback`), so the object/range is delivered in chunks
+/// rather than buffered whole. `range` is the slice actually being streamed
+/// (`0..object_size` for an unranged GET) and `object_size` is the full
+/// object size, per the `ObjectMeta` contract.
 fn stream_get_result(
     location: &Path,
     body: BoxStream<'static, object_store::Result<Bytes>>,
+    range: Range<u64>,
     object_size: u64,
 ) -> GetResult {
     let meta = ObjectMeta {
@@ -248,20 +271,18 @@ fn stream_get_result(
     GetResult {
         payload: GetResultPayload::Stream(body),
         meta,
-        range: 0..object_size,
+        range,
         attributes: Attributes::default(),
     }
 }
 
-/// Wrap the raw byte stream for a full (unranged) GET so a stream error
+/// Wrap the raw byte stream for a GET (full or ranged) so a stream error
 /// *before* any bytes reach the consumer transparently falls back to
-/// `direct`, mirroring the buffered-then-fallback precondition the
-/// bounded-range path relies on (`get_range_bytes` / `client.rs:396-403`):
-/// zero bytes have been yielded downstream yet, so retrying against the
-/// origin can't re-deliver a duplicate prefix. Once the first chunk has been
-/// yielded downstream, a later error simply ends the stream — retrying at
-/// that point would re-emit already-delivered bytes from offset 0, which is
-/// unsound.
+/// `direct`: zero bytes have been yielded downstream yet, so retrying
+/// against the origin can't re-deliver a duplicate prefix. Once the first
+/// chunk has been yielded downstream, a later error simply ends the stream —
+/// retrying at that point would re-emit already-delivered bytes from the
+/// start, which is unsound.
 fn full_stream_with_fallback(
     direct: Arc<dyn ObjectStore>,
     location: Path,
@@ -298,23 +319,11 @@ fn full_stream_with_fallback(
     .boxed()
 }
 
-/// Build a `GetResult` for a ranged GET. `range` is the slice actually returned
-/// while `object_size` is the full object size (per the `ObjectMeta` contract).
-///
-/// When no bytes are returned (e.g. a 0-byte object, or a range starting at or
-/// beyond EOF), the requested `range` may lie outside the object; report an
-/// empty `0..0` range so it always matches `data.len()` and stays within
-/// `object_size`, satisfying the `GetResult` invariant.
-fn ranged_get_result(
-    location: &Path,
-    data: Bytes,
-    range: Range<u64>,
-    object_size: u64,
-) -> GetResult {
-    let range = if data.is_empty() { 0..0 } else { range };
-    build_get_result(location, data, range, object_size)
-}
-
+/// Build a `GetResult` for an already-buffered, small ranged payload (used
+/// only for the zero-length-range edge cases in `get_range_stream` and the
+/// HEAD-only path in `get_opts`, where there is nothing worth streaming).
+/// `range` is the slice actually returned while `object_size` is the full
+/// object size, per the `ObjectMeta` contract.
 fn build_get_result(
     location: &Path,
     data: Bytes,
@@ -335,6 +344,72 @@ fn build_get_result(
         range,
         attributes: Attributes::default(),
     }
+}
+
+/// Why reading a streamed `/ranges` response body failed: distinguishing the
+/// two cases lets `get_ranges` keep logging them the way the previous
+/// buffered implementation did (a transport error at `debug`, a
+/// protocol-level truncation at `warn`).
+enum RangesReadError {
+    Transport(reqwest::Error),
+    Truncated,
+}
+
+impl From<reqwest::Error> for RangesReadError {
+    fn from(e: reqwest::Error) -> Self {
+        RangesReadError::Transport(e)
+    }
+}
+
+/// Reassemble `count` length-prefixed frames (an 8-byte little-endian length
+/// followed by that many bytes, repeated once per requested range — see the
+/// server's `frame_ranges_stream`) from a streaming multi-range response
+/// body, mirroring `RangeCache::get_ranges`'s pending-chunk reassembly on the
+/// server side (`range_cache.rs`) instead of buffering the whole response
+/// with `resp.bytes().await` before parsing it.
+async fn read_framed_ranges(
+    mut stream: BoxStream<'static, reqwest::Result<Bytes>>,
+    count: usize,
+) -> Result<Vec<Bytes>, RangesReadError> {
+    let mut pending: Option<Bytes> = None;
+    let mut results = Vec::with_capacity(count);
+    for _ in 0..count {
+        let mut prefix = pull_exact(&mut stream, &mut pending, 8).await?;
+        let len = prefix.get_u64_le() as usize;
+        let data = pull_exact(&mut stream, &mut pending, len).await?;
+        results.push(data);
+    }
+    Ok(results)
+}
+
+/// Pull exactly `need` bytes out of `stream`, using `pending` as a one-chunk
+/// lookahead so a frame that straddles a network chunk boundary is
+/// reassembled correctly (mirrors `RangeCache::get_ranges`'s reassembly loop
+/// in `range_cache.rs`).
+async fn pull_exact(
+    stream: &mut BoxStream<'static, reqwest::Result<Bytes>>,
+    pending: &mut Option<Bytes>,
+    need: usize,
+) -> Result<Bytes, RangesReadError> {
+    let mut collected = BytesMut::with_capacity(need);
+    while collected.len() < need {
+        let chunk = match pending.take() {
+            Some(c) => c,
+            None => match stream.next().await {
+                Some(Ok(c)) => c,
+                Some(Err(e)) => return Err(e.into()),
+                None => return Err(RangesReadError::Truncated),
+            },
+        };
+        let remaining = need - collected.len();
+        if chunk.len() > remaining {
+            collected.put_slice(&chunk[..remaining]);
+            *pending = Some(chunk.slice(remaining..));
+        } else {
+            collected.put_slice(&chunk);
+        }
+    }
+    Ok(collected.freeze())
 }
 
 #[async_trait]
@@ -379,7 +454,7 @@ impl ObjectStore for CacheClientStore {
         // payload with the true object size instead of streaming the object.
         if options.head {
             let result: Result<GetResult> = match self.head_size(location).await {
-                Ok(size) => Ok(ranged_get_result(location, Bytes::new(), 0..0, size)),
+                Ok(size) => Ok(build_get_result(location, Bytes::new(), 0..0, size)),
                 Err(e) => Err(e),
             };
             return match result {
@@ -399,41 +474,19 @@ impl ObjectStore for CacheClientStore {
 
         let result: Result<GetResult> = match &options.range {
             None => self.get_full_stream(location, options.clone()).await,
-            // Issue the range GET first and read the full object size from the
-            // 206 `Content-Range` header, avoiding a preceding HEAD round-trip.
-            // `resolve_size` only falls back to a HEAD if that header was absent
-            // or unparseable.
+            // Issue the range GET and stream the body; the actual served
+            // range and the full object size come from the 206's
+            // `Content-Range` header (see `get_range_stream`), avoiding a
+            // preceding HEAD round-trip in the common case.
             Some(GetRange::Bounded(r)) => {
-                match self.get_range_bytes(location, r.start, Some(r.end)).await {
-                    Ok((data, size_hint)) => match self.resolve_size(location, size_hint).await {
-                        Ok(size) => {
-                            let len = data.len() as u64;
-                            Ok(ranged_get_result(
-                                location,
-                                data,
-                                r.start..r.start + len,
-                                size,
-                            ))
-                        }
-                        Err(e) => Err(e),
-                    },
-                    Err(e) => Err(e),
-                }
+                self.get_range_stream(location, r.start, Some(r.end), options.clone())
+                    .await
             }
+            // Open-ended range: the server resolves `-` against the true
+            // object size, returned to us via `Content-Range`.
             Some(GetRange::Offset(offset)) => {
-                let start = *offset;
-                // Open-ended range: the server resolves `-` against the true
-                // object size, returned to us via `Content-Range`.
-                match self.get_range_bytes(location, start, None).await {
-                    Ok((data, size_hint)) => match self.resolve_size(location, size_hint).await {
-                        Ok(size) => {
-                            let len = data.len() as u64;
-                            Ok(ranged_get_result(location, data, start..start + len, size))
-                        }
-                        Err(e) => Err(e),
-                    },
-                    Err(e) => Err(e),
-                }
+                self.get_range_stream(location, *offset, None, options.clone())
+                    .await
             }
             // Suffix reads need the object size up front to compute the start
             // offset, since the cache server's Range parser does not accept the
@@ -441,12 +494,8 @@ impl ObjectStore for CacheClientStore {
             Some(GetRange::Suffix(suffix)) => match self.head_size(location).await {
                 Ok(size) => {
                     let start = size.saturating_sub(*suffix);
-                    self.get_range_bytes(location, start, Some(size))
+                    self.get_range_stream(location, start, Some(size), options.clone())
                         .await
-                        .map(|(data, _)| {
-                            let len = data.len() as u64;
-                            ranged_get_result(location, data, start..start + len, size)
-                        })
                 }
                 Err(e) => Err(e),
             },
@@ -502,35 +551,33 @@ impl ObjectStore for CacheClientStore {
             }
         };
 
-        let mut data = match resp.bytes().await {
-            Ok(b) => b,
-            Err(e) => {
+        // Stream the length-prefixed multi-range body (see the server's
+        // `frame_ranges_stream`) and reassemble each range's `Bytes` as its
+        // chunks arrive, instead of buffering the whole response with
+        // `.bytes()` into one contiguous allocation before any of it is
+        // used — the response can now be arbitrarily large since the server
+        // no longer caps total requested bytes. `read_framed_ranges` is a
+        // plain `Future` (not a `Stream`) that only resolves once every
+        // range has been read, so nothing is ever exposed to the caller
+        // before completion, and any read failure can still safely fall back
+        // to `self.direct` here, exactly like the previous buffered
+        // implementation.
+        match read_framed_ranges(resp.bytes_stream().boxed(), ranges.len()).await {
+            Ok(results) => Ok(results),
+            Err(RangesReadError::Transport(e)) => {
                 imetric!("range_cache_client_fallback", "count", 1_u64);
                 debug!("reading ranges response failed: {e}, falling back to direct");
-                return self.direct.get_ranges(location, ranges).await;
+                self.direct.get_ranges(location, ranges).await
             }
-        };
-
-        let mut results = Vec::with_capacity(ranges.len());
-        for _ in 0..ranges.len() {
-            if data.remaining() < 8 {
+            Err(RangesReadError::Truncated) => {
                 // A truncated/garbled framing from our own cache is a protocol
                 // violation (unexpected), unlike the clean miss/outage paths
                 // above — keep this at warn.
                 imetric!("range_cache_client_fallback", "count", 1_u64);
                 warn!("truncated ranges response, falling back to direct");
-                return self.direct.get_ranges(location, ranges).await;
+                self.direct.get_ranges(location, ranges).await
             }
-            let len = data.get_u64_le() as usize;
-            if data.remaining() < len {
-                imetric!("range_cache_client_fallback", "count", 1_u64);
-                warn!("truncated ranges response body, falling back to direct");
-                return self.direct.get_ranges(location, ranges).await;
-            }
-            results.push(data.copy_to_bytes(len));
         }
-
-        Ok(results)
     }
 
     fn delete_stream(

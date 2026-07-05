@@ -4,14 +4,14 @@ use async_trait::async_trait;
 use axum::Router;
 use axum::extract::{Path as AxumPath, State};
 use axum::http::{HeaderMap, StatusCode};
-use axum::routing::post;
+use axum::routing::{get, post};
 use bytes::Bytes;
 use futures::stream::BoxStream;
 use object_store::memory::InMemory;
 use object_store::path::Path;
 use object_store::{
-    CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
-    ObjectStoreExt, PutMultipartOptions, PutOptions, PutPayload, PutResult,
+    CopyOptions, GetOptions, GetRange, GetResult, ListResult, MultipartUpload, ObjectMeta,
+    ObjectStore, ObjectStoreExt, PutMultipartOptions, PutOptions, PutPayload, PutResult,
 };
 use tokio::sync::Semaphore;
 
@@ -23,7 +23,7 @@ use micromegas_object_cache::range_cache::{
 };
 use micromegas_object_cache_srv::app_state::AppState;
 use micromegas_object_cache_srv::handlers::{
-    get_range_handler, permits_for_bytes, post_ranges_handler, stream_window_bytes,
+    get_range_handler, head_handler, permits_for_bytes, post_ranges_handler, stream_window_bytes,
 };
 
 const BLOCK_SIZE: u64 = 1024 * 1024;
@@ -442,10 +442,12 @@ async fn large_range_streams_across_multiple_windows() {
     assert_eq!(&body[..], &data[..]);
 }
 
-/// Scattered small ranges that used to be charged for every distinct block
-/// they touch (and could exceed a small budget) now charge only the
-/// proportional framed-response size, and stream successfully even at a
-/// tiny budget.
+/// Scattered small ranges are charged for every distinct block they touch
+/// (not just the tiny framed-response size), since each touched block is
+/// retained in full for the life of the request — but that charge is still
+/// capped at the fixed streaming window, so it stays within the minimum
+/// valid budget (`window_mb`, the same floor `object_cache_srv.rs` enforces
+/// at startup) and the request streams successfully rather than hanging.
 #[tokio::test]
 async fn scattered_small_ranges_now_stream_successfully() {
     let inner = Arc::new(InMemory::new());
@@ -453,10 +455,11 @@ async fn scattered_small_ranges_now_stream_successfully() {
     put_bytes(&inner, "obj/z", &data).await;
 
     let body = Bytes::from_static(br#"{"ranges": [[0,1],[1048576,1048577],[2097152,2097153]]}"#);
-    let state = make_state(inner as Arc<dyn ObjectStore>, 1);
+    let window_mb = permits_for_bytes(stream_window_bytes(BLOCK_SIZE));
+    let state = make_state(inner as Arc<dyn ObjectStore>, window_mb);
     let resp = post_ranges_handler(AxumPath("obj/z".to_string()), State(state), body)
         .await
-        .expect("scattered small ranges must stream successfully even at a tiny budget");
+        .expect("scattered small ranges across few blocks must stream successfully at the minimum valid budget");
     assert_eq!(resp.status(), StatusCode::OK);
 
     let body_bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
@@ -545,6 +548,96 @@ async fn mid_stream_origin_failure_falls_back_to_direct_via_client() {
         .expect("client must fall back to direct on truncated framing");
     assert_eq!(got.len(), 1);
     assert_eq!(&got[0][..], &data[..]);
+
+    server.abort();
+    let _ = server.await;
+}
+
+/// `CacheClientStore::get_opts` now streams ranged GETs instead of buffering
+/// them with `.bytes()` (see `get_range_stream` in `client.rs`); exercise all
+/// three `GetRange` shapes end to end against a real `get_range_handler` /
+/// `head_handler` server, spanning several fetch windows so the streamed
+/// body is delivered in multiple chunks. The client's fallback `direct`
+/// store deliberately holds different bytes, so a passing assertion can only
+/// be explained by the streamed cache path actually running, not a silent
+/// fallback.
+#[tokio::test]
+async fn ranged_get_via_client_streams_bounded_offset_and_suffix() {
+    let window_bytes = stream_window_bytes(BLOCK_SIZE); // 16 MiB
+    let total = window_bytes + 4 * 1024 * 1024; // spans several fetch windows
+
+    let data: Vec<u8> = (0u8..=255).cycle().take(total as usize).collect();
+
+    let origin = Arc::new(InMemory::new());
+    put_bytes(&origin, "obj/g", &data).await;
+    let state = make_state(
+        origin as Arc<dyn ObjectStore>,
+        permits_for_bytes(window_bytes) * 4,
+    );
+
+    let app = Router::new()
+        .route("/obj/{*key}", get(get_range_handler).head(head_handler))
+        .with_state(state);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind ephemeral port");
+    let addr = listener.local_addr().expect("local_addr");
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("serve");
+    });
+
+    // Mismatched fallback data: only a genuine streamed read from the cache
+    // server can produce a correct result below.
+    let direct = Arc::new(InMemory::new());
+    put_bytes(&direct, "obj/g", &vec![0u8; data.len()]).await;
+
+    let client = CacheClientStore::new(format!("http://{addr}"), None, direct);
+    let path = Path::from("obj/g");
+
+    // Bounded range spanning multiple fetch windows.
+    let bounded_range = 1_000u64..(total - 1_000);
+    let bounded = client
+        .get_range(&path, bounded_range.clone())
+        .await
+        .expect("bounded get_range");
+    assert_eq!(
+        &bounded[..],
+        &data[bounded_range.start as usize..bounded_range.end as usize]
+    );
+
+    // Open-ended range.
+    let offset = total - 12345;
+    let offset_result = client
+        .get_opts(
+            &path,
+            GetOptions {
+                range: Some(GetRange::Offset(offset)),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("offset get_opts");
+    assert_eq!(offset_result.meta.size, total);
+    assert_eq!(offset_result.range, offset..total);
+    let offset_bytes = offset_result.bytes().await.expect("offset bytes");
+    assert_eq!(&offset_bytes[..], &data[offset as usize..]);
+
+    // Suffix range.
+    let suffix_len = 54321u64;
+    let suffix_result = client
+        .get_opts(
+            &path,
+            GetOptions {
+                range: Some(GetRange::Suffix(suffix_len)),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("suffix get_opts");
+    assert_eq!(suffix_result.meta.size, total);
+    assert_eq!(suffix_result.range, (total - suffix_len)..total);
+    let suffix_bytes = suffix_result.bytes().await.expect("suffix bytes");
+    assert_eq!(&suffix_bytes[..], &data[(total - suffix_len) as usize..]);
 
     server.abort();
     let _ = server.await;
