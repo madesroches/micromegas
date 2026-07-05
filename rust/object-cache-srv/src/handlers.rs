@@ -1,5 +1,6 @@
 use crate::app_state::AppState;
 use crate::validation::{is_not_found, parse_range_header};
+use async_stream::{stream as gen_stream, try_stream};
 use axum::{
     body::Body,
     extract::{Path, State},
@@ -7,13 +8,15 @@ use axum::{
     response::Response,
 };
 use bytes::{BufMut, Bytes, BytesMut};
-use futures::{Stream, StreamExt};
+use futures::stream::BoxStream;
+use futures::{Stream, StreamExt, stream};
 use micromegas_object_cache::blocks::blocks_for_range;
 use micromegas_object_cache::prefetch::{PrefetchItem, PrefetchResponse};
-use micromegas_object_cache::range_cache::RangeError;
+use micromegas_object_cache::range_cache::{DEMAND_WINDOW_BLOCKS, RangeError, StreamRangesCaller};
 use micromegas_object_cache::validation::validate_key;
 use micromegas_tracing::prelude::*;
 use serde::Deserialize;
+use std::collections::HashSet;
 use std::pin::Pin;
 use std::task::{Context as TaskContext, Poll};
 use tokio::sync::OwnedSemaphorePermit;
@@ -24,48 +27,118 @@ use tokio::sync::mpsc::error::TrySendError;
 /// so this is comfortably above legitimate use while bounding per-request work.
 const MAX_RANGES_PER_REQUEST: usize = 4096;
 
-/// Maximum total requested bytes (summed across all ranges) for a single
-/// multi-range request. The handler assembles all results in memory, so this
-/// caps peak allocation regardless of how many ranges overlap the same bytes.
-const MAX_TOTAL_REQUESTED_BYTES: u64 = 512 * 1024 * 1024; // 512 MiB
-
 /// Maximum size of a single NDJSON line in a `POST /prefetch` body. An item at
 /// the `MAX_RANGES_PER_REQUEST` cap serializes to roughly 100 KiB, so this
 /// leaves about 10x headroom while still bounding per-line memory; unlike a
 /// whole-body cap, this doesn't limit how many items a client can batch.
 const MAX_PREFETCH_LINE_BYTES: usize = 1024 * 1024; // 1 MiB
 
-const BYTES_PER_MEM_PERMIT: u64 = 1024 * 1024;
+pub const BYTES_PER_MEM_PERMIT: u64 = 1024 * 1024;
 
 /// Number of `mem_permits` (1 MiB each) needed to cover `bytes`.
-fn permits_for_bytes(bytes: u64) -> u32 {
+pub fn permits_for_bytes(bytes: u64) -> u32 {
     bytes.div_ceil(BYTES_PER_MEM_PERMIT) as u32
 }
 
-/// A one-shot response body that owns a memory-budget permit for its entire
-/// lifetime: the permit is released whenever this value is dropped, whether
-/// that's after the body was fully sent or because the connection was
-/// aborted mid-stream. This is what makes the memory-budget guard cover the
-/// response's full lifetime rather than just the assembly window (see
-/// `object_cache_fetch_rework_plan.md` §5).
+/// Byte size of the fixed window a streaming request's memory charge is
+/// capped at: `permits_for_bytes(min(response size, this))`. Shared by the
+/// handlers' proportional per-stream charge below and by the startup guard
+/// in `object_cache_srv.rs`, which floors `--memory-budget-mb` at this value
+/// so a large read's charge can never exceed the whole budget — which would
+/// otherwise make `acquire_many_owned` hang forever instead of failing fast.
+pub fn stream_window_bytes(block_size: u64) -> u64 {
+    2 * DEMAND_WINDOW_BLOCKS * block_size
+}
+
+/// A response body wrapping a byte stream plus a memory-budget permit held
+/// for the body's entire lifetime: the permit is released whenever this value
+/// is dropped, whether that's after the body was fully sent or because the
+/// connection was aborted mid-stream. This is what makes the memory-budget
+/// guard cover the response's full lifetime rather than just the fetch
+/// window.
 struct PermitBody {
-    data: Option<Bytes>,
+    stream: BoxStream<'static, Result<Bytes, anyhow::Error>>,
     _permit: OwnedSemaphorePermit,
 }
 
 impl Stream for PermitBody {
-    type Item = Result<Bytes, std::convert::Infallible>;
+    type Item = Result<Bytes, anyhow::Error>;
 
-    fn poll_next(self: Pin<&mut Self>, _cx: &mut TaskContext<'_>) -> Poll<Option<Self::Item>> {
-        Poll::Ready(self.get_mut().data.take().map(Ok))
+    fn poll_next(self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<Option<Self::Item>> {
+        Pin::new(&mut self.get_mut().stream).poll_next(cx)
     }
 }
 
-fn permit_body(data: Bytes, permit: OwnedSemaphorePermit) -> Body {
+fn permit_body(
+    stream: BoxStream<'static, Result<Bytes, anyhow::Error>>,
+    permit: OwnedSemaphorePermit,
+) -> Body {
     Body::from_stream(PermitBody {
-        data: Some(data),
+        stream,
         _permit: permit,
     })
+}
+
+/// Wrap `inner` so that, once it drains to completion (yields `None`)
+/// without ever yielding an `Err`, `on_complete` is called with the total
+/// bytes yielded. A mid-stream error or the consumer dropping the stream
+/// before it drains both skip the callback — matching the accepted
+/// bytes-served under-reporting described where this is used.
+fn count_bytes_served<F>(
+    mut inner: BoxStream<'static, Result<Bytes, anyhow::Error>>,
+    on_complete: F,
+) -> BoxStream<'static, Result<Bytes, anyhow::Error>>
+where
+    F: FnOnce(u64) + Send + 'static,
+{
+    gen_stream! {
+        let mut total = 0u64;
+        let mut on_complete = Some(on_complete);
+        while let Some(item) = inner.next().await {
+            let is_err = item.is_err();
+            if let Ok(chunk) = &item {
+                total += chunk.len() as u64;
+            }
+            yield item;
+            if is_err {
+                return;
+            }
+        }
+        if let Some(f) = on_complete.take() {
+            f(total);
+        }
+    }
+    .boxed()
+}
+
+/// Interleave each range's 8-byte little-endian length prefix with its data
+/// chunks pulled from `inner`, matching the on-wire framing the client's
+/// length-prefixed reader expects. `range_lens` must have exactly one entry
+/// per non-degenerate range passed to the `stream_ranges` call that produced
+/// `inner`, in the same order, and `inner` must yield each range's bytes
+/// contiguously (see `RangeCache::stream_ranges`'s ordering guarantee).
+fn frame_ranges_stream(
+    mut inner: BoxStream<'static, Result<Bytes, anyhow::Error>>,
+    range_lens: Vec<u64>,
+) -> BoxStream<'static, Result<Bytes, anyhow::Error>> {
+    try_stream! {
+        for len in range_lens {
+            let mut prefix = BytesMut::with_capacity(8);
+            prefix.put_u64_le(len);
+            yield prefix.freeze();
+
+            let mut remaining = len;
+            while remaining > 0 {
+                let chunk = inner
+                    .next()
+                    .await
+                    .expect("stream_ranges under-yielded for a non-degenerate range")?;
+                remaining = remaining.saturating_sub(chunk.len() as u64);
+                yield chunk;
+            }
+        }
+    }
+    .boxed()
 }
 
 pub async fn head_handler(
@@ -144,9 +217,7 @@ pub async fn get_range_handler(
     };
 
     // An explicit range whose end exceeds the object size (or an open-ended
-    // range whose start is past EOF) is unsatisfiable per RFC 7233 and must be
-    // 416, not 413. This is checked before the 512 MiB span cap so an
-    // out-of-bounds request is never misreported as too large.
+    // range whose start is past EOF) is unsatisfiable per RFC 7233.
     if byte_range.end > file_size || byte_range.start > file_size {
         warn!("range {byte_range:?} out of bounds for {key} (file_size {file_size})");
         return Err(StatusCode::RANGE_NOT_SATISFIABLE);
@@ -167,27 +238,14 @@ pub async fn get_range_handler(
         return Ok(response);
     }
 
-    // The cache assembles the requested span contiguously in memory, so cap the
-    // single-range read at the same limit as the multi-range POST path to bound
-    // peak allocation. The client falls back to the direct store on any non-2xx,
-    // so an oversized read still succeeds (just uncached).
+    // Proportional memory charge: a small read charges close to its actual
+    // size, a large one clamps to the fixed streaming window, so per-request
+    // in-flight memory stays bounded regardless of how large the range is.
+    // The client falls back to the direct store on any non-2xx, so an
+    // oversized read still succeeds (just uncached).
     let requested_bytes = byte_range.end - byte_range.start;
-    if requested_bytes > MAX_TOTAL_REQUESTED_BYTES {
-        warn!(
-            "rejected range {byte_range:?} for {key}: requested bytes exceed max {MAX_TOTAL_REQUESTED_BYTES}"
-        );
-        return Err(StatusCode::PAYLOAD_TOO_LARGE);
-    }
-
-    let permits_needed = permits_for_bytes(requested_bytes);
-    if permits_needed > state.memory_budget_mb {
-        warn!(
-            "rejected range {byte_range:?} for {key}: {requested_bytes} bytes exceeds the \
-             whole memory budget ({} MiB)",
-            state.memory_budget_mb
-        );
-        return Err(StatusCode::PAYLOAD_TOO_LARGE);
-    }
+    let window = stream_window_bytes(state.cache.block_size());
+    let permits_needed = permits_for_bytes(requested_bytes.min(window));
     let mem_permit = state
         .mem_permits
         .clone()
@@ -195,46 +253,69 @@ pub async fn get_range_handler(
         .await
         .expect("mem_permits semaphore is never closed");
 
-    match state.cache.get_range(&key, byte_range.clone()).await {
-        Ok(data) => {
-            let content_length = data.len();
-            imetric!("object_cache_get_requests", "count", 1_u64);
-            imetric!(
-                "object_cache_get_bytes_served",
-                "bytes",
-                content_length as u64
-            );
-            debug!(
-                "GET {key} {}-{} served {content_length} bytes",
-                byte_range.start,
-                byte_range.end.saturating_sub(1)
-            );
-            let response = Response::builder()
-                .status(StatusCode::PARTIAL_CONTENT)
-                .header("Content-Type", "application/octet-stream")
-                .header("Content-Length", content_length.to_string())
-                .header(
-                    "Content-Range",
-                    format!(
-                        "bytes {}-{}/{}",
-                        byte_range.start,
-                        byte_range.end.saturating_sub(1),
-                        file_size
-                    ),
-                )
-                .body(permit_body(data, mem_permit))
-                .expect("build GET response");
-            Ok(response)
-        }
+    let mut inner = match state
+        .cache
+        .stream_ranges(&key, vec![byte_range.clone()], StreamRangesCaller::Range)
+        .await
+    {
+        Ok(s) => s.boxed(),
         Err(e) => {
             if let Some(RangeError::OutOfBounds { .. }) = e.downcast_ref::<RangeError>() {
                 warn!("range {byte_range:?} out of bounds for {key}: {e}");
                 return Err(StatusCode::RANGE_NOT_SATISFIABLE);
             }
+            if is_not_found(&e) {
+                return Err(StatusCode::NOT_FOUND);
+            }
             error!("get_range {key} {byte_range:?}: {e:?}");
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
         }
-    }
+    };
+
+    // Commit-before-stream: await the first chunk before building the
+    // response, so a dead origin still surfaces as 500 rather than an
+    // aborted 200/206.
+    let first = match inner.next().await {
+        Some(Ok(chunk)) => chunk,
+        Some(Err(e)) => {
+            error!("get_range {key} {byte_range:?}: {e:?}");
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+        None => unreachable!("stream_ranges yielded no chunks for a non-degenerate range"),
+    };
+
+    imetric!("object_cache_get_requests", "count", 1_u64);
+
+    let key_for_log = key.clone();
+    let range_for_log = byte_range.clone();
+    let full = stream::once(async move { Ok::<Bytes, anyhow::Error>(first) })
+        .chain(inner)
+        .boxed();
+    let counted = count_bytes_served(full, move |bytes| {
+        imetric!("object_cache_get_bytes_served", "bytes", bytes);
+        debug!(
+            "GET {key_for_log} {}-{} served {bytes} bytes",
+            range_for_log.start,
+            range_for_log.end.saturating_sub(1)
+        );
+    });
+
+    let response = Response::builder()
+        .status(StatusCode::PARTIAL_CONTENT)
+        .header("Content-Type", "application/octet-stream")
+        .header("Content-Length", requested_bytes.to_string())
+        .header(
+            "Content-Range",
+            format!(
+                "bytes {}-{}/{}",
+                byte_range.start,
+                byte_range.end.saturating_sub(1),
+                file_size
+            ),
+        )
+        .body(permit_body(counted, mem_permit))
+        .expect("build GET response");
+    Ok(response)
 }
 
 #[derive(Deserialize)]
@@ -273,53 +354,54 @@ pub async fn post_ranges_handler(
     // Reject inverted/degenerate ranges (e.g. `[100, 50]` or `[50, 50]`),
     // matching the single-range path's `parse_range_header` validation. An
     // empty or backwards range would otherwise silently yield 0-length data.
-    // While iterating, sum the requested bytes to bound the in-memory assembled
-    // response (overlapping ranges can otherwise amplify allocation).
+    // While iterating, sum the requested bytes for the proportional memory
+    // charge below, and track which blocks each range touches: a request
+    // with many scattered small ranges can transiently retain a whole block
+    // per range while charging only for the (much smaller) requested bytes,
+    // so the charge must also account for distinct blocks touched.
+    let block_size = state.cache.block_size();
     let mut total_requested: u64 = 0;
+    let mut touched_blocks: HashSet<u64> = HashSet::new();
     for &[s, e] in &req.ranges {
         if s >= e {
             warn!("rejected inverted range [{s}, {e}] for {key}");
             return Err(StatusCode::BAD_REQUEST);
         }
         total_requested = total_requested.saturating_add(e - s);
-        if total_requested > MAX_TOTAL_REQUESTED_BYTES {
-            warn!(
-                "rejected ranges for {key}: total requested bytes exceeds max {MAX_TOTAL_REQUESTED_BYTES}"
-            );
-            return Err(StatusCode::PAYLOAD_TOO_LARGE);
-        }
+        touched_blocks.extend(blocks_for_range(s, e, block_size));
+    }
+
+    // Empty-ranges short-circuit, mirroring `get_ranges`'s own guard:
+    // `stream_ranges` always does a `size()` lookup up front regardless of
+    // `ranges`, so without this a `{"ranges":[]}` request against a missing
+    // key would flip from today's 200 (empty body) to 404. Still emit all
+    // three metrics to match the Ok-arm behavior below.
+    if req.ranges.is_empty() {
+        imetric!("object_cache_ranges_requests", "count", 1_u64);
+        imetric!("object_cache_ranges_count", "count", 0_u64);
+        imetric!("object_cache_ranges_bytes_served", "bytes", 0_u64);
+        let response = Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Type", "application/octet-stream")
+            .body(Body::empty())
+            .expect("build empty ranges response");
+        return Ok(response);
     }
 
     // Each range is written into the response body behind an 8-byte
-    // little-endian length prefix (see `buf.put_u64_le` below); account for
-    // that overhead so the permit budget matches the actual assembled size.
-    let response_bytes = total_requested.saturating_add(8 * req.ranges.len() as u64);
+    // little-endian length prefix (see `frame_ranges_stream`); account for
+    // that overhead so the permit charge matches the actual framed size.
+    let framed_response_bytes = total_requested.saturating_add(8 * req.ranges.len() as u64);
 
-    // `get_ranges` retains a full block for every distinct block the ranges
-    // touch, all held simultaneously until assembly completes — so scattered
-    // small ranges amplify well past the requested bytes (4096 one-byte
-    // ranges in distinct 1 MiB blocks retain ~4 GiB). Dedupe blocks the same
-    // way `get_ranges` does and charge the budget for whichever is larger:
-    // the retained blocks or the framed response body.
-    let block_size = state.cache.block_size();
-    let mut touched_blocks = std::collections::BTreeSet::new();
-    for &[s, e] in &req.ranges {
-        let blk = blocks_for_range(s, e, block_size);
-        touched_blocks.extend(blk.start..blk.end);
-    }
+    // Proportional memory charge, capped at the fixed streaming window (see
+    // `get_range_handler` for the same pattern and its rationale). Charge for
+    // whichever is larger of the framed response size and the bytes backing
+    // the distinct blocks this request touches, so scattered small ranges
+    // spread across many blocks can't under-charge the shared memory budget.
     let block_bytes = touched_blocks.len() as u64 * block_size;
-
-    let charged_bytes = response_bytes.max(block_bytes);
-    let permits_needed = permits_for_bytes(charged_bytes);
-    if permits_needed > state.memory_budget_mb {
-        warn!(
-            "rejected ranges for {key}: {charged_bytes} charged bytes (response \
-             {response_bytes}, blocks {block_bytes}) exceeds the whole memory budget \
-             ({} MiB)",
-            state.memory_budget_mb
-        );
-        return Err(StatusCode::PAYLOAD_TOO_LARGE);
-    }
+    let charge_bytes = framed_response_bytes.max(block_bytes);
+    let window = stream_window_bytes(block_size);
+    let permits_needed = permits_for_bytes(charge_bytes.min(window));
     let mem_permit = state
         .mem_permits
         .clone()
@@ -328,33 +410,15 @@ pub async fn post_ranges_handler(
         .expect("mem_permits semaphore is never closed");
 
     let ranges: Vec<std::ops::Range<u64>> = req.ranges.iter().map(|&[s, e]| s..e).collect();
+    let range_lens: Vec<u64> = ranges.iter().map(|r| r.end - r.start).collect();
+    let range_count = ranges.len() as u64;
 
-    match state.cache.get_ranges(&key, &ranges).await {
-        Ok(results) => {
-            let mut buf = BytesMut::new();
-            for chunk in &results {
-                buf.put_u64_le(chunk.len() as u64);
-                buf.put_slice(chunk);
-            }
-            let bytes_served = buf.len();
-            imetric!("object_cache_ranges_requests", "count", 1_u64);
-            imetric!("object_cache_ranges_count", "count", ranges.len() as u64);
-            imetric!(
-                "object_cache_ranges_bytes_served",
-                "bytes",
-                bytes_served as u64
-            );
-            debug!(
-                "POST ranges {key}: {} ranges served {bytes_served} bytes",
-                ranges.len()
-            );
-            let response = Response::builder()
-                .status(StatusCode::OK)
-                .header("Content-Type", "application/octet-stream")
-                .body(permit_body(buf.freeze(), mem_permit))
-                .expect("build ranges response");
-            Ok(response)
-        }
+    let inner = match state
+        .cache
+        .stream_ranges(&key, ranges.clone(), StreamRangesCaller::Ranges)
+        .await
+    {
+        Ok(s) => s.boxed(),
         Err(e) => {
             if let Some(RangeError::OutOfBounds { .. }) = e.downcast_ref::<RangeError>() {
                 warn!("ranges {ranges:?} out of bounds for {key}: {e}");
@@ -364,9 +428,43 @@ pub async fn post_ranges_handler(
                 return Err(StatusCode::NOT_FOUND);
             }
             error!("get_ranges {key}: {e:?}");
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
         }
-    }
+    };
+
+    let mut framed = frame_ranges_stream(inner, range_lens);
+
+    // Commit-before-stream: await the first frame (always the first range's
+    // length prefix, since `req.ranges` is non-empty here) before building
+    // the response, so a dead origin still surfaces as 500 rather than an
+    // aborted 200.
+    let first = match framed.next().await {
+        Some(Ok(chunk)) => chunk,
+        Some(Err(e)) => {
+            error!("get_ranges {key}: {e:?}");
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+        None => unreachable!("frame_ranges_stream always yields at least one prefix"),
+    };
+
+    imetric!("object_cache_ranges_requests", "count", 1_u64);
+    imetric!("object_cache_ranges_count", "count", range_count);
+
+    let key_for_log = key.clone();
+    let full = stream::once(async move { Ok::<Bytes, anyhow::Error>(first) })
+        .chain(framed)
+        .boxed();
+    let counted = count_bytes_served(full, move |bytes| {
+        imetric!("object_cache_ranges_bytes_served", "bytes", bytes);
+        debug!("POST ranges {key_for_log}: {range_count} ranges served {bytes} bytes");
+    });
+
+    let response = Response::builder()
+        .status(StatusCode::OK)
+        .header("Content-Type", "application/octet-stream")
+        .body(permit_body(counted, mem_permit))
+        .expect("build ranges response");
+    Ok(response)
 }
 
 /// Parse and process a single NDJSON line from a `POST /prefetch` body,

@@ -4,9 +4,10 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, Weak};
 
 use anyhow::{Result, anyhow};
-use bytes::Bytes;
+use async_stream::try_stream;
+use bytes::{BufMut, Bytes, BytesMut};
 use futures::future::join_all;
-use futures::stream::{self, FuturesUnordered, StreamExt};
+use futures::stream::{self, FuturesUnordered, Stream, StreamExt};
 use micromegas_tracing::prelude::*;
 use object_store::{ObjectStore, ObjectStoreExt, path::Path};
 use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore, watch};
@@ -22,7 +23,39 @@ pub enum RangeError {
     OutOfBounds { requested_end: u64, file_size: u64 },
 }
 
+/// Which caller is invoking `RangeCache::stream_ranges`, selecting which of
+/// the two distinct `range_cache_get_range_error` / `range_cache_get_ranges_error`
+/// counters is emitted on an upfront validation failure or a mid-stream fetch
+/// error. `stream_ranges` is the single fill path behind both `get_range`/
+/// `get_range_handler` (`Range`) and `get_ranges`/`post_ranges_handler`
+/// (`Ranges`), so the tag keeps the two metric names emitting exactly as they
+/// did before those call sites shared one implementation.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum StreamRangesCaller {
+    Range,
+    Ranges,
+}
+
+impl StreamRangesCaller {
+    fn emit_error_metric(self) {
+        match self {
+            StreamRangesCaller::Range => imetric!("range_cache_get_range_error", "count", 1_u64),
+            StreamRangesCaller::Ranges => {
+                imetric!("range_cache_get_ranges_error", "count", 1_u64)
+            }
+        }
+    }
+}
+
 pub const DEFAULT_BLOCK_SIZE: u64 = 1024 * 1024;
+
+/// Number of blocks per streamed fetch window used by `stream_ranges`. At the
+/// default 1 MiB block size, 8 blocks (8 MiB) matches one coalesced origin
+/// GET run (`DEFAULT_MAX_COALESCED_GET_BYTES`), with `buffered(2)` giving
+/// modest pipeline overlap. This bounds peak in-flight memory per stream to
+/// roughly `2 * DEMAND_WINDOW_BLOCKS * block_size`, independent of how large
+/// the requested range is.
+pub const DEMAND_WINDOW_BLOCKS: u64 = 8;
 
 /// Default total number of origin GETs allowed to run concurrently. See
 /// `RangeCache::new`.
@@ -683,19 +716,50 @@ impl RangeCache {
 
                 match outcome {
                     Ok(data) => {
-                        imetric!("range_cache_origin_block_fetch", "count", run_len as u64);
-                        imetric!("range_cache_origin_block_bytes", "bytes", data.len() as u64);
-                        debug!(
-                            "range_cache origin fetch key={key_owned} run={run:?} bytes={}",
-                            data.len()
-                        );
-                        for i in 0..run_len {
-                            let offset = i as u64 * block_size;
-                            let local_start = offset as usize;
-                            let local_end = (offset + block_size).min(data.len() as u64) as usize;
-                            let chunk = data.slice(local_start..local_end);
-                            backend.put(run_keys[i].clone(), chunk.clone(), hint).await;
-                            run_entries[i].fulfill(Ok(chunk));
+                        // The backend-hit path above heals a length mismatch
+                        // (an undersized cached entry, or the origin object
+                        // having changed size) by treating it as a miss and
+                        // refetching. A true origin fetch has nowhere further
+                        // to fall back to, so a short read here — which
+                        // `object_store`'s `GetRange::Bounded` returns without
+                        // error when the object is shorter than requested —
+                        // must surface as an explicit error instead of being
+                        // silently clipped by `assemble_range`, which would
+                        // otherwise under-yield bytes and either corrupt a
+                        // `Content-Length`-declared response or trip
+                        // `frame_ranges_stream`'s under-yield `.expect()`.
+                        let expected_run_bytes = byte_end - byte_start;
+                        if data.len() as u64 != expected_run_bytes {
+                            imetric!("range_cache_origin_run_len_mismatch", "count", 1_u64);
+                            warn!(
+                                "range_cache origin fetch length mismatch key={key_owned} \
+                                 run={run:?} expected={expected_run_bytes} got={}",
+                                data.len()
+                            );
+                            let shared: Arc<anyhow::Error> = Arc::new(anyhow!(
+                                "origin object changed size mid-fetch: key={key_owned} \
+                                 run={run:?} expected {expected_run_bytes} bytes, got {} bytes",
+                                data.len()
+                            ));
+                            for entry in &run_entries {
+                                entry.fulfill(Err(shared.clone()));
+                            }
+                        } else {
+                            imetric!("range_cache_origin_block_fetch", "count", run_len as u64);
+                            imetric!("range_cache_origin_block_bytes", "bytes", data.len() as u64);
+                            debug!(
+                                "range_cache origin fetch key={key_owned} run={run:?} bytes={}",
+                                data.len()
+                            );
+                            for i in 0..run_len {
+                                let offset = i as u64 * block_size;
+                                let local_start = offset as usize;
+                                let local_end =
+                                    (offset + block_size).min(data.len() as u64) as usize;
+                                let chunk = data.slice(local_start..local_end);
+                                backend.put(run_keys[i].clone(), chunk.clone(), hint).await;
+                                run_entries[i].fulfill(Ok(chunk));
+                            }
                         }
                     }
                     Err(e) => {
@@ -751,57 +815,133 @@ impl RangeCache {
         Ok(hits)
     }
 
+    /// Stream the bytes for `ranges` (each half-open `[start, end)`) without
+    /// materializing more than a couple of `DEMAND_WINDOW_BLOCKS` windows of
+    /// blocks at a time, regardless of how large the ranges are in total.
+    ///
+    /// Upfront validation — the `size()` lookup and every range's
+    /// out-of-bounds check — runs before the stream is constructed and
+    /// returned, so 404/416-shaped errors surface synchronously to the
+    /// caller with proper status codes; only a failure *after* that point
+    /// (a mid-stream `fetch_blocks` error, e.g. the origin going down) is
+    /// yielded as the stream's terminal `Err` item. A degenerate
+    /// `start >= end` range is validated like any other (its `end` is still
+    /// checked against `file_size`) but yields no bytes.
+    ///
+    /// Yields a flat, ordered sequence of chunks: ranges are processed in
+    /// the order given and each range's bytes are emitted contiguously
+    /// (possibly split into several `Bytes` chunks at window boundaries)
+    /// before the next range's bytes begin. There is no cross-range block
+    /// dedup — a block shared by two ranges is fetched once per range it
+    /// appears in, though a repeat is always a backend hit or an in-flight
+    /// join, never a second origin GET (see `own_or_join`).
+    ///
+    /// `caller` selects which of the two distinct error counters
+    /// (`range_cache_get_range_error` / `range_cache_get_ranges_error`) this
+    /// call emits on validation failure or a mid-stream fetch error, so
+    /// `get_range`/`get_ranges` (and the two HTTP handlers, which call this
+    /// directly) keep emitting the metric they always have.
     #[span_fn]
-    pub async fn get_range(&self, key: &str, range: Range<u64>) -> Result<Bytes> {
+    pub async fn stream_ranges(
+        &self,
+        key: &str,
+        ranges: Vec<Range<u64>>,
+        caller: StreamRangesCaller,
+    ) -> Result<impl Stream<Item = Result<Bytes>> + Send + 'static> {
         let file_size = match self.size(key).await {
             Ok(s) => s,
             Err(e) => {
-                imetric!("range_cache_get_range_error", "count", 1_u64);
+                caller.emit_error_metric();
                 return Err(e);
             }
         };
 
-        let start = range.start;
-        let end = range.end;
-
-        if end > file_size {
-            imetric!("range_cache_get_range_error", "count", 1_u64);
-            return Err(RangeError::OutOfBounds {
-                requested_end: end,
-                file_size,
+        for r in &ranges {
+            if r.end > file_size {
+                caller.emit_error_metric();
+                return Err(RangeError::OutOfBounds {
+                    requested_end: r.end,
+                    file_size,
+                }
+                .into());
             }
-            .into());
         }
 
-        if start >= end {
-            return Ok(Bytes::new());
-        }
+        let cache = self.clone();
+        let key = key.to_string();
+        Ok(try_stream! {
+            for r in ranges {
+                let start = r.start;
+                let end = r.end;
+                if start >= end {
+                    continue;
+                }
 
-        let blk_indices = blocks_for_range(start, end, self.block_size);
-        let indices: Vec<u64> = (blk_indices.start..blk_indices.end).collect();
+                let blk_range = blocks_for_range(start, end, cache.block_size);
+                let window_indices: Vec<Vec<u64>> = (blk_range.start..blk_range.end)
+                    .collect::<Vec<u64>>()
+                    .chunks(DEMAND_WINDOW_BLOCKS as usize)
+                    .map(|w| w.to_vec())
+                    .collect();
 
-        let block_map = match self
-            .fetch_blocks(key, file_size, &indices, Priority::Demand)
-            .await
-        {
-            Ok(m) => m,
-            Err(e) => {
-                imetric!("range_cache_get_range_error", "count", 1_u64);
-                return Err(e);
+                let mut windows = stream::iter(window_indices)
+                    .map(|w| {
+                        let cache = cache.clone();
+                        let key = key.clone();
+                        async move {
+                            let result = cache
+                                .fetch_blocks(&key, file_size, &w, Priority::Demand)
+                                .await;
+                            (w, result)
+                        }
+                    })
+                    .buffered(2);
+
+                while let Some((w, result)) = windows.next().await {
+                    let block_map = result.inspect_err(|_| caller.emit_error_metric())?;
+                    let blocks: Vec<(u64, Bytes)> = w
+                        .iter()
+                        .map(|idx| {
+                            let data = block_map
+                                .get(idx)
+                                .cloned()
+                                .expect("fetch_blocks returns every requested index");
+                            (*idx, data)
+                        })
+                        .collect();
+                    // Clamp to this window's own byte span (intersected with
+                    // the outer requested range), not the whole range's
+                    // bounds: `blocks` only holds this window's data, and
+                    // `assemble_range` pre-sizes its output buffer from
+                    // `req_end - req_start`, so passing the full range's
+                    // bounds on every window would over-allocate by up to the
+                    // entire range's size on each iteration.
+                    let win_start = w[0] * cache.block_size;
+                    let win_end = block_byte_range(
+                        *w.last().expect("window is non-empty"),
+                        cache.block_size,
+                        file_size,
+                    )
+                    .end;
+                    let local_start = start.max(win_start);
+                    let local_end = end.min(win_end);
+                    yield assemble_range(&blocks, cache.block_size, local_start, local_end);
+                }
             }
-        };
+        })
+    }
 
-        let blocks: Vec<(u64, Bytes)> = indices
-            .into_iter()
-            .map(|idx| {
-                let data = block_map
-                    .get(&idx)
-                    .cloned()
-                    .expect("fetch_blocks returns every requested index");
-                (idx, data)
-            })
-            .collect();
-        Ok(assemble_range(&blocks, self.block_size, start, end))
+    #[span_fn]
+    pub async fn get_range(&self, key: &str, range: Range<u64>) -> Result<Bytes> {
+        let mut stream = Box::pin(
+            self.stream_ranges(key, vec![range], StreamRangesCaller::Range)
+                .await?,
+        );
+        let mut buf = BytesMut::new();
+        while let Some(chunk) = stream.next().await {
+            buf.put_slice(&chunk?);
+        }
+        Ok(buf.freeze())
     }
 
     #[span_fn]
@@ -810,62 +950,46 @@ impl RangeCache {
             return Ok(vec![]);
         }
 
-        // Propagate the size-lookup error unwrapped so the underlying
-        // `object_store::Error` (notably `NotFound`) survives the downcast in
-        // callers, matching `get_range` and the single-GET endpoint.
-        let file_size = match self.size(key).await {
-            Ok(s) => s,
-            Err(e) => {
-                imetric!("range_cache_get_ranges_error", "count", 1_u64);
-                return Err(e);
-            }
-        };
+        let owned_ranges: Vec<Range<u64>> = ranges.to_vec();
+        let mut stream = Box::pin(
+            self.stream_ranges(key, owned_ranges, StreamRangesCaller::Ranges)
+                .await?,
+        );
 
-        let mut all_block_indices = BTreeSet::new();
-        for r in ranges {
-            let start = r.start;
-            let end = r.end;
-            if end > file_size {
-                imetric!("range_cache_get_ranges_error", "count", 1_u64);
-                return Err(RangeError::OutOfBounds {
-                    requested_end: end,
-                    file_size,
-                }
-                .into());
-            }
-            if start < end {
-                let blk = blocks_for_range(start, end, self.block_size);
-                for idx in blk.start..blk.end {
-                    all_block_indices.insert(idx);
-                }
-            }
-        }
-
-        let indices: Vec<u64> = all_block_indices.into_iter().collect();
-        let block_map = match self
-            .fetch_blocks(key, file_size, &indices, Priority::Demand)
-            .await
-        {
-            Ok(m) => m,
-            Err(e) => {
-                imetric!("range_cache_get_ranges_error", "count", 1_u64);
-                return Err(e);
-            }
-        };
-
+        // `stream_ranges` yields a flat chunk sequence in range order,
+        // possibly split at window boundaries; reconstruct the per-range
+        // split here from each range's known length rather than relying on
+        // a chunk boundary lining up with a range boundary.
         let mut result = Vec::with_capacity(ranges.len());
+        let mut pending: Option<Bytes> = None;
         for r in ranges {
             let start = r.start;
             let end = r.end;
             if start >= end {
+                // `stream_ranges` yields nothing for a degenerate range, so
+                // reinsert the empty chunk at its position ourselves.
                 result.push(Bytes::new());
                 continue;
             }
-            let blk = blocks_for_range(start, end, self.block_size);
-            let blocks: Vec<(u64, Bytes)> = (blk.start..blk.end)
-                .filter_map(|idx| block_map.get(&idx).map(|d| (idx, d.clone())))
-                .collect();
-            result.push(assemble_range(&blocks, self.block_size, start, end));
+            let need = (end - start) as usize;
+            let mut collected = BytesMut::with_capacity(need);
+            while collected.len() < need {
+                let chunk = match pending.take() {
+                    Some(c) => c,
+                    None => stream
+                        .next()
+                        .await
+                        .expect("stream_ranges under-yielded for a non-degenerate range")?,
+                };
+                let remaining = need - collected.len();
+                if chunk.len() > remaining {
+                    collected.put_slice(&chunk[..remaining]);
+                    pending = Some(chunk.slice(remaining..));
+                } else {
+                    collected.put_slice(&chunk);
+                }
+            }
+            result.push(collected.freeze());
         }
 
         Ok(result)

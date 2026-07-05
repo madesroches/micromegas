@@ -22,7 +22,8 @@ use micromegas_object_cache::foyer_backend::FoyerBackend;
 use micromegas_object_cache::range_cache::RangeCache;
 use micromegas_object_cache_srv::app_state::AppState;
 use micromegas_object_cache_srv::handlers::{
-    get_range_handler, head_handler, post_ranges_handler, prefetch_handler,
+    get_range_handler, head_handler, permits_for_bytes, post_ranges_handler, prefetch_handler,
+    stream_window_bytes,
 };
 use micromegas_object_cache_srv::prefetch_queue::spawn_prefetch_worker;
 use micromegas_tracing::prelude::*;
@@ -61,13 +62,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .into());
     }
-    // A zero budget would make the memory-guard reject every non-empty data
-    // request with 413 while /health and /ready still pass; fail at startup
-    // instead.
+    // A zero budget would make every non-empty data request hang forever
+    // acquiring its mem_permits charge while /health and /ready still pass;
+    // fail at startup instead.
     if args.memory_budget_mb == 0 {
         return Err(
             anyhow!("MICROMEGAS_OBJECT_CACHE_MEMORY_BUDGET_MB must be greater than 0").into(),
         );
+    }
+    // A large streaming read still charges a full window's worth of permits
+    // (`stream_window_bytes`, capped rather than rejected outright — see
+    // `handlers::stream_window_bytes`), and `Semaphore::acquire_many_owned`
+    // never completes (and never errors) if the requested count exceeds the
+    // semaphore's total permits. Without this floor, a deployment configured
+    // with a smaller `--memory-budget-mb` would hang every large read
+    // instead of failing fast here at startup.
+    let window_mb = permits_for_bytes(stream_window_bytes(args.block_size));
+    if args.memory_budget_mb < window_mb {
+        return Err(anyhow!(
+            "MICROMEGAS_OBJECT_CACHE_MEMORY_BUDGET_MB ({}) must be at least {window_mb} MiB \
+             (2 * DEMAND_WINDOW_BLOCKS * block_size, the largest charge a single streaming \
+             request can make), or every large read would hang acquiring mem_permits",
+            args.memory_budget_mb
+        )
+        .into());
     }
     if args.prefetch_queue_capacity == 0 {
         return Err(anyhow!(

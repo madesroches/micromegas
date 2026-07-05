@@ -46,7 +46,7 @@ docker run -d -p 8080:8080 \
 | `MICROMEGAS_OBJECT_CACHE_MAX_CONCURRENT_FETCHES` | No | Total concurrent origin GETs (default `32`; NIC-sized starting point, tune against measurement) |
 | `MICROMEGAS_OBJECT_CACHE_DEMAND_RESERVED_FETCHES` | No | Origin-GET slots always available to demand reads; prefetch is capped at `total - reserved` (default `8`); must be less than `MAX_CONCURRENT_FETCHES` |
 | `MICROMEGAS_OBJECT_CACHE_MAX_COALESCED_GET_BYTES` | No | Max span of one coalesced run GET, in bytes (default `8388608`, 8 MiB); larger contiguous runs are split at block boundaries |
-| `MICROMEGAS_OBJECT_CACHE_MEMORY_BUDGET_MB` | No | Cross-request cap on concurrently-assembled response bytes, in MiB (default `1024`) |
+| `MICROMEGAS_OBJECT_CACHE_MEMORY_BUDGET_MB` | No | Cross-request cap on concurrent in-flight streaming windows, in MiB (default `1024`); must be at least the fixed per-stream window's size, or the server refuses to start |
 | `MICROMEGAS_OBJECT_CACHE_PROMOTE_WHOLE_BATCH` | No | On a demand hit into a prefetch batch, promote the whole batch (anticipatory) instead of only the covering run (default `false`, precise) |
 | `MICROMEGAS_OBJECT_CACHE_PREFETCH_QUEUE_CAPACITY` | No | Depth of the bounded `POST /prefetch` queue; items beyond this are load-shed (default `4096`); must be > 0 |
 | `MICROMEGAS_OBJECT_CACHE_PREFETCH_WORKER_CONCURRENCY` | No | Concurrent in-flight prefetch fills driven by the queue worker (default `8`); must be > 0 |
@@ -92,13 +92,19 @@ per-request cap:
 - **Coalescing.** Contiguous missing blocks are merged into one origin GET
   (bounded by `MICROMEGAS_OBJECT_CACHE_MAX_COALESCED_GET_BYTES`) rather than
   one GET per block.
-- **Cross-request memory budget.** `MICROMEGAS_OBJECT_CACHE_MEMORY_BUDGET_MB`
-  bounds the sum of in-flight response bytes across *all* concurrent requests
-  (1 MiB per permit), separate from the existing 512 MiB per-request cap. A
-  request whose assembled size alone exceeds the whole budget is rejected with
-  `413` rather than blocking forever. Transient assembly overhead runs roughly
-  2-3x the counted bytes, so size this with that multiplier in mind alongside
-  the RAM cache tier.
+- **Cross-request memory budget.** `GET /obj/{key}` and `POST /ranges/{key}`
+  responses are streamed rather than assembled in memory: bytes are written
+  to the socket in bounded windows as they're fetched, so response size is no
+  longer capped. `MICROMEGAS_OBJECT_CACHE_MEMORY_BUDGET_MB` instead bounds the
+  sum of in-flight streaming-window bytes across *all* concurrent requests (1
+  MiB per permit). Each request charges `min(response size, a fixed per-stream
+  window)`: a small response charges close to its actual size (so plenty of
+  small reads can run concurrently), while a large one clamps to the window,
+  bounding per-request memory and gating how many large streaming requests can
+  run concurrently regardless of how big the response gets. The server floors
+  this budget at the window's size at startup and refuses to start below it,
+  since a smaller budget would make a large read's charge hang forever instead
+  of failing fast.
 
 ## Prefetch
 
@@ -170,6 +176,7 @@ The cache emits metrics through the standard micromegas tracing sink (queryable 
 | `object_cache_get_bytes_served` / `object_cache_ranges_bytes_served` | cache server | Bytes served to clients over the wire. |
 | `range_cache_client_fallback` | each client | Reads that fell back to the direct store (cache unreachable, non-2xx, or bad response). **A rising rate is the primary "cache unhealthy" alert** — routine fallback logs at `debug` precisely so it doesn't flood, leaving this metric as the signal. |
 | `range_cache_block_len_mismatch` | cache server | A cached block's length didn't match its expected byte span (e.g. a poisoned entry from an undersized prefetch `size`, or the origin object changed size); the block is refetched and overwritten. Should be ~0. |
+| `range_cache_origin_run_len_mismatch` | cache server | An origin `get_range` fetch returned fewer bytes than the requested run span (the origin object shrank mid-flight). Surfaced as a fetch error rather than silently under-yielded. Should be ~0. |
 | `object_cache_prefetch_requests` / `object_cache_prefetch_keys_enqueued` | cache server | `POST /prefetch` request and accepted-key counts. |
 | `object_cache_prefetch_dropped` | cache server | Prefetch items load-shed because the queue was full. A sustained non-zero rate means prefetch volume exceeds `MICROMEGAS_OBJECT_CACHE_PREFETCH_QUEUE_CAPACITY` / worker throughput. |
 | `object_cache_prefetch_keys_warmed` / `object_cache_prefetch_fill_error` | cache server | Prefetch fills that completed successfully vs. failed (e.g. key not found at the origin). |

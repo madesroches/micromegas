@@ -17,6 +17,7 @@ micromegas-object-cache = { workspace = true, features = ["foyer"] }
 micromegas-tracing.workspace = true
 
 anyhow.workspace = true
+async-stream.workspace = true
 axum.workspace = true
 bytes.workspace = true
 clap.workspace = true

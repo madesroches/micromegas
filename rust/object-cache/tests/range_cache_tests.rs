@@ -4,7 +4,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
+use futures::StreamExt;
 use futures::stream::BoxStream;
 use object_store::memory::InMemory;
 use object_store::path::Path;
@@ -17,7 +18,8 @@ use tokio::sync::Semaphore;
 use micromegas_object_cache::memory_backend::MemoryBackend;
 use micromegas_object_cache::range_cache::{
     DEFAULT_BLOCK_SIZE, DEFAULT_DEMAND_RESERVED_FETCH_PERMITS, DEFAULT_MAX_COALESCED_GET_BYTES,
-    DEFAULT_PROMOTE_WHOLE_BATCH, DEFAULT_TOTAL_FETCH_PERMITS, RangeCache,
+    DEFAULT_PROMOTE_WHOLE_BATCH, DEFAULT_TOTAL_FETCH_PERMITS, DEMAND_WINDOW_BLOCKS, RangeCache,
+    RangeError, StreamRangesCaller,
 };
 
 fn make_cache(origin: Arc<dyn ObjectStore>) -> RangeCache {
@@ -899,4 +901,307 @@ async fn total_concurrency_never_exceeds_total() {
         assert!(counting.peak_in_flight() <= total);
     })
     .await;
+}
+
+// -- stream_ranges ------------------------------------------------------
+
+/// A ranged `get_opts` call fails once its requested start offset reaches
+/// `fail_from`; earlier ranges succeed. Lets a test make an early fetch
+/// window's origin call succeed (so the stream commits its first bytes)
+/// while a later window's call fails with a genuine mid-stream error.
+#[derive(Debug)]
+struct FailAtOffsetStore {
+    inner: Arc<dyn ObjectStore>,
+    fail_from: u64,
+}
+
+impl std::fmt::Display for FailAtOffsetStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "FailAtOffsetStore({})", self.inner)
+    }
+}
+
+#[async_trait]
+impl ObjectStore for FailAtOffsetStore {
+    async fn put_opts(
+        &self,
+        location: &Path,
+        payload: PutPayload,
+        opts: PutOptions,
+    ) -> object_store::Result<PutResult> {
+        self.inner.put_opts(location, payload, opts).await
+    }
+
+    async fn put_multipart_opts(
+        &self,
+        location: &Path,
+        opts: PutMultipartOptions,
+    ) -> object_store::Result<Box<dyn MultipartUpload>> {
+        self.inner.put_multipart_opts(location, opts).await
+    }
+
+    async fn get_opts(
+        &self,
+        location: &Path,
+        options: GetOptions,
+    ) -> object_store::Result<GetResult> {
+        if let Some(object_store::GetRange::Bounded(r)) = &options.range
+            && r.start >= self.fail_from
+        {
+            return Err(object_store::Error::Generic {
+                store: "FailAtOffsetStore",
+                source: Box::new(std::io::Error::other("origin down mid-stream")),
+            });
+        }
+        self.inner.get_opts(location, options).await
+    }
+
+    fn delete_stream(
+        &self,
+        locations: BoxStream<'static, object_store::Result<Path>>,
+    ) -> BoxStream<'static, object_store::Result<Path>> {
+        self.inner.delete_stream(locations)
+    }
+
+    fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
+        self.inner.list(prefix)
+    }
+
+    async fn list_with_delimiter(&self, prefix: Option<&Path>) -> object_store::Result<ListResult> {
+        self.inner.list_with_delimiter(prefix).await
+    }
+
+    async fn copy_opts(
+        &self,
+        from: &Path,
+        to: &Path,
+        options: CopyOptions,
+    ) -> object_store::Result<()> {
+        self.inner.copy_opts(from, to, options).await
+    }
+}
+
+/// Drain a `stream_ranges` stream into one flat `Bytes`, for tests covering a
+/// single range where the exact chunk boundaries don't matter.
+async fn collect_stream(
+    stream: impl futures::Stream<Item = anyhow::Result<Bytes>> + Send + 'static,
+) -> anyhow::Result<Bytes> {
+    let mut stream = Box::pin(stream);
+    let mut buf = BytesMut::new();
+    while let Some(chunk) = stream.next().await {
+        buf.extend_from_slice(&chunk?);
+    }
+    Ok(buf.freeze())
+}
+
+#[tokio::test]
+async fn stream_ranges_multi_window_matches_direct() {
+    let block_size = 1024u64;
+    let store = Arc::new(InMemory::new());
+    // Spans 4 fetch windows (`DEMAND_WINDOW_BLOCKS` blocks each).
+    let total = DEMAND_WINDOW_BLOCKS * block_size * 4;
+    let data: Vec<u8> = (0u8..=255).cycle().take(total as usize).collect();
+    put_bytes(&store, "obj", &data).await;
+
+    let cache = RangeCache::new(
+        store.clone() as Arc<dyn ObjectStore>,
+        Arc::new(MemoryBackend::new()),
+        block_size,
+        "ns".to_string(),
+        DEFAULT_TOTAL_FETCH_PERMITS,
+        DEFAULT_DEMAND_RESERVED_FETCH_PERMITS,
+        DEFAULT_MAX_COALESCED_GET_BYTES,
+        DEFAULT_PROMOTE_WHOLE_BATCH,
+    );
+
+    #[allow(clippy::single_range_in_vec_init)]
+    let stream = cache
+        .stream_ranges("obj", vec![0..total], StreamRangesCaller::Range)
+        .await
+        .expect("stream_ranges");
+    let got = collect_stream(stream).await.expect("collect");
+    assert_eq!(&got[..], &data[..]);
+}
+
+#[tokio::test]
+async fn stream_ranges_non_block_aligned_boundary() {
+    let block_size = 1024u64;
+    let store = Arc::new(InMemory::new());
+    let total = 10 * block_size;
+    let data: Vec<u8> = (0u8..=255).cycle().take(total as usize).collect();
+    put_bytes(&store, "obj", &data).await;
+
+    let cache = RangeCache::new(
+        store.clone() as Arc<dyn ObjectStore>,
+        Arc::new(MemoryBackend::new()),
+        block_size,
+        "ns".to_string(),
+        DEFAULT_TOTAL_FETCH_PERMITS,
+        DEFAULT_DEMAND_RESERVED_FETCH_PERMITS,
+        DEFAULT_MAX_COALESCED_GET_BYTES,
+        DEFAULT_PROMOTE_WHOLE_BATCH,
+    );
+
+    let range = 500u64..(9 * block_size + 37);
+    let stream = cache
+        .stream_ranges("obj", vec![range.clone()], StreamRangesCaller::Range)
+        .await
+        .expect("stream_ranges");
+    let got = collect_stream(stream).await.expect("collect");
+    assert_eq!(&got[..], &data[range.start as usize..range.end as usize]);
+}
+
+#[tokio::test]
+async fn stream_ranges_multiple_ranges_sharing_blocks() {
+    let block_size = 1024u64;
+    let store = Arc::new(InMemory::new());
+    let total = 5 * block_size;
+    let data: Vec<u8> = (0u8..=255).cycle().take(total as usize).collect();
+    put_bytes(&store, "obj", &data).await;
+
+    let cache = RangeCache::new(
+        store.clone() as Arc<dyn ObjectStore>,
+        Arc::new(MemoryBackend::new()),
+        block_size,
+        "ns".to_string(),
+        DEFAULT_TOTAL_FETCH_PERMITS,
+        DEFAULT_DEMAND_RESERVED_FETCH_PERMITS,
+        DEFAULT_MAX_COALESCED_GET_BYTES,
+        DEFAULT_PROMOTE_WHOLE_BATCH,
+    );
+
+    // The second and third ranges both touch block 0; the fourth is
+    // degenerate and must contribute nothing to the flat chunk sequence.
+    let ranges = vec![
+        100u64..300,
+        200u64..900,
+        3 * block_size..3 * block_size + 50,
+        50u64..50,
+    ];
+    let mut stream = Box::pin(
+        cache
+            .stream_ranges("obj", ranges.clone(), StreamRangesCaller::Ranges)
+            .await
+            .expect("stream_ranges"),
+    );
+
+    // Reconstruct each range's bytes from the flat, ordered chunk sequence
+    // by known length, the same way the `get_ranges` collector does.
+    let mut pending: Option<Bytes> = None;
+    let mut results: Vec<Bytes> = Vec::new();
+    for r in &ranges {
+        if r.start >= r.end {
+            results.push(Bytes::new());
+            continue;
+        }
+        let need = (r.end - r.start) as usize;
+        let mut collected = BytesMut::with_capacity(need);
+        while collected.len() < need {
+            let chunk = match pending.take() {
+                Some(c) => c,
+                None => stream
+                    .next()
+                    .await
+                    .expect("stream under-yielded")
+                    .expect("chunk ok"),
+            };
+            let remaining = need - collected.len();
+            if chunk.len() > remaining {
+                collected.extend_from_slice(&chunk[..remaining]);
+                pending = Some(chunk.slice(remaining..));
+            } else {
+                collected.extend_from_slice(&chunk);
+            }
+        }
+        results.push(collected.freeze());
+    }
+
+    for (r, got) in ranges.iter().zip(results.iter()) {
+        assert_eq!(&got[..], &data[r.start as usize..r.end as usize]);
+    }
+}
+
+#[tokio::test]
+async fn stream_ranges_missing_key_errors_upfront() {
+    let store = Arc::new(InMemory::new());
+    let cache = make_cache(store as Arc<dyn ObjectStore>);
+
+    #[allow(clippy::single_range_in_vec_init)]
+    let result = cache
+        .stream_ranges("missing", vec![0..10], StreamRangesCaller::Range)
+        .await;
+    let err = match result {
+        Err(e) => e,
+        Ok(_) => panic!("missing key must error before any stream is returned"),
+    };
+    let os_err = err
+        .downcast_ref::<object_store::Error>()
+        .expect("NotFound should survive the downcast");
+    assert!(matches!(os_err, object_store::Error::NotFound { .. }));
+}
+
+#[tokio::test]
+async fn stream_ranges_out_of_bounds_errors_upfront() {
+    let store = Arc::new(InMemory::new());
+    put_bytes(&store, "obj", &[0u8; 100]).await;
+    let cache = make_cache(store as Arc<dyn ObjectStore>);
+
+    #[allow(clippy::single_range_in_vec_init)]
+    let result = cache
+        .stream_ranges("obj", vec![0..200], StreamRangesCaller::Ranges)
+        .await;
+    let err = match result {
+        Err(e) => e,
+        Ok(_) => panic!("out-of-bounds range must error before any stream is returned"),
+    };
+    assert!(err.downcast_ref::<RangeError>().is_some());
+}
+
+#[tokio::test]
+async fn stream_ranges_mid_stream_origin_failure_surfaces_as_stream_err() {
+    let block_size = 1024u64;
+    let store = Arc::new(InMemory::new());
+    let total = DEMAND_WINDOW_BLOCKS * block_size * 3; // spans 3 fetch windows
+    let data: Vec<u8> = (0u8..=255).cycle().take(total as usize).collect();
+    put_bytes(&store, "obj", &data).await;
+
+    // The first fetch window succeeds; the second (and any later) fails.
+    let flaky = Arc::new(FailAtOffsetStore {
+        inner: store.clone() as Arc<dyn ObjectStore>,
+        fail_from: DEMAND_WINDOW_BLOCKS * block_size,
+    });
+    let cache = RangeCache::new(
+        flaky as Arc<dyn ObjectStore>,
+        Arc::new(MemoryBackend::new()),
+        block_size,
+        "ns".to_string(),
+        DEFAULT_TOTAL_FETCH_PERMITS,
+        DEFAULT_DEMAND_RESERVED_FETCH_PERMITS,
+        DEFAULT_MAX_COALESCED_GET_BYTES,
+        DEFAULT_PROMOTE_WHOLE_BATCH,
+    );
+
+    #[allow(clippy::single_range_in_vec_init)]
+    let mut stream = Box::pin(
+        cache
+            .stream_ranges("obj", vec![0..total], StreamRangesCaller::Range)
+            .await
+            .expect("stream_ranges upfront validation passes"),
+    );
+
+    // The first window's bytes are yielded successfully...
+    let first = stream
+        .next()
+        .await
+        .expect("first chunk present")
+        .expect("first window succeeds");
+    assert_eq!(
+        &first[..],
+        &data[..DEMAND_WINDOW_BLOCKS as usize * block_size as usize]
+    );
+
+    // ...then the second window's origin failure surfaces as the stream's
+    // terminal `Err` item, not a panic or a silently truncated success.
+    let second = stream.next().await.expect("stream yields the failure");
+    assert!(second.is_err(), "mid-stream origin failure must be an Err");
 }

@@ -11,14 +11,19 @@ pub struct AppState {
     /// only reachable via `--allow-all-prefixes`, since the server refuses to
     /// start with an empty list otherwise.
     pub allowed_prefixes: Vec<String>,
-    /// Cross-request bound on concurrently-assembled response bytes: one
-    /// permit per MiB. A handler acquires `ceil(bytes / 1 MiB)` permits before
-    /// assembling a response and holds them for the response body's full
-    /// lifetime.
+    /// Cross-request bound on concurrent in-flight streaming windows: one
+    /// permit per MiB. A handler acquires `ceil(min(response size, the fixed
+    /// streaming window) / 1 MiB)` permits before starting to stream a
+    /// response and holds them for the response body's full lifetime — a
+    /// small response charges close to its actual size, a large one clamps
+    /// to the window, so the charge reflects in-flight window bytes rather
+    /// than the whole response size.
     pub mem_permits: Arc<Semaphore>,
-    /// Total capacity of `mem_permits`, in MiB. A request whose assembled size
-    /// would exceed this outright is rejected (413) rather than acquired
-    /// (which would otherwise block forever).
+    /// Total capacity of `mem_permits`, in MiB. The startup guard in
+    /// `object_cache_srv.rs` floors this at the fixed streaming window's
+    /// size, so a single large streaming request's charge can never exceed
+    /// the whole budget (which would otherwise block `acquire_many_owned`
+    /// forever).
     pub memory_budget_mb: u32,
     /// Sender side of the bounded prefetch queue; the consumer task (spawned
     /// separately, see `prefetch_queue::spawn_prefetch_worker`) owns the
