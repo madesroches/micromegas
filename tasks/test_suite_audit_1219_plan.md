@@ -20,7 +20,7 @@ safe to review and merge as one PR.
   `#[serial]` usage, and left `analytics/tests/sql_view_test.rs` / `histo_view_test.rs` as `#[ignore]`d
   integration tests requiring a live Postgres/object-store. This plan builds on that state rather than
   re-litigating it.
-- Rust has 18 crates with `tests/` directories; the bulk of the suite (by test count) lives in
+- Rust has 15 crates with `tests/` directories; the bulk of the suite (by test count) lives in
   `analytics` (180) and `datafusion-extensions` (145), followed by `analytics-web-srv` (97).
 - Python (`python/micromegas/tests/`) has ~130 `def test_*` functions across 23 files. Every file that
   imports `python/micromegas/tests/test_utils.py` triggers `client = micromegas.connect()` at **module
