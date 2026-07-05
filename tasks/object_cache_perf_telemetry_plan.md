@@ -118,13 +118,13 @@ Rather than adding a 9th constructor parameter and updating all of them, add a b
 `RangeCache::with_prefix_labels(self, labels: Arc<[&'static str]>) -> Self` that defaults to empty
 `prefix_labels` when unused (every key classifies as `"other"`). `RangeCache::new` itself is
 unchanged, so the ~20 existing callers/tests compile without modification; only
-`object_cache_srv.rs` opts in. The server calls `RangeCache::new(...).with_prefix_labels(...)`
-(`object_cache_srv.rs:144`) with its resolved, leaked allowed-prefix list; when
-`--allow-all-prefixes` is set, the server omits the call (or passes an empty list) and every key
-classifies as `"other"`. Because the setter is applied to the already-constructed `RangeCache`
-rather than passed into `new`, no reordering of the `allowed_prefixes` resolution/leak
-(`object_cache_srv.rs:159`–`179`) relative to the `RangeCache::new` call is required — the
-`with_prefix_labels` call is simply placed after that resolution completes.
+`object_cache_srv.rs` opts in. The server constructs the cache at `object_cache_srv.rs:144` with
+`RangeCache::new(...)` unchanged, then — *after* the `allowed_prefixes` resolution/leak at
+`:159`–`179` — rebinds it with a separate statement (`let cache = cache.with_prefix_labels(leaked_labels);`)
+before the cache is moved into `AppState` (`:187`). Applying the setter as a separate statement
+placed after the existing resolution is what keeps this reordering-free: the leaked list need not
+exist before `:144`, so neither `new` nor the resolution block moves. When `--allow-all-prefixes`
+is set, the server skips the rebind (or passes an empty list) and every key classifies as `"other"`.
 
 **Classify once per `fetch_blocks` call, not per block probe.** `classify(key)` does a
 longest-prefix string match; `fetch_blocks` probes multiple blocks per call (`range_cache.rs:602`).
@@ -174,9 +174,9 @@ Refactor the current `stream_ranges` so the public no-size entry point resolves 
 takes size as a parameter and does the out-of-bounds validation + streaming. The `_with_size`
 variants call the inner directly, skipping the second `self.size()`. `get_range_handler` calls
 `get_range_with_size` / `stream_ranges_with_size` with the size it already resolved at `:182`, so
-`range_cache_size_backend_hit` fires exactly once per ranged GET. `prefetch_ranges` (`:1004`) and
-`post_ranges_handler` keep their single `size()` call (no pre-resolution to reuse) — no change
-needed there beyond routing through the shared inner. Existing `get_range`/`get_ranges` keep their
+`range_cache_size_backend_hit` fires exactly once per ranged GET. `prefetch_ranges` (`:1004`, which
+resolves size once directly and does not go through `stream_ranges`) and `post_ranges_handler`
+(no pre-resolution to reuse) are left unchanged. Existing `get_range`/`get_ranges` keep their
 current signatures (they still resolve size once) for callers/tests that don't have a size in hand.
 
 ### 2. Per-stage latency (`range_cache.rs`)
@@ -272,7 +272,7 @@ is observable:
 
 - Time the cache round-trip in `get_range_stream` / `get_full_stream` / `get_ranges` up to the first
   usable byte and emit `fmetric!("range_cache_client_roundtrip_ms","ms",elapsed)`.
-- Time the direct-store path taken on fallback (`full_stream_with_fallback` `:307`, the `get_ranges`
+- Time the direct-store path taken on fallback (`full_stream_with_fallback` `:286`, the `get_ranges`
   fallback arms, and the `get_opts` fallback `:509`) and emit
   `fmetric!("range_cache_client_direct_ms","ms",elapsed)`.
 
@@ -298,9 +298,10 @@ Phased, each independently shippable; ordered by value/risk.
    `tier` constants; the leaked-prefix classifier helper.
 4. `RangeCache`: add `prefix_labels` + precomputed `PropertySet`s + `classify()`, plus the
    non-breaking `with_prefix_labels` builder setter (`RangeCache::new` is unchanged); in
-   `object_cache_srv.rs`, chain `.with_prefix_labels(...)` onto the existing `RangeCache::new` call
-   (`:144`) using the already-resolved, leaked `allowed_prefixes` (`:159`–`179`) — no reordering of
-   that resolution is needed. Add the `prefix` tag to the Phase 1 wrapper's
+   `object_cache_srv.rs`, after the existing `allowed_prefixes` resolution/leak (`:159`–`179`),
+   rebind the cache built at `:144` with a separate `let cache = cache.with_prefix_labels(...)`
+   statement (before it is moved into `AppState` at `:187`) — no reordering of that resolution is
+   needed. Add the `prefix` tag to the Phase 1 wrapper's
    `object_cache_get_requests` / `object_cache_ranges_requests` emission now that `classify()` is
    available.
 
