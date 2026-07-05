@@ -716,19 +716,50 @@ impl RangeCache {
 
                 match outcome {
                     Ok(data) => {
-                        imetric!("range_cache_origin_block_fetch", "count", run_len as u64);
-                        imetric!("range_cache_origin_block_bytes", "bytes", data.len() as u64);
-                        debug!(
-                            "range_cache origin fetch key={key_owned} run={run:?} bytes={}",
-                            data.len()
-                        );
-                        for i in 0..run_len {
-                            let offset = i as u64 * block_size;
-                            let local_start = offset as usize;
-                            let local_end = (offset + block_size).min(data.len() as u64) as usize;
-                            let chunk = data.slice(local_start..local_end);
-                            backend.put(run_keys[i].clone(), chunk.clone(), hint).await;
-                            run_entries[i].fulfill(Ok(chunk));
+                        // The backend-hit path above heals a length mismatch
+                        // (an undersized cached entry, or the origin object
+                        // having changed size) by treating it as a miss and
+                        // refetching. A true origin fetch has nowhere further
+                        // to fall back to, so a short read here — which
+                        // `object_store`'s `GetRange::Bounded` returns without
+                        // error when the object is shorter than requested —
+                        // must surface as an explicit error instead of being
+                        // silently clipped by `assemble_range`, which would
+                        // otherwise under-yield bytes and either corrupt a
+                        // `Content-Length`-declared response or trip
+                        // `frame_ranges_stream`'s under-yield `.expect()`.
+                        let expected_run_bytes = byte_end - byte_start;
+                        if data.len() as u64 != expected_run_bytes {
+                            imetric!("range_cache_origin_run_len_mismatch", "count", 1_u64);
+                            warn!(
+                                "range_cache origin fetch length mismatch key={key_owned} \
+                                 run={run:?} expected={expected_run_bytes} got={}",
+                                data.len()
+                            );
+                            let shared: Arc<anyhow::Error> = Arc::new(anyhow!(
+                                "origin object changed size mid-fetch: key={key_owned} \
+                                 run={run:?} expected {expected_run_bytes} bytes, got {} bytes",
+                                data.len()
+                            ));
+                            for entry in &run_entries {
+                                entry.fulfill(Err(shared.clone()));
+                            }
+                        } else {
+                            imetric!("range_cache_origin_block_fetch", "count", run_len as u64);
+                            imetric!("range_cache_origin_block_bytes", "bytes", data.len() as u64);
+                            debug!(
+                                "range_cache origin fetch key={key_owned} run={run:?} bytes={}",
+                                data.len()
+                            );
+                            for i in 0..run_len {
+                                let offset = i as u64 * block_size;
+                                let local_start = offset as usize;
+                                let local_end =
+                                    (offset + block_size).min(data.len() as u64) as usize;
+                                let chunk = data.slice(local_start..local_end);
+                                backend.put(run_keys[i].clone(), chunk.clone(), hint).await;
+                                run_entries[i].fulfill(Ok(chunk));
+                            }
                         }
                     }
                     Err(e) => {
@@ -878,7 +909,23 @@ impl RangeCache {
                             (*idx, data)
                         })
                         .collect();
-                    yield assemble_range(&blocks, cache.block_size, start, end);
+                    // Clamp to this window's own byte span (intersected with
+                    // the outer requested range), not the whole range's
+                    // bounds: `blocks` only holds this window's data, and
+                    // `assemble_range` pre-sizes its output buffer from
+                    // `req_end - req_start`, so passing the full range's
+                    // bounds on every window would over-allocate by up to the
+                    // entire range's size on each iteration.
+                    let win_start = w[0] * cache.block_size;
+                    let win_end = block_byte_range(
+                        *w.last().expect("window is non-empty"),
+                        cache.block_size,
+                        file_size,
+                    )
+                    .end;
+                    let local_start = start.max(win_start);
+                    let local_end = end.min(win_end);
+                    yield assemble_range(&blocks, cache.block_size, local_start, local_end);
                 }
             }
         })
