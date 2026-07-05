@@ -26,6 +26,7 @@ http.workspace = true
 object_store.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sysinfo.workspace = true
 tokio.workspace = true
 tokio-stream.workspace = true
 url.workspace = true
@@ -42,6 +43,9 @@ name = "micromegas-object-cache-srv"
 path = "src/object_cache_srv.rs"
 
 [dev-dependencies]
+micromegas-transit.workspace = true
+
 async-trait.workspace = true
+serial_test = "3.2"
 tempfile = "3.14"
 tokio.workspace = true

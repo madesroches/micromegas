@@ -2,6 +2,7 @@ pub mod backend;
 pub mod blocks;
 pub mod client;
 pub mod memory_backend;
+pub mod metric_tags;
 pub mod prefetch;
 pub mod range_cache;
 pub mod validation;

@@ -2,6 +2,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::ops::Range;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, Weak};
+use std::time::Instant;
 
 use anyhow::{Result, anyhow};
 use async_stream::try_stream;
@@ -14,6 +15,7 @@ use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore, watch};
 
 use super::backend::{FillHint, RangeCacheBackend};
 use super::blocks::{assemble_range, block_byte_range, blocks_for_range, coalesce_runs};
+use super::metric_tags::{self, PrefixTags};
 
 /// Errors returned by [`RangeCache`] that callers may want to handle distinctly.
 #[derive(Debug, thiserror::Error)]
@@ -89,6 +91,26 @@ impl Priority {
         } else {
             Priority::Prefetch
         }
+    }
+
+    /// The `class` metric-tag value for this priority (see `metric_tags`).
+    fn class_label(self) -> &'static str {
+        match self {
+            Priority::Demand => metric_tags::CLASS_DEMAND,
+            Priority::Prefetch => metric_tags::CLASS_PREFETCH,
+        }
+    }
+}
+
+/// The `class` tag for one coalesced run: `Demand` if any of its entries is
+/// currently demand priority, else `Prefetch`. Mirrors `acquire_run_permit`'s
+/// own `all_prefetch` check, evaluated once the permit has been acquired so a
+/// promotion that raced the wait is reflected in the tag.
+fn effective_priority(entries: &[Arc<InFlight>]) -> Priority {
+    if entries.iter().any(|e| e.priority() == Priority::Demand) {
+        Priority::Demand
+    } else {
+        Priority::Prefetch
     }
 }
 
@@ -187,9 +209,16 @@ struct FetchScheduler {
     /// Bounds total concurrent origin GETs (blocks + size heads don't count
     /// against this; only run GETs acquire it).
     shared_permits: Arc<Semaphore>,
+    /// Total capacity of `shared_permits`, stored alongside it since
+    /// `tokio::sync::Semaphore` has no capacity accessor. Used by
+    /// `fetch_budget_stats` for the saturation sampler.
+    shared_total: usize,
     /// Prefetch runs must additionally hold one of these; sized to
     /// `total - demand_reserved` so demand always finds a free shared permit.
     prefetch_permits: Arc<Semaphore>,
+    /// Total capacity of `prefetch_permits`, for the same reason as
+    /// `shared_total`.
+    prefetch_total: usize,
     promote_whole_batch: bool,
 }
 
@@ -202,12 +231,33 @@ impl FetchScheduler {
             demand_reserved < total,
             "demand_reserved ({demand_reserved}) must be < total ({total})"
         );
+        let prefetch_total = total - demand_reserved;
         Self {
             inflight: StdMutex::new(HashMap::new()),
             shared_permits: Arc::new(Semaphore::new(total)),
-            prefetch_permits: Arc::new(Semaphore::new(total - demand_reserved)),
+            shared_total: total,
+            prefetch_permits: Arc::new(Semaphore::new(prefetch_total)),
+            prefetch_total,
             promote_whole_batch,
         }
+    }
+
+    /// `(shared_available, shared_total, prefetch_available, prefetch_total)`
+    /// -- the fetch-permit budget's current occupancy, for the saturation
+    /// sampler (`object-cache-srv/src/saturation_monitor.rs`).
+    fn fetch_budget_stats(&self) -> (usize, usize, usize, usize) {
+        (
+            self.shared_permits.available_permits(),
+            self.shared_total,
+            self.prefetch_permits.available_permits(),
+            self.prefetch_total,
+        )
+    }
+
+    /// Number of keys (blocks or `size()` heads) currently in flight to
+    /// origin.
+    fn inflight_len(&self) -> usize {
+        self.inflight.lock().expect("inflight lock").len()
     }
 
     /// Look up `key` in the in-flight map: become the owner if absent, or a
@@ -466,6 +516,17 @@ pub struct RangeCache {
     ns: String,
     scheduler: Arc<FetchScheduler>,
     max_coalesced_get_bytes: u64,
+    /// Configured `prefix` labels (the server's `allowed_prefixes`, leaked to
+    /// `'static` once at startup), in the same order as `prefix_tags`. Empty
+    /// unless `with_prefix_labels` was used, in which case every key
+    /// classifies as `metric_tags::PREFIX_OTHER`.
+    prefix_labels: Arc<[&'static str]>,
+    /// Precomputed `PrefixTags` parallel to `prefix_labels` (`prefix_tags[i]`
+    /// corresponds to `prefix_labels[i]`), so `classify_tags` is an array
+    /// lookup rather than an allocation + intern-lock per call.
+    prefix_tags: Arc<[PrefixTags]>,
+    /// Precomputed tags for a key matching none of `prefix_labels`.
+    other_tags: PrefixTags,
 }
 
 impl RangeCache {
@@ -491,7 +552,59 @@ impl RangeCache {
                 promote_whole_batch,
             )),
             max_coalesced_get_bytes,
+            prefix_labels: Arc::from(Vec::new()),
+            prefix_tags: Arc::from(Vec::new()),
+            other_tags: PrefixTags::new(metric_tags::PREFIX_OTHER),
         }
+    }
+
+    /// Attach a `prefix` classifier for the dimensioned hit-rate/request
+    /// metrics: `labels` are the server's configured `allowed_prefixes`,
+    /// leaked to `'static` once at startup by the caller (bounded,
+    /// low-cardinality, set once). Every request key is then
+    /// longest-prefix-matched against `labels` (see `classify`); a key
+    /// matching none classifies as `metric_tags::PREFIX_OTHER`.
+    ///
+    /// `RangeCache::new` itself leaves this empty (every key classifies as
+    /// `"other"`), so its existing callers/tests compile unmodified; only
+    /// `object_cache_srv.rs` opts in.
+    pub fn with_prefix_labels(mut self, labels: Arc<[&'static str]>) -> Self {
+        let tags: Vec<PrefixTags> = labels.iter().map(|&label| PrefixTags::new(label)).collect();
+        self.prefix_tags = Arc::from(tags);
+        self.prefix_labels = labels;
+        self
+    }
+
+    /// The precomputed tags for the `prefix` `key` falls under, resolved by
+    /// longest-prefix match against `prefix_labels` (`other_tags` on no
+    /// match). Private: callers needing just the label use `classify`;
+    /// hot-path callers inside this module use the tags directly.
+    fn classify_tags(&self, key: &str) -> &PrefixTags {
+        match metric_tags::longest_prefix_match(&self.prefix_labels, key) {
+            Some(i) => &self.prefix_tags[i],
+            None => &self.other_tags,
+        }
+    }
+
+    /// The `prefix` label `key` falls under (e.g. `"blobs"`, `"views"`, per
+    /// the server's configured `allowed_prefixes`), or
+    /// `metric_tags::PREFIX_OTHER` if it matches none. See
+    /// `with_prefix_labels`.
+    pub fn classify(&self, key: &str) -> &'static str {
+        self.classify_tags(key).label
+    }
+
+    /// `(shared_available, shared_total, prefetch_available, prefetch_total)`
+    /// -- the fetch-permit budget's current occupancy, for the saturation
+    /// sampler.
+    pub fn fetch_budget_stats(&self) -> (usize, usize, usize, usize) {
+        self.scheduler.fetch_budget_stats()
+    }
+
+    /// Number of keys (blocks or `size()` heads) currently in flight to
+    /// origin, for the saturation sampler.
+    pub fn inflight_len(&self) -> usize {
+        self.scheduler.inflight_len()
     }
 
     /// Size in bytes of one cache block. Every distinct block a request
@@ -508,11 +621,12 @@ impl RangeCache {
         // are assumed write-once and content-addressed, so a cached size is
         // never invalidated.
         let meta_key = format!("meta:{}:{key}", self.ns);
+        let prefix_tag = self.classify_tags(key).prefix;
 
         if let Some(data) = self.backend.get(&meta_key).await
             && data.len() == 8
         {
-            imetric!("range_cache_size_backend_hit", "count", 1_u64);
+            imetric!("range_cache_size_backend_hit", "count", prefix_tag, 1_u64);
             return decode_size(&data);
         }
 
@@ -532,8 +646,14 @@ impl RangeCache {
                         scheduler.clone(),
                         vec![(meta_key_owned.clone(), task_entry.clone())],
                     );
-                    imetric!("range_cache_origin_head", "count", 1_u64);
-                    match origin.head(&Path::from(key_owned.as_str())).await {
+                    imetric!("range_cache_origin_head", "count", prefix_tag, 1_u64);
+                    let head_path = Path::from(key_owned.as_str());
+                    let head_result = instrument_named!(
+                        origin.head(&head_path),
+                        "range_cache_origin_head_latency"
+                    )
+                    .await;
+                    match head_result {
                         Ok(object_meta) => {
                             let size = object_meta.size;
                             debug!("range_cache origin head key={key_owned} size={size}");
@@ -584,6 +704,14 @@ impl RangeCache {
             return Ok(HashMap::new());
         }
 
+        // Classify once per call (a longest-prefix string match), not once
+        // per block probe: `prefix_tags` is reused across every probe and
+        // every coalesced run below.
+        let prefix_tags = self.classify_tags(key);
+        let block_tag = prefix_tags.prefix;
+        let (run_demand_tag, run_prefetch_tag) =
+            (prefix_tags.prefix_demand, prefix_tags.prefix_prefetch);
+
         let mut hits: HashMap<u64, Bytes> = HashMap::new();
         let mut missing: Vec<u64> = Vec::new();
         {
@@ -599,8 +727,11 @@ impl RangeCache {
                     let block_key = format!("blk:{}:{key}:{idx}", self.ns);
                     let backend = self.backend.clone();
                     async move {
-                        imetric!("range_cache_block_request", "count", 1_u64);
-                        (idx, backend.get(&block_key).await)
+                        imetric!("range_cache_block_request", "count", block_tag, 1_u64);
+                        let probe =
+                            instrument_named!(backend.get(&block_key), "range_cache_backend_read")
+                                .await;
+                        (idx, probe)
                     }
                 })
                 .collect();
@@ -626,7 +757,7 @@ impl RangeCache {
                             missing.push(idx);
                             continue;
                         }
-                        imetric!("range_cache_block_backend_hit", "count", 1_u64);
+                        imetric!("range_cache_block_backend_hit", "count", block_tag, 1_u64);
                         // A prefetch has nothing to do with an already-cached
                         // block, so drop the bytes immediately instead of
                         // accumulating every hit for the whole call.
@@ -707,11 +838,43 @@ impl RangeCache {
                         .zip(run_entries.iter().cloned())
                         .collect(),
                 );
-                let permit = acquire_run_permit(&scheduler, &run_entries).await;
+                let permit_wait_start = Instant::now();
+                let permit = instrument_named!(
+                    acquire_run_permit(&scheduler, &run_entries),
+                    "range_cache_fetch_permit_wait"
+                )
+                .await;
+                // The run's effective priority, resolved once the permit is
+                // acquired so a promotion racing the wait is reflected: used
+                // to tag every latency/hit-rate signal this run emits.
+                let class = effective_priority(&run_entries).class_label();
+                let run_class_tag = if class == metric_tags::CLASS_DEMAND {
+                    run_demand_tag
+                } else {
+                    run_prefetch_tag
+                };
+                fmetric!(
+                    "range_cache_fetch_permit_wait_ms",
+                    "ms",
+                    metric_tags::class_tags(class),
+                    permit_wait_start.elapsed().as_secs_f64() * 1000.0
+                );
+
                 let byte_start = run.start * block_size;
                 let byte_end = block_byte_range(run.end - 1, block_size, file_size).end;
                 let path = Path::from(key_owned.as_str());
-                let outcome = origin.get_range(&path, byte_start..byte_end).await;
+                let origin_get_start = Instant::now();
+                let outcome = instrument_named!(
+                    origin.get_range(&path, byte_start..byte_end),
+                    "range_cache_origin_get"
+                )
+                .await;
+                fmetric!(
+                    "range_cache_origin_get_ms",
+                    "ms",
+                    metric_tags::class_tags(class),
+                    origin_get_start.elapsed().as_secs_f64() * 1000.0
+                );
                 drop(permit);
 
                 match outcome {
@@ -745,8 +908,18 @@ impl RangeCache {
                                 entry.fulfill(Err(shared.clone()));
                             }
                         } else {
-                            imetric!("range_cache_origin_block_fetch", "count", run_len as u64);
-                            imetric!("range_cache_origin_block_bytes", "bytes", data.len() as u64);
+                            imetric!(
+                                "range_cache_origin_block_fetch",
+                                "count",
+                                run_class_tag,
+                                run_len as u64
+                            );
+                            imetric!(
+                                "range_cache_origin_block_bytes",
+                                "bytes",
+                                run_class_tag,
+                                data.len() as u64
+                            );
                             debug!(
                                 "range_cache origin fetch key={key_owned} run={run:?} bytes={}",
                                 data.len()
@@ -855,7 +1028,34 @@ impl RangeCache {
                 return Err(e);
             }
         };
+        self.stream_ranges_inner(key, ranges, file_size, caller)
+            .await
+    }
 
+    /// Like `stream_ranges`, but for a caller that already resolved
+    /// `file_size` itself (e.g. `get_range_handler`, which needs it up front
+    /// for range validation): skips the redundant `self.size()` call, so a
+    /// cache hit doesn't fire `range_cache_size_backend_hit` a second time
+    /// per call.
+    #[span_fn]
+    pub async fn stream_ranges_with_size(
+        &self,
+        key: &str,
+        ranges: Vec<Range<u64>>,
+        file_size: u64,
+        caller: StreamRangesCaller,
+    ) -> Result<impl Stream<Item = Result<Bytes>> + Send + 'static> {
+        self.stream_ranges_inner(key, ranges, file_size, caller)
+            .await
+    }
+
+    async fn stream_ranges_inner(
+        &self,
+        key: &str,
+        ranges: Vec<Range<u64>>,
+        file_size: u64,
+        caller: StreamRangesCaller,
+    ) -> Result<impl Stream<Item = Result<Bytes>> + Send + 'static> {
         for r in &ranges {
             if r.end > file_size {
                 caller.emit_error_metric();
@@ -944,55 +1144,58 @@ impl RangeCache {
         Ok(buf.freeze())
     }
 
+    /// Like `get_range`, but for a caller that already resolved `file_size`
+    /// itself, skipping the redundant `self.size()` call inside
+    /// `stream_ranges` (see `stream_ranges_with_size`).
+    #[span_fn]
+    pub async fn get_range_with_size(
+        &self,
+        key: &str,
+        file_size: u64,
+        range: Range<u64>,
+    ) -> Result<Bytes> {
+        let mut stream = Box::pin(
+            self.stream_ranges_with_size(key, vec![range], file_size, StreamRangesCaller::Range)
+                .await?,
+        );
+        let mut buf = BytesMut::new();
+        while let Some(chunk) = stream.next().await {
+            buf.put_slice(&chunk?);
+        }
+        Ok(buf.freeze())
+    }
+
     #[span_fn]
     pub async fn get_ranges(&self, key: &str, ranges: &[Range<u64>]) -> Result<Vec<Bytes>> {
         if ranges.is_empty() {
             return Ok(vec![]);
         }
-
         let owned_ranges: Vec<Range<u64>> = ranges.to_vec();
-        let mut stream = Box::pin(
+        let stream = Box::pin(
             self.stream_ranges(key, owned_ranges, StreamRangesCaller::Ranges)
                 .await?,
         );
+        collect_ranges_from_stream(ranges, stream).await
+    }
 
-        // `stream_ranges` yields a flat chunk sequence in range order,
-        // possibly split at window boundaries; reconstruct the per-range
-        // split here from each range's known length rather than relying on
-        // a chunk boundary lining up with a range boundary.
-        let mut result = Vec::with_capacity(ranges.len());
-        let mut pending: Option<Bytes> = None;
-        for r in ranges {
-            let start = r.start;
-            let end = r.end;
-            if start >= end {
-                // `stream_ranges` yields nothing for a degenerate range, so
-                // reinsert the empty chunk at its position ourselves.
-                result.push(Bytes::new());
-                continue;
-            }
-            let need = (end - start) as usize;
-            let mut collected = BytesMut::with_capacity(need);
-            while collected.len() < need {
-                let chunk = match pending.take() {
-                    Some(c) => c,
-                    None => stream
-                        .next()
-                        .await
-                        .expect("stream_ranges under-yielded for a non-degenerate range")?,
-                };
-                let remaining = need - collected.len();
-                if chunk.len() > remaining {
-                    collected.put_slice(&chunk[..remaining]);
-                    pending = Some(chunk.slice(remaining..));
-                } else {
-                    collected.put_slice(&chunk);
-                }
-            }
-            result.push(collected.freeze());
+    /// Like `get_ranges`, but for a caller that already resolved `file_size`
+    /// itself (see `stream_ranges_with_size`).
+    #[span_fn]
+    pub async fn get_ranges_with_size(
+        &self,
+        key: &str,
+        file_size: u64,
+        ranges: &[Range<u64>],
+    ) -> Result<Vec<Bytes>> {
+        if ranges.is_empty() {
+            return Ok(vec![]);
         }
-
-        Ok(result)
+        let owned_ranges: Vec<Range<u64>> = ranges.to_vec();
+        let stream = Box::pin(
+            self.stream_ranges_with_size(key, owned_ranges, file_size, StreamRangesCaller::Ranges)
+                .await?,
+        );
+        collect_ranges_from_stream(ranges, stream).await
     }
 
     /// Warm the cache for `ranges` at `Prefetch` priority without returning
@@ -1036,4 +1239,46 @@ impl RangeCache {
             .await?;
         Ok(())
     }
+}
+
+/// Reassemble the flat, ordered chunk sequence a `stream_ranges*` stream
+/// yields back into one `Bytes` per requested range, using each range's
+/// known length rather than relying on a chunk boundary lining up with a
+/// range boundary. Shared by `get_ranges` and `get_ranges_with_size`.
+async fn collect_ranges_from_stream(
+    ranges: &[Range<u64>],
+    mut stream: impl Stream<Item = Result<Bytes>> + Unpin,
+) -> Result<Vec<Bytes>> {
+    let mut result = Vec::with_capacity(ranges.len());
+    let mut pending: Option<Bytes> = None;
+    for r in ranges {
+        let start = r.start;
+        let end = r.end;
+        if start >= end {
+            // `stream_ranges` yields nothing for a degenerate range, so
+            // reinsert the empty chunk at its position ourselves.
+            result.push(Bytes::new());
+            continue;
+        }
+        let need = (end - start) as usize;
+        let mut collected = BytesMut::with_capacity(need);
+        while collected.len() < need {
+            let chunk = match pending.take() {
+                Some(c) => c,
+                None => stream
+                    .next()
+                    .await
+                    .expect("stream_ranges under-yielded for a non-degenerate range")?,
+            };
+            let remaining = need - collected.len();
+            if chunk.len() > remaining {
+                collected.put_slice(&chunk[..remaining]);
+                pending = Some(chunk.slice(remaining..));
+            } else {
+                collected.put_slice(&chunk);
+            }
+        }
+        result.push(collected.freeze());
+    }
+    Ok(result)
 }
