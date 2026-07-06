@@ -113,7 +113,7 @@ Verified against the vendored `foyer-0.22.3` / `foyer-storage-0.22.3` / `foyer-m
 
 - `insert_with_hint(key, value, CacheHint::Normal)` is **removed**. The `Normal` case is just
   `insert(key, value)` (`hybrid/cache.rs:519`); for a non-default hint use
-  `insert_with_properties(key, value, HybridCacheProperties::new().with_hint(Hint::…))`. `CacheHint`
+  `insert_with_properties(key, value, HybridCacheProperties::default().with_hint(Hint::…))`. `CacheHint`
   no longer exists; the hint enum is `foyer::Hint` and cache-level props are `HybridCacheProperties`.
 - The prefetch path `storage_writer(key).force().insert(value)` **survives unchanged**:
   `HybridCacheStorageWriter::force()` (`hybrid/writer.rs:126`) and `.insert() -> Option<…>` (`:155`)
@@ -151,11 +151,16 @@ use foyer::{
   defaults `io_engine_config` to `PsyncIoEngineConfig` when unset, so `.storage().with_engine_config(...)`
   builds without an explicit `.with_io_engine_config(...)` — psync is the automatic default, no
   explicit IO-engine config is required.
-- Whether preserving direct I/O (`with_direct(true)` on Linux) is desired vs. foyer's buffered
-  default. Recommend preserving direct I/O to match today's behavior; verify alignment constraints
-  don't reject the configured `disk_bytes`/block size.
-- foyer 0.22's MSRV / edition vs. the workspace toolchain — confirm `cargo build` succeeds after the
-  bump and `Cargo.lock` updates cleanly.
+- Direct I/O alignment is **resolved**: in `foyer-storage-0.22.3/src/io/device/fs.rs`,
+  `FsDeviceBuilder::build()` aligns capacity *down* to the 4 KiB `PAGE` (`capacity = value - value %
+  PAGE`), and `with_direct(true)` only adds `O_DIRECT|O_NOATIME` open flags with no capacity/block-size
+  assertion; block size is separately aligned *up* to `PAGE` in `BlockEngineConfig::with_block_size`. So
+  preserving direct I/O never rejects the configured capacity. Recommendation stands: preserve
+  `with_direct(true)` on Linux to match today's `DirectFs` behavior.
+- foyer 0.22's MSRV / edition is **resolved**: `foyer-0.22.3/Cargo.toml` sets `rust-version = "1.85.0"`,
+  `edition = "2021"`, both satisfied by the workspace's `rust/rust-toolchain.toml` (channel `1.96.0`)
+  and `rust/Cargo.toml` (`edition = "2024"`) — no toolchain conflict. Still run `cargo build` to confirm
+  `Cargo.lock` resolves cleanly.
 
 ## Design
 
@@ -218,8 +223,11 @@ impl Default for WriteTuning {
 - `new_with_shards` gains a `tuning: WriteTuning` parameter and applies it via `BlockEngineConfig`.
 - `new(dir, ram, disk)` keeps its signature and passes `WriteTuning::default()`. It is kept purely as a
   convenience wrapper — after Step 7 migrates the one non-test caller
-  (`object_cache_srv.rs`) to `new_with_shards`, and with all test call sites already on
-  `new_with_shards`, `new` has no current callers; removing it is out of scope for this plan.
+  (`object_cache_srv.rs`) to `new_with_shards`, `new` has no current callers; removing it is out of
+  scope for this plan. Note: not every test call site is unaffected — `new_with_shards` gaining a
+  mandatory `tuning` param breaks `object-cache-srv/tests/prefetch_tests.rs:226`'s existing 4-arg call
+  (`FoyerBackend::new_with_shards(dir_path, 16*1024*1024, 16*1024*1024, 1)`), which needs
+  `WriteTuning::default()` added as the 5th arg (see Files to Modify / Step 9).
 - The server builds `WriteTuning { flushers: args.flushers, buffer_pool_bytes: args.write_buffer_mb *
   1024 * 1024, submit_queue_threshold_bytes: args.write_buffer_mb * 1024 * 1024 * 2 }` and calls
   `FoyerBackend::new_with_shards(&args.disk_path, ram, disk, 8, tuning)` (explicit `shards=8`, so no
@@ -321,7 +329,10 @@ FoyerBackend::disk_stats() -> HybridCache::statistics() (Statistics) -> BackendD
    doc comments — the module header (`saturation_monitor.rs:1-8`) and the saturation-monitor spawn
    comment in `object_cache_srv.rs:202-206` — to drop the "SSD" wording and reflect the foyer disk
    gauges.
-9. **Tests** (see Testing Strategy).
+9. **Tests** (see Testing Strategy). Also update `object-cache-srv/tests/prefetch_tests.rs:226`'s
+   `FoyerBackend::new_with_shards(dir_path, 16*1024*1024, 16*1024*1024, 1)` call to pass
+   `WriteTuning::default()` as the 5th arg — it is not in `foyer_backend_tests.rs`/`telemetry_tests.rs`
+   and would otherwise fail to compile after Step 2.
 10. **Docs** — update `mkdocs/docs/admin/object-cache.md` (env-var table, CLI flags, Saturation
     metrics table).
 
@@ -335,6 +346,7 @@ FoyerBackend::disk_stats() -> HybridCache::statistics() (Statistics) -> BackendD
 - `rust/object-cache-srv/src/object_cache_srv.rs`
 - `rust/object-cache-srv/src/saturation_monitor.rs`
 - `rust/object-cache/tests/foyer_backend_tests.rs` (extend)
+- `rust/object-cache-srv/tests/prefetch_tests.rs` (update the `new_with_shards` call to pass the new `tuning` arg)
 - `rust/object-cache-srv/tests/telemetry_tests.rs` (extend, or a new saturation test)
 - `mkdocs/docs/admin/object-cache.md`
 
