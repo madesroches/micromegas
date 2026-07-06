@@ -64,11 +64,11 @@ flushers and enlarging the buffer pool / submit-queue threshold.
 
 Two constructors: `FoyerBackend::new(dir, ram_bytes, disk_bytes)` (`:15`, delegates with `shards=8`)
 and `new_with_shards(dir, ram_bytes, disk_bytes, shards)` (`:19`). The server calls `new` at
-`object_cache_srv.rs:144`; tests call both (`object-cache/tests/foyer_backend_tests.rs`).
+`object_cache_srv.rs:136`; tests call both (`object-cache/tests/foyer_backend_tests.rs`).
 
-The demand put path uses `insert_with_hint(key, value, CacheHint::Normal)` (`:96`); the prefetch put
+The demand put path uses `insert_with_hint(key, value, CacheHint::Normal)` (`:92`); the prefetch put
 uses `storage_writer(key).force().insert(value)` (`:80`). `ram_usage()` reads
-`self.cache.memory().usage()` (`:52`); `close()` calls `self.cache.close()` (`:43`).
+`self.cache.memory().usage()` (`:50`); `close()` calls `self.cache.close()` (`:43`).
 
 ### CLI / env-var surface
 
@@ -182,9 +182,9 @@ issue's suggested defaults:
 | `write_buffer_mb: usize` | `MICROMEGAS_OBJECT_CACHE_WRITE_BUFFER_MB` | `128` | foyer `buffer_pool_size` in MiB; the submit-queue threshold is set to `2×` this (≈256 MiB) |
 
 Rationale (kept as a code/doc comment): foyer splits the pool as `buffer_pool_size / flushers`, and
-the device block size is 16 MiB — 128 MiB / 2 flushers gives each flusher an 8-block buffer. ~128 MiB
-of extra write-buffer RAM is comfortable next to the multi-GB RAM tier. Safe for smaller deployments;
-operators override via the env vars.
+the engine block size is 16 MiB (`BlockEngineConfig` default) — 128 MiB / 2 flushers gives each
+flusher a 4-block buffer. ~128 MiB of extra write-buffer RAM is comfortable next to the multi-GB RAM
+tier. Safe for smaller deployments; operators override via the env vars.
 
 The submit-queue threshold is derived in code as `2 × buffer_pool_bytes` and set **explicitly** via
 `with_submit_queue_size_threshold` (necessary now that the setter works and the 0.22 default is only
