@@ -64,7 +64,8 @@ flushers and enlarging the buffer pool / submit-queue threshold.
 
 Two constructors: `FoyerBackend::new(dir, ram_bytes, disk_bytes)` (`:15`, delegates with `shards=8`)
 and `new_with_shards(dir, ram_bytes, disk_bytes, shards)` (`:19`). The server calls `new` at
-`object_cache_srv.rs:136`; tests call both (`object-cache/tests/foyer_backend_tests.rs`).
+`object_cache_srv.rs:136`; tests call `new_with_shards` (`foyer_backend_tests.rs:31`/`:69`,
+`prefetch_tests.rs:226`) — no test calls the 3-arg `new`.
 
 The demand put path uses `insert_with_hint(key, value, CacheHint::Normal)` (`:92`); the prefetch put
 uses `storage_writer(key).force().insert(value)` (`:80`). `ram_usage()` reads
