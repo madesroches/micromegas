@@ -328,11 +328,13 @@ FoyerBackend::disk_stats() -> HybridCache::statistics() (Statistics) -> BackendD
    remove the two `object_cache_ssd_*` emissions; update the stale "host-level NIC/SSD throughput"
    doc comments — the module header (`saturation_monitor.rs:1-8`) and the saturation-monitor spawn
    comment in `object_cache_srv.rs:202-206` — to drop the "SSD" wording and reflect the foyer disk
-   gauges.
-9. **Tests** (see Testing Strategy). Also update `object-cache-srv/tests/prefetch_tests.rs:226`'s
-   `FoyerBackend::new_with_shards(dir_path, 16*1024*1024, 16*1024*1024, 1)` call to pass
-   `WriteTuning::default()` as the 5th arg — it is not in `foyer_backend_tests.rs`/`telemetry_tests.rs`
-   and would otherwise fail to compile after Step 2.
+   gauges. Also make `sample_once` (currently private, `saturation_monitor.rs:32`) `pub` — the module is
+   already `pub mod`, and the saturation test in Step 9 lives in the `object-cache-srv/tests/`
+   integration-test crate, which can only call `pub` items.
+9. **Tests** (see Testing Strategy). Three existing 4-arg `new_with_shards` call sites break after
+   Step 2 and need `WriteTuning::default()` added as the 5th arg: `foyer_backend_tests.rs:31`,
+   `foyer_backend_tests.rs:69`, and `object-cache-srv/tests/prefetch_tests.rs:226`. `telemetry_tests.rs`
+   has no `new_with_shards` call and is unaffected.
 10. **Docs** — update `mkdocs/docs/admin/object-cache.md` (env-var table, CLI flags, Saturation
     metrics table).
 
@@ -345,8 +347,9 @@ FoyerBackend::disk_stats() -> HybridCache::statistics() (Statistics) -> BackendD
 - `rust/object-cache-srv/src/cli.rs`
 - `rust/object-cache-srv/src/object_cache_srv.rs`
 - `rust/object-cache-srv/src/saturation_monitor.rs`
-- `rust/object-cache/tests/foyer_backend_tests.rs` (extend)
-- `rust/object-cache-srv/tests/prefetch_tests.rs` (update the `new_with_shards` call to pass the new `tuning` arg)
+- `rust/object-cache/tests/foyer_backend_tests.rs` (extend; also update the two existing `new_with_shards`
+  calls at `:31` and `:69` to pass the new `tuning` arg)
+- `rust/object-cache-srv/tests/prefetch_tests.rs` (update the `new_with_shards` call at `:226` to pass the new `tuning` arg)
 - `rust/object-cache-srv/tests/telemetry_tests.rs` (extend, or a new saturation test)
 - `mkdocs/docs/admin/object-cache.md`
 
@@ -394,10 +397,11 @@ FoyerBackend::disk_stats() -> HybridCache::statistics() (Statistics) -> BackendD
 - **saturation monitor**: a focused `#[serial]` test (in `telemetry_tests.rs` or a new
   `saturation_tests.rs`) that drives `sample_once` twice against a `FoyerBackend`-backed `RangeCache`
   with `prev` threaded through, asserting (a) the first tick emits **no** `object_cache_foyer_disk_*`
-  metric, and (b) after writes + a second tick, `write_bytes_per_sec` is emitted. Use the in-memory
-  sink capture (`init_in_memory_tracing`, `metrics_blocks`) already used in `telemetry_tests.rs`.
-  Avoid fixed `sleep`s — use `FoyerBackend::close`/deterministic waits per the note atop
-  `foyer_backend_tests.rs`.
+  metric, and (b) after writes + a second tick, `write_bytes_per_sec` is emitted. This requires
+  `sample_once` to be `pub` (see Step 8) since the test lives in the separate
+  `object-cache-srv/tests/` integration-test crate. Use the in-memory sink capture
+  (`init_in_memory_tracing`, `metrics_blocks`) already used in `telemetry_tests.rs`. Avoid fixed
+  `sleep`s — use `FoyerBackend::close`/deterministic waits per the note atop `foyer_backend_tests.rs`.
 - **CLI defaults**: assert `Cli::parse_from([...])` yields `flushers == 2` / `write_buffer_mb == 128`
   when unset, and that startup validation rejects `0` for each.
 - **Full gate**: `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `cargo test` from `rust/`
