@@ -129,8 +129,12 @@ Verified against the vendored `foyer-0.22.3` / `foyer-storage-0.22.3` / `foyer-m
   (that field was on 0.14's `DeviceStats`).
 - Submit-queue occupancy (`engine/block/flusher.rs:128`, `submit_queue_size: Arc<AtomicUsize>`)
   remains an **internal** field with no public accessor — still not exportable as a gauge.
-- Unchanged: `memory().usage()` (`foyer-memory-0.22.3/src/cache.rs:832`), `close()`, `obtain`/`get`,
-  `LruConfig`, `with_weighter`, `with_shards`, `with_eviction_config`.
+- `obtain` is **removed**. The read path becomes `HybridCache::get(&Q) -> HybridGet`
+  (`hybrid/cache.rs:661`); `foyer_backend.rs:57`'s `self.cache.obtain(key.to_string()).await` ports to
+  `self.cache.get(key).await` (borrowed key), keeping the same `Ok(Some(_))`/`Ok(None)`/`Err(_)` match
+  arms.
+- Unchanged: `memory().usage()` (`foyer-memory-0.22.3/src/cache.rs:832`), `close()`, `LruConfig`,
+  `with_weighter`, `with_shards`, `with_eviction_config`.
 
 ### New import set for `foyer_backend.rs`
 ```rust
@@ -143,9 +147,10 @@ use foyer::{
 
 ### Open verification points for the implementer (compiler-checkable)
 
-- Whether `.storage().with_engine_config(...)` builds without an explicit `.with_io_engine_config(...)`.
-  0.22 introduces an IO-engine layer (`PsyncIoEngineConfig` / `UringIoEngineConfig`); confirm a
-  default is applied, else add the platform-appropriate config (psync is the portable default).
+- IO-engine config is **resolved**: `StoreBuilder::build` (`foyer-storage-0.22.3/src/store.rs:445-450`)
+  defaults `io_engine_config` to `PsyncIoEngineConfig` when unset, so `.storage().with_engine_config(...)`
+  builds without an explicit `.with_io_engine_config(...)` — psync is the automatic default, no
+  explicit IO-engine config is required.
 - Whether preserving direct I/O (`with_direct(true)` on Linux) is desired vs. foyer's buffered
   default. Recommend preserving direct I/O to match today's behavior; verify alignment constraints
   don't reject the configured `disk_bytes`/block size.
@@ -178,8 +183,9 @@ operators override via the env vars.
 
 The submit-queue threshold is derived in code as `2 × buffer_pool_bytes` and set **explicitly** via
 `with_submit_queue_size_threshold` (necessary now that the setter works and the 0.22 default is only
-`1×`). Exposing a separate `MICROMEGAS_OBJECT_CACHE_SUBMIT_QUEUE_MB` override is deferred (see
-Open Questions) to keep the operator surface to the two knobs the issue asked for.
+`1×`). **Decided scope**: a separate `MICROMEGAS_OBJECT_CACHE_SUBMIT_QUEUE_MB` override is deferred, to
+keep the operator surface to the two knobs the issue asked for; if operators later need to decouple the
+threshold from the buffer size, add that third env var (default `2× write_buffer_mb`) as a follow-up.
 
 **Startup validation** (`object_cache_srv.rs`, alongside the existing guards): both `> 0`, each with a
 fatal `anyhow!` naming the env var — mirroring `prefetch_worker_concurrency == 0` etc.
@@ -210,8 +216,10 @@ impl Default for WriteTuning {
 }
 ```
 - `new_with_shards` gains a `tuning: WriteTuning` parameter and applies it via `BlockEngineConfig`.
-- `new(dir, ram, disk)` keeps its signature and passes `WriteTuning::default()`. Existing
-  `new_with_shards` test call sites pass `WriteTuning::default()`.
+- `new(dir, ram, disk)` keeps its signature and passes `WriteTuning::default()`. It is kept purely as a
+  convenience wrapper — after Step 7 migrates the one non-test caller
+  (`object_cache_srv.rs`) to `new_with_shards`, and with all test call sites already on
+  `new_with_shards`, `new` has no current callers; removing it is out of scope for this plan.
 - The server builds `WriteTuning { flushers: args.flushers, buffer_pool_bytes: args.write_buffer_mb *
   1024 * 1024, submit_queue_threshold_bytes: args.write_buffer_mb * 1024 * 1024 * 2 }` and calls
   `FoyerBackend::new_with_shards(&args.disk_path, ram, disk, 8, tuning)` (explicit `shards=8`, so no
@@ -240,7 +248,8 @@ pub struct BackendDiskStats {
 fn disk_stats(&self) -> Option<BackendDiskStats> { None }
 ```
 - `FoyerBackend` overrides it (only compiled with the `foyer` feature) from `self.cache.statistics()`:
-  `disk_write_bytes()` / `disk_read_bytes()` / `disk_write_ios()` / `disk_read_ios()` → `u64`.
+  `disk_write_bytes()` / `disk_read_bytes()` / `disk_write_ios()` / `disk_read_ios()` each return
+  `usize` and are cast to `u64` when populating `BackendDiskStats`.
 - `MemoryBackend` uses the default (`None`).
 - `RangeCache` gains `pub fn backend_disk_stats(&self) -> Option<BackendDiskStats> {
   self.backend.disk_stats() }`, mirroring the existing `fetch_budget_stats` / `inflight_len`
@@ -258,8 +267,8 @@ deltas against the previous sample. Replace the sysinfo `Disks` handling:
   |---|---|---|
   | `object_cache_foyer_disk_write_bytes_per_sec` | `bytes_per_sec` | Δ`write_bytes` — disk drain throughput (the signal the SSD gauge missed) |
   | `object_cache_foyer_disk_read_bytes_per_sec` | `bytes_per_sec` | Δ`read_bytes` |
-  | `object_cache_foyer_disk_write_ios_per_sec` | `bytes_per_sec` (rate via `fmetric!`) | Δ`write_ios` |
-  | `object_cache_foyer_disk_read_ios_per_sec` | `bytes_per_sec` | Δ`read_ios` |
+  | `object_cache_foyer_disk_write_ios_per_sec` | `ops_per_sec` | Δ`write_ios` |
+  | `object_cache_foyer_disk_read_ios_per_sec` | `ops_per_sec` | Δ`read_ios` |
 
   If `backend_disk_stats()` returns `None` (non-foyer backend), emit nothing and leave prev `None`.
 
@@ -295,8 +304,9 @@ FoyerBackend::disk_stats() -> HybridCache::statistics() (Statistics) -> BackendD
 1. **`rust/Cargo.toml`** — bump `foyer = "0.22"`; `cargo update -p foyer`; commit `Cargo.lock`.
 2. **`object-cache/src/foyer_backend.rs`** — port construction to the 0.22 Block-engine + device
    builder; port the demand put to `insert` and keep the prefetch `storage_writer().force().insert()`;
-   update imports; add `WriteTuning` (+`Default`), add `tuning` param to `new_with_shards`, `new`
-   passes `WriteTuning::default()`; set flushers/buffer/threshold via `BlockEngineConfig`; implement
+   port `FoyerBackend::get` from `obtain` to `get` (borrowed key, same match arms); update imports; add
+   `WriteTuning` (+`Default`), add `tuning` param to `new_with_shards`, `new` passes
+   `WriteTuning::default()`; set flushers/buffer/threshold via `BlockEngineConfig`; implement
    `disk_stats()` from `self.cache.statistics()`.
 3. **`object-cache/src/backend.rs`** — add `BackendDiskStats` + defaulted `disk_stats()` trait method.
 4. **`object-cache/src/memory_backend.rs`** — inherits `None` default; confirm it compiles.
@@ -307,7 +317,10 @@ FoyerBackend::disk_stats() -> HybridCache::statistics() (Statistics) -> BackendD
    `FoyerBackend::new_with_shards(&args.disk_path, ram, disk, 8, tuning)`.
 8. **`object-cache-srv/src/saturation_monitor.rs`** — drop `sysinfo::Disks`/`DiskRefreshKind`; thread
    `prev: Option<BackendDiskStats>`; emit the four `object_cache_foyer_disk_*` gauges from deltas;
-   remove the two `object_cache_ssd_*` emissions.
+   remove the two `object_cache_ssd_*` emissions; update the stale "host-level NIC/SSD throughput"
+   doc comments — the module header (`saturation_monitor.rs:1-8`) and the saturation-monitor spawn
+   comment in `object_cache_srv.rs:202-206` — to drop the "SSD" wording and reflect the foyer disk
+   gauges.
 9. **Tests** (see Testing Strategy).
 10. **Docs** — update `mkdocs/docs/admin/object-cache.md` (env-var table, CLI flags, Saturation
     metrics table).
@@ -380,13 +393,7 @@ FoyerBackend::disk_stats() -> HybridCache::statistics() (Statistics) -> BackendD
 
 ## Open Questions
 
-- **IO-engine config**: does `.storage().with_engine_config(...)` build with foyer's default IO
-  engine, or must we pass `.with_io_engine_config(PsyncIoEngineConfig::new())` (portable) / uring on
-  Linux? Resolve against the compiler during Part 0; default to psync if an explicit choice is needed.
 - **Metric rename vs. compatibility**: this renames the disk gauges to `object_cache_foyer_disk_*` and
   drops `object_cache_ssd_*`. Since the old gauges read 0 in production there is assumed to be no
   dashboard depending on their values. If literal name stability is required, keep the `_ssd_` names
   and merely re-source them from foyer.
-- **Separate submit-queue-threshold knob**: the plan derives the threshold as `2× buffer` in code. If
-  operators need to decouple it, add a third `MICROMEGAS_OBJECT_CACHE_SUBMIT_QUEUE_MB` (default:
-  `2× write_buffer_mb`). Left out for now to match the issue's two-knob request.
