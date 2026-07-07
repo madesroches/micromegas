@@ -410,7 +410,9 @@ FoyerBackend::disk_stats() -> HybridCache::statistics() (Statistics) -> BackendD
 
 ## Open Questions
 
-- **Metric rename vs. compatibility**: this renames the disk gauges to `object_cache_foyer_disk_*` and
-  drops `object_cache_ssd_*`. Since the old gauges read 0 in production there is assumed to be no
-  dashboard depending on their values. If literal name stability is required, keep the `_ssd_` names
-  and merely re-source them from foyer.
+_None — all resolved._
+
+**Resolved: metric rename is safe.** The disk gauges are renamed `object_cache_ssd_*` →
+`object_cache_foyer_disk_*` and the old names dropped. Confirmed by the user: no external or Grafana
+dashboard/alert references the `object_cache_ssd_*` metrics (and an in-repo grep found no consumers;
+the old gauges read 0 in production regardless), so no compatibility shim is needed.
