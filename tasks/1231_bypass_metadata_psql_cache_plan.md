@@ -173,7 +173,9 @@ Why reuse `strip_column_index_info`: it makes the direct path produce the *same*
 the postgres path produces, so switching the knob cannot change query results or trip the
 Arrow-57 `ColumnIndex` `null_pages` issue the strip exists to avoid. The only measured difference
 between the two paths is the metadata *acquisition* cost (postgres SELECT + parse vs object-store
-footer fetch + parse). `strip_column_index_info` must be made `pub(crate)` (currently private).
+footer fetch + parse). `load_partition_metadata_from_footer` lives in `partition_metadata.rs`,
+the same module that defines `strip_column_index_info`, so it calls it directly as a private
+module-local function — no visibility change needed.
 
 ### Telemetry / measurability (the point of the knob)
 
@@ -223,9 +225,10 @@ MICROMEGAS_DISABLE_METADATA_PSQL_CACHE
    `ReaderFactory::new` (and copy into `ParquetReader` in `create_reader`); add the
    `CachingReaderFetch` `MetadataFetch` adapter; branch `get_metadata` on the flag. Log the resolved
    path once (in `new`).
-2. **`partition_metadata.rs`** — make `strip_column_index_info` `pub(crate)`; add
-   `load_partition_metadata_from_footer` (`#[span_fn]`) using `ParquetMetaDataReader::load_and_finish`
-   + `strip_column_index_info`, with the `partition_metadata_footer_read` debug log. Add imports
+2. **`partition_metadata.rs`** — add `load_partition_metadata_from_footer` (`#[span_fn]`), co-located
+   with (and calling directly into) the private `strip_column_index_info`, using
+   `ParquetMetaDataReader::load_and_finish` + `strip_column_index_info`, with the
+   `partition_metadata_footer_read` debug log. Add imports
    (`CachingReader`, `MetadataFetch`, `ParquetError`, `bytes::Bytes`, futures `FutureExt`) as needed.
 3. **`lakehouse_context.rs`** — in `new` and `with_caches`, call `read_disable_metadata_psql_cache()`
    and pass the bool to `ReaderFactory::new`.
@@ -242,7 +245,7 @@ MICROMEGAS_DISABLE_METADATA_PSQL_CACHE
 - `rust/analytics/src/lakehouse/lakehouse_context.rs`
 - `rust/analytics/tests/` — new/extended test (metadata parity + env parse); place near existing
   lakehouse tests (identify the right file during implementation, per "unit tests under tests/").
-- `mkdocs/docs/admin/service-lifecycle.md` (or the closest analytics-config admin page) — short knob note.
+- `mkdocs/docs/admin/object-cache.md` (near the `## Client opt-in` section) — short knob note.
 
 ## Trade-offs
 
@@ -270,23 +273,34 @@ MICROMEGAS_DISABLE_METADATA_PSQL_CACHE
 
 ## Documentation
 
-The sibling analytics knobs (`MICROMEGAS_METADATA_CACHE_MB`, `MICROMEGAS_FILE_CACHE_MB`, etc.) are
-not currently documented in mkdocs, so there is no existing table to extend. Add a short
-**experimental** note for `MICROMEGAS_DISABLE_METADATA_PSQL_CACHE` on the closest analytics-service
-admin page (`mkdocs/docs/admin/service-lifecycle.md`): what it does (read partition metadata directly
-from object storage instead of postgres), that it's a read-only A/B toggle with no write-side or
-data effect, default off, and how to compare the two `#[span_fn]` spans. Backfilling docs for all the
-undocumented sibling knobs is out of scope.
+`mkdocs/docs/admin/object-cache.md` documents the object-cache read path, already has an
+`## Environment variables` table and a `## Client opt-in` section for client-side read-path env
+vars — the exact pattern this knob slots into (it's a client read-path toggle in
+`reader_factory.rs`). Add a short **experimental** note for
+`MICROMEGAS_DISABLE_METADATA_PSQL_CACHE` there (in/near `## Client opt-in`): what it does (read
+partition metadata directly from object storage instead of postgres), that it's a read-only A/B
+toggle with no write-side or data effect, default off, and how to compare the two `#[span_fn]`
+spans. Backfilling docs for the other undocumented sibling knobs (`MICROMEGAS_METADATA_CACHE_MB`,
+`MICROMEGAS_FILE_CACHE_MB`, etc.) is out of scope.
 
 ## Testing Strategy
 
-- **Metadata parity (core correctness):** in the analytics test suite, write a partition via the
-  existing test helpers (or use an existing fixture partition), then load its metadata both ways —
-  `load_partition_metadata(pool, path, None)` and `load_partition_metadata_from_footer(&mut reader,
-  path, size)` against a `CachingReader` over the test object store — and assert the results are
-  equivalent (schema, num row groups, per-row-group row counts / total `num_rows`, column count).
-  This locks in that the knob doesn't change what DataFusion sees. Prefer deterministic waits over
-  `sleep` per the repo test convention.
+- **Metadata parity (core correctness):** a true two-way parity test (`load_partition_metadata`
+  vs `load_partition_metadata_from_footer` against a row actually populated by the write path)
+  needs a live `DataLakeConnection` (postgres + object store) — `load_partition_metadata(pool,
+  path, None)` unconditionally SELECTs against a `PgPool`, and the only way to populate that row is
+  the write path (`write_partition.rs`). That makes it inherently an integration test, not a unit
+  test. Split it in two:
+  - **Footer-side unit test**, in `rust/analytics/tests/file_cache_tests.rs` (`InMemory` object
+    store + `CachingReader`, matching that file's existing style): write a parquet file, call
+    `load_partition_metadata_from_footer`, and assert the resulting `ParquetMetaData` matches what
+    `parse_parquet_metadata` + `strip_column_index_info` produce from the same bytes read directly
+    (schema, num row groups, per-row-group row counts / total `num_rows`, column count). This locks
+    in the footer-read path's correctness without touching postgres.
+  - **Full two-way parity test**, `#[ignore]`d alongside the live-infra tests in
+    `sql_view_test.rs`/`histo_view_test.rs`: write a partition through the real write path, then
+    load its metadata both ways and assert equivalence. Run manually / in an environment with live
+    postgres + object storage.
 - **Env parse:** unit tests for `read_disable_metadata_psql_cache` covering `1`/`true`/`TRUE`/`on`/
   `yes` ⇒ true and unset/`0`/`false`/garbage ⇒ false.
 - **Smoke via existing query tests:** run the lakehouse query tests with the env var set to confirm
@@ -298,8 +312,6 @@ undocumented sibling knobs is out of scope.
 
 ## Open Questions
 
-- **Which existing analytics test file/harness is the right home for the parity test**, and whether
-  a query-level env-scoped (serial) test is worth adding vs. a documented manual check — settle
-  against the test layout during implementation. Not a blocker: a unit-level parity test on
-  `load_partition_metadata` vs `load_partition_metadata_from_footer` is sufficient and always
-  possible.
+_None — all resolved._ (Test home for the parity test is settled in Testing Strategy: a
+footer-only unit test in `file_cache_tests.rs` plus an `#[ignore]`d live-infra two-way parity test
+alongside `sql_view_test.rs`/`histo_view_test.rs`.)
