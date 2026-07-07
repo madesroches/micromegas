@@ -240,7 +240,8 @@ failed queries can be re-run.
     `Partition` stay — other tests in the file use them).
 11. **Docs** — remove the "Experimental: bypassing the postgres partition-metadata cache" section
     from `mkdocs/docs/admin/object-cache.md`; delete the stale `## Unreleased`
-    `MICROMEGAS_DISABLE_METADATA_PSQL_CACHE` (#1231) bullet from `CHANGELOG.md` (see Documentation).
+    `MICROMEGAS_DISABLE_METADATA_PSQL_CACHE` (#1231) bullet from `CHANGELOG.md` and add a new
+    `## Unreleased` bullet for #1121 (see Documentation).
 12. **Gate** — `cargo fmt`; `cargo clippy --workspace -- -D warnings`; `cargo test` from `rust/`;
     `python3 build/rust_ci.py`.
 
@@ -298,7 +299,14 @@ sections already say about what gets cached.
 At PR time, delete the still-`## Unreleased` "Add `MICROMEGAS_DISABLE_METADATA_PSQL_CACHE`
 … (#1231)" bullet from `CHANGELOG.md` rather than adding a countervailing removal line next to
 it — that knob never shipped in a release, so the changelog should read as if it never existed.
-No new "Unreleased" entry for #1121 is needed once that bullet is gone.
+
+The `partition_metadata` table itself did ship (schema v4, `upgrade_v3_to_v4`), so dropping it is
+operationally visible to existing deployments and gets its own `## Unreleased` bullet: add a new
+entry (grouped under an appropriate existing category, e.g. **Caching** or **Lakehouse**) describing
+the removal of the postgres `partition_metadata` table (added `upgrade_v5_to_v6`, schema version 6),
+the removal of the write-path `INSERT INTO partition_metadata` and the cleanup-path
+`delete_partition_metadata_batch`, and the switch to reading partition metadata solely from the
+Parquet footer via the object-cache-backed reader (#1121).
 
 ## Testing Strategy
 
