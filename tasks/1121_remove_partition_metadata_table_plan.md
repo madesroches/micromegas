@@ -239,7 +239,8 @@ failed queries can be re-run.
     (`BlocksView`, `PartitionCache`, `materialize_partition_range`, `retire_partitions`, and
     `Partition` stay — other tests in the file use them).
 11. **Docs** — remove the "Experimental: bypassing the postgres partition-metadata cache" section
-    from `mkdocs/docs/admin/object-cache.md` (see Documentation).
+    from `mkdocs/docs/admin/object-cache.md`; delete the stale `## Unreleased`
+    `MICROMEGAS_DISABLE_METADATA_PSQL_CACHE` (#1231) bullet from `CHANGELOG.md` (see Documentation).
 12. **Gate** — `cargo fmt`; `cargo clippy --workspace -- -D warnings`; `cargo test` from `rust/`;
     `python3 build/rust_ci.py`.
 
@@ -294,8 +295,10 @@ its behavior (footer read via the object-cache-backed reader) is now simply how 
 is always read, not worth a dedicated callout in the object-cache doc beyond what the surrounding
 sections already say about what gets cached.
 
-A `CHANGELOG.md` "Unreleased" entry should be added at PR time (per repo convention, one line
-summarizing the removal and linking #1121), not as part of this plan document.
+At PR time, delete the still-`## Unreleased` "Add `MICROMEGAS_DISABLE_METADATA_PSQL_CACHE`
+… (#1231)" bullet from `CHANGELOG.md` rather than adding a countervailing removal line next to
+it — that knob never shipped in a release, so the changelog should read as if it never existed.
+No new "Unreleased" entry for #1121 is needed once that bullet is gone.
 
 ## Testing Strategy
 
