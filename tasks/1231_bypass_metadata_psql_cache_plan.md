@@ -61,7 +61,10 @@ metadata to the `ParquetReader` layer.
 `LakehouseContext` (`lakehouse_context.rs`) builds the shared caches and the single `ReaderFactory`.
 `ReaderFactory::new` is called from exactly two places — `LakehouseContext::new` (`:105`, reads
 `MICROMEGAS_METADATA_CACHE_MB` / `MICROMEGAS_FILE_CACHE_MB` / `MICROMEGAS_FILE_CACHE_MAX_FILE_MB`
-env vars) and `LakehouseContext::with_caches` (`:127`, caches supplied by caller, used by tests).
+env vars) and `LakehouseContext::with_caches` (`:127`, caches supplied by caller). `with_caches` is
+currently unused (grep: zero callers anywhere in the repo besides its own definition) — tests and
+internal callers (`export_log_view.rs:117`, `sql_batch_view.rs:89`,
+`tests/histo_view_test.rs:161`, `tests/sql_view_test.rs:354`) all go through `LakehouseContext::new`.
 Nothing else constructs `ReaderFactory`. The `std::env::var(...).parse().unwrap_or_else(warn+default)`
 pattern in `LakehouseContext::new` is the house style for these knobs.
 
@@ -115,8 +118,10 @@ pub fn read_disable_metadata_psql_cache() -> bool {
 Add `bypass_metadata_psql_cache: bool` to `ReaderFactory` and to `ParquetReader`.
 - `ReaderFactory::new` gains a `bypass_metadata_psql_cache: bool` param (explicit, so it stays
   testable without env). Both `LakehouseContext::new` and `::with_caches` call
-  `read_disable_metadata_psql_cache()` and pass the result — covering the env-configured path *and*
-  the test/`with_caches` path automatically. `create_reader` copies the bool into each `ParquetReader`.
+  `read_disable_metadata_psql_cache()` and pass the result, for consistency and to future-proof
+  `with_caches` — it currently has no callers (see Current State), so today this only covers the
+  env-configured path via `LakehouseContext::new`. `create_reader` copies the bool into each
+  `ParquetReader`.
 
 Passing the flag explicitly (rather than reading the env inside `ReaderFactory`) matches how the
 sibling cache knobs are resolved at the context layer and keeps `ReaderFactory` env-free/unit-testable.
@@ -294,9 +299,11 @@ spans. Backfilling docs for the other undocumented sibling knobs (`MICROMEGAS_ME
   - **Footer-side unit test**, in `rust/analytics/tests/file_cache_tests.rs` (`InMemory` object
     store + `CachingReader`, matching that file's existing style): write a parquet file, call
     `load_partition_metadata_from_footer`, and assert the resulting `ParquetMetaData` matches what
-    `parse_parquet_metadata` + `strip_column_index_info` produce from the same bytes read directly
-    (schema, num row groups, per-row-group row counts / total `num_rows`, column count). This locks
-    in the footer-read path's correctness without touching postgres.
+    `parse_parquet_metadata` alone produces from the same bytes read directly (schema, num row
+    groups, per-row-group row counts / total `num_rows`, column count) — these fields are invariant
+    under the column-index strip, so no stripped reference is needed. (`strip_column_index_info` is
+    a private `fn` in `partition_metadata.rs` and unreachable from this external integration test
+    anyway.) This locks in the footer-read path's correctness without touching postgres.
   - **Full two-way parity test**, `#[ignore]`d alongside the live-infra tests in
     `sql_view_test.rs`/`histo_view_test.rs`: write a partition through the real write path, then
     load its metadata both ways and assert equivalence. Run manually / in an environment with live
