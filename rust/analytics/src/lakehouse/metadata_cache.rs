@@ -85,6 +85,14 @@ impl MetadataCache {
     pub fn stats(&self) -> (u64, u64) {
         (self.cache.entry_count(), self.cache.weighted_size())
     }
+
+    /// Runs pending cache maintenance tasks.
+    ///
+    /// This should be called to ensure cache statistics are up-to-date,
+    /// particularly useful in test scenarios.
+    pub async fn run_pending_tasks(&self) {
+        self.cache.run_pending_tasks().await;
+    }
 }
 
 impl std::fmt::Debug for MetadataCache {

@@ -6,6 +6,7 @@ use datafusion::parquet::arrow::ArrowWriter;
 use datafusion::parquet::file::metadata::ParquetMetaData;
 use micromegas_analytics::lakehouse::caching_reader::CachingReader;
 use micromegas_analytics::lakehouse::file_cache::FileCache;
+use micromegas_analytics::lakehouse::metadata_cache::MetadataCache;
 use micromegas_analytics::lakehouse::partition_metadata::load_partition_metadata_from_footer;
 use object_store::ObjectStoreExt;
 use object_store::memory::InMemory;
@@ -363,4 +364,85 @@ async fn test_load_partition_metadata_from_footer_matches_direct_parse() {
             from_direct_parse.row_group(i).num_columns()
         );
     }
+}
+
+#[tokio::test]
+async fn test_load_partition_metadata_from_footer_with_metadata_cache() {
+    let store = Arc::new(InMemory::new());
+    let path = Path::from("test/footer_with_cache.parquet");
+    let (data, _from_direct_parse) = write_test_parquet();
+    store
+        .put(&path, data.clone().into())
+        .await
+        .expect("put should succeed");
+
+    let file_cache = Arc::new(FileCache::new(1024 * 1024, 100 * 1024));
+    let metadata_cache = MetadataCache::new(1024 * 1024);
+
+    // First call: metadata cache miss, should parse the footer and backfill the cache.
+    let mut reader1 = CachingReader::new(
+        store.clone(),
+        path.clone(),
+        path.to_string(),
+        data.len() as u64,
+        file_cache.clone(),
+    );
+    let first = load_partition_metadata_from_footer(
+        &mut reader1,
+        path.as_ref(),
+        data.len() as u64,
+        Some(&metadata_cache),
+    )
+    .await
+    .expect("first load_partition_metadata_from_footer should succeed");
+
+    // Run pending tasks to ensure stats are up-to-date
+    metadata_cache.run_pending_tasks().await;
+
+    let (entry_count, weighted_size_bytes) = metadata_cache.stats();
+    assert_eq!(
+        entry_count, 1,
+        "metadata cache should have one entry after a miss+backfill"
+    );
+    assert!(
+        weighted_size_bytes > 0,
+        "metadata cache weight should reflect footer bytes read, got {weighted_size_bytes}"
+    );
+
+    // Second call: metadata cache hit, should return equivalent metadata without needing a
+    // fresh footer read (a new reader is used only because CachingReader::get_bytes is &mut;
+    // the cache hit path returns before touching the reader).
+    let mut reader2 = CachingReader::new(
+        store,
+        path.clone(),
+        path.to_string(),
+        data.len() as u64,
+        file_cache,
+    );
+    let second = load_partition_metadata_from_footer(
+        &mut reader2,
+        path.as_ref(),
+        data.len() as u64,
+        Some(&metadata_cache),
+    )
+    .await
+    .expect("second load_partition_metadata_from_footer should succeed");
+
+    assert_eq!(
+        first.file_metadata().schema(),
+        second.file_metadata().schema()
+    );
+    assert_eq!(first.num_row_groups(), second.num_row_groups());
+    assert_eq!(
+        first.file_metadata().num_rows(),
+        second.file_metadata().num_rows()
+    );
+
+    // Cache should still report exactly one entry: the second call was a hit, not a new insert.
+    metadata_cache.run_pending_tasks().await;
+    let (entry_count_after, _) = metadata_cache.stats();
+    assert_eq!(
+        entry_count_after, 1,
+        "metadata cache should still have one entry after a cache hit"
+    );
 }
