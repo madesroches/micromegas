@@ -11,10 +11,12 @@ footer bytes. That path predates the (now much faster) object-cache service and 
 re-reading/re-parsing parquet footers from object storage on every miss.
 
 This plan adds a runtime read-side knob — env var `MICROMEGAS_DISABLE_METADATA_PSQL_CACHE` — that,
-when enabled, makes `ParquetReader::get_metadata` (the query hot path) **skip the postgres SELECT and
-the `MetadataCache` lookaside entirely** and instead read + parse the parquet footer directly from
-object storage through the existing object-cache-backed reader (`CachingReader`). It produces
-metadata identical to the postgres path (same column-index stripping), so downstream behavior is
+when enabled, makes `ParquetReader::get_metadata` (the query hot path) **skip only the postgres
+SELECT**. The `MetadataCache` parsed-lookaside stays in front of both read paths; on a miss, the
+knob backfills it from a direct parquet-footer read against object storage (via the existing
+object-cache-backed reader, `CachingReader`) instead of the postgres round-trip. On a cache hit the
+two paths are identical — the knob only changes the miss-backfill source. It produces metadata
+identical to the postgres path (same column-index stripping), so downstream behavior is
 unchanged and the two paths can be A/B'd under production traffic to decide, later, whether the
 postgres read path (or the `partition_metadata` table itself) can be retired — **that retirement
 is explicitly out of scope here** (issue "Relationships": prerequisite for #1205, not this issue).
@@ -128,10 +130,11 @@ sibling cache knobs are resolved at the context layer and keeps `ReaderFactory` 
 
 ### The direct-read path
 
-In `ParquetReader::get_metadata`, branch on the flag:
+In `ParquetReader::get_metadata`, branch on the flag. Both branches share the same
+`metadata_cache` lookaside — only the miss-backfill source differs:
 ```rust
 if self.bypass_metadata_psql_cache {
-    load_partition_metadata_from_footer(&mut self.inner, &self.filename, self.file_size).await
+    load_partition_metadata_from_footer(&mut self.inner, &self.filename, self.file_size, Some(&metadata_cache)).await
 } else {
     load_partition_metadata(&pool, &filename, Some(&metadata_cache)).await.map_err(...)
 }
@@ -141,18 +144,27 @@ New helper in `partition_metadata.rs` (co-located with the postgres path and the
 `strip_column_index_info`, which it reuses):
 ```rust
 /// Read and parse a partition's parquet footer directly from object storage via the
-/// object-cache-backed reader, bypassing the postgres partition_metadata table and MetadataCache.
-/// Produces metadata equivalent to load_partition_metadata (same column-index stripping) so the
-/// two read paths are behaviorally interchangeable and can be A/B compared.
+/// object-cache-backed reader, bypassing the postgres partition_metadata table. Still checks and
+/// backfills the shared MetadataCache parsed-lookaside, so on a cache hit this path is identical
+/// to load_partition_metadata; the two read paths differ only in the miss-backfill source
+/// (object-cache footer read vs. postgres round-trip) and are otherwise behaviorally
+/// interchangeable and A/B comparable.
 #[span_fn]
 pub async fn load_partition_metadata_from_footer(
     reader: &mut CachingReader,
     file_path: &str,
     file_size: u64,
+    cache: Option<&MetadataCache>,
 ) -> datafusion::parquet::errors::Result<Arc<ParquetMetaData>> {
+    if let Some(cache) = cache
+        && let Some(metadata) = cache.get(file_path).await
+    {
+        return Ok(metadata);
+    }
     let start = std::time::Instant::now();
+    let bytes_read = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
     let raw = ParquetMetaDataReader::new()
-        .load_and_finish(CachingReaderFetch(reader), file_size)
+        .load_and_finish(CachingReaderFetch { reader, bytes_read: bytes_read.clone() }, file_size)
         .await?;
     let stripped = strip_column_index_info(raw)
         .map_err(|e| ParquetError::External(e.into()))?;
@@ -160,16 +172,27 @@ pub async fn load_partition_metadata_from_footer(
         "partition_metadata_footer_read file={file_path} file_size={file_size} \
          duration_ms={}", start.elapsed().as_millis()
     );
-    Ok(Arc::new(stripped))
+    let result = Arc::new(stripped);
+    if let Some(cache) = cache {
+        // Footer bytes read is a cheap proxy for the parsed metadata's weight, comparable to
+        // the postgres path's stored serialized size, without an extra re-serialization pass.
+        let weight = u32::try_from(bytes_read.load(std::sync::atomic::Ordering::Relaxed)).unwrap_or(u32::MAX);
+        cache.insert(file_path.to_string(), result.clone(), weight).await;
+    }
+    Ok(result)
 }
 ```
-with the `MetadataFetch` adapter (in `reader_factory.rs` or `caching_reader.rs`, wherever
-`CachingReader` visibility is cleanest):
+with the `MetadataFetch` adapter (in `partition_metadata.rs`, alongside the helper), which also
+tallies footer bytes fetched so the caller can use them as the cache weight:
 ```rust
-struct CachingReaderFetch<'a>(&'a mut CachingReader);
+struct CachingReaderFetch<'a> {
+    reader: &'a mut CachingReader,
+    bytes_read: std::sync::Arc<std::sync::atomic::AtomicU64>,
+}
 impl MetadataFetch for CachingReaderFetch<'_> {
     fn fetch(&mut self, range: Range<u64>) -> BoxFuture<'_, parquet::errors::Result<Bytes>> {
-        self.0.get_bytes(range).boxed()
+        self.bytes_read.fetch_add(range.end - range.start, std::sync::atomic::Ordering::Relaxed);
+        self.reader.get_bytes(range).boxed()
     }
 }
 ```
@@ -177,10 +200,11 @@ impl MetadataFetch for CachingReaderFetch<'_> {
 Why reuse `strip_column_index_info`: it makes the direct path produce the *same* `ParquetMetaData`
 the postgres path produces, so switching the knob cannot change query results or trip the
 Arrow-57 `ColumnIndex` `null_pages` issue the strip exists to avoid. The only measured difference
-between the two paths is the metadata *acquisition* cost (postgres SELECT + parse vs object-store
-footer fetch + parse). `load_partition_metadata_from_footer` lives in `partition_metadata.rs`,
-the same module that defines `strip_column_index_info`, so it calls it directly as a private
-module-local function — no visibility change needed.
+between the two paths, on a cache miss, is the metadata *acquisition* cost (postgres SELECT +
+parse vs object-store footer fetch + parse); on a cache hit both paths are identical.
+`load_partition_metadata_from_footer` lives in `partition_metadata.rs`, the same module that
+defines `strip_column_index_info`, so it calls it directly as a private module-local function —
+no visibility change needed.
 
 ### Telemetry / measurability (the point of the knob)
 
@@ -195,13 +219,15 @@ module-local function — no visibility change needed.
 
 ### Behavioral notes
 
-- **MetadataCache is bypassed, not populated, under the knob.** Per the issue ("skip the … 
-  `MetadataCache` lookaside"), the direct path does not read or write `MetadataCache`; it re-parses
-  the footer on every `get_metadata` call. This is intentional — it measures the true cost of the
-  object-cache-backed metadata read (the cost #1205's L1 cache would later remove), not a cost
-  hidden behind the moka lookaside. `CachingReader`/`FileCache` still cache the footer *bytes*, so
-  the object-store round-trip is typically avoided on repeat reads; only the thrift decode + strip
-  repeats. This caveat is called out in Trade-offs.
+- **MetadataCache stays in front of both paths.** The direct path checks `MetadataCache` first,
+  same as the postgres path; a hit returns the cached `Arc<ParquetMetaData>` without touching
+  object storage or postgres. Only on a miss does it read+parse the footer from object storage and
+  insert into `MetadataCache` (weighted by footer bytes read, a proxy for the postgres path's
+  stored serialized size). On a cache hit, the two paths are behaviorally and performance-wise
+  identical; the knob's only observable effect is which source backfills a miss. This keeps the
+  A/B honest as "cost of a miss: object-cache footer read vs postgres round-trip" rather than
+  conflating it with parsed-cache pressure — see Trade-offs for why the issue's original "skip the
+  MetadataCache lookaside entirely" wording was superseded.
 - **No format-version dispatch needed.** The direct path parses the actual on-disk footer with the
   parquet-58 reader. v1 (Arrow 56) partitions still on disk are read by the same reader; the
   postgres path's `parse_legacy_and_upgrade` num_rows injection is a serialization-compat shim for
@@ -217,10 +243,13 @@ MICROMEGAS_DISABLE_METADATA_PSQL_CACHE
        -> LakehouseContext::{new, with_caches} -> ReaderFactory { bypass_metadata_psql_cache }
             -> create_reader -> ParquetReader { bypass_metadata_psql_cache }
                  -> get_metadata:
-                      bypass? load_partition_metadata_from_footer(&mut inner, file, size)
-                              -> ParquetMetaDataReader::load_and_finish(CachingReaderFetch(inner))
-                              -> strip_column_index_info   [shared with postgres path]
-                      else    load_partition_metadata(pool, file, Some(metadata_cache))  [unchanged]
+                      bypass? load_partition_metadata_from_footer(&mut inner, file, size, Some(metadata_cache))
+                              -> MetadataCache lookaside check -> hit: return cached metadata
+                              -> miss: ParquetMetaDataReader::load_and_finish(CachingReaderFetch(inner))
+                                       -> strip_column_index_info   [shared with postgres path]
+                                       -> MetadataCache.insert(weight = footer bytes read)
+                      else    load_partition_metadata(pool, file, Some(metadata_cache))  [unchanged;
+                              same MetadataCache lookaside, backfilled from postgres on miss]
 ```
 
 ## Implementation Steps
@@ -257,21 +286,24 @@ MICROMEGAS_DISABLE_METADATA_PSQL_CACHE
 - **Static process-lifetime knob vs. per-query toggle.** A/B'ing under production means running a
   fleet slice with the env var set; a per-query flag adds surface with no benefit for this
   measurement. Read once at construction.
-- **Bypass `MetadataCache` entirely (per issue) vs. keep the parsed-metadata lookaside and only swap
-  the miss source.** Keeping the lookaside would give a cleaner "cost of a miss" comparison, but the
-  issue's intent is to validate the *raw* object-cache footer path (the assumption #1205 builds on),
-  so the parsed-cache is deliberately out of the loop. The extra per-call thrift decode+strip is the
-  cost this exercise means to expose; it's captured by the span so the comparison is explicit.
-  Byte-level caching (`FileCache`) still applies, so this is decode cost, not object-store I/O, on
-  repeats.
+- **Keep the `MetadataCache` parsed-lookaside vs. bypass it entirely (the issue's original literal
+  wording, "skip the … `MetadataCache` lookaside").** The issue's follow-up comment superseded that
+  wording: per-partition footer decode is cheap (µs), but re-decoding it across a large query
+  fan-out *every query* — not just on a cold cache — would regress heavy queries once the parsed
+  cache is gone (~28 ms for 1000 partitions, decode cost alone). Keeping `MetadataCache` in front of
+  both paths means the object-cache footer read is only the miss-backfill source, so a warm cache
+  performs identically to the postgres path and the A/B cleanly isolates "cost of a miss:
+  object-cache footer read vs postgres round-trip" instead of conflating it with per-query re-decode
+  cost. Byte-level caching (`FileCache`) still applies underneath, so a `MetadataCache` miss is
+  decode cost, not necessarily object-store I/O.
 - **Reuse `strip_column_index_info` (re-serialize round-trip) vs. parse footer without page index and
   skip the strip.** Reusing it guarantees identical metadata to the postgres path, so the knob can't
   change results — worth the re-serialize cost for an honest A/B. Skipping the strip is a possible
   future optimization once the postgres path is retired, not now.
-- **No `with_prefetch_hint` on the reader.** Default 2-fetch footer load is simplest and correct; the
-  footer bytes are usually already in `FileCache`. A prefetch hint (e.g. 64 KiB suffix) could cut it
-  to one fetch for uncached large files — deferred, noted as a follow-up if telemetry shows the
-  footer fetch dominating.
+- **No `with_prefetch_hint` on the reader (confirmed decision, not just a default).** Default
+  2-fetch footer load is simplest and correct; the footer bytes are usually already in `FileCache`.
+  A prefetch hint (e.g. 64 KiB suffix) could cut it to one fetch for uncached large files — deferred,
+  noted as a follow-up if telemetry shows the footer fetch dominating.
 - **Explicit bool param on `ReaderFactory::new` vs. reading env inside `ReaderFactory`.** Explicit
   keeps `ReaderFactory` env-free and unit-testable and matches how sibling cache knobs resolve at the
   `LakehouseContext` layer; the single env read lives in one shared helper.

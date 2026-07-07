@@ -65,8 +65,9 @@ impl ReaderFactory {
     ///
     /// `bypass_metadata_psql_cache` selects the partition-metadata read path: when `true`,
     /// `ParquetReader::get_metadata` reads and parses parquet footers directly from object
-    /// storage, skipping the postgres `partition_metadata` table and the `MetadataCache`
-    /// lookaside entirely. See `read_disable_metadata_psql_cache`.
+    /// storage instead of querying the postgres `partition_metadata` table. The `MetadataCache`
+    /// parsed-lookaside is shared with the postgres path in both cases; only the miss-backfill
+    /// source differs. See `read_disable_metadata_psql_cache`.
     pub fn new(
         object_store: Arc<dyn ObjectStore>,
         pool: PgPool,
@@ -189,11 +190,20 @@ impl AsyncFileReader for ParquetReader {
         _options: Option<&ArrowReaderOptions>,
     ) -> BoxFuture<'_, datafusion::parquet::errors::Result<Arc<ParquetMetaData>>> {
         if self.bypass_metadata_psql_cache {
+            // Same MetadataCache parsed-lookaside as the postgres path below; only the
+            // miss-backfill source differs (object-cache footer read vs. postgres).
+            let metadata_cache = Arc::clone(&self.metadata_cache);
             let filename = self.filename.clone();
             let file_size = self.file_size;
             let inner = &mut self.inner;
             Box::pin(async move {
-                load_partition_metadata_from_footer(inner, &filename, file_size).await
+                load_partition_metadata_from_footer(
+                    inner,
+                    &filename,
+                    file_size,
+                    Some(&metadata_cache),
+                )
+                .await
             })
         } else {
             let metadata_cache = Arc::clone(&self.metadata_cache);

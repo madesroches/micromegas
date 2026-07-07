@@ -595,7 +595,8 @@ async fn partition_metadata_footer_parity_test() -> Result<()> {
         file_cache,
     );
     let from_footer =
-        load_partition_metadata_from_footer(&mut reader, &file_path, file_size as u64).await?;
+        load_partition_metadata_from_footer(&mut reader, &file_path, file_size as u64, None)
+            .await?;
 
     assert_eq!(*from_postgres, *from_footer);
 

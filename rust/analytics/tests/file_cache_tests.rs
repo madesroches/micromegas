@@ -335,7 +335,7 @@ async fn test_load_partition_metadata_from_footer_matches_direct_parse() {
     );
 
     let from_footer =
-        load_partition_metadata_from_footer(&mut reader, path.as_ref(), data.len() as u64)
+        load_partition_metadata_from_footer(&mut reader, path.as_ref(), data.len() as u64, None)
             .await
             .expect("load_partition_metadata_from_footer should succeed");
 
