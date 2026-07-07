@@ -8,7 +8,7 @@
 persistent cache so query-time metadata reads don't have to hit object storage. #1235 added a
 read-side A/B knob (`MICROMEGAS_DISABLE_METADATA_PSQL_CACHE`) that let `ParquetReader` read the
 footer directly from object storage instead; production comparison confirmed the two paths are
-behaviorally identical and the object-cache-backed footer read is an acceptable replacement. This
+behaviorally identical and the object-cache-backed footer read performs better. This
 plan finishes the retirement: make the object-storage footer read the only read path, delete the
 `partition_metadata` table (migration), and remove everything that only existed to serve the
 postgres path — the postgres `load_partition_metadata`, the write-path `INSERT`, batch deletes on
@@ -273,8 +273,10 @@ failed queries can be re-run.
 
 - **Go straight to removal vs. another A/B/soak period.** #1235 already produced production
   comparison data justifying this; running a second observation window on the same comparison adds
-  delay without new information. If telemetry from #1235's rollout is inconclusive by the time this
-  is implemented, pause and gather more before proceeding (see Open Questions).
+  delay without new information. The soak question is settled: only a serious regression would have
+  been a showstopper, and the footer-read path performed *better* than the postgres path in
+  production. There is also an architectural motivation beyond the A/B result — reducing reliance
+  on the postgres cluster, which has proven less efficient than expected.
 - **Drop the table vs. keep it as a disabled/inert safety net.** Keeping the table around unused
   still pays the write-path insert cost and doesn't fix the TOAST-on-delete problem (the actual
   motivation in #1108/#1121) unless the cleanup-path delete is also removed — at which point the
@@ -353,6 +355,6 @@ Parquet footer via the object-cache-backed reader (#1121).
 
 ## Open Questions
 
-- Has #1235's production A/B run long enough / against enough traffic to be confident there's no
-  latency regression from cold misses before deleting the postgres path outright? (This plan
-  assumes yes — confirm before implementing if the soak period was short.)
+None — the #1235 production A/B soak was confirmed sufficient: only a serious regression would have
+been a showstopper, and the footer-read path performed better. Removing the postgres dependency is
+also an explicit architectural goal (see Trade-offs).
