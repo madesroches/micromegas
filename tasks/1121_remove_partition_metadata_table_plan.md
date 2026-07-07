@@ -233,7 +233,11 @@ failed queries can be re-run.
     `load_partition_metadata`; delete `sql_view_test.rs`'s `partition_metadata_footer_parity_test`
     outright — the same file's `sql_view_test` already materializes partitions through the real
     write path and queries them back end-to-end through `get_metadata`, so there's nothing left for
-    a replacement smoke test to add.
+    a replacement smoke test to add. Also drop `sql_view_test.rs`'s imports that become unused once
+    the parity test is gone: the `partition_metadata::{load_partition_metadata,
+    load_partition_metadata_from_footer}` line, `CachingReader`, `FileCache`, and `sqlx::Row`
+    (`BlocksView`, `PartitionCache`, `materialize_partition_range`, `retire_partitions`, and
+    `Partition` stay — other tests in the file use them).
 11. **Docs** — remove the "Experimental: bypassing the postgres partition-metadata cache" section
     from `mkdocs/docs/admin/object-cache.md` (see Documentation).
 12. **Gate** — `cargo fmt`; `cargo clippy --workspace -- -D warnings`; `cargo test` from `rust/`;
@@ -311,7 +315,11 @@ summarizing the removal and linking #1121), not as part of this plan document.
   `query()` → `make_session_context`, which wires `lakehouse.reader_factory()` into the scan via
   `.with_parquet_file_reader_factory(...)` — driving the exact `ReaderFactory::create_reader` →
   `ParquetReader::get_metadata` path a replacement smoke test would exercise. That coverage already
-  exists, so no new test is needed.
+  exists, so no new test is needed. Deleting the parity test also leaves its imports unused — delete
+  the `partition_metadata::{load_partition_metadata, load_partition_metadata_from_footer}` import
+  line (a mechanical rename would collide with the `file_cache_tests.rs`-style rename, since
+  `load_partition_metadata_from_footer` no longer exists) along with `CachingReader`, `FileCache`,
+  and `sqlx::Row`, all of which were used only by that test.
 - **Migration test** — there are no existing automated tests covering `migrate_lakehouse` or any
   `upgrade_v*` step (confirmed by grep), so don't look for a pattern to follow. Verify the
   migration the way the repo actually exercises it: start the local test env
