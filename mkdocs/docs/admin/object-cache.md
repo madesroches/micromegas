@@ -179,6 +179,25 @@ Set the same two variables in the monolith's environment to enable them; leave t
 default) and the monolith reads directly from origin and every `warm_object` call is a harmless
 no-op.
 
+### Experimental: bypassing the postgres partition-metadata cache
+
+`MICROMEGAS_DISABLE_METADATA_PSQL_CACHE` (default off, unset/`0`/`false` — set to `1`/`true`/`yes`/`on`
+to enable) is a read-only, query-side A/B toggle in the analytics query path (`reader_factory.rs`),
+unrelated to the object-cache server itself but built to be compared against it. Partition parquet
+metadata is normally read via a postgres `partition_metadata` table plus an in-process `MetadataCache`
+lookaside, to avoid re-reading/re-parsing parquet footers from object storage on every query. With the
+knob enabled, `ParquetReader` instead reads and parses the parquet footer directly from object storage
+through the same object-cache-backed byte reader used for the rest of the file (`CachingReader`),
+skipping both the postgres `SELECT` and the `MetadataCache` entirely — every `get_metadata` call
+re-parses the footer, though the underlying footer *bytes* are still cached.
+
+It has no write-side or data effect: the `partition_metadata` table keeps being populated at write
+time regardless of the knob, so flipping it off restores the exact prior behavior at any time. Both
+read paths are `#[span_fn]`-instrumented (`load_partition_metadata` for the postgres path,
+`load_partition_metadata_from_footer` for the direct path), so their per-call latency is directly
+comparable in the trace stream by running a fleet slice with the env var set and comparing the two
+span names.
+
 ## What gets cached
 
 Only reads. The client falls back transparently to the direct store on any cache error, non-2xx response, or oversized request, so an unreachable or misbehaving cache degrades to direct reads rather than failing requests:
