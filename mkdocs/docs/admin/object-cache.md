@@ -50,6 +50,8 @@ docker run -d -p 8080:8080 \
 | `MICROMEGAS_OBJECT_CACHE_PROMOTE_WHOLE_BATCH` | No | On a demand hit into a prefetch batch, promote the whole batch (anticipatory) instead of only the covering run (default `false`, precise) |
 | `MICROMEGAS_OBJECT_CACHE_PREFETCH_QUEUE_CAPACITY` | No | Depth of the bounded `POST /prefetch` queue; items beyond this are load-shed (default `4096`); must be > 0 |
 | `MICROMEGAS_OBJECT_CACHE_PREFETCH_WORKER_CONCURRENCY` | No | Concurrent in-flight prefetch fills driven by the queue worker (default `8`); must be > 0 |
+| `MICROMEGAS_OBJECT_CACHE_FLUSHERS` | No | foyer disk-engine flusher count -- how many blocks can be written to disk concurrently (default `2`); must be > 0 |
+| `MICROMEGAS_OBJECT_CACHE_WRITE_BUFFER_MB` | No | foyer disk-engine flush buffer pool size, in MiB (default `128`); the submit-queue overflow threshold is set to 2x this value; must be > 0 |
 
 Authenticating *against the origin* (e.g. AWS credentials) uses the same environment variables as every other Micromegas service's `MICROMEGAS_OBJECT_STORE_URI` — standard `object_store` crate variables such as `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_ENDPOINT`, `AWS_REGION`, `AWS_ALLOW_HTTP`.
 
@@ -74,6 +76,8 @@ Authenticating *against the origin* (e.g. AWS credentials) uses the same environ
 | `--promote-whole-batch` | `false` | Promote a whole prefetch batch (not just the covering run) on a demand hit |
 | `--prefetch-queue-capacity` | `4096` | Depth of the bounded `POST /prefetch` queue |
 | `--prefetch-worker-concurrency` | `8` | Concurrent in-flight prefetch fills |
+| `--flushers` | `2` | foyer disk-engine flusher count |
+| `--write-buffer-mb` | `128` | foyer disk-engine flush buffer pool size, in MiB (submit-queue threshold is 2x this) |
 
 ## Fetch scheduling & memory bounds
 
@@ -250,6 +254,16 @@ A background sampler (`object-cache-srv/src/saturation_monitor.rs`) emits these 
 | `object_cache_mem_budget_occupancy_mb` / `object_cache_mem_budget_available_mb` | Occupied/available MiB of the cross-request streaming memory budget (`--memory-budget-mb`). |
 | `object_cache_prefetch_queue_depth` | Items currently queued in the bounded `/prefetch` queue, waiting for a worker slot. |
 | `object_cache_nic_rx_bytes_per_sec` / `object_cache_nic_tx_bytes_per_sec` | Host-level network throughput. The expected ceiling on the target im4gn.large (#1197) instance type, and previously unmeasured. |
-| `object_cache_ssd_read_bytes_per_sec` / `object_cache_ssd_write_bytes_per_sec` | Host-level disk throughput for the foyer SSD tier. |
+| `object_cache_foyer_disk_write_bytes_per_sec` / `object_cache_foyer_disk_read_bytes_per_sec` | The foyer disk engine's own write/read throughput (`Statistics::disk_write_bytes` / `disk_read_bytes`), sourced from the cache engine itself rather than host disk enumeration — supersedes the old `object_cache_ssd_*` gauges, which always read 0 in the deployed container. The drain-throughput signal for whether the flushers are keeping up with write-in pressure (see "Tuning the write path" below). |
+| `object_cache_foyer_disk_write_ios_per_sec` / `object_cache_foyer_disk_read_ios_per_sec` | The foyer disk engine's own write/read IO rate (`Statistics::disk_write_ios` / `disk_read_ios`). |
 
 Routine fallback-to-direct is by-design graceful degradation and is logged at `debug` (not `warn`). Genuinely unexpected conditions — a truncated cache response, a backend IO fault, an internal server error — log at `warn`/`error`.
+
+### Tuning the write path
+
+Prefetch fills are force-admitted to the SSD tier (`.force().insert()`, bypassing the admission picker), so a large prefetch burst can outrun foyer's disk-engine submit queue; when that happens foyer logs a recurring `submit queue overflow, new entry ignored` WARN and silently drops the entry (no crash, but a lower hit rate and more origin traffic). Two knobs control the ceiling:
+
+- `MICROMEGAS_OBJECT_CACHE_FLUSHERS` — how many blocks can be written to disk concurrently.
+- `MICROMEGAS_OBJECT_CACHE_WRITE_BUFFER_MB` — the flush buffer pool size; the submit-queue overflow threshold is set to 2x this value.
+
+If the overflow WARN is firing, check `object_cache_foyer_disk_write_bytes_per_sec` / `object_cache_foyer_disk_write_ios_per_sec` alongside it: a write rate that's flat while the WARN fires means the flushers are saturated and would benefit from a higher `MICROMEGAS_OBJECT_CACHE_FLUSHERS`, while a healthy rate with occasional bursts past the buffer suggests raising `MICROMEGAS_OBJECT_CACHE_WRITE_BUFFER_MB` instead. foyer does not expose submit-queue occupancy itself, so the WARN log remains the direct drop signal.

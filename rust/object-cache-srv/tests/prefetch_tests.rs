@@ -17,7 +17,7 @@ use object_store::{
     ObjectStoreExt, PutMultipartOptions, PutOptions, PutPayload, PutResult,
 };
 
-use micromegas_object_cache::foyer_backend::FoyerBackend;
+use micromegas_object_cache::foyer_backend::{FoyerBackend, WriteTuning};
 use micromegas_object_cache::memory_backend::MemoryBackend;
 use micromegas_object_cache::prefetch::{PrefetchItem, PrefetchResponse};
 use micromegas_object_cache::range_cache::{
@@ -223,9 +223,15 @@ async fn prefetch_ssd_only_leaves_ram_usage_unchanged() {
 
     let counting = CountingStore::new(store.clone() as Arc<dyn ObjectStore>);
     let foyer = Arc::new(
-        FoyerBackend::new_with_shards(dir_path, 16 * 1024 * 1024, 16 * 1024 * 1024, 1)
-            .await
-            .expect("create FoyerBackend"),
+        FoyerBackend::new_with_shards(
+            dir_path,
+            16 * 1024 * 1024,
+            16 * 1024 * 1024,
+            1,
+            WriteTuning::default(),
+        )
+        .await
+        .expect("create FoyerBackend"),
     );
     let cache = RangeCache::new(
         counting.clone() as Arc<dyn ObjectStore>,

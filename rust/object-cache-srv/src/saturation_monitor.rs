@@ -1,18 +1,26 @@
 //! Periodic saturation gauges for the object cache: fetch-budget occupancy,
-//! in-flight entries, memory-budget occupancy, prefetch queue depth, and
-//! host-level NIC/SSD throughput -- the signals #1206 calls out as missing
-//! for locating a bottleneck (a solid *counter* layer already exists, but no
+//! in-flight entries, memory-budget occupancy, prefetch queue depth,
+//! host-level NIC throughput, and the foyer disk engine's own write-path
+//! throughput -- the signals #1206 calls out as missing for locating a
+//! bottleneck (a solid *counter* layer already exists, but no
 //! saturation/queue-depth signal). Modeled on
 //! `telemetry-sink::system_monitor::send_system_metrics_forever`: a
 //! background task that wakes on an interval and emits `imetric!`/`fmetric!`.
+//!
+//! The disk gauges used to come from `sysinfo::Disks`, but that reads 0 in
+//! the deployed container (the cache device/mount isn't enumerated there);
+//! they are now sourced from the foyer engine's own `Statistics` via
+//! `RangeCache::backend_disk_stats`, which measures the cache's own device
+//! I/O directly instead of relying on host disk enumeration.
 
 use std::sync::Arc;
 use std::time::Duration;
 
+use micromegas_object_cache::backend::BackendDiskStats;
 use micromegas_object_cache::prefetch::PrefetchItem;
 use micromegas_object_cache::range_cache::RangeCache;
 use micromegas_tracing::prelude::*;
-use sysinfo::{DiskRefreshKind, Disks, Networks};
+use sysinfo::Networks;
 use tokio::sync::{Semaphore, mpsc};
 use tokio::task::JoinHandle;
 
@@ -27,15 +35,15 @@ use tokio::task::JoinHandle;
 const SAMPLE_INTERVAL: Duration = Duration::from_secs(5);
 
 /// Emit one round of saturation gauges. Split out from the spawn loop so it
-/// can be driven directly (see `saturation_monitor` tests, if any are added
-/// against a fake clock/interval).
-fn sample_once(
+/// can be driven directly (see `saturation_monitor` tests). `pub` so the
+/// `object-cache-srv/tests/` integration-test crate can drive it directly.
+pub fn sample_once(
     cache: &RangeCache,
     mem_permits: &Semaphore,
     memory_budget_mb: u32,
     prefetch_tx: &mpsc::Sender<PrefetchItem>,
     networks: &mut Networks,
-    disks: &mut Disks,
+    prev_disk_stats: &mut Option<BackendDiskStats>,
     interval_secs: f64,
 ) {
     let (shared_available, shared_total, prefetch_available, prefetch_total) =
@@ -106,23 +114,35 @@ fn sample_once(
         tx_bytes as f64 / interval_secs
     );
 
-    // SSD: `Disk::usage()` needs io-usage refresh explicitly requested --
-    // it's disabled under `DiskRefreshKind::nothing()`.
-    disks.refresh_specifics(false, DiskRefreshKind::nothing().with_io_usage());
-    let (read_bytes, written_bytes) = disks.list().iter().fold((0u64, 0u64), |(r, w), d| {
-        let usage = d.usage();
-        (r + usage.read_bytes, w + usage.written_bytes)
-    });
-    fmetric!(
-        "object_cache_ssd_read_bytes_per_sec",
-        "bytes_per_sec",
-        read_bytes as f64 / interval_secs
-    );
-    fmetric!(
-        "object_cache_ssd_write_bytes_per_sec",
-        "bytes_per_sec",
-        written_bytes as f64 / interval_secs
-    );
+    // Foyer disk engine write-path throughput: the counters are cumulative
+    // since process start, so a rate needs a delta against the previous
+    // sample. `prev_disk_stats` starts `None` (no rate on the first tick),
+    // and stays `None` for a backend with no disk tier (e.g. `MemoryBackend`
+    // in tests), in which case nothing is emitted here.
+    let current_disk_stats = cache.backend_disk_stats();
+    if let (Some(prev), Some(current)) = (*prev_disk_stats, current_disk_stats) {
+        fmetric!(
+            "object_cache_foyer_disk_write_bytes_per_sec",
+            "bytes_per_sec",
+            current.write_bytes.saturating_sub(prev.write_bytes) as f64 / interval_secs
+        );
+        fmetric!(
+            "object_cache_foyer_disk_read_bytes_per_sec",
+            "bytes_per_sec",
+            current.read_bytes.saturating_sub(prev.read_bytes) as f64 / interval_secs
+        );
+        fmetric!(
+            "object_cache_foyer_disk_write_ios_per_sec",
+            "ops_per_sec",
+            current.write_ios.saturating_sub(prev.write_ios) as f64 / interval_secs
+        );
+        fmetric!(
+            "object_cache_foyer_disk_read_ios_per_sec",
+            "ops_per_sec",
+            current.read_ios.saturating_sub(prev.read_ios) as f64 / interval_secs
+        );
+    }
+    *prev_disk_stats = current_disk_stats;
 }
 
 /// Spawn the periodic saturation sampler, waking every `SAMPLE_INTERVAL`.
@@ -137,8 +157,7 @@ pub fn spawn_saturation_monitor(
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         let mut networks = Networks::new_with_refreshed_list();
-        let mut disks =
-            Disks::new_with_refreshed_list_specifics(DiskRefreshKind::nothing().with_io_usage());
+        let mut prev_disk_stats: Option<BackendDiskStats> = None;
         loop {
             tokio::time::sleep(SAMPLE_INTERVAL).await;
             sample_once(
@@ -147,7 +166,7 @@ pub fn spawn_saturation_monitor(
                 memory_budget_mb,
                 &prefetch_tx,
                 &mut networks,
-                &mut disks,
+                &mut prev_disk_stats,
                 SAMPLE_INTERVAL.as_secs_f64(),
             );
         }

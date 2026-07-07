@@ -13,7 +13,7 @@ use micromegas_tracing::prelude::*;
 use object_store::{ObjectStore, ObjectStoreExt, path::Path};
 use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore, watch};
 
-use super::backend::{FillHint, RangeCacheBackend};
+use super::backend::{BackendDiskStats, FillHint, RangeCacheBackend};
 use super::blocks::{assemble_range, block_byte_range, blocks_for_range, coalesce_runs};
 use super::metric_tags::{self, PrefixTags};
 
@@ -605,6 +605,12 @@ impl RangeCache {
     /// origin, for the saturation sampler.
     pub fn inflight_len(&self) -> usize {
         self.scheduler.inflight_len()
+    }
+
+    /// Backend disk write-path counters (`None` for a backend with no disk
+    /// tier), for the saturation sampler's per-second foyer disk gauges.
+    pub fn backend_disk_stats(&self) -> Option<BackendDiskStats> {
+        self.backend.disk_stats()
     }
 
     /// Size in bytes of one cache block. Every distinct block a request
