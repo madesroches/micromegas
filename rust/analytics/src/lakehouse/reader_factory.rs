@@ -1,7 +1,7 @@
 use super::caching_reader::CachingReader;
 use super::file_cache::FileCache;
 use super::metadata_cache::MetadataCache;
-use super::partition_metadata::load_partition_metadata;
+use super::partition_metadata::{load_partition_metadata, load_partition_metadata_from_footer};
 use bytes::Bytes;
 use datafusion::{
     datasource::{listing::PartitionedFile, physical_plan::ParquetFileReaderFactory},
@@ -18,6 +18,18 @@ use sqlx::PgPool;
 use std::ops::Range;
 use std::sync::Arc;
 
+/// Reads MICROMEGAS_DISABLE_METADATA_PSQL_CACHE (default false). When true, ParquetReader reads
+/// parquet footers directly from object storage instead of the postgres partition_metadata table.
+pub fn read_disable_metadata_psql_cache() -> bool {
+    match std::env::var("MICROMEGAS_DISABLE_METADATA_PSQL_CACHE") {
+        Ok(v) => matches!(
+            v.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        ),
+        Err(_) => false,
+    }
+}
+
 /// A custom [`ParquetFileReaderFactory`] that handles opening parquet files
 /// from object storage, and loads metadata on-demand.
 ///
@@ -32,6 +44,7 @@ pub struct ReaderFactory {
     pool: PgPool,
     metadata_cache: Arc<MetadataCache>,
     file_cache: Arc<FileCache>,
+    bypass_metadata_psql_cache: bool,
 }
 
 impl std::fmt::Debug for ReaderFactory {
@@ -39,23 +52,42 @@ impl std::fmt::Debug for ReaderFactory {
         f.debug_struct("ReaderFactory")
             .field("metadata_cache", &self.metadata_cache)
             .field("file_cache", &self.file_cache)
+            .field(
+                "bypass_metadata_psql_cache",
+                &self.bypass_metadata_psql_cache,
+            )
             .finish()
     }
 }
 
 impl ReaderFactory {
     /// Creates a new ReaderFactory with shared metadata and file caches.
+    ///
+    /// `bypass_metadata_psql_cache` selects the partition-metadata read path: when `true`,
+    /// `ParquetReader::get_metadata` reads and parses parquet footers directly from object
+    /// storage, skipping the postgres `partition_metadata` table and the `MetadataCache`
+    /// lookaside entirely. See `read_disable_metadata_psql_cache`.
     pub fn new(
         object_store: Arc<dyn ObjectStore>,
         pool: PgPool,
         metadata_cache: Arc<MetadataCache>,
         file_cache: Arc<FileCache>,
+        bypass_metadata_psql_cache: bool,
     ) -> Self {
+        info!(
+            "partition metadata read path: {}",
+            if bypass_metadata_psql_cache {
+                "object-cache"
+            } else {
+                "postgres"
+            }
+        );
         Self {
             object_store,
             pool,
             metadata_cache,
             file_cache,
+            bypass_metadata_psql_cache,
         }
     }
 }
@@ -88,6 +120,7 @@ impl ParquetFileReaderFactory for ReaderFactory {
             pool: self.pool.clone(),
             metadata_cache: Arc::clone(&self.metadata_cache),
             inner,
+            bypass_metadata_psql_cache: self.bypass_metadata_psql_cache,
         }))
     }
 }
@@ -100,6 +133,7 @@ pub struct ParquetReader {
     pub pool: PgPool,
     pub metadata_cache: Arc<MetadataCache>,
     pub inner: CachingReader,
+    pub bypass_metadata_psql_cache: bool,
 }
 
 impl AsyncFileReader for ParquetReader {
@@ -154,15 +188,24 @@ impl AsyncFileReader for ParquetReader {
         &mut self,
         _options: Option<&ArrowReaderOptions>,
     ) -> BoxFuture<'_, datafusion::parquet::errors::Result<Arc<ParquetMetaData>>> {
-        let metadata_cache = Arc::clone(&self.metadata_cache);
-        let pool = self.pool.clone();
-        let filename = self.filename.clone();
+        if self.bypass_metadata_psql_cache {
+            let filename = self.filename.clone();
+            let file_size = self.file_size;
+            let inner = &mut self.inner;
+            Box::pin(async move {
+                load_partition_metadata_from_footer(inner, &filename, file_size).await
+            })
+        } else {
+            let metadata_cache = Arc::clone(&self.metadata_cache);
+            let pool = self.pool.clone();
+            let filename = self.filename.clone();
 
-        Box::pin(async move {
-            // Load metadata using the shared cache (handles cache hit/miss internally)
-            load_partition_metadata(&pool, &filename, Some(&metadata_cache))
-                .await
-                .map_err(|e| datafusion::parquet::errors::ParquetError::External(e.into()))
-        })
+            Box::pin(async move {
+                // Load metadata using the shared cache (handles cache hit/miss internally)
+                load_partition_metadata(&pool, &filename, Some(&metadata_cache))
+                    .await
+                    .map_err(|e| datafusion::parquet::errors::ParquetError::External(e.into()))
+            })
+        }
     }
 }

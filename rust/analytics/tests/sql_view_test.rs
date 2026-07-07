@@ -11,10 +11,15 @@ use datafusion::physical_plan::stream::RecordBatchReceiverStreamBuilder;
 use micromegas_analytics::dfext::typed_column::typed_column_by_name;
 use micromegas_analytics::lakehouse::batch_update::materialize_partition_range;
 use micromegas_analytics::lakehouse::blocks_view::BlocksView;
+use micromegas_analytics::lakehouse::caching_reader::CachingReader;
+use micromegas_analytics::lakehouse::file_cache::FileCache;
 use micromegas_analytics::lakehouse::lakehouse_context::LakehouseContext;
 use micromegas_analytics::lakehouse::merge::PartitionMerger;
 use micromegas_analytics::lakehouse::partition::Partition;
 use micromegas_analytics::lakehouse::partition_cache::{LivePartitionProvider, PartitionCache};
+use micromegas_analytics::lakehouse::partition_metadata::{
+    load_partition_metadata, load_partition_metadata_from_footer,
+};
 use micromegas_analytics::lakehouse::query::{query, query_partitions};
 use micromegas_analytics::lakehouse::runtime::make_runtime_env;
 use micromegas_analytics::lakehouse::session_configurator::NoOpSessionConfigurator;
@@ -27,6 +32,7 @@ use micromegas_analytics::time::TimeRange;
 use micromegas_ingestion::data_lake_connection::{DataLakeConnection, connect_to_data_lake};
 use micromegas_telemetry_sink::TelemetryGuardBuilder;
 use micromegas_tracing::prelude::*;
+use sqlx::Row;
 use std::sync::Arc;
 
 async fn make_log_entries_levels_per_process_minute_view(
@@ -510,6 +516,88 @@ async fn sql_view_test() -> Result<()> {
         .await?,
     );
     test_log_summary_view(runtime, lake.clone(), log_summary_view).await?;
+
+    Ok(())
+}
+
+/// Full two-way parity check: writes a partition through the real write path (materializing
+/// `blocks_view` over a live time range), then loads its metadata both via
+/// `load_partition_metadata` (postgres + `MetadataCache`) and `load_partition_metadata_from_footer`
+/// (direct object-storage footer read) and asserts the two are equal. Needs a live `DataLakeConnection`
+/// (postgres + object store) with at least one block already ingested in the last 24h, so it lives
+/// alongside the other `#[ignore]`d live-infra tests, not as a unit test.
+#[ignore]
+#[tokio::test]
+async fn partition_metadata_footer_parity_test() -> Result<()> {
+    let _telemetry_guard = TelemetryGuardBuilder::default()
+        .with_ctrlc_handling()
+        .with_local_sink_max_level(LevelFilter::Info)
+        .build();
+    let connection_string = std::env::var("MICROMEGAS_SQL_CONNECTION_STRING")
+        .with_context(|| "reading MICROMEGAS_SQL_CONNECTION_STRING")?;
+    let object_store_uri = std::env::var("MICROMEGAS_OBJECT_STORE_URI")
+        .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
+    let runtime = Arc::new(make_runtime_env()?);
+    let lake = Arc::new(connect_to_data_lake(&connection_string, &object_store_uri).await?);
+    let lakehouse = Arc::new(LakehouseContext::new(lake.clone(), runtime.clone()));
+    let null_response_writer = Arc::new(ResponseWriter::new(None));
+
+    // Materialize a blocks_view partition through the real write path so partition_metadata
+    // has a row to compare against.
+    let end_range = Utc::now().duration_trunc(TimeDelta::minutes(1))?;
+    let begin_range = end_range - TimeDelta::hours(24);
+    let insert_range = TimeRange::new(begin_range, end_range);
+    let blocks_view = Arc::new(BlocksView::new()?);
+    let partitions = Arc::new(
+        PartitionCache::fetch_overlapping_insert_range_for_view(
+            &lake.db_pool,
+            blocks_view.get_view_set_name(),
+            blocks_view.get_view_instance_id(),
+            insert_range,
+        )
+        .await?,
+    );
+    materialize_partition_range(
+        partitions,
+        lakehouse.clone(),
+        blocks_view.clone(),
+        insert_range,
+        TimeDelta::hours(24),
+        null_response_writer,
+    )
+    .await?;
+
+    let row = sqlx::query(
+        "SELECT file_path, file_size
+         FROM lakehouse_partitions
+         WHERE view_set_name = $1 AND view_instance_id = $2
+         ORDER BY end_insert_time DESC
+         LIMIT 1",
+    )
+    .bind(blocks_view.get_view_set_name().as_str())
+    .bind(blocks_view.get_view_instance_id().as_str())
+    .fetch_optional(&lake.db_pool)
+    .await?
+    .context(
+        "no blocks_view partition found in the last 24h - ingest telemetry data before running this test",
+    )?;
+    let file_path: String = row.try_get("file_path")?;
+    let file_size: i64 = row.try_get("file_size")?;
+
+    let from_postgres = load_partition_metadata(&lake.db_pool, &file_path, None).await?;
+
+    let file_cache = Arc::new(FileCache::new(200 * 1024 * 1024, 10 * 1024 * 1024));
+    let mut reader = CachingReader::new(
+        lake.blob_storage.inner(),
+        object_store::path::Path::from(file_path.as_str()),
+        file_path.clone(),
+        file_size as u64,
+        file_cache,
+    );
+    let from_footer =
+        load_partition_metadata_from_footer(&mut reader, &file_path, file_size as u64).await?;
+
+    assert_eq!(*from_postgres, *from_footer);
 
     Ok(())
 }

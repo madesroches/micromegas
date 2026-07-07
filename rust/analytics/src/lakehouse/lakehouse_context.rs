@@ -1,7 +1,7 @@
 use super::file_cache::FileCache;
 use super::metadata_cache::MetadataCache;
 use super::migration::migrate_lakehouse;
-use super::reader_factory::ReaderFactory;
+use super::reader_factory::{ReaderFactory, read_disable_metadata_psql_cache};
 use super::runtime::make_runtime_env;
 use anyhow::Context;
 use anyhow::Result;
@@ -107,6 +107,7 @@ impl LakehouseContext {
             lake.db_pool.clone(),
             metadata_cache.clone(),
             file_cache.clone(),
+            read_disable_metadata_psql_cache(),
         ));
         Self {
             lake,
@@ -129,6 +130,7 @@ impl LakehouseContext {
             lake.db_pool.clone(),
             metadata_cache.clone(),
             file_cache.clone(),
+            read_disable_metadata_psql_cache(),
         ));
         Self {
             lake,

@@ -1,13 +1,19 @@
 use anyhow::{Context, Result};
 use bytes::Bytes;
+use datafusion::parquet::arrow::async_reader::MetadataFetch;
+use datafusion::parquet::errors::ParquetError;
+use datafusion::parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
+use futures::FutureExt;
+use futures::future::BoxFuture;
 use micromegas_tracing::prelude::*;
 use sqlx::{PgPool, Row};
+use std::ops::Range;
 use std::sync::Arc;
 
+use super::caching_reader::CachingReader;
 use super::metadata_cache::MetadataCache;
 use crate::arrow_utils::parse_parquet_metadata;
 use crate::lakehouse::metadata_compat;
-use datafusion::parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
 
 /// Strips column index information from Parquet metadata
 ///
@@ -145,6 +151,42 @@ pub async fn load_partition_metadata(
     }
 
     Ok(result)
+}
+
+/// Adapts `CachingReader::get_bytes` to the `MetadataFetch` interface expected by
+/// `ParquetMetaDataReader`, so the footer read benefits from the same object-cache-backed
+/// byte caching as the rest of the file.
+struct CachingReaderFetch<'a>(&'a mut CachingReader);
+
+impl MetadataFetch for CachingReaderFetch<'_> {
+    fn fetch(
+        &mut self,
+        range: Range<u64>,
+    ) -> BoxFuture<'_, datafusion::parquet::errors::Result<Bytes>> {
+        self.0.get_bytes(range).boxed()
+    }
+}
+
+/// Read and parse a partition's parquet footer directly from object storage via the
+/// object-cache-backed reader, bypassing the postgres partition_metadata table and MetadataCache.
+/// Produces metadata equivalent to load_partition_metadata (same column-index stripping) so the
+/// two read paths are behaviorally interchangeable and can be A/B compared.
+#[span_fn]
+pub async fn load_partition_metadata_from_footer(
+    reader: &mut CachingReader,
+    file_path: &str,
+    file_size: u64,
+) -> datafusion::parquet::errors::Result<Arc<ParquetMetaData>> {
+    let start = std::time::Instant::now();
+    let raw = ParquetMetaDataReader::new()
+        .load_and_finish(CachingReaderFetch(reader), file_size)
+        .await?;
+    let stripped = strip_column_index_info(raw).map_err(|e| ParquetError::External(e.into()))?;
+    let duration_ms = start.elapsed().as_millis();
+    debug!(
+        "partition_metadata_footer_read file={file_path} file_size={file_size} duration_ms={duration_ms}"
+    );
+    Ok(Arc::new(stripped))
 }
 
 /// Delete multiple partition metadata entries in a single transaction
