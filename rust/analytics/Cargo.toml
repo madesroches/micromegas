@@ -34,7 +34,7 @@ lazy_static.workspace = true
 moka.workspace = true
 object_store.workspace = true
 opentelemetry-proto.workspace = true
-parquet = { workspace = true, features = ["async"] }
+parquet.workspace = true
 prost.workspace = true
 sqlx.workspace = true
 thrift.workspace = true
