@@ -194,15 +194,26 @@ failed queries can be re-run.
    `load_partition_metadata`; drop now-unused imports (`sqlx::{PgPool, Row}`,
    `crate::lakehouse::metadata_compat`, `crate::arrow_utils::parse_parquet_metadata`, `anyhow`
    pieces only used by the deleted function — keep `strip_column_index_info`, it's still used by
-   the renamed function).
+   the renamed function). Update surviving doc comments that describe the deleted postgres path:
+   the `CachingReaderFetch` doc's reference to `load_partition_metadata_from_footer` (now just
+   `load_partition_metadata`); the renamed loader's doc, which currently describes "bypassing the
+   postgres partition_metadata table" and being "A/B comparable" with a deleted sibling — rewrite
+   to describe it as the sole read path; and the cache-weight comment that compares against "the
+   postgres path's stored serialized size" — rewrite to drop the postgres comparison.
 2. **`metadata_compat.rs`** — delete the file; remove `pub mod metadata_compat;` from `mod.rs`.
-3. **`arrow_utils.rs`** — delete `serialize_parquet_metadata`.
+   Also update the doc comment on `pub mod partition_metadata;` in `mod.rs` ("Operations on the
+   dedicated partition_metadata table"), which becomes stale once the table is dropped.
+3. **`arrow_utils.rs`** — delete `serialize_parquet_metadata`. In `partition_metadata.rs`,
+   `strip_column_index_info`'s comment "similar to serialize_parquet_metadata" refers to a function
+   this step deletes — reword it to describe the format directly instead of by comparison.
 4. **`reader_factory.rs`** — delete `read_disable_metadata_psql_cache`; drop
    `bypass_metadata_psql_cache` and `pool` fields from `ReaderFactory` and `ParquetReader`; update
    `ReaderFactory::new` signature and the `Debug` impl; simplify `get_metadata` to call
    `load_partition_metadata` directly (no branch); drop the now-unused `sqlx::PgPool` import and
    the `use super::partition_metadata::{load_partition_metadata, load_partition_metadata_from_footer}`
-   line (import just the one renamed function).
+   line (import just the one renamed function). Update `ReaderFactory`'s doc comment, which
+   currently claims the `MetadataCache` "significantly reduc[es] database fetches" — with no
+   database read path left, reword to describe it as reducing object-storage footer reads.
 5. **`lakehouse_context.rs`** — update both `ReaderFactory::new` call sites (drop `lake.db_pool.clone()`
    and `read_disable_metadata_psql_cache()` args); drop the now-unused import of
    `read_disable_metadata_psql_cache`.
@@ -219,9 +230,10 @@ failed queries can be re-run.
    dispatch step in `execute_lakehouse_migration`.
 10. **Tests** — see Testing Strategy: delete `reader_factory_tests.rs`, `test_metadata_compat.rs`,
     `test_parquet_metadata_format.rs`; update `file_cache_tests.rs`'s call sites to the renamed
-    `load_partition_metadata`; replace `sql_view_test.rs`'s
-    `partition_metadata_footer_parity_test` with a plain end-to-end smoke test (materialize a
-    partition, query it back) since there's no longer a second path to compare against.
+    `load_partition_metadata`; delete `sql_view_test.rs`'s `partition_metadata_footer_parity_test`
+    outright — the same file's `sql_view_test` already materializes partitions through the real
+    write path and queries them back end-to-end through `get_metadata`, so there's nothing left for
+    a replacement smoke test to add.
 11. **Docs** — remove the "Experimental: bypassing the postgres partition-metadata cache" section
     from `mkdocs/docs/admin/object-cache.md` (see Documentation).
 12. **Gate** — `cargo fmt`; `cargo clippy --workspace -- -D warnings`; `cargo test` from `rust/`;
@@ -259,7 +271,9 @@ failed queries can be re-run.
   filed. The persistent-cache alternatives in the issue (S3 Express, Redis/Valkey, a range-aware
   proxy) remain available as later, separate work if cold-miss latency becomes a measured problem —
   nothing here forecloses them, since they'd sit *underneath* the footer read (in `CachingReader`)
-  rather than beside it.
+  rather than beside it. This matches issue #1121's own framing, which lists them as contingent
+  alternatives "if cold-miss latency from Parquet footer reads turns out to be a problem," not as
+  in-scope work.
 - **Rename `load_partition_metadata_from_footer` → `load_partition_metadata` vs. keep the longer
   name.** With only one loader left, the `_from_footer` qualifier no longer disambiguates anything;
   renaming matches how the function reads at call sites (`ReaderFactory::get_metadata`) and avoids
@@ -290,12 +304,14 @@ summarizing the removal and linking #1121), not as part of this plan document.
 - **Delete now-meaningless tests**: `reader_factory_tests.rs` (tested the env-var parser being
   removed), `test_metadata_compat.rs` (tests `parse_legacy_and_upgrade`, being removed),
   `test_parquet_metadata_format.rs` (tests `serialize_parquet_metadata`, being removed).
-- **Replace the parity test** — `sql_view_test.rs::partition_metadata_footer_parity_test` currently
-  compares the postgres and footer paths; once the postgres path is gone there's nothing to compare.
-  Replace it with a smoke test in the same `#[ignore]`d live-infra style: materialize a partition
-  through the real write path (as today), then run a query against it end-to-end and assert it
-  succeeds and returns the expected rows — this exercises `get_metadata` through the only remaining
-  path without needing a second implementation to diff against.
+- **Delete the parity test** — `sql_view_test.rs::partition_metadata_footer_parity_test` currently
+  compares the postgres and footer paths; once the postgres path is gone there's nothing to compare,
+  so delete it rather than replace it. The same file's `#[ignore]`d `sql_view_test` already
+  materializes a partition through the real write path (`materialize_range`) and queries it back via
+  `query()` → `make_session_context`, which wires `lakehouse.reader_factory()` into the scan via
+  `.with_parquet_file_reader_factory(...)` — driving the exact `ReaderFactory::create_reader` →
+  `ParquetReader::get_metadata` path a replacement smoke test would exercise. That coverage already
+  exists, so no new test is needed.
 - **Migration test** — there are no existing automated tests covering `migrate_lakehouse` or any
   `upgrade_v*` step (confirmed by grep), so don't look for a pattern to follow. Verify the
   migration the way the repo actually exercises it: start the local test env
@@ -311,7 +327,3 @@ summarizing the removal and linking #1121), not as part of this plan document.
 - Has #1235's production A/B run long enough / against enough traffic to be confident there's no
   latency regression from cold misses before deleting the postgres path outright? (This plan
   assumes yes — confirm before implementing if the soak period was short.)
-- None of the "persistent cache layer for cold misses" alternatives from the issue (S3 Express,
-  Redis/Valkey, range-aware proxy) are in scope here — confirm that's still the intent, i.e. ship
-  the removal first and only revisit a persistent cache if cold-miss latency shows up as a problem
-  in practice.
