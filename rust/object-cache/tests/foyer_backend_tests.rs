@@ -3,7 +3,7 @@
 use bytes::Bytes;
 
 use micromegas_object_cache::backend::{FillHint, RangeCacheBackend};
-use micromegas_object_cache::foyer_backend::FoyerBackend;
+use micromegas_object_cache::foyer_backend::{FoyerBackend, WriteTuning};
 
 // Deliberately does not close/reopen the backend to force a disk read: foyer's
 // default hash builder (ahash `RandomState::default()`) picks a fresh random
@@ -28,9 +28,10 @@ async fn round_trip_through_disk_tier() {
     // exactly holds the first 4096-byte payload, so the subsequent puts push the
     // RAM tier over budget and evict "key", which enqueues it for the disk tier
     // (the disk write is triggered by memory eviction, not by insert itself).
-    let backend = FoyerBackend::new_with_shards(dir_path, 4096, 16 * 1024 * 1024, 1)
-        .await
-        .expect("create backend");
+    let backend =
+        FoyerBackend::new_with_shards(dir_path, 4096, 16 * 1024 * 1024, 1, WriteTuning::default())
+            .await
+            .expect("create backend");
     backend
         .put("key".to_string(), data.clone(), FillHint::Demand)
         .await;
@@ -66,9 +67,15 @@ async fn prefetch_fill_lands_on_disk_not_ram() {
     let dir_path = dir.path().to_str().expect("utf8 path");
     let data = Bytes::from(vec![9u8; 4096]);
 
-    let backend = FoyerBackend::new_with_shards(dir_path, 16 * 1024 * 1024, 16 * 1024 * 1024, 1)
-        .await
-        .expect("create backend");
+    let backend = FoyerBackend::new_with_shards(
+        dir_path,
+        16 * 1024 * 1024,
+        16 * 1024 * 1024,
+        1,
+        WriteTuning::default(),
+    )
+    .await
+    .expect("create backend");
 
     let ram_before = backend.ram_usage();
     backend
@@ -84,4 +91,50 @@ async fn prefetch_fill_lands_on_disk_not_ram() {
     backend.close().await.expect("close backend");
     let got = backend.get("prefetched").await.expect("get from disk tier");
     assert_eq!(got, data);
+}
+
+// A non-default `WriteTuning` (more flushers, a bigger buffer pool and
+// submit-queue threshold) must not change the backend's observable behavior:
+// the disk round-trip still works, and `disk_stats()` reports the write that
+// just landed.
+#[tokio::test]
+async fn round_trip_with_custom_write_tuning() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir_path = dir.path().to_str().expect("utf8 path");
+    let data = Bytes::from(vec![9u8; 4096]);
+
+    let tuning = WriteTuning {
+        flushers: 2,
+        buffer_pool_bytes: 32 * 1024 * 1024,
+        submit_queue_threshold_bytes: 64 * 1024 * 1024,
+    };
+    // The disk device must hold enough blocks for the flusher count: foyer's
+    // block engine derives `blocks = capacity / block_size` (default block
+    // size 16 MiB), and `flushers` flushers contending for too few blocks
+    // deadlock on flush. A 16 MiB device is a single block -- fine for the
+    // 1-flusher tests above, but `flushers: 2` needs headroom, so give this
+    // one a 256 MiB device (16 blocks). Production disks are hundreds of GB,
+    // so this constraint never binds there.
+    let disk_bytes = 256 * 1024 * 1024;
+    let backend = FoyerBackend::new_with_shards(dir_path, 4096, disk_bytes, 1, tuning)
+        .await
+        .expect("create backend with custom tuning");
+
+    backend
+        .put("key".to_string(), data.clone(), FillHint::Prefetch)
+        .await;
+    // close() awaits the flusher, so the disk write below is guaranteed
+    // durable and `disk_stats()` reflects it deterministically.
+    backend.close().await.expect("close backend");
+
+    let got = backend.get("key").await.expect("get from disk tier");
+    assert_eq!(got, data);
+
+    let stats = backend
+        .disk_stats()
+        .expect("foyer backend reports disk stats");
+    assert!(
+        stats.write_bytes > 0,
+        "a completed disk write must be reflected in disk_stats(): {stats:?}"
+    );
 }

@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use bytes::Bytes;
+use micromegas_object_cache::backend::RangeCacheBackend;
 use micromegas_object_cache::memory_backend::MemoryBackend;
 use micromegas_object_cache::range_cache::{
     DEFAULT_BLOCK_SIZE, DEFAULT_DEMAND_RESERVED_FETCH_PERMITS, DEFAULT_MAX_COALESCED_GET_BYTES,
@@ -273,4 +274,20 @@ async fn fetch_budget_stats_reflect_in_flight_fetch() {
     let (shared_avail2, _, prefetch_avail2, _) = cache.fetch_budget_stats();
     assert_eq!(shared_avail2, shared_total);
     assert_eq!(prefetch_avail2, prefetch_total);
+}
+
+/// `MemoryBackend` has no disk tier, so `disk_stats()` must stay `None` --
+/// this is the branch the saturation monitor's foyer disk gauges skip
+/// entirely for a non-foyer backend.
+#[tokio::test]
+async fn memory_backend_disk_stats_is_none() {
+    let backend = MemoryBackend::new();
+    assert!(RangeCacheBackend::disk_stats(&backend).is_none());
+
+    let store = Arc::new(InMemory::new());
+    let cache = make_cache(store as Arc<dyn ObjectStore>);
+    assert!(
+        cache.backend_disk_stats().is_none(),
+        "RangeCache::backend_disk_stats must delegate to the backend's None default"
+    );
 }

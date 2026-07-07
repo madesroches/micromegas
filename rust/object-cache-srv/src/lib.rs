@@ -5,6 +5,7 @@
 //! handlers and app state directly.
 
 pub mod app_state;
+pub mod cli;
 pub mod handlers;
 pub mod prefetch_queue;
 pub mod saturation_monitor;

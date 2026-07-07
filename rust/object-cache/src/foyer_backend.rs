@@ -1,10 +1,40 @@
 use anyhow::{Result, ensure};
 use async_trait::async_trait;
 use bytes::Bytes;
-use foyer::{CacheHint, DirectFsDeviceOptions, Engine, HybridCache, HybridCacheBuilder, LruConfig};
+use foyer::{
+    BlockEngineConfig, DeviceBuilder, FsDeviceBuilder, HybridCache, HybridCacheBuilder, LruConfig,
+};
 use micromegas_tracing::prelude::*;
 
-use super::backend::{FillHint, RangeCacheBackend};
+use super::backend::{BackendDiskStats, FillHint, RangeCacheBackend};
+
+/// foyer disk-engine write-path tuning. Defaults reproduce foyer's own
+/// `BlockEngineConfig` defaults (`flushers=1`, `buffer_pool_size=16 MiB`),
+/// with the submit-queue threshold pinned to 2x the buffer pool -- which
+/// foyer's doc comment describes as its intended default but which 0.22 no
+/// longer applies automatically (its actual default is 1x, see
+/// `BlockEngineConfig::new`) -- so existing callers/tests are unaffected
+/// unless they opt into a different tuning.
+#[derive(Clone, Copy, Debug)]
+pub struct WriteTuning {
+    /// `BlockEngineConfig::with_flushers`.
+    pub flushers: usize,
+    /// `BlockEngineConfig::with_buffer_pool_size`, in bytes.
+    pub buffer_pool_bytes: usize,
+    /// `BlockEngineConfig::with_submit_queue_size_threshold`, in bytes.
+    pub submit_queue_threshold_bytes: usize,
+}
+
+impl Default for WriteTuning {
+    fn default() -> Self {
+        let buffer = 16 * 1024 * 1024;
+        Self {
+            flushers: 1,
+            buffer_pool_bytes: buffer,
+            submit_queue_threshold_bytes: buffer * 2,
+        }
+    }
+}
 
 pub struct FoyerBackend {
     cache: HybridCache<String, Bytes>,
@@ -12,7 +42,7 @@ pub struct FoyerBackend {
 
 impl FoyerBackend {
     pub async fn new(dir: &str, ram_bytes: usize, disk_bytes: usize) -> Result<Self> {
-        Self::new_with_shards(dir, ram_bytes, disk_bytes, 8).await
+        Self::new_with_shards(dir, ram_bytes, disk_bytes, 8, WriteTuning::default()).await
     }
 
     pub async fn new_with_shards(
@@ -20,8 +50,22 @@ impl FoyerBackend {
         ram_bytes: usize,
         disk_bytes: usize,
         shards: usize,
+        tuning: WriteTuning,
     ) -> Result<Self> {
         ensure!(shards > 0, "shards must be > 0");
+
+        // Direct I/O (bypassing the page cache) matches the old `DirectFs`
+        // engine's behavior; the flag only exists on Linux.
+        #[cfg(target_os = "linux")]
+        let device = FsDeviceBuilder::new(dir)
+            .with_capacity(disk_bytes)
+            .with_direct(true)
+            .build()?;
+        #[cfg(not(target_os = "linux"))]
+        let device = FsDeviceBuilder::new(dir)
+            .with_capacity(disk_bytes)
+            .build()?;
+
         let cache = HybridCacheBuilder::new()
             .memory(ram_bytes)
             .with_weighter(|_key: &String, value: &Bytes| value.len())
@@ -31,8 +75,13 @@ impl FoyerBackend {
             // future foyer default change silently altering RAM-tier
             // eviction behavior for demand fills.
             .with_eviction_config(LruConfig::default())
-            .storage(Engine::Large)
-            .with_device_options(DirectFsDeviceOptions::new(dir).with_capacity(disk_bytes))
+            .storage()
+            .with_engine_config(
+                BlockEngineConfig::new(device)
+                    .with_flushers(tuning.flushers)
+                    .with_buffer_pool_size(tuning.buffer_pool_bytes)
+                    .with_submit_queue_size_threshold(tuning.submit_queue_threshold_bytes),
+            )
             .build()
             .await?;
         Ok(Self { cache })
@@ -54,7 +103,7 @@ impl FoyerBackend {
 #[async_trait]
 impl RangeCacheBackend for FoyerBackend {
     async fn get(&self, key: &str) -> Option<Bytes> {
-        match self.cache.obtain(key.to_string()).await {
+        match self.cache.get(key).await {
             Ok(Some(entry)) => Some(entry.value().clone()),
             Ok(None) => None,
             // A backend (disk/IO) error must not fail the read: treat it as a
@@ -89,8 +138,18 @@ impl RangeCacheBackend for FoyerBackend {
                 }
             }
             FillHint::Demand => {
-                self.cache.insert_with_hint(key, value, CacheHint::Normal);
+                self.cache.insert(key, value);
             }
         }
+    }
+
+    fn disk_stats(&self) -> Option<BackendDiskStats> {
+        let stats = self.cache.statistics();
+        Some(BackendDiskStats {
+            write_bytes: stats.disk_write_bytes() as u64,
+            read_bytes: stats.disk_read_bytes() as u64,
+            write_ios: stats.disk_write_ios() as u64,
+            read_ios: stats.disk_read_ios() as u64,
+        })
     }
 }

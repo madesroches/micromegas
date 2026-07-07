@@ -2,8 +2,6 @@
 #[global_allocator]
 static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
-mod cli;
-
 use anyhow::{Context, Result, anyhow};
 use axum::{
     Router,
@@ -12,15 +10,15 @@ use axum::{
     routing::{get, post},
 };
 use clap::Parser;
-use cli::Cli;
 use micromegas::micromegas_main;
 use micromegas::servers::shutdown::{serve_axum_with_graceful_shutdown, wait_for_sigterm};
 use micromegas_auth::api_key::{ApiKeyAuthProvider, parse_key_ring};
 use micromegas_auth::axum::auth_middleware;
 use micromegas_auth::types::AuthProvider;
-use micromegas_object_cache::foyer_backend::FoyerBackend;
+use micromegas_object_cache::foyer_backend::{FoyerBackend, WriteTuning};
 use micromegas_object_cache::range_cache::RangeCache;
 use micromegas_object_cache_srv::app_state::AppState;
+use micromegas_object_cache_srv::cli::{self, Cli};
 use micromegas_object_cache_srv::handlers::{
     get_range_handler, head_handler, permits_for_bytes, post_ranges_handler, prefetch_handler,
     stream_window_bytes,
@@ -99,6 +97,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .into());
     }
+    cli::validate_write_tuning(args.flushers, args.write_buffer_mb)?;
 
     let ns = if args.namespace.is_empty() {
         // Strip any `scheme://` prefix so the namespace is stable regardless of
@@ -133,10 +132,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let origin_store: Arc<dyn object_store::ObjectStore> =
         Arc::new(PrefixStore::new(origin_store, prefix));
 
-    let foyer = FoyerBackend::new(
+    // The submit-queue overflow threshold is pinned to 2x the buffer pool
+    // (foyer's documented -- but no longer automatic, see `WriteTuning` --
+    // intended default); see `MICROMEGAS_OBJECT_CACHE_WRITE_BUFFER_MB`.
+    let write_tuning = WriteTuning {
+        flushers: args.flushers,
+        buffer_pool_bytes: args.write_buffer_mb * 1024 * 1024,
+        submit_queue_threshold_bytes: args.write_buffer_mb * 1024 * 1024 * 2,
+    };
+    let foyer = FoyerBackend::new_with_shards(
         &args.disk_path,
         args.ram_mb * 1024 * 1024,
         args.disk_gb * 1024 * 1024 * 1024,
+        8,
+        write_tuning,
     )
     .await
     .with_context(|| "building FoyerBackend")?;
@@ -200,10 +209,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let state = AppState::new(cache, allowed_prefixes, args.memory_budget_mb, prefetch_tx);
 
     // Periodic saturation gauges (fetch-budget occupancy, in-flight entries,
-    // memory-budget occupancy, prefetch queue depth, host NIC/SSD
-    // throughput) -- see `saturation_monitor` for what each signals. Spawned
-    // detached: the sampler runs for the process lifetime, like the
-    // prefetch worker above.
+    // memory-budget occupancy, prefetch queue depth, host NIC throughput,
+    // foyer disk write-path throughput) -- see `saturation_monitor` for what
+    // each signals. Spawned detached: the sampler runs for the process
+    // lifetime, like the prefetch worker above.
     let _saturation_monitor =
         micromegas_object_cache_srv::saturation_monitor::spawn_saturation_monitor(
             state.cache.clone(),
