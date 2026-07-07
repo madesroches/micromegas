@@ -213,7 +213,11 @@ failed queries can be re-run.
    the `use super::partition_metadata::{load_partition_metadata, load_partition_metadata_from_footer}`
    line (import just the one renamed function). Update `ReaderFactory`'s doc comment, which
    currently claims the `MetadataCache` "significantly reduc[es] database fetches" — with no
-   database read path left, reword to describe it as reducing object-storage footer reads.
+   database read path left, reword to describe it as reducing object-storage footer reads. Also
+   update the `pub mod reader_factory;` doc comment in `mod.rs` ("Wrapper around ParquetObjectreader
+   to provide ParquetMetaData without hitting the ObjectStore") — metadata is now loaded *from*
+   object storage (via cached footer reads), so "without hitting the ObjectStore" becomes the
+   opposite of the actual behavior.
 5. **`lakehouse_context.rs`** — update both `ReaderFactory::new` call sites (drop `lake.db_pool.clone()`
    and `read_disable_metadata_psql_cache()` args); drop the now-unused import of
    `read_disable_metadata_psql_cache`.
@@ -224,8 +228,9 @@ failed queries can be re-run.
 7. **`temp.rs`** — delete the `delete_partition_metadata_batch` call and its `with_context`; drop
    the `use super::partition_metadata::delete_partition_metadata_batch` import.
 8. **`partition_cache.rs`** — delete `partition_with_metadata` and `PartitionWithMetadata`; drop the
-   now-unused `load_partition_metadata` import and any now-unused `ParquetMetaData`/`PgPool`
-   imports it leaves behind.
+   now-unused `load_partition_metadata` and `ParquetMetaData` imports (the deleted struct's field
+   was `ParquetMetaData`'s only other use in the file). Keep `sqlx::{PgPool, Row}` — `PartitionCache`
+   itself still uses both (`db_pool: PgPool` field and `new(db_pool: PgPool)`).
 9. **`migration.rs`** — add `upgrade_v5_to_v6`, bump `LATEST_LAKEHOUSE_SCHEMA_VERSION` to 6, add the
    dispatch step in `execute_lakehouse_migration`.
 10. **Tests** — see Testing Strategy: delete `reader_factory_tests.rs`, `test_metadata_compat.rs`,
@@ -318,7 +323,12 @@ Parquet footer via the object-cache-backed reader (#1121).
   consistency).
 - **Delete now-meaningless tests**: `reader_factory_tests.rs` (tested the env-var parser being
   removed), `test_metadata_compat.rs` (tests `parse_legacy_and_upgrade`, being removed),
-  `test_parquet_metadata_format.rs` (tests `serialize_parquet_metadata`, being removed).
+  `test_parquet_metadata_format.rs` (tests `serialize_parquet_metadata`, being removed). Note:
+  deleting `test_parquet_metadata_format.rs` also drops the only direct test of
+  `parse_parquet_metadata`, which survives this change — accepted, because its sole remaining
+  caller is the dormant v2→v3 migration code (`populate_num_rows_column`), which has no test
+  coverage today either, and the test's input builder (`serialize_parquet_metadata`) is being
+  deleted.
 - **Delete the parity test** — `sql_view_test.rs::partition_metadata_footer_parity_test` currently
   compares the postgres and footer paths; once the postgres path is gone there's nothing to compare,
   so delete it rather than replace it. The same file's `#[ignore]`d `sql_view_test` already
@@ -336,8 +346,8 @@ Parquet footer via the object-cache-backed reader (#1121).
   migration the way the repo actually exercises it: start the local test env
   (`local_test_env/ai_scripts/start_services.py`) against a database at v5 — `migrate_lakehouse`
   runs at service startup — then confirm the version row reads 6, `partition_metadata` is gone
-  (`SELECT ... FROM information_schema.tables`), and an end-to-end query (the replacement smoke
-  test, or `micromegas-query`) succeeds against pre-existing partitions.
+  (`SELECT ... FROM information_schema.tables`), and an end-to-end query (the `#[ignore]`d
+  `sql_view_test`, or `micromegas-query`) succeeds against pre-existing partitions.
 - **Full gate**: `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `cargo test` from `rust/`,
   then `python3 build/rust_ci.py`.
 
