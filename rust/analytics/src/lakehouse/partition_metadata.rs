@@ -6,10 +6,10 @@ use datafusion::parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader
 use futures::FutureExt;
 use futures::future::BoxFuture;
 use micromegas_tracing::prelude::*;
+use object_store::{ObjectStore, ObjectStoreExt, path::Path};
 use std::ops::Range;
 use std::sync::Arc;
 
-use super::caching_reader::CachingReader;
 use super::metadata_cache::MetadataCache;
 
 /// Strips column index information from Parquet metadata
@@ -68,19 +68,21 @@ fn strip_column_index_info(metadata: ParquetMetaData) -> Result<ParquetMetaData>
         .context("re-parsing metadata after stripping column index")
 }
 
-/// Adapts `CachingReader::get_bytes` to the `MetadataFetch` interface expected by
-/// `ParquetMetaDataReader`, so the footer read benefits from the same object-cache-backed
-/// byte caching as the rest of the file.
+/// Adapts `ObjectStore::get_range` to the `MetadataFetch` interface expected by
+/// `ParquetMetaDataReader`, so the footer read benefits from the same
+/// object-store-backed byte caching as the rest of the file (the object store
+/// itself may be L1-cache-backed, see `object_cache::l1_wrap`).
 ///
 /// Also tallies the number of footer bytes fetched via `bytes_read`, so callers can use it
 /// as a cheap proxy for the parsed metadata's weight in `MetadataCache` (see
 /// `load_partition_metadata`).
-struct CachingReaderFetch<'a> {
-    reader: &'a mut CachingReader,
+struct ObjectStoreFetch<'a> {
+    object_store: &'a Arc<dyn ObjectStore>,
+    path: &'a Path,
     bytes_read: std::sync::Arc<std::sync::atomic::AtomicU64>,
 }
 
-impl MetadataFetch for CachingReaderFetch<'_> {
+impl MetadataFetch for ObjectStoreFetch<'_> {
     fn fetch(
         &mut self,
         range: Range<u64>,
@@ -89,22 +91,32 @@ impl MetadataFetch for CachingReaderFetch<'_> {
             range.end - range.start,
             std::sync::atomic::Ordering::Relaxed,
         );
-        self.reader.get_bytes(range).boxed()
+        let object_store = self.object_store;
+        let path = self.path;
+        async move {
+            object_store
+                .get_range(path, range)
+                .await
+                .map_err(|e| ParquetError::External(Box::new(e)))
+        }
+        .boxed()
     }
 }
 
-/// Read and parse a partition's parquet footer directly from object storage via the
-/// object-cache-backed reader — the sole partition-metadata read path.
-/// Checks and backfills the shared `MetadataCache` parsed-lookaside: on a cache hit this
-/// returns immediately, on a miss it reads the footer from object storage and stores the
-/// parsed result before returning it.
+/// Read and parse a partition's parquet footer directly from `object_store` — the sole
+/// partition-metadata read path. Checks and backfills the shared `MetadataCache`
+/// parsed-lookaside: on a cache hit this returns immediately, on a miss it reads the
+/// footer from `object_store` (which may itself be L1-cache-backed) and stores the parsed
+/// result before returning it.
 #[span_fn]
 pub async fn load_partition_metadata(
-    reader: &mut CachingReader,
-    file_path: &str,
+    object_store: &Arc<dyn ObjectStore>,
+    path: &Path,
     file_size: u64,
     cache: Option<&MetadataCache>,
 ) -> datafusion::parquet::errors::Result<Arc<ParquetMetaData>> {
+    let file_path = path.as_ref();
+
     // Check cache first
     if let Some(cache) = cache
         && let Some(metadata) = cache.get(file_path).await
@@ -117,8 +129,9 @@ pub async fn load_partition_metadata(
     let bytes_read = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
     let raw = ParquetMetaDataReader::new()
         .load_and_finish(
-            CachingReaderFetch {
-                reader,
+            ObjectStoreFetch {
+                object_store,
+                path,
                 bytes_read: bytes_read.clone(),
             },
             file_size,

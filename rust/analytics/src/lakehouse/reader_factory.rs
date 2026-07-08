@@ -1,5 +1,3 @@
-use super::caching_reader::CachingReader;
-use super::file_cache::FileCache;
 use super::metadata_cache::MetadataCache;
 use super::partition_metadata::load_partition_metadata;
 use bytes::Bytes;
@@ -13,7 +11,7 @@ use datafusion::{
 };
 use futures::future::BoxFuture;
 use micromegas_tracing::prelude::*;
-use object_store::ObjectStore;
+use object_store::{ObjectStore, ObjectStoreExt, path::Path};
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -24,34 +22,30 @@ use std::sync::Arc;
 /// `MetadataCache`, significantly reducing repeated object-storage footer reads for
 /// repeated queries on the same partitions.
 ///
-/// File contents are cached via a shared `FileCache` with thundering herd
-/// protection, reducing object storage reads for frequently accessed files.
+/// File content caching is the responsibility of `object_store` itself: this
+/// factory is typically constructed with an object store already wrapped by the
+/// in-process L1 cache (see `object_cache::l1_wrap`), so it just reads bytes
+/// through it directly.
 pub struct ReaderFactory {
     object_store: Arc<dyn ObjectStore>,
     metadata_cache: Arc<MetadataCache>,
-    file_cache: Arc<FileCache>,
 }
 
 impl std::fmt::Debug for ReaderFactory {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ReaderFactory")
             .field("metadata_cache", &self.metadata_cache)
-            .field("file_cache", &self.file_cache)
             .finish()
     }
 }
 
 impl ReaderFactory {
-    /// Creates a new ReaderFactory with shared metadata and file caches.
-    pub fn new(
-        object_store: Arc<dyn ObjectStore>,
-        metadata_cache: Arc<MetadataCache>,
-        file_cache: Arc<FileCache>,
-    ) -> Self {
+    /// Creates a new ReaderFactory with a shared metadata cache, reading file
+    /// contents through `object_store`.
+    pub fn new(object_store: Arc<dyn ObjectStore>, metadata_cache: Arc<MetadataCache>) -> Self {
         Self {
             object_store,
             metadata_cache,
-            file_cache,
         }
     }
 }
@@ -69,31 +63,25 @@ impl ParquetFileReaderFactory for ReaderFactory {
         let filename = path.to_string();
         let file_size = partitioned_file.object_meta.size;
 
-        // CachingReader handles file content caching with thundering herd protection
-        let inner = CachingReader::new(
-            Arc::clone(&self.object_store),
-            path,
-            filename.clone(),
-            file_size,
-            Arc::clone(&self.file_cache),
-        );
-
         Ok(Box::new(ParquetReader {
             filename,
             file_size,
             metadata_cache: Arc::clone(&self.metadata_cache),
-            inner,
+            object_store: Arc::clone(&self.object_store),
+            path,
         }))
     }
 }
 
-/// A wrapper around a `CachingReader` that loads metadata on-demand
-/// using a shared global cache.
+/// Reads a parquet file's bytes and metadata directly from its `object_store`
+/// (which may itself be L1-cache-backed, see `object_cache::l1_wrap`) and a
+/// shared `MetadataCache`.
 pub struct ParquetReader {
     pub filename: String,
     pub file_size: u64,
     pub metadata_cache: Arc<MetadataCache>,
-    pub inner: CachingReader,
+    pub object_store: Arc<dyn ObjectStore>,
+    pub path: Path,
 }
 
 impl AsyncFileReader for ParquetReader {
@@ -104,16 +92,19 @@ impl AsyncFileReader for ParquetReader {
         let filename = self.filename.clone();
         let file_size = self.file_size;
         let bytes_requested = range.end - range.start;
-        let inner = &mut self.inner;
+        let object_store = Arc::clone(&self.object_store);
+        let path = self.path.clone();
 
         Box::pin(async move {
             let start = std::time::Instant::now();
-            let result = inner.get_bytes(range).await;
+            let result = object_store
+                .get_range(&path, range)
+                .await
+                .map_err(|e| datafusion::parquet::errors::ParquetError::External(Box::new(e)));
             let duration_ms = start.elapsed().as_millis();
-            let cache_hit = inner.last_read_was_cache_hit();
 
             debug!(
-                "parquet_read file={filename} file_size={file_size} bytes={bytes_requested} cache_hit={cache_hit} duration_ms={duration_ms}"
+                "parquet_read file={filename} file_size={file_size} bytes={bytes_requested} duration_ms={duration_ms}"
             );
 
             result
@@ -128,16 +119,19 @@ impl AsyncFileReader for ParquetReader {
         let file_size = self.file_size;
         let num_ranges = ranges.len();
         let total_bytes: u64 = ranges.iter().map(|r| r.end - r.start).sum();
-        let inner = &mut self.inner;
+        let object_store = Arc::clone(&self.object_store);
+        let path = self.path.clone();
 
         Box::pin(async move {
             let start = std::time::Instant::now();
-            let result = inner.get_byte_ranges(ranges).await;
+            let result = object_store
+                .get_ranges(&path, &ranges)
+                .await
+                .map_err(|e| datafusion::parquet::errors::ParquetError::External(Box::new(e)));
             let duration_ms = start.elapsed().as_millis();
-            let cache_hit = inner.last_read_was_cache_hit();
 
             debug!(
-                "parquet_read file={filename} file_size={file_size} ranges={num_ranges} bytes={total_bytes} cache_hit={cache_hit} duration_ms={duration_ms}"
+                "parquet_read file={filename} file_size={file_size} ranges={num_ranges} bytes={total_bytes} duration_ms={duration_ms}"
             );
 
             result
@@ -149,11 +143,11 @@ impl AsyncFileReader for ParquetReader {
         _options: Option<&ArrowReaderOptions>,
     ) -> BoxFuture<'_, datafusion::parquet::errors::Result<Arc<ParquetMetaData>>> {
         let metadata_cache = Arc::clone(&self.metadata_cache);
-        let filename = self.filename.clone();
+        let object_store = Arc::clone(&self.object_store);
+        let path = self.path.clone();
         let file_size = self.file_size;
-        let inner = &mut self.inner;
         Box::pin(async move {
-            load_partition_metadata(inner, &filename, file_size, Some(&metadata_cache)).await
+            load_partition_metadata(&object_store, &path, file_size, Some(&metadata_cache)).await
         })
     }
 }
