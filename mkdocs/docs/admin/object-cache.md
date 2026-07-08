@@ -179,6 +179,36 @@ Set the same two variables in the monolith's environment to enable them; leave t
 default) and the monolith reads directly from origin and every `warm_object` call is a harmless
 no-op.
 
+## In-process L1 cache
+
+Query processes (FlightSQL, the monolith) also carry a small **in-process L1 cache**, independent
+of the `object-cache-srv` deployment described above. It sits closer to the query than this
+service does: L1 caches hot byte ranges directly inside the query process's memory, so a repeat
+read of the same partition never leaves the process, let alone reaches this cache server or the
+origin store. An L1 miss falls through to whatever store L1 wraps — this cache server if
+[client opt-in](#client-opt-in) is configured, otherwise the origin store directly — so the
+L1 → L2 (this service) → origin tiering still holds; L1 is just an additional tier in front of it.
+
+L1 is sized by `MICROMEGAS_L1_CACHE_MB` (default `200`; `0` disables it) in the query process's own
+environment — this is unrelated to `MICROMEGAS_OBJECT_CACHE_RAM_MB` above, which sizes this
+server's own RAM tier.
+
+L1 covers exactly two read paths, both read-repeatedly on the query hot path:
+
+- Parquet partition reads (materialized views under `views/...`), through DataFusion's parquet
+  reader.
+- Static JSON/CSV table reads (`MICROMEGAS_STATIC_TABLES_URL`).
+
+It deliberately excludes raw blob reads (`blobs/{process_id}/{stream_id}/{block_id}`) — ETL
+materialization and the `get_payload`/`parse_block` SQL functions always read those directly from
+the origin/L2 stack, never through L1, since blobs are read exactly once and caching them would
+only add memory pressure for no benefit.
+
+L1 emits the same `RangeCache` hit/miss metrics described in [Monitoring](#monitoring) below, but
+without per-prefix labels, so every L1 hit/miss (parquet or static-table alike) reports
+`prefix="other"` — this gives aggregate L1 observability only, with no way to split lakehouse
+traffic from static-table traffic in the metrics.
+
 ## What gets cached
 
 Only reads. The client falls back transparently to the direct store on any cache error, non-2xx response, or oversized request, so an unreachable or misbehaving cache degrades to direct reads rather than failing requests:

@@ -74,6 +74,9 @@ impl StaticTablesConfigurator {
             std::env::vars().map(|(k, v)| (k.to_lowercase(), v)),
         )?;
         let object_store = Arc::new(object_store);
+        // Wrap with the in-process L1 cache: static tables are read
+        // repeatedly (see the L1 cache plan), just like lakehouse partitions.
+        let object_store = micromegas_object_cache::l1_wrap(object_store, "static");
 
         // Register the object store so table providers can access it
         ctx.register_object_store(&parsed_url, object_store.clone());

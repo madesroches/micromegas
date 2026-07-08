@@ -21,6 +21,7 @@ async-stream.workspace = true
 async-trait.workspace = true
 bytes.workspace = true
 chrono.workspace = true
+foyer-memory.workspace = true
 futures.workspace = true
 object_store.workspace = true
 reqwest.workspace = true
