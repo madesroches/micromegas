@@ -6,229 +6,251 @@ cache (#1188) and the read-path rework (#1203/#1216).
 
 ## Overview
 
-Add an **in-process L1 cache** for parquet row-group bytes, built from the existing `RangeCache`
-core (`rust/object-cache/src/range_cache.rs`) with a **bounded RAM backend**, composed as an
-`ObjectStore` layer in front of `CacheClientStore` (the L2 client). Hot reads short-circuit at L1
-with zero network; an L1 miss falls through to L2 (or directly to origin object storage when L2 is
-not configured).
+Add an **in-process L1 cache** for query-side reads, built from the existing `RangeCache` core
+(`rust/object-cache/src/range_cache.rs`) with a **bounded RAM backend**. Rather than filtering by
+key prefix or file extension, L1 is installed **only on the object stores DataFusion reads through**:
+the store handed to the parquet `ReaderFactory` and the static-tables store. Every raw-blob read
+(ETL materialization, and the `get_payload`/`parse_block` UDFs) goes through `BlobStorage` on a
+different store reference and bypasses L1 automatically — so no path/prefix/suffix filter is needed;
+the caller distinction *is* the filter.
 
 The same change **removes the old whole-file `FileCache`** (`file_cache.rs` / `caching_reader.rs`),
 which today only caches files ≤10 MB at the parquet-reader layer. L1 subsumes it: it caches hot
-bytes for files of all sizes at a lower layer, closing the >10 MB gap that motivates this issue and
-eliminating a redundant second copy of small-file bytes.
+row-group bytes for files of all sizes, closing the >10 MB gap that motivates this issue.
 
-Two scope constraints (from the issue discussion):
-1. **L1 caches parquet files only, not blobs.** Raw blobs (`.../blobs/...`) are written once at
-   ingestion and read once during ETL — caching them would only churn the RAM budget and evict
-   genuinely hot parquet bytes.
-2. **L1 replaces `FileCache`**, it does not sit alongside it.
+Hot reads short-circuit at L1 with zero network; an L1 miss falls through to whatever store it wraps
+— which already contains L2 (`CacheClientStore`) when configured, else object storage directly. So
+the L1 → L2 → origin tiering the issue describes still holds; L1 just lives at the reader layer
+rather than as a standalone `ObjectStore` in `make_cache`.
 
 ## Current State
 
-### Layering today
+### Object stores and read paths (why caller-based works)
 
-`connect_to_data_lake` (`rust/ingestion/src/data_lake_connection.rs:111-131`) builds the object-store
-stack:
+`DataLakeConnection.blob_storage` (`rust/telemetry/src/blob_storage.rs`) wraps one
+`Arc<dyn ObjectStore>` stack, built in `connect_to_data_lake`
+(`rust/ingestion/src/data_lake_connection.rs:111-131`):
 
 ```
 BlobStorage.inner() = PrefixStore(root) -> CacheClientStore (L2, if configured) -> raw store (S3/GCS)
 ```
 
-- `make_cache` (`data_lake_connection.rs:86-108`) wraps the raw full-bucket store in
-  `CacheClientStore` **only when `MICROMEGAS_OBJECT_CACHE_URL` + `..._API_KEY` are set**; otherwise
-  it returns the raw store unwrapped.
-- `BlobStorage::new` (`rust/telemetry/src/blob_storage.rs:19-23`) wraps that layer in
-  `PrefixStore(root)`. Because the prefix store is outermost, the cache layer sees **bucket-relative
-  keys that already include the lake root**, e.g. `{root}/views/.../x.parquet` and `{root}/blobs/...`
-  (confirmed: `blob_storage.rs:47-56`, and the server forbids a non-empty origin prefix for the same
-  reason).
+The lake object store has exactly **two** top-level key prefixes:
+- `blobs/{process_id}/{stream_id}/{block_id}` — raw telemetry payloads, **read-once** (parsed into
+  parquet during ETL). Written at `web_ingestion_service.rs:155`, read via `payload.rs:25`
+  (`read_blob`).
+- `views/{view_set}/{view_instance}/{date}/{time}_{file_id}.parquet` — materialized partitions,
+  **read-repeatedly** on the query hot path. Written at `write_partition.rs:546-547`.
 
-### The read path and the old file cache
+Two facts (confirmed by tracing) make the caller-based install clean:
 
-- `ReaderFactory` (`rust/analytics/src/lakehouse/reader_factory.rs:29-88`) is DataFusion's
-  `ParquetFileReaderFactory`. It holds `object_store` (= `BlobStorage.inner()`), a `MetadataCache`,
-  and a `FileCache`, and builds a `ParquetReader` per file wrapping a `CachingReader`.
-- `CachingReader` (`rust/analytics/src/lakehouse/caching_reader.rs`) caches **whole files ≤10 MB** in
-  the shared `FileCache` and slices ranges out of the cached `Bytes`; files >10 MB bypass the cache
-  and call `object_store.get_range`/`get_ranges` directly — which, when L2 is configured, cross the
-  network on **every** repeat read.
-- `FileCache` (`rust/analytics/src/lakehouse/file_cache.rs`) is a moka LRU keyed by path, byte-weighted,
-  default 200 MB budget / 10 MB max-file, with thundering-herd coalescing via `try_get_with`.
-- `load_partition_metadata` (`rust/analytics/src/lakehouse/partition_metadata.rs:102-147`) reads the
-  parquet footer through a `CachingReaderFetch` adapter (`partition_metadata.rs:78-94`) over the same
-  `CachingReader`, so footer reads for >10 MB files also cross the network on cold in-process reads.
-- Config knobs today (`rust/analytics/src/lakehouse/lakehouse_context.rs:17-20,79-103`):
-  `MICROMEGAS_FILE_CACHE_MB` (default 200), `MICROMEGAS_FILE_CACHE_MAX_FILE_MB` (default 10).
+1. **Parquet partition scans read exclusively through `ReaderFactory.object_store`.** The scan is
+   wired by `ParquetSource::with_parquet_file_reader_factory`
+   (`partitioned_execution_plan.rs:56-60`); when a reader factory is set, DataFusion does **not**
+   consult `runtime_env().object_store(url)`. `ReaderFactory::new` is called at exactly two sites,
+   both `lake.blob_storage.inner()`: `lakehouse_context.rs:106` and `:127`.
 
-### The RangeCache core (reused as-is)
+2. **Every raw-blob read goes through `BlobStorage`, never through the reader factory store.** ETL
+   processors call `fetch_block_payload` → `BlobStorage::read_blob` (`payload.rs:19-38`,
+   `blob_storage.rs:72-75`). The `get_payload` UDF (`get_payload_function.rs:110`) and `parse_block`
+   UDTF (`parse_block_table_function.rs:301`) also use `BlobStorage`. `BlobStorage.inner()` and
+   `read_blob` share the same internal `Arc`, but that Arc is a *different reference* from whatever we
+   wrap and hand to `ReaderFactory` — so wrapping the reader-factory store leaves all blob reads
+   uncached even when they are triggered from SQL.
 
-- `RangeCache` (`rust/object-cache/src/range_cache.rs:511-559`) — block model (default block
-  1 MiB), single-flight in-flight map, run coalescing, priority fetch budget, write-once keys (no
-  invalidation). `#[derive(Clone)]`, cheap to clone.
-- Public read API: `get_range(key, range)` (`:1141`), `get_ranges(key, ranges)` (`:1175`),
-  `size(key)` (`:625`), plus `*_with_size` and `stream_ranges_with_size` variants.
-- Plain `new(origin, backend, block_size, ns, total_fetch_permits, demand_reserved_fetch_permits,
-  max_coalesced_get_bytes, promote_whole_batch)` works without prefix labels (every key classifies
-  as `"other"`); `with_prefix_labels` is an optional builder for dimensioned metrics.
-- Backends implement `RangeCacheBackend { get, put, disk_stats }` (`backend.rs`).
-  - `MemoryBackend` (`memory_backend.rs`) is a plain `Mutex<HashMap<String, Bytes>>` — **unbounded,
-    no eviction, ignores `FillHint`.** Not usable as-is for a budgeted L1.
-  - `FoyerBackend` (`foyer_backend.rs`) has a bounded, byte-weighted LRU RAM tier but is
-    **feature-gated (`foyer`, off by default)** and always constructs an on-disk device — there is no
-    clean RAM-only path.
-- Reference construction (`rust/object-cache-srv/src/object_cache_srv.rs:153-162`), defaults from
-  `range_cache.rs:64-72`: `total_fetch_permits = 32`, `demand_reserved = 8`,
-  `max_coalesced_get_bytes = 8 MiB`, `promote_whole_batch = false`, block size 1 MiB.
+**Consequence:** wrap the store *passed to* `ReaderFactory::new` (and the static-tables store); do
+**not** wrap inside `BlobStorage` (`connect_with_layer`) or in `make_cache`, which would cache blob
+reads too.
+
+### Static tables (separate store, also read-repeatedly)
+
+`StaticTablesConfigurator` (`static_tables_configurator.rs`) discovers `*.json`/`*.csv` under
+`MICROMEGAS_STATIC_TABLES_URL` (`public/src/servers/flight_sql_server.rs:206`), parses its **own**
+object store (`static_tables_configurator.rs:70-76`), registers it with `ctx.register_object_store`,
+and exposes each file as a DataFusion `ListingTable`. Reads are lazy per query through that
+registered store (`csv_table_provider.rs:34`, `json_table_provider.rs:96`), so they benefit from
+caching and are wrapped the same way.
+
+### The old file cache (to be removed)
+
+- `ReaderFactory` (`reader_factory.rs:29-88`) holds `object_store`, `MetadataCache`, `FileCache`, and
+  builds a `ParquetReader` wrapping a `CachingReader` per file.
+- `CachingReader` (`caching_reader.rs`) caches whole files ≤10 MB in `FileCache` and slices ranges;
+  >10 MB files bypass and read `object_store.get_range`/`get_ranges` directly.
+- `FileCache` (`file_cache.rs`) is a moka LRU, default 200 MB / 10 MB max-file, coalescing via
+  `try_get_with`. Config: `MICROMEGAS_FILE_CACHE_MB`, `MICROMEGAS_FILE_CACHE_MAX_FILE_MB`
+  (`lakehouse_context.rs:17-20,79-103`).
+- `load_partition_metadata` (`partition_metadata.rs:102-147`) reads the footer through a
+  `CachingReaderFetch` adapter over the same `CachingReader`.
+
+### RangeCache core (reused as-is)
+
+- `RangeCache::new(origin, backend, block_size, ns, total_fetch_permits,
+  demand_reserved_fetch_permits, max_coalesced_get_bytes, promote_whole_batch)`
+  (`range_cache.rs:533-559`). Block model (default 1 MiB), single-flight, run coalescing, write-once
+  keys (no invalidation). `#[derive(Clone)]`.
+- Read API: `get_range(key, range)` (`:1141`), `get_ranges(key, ranges)` (`:1175`), `size(key)`
+  (`:625`), plus `*_with_size` / `stream_ranges_with_size`.
+- Takes a `backend: Arc<dyn RangeCacheBackend>` (`backend.rs`), so **multiple `RangeCache` instances
+  can share one backend** (hence one RAM budget) as long as their `ns` differ (ns is part of every
+  key).
+  - `MemoryBackend` (`memory_backend.rs`) is a plain unbounded `Mutex<HashMap>` — **no eviction**,
+    not usable for a budgeted L1.
+  - `FoyerBackend` (`foyer_backend.rs`) has a bounded byte-weighted LRU RAM tier but is feature-gated
+    and always builds an on-disk device.
+- Reference config (`object_cache_srv.rs:153-162`, defaults `range_cache.rs:64-72`):
+  `total_fetch_permits = 32`, `demand_reserved = 8`, `max_coalesced_get_bytes = 8 MiB`,
+  `promote_whole_batch = false`, block 1 MiB.
 
 ## Design
 
 ### Target layering
 
 ```
-BlobStorage.inner() = PrefixStore(root)
-                        -> L1CacheStore (NEW: in-process RangeCache + bounded RAM backend)
-                          -> CacheClientStore (L2, if configured)
-                            -> raw store (S3/GCS)
+DataFusion parquet scan  --> ReaderFactory.object_store = L1CacheStore
+                                                            (RangeCache ns="lakehouse",
+                                                             origin = blob_storage.inner())
+                                                              --> PrefixStore(root) -> L2 -> origin
+
+DataFusion static scan   --> registered store             = L1CacheStore
+                                                            (RangeCache ns="static",
+                                                             origin = static-tables store)
+
+ETL / get_payload / parse_block --> BlobStorage.read_blob --> (unwrapped) PrefixStore(root) -> L2 -> origin
 ```
 
-L1 is inserted inside `make_cache`, wrapping whatever origin it is given: `CacheClientStore` when L2
-is configured, otherwise the raw store. This keeps in-process caching **always on** (matching the old
-`FileCache`, which was unconditional), so a monolith with no object-cache-srv does not regress — it
-just gets a byte-range RAM cache instead of a whole-file one.
+Both `L1CacheStore` instances share **one** `Arc<BoundedMemoryBackend>` (a single RAM budget),
+distinguished by `ns`. `make_cache` / `BlobStorage` are unchanged.
 
 ### New component: `L1CacheStore` (an `ObjectStore` over a `RangeCache`)
 
-`RangeCache` is an internal API, not an `ObjectStore`; `CacheClientStore` is the only
-`impl ObjectStore` wrapper today. Add a second adapter in the `object-cache` crate that exposes a
-RAM-backed `RangeCache` as an `ObjectStore`, so it slots into the layer chain exactly like
-`CacheClientStore`:
+`RangeCache` is an internal API, not an `ObjectStore`. Add a thin adapter in the `object-cache`
+crate exposing a RAM-backed `RangeCache` as an `ObjectStore`, so it drops into either wrap site:
 
 ```rust
 // rust/object-cache/src/l1_store.rs (new)
 pub struct L1CacheStore {
-    cache: RangeCache,            // backend = bounded RAM; origin = the wrapped store
-    origin: Arc<dyn ObjectStore>, // same store RangeCache fetches from; used for pass-through ops
+    cache: RangeCache,             // backend = shared bounded RAM; origin = the wrapped store
+    origin: Arc<dyn ObjectStore>,  // for pass-through ops (put/list/delete/head/preconditions)
 }
 ```
 
-Behavior of the `ObjectStore` impl (mirrors `CacheClientStore`'s structure):
+`ObjectStore` impl (mirrors `CacheClientStore`'s shape):
+- **`get_opts`** — no conditional/version preconditions and not `head`:
+  - `GetRange::Bounded(r)` → `cache.get_range(key, r)` returned as a single-chunk streaming
+    `GetResult`.
+  - full / open-ended / suffix → resolve size via `cache.size(key)` and serve the requested slice
+    (suffix computes `start = size - suffix`).
+  - preconditions / `head` → delegate to `origin`.
+- **`get_ranges`** → `cache.get_ranges(key, ranges)`.
+- **`put_*`, `list`, `delete`, `copy`, `head`** → delegate to `origin`. On any cache error, fall back
+  to `origin` for the same request (same graceful-degradation contract as `CacheClientStore`).
 
-- **`get_opts`** — cache only when the key is parquet (see filter below) and the request has no
-  conditional/version preconditions:
-  - `GetRange::Bounded(r)` → `cache.get_range(key, r)`, returned as a single-chunk streaming
-    `GetResult` (reuse the existing `build_get_result` pattern).
-  - full / open-ended / suffix → resolve size via `cache.size(key)` (or `get_ranges_with_size`) and
-    serve from the cache; suffix computes `start = size - suffix`.
-  - non-parquet key, precondition set, or `head` → delegate straight to `origin`.
-- **`get_ranges`** — parquet key → `cache.get_ranges(key, ranges)`; else delegate to `origin`.
-- **`put_*`, `list`, `delete`, `copy`, `head`, `get` (unranged full for non-parquet)** — delegate to
-  `origin` unchanged. L1 never caches writes; write-once keys mean no invalidation is needed.
+**No prefix/suffix filter inside `L1CacheStore`** — it caches whatever it is asked for, and it is only
+ever handed parquet-partition reads and static-table reads, both cacheable. Full-object reads (CSV/JSON
+static tables read whole files) are served by fetching all covering blocks, which is exactly the
+caching we want.
 
-Because `RangeCache` already does single-flight, coalescing, and its own error handling, the adapter
-is thin. On any cache error the adapter falls back to `origin` for the same request (same graceful
-degradation contract as `CacheClientStore`).
+### New component: `BoundedMemoryBackend` (shared RAM budget)
 
-### Parquet-only filter
-
-L1 sees bucket-relative keys with the lake root prefix, so a bare `views/` prefix match is not
-root-robust. **Cache iff the key ends in `.parquet`.** Blobs (`{root}/blobs/{process}/{stream}/{block}`)
-never carry that suffix, so this cleanly excludes them and is independent of the lake root. Everything
-else falls straight through to `origin`. (A `helper is_cacheable(key: &str) -> bool` keeps this in one
-place.)
-
-### Bounded RAM backend
-
-`MemoryBackend` is unbounded, so L1 needs a budgeted backend. Add a byte-bounded LRU backend in the
-`object-cache` crate:
+`MemoryBackend` is unbounded, so add a byte-bounded LRU backend in `object-cache`:
 
 ```rust
 // rust/object-cache/src/bounded_memory_backend.rs (new)
 pub struct BoundedMemoryBackend { /* LRU keyed by String, weighted by value.len(), byte cap */ }
-impl RangeCacheBackend for BoundedMemoryBackend { get; put (evicts LRU while over budget); }
+impl RangeCacheBackend for BoundedMemoryBackend { get; put (evict LRU while over budget); }
 ```
 
-- Weight = `value.len()`; evict least-recently-used entries on `put` until within the byte cap.
-- `FillHint::Prefetch` fills should not evict hot `Demand` data — at minimum, honor the hint by not
-  admitting a prefetch fill that would evict demand entries (foyer's RAM tier has an equivalent
-  policy). A first cut may treat both equally and refine later.
-- `disk_stats()` returns `None` (no disk tier) — already the trait default.
+- Weight = `value.len()`; evict least-recently-used on `put` until within the cap.
+- `FillHint::Prefetch` should not evict hot `Demand` data. L1 is read-driven (no write-warming), so
+  prefetch fills are rare here — a v1 may treat both equally and refine later.
+- `disk_stats()` returns `None` (trait default).
 
-Rationale for a new backend over the two existing options is in **Trade-offs**.
+### Shared backend across both wrap sites
+
+Both L1 wraps must share one budget without threading a handle across the analytics/public crate
+boundary (the static configurator is built separately in `flight_sql_server.rs`, with no access to
+`LakehouseContext`). Provide a process-global, lazily-initialized shared backend in `object-cache`,
+sized once from `MICROMEGAS_L1_CACHE_MB`:
+
+```rust
+// object-cache
+pub fn shared_l1_backend() -> Option<Arc<BoundedMemoryBackend>>; // None when MICROMEGAS_L1_CACHE_MB == 0
+pub fn l1_wrap(origin: Arc<dyn ObjectStore>, ns: &str) -> Arc<dyn ObjectStore>; // wraps iff enabled
+```
+
+`l1_wrap` returns `origin` unchanged when L1 is disabled. Sharing a global is safe here because keys
+are write-once/content-addressed and namespaced per instance, so cross-context reuse (e.g. in tests)
+can only ever return identical bytes. (Alternative — explicit construction threaded from
+`LakehouseContext` into `StaticTablesConfigurator::from_env` — is noted in Trade-offs.)
 
 ### Wiring
 
-`make_cache` (`data_lake_connection.rs`) gains the L1 layer:
-
-```rust
-fn make_cache(direct) -> (Arc<dyn ObjectStore>, Option<Arc<dyn ObjectPrefetch>>) {
-    let (l2_or_direct, prefetch) = /* existing CacheClientStore logic */;
-    let l1 = build_l1(l2_or_direct.clone());     // reads MICROMEGAS_L1_CACHE_MB etc.
-    (l1, prefetch)                                // prefetch face unchanged (still the L2 client)
-}
-```
-
-- `build_l1` constructs `BoundedMemoryBackend`, a `RangeCache::new(origin, backend, block_size, ns,
-  ...)` with the block/permit/coalesce defaults, and returns `Arc::new(L1CacheStore { ... })`.
-- When `MICROMEGAS_L1_CACHE_MB == 0`, `build_l1` returns the origin unwrapped (L1 disabled).
-- `ns` for L1 can be derived from the origin URI like the server does, or a fixed `"l1"` — L1 is a
-  single process-local namespace, so a constant is fine.
-- The prefetch face returned for write-time warming is still the **L2** client (`CacheClientStore`);
-  L1 is a read-side cache and is not warmed on write.
+- `lakehouse_context.rs:106` and `:127`: wrap before constructing the factory —
+  `L1: ReaderFactory::new(l1_wrap(lake.blob_storage.inner(), "lakehouse"), metadata_cache)`. Drop the
+  `file_cache` argument.
+- `static_tables_configurator.rs:76`: `let object_store = l1_wrap(Arc::new(object_store), "static");`
+  before `register_object_store`.
+- `analytics/Cargo.toml`: add a dependency on `micromegas-object-cache` (analytics does not depend on
+  it today).
 
 ### Removing the old file cache (analytics)
 
-- Delete `rust/analytics/src/lakehouse/file_cache.rs`, `caching_reader.rs`, and
-  `rust/analytics/tests/file_cache_tests.rs`; drop their `mod` lines in `lakehouse/mod.rs`.
-- `ReaderFactory` (`reader_factory.rs`): drop the `file_cache` field; `ParquetReader` holds
+- Delete `file_cache.rs`, `caching_reader.rs`, `tests/file_cache_tests.rs`; drop their `mod` lines in
+  `lakehouse/mod.rs`.
+- `ReaderFactory` / `ParquetReader`: drop the `file_cache` field; `ParquetReader` holds
   `object_store: Arc<dyn ObjectStore>` + `path` and implements `AsyncFileReader::get_bytes` /
-  `get_byte_ranges` by calling `object_store.get_range` / `get_ranges` directly (L1 now lives in that
-  store). Keep the `parquet_read ... duration_ms` debug log; the per-read `cache_hit` flag goes away
-  (L1 emits its own hit/miss metrics — see Testing/Telemetry).
-- `load_partition_metadata` (`partition_metadata.rs`): replace the `CachingReaderFetch` adapter with a
-  small `MetadataFetch` that reads `object_store.get_range(path, range)`. Change the signature from
-  `reader: &mut CachingReader` to `object_store: &Arc<dyn ObjectStore>, path: &Path` (footer reads now
-  benefit from L1 too — this addresses the #1121 footer-read tie-in the issue mentions).
+  `get_byte_ranges` via `object_store.get_range` / `get_ranges` (L1 now lives in that store). Keep the
+  `parquet_read ... duration_ms` debug log; the per-read `cache_hit` flag goes away (L1 emits its own
+  hit/miss metrics — see Testing).
+- `load_partition_metadata` (`partition_metadata.rs`): replace `CachingReaderFetch` with a
+  `MetadataFetch` reading `object_store.get_range(path, range)`; change the signature from
+  `reader: &mut CachingReader` to `object_store: &Arc<dyn ObjectStore>, path: &Path`. Footer reads now
+  benefit from L1 too (the #1121 footer tie-in the issue mentions).
 - `lakehouse_context.rs`: drop `FileCache` construction and the `MICROMEGAS_FILE_CACHE_MB` /
-  `MICROMEGAS_FILE_CACHE_MAX_FILE_MB` knobs; `ReaderFactory::new` no longer takes a file cache.
+  `MICROMEGAS_FILE_CACHE_MAX_FILE_MB` knobs.
 
 ## Implementation Steps
 
-**Phase 1 — object-cache crate (new building blocks)**
-1. Add `BoundedMemoryBackend` (`bounded_memory_backend.rs`) implementing `RangeCacheBackend` with a
-   byte-weighted LRU and a configurable cap; export from `lib.rs`. Unit tests: eviction at budget,
-   weight accounting, `get`/`put` round-trip, hint handling.
-2. Add `L1CacheStore` (`l1_store.rs`) implementing `ObjectStore` over a `RangeCache`, with the
-   parquet-only filter and origin pass-through/fallback; export from `lib.rs`.
+**Phase 1 — object-cache crate (building blocks)**
+1. `BoundedMemoryBackend` (`bounded_memory_backend.rs`) + export. Tests: eviction at budget, weight
+   accounting, get/put, hint handling.
+2. `L1CacheStore` (`l1_store.rs`) implementing `ObjectStore` over a `RangeCache`, with origin
+   pass-through/fallback + export.
+3. `shared_l1_backend()` / `l1_wrap(origin, ns)` helpers reading `MICROMEGAS_L1_CACHE_MB` (0 =
+   disabled) + export.
 
-**Phase 2 — wiring (ingestion)**
-3. Add `build_l1` + the `MICROMEGAS_L1_CACHE_MB` (and any block/permit) env knobs; insert L1 in
-   `make_cache` in front of the existing L2/direct store. `0` disables.
+**Phase 2 — wiring (analytics)**
+4. Add `micromegas-object-cache` to `analytics/Cargo.toml`.
+5. Wrap the reader-factory store at `lakehouse_context.rs:106` and `:127` via `l1_wrap(..., "lakehouse")`.
+6. Wrap the static-tables store at `static_tables_configurator.rs:76` via `l1_wrap(..., "static")`.
 
-**Phase 3 — remove the old file cache (analytics)**
-4. Refactor `load_partition_metadata` to read via `object_store` + `path`.
-5. Refactor `ReaderFactory` / `ParquetReader` to read directly from `object_store`; drop the
-   `file_cache` field.
-6. Delete `file_cache.rs`, `caching_reader.rs`, `file_cache_tests.rs`; update `mod.rs`.
-7. Update `lakehouse_context.rs` to drop `FileCache` and its env knobs.
+**Phase 3 — remove old file cache (analytics)**
+7. Refactor `load_partition_metadata` to read via `object_store` + `path`.
+8. Refactor `ReaderFactory` / `ParquetReader` to read directly from `object_store`; drop `file_cache`.
+9. Delete `file_cache.rs`, `caching_reader.rs`, `file_cache_tests.rs`; update `mod.rs`.
+10. Drop `FileCache` + its env knobs from `lakehouse_context.rs`.
 
 **Phase 4 — verify**
-8. `cd rust && cargo fmt && cargo clippy --workspace -- -D warnings && cargo test`.
-9. Manual: run flight-sql with and without `MICROMEGAS_OBJECT_CACHE_URL`, confirm repeat queries hit
-   L1 (metrics) and blobs are not cached.
+11. `cd rust && cargo fmt && cargo clippy --workspace -- -D warnings && cargo test`.
+12. Manual: run flight-sql with and without `MICROMEGAS_OBJECT_CACHE_URL`; confirm repeat queries hit
+    L1 (metrics), a `get_payload`/`parse_block` query does not populate L1, and a repeat static-table
+    query hits L1.
 
 ## Files to Modify
 
 **New**
 - `rust/object-cache/src/bounded_memory_backend.rs`
-- `rust/object-cache/src/l1_store.rs`
+- `rust/object-cache/src/l1_store.rs` (+ `shared_l1_backend`/`l1_wrap`, or a small `l1.rs`)
 - `rust/object-cache/tests/l1_store_tests.rs`, `.../bounded_memory_backend_tests.rs`
 
 **Modified**
 - `rust/object-cache/src/lib.rs` (exports)
-- `rust/ingestion/src/data_lake_connection.rs` (`make_cache`, `build_l1`, env knobs)
+- `rust/analytics/Cargo.toml` (add `micromegas-object-cache`)
+- `rust/analytics/src/lakehouse/lakehouse_context.rs`
+- `rust/analytics/src/lakehouse/static_tables_configurator.rs`
 - `rust/analytics/src/lakehouse/reader_factory.rs`
 - `rust/analytics/src/lakehouse/partition_metadata.rs`
-- `rust/analytics/src/lakehouse/lakehouse_context.rs`
 - `rust/analytics/src/lakehouse/mod.rs`
 
 **Deleted**
@@ -238,59 +260,63 @@ fn make_cache(direct) -> (Arc<dyn ObjectStore>, Option<Arc<dyn ObjectPrefetch>>)
 
 ## Trade-offs
 
-- **Bounded RAM backend: new `BoundedMemoryBackend` vs. `FoyerBackend` RAM-only vs. re-adding moka.**
-  Foyer's RAM tier is already a bounded weighted LRU, but it is feature-gated and always builds an
-  on-disk device (no clean RAM-only path) — pulling foyer's disk machinery into every flight-sql /
-  monolith process just to bound RAM is the wrong footprint for a "zero-network, RAM-only" L1. moka
-  was deliberately removed from `object-cache` in #1203; re-adding it would regress that cleanup. A
-  small byte-weighted LRU backend is the least-surprising fit, keeps L1 free of disk deps, and is
-  reusable. Cost: a modest amount of new, well-scoped code.
-- **Block granularity vs. whole-file.** The old `FileCache` cached whole ≤10 MB files; L1 caches
-  1 MiB blocks. For large files this is the whole point (cache only touched row-group blocks instead
-  of nothing). For a cold one-shot read of a small file, block-aligned fetching can pull marginally
-  more bytes than exact ranges, but repeat reads are served from RAM. Net win on the hot path.
-- **L1 always-on vs. only-with-L2.** The issue frames L1 "in front of `CacheClientStore`", but the
-  old `FileCache` ran unconditionally. Gating L1 on L2 would regress no-L2 deployments (monolith), so
-  L1 wraps whatever origin it is given and is controlled by its own `MICROMEGAS_L1_CACHE_MB` knob.
-- **Parquet-only by `.parquet` suffix vs. prefix classification.** `RangeCache::classify` exists but
-  is metrics-only and prefix-based; the suffix check is simpler, root-agnostic, and the correct gate
-  for *whether to cache at all*. Prefix labels remain available if we later want dimensioned L1
-  metrics.
+- **Caller-based install vs. prefix/suffix filter.** Wrapping per object-store instance needs no
+  filtering logic and correctly excludes blobs even when read through DataFusion UDFs
+  (`get_payload`/`parse_block`), because those go through `BlobStorage`, not the reader-factory store.
+  A prefix filter at `make_cache` would need root-aware segment matching and still wouldn't cover
+  static tables (a separate store); a `.parquet` suffix filter wouldn't cover static tables either.
+  Cost: L1 wiring moves into the analytics layer and `analytics` gains an `object-cache` dependency,
+  and it is no longer literally an `ObjectStore` in front of `CacheClientStore` as #1205's text
+  describes (functionally the L1→L2→origin tiering is preserved, since L1's origin already contains
+  L2).
+- **Shared global backend vs. explicit threading.** A process-global bounded backend gives one RAM
+  budget across both wrap sites with no cross-crate plumbing; write-once/namespaced keys make global
+  reuse safe. The explicit alternative (build the backend in `LakehouseContext` and pass it into
+  `StaticTablesConfigurator::from_env`) avoids a global but threads a handle through the public crate
+  and complicates the static-tables entry point. Chosen: shared global; revisit if it complicates
+  tests.
+- **New `BoundedMemoryBackend` vs. `FoyerBackend` RAM-only vs. re-adding moka.** Foyer is feature-gated
+  and always builds a disk device (wrong footprint for a RAM-only L1); moka was deliberately removed
+  from `object-cache` in #1203. A small byte-weighted LRU backend is the least-surprising fit and keeps
+  L1 disk-dep-free.
+- **Block granularity vs. whole-file.** L1 caches 1 MiB blocks instead of whole ≤10 MB files. For large
+  files this is the point (cache only touched row-group blocks); for a cold one-shot small-file read it
+  can pull marginally more bytes, but repeat reads are served from RAM.
 
 ## Documentation
 
-- Update the admin/object-cache docs (the page added in #1188/`1117316ca`, under `mkdocs/docs/`) to
-  describe the L1 tier and the `MICROMEGAS_L1_CACHE_MB` knob, and to note that `MICROMEGAS_FILE_CACHE_*`
-  are removed.
-- Note the removal of `MICROMEGAS_FILE_CACHE_MB` / `MICROMEGAS_FILE_CACHE_MAX_FILE_MB` wherever env
-  vars are listed for services.
+- Update the admin/object-cache docs (`mkdocs/docs/`, page from #1188) to describe the L1 tier, the
+  `MICROMEGAS_L1_CACHE_MB` knob, that it covers parquet partitions **and** static tables, and that it
+  excludes raw blobs.
+- Note removal of `MICROMEGAS_FILE_CACHE_MB` / `MICROMEGAS_FILE_CACHE_MAX_FILE_MB` wherever service env
+  vars are listed.
 
 ## Testing Strategy
 
-- **Unit (`object-cache`)**: `BoundedMemoryBackend` eviction/weight/hint; `L1CacheStore` — parquet
-  keys are cached (second read issues no origin request), blob/non-parquet keys always pass through,
-  ranged/full/suffix gets return correct bytes, origin errors fall back.
-- **Integration**: a `RangeCache`-over-`L1CacheStore` with a counting mock origin `ObjectStore`
-  proving repeat parquet reads hit RAM (origin call count stays flat) while blob reads always reach
-  origin.
-- **Analytics regression**: existing lakehouse/query tests must pass unchanged after the `FileCache`
-  removal; port any still-relevant assertions from `file_cache_tests.rs` (e.g. large-file reads
-  succeed) into the new L1 tests rather than dropping coverage.
-- **Telemetry**: confirm L1 hit/miss is observable. `RangeCache` emits per-prefix hit/miss metrics
-  (#1206); with plain `new` these tag as `"other"`. Decide whether to call `with_prefix_labels` on L1
-  so the L1 win is measurable per the #1206 sequencing note (Open Questions).
+- **Unit (`object-cache`)**: `BoundedMemoryBackend` eviction/weight/hint; `L1CacheStore` over a counting
+  mock origin — repeat reads issue no origin request; ranged/full/suffix reads return correct bytes;
+  origin errors fall back; `list`/`put`/`delete` pass through.
+- **Analytics integration**: repeat parquet-partition query keeps the origin call count flat while a
+  `get_payload`/`parse_block` query does not populate L1 (proves the caller-based split); repeat
+  static-table query hits L1.
+- **Regression**: existing lakehouse/query tests pass after `FileCache` removal; port still-relevant
+  assertions from `file_cache_tests.rs` into the new L1 tests rather than dropping coverage.
+- **Telemetry**: confirm L1 hit/miss is observable. `RangeCache` emits per-prefix hit/miss (#1206);
+  with plain `new` these tag `"other"` — decide whether to attach `with_prefix_labels` for dimensioned
+  L1 metrics (Open Questions).
 - **CI**: `python3 build/rust_ci.py`.
 
 ## Open Questions
 
-1. **Default `MICROMEGAS_L1_CACHE_MB`.** Old `FileCache` defaulted to 200 MB. Keep 200, or size L1
-   larger now that it covers all file sizes? (Proposed: keep 200 as a safe default.)
-2. **Prefix-labeled L1 metrics.** Attach `with_prefix_labels(["views", "blobs"])` to L1 for
-   dimensioned hit-rate metrics, or leave everything as `"other"`? Attaching makes the L1 win
-   measurable (ties into #1206) at the cost of a little wiring.
-3. **`FillHint` handling in `BoundedMemoryBackend`.** Full demand/prefetch admission policy in v1, or
-   ship a simple equal-treatment LRU first and refine? L1 is read-driven (no write-warming), so
-   prefetch fills are rare here — equal treatment is likely fine initially.
-4. **Fetch-permit sizing for L1.** Reuse the server defaults (32 / 8), or smaller for an in-process
-   RAM cache whose "origin" is often another in-process/LAN hop? (Proposed: reuse defaults; revisit
-   if it over-fans-out to S3 in the no-L2 case.)
+1. **Default `MICROMEGAS_L1_CACHE_MB`.** Old `FileCache` defaulted to 200 MB. Keep 200, or size up now
+   that L1 covers all file sizes + static tables? (Proposed: keep 200.)
+2. **Dimensioned L1 metrics.** Attach `with_prefix_labels(["views", "blobs"])` (and/or per-ns tags) so
+   the L1 win is measurable per the #1206 sequencing note, or leave as `"other"`?
+3. **`blocks` metadata-view reads.** `query_partitions(..., lake.blob_storage.inner(), ...)`
+   (`partition_source_data.rs:273`, `jit_partitions.rs`) reads the `blocks` metadata *view* (parquet)
+   through DataFusion. Confirm whether those reads use the context's wrapped `ReaderFactory` (cached)
+   or a fresh unwrapped factory; if unwrapped, decide whether to route them through L1 too.
+4. **`FillHint` handling in `BoundedMemoryBackend`.** Full demand/prefetch admission policy in v1, or
+   equal-treatment LRU first? (L1 is read-driven, so prefetch fills are rare — equal treatment likely
+   fine initially.)
+5. **Fetch-permit sizing for L1.** Reuse server defaults (32 / 8), or smaller for an in-process cache?
