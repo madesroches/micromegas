@@ -122,23 +122,22 @@ ETL / get_payload / parse_block --> BlobStorage.read_blob --> (unwrapped) Prefix
 Both `L1CacheStore` instances share **one** `Arc<BoundedMemoryBackend>` (a single RAM budget),
 distinguished by `ns`. `make_cache` / `BlobStorage` are unchanged.
 
-### Crate placement (keep `object-cache` untouched)
+### Crate placement (all in `object-cache`)
 
-All new code lives in `analytics`; `object-cache` is not modified. `object-cache` deliberately
-dropped its moka dependency in #1203, and `analytics` already depends on moka (`file_cache.rs`,
-`metadata_cache.rs`) — so the moka-based backend belongs in `analytics`, not next to the other
-backends in `object-cache`. The only `object-cache` surface used is the already-`pub` `RangeCache`
-and `RangeCacheBackend` trait. Both wrap sites (`lakehouse_context.rs`, `static_tables_configurator.rs`)
-are in `analytics`, so the shared-budget backend is a simple analytics-local global — no cross-crate
-threading.
+The bounded backend, `L1CacheStore`, and `l1_wrap` all live in `object-cache`, next to the existing
+`MemoryBackend`/`FoyerBackend` and the `RangeCache` they pair with — generic, reusable, and testable
+in that crate's suite. `analytics` gains a dependency on `object-cache` and simply calls
+`object_cache::l1_wrap(...)` at the two wrap sites. This is possible because the bounded backend uses
+`foyer`'s **in-memory** `Cache` (see below), so no moka is introduced into `object-cache` (respecting
+the #1203 removal). The shared-budget backend is an `object-cache`-owned global.
 
 ### New component: `L1CacheStore` (an `ObjectStore` over a `RangeCache`)
 
-`RangeCache` is an internal API, not an `ObjectStore`. Add a thin adapter in `analytics` exposing a
+`RangeCache` is an internal API, not an `ObjectStore`. Add a thin adapter in `object-cache` exposing a
 RAM-backed `RangeCache` as an `ObjectStore`, so it drops into either wrap site:
 
 ```rust
-// rust/analytics/src/lakehouse/l1_store.rs (new)
+// rust/object-cache/src/l1_store.rs (new)
 pub struct L1CacheStore {
     cache: RangeCache,             // backend = shared bounded RAM; origin = the wrapped store
     origin: Arc<dyn ObjectStore>,  // for pass-through ops (put/list/delete/head/preconditions)
@@ -163,31 +162,38 @@ caching we want.
 
 ### New component: `BoundedMemoryBackend` (shared RAM budget)
 
-`MemoryBackend` (`object-cache`) is unbounded. Rather than hand-roll an LRU, reuse **moka** — the same
-`moka::future::Cache` + byte-weigher the current `FileCache` already uses (`file_cache.rs:43-45`), so
-this is a small, proven wrapper, not a new eviction algorithm. It lives in `analytics` (which already
-depends on moka), implementing the `object-cache` `RangeCacheBackend` trait:
+`MemoryBackend` (`object-cache`) is unbounded. Back the new bounded variant with foyer's **in-memory**
+`Cache` (the `foyer-memory` crate) — not hand-rolled, and not `HybridCache`. `foyer::Cache` is a pure
+in-memory, byte-weighted, sharded cache with configurable eviction (`LfuConfig`/`FifoConfig`); it has
+**no disk/IO dependencies** (verified: `foyer-memory` 0.22 pulls no `foyer-storage`, `io_uring`, or
+`libc`). It is the same in-memory engine foyer's `HybridCache` uses for its RAM tier, so L1 reuses the
+exact eviction implementation the object cache already relies on.
 
 ```rust
-// rust/analytics/src/lakehouse/bounded_memory_backend.rs (new)
-pub struct BoundedMemoryBackend { cache: moka::future::Cache<String, Bytes> } // weigher = |_, v| v.len()
+// rust/object-cache/src/bounded_memory_backend.rs (new)
+pub struct BoundedMemoryBackend { cache: foyer::Cache<String, Bytes> }
+// built as: CacheBuilder::new(budget_bytes).with_weighter(|_k, v| v.len()).with_eviction_config(LfuConfig::default())
 #[async_trait] impl RangeCacheBackend for BoundedMemoryBackend { get; put; } // disk_stats -> None (default)
 ```
 
-- Byte-weighted `max_capacity`; moka handles eviction and concurrency. Simpler than `FileCache`: the
-  backend is pure `get`/`put` (no `try_get_with`) because `RangeCache` already owns single-flight via
-  its in-flight map (#1203).
+- Byte-weighted capacity; foyer handles eviction and sharded concurrency. Pure `get`/`put` (no
+  single-flight in the backend) because `RangeCache` already owns single-flight via its in-flight map
+  (#1203).
 - `FillHint::Prefetch` should not evict hot `Demand` data. L1 is read-driven (no write-warming), so
   prefetch fills are rare here — a v1 may ignore the hint and refine later.
 - `disk_stats()` returns `None` (trait default).
 
+Adding `foyer-memory` as a (non-optional) dependency of `object-cache` is the only new dep. The
+existing `foyer` **feature** (which pulls the disk-backed `HybridCache` for `object-cache-srv`) is
+unchanged and still optional.
+
 ### Shared backend across both wrap sites
 
-Both wrap sites are in `analytics`, so a single analytics-local lazily-initialized backend, sized once
-from `MICROMEGAS_L1_CACHE_MB`, gives one shared budget with no cross-crate threading:
+An `object-cache`-owned lazily-initialized global backend, sized once from `MICROMEGAS_L1_CACHE_MB`,
+gives one shared budget for both wrap sites:
 
 ```rust
-// rust/analytics/src/lakehouse/l1_store.rs
+// rust/object-cache/src/l1_store.rs
 fn shared_l1_backend() -> Option<Arc<BoundedMemoryBackend>>; // None when MICROMEGAS_L1_CACHE_MB == 0
 pub fn l1_wrap(origin: Arc<dyn ObjectStore>, ns: &str) -> Arc<dyn ObjectStore>; // wraps iff enabled
 ```
@@ -201,7 +207,7 @@ only ever return identical bytes.
 - `lakehouse_context.rs:106` and `:127`: wrap before constructing the factory —
   `L1: ReaderFactory::new(l1_wrap(lake.blob_storage.inner(), "lakehouse"), metadata_cache)`. Drop the
   `file_cache` argument.
-- `static_tables_configurator.rs:76`: `let object_store = l1_wrap(Arc::new(object_store), "static");`
+- `static_tables_configurator.rs:76`: `let object_store = object_cache::l1_wrap(Arc::new(object_store), "static");`
   before `register_object_store`.
 - `analytics/Cargo.toml`: add a dependency on `micromegas-object-cache` (analytics does not depend on
   it today).
@@ -224,17 +230,20 @@ only ever return identical bytes.
 
 ## Implementation Steps
 
-**Phase 1 — building blocks (all in `analytics`)**
-1. Add `micromegas-object-cache` to `analytics/Cargo.toml` (for `RangeCache` + `RangeCacheBackend`).
-2. `BoundedMemoryBackend` (`bounded_memory_backend.rs`), moka-based, implementing `RangeCacheBackend`.
-   Tests: byte-weighted eviction at budget, get/put round-trip.
+**Phase 1 — building blocks (in `object-cache`)**
+1. Add `foyer-memory` to `object-cache/Cargo.toml` (non-optional) and the workspace root.
+2. `BoundedMemoryBackend` (`bounded_memory_backend.rs`), foyer-in-memory-based, implementing
+   `RangeCacheBackend` + export. Tests: byte-weighted eviction at budget, get/put round-trip.
 3. `L1CacheStore` (`l1_store.rs`) implementing `ObjectStore` over a `RangeCache`, with origin
    pass-through/fallback; plus `shared_l1_backend()` / `l1_wrap(origin, ns)` reading
-   `MICROMEGAS_L1_CACHE_MB` (0 = disabled).
+   `MICROMEGAS_L1_CACHE_MB` (0 = disabled) + export.
 
 **Phase 2 — wiring (analytics)**
-4. Wrap the reader-factory store at `lakehouse_context.rs:106` and `:127` via `l1_wrap(..., "lakehouse")`.
-5. Wrap the static-tables store at `static_tables_configurator.rs:76` via `l1_wrap(..., "static")`.
+4. Add `micromegas-object-cache` to `analytics/Cargo.toml`.
+5. Wrap the reader-factory store at `lakehouse_context.rs:106` and `:127` via
+   `object_cache::l1_wrap(..., "lakehouse")`.
+6. Wrap the static-tables store at `static_tables_configurator.rs:76` via
+   `object_cache::l1_wrap(..., "static")`.
 
 **Phase 3 — remove old file cache (analytics)**
 7. Refactor `load_partition_metadata` to read via `object_store` + `path`.
@@ -250,12 +259,14 @@ only ever return identical bytes.
 
 ## Files to Modify
 
-**New (all in `analytics`; `object-cache` is untouched)**
-- `rust/analytics/src/lakehouse/bounded_memory_backend.rs`
-- `rust/analytics/src/lakehouse/l1_store.rs` (`L1CacheStore` + `shared_l1_backend`/`l1_wrap`)
-- `rust/analytics/tests/l1_store_tests.rs`
+**New (in `object-cache`)**
+- `rust/object-cache/src/bounded_memory_backend.rs`
+- `rust/object-cache/src/l1_store.rs` (`L1CacheStore` + `shared_l1_backend`/`l1_wrap`)
+- `rust/object-cache/tests/l1_store_tests.rs`
 
 **Modified**
+- `rust/Cargo.toml` (workspace: add `foyer-memory`)
+- `rust/object-cache/Cargo.toml` (add `foyer-memory`); `object-cache/src/lib.rs` (exports)
 - `rust/analytics/Cargo.toml` (add `micromegas-object-cache`)
 - `rust/analytics/src/lakehouse/lakehouse_context.rs`
 - `rust/analytics/src/lakehouse/static_tables_configurator.rs`
@@ -279,15 +290,19 @@ only ever return identical bytes.
   and it is no longer literally an `ObjectStore` in front of `CacheClientStore` as #1205's text
   describes (functionally the L1→L2→origin tiering is preserved, since L1's origin already contains
   L2).
-- **moka-based backend in `analytics` vs. hand-rolled LRU vs. `FoyerBackend` in `object-cache`.** moka
-  is the workspace LRU and already backs `FileCache` with a byte-weigher, so the backend is a proven
-  wrapper rather than a hand-rolled eviction algorithm. Placing it in `analytics` (which already
-  depends on moka) keeps `object-cache` free of the moka dependency #1203 removed, at the cost of the
-  backend living apart from `MemoryBackend`/`FoyerBackend`. Foyer's RAM tier was rejected: feature-gated
-  and always builds an on-disk device — wrong footprint for a RAM-only L1.
-- **Shared analytics-local global backend.** Both wrap sites are in `analytics`, so one lazily-initialized
-  global gives a single RAM budget with no cross-crate plumbing; write-once/namespaced keys make the
-  shared instance safe (identical bytes for identical keys).
+- **foyer in-memory `Cache` vs. moka vs. hand-rolled LRU.** foyer's `Cache` (the `foyer-memory` crate)
+  is a pure in-memory, byte-weighted, sharded cache with **no disk/IO deps** — it is the same engine
+  foyer's `HybridCache` uses for its RAM tier, so L1 reuses the exact eviction implementation the object
+  cache already relies on, and the backend lives in `object-cache` next to `MemoryBackend`/`FoyerBackend`.
+  (An earlier draft wrongly assumed foyer forces a disk tier; that is only true of our `FoyerBackend`
+  wrapper's use of `HybridCache`.) moka — the workspace LRU already backing `FileCache` — is the
+  zero-new-dependency alternative, but it would either re-introduce moka into `object-cache` (reversing
+  the #1203 removal) or split the backend off into `analytics`. Chosen: `foyer-memory`, for stack
+  consistency and clean placement; cost is one light new dependency on `object-cache`. Hand-rolling an
+  LRU was rejected as needless risk.
+- **Shared `object-cache`-owned global backend.** One lazily-initialized global gives a single RAM
+  budget for both wrap sites; write-once/namespaced keys make the shared instance safe (identical bytes
+  for identical keys).
 - **Block granularity vs. whole-file.** L1 caches 1 MiB blocks instead of whole ≤10 MB files. For large
   files this is the point (cache only touched row-group blocks); for a cold one-shot small-file read it
   can pull marginally more bytes, but repeat reads are served from RAM.
