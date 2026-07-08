@@ -305,7 +305,8 @@ only ever return identical bytes.
 11. `cd rust && cargo fmt && cargo clippy --workspace -- -D warnings && cargo test`.
 12. Manual: run flight-sql with and without `MICROMEGAS_OBJECT_CACHE_URL`; confirm repeat queries hit
     L1 (metrics), a `get_payload`/`parse_block` query does not populate L1, and a repeat static-table
-    query hits L1.
+    query hits L1 (metrics only report an aggregate `prefix="other"` hit count, indistinguishable from
+    lakehouse hits — run the static-table query in isolation to attribute the increment).
 
 ## Files to Modify
 
@@ -382,12 +383,14 @@ only ever return identical bytes.
   static-table query hits L1.
 - **Regression**: existing lakehouse/query tests pass after `FileCache` removal; port still-relevant
   assertions from `file_cache_tests.rs` into the new L1 tests rather than dropping coverage.
-- **Telemetry**: confirm L1 hit/miss is observable. `RangeCache` emits per-prefix hit/miss (#1206);
-  with plain `new` these tag `"other"`. L1 does **not** attach `with_prefix_labels`: the lakehouse ns
-  only ever sees `views/...` (a single bucket, redundant with the per-ns total) and static-ns keys are
-  not under `views/` (they would fall to `"other"`), so a prefix label adds no separating power over the
-  two-ns split. Rely on the per-ns metrics (`"lakehouse"` vs `"static"`); revisit only if a second
-  reachable prefix is ever introduced.
+- **Telemetry**: confirm L1 hit/miss is observable. `RangeCache` emits hit/miss dimensioned only by
+  `prefix` and `class` (#1206) — `ns` is purely a cache-key namespace (`meta:{ns}:...`, `blk:{ns}:...`)
+  and is **not** a metric dimension. L1 uses plain `RangeCache::new` (no `with_prefix_labels`), so
+  `classify_tags` always resolves to `metric_tags::PREFIX_OTHER`: every L1 hit/miss — lakehouse and
+  static alike — is emitted as `prefix="other"`. This gives aggregate L1 hit/miss observability only,
+  with no way to split lakehouse from static-table traffic in the metrics. Revisit with
+  `with_prefix_labels(["views"])` on the lakehouse wrap site (lakehouse keys live under `views/`;
+  static-table keys don't) if a per-store split is ever needed.
 - **CI**: `python3 build/rust_ci.py`.
 
 ## Open Questions
