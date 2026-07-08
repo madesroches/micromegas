@@ -131,7 +131,8 @@ or clippy `-D warnings` fails (`unused_variables` on the parameter, `dead_code` 
   (line 662).
 - `PartitionWriteResult.file_metadata: Option<Arc<ParquetMetaData>>` (line 405) and its
   initializations (`Some(Arc::new(parquet_metadata))` in the non-empty case, `None` in the two
-  empty/error cases). `num_rows` is extracted from `parquet_metadata` before this, so the
+  empty-partition cases; the `arrow_writer.close()` error path returns `Err` rather than a result
+  struct). `num_rows` is extracted from `parquet_metadata` before this, so the
   `arrow_writer.close()` result is still needed — only the `Arc::new` + field threading goes.
 - The now-unused `parquet::file::metadata::ParquetMetaData` import (those two spots are its only
   uses in the file).
@@ -309,7 +310,7 @@ it — that knob never shipped in a release, so the changelog should read as if 
 
 The `partition_metadata` table itself did ship (schema v4, `upgrade_v3_to_v4`), so dropping it is
 operationally visible to existing deployments and gets its own `## Unreleased` bullet: add a new
-entry (grouped under an appropriate existing category, e.g. **Caching** or **Lakehouse**) describing
+entry (under the existing **Caching** category, alongside the #1231 bullet being deleted) describing
 the removal of the postgres `partition_metadata` table (added `upgrade_v5_to_v6`, schema version 6),
 the removal of the write-path `INSERT INTO partition_metadata` and the cleanup-path
 `delete_partition_metadata_batch`, and the switch to reading partition metadata solely from the
