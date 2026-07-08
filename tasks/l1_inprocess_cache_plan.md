@@ -37,7 +37,7 @@ BlobStorage.inner() = PrefixStore(root) -> CacheClientStore (L2, if configured) 
 
 The lake object store has exactly **two** top-level key prefixes:
 - `blobs/{process_id}/{stream_id}/{block_id}` — raw telemetry payloads, **read-once** (parsed into
-  parquet during ETL). Written at `web_ingestion_service.rs:155`, read via `payload.rs:25`
+  parquet during ETL). Written at `web_ingestion_service.rs:155`, read via `payload.rs:26-27`
   (`read_blob`).
 - `views/{view_set}/{view_instance}/{date}/{time}_{file_id}.parquet` — materialized partitions,
   **read-repeatedly** on the query hot path. Written at `write_partition.rs:546-547`.
@@ -74,7 +74,7 @@ bytes).
 ### Static tables (separate store, also read-repeatedly)
 
 `StaticTablesConfigurator` (`static_tables_configurator.rs`) discovers `*.json`/`*.csv` under
-`MICROMEGAS_STATIC_TABLES_URL` (`public/src/servers/flight_sql_server.rs:206`), parses its **own**
+`MICROMEGAS_STATIC_TABLES_URL` (`public/src/servers/flight_sql_server.rs:207`), parses its **own**
 object store (`static_tables_configurator.rs:70-76`), registers it with `ctx.register_object_store`,
 and exposes each file as a DataFusion `ListingTable`. Reads are lazy per query through that
 registered store (`csv_table_provider.rs:34`, `json_table_provider.rs:96`), so they benefit from
@@ -107,7 +107,7 @@ caching and are wrapped the same way.
     not usable for a budgeted L1.
   - `FoyerBackend` (`foyer_backend.rs`) has a bounded byte-weighted LRU RAM tier but is feature-gated
     and always builds an on-disk device.
-- Reference config (`object_cache_srv.rs:153-162`, defaults `range_cache.rs:64-72`):
+- Reference config (`object-cache-srv` crate, `object_cache_srv.rs:153-162`; defaults `range_cache.rs:64-72`):
   `total_fetch_permits = 32`, `demand_reserved = 8`, `max_coalesced_get_bytes = 8 MiB`,
   `promote_whole_batch = false`, block 1 MiB. For L1, reads are demand-only
   (`get_range`/`get_ranges` → `Priority::Demand`, fetch at `range_cache.rs:1099`), and a demand read
@@ -203,8 +203,11 @@ implementation `FoyerBackend` already relies on — via a different eviction con
 pub struct BoundedMemoryBackend { cache: foyer_memory::Cache<String, Bytes> }
 // built as: foyer_memory::CacheBuilder::new(budget_bytes).with_weighter(|_k, v| v.len())
 //   .with_eviction_config(foyer_memory::LfuConfig::default())
-//   .build() // terminal call, required to get a `Cache`; the `Properties` generic on
-//            // `build::<P>()` defaults so the `Cache<String, Bytes>` field type resolves
+//   .build() // terminal call, required to get a `Cache`; the `Cache<String, Bytes>`
+//            // field annotation pins `build`'s inferred `Properties` generic
+// get: self.cache.get(key).map(|e| e.value().clone()) -- `Cache::get` returns
+//      Option<CacheEntry>, so map through `.value().clone()` (cheap ref-counted
+//      Bytes clone) to satisfy `RangeCacheBackend::get -> Option<Bytes>`
 #[async_trait] impl RangeCacheBackend for BoundedMemoryBackend { get; put; } // disk_stats -> None (default)
 ```
 
