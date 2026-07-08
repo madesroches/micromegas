@@ -178,8 +178,9 @@ caching we want.
 `foyer` crate (which transitively pulls in `foyer-storage`/`io-uring`/`libc`, the exact deps this
 component exists to avoid; the existing `FoyerBackend` depends on the umbrella `foyer::` path and uses
 `HybridCache`/`LruConfig`). `foyer_memory::Cache` is a pure in-memory, byte-weighted, sharded cache with
-configurable eviction (`LfuConfig`/`FifoConfig`); it has **no disk/IO dependencies** (verified:
-`foyer-memory` 0.22 pulls no `foyer-storage`, `io_uring`, or `libc`). It is the same in-memory engine the
+configurable eviction (`LfuConfig`/`FifoConfig`); it has **no disk-IO dependencies** (verified:
+`foyer-memory` 0.22 pulls no `foyer-storage` or `io_uring`; `libc` still comes in transitively via
+`tokio`/`parking_lot`, but that is unrelated to disk). It is the same in-memory engine the
 umbrella `foyer` crate's `HybridCache` uses internally for its RAM tier, so L1 reuses the exact eviction
 implementation `FoyerBackend` already relies on — via a different eviction config (`LfuConfig` here vs.
 `FoyerBackend`'s `LruConfig`) and a lighter, disk-free crate.
