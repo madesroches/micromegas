@@ -109,8 +109,20 @@ caching and are wrapped the same way.
     and always builds an on-disk device.
 - Reference config (`object_cache_srv.rs:153-162`, defaults `range_cache.rs:64-72`):
   `total_fetch_permits = 32`, `demand_reserved = 8`, `max_coalesced_get_bytes = 8 MiB`,
-  `promote_whole_batch = false`, block 1 MiB. For L1 only `total_fetch_permits` is meaningful:
-  reads are demand-only (no prefetch path), so `demand_reserved` is inert here — see Open Questions.
+  `promote_whole_batch = false`, block 1 MiB. For L1, reads are demand-only
+  (`get_range`/`get_ranges` → `Priority::Demand`, fetch at `range_cache.rs:1099`), and a demand read
+  never acquires the `prefetch_permits` semaphore (`acquire_run_permit` returns early for non-all-prefetch
+  batches, `range_cache.rs:433`); `demand_reserved_fetch_permits` only sizes that semaphore
+  (`prefetch_total = total - demand_reserved`, `range_cache.rs:234`). So `demand_reserved` is fully inert
+  for L1 — its only remaining effect is satisfying the startup assertion
+  `assert!(demand_reserved < total)` (`range_cache.rs:230-233`); pass any small placeholder value below
+  `total` and ignore it. The only meaningful knob is `total_fetch_permits`, which caps concurrent origin
+  GETs and therefore transient fetch-buffer memory at roughly `total × max_coalesced_get_bytes`
+  (≈ `total × 8 MiB`) — memory that is *separate from* the `MICROMEGAS_L1_CACHE_MB` budget and lives
+  inside a query process alongside DataFusion execution. The server's `32` was sized for a dedicated
+  caching service; in-process, use a smaller `total` (e.g. `16`, ≈128 MiB transient cap) to avoid
+  over-parallelizing object I/O and stacking transient buffers on top of the cache and DataFusion's
+  working set. Treat `16` as a tunable starting point for the target deployment, not a hard requirement.
 
 ## Design
 
@@ -380,16 +392,4 @@ only ever return identical bytes.
 
 ## Open Questions
 
-1. **Fetch-permit sizing for L1 (`total` only).** L1 is demand-only — there is no prefetch path
-   in-process (parquet reads come through `L1CacheStore → RangeCache::get_range`/`get_ranges` as
-   `Priority::Demand`, and nothing issues a `Prefetch` run), so `demand_reserved_fetch_permits` is inert
-   here: the
-   `prefetch_permits` semaphore is never acquired and the reservation never gates anything. Pass a small
-   placeholder (must be `< total`) and ignore it. The only meaningful knob is `total_fetch_permits`, which
-   caps concurrent origin GETs and therefore transient fetch-buffer memory at roughly
-   `total × max_coalesced_get_bytes` (≈ `total × 8 MiB`) — memory that is *separate from* the
-   `MICROMEGAS_L1_CACHE_MB` budget and lives inside a query process alongside DataFusion execution. The
-   server's `32` was sized for a dedicated caching service; in-process, prefer a smaller `total` (e.g.
-   `16`, ≈128 MiB transient cap) to avoid over-parallelizing object I/O and stacking transient buffers on
-   top of the cache and DataFusion's working set. Final value is a memory-vs-miss-fill-throughput tuning
-   call for the target deployment.
+None.
