@@ -128,8 +128,10 @@ The bounded backend, `L1CacheStore`, and `l1_wrap` all live in `object-cache`, n
 `MemoryBackend`/`FoyerBackend` and the `RangeCache` they pair with — generic, reusable, and testable
 in that crate's suite. `analytics` gains a dependency on `object-cache` and simply calls
 `object_cache::l1_wrap(...)` at the two wrap sites. This is possible because the bounded backend uses
-`foyer`'s **in-memory** `Cache` (see below), so no moka is introduced into `object-cache` (respecting
-the #1203 removal). The shared-budget backend is an `object-cache`-owned global.
+the standalone `foyer-memory` crate's in-memory `Cache` type (`foyer_memory::Cache`, see below) — **not**
+the umbrella `foyer` crate, which would transitively pull in `foyer-storage`/`io-uring`/`libc` — so no
+moka is introduced into `object-cache` (respecting the #1203 removal). The shared-budget backend is an
+`object-cache`-owned global.
 
 ### New component: `L1CacheStore` (an `ObjectStore` over a `RangeCache`)
 
@@ -162,17 +164,22 @@ caching we want.
 
 ### New component: `BoundedMemoryBackend` (shared RAM budget)
 
-`MemoryBackend` (`object-cache`) is unbounded. Back the new bounded variant with foyer's **in-memory**
-`Cache` (the `foyer-memory` crate) — not hand-rolled, and not `HybridCache`. `foyer::Cache` is a pure
-in-memory, byte-weighted, sharded cache with configurable eviction (`LfuConfig`/`FifoConfig`); it has
-**no disk/IO dependencies** (verified: `foyer-memory` 0.22 pulls no `foyer-storage`, `io_uring`, or
-`libc`). It is the same in-memory engine foyer's `HybridCache` uses for its RAM tier, so L1 reuses the
-exact eviction implementation the object cache already relies on.
+`MemoryBackend` (`object-cache`) is unbounded. Back the new bounded variant with the standalone
+`foyer-memory` crate's in-memory `Cache` — not hand-rolled, not `HybridCache`, and **not** the umbrella
+`foyer` crate (which transitively pulls in `foyer-storage`/`io-uring`/`libc`, the exact deps this
+component exists to avoid; the existing `FoyerBackend` depends on the umbrella `foyer::` path and uses
+`HybridCache`/`LruConfig`). `foyer_memory::Cache` is a pure in-memory, byte-weighted, sharded cache with
+configurable eviction (`LfuConfig`/`FifoConfig`); it has **no disk/IO dependencies** (verified:
+`foyer-memory` 0.22 pulls no `foyer-storage`, `io_uring`, or `libc`). It is the same in-memory engine the
+umbrella `foyer` crate's `HybridCache` uses internally for its RAM tier, so L1 reuses the exact eviction
+implementation `FoyerBackend` already relies on — via a different eviction config (`LfuConfig` here vs.
+`FoyerBackend`'s `LruConfig`) and a lighter, disk-free crate.
 
 ```rust
 // rust/object-cache/src/bounded_memory_backend.rs (new)
-pub struct BoundedMemoryBackend { cache: foyer::Cache<String, Bytes> }
-// built as: CacheBuilder::new(budget_bytes).with_weighter(|_k, v| v.len()).with_eviction_config(LfuConfig::default())
+pub struct BoundedMemoryBackend { cache: foyer_memory::Cache<String, Bytes> }
+// built as: foyer_memory::CacheBuilder::new(budget_bytes).with_weighter(|_k, v| v.len())
+//   .with_eviction_config(foyer_memory::LfuConfig::default())
 #[async_trait] impl RangeCacheBackend for BoundedMemoryBackend { get; put; } // disk_stats -> None (default)
 ```
 
@@ -211,6 +218,12 @@ only ever return identical bytes.
   before `register_object_store`.
 - `analytics/Cargo.toml`: add a dependency on `micromegas-object-cache` (analytics does not depend on
   it today).
+- `blocks`-view reads are covered automatically: `query_partitions` (`query.rs:80-91`) takes
+  `reader_factory: Arc<ReaderFactory>` as a parameter and never builds its own. Every caller —
+  `partition_source_data.rs:269-273` and all four sites in `jit_partitions.rs` (75-79, 131-135, 277-281,
+  415-419) — passes `lakehouse.reader_factory().clone()`, i.e. the single shared `ReaderFactory` from
+  `LakehouseContext`. So wrapping at `lakehouse_context.rs:106`/`:127` (above) automatically L1-caches
+  `blocks`-view reads too; no extra routing is needed.
 
 ### Removing the old file cache (analytics)
 
@@ -290,16 +303,20 @@ only ever return identical bytes.
   and it is no longer literally an `ObjectStore` in front of `CacheClientStore` as #1205's text
   describes (functionally the L1→L2→origin tiering is preserved, since L1's origin already contains
   L2).
-- **foyer in-memory `Cache` vs. moka vs. hand-rolled LRU.** foyer's `Cache` (the `foyer-memory` crate)
-  is a pure in-memory, byte-weighted, sharded cache with **no disk/IO deps** — it is the same engine
-  foyer's `HybridCache` uses for its RAM tier, so L1 reuses the exact eviction implementation the object
-  cache already relies on, and the backend lives in `object-cache` next to `MemoryBackend`/`FoyerBackend`.
-  (An earlier draft wrongly assumed foyer forces a disk tier; that is only true of our `FoyerBackend`
-  wrapper's use of `HybridCache`.) moka — the workspace LRU already backing `FileCache` — is the
-  zero-new-dependency alternative, but it would either re-introduce moka into `object-cache` (reversing
-  the #1203 removal) or split the backend off into `analytics`. Chosen: `foyer-memory`, for stack
-  consistency and clean placement; cost is one light new dependency on `object-cache`. Hand-rolling an
-  LRU was rejected as needless risk.
+- **`foyer_memory::Cache` vs. moka vs. hand-rolled LRU.** The standalone `foyer-memory` crate's `Cache`
+  is a pure in-memory, byte-weighted, sharded cache with **no disk/IO deps** — unlike the umbrella
+  `foyer` crate (already a dependency, via the `foyer` feature, for `FoyerBackend`'s `HybridCache`/
+  `LruConfig`, and which transitively pulls in `foyer-storage`/`io-uring`/`libc`). `foyer-memory` is the
+  same in-memory engine the umbrella crate's `HybridCache` uses internally for its RAM tier, so L1 reuses
+  the exact eviction implementation `FoyerBackend` already relies on (with `LfuConfig` instead of
+  `FoyerBackend`'s `LruConfig`), and the backend lives in `object-cache` next to
+  `MemoryBackend`/`FoyerBackend`. (An earlier draft wrongly assumed foyer forces a disk tier; that is
+  only true of the umbrella `foyer` crate used via `HybridCache`, not of `foyer-memory` used directly.)
+  moka — the workspace LRU already backing `FileCache` — is the zero-new-dependency alternative, but it
+  would either re-introduce moka into `object-cache` (reversing the #1203 removal) or split the backend
+  off into `analytics`. Chosen: `foyer-memory`, for stack consistency and clean placement; cost is one
+  light, disk-free new dependency on `object-cache` (distinct from the existing optional `foyer`
+  feature). Hand-rolling an LRU was rejected as needless risk.
 - **Shared `object-cache`-owned global backend.** One lazily-initialized global gives a single RAM
   budget for both wrap sites; write-once/namespaced keys make the shared instance safe (identical bytes
   for identical keys).
@@ -336,11 +353,7 @@ only ever return identical bytes.
    that L1 covers all file sizes + static tables? (Proposed: keep 200.)
 2. **Dimensioned L1 metrics.** Attach `with_prefix_labels(["views", "blobs"])` (and/or per-ns tags) so
    the L1 win is measurable per the #1206 sequencing note, or leave as `"other"`?
-3. **`blocks` metadata-view reads.** `query_partitions(..., lake.blob_storage.inner(), ...)`
-   (`partition_source_data.rs:273`, `jit_partitions.rs`) reads the `blocks` metadata *view* (parquet)
-   through DataFusion. Confirm whether those reads use the context's wrapped `ReaderFactory` (cached)
-   or a fresh unwrapped factory; if unwrapped, decide whether to route them through L1 too.
-4. **`FillHint` handling in `BoundedMemoryBackend`.** Full demand/prefetch admission policy in v1, or
+3. **`FillHint` handling in `BoundedMemoryBackend`.** Full demand/prefetch admission policy in v1, or
    equal-treatment LRU first? (L1 is read-driven, so prefetch fills are rare — equal treatment likely
    fine initially.)
-5. **Fetch-permit sizing for L1.** Reuse server defaults (32 / 8), or smaller for an in-process cache?
+4. **Fetch-permit sizing for L1.** Reuse server defaults (32 / 8), or smaller for an in-process cache?
