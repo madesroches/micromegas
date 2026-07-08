@@ -122,13 +122,23 @@ ETL / get_payload / parse_block --> BlobStorage.read_blob --> (unwrapped) Prefix
 Both `L1CacheStore` instances share **one** `Arc<BoundedMemoryBackend>` (a single RAM budget),
 distinguished by `ns`. `make_cache` / `BlobStorage` are unchanged.
 
+### Crate placement (keep `object-cache` untouched)
+
+All new code lives in `analytics`; `object-cache` is not modified. `object-cache` deliberately
+dropped its moka dependency in #1203, and `analytics` already depends on moka (`file_cache.rs`,
+`metadata_cache.rs`) — so the moka-based backend belongs in `analytics`, not next to the other
+backends in `object-cache`. The only `object-cache` surface used is the already-`pub` `RangeCache`
+and `RangeCacheBackend` trait. Both wrap sites (`lakehouse_context.rs`, `static_tables_configurator.rs`)
+are in `analytics`, so the shared-budget backend is a simple analytics-local global — no cross-crate
+threading.
+
 ### New component: `L1CacheStore` (an `ObjectStore` over a `RangeCache`)
 
-`RangeCache` is an internal API, not an `ObjectStore`. Add a thin adapter in the `object-cache`
-crate exposing a RAM-backed `RangeCache` as an `ObjectStore`, so it drops into either wrap site:
+`RangeCache` is an internal API, not an `ObjectStore`. Add a thin adapter in `analytics` exposing a
+RAM-backed `RangeCache` as an `ObjectStore`, so it drops into either wrap site:
 
 ```rust
-// rust/object-cache/src/l1_store.rs (new)
+// rust/analytics/src/lakehouse/l1_store.rs (new)
 pub struct L1CacheStore {
     cache: RangeCache,             // backend = shared bounded RAM; origin = the wrapped store
     origin: Arc<dyn ObjectStore>,  // for pass-through ops (put/list/delete/head/preconditions)
@@ -153,36 +163,38 @@ caching we want.
 
 ### New component: `BoundedMemoryBackend` (shared RAM budget)
 
-`MemoryBackend` is unbounded, so add a byte-bounded LRU backend in `object-cache`:
+`MemoryBackend` (`object-cache`) is unbounded. Rather than hand-roll an LRU, reuse **moka** — the same
+`moka::future::Cache` + byte-weigher the current `FileCache` already uses (`file_cache.rs:43-45`), so
+this is a small, proven wrapper, not a new eviction algorithm. It lives in `analytics` (which already
+depends on moka), implementing the `object-cache` `RangeCacheBackend` trait:
 
 ```rust
-// rust/object-cache/src/bounded_memory_backend.rs (new)
-pub struct BoundedMemoryBackend { /* LRU keyed by String, weighted by value.len(), byte cap */ }
-impl RangeCacheBackend for BoundedMemoryBackend { get; put (evict LRU while over budget); }
+// rust/analytics/src/lakehouse/bounded_memory_backend.rs (new)
+pub struct BoundedMemoryBackend { cache: moka::future::Cache<String, Bytes> } // weigher = |_, v| v.len()
+#[async_trait] impl RangeCacheBackend for BoundedMemoryBackend { get; put; } // disk_stats -> None (default)
 ```
 
-- Weight = `value.len()`; evict least-recently-used on `put` until within the cap.
+- Byte-weighted `max_capacity`; moka handles eviction and concurrency. Simpler than `FileCache`: the
+  backend is pure `get`/`put` (no `try_get_with`) because `RangeCache` already owns single-flight via
+  its in-flight map (#1203).
 - `FillHint::Prefetch` should not evict hot `Demand` data. L1 is read-driven (no write-warming), so
-  prefetch fills are rare here — a v1 may treat both equally and refine later.
+  prefetch fills are rare here — a v1 may ignore the hint and refine later.
 - `disk_stats()` returns `None` (trait default).
 
 ### Shared backend across both wrap sites
 
-Both L1 wraps must share one budget without threading a handle across the analytics/public crate
-boundary (the static configurator is built separately in `flight_sql_server.rs`, with no access to
-`LakehouseContext`). Provide a process-global, lazily-initialized shared backend in `object-cache`,
-sized once from `MICROMEGAS_L1_CACHE_MB`:
+Both wrap sites are in `analytics`, so a single analytics-local lazily-initialized backend, sized once
+from `MICROMEGAS_L1_CACHE_MB`, gives one shared budget with no cross-crate threading:
 
 ```rust
-// object-cache
-pub fn shared_l1_backend() -> Option<Arc<BoundedMemoryBackend>>; // None when MICROMEGAS_L1_CACHE_MB == 0
+// rust/analytics/src/lakehouse/l1_store.rs
+fn shared_l1_backend() -> Option<Arc<BoundedMemoryBackend>>; // None when MICROMEGAS_L1_CACHE_MB == 0
 pub fn l1_wrap(origin: Arc<dyn ObjectStore>, ns: &str) -> Arc<dyn ObjectStore>; // wraps iff enabled
 ```
 
-`l1_wrap` returns `origin` unchanged when L1 is disabled. Sharing a global is safe here because keys
-are write-once/content-addressed and namespaced per instance, so cross-context reuse (e.g. in tests)
-can only ever return identical bytes. (Alternative — explicit construction threaded from
-`LakehouseContext` into `StaticTablesConfigurator::from_env` — is noted in Trade-offs.)
+`l1_wrap` returns `origin` unchanged when L1 is disabled. A shared global is safe because keys are
+write-once/content-addressed and namespaced per instance, so cross-context reuse (e.g. in tests) can
+only ever return identical bytes.
 
 ### Wiring
 
@@ -212,18 +224,17 @@ can only ever return identical bytes. (Alternative — explicit construction thr
 
 ## Implementation Steps
 
-**Phase 1 — object-cache crate (building blocks)**
-1. `BoundedMemoryBackend` (`bounded_memory_backend.rs`) + export. Tests: eviction at budget, weight
-   accounting, get/put, hint handling.
-2. `L1CacheStore` (`l1_store.rs`) implementing `ObjectStore` over a `RangeCache`, with origin
-   pass-through/fallback + export.
-3. `shared_l1_backend()` / `l1_wrap(origin, ns)` helpers reading `MICROMEGAS_L1_CACHE_MB` (0 =
-   disabled) + export.
+**Phase 1 — building blocks (all in `analytics`)**
+1. Add `micromegas-object-cache` to `analytics/Cargo.toml` (for `RangeCache` + `RangeCacheBackend`).
+2. `BoundedMemoryBackend` (`bounded_memory_backend.rs`), moka-based, implementing `RangeCacheBackend`.
+   Tests: byte-weighted eviction at budget, get/put round-trip.
+3. `L1CacheStore` (`l1_store.rs`) implementing `ObjectStore` over a `RangeCache`, with origin
+   pass-through/fallback; plus `shared_l1_backend()` / `l1_wrap(origin, ns)` reading
+   `MICROMEGAS_L1_CACHE_MB` (0 = disabled).
 
 **Phase 2 — wiring (analytics)**
-4. Add `micromegas-object-cache` to `analytics/Cargo.toml`.
-5. Wrap the reader-factory store at `lakehouse_context.rs:106` and `:127` via `l1_wrap(..., "lakehouse")`.
-6. Wrap the static-tables store at `static_tables_configurator.rs:76` via `l1_wrap(..., "static")`.
+4. Wrap the reader-factory store at `lakehouse_context.rs:106` and `:127` via `l1_wrap(..., "lakehouse")`.
+5. Wrap the static-tables store at `static_tables_configurator.rs:76` via `l1_wrap(..., "static")`.
 
 **Phase 3 — remove old file cache (analytics)**
 7. Refactor `load_partition_metadata` to read via `object_store` + `path`.
@@ -239,13 +250,12 @@ can only ever return identical bytes. (Alternative — explicit construction thr
 
 ## Files to Modify
 
-**New**
-- `rust/object-cache/src/bounded_memory_backend.rs`
-- `rust/object-cache/src/l1_store.rs` (+ `shared_l1_backend`/`l1_wrap`, or a small `l1.rs`)
-- `rust/object-cache/tests/l1_store_tests.rs`, `.../bounded_memory_backend_tests.rs`
+**New (all in `analytics`; `object-cache` is untouched)**
+- `rust/analytics/src/lakehouse/bounded_memory_backend.rs`
+- `rust/analytics/src/lakehouse/l1_store.rs` (`L1CacheStore` + `shared_l1_backend`/`l1_wrap`)
+- `rust/analytics/tests/l1_store_tests.rs`
 
 **Modified**
-- `rust/object-cache/src/lib.rs` (exports)
 - `rust/analytics/Cargo.toml` (add `micromegas-object-cache`)
 - `rust/analytics/src/lakehouse/lakehouse_context.rs`
 - `rust/analytics/src/lakehouse/static_tables_configurator.rs`
@@ -269,16 +279,15 @@ can only ever return identical bytes. (Alternative — explicit construction thr
   and it is no longer literally an `ObjectStore` in front of `CacheClientStore` as #1205's text
   describes (functionally the L1→L2→origin tiering is preserved, since L1's origin already contains
   L2).
-- **Shared global backend vs. explicit threading.** A process-global bounded backend gives one RAM
-  budget across both wrap sites with no cross-crate plumbing; write-once/namespaced keys make global
-  reuse safe. The explicit alternative (build the backend in `LakehouseContext` and pass it into
-  `StaticTablesConfigurator::from_env`) avoids a global but threads a handle through the public crate
-  and complicates the static-tables entry point. Chosen: shared global; revisit if it complicates
-  tests.
-- **New `BoundedMemoryBackend` vs. `FoyerBackend` RAM-only vs. re-adding moka.** Foyer is feature-gated
-  and always builds a disk device (wrong footprint for a RAM-only L1); moka was deliberately removed
-  from `object-cache` in #1203. A small byte-weighted LRU backend is the least-surprising fit and keeps
-  L1 disk-dep-free.
+- **moka-based backend in `analytics` vs. hand-rolled LRU vs. `FoyerBackend` in `object-cache`.** moka
+  is the workspace LRU and already backs `FileCache` with a byte-weigher, so the backend is a proven
+  wrapper rather than a hand-rolled eviction algorithm. Placing it in `analytics` (which already
+  depends on moka) keeps `object-cache` free of the moka dependency #1203 removed, at the cost of the
+  backend living apart from `MemoryBackend`/`FoyerBackend`. Foyer's RAM tier was rejected: feature-gated
+  and always builds an on-disk device — wrong footprint for a RAM-only L1.
+- **Shared analytics-local global backend.** Both wrap sites are in `analytics`, so one lazily-initialized
+  global gives a single RAM budget with no cross-crate plumbing; write-once/namespaced keys make the
+  shared instance safe (identical bytes for identical keys).
 - **Block granularity vs. whole-file.** L1 caches 1 MiB blocks instead of whole ≤10 MB files. For large
   files this is the point (cache only touched row-group blocks); for a cold one-shot small-file read it
   can pull marginally more bytes, but repeat reads are served from RAM.
