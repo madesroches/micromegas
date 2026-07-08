@@ -7,7 +7,7 @@ use datafusion::parquet::file::metadata::ParquetMetaData;
 use micromegas_analytics::lakehouse::caching_reader::CachingReader;
 use micromegas_analytics::lakehouse::file_cache::FileCache;
 use micromegas_analytics::lakehouse::metadata_cache::MetadataCache;
-use micromegas_analytics::lakehouse::partition_metadata::load_partition_metadata_from_footer;
+use micromegas_analytics::lakehouse::partition_metadata::load_partition_metadata;
 use object_store::ObjectStoreExt;
 use object_store::memory::InMemory;
 use object_store::path::Path;
@@ -295,7 +295,7 @@ async fn test_multiple_readers_share_cache() {
 }
 
 // ============================================================================
-// load_partition_metadata_from_footer tests
+// load_partition_metadata tests
 // ============================================================================
 
 /// Writes a small parquet file in memory, returning its bytes together with the
@@ -317,7 +317,7 @@ fn write_test_parquet() -> (Bytes, ParquetMetaData) {
 }
 
 #[tokio::test]
-async fn test_load_partition_metadata_from_footer_matches_direct_parse() {
+async fn test_load_partition_metadata_matches_direct_parse() {
     let store = Arc::new(InMemory::new());
     let path = Path::from("test/footer.parquet");
     let (data, from_direct_parse) = write_test_parquet();
@@ -335,13 +335,12 @@ async fn test_load_partition_metadata_from_footer_matches_direct_parse() {
         cache,
     );
 
-    let from_footer =
-        load_partition_metadata_from_footer(&mut reader, path.as_ref(), data.len() as u64, None)
-            .await
-            .expect("load_partition_metadata_from_footer should succeed");
+    let from_footer = load_partition_metadata(&mut reader, path.as_ref(), data.len() as u64, None)
+        .await
+        .expect("load_partition_metadata should succeed");
 
     // These fields are invariant under the column-index strip that
-    // load_partition_metadata_from_footer applies, so no stripped reference is needed.
+    // load_partition_metadata applies, so no stripped reference is needed.
     assert_eq!(
         from_footer.file_metadata().schema(),
         from_direct_parse.file_metadata().schema()
@@ -367,7 +366,7 @@ async fn test_load_partition_metadata_from_footer_matches_direct_parse() {
 }
 
 #[tokio::test]
-async fn test_load_partition_metadata_from_footer_with_metadata_cache() {
+async fn test_load_partition_metadata_with_metadata_cache() {
     let store = Arc::new(InMemory::new());
     let path = Path::from("test/footer_with_cache.parquet");
     let (data, _from_direct_parse) = write_test_parquet();
@@ -387,14 +386,14 @@ async fn test_load_partition_metadata_from_footer_with_metadata_cache() {
         data.len() as u64,
         file_cache.clone(),
     );
-    let first = load_partition_metadata_from_footer(
+    let first = load_partition_metadata(
         &mut reader1,
         path.as_ref(),
         data.len() as u64,
         Some(&metadata_cache),
     )
     .await
-    .expect("first load_partition_metadata_from_footer should succeed");
+    .expect("first load_partition_metadata should succeed");
 
     // Run pending tasks to ensure stats are up-to-date
     metadata_cache.run_pending_tasks().await;
@@ -419,14 +418,14 @@ async fn test_load_partition_metadata_from_footer_with_metadata_cache() {
         data.len() as u64,
         file_cache,
     );
-    let second = load_partition_metadata_from_footer(
+    let second = load_partition_metadata(
         &mut reader2,
         path.as_ref(),
         data.len() as u64,
         Some(&metadata_cache),
     )
     .await
-    .expect("second load_partition_metadata_from_footer should succeed");
+    .expect("second load_partition_metadata should succeed");
 
     assert_eq!(
         first.file_metadata().schema(),

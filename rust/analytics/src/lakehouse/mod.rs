@@ -52,8 +52,6 @@ pub mod materialized_view;
 pub mod merge;
 /// Global LRU cache for partition metadata
 pub mod metadata_cache;
-/// Compatibility layer for parsing legacy Arrow 56.0 metadata and upgrading to Arrow 57.0
-pub mod metadata_compat;
 /// Specification for a view partition backed by a table in the postgresql metadata database.
 pub mod metadata_partition_spec;
 /// Implementation of `BlockProcessor` for measures
@@ -72,7 +70,7 @@ pub mod parse_block_table_function;
 pub mod partition;
 /// In-memory copy of a subnet of the list of the partitions in the db
 pub mod partition_cache;
-/// Operations on the dedicated partition_metadata table
+/// Reads and parses partition Parquet footers directly from object storage
 pub mod partition_metadata;
 /// Describes the event blocks backing a partition
 pub mod partition_source_data;
@@ -93,7 +91,8 @@ pub mod processes_view;
 /// property_get function support from SQL
 /// Datafusion integration
 pub mod query;
-/// Wrapper around ParquetObjectreader to provide ParquetMetaData without hitting the ObjectStore
+/// Wrapper around ParquetObjectreader to provide ParquetMetaData, reading footers from the
+/// ObjectStore through a cache-backed reader
 pub mod reader_factory;
 /// Scalar UDF to retire a single partition by file path
 pub mod retire_partition_by_file_udf;

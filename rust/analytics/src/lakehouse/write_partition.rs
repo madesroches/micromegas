@@ -1,6 +1,5 @@
 use crate::{
-    arrow_utils::serialize_parquet_metadata, lakehouse::async_parquet_writer::AsyncParquetWriter,
-    response_writer::Logger, time::TimeRange,
+    lakehouse::async_parquet_writer::AsyncParquetWriter, response_writer::Logger, time::TimeRange,
 };
 use anyhow::{Context, Result};
 use chrono::{DateTime, TimeDelta, Utc};
@@ -9,10 +8,7 @@ use datafusion::{
     parquet::{
         arrow::AsyncArrowWriter,
         basic::Compression,
-        file::{
-            metadata::ParquetMetaData,
-            properties::{WriterProperties, WriterVersion},
-        },
+        file::properties::{WriterProperties, WriterVersion},
     },
 };
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
@@ -251,7 +247,6 @@ fn generate_partition_lock_key(
 async fn insert_partition(
     lake: &DataLakeConnection,
     partition: &Partition,
-    file_metadata: Option<&Arc<ParquetMetaData>>,
     logger: Arc<dyn Logger>,
 ) -> Result<()> {
     // Generate deterministic lock key for this partition
@@ -320,25 +315,6 @@ async fn insert_partition(
         partition.file_path
     );
 
-    // Insert the parquet metadata into the dedicated metadata table within the same transaction
-    // Only insert metadata if partition has a file (not empty)
-    if let (Some(file_path), Some(metadata)) = (&partition.file_path, file_metadata) {
-        let metadata_bytes = serialize_parquet_metadata(metadata)
-            .with_context(|| "serializing parquet metadata for dedicated table")?;
-        let insert_time = sqlx::types::chrono::Utc::now();
-
-        sqlx::query(
-            "INSERT INTO partition_metadata (file_path, metadata, insert_time, partition_format_version)
-             VALUES ($1, $2, $3, 2)",
-        )
-        .bind(file_path)
-        .bind(metadata_bytes.as_ref())
-        .bind(insert_time)
-        .execute(&mut *transaction)
-        .await
-        .with_context(|| format!("inserting metadata for file: {}", file_path))?;
-    }
-
     // Insert the new partition with format version 2 (Arrow 57.0)
     let insert_result = sqlx::query(
         "INSERT INTO lakehouse_partitions VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 2);",
@@ -402,7 +378,6 @@ async fn insert_partition(
 /// Result of writing rows to a partition file.
 struct PartitionWriteResult {
     num_rows: i64,
-    file_metadata: Option<Arc<ParquetMetaData>>,
     file_path: Option<String>,
     file_size: i64,
     event_time_range: Option<TimeRange>,
@@ -497,24 +472,21 @@ async fn finalize_partition_write(
 
                     return Ok(PartitionWriteResult {
                         num_rows: 0,
-                        file_metadata: None,
                         file_path: None,
                         file_size: 0,
                         event_time_range: None,
                     });
                 }
 
-                // Non-empty file: keep it and return full metadata
+                // Non-empty file: keep it and return the result
                 debug!(
                     "wrote nb_rows={} size={} path={file_path}",
                     num_rows,
                     byte_counter.load(std::sync::atomic::Ordering::Relaxed)
                 );
-                let file_metadata = Arc::new(parquet_metadata);
                 let file_size = byte_counter.load(std::sync::atomic::Ordering::Relaxed);
                 Ok(PartitionWriteResult {
                     num_rows,
-                    file_metadata: Some(file_metadata),
                     file_path: Some(file_path),
                     file_size,
                     event_time_range: Some(event_time_range),
@@ -553,7 +525,6 @@ async fn finalize_partition_write(
 
         Ok(PartitionWriteResult {
             num_rows: 0,
-            file_metadata: None,
             file_path: None,
             file_size: 0,
             event_time_range: None,
@@ -659,7 +630,6 @@ pub async fn write_partition_from_rows(
             source_data_hash,
             num_rows: result.num_rows,
         },
-        result.file_metadata.as_ref(),
         logger,
     )
     .await
