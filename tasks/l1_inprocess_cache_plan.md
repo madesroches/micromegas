@@ -180,19 +180,28 @@ implementation `FoyerBackend` already relies on — via a different eviction con
 pub struct BoundedMemoryBackend { cache: foyer_memory::Cache<String, Bytes> }
 // built as: foyer_memory::CacheBuilder::new(budget_bytes).with_weighter(|_k, v| v.len())
 //   .with_eviction_config(foyer_memory::LfuConfig::default())
+//   .build() // terminal call, required to get a `Cache`; the `Properties` generic on
+//            // `build::<P>()` defaults so the `Cache<String, Bytes>` field type resolves
 #[async_trait] impl RangeCacheBackend for BoundedMemoryBackend { get; put; } // disk_stats -> None (default)
 ```
 
 - Byte-weighted capacity; foyer handles eviction and sharded concurrency. Pure `get`/`put` (no
   single-flight in the backend) because `RangeCache` already owns single-flight via its in-flight map
   (#1203).
-- `FillHint::Prefetch` should not evict hot `Demand` data. L1 is read-driven (no write-warming), so
-  prefetch fills are rare here — a v1 may ignore the hint and refine later.
+- `BoundedMemoryBackend` ignores `FillHint` (treats `Demand` and `Prefetch` identically): with no disk
+  tier, demand/prefetch admission is meaningless here. `FoyerBackend` only honors the hint by writing
+  SSD-only via `storage_writer(...).force()` (`foyer_backend.rs:121`), which has no equivalent without
+  a disk tier, and `foyer_memory::Cache` exposes only a plain `insert`. `MemoryBackend` already ignores
+  the hint too. Revisit only if a future disk-backed L1 variant is added.
 - `disk_stats()` returns `None` (trait default).
 
-Adding `foyer-memory` as a (non-optional) dependency of `object-cache` is the only new dep. The
-existing `foyer` **feature** (which pulls the disk-backed `HybridCache` for `object-cache-srv`) is
-unchanged and still optional.
+`foyer-memory` 0.22.3 is already present in `rust/Cargo.lock` transitively (pulled by the umbrella
+`foyer` 0.22.3 and by `foyer-storage`), so adding it as a (non-optional) dependency of `object-cache`
+promotes an existing transitive crate to a direct one — it costs nothing new in the dependency tree,
+only a new manifest entry. It **must** be pinned to the same `0.22.x` line as the umbrella `foyer`
+dependency (lockstep-versioned sub-crates); pinning to a different line (e.g. `0.23`) would put two
+`foyer-memory` versions in the tree. The existing `foyer` **feature** (which pulls the disk-backed
+`HybridCache` for `object-cache-srv`) is unchanged and still optional.
 
 ### Shared backend across both wrap sites
 
@@ -244,7 +253,9 @@ only ever return identical bytes.
 ## Implementation Steps
 
 **Phase 1 — building blocks (in `object-cache`)**
-1. Add `foyer-memory` to `object-cache/Cargo.toml` (non-optional) and the workspace root.
+1. Add `foyer-memory` to `object-cache/Cargo.toml` (non-optional) and the workspace root, pinned to
+   the same `0.22.x` line as the umbrella `foyer` dependency (already in `Cargo.lock` transitively at
+   0.22.3 — this promotes it to a direct dep without adding a new crate to the tree).
 2. `BoundedMemoryBackend` (`bounded_memory_backend.rs`), foyer-in-memory-based, implementing
    `RangeCacheBackend` + export. Tests: byte-weighted eviction at budget, get/put round-trip.
 3. `L1CacheStore` (`l1_store.rs`) implementing `ObjectStore` over a `RangeCache`, with origin
@@ -312,11 +323,14 @@ only ever return identical bytes.
   `FoyerBackend`'s `LruConfig`), and the backend lives in `object-cache` next to
   `MemoryBackend`/`FoyerBackend`. (An earlier draft wrongly assumed foyer forces a disk tier; that is
   only true of the umbrella `foyer` crate used via `HybridCache`, not of `foyer-memory` used directly.)
-  moka — the workspace LRU already backing `FileCache` — is the zero-new-dependency alternative, but it
-  would either re-introduce moka into `object-cache` (reversing the #1203 removal) or split the backend
-  off into `analytics`. Chosen: `foyer-memory`, for stack consistency and clean placement; cost is one
-  light, disk-free new dependency on `object-cache` (distinct from the existing optional `foyer`
-  feature). Hand-rolling an LRU was rejected as needless risk.
+  moka — the workspace LRU already backing `FileCache` — is an alternative that adds no *new* crate to
+  the tree either (moka is already a workspace dependency elsewhere), but it would either re-introduce
+  moka into `object-cache` (reversing the #1203 removal) or split the backend off into `analytics`.
+  Chosen: `foyer-memory`, for stack consistency and clean placement; since it is already in
+  `Cargo.lock` transitively at 0.22.3 (pulled by the umbrella `foyer` crate), promoting it to a direct
+  `object-cache` dependency (pinned to the same `0.22.x` line) costs a manifest entry, not a new crate
+  in the tree — and it stays light and disk-free (distinct from the existing optional `foyer` feature).
+  Hand-rolling an LRU was rejected as needless risk.
 - **Shared `object-cache`-owned global backend.** One lazily-initialized global gives a single RAM
   budget for both wrap sites; write-once/namespaced keys make the shared instance safe (identical bytes
   for identical keys).
@@ -353,7 +367,4 @@ only ever return identical bytes.
    that L1 covers all file sizes + static tables? (Proposed: keep 200.)
 2. **Dimensioned L1 metrics.** Attach `with_prefix_labels(["views", "blobs"])` (and/or per-ns tags) so
    the L1 win is measurable per the #1206 sequencing note, or leave as `"other"`?
-3. **`FillHint` handling in `BoundedMemoryBackend`.** Full demand/prefetch admission policy in v1, or
-   equal-treatment LRU first? (L1 is read-driven, so prefetch fills are rare — equal treatment likely
-   fine initially.)
-4. **Fetch-permit sizing for L1.** Reuse server defaults (32 / 8), or smaller for an in-process cache?
+3. **Fetch-permit sizing for L1.** Reuse server defaults (32 / 8), or smaller for an in-process cache?
