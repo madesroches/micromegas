@@ -369,20 +369,16 @@ only ever return identical bytes.
 - **Regression**: existing lakehouse/query tests pass after `FileCache` removal; port still-relevant
   assertions from `file_cache_tests.rs` into the new L1 tests rather than dropping coverage.
 - **Telemetry**: confirm L1 hit/miss is observable. `RangeCache` emits per-prefix hit/miss (#1206);
-  with plain `new` these tag `"other"` — decide whether to attach `with_prefix_labels` for dimensioned
-  L1 metrics (Open Questions).
+  with plain `new` these tag `"other"`. L1 does **not** attach `with_prefix_labels`: the lakehouse ns
+  only ever sees `views/...` (a single bucket, redundant with the per-ns total) and static-ns keys are
+  not under `views/` (they would fall to `"other"`), so a prefix label adds no separating power over the
+  two-ns split. Rely on the per-ns metrics (`"lakehouse"` vs `"static"`); revisit only if a second
+  reachable prefix is ever introduced.
 - **CI**: `python3 build/rust_ci.py`.
 
 ## Open Questions
 
-1. **Dimensioned L1 metrics (minor).** L1 only ever sees `views/...` keys — blob reads bypass L1
-   entirely by construction (per the caller-based split), so `"blobs"` is not a reachable prefix here;
-   the two `ns` values (`"lakehouse"`/`"static"`) already separate partition reads from static-table
-   reads. Attach `with_prefix_labels` with just the one real prefix, e.g.
-   `with_prefix_labels(Arc::from(["views"]) as Arc<[&'static str]>)`, for per-prefix hit/miss on top of
-   the per-ns split, or skip it and rely on per-ns metrics alone (unlabeled keys fall to `"other"`) —
-   an observability nicety, not a blocker.
-2. **Fetch-permit sizing for L1 (`total` only).** L1 is demand-only — there is no prefetch path
+1. **Fetch-permit sizing for L1 (`total` only).** L1 is demand-only — there is no prefetch path
    in-process (parquet reads come through `ReaderFactory → CachingReader` as `Priority::Demand`, and
    nothing issues a `Prefetch` run), so `demand_reserved_fetch_permits` is inert here: the
    `prefetch_permits` semaphore is never acquired and the reservation never gates anything. Pass a small
