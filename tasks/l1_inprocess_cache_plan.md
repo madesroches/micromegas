@@ -235,8 +235,9 @@ only ever return identical bytes.
 - `lakehouse_context.rs:106` and `:127`: wrap before constructing the factory —
   `L1: ReaderFactory::new(l1_wrap(lake.blob_storage.inner(), "lakehouse"), metadata_cache)`. Drop the
   `file_cache` argument.
-- `static_tables_configurator.rs:76`: `let object_store = object_cache::l1_wrap(Arc::new(object_store), "static");`
-  before `register_object_store`.
+- `static_tables_configurator.rs:76-79`: after the existing `let object_store = Arc::new(object_store);`
+  (line 76), insert `let object_store = object_cache::l1_wrap(object_store, "static");` before the
+  `register_object_store` call (line 79).
 - `analytics/Cargo.toml`: add a dependency on `micromegas-object-cache` (analytics does not depend on
   it today).
 - `blocks`-view reads are covered automatically: `query_partitions` (`query.rs:80-91`) takes
@@ -278,7 +279,8 @@ only ever return identical bytes.
 4. Add `micromegas-object-cache` to `analytics/Cargo.toml`.
 5. Wrap the reader-factory store at `lakehouse_context.rs:106` and `:127` via
    `object_cache::l1_wrap(..., "lakehouse")`.
-6. Wrap the static-tables store at `static_tables_configurator.rs:76` via
+6. Wrap the static-tables store at `static_tables_configurator.rs:76-79` (after the existing
+   `Arc::new(object_store)`, before the `register_object_store` call at line 79) via
    `object_cache::l1_wrap(..., "static")`.
 
 **Phase 3 — remove old file cache (analytics)**
@@ -379,8 +381,9 @@ only ever return identical bytes.
 ## Open Questions
 
 1. **Fetch-permit sizing for L1 (`total` only).** L1 is demand-only — there is no prefetch path
-   in-process (parquet reads come through `ReaderFactory → CachingReader` as `Priority::Demand`, and
-   nothing issues a `Prefetch` run), so `demand_reserved_fetch_permits` is inert here: the
+   in-process (parquet reads come through `L1CacheStore → RangeCache::get_range`/`get_ranges` as
+   `Priority::Demand`, and nothing issues a `Prefetch` run), so `demand_reserved_fetch_permits` is inert
+   here: the
    `prefetch_permits` semaphore is never acquired and the reservation never gates anything. Pass a small
    placeholder (must be `< total`) and ignore it. The only meaningful knob is `total_fetch_permits`, which
    caps concurrent origin GETs and therefore transient fetch-buffer memory at roughly
