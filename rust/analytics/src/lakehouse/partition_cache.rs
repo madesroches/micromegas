@@ -1,43 +1,12 @@
 use crate::time::TimeRange;
 
-use super::{
-    partition::Partition, partition_metadata::load_partition_metadata, view::ViewMetadata,
-};
+use super::{partition::Partition, view::ViewMetadata};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use datafusion::parquet::file::metadata::ParquetMetaData;
 use micromegas_tracing::prelude::*;
 use sqlx::{PgPool, Row};
 use std::{fmt, sync::Arc};
-
-/// A partition with its file metadata loaded on-demand.
-/// This is used when you need both the partition data and its parquet metadata.
-#[derive(Clone, Debug)]
-pub struct PartitionWithMetadata {
-    pub partition: Partition,
-    pub file_metadata: Arc<ParquetMetaData>,
-}
-
-/// Convenience function to create a PartitionWithMetadata from an existing Partition.
-/// This loads the file metadata on-demand using the file_path.
-#[span_fn]
-pub async fn partition_with_metadata(
-    partition: Partition,
-    pool: &PgPool,
-) -> Result<PartitionWithMetadata> {
-    let file_path = partition
-        .file_path
-        .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("cannot load metadata for empty partition"))?;
-    let file_metadata = load_partition_metadata(pool, file_path, None)
-        .await
-        .with_context(|| format!("loading metadata for partition: {}", file_path))?;
-    Ok(PartitionWithMetadata {
-        partition,
-        file_metadata,
-    })
-}
 
 /// A trait for providing queryable partitions.
 #[async_trait]
