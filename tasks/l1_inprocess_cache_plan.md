@@ -58,9 +58,18 @@ Two facts (confirmed by tracing) make the caller-based install clean:
    wrap and hand to `ReaderFactory` — so wrapping the reader-factory store leaves all blob reads
    uncached even when they are triggered from SQL.
 
+Separately, `query_partitions_context` (`query.rs:60,67`) also calls
+`ctx.register_object_store("obj://lakehouse/", object_store)` with the store passed by every
+caller — `partition_source_data.rs:269-273` and all four sites in `jit_partitions.rs` — as
+`blob_storage.inner()`, **unwrapped**. This is intentional and does not need L1 wrapping: parquet
+byte reads are served by the `ReaderFactory` (fact 1 above), never by this registered store;
+`register_object_store` here only lets DataFusion resolve `obj://lakehouse/...` URLs, it isn't on
+the byte-read path.
+
 **Consequence:** wrap the store *passed to* `ReaderFactory::new` (and the static-tables store); do
-**not** wrap inside `BlobStorage` (`connect_with_layer`) or in `make_cache`, which would cache blob
-reads too.
+**not** wrap inside `BlobStorage` (`connect_with_layer`), in `make_cache`, or the store registered by
+`query_partitions_context`, which would cache blob reads too (or wrap a store that never serves
+bytes).
 
 ### Static tables (separate store, also read-repeatedly)
 
@@ -205,8 +214,9 @@ dependency (lockstep-versioned sub-crates); pinning to a different line (e.g. `0
 
 ### Shared backend across both wrap sites
 
-An `object-cache`-owned lazily-initialized global backend, sized once from `MICROMEGAS_L1_CACHE_MB`,
-gives one shared budget for both wrap sites:
+An `object-cache`-owned lazily-initialized global backend, sized once from `MICROMEGAS_L1_CACHE_MB`
+(default 200 MB, matching the old `FileCache`'s `DEFAULT_FILE_CACHE_SIZE_MB` at
+`lakehouse_context.rs:17`), gives one shared budget for both wrap sites:
 
 ```rust
 // rust/object-cache/src/l1_store.rs
@@ -363,8 +373,11 @@ only ever return identical bytes.
 
 ## Open Questions
 
-1. **Default `MICROMEGAS_L1_CACHE_MB`.** Old `FileCache` defaulted to 200 MB. Keep 200, or size up now
-   that L1 covers all file sizes + static tables? (Proposed: keep 200.)
-2. **Dimensioned L1 metrics.** Attach `with_prefix_labels(["views", "blobs"])` (and/or per-ns tags) so
-   the L1 win is measurable per the #1206 sequencing note, or leave as `"other"`?
-3. **Fetch-permit sizing for L1.** Reuse server defaults (32 / 8), or smaller for an in-process cache?
+1. **Dimensioned L1 metrics (minor).** L1 only ever sees `views/...` keys — blob reads bypass L1
+   entirely by construction (per the caller-based split), so `"blobs"` is not a reachable prefix here;
+   the two `ns` values (`"lakehouse"`/`"static"`) already separate partition reads from static-table
+   reads. Attach `with_prefix_labels` with just the one real prefix, e.g.
+   `with_prefix_labels(Arc::from(["views"]) as Arc<[&'static str]>)`, for per-prefix hit/miss on top of
+   the per-ns split, or skip it and rely on per-ns metrics alone (unlabeled keys fall to `"other"`) —
+   an observability nicety, not a blocker.
+2. **Fetch-permit sizing for L1.** Reuse server defaults (32 / 8), or smaller for an in-process cache?
