@@ -109,7 +109,8 @@ caching and are wrapped the same way.
     and always builds an on-disk device.
 - Reference config (`object_cache_srv.rs:153-162`, defaults `range_cache.rs:64-72`):
   `total_fetch_permits = 32`, `demand_reserved = 8`, `max_coalesced_get_bytes = 8 MiB`,
-  `promote_whole_batch = false`, block 1 MiB.
+  `promote_whole_batch = false`, block 1 MiB. For L1 only `total_fetch_permits` is meaningful:
+  reads are demand-only (no prefetch path), so `demand_reserved` is inert here — see Open Questions.
 
 ## Design
 
@@ -381,4 +382,15 @@ only ever return identical bytes.
    `with_prefix_labels(Arc::from(["views"]) as Arc<[&'static str]>)`, for per-prefix hit/miss on top of
    the per-ns split, or skip it and rely on per-ns metrics alone (unlabeled keys fall to `"other"`) —
    an observability nicety, not a blocker.
-2. **Fetch-permit sizing for L1.** Reuse server defaults (32 / 8), or smaller for an in-process cache?
+2. **Fetch-permit sizing for L1 (`total` only).** L1 is demand-only — there is no prefetch path
+   in-process (parquet reads come through `ReaderFactory → CachingReader` as `Priority::Demand`, and
+   nothing issues a `Prefetch` run), so `demand_reserved_fetch_permits` is inert here: the
+   `prefetch_permits` semaphore is never acquired and the reservation never gates anything. Pass a small
+   placeholder (must be `< total`) and ignore it. The only meaningful knob is `total_fetch_permits`, which
+   caps concurrent origin GETs and therefore transient fetch-buffer memory at roughly
+   `total × max_coalesced_get_bytes` (≈ `total × 8 MiB`) — memory that is *separate from* the
+   `MICROMEGAS_L1_CACHE_MB` budget and lives inside a query process alongside DataFusion execution. The
+   server's `32` was sized for a dedicated caching service; in-process, prefer a smaller `total` (e.g.
+   `16`, ≈128 MiB transient cap) to avoid over-parallelizing object I/O and stacking transient buffers on
+   top of the cache and DataFusion's working set. Final value is a memory-vs-miss-fill-throughput tuning
+   call for the target deployment.
