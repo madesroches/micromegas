@@ -204,14 +204,14 @@ impl ObjectStore for L1CacheStore {
                 Some(GetRange::Bounded(r)) => {
                     let r = r.clone();
                     let data = self.cache.get_range(&key, r.clone()).await?;
-                    // Skip resolving the full object size here: our only
-                    // caller for this arm is `ObjectStore::get_range`'s
-                    // default impl, which reads the result via `.bytes()`
-                    // -- that only consults `range`, never `meta.size` --
-                    // so avoid an extra `cache.size()` round trip and reuse
-                    // the requested end as a placeholder.
-                    let placeholder_size = r.end;
-                    Ok((data, r, placeholder_size))
+                    // Resolve the true object size so `meta.size` matches
+                    // what real object stores report even for ranged gets
+                    // (our only in-tree caller, `ObjectStore::get_range`'s
+                    // default impl, reads via `.bytes()` and only consults
+                    // `range`, but callers of `get_opts` directly are
+                    // entitled to a correct `meta.size`).
+                    let size = self.cache.size(&key).await?;
+                    Ok((data, r, size))
                 }
                 other => {
                     let size = self.cache.size(&key).await?;
