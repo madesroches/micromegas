@@ -9,8 +9,9 @@ actually flaky — their correctness comes from `flush_thread_buffer()` /
 `drop(runtime)` / `tokio::sync::Notify` / condition-polling, not from wall-clock
 timing. This task makes three concrete, scoped test-quality improvements:
 
-1. Remove a genuine race-to-fail in `cron_loop_drains` by awaiting a
-   task-started signal instead of guessing with a fixed 50 ms sleep.
+1. Replace a meaningless fixed 50 ms sleep in `cron_loop_drains` with an
+   explicit task-started signal, making the test deterministic-by-construction
+   instead of a wall-clock guess.
 2. Replace the pointless random sleeps in `async_span_tests.rs` with a small
    fixed sleep, which also drops the `rand` test dependency from `analytics`.
 3. Correct the docstrings of `thread_park_test` (and the `TracingRuntimeExt`
@@ -22,30 +23,37 @@ This is deliberately narrow: it is a test-quality pass, **not** a broad
 
 ## Current State
 
-### 1. `cron_loop_drains` — genuine race
+### 1. `cron_loop_drains` — meaningless wall-clock sleep
 `rust/public/tests/graceful_shutdown_tests.rs:142-194`. The test spawns
 `run_tasks_forever` with a single `SlowTask` (sleeps 300 ms, then sets an
 `AtomicBool`), sleeps a fixed **50 ms** "to give the task time to start"
 (`:186`), triggers shutdown via `Notify`, then asserts `finished == true`.
 
-If 50 ms is not enough for `run_tasks_forever` to schedule and enter the
-`SlowTask` before the shutdown `Notify` is observed, the drain path finds an
-empty (or not-yet-started) task set and the callback never runs, so `finished`
-stays `false` and the assertion fails. Low-probability, but a real flaky
-**failure** mode.
+That 50 ms guards nothing: with the test's `max_parallelism == 1`,
+`run_tasks_forever` spawns the `SlowTask` into the `JoinSet` on its very first
+loop iteration, before the loop ever reaches a shutdown-observation `select!`
+(see below). Every exit path drains the `JoinSet` — awaiting each spawned task
+to completion — before returning, and the test awaits the runner rather than
+cancelling it, so `finished` is already deterministic regardless of the sleep
+duration. The sleep is a leftover wall-clock guess with no correctness role,
+which is consistent with this pass's broader finding that most of these tests
+aren't actually flaky — it's still worth removing so the test's intent
+(exercise the drain path while the task is genuinely in-flight) is explicit
+rather than implied by a magic number.
 
 The correct pattern already exists in the same file: `axum_drain_completes`
 (`:22-64`) uses a `handler_started: Arc<Notify>` that the handler fires on
-entry, and the test `await`s it before triggering shutdown (`:56-57`).
+entry, and the test `await`s it before triggering shutdown (`:56-57`). The
+issue's acceptance criterion asks for the same started-signal pattern here.
 
 Relevant production code (no changes needed, but informs the fix):
 - `run_tasks_forever` (`rust/public/src/servers/maintenance.rs:203-263`):
-  with `max_parallelism == 1`, after `task_set.spawn(task.spawn().await)` the
-  set length reaches the cap and the loop enters a `select!` awaiting either
-  `task_set.join_next()` or `shutdown`; on shutdown it calls `drain_task_set`,
-  which awaits every in-flight task to completion before returning. So once the
-  callback has *started*, draining is guaranteed to await it — awaiting a
-  started-signal fully closes the race.
+  with `max_parallelism == 1`, `task_set.spawn(task.spawn().await)` runs first,
+  before any shutdown check — the first shutdown-observation `select!` (`:215`)
+  is only reached afterward. On shutdown, `drain_task_set` awaits every
+  spawned task to completion via `join_next().await`, independent of whether
+  the callback has "started". `tokio::sync::Notify` also retains a single
+  permit, so an early `notify_one()` is never lost.
 - `CronTask` / `TaskCallback` (`rust/public/src/servers/cron_task.rs:9-14`):
   `run(&self, task_scheduled_time)` is the hook where the stub signals "started".
 
@@ -204,11 +212,13 @@ pre-agreed remedy without re-litigating.
   whose stated non-goals exclude broad changes. If park-flushing is desired, it
   should be its own issue with its own perf justification; this plan only aligns
   the docs with current behavior.
-- **Keeping the 300 ms work sleep in `cron_loop_drains`.** With the started
-  signal the drain is deterministic regardless of duration, but keeping a
-  non-trivial work sleep ensures the callback is genuinely mid-flight at
-  shutdown, so the test still exercises draining rather than a
-  race-free-but-already-finished task.
+- **Keeping the 300 ms work sleep in `cron_loop_drains`.** The started signal
+  (not the sleep duration) is what makes the drain deterministic — draining
+  already awaits the spawned task to completion regardless of timing. Keeping
+  a non-trivial work sleep is not a race guard; it simply keeps the callback
+  genuinely mid-flight at the moment shutdown fires, so the test still
+  exercises the drain path rather than racing shutdown against an
+  already-finished task.
 
 ## Documentation
 No user-facing docs (mkdocs) are affected. The only documentation touched is
