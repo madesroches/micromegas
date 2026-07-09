@@ -38,6 +38,7 @@ This file documents the historical progress of the Micromegas project. For curre
   * Fix `capi-release`: route both build legs through the dev-worker runner (mold + mingw-w64 in the image), cross-compile the Windows artifacts on the Linux runner, and add the cross target to the pinned `1.96.0` toolchain the build actually uses (#1175)
 * **Dependencies:**
   * Update DataFusion to 54.0 and rebuild the datafusion-wasm bindings
+  * Migrate the internal proc-macro crates (`micromegas-proc-macros`, `micromegas-tracing-proc-macros`, `micromegas-derive-transit`) from `syn` 1.0 to 2.0 and bump the workspace pin, dropping the duplicate `syn 1.0.109` from the build; macro behavior unchanged (#1253)
 * **Native / Blender:**
   * Add `micromegas-capi` C ABI crate (`cdylib` + `staticlib`) exposing init/shutdown, log, and int/float metric FFI over the existing Rust telemetry producer stack; ships a hand-authored C header and 8 smoke tests (#1160)
   * Add Blender Python extension (`blender/micromegas_blender/`) in Blender 4.2+ Extension format with `blender_manifest.toml`; captures user actions (modal recorder, `bpy.msgbus`, `bpy.app.handlers`), performance metrics, and process fingerprint via ctypes binding to `libmicromegas_capi` (#1160)
