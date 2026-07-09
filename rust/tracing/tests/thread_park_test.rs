@@ -29,7 +29,7 @@ fn test_worker_thread_span_flush() {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .thread_name("park-test")
-        .worker_threads(2) // Use just 2 threads to make parking more predictable
+        .worker_threads(2) // Spread the spawned tasks across multiple worker threads so multiple thread streams are exercised
         .with_tracing_callbacks_and_custom_start(|| {
             eprintln!("Thread started - initializing stream");
         })
