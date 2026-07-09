@@ -10,7 +10,8 @@ dependency in the tree is already on syn 2.x. Migrating the three crates to the 
 bump the workspace pin to `"2.0"`, which drops `syn v1.0.109` and its transitive `quote 1`/`unicode-ident`
 duplication from every build, shrinking the proc-macro compile stack.
 
-This is a dependency/API migration only — no change to macro behavior or generated code.
+This is a dependency/API migration only — generated code and all valid-input macro behavior are
+unchanged (one invalid-input error path shifts; see Design §B).
 
 ## Current State
 `syn` is declared once, in the workspace root, and pulled in by exactly three crates:
@@ -122,6 +123,14 @@ tests keep passing verbatim.
 - **Catch-all** (line 206): change `other =>` from matching a `NestedMeta` to matching a `Meta`;
   `syn::Error::new_spanned(&other, "Unsupported attribute argument…")` still compiles (`Meta`
   implements `ToTokens`).
+
+One behavioral edge case worth noting: under syn 1.0 a *bare-literal* argument (e.g.
+`#[micromegas_main("foo")]`) parses as `NestedMeta::Lit` and reaches the `other =>` catch-all,
+producing the "Unsupported attribute argument" error. Because `Meta` cannot parse a bare literal
+(it starts with a `Path`), the same input now fails earlier with a generic parse error instead.
+This is acceptable — such input is invalid, undocumented, and untested, so no test regresses and
+no valid usage changes. Bare-path (`foo`) and list (`foo(bar)`) args still route to the catch-all
+identically.
 
 Alternative considered and rejected: `syn::meta::parser` (the syn 2.0 "recommended" attribute-arg
 API) — see Trade-offs.
