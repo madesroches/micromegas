@@ -26,6 +26,8 @@ This file documents the historical progress of the Micromegas project. For curre
   * Fix a lost-wakeup deadlock in `range_cache::InFlight::fulfill`: `watch::Sender::send` drops the result when the channel has zero receivers, and joiners subscribe lazily inside `join()`, so a fetch completing before any joiner subscribed would hang every later joiner forever; switch to `send_replace`, which stores the value unconditionally (#1259)
 * **OTLP:**
   * Populate the `processes.username` column from `process.owner` (falling back through `process.user.name`, `process.real_user.name`, then `user.name`) and fold the resolved owner into the `process_id` derivation so processes that differ only by owning user get distinct ids; re-derivation stays under the existing `NS_OTEL_PROCESS_V1` namespace
+* **Auth:**
+  * Consolidate OIDC login-flow client construction into the `micromegas-auth` crate (new `oidc_client` module with a `DiscoveredProvider` that owns provider discovery + client building) so it lives in one place instead of being reimplemented in `analytics-web-srv`, and split the 909-line `analytics-web-srv/src/auth.rs` into focused `config`/`state`/`cookies`/`claims`/`handlers` submodules; behavior-preserving, public API unchanged (#1249)
 * **Security:**
   * Fix Dependabot alerts: bump `golang.org/x/net` to 0.55.0 in the Grafana plugin backend and `joserfc` to 1.7.2 in the Python client (#338, #337)
   * Upgrade `opentelemetry-proto` to 0.32 to resolve GHSA-w9wp-h8wv-79jx; treat the new profiling-only string-interning fields (`*_strindex`) as absent on non-profiling OTLP signals, per the OTLP spec (#336)

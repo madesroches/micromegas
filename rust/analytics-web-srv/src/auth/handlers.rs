@@ -1,17 +1,13 @@
-//! Authentication endpoints for analytics-web-srv
-//!
-//! Implements OIDC authorization code flow with PKCE:
-//! - /auth/login - Initiate OIDC login
-//! - /auth/callback - Handle OIDC callback
-//! - /auth/refresh - Refresh tokens
-//! - /auth/logout - Clear session
-//! - /auth/me - Get current user info
-//!
-//! Security: All JWT tokens are fully validated (signature + claims) at this tier
-//! using the micromegas-auth crate with JWKS caching. Invalid tokens are rejected
-//! before forwarding requests to FlightSQL.
+//! Axum request/response glue: the auth endpoints, middleware, and extractors.
 
-use anyhow::{Result, anyhow};
+use super::claims::{
+    CookieTokenRequestParts, UserInfo, ValidatedUser, extract_name_from_token,
+    extract_subject_from_token,
+};
+use super::cookies::{
+    ID_TOKEN_COOKIE, OAUTH_STATE_COOKIE, REFRESH_TOKEN_COOKIE, clear_cookie, create_cookie,
+};
+use super::state::AuthState;
 use axum::{
     Json,
     extract::{FromRequestParts, Query, Request, State},
@@ -19,201 +15,16 @@ use axum::{
     middleware::Next,
     response::{IntoResponse, Redirect, Response},
 };
-use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
-use base64::Engine;
+use axum_extra::extract::cookie::CookieJar;
 use micromegas::tracing::prelude::*;
 use micromegas_auth::oauth_state::{OAuthState, generate_nonce, sign_state, verify_state};
-use micromegas_auth::oidc::{OidcAuthProvider, OidcConfig, create_http_client};
-use micromegas_auth::types::{AuthContext, AuthProvider};
+use micromegas_auth::oidc::create_http_client;
+use micromegas_auth::types::AuthProvider;
 use micromegas_auth::url_validation::validate_return_url;
 use openidconnect::{
-    AuthenticationFlow, CsrfToken, Nonce, PkceCodeChallenge, Scope,
-    core::{CoreProviderMetadata, CoreResponseType},
+    AuthenticationFlow, CsrfToken, Nonce, PkceCodeChallenge, Scope, core::CoreResponseType,
 };
-use serde::{Deserialize, Serialize};
-use std::sync::Arc;
-
-/// Type alias for the OIDC client with endpoints set from provider metadata
-type ConfiguredCoreClient = openidconnect::Client<
-    openidconnect::EmptyAdditionalClaims,
-    openidconnect::core::CoreAuthDisplay,
-    openidconnect::core::CoreGenderClaim,
-    openidconnect::core::CoreJweContentEncryptionAlgorithm,
-    openidconnect::core::CoreJsonWebKey,
-    openidconnect::core::CoreAuthPrompt,
-    openidconnect::StandardErrorResponse<openidconnect::core::CoreErrorResponseType>,
-    openidconnect::core::CoreTokenResponse,
-    openidconnect::core::CoreTokenIntrospectionResponse,
-    openidconnect::core::CoreRevocableToken,
-    openidconnect::core::CoreRevocationErrorResponse,
-    openidconnect::EndpointSet,
-    openidconnect::EndpointNotSet,
-    openidconnect::EndpointNotSet,
-    openidconnect::EndpointNotSet,
-    openidconnect::EndpointMaybeSet,
-    openidconnect::EndpointMaybeSet,
->;
-
-/// OIDC client configuration
-#[derive(Debug, Clone, Deserialize)]
-pub struct OidcClientConfig {
-    /// OIDC provider issuer URL
-    pub issuer: String,
-    /// Client ID (public client)
-    pub client_id: String,
-    /// Redirect URI for callback
-    pub redirect_uri: String,
-}
-
-impl OidcClientConfig {
-    /// Load configuration from environment variables
-    ///
-    /// Required environment variables:
-    /// - MICROMEGAS_OIDC_CONFIG: JSON with "issuers" array (same format as FlightSQL server)
-    /// - MICROMEGAS_AUTH_REDIRECT_URI: OAuth callback URL
-    ///
-    /// Expected MICROMEGAS_OIDC_CONFIG format (uses micromegas-auth's OidcConfig):
-    /// {
-    ///   "issuers": [
-    ///     {
-    ///       "issuer": "https://...",
-    ///       "audience": "client-id"
-    ///     }
-    ///   ]
-    /// }
-    ///
-    /// Note: When multiple issuers are configured, the first issuer is used for
-    /// the OAuth login flow (you can only redirect to one provider). Token
-    /// validation via OidcAuthProvider will accept tokens from any configured issuer.
-    pub fn from_env() -> Result<Self> {
-        // Use the shared OidcConfig from micromegas-auth
-        let config = micromegas_auth::oidc::OidcConfig::from_env()?;
-
-        // Need at least one issuer
-        if config.issuers.is_empty() {
-            return Err(anyhow!(
-                "MICROMEGAS_OIDC_CONFIG must contain at least one issuer in the 'issuers' array"
-            ));
-        }
-
-        // Use the first issuer for OAuth login flow
-        // (token validation via OidcAuthProvider supports all issuers)
-        let issuer_config = &config.issuers[0];
-
-        if config.issuers.len() > 1 {
-            info!(
-                "Multiple OIDC issuers configured ({}). Using '{}' for OAuth login flow. \
-                 Token validation will accept tokens from all configured issuers.",
-                config.issuers.len(),
-                issuer_config.issuer
-            );
-        }
-
-        let redirect_uri = std::env::var("MICROMEGAS_AUTH_REDIRECT_URI")
-            .map_err(|_| anyhow!("MICROMEGAS_AUTH_REDIRECT_URI environment variable not set"))?;
-
-        Ok(OidcClientConfig {
-            issuer: issuer_config.issuer.clone(),
-            client_id: issuer_config.audience.clone(),
-            redirect_uri,
-        })
-    }
-}
-
-/// OIDC provider metadata cached
-#[derive(Clone)]
-pub struct OidcProviderInfo {
-    pub metadata: Arc<CoreProviderMetadata>,
-    pub client_id: openidconnect::ClientId,
-    pub redirect_uri: openidconnect::RedirectUrl,
-}
-
-/// State for auth endpoints
-#[derive(Clone)]
-pub struct AuthState {
-    /// OIDC provider info (lazy initialized) - for OAuth flow
-    pub oidc_provider: Arc<tokio::sync::OnceCell<OidcProviderInfo>>,
-    /// OIDC auth provider (lazy initialized) - for JWT validation
-    pub auth_provider: Arc<tokio::sync::OnceCell<Arc<OidcAuthProvider>>>,
-    /// OIDC client configuration
-    pub config: OidcClientConfig,
-    /// Cookie domain (optional)
-    pub cookie_domain: Option<String>,
-    /// Whether we're in production (secure cookies)
-    pub secure_cookies: bool,
-    /// Secret for signing OAuth state parameters (HMAC-SHA256)
-    pub state_signing_secret: Vec<u8>,
-    /// Base path for cookies (e.g., "/micromegas"), defaults to "/"
-    pub base_path: String,
-    /// Environment variable name used to load the OIDC admin list.
-    ///
-    /// Defaults to `"MICROMEGAS_ADMINS"` for standalone deployments.
-    /// The monolith sets this to `"MICROMEGAS_ANALYTICS_ADMINS"` (with fallback
-    /// already resolved) so the web role's admin list matches the FlightSQL role.
-    pub admin_var_name: String,
-}
-
-impl AuthState {
-    /// Returns the cookie path, using base_path or "/" if empty
-    pub fn cookie_path(&self) -> String {
-        if self.base_path.is_empty() {
-            "/".to_string()
-        } else {
-            self.base_path.clone()
-        }
-    }
-
-    pub async fn get_oidc_provider(&self) -> Result<&OidcProviderInfo> {
-        let config = self.config.clone();
-        self.oidc_provider
-            .get_or_try_init(|| async move {
-                let issuer_url = openidconnect::IssuerUrl::new(config.issuer.clone())
-                    .map_err(|e| anyhow!("Invalid issuer URL: {e:?}"))?;
-
-                let http_client = create_http_client()?;
-                let provider_metadata =
-                    CoreProviderMetadata::discover_async(issuer_url, &http_client)
-                        .await
-                        .map_err(|e| anyhow!("Failed to discover OIDC provider: {e:?}"))?;
-
-                let client_id = openidconnect::ClientId::new(config.client_id.clone());
-                let redirect_uri = openidconnect::RedirectUrl::new(config.redirect_uri.clone())
-                    .map_err(|e| anyhow!("Invalid redirect URI: {e:?}"))?;
-
-                Ok(OidcProviderInfo {
-                    metadata: Arc::new(provider_metadata),
-                    client_id,
-                    redirect_uri,
-                })
-            })
-            .await
-    }
-
-    pub fn build_oidc_client(&self, provider: &OidcProviderInfo) -> ConfiguredCoreClient {
-        openidconnect::core::CoreClient::from_provider_metadata(
-            (*provider.metadata).clone(),
-            provider.client_id.clone(),
-            None, // No client secret (public client with PKCE)
-        )
-        .set_redirect_uri(provider.redirect_uri.clone())
-    }
-
-    /// Get or initialize the OIDC auth provider for JWT validation.
-    ///
-    /// The auth provider is lazy-initialized on first use and cached.
-    /// The admin list is loaded from the var named by `self.admin_var_name`
-    /// (defaults to `MICROMEGAS_ADMINS`; the monolith may set a role-scoped name).
-    pub async fn get_auth_provider(&self) -> Result<&Arc<OidcAuthProvider>> {
-        let admin_var = self.admin_var_name.clone();
-        self.auth_provider
-            .get_or_try_init(|| async move {
-                let config = OidcConfig::from_env()?;
-                let provider = OidcAuthProvider::new(config, &admin_var).await?;
-                Ok(Arc::new(provider))
-            })
-            .await
-    }
-}
+use serde::Deserialize;
 
 /// Query parameters for login endpoint
 #[derive(Debug, Deserialize)]
@@ -229,122 +40,6 @@ pub struct CallbackQuery {
     code: String,
     /// State parameter (contains nonce and return_url)
     state: String,
-}
-
-/// User info response
-#[derive(Debug, Serialize)]
-pub struct UserInfo {
-    sub: String,
-    email: Option<String>,
-    name: Option<String>,
-    is_admin: bool,
-}
-
-/// JWT claims for decoding (minimal) - used for auth_me name extraction
-#[derive(Debug, Deserialize)]
-struct IdTokenClaims {
-    #[serde(default)]
-    name: Option<String>,
-}
-
-/// Validated user information extracted from JWT after signature verification
-///
-/// This struct is inserted into request extensions by the auth middleware
-/// and can be used by handlers to access validated user information.
-#[derive(Clone, Debug)]
-#[allow(dead_code)] // Struct inserted into request extensions; handlers access fields via Extension<ValidatedUser>
-pub struct ValidatedUser {
-    /// Unique subject identifier (user ID)
-    pub subject: String,
-    /// Email address (if available)
-    pub email: Option<String>,
-    /// Token issuer URL
-    pub issuer: String,
-    /// Whether this user has admin privileges
-    pub is_admin: bool,
-}
-
-impl From<&AuthContext> for ValidatedUser {
-    fn from(ctx: &AuthContext) -> Self {
-        Self {
-            subject: ctx.subject.clone(),
-            email: ctx.email.clone(),
-            issuer: ctx.issuer.clone(),
-            is_admin: ctx.is_admin,
-        }
-    }
-}
-
-/// Request parts adapter for cookie-based tokens
-///
-/// Adapts a cookie-based token into the RequestParts trait expected by OidcAuthProvider.
-/// Used by both cookie_auth_middleware and auth_me endpoint for token validation.
-struct CookieTokenRequestParts {
-    token: String,
-}
-
-impl micromegas_auth::types::RequestParts for CookieTokenRequestParts {
-    fn authorization_header(&self) -> Option<&str> {
-        None
-    }
-
-    fn bearer_token(&self) -> Option<&str> {
-        Some(&self.token)
-    }
-
-    fn get_header(&self, _name: &str) -> Option<&str> {
-        None
-    }
-
-    fn method(&self) -> Option<&str> {
-        None
-    }
-
-    fn uri(&self) -> Option<&str> {
-        None
-    }
-}
-
-/// Cookie names
-const ID_TOKEN_COOKIE: &str = "id_token"; // ID token (JWT) for user info and FlightSQL API authorization
-const REFRESH_TOKEN_COOKIE: &str = "refresh_token";
-const OAUTH_STATE_COOKIE: &str = "oauth_state";
-
-/// Create a cookie with common settings
-pub fn create_cookie<'a>(
-    name: &'a str,
-    value: String,
-    max_age_secs: i64,
-    state: &AuthState,
-) -> Cookie<'a> {
-    let mut cookie = Cookie::build((name, value))
-        .http_only(true)
-        .secure(state.secure_cookies)
-        .same_site(SameSite::Lax)
-        .path(state.cookie_path())
-        .max_age(time::Duration::seconds(max_age_secs));
-
-    if let Some(domain) = &state.cookie_domain {
-        cookie = cookie.domain(domain.clone());
-    }
-
-    cookie.build()
-}
-
-/// Create an expired cookie to clear it
-pub fn clear_cookie<'a>(name: &'a str, state: &AuthState) -> Cookie<'a> {
-    let mut cookie = Cookie::build((name, ""))
-        .http_only(true)
-        .secure(state.secure_cookies)
-        .same_site(SameSite::Lax)
-        .path(state.cookie_path())
-        .max_age(time::Duration::seconds(0));
-
-    if let Some(domain) = &state.cookie_domain {
-        cookie = cookie.domain(domain.clone());
-    }
-
-    cookie.build()
 }
 
 /// GET /auth/login - Initiate OIDC login
@@ -379,7 +74,7 @@ pub async fn auth_login(
         .get_oidc_provider()
         .await
         .map_err(|e| AuthApiError::Internal(format!("Failed to get OIDC provider: {e:?}")))?;
-    let client = state.build_oidc_client(provider);
+    let client = provider.build_client();
 
     // Generate authorization URL
     let (auth_url, _csrf_token, _nonce) = client
@@ -431,12 +126,11 @@ pub async fn auth_callback(
         return Err(AuthApiError::InvalidState);
     }
 
-    // Get OIDC provider and build client
+    // Get OIDC provider
     let provider = state
         .get_oidc_provider()
         .await
         .map_err(|e| AuthApiError::Internal(format!("Failed to get OIDC provider: {e:?}")))?;
-    let _client = state.build_oidc_client(provider);
 
     // Exchange code for tokens using manual HTTP request
     // Note: We don't use the openidconnect library's exchange_code() because:
@@ -553,12 +247,11 @@ pub async fn auth_refresh(
         .value()
         .to_string();
 
-    // Get OIDC provider and build client
+    // Get OIDC provider
     let provider = state
         .get_oidc_provider()
         .await
         .map_err(|e| AuthApiError::Internal(format!("Failed to get OIDC provider: {e:?}")))?;
-    let _client = state.build_oidc_client(provider);
 
     // Exchange refresh token for new tokens using manual HTTP request
     // Note: Same reasoning as auth_callback - Auth0's non-standard fields break library parsing
@@ -706,38 +399,6 @@ pub async fn auth_me(
         name,
         is_admin: auth_context.is_admin,
     }))
-}
-
-/// Extract the 'name' claim from a JWT payload
-///
-/// This is used by auth_me() to get the display name which isn't in AuthContext
-fn extract_name_from_token(token: &str) -> Option<String> {
-    let parts: Vec<&str> = token.split('.').collect();
-    if parts.len() != 3 {
-        return None;
-    }
-
-    let payload_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .decode(parts[1].as_bytes())
-        .ok()?;
-
-    let claims: IdTokenClaims = serde_json::from_slice(&payload_bytes).ok()?;
-    claims.name
-}
-
-/// Extract the 'sub' claim from a JWT payload for audit logging
-fn extract_subject_from_token(token: &str) -> Option<String> {
-    let parts: Vec<&str> = token.split('.').collect();
-    if parts.len() != 3 {
-        return None;
-    }
-
-    let payload_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .decode(parts[1].as_bytes())
-        .ok()?;
-
-    let claims: serde_json::Value = serde_json::from_slice(&payload_bytes).ok()?;
-    claims["sub"].as_str().map(|s| s.to_string())
 }
 
 /// Authentication API errors

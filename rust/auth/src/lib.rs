@@ -81,6 +81,9 @@ pub mod api_key;
 /// OIDC authentication with JWKS caching
 pub mod oidc;
 
+/// Canonical login-flow OIDC client construction (discovery + client building)
+pub mod oidc_client;
+
 /// Multi-provider authentication (API key + OIDC)
 pub mod multi;
 
