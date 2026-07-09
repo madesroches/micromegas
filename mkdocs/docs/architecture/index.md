@@ -31,6 +31,11 @@ graph TD
         S3[(Object Storage<br/>S3/GCS/Local<br/>Raw Payloads)]
     end
     
+    subgraph "Caching (read path)"
+        L2[object-cache-srv<br/>shared L2<br/>RAM+SSD]
+        L1[in-process L1<br/>RAM range cache]
+    end
+    
     subgraph "Maintenance"
         Admin[telemetry-admin<br/>crond]
     end
@@ -65,7 +70,9 @@ graph TD
     Ingestion --> S3
     
     PG --> DataFusion
-    S3 --> DataFusion
+    S3 -->|reads| L2
+    L2 --> L1
+    L1 --> DataFusion
     DataFusion --> Parquet
     DataFusion --> FlightSQL
     
@@ -84,11 +91,13 @@ graph TD
     classDef service fill:#f3e5f5
     classDef storage fill:#e1f5fe
     classDef client fill:#fce4ec
+    classDef cache fill:#fff8e1
     
     class App1,App2,App3,Otel app
     class Lib1,Lib2,Lib3,Sink1,Sink2,Sink3 tracing
     class Ingestion,FlightSQL,DataFusion,Admin,WebApp service
     class PG,S3,Parquet storage
+    class L1,L2 cache
     class PyClient,Grafana,Custom,Browser client
 ```
 
@@ -103,6 +112,7 @@ graph TD
 - **PostgreSQL**: Stores metadata, process information, and stream definitions
 - **Object Storage**: Stores raw telemetry payloads in efficient binary format (S3, GCS, or local files)
 - **Lakehouse**: Materialized Parquet views created on-demand for fast analytics
+- **Read Caching**: Reads of lake objects are served through a tiered cache — an in-process **L1** and a shared **L2** (`object-cache-srv`) — before falling through to the origin store; writes go straight to origin. See [Caching Architecture](caching.md) for how the tiers fit together.
 
 #### Analytics Engine
 - **DataFusion**: SQL query engine with vectorized execution optimized for Parquet (columnar format)
