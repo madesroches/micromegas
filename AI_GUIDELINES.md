@@ -5,6 +5,7 @@
 ### Rust
 - **Dependencies**: Always maintain alphabetical order within dependency blocks in Cargo.toml files
 - **Error Handling**: Use `expect()` with descriptive messages instead of `unwrap()`
+- **anyhow vs thiserror**: `anyhow` is the default for error propagation/reporting — use it unless the caller needs to branch on the error kind. Reach for `thiserror` (a typed error enum) only when a caller must match on which variant occurred to change behavior; the branching need justifies the typed error, not the location in the stack. The canonical example is retryability: where a path retries, model the retryable/terminal distinction as an explicit type (see `object-cache/src/range_cache/error.rs`, `otel-ingestion/src/error.rs`, `telemetry-sink/src/http_event_sink.rs`) rather than downcasting an `anyhow::Error` or matching on its message string. Don't convert the `anyhow` majority to `thiserror` — only the specific spots where callers branch on error kind.
 - **Testing**: Use `cargo test -- --nocapture` to see println! output during tests
 - **Formatting**: Always run `cargo fmt` before any commit to ensure consistent code formatting
 - **Format Strings**: Use inline format arguments `format!("value: {variable}")` instead of `format!("value: {}", variable)`
