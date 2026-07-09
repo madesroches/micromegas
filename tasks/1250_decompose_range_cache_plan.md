@@ -148,6 +148,18 @@ already-`pub` items (`RangeError`, `StreamRangesCaller`, the `DEFAULT_*`
 consts) are re-exported from `mod.rs` with `pub use` so the `range_cache::`
 path is unchanged for external callers.
 
+`pub(super)` on a type only covers the type and its methods, not field-literal
+construction of its fields from another module. `BatchState` is the one item
+here built via a bare field literal (`BatchState { entries: StdMutex::new(...) }`)
+from what becomes `fetch.rs`'s `register_missing` helper, so marking the struct
+`pub(super)` is not sufficient by itself. To keep `entries` private (consistent
+with every other scheduler type, which is constructed via `::new`/internal
+fns), `scheduler.rs` gives `BatchState` a `pub(super) fn new(...) -> Self`
+constructor; `register_missing` calls `BatchState::new(...)` instead of the
+field literal. No other moved item is constructed by field literal across the
+`fetch.rs`/`scheduler.rs` boundary, so this is the only extra visibility
+consideration beyond `pub(super)` on types/fns/methods.
+
 Concretely, `mod.rs` will contain:
 ```rust
 mod error;
@@ -175,8 +187,9 @@ independently readable:
   hits/missing partition, sort+dedup of `missing`. Returns early-empty-missing
   naturally (caller checks `missing.is_empty()`).
 - `fn register_missing(&self, key, missing, prio) -> (Vec<u64> /*owned*/, HashMap<u64, Arc<InFlight>>, Option<Arc<BatchState>>)`
-  — phase 2: build `BatchState`, `own_or_join` each missing block, return
-  `owned` + `entries` + `batch`.
+  — phase 2: build `BatchState` via its `BatchState::new(...)` constructor (see
+  [Visibility](#visibility)), `own_or_join` each missing block, return `owned`
+  + `entries` + `batch`.
 - `fn spawn_run_fetch(&self, key, file_size, run, run_entries, run_keys, hint, run_class_tags…)`
   — phase 3: the per-run detached task body (permit acquire → origin GET →
   length check → chunk split → backend put + fulfill → scheduler cleanup, with
@@ -218,7 +231,11 @@ only relocated. No signatures of public methods change.
    `BatchState`, `FetchResult`, `InFlight`, `Ownership`, `FetchScheduler`,
    `FulfillGuard`, `RunPermit`, `any_entry_promoted`, `acquire_run_permit`,
    `reconstruct_shared_error`, `decode_size`. Mark each item used from `mod.rs`
-   or `fetch.rs` as `pub(super)`. Add `mod scheduler; use scheduler::*;` (or
+   or `fetch.rs` as `pub(super)`. Additionally, give `BatchState` a
+   `pub(super) fn new(...) -> Self` constructor and keep its `entries` field
+   private — `pub(super)` on the struct alone doesn't let `fetch.rs`'s
+   `register_missing` build it via field literal (see
+   [Visibility](#visibility)). Add `mod scheduler; use scheduler::*;` (or
    explicit `use`s) to `mod.rs`. Build.
 4. **Extract `fetch.rs` and decompose `fetch_blocks`.** Move `fetch_blocks`
    into a `impl RangeCache` block in `fetch.rs`, along with
