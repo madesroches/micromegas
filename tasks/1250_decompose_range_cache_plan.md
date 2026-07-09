@@ -126,6 +126,15 @@ object-cache/src/range_cache/
                 private fields.
 ```
 
+Import path note: `range_cache.rs` today reaches its sibling top-level modules
+via `super::backend`, `super::blocks`, and `super::metric_tags` (lines 16–18),
+which resolves because `super` = crate root for a module declared directly in
+`lib.rs`. Once that code moves into `range_cache/scheduler.rs` and
+`range_cache/fetch.rs`, `super` instead resolves to the `range_cache` module,
+so those paths must be rewritten to `crate::backend`, `crate::blocks`, and
+`crate::metric_tags`. `mod.rs` itself is unaffected — for it, `super` still
+means the crate root, so its own `super::` imports stay unchanged.
+
 Rationale for this grouping:
 - `error.rs` is the tiny, self-contained public error/caller surface.
 - `scheduler.rs` is the cohesive single-flight + permit machinery
@@ -270,7 +279,11 @@ only relocated. No signatures of public methods change.
    private — `pub(super)` on the struct alone doesn't let `fetch.rs`'s
    `register_missing` build it via field literal (see
    [Visibility](#visibility)). Add `mod scheduler; use scheduler::*;` (or
-   explicit `use`s) to `mod.rs`. Build.
+   explicit `use`s) to `mod.rs`. Since `scheduler.rs` now lives one level
+   deeper than `range_cache.rs` did, rewrite its `super::metric_tags` import
+   (used by `Priority::class_label` for `CLASS_DEMAND`/`CLASS_PREFETCH`) to
+   `crate::metric_tags` (see the File layout section's import path note).
+   Build.
 4. **Extract `fetch.rs` and decompose `fetch_blocks`.** Move `fetch_blocks`
    into a `impl RangeCache` block in `fetch.rs`, along with
    `BACKEND_PROBE_CONCURRENCY`. Mark `fetch_blocks` `pub(super)`, since it is
@@ -278,8 +291,14 @@ only relocated. No signatures of public methods change.
    (same rule as Step 3's scheduler items). Introduce the helpers from the
    Design section (`ProbeOutcome`, `probe_blocks`, `register_missing`,
    `spawn_run_fetch`, `join_demand`, `join_prefetch`) as private items, since
-   they are only called within `fetch.rs`. Add `mod fetch;` to `mod.rs`. Keep
-   every metric name, tag, log line, and branch identical. Build.
+   they are only called within `fetch.rs`. Add `mod fetch;` to `mod.rs`. Like
+   `scheduler.rs` in Step 3, `fetch.rs` now lives one level deeper than
+   `range_cache.rs` did, so rewrite its `super::blocks` (for
+   `block_byte_range`, `coalesce_runs`), `super::backend` (for `FillHint`), and
+   `super::metric_tags` (for `class_tags`, `CLASS_DEMAND`) imports to
+   `crate::blocks`, `crate::backend`, and `crate::metric_tags` respectively
+   (see the File layout section's import path note). Keep every metric name,
+   tag, log line, and branch identical. Build.
 5. **Verify each helper is < ~80 LOC** and `fetch_blocks` orchestrator is small;
    adjust extraction boundaries if any helper is still oversized (e.g. split the
    run success path as noted).
