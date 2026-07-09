@@ -207,7 +207,7 @@ pub fn span_fn(args: TokenStream, input: TokenStream) -> TokenStream {
 
         // Extract and instrument the async block from Box::pin(async move { ... })
         if stmts.len() == 1
-            && let syn::Stmt::Expr(syn::Expr::Call(call_expr)) = &stmts[0]
+            && let syn::Stmt::Expr(syn::Expr::Call(call_expr), _) = &stmts[0]
             && call_expr.args.len() == 1
         {
             let async_block = &call_expr.args[0];

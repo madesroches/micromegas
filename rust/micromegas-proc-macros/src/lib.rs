@@ -5,7 +5,7 @@
 
 use proc_macro2::TokenStream;
 use quote::quote;
-use syn::{ItemFn, Lit, Meta, NestedMeta};
+use syn::{Expr, ExprLit, ItemFn, Lit, Meta};
 
 /// micromegas_main: Creates a tokio runtime with proper micromegas tracing callbacks and telemetry setup
 ///
@@ -79,11 +79,10 @@ fn expand_micromegas_main(
 ) -> Result<TokenStream, syn::Error> {
     use syn::parse::Parser;
 
-    let args: Vec<NestedMeta> =
-        syn::punctuated::Punctuated::<NestedMeta, syn::Token![,]>::parse_terminated
-            .parse2(args)?
-            .into_iter()
-            .collect();
+    let args: Vec<Meta> = syn::punctuated::Punctuated::<Meta, syn::Token![,]>::parse_terminated
+        .parse2(args)?
+        .into_iter()
+        .collect();
 
     let function: ItemFn = syn::parse2(input)?;
 
@@ -113,92 +112,128 @@ fn expand_micromegas_main(
 
     for arg in args {
         match arg {
-            NestedMeta::Meta(Meta::NameValue(nv)) if nv.path.is_ident("interop_max_level") => {
-                if let Lit::Str(lit_str) = &nv.lit {
+            Meta::NameValue(nv) if nv.path.is_ident("interop_max_level") => {
+                if let Expr::Lit(ExprLit {
+                    lit: Lit::Str(lit_str),
+                    ..
+                }) = &nv.value
+                {
                     interop_max_level = Some(lit_str.clone());
                 } else {
                     return Err(syn::Error::new_spanned(
-                        &nv.lit,
+                        &nv.value,
                         "interop_max_level must be a string literal",
                     ));
                 }
             }
-            NestedMeta::Meta(Meta::NameValue(nv)) if nv.path.is_ident("max_level_override") => {
-                if let Lit::Str(lit_str) = &nv.lit {
+            Meta::NameValue(nv) if nv.path.is_ident("max_level_override") => {
+                if let Expr::Lit(ExprLit {
+                    lit: Lit::Str(lit_str),
+                    ..
+                }) = &nv.value
+                {
                     max_level_override = Some(lit_str.clone());
                 } else {
                     return Err(syn::Error::new_spanned(
-                        &nv.lit,
+                        &nv.value,
                         "max_level_override must be a string literal",
                     ));
                 }
             }
-            NestedMeta::Meta(Meta::NameValue(nv)) if nv.path.is_ident("ctrlc_handling") => {
-                if let Lit::Bool(lit_bool) = &nv.lit {
+            Meta::NameValue(nv) if nv.path.is_ident("ctrlc_handling") => {
+                if let Expr::Lit(ExprLit {
+                    lit: Lit::Bool(lit_bool),
+                    ..
+                }) = &nv.value
+                {
                     ctrlc_handling = lit_bool.value();
                 } else {
                     return Err(syn::Error::new_spanned(
-                        &nv.lit,
+                        &nv.value,
                         "ctrlc_handling must be a bool literal",
                     ));
                 }
             }
-            NestedMeta::Meta(Meta::NameValue(nv)) if nv.path.is_ident("local_sink_enabled") => {
-                if let Lit::Bool(lit_bool) = &nv.lit {
+            Meta::NameValue(nv) if nv.path.is_ident("local_sink_enabled") => {
+                if let Expr::Lit(ExprLit {
+                    lit: Lit::Bool(lit_bool),
+                    ..
+                }) = &nv.value
+                {
                     local_sink_enabled = lit_bool.value();
                 } else {
                     return Err(syn::Error::new_spanned(
-                        &nv.lit,
+                        &nv.value,
                         "local_sink_enabled must be a bool literal",
                     ));
                 }
             }
-            NestedMeta::Meta(Meta::NameValue(nv)) if nv.path.is_ident("local_sink_max_level") => {
-                if let Lit::Str(lit_str) = &nv.lit {
+            Meta::NameValue(nv) if nv.path.is_ident("local_sink_max_level") => {
+                if let Expr::Lit(ExprLit {
+                    lit: Lit::Str(lit_str),
+                    ..
+                }) = &nv.value
+                {
                     local_sink_max_level = Some(lit_str.clone());
                 } else {
                     return Err(syn::Error::new_spanned(
-                        &nv.lit,
+                        &nv.value,
                         "local_sink_max_level must be a string literal",
                     ));
                 }
             }
-            NestedMeta::Meta(Meta::NameValue(nv)) if nv.path.is_ident("install_log_capture") => {
-                if let Lit::Bool(lit_bool) = &nv.lit {
+            Meta::NameValue(nv) if nv.path.is_ident("install_log_capture") => {
+                if let Expr::Lit(ExprLit {
+                    lit: Lit::Bool(lit_bool),
+                    ..
+                }) = &nv.value
+                {
                     install_log_capture = lit_bool.value();
                 } else {
                     return Err(syn::Error::new_spanned(
-                        &nv.lit,
+                        &nv.value,
                         "install_log_capture must be a bool literal",
                     ));
                 }
             }
-            NestedMeta::Meta(Meta::NameValue(nv)) if nv.path.is_ident("system_metrics") => {
-                if let Lit::Bool(lit_bool) = &nv.lit {
+            Meta::NameValue(nv) if nv.path.is_ident("system_metrics") => {
+                if let Expr::Lit(ExprLit {
+                    lit: Lit::Bool(lit_bool),
+                    ..
+                }) = &nv.value
+                {
                     system_metrics = lit_bool.value();
                 } else {
                     return Err(syn::Error::new_spanned(
-                        &nv.lit,
+                        &nv.value,
                         "system_metrics must be a bool literal",
                     ));
                 }
             }
-            NestedMeta::Meta(Meta::NameValue(nv)) if nv.path.is_ident("telemetry_url") => {
-                if let Lit::Str(lit_str) = &nv.lit {
+            Meta::NameValue(nv) if nv.path.is_ident("telemetry_url") => {
+                if let Expr::Lit(ExprLit {
+                    lit: Lit::Str(lit_str),
+                    ..
+                }) = &nv.value
+                {
                     telemetry_url = Some(lit_str.value());
                 } else {
                     return Err(syn::Error::new_spanned(
-                        &nv.lit,
+                        &nv.value,
                         "telemetry_url must be a string literal",
                     ));
                 }
             }
-            NestedMeta::Meta(Meta::NameValue(nv)) if nv.path.is_ident("api_key") => {
-                if let Lit::Str(lit_str) = &nv.lit {
+            Meta::NameValue(nv) if nv.path.is_ident("api_key") => {
+                if let Expr::Lit(ExprLit {
+                    lit: Lit::Str(lit_str),
+                    ..
+                }) = &nv.value
+                {
                     api_key = Some(lit_str.value());
                 } else {
                     return Err(syn::Error::new_spanned(
-                        &nv.lit,
+                        &nv.value,
                         "api_key must be a string literal",
                     ));
                 }
