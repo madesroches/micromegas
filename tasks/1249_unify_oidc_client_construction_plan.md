@@ -233,9 +233,13 @@ callers — no test edits needed for construction.
 parameter (`use super::state::AuthState`). Consts are `pub(crate)` (used by
 handlers).
 
-**`claims.rs`** — `ValidatedUser` (+ `From<&AuthContext>`), `UserInfo`,
-`IdTokenClaims`, `CookieTokenRequestParts` (+ `RequestParts` impl),
-`extract_name_from_token`, `extract_subject_from_token`.
+**`claims.rs`** — `ValidatedUser` (+ `From<&AuthContext>`), `UserInfo` (fields
+`pub(crate)` — struct-literal-constructed in `handlers.rs::auth_me`),
+`IdTokenClaims` (module-private), `CookieTokenRequestParts` (struct and its
+`token` field `pub(crate)` — struct-literal-constructed in
+`handlers.rs::auth_me` and `handlers.rs::cookie_auth_middleware`) +
+`RequestParts` impl, `extract_name_from_token`, `extract_subject_from_token`
+(both `pub(crate)` — called from `handlers.rs`).
 
 **`handlers.rs`** — `LoginQuery`, `CallbackQuery`, the five handlers
 (`auth_login`/`auth_callback`/`auth_refresh`/`auth_logout`/`auth_me`),
@@ -265,10 +269,15 @@ pub use handlers::{
 pub use state::AuthState;
 ```
 
-Only items actually referenced externally need `pub use`; internal-only types
-(`IdTokenClaims`, `CookieTokenRequestParts`, `LoginQuery`, `CallbackQuery`,
-cookie consts) stay module-private / `pub(crate)`. Cross-check the re-export
-list against the four-consumer table so every previously-public name resolves;
+Only items actually referenced externally need `pub use`. Within the crate,
+several items cross submodule boundaries and therefore must be `pub(crate)`
+(module-private would not compile): `CookieTokenRequestParts` (struct and its
+`token` field) and the three cookie-name consts (read throughout `handlers.rs`),
+`extract_name_from_token` / `extract_subject_from_token` (called from
+`handlers.rs`), and `UserInfo`'s fields (struct-literal-constructed in
+`handlers.rs::auth_me`). Only `IdTokenClaims`, `LoginQuery`, and `CallbackQuery`
+are genuinely safe to keep module-private. Cross-check the re-export list
+against the four-consumer table so every previously-public name resolves;
 `cargo build` + `cargo test --no-run` will confirm.
 
 ### Module dependency graph (no cycles)
