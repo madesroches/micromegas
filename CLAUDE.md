@@ -26,6 +26,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ### Rust
 - Dependencies in alphabetical order in Cargo.toml files
 - Use `expect()` with descriptive messages instead of `unwrap()`
+- anyhow vs thiserror: see @AI_GUIDELINES.md — `anyhow` by default, `thiserror` only when a caller must branch on the error kind (e.g. retryability)
 - Run `cargo fmt` before any commit
 - Use inline format arguments: `format!("value: {variable}")`
 - Import proc macros through parent crate: `micromegas_tracing::prelude::*`
