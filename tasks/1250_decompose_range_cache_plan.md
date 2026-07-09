@@ -119,8 +119,9 @@ object-cache/src/range_cache/
                 Ownership, FetchScheduler, FulfillGuard, RunPermit,
                 any_entry_promoted, acquire_run_permit, reconstruct_shared_error,
                 decode_size.
-  fetch.rs      `impl RangeCache` block holding `fetch_blocks` decomposed into
-                private helper methods (see below), plus BACKEND_PROBE_CONCURRENCY.
+  fetch.rs      `impl RangeCache` block holding `fetch_blocks` (`pub(super)`,
+                since it's called from `mod.rs`) decomposed into private
+                sub-helper methods (see below), plus BACKEND_PROBE_CONCURRENCY.
                 Child module of range_cache, so it can access RangeCache's
                 private fields.
 ```
@@ -190,6 +191,13 @@ independently readable:
 `fetch_blocks` then reads as: classify → `probe_blocks` → early return →
 `register_missing` → per-run `spawn_run_fetch` → `join_demand`/`join_prefetch`.
 
+`fetch_blocks` itself is called from `stream_ranges_inner` and
+`prefetch_blocks`, both of which stay in `mod.rs`; since a private item in a
+child module isn't visible to its parent, `fetch_blocks` must be marked
+`pub(super)` (like the scheduler items in Step 3). The extracted sub-helpers
+(`probe_blocks`, `register_missing`, `spawn_run_fetch`, `join_demand`,
+`join_prefetch`) are called only from within `fetch.rs` and stay private.
+
 Metric emission (`imetric!`/`fmetric!`), tag classification, and the exact
 control flow (early returns, sort/dedup, prefetch-vs-demand branching, the
 `FulfillGuard`/panic path, detached-task spawning) are preserved verbatim —
@@ -214,10 +222,13 @@ only relocated. No signatures of public methods change.
    explicit `use`s) to `mod.rs`. Build.
 4. **Extract `fetch.rs` and decompose `fetch_blocks`.** Move `fetch_blocks`
    into a `impl RangeCache` block in `fetch.rs`, along with
-   `BACKEND_PROBE_CONCURRENCY`. Introduce the helpers from the Design section
-   (`ProbeOutcome`, `probe_blocks`, `register_missing`, `spawn_run_fetch`,
-   `join_demand`, `join_prefetch`). Add `mod fetch;` to `mod.rs`. Keep every
-   metric name, tag, log line, and branch identical. Build.
+   `BACKEND_PROBE_CONCURRENCY`. Mark `fetch_blocks` `pub(super)`, since it is
+   still called from `stream_ranges_inner` and `prefetch_blocks` in `mod.rs`
+   (same rule as Step 3's scheduler items). Introduce the helpers from the
+   Design section (`ProbeOutcome`, `probe_blocks`, `register_missing`,
+   `spawn_run_fetch`, `join_demand`, `join_prefetch`) as private items, since
+   they are only called within `fetch.rs`. Add `mod fetch;` to `mod.rs`. Keep
+   every metric name, tag, log line, and branch identical. Build.
 5. **Verify each helper is < ~80 LOC** and `fetch_blocks` orchestrator is small;
    adjust extraction boundaries if any helper is still oversized (e.g. split the
    run success path as noted).
