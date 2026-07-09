@@ -104,19 +104,17 @@ architecture level the shape is:
 
 ### Cache warming
 
-Warming is **one mechanism with, today, a single producer** — not two independent paths.
+The cache can be filled ahead of demand through the `POST /prefetch` endpoint on
+`object-cache-srv`: a batch of keys (NDJSON, best-effort, load-shed when the queue is full) is
+filled at background *prefetch* priority. Prefetched blocks are admitted to the **SSD tier
+only** — `FoyerBackend::put` uses `.force().insert()` under the prefetch fill hint
+(`foyer_backend.rs`) — so warming never evicts hot demand data from RAM. `POST /prefetch` is a
+general "warm these keys" primitive that anything can drive.
 
-The **mechanism** is the `POST /prefetch` endpoint on `object-cache-srv`: a batch of keys
-(NDJSON, best-effort, load-shed when the queue is full) is filled at background *prefetch*
-priority. Prefetched blocks are admitted to the **SSD tier only** — `FoyerBackend::put` uses
-`.force().insert()` under the prefetch fill hint (`foyer_backend.rs`) — so warming never evicts
-hot demand data from RAM. `POST /prefetch` is a general "warm these keys" primitive that anything
-can drive.
-
-The **only producer wired into the system today** is **write-time warming (notify-by-key)**.
-After a writer commits a new partition durably to origin *and* to the `lakehouse_partitions`
-table, it POSTs the partition's key to `/prefetch` so the cache pulls it before the follow-up
-query asks for it. This is fire-and-forget off the write path: `DataLakeConnection::warm_object`
+Its one caller today is **write-time warming (notify-by-key)**. After a writer commits a new
+partition durably to origin *and* to the `lakehouse_partitions` table, it POSTs the partition's
+key to `/prefetch` so the cache pulls it before the follow-up query asks for it. This is
+fire-and-forget off the write path: `DataLakeConnection::warm_object`
 (`ingestion/src/data_lake_connection.rs`) spawns a detached task, so a slow or unreachable cache
 never delays or fails the write; its one production caller is the partition-write path
 (`write_partition.rs`). `warm_object` is itself a general "warm any object by key" primitive, so
