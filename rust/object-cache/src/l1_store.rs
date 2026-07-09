@@ -19,9 +19,11 @@ use crate::range_cache::{
 
 /// Environment variable sizing the shared in-process L1 RAM budget, in MB.
 /// `0` disables L1 (`l1_wrap` then returns the origin store unchanged).
-const ENV_L1_CACHE_MB: &str = "MICROMEGAS_L1_CACHE_MB";
+/// Part of the `MICROMEGAS_OBJECT_CACHE_*` family: `_L1_MB` sizes this
+/// in-process tier, `_RAM_MB` sizes the `object-cache-srv`'s own RAM tier.
+const ENV_OBJECT_CACHE_L1_MB: &str = "MICROMEGAS_OBJECT_CACHE_L1_MB";
 /// Matches the old whole-file `FileCache`'s default budget.
-const DEFAULT_L1_CACHE_MB: u64 = 200;
+const DEFAULT_OBJECT_CACHE_L1_MB: u64 = 200;
 
 /// Total number of origin GETs the in-process L1 cache allows concurrently.
 /// L1 issues only demand reads (`RangeCache::get_range`/`get_ranges`), so
@@ -38,23 +40,23 @@ const L1_TOTAL_FETCH_PERMITS: usize = 16;
 const L1_DEMAND_RESERVED_FETCH_PERMITS: usize = 4;
 
 /// The shared in-process L1 RAM budget, lazily sized once (on first use) from
-/// `MICROMEGAS_L1_CACHE_MB`. `None` when L1 is disabled (budget `0`).
+/// `MICROMEGAS_OBJECT_CACHE_L1_MB`. `None` when L1 is disabled (budget `0`).
 static SHARED_L1_BACKEND: OnceLock<Option<Arc<BoundedMemoryBackend>>> = OnceLock::new();
 
 fn shared_l1_backend() -> Option<Arc<BoundedMemoryBackend>> {
     SHARED_L1_BACKEND
         .get_or_init(|| {
-            let mb = match std::env::var(ENV_L1_CACHE_MB) {
+            let mb = match std::env::var(ENV_OBJECT_CACHE_L1_MB) {
                 Ok(s) => s.parse::<u64>().unwrap_or_else(|_| {
                     warn!(
-                        "Invalid {ENV_L1_CACHE_MB} value '{s}', using default {DEFAULT_L1_CACHE_MB} MB"
+                        "Invalid {ENV_OBJECT_CACHE_L1_MB} value '{s}', using default {DEFAULT_OBJECT_CACHE_L1_MB} MB"
                     );
-                    DEFAULT_L1_CACHE_MB
+                    DEFAULT_OBJECT_CACHE_L1_MB
                 }),
-                Err(_) => DEFAULT_L1_CACHE_MB,
+                Err(_) => DEFAULT_OBJECT_CACHE_L1_MB,
             };
             if mb == 0 {
-                info!("{ENV_L1_CACHE_MB}=0, in-process L1 cache disabled");
+                info!("{ENV_OBJECT_CACHE_L1_MB}=0, in-process L1 cache disabled");
                 None
             } else {
                 info!("in-process L1 cache enabled, budget={mb}MB");
@@ -70,7 +72,7 @@ fn shared_l1_backend() -> Option<Arc<BoundedMemoryBackend>> {
 /// bounded RAM backend, namespaced by `ns` (e.g. `"lakehouse"`, `"static"`) so
 /// distinct wrap sites share one RAM budget without their keys colliding.
 ///
-/// Returns `origin` unchanged when L1 is disabled (`MICROMEGAS_L1_CACHE_MB=0`).
+/// Returns `origin` unchanged when L1 is disabled (`MICROMEGAS_OBJECT_CACHE_L1_MB=0`).
 pub fn l1_wrap(origin: Arc<dyn ObjectStore>, ns: &str) -> Arc<dyn ObjectStore> {
     match shared_l1_backend() {
         Some(backend) => Arc::new(L1CacheStore::new(origin, backend, ns.to_string())),

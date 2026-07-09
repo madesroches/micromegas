@@ -189,9 +189,11 @@ origin store. An L1 miss falls through to whatever store L1 wraps — this cache
 [client opt-in](#client-opt-in) is configured, otherwise the origin store directly — so the
 L1 → L2 (this service) → origin tiering still holds; L1 is just an additional tier in front of it.
 
-L1 is sized by `MICROMEGAS_L1_CACHE_MB` (default `200`; `0` disables it) in the query process's own
-environment — this is unrelated to `MICROMEGAS_OBJECT_CACHE_RAM_MB` above, which sizes this
-server's own RAM tier.
+L1 is sized by `MICROMEGAS_OBJECT_CACHE_L1_MB` (default `200`; `0` disables it) in the query
+process's own environment. It belongs to the same `MICROMEGAS_OBJECT_CACHE_*` family as this
+server's knobs — the two are sibling tiers of one object-cache subsystem: `_L1_MB` sizes the
+in-process L1 tier, while `MICROMEGAS_OBJECT_CACHE_RAM_MB` above sizes this server's own RAM tier.
+Set them independently.
 
 L1 covers exactly two read paths, both read-repeatedly on the query hot path:
 
