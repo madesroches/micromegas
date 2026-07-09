@@ -148,7 +148,18 @@ already-`pub` items (`RangeError`, `StreamRangesCaller`, the `DEFAULT_*`
 consts) are re-exported from `mod.rs` with `pub use` so the `range_cache::`
 path is unchanged for external callers.
 
-`pub(super)` on a type only covers the type and its methods, not field-literal
+In Rust, marking a type `pub(super)` changes only the visibility of the type
+itself — it does **not** change the visibility of any of its inherent methods.
+Each inherent method carries its own independent visibility modifier, so every
+currently-private method that ends up called across the new module boundary
+must be marked `pub(super)` individually, in addition to the type. Concretely,
+these inherent methods are called from `mod.rs` and/or `fetch.rs` and each
+needs its own `pub(super)` in `scheduler.rs`: `FetchScheduler::{new,
+own_or_join, remove_entry, fetch_budget_stats, inflight_len}`,
+`InFlight::{fulfill, join}`, `FulfillGuard::{new, disarm}`, and
+`Priority::class_label`.
+
+Separately, `pub(super)` on a type also does not cover field-literal
 construction of its fields from another module. `BatchState` is the one item
 here built via a bare field literal (`BatchState { entries: StdMutex::new(...) }`)
 from what becomes `fetch.rs`'s `register_missing` helper, so marking the struct
@@ -230,8 +241,15 @@ only relocated. No signatures of public methods change.
 3. **Extract `scheduler.rs`.** Move `Priority`, `effective_priority`,
    `BatchState`, `FetchResult`, `InFlight`, `Ownership`, `FetchScheduler`,
    `FulfillGuard`, `RunPermit`, `any_entry_promoted`, `acquire_run_permit`,
-   `reconstruct_shared_error`, `decode_size`. Mark each item used from `mod.rs`
-   or `fetch.rs` as `pub(super)`. Additionally, give `BatchState` a
+   `reconstruct_shared_error`, `decode_size`. Mark each moved top-level item
+   used from `mod.rs` or `fetch.rs` as `pub(super)`. Marking a type
+   `pub(super)` does **not** carry over to its inherent methods — each method
+   has independent visibility — so also mark each of these currently-private
+   methods `pub(super)` individually, since they are called across the new
+   module boundary: `FetchScheduler::{new, own_or_join, remove_entry,
+   fetch_budget_stats, inflight_len}`, `InFlight::{fulfill, join}`,
+   `FulfillGuard::{new, disarm}`, and `Priority::class_label` (see
+   [Visibility](#visibility)). Additionally, give `BatchState` a
    `pub(super) fn new(...) -> Self` constructor and keep its `entries` field
    private — `pub(super)` on the struct alone doesn't let `fetch.rs`'s
    `register_missing` build it via field literal (see
