@@ -4,6 +4,9 @@
 
 It only caches **reads**. Writes, deletes, and listings always go straight to the origin store — see [What gets cached](#what-gets-cached) below.
 
+!!! info "Looking for the *why*, not the *how*?"
+    This is an operator/deployment guide. For an architecture-level view of how the cache tiers fit together — the in-process L1 cache, this L2 server, the metadata cache, and why there is no invalidation — see [Caching Architecture](../architecture/caching.md).
+
 ## Quick start with the local helper script
 
 ```bash
@@ -133,7 +136,7 @@ The endpoint returns immediately with `202 Accepted` and a small JSON body:
 - `rejected` — items that failed key/prefix or range validation and were skipped; the rest of the batch still proceeds.
 - `dropped` — items load-shed because the queue (`MICROMEGAS_OBJECT_CACHE_PREFETCH_QUEUE_CAPACITY`) was full. Prefetch is best-effort: a full queue never blocks the caller or the response status.
 
-Fills run at the same `Prefetch` priority described in [Fetch scheduling & memory bounds](#fetch-scheduling--memory-bounds) above, so a large prefetch batch never starves a concurrent demand read. Prefetched blocks are admitted to the SSD tier only (not the RAM tier), so they don't compete with hot demand data for RAM residency; a later demand read against a prefetched block is served from SSD.
+Fills run at the same `Prefetch` priority described in [Fetch scheduling & memory bounds](#fetch-scheduling-memory-bounds) above, so a large prefetch batch never starves a concurrent demand read. Prefetched blocks are admitted to the SSD tier only (not the RAM tier), so they don't compete with hot demand data for RAM residency; a later demand read against a prefetched block is served from SSD.
 
 ## Write-time warming
 

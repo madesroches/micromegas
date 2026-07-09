@@ -126,7 +126,9 @@ nav:
     - Blender Add-on: blender/index.md
     - Native SDK (C ABI): native/index.md
   - Operations:
-    - Architecture: architecture/index.md
+    - Architecture:
+        - Overview: architecture/index.md
+        - Caching: architecture/caching.md
     - Administration:
         - Authentication: admin/authentication.md
         - Web App Deployment: admin/web-app.md
