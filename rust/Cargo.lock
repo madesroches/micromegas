@@ -3699,7 +3699,6 @@ dependencies = [
  "parquet",
  "pin-project",
  "prost 0.14.4",
- "rand 0.9.4",
  "serial_test",
  "sqlx",
  "tempfile",

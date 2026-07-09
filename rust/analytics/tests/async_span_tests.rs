@@ -3,15 +3,12 @@ use micromegas_tracing::event::TracingBlock;
 use micromegas_tracing::intern_string::intern_string;
 use micromegas_tracing::prelude::*;
 use micromegas_tracing::test_utils::init_in_memory_tracing;
-use rand::Rng;
 use serial_test::serial;
 use std::time::Duration;
 use tokio::time::sleep;
 
 async fn manual_inner() {
-    let ms = rand::rng().random_range(0..=1000);
-    eprintln!("wainting for {ms} ms");
-    sleep(Duration::from_millis(ms)).await;
+    sleep(Duration::from_millis(1)).await;
 }
 
 async fn manual_outer() {
@@ -23,9 +20,7 @@ async fn manual_outer() {
 
 #[span_fn]
 async fn macro_inner() {
-    let ms = rand::rng().random_range(0..=1000);
-    eprintln!("waiting for {ms} ms");
-    sleep(Duration::from_millis(ms)).await;
+    sleep(Duration::from_millis(1)).await;
 }
 
 #[span_fn]
@@ -146,9 +141,8 @@ fn sync_span_macro() {
 }
 
 async fn named_inner_work(operation: &'static str) {
-    let ms = rand::rng().random_range(0..=500);
-    eprintln!("doing {} for {} ms", operation, ms);
-    sleep(Duration::from_millis(ms)).await;
+    eprintln!("doing {operation}");
+    sleep(Duration::from_millis(1)).await;
 }
 
 async fn test_named_spans() {
