@@ -34,6 +34,20 @@ struct ProbeOutcome {
     missing: Vec<u64>,
 }
 
+/// Result of phase 2 (`register_missing`): the single-flight registration of
+/// every missing block.
+struct RegisteredBlocks {
+    /// The missing blocks this call owns (is responsible for fetching from
+    /// origin); a sorted subsequence of the `missing` slice passed in.
+    owned: Vec<u64>,
+    /// The in-flight entry for every missing block, owned or joined, keyed by
+    /// block index.
+    entries: HashMap<u64, Arc<InFlight>>,
+    /// The batch handle for a prefetch call (`None` on the demand path); lets a
+    /// demand joiner promote every sibling of a scattered prefetch call.
+    batch: Option<Arc<BatchState>>,
+}
+
 impl RangeCache {
     /// Fetch `indices` (block indices within `key`, sized `file_size`) at the
     /// given priority, returning the bytes for every requested block on the
@@ -68,7 +82,11 @@ impl RangeCache {
             return Ok(hits);
         }
 
-        let (owned, entries, _batch) = self.register_missing(key, &missing, prio);
+        let RegisteredBlocks {
+            owned,
+            entries,
+            batch: _batch,
+        } = self.register_missing(key, &missing, prio);
 
         let hint = match prio {
             Priority::Demand => FillHint::Demand,
@@ -182,17 +200,7 @@ impl RangeCache {
     /// origin) and joined (some other call already owns it). `missing` is
     /// taken by reference so `fetch_blocks` retains ownership of the `Vec`
     /// for the `join_demand` call in phase 4.
-    #[allow(clippy::type_complexity)]
-    fn register_missing(
-        &self,
-        key: &str,
-        missing: &[u64],
-        prio: Priority,
-    ) -> (
-        Vec<u64>,
-        HashMap<u64, Arc<InFlight>>,
-        Option<Arc<BatchState>>,
-    ) {
+    fn register_missing(&self, key: &str, missing: &[u64], prio: Priority) -> RegisteredBlocks {
         // Only prefetch calls carry a batch handle: it's what lets a demand
         // joiner promote every sibling of a scattered prefetch call, not
         // just the one block it happened to touch (see `promote_whole_batch`).
@@ -219,7 +227,11 @@ impl RangeCache {
         // Every member of this batch (owned or joined) was recorded as a
         // promotion sibling inside `own_or_join`, under the inflight lock,
         // so no entry became joinable before the batch list held it.
-        (owned, entries, batch)
+        RegisteredBlocks {
+            owned,
+            entries,
+            batch,
+        }
     }
 
     /// Phase 3: spawn the detached task that owns one coalesced run of
