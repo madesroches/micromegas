@@ -113,7 +113,8 @@ uses `range_cache/mod.rs`.
 ```
 object-cache/src/range_cache/
   mod.rs        RangeCache struct + its public methods + pub re-exports of the
-                submodule items that form the crate-facing API; module docs.
+                submodule items that form the crate-facing API; the struct's
+                doc comment travels with it.
   error.rs      RangeError, StreamRangesCaller (+ emit_error_metric).
   scheduler.rs  Priority, effective_priority, BatchState, FetchResult, InFlight,
                 Ownership, FetchScheduler, FulfillGuard, RunPermit,
@@ -138,9 +139,12 @@ means the crate root, so its own `super::` imports stay unchanged.
 Rationale for this grouping:
 - `error.rs` is the tiny, self-contained public error/caller surface.
 - `scheduler.rs` is the cohesive single-flight + permit machinery
-  (`FetchScheduler`, `InFlight`, promotion, permits) plus the two pure decode/
-  reconstruct helpers it collaborates with. This is the bulk of the non-
-  `RangeCache` code and has a clear single responsibility.
+  (`FetchScheduler`, `InFlight`, promotion, permits) plus `decode_size` and
+  `reconstruct_shared_error`, two small pure helpers shared across submodules
+  (`decode_size` by `size()` in `mod.rs`; `reconstruct_shared_error` by
+  `size()` in `mod.rs` and by `fetch.rs`) that are grouped here rather than
+  given their own file. This is the bulk of the non-`RangeCache` code and has
+  a clear single responsibility.
 - `fetch.rs` isolates the one giant method and its new sub-helpers, so `mod.rs`
   stays focused on the cache's public surface and the streaming/assembly logic.
 - Constants (`DEFAULT_*`, `DEMAND_WINDOW_BLOCKS`) stay in `mod.rs` (they are the
@@ -224,10 +228,12 @@ independently readable:
   — phase 1: bounded-concurrency backend probe, length-mismatch healing,
   hits/missing partition, sort+dedup of `missing`. Returns early-empty-missing
   naturally (caller checks `missing.is_empty()`).
-- `fn register_missing(&self, key, missing, prio) -> (Vec<u64> /*owned*/, HashMap<u64, Arc<InFlight>>, Option<Arc<BatchState>>)`
+- `fn register_missing(&self, key, missing: &[u64], prio) -> (Vec<u64> /*owned*/, HashMap<u64, Arc<InFlight>>, Option<Arc<BatchState>>)`
   — phase 2: build `BatchState` via its `BatchState::new(...)` constructor (see
   [Visibility](#visibility)), `own_or_join` each missing block, return `owned`
-  + `entries` + `batch`.
+  + `entries` + `batch`. Takes `missing` by reference (rather than by value) so
+  `fetch_blocks` retains ownership of the `Vec<u64>` for the `join_demand` call
+  in phase 4.
 - `fn spawn_run_fetch(&self, key, file_size, run, run_entries, run_keys, hint, run_class_tags…)`
   — phase 3: the per-run detached task body (permit acquire → origin GET →
   length check → chunk split → backend put + fulfill → scheduler cleanup, with
@@ -262,9 +268,8 @@ only relocated. No signatures of public methods change.
    compiles unchanged before splitting.
 2. **Extract `error.rs`.** Move `RangeError` and `StreamRangesCaller` (+
    `emit_error_metric`). Add `mod error; pub use error::{RangeError, StreamRangesCaller};`
-   to `mod.rs`. `emit_error_metric` is only called within the crate; keep it
-   `pub(crate)` (it is currently a private method — its callers are `mod.rs`
-   methods, so `pub(super)` suffices). Build.
+   to `mod.rs`. `emit_error_metric` is currently a private method; its callers
+   are `mod.rs` methods, so mark it `pub(super)`. Build.
 3. **Extract `scheduler.rs`.** Move `Priority`, `effective_priority`,
    `BatchState`, `FetchResult`, `InFlight`, `Ownership`, `FetchScheduler`,
    `FulfillGuard`, `RunPermit`, `any_entry_promoted`, `acquire_run_permit`,
@@ -354,7 +359,7 @@ No test files change (the public API is preserved). No other crate changes.
 ## Documentation
 
 No user-facing or `mkdocs/` documentation covers `range_cache` internals (it is
-an implementation detail of the object cache). The module-level doc comment on
+an implementation detail of the object cache). The struct-level doc comment on
 `RangeCache` (current lines 487–510) is preserved and stays with the struct in
 `mod.rs`. No documentation changes required.
 
@@ -372,7 +377,7 @@ This is behavior-preserving, so the existing test suites are the specification:
 - `cargo clippy --workspace -- -D warnings` — must be clean (acceptance
   criterion).
 - `cargo fmt` — required before commit.
-- `python3 build/rust_ci.py` from `rust/` — full CI parity (fmt check, clippy,
+- `python3 ../build/rust_ci.py` from `rust/` — full CI parity (fmt check, clippy,
   tests) as a final gate.
 
 Success = all of the above green with **no test edits**. If any test needs
