@@ -5,25 +5,25 @@ use serial_test::serial;
 use std::time::Duration;
 use tokio::time::sleep;
 
-/// A function that deliberately causes thread parking through async sleep.
-/// This allows us to test that the on_thread_park callback is properly
-/// flushing events when threads become idle.
+/// An instrumented async function that awaits a short sleep, so the
+/// resulting span runs across an `.await` point on a tokio worker thread.
 #[span_fn]
-async fn park_inducing_function() {
-    eprintln!("Starting async work that will cause thread parking");
+async fn instrumented_async_work() {
+    eprintln!("Starting instrumented async work");
 
-    // This sleep should cause the thread to park, triggering on_thread_park callback
+    // The await point lets the task be rescheduled onto any worker thread.
     sleep(Duration::from_millis(100)).await;
 
     eprintln!("Finished async work");
 }
 
-/// Tests that the tokio runtime's on_thread_park callback properly flushes
-/// tracing events when threads become idle. This ensures low-latency event
-/// processing by not waiting for thread destruction to flush buffers.
+/// Tests that span events recorded on tokio worker threads are flushed when
+/// the runtime shuts down (worker threads stop). Events are buffered
+/// per-thread and only flushed on `on_thread_stop`, which `drop(runtime)`
+/// triggers here.
 #[test]
 #[serial]
-fn test_thread_park_flush() {
+fn test_worker_thread_span_flush() {
     let guard = init_in_memory_tracing();
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -37,14 +37,14 @@ fn test_thread_park_flush() {
         .expect("failed to build tokio runtime");
 
     runtime.block_on(async {
-        eprintln!("Spawning tasks that will cause thread parking");
+        eprintln!("Spawning tasks that exercise instrumented async work");
 
-        // Spawn multiple tasks to increase chance of thread parking
+        // Spawn multiple tasks across the worker thread pool
         let tasks = (0..4)
             .map(|i| {
                 tokio::task::spawn(async move {
                     eprintln!("Task {} starting", i);
-                    park_inducing_function().await;
+                    instrumented_async_work().await;
                     eprintln!("Task {} finished", i);
                 })
             })
@@ -70,7 +70,7 @@ fn test_thread_park_flush() {
 
     eprintln!("Total events recorded: {}", total_events);
 
-    // Each call to park_inducing_function should generate 2 events (begin + end span)
+    // Each call to instrumented_async_work should generate 2 events (begin + end span)
     // With 4 tasks, we expect at least 8 events
     assert!(
         total_events >= 8,

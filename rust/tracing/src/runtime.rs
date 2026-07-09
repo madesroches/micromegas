@@ -11,8 +11,8 @@ use crate::dispatch::{flush_thread_buffer, init_thread_stream, unregister_thread
 /// This trait provides a convenient way to configure tokio runtimes with the proper
 /// thread lifecycle callbacks for micromegas tracing, ensuring that:
 /// - Thread streams are initialized when worker threads start
-/// - Event buffers are flushed when threads park (become idle)
-/// - Thread streams are properly unregistered when threads stop
+/// - Event buffers are flushed and thread streams are unregistered when
+///   worker threads stop
 ///
 /// This is useful in both production applications (like ingestion servers) and tests
 /// where you need proper tracing integration with tokio's thread pool.
@@ -35,8 +35,8 @@ pub trait TracingRuntimeExt {
     ///
     /// This method adds the following callbacks:
     /// - `on_thread_start`: Initializes thread-local tracing stream
-    /// - `on_thread_park`: Flushes event buffer when thread becomes idle
-    /// - `on_thread_stop`: Unregisters thread stream to prevent dangling pointers
+    /// - `on_thread_stop`: Flushes the event buffer and unregisters the
+    ///   thread stream to prevent dangling pointers
     fn with_tracing_callbacks(&mut self) -> &mut Self;
 
     /// Configures the runtime builder with tracing callbacks and custom thread start logic.

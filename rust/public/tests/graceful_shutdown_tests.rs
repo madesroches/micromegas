@@ -153,16 +153,21 @@ async fn cron_loop_drains() {
 
     struct SlowTask {
         finished: Arc<AtomicBool>,
+        started: Arc<Notify>,
     }
 
     #[async_trait]
     impl TaskCallback for SlowTask {
         async fn run(&self, _: DateTime<Utc>) -> anyhow::Result<()> {
+            self.started.notify_one();
             tokio::time::sleep(Duration::from_millis(300)).await;
             self.finished.store(true, Ordering::SeqCst);
             Ok(())
         }
     }
+
+    let started = Arc::new(Notify::new());
+    let started2 = started.clone();
 
     // offset = -period so next_run = start of current hour window <= now
     let task = CronTask::new(
@@ -171,6 +176,7 @@ async fn cron_loop_drains() {
         TimeDelta::seconds(-3600),
         Arc::new(SlowTask {
             finished: finished2,
+            started: started2,
         }),
     )
     .expect("create task");
@@ -182,8 +188,8 @@ async fn cron_loop_drains() {
         notify2.notified().await
     }));
 
-    // Give the task time to start executing
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    // Trigger shutdown only after the task has started executing
+    started.notified().await;
     notify.notify_one();
 
     runner.await.expect("runner task");
