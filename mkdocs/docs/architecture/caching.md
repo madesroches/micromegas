@@ -131,11 +131,6 @@ Despite the name, `PartitionCache` is **not** part of the caching subsystem. It 
 in-memory snapshot of the partition rows a query planned against, with no cross-query lifetime and
 no eviction. It is called out here only so it is not confused with the object or metadata caches.
 
-### Out of scope
-
-Caches that affect neither query performance nor object-storage cost are intentionally not covered
-here — e.g. the OIDC/JWKS auth-key cache and the data-source config cache.
-
 ## Explicit non-caches
 
 Two "caches you might expect but won't find" are design decisions worth recording:
