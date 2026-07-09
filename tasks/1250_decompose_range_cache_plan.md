@@ -183,13 +183,18 @@ that will surface any visibility gap this enumeration misses.
 
 Separately, `pub(super)` on a type also does not cover field-literal
 construction of its fields from another module. `BatchState` is the one item
-here built via a bare field literal (`BatchState { entries: StdMutex::new(...) }`)
-from what becomes `fetch.rs`'s `register_missing` helper, so marking the struct
-`pub(super)` is not sufficient by itself. To keep `entries` private (consistent
-with every other scheduler type, which is constructed via `::new`/internal
-fns), `scheduler.rs` gives `BatchState` a `pub(super) fn new(...) -> Self`
-constructor; `register_missing` calls `BatchState::new(...)` instead of the
-field literal. No other moved item is constructed by field literal across the
+here built via a bare field literal (`BatchState { entries: StdMutex::new(...) }`),
+and that construction site only moves into `fetch.rs`'s `register_missing`
+helper in Step 4 — at the end of Step 3, `fetch_blocks` (the sole call site)
+still lives in `mod.rs`. So the `entries`-private + constructor change is
+deferred to Step 4: in Step 3, `BatchState` moves to `scheduler.rs` but its
+`entries` field stays `pub(super)`, so the still-in-`mod.rs` field literal
+keeps compiling. In Step 4, once the field literal relocates into
+`register_missing`, `scheduler.rs` gives `BatchState` a `pub(super) fn
+new(...) -> Self` constructor, `register_missing` calls `BatchState::new(...)`
+instead of the field literal, and `entries` becomes private (consistent with
+every other scheduler type, which is constructed via `::new`/internal fns). No
+other moved item is constructed by field literal across the
 `fetch.rs`/`scheduler.rs` boundary, so this is the only extra visibility
 consideration beyond `pub(super)` on types/fns/methods.
 
@@ -274,11 +279,13 @@ only relocated. No signatures of public methods change.
    [Visibility](#visibility)). Also mark `RunPermit` itself `pub(super)` — it
    is the one moved type whose only cross-module use is as
    `acquire_run_permit`'s return type, and it is never named explicitly in
-   `fetch.rs` (see [Visibility](#visibility)). Additionally, give `BatchState` a
-   `pub(super) fn new(...) -> Self` constructor and keep its `entries` field
-   private — `pub(super)` on the struct alone doesn't let `fetch.rs`'s
-   `register_missing` build it via field literal (see
-   [Visibility](#visibility)). Add `mod scheduler; use scheduler::*;` (or
+   `fetch.rs` (see [Visibility](#visibility)). Keep `BatchState`'s `entries`
+   field `pub(super)` for now (not private) — its only construction site is
+   still the field literal in `mod.rs`'s `fetch_blocks` at this point
+   (`fetch_blocks` doesn't move to `fetch.rs` until Step 4), so making
+   `entries` private here would break that field literal before its call site
+   is converted to a constructor call (see [Visibility](#visibility)). Add
+   `mod scheduler; use scheduler::*;` (or
    explicit `use`s) to `mod.rs`. Since `scheduler.rs` now lives one level
    deeper than `range_cache.rs` did, rewrite its `super::metric_tags` import
    (used by `Priority::class_label` for `CLASS_DEMAND`/`CLASS_PREFETCH`) to
@@ -291,7 +298,13 @@ only relocated. No signatures of public methods change.
    (same rule as Step 3's scheduler items). Introduce the helpers from the
    Design section (`ProbeOutcome`, `probe_blocks`, `register_missing`,
    `spawn_run_fetch`, `join_demand`, `join_prefetch`) as private items, since
-   they are only called within `fetch.rs`. Add `mod fetch;` to `mod.rs`. Like
+   they are only called within `fetch.rs`. This step also moves `BatchState`'s
+   field-literal construction (`BatchState { entries: StdMutex::new(...) }`)
+   into `register_missing`; at this point, add `scheduler.rs`'s `pub(super)
+   fn new(...) -> Self` constructor for `BatchState`, switch `register_missing`
+   to call `BatchState::new(...)` instead of the field literal, and change
+   `entries` from `pub(super)` (set in Step 3) to private (see
+   [Visibility](#visibility)). Add `mod fetch;` to `mod.rs`. Like
    `scheduler.rs` in Step 3, `fetch.rs` now lives one level deeper than
    `range_cache.rs` did, so rewrite its `super::blocks` (for
    `block_byte_range`, `coalesce_runs`), `super::backend` (for `FillHint`), and
