@@ -118,10 +118,11 @@ object-cache/src/range_cache/
   scheduler.rs  Priority, effective_priority, BatchState, FetchResult, InFlight,
                 Ownership, FetchScheduler, FulfillGuard, RunPermit,
                 any_entry_promoted, acquire_run_permit, reconstruct_shared_error,
-                decode_size, BACKEND_PROBE_CONCURRENCY.
+                decode_size.
   fetch.rs      `impl RangeCache` block holding `fetch_blocks` decomposed into
-                private helper methods (see below). Child module of range_cache,
-                so it can access RangeCache's private fields.
+                private helper methods (see below), plus BACKEND_PROBE_CONCURRENCY.
+                Child module of range_cache, so it can access RangeCache's
+                private fields.
 ```
 
 Rationale for this grouping:
@@ -134,9 +135,8 @@ Rationale for this grouping:
   stays focused on the cache's public surface and the streaming/assembly logic.
 - Constants (`DEFAULT_*`, `DEMAND_WINDOW_BLOCKS`) stay in `mod.rs` (they are the
   public knobs and belong with the type), re-exported implicitly by being `pub`
-  at module root. `BACKEND_PROBE_CONCURRENCY` moves to `scheduler.rs`… no —
-  it's used only by `fetch_blocks`, so it lives in `fetch.rs`. (Final home:
-  wherever its sole user ends up; see Implementation Steps.)
+  at module root. `BACKEND_PROBE_CONCURRENCY` lives in `fetch.rs`, since
+  `fetch_blocks` is its sole user.
 
 ### Visibility
 
