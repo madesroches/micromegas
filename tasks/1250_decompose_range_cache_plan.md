@@ -159,6 +159,19 @@ own_or_join, remove_entry, fetch_budget_stats, inflight_len}`,
 `InFlight::{fulfill, join}`, `FulfillGuard::{new, disarm}`, and
 `Priority::class_label`.
 
+`RunPermit` itself needs the same treatment for a different reason: it is the
+one moved type whose only cross-module use is as `acquire_run_permit`'s return
+type, so it must be `pub(super)` right alongside that function — without it,
+rustc reports `RunPermit` as private at every call site in `fetch.rs`, even
+though `RunPermit` is never named explicitly there (the permit is bound by
+inference and dropped).
+
+The definitive rule behind all of the above: any item — type, free fn,
+inherent method, or field — referenced from another submodule, including only
+as a parameter or return type, must be `pub(super)`; the build-after-each-step
+compilation gate in the Implementation Steps is the authoritative backstop
+that will surface any visibility gap this enumeration misses.
+
 Separately, `pub(super)` on a type also does not cover field-literal
 construction of its fields from another module. `BatchState` is the one item
 here built via a bare field literal (`BatchState { entries: StdMutex::new(...) }`)
@@ -249,7 +262,10 @@ only relocated. No signatures of public methods change.
    module boundary: `FetchScheduler::{new, own_or_join, remove_entry,
    fetch_budget_stats, inflight_len}`, `InFlight::{fulfill, join}`,
    `FulfillGuard::{new, disarm}`, and `Priority::class_label` (see
-   [Visibility](#visibility)). Additionally, give `BatchState` a
+   [Visibility](#visibility)). Also mark `RunPermit` itself `pub(super)` — it
+   is the one moved type whose only cross-module use is as
+   `acquire_run_permit`'s return type, and it is never named explicitly in
+   `fetch.rs` (see [Visibility](#visibility)). Additionally, give `BatchState` a
    `pub(super) fn new(...) -> Self` constructor and keep its `entries` field
    private — `pub(super)` on the struct alone doesn't let `fetch.rs`'s
    `register_missing` build it via field literal (see
