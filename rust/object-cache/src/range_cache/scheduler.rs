@@ -113,9 +113,13 @@ impl InFlight {
         if self.fulfilled.swap(true, Ordering::AcqRel) {
             return;
         }
-        // A send error just means every waiter already dropped its
-        // receiver, which is harmless.
-        let _ = self.result.send(Some(result));
+        // `send_replace`, not `send`: `send` drops the value without storing
+        // it when the channel currently has zero receivers, and joiners
+        // subscribe lazily inside `join()`. A fetch task that completes
+        // before any joiner's `subscribe()` would lose the result and hang
+        // every later joiner forever (issue #1259). `send_replace` stores
+        // the value unconditionally.
+        self.result.send_replace(Some(result));
     }
 
     /// Wait for the fetch to complete, returning immediately if it already
