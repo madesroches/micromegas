@@ -30,7 +30,6 @@ This file documents the historical progress of the Micromegas project. For curre
   * Upgrade `opentelemetry-proto` to 0.32 to resolve GHSA-w9wp-h8wv-79jx; treat the new profiling-only string-interning fields (`*_strindex`) as absent on non-profiling OTLP signals, per the OTLP spec (#336)
   * Harden the transit block parsing path (`parser.rs`, `dyn_string.rs`, `serialize.rs`, `parsing.rs`) against malformed/truncated payloads: replace unchecked arithmetic, slicing, and raw-pointer reads with checked variants that return `Err` instead of panicking or triggering UB; add a choke-point error log on parse failure and extensive corrupt-input regression tests (#1192)
 * **Build:**
-  * Fix alphabetical ordering of two dependency pairs (`quote`/`rand`, `thread-id`/`thrift`) in `rust/Cargo.toml` workspace dependencies (#1254)
   * Add `dev_worker.py --size` to report the runner container and cache volume sizes, and make `--cleanup` also delete the cache volume
   * Fix `build_blender_plugin.py` artifact lookup when `CARGO_TARGET_DIR` is set; add `x86_64-pc-windows-gnu` to the pinned toolchain so the Windows cross-target installs automatically on fresh checkouts
   * Add Docker Hub publish pipeline for release: `build_docker_images.py` gains an arm64 buildx `--push` path and an `--all-arches` flag that builds both architectures in one run, with `--push` independently controlling publishing; sync the release runbook with a both-arch Docker Images phase (#1165)
