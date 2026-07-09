@@ -11,7 +11,7 @@ use micromegas_tracing::prelude::*;
 use micromegas_tracing::property_set::PropertySet;
 use object_store::{ObjectStoreExt, path::Path};
 
-use crate::backend::{FillHint, RangeCacheBackend};
+use crate::backend::FillHint;
 use crate::blocks::{block_byte_range, coalesce_runs};
 use crate::metric_tags;
 
@@ -46,6 +46,17 @@ struct RegisteredBlocks {
     /// The batch handle for a prefetch call (`None` on the demand path); lets a
     /// demand joiner promote every sibling of a scattered prefetch call.
     batch: Option<Arc<BatchState>>,
+}
+
+/// One coalesced run of contiguous missing blocks filled by a single origin
+/// GET. Bundles the block-index `range` with the in-flight `entries` and cache
+/// `keys` for those blocks; `entries[i]` and `keys[i]` both correspond to block
+/// index `range.start + i`, an alignment the type keeps together rather than
+/// leaving to three parallel `Vec`s.
+struct CoalescedRun {
+    range: Range<u64>,
+    entries: Vec<Arc<InFlight>>,
+    keys: Vec<String>,
 }
 
 impl RangeCache {
@@ -95,23 +106,19 @@ impl RangeCache {
 
         // `owned` is a sorted subsequence of `missing` (itself sorted), so no
         // extra sort is needed before coalescing.
-        for run in coalesce_runs(&owned, self.block_size, self.max_coalesced_get_bytes) {
-            let run_entries: Vec<Arc<InFlight>> = (run.start..run.end)
+        for range in coalesce_runs(&owned, self.block_size, self.max_coalesced_get_bytes) {
+            let run_entries: Vec<Arc<InFlight>> = (range.start..range.end)
                 .map(|idx| entries.get(&idx).expect("owned entry present").clone())
                 .collect();
-            let run_keys: Vec<String> = (run.start..run.end)
+            let run_keys: Vec<String> = (range.start..range.end)
                 .map(|idx| format!("blk:{}:{key}:{idx}", self.ns))
                 .collect();
-            self.spawn_run_fetch(
-                key,
-                file_size,
-                run,
-                run_entries,
-                run_keys,
-                hint,
-                run_demand_tag,
-                run_prefetch_tag,
-            );
+            let run = CoalescedRun {
+                range,
+                entries: run_entries,
+                keys: run_keys,
+            };
+            self.spawn_run_fetch(key, file_size, run, hint, run_demand_tag, run_prefetch_tag);
         }
 
         if prio == Priority::Prefetch {
@@ -242,44 +249,42 @@ impl RangeCache {
     /// so a cancelled caller (e.g. an axum request future dropped on client
     /// disconnect) can never strand the other owned blocks or any joiners
     /// waiting on this run. `FulfillGuard` covers the panic path.
-    #[allow(clippy::too_many_arguments)]
     fn spawn_run_fetch(
         &self,
         key: &str,
         file_size: u64,
-        run: Range<u64>,
-        run_entries: Vec<Arc<InFlight>>,
-        run_keys: Vec<String>,
+        run: CoalescedRun,
         hint: FillHint,
         run_demand_tag: &'static PropertySet,
         run_prefetch_tag: &'static PropertySet,
     ) {
-        let run_len = (run.end - run.start) as usize;
-        let origin = self.origin.clone();
-        let backend = self.backend.clone();
-        let scheduler = self.scheduler.clone();
+        // Capture a `RangeCache` clone (cheap: all fields are `Arc`s or `Copy`)
+        // rather than cloning each field the task needs individually, mirroring
+        // the pattern in `stream_ranges_inner`. It also lets the success tail be
+        // a `RangeCache` method that reads `block_size`/`backend` from `self`.
+        let cache = self.clone();
         let block_size = self.block_size;
         let key_owned = key.to_string();
 
         tokio::spawn(async move {
             let guard = FulfillGuard::new(
-                scheduler.clone(),
-                run_keys
+                cache.scheduler.clone(),
+                run.keys
                     .iter()
                     .cloned()
-                    .zip(run_entries.iter().cloned())
+                    .zip(run.entries.iter().cloned())
                     .collect(),
             );
             let permit_wait_start = Instant::now();
             let permit = instrument_named!(
-                acquire_run_permit(&scheduler, &run_entries),
+                acquire_run_permit(&cache.scheduler, &run.entries),
                 "range_cache_fetch_permit_wait"
             )
             .await;
             // The run's effective priority, resolved once the permit is
             // acquired so a promotion racing the wait is reflected: used
             // to tag every latency/hit-rate signal this run emits.
-            let class = effective_priority(&run_entries).class_label();
+            let class = effective_priority(&run.entries).class_label();
             let run_class_tag = if class == metric_tags::CLASS_DEMAND {
                 run_demand_tag
             } else {
@@ -292,12 +297,12 @@ impl RangeCache {
                 permit_wait_start.elapsed().as_secs_f64() * 1000.0
             );
 
-            let byte_start = run.start * block_size;
-            let byte_end = block_byte_range(run.end - 1, block_size, file_size).end;
+            let byte_start = run.range.start * block_size;
+            let byte_end = block_byte_range(run.range.end - 1, block_size, file_size).end;
             let path = Path::from(key_owned.as_str());
             let origin_get_start = Instant::now();
             let outcome = instrument_named!(
-                origin.get_range(&path, byte_start..byte_end),
+                cache.origin.get_range(&path, byte_start..byte_end),
                 "range_cache_origin_get"
             )
             .await;
@@ -311,106 +316,100 @@ impl RangeCache {
 
             match outcome {
                 Ok(data) => {
-                    fulfill_run_success(
-                        data,
-                        byte_start,
-                        byte_end,
-                        &key_owned,
-                        run,
-                        run_len,
-                        run_class_tag,
-                        block_size,
-                        hint,
-                        &run_keys,
-                        &run_entries,
-                        &backend,
-                    )
-                    .await;
+                    cache
+                        .fulfill_run_success(
+                            &run,
+                            data,
+                            byte_start..byte_end,
+                            &key_owned,
+                            run_class_tag,
+                            hint,
+                        )
+                        .await;
                 }
                 Err(e) => {
                     let shared: Arc<anyhow::Error> = Arc::new(anyhow::Error::from(e));
-                    for entry in &run_entries {
+                    for entry in &run.entries {
                         entry.fulfill(Err(shared.clone()));
                     }
                 }
             }
-            for k in &run_keys {
-                scheduler.remove_entry(k);
+            for k in &run.keys {
+                cache.scheduler.remove_entry(k);
             }
             guard.disarm();
         });
     }
-}
 
-/// Success-path tail of `spawn_run_fetch`'s per-run task: validate the
-/// origin GET's length against the run's expected byte span (a short read is
-/// an explicit error, never silently clipped — see the inline comment below),
-/// then split the buffer into per-block chunks, writing each to the backend
-/// and fulfilling its entry.
-#[allow(clippy::too_many_arguments)]
-async fn fulfill_run_success(
-    data: Bytes,
-    byte_start: u64,
-    byte_end: u64,
-    key_owned: &str,
-    run: Range<u64>,
-    run_len: usize,
-    run_class_tag: &'static PropertySet,
-    block_size: u64,
-    hint: FillHint,
-    run_keys: &[String],
-    run_entries: &[Arc<InFlight>],
-    backend: &Arc<dyn RangeCacheBackend>,
-) {
-    // The backend-hit path above heals a length mismatch (an undersized
-    // cached entry, or the origin object having changed size) by treating it
-    // as a miss and refetching. A true origin fetch has nowhere further to
-    // fall back to, so a short read here — which `object_store`'s
-    // `GetRange::Bounded` returns without error when the object is shorter
-    // than requested — must surface as an explicit error instead of being
-    // silently clipped by `assemble_range`, which would otherwise
-    // under-yield bytes and either corrupt a `Content-Length`-declared
-    // response or trip `frame_ranges_stream`'s under-yield `.expect()`.
-    let expected_run_bytes = byte_end - byte_start;
-    if data.len() as u64 != expected_run_bytes {
-        imetric!("range_cache_origin_run_len_mismatch", "count", 1_u64);
-        warn!(
-            "range_cache origin fetch length mismatch key={key_owned} \
-             run={run:?} expected={expected_run_bytes} got={}",
-            data.len()
-        );
-        let shared: Arc<anyhow::Error> = Arc::new(anyhow!(
-            "origin object changed size mid-fetch: key={key_owned} \
-             run={run:?} expected {expected_run_bytes} bytes, got {} bytes",
-            data.len()
-        ));
-        for entry in run_entries {
-            entry.fulfill(Err(shared.clone()));
-        }
-    } else {
-        imetric!(
-            "range_cache_origin_block_fetch",
-            "count",
-            run_class_tag,
-            run_len as u64
-        );
-        imetric!(
-            "range_cache_origin_block_bytes",
-            "bytes",
-            run_class_tag,
-            data.len() as u64
-        );
-        debug!(
-            "range_cache origin fetch key={key_owned} run={run:?} bytes={}",
-            data.len()
-        );
-        for i in 0..run_len {
-            let offset = i as u64 * block_size;
-            let local_start = offset as usize;
-            let local_end = (offset + block_size).min(data.len() as u64) as usize;
-            let chunk = data.slice(local_start..local_end);
-            backend.put(run_keys[i].clone(), chunk.clone(), hint).await;
-            run_entries[i].fulfill(Ok(chunk));
+    /// Success-path tail of `spawn_run_fetch`'s per-run task: validate the
+    /// origin GET's length against the run's expected byte span (a short read
+    /// is an explicit error, never silently clipped — see the inline comment
+    /// below), then split the buffer into per-block chunks, writing each to the
+    /// backend and fulfilling its entry.
+    async fn fulfill_run_success(
+        &self,
+        run: &CoalescedRun,
+        data: Bytes,
+        byte_range: Range<u64>,
+        key_owned: &str,
+        run_class_tag: &'static PropertySet,
+        hint: FillHint,
+    ) {
+        let block_size = self.block_size;
+        let range = &run.range;
+        let run_len = (range.end - range.start) as usize;
+        // The backend-hit path above heals a length mismatch (an undersized
+        // cached entry, or the origin object having changed size) by treating
+        // it as a miss and refetching. A true origin fetch has nowhere further
+        // to fall back to, so a short read here — which `object_store`'s
+        // `GetRange::Bounded` returns without error when the object is shorter
+        // than requested — must surface as an explicit error instead of being
+        // silently clipped by `assemble_range`, which would otherwise
+        // under-yield bytes and either corrupt a `Content-Length`-declared
+        // response or trip `frame_ranges_stream`'s under-yield `.expect()`.
+        let expected_run_bytes = byte_range.end - byte_range.start;
+        if data.len() as u64 != expected_run_bytes {
+            imetric!("range_cache_origin_run_len_mismatch", "count", 1_u64);
+            warn!(
+                "range_cache origin fetch length mismatch key={key_owned} \
+                 run={range:?} expected={expected_run_bytes} got={}",
+                data.len()
+            );
+            let shared: Arc<anyhow::Error> = Arc::new(anyhow!(
+                "origin object changed size mid-fetch: key={key_owned} \
+                 run={range:?} expected {expected_run_bytes} bytes, got {} bytes",
+                data.len()
+            ));
+            for entry in &run.entries {
+                entry.fulfill(Err(shared.clone()));
+            }
+        } else {
+            imetric!(
+                "range_cache_origin_block_fetch",
+                "count",
+                run_class_tag,
+                run_len as u64
+            );
+            imetric!(
+                "range_cache_origin_block_bytes",
+                "bytes",
+                run_class_tag,
+                data.len() as u64
+            );
+            debug!(
+                "range_cache origin fetch key={key_owned} run={range:?} bytes={}",
+                data.len()
+            );
+            for i in 0..run_len {
+                let offset = i as u64 * block_size;
+                let local_start = offset as usize;
+                let local_end = (offset + block_size).min(data.len() as u64) as usize;
+                let chunk = data.slice(local_start..local_end);
+                self.backend
+                    .put(run.keys[i].clone(), chunk.clone(), hint)
+                    .await;
+                run.entries[i].fulfill(Ok(chunk));
+            }
         }
     }
 }
