@@ -39,7 +39,7 @@ Owns validation, not login-flow client construction:
   `CoreProviderMetadata::discover_async` (`oidc.rs:54`) **only** to read
   `jwks_uri`, then fetches the JWKS. This discovery is an internal
   implementation detail of JWKS fetching for the validation path.
-- `OidcConfig` / `OidcIssuer` (`oidc.rs:108`, `124`) — issuer/audience config,
+- `OidcConfig` (`oidc.rs:126`) / `OidcIssuer` (`oidc.rs:110`) — issuer/audience config,
   `from_env` / `from_env_var`. Already consumed by `analytics-web-srv`.
 - `OidcAuthProvider` (`oidc.rs:318`) — the JWT-validation provider.
 
@@ -126,7 +126,7 @@ use std::sync::Arc;
 
 /// Fully-parameterized openidconnect client with endpoints set from
 /// discovered provider metadata (public client, PKCE — no client secret).
-pub type ConfiguredCoreClient = openidconnect::Client< /* …16 type params, moved verbatim from auth.rs:37-55… */ >;
+pub type ConfiguredCoreClient = openidconnect::Client< /* …17 type params, moved verbatim from auth.rs:37-55… */ >;
 
 /// A discovered OIDC provider, ready to build login-flow clients from.
 ///
@@ -216,9 +216,10 @@ field's inner type changes from `OidcProviderInfo` to
 // state.rs, get_oidc_provider body (delegating to the crate)
 self.oidc_provider
     .get_or_try_init(|| async move {
-        DiscoveredProvider::discover(&config.issuer, &config.client_id, &config.redirect_uri)
-            .await
-            .map_err(|e| anyhow!("Failed to get OIDC provider: {e:?}"))
+        // discover() already returns an anyhow error, and every caller
+        // (auth_login/auth_callback/auth_refresh) wraps it with
+        // "Failed to get OIDC provider" — so return it directly, no extra wrap.
+        DiscoveredProvider::discover(&config.issuer, &config.client_id, &config.redirect_uri).await
     })
     .await
 ```
