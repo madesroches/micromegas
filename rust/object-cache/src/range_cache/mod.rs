@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -335,64 +335,89 @@ impl RangeCache {
         let key = key.to_string();
         Ok(try_stream! {
             for r in ranges {
-                let start = r.start;
-                let end = r.end;
-                if start >= end {
+                if r.start >= r.end {
                     continue;
                 }
-
-                let blk_range = blocks_for_range(start, end, cache.block_size);
-                let window_indices: Vec<Vec<u64>> = (blk_range.start..blk_range.end)
-                    .collect::<Vec<u64>>()
-                    .chunks(DEMAND_WINDOW_BLOCKS as usize)
-                    .map(|w| w.to_vec())
-                    .collect();
-
-                let mut windows = stream::iter(window_indices)
-                    .map(|w| {
-                        let cache = cache.clone();
-                        let key = key.clone();
-                        async move {
-                            let result = cache
-                                .fetch_blocks(&key, file_size, &w, Priority::Demand)
-                                .await;
-                            (w, result)
-                        }
-                    })
-                    .buffered(2);
-
+                let blk_range = blocks_for_range(r.start, r.end, cache.block_size);
+                let mut windows = cache.stream_demand_windows(&key, file_size, blk_range);
                 while let Some((w, result)) = windows.next().await {
                     let block_map = result.inspect_err(|_| caller.emit_error_metric())?;
-                    let blocks: Vec<(u64, Bytes)> = w
-                        .iter()
-                        .map(|idx| {
-                            let data = block_map
-                                .get(idx)
-                                .cloned()
-                                .expect("fetch_blocks returns every requested index");
-                            (*idx, data)
-                        })
-                        .collect();
-                    // Clamp to this window's own byte span (intersected with
-                    // the outer requested range), not the whole range's
-                    // bounds: `blocks` only holds this window's data, and
-                    // `assemble_range` pre-sizes its output buffer from
-                    // `req_end - req_start`, so passing the full range's
-                    // bounds on every window would over-allocate by up to the
-                    // entire range's size on each iteration.
-                    let win_start = w[0] * cache.block_size;
-                    let win_end = block_byte_range(
-                        *w.last().expect("window is non-empty"),
-                        cache.block_size,
-                        file_size,
-                    )
-                    .end;
-                    let local_start = start.max(win_start);
-                    let local_end = end.min(win_end);
-                    yield assemble_range(&blocks, cache.block_size, local_start, local_end);
+                    yield cache.assemble_window(&block_map, &w, r.start, r.end, file_size);
                 }
             }
         })
+    }
+
+    /// Build the ordered, bounded stream of demand-priority window fetches for
+    /// one requested range's block span `blk_range`: chunk it into
+    /// `DEMAND_WINDOW_BLOCKS`-sized windows and fetch each (at most two in
+    /// flight via `buffered(2)`), yielding `(window_indices, fetch_result)`.
+    /// Extracted from `stream_ranges_inner`'s `try_stream!` body to keep that
+    /// generator small; the returned stream owns its own `RangeCache`/key
+    /// clones so it is `'static`.
+    fn stream_demand_windows(
+        &self,
+        key: &str,
+        file_size: u64,
+        blk_range: Range<u64>,
+    ) -> impl Stream<Item = (Vec<u64>, Result<HashMap<u64, Bytes>>)> + Send + 'static {
+        let window_indices: Vec<Vec<u64>> = (blk_range.start..blk_range.end)
+            .collect::<Vec<u64>>()
+            .chunks(DEMAND_WINDOW_BLOCKS as usize)
+            .map(|w| w.to_vec())
+            .collect();
+        let cache = self.clone();
+        let key = key.to_string();
+        stream::iter(window_indices)
+            .map(move |w| {
+                let cache = cache.clone();
+                let key = key.clone();
+                async move {
+                    let result = cache
+                        .fetch_blocks(&key, file_size, &w, Priority::Demand)
+                        .await;
+                    (w, result)
+                }
+            })
+            .buffered(2)
+    }
+
+    /// Assemble the bytes for one window: gather its blocks from `block_map`,
+    /// then clamp to the window's own byte span intersected with the outer
+    /// requested range `[req_start, req_end)` before assembling. Clamping to
+    /// the window (not the whole range) matters because `block_map` holds only
+    /// this window's data and `assemble_range` pre-sizes its output buffer from
+    /// `req_end - req_start`, so passing the full range's bounds on every
+    /// window would over-allocate by up to the entire range's size each
+    /// iteration.
+    fn assemble_window(
+        &self,
+        block_map: &HashMap<u64, Bytes>,
+        window: &[u64],
+        req_start: u64,
+        req_end: u64,
+        file_size: u64,
+    ) -> Bytes {
+        let blocks: Vec<(u64, Bytes)> = window
+            .iter()
+            .map(|idx| {
+                let data = block_map
+                    .get(idx)
+                    .cloned()
+                    .expect("fetch_blocks returns every requested index");
+                (*idx, data)
+            })
+            .collect();
+        let win_start = window[0] * self.block_size;
+        let win_end = block_byte_range(
+            *window.last().expect("window is non-empty"),
+            self.block_size,
+            file_size,
+        )
+        .end;
+        let local_start = req_start.max(win_start);
+        let local_end = req_end.min(win_end);
+        assemble_range(&blocks, self.block_size, local_start, local_end)
     }
 
     #[span_fn]
