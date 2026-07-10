@@ -303,10 +303,6 @@ pub async fn default_view_factory(
     factory.add_view_set(String::from("images"), images_view_maker);
     factory.add_view_set(String::from("log_entries"), log_view_maker.clone());
     factory.add_view_set(String::from("measures"), metrics_view_maker);
-    factory.add_view_set(
-        String::from("thread_spans"),
-        Arc::new(ThreadSpansViewMaker {}),
-    );
 
     // Create the factory as Arc to pass to other view makers
     let factory_arc = Arc::new(factory);
@@ -329,6 +325,12 @@ pub async fn default_view_factory(
     updated_factory.add_view_set(
         String::from("net_spans"),
         Arc::new(NetSpansViewMaker::new(Arc::new(updated_factory.clone()))),
+    );
+
+    // Add thread_spans view maker
+    updated_factory.add_view_set(
+        String::from("thread_spans"),
+        Arc::new(ThreadSpansViewMaker::new(Arc::new(updated_factory.clone()))),
     );
 
     // Add otel_spans view maker (per-process JIT only — no global instance)

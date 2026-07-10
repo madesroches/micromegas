@@ -1,70 +1,39 @@
 """Helpers for the OTLP/HTTP end-to-end tests.
 
-The Rust ingest path computes process_id deterministically from a hash of
-resource attributes (`rust/otel-ingestion/src/identity.rs`). To verify the
-data lands queryable for a known producer, the test must compute the same
-process_id client-side. This module is a Python port of that formula.
-
-If the Rust formula ever changes (which would require bumping
-NS_OTEL_PROCESS_V1 to _V2), this module has to change in lockstep.
+The ingest path derives process_id from a hash of many resource attributes
+(`rust/otel-ingestion/src/identity.rs`). Rather than mirror that formula
+client-side — which silently drifts whenever the Rust side adds an identity
+field — the tests tag each run with a unique `service.instance.id` and look up
+the server-assigned process_id after ingestion (see `discover_process_id`).
 """
 
 import time
-import uuid
-
-# Namespace UUIDs are load-bearing — must match
-# `rust/otel-ingestion/src/identity.rs` exactly.
-NS_OTEL_PROCESS_V1 = uuid.UUID("80a447b8-fcdd-42a6-a613-f6c8719cd5fe")
-NS_OTEL_STREAM_V1 = uuid.UUID("fe93bacf-e851-4cf6-8526-05f8454b3488")
-NS_OTEL_BLOCK_V1 = uuid.UUID("5829a6f7-0577-4c8c-862f-cf4fdab445cc")
-
-# ASCII unit separator between concatenated string fields.
-SEPARATOR = "\x1f"
 
 
-def _norm(s):
-    """trim + lower-case (matches the Rust `norm` helper)."""
-    return (s or "").strip().lower()
+def discover_process_id(client, instance_id, begin, end, timeout_s=60):
+    """Return the server-assigned process_id for a given `service.instance.id`.
 
-
-def compute_otel_process_id(
-    host_name="",
-    host_id="",
-    pid="",
-    start_time="",
-    service_namespace="",
-    service_name="",
-    instance_id="",
-):
-    """Mirror of `process_id_from_resource` in identity.rs.
-
-    Field order is the contract — changing it requires a new namespace UUID.
-    `pid` and `start_time` are passed through verbatim (no case folding);
-    everything else is trim+lower-cased.
+    The OTLP ingest path stores resource attributes as process properties
+    prefixed with `otel.resource.`, so a run's unique instance id is queryable
+    as `otel.resource.service.instance.id`. Polls until the process row is
+    materialized (it lands within a second or two of ingestion).
     """
-    key = SEPARATOR.join(
-        [
-            _norm(host_id),
-            _norm(host_name),
-            str(pid) if pid != "" else "",
-            start_time or "",
-            _norm(service_namespace),
-            _norm(service_name),
-            _norm(instance_id),
-        ]
+
+    def query():
+        sql = (
+            "SELECT process_id FROM processes "
+            "WHERE property_get(properties, 'otel.resource.service.instance.id') "
+            f"= '{instance_id}'"
+        )
+        return client.query(sql, begin, end)
+
+    df = assert_eventually(
+        query,
+        lambda r: not r.empty,
+        timeout_s=timeout_s,
+        msg=f"waiting for process with service.instance.id={instance_id}",
     )
-    return uuid.uuid5(NS_OTEL_PROCESS_V1, key)
-
-
-def compute_otel_stream_id(process_id, signal):
-    """Mirror of `stream_id_from_process_signal` in identity.rs.
-
-    `signal` must be one of "logs", "metrics", "traces".
-    """
-    if signal not in ("logs", "metrics", "traces"):
-        raise ValueError(f"signal must be logs|metrics|traces, got {signal!r}")
-    key = f"{process_id}{SEPARATOR}{signal}"
-    return uuid.uuid5(NS_OTEL_STREAM_V1, key)
+    return str(df.iloc[0]["process_id"])
 
 
 def assert_eventually(query_fn, predicate, timeout_s=30, interval_s=0.5, msg=None):

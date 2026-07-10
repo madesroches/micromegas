@@ -1,6 +1,9 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use datafusion::arrow::array::{Int32Array, Int64Array, RecordBatch, TimestampNanosecondArray};
+use datafusion::arrow::array::{
+    BinaryArray, GenericListArray, Int32Array, Int64Array, RecordBatch, StringArray,
+    TimestampNanosecondArray,
+};
 use micromegas_telemetry::{
     property::Property, stream_info::StreamInfo, types::block::BlockMetadata,
 };
@@ -120,50 +123,93 @@ pub fn get_thread_name_from_stream_metadata(stream: &StreamMetadata) -> Result<S
     }
 }
 
-/// Creates a `StreamMetadata` from a database row with pre-serialized JSONB properties.
+/// Creates a `StreamMetadata` from a row of the `streams` view's (unprefixed) columns.
 #[span_fn]
-pub fn stream_metadata_from_row(row: &sqlx::postgres::PgRow) -> Result<StreamMetadata> {
-    let dependencies_metadata_buffer: Vec<u8> = row.try_get("dependencies_metadata")?;
+pub fn stream_metadata_from_batch_row(batch: &RecordBatch, row: usize) -> Result<StreamMetadata> {
+    let stream_id_column = string_column_by_name(batch, "stream_id")?;
+    let process_id_column = string_column_by_name(batch, "process_id")?;
+    let dependencies_metadata_column: &BinaryArray =
+        typed_column_by_name(batch, "dependencies_metadata")?;
+    let objects_metadata_column: &BinaryArray = typed_column_by_name(batch, "objects_metadata")?;
+    let tags_column: &GenericListArray<i32> = typed_column_by_name(batch, "tags")?;
+    let properties_accessor = properties_column_by_name(batch, "properties")
+        .with_context(|| "accessing properties column")?;
+
+    let stream_id =
+        Uuid::parse_str(stream_id_column.value(row)?).with_context(|| "parsing stream_id")?;
+    let process_id =
+        Uuid::parse_str(process_id_column.value(row)?).with_context(|| "parsing process_id")?;
+
     let dependencies_metadata: Vec<UserDefinedType> =
-        ciborium::from_reader(&dependencies_metadata_buffer[..])
-            .with_context(|| "decoding dependencies metadata")?;
-    let objects_metadata_buffer: Vec<u8> = row.try_get("objects_metadata")?;
+        ciborium::from_reader(dependencies_metadata_column.value(row))
+            .with_context(|| "decoding dependencies_metadata")?;
     let objects_metadata: Vec<UserDefinedType> =
-        ciborium::from_reader(&objects_metadata_buffer[..])
-            .with_context(|| "decoding objects metadata")?;
-    let tags: Vec<String> = row.try_get("tags")?;
-    let properties: Vec<Property> = row.try_get("properties")?;
-    let properties_map = micromegas_telemetry::property::into_hashmap(properties);
-    let serialized_properties = serialize_properties_to_jsonb(&properties_map)
-        .with_context(|| "serializing stream properties to JSONB")?;
+        ciborium::from_reader(objects_metadata_column.value(row))
+            .with_context(|| "decoding objects_metadata")?;
+    let tags: Vec<String> = tags_column
+        .value(row)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .with_context(|| "casting tags")?
+        .iter()
+        .map(|item| String::from(item.unwrap_or_default()))
+        .collect();
+
+    let properties = properties_accessor
+        .jsonb_value(row)
+        .with_context(|| "extracting JSONB from properties column")?;
 
     Ok(StreamMetadata {
-        stream_id: row.try_get("stream_id")?,
-        process_id: row.try_get("process_id")?,
+        stream_id,
+        process_id,
         dependencies_metadata,
         objects_metadata,
         tags,
-        properties: Arc::new(serialized_properties),
+        properties: Arc::new(properties),
     })
 }
 
-/// Finds a stream by its ID and returns it as StreamMetadata.
+/// Finds a stream and its metadata using DataFusion (reads the `streams` view).
 #[span_fn]
-pub async fn find_stream(
-    pool: &sqlx::Pool<sqlx::Postgres>,
-    stream_id: sqlx::types::Uuid,
+pub async fn find_stream_from_view(
+    lakehouse: Arc<LakehouseContext>,
+    view_factory: Arc<ViewFactory>,
+    stream_id: &Uuid,
+    query_range: Option<TimeRange>,
 ) -> Result<StreamMetadata> {
-    let row = sqlx::query(
+    let partition_provider = Arc::new(LivePartitionProvider::new(lakehouse.lake().db_pool.clone()));
+
+    let ctx = make_session_context(
+        lakehouse,
+        partition_provider,
+        query_range,
+        view_factory,
+        Arc::new(NoOpSessionConfigurator),
+    )
+    .await
+    .with_context(|| "creating DataFusion session context")?;
+
+    let sql = format!(
         "SELECT stream_id, process_id, dependencies_metadata, objects_metadata, tags, properties
          FROM streams
-         WHERE stream_id = $1
-         ;",
-    )
-    .bind(stream_id)
-    .fetch_one(pool)
-    .await
-    .with_context(|| "select from streams")?;
-    stream_metadata_from_row(&row)
+         WHERE stream_id = '{stream_id}'"
+    );
+
+    let df = ctx
+        .sql(&sql)
+        .await
+        .with_context(|| "executing SQL query for stream")?;
+
+    let results = df
+        .collect()
+        .await
+        .with_context(|| "collecting results from DataFusion")?;
+
+    if results.is_empty() || results[0].num_rows() == 0 {
+        anyhow::bail!("Stream not found");
+    }
+
+    stream_metadata_from_batch_row(&results[0], 0)
 }
 
 /// Creates a `ProcessMetadata` from a database row with pre-serialized JSONB properties.

@@ -1,10 +1,9 @@
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use chrono::{DateTime, TimeDelta, Utc};
 use datafusion::scalar::ScalarValue;
 use micromegas_telemetry::types::block::BlockMetadata;
-use sqlx::Row;
 
 use crate::metadata::ProcessMetadata;
 
@@ -21,43 +20,6 @@ impl TimeRange {
     pub fn new(begin: DateTime<Utc>, end: DateTime<Utc>) -> Self {
         Self { begin, end }
     }
-}
-
-/// Creates a `ConvertTicks` from a database connection.
-pub async fn make_time_converter_from_db(
-    pool: &sqlx::Pool<sqlx::Postgres>,
-    process: &ProcessMetadata,
-) -> Result<ConvertTicks> {
-    if process.tsc_frequency > 0 {
-        // we have a good tsc freq provided
-        return ConvertTicks::from_meta_data(
-            process.start_ticks,
-            process.start_time.timestamp_nanos_opt().unwrap_or_default(),
-            process.tsc_frequency,
-        );
-    }
-    // we need to estimate the tsc frequency
-    let row = sqlx::query(
-        "SELECT end_time, end_ticks
-         FROM blocks
-         WHERE process_id = $1
-         ORDER BY end_time DESC
-         LIMIT 1",
-    )
-    .bind(process.process_id)
-    .fetch_one(pool)
-    .await
-    .with_context(|| "getting last block end time for tsc estimation")?;
-    let end_time: chrono::DateTime<chrono::Utc> = row.try_get("end_time")?;
-    let relative_end_ticks: i64 = row.try_get("end_ticks")?;
-    let delta_time = end_time - process.start_time;
-    let nb_seconds = delta_time.num_nanoseconds().unwrap_or_default() as f64 / 1_000_000_000.0;
-    let ticks_per_second = relative_end_ticks as f64 / nb_seconds;
-    ConvertTicks::from_meta_data(
-        process.start_ticks,
-        process.start_time.timestamp_nanos_opt().unwrap_or_default(),
-        ticks_per_second.round() as i64,
-    )
 }
 
 /// Creates a `ConvertTicks` from a block's metadata.

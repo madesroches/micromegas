@@ -4,6 +4,8 @@ This file documents the historical progress of the Micromegas project. For curre
 
 ## Unreleased
 
+* **Analytics:**
+  * Move `ThreadSpansView::jit_update` off Postgres onto DataFusion views: replace the unprunable `blocks` full-table scan (TSC frequency estimation) and the `streams`/`processes` PK reads with `find_stream_from_view`/`find_process_with_latest_timing` against the DataFusion `streams`/`processes` views, and delete the now-dead `make_time_converter_from_db`/`find_stream` Postgres helpers (#1244)
 * **Tests:**
   * Delete the orphaned, never-compiled `rust/http-gateway/src/config.rs` (duplicate of `HeaderForwardingConfig` in `public::servers::http_gateway`) and its dead tests; move three `tracing` crate inline `#[cfg(test)]` modules (`time.rs`, `logs/events.rs`, `string_id.rs`) into the crate's `tests/` folder per convention; mark `ingestion`'s `readiness.rs` live-dependency test `#[ignore]` instead of silently no-op-passing without a DB; replace a fixed 50ms sleep in `large_message_tests.rs` with a bounded TCP readiness poll (#1219)
   * Tighten timing/sleep-based tests: replace a meaningless fixed sleep in `cron_loop_drains` with a task-started signal, swap the random sleeps in `async_span_tests.rs` for fixed 1ms ones (dropping the `rand` dev-dependency), and correct the `thread_park_test` / `TracingRuntimeExt` docs to describe flush-on-thread-stop rather than a nonexistent `on_thread_park` callback (#1252)

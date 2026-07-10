@@ -8,15 +8,15 @@ use super::{
     partition_cache::PartitionCache,
     partition_source_data::{SourceDataBlocksInMemory, hash_to_object_count},
     view::{PartitionSpec, View, ViewMetadata},
-    view_factory::ViewMaker,
+    view_factory::{ViewFactory, ViewMaker},
 };
 use crate::{
     call_tree::make_call_tree,
     lakehouse::write_partition::{PartitionRowSet, write_partition_from_rows},
-    metadata::{find_process, find_stream},
+    metadata::{find_process_with_latest_timing, find_stream_from_view},
     response_writer::ResponseWriter,
     span_table::{SpanRecordBuilder, get_spans_schema},
-    time::{ConvertTicks, TimeRange, datetime_to_scalar, make_time_converter_from_db},
+    time::{ConvertTicks, TimeRange, datetime_to_scalar, make_time_converter_from_latest_timing},
 };
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -38,11 +38,22 @@ lazy_static::lazy_static! {
 
 /// A `ViewMaker` for creating `ThreadSpansView` instances.
 #[derive(Debug)]
-pub struct ThreadSpansViewMaker {}
+pub struct ThreadSpansViewMaker {
+    view_factory: Arc<ViewFactory>,
+}
+
+impl ThreadSpansViewMaker {
+    pub fn new(view_factory: Arc<ViewFactory>) -> Self {
+        Self { view_factory }
+    }
+}
 
 impl ViewMaker for ThreadSpansViewMaker {
     fn make_view(&self, stream_id: &str) -> Result<Arc<dyn View>> {
-        Ok(Arc::new(ThreadSpansView::new(stream_id)?))
+        Ok(Arc::new(ThreadSpansView::new(
+            stream_id,
+            self.view_factory.clone(),
+        )?))
     }
 
     fn get_schema_hash(&self) -> Vec<u8> {
@@ -60,10 +71,11 @@ pub struct ThreadSpansView {
     view_set_name: Arc<String>,
     view_instance_id: Arc<String>,
     stream_id: sqlx::types::Uuid,
+    view_factory: Arc<ViewFactory>,
 }
 
 impl ThreadSpansView {
-    pub fn new(view_instance_id: &str) -> Result<Self> {
+    pub fn new(view_instance_id: &str, view_factory: Arc<ViewFactory>) -> Result<Self> {
         if view_instance_id == "global" {
             anyhow::bail!("the global view is not implemented for thread spans");
         }
@@ -72,6 +84,7 @@ impl ThreadSpansView {
             view_set_name: Arc::new(String::from(VIEW_SET_NAME)),
             view_instance_id: Arc::new(String::from(view_instance_id)),
             stream_id: Uuid::parse_str(view_instance_id).with_context(|| "Uuid::parse_str")?,
+            view_factory,
         })
     }
 }
@@ -258,22 +271,34 @@ impl View for ThreadSpansView {
         lakehouse: Arc<LakehouseContext>,
         query_range: Option<TimeRange>,
     ) -> Result<()> {
-        if query_range.is_none() {
+        let Some(query_range) = query_range else {
             anyhow::bail!("query range mandatory for thread spans view");
-        }
-        let query_range = query_range.unwrap();
+        };
         let stream = Arc::new(
-            find_stream(&lakehouse.lake().db_pool, self.stream_id)
-                .await
-                .with_context(|| "find_stream")?,
+            find_stream_from_view(
+                lakehouse.clone(),
+                self.view_factory.clone(),
+                &self.stream_id,
+                None,
+            )
+            .await
+            .with_context(|| "find_stream_from_view")?,
         );
-        let process = Arc::new(
-            find_process(&lakehouse.lake().db_pool, &stream.process_id)
-                .await
-                .with_context(|| "find_process")?,
-        );
-        let convert_ticks =
-            make_time_converter_from_db(&lakehouse.lake().db_pool, &process).await?;
+        let (process, last_block_end_ticks, last_block_end_time) = find_process_with_latest_timing(
+            lakehouse.clone(),
+            self.view_factory.clone(),
+            &stream.process_id,
+            None,
+        )
+        .await
+        .with_context(|| "find_process_with_latest_timing")?;
+        let process = Arc::new(process);
+        let convert_ticks = make_time_converter_from_latest_timing(
+            &process,
+            last_block_end_ticks,
+            last_block_end_time,
+        )
+        .with_context(|| "make_time_converter_from_latest_timing")?;
         let blocks_view = BlocksView::new()?;
         let partitions = generate_stream_jit_partitions(
             &JitPartitionConfig::default(),
