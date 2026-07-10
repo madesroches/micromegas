@@ -93,6 +93,13 @@ same `jit_update` reads it a few lines later via `generate_stream_jit_partitions
 **same materialization semantics as the already-shipped `find_process_with_latest_timing`** used by
 `net_spans`/`async_events`. No new ordering dependency beyond what those views already assume.
 
+`streams_view` and `processes_view` are constructed identically (`view_factory.rs:274-301`), pushed
+adjacently into the same `global_views` vec, and are both `SqlBatchView`s aggregating from the same
+`blocks` source with the identical no-op `jit_update` (`sql_batch_view.rs:203-209`) and
+`LivePartitionProvider` read path. Querying `FROM streams` therefore inherits the exact
+on-demand/materialization guarantees already shipped for `FROM processes` via
+`find_process_with_latest_timing` — confirmed by the code, not just by analogy.
+
 ## Design
 
 Inject a `ViewFactory` into `ThreadSpansViewMaker`/`ThreadSpansView` (mirroring `NetSpansView`),
@@ -201,15 +208,18 @@ snapshot-clone pattern used for `net_spans`/`async_events`.
 - `make_time_converter_from_db` (`time.rs`) — no remaining callers; delete it and drop the
   now-unused `sqlx::Row` import if nothing else in the file uses it.
 - `find_stream` (`metadata.rs`) — `thread_spans` was its only caller; delete it once confirmed
-  unused. Keep `stream_metadata_from_row` if other code still uses it (verify). `find_process`
-  **stays** (still used by `log_view`, `metrics_view`, `images_view`, `otel/spans_view`).
+  unused. `stream_metadata_from_row` (`metadata.rs:125`) has exactly one caller, `find_stream`
+  itself (`metadata.rs:166`), so it becomes dead code once `find_stream` is deleted; delete it in
+  the same step. `find_process` **stays** (still used by `log_view`, `metrics_view`, `images_view`,
+  `otel/spans_view`).
 
 ## Implementation Steps
 
 1. **`rust/analytics/src/metadata.rs`**
    - Add `stream_metadata_from_batch_row(batch, row, prefix)` helper (DRY extraction).
    - Add `find_stream_from_view(lakehouse, view_factory, stream_id, query_range)` using it.
-   - Delete `find_stream` once its only caller is gone (step 2).
+   - Delete `find_stream` once its only caller is gone (step 2), and delete
+     `stream_metadata_from_row` alongside it (its only caller is `find_stream`).
 2. **`rust/analytics/src/lakehouse/thread_spans_view.rs`**
    - Imports: drop `find_process`, `find_stream`, `make_time_converter_from_db`; add
      `find_stream_from_view`, `find_process_with_latest_timing`,
@@ -278,12 +288,5 @@ remaining Postgres `blocks` reads, tick this one off there.
 
 ## Open Questions
 
-1. **Streams-view read semantics** — `find_process_with_latest_timing` is already used this exact
-   way for `net_spans`/`async_events`, so querying `FROM streams` in the same session-context path
-   should inherit identical materialization guarantees. Worth a one-line confirmation during
-   implementation that the `streams` batch view is queryable on-demand in the JIT context (not
-   dependent on a prior maintenance pass) for very recent data. If it is not, keep `find_stream`
-   (Postgres) for the stream read and convert only the `blocks`/timing path — the core issue is
-   still resolved.
-2. **Scope confirmation** — proceed with converting all three reads (recommended, per direction),
+1. **Scope confirmation** — proceed with converting all three reads (recommended, per direction),
    or land only the mandated `blocks`-scan removal and defer the stream conversion?
