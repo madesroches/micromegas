@@ -109,7 +109,9 @@ the running service rather than a one-off manual purge.
 - `local_test_env/ai_scripts/start_services.py` — service-name list (l.36), binary launch +
   `crond` arg (l.204), build `--bin telemetry-admin` (l.400), hardcoded log filename
   `/tmp/admin.log` (write at l.202, echo at l.231) — rename to `/tmp/maintenance.log`.
-- `local_test_env/ai_scripts/stop_services.py:53` — service-name list.
+- `local_test_env/ai_scripts/stop_services.py:53` — service-name list; `stop_services.py:66` —
+  `log_files` cleanup list entry `/tmp/admin.log`, rename to `/tmp/maintenance.log` so it still
+  cleans up the daemon's renamed log file.
 - `local_test_env/ai_scripts/start_services_with_oidc.py` — service list (l.70),
   `cargo run -p telemetry-admin -- crond` (l.229), hardcoded log filename `/tmp/admin.log` —
   rename to `/tmp/maintenance.log` (write at l.227, echo at l.258).
@@ -254,7 +256,8 @@ step asserts a passing `cargo build` while the two sides of the call are mismatc
    (default 90) and pass it into the `daemon(…)` call (line ~287).
 9. In `src/main.rs` (telemetry-maintenance-srv): replace the `Cli`/`Commands` definitions with the
    flat `Parser` struct (grace period + retention_days), drop `arg_required_else_help`, remove the
-   `Subcommand` import.
+   `Subcommand` import, and update the module doc-comment on line 1 (`//! Telemetry Admin CLI`) to
+   reflect the maintenance daemon (e.g. `//! Telemetry maintenance daemon`).
 10. Replace the `match args.command { … }` block with a direct daemon launch (build view factory →
     `get_global_views_with_update_group` → `daemon(lakehouse, views, args.retention_days,
     wait_for_sigterm(), grace)`). `daemon()` already takes the matching 5 parameters from step 7,
@@ -292,7 +295,9 @@ step asserts a passing `cargo build` while the two sides of the call are mismatc
     dropping the `"crond"` arg (l.204), build `--bin telemetry-maintenance-srv` (l.400), and
     rename the hardcoded log filename `/tmp/admin.log` → `/tmp/maintenance.log` (write at l.202,
     echo at l.231).
-20. `local_test_env/ai_scripts/stop_services.py:53`: service name.
+20. `local_test_env/ai_scripts/stop_services.py`: service name (l.53), and rename the
+    `log_files` cleanup list entry `/tmp/admin.log` → `/tmp/maintenance.log` (l.66) so it still
+    cleans up the daemon's renamed log file.
 21. `local_test_env/ai_scripts/start_services_with_oidc.py`: service list (l.70),
     `cargo run -p telemetry-maintenance-srv --` dropping `crond` (l.229), and the hardcoded log
     filename `/tmp/admin.log` → `/tmp/maintenance.log` (write at l.227, echo at l.258).
@@ -313,7 +318,9 @@ step asserts a passing `cargo build` while the two sides of the call are mismatc
     log-path line's `/tmp/admin.log` → `/tmp/maintenance.log` and reword the "Admin:" label for the
     maintenance daemon), `AI_GUIDELINES.md:66`, `.github/copilot-instructions.md:59`.
 27. Add a `CHANGELOG.md` Unreleased entry (removed subcommands; binary + Docker-image rename as a
-    breaking deployment change; new `MICROMEGAS_RETENTION_DAYS` knob).
+    breaking deployment change; new `MICROMEGAS_RETENTION_DAYS` knob; note that the public crate's
+    `daemon()` signature changed with a new `retention_days` parameter, matching the precedent set
+    by the existing l.85 entry for #1037).
 
 ### Phase 6 — Verify
 28. From `rust/`: `cargo fmt`, `cargo build`, `cargo clippy --workspace -- -D warnings`,
@@ -377,7 +384,9 @@ step asserts a passing `cargo build` while the two sides of the call are mismatc
   **`doc/GETTING_STARTED.md`** — name/command updates.
 - **`CHANGELOG.md`** — Unreleased entry covering: removal of the four subcommands; binary rename
   `telemetry-admin` → `telemetry-maintenance-srv` and Docker image `micromegas-admin` →
-  `micromegas-maintenance` (breaking for deployments); new `MICROMEGAS_RETENTION_DAYS` knob.
+  `micromegas-maintenance` (breaking for deployments); new `MICROMEGAS_RETENTION_DAYS` knob; the
+  public crate's `daemon()` signature change (new `retention_days` parameter), matching the l.85
+  precedent that calls out `daemon()`/`run_tasks_forever` signature changes.
 - **`rust/telemetry-maintenance-srv/README.md`**, top-level **`README.md`** — daemon framing.
 - The deprecated subcommands are not documented in any live page (the docs already steer users to
   SQL functions), so there is no subcommand reference to remove — only naming to update.
