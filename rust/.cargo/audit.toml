@@ -6,9 +6,21 @@
 # dependency bump — remove the ignore as soon as a fix ships.
 [advisories]
 ignore = [
-    # rsa 0.9.10 (via jsonwebtoken -> micromegas-auth): Marvin timing
-    # side-channel. NO fixed upstream version exists as of this writing.
-    # Revisit when a fix ships; rollout tracked under #1246.
+    # rsa 0.9.10, in micromegas-auth. RUSTSEC-2023-0071 is the "Marvin"
+    # timing side-channel, which affects RSA *private-key* operations
+    # (decryption/signing). This crate only ever does public-key work:
+    # OIDC token signature *verification* (RS256 via jsonwebtoken decode,
+    # RsaPublicKey built from JWK n/e). The signing path exists only in
+    # auth's tests, so the vulnerable operation is not exercised in
+    # production. Low risk here on those grounds alone.
+    #
+    # No fix is available and there is no upgrade path: rsa enters via THREE
+    # paths -- jsonwebtoken (rust_crypto feature), a direct dep in auth, and
+    # openidconnect 4.0.1 (pulls rsa in its default features). openidconnect
+    # 4.0.1 is the latest published release, so bumping it cannot drop rsa,
+    # and swapping jsonwebtoken alone leaves the openidconnect path. Clearing
+    # this requires the OIDC stack to move off the pure-Rust rsa crate.
+    # Revisit when rsa ships a fix or openidconnect drops it; tracked under #1246.
     "RUSTSEC-2023-0071",
 
     # quick-xml 0.39.4 (via object_store 0.13.2): DoS in XML parsing of
