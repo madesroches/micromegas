@@ -61,6 +61,16 @@ jobs:
       if: needs.check-runner.outputs.runner == 'ubuntu-latest'
       run: cargo install cargo-machete
 
+    - name: Install cargo-audit
+      run: |
+        if [ -z "$CARGO_BUILD_JOBS" ]; then unset CARGO_BUILD_JOBS; fi
+        cargo install cargo-audit --locked --version '^0.22'
+
+    - name: Install cargo-deny
+      run: |
+        if [ -z "$CARGO_BUILD_JOBS" ]; then unset CARGO_BUILD_JOBS; fi
+        cargo install cargo-deny --locked
+
     - name: Run native CI
       run: |
         if [ -z "$CARGO_BUILD_JOBS" ]; then unset CARGO_BUILD_JOBS; fi

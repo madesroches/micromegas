@@ -12,6 +12,18 @@ def run_native():
         ("Formatting Check", "cargo fmt --check", None),
         ("Clippy Linting", "cargo clippy --workspace -- -D warnings", None),
         ("Unused Dependencies Check", "cargo machete", None),
+        ("Advisory Audit", "cargo audit", None),
+        ("License & Supply-Chain (deny)", "cargo deny check licenses bans sources", None),
+        ("Advisory Audit (datafusion-wasm)", "cargo audit", wasm_crate),
+        (
+            # The wasm tree reuses the main deny.toml, whose `bans.skip` list is
+            # the union of both trees' duplicates. Skips that only apply to the
+            # main tree show up here as `unnecessary-skip`; allow that one lint so
+            # the shared config stays a single source of truth without noise.
+            "License & Supply-Chain (deny, datafusion-wasm)",
+            "cargo deny --config ../deny.toml check licenses bans sources --allow unnecessary-skip",
+            wasm_crate,
+        ),
         ("Running Tests", "cargo test", None),
     ]
     _run_steps("Native", steps)
