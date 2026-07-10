@@ -1,0 +1,13 @@
+# cargo-audit configuration for the datafusion-wasm tree.
+#
+# This crate is excluded from the main workspace and has its own Cargo.lock,
+# and cargo-audit has no --config flag and does not inherit a parent
+# directory's config, so ignores for this tree must live here (see
+# ../.cargo/audit.toml for the main-tree list and the ignore policy).
+[advisories]
+ignore = [
+    # paste 1.0.15 (RUSTSEC-2024-0436): unmaintained, not a vulnerability.
+    # Pulled transitively by the Arrow stack as a proc-macro; no maintained
+    # drop-in and nothing to bump on our side. Remove when upstream drops it.
+    "RUSTSEC-2024-0436",
+]

@@ -1,9 +1,11 @@
 # cargo-audit configuration — see https://docs.rs/cargo-audit
 #
-# Add an advisory ID here ONLY when there is no fixed version available yet.
-# Every entry MUST carry a comment: the advisory URL, why it does not apply
-# (or cannot be fixed yet), and a condition for removal. Revisit on each
-# dependency bump — remove the ignore as soon as a fix ships.
+# Add an advisory ID here ONLY when it cannot be resolved by a dependency
+# bump — either no fixed version exists (vulnerabilities) or the crate is
+# unmaintained with no maintained drop-in (informational warnings). Every
+# entry MUST carry a comment: the advisory URL/ID, why it can't be fixed
+# now, and a condition for removal. Revisit on each dependency bump — remove
+# the ignore as soon as a fix ships or the dependency drops the crate.
 [advisories]
 ignore = [
     # rsa 0.9.10, in micromegas-auth. RUSTSEC-2023-0071 is the "Marvin"
@@ -31,4 +33,16 @@ ignore = [
     # a fix ships; rollout tracked under #1246.
     "RUSTSEC-2026-0194",
     "RUSTSEC-2026-0195",
+
+    # paste 1.0.15 (RUSTSEC-2024-0436): unmaintained, not a vulnerability.
+    # Pulled transitively by the Arrow/Foyer stack (arrow-flight, foyer-memory)
+    # as a proc-macro; there is no maintained drop-in and nothing to bump on
+    # our side. Remove when those upstreams stop depending on `paste`.
+    "RUSTSEC-2024-0436",
+
+    # proc-macro-error2 2.0.1 (RUSTSEC-2026-0173): unmaintained, not a
+    # vulnerability. A build-time proc-macro reached transitively via
+    # defmt-macros; no maintained replacement and nothing to bump on our side.
+    # Remove when the dependency drops it.
+    "RUSTSEC-2026-0173",
 ]
