@@ -51,7 +51,7 @@ Micromegas consists of several key components:
 6.  **PostgreSQL Database:** Stores metadata about processes, streams, and data blocks, keeping the object storage indexable and fast to query.
 7.  **Object Storage (S3/GCS):** Stores all raw telemetry payloads and materialized query results in Parquet format.
 
-These roles can run as independent, horizontally-scalable services or bundled into a single `micromegas-monolith` process for local development and single-machine deployments. An optional shared read cache (`object-cache-srv`) can front the object store to cut egress cost and read latency across services.
+These roles can run as independent, horizontally-scalable services or bundled into a single `micromegas-monolith` process for local development and single-machine deployments. An optional shared read cache (`micromegas-object-cache-srv`) can front the object store to cut egress cost and read latency across services.
 
 ## Cost-Effectiveness
 
