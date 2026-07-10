@@ -108,13 +108,13 @@ the running service rather than a one-off manual purge.
 **local_test_env / dev scripts**
 - `local_test_env/ai_scripts/start_services.py` — service-name list (l.36), binary launch +
   `crond` arg (l.204), build `--bin telemetry-admin` (l.400), hardcoded log filename
-  `/tmp/admin.log` (write at l.202, echo at l.231) — rename to `/tmp/maintenance.log`.
+  `/tmp/admin.log` (write at l.202, echo at l.231) — rename to `/tmp/daemon.log`.
 - `local_test_env/ai_scripts/stop_services.py:53` — service-name list; `stop_services.py:66` —
-  `log_files` cleanup list entry `/tmp/admin.log`, rename to `/tmp/maintenance.log` so it still
+  `log_files` cleanup list entry `/tmp/admin.log`, rename to `/tmp/daemon.log` so it still
   cleans up the daemon's renamed log file.
 - `local_test_env/ai_scripts/start_services_with_oidc.py` — service list (l.70),
   `cargo run -p telemetry-admin -- crond` (l.229), hardcoded log filename `/tmp/admin.log` —
-  rename to `/tmp/maintenance.log` (write at l.227, echo at l.258).
+  rename to `/tmp/daemon.log` (write at l.227, echo at l.258).
 - `local_test_env/dev.py` — build (l.45), `cargo run … -p telemetry-admin -- crond` (l.211).
 
 **Docs (mkdocs + doc/)**
@@ -131,7 +131,7 @@ the running service rather than a one-off manual purge.
 - `rust/telemetry-admin-cli/README.md` — title + description.
 - `README.md:50` — "Maintenance Daemon (`telemetry-admin`)".
 - `CLAUDE.md:78` — service list mentions `telemetry-admin`.
-- `CLAUDE.md:97` — "Admin: `tail -f /tmp/admin.log`"; rename the log path to `/tmp/maintenance.log`
+- `CLAUDE.md:97` — "Admin: `tail -f /tmp/admin.log`"; rename the log path to `/tmp/daemon.log`
   and reword the "Admin:" label to reflect the maintenance daemon.
 - `AI_GUIDELINES.md:66` — "`telemetry-admin-cli/`: Administrative CLI tool".
 - `.github/copilot-instructions.md:59` — "admin CLI".
@@ -293,14 +293,14 @@ step asserts a passing `cargo build` while the two sides of the call are mismatc
 19. `local_test_env/ai_scripts/start_services.py`: service name `telemetry-admin` →
     `telemetry-maintenance-srv` (l.36), launch `[str(target_dir / "telemetry-maintenance-srv")]`
     dropping the `"crond"` arg (l.204), build `--bin telemetry-maintenance-srv` (l.400), and
-    rename the hardcoded log filename `/tmp/admin.log` → `/tmp/maintenance.log` (write at l.202,
+    rename the hardcoded log filename `/tmp/admin.log` → `/tmp/daemon.log` (write at l.202,
     echo at l.231).
 20. `local_test_env/ai_scripts/stop_services.py`: service name (l.53), and rename the
-    `log_files` cleanup list entry `/tmp/admin.log` → `/tmp/maintenance.log` (l.66) so it still
+    `log_files` cleanup list entry `/tmp/admin.log` → `/tmp/daemon.log` (l.66) so it still
     cleans up the daemon's renamed log file.
 21. `local_test_env/ai_scripts/start_services_with_oidc.py`: service list (l.70),
     `cargo run -p telemetry-maintenance-srv --` dropping `crond` (l.229), and the hardcoded log
-    filename `/tmp/admin.log` → `/tmp/maintenance.log` (write at l.227, echo at l.258).
+    filename `/tmp/admin.log` → `/tmp/daemon.log` (write at l.227, echo at l.258).
 22. `local_test_env/dev.py`: build `-p telemetry-maintenance-srv` (l.45),
     `cargo run … -p telemetry-maintenance-srv` dropping `crond` (l.211).
 
@@ -315,7 +315,7 @@ step asserts a passing `cargo build` while the two sides of the call are mismatc
     `doc/GETTING_STARTED.md`.
 25. Update `rust/public/src/lib.rs` doc comments (l.30 path, l.75 run command).
 26. Update `README.md:50`, `CLAUDE.md:78` (service list), `CLAUDE.md:97` (rename the "Admin:"
-    log-path line's `/tmp/admin.log` → `/tmp/maintenance.log` and reword the "Admin:" label for the
+    log-path line's `/tmp/admin.log` → `/tmp/daemon.log` and reword the "Admin:" label for the
     maintenance daemon), `AI_GUIDELINES.md:66`, `.github/copilot-instructions.md:59`.
 27. Add a `CHANGELOG.md` Unreleased entry (removed subcommands; binary + Docker-image rename as a
     breaking deployment change; new `MICROMEGAS_RETENTION_DAYS` knob; note that the public crate's
@@ -399,7 +399,7 @@ step asserts a passing `cargo build` while the two sides of the call are mismatc
   and `--retention-days` (no subcommands); a bare `cargo run --bin telemetry-maintenance-srv`
   starts the daemon.
 - End-to-end via `local_test_env/ai_scripts/start_services.py`: services come up, the maintenance
-  daemon starts under its new name, and partitions materialize (check `/tmp/maintenance.log` /
+  daemon starts under its new name, and partitions materialize (check `/tmp/daemon.log` /
   the daemon log and query `list_partitions()`).
 - Set `MICROMEGAS_RETENTION_DAYS=1` and confirm the hourly task logs deletion at the configured
   horizon (or unit-test `EveryHourTask` wiring if a lighter check is preferred).
