@@ -290,7 +290,3 @@ remaining Postgres `blocks` reads, tick this one off there.
   works (validates that `StreamMetadata.dependencies_metadata`/`objects_metadata` reconstructed from
   the `streams` view match the Postgres-sourced values).
 
-## Open Questions
-
-1. **Scope confirmation** — proceed with converting all three reads (recommended, per direction),
-   or land only the mandated `blocks`-scan removal and defer the stream conversion?
