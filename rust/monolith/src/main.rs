@@ -160,6 +160,10 @@ struct Cli {
     /// Opt out of auto-seeding the local FlightSQL data source in the web app DB
     #[clap(long)]
     no_seed_data_source: bool,
+
+    /// Delete lake data older than this many days (retention horizon, maintenance role)
+    #[clap(long, default_value = "90", env = "MICROMEGAS_RETENTION_DAYS")]
+    retention_days: i32,
 }
 
 // ---------------------------------------------------------------------------
@@ -280,11 +284,12 @@ async fn main() -> Result<()> {
             .clone();
         let shutdown = fanout.subscribe();
         let grace_c = grace;
+        let retention_days = args.retention_days;
         join_set.spawn(async move {
             let view_factory =
                 default_view_factory(lh.runtime().clone(), lh.lake().clone()).await?;
             let views_to_update = get_global_views_with_update_group(&view_factory);
-            daemon(lh, views_to_update, shutdown, grace_c).await
+            daemon(lh, views_to_update, retention_days, shutdown, grace_c).await
         });
     }
 

@@ -14,7 +14,7 @@ Graceful shutdown applies to every long-running service:
 | Telemetry ingestion | `telemetry-ingestion-srv` | In-flight HTTP ingestion requests |
 | FlightSQL | `flight-sql-srv` | In-flight query RPCs |
 | Analytics web app | `analytics-web-srv` | In-flight HTTP requests |
-| Maintenance daemon | `telemetry-admin crond` | Running materialization / retention tasks |
+| Maintenance daemon | `telemetry-maintenance-srv` | Running materialization / retention tasks |
 | Object cache | `micromegas-object-cache-srv` | In-flight range/object read requests |
 
 Each accepts a `--shutdown-grace-period-seconds` flag (default: **25**):
@@ -23,7 +23,7 @@ Each accepts a `--shutdown-grace-period-seconds` flag (default: **25**):
 telemetry-ingestion-srv      --shutdown-grace-period-seconds 25
 flight-sql-srv               --shutdown-grace-period-seconds 25
 analytics-web-srv            --shutdown-grace-period-seconds 25
-telemetry-admin crond        --shutdown-grace-period-seconds 25
+telemetry-maintenance-srv    --shutdown-grace-period-seconds 25
 micromegas-object-cache-srv  --shutdown-grace-period-seconds 25
 ```
 

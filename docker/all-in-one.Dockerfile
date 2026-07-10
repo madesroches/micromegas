@@ -79,14 +79,14 @@ RUN if [ "$TARGETARCH" = "arm64" ]; then \
       cargo build --release --target aarch64-unknown-linux-gnu \
         --bin telemetry-ingestion-srv \
         --bin flight-sql-srv \
-        --bin telemetry-admin \
+        --bin telemetry-maintenance-srv \
         --bin http-gateway-srv \
         --bin analytics-web-srv; \
     else \
       cargo build --release \
         --bin telemetry-ingestion-srv \
         --bin flight-sql-srv \
-        --bin telemetry-admin \
+        --bin telemetry-maintenance-srv \
         --bin http-gateway-srv \
         --bin analytics-web-srv; \
     fi
@@ -94,7 +94,7 @@ RUN if [ "$TARGETARCH" = "arm64" ]; then \
 RUN if [ "$TARGETARCH" = "arm64" ]; then ARCH_PATH="aarch64-unknown-linux-gnu/"; else ARCH_PATH=""; fi && \
     cp /build/rust/target/${ARCH_PATH}release/telemetry-ingestion-srv /build/telemetry-ingestion-srv && \
     cp /build/rust/target/${ARCH_PATH}release/flight-sql-srv /build/flight-sql-srv && \
-    cp /build/rust/target/${ARCH_PATH}release/telemetry-admin /build/telemetry-admin && \
+    cp /build/rust/target/${ARCH_PATH}release/telemetry-maintenance-srv /build/telemetry-maintenance-srv && \
     cp /build/rust/target/${ARCH_PATH}release/http-gateway-srv /build/http-gateway-srv && \
     cp /build/rust/target/${ARCH_PATH}release/analytics-web-srv /build/analytics-web-srv
 
@@ -108,7 +108,7 @@ RUN apt-get update && \
 # Copy all binaries
 COPY --from=rust-builder /build/telemetry-ingestion-srv /usr/local/bin/
 COPY --from=rust-builder /build/flight-sql-srv /usr/local/bin/
-COPY --from=rust-builder /build/telemetry-admin /usr/local/bin/
+COPY --from=rust-builder /build/telemetry-maintenance-srv /usr/local/bin/
 COPY --from=rust-builder /build/http-gateway-srv /usr/local/bin/
 COPY --from=rust-builder /build/analytics-web-srv /usr/local/bin/
 

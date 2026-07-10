@@ -50,7 +50,7 @@ def main():
     services = [
         "telemetry-ingestion-srv",
         "flight-sql-srv",
-        "telemetry-admin",
+        "telemetry-maintenance-srv",
         "micromegas-object-cache-srv",
         "micromegas-monolith",
     ]
@@ -63,7 +63,7 @@ def main():
     log_files = [
         "/tmp/ingestion.log",
         "/tmp/analytics.log",
-        "/tmp/admin.log",
+        "/tmp/daemon.log",
         "/tmp/object_cache.log",
         "/tmp/monolith.log",
     ]

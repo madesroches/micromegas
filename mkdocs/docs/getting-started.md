@@ -73,7 +73,7 @@ Install [Visual Studio Build Tools](https://visualstudio.microsoft.com/downloads
 
 #### Option A: Monolith (recommended)
 
-The simplest way to start everything is the monolith script, which builds and launches a single `micromegas-monolith` process running all roles (ingestion, analytics, web, admin):
+The simplest way to start everything is the monolith script, which builds and launches a single `micromegas-monolith` process running all roles (ingestion, analytics, web, maintenance):
 
 ```bash
 python3 local_test_env/ai_scripts/start_services.py --monolith
@@ -121,17 +121,17 @@ cd rust
 cargo run -p flight-sql-srv -- --disable-auth
 ```
 
-**Terminal 4: Admin Service**
+**Terminal 4: Maintenance Service**
 ```bash
 cd rust
-cargo run -p telemetry-admin -- crond
+cargo run -p telemetry-maintenance-srv
 ```
 
 !!! info "Service Roles"
     - **PostgreSQL**: Stores metadata and service configuration
     - **Ingestion Server**: Receives telemetry data from applications (port 9000)
     - **FlightSQL Server**: Provides SQL query interface for analytics (port 50051)
-    - **Admin Service**: Handles background processing and global view materialization
+    - **Maintenance Service**: Handles background processing and global view materialization
 
 ## Verify Installation
 

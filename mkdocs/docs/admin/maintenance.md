@@ -1,9 +1,9 @@
 # Maintenance Daemon
 
-`telemetry-admin` runs the maintenance daemon that keeps the data lake healthy. It
-is a long-running service you deploy alongside [ingestion](ingestion.md) and
-[FlightSQL](flight-sql.md): it materializes views on a schedule and runs retention
-cleanup.
+`telemetry-maintenance-srv` is the maintenance daemon that keeps the data lake
+healthy. It is a long-running service you deploy alongside
+[ingestion](ingestion.md) and [FlightSQL](flight-sql.md): it materializes views
+on a schedule and runs retention cleanup.
 
 Ad-hoc administration — inspecting partitions, retiring incompatible ones — is
 done through SQL and the Python API, not by driving this binary. See
@@ -20,15 +20,16 @@ It reads the lake from the environment:
 
 ```bash
 # from the rust/ directory
-cargo run --release --bin telemetry-admin -- crond
+cargo run --release --bin telemetry-maintenance-srv
 ```
 
-The Docker image (`admin.Dockerfile`) runs `telemetry-admin` as its entrypoint;
-pass `crond` as the command.
+The Docker image (`maintenance.Dockerfile`) runs `telemetry-maintenance-srv` as
+its entrypoint; no arguments are required.
 
 | Flag | Default | Description |
 |---|---|---|
 | `--shutdown-grace-period-seconds` | `25` | Seconds to let in-flight tasks finish on `SIGTERM` |
+| `--retention-days` | `90` | Delete lake data older than this many days (retention horizon) |
 
 On `SIGTERM` the daemon stops scheduling new tasks and drains those already
 running, up to the grace period. See
@@ -36,10 +37,11 @@ running, up to the grace period. See
 is safe to redo — a task that doesn't finish simply leaves its partition
 unwritten, and the next scheduled run redoes it.
 
-Run a **single** `crond` instance per lake. The scheduled tasks are not
-partitioned across instances, so multiple daemons would redundantly materialize
-the same partitions. Materialization is idempotent, so this is wasteful rather
-than corrupting — but there is no benefit to more than one.
+Run a **single** `telemetry-maintenance-srv` instance per lake. The scheduled
+tasks are not partitioned across instances, so multiple daemons would
+redundantly materialize the same partitions. Materialization is idempotent, so
+this is wasteful rather than corrupting — but there is no benefit to more than
+one.
 
 ## What it does
 
@@ -59,11 +61,21 @@ ones:
 
 The hourly task performs cleanup automatically:
 
-- **Deletes lake data older than 90 days** — blocks, streams, and processes past
-  the retention horizon are removed.
+- **Deletes lake data older than the retention horizon** — blocks, streams, and
+  processes past the horizon are removed.
 - **Deletes expired temporary files** left behind by query execution.
 
-The 90-day retention is the daemon's built-in policy.
+The retention horizon defaults to 90 days and is configurable via
+`--retention-days` or the `MICROMEGAS_RETENTION_DAYS` environment variable:
+
+```bash
+telemetry-maintenance-srv --retention-days 30
+# or
+export MICROMEGAS_RETENTION_DAYS=30
+```
+
+The flag takes precedence over the environment variable, which in turn takes
+precedence over the default.
 
 ## Ad-hoc administration
 

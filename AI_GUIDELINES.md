@@ -63,7 +63,7 @@ Micromegas is a unified observability platform with these core components:
 ### Services
 - **`telemetry-ingestion-srv/`**: HTTP service accepting telemetry data, stores metadata in PostgreSQL and payloads in object storage (S3/GCS)
 - **`flight-sql-srv/`**: Apache Arrow FlightSQL service for querying data using DataFusion
-- **`telemetry-admin-cli/`**: Administrative CLI tool
+- **`telemetry-maintenance-srv/`**: Maintenance daemon (view materialization + retention)
 
 ### Data Flow
 1. Applications use `micromegas-tracing` to emit telemetry (logs/metrics/spans)
