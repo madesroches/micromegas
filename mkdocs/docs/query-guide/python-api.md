@@ -393,7 +393,7 @@ log_streams = client.query_streams(
 )
 
 print(f"Found {len(streams)} total streams")
-print(f"Stream types: {streams['stream_type'].value_counts()}")
+print(f"Streams per process:\n{streams['process_id'].value_counts()}")
 ```
 
 ### `query_blocks(begin, end, limit, stream_id)`
@@ -428,8 +428,8 @@ for _, span in slow_spans.iterrows():
     duration_ms = span['duration'] / 1000000  # Convert nanoseconds to milliseconds
     print(f"  {span['name']}: {duration_ms:.2f}ms")
 
-# Analyze span hierarchy
-root_spans = spans[spans['parent_span_id'].isna()]
+# Analyze span hierarchy (root spans have depth 0)
+root_spans = spans[spans['depth'] == 0]
 print(f"Found {len(root_spans)} root operations")
 ```
 

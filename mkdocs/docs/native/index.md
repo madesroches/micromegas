@@ -87,7 +87,7 @@ void mm_log(MmHandle *handle, int level, const char *target, const char *msg);
 ```
 
 Emits a log event.  `target` is a subsystem name (e.g. `"myapp.render"`).
-Both `target` and `msg` may be `NULL` (silently ignored).
+A `NULL` `target` is substituted with `"capi"`; a `NULL` `msg` is silently ignored (no event is emitted).
 
 ### `mm_metric_i` / `mm_metric_f`
 

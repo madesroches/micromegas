@@ -110,11 +110,11 @@ void AMyGameMode::Tick(float DeltaSeconds)
                        TEXT("FPS"), TEXT("fps"), 1.0f / DeltaSeconds);
     
     // Game state metrics
-    MICROMEGAS_IMETRIC("Game", MicromegasTracing::Verbosity::Low,
+    MICROMEGAS_IMETRIC("Game", MicromegasTracing::Verbosity::Min,
                        TEXT("PlayerCount"), TEXT("count"), 
                        GetNumPlayers());
     
-    MICROMEGAS_IMETRIC("Game", MicromegasTracing::Verbosity::Low,
+    MICROMEGAS_IMETRIC("Game", MicromegasTracing::Verbosity::Min,
                        TEXT("AICount"), TEXT("count"),
                        GetWorld()->GetNumPawns() - GetNumPlayers());
     
@@ -123,7 +123,7 @@ void AMyGameMode::Tick(float DeltaSeconds)
     if (++FrameCounter % 60 == 0)
     {
         FPlatformMemoryStats MemStats = FPlatformMemory::GetStats();
-        MICROMEGAS_IMETRIC("Memory", MicromegasTracing::Verbosity::Low,
+        MICROMEGAS_IMETRIC("Memory", MicromegasTracing::Verbosity::Min,
                            TEXT("WorkingSetSize"), TEXT("bytes"),
                            MemStats.UsedPhysical);
     }
@@ -216,7 +216,7 @@ float AMyActor::TakeDamage(float DamageAmount, FDamageEvent const& DamageEvent,
                    *GetName(), ActualDamage,
                    DamageCauser ? *DamageCauser->GetName() : TEXT("Unknown")));
     
-    MICROMEGAS_FMETRIC("Combat", MicromegasTracing::Verbosity::High,
+    MICROMEGAS_FMETRIC("Combat", MicromegasTracing::Verbosity::Max,
                        TEXT("DamageDealt"), TEXT("points"), ActualDamage);
     
     return ActualDamage;
@@ -258,7 +258,7 @@ void AMyPlayerController::OnFire()
 {
     MICROMEGAS_LOG("Player.Input", MicromegasTracing::LogLevel::Trace,
                    TEXT("Fire action"));
-    MICROMEGAS_IMETRIC("Player.Actions", MicromegasTracing::Verbosity::High,
+    MICROMEGAS_IMETRIC("Player.Actions", MicromegasTracing::Verbosity::Max,
                        TEXT("Fire"), TEXT("count"), 1);
     
     // Fire logic...
@@ -266,7 +266,7 @@ void AMyPlayerController::OnFire()
 
 void AMyPlayerController::OnJump()
 {
-    MICROMEGAS_IMETRIC("Player.Actions", MicromegasTracing::Verbosity::High,
+    MICROMEGAS_IMETRIC("Player.Actions", MicromegasTracing::Verbosity::Max,
                        TEXT("Jump"), TEXT("count"), 1);
     // Jump logic...
 }
@@ -332,7 +332,7 @@ void AMyGameState::Tick(float DeltaSeconds)
 void AMyGameState::ServerRPC_Implementation(const FString& Data)
 {
     MICROMEGAS_SPAN_SCOPE("Network.RPC", "ServerRPC");
-    MICROMEGAS_IMETRIC("Network.RPC", MicromegasTracing::Verbosity::High,
+    MICROMEGAS_IMETRIC("Network.RPC", MicromegasTracing::Verbosity::Max,
                        TEXT("ServerCalls"), TEXT("count"), 1);
     
     // Process RPC...
@@ -340,7 +340,7 @@ void AMyGameState::ServerRPC_Implementation(const FString& Data)
 
 void AMyGameState::ClientRPC_Implementation(const FString& Data)
 {
-    MICROMEGAS_IMETRIC("Network.RPC", MicromegasTracing::Verbosity::High,
+    MICROMEGAS_IMETRIC("Network.RPC", MicromegasTracing::Verbosity::Max,
                        TEXT("ClientCalls"), TEXT("count"), 1);
     
     // Process RPC...
@@ -348,7 +348,7 @@ void AMyGameState::ClientRPC_Implementation(const FString& Data)
 
 void AMyGameState::OnRep_ReplicatedProperty()
 {
-    MICROMEGAS_IMETRIC("Network.Replication", MicromegasTracing::Verbosity::High,
+    MICROMEGAS_IMETRIC("Network.Replication", MicromegasTracing::Verbosity::Max,
                        TEXT("PropertyUpdates"), TEXT("count"), 1);
 }
 ```
@@ -391,7 +391,7 @@ void UMyAssetManager::OnLevelStreamingComplete(ULevelStreaming* StreamedLevel)
                        *StreamedLevel->GetWorldAssetPackageFName().ToString(),
                        SizeBytes / (1024.0f * 1024.0f)));
         
-        MICROMEGAS_IMETRIC("Content.Streaming", MicromegasTracing::Verbosity::Low,
+        MICROMEGAS_IMETRIC("Content.Streaming", MicromegasTracing::Verbosity::Min,
                            TEXT("LevelSize"), TEXT("bytes"), SizeBytes);
     }
 }
@@ -420,7 +420,7 @@ void AMyAIController::OnMoveCompleted(FAIRequestID RequestID, EPathFollowingResu
                    FString::Printf(TEXT("AI move completed: %s"), 
                    *UEnum::GetValueAsString(Result)));
     
-    MICROMEGAS_IMETRIC("AI.Movement", MicromegasTracing::Verbosity::High,
+    MICROMEGAS_IMETRIC("AI.Movement", MicromegasTracing::Verbosity::Max,
                        TEXT("MovesCompleted"), TEXT("count"), 1);
     
     Super::OnMoveCompleted(RequestID, Result);
@@ -453,7 +453,7 @@ void FMySceneProxy::GetDynamicMeshElements(...)
     MICROMEGAS_SPAN_SCOPE("Render.SceneProxy", "GetDynamicMeshElements");
     
     // Expensive rendering operations
-    MICROMEGAS_IMETRIC("Render", MicromegasTracing::Verbosity::High,
+    MICROMEGAS_IMETRIC("Render", MicromegasTracing::Verbosity::Max,
                        TEXT("DynamicElements"), TEXT("count"), Elements.Num());
 }
 ```
@@ -552,7 +552,7 @@ void UMyGameSubsystem::HandleError(const FString& ErrorContext, const FString& E
                    FString::Printf(TEXT("[%s] %s"), *ErrorContext, *ErrorMessage));
     
     // Track error metrics
-    MICROMEGAS_IMETRIC("Errors", MicromegasTracing::Verbosity::Low,
+    MICROMEGAS_IMETRIC("Errors", MicromegasTracing::Verbosity::Min,
                        *FString::Printf(TEXT("Error.%s"), *ErrorContext),
                        TEXT("count"), 1);
     

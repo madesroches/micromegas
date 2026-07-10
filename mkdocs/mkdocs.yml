@@ -104,7 +104,7 @@ nav:
         - Variables: web-app/notebooks/variables.md
         - Execution & Auto-Run: web-app/notebooks/execution.md
         - Screens as Code: web-app/notebooks/screens-as-code.md
-    - Deployment: admin/web-app.md
+    - Analytics Web App Deployment: admin/web-app.md
   - Integrations:
     - OpenTelemetry (OTLP): otlp/index.md
     - Unreal Engine:
@@ -126,10 +126,15 @@ nav:
     - Blender Add-on: blender/index.md
     - Native SDK (C ABI): native/index.md
   - Operations:
-    - Architecture: architecture/index.md
+    - Architecture:
+        - Overview: architecture/index.md
+        - Caching: architecture/caching.md
     - Administration:
         - Authentication: admin/authentication.md
-        - Web App Deployment: admin/web-app.md
+        - Telemetry Ingestion Server: admin/ingestion.md
+        - FlightSQL Server: admin/flight-sql.md
+        - Maintenance Daemon: admin/maintenance.md
+        - Analytics Web App Deployment: admin/web-app.md
         - Monolith Deployment: admin/monolith.md
         - Object Cache Deployment: admin/object-cache.md
         - Service Lifecycle & Shutdown: admin/service-lifecycle.md

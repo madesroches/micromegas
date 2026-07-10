@@ -39,7 +39,7 @@ This creates `micromegas-screens.json` with the server URL and a `managed_by` li
 
 ```json
 {
-  "managed_by": "https://github.com/org/repo/tree/main/screens",
+  "managed_by": "https://github.com/org/repo",
   "server": "https://micromegas.example.com"
 }
 ```
@@ -123,7 +123,7 @@ Refresh local files from server. With no arguments, pulls all locally-tracked sc
 micromegas-screens plan [NAME...]
 ```
 
-Preview what `apply` would change. Shows creates, updates, deletes, and untracked screens, and prints a **unified diff** for each modified screen. Pass `--color` to get colored diff output in a terminal. Read-only — no server mutations.
+Preview what `apply` would change. Shows creates, updates, deletes, and untracked screens, and prints a **unified diff** for each modified screen. Colored diff output is on by default in a terminal; pass `--no-color` to disable it. Read-only — no server mutations.
 
 ### `apply`
 

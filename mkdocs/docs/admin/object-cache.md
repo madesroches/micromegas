@@ -1,8 +1,11 @@
 # Object Cache Deployment
 
-`micromegas-object-cache-srv` is a shared HTTP range cache that sits in front of the data lake's object store. Split-mode services (FlightSQL, the maintenance daemon, ingestion) read overlapping byte ranges of the same Parquet/block files; routing those reads through one shared cache avoids re-fetching the same bytes from S3/GCS on every process, cutting egress cost and read latency.
+`micromegas-object-cache-srv` is a shared HTTP range cache that sits in front of the data lake's object store. Split-mode query services (FlightSQL and the maintenance daemon) read overlapping byte ranges of the same Parquet/block files; routing those reads through one shared cache avoids re-fetching the same bytes from S3/GCS on every process, cutting egress cost and read latency.
 
 It only caches **reads**. Writes, deletes, and listings always go straight to the origin store — see [What gets cached](#what-gets-cached) below.
+
+!!! info "Looking for the *why*, not the *how*?"
+    This is an operator/deployment guide. For an architecture-level view of how the cache tiers fit together — the in-process L1 cache, this L2 server, the metadata cache, and why there is no invalidation — see [Caching Architecture](../architecture/caching.md).
 
 ## Quick start with the local helper script
 
@@ -81,90 +84,58 @@ Authenticating *against the origin* (e.g. AWS credentials) uses the same environ
 
 ## Fetch scheduling & memory bounds
 
-Concurrent origin fetches share one global, priority-aware budget rather than a
-per-request cap:
+Origin fetches share one global, priority-aware budget rather than a per-request cap. The knobs
+that shape it are in the [environment variables](#environment-variables) table above; the ones
+worth tuning:
 
-- **Demand over prefetch.** Every origin GET is either `Demand` (a client's
-  `GET`/`POST /ranges` request) or `Prefetch` (background warming, #1198).
-  `MICROMEGAS_OBJECT_CACHE_DEMAND_RESERVED_FETCHES` of the total budget is
-  always available to demand reads; prefetch is capped at the remainder, so a
-  demand read is never stuck behind a large prefetch batch.
-- **Promotion.** If a demand read arrives for a block a prefetch call already
-  queued (but hasn't started fetching), that block is promoted to demand
-  priority and competes for reserved capacity immediately, instead of waiting
-  behind the rest of the prefetch batch.
-- **Coalescing.** Contiguous missing blocks are merged into one origin GET
-  (bounded by `MICROMEGAS_OBJECT_CACHE_MAX_COALESCED_GET_BYTES`) rather than
-  one GET per block.
-- **Cross-request memory budget.** `GET /obj/{key}` and `POST /ranges/{key}`
-  responses are streamed rather than assembled in memory: bytes are written
-  to the socket in bounded windows as they're fetched, so response size is no
-  longer capped. `MICROMEGAS_OBJECT_CACHE_MEMORY_BUDGET_MB` instead bounds the
-  sum of in-flight streaming-window bytes across *all* concurrent requests (1
-  MiB per permit). Each request charges `min(response size, a fixed per-stream
-  window)`: a small response charges close to its actual size (so plenty of
-  small reads can run concurrently), while a large one clamps to the window,
-  bounding per-request memory and gating how many large streaming requests can
-  run concurrently regardless of how big the response gets. The server floors
-  this budget at the window's size at startup and refuses to start below it,
-  since a smaller budget would make a large read's charge hang forever instead
-  of failing fast.
+- `--max-concurrent-fetches` / `--demand-reserved-fetches` — total origin-GET concurrency, and the
+  slice always reserved for demand reads so they never queue behind a large prefetch batch.
+- `--max-coalesced-get-bytes` — how large a run of contiguous missing blocks may be merged into a
+  single origin GET.
+- `--memory-budget-mb` — cross-request cap on in-flight streaming memory; the server refuses to
+  start if it is set below one per-stream window.
+
+See [Caching Architecture](../architecture/caching.md#read-path-mechanics) for how demand/prefetch
+prioritization, coalescing, and streaming work.
 
 ## Prefetch
 
-`POST /prefetch` warms the cache for a batch of keys at background priority, without serving any bytes back to the caller. The request body is `Content-Type: application/x-ndjson`: one JSON object per `\n`-terminated line, each describing a key to warm:
+`POST /prefetch` warms the cache for a batch of keys at background priority, returning `202 Accepted` immediately without serving bytes back. The body is `Content-Type: application/x-ndjson`, one JSON object per line:
 
 ```
 {"key": "blobs/abc", "size": 123456}
 {"key": "blobs/def", "size": 654321, "ranges": [[0, 65536]]}
 ```
 
-`size` must be the object's exact current size, supplied by the caller — the server trusts it rather than issuing an origin HEAD, since prefetch targets objects that are typically cold. `ranges` is optional; when absent or empty the whole object `[0, size)` is warmed, otherwise only the listed `[start, end)` ranges are.
-
-The body is parsed incrementally as it arrives, so there is no whole-batch size cap and no key-count cap. The only remaining ceiling is on a single NDJSON line (1 MiB) — a request with a line longer than that is rejected with `400`. There is also no per-item size limit: the fill worker streams the block-index space in bounded windows rather than materializing it, so warming an arbitrarily large (or even bogus) `size` costs constant per-item memory. An oversized `size` just stops warming at the first origin fetch past the object's real end. A malformed line is counted as `rejected` and does not abort the rest of the batch, since newline framing means one bad line can't desynchronize the ones that follow.
-
-The endpoint returns immediately with `202 Accepted` and a small JSON body:
+`size` is the object's exact size (the server trusts it rather than issuing a HEAD); `ranges` is optional and defaults to the whole object. A single NDJSON line is capped at 1 MiB. The response reports counts:
 
 ```json
 {"accepted": 1, "rejected": 0, "dropped": 1}
 ```
 
-- `accepted` — items enqueued onto the background fill queue.
-- `rejected` — items that failed key/prefix or range validation and were skipped; the rest of the batch still proceeds.
-- `dropped` — items load-shed because the queue (`MICROMEGAS_OBJECT_CACHE_PREFETCH_QUEUE_CAPACITY`) was full. Prefetch is best-effort: a full queue never blocks the caller or the response status.
+- `accepted` — enqueued onto the background fill queue.
+- `rejected` — failed key/prefix or range validation; the rest of the batch still proceeds.
+- `dropped` — load-shed because the queue (`MICROMEGAS_OBJECT_CACHE_PREFETCH_QUEUE_CAPACITY`) was full. Prefetch is best-effort — a full queue never blocks the caller.
 
-Fills run at the same `Prefetch` priority described in [Fetch scheduling & memory bounds](#fetch-scheduling--memory-bounds) above, so a large prefetch batch never starves a concurrent demand read. Prefetched blocks are admitted to the SSD tier only (not the RAM tier), so they don't compete with hot demand data for RAM residency; a later demand read against a prefetched block is served from SSD.
+Warmed blocks are admitted to the SSD tier only, so they don't evict hot demand data from RAM.
 
 ## Write-time warming
 
-When a writer (the maintenance daemon, JIT materialization, or a merge) finishes writing a new
-Parquet partition durably to the origin store *and* commits its row to
-`lakehouse_partitions` in PostgreSQL, it POSTs the partition's key to `/prefetch` so the cache
-pulls it from origin at prefetch priority *before* the follow-up query asks for it. This turns the
-first read of a new partition from a cold origin GET into a warm cache hit.
+When the writing service has the cache configured, a freshly-committed Parquet partition is warmed
+automatically: the writer POSTs its key to `/prefetch` so the first query read is a hit instead of
+a cold origin GET. It is fire-and-forget — a slow or unreachable cache never delays or fails a
+write — and costs one extra origin GET per new partition, paid by the cache.
 
-This is **notify-by-key**, not a write-through cache: the writer never pushes bytes into the
-cache — it only names the key that just became available, and the cache fetches it from origin
-itself, exactly like a prefetch triggered any other way. The write/materialization path is never
-delayed or failed by a warm: the POST is fired from a detached, fire-and-forget task, so a slow or
-unreachable cache has no effect on write latency or success.
+There is no separate on/off switch: it follows the same [client opt-in](#client-opt-in) as reads
+(`MICROMEGAS_OBJECT_CACHE_URL` + `MICROMEGAS_OBJECT_CACHE_API_KEY`). The `object_warm_requested`
+metric counts scheduled warms; a failed warm surfaces through `range_cache_client_prefetch_error`
+and just means that object's first read stays a cold miss.
 
-Write-time warming is enabled automatically whenever the writing service has the cache configured
-(`MICROMEGAS_OBJECT_CACHE_URL` + `MICROMEGAS_OBJECT_CACHE_API_KEY` set, per
-[Client opt-in](#client-opt-in) below) — there is no separate on/off switch. The cost is one extra
-origin GET per new partition, paid by the cache, off the write path.
-
-A warm is only ever requested for a non-empty partition (empty partitions have no object to warm).
-The underlying trigger is a general "warm any object by key" primitive (`DataLakeConnection::warm_object`),
-so nothing about it is partition-specific — the write-partition path is simply its first caller.
-The `object_warm_requested` metric counts scheduled warms; a failed warm (unreachable
-cache, non-2xx, etc.) surfaces through the existing `range_cache_client_prefetch_error` metric and
-simply means the first demand read of that object stays a cold miss rather than a hit — it does
-not raise an error anywhere.
+See [Caching Architecture](../architecture/caching.md#cache-warming) for the design.
 
 ## Client opt-in
 
-The cache is opt-in per client. Each split-mode service (ingestion, FlightSQL, the maintenance daemon) reads through it only when both of these are set in *its own* environment:
+The cache is opt-in per client. FlightSQL and the maintenance daemon use it only when both of these are set in *their own* environment:
 
 ```bash
 export MICROMEGAS_OBJECT_CACHE_URL=http://object-cache:8080
@@ -181,39 +152,23 @@ no-op.
 
 ## In-process L1 cache
 
-Query processes (FlightSQL, the monolith) also carry a small **in-process L1 cache**, independent
-of the `object-cache-srv` deployment described above. It sits closer to the query than this
-service does: L1 caches hot byte ranges directly inside the query process's memory, so a repeat
-read of the same partition never leaves the process, let alone reaches this cache server or the
-origin store. An L1 miss falls through to whatever store L1 wraps — this cache server if
-[client opt-in](#client-opt-in) is configured, otherwise the origin store directly — so the
-L1 → L2 (this service) → origin tiering still holds; L1 is just an additional tier in front of it.
+Query processes (FlightSQL, the monolith) also carry a small **in-process L1 cache** in front of
+this server: a repeat read of the same partition is served from the query process's own memory and
+never reaches this service or the origin. It is a sibling tier of the same object-cache subsystem —
+see [Caching Architecture](../architecture/caching.md) for how L1, this L2 server, and the origin
+fit together, and what L1 does and doesn't cover.
 
-L1 is sized by `MICROMEGAS_OBJECT_CACHE_L1_MB` (default `200`; `0` disables it) in the query
-process's own environment. It belongs to the same `MICROMEGAS_OBJECT_CACHE_*` family as this
-server's knobs — the two are sibling tiers of one object-cache subsystem: `_L1_MB` sizes the
-in-process L1 tier, while `MICROMEGAS_OBJECT_CACHE_RAM_MB` above sizes this server's own RAM tier.
-Set them independently.
+For operators there is one knob: `MICROMEGAS_OBJECT_CACHE_L1_MB` (default `200`; `0` disables), set
+in the *query* process's own environment. It sizes the in-process L1 RAM tier independently of
+`MICROMEGAS_OBJECT_CACHE_RAM_MB` above, which sizes this server's RAM tier.
 
-L1 covers exactly two read paths, both read-repeatedly on the query hot path:
-
-- Parquet partition reads (materialized views under `views/...`), through DataFusion's parquet
-  reader.
-- Static JSON/CSV table reads (`MICROMEGAS_STATIC_TABLES_URL`).
-
-It deliberately excludes raw blob reads (`blobs/{process_id}/{stream_id}/{block_id}`) — ETL
-materialization and the `get_payload`/`parse_block` SQL functions always read those directly from
-the origin/L2 stack, never through L1, since blobs are read exactly once and caching them would
-only add memory pressure for no benefit.
-
-L1 emits the same `RangeCache` hit/miss metrics described in [Monitoring](#monitoring) below, but
-without per-prefix labels, so every L1 hit/miss (parquet or static-table alike) reports
-`prefix="other"` — this gives aggregate L1 observability only, with no way to split lakehouse
-traffic from static-table traffic in the metrics.
+L1 emits the same `range_cache_*` hit/miss metrics as this server (see [Monitoring](#monitoring)),
+but without per-prefix labels — every L1 hit/miss reports `prefix="other"`, giving aggregate L1
+observability only.
 
 ## What gets cached
 
-Only reads. The client falls back transparently to the direct store on any cache error, non-2xx response, or oversized request, so an unreachable or misbehaving cache degrades to direct reads rather than failing requests:
+Only reads are cached, and the client falls back to a direct origin read on any cache error, so an unreachable or misbehaving cache degrades to direct reads rather than failing requests:
 
 | Operation | Path |
 |---|---|
@@ -221,11 +176,15 @@ Only reads. The client falls back transparently to the direct store on any cache
 | Writes (`put`, multipart upload) | Always direct to the origin store |
 | Deletes, listing, copy | Always direct to the origin store |
 
-This works because the lake is **write-once**: blocks are written to a deterministic path exactly once and never modified in place, so a cached range never goes stale and the cache never needs invalidation.
+Cached ranges never need invalidation because the lake is write-once; see [Caching Architecture](../architecture/caching.md) for why.
 
 ## Authentication
 
-The cache supports API keys only (no OIDC). Configure a key ring with `MICROMEGAS_API_KEYS` and give each client service its own named key, or pass `--disable-auth` for local development — matching the `--disable-auth` convention used by the other services.
+The cache authenticates with API keys only (no OIDC). Configure a key ring with `MICROMEGAS_API_KEYS` and give **each client its own named key**, so keys can be rotated or revoked per service. Issue keys only to the services that actually use the cache — currently **FlightSQL and the maintenance daemon**.
+
+Apply defense in depth: API keys are the application-layer check, but the cache is a purely internal service with no public role, so restrict it at the network layer too. Bind it to a private network and use a security group / firewall / Kubernetes `NetworkPolicy` so that **only the services that use the cache can reach its listen endpoint** — nothing else, the public internet included, should be able to open a connection.
+
+`--disable-auth` drops the API-key check and is for local development only — never on an endpoint reachable by anything but localhost.
 
 ## Health and readiness
 
@@ -256,9 +215,9 @@ The cache emits metrics through the standard micromegas tracing sink (queryable 
 | `object_cache_prefetch_requests` / `object_cache_prefetch_keys_enqueued` | cache server | `POST /prefetch` request and accepted-key counts. |
 | `object_cache_prefetch_dropped` | cache server | Prefetch items load-shed because the queue was full. A sustained non-zero rate means prefetch volume exceeds `MICROMEGAS_OBJECT_CACHE_PREFETCH_QUEUE_CAPACITY` / worker throughput. |
 | `object_cache_prefetch_keys_warmed` / `object_cache_prefetch_fill_error` | cache server | Prefetch fills that completed successfully vs. failed (e.g. key not found at the origin). |
-| `range_cache_client_prefetch_error` | each client | `CacheClientStore::prefetch` calls that failed (transport error or non-2xx). Best-effort — callers do not retry. |
-| `object_warm_requested` | writer (ingestion) | A cache warm was scheduled for a freshly-written object via `DataLakeConnection::warm_object` (e.g. a new partition; see [Write-time warming](#write-time-warming)). |
-| `range_cache_prefetch_admission_unexpected_none` | cache server | Defensive counter in the SSD-only prefetch admission path (`FoyerBackend::put`): bumped if `.force().insert(value)` unexpectedly returns `None`. Should never fire; a sustained non-zero rate points to an admission-path regression. |
+| `range_cache_client_prefetch_error` | each client | Client-side prefetch calls that failed (transport error or non-2xx). Best-effort — callers do not retry. |
+| `object_warm_requested` | maintenance daemon / JIT | A cache warm was scheduled for a freshly-written object (e.g. a new partition; see [Write-time warming](#write-time-warming)). |
+| `range_cache_prefetch_admission_unexpected_none` | cache server | Defensive counter in the SSD-only prefetch admission path: bumped if a force-insert unexpectedly reports no admission. Should never fire; a sustained non-zero rate points to an admission-path regression. |
 
 ### Latency
 
@@ -266,34 +225,34 @@ Spans (queryable in the spans table, correlatable with a trace) cover every fetc
 
 | Metric | Where | Meaning |
 |---|---|---|
-| `range_cache_fetch_permit_wait_ms` (`+ class`) | cache server | Time a coalesced origin fetch spent waiting for a fetch-budget permit before its `get_range` started. The highest-value signal for the #1203 scheduler — a rising `class="demand"` wait means demand is contending with prefetch (or with itself) for the shared budget. |
+| `range_cache_fetch_permit_wait_ms` (`+ class`) | cache server | Time a coalesced origin fetch spent waiting for a fetch-budget permit before its `get_range` started. The highest-value scheduler signal — a rising `class="demand"` wait means demand is contending with prefetch (or with itself) for the shared budget. |
 | `range_cache_origin_get_ms` (`+ class`) | cache server | Duration of the origin `get_range` call itself, once a permit was held. |
 | `object_cache_mem_permit_wait_ms` | cache server | Time a request spent waiting to acquire its cross-request memory-budget permits (`--memory-budget-mb`) before it could start streaming. A rising value means the memory budget, not the fetch budget, is the bottleneck. |
-| `object_cache_ttfb_ms` (`+ prefix`) | cache server | Time to first byte: handler entry to the first chunk being ready to send, now that streaming (#1189/#1222) has landed. |
+| `object_cache_ttfb_ms` (`+ prefix`) | cache server | Time to first byte: handler entry to the first chunk being ready to send. |
 | `range_cache_client_roundtrip_ms` | each client | Time for a streaming cache-path read (`get_range`/`get_full_stream`) to get a usable stream back from the cache server, measured before any body bytes are read. |
 | `range_cache_client_ranges_ms` | each client | Time for a `get_ranges` cache-path read to fully read and reassemble the framed multi-range response body. Not directly comparable to `range_cache_client_roundtrip_ms`, which is measured at time-to-headers rather than time-to-full-body. |
 | `range_cache_client_direct_ms` | each client | Time for the direct-store fallback path taken on a cache miss/error, on any of the above paths. Compare against the corresponding cache-path metric to confirm the cache path is actually winning end-to-end. |
 
 ### Saturation
 
-A background sampler (`object-cache-srv/src/saturation_monitor.rs`) emits these gauges on a fixed interval (5s by default), independent of request volume — the signals needed to tell *which* resource is the bottleneck, not just that requests are slow:
+A background sampler emits these gauges on a fixed interval (5s by default), independent of request volume — the signals needed to tell *which* resource is the bottleneck, not just that requests are slow:
 
 | Metric | Meaning |
 |---|---|
 | `object_cache_fetch_shared_occupancy` / `object_cache_fetch_shared_available` | Occupied/available slots in the total origin-GET concurrency budget (`--max-concurrent-fetches`). |
 | `object_cache_fetch_prefetch_occupancy` / `object_cache_fetch_prefetch_available` | Occupied/available slots in the prefetch-only sub-budget (`--max-concurrent-fetches` minus `--demand-reserved-fetches`). |
-| `object_cache_inflight_entries` | Number of block/`size()` keys currently in flight to origin. A key signal for the #1203 scheduler alongside the permit-wait latency above. |
+| `object_cache_inflight_entries` | Number of block/`size()` keys currently in flight to origin. A key scheduler signal alongside the permit-wait latency above. |
 | `object_cache_mem_budget_occupancy_mb` / `object_cache_mem_budget_available_mb` | Occupied/available MiB of the cross-request streaming memory budget (`--memory-budget-mb`). |
 | `object_cache_prefetch_queue_depth` | Items currently queued in the bounded `/prefetch` queue, waiting for a worker slot. |
-| `object_cache_nic_rx_bytes_per_sec` / `object_cache_nic_tx_bytes_per_sec` | Host-level network throughput. The expected ceiling on the target im4gn.large (#1197) instance type, and previously unmeasured. |
-| `object_cache_foyer_disk_write_bytes_per_sec` / `object_cache_foyer_disk_read_bytes_per_sec` | The foyer disk engine's own write/read throughput (`Statistics::disk_write_bytes` / `disk_read_bytes`), sourced from the cache engine itself rather than host disk enumeration — supersedes the old `object_cache_ssd_*` gauges, which always read 0 in the deployed container. The drain-throughput signal for whether the flushers are keeping up with write-in pressure (see "Tuning the write path" below). |
-| `object_cache_foyer_disk_write_ios_per_sec` / `object_cache_foyer_disk_read_ios_per_sec` | The foyer disk engine's own write/read IO rate (`Statistics::disk_write_ios` / `disk_read_ios`). |
+| `object_cache_nic_rx_bytes_per_sec` / `object_cache_nic_tx_bytes_per_sec` | Host-level network throughput — the expected ceiling on the deployment's instance type. |
+| `object_cache_foyer_disk_write_bytes_per_sec` / `object_cache_foyer_disk_read_bytes_per_sec` | The foyer disk engine's own write/read throughput, sourced from the cache engine rather than host disk enumeration. The drain-throughput signal for whether the flushers are keeping up with write-in pressure (see "Tuning the write path" below). |
+| `object_cache_foyer_disk_write_ios_per_sec` / `object_cache_foyer_disk_read_ios_per_sec` | The foyer disk engine's own write/read IO rate. |
 
 Routine fallback-to-direct is by-design graceful degradation and is logged at `debug` (not `warn`). Genuinely unexpected conditions — a truncated cache response, a backend IO fault, an internal server error — log at `warn`/`error`.
 
 ### Tuning the write path
 
-Prefetch fills are force-admitted to the SSD tier (`.force().insert()`, bypassing the admission picker), so a large prefetch burst can outrun foyer's disk-engine submit queue; when that happens foyer logs a recurring `submit queue overflow, new entry ignored` WARN and silently drops the entry (no crash, but a lower hit rate and more origin traffic). Two knobs control the ceiling:
+Prefetch fills are force-admitted to the SSD tier (bypassing the admission picker), so a large prefetch burst can outrun foyer's disk-engine submit queue; when that happens foyer logs a recurring `submit queue overflow, new entry ignored` WARN and silently drops the entry (no crash, but a lower hit rate and more origin traffic). Two knobs control the ceiling:
 
 - `MICROMEGAS_OBJECT_CACHE_FLUSHERS` — how many blocks can be written to disk concurrently.
 - `MICROMEGAS_OBJECT_CACHE_WRITE_BUFFER_MB` — the flush buffer pool size; the submit-queue overflow threshold is set to 2x this value.

@@ -100,8 +100,8 @@ The dashboard time range is automatically applied - no need for time filter macr
 
 ```sql
 SELECT
-  time_bucket('1 minute', time) AS time,
-  process_name,
+  date_bin('1 minute', time) AS time,
+  exe,
   COUNT(*) as event_count
 FROM log_entries
 WHERE level = 2
@@ -128,12 +128,12 @@ LIMIT 100
 
 ```sql
 SELECT
-  time_bucket('5 minutes', time) AS time,
-  metric_name,
+  date_bin('5 minutes', time) AS time,
+  name,
   AVG(value) as avg_value,
   MAX(value) as max_value
 FROM measures
-WHERE metric_name LIKE 'cpu.%'
+WHERE name LIKE 'cpu.%'
 GROUP BY 1, 2
 ORDER BY 1
 ```
@@ -245,7 +245,7 @@ ORDER BY time_bin
 -- ⚠️ Acceptable: Aggregate raw data
 -- Slow - scans all matching rows
 SELECT
-  time_bucket('1 minute', time) AS time,
+  date_bin('1 minute', time) AS time,
   COUNT(*) as error_count
 FROM log_entries
 WHERE level <= 2
@@ -275,7 +275,7 @@ The bottleneck in queries is **data scanning**, not data transfer. Aggregating r
 
 Both return the same amount of data, but `log_stats` is 100,000x faster because it scans 100,000x less data.
 
-**Recommendation**: Use `log_stats` for log volume analysis and trend monitoring. For other frequently-used aggregation queries, ask your administrator to create custom materialized views. See [Admin Guide - Materialized Views](../admin/authentication.md) for setup details.
+**Recommendation**: Use `log_stats` for log volume analysis and trend monitoring. For other frequently-used aggregation queries, ask your administrator to create custom materialized views. See [Admin Guide - Materialized Views](../admin/maintenance.md) for setup details.
 
 ## Advanced: Manual Time Filter Macros
 

@@ -26,7 +26,7 @@ export MICROMEGAS_GATEWAY_HEADERS='{
 | `blocked_headers` | Headers to block (overrides allows) |
 
 **Default headers (if not configured):**
-- `Authorization`, `X-Request-ID`, `X-User-ID`, `X-User-Email`, `User-Agent`
+- `Authorization`, `User-Agent`, `X-Client-Type`, `X-Correlation-ID`, `X-Request-ID`, `X-User-Email`, `X-User-ID`, `X-User-Name`
 - Blocks: `Cookie`, `Set-Cookie`, `X-Client-IP`
 
 **Security:**

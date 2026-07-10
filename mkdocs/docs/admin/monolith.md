@@ -82,7 +82,7 @@ The prefix fallback means `MICROMEGAS_API_KEYS` works for ingestion when `MICROM
 ```bash
 export MICROMEGAS_OIDC_CONFIG='{"issuers":[{"issuer":"https://your-idp.example.com","audience":"your-client-id"}]}'
 export MICROMEGAS_STATE_SECRET="<random-secret>"
-export MICROMEGAS_AUTH_REDIRECT_URI="http://localhost:3000/api/auth/callback"
+export MICROMEGAS_AUTH_REDIRECT_URI="http://localhost:3000/auth/callback"
 micromegas-monolith --disable-ingestion-auth
 ```
 

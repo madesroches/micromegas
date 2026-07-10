@@ -162,7 +162,7 @@ MICROMEGAS_FMETRIC("Game", MicromegasTracing::Verbosity::Max,
 
 ## Spans/Tracing API
 
-**Important:** Spans are **disabled by default**. Enable with console command: `telemetry.spans.enable 1`. Use reasonable sampling strategy for high-frequency spans.
+**Important:** Spans are **disabled by default in the editor** and **enabled by default in non-editor (game) builds**. Toggle with the console command `telemetry.spans.enable 0/1`. Use a reasonable sampling strategy for high-frequency spans.
 
 ### MICROMEGAS_SPAN_FUNCTION
 
@@ -769,7 +769,7 @@ MICROMEGAS_LOG("Render", MicromegasTracing::LogLevel::Info, TEXT("Render thread"
 // Safe from worker threads
 ParallelFor(NumItems, [](int32 Index)
 {
-    MICROMEGAS_IMETRIC("Worker", MicromegasTracing::Verbosity::High,
+    MICROMEGAS_IMETRIC("Worker", MicromegasTracing::Verbosity::Max,
                        TEXT("ItemProcessed"), TEXT("count"), 1);
 });
 ```
@@ -795,7 +795,7 @@ void UMyGameplayAbility::ActivateAbility(...)
 void UAnimInstance::NativeUpdateAnimation(float DeltaSeconds)
 {
     MICROMEGAS_SPAN_FUNCTION("Animation");
-    MICROMEGAS_FMETRIC("Animation", MicromegasTracing::Verbosity::High,
+    MICROMEGAS_FMETRIC("Animation", MicromegasTracing::Verbosity::Max,
                        TEXT("UpdateTime"), TEXT("ms"), DeltaSeconds * 1000);
     
     Super::NativeUpdateAnimation(DeltaSeconds);
