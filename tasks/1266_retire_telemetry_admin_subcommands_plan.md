@@ -107,7 +107,8 @@ the running service rather than a one-off manual purge.
 
 **local_test_env / dev scripts**
 - `local_test_env/ai_scripts/start_services.py` — service-name list (l.36), binary launch +
-  `crond` arg (l.204), build `--bin telemetry-admin` (l.400).
+  `crond` arg (l.204), build `--bin telemetry-admin` (l.400), hardcoded log filename
+  `/tmp/admin.log` (write at l.202, echo at l.231) — rename to `/tmp/maintenance.log`.
 - `local_test_env/ai_scripts/stop_services.py:53` — service-name list.
 - `local_test_env/ai_scripts/start_services_with_oidc.py` — service list (l.70),
   `cargo run -p telemetry-admin -- crond` (l.229).
@@ -278,7 +279,9 @@ crate. Recommended: delete.
 ### Phase 5 — Scripts
 21. `local_test_env/ai_scripts/start_services.py`: service name `telemetry-admin` →
     `telemetry-maintenance-srv` (l.36), launch `[str(target_dir / "telemetry-maintenance-srv")]`
-    dropping the `"crond"` arg (l.204), build `--bin telemetry-maintenance-srv` (l.400).
+    dropping the `"crond"` arg (l.204), build `--bin telemetry-maintenance-srv` (l.400), and
+    rename the hardcoded log filename `/tmp/admin.log` → `/tmp/maintenance.log` (write at l.202,
+    echo at l.231).
 22. `local_test_env/ai_scripts/stop_services.py:53`: service name.
 23. `local_test_env/ai_scripts/start_services_with_oidc.py`: service list (l.70),
     `cargo run -p telemetry-maintenance-srv --` dropping `crond` (l.229).
@@ -375,7 +378,7 @@ crate. Recommended: delete.
   and `--retention-days` (no subcommands); a bare `cargo run --bin telemetry-maintenance-srv`
   starts the daemon.
 - End-to-end via `local_test_env/ai_scripts/start_services.py`: services come up, the maintenance
-  daemon starts under its new name, and partitions materialize (check `/tmp/admin.log` /
+  daemon starts under its new name, and partitions materialize (check `/tmp/maintenance.log` /
   the daemon log and query `list_partitions()`).
 - Set `MICROMEGAS_RETENTION_DAYS=1` and confirm the hourly task logs deletion at the configured
   horizon (or unit-test `EveryHourTask` wiring if a lighter check is preferred).
@@ -383,13 +386,11 @@ crate. Recommended: delete.
   residual `telemetry-admin` / `crond` references (outside `tasks/completed/` and `CHANGELOG` l.85)
   to confirm nothing live was missed.
 
-## Open Questions
-- **Binary name.** Plan uses `telemetry-maintenance-srv` (matches the `*-srv` convention and the
-  issue's own first suggestion). If a different name is preferred (`maintenance-daemon`), it is a
-  find-and-replace across the same file set.
-- **Docker image rename scope.** Plan renames the published image `micromegas-admin` →
-  `micromegas-maintenance`. If operators must keep the existing image name for continuity, the
-  image name can stay while the binary inside it is renamed — but that reintroduces the
-  admin-vs-daemon naming mismatch at the image layer.
+## Resolved Decisions
+- **Binary name**: `telemetry-maintenance-srv`, matching the `*-srv` convention (see Naming and
+  Trade-offs).
+- **Docker image rename**: confirmed — `micromegas-admin` → `micromegas-maintenance`. This is a
+  breaking change for deployments pulling the published image; it is called out in the CHANGELOG
+  entry (see Trade-offs).
 </content>
 </invoke>
