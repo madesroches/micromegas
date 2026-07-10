@@ -279,7 +279,7 @@ impl View for ThreadSpansView {
                 lakehouse.clone(),
                 self.view_factory.clone(),
                 &self.stream_id,
-                query_range,
+                None,
             )
             .await
             .with_context(|| "find_stream_from_view")?,
