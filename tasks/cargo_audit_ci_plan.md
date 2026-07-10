@@ -281,13 +281,17 @@ main policy, following the same documented-ignore convention.
      advisories (RUSTSEC-2026-0194/0195), each with a tracking-issue reference.
    - Open a tracking issue for the ignored advisories (referenced from the config).
 3. **`rust/deny.toml`** — create with the `licenses`/`bans`/`sources` config above.
-4. **`rust/datafusion-wasm` coverage** — run `cargo audit` and
+4. **`rust/datafusion-wasm` coverage — run and triage.** Run `cargo audit` and
    `cargo deny --config ../deny.toml check licenses bans sources` from
    `rust/datafusion-wasm/` against its own `Cargo.lock` (deny reuses the main policy
-   directly; audit has no `--config` flag and cannot inherit `rust/.cargo/audit.toml`) and
-   triage any findings; add a scoped `rust/datafusion-wasm/.cargo/audit.toml` only if a
-   wasm-tree advisory needs ignoring, and a scoped `rust/datafusion-wasm/deny.toml` only if
-   the wasm tree's licenses/sources ever diverge from the main policy.
+   directly; audit has no `--config` flag and cannot inherit `rust/.cargo/audit.toml`).
+   `cargo audit` fails today on RUSTSEC-2026-0185 (quinn-proto 0.11.14): run
+   `cargo update -p quinn-proto` from `rust/datafusion-wasm/` to bump to 0.11.16
+   (in-semver, updates `rust/datafusion-wasm/Cargo.lock`) — same approach as the
+   crossbeam-epoch bump in step 2. Add a scoped `rust/datafusion-wasm/.cargo/audit.toml`
+   only if further triage turns up a wasm-tree advisory with no fix available, and a
+   scoped `rust/datafusion-wasm/deny.toml` only if the wasm tree's licenses/sources ever
+   diverge from the main policy.
 5. **`.github/workflows/rust.yml`** — add `Install cargo-audit` and `Install cargo-deny`
    steps to the `native` job (no `ubuntu-latest` guard; add cargo-audit version floor
    once confirmed).
@@ -348,8 +352,13 @@ main policy, following the same documented-ignore convention.
     the proposed `deny.toml`, though the output is noisy: expect ~9 wildcard warnings,
     ~40 duplicate-version warnings, and 8 non-fatal unresolved-workspace-dependency
     diagnostics (see Resolved Findings item 1) — none of these are failures.
-  - `cd rust/datafusion-wasm && cargo audit` and
-    `cd rust/datafusion-wasm && cargo deny check licenses bans sources` → run against the
+  - `cd rust/datafusion-wasm && cargo audit` → fails today with 1 vulnerability
+    (quinn-proto 0.11.14, RUSTSEC-2026-0185); expect exit 0 **after**
+    `cargo update -p quinn-proto` (bumps to 0.11.16, see Resolved Findings). The
+    "scoped ignore only if needed" mechanism (`rust/datafusion-wasm/.cargo/audit.toml`)
+    remains a fallback for future no-fix-available advisories — the concrete fix here is
+    the version bump, not an ignore.
+  - `cd rust/datafusion-wasm && cargo deny check licenses bans sources` → run against the
     wasm tree's own `Cargo.lock`; triage and record results the same way as the main tree
     (add scoped ignores/config only if needed).
 - Run the full pipeline locally: `python3 build/rust_ci.py native` and confirm all four
@@ -387,6 +396,16 @@ Non-fatal warnings (exit 0 under plain `cargo audit`; no action required now, ca
 for follow-up bumps): `paste` (unmaintained, RUSTSEC-2024-0436), `proc-macro-error2`
 (unmaintained, RUSTSEC-2026-0173), `anyhow` 1.0.102 (unsound `downcast_mut`,
 RUSTSEC-2026-0190).
+
+**`datafusion-wasm` tree baseline.** `cd rust/datafusion-wasm && cargo audit` currently
+**fails** with 1 vulnerability:
+
+| Advisory | Crate | Path | Fix available? | Resolution |
+|---|---|---|---|---|
+| RUSTSEC-2026-0185 | quinn-proto 0.11.14 | wasm tree, `rust/datafusion-wasm/Cargo.lock` | Yes (≥0.11.15) | `cargo update -p quinn-proto` (run in `rust/datafusion-wasm/`; bumps to 0.11.16, in-semver) |
+
+Non-fatal warnings in the wasm tree are the same class as the main tree (`paste`,
+`anyhow`) and require no action.
 
 **2. Allow `MPL-2.0`?** Yes. The only MPL-2.0 crate is `colored` 3.1.1 (terminal colors,
 via `micromegas-telemetry-sink`). MPL-2.0 is file-level weak copyleft with no obligations
