@@ -1,0 +1,47 @@
+# cargo-deny configuration — https://embarkstudios.github.io/cargo-deny/
+# Advisory scanning is intentionally handled by `cargo audit`, not here.
+
+[licenses]
+# Permissive licenses actually present in the dependency tree. Add a new
+# entry (with a one-line justification) only after reviewing the crate.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    "Unlicense",
+    "BSL-1.0",
+    "0BSD",
+    "CC0-1.0",
+    "MIT-0",
+    "bzip2-1.0.6",
+    "CDLA-Permissive-2.0",
+    # MPL-2.0: `colored` 3.1.1 (via micromegas-telemetry-sink). Weak,
+    # file-level copyleft — no obligations when consumed unmodified as a
+    # library dependency, so accepted. Verified `cargo deny check licenses`
+    # passes with this entry.
+    "MPL-2.0",
+]
+confidence-threshold = 0.8
+# Per-crate license clarifications/exceptions go here if a crate's SPDX
+# metadata is missing or wrong:
+# [[licenses.exceptions]]
+# name = "some-crate"
+# allow = ["..."]
+
+[bans]
+# Start permissive: a DataFusion/Arrow tree has many legitimate duplicate
+# versions. Surface them without failing the build; tighten to "deny" for
+# specific crates later via `skip`/`deny` once triaged.
+multiple-versions = "warn"
+wildcards = "warn"
+
+[sources]
+# Verified: the tree has no git deps and no non-crates.io registries.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

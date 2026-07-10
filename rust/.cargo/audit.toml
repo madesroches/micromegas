@@ -1,0 +1,21 @@
+# cargo-audit configuration — see https://docs.rs/cargo-audit
+#
+# Add an advisory ID here ONLY when there is no fixed version available yet.
+# Every entry MUST carry a comment: the advisory URL, why it does not apply
+# (or cannot be fixed yet), and a condition for removal. Revisit on each
+# dependency bump — remove the ignore as soon as a fix ships.
+[advisories]
+ignore = [
+    # rsa 0.9.10 (via jsonwebtoken -> micromegas-auth): Marvin timing
+    # side-channel. NO fixed upstream version exists as of this writing.
+    # Revisit when the `rsa` crate ships a fix. Tracked in #NNNN.
+    "RUSTSEC-2023-0071",
+
+    # quick-xml 0.39.4 (via object_store 0.13.2): DoS in XML parsing of
+    # object-store list responses. Fix is quick-xml >=0.41.0, but
+    # object_store 0.13.2 pins ^0.39 and object_store is in turn pinned by
+    # datafusion 54. Cannot bump within semver today. Remove once datafusion
+    # bumps object_store to a release that pulls quick-xml >=0.41. Tracked in #NNNN.
+    "RUSTSEC-2026-0194",
+    "RUSTSEC-2026-0195",
+]

@@ -12,6 +12,14 @@ def run_native():
         ("Formatting Check", "cargo fmt --check", None),
         ("Clippy Linting", "cargo clippy --workspace -- -D warnings", None),
         ("Unused Dependencies Check", "cargo machete", None),
+        ("Advisory Audit", "cargo audit", None),
+        ("License & Supply-Chain (deny)", "cargo deny check licenses bans sources", None),
+        ("Advisory Audit (datafusion-wasm)", "cargo audit", wasm_crate),
+        (
+            "License & Supply-Chain (deny, datafusion-wasm)",
+            "cargo deny --config ../deny.toml check licenses bans sources",
+            wasm_crate,
+        ),
         ("Running Tests", "cargo test", None),
     ]
     _run_steps("Native", steps)
