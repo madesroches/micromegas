@@ -271,9 +271,9 @@ impl View for ThreadSpansView {
         lakehouse: Arc<LakehouseContext>,
         query_range: Option<TimeRange>,
     ) -> Result<()> {
-        if query_range.is_none() {
+        let Some(query_range) = query_range else {
             anyhow::bail!("query range mandatory for thread spans view");
-        }
+        };
         let stream = Arc::new(
             find_stream_from_view(
                 lakehouse.clone(),
@@ -299,7 +299,6 @@ impl View for ThreadSpansView {
             last_block_end_time,
         )
         .with_context(|| "make_time_converter_from_latest_timing")?;
-        let query_range = query_range.unwrap();
         let blocks_view = BlocksView::new()?;
         let partitions = generate_stream_jit_partitions(
             &JitPartitionConfig::default(),
