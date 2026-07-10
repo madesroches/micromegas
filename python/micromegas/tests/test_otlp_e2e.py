@@ -25,7 +25,7 @@ from opentelemetry.proto.trace.v1 import trace_pb2
 
 from .otlp_helpers import (
     assert_eventually,
-    compute_otel_process_id,
+    discover_process_id,
     make_resource,
     string_kv,
 )
@@ -39,6 +39,10 @@ TRACES_ENDPOINT = f"{INGESTION_URL}/ingestion/otlp/v1/traces"
 
 PROTOBUF_HEADERS = {"Content-Type": "application/x-protobuf"}
 
+# OTLP data materializes into the global views within a second or two (the
+# maintenance daemon's per-second task). Poll with a small margin over that.
+POLL_TIMEOUT_S = 15
+
 
 def _now_ns():
     """Current wall-clock time as nanoseconds since the Unix epoch."""
@@ -49,27 +53,19 @@ def _fresh_resource_attrs():
     """Build a resource attribute set with a per-run-unique service.instance.id.
 
     Different tests / runs get distinct process_ids without needing a DB wipe
-    between runs. Returns (attrs_dict, expected_process_id).
+    between runs. The server derives the process_id from these attributes; the
+    test recovers it after ingestion via `discover_process_id(instance_id)`
+    rather than recomputing the hash. Returns (attrs_dict, instance_id).
     """
     instance_id = str(uuid.uuid4())
-    host_name = "otlp-e2e-host"
-    host_id = "otlp-e2e-host-id"
-    pid = "12345"
     attrs = {
         "service.name": "otlp-e2e",
         "service.instance.id": instance_id,
-        "host.name": host_name,
-        "host.id": host_id,
-        "process.pid": pid,
+        "host.name": "otlp-e2e-host",
+        "host.id": "otlp-e2e-host-id",
+        "process.pid": "12345",
     }
-    expected_pid = compute_otel_process_id(
-        host_name=host_name,
-        host_id=host_id,
-        pid=pid,
-        service_name="otlp-e2e",
-        instance_id=instance_id,
-    )
-    return attrs, expected_pid
+    return attrs, instance_id
 
 
 def _query_window():
@@ -133,7 +129,7 @@ def common_scope(name, version=""):
 
 
 def test_otlp_logs_e2e():
-    attrs, expected_pid = _fresh_resource_attrs()
+    attrs, instance_id = _fresh_resource_attrs()
     base_ns = _now_ns()
     req = _build_logs_request(attrs, base_ns)
 
@@ -147,7 +143,9 @@ def test_otlp_logs_e2e():
     assert resp.headers.get("content-type", "").startswith("application/x-protobuf")
 
     begin, end = _query_window()
-    pid_str = str(expected_pid)
+    pid_str = discover_process_id(
+        client, instance_id, begin, end, timeout_s=POLL_TIMEOUT_S
+    )
 
     def query_count():
         sql = (
@@ -158,7 +156,7 @@ def test_otlp_logs_e2e():
     df = assert_eventually(
         query_count,
         lambda r: not r.empty and int(r.iloc[0]["c"]) >= 5,
-        timeout_s=60,
+        timeout_s=POLL_TIMEOUT_S,
         msg=f"waiting for 5 log_entries with process_id={pid_str}",
     )
     assert int(df.iloc[0]["c"]) >= 5
@@ -232,7 +230,7 @@ def _build_metrics_request(resource_attrs, base_ns):
 
 
 def test_otlp_metrics_e2e():
-    attrs, expected_pid = _fresh_resource_attrs()
+    attrs, instance_id = _fresh_resource_attrs()
     base_ns = _now_ns()
     req = _build_metrics_request(attrs, base_ns)
 
@@ -245,7 +243,9 @@ def test_otlp_metrics_e2e():
     assert resp.status_code == 200, resp.text
 
     begin, end = _query_window()
-    pid_str = str(expected_pid)
+    pid_str = discover_process_id(
+        client, instance_id, begin, end, timeout_s=POLL_TIMEOUT_S
+    )
 
     def query_count():
         sql = f"SELECT count(*) AS c FROM measures " f"WHERE process_id = '{pid_str}'"
@@ -254,7 +254,7 @@ def test_otlp_metrics_e2e():
     df = assert_eventually(
         query_count,
         lambda r: not r.empty and int(r.iloc[0]["c"]) >= 2,
-        timeout_s=60,
+        timeout_s=POLL_TIMEOUT_S,
         msg=f"waiting for 2 measures with process_id={pid_str}",
     )
     assert int(df.iloc[0]["c"]) >= 2
@@ -344,7 +344,7 @@ def _build_traces_request(resource_attrs, base_ns):
 
 
 def test_otlp_traces_e2e():
-    attrs, expected_pid = _fresh_resource_attrs()
+    attrs, instance_id = _fresh_resource_attrs()
     base_ns = _now_ns()
     req, trace_id, root_span_id = _build_traces_request(attrs, base_ns)
 
@@ -357,7 +357,9 @@ def test_otlp_traces_e2e():
     assert resp.status_code == 200, resp.text
 
     begin, end = _query_window()
-    pid_str = str(expected_pid)
+    pid_str = discover_process_id(
+        client, instance_id, begin, end, timeout_s=POLL_TIMEOUT_S
+    )
 
     def query_count():
         sql = f"SELECT count(*) AS c FROM view_instance('otel_spans', '{pid_str}')"
@@ -366,7 +368,7 @@ def test_otlp_traces_e2e():
     df = assert_eventually(
         query_count,
         lambda r: not r.empty and int(r.iloc[0]["c"]) >= 3,
-        timeout_s=60,
+        timeout_s=POLL_TIMEOUT_S,
         msg=f"waiting for 3 spans with process_id={pid_str}",
     )
 
@@ -408,7 +410,7 @@ def test_otlp_idempotency_e2e():
     """POST the same logs payload twice — block_id is content-addressed, so
     the second insert hits ON CONFLICT (block_id) DO NOTHING and the row count
     stays at 5."""
-    attrs, expected_pid = _fresh_resource_attrs()
+    attrs, instance_id = _fresh_resource_attrs()
     base_ns = _now_ns()
     req = _build_logs_request(attrs, base_ns)
     body = req.SerializeToString()
@@ -420,7 +422,9 @@ def test_otlp_idempotency_e2e():
         assert resp.status_code == 200, f"attempt {i}: {resp.text}"
 
     begin, end = _query_window()
-    pid_str = str(expected_pid)
+    pid_str = discover_process_id(
+        client, instance_id, begin, end, timeout_s=POLL_TIMEOUT_S
+    )
 
     def query_count():
         sql = (
@@ -431,7 +435,7 @@ def test_otlp_idempotency_e2e():
     df = assert_eventually(
         query_count,
         lambda r: not r.empty and int(r.iloc[0]["c"]) >= 5,
-        timeout_s=60,
+        timeout_s=POLL_TIMEOUT_S,
         msg=f"waiting for 5 idempotent log_entries with process_id={pid_str}",
     )
     # Should be exactly 5 — the second POST is a no-op via block_id ON CONFLICT.
@@ -444,14 +448,14 @@ def test_otlp_idempotency_e2e():
 
 
 def test_otlp_content_type_rejection():
-    """OTLP/HTTP only accepts application/x-protobuf in v1; everything else
-    must come back as 415 with a google.rpc.Status proto body."""
-    # Use a syntactically valid empty logs request body, but advertise JSON.
+    """OTLP/HTTP accepts application/x-protobuf and application/json; any other
+    content-type must come back as 415 with a google.rpc.Status proto body."""
+    # Advertise an unsupported content-type; the body content is irrelevant.
     body = logs_service_pb2.ExportLogsServiceRequest().SerializeToString()
     resp = requests.post(
         LOGS_ENDPOINT,
         data=body,
-        headers={"Content-Type": "application/json"},
+        headers={"Content-Type": "text/plain"},
         timeout=10,
     )
     assert resp.status_code == 415, resp.text
