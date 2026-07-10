@@ -132,22 +132,23 @@ separate `find_process` call to discover the process id.
 
 ### DRY: shared `stream_metadata_from_batch_row` helper
 
-Add a helper in `metadata.rs` that builds a `StreamMetadata` from one Arrow row, parameterized by
-column-name prefix so it serves both the `streams` view (`""`) and the blocks/source view
-(`"streams."`):
+Add a helper in `metadata.rs` that builds a `StreamMetadata` from one Arrow row of the `streams`
+view's (unprefixed) columns:
 
 ```rust
 pub fn stream_metadata_from_batch_row(
     batch: &RecordBatch,
     row: usize,
-    prefix: &str, // "" for the streams view, "streams." for the blocks/source view
 ) -> Result<StreamMetadata>
 ```
 
 Body mirrors `jit_partitions.rs:300-339` (Binary→CBOR for deps/objs, `List<Utf8>`→`Vec<String>`
 for tags, `properties_column_by_name(...).jsonb_value(...)` for properties). Use it in
-`find_stream_from_view`. Refactoring the three existing extraction sites to call it is an optional
-follow-up cleanup (kept out of the critical path to bound scope — see Trade-offs).
+`find_stream_from_view`. The three existing blocks/source extraction sites read a mixed-prefix
+schema (`stream_id`/`process_id` unprefixed, `dependencies_metadata`/`objects_metadata`/`tags`/
+`properties`/`format` under `streams.`), so this helper — built for the uniformly-unprefixed
+`streams` view — doesn't directly serve them; refactoring those sites is left out of this change
+(see Trade-offs).
 
 ### Struct / constructor changes (`thread_spans_view.rs`)
 
@@ -216,7 +217,7 @@ snapshot-clone pattern used for `net_spans`/`async_events`.
 ## Implementation Steps
 
 1. **`rust/analytics/src/metadata.rs`**
-   - Add `stream_metadata_from_batch_row(batch, row, prefix)` helper (DRY extraction).
+   - Add `stream_metadata_from_batch_row(batch, row)` helper (DRY extraction, `streams` view only).
    - Add `find_stream_from_view(lakehouse, view_factory, stream_id, query_range)` using it.
    - Delete `find_stream` once its only caller is gone (step 2), and delete
      `stream_metadata_from_row` alongside it (its only caller is `find_stream`).
@@ -232,8 +233,9 @@ snapshot-clone pattern used for `net_spans`/`async_events`.
    - Move the `thread_spans` registration down to `ThreadSpansViewMaker::new(Arc::new(updated_factory.clone()))`.
 4. **`rust/analytics/src/time.rs`**
    - Delete `make_time_converter_from_db`; drop now-unused imports.
-5. (Optional DRY follow-up) refactor `jit_partitions.rs`, `parse_block_table_function.rs`,
-   `partition_source_data.rs` extraction sites onto `stream_metadata_from_batch_row`.
+5. (Out of scope) `jit_partitions.rs`, `parse_block_table_function.rs`, `partition_source_data.rs`
+   still read the blocks/source schema (mixed-prefix columns) and are left as-is;
+   `stream_metadata_from_batch_row` is not a drop-in replacement for them (see Trade-offs).
 6. `cargo fmt`, `cargo clippy --workspace -- -D warnings`, analytics tests.
 
 ## Files to Modify
@@ -242,8 +244,6 @@ snapshot-clone pattern used for `net_spans`/`async_events`.
 - `rust/analytics/src/lakehouse/thread_spans_view.rs`
 - `rust/analytics/src/lakehouse/view_factory.rs`
 - `rust/analytics/src/time.rs`
-- (optional) `rust/analytics/src/lakehouse/jit_partitions.rs`,
-  `parse_block_table_function.rs`, `partition_source_data.rs`
 
 ## Trade-offs
 
@@ -260,9 +260,13 @@ snapshot-clone pattern used for `net_spans`/`async_events`.
   call, but this is a low-frequency JIT path and the win is removing the unprunable `blocks` scan
   and shedding Postgres load. Not worth folding into a single joined query (added coupling, less
   reuse of the existing `find_process_with_latest_timing`).
-- **Shared extraction helper vs. inlining.** A parameterized `stream_metadata_from_batch_row`
-  removes a 4th copy of the same Arrow decode and gives an obvious home for later de-duplication of
-  the existing three, without forcing that refactor into this change.
+- **Shared extraction helper vs. inlining.** `stream_metadata_from_batch_row` avoids a 4th copy of
+  the same Arrow decode for the `streams` view. It does not de-duplicate the existing three
+  blocks/source sites (`jit_partitions.rs:300-309`, `parse_block_table_function.rs:120-141`,
+  `partition_source_data.rs:179-199`): those read a mixed-prefix schema (`stream_id`/`process_id`
+  unprefixed, the rest under `streams.`), which this single-schema helper doesn't cover. Unifying
+  them would need a different helper shape (e.g. explicit column names per field, or two prefix
+  arguments) and is left out of this change.
 - **Deleting `make_time_converter_from_db`/`find_stream`** vs. leaving them: deleting removes
   dead, unpruned-Postgres-read helpers so nothing reintroduces them by habit. `find_process`,
   `make_time_converter_from_block_meta`, `make_time_converter_from_latest_timing`, and
