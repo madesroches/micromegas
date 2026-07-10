@@ -180,7 +180,11 @@ Cached ranges never need invalidation because the lake is write-once; see [Cachi
 
 ## Authentication
 
-The cache supports API keys only (no OIDC). Configure a key ring with `MICROMEGAS_API_KEYS` and give each client service its own named key, or pass `--disable-auth` for local development — matching the `--disable-auth` convention used by the other services.
+The cache authenticates with API keys only (no OIDC). Configure a key ring with `MICROMEGAS_API_KEYS` and give **each client its own named key**, so keys can be rotated or revoked per service. Only the two services that use the cache need a key — **FlightSQL and the maintenance daemon**; ingestion is not a client and should not be issued one.
+
+Apply defense in depth: API keys are the application-layer check, but the cache is a purely internal service with no public role, so restrict it at the network layer too. Bind it to a private network and use a security group / firewall / Kubernetes `NetworkPolicy` so that **only FlightSQL and the maintenance daemon can reach its listen endpoint** — nothing else, ingestion or the public internet included, should be able to open a connection.
+
+`--disable-auth` drops the API-key check and is for local development only — never on an endpoint reachable by anything but localhost.
 
 ## Health and readiness
 
