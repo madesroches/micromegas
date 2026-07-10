@@ -1,4 +1,4 @@
-# Web App Deployment
+# Analytics Web App Deployment
 
 > **TLDR:** The web app is a dev/demo tool. For production use, query via FlightSQL directly.
 
