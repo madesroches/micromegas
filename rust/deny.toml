@@ -34,11 +34,67 @@ confidence-threshold = 0.8
 # allow = ["..."]
 
 [bans]
-# Start permissive: a DataFusion/Arrow tree has many legitimate duplicate
-# versions. Surface them without failing the build; tighten to "deny" for
-# specific crates later via `skip`/`deny` once triaged.
-multiple-versions = "warn"
+# Duplicate versions are an error: a new, un-exempted duplicate fails the
+# build so it gets a deliberate look. The crates below are the duplicates
+# already present in the tree (mostly unavoidable ecosystem splits — the
+# `windows-*` API crates mid-migration, the RustCrypto trait crates, and
+# transitive `rand`/`getrandom`/`hashbrown` version skew from DataFusion).
+# Each is skipped by name, so all of its current versions are accepted;
+# a brand-new duplicated crate is not on the list and therefore fails.
+# Revisit periodically and drop entries as the tree converges — a stale
+# entry surfaces as an `unnecessary-skip` warning.
+# This list is the union across both the main workspace and the
+# `datafusion-wasm` tree (which shares this config via `--config ../deny.toml`
+# and whose duplicates are a subset of the main tree's).
+multiple-versions = "deny"
 wildcards = "warn"
+skip = [
+    # windows-* API crate family (split across major versions during the
+    # ongoing windows-rs ecosystem migration)
+    "windows",
+    "windows-collections",
+    "windows-core",
+    "windows-future",
+    "windows-implement",
+    "windows-link",
+    "windows-numerics",
+    "windows-result",
+    "windows-strings",
+    "windows-sys",
+    "windows-targets",
+    "windows_aarch64_gnullvm",
+    "windows_aarch64_msvc",
+    "windows_i686_gnu",
+    "windows_i686_gnullvm",
+    "windows_i686_msvc",
+    "windows_x86_64_gnu",
+    "windows_x86_64_gnullvm",
+    "windows_x86_64_msvc",
+    # RustCrypto trait/impl crates (traits split across versions)
+    "block-buffer",
+    "const-oid",
+    "cpufeatures",
+    "crypto-common",
+    "digest",
+    "md-5",
+    "sha2",
+    # rand / getrandom / hashbrown version skew (DataFusion/Arrow tree)
+    "getrandom",
+    "hashbrown",
+    "rand",
+    "rand_chacha",
+    "rand_core",
+    "r-efi",
+    # misc transitive duplicates
+    "base64",
+    "core-foundation",
+    "foldhash",
+    "itertools",
+    "ordered-float",
+    "redox_syscall",
+    "thiserror",
+    "thiserror-impl",
+]
 
 [sources]
 # Verified: the tree has no git deps and no non-crates.io registries.

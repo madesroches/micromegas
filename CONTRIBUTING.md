@@ -76,17 +76,20 @@ and `rust/datafusion-wasm/` (excluded from the main workspace, so it has its own
   vulnerability with a fixed version available; unmaintained/unsound/yanked warnings are
   reported but do not fail the build. Requires cargo-audit `>=0.22` — older releases
   cannot parse advisories with CVSS 4.0 scores.
-- **`cargo deny check licenses bans sources`** — license allowlist, duplicate/wildcard
-  dependency visibility, and source (registry/git) allowlist. Advisory scanning is
-  intentionally left to `cargo audit`, so cargo-deny's `advisories` check is not run.
+- **`cargo deny check licenses bans sources`** — license allowlist, duplicate-version
+  bans (a new, un-exempted duplicate fails the build; wildcard deps are reported but
+  non-fatal), and source (registry/git) allowlist. Advisory scanning is intentionally
+  left to `cargo audit`, so cargo-deny's `advisories` check is not run.
 
 Run them standalone the same way CI does:
 ```bash
 cd rust && cargo audit
 cd rust && cargo deny check licenses bans sources
 cd rust/datafusion-wasm && cargo audit
-cd rust/datafusion-wasm && cargo deny --config ../deny.toml check licenses bans sources
+cd rust/datafusion-wasm && cargo deny --config ../deny.toml check licenses bans sources --allow unnecessary-skip
 ```
+(The wasm tree reuses `rust/deny.toml`; `--allow unnecessary-skip` suppresses warnings for
+skip entries that only apply to the main workspace's larger dependency tree.)
 
 **Adding a documented advisory ignore** (only when no fixed version exists yet): add the
 advisory ID to `ignore` in `rust/.cargo/audit.toml`, with a comment giving the advisory
@@ -97,6 +100,13 @@ cargo-audit has no `--config` flag and does not inherit a parent directory's con
 **Adding a license allow entry**: add the SPDX identifier to `[licenses].allow` in
 `rust/deny.toml`, with a one-line comment identifying which crate needs it and why the
 license is acceptable.
+
+**Accepting a new duplicate crate version**: if `cargo deny check bans` fails on a new
+duplicate, first prefer resolving the skew (align versions via a dependency bump). If the
+duplicate is unavoidable (typically a transitive ecosystem split), add the crate name to
+`[bans].skip` in `rust/deny.toml`. Skips are by name, so all of the crate's current
+versions are accepted; keep the list grouped and drop entries as the tree converges (a
+stale entry surfaces as an `unnecessary-skip` warning).
 
 ### Local Pre-commit Hook (Recommended)
 
