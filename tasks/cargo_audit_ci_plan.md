@@ -294,8 +294,10 @@ offline (metadata + lock only).
   - `cd rust && cargo audit` → expect exit 0 **after** the crossbeam bump and the three
     documented ignores are in place (it fails today with 4 vulns — see Resolved
     Findings).
-  - `cd rust && cargo deny check licenses bans sources` → already passes with the
-    proposed `deny.toml`.
+  - `cd rust && cargo deny check licenses bans sources` → already passes (exit 0) with
+    the proposed `deny.toml`, though the output is noisy: expect ~9 wildcard warnings,
+    ~40 duplicate-version warnings, and 8 non-fatal unresolved-workspace-dependency
+    diagnostics (see Resolved Findings item 1) — none of these are failures.
 - Run the full pipeline locally: `python3 build/rust_ci.py native` and confirm both new
   steps appear and pass.
 - Negative checks (manual, throwaway, then revert):
@@ -308,9 +310,15 @@ offline (metadata + lock only).
 All three original open questions were resolved by installing the tooling
 (cargo-audit 0.22.2, cargo-deny 0.20.2) and running it against the committed lock/tree.
 
-**1. Does the tree pass today?** `cargo deny check licenses bans sources` **passes** with
-the proposed `deny.toml` (one benign wildcard warning on the workspace-inherited
-`micromegas` dep in the `write-perfetto` example — non-fatal under `wildcards = "warn"`).
+**1. Does the tree pass today?** `cargo deny check licenses bans sources` **passes**
+(exit 0) with the proposed `deny.toml`, but the output is noisy, not clean: ~9
+`warning[wildcard]` entries across workspace crates (analytics-web-srv, flight-sql-srv,
+http-gateway, telemetry-ingestion-srv, telemetry-maintenance-srv, uri-handler,
+write-perfetto, micromegas-monolith, micromegas-object-cache-srv — all
+workspace-inherited deps, non-fatal under `wildcards = "warn"`), ~40 `warning[duplicate]`
+entries (expected on an Arrow/DataFusion tree under `multiple-versions = "warn"`), and 8
+non-fatal `bug[unresolved-workspace-dependency]` diagnostics. None of this fails the
+build — it is the expected shape of the passing output, not a sign of breakage.
 `cargo audit` currently **fails** with 4 vulnerabilities (plus 3 non-fatal warnings),
 each with a determined resolution:
 
