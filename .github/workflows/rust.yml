@@ -62,10 +62,14 @@ jobs:
       run: cargo install cargo-machete
 
     - name: Install cargo-audit
-      run: cargo install cargo-audit --locked --version '^0.22'
+      run: |
+        if [ -z "$CARGO_BUILD_JOBS" ]; then unset CARGO_BUILD_JOBS; fi
+        cargo install cargo-audit --locked --version '^0.22'
 
     - name: Install cargo-deny
-      run: cargo install cargo-deny --locked
+      run: |
+        if [ -z "$CARGO_BUILD_JOBS" ]; then unset CARGO_BUILD_JOBS; fi
+        cargo install cargo-deny --locked
 
     - name: Run native CI
       run: |
