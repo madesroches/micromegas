@@ -3,14 +3,14 @@ name: micromegas-query
 description: Query micromegas observability data (logs, metrics, spans) using SQL. Use when the user wants to explore telemetry data, investigate errors, check performance, or analyze system behavior.
 argument-hint: "<SQL query or natural language question about observability data>"
 context: fork
-allowed-tools: Bash(source ~/.micromegas_env *), Bash(pip install micromegas), Bash(micromegas-query *), Bash(which micromegas-query), Bash(printenv MICROMEGAS_ANALYTICS_URI), Read, Glob, Grep, WebFetch(https://micromegas.info/*), WebFetch(https://datafusion.apache.org/*)
+allowed-tools: Bash(source ~/.micromegas_env), Bash(source ~/.micromegas_env *), Bash(pip install micromegas), Bash(micromegas-query *), Bash(which micromegas-query), Bash(printenv MICROMEGAS_ANALYTICS_URI), Read, Write, Edit, Glob, Grep, WebFetch(https://micromegas.info/*), WebFetch(https://datafusion.apache.org/*)
 ---
 
 The user's query or question: $ARGUMENTS
 
 ## MANDATORY RULES — read before writing ANY query
 
-1. **Every query MUST have `--begin` (and optionally `--end`).** No exceptions — not for DESCRIBE, not for SELECT DISTINCT, not for process lookups, not for exploratory queries. Default to `--begin 1h` when in doubt; narrow further when possible. The **only** exception: `--all` may be used for lightweight aggregate-only queries (`COUNT(*)`, `COUNT(DISTINCT ...)`, `MIN/MAX`) that return a single row or a small fixed number of rows. Never use `--all` with queries that return raw rows or unbounded GROUP BY result sets.
+1. **Every query MUST have `--begin` (and optionally `--end`).** No exceptions — not for `SELECT DISTINCT`, not for process lookups, not for exploratory queries. Default to `--begin 1h` when in doubt; narrow further when possible. The **only** exception: `--all` may be used for lightweight aggregate-only queries (`COUNT(*)`, `COUNT(DISTINCT ...)`, `MIN/MAX`) that return a single row or a small fixed number of rows. Never use `--all` with queries that return raw rows or unbounded GROUP BY result sets.
 2. **Every query MUST have a `LIMIT` clause** unless the user explicitly asks for all rows or the query is a pure aggregate (COUNT, SUM, etc.) guaranteed to return a small result set. Default to `LIMIT 20`. For GROUP BY queries, still add LIMIT (e.g. `LIMIT 50`).
 3. **Use `--begin`/`--end` CLI flags for time filtering, never `WHERE time >= ...` in SQL.** The CLI flags enable server-side partition pruning, making queries much faster.
 4. **Use `view_instance()` for single-process/stream queries.** Much better performance than filtering with WHERE.
@@ -44,11 +44,11 @@ export MICROMEGAS_OIDC_CLIENT_ID=<value from user>
 export MICROMEGAS_OIDC_AUDIENCE=<value from user>
 export MICROMEGAS_OIDC_SCOPE="openid email profile offline_access"
 ```
-Then append `source ~/.micromegas_env` to the user's shell profile (`~/.bashrc` or `~/.zshrc`) only if that source line is not already present. Source it in the current session.
+Then append `source ~/.micromegas_env` to the user's shell profile (`~/.bashrc` or `~/.zshrc`) only if that source line is not already present. The profile append is what matters: each command runs in a fresh shell, so sourcing the file in one command does **not** carry over to the next `micromegas-query` invocation — the profile line ensures every new shell picks up the config.
 
-Verify setup with:
+Verify setup with (source the env in the same command so it applies before the profile append takes effect in new shells):
 ```
-micromegas-query "SELECT 1" --begin 1h
+source ~/.micromegas_env && micromegas-query "SELECT 1" --begin 1h
 ```
 
 ## CLI syntax
@@ -60,7 +60,7 @@ micromegas-query [--file <path|->] ["<SQL>"] --begin <time> [--end <time>] [--fo
 - `--begin` is **always required** except when using `--all` for lightweight aggregate-only queries (see MANDATORY RULES).
 - `--file` accepts a `.sql` file path or `-` for stdin, as an alternative to the inline SQL positional argument. Using `--file` avoids awkward shell quoting when queries contain JSONPath expressions (e.g., `$[*].attributes[*]?(@.key=="Branch").value`).
 - Time formats: relative (`1h`, `30m`, `7d`) or RFC 3339
-- **ALWAYS use `--begin`/`--end` for time filtering, NEVER use `WHERE time >= ... AND time <= ...` in SQL.** The CLI flags enable server-side partition pruning, making queries much faster.
+- Use `--begin`/`--end` for time filtering, never `WHERE time >= ...` in SQL (see MANDATORY RULES).
 - Use `--format csv` or `--format json` when processing results programmatically (csv for flat data, json when properties/nested fields matter)
 - `--max-colwidth 0` for unlimited column width
 
@@ -71,6 +71,8 @@ Views are listed below. **Do not run DESCRIBE queries** — all schemas are docu
 **Ignore internal tables:** Tables prefixed with `__` and suffixed with `__partitions` (e.g. `__log_entries__partitions`) are internal partition tables — never query them directly.
 
 **Log levels:** 1=Fatal, 2=Error, 3=Warn, 4=Info, 5=Debug, 6=Trace
+
+**Type notes:** Types below are simplified for readability. `Dictionary(Utf8)` columns are dictionary-encoded (`Dictionary(Int16, Utf8)`) and behave like `Utf8` in SQL. `properties`/`process_properties` shown as `Binary` are actually `Dictionary(Int32, Binary)` — always read them via `property_get()` / the JSONB functions rather than treating them as raw bytes.
 
 ### `processes` — process metadata (global)
 
@@ -104,9 +106,12 @@ Views are listed below. **Do not run DESCRIBE queries** — all schemas are docu
 | tags | List(Utf8) |
 | properties | Binary (use `property_get()`) |
 | insert_time | Timestamp(ns, UTC) |
+| format | Utf8 |
 | last_update_time | Timestamp(ns, UTC) |
 
 ### `blocks` — block metadata with joined stream/process info (global)
+
+Common columns below. The view also exposes the full set of joined `streams.*` and `processes.*` fields (e.g. `streams.dependencies_metadata`, `streams.insert_time`, `streams.format`, `processes.start_time`, `processes.tsc_frequency`, `processes.realname`, `processes.distro`, `processes.cpu_brand`, `processes.parent_process_id`, …).
 
 | Column | Type |
 |--------|------|
@@ -221,7 +226,7 @@ High-frequency numeric metrics. Use `view_instance('measures', process_id)` for 
 - `process_spans(process_id, 'thread'|'async'|'both')` — all spans for a process with `stream_id` and `thread_name` columns. **Extremely dense** — always use tight `--begin`/`--end` and `LIMIT`.
 - `list_partitions()` — list available data partitions with metadata
 - `expand_histogram(h)` — expands a histogram into rows of `(bin_center, count)` for visualization
-- `jsonb_each(jsonb)` — expand JSONB object/array into rows of `(key, value)`
+- `jsonb_each(jsonb)` — expand JSONB object/array into rows of `(key, value)`. `value` is raw JSONB (Binary) — wrap it with `jsonb_as_string()`/`jsonb_as_f64()`/`jsonb_format_json()` to read it.
 
 ### Property functions
 - `property_get(properties, key)` — extract property values
