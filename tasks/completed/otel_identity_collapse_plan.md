@@ -1,5 +1,7 @@
 # OTel Identity Collapse Plan
 
+**Status: Superseded.** The warning noise was solved by downgrading to `debug!` (not the planned rate-limited `warn!`), and `local_test_env/claude_code_otel.py` shipped as the client wrapper (more capable than spec'd — also sets `process.owner`). But the identity formula this plan froze was later changed anyway (`fe30db51e`, `ce71f4370` fold `process.owner` into `process_id`), so the actual fix took a different path than described here. The `degenerate_resources` counter, doc updates, and CHANGELOG entry from this plan were never done and are no longer planned under this document.
+
 ## Overview
 
 Make the OTLP "degenerate resource" case observable, actionable, and easy to fix from the client side. Real-world OTel SDKs — most notably **Claude Code itself**, the driving use case for the OTLP feature — emit Resource attributes that contain `service.name`/`service.version`/`os.*` but *none* of the four identity-bearing fields (`host.id`, `host.name`, `process.pid`, `service.instance.id`). Our `process_id_from_resource` formula then collapses every session, on every machine, onto a single `process_id`. The formula itself is correct and load-bearing — it cannot change without a `_V2` namespace bump and a data-lake migration. The fix lives at the edges: better client-side guidance, less server-log spam, and operator-side observability.
