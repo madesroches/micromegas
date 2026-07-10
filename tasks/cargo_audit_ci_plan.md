@@ -49,6 +49,13 @@ or `.cargo/audit.toml` anywhere in the repo, and no existing `cargo audit`/`carg
 usage (only a passing mention in a completed study doc). Security alerts fire post-merge
 only.
 
+`rust/Cargo.toml:3` excludes `datafusion-wasm` from the main workspace
+(`exclude = ["target", ".claude", ".*", "datafusion-wasm", "examples"]`). It is a
+standalone `[package]` with its own `rust/datafusion-wasm/Cargo.lock`, pulling a distinct
+dependency tree (datafusion 54, arrow 58, wasm-bindgen, getrandom with the `wasm_js`
+feature). Gates that only run from `rust/` against `rust/Cargo.lock` never see this tree,
+so it needs its own, explicit coverage (see CI wiring below).
+
 **Dependency-tree facts** (gathered via `cargo metadata` / `Cargo.lock` on
 `rust/Cargo.lock`):
 - **No git dependencies and no non-crates.io registries.** The `sources` gate can
@@ -88,7 +95,8 @@ So the step is plain `cargo audit` (no `--deny warnings`) initially; tighten lat
 **Baseline (measured with cargo-audit 0.22.2 against the committed lock):** 4
 vulnerabilities + 3 non-fatal warnings. To land the gate green the implementation must
 resolve each — see the table under Resolved Findings. In short: bump `crossbeam-epoch`
-(fix available, dev-only), and add documented ignores for the two `quick-xml` advisories
+(fix available; it's a runtime dependency, reached via `moka`), and add documented
+ignores for the two `quick-xml` advisories
 (pinned transitively by `object_store`) and the `rsa` Marvin advisory (no fix exists).
 
 **Tool update (required).** The RustSec advisory DB now contains CVSS 4.0 entries, and
@@ -233,11 +241,31 @@ fast no-op when the pinned version is already present:
 access, so no extra plumbing is needed. `cargo deny`'s license/bans/sources checks are
 offline (metadata + lock only).
 
+**3. `rust/datafusion-wasm` coverage.** Because this crate is excluded from the main
+workspace (`rust/Cargo.toml:3`), it has its own `Cargo.lock` that neither gate above ever
+touches. Rather than leave that tree unaudited, add a second, independent invocation of
+both tools with `cwd="datafusion-wasm"`, so each tool picks up *its own* `Cargo.lock`:
+
+```python
+("Advisory Audit (datafusion-wasm)", "cargo audit", "datafusion-wasm"),
+("License & Supply-Chain (deny, datafusion-wasm)", "cargo deny check licenses bans sources", "datafusion-wasm"),
+```
+
+The wasm tree is small (one package, no dev/test-only extras beyond `wasm-bindgen-test`)
+and its dependencies (datafusion, arrow, wasm-bindgen) look license-compatible with the
+main tree, so no separate config is expected initially — first try pointing it at the
+existing `rust/deny.toml`/`rust/.cargo/audit.toml` (e.g. via `--config`/relative path) to
+avoid duplicating policy. If triage during implementation turns up advisories or licenses
+not covered by those, add a lightweight `rust/datafusion-wasm/.cargo/audit.toml` and/or
+`rust/datafusion-wasm/deny.toml` scoped to that tree, following the same documented-ignore
+convention.
+
 ## Implementation Steps
 
 1. **`build/rust_ci.py`** — add the two steps (`Advisory Audit`, then
    `License & Supply-Chain (deny)`) to `run_native()`, after `Unused Dependencies Check`
-   and before `Running Tests`.
+   and before `Running Tests`; add the matching `datafusion-wasm`-scoped pair (see CI
+   wiring item 3) right after them.
 2. **Resolve the current baseline** so the gate lands green:
    - Run `cargo update -p crossbeam-epoch` (0.9.18 → 0.9.20) to fix RUSTSEC-2026-0204.
    - Create `rust/.cargo/audit.toml` with the documented ignores for `rsa`
@@ -245,24 +273,33 @@ offline (metadata + lock only).
      advisories (RUSTSEC-2026-0194/0195), each with a tracking-issue reference.
    - Open a tracking issue for the ignored advisories (referenced from the config).
 3. **`rust/deny.toml`** — create with the `licenses`/`bans`/`sources` config above.
-4. **`.github/workflows/rust.yml`** — add `Install cargo-audit` and `Install cargo-deny`
+4. **`rust/datafusion-wasm` coverage** — run `cargo audit` and
+   `cargo deny check licenses bans sources` from `rust/datafusion-wasm/` against its own
+   `Cargo.lock` and triage any findings; add a scoped
+   `rust/datafusion-wasm/.cargo/audit.toml` and/or `rust/datafusion-wasm/deny.toml` only if
+   the wasm tree's advisories/licenses aren't already covered by the main configs.
+5. **`.github/workflows/rust.yml`** — add `Install cargo-audit` and `Install cargo-deny`
    steps to the `native` job (no `ubuntu-latest` guard; add cargo-audit version floor
    once confirmed).
-5. **`CONTRIBUTING.md`** — extend **CI Tools**: install both
+6. **`CONTRIBUTING.md`** — extend **CI Tools**: install both
    (`cargo install cargo-audit --locked`, `cargo install cargo-deny --locked`), note the
-   pipeline runs `cargo audit` and `cargo deny check licenses bans sources` from `rust/`,
-   how to run each standalone, and how to add a documented advisory ignore / license
-   allow entry.
-6. **Local verification** — install a current cargo-audit and cargo-deny, then run both
-   against the committed `Cargo.lock`/tree and triage results (see Open Questions).
+   pipeline runs `cargo audit` and `cargo deny check licenses bans sources` from both
+   `rust/` and `rust/datafusion-wasm/`, how to run each standalone, and how to add a
+   documented advisory ignore / license allow entry.
+7. **Local verification** — install a current cargo-audit and cargo-deny, then run both
+   against the committed `Cargo.lock`/tree (main and `datafusion-wasm`) and triage results
+   (see Open Questions).
 
 ## Files to Modify
 
-- `build/rust_ci.py` — add the two pipeline steps.
+- `build/rust_ci.py` — add the four pipeline steps (main tree + `datafusion-wasm` tree).
 - `.github/workflows/rust.yml` — add cargo-audit and cargo-deny install steps.
 - `CONTRIBUTING.md` — document local install/run and the ignore/allow mechanisms.
 - `rust/.cargo/audit.toml` — **new** — advisory ignore list.
 - `rust/deny.toml` — **new** — license/bans/sources policy.
+- `rust/datafusion-wasm/.cargo/audit.toml`, `rust/datafusion-wasm/deny.toml` — **new,
+  conditional** — only added if triage of the `datafusion-wasm` tree finds
+  advisories/licenses not already covered by the main configs.
 
 ## Trade-offs
 
@@ -283,7 +320,7 @@ offline (metadata + lock only).
 
 ## Documentation
 
-- `CONTRIBUTING.md` — **CI Tools** section (primary; step 5).
+- `CONTRIBUTING.md` — **CI Tools** section (primary; step 6).
 - No `mkdocs/` site page covers CI tooling today, so no docs-site change is required.
   Consider a one-line mention on a future "Development/CI" docs page if one is created.
 
@@ -298,8 +335,12 @@ offline (metadata + lock only).
     the proposed `deny.toml`, though the output is noisy: expect ~9 wildcard warnings,
     ~40 duplicate-version warnings, and 8 non-fatal unresolved-workspace-dependency
     diagnostics (see Resolved Findings item 1) — none of these are failures.
-- Run the full pipeline locally: `python3 build/rust_ci.py native` and confirm both new
-  steps appear and pass.
+  - `cd rust/datafusion-wasm && cargo audit` and
+    `cd rust/datafusion-wasm && cargo deny check licenses bans sources` → run against the
+    wasm tree's own `Cargo.lock`; triage and record results the same way as the main tree
+    (add scoped ignores/config only if needed).
+- Run the full pipeline locally: `python3 build/rust_ci.py native` and confirm all four
+  new steps (main tree + `datafusion-wasm` tree) appear and pass.
 - Negative checks (manual, throwaway, then revert):
   - Add a known-vulnerable crate/version → `cargo audit` exits non-zero.
   - Add a crate under a non-allowed license → `cargo deny check licenses` fails.
@@ -324,7 +365,7 @@ each with a determined resolution:
 
 | Advisory | Crate | Path | Fix available? | Resolution |
 |---|---|---|---|---|
-| RUSTSEC-2026-0204 | crossbeam-epoch 0.9.18 | dev-only, via `criterion` benches | Yes (≥0.9.20) | `cargo update -p crossbeam-epoch` |
+| RUSTSEC-2026-0204 | crossbeam-epoch 0.9.18 | runtime, via `moka` 0.12.15 → `micromegas-analytics`/`analytics-web-srv` (also reached via `criterion` benches) | Yes (≥0.9.20) | `cargo update -p crossbeam-epoch` |
 | RUSTSEC-2026-0194 (high) | quick-xml 0.39.4 | via `object_store` 0.13.2 | ≥0.41.0, but **pinned** (object_store ^0.39, gated by datafusion 54) | documented ignore + tracking issue |
 | RUSTSEC-2026-0195 (high) | quick-xml 0.39.4 | via `object_store` 0.13.2 | same as above | documented ignore + tracking issue |
 | RUSTSEC-2023-0071 (med) | rsa 0.9.10 | via `jsonwebtoken` → `micromegas-auth` | **No fix exists** | documented ignore + tracking issue |
