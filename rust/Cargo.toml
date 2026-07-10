@@ -29,7 +29,7 @@ micromegas-telemetry = { path = "telemetry", version = "0.27.0" }
 micromegas-telemetry-sink = { path = "telemetry-sink", version = "0.27.0" }
 micromegas-tracing = { path = "tracing", version = "0.27.0", default-features = false }
 micromegas-transit = { path = "transit", version = "0.27.0" }
-micromegas = { path = "public" }
+micromegas = { path = "public", version = "0.27.0" }
 
 anyhow = "1.0"
 arrow-flight = { version = "58.0", features = ["flight-sql-experimental"] }

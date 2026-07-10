@@ -47,7 +47,9 @@ confidence-threshold = 0.8
 # `datafusion-wasm` tree (which shares this config via `--config ../deny.toml`
 # and whose duplicates are a subset of the main tree's).
 multiple-versions = "deny"
-wildcards = "warn"
+# All internal path/workspace deps carry an explicit version, so any
+# remaining wildcard would be a real external `*` requirement — deny it.
+wildcards = "deny"
 skip = [
     # windows-* API crate family (split across major versions during the
     # ongoing windows-rs ecosystem migration)
