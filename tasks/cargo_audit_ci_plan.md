@@ -244,21 +244,29 @@ offline (metadata + lock only).
 **3. `rust/datafusion-wasm` coverage.** Because this crate is excluded from the main
 workspace (`rust/Cargo.toml:3`), it has its own `Cargo.lock` that neither gate above ever
 touches. Rather than leave that tree unaudited, add a second, independent invocation of
-both tools with `cwd="datafusion-wasm"`, so each tool picks up *its own* `Cargo.lock`:
+both tools with `cwd=wasm_crate` — the absolute `Path` already defined at
+`build/rust_ci.py:7` and used by `run_wasm()` — so each tool picks up *its own*
+`Cargo.lock`. (A relative `"datafusion-wasm"` string would resolve against the *process*
+working directory, not `rust/`; since CI invokes `./build/rust_ci.py native` from the repo
+checkout root, that would point at a nonexistent `<repo_root>/datafusion-wasm`.)
 
 ```python
-("Advisory Audit (datafusion-wasm)", "cargo audit", "datafusion-wasm"),
-("License & Supply-Chain (deny, datafusion-wasm)", "cargo deny check licenses bans sources", "datafusion-wasm"),
+("Advisory Audit (datafusion-wasm)", "cargo audit", wasm_crate),
+("License & Supply-Chain (deny, datafusion-wasm)", "cargo deny check licenses bans sources --config ../deny.toml", wasm_crate),
 ```
 
 The wasm tree is small (one package, no dev/test-only extras beyond `wasm-bindgen-test`)
 and its dependencies (datafusion, arrow, wasm-bindgen) look license-compatible with the
-main tree, so no separate config is expected initially — first try pointing it at the
-existing `rust/deny.toml`/`rust/.cargo/audit.toml` (e.g. via `--config`/relative path) to
-avoid duplicating policy. If triage during implementation turns up advisories or licenses
-not covered by those, add a lightweight `rust/datafusion-wasm/.cargo/audit.toml` and/or
-`rust/datafusion-wasm/deny.toml` scoped to that tree, following the same documented-ignore
-convention.
+main tree. `cargo deny` reuses the main policy directly via `--config ../deny.toml` (shown
+above — verified: `cargo deny --config ../deny.toml check licenses sources` passes from
+`rust/datafusion-wasm`), so no separate `deny.toml` is expected initially. `cargo audit`,
+however, has no `--config` flag and does not walk up to a parent directory's
+`.cargo/audit.toml` (verified against cargo-audit 0.22.2), so it cannot reuse
+`rust/.cargo/audit.toml`. If triage during implementation turns up a wasm-tree advisory
+that needs ignoring, it requires its own `rust/datafusion-wasm/.cargo/audit.toml` (or
+explicit `--ignore` flags), not a shared config. Only add a
+`rust/datafusion-wasm/deny.toml` if the wasm tree's licenses/sources ever diverge from the
+main policy, following the same documented-ignore convention.
 
 ## Implementation Steps
 
@@ -274,10 +282,12 @@ convention.
    - Open a tracking issue for the ignored advisories (referenced from the config).
 3. **`rust/deny.toml`** — create with the `licenses`/`bans`/`sources` config above.
 4. **`rust/datafusion-wasm` coverage** — run `cargo audit` and
-   `cargo deny check licenses bans sources` from `rust/datafusion-wasm/` against its own
-   `Cargo.lock` and triage any findings; add a scoped
-   `rust/datafusion-wasm/.cargo/audit.toml` and/or `rust/datafusion-wasm/deny.toml` only if
-   the wasm tree's advisories/licenses aren't already covered by the main configs.
+   `cargo deny check licenses bans sources --config ../deny.toml` from
+   `rust/datafusion-wasm/` against its own `Cargo.lock` (deny reuses the main policy
+   directly; audit has no `--config` flag and cannot inherit `rust/.cargo/audit.toml`) and
+   triage any findings; add a scoped `rust/datafusion-wasm/.cargo/audit.toml` only if a
+   wasm-tree advisory needs ignoring, and a scoped `rust/datafusion-wasm/deny.toml` only if
+   the wasm tree's licenses/sources ever diverge from the main policy.
 5. **`.github/workflows/rust.yml`** — add `Install cargo-audit` and `Install cargo-deny`
    steps to the `native` job (no `ubuntu-latest` guard; add cargo-audit version floor
    once confirmed).
@@ -297,9 +307,12 @@ convention.
 - `CONTRIBUTING.md` — document local install/run and the ignore/allow mechanisms.
 - `rust/.cargo/audit.toml` — **new** — advisory ignore list.
 - `rust/deny.toml` — **new** — license/bans/sources policy.
-- `rust/datafusion-wasm/.cargo/audit.toml`, `rust/datafusion-wasm/deny.toml` — **new,
-  conditional** — only added if triage of the `datafusion-wasm` tree finds
-  advisories/licenses not already covered by the main configs.
+- `rust/datafusion-wasm/.cargo/audit.toml` — **new, conditional** — only added if triage
+  of the `datafusion-wasm` tree finds an advisory that needs ignoring; cargo-audit has no
+  `--config` flag and cannot reuse `rust/.cargo/audit.toml`, so this must be its own file.
+- `rust/datafusion-wasm/deny.toml` — **new, conditional, unlikely** — the wasm `cargo deny`
+  step reuses `rust/deny.toml` directly via `--config ../deny.toml`; only add a separate
+  file if the wasm tree's licenses/sources ever diverge from the main policy.
 
 ## Trade-offs
 
