@@ -1,6 +1,6 @@
 [package]
-name = "telemetry-admin"
-description = "command-line interface for the management of the data lake, part of micromegas"
+name = "telemetry-maintenance-srv"
+description = "maintenance daemon for the data lake, part of micromegas"
 keywords.workspace = true
 version.workspace = true
 edition.workspace = true
@@ -10,8 +10,8 @@ license.workspace = true
 authors.workspace = true
 
 [[bin]]
-name = "telemetry-admin"
-path = "src/telemetry_admin.rs"
+name = "telemetry-maintenance-srv"
+path = "src/main.rs"
 
 [dependencies]
 micromegas = { workspace = true, features = ["server"] }
