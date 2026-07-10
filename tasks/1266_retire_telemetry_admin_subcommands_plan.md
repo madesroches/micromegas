@@ -99,9 +99,11 @@ the running service rather than a one-off manual purge.
   `COPY` (l.35), `ENTRYPOINT` (l.37); plus the **filename** itself.
 - `docker/all-in-one.Dockerfile` — `--bin telemetry-admin` (l.82, 89), cp path (l.97),
   `COPY` (l.111).
-- `docker/README.md` — image name `micromegas-admin` and command lines (l.124, l.173).
+- `docker/README.md` — image table row `admin.Dockerfile` / `micromegas-admin` / "Telemetry admin
+  CLI" (l.13), plus image name `micromegas-admin` and command lines (l.124, l.173).
 - `build/build_docker_images.py:35` — `"admin": ("admin.Dockerfile", "Telemetry admin CLI")`.
 - `build/run_daemon_container.py:12` — `"telemetry-admin crond"` command.
+- `.gitignore:40` — `docker/telemetry-admin` (built binary copied into the docker build context).
 
 **local_test_env / dev scripts**
 - `local_test_env/ai_scripts/start_services.py` — service-name list (l.36), binary launch +
@@ -264,42 +266,46 @@ crate. Recommended: delete.
     (l.82, 89), cp path (l.97), COPY (l.111).
 17. `build/build_docker_images.py:35`: key `admin` → `maintenance`, filename
     `maintenance.Dockerfile`, description "Maintenance daemon".
-18. `build/run_daemon_container.py:12`: command `"telemetry-maintenance-srv"` (drop `crond`; adjust
-    image name to `micromegas-maintenance` if referenced there).
-19. `docker/README.md`: image `micromegas-admin` → `micromegas-maintenance`, drop the `crond` arg
-    from both run blocks (l.124, l.173).
+18. `build/run_daemon_container.py:12`: command token `"telemetry-admin crond"` →
+    `"telemetry-maintenance-srv"`. The image on line 11 (`marcantoinedesroches/micromegas-all:latest`)
+    is the separate all-in-one image and is **not** renamed — leave it as-is.
+19. `docker/README.md`: image table row (l.13) — Dockerfile `admin.Dockerfile` →
+    `maintenance.Dockerfile`, image `micromegas-admin` → `micromegas-maintenance`, description
+    "Telemetry admin CLI" → "Maintenance daemon"; plus image `micromegas-admin` →
+    `micromegas-maintenance` and drop the `crond` arg from both run blocks (l.124, l.173).
+20. Update `.gitignore:40`: `docker/telemetry-admin` → `docker/telemetry-maintenance-srv`.
 
 ### Phase 5 — Scripts
-20. `local_test_env/ai_scripts/start_services.py`: service name `telemetry-admin` →
+21. `local_test_env/ai_scripts/start_services.py`: service name `telemetry-admin` →
     `telemetry-maintenance-srv` (l.36), launch `[str(target_dir / "telemetry-maintenance-srv")]`
     dropping the `"crond"` arg (l.204), build `--bin telemetry-maintenance-srv` (l.400).
-21. `local_test_env/ai_scripts/stop_services.py:53`: service name.
-22. `local_test_env/ai_scripts/start_services_with_oidc.py`: service list (l.70),
+22. `local_test_env/ai_scripts/stop_services.py:53`: service name.
+23. `local_test_env/ai_scripts/start_services_with_oidc.py`: service list (l.70),
     `cargo run -p telemetry-maintenance-srv --` dropping `crond` (l.229).
-23. `local_test_env/dev.py`: build `-p telemetry-maintenance-srv` (l.45),
+24. `local_test_env/dev.py`: build `-p telemetry-maintenance-srv` (l.45),
     `cargo run … -p telemetry-maintenance-srv` dropping `crond` (l.211).
 
 ### Phase 6 — Docs & meta
-24. Update `mkdocs/docs/admin/maintenance.md`: binary name, run command
+25. Update `mkdocs/docs/admin/maintenance.md`: binary name, run command
     (`cargo run --release --bin telemetry-maintenance-srv`, no `crond`), Docker/entrypoint prose,
     and the Retention section to document `--retention-days` / `MICROMEGAS_RETENTION_DAYS`
     (default 90) instead of describing 90 as fixed.
-25. Update `mkdocs/docs/admin/service-lifecycle.md` (table row + example; binary is now
+26. Update `mkdocs/docs/admin/service-lifecycle.md` (table row + example; binary is now
     `telemetry-maintenance-srv` with no `crond`), `mkdocs/docs/architecture/index.md` (diagram node
     + split-mode paragraph), `mkdocs/docs/getting-started.md`, `mkdocs/docs/cost-effectiveness.md`,
     `doc/GETTING_STARTED.md`.
-26. Update `rust/public/src/lib.rs` doc comments (l.30 path, l.75 run command).
-27. Update `README.md:50`, `CLAUDE.md:78`, `AI_GUIDELINES.md:66`,
+27. Update `rust/public/src/lib.rs` doc comments (l.30 path, l.75 run command).
+28. Update `README.md:50`, `CLAUDE.md:78`, `AI_GUIDELINES.md:66`,
     `.github/copilot-instructions.md:59`.
-28. Add a `CHANGELOG.md` Unreleased entry (removed subcommands; binary + Docker-image rename as a
+29. Add a `CHANGELOG.md` Unreleased entry (removed subcommands; binary + Docker-image rename as a
     breaking deployment change; new `MICROMEGAS_RETENTION_DAYS` knob).
 
 ### Phase 7 — Verify
-29. From `rust/`: `cargo fmt`, `cargo build`, `cargo clippy --workspace -- -D warnings`,
+30. From `rust/`: `cargo fmt`, `cargo build`, `cargo clippy --workspace -- -D warnings`,
     `cargo test`.
-30. Run `local_test_env/ai_scripts/start_services.py` and confirm the daemon starts under its new
+31. Run `local_test_env/ai_scripts/start_services.py` and confirm the daemon starts under its new
     name and materializes partitions (see Testing Strategy).
-31. `python build/build_docker_images.py` (or the maintenance image only) to confirm the renamed
+32. `python build/build_docker_images.py` (or the maintenance image only) to confirm the renamed
     Dockerfile/image build.
 
 ## Files to Modify
@@ -310,6 +316,7 @@ crate. Recommended: delete.
 - `docker/admin.Dockerfile` → `docker/maintenance.Dockerfile`, `docker/all-in-one.Dockerfile`,
   `docker/README.md`
 - `build/build_docker_images.py`, `build/run_daemon_container.py`
+- `.gitignore` (`docker/telemetry-admin` → `docker/telemetry-maintenance-srv`)
 - `local_test_env/ai_scripts/start_services.py`, `stop_services.py`,
   `start_services_with_oidc.py`, `local_test_env/dev.py`
 - `mkdocs/docs/admin/maintenance.md`, `mkdocs/docs/admin/service-lifecycle.md`,
