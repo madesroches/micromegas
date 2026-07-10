@@ -56,7 +56,7 @@ some_future.instrument(&static_span_desc!("operation_name")).await
 
 #### Service Management (for testing)
 - **Start all services**: `python3 local_test_env/ai_scripts/start_services.py`
-  - PostgreSQL + ingestion-srv (9000) + flight-sql-srv (50051) + admin CLI
+  - PostgreSQL + ingestion-srv (9000) + flight-sql-srv (50051) + maintenance daemon
   - Logs in `/tmp/ingestion.log` and `/tmp/analytics.log`
 - **Stop all services**: `python3 local_test_env/ai_scripts/stop_services.py`
 

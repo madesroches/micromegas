@@ -47,7 +47,7 @@ Micromegas consists of several key components:
 2.  **Ingestion Service (`telemetry-ingestion-srv`):** A scalable service that receives telemetry (native transit/CBOR and OTLP/HTTP) and writes it to blob storage.
 3.  **Analytics Service (`flight-sql-srv`):** A DataFusion-powered service that exposes a FlightSQL endpoint for running queries against your data.
 4.  **Analytics Web App (`analytics-web-srv`):** A browser UI for exploring data through interactive notebooks.
-5.  **Maintenance Daemon (`telemetry-admin`):** Runs the on-demand and continuous ETL that materializes raw blocks into Parquet views, so data is only processed when it's worth querying.
+5.  **Maintenance Daemon (`telemetry-maintenance-srv`):** Runs the on-demand and continuous ETL that materializes raw blocks into Parquet views, so data is only processed when it's worth querying.
 6.  **PostgreSQL Database:** Stores metadata about processes, streams, and data blocks, keeping the object storage indexable and fast to query.
 7.  **Object Storage (S3/GCS):** Stores all raw telemetry payloads and materialized query results in Parquet format.
 

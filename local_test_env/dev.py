@@ -42,7 +42,7 @@ def build_rust_services(build_mode):
 
     os.chdir(str(RUST_DIR))
     run_command(f"cargo build {build_flags} -p telemetry-ingestion-srv")
-    run_command(f"cargo build {build_flags} -p telemetry-admin")
+    run_command(f"cargo build {build_flags} -p telemetry-maintenance-srv")
     run_command(f"cargo build {build_flags} -p flight-sql-srv")
     os.chdir(str(SCRIPT_DIR))
 
@@ -208,7 +208,7 @@ def start_services(build_mode):
         ),
         (
             3,
-            f'echo "😈 Starting Daemon..."; cd ../rust && cargo run {run_flags} -p telemetry-admin -- crond',
+            f'echo "😈 Starting Daemon..."; cd ../rust && cargo run {run_flags} -p telemetry-maintenance-srv',
         ),
     ]
 

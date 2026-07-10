@@ -92,13 +92,14 @@ impl TaskCallback for EveryDayTask {
 pub struct EveryHourTask {
     pub lakehouse: Arc<LakehouseContext>,
     pub views: Views,
+    pub retention_days: i32,
 }
 
 #[async_trait]
 impl TaskCallback for EveryHourTask {
     #[span_fn]
     async fn run(&self, task_scheduled_time: DateTime<Utc>) -> Result<()> {
-        delete_old_data(self.lakehouse.lake(), 90).await?;
+        delete_old_data(self.lakehouse.lake(), self.retention_days).await?;
         delete_expired_temporary_files(self.lakehouse.lake().clone()).await?;
 
         let partition_time_delta = TimeDelta::hours(1);
@@ -286,11 +287,13 @@ pub fn get_global_views_with_update_group(view_factory: &ViewFactory) -> Vec<Arc
 ///
 /// * `lakehouse` - The lakehouse context with shared metadata cache.
 /// * `views_to_update` - A vector of views that need to be updated by the daemon.
+/// * `retention_days` - Delete lake data older than this many days (retention horizon).
 /// * `shutdown` - Future that completes when the process should begin shutting down.
 /// * `grace` - Maximum time to wait for in-flight tasks after the shutdown signal.
 pub async fn daemon<F>(
     lakehouse: Arc<LakehouseContext>,
     mut views_to_update: Vec<Arc<dyn View>>,
+    retention_days: i32,
     shutdown: F,
     grace: Duration,
 ) -> Result<()>
@@ -318,6 +321,7 @@ where
         Arc::new(EveryHourTask {
             lakehouse: lakehouse.clone(),
             views: views.clone(),
+            retention_days,
         }),
     )?;
     let every_minute = CronTask::new(

@@ -67,7 +67,7 @@ def get_oidc_config():
 
 def kill_services():
     """Kill any existing services"""
-    services = ["telemetry-ingestion-srv", "flight-sql-srv", "telemetry-admin"]
+    services = ["telemetry-ingestion-srv", "flight-sql-srv", "telemetry-maintenance-srv"]
     for service in services:
         try:
             subprocess.run(f"pkill -f {service}", shell=True, check=False)
@@ -222,17 +222,17 @@ def main():
     time.sleep(5)
     print()
 
-    # Start Admin Daemon
-    print("⚙️  Starting Admin Daemon...")
-    with open("/tmp/admin.log", "w") as log_file:
-        admin_process = subprocess.Popen(
-            ["cargo", "run", "-p", "telemetry-admin", "--", "crond"],
+    # Start Maintenance Daemon
+    print("⚙️  Starting Maintenance Daemon...")
+    with open("/tmp/daemon.log", "w") as log_file:
+        maintenance_process = subprocess.Popen(
+            ["cargo", "run", "-p", "telemetry-maintenance-srv"],
             stdout=log_file,
             stderr=subprocess.STDOUT,
             env=env,
         )
-    admin_pid = admin_process.pid
-    print(f"Admin Daemon PID: {admin_pid}")
+    maintenance_pid = maintenance_process.pid
+    print(f"Maintenance Daemon PID: {maintenance_pid}")
     print()
 
     # Summary
@@ -248,18 +248,18 @@ def main():
     print("PIDs:")
     print(f"  Ingestion: {ingestion_pid}")
     print(f"  Analytics: {analytics_pid}")
-    print(f"  Admin: {admin_pid}")
+    print(f"  Maintenance: {maintenance_pid}")
     if postgres_pid:
         print(f"  PostgreSQL: {postgres_pid}")
     print()
     print("Logs:")
     print("  tail -f /tmp/ingestion.log")
     print("  tail -f /tmp/analytics.log   # Watch for OIDC auth events")
-    print("  tail -f /tmp/admin.log")
+    print("  tail -f /tmp/daemon.log")
     print()
 
     # Save PIDs
-    pids = [str(ingestion_pid), str(analytics_pid), str(admin_pid)]
+    pids = [str(ingestion_pid), str(analytics_pid), str(maintenance_pid)]
     if postgres_pid:
         pids.append(str(postgres_pid))
 

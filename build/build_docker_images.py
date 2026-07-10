@@ -32,7 +32,7 @@ DOCKERHUB_REPO = "micromegas"
 SERVICES = {
     "ingestion": ("ingestion.Dockerfile", "Telemetry ingestion server"),
     "flight-sql": ("flight-sql.Dockerfile", "FlightSQL analytics server"),
-    "admin": ("admin.Dockerfile", "Telemetry admin CLI"),
+    "maintenance": ("maintenance.Dockerfile", "Maintenance daemon"),
     "object-cache": ("object-cache.Dockerfile", "Shared object range cache service"),
     "http-gateway": ("http-gateway.Dockerfile", "HTTP gateway server"),
     "analytics-web": ("analytics-web.Dockerfile", "Analytics web app"),

@@ -19,7 +19,7 @@ For testing purposes, you can run the Micromegas stack on your local workstation
 
 ### Full Local Stack
 
-Run all services locally: PostgreSQL, ingestion, FlightSQL, admin daemon, and optionally the web app.
+Run all services locally: PostgreSQL, ingestion, FlightSQL, maintenance daemon, and optionally the web app.
 
 #### Environment Variables
 
@@ -72,7 +72,7 @@ Before starting, set the following environment variables:
 
     ```bash
     cd rust
-    cargo run -p telemetry-admin -- crond
+    cargo run -p telemetry-maintenance-srv
     ```
 
 6.  **Query the Analytics Service (Python Example):**
@@ -103,7 +103,7 @@ Before starting, set the following environment variables:
 
 ### Hybrid Setup: Local Frontend + Remote Backend
 
-This mode runs the analytics web app locally but queries data from a remote FlightSQL server. You skip the local ingestion server, FlightSQL server, and admin daemon. You still need a local PostgreSQL instance for the app database.
+This mode runs the analytics web app locally but queries data from a remote FlightSQL server. You skip the local ingestion server, FlightSQL server, and maintenance daemon. You still need a local PostgreSQL instance for the app database.
 
 #### Environment Variables
 

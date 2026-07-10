@@ -21,7 +21,7 @@ The infrastructure cost for Micromegas comes from standard cloud services:
 
 - **Ingestion Service** (`telemetry-ingestion-srv`) - Handles incoming telemetry data
 - **Analytics Service** (`flight-sql-srv`) - Serves SQL queries and dashboards
-- **Maintenance Daemon** (`telemetry-admin`) - Background data processing and rollups
+- **Maintenance Daemon** (`telemetry-maintenance-srv`) - Background data processing and rollups
 
 !!! tip "Simplified deployment"
     For smaller deployments or local development, `micromegas-monolith` runs all roles (ingestion, analytics, web, maintenance) in a single process, eliminating the need to manage multiple services.

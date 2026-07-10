@@ -75,7 +75,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### Service Management (for testing and development)
 - **Start Services** (split mode): `python3 local_test_env/ai_scripts/start_services.py`
-  - Starts PostgreSQL, telemetry-ingestion-srv (port 9000), flight-sql-srv (port 50051), and telemetry-admin
+  - Starts PostgreSQL, telemetry-ingestion-srv (port 9000), flight-sql-srv (port 50051), and telemetry-maintenance-srv
   - Services run in background with logs in `/tmp/`
   - PIDs saved to `/tmp/micromegas_pids.txt`
 - **Start Services** (monolith mode): `python3 local_test_env/ai_scripts/start_services.py --monolith`
@@ -94,7 +94,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Service Logs**:
   - Ingestion: `tail -f /tmp/ingestion.log`
   - Analytics: `tail -f /tmp/analytics.log`
-  - Admin: `tail -f /tmp/admin.log`
+  - Maintenance: `tail -f /tmp/daemon.log`
   - Monolith: `tail -f /tmp/monolith.log`
 - **Service URLs**:
   - Ingestion server: http://127.0.0.1:9000

@@ -10,7 +10,7 @@ Seven services are published to Docker Hub under `marcantoinedesroches/`:
 |------------|-------|-------------|
 | `ingestion.Dockerfile` | `marcantoinedesroches/micromegas-ingestion` | Telemetry ingestion server (HTTP) |
 | `flight-sql.Dockerfile` | `marcantoinedesroches/micromegas-flight-sql` | FlightSQL analytics server |
-| `admin.Dockerfile` | `marcantoinedesroches/micromegas-admin` | Telemetry admin CLI |
+| `maintenance.Dockerfile` | `marcantoinedesroches/micromegas-maintenance` | Maintenance daemon |
 | `object-cache.Dockerfile` | `marcantoinedesroches/micromegas-object-cache` | Shared object range cache service |
 | `http-gateway.Dockerfile` | `marcantoinedesroches/micromegas-http-gateway` | HTTP gateway server |
 | `analytics-web.Dockerfile` | `marcantoinedesroches/micromegas-analytics-web` | Analytics web app (frontend + backend) |
@@ -71,7 +71,7 @@ docker login
 ### Release publish (both arches, all services)
 
 ```bash
-SVCS="ingestion flight-sql admin object-cache http-gateway analytics-web monolith"
+SVCS="ingestion flight-sql maintenance object-cache http-gateway analytics-web monolith"
 python build/build_docker_images.py $SVCS --all-arches --push --version X.Y.0
 ```
 
@@ -116,12 +116,11 @@ docker run -d -p 50051:50051 \
   -e MICROMEGAS_OBJECT_STORE_URI \
   marcantoinedesroches/micromegas-flight-sql:latest
 
-# Admin daemon
+# Maintenance daemon
 docker run -d \
   -e MICROMEGAS_SQL_CONNECTION_STRING \
   -e MICROMEGAS_OBJECT_STORE_URI \
-  marcantoinedesroches/micromegas-admin:latest \
-  crond
+  marcantoinedesroches/micromegas-maintenance:latest
 
 # Object cache (fronts a bucket-only S3/GCS origin; see Environment Variables below)
 docker run -d -p 8080:8080 \
@@ -165,12 +164,12 @@ docker run -d --name flight-sql \
   micromegas-all:latest \
   flight-sql-srv
 
-# Admin daemon
-docker run -d --name admin \
+# Maintenance daemon
+docker run -d --name maintenance \
   -e MICROMEGAS_SQL_CONNECTION_STRING \
   -e MICROMEGAS_OBJECT_STORE_URI \
   micromegas-all:latest \
-  telemetry-admin crond
+  telemetry-maintenance-srv
 
 # Analytics web app
 docker run -d --name analytics-web \

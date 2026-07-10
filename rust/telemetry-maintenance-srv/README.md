@@ -1,6 +1,6 @@
-# Micromegas Telemetry Admin CLI Crate
+# Micromegas Telemetry Maintenance Daemon Crate
 
-This crate provides a command-line interface for the management of the data lake for the Micromegas observability platform.
+This crate provides the maintenance daemon for the data lake of the Micromegas observability platform: it runs the scheduled materialization and retention loop.
 
 ## Documentation
 

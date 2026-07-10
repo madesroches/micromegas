@@ -1,4 +1,4 @@
-# Multi-stage build for telemetry-admin
+# Multi-stage build for telemetry-maintenance-srv
 FROM --platform=$BUILDPLATFORM rust:1-bookworm AS builder
 
 ARG TARGETARCH
@@ -17,13 +17,13 @@ WORKDIR /build/rust
 RUN if [ "$TARGETARCH" = "arm64" ]; then \
       rustup target add aarch64-unknown-linux-gnu && \
       CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
-      cargo build --release --target aarch64-unknown-linux-gnu --bin telemetry-admin; \
+      cargo build --release --target aarch64-unknown-linux-gnu --bin telemetry-maintenance-srv; \
     else \
-      cargo build --release --bin telemetry-admin; \
+      cargo build --release --bin telemetry-maintenance-srv; \
     fi
 
 RUN if [ "$TARGETARCH" = "arm64" ]; then ARCH_PATH="aarch64-unknown-linux-gnu/"; else ARCH_PATH=""; fi && \
-    cp /build/rust/target/${ARCH_PATH}release/telemetry-admin /build/telemetry-admin
+    cp /build/rust/target/${ARCH_PATH}release/telemetry-maintenance-srv /build/telemetry-maintenance-srv
 
 # Runtime stage
 FROM debian:bookworm-slim
@@ -32,6 +32,6 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /build/telemetry-admin /usr/local/bin/
+COPY --from=builder /build/telemetry-maintenance-srv /usr/local/bin/
 
-ENTRYPOINT ["telemetry-admin"]
+ENTRYPOINT ["telemetry-maintenance-srv"]

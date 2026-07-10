@@ -9,5 +9,5 @@ docker_command.run_docker_command(
     "docker run --network=host -v ~/lake:/lake "
     "-e MICROMEGAS_TELEMETRY_URL -e MICROMEGAS_SQL_CONNECTION_STRING -e MICROMEGAS_OBJECT_STORE_URI "
     "-d marcantoinedesroches/micromegas-all:latest "
-    "telemetry-admin crond",
+    "telemetry-maintenance-srv",
 )

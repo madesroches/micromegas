@@ -27,7 +27,7 @@
 //! <https://github.com/madesroches/micromegas/blob/main/rust/flight-sql-srv/src/flight_sql_srv.rs>
 //!
 //! ## Lakehouse daemon
-//! <https://github.com/madesroches/micromegas/blob/main/rust/telemetry-admin-cli/src/telemetry_admin.rs> (with `crond` argument)
+//! <https://github.com/madesroches/micromegas/blob/main/rust/telemetry-maintenance-srv/src/main.rs>
 //!
 //! ## Python API
 //! <https://pypi.org/project/micromegas/>
@@ -72,7 +72,7 @@
 //! 5. In a new shell, start the daemon
 //! ```text
 //! > cd micromegas/rust
-//! > cargo run -p telemetry-admin -- crond
+//! > cargo run -p telemetry-maintenance-srv
 //! ```
 //!
 //! 6. In a python interpreter, query the analytics service

@@ -33,7 +33,7 @@ def kill_services():
     services = [
         "telemetry-ingestion-srv",
         "flight-sql-srv",
-        "telemetry-admin",
+        "telemetry-maintenance-srv",
         "micromegas-object-cache-srv",
         "micromegas-monolith",
     ]
@@ -197,17 +197,17 @@ def start_split_mode(rust_dir, target_dir, postgres_pid, enable_object_cache=Tru
     analytics_pid = analytics_process.pid
     print(f"Analytics Server PID: {analytics_pid}")
 
-    # Start Admin Daemon
-    print("⚙️ Starting Admin Daemon...")
-    with open("/tmp/admin.log", "w") as log_file:
-        admin_process = subprocess.Popen(
-            [str(target_dir / "telemetry-admin"), "crond"],
+    # Start Maintenance Daemon
+    print("⚙️ Starting Maintenance Daemon...")
+    with open("/tmp/daemon.log", "w") as log_file:
+        maintenance_process = subprocess.Popen(
+            [str(target_dir / "telemetry-maintenance-srv")],
             stdout=log_file,
             stderr=subprocess.STDOUT,
             env=os.environ.copy(),
         )
-    admin_pid = admin_process.pid
-    print(f"Admin Daemon PID: {admin_pid}")
+    maintenance_pid = maintenance_process.pid
+    print(f"Maintenance Daemon PID: {maintenance_pid}")
 
     print()
     print("🎉 All services started!")
@@ -219,7 +219,7 @@ def start_split_mode(rust_dir, target_dir, postgres_pid, enable_object_cache=Tru
     print("PIDs:")
     print(f"  Ingestion: {ingestion_pid}")
     print(f"  Analytics: {analytics_pid}")
-    print(f"  Admin: {admin_pid}")
+    print(f"  Maintenance: {maintenance_pid}")
     if cache_pid:
         print(f"  Object Cache: {cache_pid}")
     if postgres_pid:
@@ -228,11 +228,11 @@ def start_split_mode(rust_dir, target_dir, postgres_pid, enable_object_cache=Tru
     print("Logs:")
     print("  tail -f /tmp/ingestion.log")
     print("  tail -f /tmp/analytics.log")
-    print("  tail -f /tmp/admin.log")
+    print("  tail -f /tmp/daemon.log")
     if cache_pid:
         print("  tail -f /tmp/object_cache.log")
 
-    pids = [str(ingestion_pid), str(analytics_pid), str(admin_pid)]
+    pids = [str(ingestion_pid), str(analytics_pid), str(maintenance_pid)]
     if cache_pid:
         pids.append(str(cache_pid))
     if postgres_pid:
@@ -397,7 +397,7 @@ def main():
         os.chdir(rust_dir)
         run_command(
             "cargo build --bin telemetry-ingestion-srv --bin flight-sql-srv "
-            f"--bin telemetry-admin --bin micromegas-object-cache-srv{release_flag}"
+            f"--bin telemetry-maintenance-srv --bin micromegas-object-cache-srv{release_flag}"
         )
 
     print("🚀 Starting services...")
