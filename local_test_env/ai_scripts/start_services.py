@@ -200,14 +200,14 @@ def start_split_mode(rust_dir, target_dir, postgres_pid, enable_object_cache=Tru
     # Start Maintenance Daemon
     print("⚙️ Starting Maintenance Daemon...")
     with open("/tmp/daemon.log", "w") as log_file:
-        admin_process = subprocess.Popen(
+        maintenance_process = subprocess.Popen(
             [str(target_dir / "telemetry-maintenance-srv")],
             stdout=log_file,
             stderr=subprocess.STDOUT,
             env=os.environ.copy(),
         )
-    admin_pid = admin_process.pid
-    print(f"Maintenance Daemon PID: {admin_pid}")
+    maintenance_pid = maintenance_process.pid
+    print(f"Maintenance Daemon PID: {maintenance_pid}")
 
     print()
     print("🎉 All services started!")
@@ -219,7 +219,7 @@ def start_split_mode(rust_dir, target_dir, postgres_pid, enable_object_cache=Tru
     print("PIDs:")
     print(f"  Ingestion: {ingestion_pid}")
     print(f"  Analytics: {analytics_pid}")
-    print(f"  Maintenance: {admin_pid}")
+    print(f"  Maintenance: {maintenance_pid}")
     if cache_pid:
         print(f"  Object Cache: {cache_pid}")
     if postgres_pid:
@@ -232,7 +232,7 @@ def start_split_mode(rust_dir, target_dir, postgres_pid, enable_object_cache=Tru
     if cache_pid:
         print("  tail -f /tmp/object_cache.log")
 
-    pids = [str(ingestion_pid), str(analytics_pid), str(admin_pid)]
+    pids = [str(ingestion_pid), str(analytics_pid), str(maintenance_pid)]
     if cache_pid:
         pids.append(str(cache_pid))
     if postgres_pid:

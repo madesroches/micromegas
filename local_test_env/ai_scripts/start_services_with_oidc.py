@@ -225,14 +225,14 @@ def main():
     # Start Maintenance Daemon
     print("⚙️  Starting Maintenance Daemon...")
     with open("/tmp/daemon.log", "w") as log_file:
-        admin_process = subprocess.Popen(
+        maintenance_process = subprocess.Popen(
             ["cargo", "run", "-p", "telemetry-maintenance-srv"],
             stdout=log_file,
             stderr=subprocess.STDOUT,
             env=env,
         )
-    admin_pid = admin_process.pid
-    print(f"Maintenance Daemon PID: {admin_pid}")
+    maintenance_pid = maintenance_process.pid
+    print(f"Maintenance Daemon PID: {maintenance_pid}")
     print()
 
     # Summary
@@ -248,7 +248,7 @@ def main():
     print("PIDs:")
     print(f"  Ingestion: {ingestion_pid}")
     print(f"  Analytics: {analytics_pid}")
-    print(f"  Maintenance: {admin_pid}")
+    print(f"  Maintenance: {maintenance_pid}")
     if postgres_pid:
         print(f"  PostgreSQL: {postgres_pid}")
     print()
@@ -259,7 +259,7 @@ def main():
     print()
 
     # Save PIDs
-    pids = [str(ingestion_pid), str(analytics_pid), str(admin_pid)]
+    pids = [str(ingestion_pid), str(analytics_pid), str(maintenance_pid)]
     if postgres_pid:
         pids.append(str(postgres_pid))
 
