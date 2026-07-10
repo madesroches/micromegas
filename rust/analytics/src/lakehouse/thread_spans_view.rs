@@ -288,7 +288,7 @@ impl View for ThreadSpansView {
             lakehouse.clone(),
             self.view_factory.clone(),
             &stream.process_id,
-            query_range,
+            None,
         )
         .await
         .with_context(|| "find_process_with_latest_timing")?;
