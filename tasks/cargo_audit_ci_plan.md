@@ -252,7 +252,7 @@ checkout root, that would point at a nonexistent `<repo_root>/datafusion-wasm`.)
 
 ```python
 ("Advisory Audit (datafusion-wasm)", "cargo audit", wasm_crate),
-("License & Supply-Chain (deny, datafusion-wasm)", "cargo deny check licenses bans sources --config ../deny.toml", wasm_crate),
+("License & Supply-Chain (deny, datafusion-wasm)", "cargo deny --config ../deny.toml check licenses bans sources", wasm_crate),
 ```
 
 The wasm tree is small (one package, no dev/test-only extras beyond `wasm-bindgen-test`)
@@ -282,7 +282,7 @@ main policy, following the same documented-ignore convention.
    - Open a tracking issue for the ignored advisories (referenced from the config).
 3. **`rust/deny.toml`** — create with the `licenses`/`bans`/`sources` config above.
 4. **`rust/datafusion-wasm` coverage** — run `cargo audit` and
-   `cargo deny check licenses bans sources --config ../deny.toml` from
+   `cargo deny --config ../deny.toml check licenses bans sources` from
    `rust/datafusion-wasm/` against its own `Cargo.lock` (deny reuses the main policy
    directly; audit has no `--config` flag and cannot inherit `rust/.cargo/audit.toml`) and
    triage any findings; add a scoped `rust/datafusion-wasm/.cargo/audit.toml` only if a
