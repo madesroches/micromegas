@@ -111,7 +111,8 @@ the running service rather than a one-off manual purge.
   `/tmp/admin.log` (write at l.202, echo at l.231) — rename to `/tmp/maintenance.log`.
 - `local_test_env/ai_scripts/stop_services.py:53` — service-name list.
 - `local_test_env/ai_scripts/start_services_with_oidc.py` — service list (l.70),
-  `cargo run -p telemetry-admin -- crond` (l.229).
+  `cargo run -p telemetry-admin -- crond` (l.229), hardcoded log filename `/tmp/admin.log` —
+  rename to `/tmp/maintenance.log` (write at l.227, echo at l.258).
 - `local_test_env/dev.py` — build (l.45), `cargo run … -p telemetry-admin -- crond` (l.211).
 
 **Docs (mkdocs + doc/)**
@@ -128,6 +129,8 @@ the running service rather than a one-off manual purge.
 - `rust/telemetry-admin-cli/README.md` — title + description.
 - `README.md:50` — "Maintenance Daemon (`telemetry-admin`)".
 - `CLAUDE.md:78` — service list mentions `telemetry-admin`.
+- `CLAUDE.md:97` — "Admin: `tail -f /tmp/admin.log`"; rename the log path to `/tmp/maintenance.log`
+  and reword the "Admin:" label to reflect the maintenance daemon.
 - `AI_GUIDELINES.md:66` — "`telemetry-admin-cli/`: Administrative CLI tool".
 - `.github/copilot-instructions.md:59` — "admin CLI".
 - `CHANGELOG.md` — add an Unreleased entry (see Documentation). Leave the historical l.85 entry
@@ -275,7 +278,12 @@ step asserts a passing `cargo build` while the two sides of the call are mismatc
 17. `docker/README.md`: image table row (l.13) — Dockerfile `admin.Dockerfile` →
     `maintenance.Dockerfile`, image `micromegas-admin` → `micromegas-maintenance`, description
     "Telemetry admin CLI" → "Maintenance daemon"; plus image `micromegas-admin` →
-    `micromegas-maintenance` and drop the `crond` arg from both run blocks (l.124, l.173).
+    `micromegas-maintenance`. In the "Admin daemon" run block (against the renamed
+    `micromegas-admin`/`micromegas-maintenance` image, whose entrypoint is the binary), just drop
+    the `crond` arg (l.124). In the All-in-One block (against the un-renamed `micromegas-all`
+    image, which takes the binary name as its command), rename the binary token itself:
+    `telemetry-admin crond` → `telemetry-maintenance-srv` (l.173) — dropping only `crond` there
+    would leave the nonexistent `telemetry-admin` binary name.
 18. Update `.gitignore:40`: `docker/telemetry-admin` → `docker/telemetry-maintenance-srv`.
 
 ### Phase 4 — Scripts
@@ -286,7 +294,8 @@ step asserts a passing `cargo build` while the two sides of the call are mismatc
     echo at l.231).
 20. `local_test_env/ai_scripts/stop_services.py:53`: service name.
 21. `local_test_env/ai_scripts/start_services_with_oidc.py`: service list (l.70),
-    `cargo run -p telemetry-maintenance-srv --` dropping `crond` (l.229).
+    `cargo run -p telemetry-maintenance-srv --` dropping `crond` (l.229), and the hardcoded log
+    filename `/tmp/admin.log` → `/tmp/maintenance.log` (write at l.227, echo at l.258).
 22. `local_test_env/dev.py`: build `-p telemetry-maintenance-srv` (l.45),
     `cargo run … -p telemetry-maintenance-srv` dropping `crond` (l.211).
 
@@ -300,8 +309,9 @@ step asserts a passing `cargo build` while the two sides of the call are mismatc
     + split-mode paragraph), `mkdocs/docs/getting-started.md`, `mkdocs/docs/cost-effectiveness.md`,
     `doc/GETTING_STARTED.md`.
 25. Update `rust/public/src/lib.rs` doc comments (l.30 path, l.75 run command).
-26. Update `README.md:50`, `CLAUDE.md:78`, `AI_GUIDELINES.md:66`,
-    `.github/copilot-instructions.md:59`.
+26. Update `README.md:50`, `CLAUDE.md:78` (service list), `CLAUDE.md:97` (rename the "Admin:"
+    log-path line's `/tmp/admin.log` → `/tmp/maintenance.log` and reword the "Admin:" label for the
+    maintenance daemon), `AI_GUIDELINES.md:66`, `.github/copilot-instructions.md:59`.
 27. Add a `CHANGELOG.md` Unreleased entry (removed subcommands; binary + Docker-image rename as a
     breaking deployment change; new `MICROMEGAS_RETENTION_DAYS` knob).
 
