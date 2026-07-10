@@ -33,19 +33,14 @@ This guide covers configuring the Micromegas datasource in Grafana.
 !!! warning "Security Recommendation"
     Always enable TLS/SSL for production deployments to encrypt data in transit.
 
-### Skip TLS Verification
-
-**Skip TLS Verify**: Only for self-signed certificates
-
-!!! danger "Use Only for Development"
-    Never skip TLS verification in production. Use valid certificates instead.
-
 ## Authentication
 
-Choose between two authentication methods:
+Select an authentication type from the **Auth Type** dropdown:
 
-- **API Key**: Simple authentication with a single credential
-- **OAuth 2.0 Client Credentials**: Enterprise authentication with identity provider
+- **none**: No authentication
+- **username/password**: Basic authentication with a username and password
+- **token**: Static bearer token
+- **oauth2-client-credentials**: Enterprise authentication with an identity provider
 
 See the [Authentication Guide](authentication.md) for detailed setup instructions.
 
@@ -75,8 +70,8 @@ key2: value2
 ```
 Host: localhost:50051
 TLS/SSL: Disabled
-Auth Method: API Key
-API Key: dev-key-12345
+Auth Type: token
+Token: dev-key-12345
 ```
 
 ### Production Setup
@@ -84,7 +79,7 @@ API Key: dev-key-12345
 ```
 Host: analytics.example.com:50051
 TLS/SSL: Enabled
-Auth Method: OAuth 2.0 Client Credentials
+Auth Type: oauth2-client-credentials
 OIDC Issuer: https://accounts.google.com
 Client ID: grafana-prod@project.iam.gserviceaccount.com
 Client Secret: ********
@@ -95,8 +90,8 @@ Client Secret: ********
 ```
 Host: analytics.example.com:50051
 TLS/SSL: Enabled
-Auth Method: API Key
-API Key: prod-key-67890
+Auth Type: token
+Token: prod-key-67890
 Metadata:
   environment: production
   region: us-east-1

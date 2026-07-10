@@ -33,8 +33,8 @@ Enterprise authentication via identity provider (Google, Auth0, Azure AD, Okta).
    ```
 
 3. **Configure Grafana datasource**:
-   - Auth Method: API Key
-   - API Key: Paste your generated key
+   - Auth Type: token
+   - Token: Paste your generated key
    - Save & Test
 
 ## OAuth 2.0 Client Credentials
@@ -50,7 +50,7 @@ Enterprise authentication via identity provider (Google, Auth0, Azure AD, Okta).
 2. **Configure server** with OIDC settings (see [Admin Guide](../admin/authentication.md))
 
 3. **Configure Grafana datasource**:
-   - Auth Method: OAuth 2.0 Client Credentials
+   - Auth Type: oauth2-client-credentials
    - OIDC Issuer: Your provider URL
    - Client ID: From step 1
    - Client Secret: From step 1
@@ -87,7 +87,7 @@ Create a Machine-to-Machine application in Auth0:
 
 **Grafana Configuration**:
 ```
-Auth Method: OAuth 2.0 Client Credentials
+Auth Type: oauth2-client-credentials
 OIDC Issuer: https://YOUR-TENANT.auth0.com
 Client ID: (from Auth0 application)
 Client Secret: (from Auth0 application)
@@ -108,7 +108,7 @@ gcloud iam service-accounts keys create credentials.json \
 
 **Grafana Configuration**:
 ```
-Auth Method: OAuth 2.0 Client Credentials
+Auth Type: oauth2-client-credentials
 OIDC Issuer: https://accounts.google.com
 Client ID: grafana-prod@PROJECT.iam.gserviceaccount.com
 Client Secret: (from credentials.json)

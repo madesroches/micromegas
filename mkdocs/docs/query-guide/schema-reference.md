@@ -35,9 +35,9 @@ Contains metadata about processes that have sent telemetry data.
 | `computer` | `Dictionary(Int16, Utf8)` | Computer/hostname |
 | `distro` | `Dictionary(Int16, Utf8)` | Operating system distribution |
 | `cpu_brand` | `Dictionary(Int16, Utf8)` | CPU brand information |
-| `tsc_frequency` | `UInt64` | Time stamp counter frequency |
+| `tsc_frequency` | `Int64` | Time stamp counter frequency |
 | `start_time` | `Timestamp(Nanosecond)` | Process start time |
-| `start_ticks` | `UInt64` | Process start time in ticks |
+| `start_ticks` | `Int64` | Process start time in ticks |
 | `insert_time` | `Timestamp(Nanosecond)` | When the process data was first inserted |
 | `parent_process_id` | `Dictionary(Int16, Utf8)` | Parent process identifier |
 | `properties` | `Dictionary(Int32, Binary)` | Additional process metadata (JSONB format) |
@@ -72,6 +72,7 @@ Contains information about data streams within processes.
 | `tags` | `List<Utf8>` | Stream tags |
 | `properties` | `Dictionary(Int32, Binary)` | Stream properties (JSONB format) |
 | `insert_time` | `Timestamp(Nanosecond)` | When the stream data was first inserted |
+| `format` | `Utf8` | Stream payload format (e.g. for OTLP support) |
 | `last_update_time` | `Timestamp(Nanosecond)` | When the stream data was last updated |
 
 **Example Queries:**
@@ -352,6 +353,7 @@ Asynchronous span events for tracking async operations with call hierarchy depth
 | `span_id` | `Int64` | Async span identifier |
 | `parent_span_id` | `Int64` | Parent span identifier |
 | `depth` | `UInt32` | Nesting depth in async call hierarchy |
+| `hash` | `UInt32` | Hash of the span's scope descriptor |
 | `name` | `Dictionary(Int16, Utf8)` | Span name (function) |
 | `filename` | `Dictionary(Int16, Utf8)` | Source file |
 | `target` | `Dictionary(Int16, Utf8)` | Module/target |

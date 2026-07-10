@@ -74,24 +74,6 @@ See [Admin Functions Reference](../admin/functions-reference.md#list_view_sets) 
 
 **⚠️ DESTRUCTIVE OPERATION:** See [Admin Functions Reference](../admin/functions-reference.md#retire_partition_by_filefile_path) for details.
 
-#### `delete_duplicate_processes()` 🔧
-
-**Administrative Function** - Deletes duplicate processes within the query time range. Keeps the earliest entry per `process_id`.
-
-**⚠️ DESTRUCTIVE OPERATION:** See [Admin Functions Reference](../admin/functions-reference.md) for details.
-
-#### `delete_duplicate_streams()` 🔧
-
-**Administrative Function** - Deletes duplicate streams within the query time range. Keeps the earliest entry per `stream_id`.
-
-**⚠️ DESTRUCTIVE OPERATION:** See [Admin Functions Reference](../admin/functions-reference.md) for details.
-
-#### `delete_duplicate_blocks()` 🔧
-
-**Administrative Function** - Deletes duplicate blocks within the query time range. Keeps the earliest entry per `block_id`.
-
-**⚠️ DESTRUCTIVE OPERATION:** See [Admin Functions Reference](../admin/functions-reference.md) for details.
-
 #### `perfetto_trace_chunks(process_id, span_types, start_time, end_time)`
 
 Generates Perfetto trace chunks from process telemetry data for visualization and performance analysis.

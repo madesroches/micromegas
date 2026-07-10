@@ -215,13 +215,13 @@ export MICROMEGAS_OIDC_CLIENT_SECRET="your-client-secret"  # Optional
 export MICROMEGAS_ANALYTICS_URI="grpc+tls://analytics.example.com:50051"
 
 # First use: Opens browser for authentication
-python3 -m micromegas.cli.query_processes --since 1h
+micromegas-query "SELECT process_id, exe, start_time FROM processes" --begin 1h
 
 # Subsequent uses: No browser interaction, uses cached tokens
-python3 -m micromegas.cli.query_process_log <process_id>
+micromegas-query "SELECT time, level, msg FROM log_entries WHERE process_id = '<process_id>'" --begin 1h
 
 # Logout (clear saved tokens)
-micromegas_logout
+micromegas-logout
 ```
 
 **Environment Variables:**
@@ -589,8 +589,8 @@ This prevents authorization code interception attacks even if the client secret 
 1. Check server logs: `tail -f /tmp/analytics.log | grep -i auth`
 2. Verify OIDC configuration matches between server and client
 3. Ensure Client ID and Issuer URL are correct
-4. Check token expiration: `cat ~/.micromegas/tokens.json | jq .expires_at`
-5. Clear tokens and re-authenticate: `micromegas_logout`
+4. Check token expiration: `cat ~/.micromegas/tokens.json | jq .token.expires_at`
+5. Clear tokens and re-authenticate: `micromegas-logout`
 
 ### Token Refresh Failures
 
@@ -598,10 +598,10 @@ This prevents authorization code interception attacks even if the client secret 
 
 **Solutions:**
 
-1. Check if refresh token is present: `cat ~/.micromegas/tokens.json | jq .refresh_token`
+1. Check if refresh token is present: `cat ~/.micromegas/tokens.json | jq .token.refresh_token`
 2. Verify client secret matches (if required by provider)
 3. Check token file permissions: `ls -la ~/.micromegas/tokens.json` (should be 600)
-4. Re-authenticate: `micromegas_logout` then retry
+4. Re-authenticate: `micromegas-logout` then retry
 
 ### Server Configuration Issues
 

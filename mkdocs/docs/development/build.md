@@ -75,12 +75,6 @@ python3 ../build/rust_ci.py
 # Clean build
 cargo clean && cargo build
 
-# Release with debug symbols for profiling
-cargo build --profile release-debug
-
-# Profiling build
-cargo build --profile profiling
-
 # Cross-compile for Windows (from Linux)
 rustup target add x86_64-pc-windows-gnu
 cargo build --target x86_64-pc-windows-gnu
