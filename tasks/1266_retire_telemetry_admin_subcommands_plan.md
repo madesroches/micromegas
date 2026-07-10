@@ -100,7 +100,9 @@ the running service rather than a one-off manual purge.
 - `docker/all-in-one.Dockerfile` — `--bin telemetry-admin` (l.82, 89), cp path (l.97),
   `COPY` (l.111).
 - `docker/README.md` — image table row `admin.Dockerfile` / `micromegas-admin` / "Telemetry admin
-  CLI" (l.13), plus image name `micromegas-admin` and command lines (l.124, l.173).
+  CLI" (l.13), plus image name `micromegas-admin` and command lines (l.124, l.173); also the
+  `# Admin daemon` comment headers (l.119, l.168) and the `docker run … --name admin` container
+  name (l.169).
 - `build/build_docker_images.py:35` — `"admin": ("admin.Dockerfile", "Telemetry admin CLI")`.
 - `build/run_daemon_container.py:12` — `"telemetry-admin crond"` command.
 - `.gitignore:40` — `docker/telemetry-admin` (built binary copied into the docker build context).
@@ -286,7 +288,9 @@ step asserts a passing `cargo build` while the two sides of the call are mismatc
     the `crond` arg (l.124). In the All-in-One block (against the un-renamed `micromegas-all`
     image, which takes the binary name as its command), rename the binary token itself:
     `telemetry-admin crond` → `telemetry-maintenance-srv` (l.173) — dropping only `crond` there
-    would leave the nonexistent `telemetry-admin` binary name.
+    would leave the nonexistent `telemetry-admin` binary name. Also reword the two `# Admin daemon`
+    comment headers (l.119, l.168) to `# Maintenance daemon` and the container name
+    `docker run -d --name admin` → `--name maintenance` (l.169), to clear the stale "admin" labels.
 18. Update `.gitignore:40`: `docker/telemetry-admin` → `docker/telemetry-maintenance-srv`.
 
 ### Phase 4 — Scripts
