@@ -182,9 +182,10 @@ Notes:
   directly, passing the grace period and (see below) the retention horizon.
 - Delete the now-dead imports (`delete_old_data`, `materialize_partition_range`,
   `delete_expired_temporary_files`, `retire_partitions`, `Context`, `PartitionCache`,
-  `TimeRange`, `TimeDelta`, `DateTime`, `Utc`). Keep `ResponseWriter`? No — the
-  `null_response_writer` was only used by the removed handlers; `daemon()` builds its own. Verify
-  with `cargo build` + `cargo clippy` that no unused-import warnings remain.
+  `TimeRange`, `TimeDelta`, `DateTime`, `Utc`, `std::sync::Arc`). Keep `ResponseWriter`? No — the
+  `null_response_writer` construction (line 82) and the `Arc::new(...)` calls it and the removed
+  handlers used are deleted along with the handlers; `daemon()` builds its own `Arc`-wrapped
+  context. Verify with `cargo build` + `cargo clippy` that no unused-import warnings remain.
 
 ### 3. Make the retention horizon configurable
 Thread a `retention_days: i32` value into the daemon so the hourly task's hardcoded `90`
@@ -239,76 +240,77 @@ crate. Recommended: delete.
 5. Rewrite `rust/telemetry-maintenance-srv/README.md` title/description for the daemon.
 6. Build to confirm the workspace glob picks up the new directory: `cargo build` from `rust/`.
 
-### Phase 2 — Collapse the CLI and remove subcommands
-7. In `src/main.rs`: replace the `Cli`/`Commands` definitions with the flat `Parser` struct
-   (grace period + retention_days), drop `arg_required_else_help`, remove the `Subcommand` import.
-8. Replace the `match args.command { … }` block with a direct daemon launch (build view factory →
-   `get_global_views_with_update_group` → `daemon(lakehouse, views, args.retention_days,
-   wait_for_sigterm(), grace)`).
-9. Delete all imports that were only used by the removed handlers.
-10. `cargo build` + `cargo clippy --workspace -- -D warnings` — zero unused-import/dead-code
-    warnings.
+### Phase 2 — Collapse the CLI, remove subcommands, and make retention configurable
+Note: the `daemon()` signature change and the standalone binary's switch to the new call arity are
+done together in this phase, with a single build checkpoint at the end (step 12) — no intermediate
+step asserts a passing `cargo build` while the two sides of the call are mismatched.
+7. In `rust/public/src/servers/maintenance.rs`: add `retention_days` param to `daemon()`, add the
+   `retention_days` field to `EveryHourTask`, populate it when constructing the hourly task, and
+   replace the literal `90` at line 101 with `self.retention_days`.
+8. In `rust/monolith/src/main.rs`: add `--retention-days` / `MICROMEGAS_RETENTION_DAYS` clap field
+   (default 90) and pass it into the `daemon(…)` call (line ~287).
+9. In `src/main.rs` (telemetry-maintenance-srv): replace the `Cli`/`Commands` definitions with the
+   flat `Parser` struct (grace period + retention_days), drop `arg_required_else_help`, remove the
+   `Subcommand` import.
+10. Replace the `match args.command { … }` block with a direct daemon launch (build view factory →
+    `get_global_views_with_update_group` → `daemon(lakehouse, views, args.retention_days,
+    wait_for_sigterm(), grace)`). `daemon()` already takes the matching 5 parameters from step 7,
+    so this is the only place the call arity changes.
+11. Delete all imports that were only used by the removed handlers (including `std::sync::Arc` —
+    see Design §2).
+12. `cargo build` + `cargo clippy --workspace -- -D warnings` — zero unused-import/dead-code
+    warnings; both `telemetry-maintenance-srv` and `micromegas-monolith` compile.
 
-### Phase 3 — Configurable retention
-11. In `rust/public/src/servers/maintenance.rs`: add `retention_days` param to `daemon()`, add the
-    `retention_days` field to `EveryHourTask`, populate it when constructing the hourly task, and
-    replace the literal `90` at line 101 with `self.retention_days`.
-12. In `rust/monolith/src/main.rs`: add `--retention-days` / `MICROMEGAS_RETENTION_DAYS` clap field
-    (default 90) and pass it into the `daemon(…)` call (line ~287).
-13. Update the daemon call in the new `telemetry-maintenance-srv/src/main.rs` to pass
-    `args.retention_days`.
-14. `cargo build` — both binaries compile.
-
-### Phase 4 — Docker
-15. `git mv docker/admin.Dockerfile docker/maintenance.Dockerfile`; update the comment, all
+### Phase 3 — Docker
+13. `git mv docker/admin.Dockerfile docker/maintenance.Dockerfile`; update the comment, all
     `--bin telemetry-admin` → `--bin telemetry-maintenance-srv`, cp/COPY paths, and
     `ENTRYPOINT ["telemetry-maintenance-srv"]`.
-16. `docker/all-in-one.Dockerfile`: `--bin telemetry-admin` → `--bin telemetry-maintenance-srv`
+14. `docker/all-in-one.Dockerfile`: `--bin telemetry-admin` → `--bin telemetry-maintenance-srv`
     (l.82, 89), cp path (l.97), COPY (l.111).
-17. `build/build_docker_images.py:35`: key `admin` → `maintenance`, filename
+15. `build/build_docker_images.py:35`: key `admin` → `maintenance`, filename
     `maintenance.Dockerfile`, description "Maintenance daemon".
-18. `build/run_daemon_container.py:12`: command token `"telemetry-admin crond"` →
+16. `build/run_daemon_container.py:12`: command token `"telemetry-admin crond"` →
     `"telemetry-maintenance-srv"`. The image on line 11 (`marcantoinedesroches/micromegas-all:latest`)
     is the separate all-in-one image and is **not** renamed — leave it as-is.
-19. `docker/README.md`: image table row (l.13) — Dockerfile `admin.Dockerfile` →
+17. `docker/README.md`: image table row (l.13) — Dockerfile `admin.Dockerfile` →
     `maintenance.Dockerfile`, image `micromegas-admin` → `micromegas-maintenance`, description
     "Telemetry admin CLI" → "Maintenance daemon"; plus image `micromegas-admin` →
     `micromegas-maintenance` and drop the `crond` arg from both run blocks (l.124, l.173).
-20. Update `.gitignore:40`: `docker/telemetry-admin` → `docker/telemetry-maintenance-srv`.
+18. Update `.gitignore:40`: `docker/telemetry-admin` → `docker/telemetry-maintenance-srv`.
 
-### Phase 5 — Scripts
-21. `local_test_env/ai_scripts/start_services.py`: service name `telemetry-admin` →
+### Phase 4 — Scripts
+19. `local_test_env/ai_scripts/start_services.py`: service name `telemetry-admin` →
     `telemetry-maintenance-srv` (l.36), launch `[str(target_dir / "telemetry-maintenance-srv")]`
     dropping the `"crond"` arg (l.204), build `--bin telemetry-maintenance-srv` (l.400), and
     rename the hardcoded log filename `/tmp/admin.log` → `/tmp/maintenance.log` (write at l.202,
     echo at l.231).
-22. `local_test_env/ai_scripts/stop_services.py:53`: service name.
-23. `local_test_env/ai_scripts/start_services_with_oidc.py`: service list (l.70),
+20. `local_test_env/ai_scripts/stop_services.py:53`: service name.
+21. `local_test_env/ai_scripts/start_services_with_oidc.py`: service list (l.70),
     `cargo run -p telemetry-maintenance-srv --` dropping `crond` (l.229).
-24. `local_test_env/dev.py`: build `-p telemetry-maintenance-srv` (l.45),
+22. `local_test_env/dev.py`: build `-p telemetry-maintenance-srv` (l.45),
     `cargo run … -p telemetry-maintenance-srv` dropping `crond` (l.211).
 
-### Phase 6 — Docs & meta
-25. Update `mkdocs/docs/admin/maintenance.md`: binary name, run command
+### Phase 5 — Docs & meta
+23. Update `mkdocs/docs/admin/maintenance.md`: binary name, run command
     (`cargo run --release --bin telemetry-maintenance-srv`, no `crond`), Docker/entrypoint prose,
     and the Retention section to document `--retention-days` / `MICROMEGAS_RETENTION_DAYS`
     (default 90) instead of describing 90 as fixed.
-26. Update `mkdocs/docs/admin/service-lifecycle.md` (table row + example; binary is now
+24. Update `mkdocs/docs/admin/service-lifecycle.md` (table row + example; binary is now
     `telemetry-maintenance-srv` with no `crond`), `mkdocs/docs/architecture/index.md` (diagram node
     + split-mode paragraph), `mkdocs/docs/getting-started.md`, `mkdocs/docs/cost-effectiveness.md`,
     `doc/GETTING_STARTED.md`.
-27. Update `rust/public/src/lib.rs` doc comments (l.30 path, l.75 run command).
-28. Update `README.md:50`, `CLAUDE.md:78`, `AI_GUIDELINES.md:66`,
+25. Update `rust/public/src/lib.rs` doc comments (l.30 path, l.75 run command).
+26. Update `README.md:50`, `CLAUDE.md:78`, `AI_GUIDELINES.md:66`,
     `.github/copilot-instructions.md:59`.
-29. Add a `CHANGELOG.md` Unreleased entry (removed subcommands; binary + Docker-image rename as a
+27. Add a `CHANGELOG.md` Unreleased entry (removed subcommands; binary + Docker-image rename as a
     breaking deployment change; new `MICROMEGAS_RETENTION_DAYS` knob).
 
-### Phase 7 — Verify
-30. From `rust/`: `cargo fmt`, `cargo build`, `cargo clippy --workspace -- -D warnings`,
+### Phase 6 — Verify
+28. From `rust/`: `cargo fmt`, `cargo build`, `cargo clippy --workspace -- -D warnings`,
     `cargo test`.
-31. Run `local_test_env/ai_scripts/start_services.py` and confirm the daemon starts under its new
+29. Run `local_test_env/ai_scripts/start_services.py` and confirm the daemon starts under its new
     name and materializes partitions (see Testing Strategy).
-32. `python build/build_docker_images.py` (or the maintenance image only) to confirm the renamed
+30. `python build/build_docker_images.py` (or the maintenance image only) to confirm the renamed
     Dockerfile/image build.
 
 ## Files to Modify
