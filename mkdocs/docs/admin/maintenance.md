@@ -5,9 +5,9 @@ is a long-running service you deploy alongside [ingestion](ingestion.md) and
 [FlightSQL](flight-sql.md): it materializes views on a schedule and runs retention
 cleanup.
 
-Ad-hoc administration — inspecting partitions, retiring incompatible ones,
-removing duplicates — is done through SQL and the Python API, not by driving this
-binary. See [Admin SQL Functions](functions-reference.md).
+Ad-hoc administration — inspecting partitions, retiring incompatible ones — is
+done through SQL and the Python API, not by driving this binary. See
+[Admin SQL Functions](functions-reference.md).
 
 It reads the lake from the environment:
 
@@ -68,12 +68,11 @@ The 90-day retention is the daemon's built-in policy.
 ## Ad-hoc administration
 
 Manual maintenance — backfilling a time range, retiring stale or
-schema-incompatible partitions, removing duplicate processes/streams/blocks — runs
-through the FlightSQL server, not this binary:
+schema-incompatible partitions — runs through the FlightSQL server, not this
+binary:
 
 - **SQL functions** such as `materialize_partitions()` (backfill a time range),
-  `retire_partitions()`, `retire_partition_by_metadata()`, and the
-  `delete_duplicate_*()` UDFs.
+  `retire_partitions()`, and `retire_partition_by_metadata()`.
 - **Python helpers** such as `micromegas.admin.list_incompatible_partitions()` and
   `micromegas.admin.retire_incompatible_partitions()`.
 
