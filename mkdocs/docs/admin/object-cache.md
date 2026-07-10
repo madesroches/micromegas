@@ -1,6 +1,6 @@
 # Object Cache Deployment
 
-`micromegas-object-cache-srv` is a shared HTTP range cache that sits in front of the data lake's object store. Split-mode services (FlightSQL, the maintenance daemon, ingestion) read overlapping byte ranges of the same Parquet/block files; routing those reads through one shared cache avoids re-fetching the same bytes from S3/GCS on every process, cutting egress cost and read latency.
+`micromegas-object-cache-srv` is a shared HTTP range cache that sits in front of the data lake's object store. Split-mode query services (FlightSQL and the maintenance daemon) read overlapping byte ranges of the same Parquet/block files; routing those reads through one shared cache avoids re-fetching the same bytes from S3/GCS on every process, cutting egress cost and read latency.
 
 It only caches **reads**. Writes, deletes, and listings always go straight to the origin store — see [What gets cached](#what-gets-cached) below.
 
@@ -135,7 +135,7 @@ See [Caching Architecture](../architecture/caching.md#cache-warming) for the des
 
 ## Client opt-in
 
-The cache is opt-in per client. Each split-mode service (ingestion, FlightSQL, the maintenance daemon) reads through it only when both of these are set in *its own* environment:
+The cache is opt-in per client. FlightSQL and the maintenance daemon use it only when both of these are set in *their own* environment:
 
 ```bash
 export MICROMEGAS_OBJECT_CACHE_URL=http://object-cache:8080
@@ -212,7 +212,7 @@ The cache emits metrics through the standard micromegas tracing sink (queryable 
 | `object_cache_prefetch_dropped` | cache server | Prefetch items load-shed because the queue was full. A sustained non-zero rate means prefetch volume exceeds `MICROMEGAS_OBJECT_CACHE_PREFETCH_QUEUE_CAPACITY` / worker throughput. |
 | `object_cache_prefetch_keys_warmed` / `object_cache_prefetch_fill_error` | cache server | Prefetch fills that completed successfully vs. failed (e.g. key not found at the origin). |
 | `range_cache_client_prefetch_error` | each client | Client-side prefetch calls that failed (transport error or non-2xx). Best-effort — callers do not retry. |
-| `object_warm_requested` | writer (ingestion) | A cache warm was scheduled for a freshly-written object (e.g. a new partition; see [Write-time warming](#write-time-warming)). |
+| `object_warm_requested` | maintenance daemon / JIT | A cache warm was scheduled for a freshly-written object (e.g. a new partition; see [Write-time warming](#write-time-warming)). |
 | `range_cache_prefetch_admission_unexpected_none` | cache server | Defensive counter in the SSD-only prefetch admission path: bumped if a force-insert unexpectedly reports no admission. Should never fire; a sustained non-zero rate points to an admission-path regression. |
 
 ### Latency
