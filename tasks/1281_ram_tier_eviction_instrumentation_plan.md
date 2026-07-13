@@ -36,11 +36,12 @@ All three are dogfooded through the standard tracing sink, queryable like every 
 
 ### foyer's eviction/tier hooks (foyer 0.22 / foyer-memory 0.22.3 / foyer-storage 0.22.3)
 
-- **RAM tier listener**: `HybridCacheBuilder::with_event_listener(Arc<dyn EventListener<K, V>>)`
-  (`hybrid/builder.rs:82`), registered on the in-memory `CacheBuilder` inside `.memory()` (`:124`).
-  `EventListener::on_leave(&self, reason: Event, key, value)` (`foyer-common/src/event.rs:38`);
+- **RAM tier listener**: `HybridCacheBuilder::with_event_listener(Arc<dyn EventListener<Key = K, Value = V>>)`
+  (`hybrid/builder.rs:82`) — the trait uses associated types (`type Key; type Value;`), not generic
+  params, registered on the in-memory `CacheBuilder` inside `.memory()` (`:124`).
+  `EventListener::on_leave(&self, reason: Event, key, value)` (`foyer-common/src/event.rs:39`);
   `Event` ∈ `Evict`/`Replace`/`Remove`/`Clear` (`:19`). Confirmed: `on_leave` is invoked **only**
-  from `foyer-memory` (`raw.rs:399,510,614,643,668`) — it is a RAM-tier event exclusively.
+  from `foyer-memory` (`raw.rs:399,510,614,643,668,697,839`) — it is a RAM-tier event exclusively.
 - **Hybrid policy**: `HybridCachePolicy::default() == WriteOnEviction` (`hybrid/cache.rs:180`) — an
   entry is written to disk **when it is evicted from RAM**. So under the current default, the RAM
   `Event::Evict` moment *is* the disk-write moment.
