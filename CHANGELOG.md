@@ -8,6 +8,8 @@ This file documents the historical progress of the Micromegas project. For curre
   * Fix a demand-fill leak where a cached block stored as a slice of its coalesced origin-GET buffer pinned the whole parent allocation, letting RAM-tier RSS run up to `max_coalesced_get_bytes / block_size`x its accounted weight; copy on demand admission in both `FoyerBackend` and the L1 `BoundedMemoryBackend` to detach the cached block, and export accounted RAM-tier usage as a new `object_cache_ram_tier_usage_bytes` saturation gauge (#1276)
 * **Docs:**
   * Rewrite the "Getting Started" page as a Docker-based quickstart (clone-free `curl` + in-repo compose options, self-contained monolith compose file with inline DB init, web app, optional Python sample query, stop/cleanup, troubleshooting); relocate the developer/build setup to the Build Guide and repoint entry-point links; note the Compose v2.23.1+ prerequisite where the shared compose file is invoked (#1273)
+* **Config:**
+  * Consolidate ad-hoc `MICROMEGAS_*` env-var reads into typed config structs (`DataLakeConfig`, `WebServerConfig`, `CommonServerArgs`, `GatewayConfig`) and shared helpers (`parse_object_store_url`), replacing ~15 scattered `std::env::var` call sites; flatten `CommonServerArgs` into the service binaries and add an env-backed `--flightsql-url` flag to `http-gateway` to fail fast instead of reading the env per request (#1248)
 
 ## v0.27.0 - 2026-07-12
 
