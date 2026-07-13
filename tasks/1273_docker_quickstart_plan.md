@@ -146,7 +146,10 @@ Notes:
   block (see Resolved Decisions #2).
 
 The compose file remains referenced by `docker/README.md` and
-`admin/monolith.md`; both keep working unchanged after this edit.
+`admin/monolith.md`. The inline `configs.content` floor (Compose v2.23.1+)
+applies to every invocation of the shared file, so both docs must gain a
+one-line "requires Docker Compose v2.23.1+" prerequisite note in their
+quick-start sections — they are not unaffected by this edit.
 
 ### 3. Move dev/build-from-source content into Development docs
 
@@ -228,6 +231,8 @@ The compose file remains referenced by `docker/README.md` and
 - `mkdocs/docs/index.md` — optional label tweaks
 - `mkdocs/mkdocs.yml` — optional nav label rename
 - `README.md` — reframe Getting Started; add contributor build-docs link
+- `docker/README.md` — add Docker Compose v2.23.1+ prerequisite note
+- `mkdocs/docs/admin/monolith.md` — add Docker Compose v2.23.1+ prerequisite note
 
 ## Trade-offs
 
@@ -258,10 +263,14 @@ This task *is* documentation. Pages touched:
 - `index.md` (optional label tweak)
 - `mkdocs.yml` (optional nav label)
 - Repo `README.md` (entry links)
+- `admin/monolith.md` (gains a Compose v2.23.1+ prerequisite note)
+- `docker/README.md` (gains a Compose v2.23.1+ prerequisite note)
 
 `admin/monolith.md` and `docker/README.md` stay as the production/admin and
-maintainer references and need no change (they keep referencing the same compose
-file, which still works after the `configs` edit).
+maintainer references — they keep referencing the same compose file — but each
+picks up a one-line "requires Docker Compose v2.23.1+" prerequisite note in its
+quick-start section, since the inline `configs` edit raises the version floor
+for every invocation of the shared file.
 
 ## Testing Strategy
 
