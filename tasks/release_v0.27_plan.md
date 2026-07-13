@@ -26,10 +26,12 @@ Release version 0.27.0 of Micromegas. This is a caching + native-integration rel
 |---|---|---|---|
 | `rust/object-cache` (`micromegas-object-cache`) | lib | **YES — publishes by default** | **Must add to `build/release.py`** (see fix below) |
 | `rust/object-cache-srv` (`micromegas-object-cache-srv`) | binary/server | No (not a lib dep of any published crate) | Docker image only — already in `SERVICES` as `object-cache` |
-| `rust/capi` (`micromegas-capi`) | cdylib/staticlib | No | Released via `capi-v0.27.0` tag → `capi-release.yml`; not a crates.io publish |
+| `rust/capi` (`micromegas-capi`) | cdylib/staticlib | **No — decided** | Released via `capi-v0.27.0` tag → `capi-release.yml`; **not a crates.io publish** (see note below) |
 | `blender/micromegas_blender` | Python extension | n/a | Released via `blender-v0.27.0` tag → `blender-extension.yml` |
 
 > **Also new but not published to crates.io** (binary-only servers, consistent with prior releases): `monolith`, `http-gateway`, `uri-handler`, `analytics-web-srv`, `telemetry-maintenance-srv` (renamed from admin). These ship as Docker images / GitHub release artifacts, not crates.
+
+> **`micromegas-capi` stays off crates.io (decided).** crates.io serves Rust `cargo add` consumers, but capi's audience is explicitly *non-Rust* (Python/C/C++/game-engine callers) — a Rust project would depend on `micromegas-telemetry-sink`/`micromegas-tracing` directly, never the C-ABI wrapper. That audience is already served by the per-platform prebuilt archives (shared lib + static lib + `micromegas.h`) that the `capi-v*` tag publishes as GitHub Release assets via `capi-release.yml` — the right artifact for a non-Rust consumer, not a source crate. No `publish = false` is needed: like every other non-published crate in the workspace, capi is gated off crates.io solely by omission from `build/release.py`'s explicit per-package `-p <crate>` allow-list, so the documented release flow will never publish it.
 
 ## ⚠️ CRITICAL Pre-Release Fix: `micromegas-object-cache` missing from `release.py`
 
@@ -98,8 +100,8 @@ This must land (committed to the `release` branch) **before** running Phase 1.
 ### 3. Documentation Updates
 
 - [ ] Review git log: `git log --oneline micromegas-v0.26.0..HEAD`
-- [ ] Update `CHANGELOG.md` — the `## Unreleased` section is already comprehensive; rename it to `## v0.27.0 - 2026-07-12` (adjust to actual release date) and add a fresh empty `## Unreleased` above it
-- [ ] Update `grafana/CHANGELOG.md` — add `## 0.27.0 (<date>)` version-sync entry (note the Dependabot bumps: `golang.org/x/net` 0.55.0)
+- [ ] Update `CHANGELOG.md` — the `## Unreleased` section is already comprehensive; rename it to `## v0.27.0 - 2026-07-12` and add a fresh empty `## Unreleased` above it
+- [ ] Update `grafana/CHANGELOG.md` — add `## 0.27.0 (2026-07-12)` version-sync entry (note the Dependabot bumps: `golang.org/x/net` 0.55.0)
 - [ ] Update `README.md` roadmap — add a `### v0.27.0 (July 2026)` block under "Recent Releases" with the highlights (tiered object cache, partition_metadata removal, Blender/C-ABI integration, sink/transit hardening, supply-chain gates, `telemetry-maintenance-srv` rename, DataFusion 54)
 
 ### 4. Grafana Plugin Preparation
@@ -216,8 +218,8 @@ docker buildx imagetools inspect marcantoinedesroches/micromegas-object-cache:0.
 1. **New lib crate that other published crates depend on → add to `release.py` before its dependents.** `micromegas-object-cache` (new this cycle) is depended on by `ingestion` and `analytics`; missing it breaks the whole publish run. The pre-release "Verify release.py" step must diff new `rust/*/Cargo.toml` members against the `release.py` layer list.
 2. **Keep the Phase 3.5 Docker command in sync with `SERVICES`.** This cycle: `admin` → `maintenance` rename and the new `object-cache` service. Prefer deriving the list from `SERVICES.keys()` (minus `all`) rather than hardcoding.
 
-## Open Questions
+## Decisions
 
-1. **Release date** — the plan assumes 2026-07-12; confirm the actual date for the CHANGELOG/README/grafana entries.
-2. **Release tagline** — proposed "Tiered object cache + Blender observability"; adjust if you prefer to foreground the `partition_metadata` removal or the hardening work.
-3. **`micromegas-capi` on crates.io** — currently released only as binaries via `capi-v0.27.0`. Confirm we intend to keep it off crates.io (it has no `publish = false`, so it *could* be published, but nothing depends on it there).
+1. **Release date — 2026-07-12.** Used for the `CHANGELOG.md`, `grafana/CHANGELOG.md`, and `README.md` entries.
+2. **Release tagline — "Tiered object cache + Blender observability."** Used in the Phase 3 GitHub release title.
+3. **`micromegas-capi` stays off crates.io.** Released as prebuilt per-platform archives via the `capi-v0.27.0` tag → `capi-release.yml` only; no crates.io publish. Rationale in the "New Crates & Services" section above.
