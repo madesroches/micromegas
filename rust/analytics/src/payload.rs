@@ -32,7 +32,7 @@ pub async fn fetch_block_payload(
         span_scope!("decode");
         let payload: micromegas_telemetry::block_wire_format::BlockPayload =
             ciborium::from_reader(&buffer[..])
-                .with_context(|| format!("reading payload {}", &block_id))?;
+                .with_context(|| format!("reading payload {}", block_id))?;
         Ok(payload)
     }
 }

@@ -284,8 +284,8 @@ async fn insert_partition(
     logger
         .write_log_entry(format!(
             "[PARTITION_WRITE_START] view={}/{} time_range=[{}, {}] source_rows={} - lock acquired",
-            &partition.view_metadata.view_set_name,
-            &partition.view_metadata.view_instance_id,
+            partition.view_metadata.view_set_name,
+            partition.view_metadata.view_instance_id,
             partition.begin_insert_time(),
             partition.end_insert_time(),
             source_row_count
@@ -349,8 +349,8 @@ async fn insert_partition(
             logger
                 .write_log_entry(format!(
                     "[PARTITION_INSERT_ERROR] view={}/{} time_range=[{}, {}] source_rows={} error={}",
-                    &partition.view_metadata.view_set_name,
-                    &partition.view_metadata.view_instance_id,
+                    partition.view_metadata.view_set_name,
+                    partition.view_metadata.view_instance_id,
                     partition.begin_insert_time(),
                     partition.end_insert_time(),
                     source_row_count,
@@ -545,8 +545,8 @@ pub async fn write_partition_from_rows(
     let file_id = uuid::Uuid::new_v4();
     let file_path = format!(
         "views/{}/{}/{}/{}_{file_id}.parquet",
-        &view_metadata.view_set_name,
-        &view_metadata.view_instance_id,
+        view_metadata.view_set_name,
+        view_metadata.view_instance_id,
         insert_range.begin.format("%Y-%m-%d"),
         insert_range.begin.format("%H-%M-%S")
     );

@@ -94,7 +94,7 @@ pub fn get_thread_name_from_stream_metadata(stream: &StreamMetadata) -> Result<S
     const THREAD_ID_KEY: &str = "thread-id";
 
     if stream.properties.is_empty() {
-        return Ok(format!("{}", &stream.stream_id));
+        return Ok(format!("{}", stream.stream_id));
     }
 
     let jsonb = RawJsonb::new(&stream.properties);

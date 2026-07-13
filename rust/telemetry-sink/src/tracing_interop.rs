@@ -74,7 +74,7 @@ where
             line: 0,
         };
 
-        log_interop(&log_desc, format_args!("{}", &buffer));
+        log_interop(&log_desc, format_args!("{}", buffer));
     }
 }
 
