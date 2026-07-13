@@ -89,8 +89,9 @@ New `getting-started.md` outline:
    - The sample query returns Micromegas's own self-telemetry — the compose
      file's monolith ingests its own traces/logs by default — so newcomers
      should expect to see real rows, not an empty table; it's empty until the
-     first sink flush (~5s) is ingested AND the maintenance role materializes
-     it (another ~1-2s) — after that expect real rows
+     first sink flush (~5s) is ingested, and the maintenance role continuously
+     materializes the global view on a ~1s cron, so rows appear within a
+     second or two after that
 
 ## What you just ran  (evaluation-only callout)
    - --disable-auth, file object store, single process, ephemeral volumes
@@ -104,9 +105,10 @@ New `getting-started.md` outline:
    - "Building from source / contributing?" → development/build.md
 
 ## Troubleshooting
-   - port conflicts (3000/9000/5432), image pull, expect to see Micromegas's
+   - port conflicts (3000/9000/50051), image pull, expect to see Micromegas's
      own self-telemetry in the sample query (empty until the first sink flush
-     ~5s is ingested AND the maintenance role materializes it ~1-2s more)
+     ~5s is ingested; the maintenance role continuously materializes the
+     global view on a ~1s cron, so rows appear within a second or two more)
 ```
 
 ### 2. Make the compose file genuinely clone-free (single source of truth)
@@ -302,9 +304,10 @@ for every invocation of the shared file.
   docker/docker-compose.monolith.yaml up`; verify Postgres creates both
   `micromegas` and `micromegas_app`, the web app loads at `http://localhost:3000`,
   and `pip install micromegas` + the sample query connects and returns the
-  monolith's own self-telemetry (empty only if run before both the first sink
-  flush ~5s and the maintenance role's next materialization pass ~1-2s
-  complete).
+  monolith's own self-telemetry (empty only if run before the first sink
+  flush ~5s completes; the maintenance role continuously materializes the
+  global view on a ~1s cron, so rows lag the flush by roughly 1-2s
+  thereafter).
 - **Clone-free test:** in an empty temp dir, `curl` the compose file from the
   branch raw URL and run it; verify identical behavior with no other files
   present.
