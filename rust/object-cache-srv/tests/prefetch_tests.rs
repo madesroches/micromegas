@@ -229,6 +229,7 @@ async fn prefetch_ssd_only_leaves_ram_usage_unchanged() {
             16 * 1024 * 1024,
             1,
             WriteTuning::default(),
+            Arc::from(Vec::new()),
         )
         .await
         .expect("create FoyerBackend"),

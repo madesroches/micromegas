@@ -71,9 +71,16 @@ async fn foyer_disk_gauges_emit_only_after_a_second_tick() {
     let dir_path = dir.path().to_str().expect("utf8 path");
 
     let foyer = Arc::new(
-        FoyerBackend::new_with_shards(dir_path, 4096, 16 * 1024 * 1024, 1, WriteTuning::default())
-            .await
-            .expect("create FoyerBackend"),
+        FoyerBackend::new_with_shards(
+            dir_path,
+            4096,
+            16 * 1024 * 1024,
+            1,
+            WriteTuning::default(),
+            Arc::from(Vec::new()),
+        )
+        .await
+        .expect("create FoyerBackend"),
     );
     let store = Arc::new(InMemory::new());
     let cache = RangeCache::new(
@@ -168,6 +175,7 @@ async fn ram_tier_usage_gauge_reflects_demand_put() {
             16 * 1024 * 1024,
             1,
             WriteTuning::default(),
+            Arc::from(Vec::new()),
         )
         .await
         .expect("create FoyerBackend"),

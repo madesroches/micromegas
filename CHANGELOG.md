@@ -5,6 +5,7 @@ This file documents the historical progress of the Micromegas project. For curre
 ## Unreleased
 
 * **Caching:**
+  * Instrument object-cache eviction: emit RAM-tier eviction count/age metrics (tagged by `prefix` and `reason`) via a foyer `EventListener`, and a disk read-age estimate on disk-tier read hits, so it's observable what gets evicted and how long it lived before leaving a tier (#1281)
   * Fix a demand-fill leak where a cached block stored as a slice of its coalesced origin-GET buffer pinned the whole parent allocation, letting RAM-tier RSS run up to `max_coalesced_get_bytes / block_size`x its accounted weight; copy on demand admission in both `FoyerBackend` and the L1 `BoundedMemoryBackend` to detach the cached block, and export accounted RAM-tier usage as a new `object_cache_ram_tier_usage_bytes` saturation gauge (#1276)
 * **Docs:**
   * Rewrite the "Getting Started" page as a Docker-based quickstart (clone-free `curl` + in-repo compose options, self-contained monolith compose file with inline DB init, web app, optional Python sample query, stop/cleanup, troubleshooting); relocate the developer/build setup to the Build Guide and repoint entry-point links; note the Compose v2.23.1+ prerequisite where the shared compose file is invoked (#1273)

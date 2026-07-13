@@ -8,6 +8,8 @@
 //! manage the cardinality"). Centralizing the `Property`/`PropertySet`
 //! construction here keeps the label taxonomy in one place (DRY).
 
+use std::sync::Arc;
+
 use micromegas_tracing::property_set::{Property, PropertySet};
 
 /// Demand-vs-prefetch `class` dimension values. Kept as plain string
@@ -90,4 +92,94 @@ pub fn longest_prefix_match(labels: &[&'static str], key: &str) -> Option<usize>
         })
         .max_by_key(|(_, p)| p.len())
         .map(|(i, _)| i)
+}
+
+/// RAM-tier eviction `reason` dimension values (`foyer::Event` mapped to a
+/// stable label string by `foyer_backend::reason_str`).
+pub const REASON_EVICT: &str = "evict";
+pub const REASON_REPLACE: &str = "replace";
+pub const REASON_REMOVE: &str = "remove";
+pub const REASON_CLEAR: &str = "clear";
+
+/// Precomputed, interned `&'static PropertySet`s for one `prefix` label, for
+/// the RAM-tier eviction count/age metrics. Parallels `PrefixTags`, but
+/// dimensioned by `reason` instead of `class`.
+#[derive(Debug, Clone, Copy)]
+pub struct EvictionTags {
+    /// `{prefix}` -- used by both the RAM eviction age metric and the disk
+    /// read-age metric.
+    pub prefix: &'static PropertySet,
+    count_evict: &'static PropertySet,
+    count_replace: &'static PropertySet,
+    count_remove: &'static PropertySet,
+    count_clear: &'static PropertySet,
+}
+
+impl EvictionTags {
+    pub fn new(label: &'static str) -> Self {
+        Self {
+            prefix: PropertySet::find_or_create(vec![Property::new("prefix", label)]),
+            count_evict: PropertySet::find_or_create(vec![
+                Property::new("prefix", label),
+                Property::new("reason", REASON_EVICT),
+            ]),
+            count_replace: PropertySet::find_or_create(vec![
+                Property::new("prefix", label),
+                Property::new("reason", REASON_REPLACE),
+            ]),
+            count_remove: PropertySet::find_or_create(vec![
+                Property::new("prefix", label),
+                Property::new("reason", REASON_REMOVE),
+            ]),
+            count_clear: PropertySet::find_or_create(vec![
+                Property::new("prefix", label),
+                Property::new("reason", REASON_CLEAR),
+            ]),
+        }
+    }
+
+    /// `{prefix, reason}` for `reason`, which must be one of the `REASON_*`
+    /// constants; any other value falls back to the evict tags (the listener
+    /// only ever passes one of the four constants).
+    pub fn count_for(&self, reason: &'static str) -> &'static PropertySet {
+        match reason {
+            REASON_REPLACE => self.count_replace,
+            REASON_REMOVE => self.count_remove,
+            REASON_CLEAR => self.count_clear,
+            _ => self.count_evict,
+        }
+    }
+}
+
+/// Precomputed table shared (via `Arc`) between the RAM eviction listener and
+/// `FoyerBackend::get`, so the key-to-prefix matching rule
+/// (`longest_prefix_match`) is not duplicated between the two call sites.
+pub struct EvictionTagTable {
+    labels: Arc<[&'static str]>,
+    tags: Arc<[EvictionTags]>,
+    other: EvictionTags,
+}
+
+impl EvictionTagTable {
+    pub fn new(labels: Arc<[&'static str]>) -> Self {
+        let tags: Vec<EvictionTags> = labels
+            .iter()
+            .map(|&label| EvictionTags::new(label))
+            .collect();
+        Self {
+            labels,
+            tags: Arc::from(tags),
+            other: EvictionTags::new(PREFIX_OTHER),
+        }
+    }
+
+    /// The precomputed tags for the `prefix` `key` falls under, resolved by
+    /// longest-prefix match against `labels` (the `"other"` fallback tags on
+    /// no match).
+    pub fn classify(&self, key: &str) -> &EvictionTags {
+        match longest_prefix_match(&self.labels, key) {
+            Some(i) => &self.tags[i],
+            None => &self.other,
+        }
+    }
 }

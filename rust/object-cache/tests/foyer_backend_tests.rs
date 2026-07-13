@@ -1,9 +1,59 @@
 #![cfg(feature = "foyer")]
 
+use std::sync::Arc;
+
 use bytes::Bytes;
 
 use micromegas_object_cache::backend::{FillHint, RangeCacheBackend};
 use micromegas_object_cache::foyer_backend::{FoyerBackend, WriteTuning};
+use micromegas_tracing::event::in_memory_sink::InMemorySink;
+use micromegas_tracing::metrics::MetricsMsgQueueAny;
+use micromegas_tracing::property_set::{PropertySet, property_get};
+use micromegas_tracing::test_utils::init_in_memory_tracing;
+use micromegas_transit::HeterogeneousQueue;
+use serial_test::serial;
+
+/// `(value, properties)` for every firing of the tagged float metric `name`
+/// since the guard was created. Requires `dispatch::flush_metrics_buffer`
+/// first. Duplicated from `object-cache-srv/tests/saturation_tests.rs`'s
+/// `float_metric_values`/`integer_metric_values`: that binary's helpers are
+/// private free functions in a different crate's integration-test binary,
+/// unreachable from here, so there's no import path to share them without
+/// promoting them to a library crate.
+fn tagged_float_metric_values(sink: &InMemorySink, name: &str) -> Vec<(f64, &'static PropertySet)> {
+    let state = sink.state.lock().expect("sink lock");
+    let mut out = Vec::new();
+    for block in &state.metrics_blocks {
+        for evt in block.events.iter() {
+            if let MetricsMsgQueueAny::TaggedFloatMetricEvent(e) = evt
+                && e.desc.name == name
+            {
+                out.push((e.value, e.properties));
+            }
+        }
+    }
+    out
+}
+
+/// `(value, properties)` for every firing of the tagged integer metric
+/// `name` since the guard was created.
+fn tagged_integer_metric_values(
+    sink: &InMemorySink,
+    name: &str,
+) -> Vec<(u64, &'static PropertySet)> {
+    let state = sink.state.lock().expect("sink lock");
+    let mut out = Vec::new();
+    for block in &state.metrics_blocks {
+        for evt in block.events.iter() {
+            if let MetricsMsgQueueAny::TaggedIntegerMetricEvent(e) = evt
+                && e.desc.name == name
+            {
+                out.push((e.value, e.properties));
+            }
+        }
+    }
+    out
+}
 
 // Deliberately does not close/reopen the backend to force a disk read: foyer's
 // default hash builder (ahash `RandomState::default()`) picks a fresh random
@@ -28,10 +78,16 @@ async fn round_trip_through_disk_tier() {
     // exactly holds the first 4096-byte payload, so the subsequent puts push the
     // RAM tier over budget and evict "key", which enqueues it for the disk tier
     // (the disk write is triggered by memory eviction, not by insert itself).
-    let backend =
-        FoyerBackend::new_with_shards(dir_path, 4096, 16 * 1024 * 1024, 1, WriteTuning::default())
-            .await
-            .expect("create backend");
+    let backend = FoyerBackend::new_with_shards(
+        dir_path,
+        4096,
+        16 * 1024 * 1024,
+        1,
+        WriteTuning::default(),
+        Arc::from(Vec::new()),
+    )
+    .await
+    .expect("create backend");
     backend
         .put("key".to_string(), data.clone(), FillHint::Demand)
         .await;
@@ -73,6 +129,7 @@ async fn prefetch_fill_lands_on_disk_not_ram() {
         16 * 1024 * 1024,
         1,
         WriteTuning::default(),
+        Arc::from(Vec::new()),
     )
     .await
     .expect("create backend");
@@ -111,6 +168,7 @@ async fn demand_fill_detaches_from_parent_buffer() {
         16 * 1024 * 1024,
         1,
         WriteTuning::default(),
+        Arc::from(Vec::new()),
     )
     .await
     .expect("create backend");
@@ -154,9 +212,10 @@ async fn round_trip_with_custom_write_tuning() {
     // one a 256 MiB device (16 blocks). Production disks are hundreds of GB,
     // so this constraint never binds there.
     let disk_bytes = 256 * 1024 * 1024;
-    let backend = FoyerBackend::new_with_shards(dir_path, 4096, disk_bytes, 1, tuning)
-        .await
-        .expect("create backend with custom tuning");
+    let backend =
+        FoyerBackend::new_with_shards(dir_path, 4096, disk_bytes, 1, tuning, Arc::from(Vec::new()))
+            .await
+            .expect("create backend with custom tuning");
 
     backend
         .put("key".to_string(), data.clone(), FillHint::Prefetch)
@@ -174,5 +233,154 @@ async fn round_trip_with_custom_write_tuning() {
     assert!(
         stats.write_bytes > 0,
         "a completed disk write must be reflected in disk_stats(): {stats:?}"
+    );
+}
+
+// A capacity-driven RAM eviction (forced the same way as
+// `round_trip_through_disk_tier`) must fire
+// `object_cache_ram_tier_eviction_count{reason=evict, prefix=blobs}` and
+// `object_cache_ram_tier_eviction_age_ms{prefix=blobs}` with a plausible
+// (>= 0) age. `#[serial]`: `init_in_memory_tracing` touches global dispatch
+// state shared by every test in this file that uses it.
+#[tokio::test]
+#[serial]
+async fn ram_eviction_emits_count_and_age_metrics() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir_path = dir.path().to_str().expect("utf8 path");
+    let prefix_labels: Arc<[&'static str]> = Arc::from(vec!["blobs"]);
+
+    let backend = FoyerBackend::new_with_shards(
+        dir_path,
+        4096,
+        16 * 1024 * 1024,
+        1,
+        WriteTuning::default(),
+        prefix_labels,
+    )
+    .await
+    .expect("create backend");
+
+    let guard = init_in_memory_tracing();
+
+    // Same capacity-pressure pattern as `round_trip_through_disk_tier`: the
+    // first 4096-byte put exactly fills the budget, so the following puts
+    // evict it.
+    backend
+        .put(
+            "blobs/key".to_string(),
+            Bytes::from(vec![9u8; 4096]),
+            FillHint::Demand,
+        )
+        .await;
+    backend
+        .put(
+            "blobs/evict-1".to_string(),
+            Bytes::from(vec![1u8; 16]),
+            FillHint::Demand,
+        )
+        .await;
+    backend
+        .put(
+            "blobs/evict-2".to_string(),
+            Bytes::from(vec![2u8; 16]),
+            FillHint::Demand,
+        )
+        .await;
+    backend.close().await.expect("close backend");
+
+    micromegas_tracing::dispatch::flush_metrics_buffer();
+
+    let counts = tagged_integer_metric_values(&guard.sink, "object_cache_ram_tier_eviction_count");
+    assert!(
+        counts.iter().any(|(_, props)| {
+            property_get(props.get_properties(), "prefix") == Some("blobs")
+                && property_get(props.get_properties(), "reason") == Some("evict")
+        }),
+        "expected an evict-reason RAM eviction count for prefix=blobs, got {counts:?}"
+    );
+
+    let ages = tagged_float_metric_values(&guard.sink, "object_cache_ram_tier_eviction_age_ms");
+    let blobs_ages: Vec<f64> = ages
+        .iter()
+        .filter(|(_, props)| property_get(props.get_properties(), "prefix") == Some("blobs"))
+        .map(|(v, _)| *v)
+        .collect();
+    assert!(
+        !blobs_ages.is_empty(),
+        "expected a RAM eviction age sample for prefix=blobs"
+    );
+    assert!(
+        blobs_ages.iter().all(|age| *age >= 0.0),
+        "RAM eviction age must not be negative: {blobs_ages:?}"
+    );
+}
+
+// A disk-tier hit (`Source::Disk`) must fire exactly one
+// `object_cache_disk_tier_read_age_ms{prefix=blobs}` sample, verifying both
+// the disk read-age instrumentation and (indirectly) that `CachedBlock`'s
+// `Code` round-trip preserves `disk_write_ms` through the encode-to-disk /
+// decode-on-read path -- if it didn't, `disk_write_ms` would decode as
+// `DISK_WRITE_NONE` and no metric would fire at all.
+#[tokio::test]
+#[serial]
+async fn disk_read_age_metric_fires_on_disk_read() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir_path = dir.path().to_str().expect("utf8 path");
+    let data = Bytes::from(vec![9u8; 4096]);
+    let prefix_labels: Arc<[&'static str]> = Arc::from(vec!["blobs"]);
+
+    let backend = FoyerBackend::new_with_shards(
+        dir_path,
+        4096,
+        16 * 1024 * 1024,
+        1,
+        WriteTuning::default(),
+        prefix_labels,
+    )
+    .await
+    .expect("create backend");
+
+    backend
+        .put("blobs/key".to_string(), data.clone(), FillHint::Demand)
+        .await;
+    backend
+        .put(
+            "blobs/evict-1".to_string(),
+            Bytes::from(vec![1u8; 16]),
+            FillHint::Demand,
+        )
+        .await;
+    backend
+        .put(
+            "blobs/evict-2".to_string(),
+            Bytes::from(vec![2u8; 16]),
+            FillHint::Demand,
+        )
+        .await;
+    // close() awaits the flusher, so the read below is guaranteed to see
+    // "blobs/key" on disk rather than racing the background write.
+    backend.close().await.expect("close backend");
+
+    let guard = init_in_memory_tracing();
+
+    let got = backend.get("blobs/key").await.expect("get from disk tier");
+    assert_eq!(got, data);
+
+    micromegas_tracing::dispatch::flush_metrics_buffer();
+    let ages = tagged_float_metric_values(&guard.sink, "object_cache_disk_tier_read_age_ms");
+    let blobs_ages: Vec<f64> = ages
+        .iter()
+        .filter(|(_, props)| property_get(props.get_properties(), "prefix") == Some("blobs"))
+        .map(|(v, _)| *v)
+        .collect();
+    assert_eq!(
+        blobs_ages.len(),
+        1,
+        "expected exactly one disk read-age sample for prefix=blobs, got {ages:?}"
+    );
+    assert!(
+        blobs_ages[0] >= 0.0,
+        "disk read-age must not be negative: {}",
+        blobs_ages[0]
     );
 }
