@@ -337,6 +337,28 @@ check needs `permits_for_bytes(stream_window_bytes(block_size))`; keep that math
 
 ### Http-gateway: eliminate the per-request env read
 
+The FlightSQL URL becomes an env-backed clap flag (`--flightsql-url`, env
+`MICROMEGAS_FLIGHTSQL_URL`), mirroring `object-cache-srv`'s `origin_uri`
+(`object-cache-srv/src/cli.rs:20`). `http::Uri` implements `FromStr`, so clap parses
+it directly; the env var still works as the fallback, so this is behavior-preserving
+while making the input visible in `--help`. The header-forwarding config stays
+env-only (`MICROMEGAS_GATEWAY_HEADERS`), so `GatewayConfig` combines the CLI-derived
+`flight_url` with the env-derived headers — the same CLI-plus-env split as
+`WebServerConfig::from_cli_and_env`.
+
+```rust
+// http-gateway/src/http_gateway_srv.rs
+#[derive(Parser, Debug)]
+struct Cli {
+    #[clap(long, default_value = "0.0.0.0:3000")]
+    listen_endpoint_http: SocketAddr,
+
+    /// Upstream FlightSQL endpoint the gateway proxies to.
+    #[clap(long, env = "MICROMEGAS_FLIGHTSQL_URL")]
+    flightsql_url: http::Uri,
+}
+```
+
 ```rust
 // public/src/servers/http_gateway.rs
 pub struct GatewayConfig {
@@ -345,22 +367,20 @@ pub struct GatewayConfig {
 }
 
 impl GatewayConfig {
-    pub fn from_env() -> anyhow::Result<Self> {
-        let flight_url = std::env::var("MICROMEGAS_FLIGHTSQL_URL")
-            .context("MICROMEGAS_FLIGHTSQL_URL not configured")?
-            .parse::<http::Uri>()
-            .context("Invalid MICROMEGAS_FLIGHTSQL_URL")?;
+    /// Combine the CLI-derived FlightSQL URL with the env-derived header config.
+    pub fn new(flight_url: http::Uri) -> anyhow::Result<Self> {
         Ok(Self { flight_url, headers: HeaderForwardingConfig::from_env()? })
     }
 }
 ```
 
-- `http-gateway` main builds `Arc::new(GatewayConfig::from_env()?)` and layers it as
-  the `Extension` (replacing the current `HeaderForwardingConfig` extension).
+- `http-gateway` main builds `Arc::new(GatewayConfig::new(args.flightsql_url)?)` and
+  layers it as the `Extension` (replacing the current `HeaderForwardingConfig`
+  extension).
 - `handle_query` takes `Extension(config): Extension<Arc<GatewayConfig>>` and uses
   `config.flight_url.clone()` + `config.headers` — no `std::env::var` on the request
-  path. Fail-fast on a bad/missing URL now happens once at startup instead of per
-  request.
+  path. A missing URL is now a clap parse error at startup (clap enforces the required
+  flag/env) instead of a per-request failure.
 
 ## Implementation Steps
 
@@ -398,9 +418,11 @@ impl GatewayConfig {
 11. Move object-cache-srv numeric validation into `Cli::validate`; call it from main.
 
 ### Phase 6 — hot-path fix
-12. Add `GatewayConfig` to `http_gateway.rs`; build it in `http_gateway_srv.rs` (the
-    `http-gateway` binary's main); thread it through `handle_query`; remove the
-    per-request env read at line 279.
+12. Add the `--flightsql-url` env-backed flag to the `http_gateway_srv.rs` `Cli`; add
+    `GatewayConfig` (with `GatewayConfig::new`) to `http_gateway.rs`; build
+    `Arc::new(GatewayConfig::new(args.flightsql_url)?)` in `http_gateway_srv.rs` (the
+    `http-gateway` binary's main) and layer it as the `Extension`; thread it through
+    `handle_query`; remove the per-request env read at line 279.
 
 ### Phase 7 — verify
 13. `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `cargo test`,
@@ -463,8 +485,11 @@ Modify:
 - Rustdoc on the new `DataLakeConfig`, `CommonServerArgs`, `parse_object_store_url`,
   `WebServerConfig::from_cli_and_env`, `GatewayConfig` serves as the "one place to
   see each service's inputs."
-- No user-facing docs (mkdocs) change: env var names, defaults, and CLI flags are
-  all unchanged — this is an internal refactor.
+- One additive user-facing change: the `http-gateway` binary gains a
+  `--flightsql-url` flag (env-backed by the existing `MICROMEGAS_FLIGHTSQL_URL`, so
+  existing env-only deployments keep working unchanged). All other env var names,
+  defaults, and CLI flags are unchanged. No mkdocs change required — the gateway is
+  not covered in user-facing docs today; if that changes, document the new flag.
 
 ## Testing Strategy
 
@@ -485,7 +510,7 @@ Modify:
 
 ## Open Questions
 
-1. `http-gateway`: should `MICROMEGAS_FLIGHTSQL_URL` also become a CLI flag
-   (`--flightsql-url`, env-backed) for consistency with other binaries, or stay
-   env-only? Plan assumes env-only (behavior-preserving); a flag is a small add if
-   desired.
+None outstanding. (Resolved: `http-gateway` gains a `--flightsql-url` env-backed clap
+flag, mirroring `object-cache-srv`'s `origin_uri` — see the "Http-gateway" design
+section. The existing `MICROMEGAS_FLIGHTSQL_URL` env var remains the fallback, so the
+change is behavior-preserving.)
