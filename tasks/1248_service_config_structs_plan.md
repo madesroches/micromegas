@@ -305,9 +305,10 @@ let web_config = WebServerConfig::from_cli_and_env(WebCliArgs {
 })?;
 ```
 
-The monolith still reads `app_db_string` separately for `seed_local_data_source`;
-after this change it reads `web_config.app_db_string` (already validated) rather
-than a second `std::env::var`.
+The monolith today reads `app_db_string` once and reuses it for both
+`seed_local_data_source` and the `WebServerConfig` struct literal; after this
+change, seeding reads `web_config.app_db_string` (already validated) instead of
+the standalone read that `from_cli_and_env` now subsumes.
 
 ### Object-cache-srv: group validation with the type
 
