@@ -10,7 +10,7 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
-analytics-web-srv = { path = "../analytics-web-srv", version = "0.27.0" }
+analytics-web-srv = { path = "../analytics-web-srv", version = "0.28.0" }
 micromegas = { workspace = true, features = ["server"] }
 
 anyhow.workspace = true
