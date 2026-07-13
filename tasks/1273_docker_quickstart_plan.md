@@ -23,6 +23,10 @@ Resolves [#1273](https://github.com/madesroches/micromegas/issues/1273).
   does **not** cover the `start_services.py` dev-run flow or the local env vars.
 - **`mkdocs/docs/contributing.md`** line 38: "Development Setup" just links back
   to `getting-started.md`. This is the reference that must be redirected.
+- **Root `/CONTRIBUTING.md`** line 38 has the identical "Development Setup" →
+  `https://micromegas.info/docs/getting-started/` link. It is a separate file
+  from `mkdocs/docs/contributing.md` (not a symlink/copy), so it needs the same
+  redirect.
 - **`docker/docker-compose.monolith.yaml`** already does exactly what the
   quickstart needs: Postgres + `marcantoinedesroches/micromegas-monolith:latest`,
   file-backed object store (`file:///data`), `--disable-auth`, web app on `:3000`,
@@ -44,6 +48,7 @@ Resolves [#1273](https://github.com/madesroches/micromegas/issues/1273).
   - `mkdocs/docs/index.md` lines 11 (`→ Get Started` button) and 50 (Quick Start
     list) — both point to `getting-started.md` (fine to keep, content changes).
   - `mkdocs/docs/contributing.md` line 38 → should point to `development/build.md`.
+  - Root `/CONTRIBUTING.md` line 38 → same fix, same target URL.
   - `mkdocs/docs/development/build.md` "Next Steps" links back to
     `getting-started.md` as "Set up a development instance" — reword.
 
@@ -166,6 +171,9 @@ quick-start sections — they are not unaffected by this edit.
 - **`contributing.md`** line 38: change the "Development Setup" link from
   `getting-started.md` to `development/build.md` (and mention the new dev-instance
   section there).
+- **Root `/CONTRIBUTING.md`** line 38: same "Development Setup" link repoint, to
+  `https://micromegas.info/docs/development/build/` (this file is separate from
+  `mkdocs/docs/contributing.md`, not a copy/symlink of it).
 - Cross-link: `build.md` "Next Steps" reference to `getting-started.md` is
   reworded (it's no longer a dev instance) or dropped.
 
@@ -208,6 +216,8 @@ quick-start sections — they are not unaffected by this edit.
    (env vars, `start_services.py` monolith/split/manual, `stop_services.py`,
    service roles) — content lifted from the old `getting-started.md`.
 5. Update `mkdocs/docs/contributing.md` line 38 to link `development/build.md`.
+   Also update root `/CONTRIBUTING.md` line 38 (same "Development Setup" link,
+   same fix).
 6. Reword/drop the `build.md` "Next Steps" link to `getting-started.md`.
 
 ### Phase 4 — Fix entry-point links + nav
@@ -228,6 +238,8 @@ quick-start sections — they are not unaffected by this edit.
 - `mkdocs/docs/getting-started.md` — rewrite as Docker quickstart
 - `mkdocs/docs/development/build.md` — add "Running a Development Instance"; fix Next Steps link
 - `mkdocs/docs/contributing.md` — repoint "Development Setup" to build.md
+- `CONTRIBUTING.md` (root) — repoint "Development Setup" to build.md (separate
+  file, same fix)
 - `mkdocs/docs/index.md` — optional label tweaks
 - `mkdocs/mkdocs.yml` — optional nav label rename
 - `README.md` — reframe Getting Started; add contributor build-docs link
