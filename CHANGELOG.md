@@ -4,6 +4,9 @@ This file documents the historical progress of the Micromegas project. For curre
 
 ## Unreleased
 
+* **Caching:**
+  * Fix a demand-fill leak where a cached block stored as a slice of its coalesced origin-GET buffer pinned the whole parent allocation, letting RAM-tier RSS run up to `max_coalesced_get_bytes / block_size`x its accounted weight; copy on demand admission in both `FoyerBackend` and the L1 `BoundedMemoryBackend` to detach the cached block, and export accounted RAM-tier usage as a new `object_cache_ram_tier_usage_bytes` saturation gauge (#1276)
+
 ## v0.27.0 - 2026-07-12
 
 * **Analytics:**
