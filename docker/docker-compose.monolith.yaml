@@ -5,9 +5,15 @@ services:
       POSTGRES_USER: micromegas
       POSTGRES_PASSWORD: micromegas
       POSTGRES_DB: micromegas
+    # Inline DB-init SQL (creates the micromegas_app database) via a Compose
+    # config so this file is self-contained — no sibling script needed. This
+    # lets it be curl'd or copy-pasted for a clone-free quickstart.
+    # Requires Docker Compose v2.23.1+ for inline `configs.content`.
+    configs:
+      - source: pg_init
+        target: /docker-entrypoint-initdb.d/init-databases.sql
     volumes:
       - pgdata:/var/lib/postgresql/data
-      - ./init-databases.sh:/docker-entrypoint-initdb.d/init-databases.sh
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U micromegas"]
       interval: 5s
@@ -47,6 +53,11 @@ services:
       #   MICROMEGAS_ANALYTICS_OIDC_CONFIG  or  MICROMEGAS_OIDC_CONFIG
     volumes:
       - lake:/data
+
+configs:
+  pg_init:
+    content: |
+      CREATE DATABASE micromegas_app;
 
 volumes:
   pgdata:
