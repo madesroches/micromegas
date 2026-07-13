@@ -69,7 +69,7 @@ reference to the same coalesced-GET parent buffer. L1 is enabled by default
 ### The observability gap
 `FoyerBackend::ram_usage()` (`foyer_backend.rs:98-100`) returns
 `self.cache.memory().usage()` — the accounted RAM-tier bytes — but it is only
-consumed by an integration test; it is never sampled into the saturation
+consumed by integration tests; it is never sampled into the saturation
 monitor. `sample_once` (`object-cache-srv/src/saturation_monitor.rs:40-146`)
 emits fetch-budget occupancy, in-flight entries, the **request-window permit
 budget** (`object_cache_mem_budget_*`, unrelated to the RAM tier and normally
@@ -112,7 +112,10 @@ lives in `foyer_backend.rs`, and the prefetch path's own detachment
 Keeping `fetch.rs` producing zero-copy slices also preserves the cheap transient
 `fulfill(Ok(chunk))` hand-off (that value is short-lived and released as soon as
 the read completes, so it is not part of the leak). The copy runs once per
-freshly-fetched demand block (only from `fulfill_run_success`); backend *hits*
+freshly-fetched demand block from `fulfill_run_success`; the only other
+demand-put call site is `RangeCache::size` (`range_cache/mod.rs:228`), which
+demand-puts an 8-byte owned `Bytes` (`size.to_le_bytes()`) for size caching —
+already fully owned, so the copy there is trivially cheap. Backend *hits*
 never re-`put`, so there is no per-read copy on the hot cached path.
 
 The copy is unconditional — even a single-block run (where `block_size` == run
@@ -253,10 +256,19 @@ out of scope — this plan only exports the signal.
 
 ## Testing Strategy
 - **Detachment regression** (`foyer_backend_tests.rs`, deterministic, no RSS
-  measurement): slice a block out of a larger parent buffer, demand-`put` it,
-  `get` it back, and assert the returned bytes no longer share the parent's
-  allocation:
+  measurement): construct the backend with a `ram_bytes` budget comfortably
+  larger than the block (e.g. `1 * 1024 * 1024`, unlike the neighboring
+  `round_trip_through_disk_tier` test's deliberately tiny 4096-byte budget
+  tuned to evict), so the block is never pushed to the disk tier — otherwise a
+  disk-tier load deserializes into a fresh buffer regardless of the fix,
+  making the assertion pass vacuously. Then slice a block out of a larger
+  parent buffer, demand-`put` it, `get` it back, and assert the returned bytes
+  no longer share the parent's allocation:
   ```rust
+  let backend =
+      FoyerBackend::new_with_shards(dir_path, 1024 * 1024, 16 * 1024 * 1024, 1, WriteTuning::default())
+          .await
+          .expect("create backend");
   let parent = Bytes::from(vec![7u8; 8192]);
   let block = parent.slice(0..4096);
   let block_ptr = block.as_ptr();          // points into `parent`'s allocation
@@ -267,7 +279,9 @@ out of scope — this plan only exports the signal.
       "demand admission must copy, detaching the cached block from its parent GET buffer");
   ```
   (`Bytes::as_ptr` is public; a clone from the RAM tier preserves the stored
-  buffer's base pointer, so this fails before the fix and passes after.)
+  buffer's base pointer, so this fails before the fix and passes after — and
+  the generous `ram_bytes` guarantees the `get` deterministically hits the
+  memory tier rather than the disk tier.)
 - **L1 detachment regression** (`l1_store_tests.rs`, same technique against
   `BoundedMemoryBackend` directly): slice a block out of a larger parent
   buffer, `put` it (any `FillHint`, since L1 treats them identically), `get`
