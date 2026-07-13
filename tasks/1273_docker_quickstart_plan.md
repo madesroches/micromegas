@@ -76,7 +76,10 @@ New `getting-started.md` outline:
 
 ## 3. (Optional) Run a query from Python
    - pip install micromegas ; the existing sample query script
-     (MICROMEGAS_TELEMETRY_URL / connect() note for local)
+     (`micromegas.connect()` needs no configuration locally — it defaults to
+     `grpc://localhost:50051`, which matches the compose FlightSQL port;
+     optionally mention `MICROMEGAS_ANALYTICS_URI` as the CLI-only
+     query-endpoint override)
 
 ## What you just ran  (evaluation-only callout)
    - --disable-auth, file object store, single process, ephemeral volumes
@@ -136,10 +139,11 @@ Notes:
   note stating a recent Docker/Compose is required.
 - The doc's clone-free `curl` command points at the raw URL of this file on
   `main`; the inline block in the doc is the same content.
-- Once the script is no longer referenced by the compose file, decide the fate of
-  `docker/init-databases.sh`: remove it (nothing else references it — verify with
-  a repo grep) or leave it. **Recommendation: remove it** to avoid a dead,
-  drifting second copy of the init SQL. (Open question below.)
+- Once the script is no longer referenced by the compose file, `docker/init-databases.sh`
+  becomes a dead, drifting second copy of the init SQL. **Resolved:** remove it —
+  a repo grep confirmed the compose file was its only reference. The script has
+  been removed; the init SQL now lives inline in the compose `configs.pg_init`
+  block (see Resolved Decisions #2).
 
 The compose file remains referenced by `docker/README.md` and
 `admin/monolith.md`; both keep working unchanged after this edit.
@@ -183,8 +187,9 @@ The compose file remains referenced by `docker/README.md` and
    `docker compose -f docker/docker-compose.monolith.yaml up`, confirm
    `micromegas_app` DB is created and the web app serves on `:3000`.
 2. Grep the repo for other references to `init-databases.sh`
-   (`git grep init-databases`). If none outside this compose file, remove
-   `docker/init-databases.sh` (pending open-question decision).
+   (`git grep init-databases`) and remove `docker/init-databases.sh` — resolved
+   decision, no longer referenced once the compose file's init SQL is inline
+   (done, see Progress).
 
 ### Phase 2 — Rewrite the newcomer page
 3. Rewrite `mkdocs/docs/getting-started.md` as the Docker quickstart (outline
@@ -216,7 +221,7 @@ The compose file remains referenced by `docker/README.md` and
 ## Files to Modify
 
 - `docker/docker-compose.monolith.yaml` — inline `configs` for DB init (clone-free)
-- `docker/init-databases.sh` — remove (pending decision)
+- `docker/init-databases.sh` — removed (init SQL now inline in compose `configs.pg_init`)
 - `mkdocs/docs/getting-started.md` — rewrite as Docker quickstart
 - `mkdocs/docs/development/build.md` — add "Running a Development Instance"; fix Next Steps link
 - `mkdocs/docs/contributing.md` — repoint "Development Setup" to build.md
