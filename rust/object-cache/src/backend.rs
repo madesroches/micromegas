@@ -31,4 +31,12 @@ pub trait RangeCacheBackend: Send + Sync {
     fn disk_stats(&self) -> Option<BackendDiskStats> {
         None
     }
+
+    /// Accounted RAM-tier byte usage, for the saturation monitor's residency
+    /// gauge. `None` for backends with no RAM tier accounting (e.g.
+    /// `MemoryBackend`). Divergence between this and process RSS is the
+    /// signature of a cached value pinning more than its accounted weight.
+    fn ram_usage_bytes(&self) -> Option<usize> {
+        None
+    }
 }

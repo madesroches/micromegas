@@ -93,6 +93,44 @@ async fn prefetch_fill_lands_on_disk_not_ram() {
     assert_eq!(got, data);
 }
 
+// A demand-admitted block must be detached (copied) from its coalesced-GET
+// parent buffer, or the RAM tier's eviction structure keeps the whole parent
+// allocation alive even though the weigher only charges the slice length --
+// see the demand-fill-copy plan (#1276). `ram_bytes` is generous (well above
+// the 4096-byte block) so the `get` below deterministically hits the memory
+// tier rather than the disk tier, which would deserialize into a fresh buffer
+// regardless of the fix and make the assertion pass vacuously.
+#[tokio::test]
+async fn demand_fill_detaches_from_parent_buffer() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir_path = dir.path().to_str().expect("utf8 path");
+
+    let backend = FoyerBackend::new_with_shards(
+        dir_path,
+        1024 * 1024,
+        16 * 1024 * 1024,
+        1,
+        WriteTuning::default(),
+    )
+    .await
+    .expect("create backend");
+
+    let parent = Bytes::from(vec![7u8; 8192]);
+    let block = parent.slice(0..4096);
+    let block_ptr = block.as_ptr();
+    backend
+        .put("k".to_string(), block.clone(), FillHint::Demand)
+        .await;
+
+    let got = backend.get("k").await.expect("hit");
+    assert_eq!(got, vec![7u8; 4096]);
+    assert_ne!(
+        got.as_ptr(),
+        block_ptr,
+        "demand admission must copy, detaching the cached block from its parent GET buffer"
+    );
+}
+
 // A non-default `WriteTuning` (more flushers, a bigger buffer pool and
 // submit-queue threshold) must not change the backend's observable behavior:
 // the disk round-trip still works, and `disk_stats()` reports the write that

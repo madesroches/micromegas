@@ -138,7 +138,13 @@ impl RangeCacheBackend for FoyerBackend {
                 }
             }
             FillHint::Demand => {
-                self.cache.insert(key, value);
+                // Copy so the cached block does not retain its whole coalesced-GET
+                // parent buffer; otherwise RAM-tier RSS runs up to
+                // (max_coalesced_get_bytes / block_size)x its accounted weight while the
+                // weigher (value.len()) believes the tier is under budget. One memcpy per
+                // admitted block is negligible against the origin GET.
+                let owned = Bytes::copy_from_slice(&value);
+                self.cache.insert(key, owned);
             }
         }
     }
@@ -151,5 +157,9 @@ impl RangeCacheBackend for FoyerBackend {
             write_ios: stats.disk_write_ios() as u64,
             read_ios: stats.disk_read_ios() as u64,
         })
+    }
+
+    fn ram_usage_bytes(&self) -> Option<usize> {
+        Some(self.ram_usage())
     }
 }

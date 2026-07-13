@@ -43,6 +43,29 @@ async fn bounded_memory_backend_ignores_fill_hint() {
     assert_eq!(backend.get("key").await, Some(data));
 }
 
+// A `put` must detach (copy) the stored block from its parent buffer, or the
+// LFU eviction structure keeps the whole coalesced-GET parent allocation
+// alive even though the weigher only charges the slice length -- the same bug
+// as `FoyerBackend`'s demand path (see #1276).
+#[tokio::test]
+async fn bounded_memory_backend_detaches_from_parent_buffer() {
+    let backend = BoundedMemoryBackend::new(1024 * 1024);
+    let parent = Bytes::from(vec![7u8; 8192]);
+    let block = parent.slice(0..4096);
+    let block_ptr = block.as_ptr();
+    backend
+        .put("k".to_string(), block.clone(), FillHint::Demand)
+        .await;
+
+    let got = backend.get("k").await.expect("hit");
+    assert_eq!(got, vec![7u8; 4096]);
+    assert_ne!(
+        got.as_ptr(),
+        block_ptr,
+        "put must copy, detaching the cached block from its parent buffer"
+    );
+}
+
 #[tokio::test]
 async fn bounded_memory_backend_evicts_at_budget() {
     let budget = 800usize;
