@@ -115,18 +115,34 @@ millis timestamp embedded in the encoded payload** (`chrono` is already an objec
 ///   the default `WriteOnEviction` policy encode runs at disk-write time), and
 ///   preserved verbatim through disk reclaim (raw-byte reinsertion, no re-encode).
 ///   `DISK_WRITE_NONE` for a RAM-only entry that has never been persisted.
+/// - `is_prefetch`: true only for the ephemeral phantom record created by the
+///   prefetch `put` arm. Not serialized (always `false` on decode). foyer 0.22.3
+///   fires `on_leave` *twice* for that phantom record — `Event::Remove`
+///   synchronously during `insert`, then `Event::Evict` when the ephemeral
+///   handle is dropped (the disk-write dispatch) — both at age ≈ 0 ms. The
+///   listener (§3) uses this marker to exclude that noise from both signals.
 #[derive(Clone)]
 struct CachedBlock {
     bytes: Bytes,
     ram_inserted_at: Instant,
     disk_write_ms: i64,
+    is_prefetch: bool,
 }
 
 const DISK_WRITE_NONE: i64 = i64::MIN;
 
 impl CachedBlock {
     fn new(bytes: Bytes) -> Self {
-        Self { bytes, ram_inserted_at: Instant::now(), disk_write_ms: DISK_WRITE_NONE }
+        Self {
+            bytes,
+            ram_inserted_at: Instant::now(),
+            disk_write_ms: DISK_WRITE_NONE,
+            is_prefetch: false,
+        }
+    }
+    /// Ephemeral disk-only phantom record for the prefetch path (see field doc).
+    fn new_prefetch(bytes: Bytes) -> Self {
+        Self { is_prefetch: true, ..Self::new(bytes) }
     }
 }
 
@@ -141,7 +157,7 @@ impl foyer::Code for CachedBlock {
     fn decode(reader: &mut impl std::io::Read) -> foyer::Result<Self> {
         let disk_write_ms = i64::decode(reader)?;
         let bytes = Bytes::decode(reader)?;
-        Ok(Self { bytes, ram_inserted_at: Instant::now(), disk_write_ms })
+        Ok(Self { bytes, ram_inserted_at: Instant::now(), disk_write_ms, is_prefetch: false })
     }
     fn estimated_size(&self) -> usize {
         std::mem::size_of::<i64>() + self.bytes.estimated_size()
@@ -154,8 +170,10 @@ Ripple changes in `foyer_backend.rs`:
 - weighter: `|_key, value: &CachedBlock| value.bytes.len()` (RAM budget still counts payload bytes;
   the extra 8 disk bytes are disk-tier only and don't affect RAM accounting).
 - demand `put`: `self.cache.insert(key, CachedBlock::new(owned))`.
-- prefetch `put`: `storage_writer(key).force().insert(CachedBlock::new(value))` (disk-only path;
-  its encode stamps the disk-write time, exactly what we want for later disk read-age).
+- prefetch `put`: `storage_writer(key).force().insert(CachedBlock::new_prefetch(value))`
+  (disk-only path; its encode stamps the disk-write time, exactly what we want for later disk
+  read-age; `is_prefetch: true` lets the listener exclude the phantom `on_leave` firings this path
+  triggers — see §3).
 - `get` (see §4).
 
 ### 2. Shared prefix-tag classifier (`metric_tags.rs`)
@@ -211,6 +229,14 @@ impl foyer::EventListener for EvictionListener {
     type Key = String;
     type Value = CachedBlock;
     fn on_leave(&self, reason: Event, key: &String, value: &CachedBlock) {
+        if value.is_prefetch {
+            // Phantom prefetch record: foyer fires Remove (synchronously during
+            // `insert`) then Evict (when the ephemeral handle is dropped, i.e.
+            // the disk-write dispatch) for the *same* disk-only write, both at
+            // age ≈ 0 ms — indistinguishable from real thrashing if counted.
+            // Exclude from both the count and the age signal.
+            return;
+        }
         let t = self.tags.classify(key);
         imetric!("object_cache_ram_tier_eviction_count", "count",
                  t.count_for(reason_str(reason)), 1_u64);
@@ -329,11 +355,21 @@ passes an empty slice → everything classifies as `"other"` (matching `RangeCac
   co-locates timing with the value so foyer manages its lifetime for free. Chosen: wrapper.
 - **Age on `Evict` only vs. all reasons**: `Replace`/`Remove`/`Clear` don't speak to capacity
   pressure; emitting age for them would dilute the thrashing signal. The `count` metric still covers
-  all four reasons so total RAM churn stays visible. Chosen: RAM age on `Evict`, count on all.
+  all four reasons (for real RAM residents) so total RAM churn stays visible. Chosen: RAM age on
+  `Evict`, count on all — except the prefetch phantom record, which is excluded from *both* signals
+  entirely via the `is_prefetch` marker (§3/§1): foyer 0.22.3 fires `on_leave` twice for that
+  ephemeral disk-only write (`Remove` at insert, `Evict` at drop), both at age ≈ 0 ms, which is
+  otherwise indistinguishable from genuine thrashing.
 - **Listener classifies keys itself vs. calling back into `RangeCache`**: the listener/`get` live in
   the backend and can't reach `RangeCache`'s classifier; they reuse the shared
   `longest_prefix_match` + `EvictionTagTable`, so matching logic isn't duplicated — only a small
   precomputed table is held in a second place (as `RangeCache` already does). Consistent.
+- **Dependency on foyer's default `WriteOnEviction` hybrid policy**: `Code::encode` stamps
+  `disk_write_ms` as "now", which is only equal to the disk-write moment because
+  `HybridCachePolicy::default() == WriteOnEviction` (`hybrid/cache.rs:180`); this plan pins no policy
+  change. If the policy is ever switched to `WriteOnInsertion`, `disk_write_ms` would instead mark
+  insertion time and disk read-age would become "age since insertion" rather than "disk residency" —
+  revisit this design if `with_policy` is ever touched.
 
 ## Documentation
 
@@ -347,9 +383,14 @@ passes an empty slice → everything classifies as `"other"` (matching `RangeCac
 - **RAM eviction (`foyer_backend_tests.rs`)**: build a `FoyerBackend` with a tiny `ram_bytes` and
   real prefix labels; insert enough demand entries to force capacity eviction; assert
   `object_cache_ram_tier_eviction_count{reason=evict, prefix=…}` fired and
-  `object_cache_ram_tier_eviction_age_ms{prefix=…}` fired with a plausible (> 0) value. Reuse the
-  `InMemorySink` + `integer_metric_values`/`float_metric_values` helpers from `saturation_tests.rs`;
-  gate on `init_in_memory_tracing` (see `telemetry_tests.rs`).
+  `object_cache_ram_tier_eviction_age_ms{prefix=…}` fired with a plausible (> 0) value. Reuse
+  `InMemorySink`/`init_in_memory_tracing` from `micromegas_tracing` (see `telemetry_tests.rs`) —
+  these are library types and reachable from any crate. `integer_metric_values`/
+  `float_metric_values`, however, are private free functions inside the `object-cache-srv`
+  `saturation_tests` integration-test binary; `foyer_backend_tests.rs` lives in a different crate
+  (`object-cache`) as a separate test binary with no import path to them, so duplicate both helpers
+  into `foyer_backend_tests.rs` (or promote them to a shared library location) instead of importing
+  them.
 - **Disk read-age**: with a small RAM tier and a real disk tier, insert a key (force RAM eviction so
   it lands on disk), then `get` it back and assert `entry.source()` took the disk path and
   `object_cache_disk_tier_read_age_ms{prefix=…}` fired ≥ 0. (May need a brief settle after eviction
@@ -372,13 +413,3 @@ passes an empty slice → everything classifies as `"other"` (matching `RangeCac
    the estimate proves insufficient (e.g. a workload that rarely re-reads disk entries, starving the
    read-age tail). **Recommendation**: ship the read-age estimate + aggregate reclaim stats; revisit
    only if the estimate is demonstrably blind.
-2. **Prefetch-drop leave events**: the prefetch path inserts an "ephemeral RAM record dropped
-   immediately" (`foyer_backend.rs:126`). If that drop fires `on_leave` (likely `Remove`), the
-   count metric will show `reason=remove` churn that isn't true eviction. Harmless for the age
-   signals (Evict-only / disk-source-only). **Recommendation**: verify empirically; keep all
-   reasons visible initially (visibility is the point), refine only if `Remove` volume misleads.
-3. **`Instant`-based RAM age vs. dependency on the default `WriteOnEviction` policy**: the
-   disk-write timestamp is stamped in `Code::encode`, which under `WriteOnEviction` coincides with
-   RAM eviction. If the policy is ever switched to `WriteOnInsertion`, `disk_write_ms` would instead
-   mark insertion time and disk read-age would become "age since insertion" rather than "disk
-   residency". The plan pins no policy change; flag this coupling if `with_policy` is later touched.
