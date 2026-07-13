@@ -27,7 +27,10 @@ run_command("cargo release -p micromegas-auth -x --no-confirm")
 # Layer 5: Telemetry data structures (depends on tracing, transit)
 run_command("cargo release -p micromegas-telemetry -x --no-confirm")
 
-# Layer 6: Core services (depend on telemetry, tracing, transit)
+# Layer 5.5: Object cache engine (depends on tracing, transit)
+run_command("cargo release -p micromegas-object-cache -x --no-confirm")
+
+# Layer 6: Core services (depend on telemetry, tracing, transit, object-cache)
 run_command("cargo release -p micromegas-ingestion -x --no-confirm")
 run_command("cargo release -p micromegas-telemetry-sink -x --no-confirm")
 

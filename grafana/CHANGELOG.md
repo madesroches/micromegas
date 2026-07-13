@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.27.0 (2026-07-12)
+
+Version sync release. Security fix from Dependabot dependency bump: `golang.org/x/net` 0.55.0 (#338).
+
 ## 0.26.0 (2026-06-23)
 
 Version sync release. Security fixes from Dependabot dependency bumps (#1157, #1152, #1150).

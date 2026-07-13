@@ -4,6 +4,8 @@ This file documents the historical progress of the Micromegas project. For curre
 
 ## Unreleased
 
+## v0.27.0 - 2026-07-12
+
 * **Analytics:**
   * Move `ThreadSpansView::jit_update` off Postgres onto DataFusion views: replace the unprunable `blocks` full-table scan (TSC frequency estimation) and the `streams`/`processes` PK reads with `find_stream_from_view`/`find_process_with_latest_timing` against the DataFusion `streams`/`processes` views, and delete the now-dead `make_time_converter_from_db`/`find_stream` Postgres helpers (#1244)
 * **Tests:**
