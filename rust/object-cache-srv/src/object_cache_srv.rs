@@ -64,35 +64,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let origin_store: Arc<dyn object_store::ObjectStore> =
         Arc::new(PrefixStore::new(origin_store, prefix));
 
-    // The submit-queue overflow threshold is pinned to 2x the buffer pool
-    // (foyer's documented -- but no longer automatic, see `WriteTuning` --
-    // intended default); see `MICROMEGAS_OBJECT_CACHE_WRITE_BUFFER_MB`.
-    let write_tuning = WriteTuning {
-        flushers: args.flushers,
-        buffer_pool_bytes: args.write_buffer_mb * 1024 * 1024,
-        submit_queue_threshold_bytes: args.write_buffer_mb * 1024 * 1024 * 2,
-    };
-    let foyer = FoyerBackend::new_with_shards(
-        &args.disk_path,
-        args.ram_mb * 1024 * 1024,
-        args.disk_gb * 1024 * 1024 * 1024,
-        8,
-        write_tuning,
-    )
-    .await
-    .with_context(|| "building FoyerBackend")?;
-
-    let cache = RangeCache::new(
-        origin_store,
-        Arc::new(foyer),
-        args.block_size,
-        ns,
-        args.max_concurrent_fetches,
-        args.demand_reserved_fetches,
-        args.max_coalesced_get_bytes,
-        args.promote_whole_batch,
-    );
-
     // Resolve the prefix allowlist. Fail-closed like auth: an empty list is a
     // fatal config error unless `--allow-all-prefixes` is given (dev opt-out).
     // Reject blank entries (e.g. a trailing comma in the env var) — a blank
@@ -119,17 +90,49 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         prefixes
     };
 
-    // Attach the `prefix` metric-tag classifier now that `allowed_prefixes`
-    // is resolved: labels are leaked to `'static` once here (bounded,
-    // low-cardinality, set once at startup) so the hot per-block emission
-    // sites in `fetch_blocks` can hold `&'static PropertySet`s without an
-    // allocation per call. `--allow-all-prefixes` leaves this list empty, so
-    // every key classifies as `"other"` (`RangeCache::new`'s own default).
+    // Resolve the `prefix` metric-tag classifier labels now, ahead of both
+    // the `FoyerBackend` (RAM-eviction listener + disk read-age) and
+    // `RangeCache` builds: labels are leaked to `'static` once here (bounded,
+    // low-cardinality, set once at startup) so the hot per-block/eviction
+    // emission sites can hold `&'static PropertySet`s without an allocation
+    // per call. `--allow-all-prefixes` leaves this list empty, so every key
+    // classifies as `"other"` (both `FoyerBackend::new` and `RangeCache::new`'s
+    // own defaults).
     let prefix_labels: Arc<[&'static str]> = allowed_prefixes
         .iter()
         .map(|p| -> &'static str { Box::leak(p.clone().into_boxed_str()) })
         .collect::<Vec<_>>()
         .into();
+
+    // The submit-queue overflow threshold is pinned to 2x the buffer pool
+    // (foyer's documented -- but no longer automatic, see `WriteTuning` --
+    // intended default); see `MICROMEGAS_OBJECT_CACHE_WRITE_BUFFER_MB`.
+    let write_tuning = WriteTuning {
+        flushers: args.flushers,
+        buffer_pool_bytes: args.write_buffer_mb * 1024 * 1024,
+        submit_queue_threshold_bytes: args.write_buffer_mb * 1024 * 1024 * 2,
+    };
+    let foyer = FoyerBackend::new_with_shards(
+        &args.disk_path,
+        args.ram_mb * 1024 * 1024,
+        args.disk_gb * 1024 * 1024 * 1024,
+        8,
+        write_tuning,
+        prefix_labels.clone(),
+    )
+    .await
+    .with_context(|| "building FoyerBackend")?;
+
+    let cache = RangeCache::new(
+        origin_store,
+        Arc::new(foyer),
+        args.block_size,
+        ns,
+        args.max_concurrent_fetches,
+        args.demand_reserved_fetches,
+        args.max_coalesced_get_bytes,
+        args.promote_whole_batch,
+    );
     let cache = cache.with_prefix_labels(prefix_labels);
 
     let (prefetch_tx, _prefetch_worker) = spawn_prefetch_worker(
