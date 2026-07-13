@@ -4,7 +4,7 @@ This guide covers building Micromegas from source and setting up a development e
 
 ## Prerequisites
 
-- **[Rust](https://rustup.rs/)** - Toolchain version pinned in `rust/rust-toolchain.toml` (currently `1.96.0`); `rustup` will install it automatically on first build
+- **[Rust](https://rustup.rs/)** - Toolchain version pinned in `rust/rust-toolchain.toml`; `rustup` will install it automatically on first build
 - **[Python 3.8+](https://www.python.org/downloads/)**
 - **[Docker](https://www.docker.com/get-started/)** - For running PostgreSQL
 - **[Git](https://git-scm.com/downloads)**
