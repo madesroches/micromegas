@@ -54,8 +54,17 @@ the RAM eviction structure.
 
 The zero-copy insert was an intentional optimization; the DEFAULT_MAX_COALESCED
 default and `block_size` set the amplification factor. With `block_size = 1 MiB`
-and `max_coalesced_get_bytes = 16 MiB`, a lone survivor pins up to 16× its
-accounted weight.
+and the default `max_coalesced_get_bytes = 8 MiB`, a lone survivor pins up to
+8× its accounted weight.
+
+`rust/object-cache/src/bounded_memory_backend.rs:47-52` — `BoundedMemoryBackend`
+(the in-process L1 backend used by `l1_store.rs`) has the identical bug: `put`
+stores the slice verbatim, and its weigher (`value.len()`, line 29) charges
+only the slice length while the LFU eviction structure holds a strong
+reference to the same coalesced-GET parent buffer. L1 is enabled by default
+(200 MB) and wired into production read paths
+(`analytics/src/lakehouse/lakehouse_context.rs:76,94`,
+`static_tables_configurator.rs:79`), so this backend needs the same fix.
 
 ### The observability gap
 `FoyerBackend::ram_usage()` (`foyer_backend.rs:98-100`) returns
@@ -110,6 +119,21 @@ The copy is unconditional — even a single-block run (where `block_size` == run
 size and there is no over-retention) is copied, because `Bytes` exposes no cheap
 "do I own my whole allocation?" check and the memcpy is negligible.
 
+The identical copy is needed in `BoundedMemoryBackend::put`
+(`rust/object-cache/src/bounded_memory_backend.rs:47-52`), which has no
+demand/prefetch distinction (see its comment: L1 has no disk tier to route a
+prefetch-only admission through, so both hints take the same path) — every
+`put` there is the demand case, so the copy applies unconditionally to the
+whole method:
+```rust
+async fn put(&self, key: String, value: Bytes, _hint: FillHint) {
+    let owned = Bytes::copy_from_slice(&value);
+    self.cache.insert(key, owned);
+}
+```
+This keeps the "RAM residency should be truthful" invariant in both backends
+that carry a byte weigher, matching the rationale above.
+
 ### 2. Observability: export accounted RAM-tier usage
 Add a RAM-tier usage accessor to the backend abstraction, mirroring the existing
 `disk_stats()` shape (defaulted so non-foyer backends need no override), and emit
@@ -160,31 +184,47 @@ No separate process-RSS gauge is added: host/process memory is already covered
 by `send_system_metrics_forever`, and the missing signal was specifically the
 accounted RAM-tier side of the comparison.
 
+The gauge rides the existing 5s `SAMPLE_INTERVAL` (`saturation_monitor.rs:27-35`)
+rather than a dedicated cadence: that interval is a telemetry-volume tradeoff
+shared by every sibling saturation gauge, and the failure mode this gauge
+targets is a monotonic creep over minutes-to-hours, which 5s resolves with
+large margin. No dedicated alert is added either: a repo-wide search found no
+Prometheus/Grafana alerting infrastructure in-repo, so a `used_memory` vs.
+`object_cache_ram_tier_usage_bytes` alert has nowhere to live here and stays
+out of scope — this plan only exports the signal.
+
 ## Implementation Steps
 1. **Fix the leak** — `rust/object-cache/src/foyer_backend.rs`: copy the value
    in the `FillHint::Demand` branch of `put` (`Bytes::copy_from_slice(&value)`),
    with the explanatory comment above.
-2. **Add trait accessor** — `rust/object-cache/src/backend.rs`: add
+2. **Fix the same leak in L1** — `rust/object-cache/src/bounded_memory_backend.rs`:
+   copy the value in `put` before `self.cache.insert`.
+3. **Add trait accessor** — `rust/object-cache/src/backend.rs`: add
    `ram_usage_bytes(&self) -> Option<usize>` (default `None`) to
    `RangeCacheBackend`.
-3. **Implement for foyer** — `rust/object-cache/src/foyer_backend.rs`: implement
+4. **Implement for foyer** — `rust/object-cache/src/foyer_backend.rs`: implement
    the trait method returning `Some(self.ram_usage())`.
-4. **Expose on RangeCache** — `rust/object-cache/src/range_cache/mod.rs`: add
+5. **Expose on RangeCache** — `rust/object-cache/src/range_cache/mod.rs`: add
    `backend_ram_usage() -> Option<usize>` delegating to `self.backend`.
-5. **Emit the gauge** — `rust/object-cache-srv/src/saturation_monitor.rs`: emit
+6. **Emit the gauge** — `rust/object-cache-srv/src/saturation_monitor.rs`: emit
    `object_cache_ram_tier_usage_bytes` in `sample_once`; extend the module
    doc-comment's gauge list.
-6. **Tests** — add the regression test (detachment) and the gauge test (below).
-7. **Docs** — update `mkdocs/docs/admin/object-cache.md` saturation table.
-8. Run `cargo fmt`, `cargo clippy --workspace -- -D warnings`, and the
+7. **Tests** — add the foyer detachment regression test, the L1
+   (`BoundedMemoryBackend`) detachment regression test, and the gauge test
+   (below).
+8. **Docs** — update `mkdocs/docs/admin/object-cache.md` saturation table.
+9. Run `cargo fmt`, `cargo clippy --workspace -- -D warnings`, and the
    object-cache test suites.
 
 ## Files to Modify
 - `rust/object-cache/src/foyer_backend.rs` — copy on demand admission; trait impl.
+- `rust/object-cache/src/bounded_memory_backend.rs` — copy on admission in `put`.
 - `rust/object-cache/src/backend.rs` — new trait method.
 - `rust/object-cache/src/range_cache/mod.rs` — `backend_ram_usage()` accessor.
 - `rust/object-cache-srv/src/saturation_monitor.rs` — new gauge + doc comment.
 - `rust/object-cache/tests/foyer_backend_tests.rs` — detachment regression test.
+- `rust/object-cache/tests/l1_store_tests.rs` — L1 (`BoundedMemoryBackend`)
+  detachment regression test.
 - `rust/object-cache-srv/tests/saturation_tests.rs` — RAM-tier gauge test.
 - `mkdocs/docs/admin/object-cache.md` — saturation metrics table.
 
@@ -228,19 +268,21 @@ accounted RAM-tier side of the comparison.
   ```
   (`Bytes::as_ptr` is public; a clone from the RAM tier preserves the stored
   buffer's base pointer, so this fails before the fix and passes after.)
+- **L1 detachment regression** (`l1_store_tests.rs`, same technique against
+  `BoundedMemoryBackend` directly): slice a block out of a larger parent
+  buffer, `put` it (any `FillHint`, since L1 treats them identically), `get`
+  it back, and assert the returned bytes' base pointer differs from the
+  slice's — covering the identical bug in the in-process L1 backend.
 - **Gauge emission** (`saturation_tests.rs`): drive `sample_once` against a
   `FoyerBackend`-backed `RangeCache`, and assert `object_cache_ram_tier_usage_bytes`
   fires; after a demand `put` of one block, assert the sampled value is ≥ that
-  block's size (residency is now visible). Follow the existing integer-metric
-  extraction helper pattern in that file.
+  block's size (residency is now visible). `saturation_tests.rs` currently only
+  has a float-metric extraction helper (`float_metric_values`); add an
+  integer-metric extraction helper following the pattern in
+  `telemetry_tests.rs` (`rust/object-cache/tests/telemetry_tests.rs:42-60`,
+  `rust/object-cache-srv/tests/telemetry_tests.rs:62`).
 - **Existing suites** — the round-trip and prefetch tests in
   `foyer_backend_tests.rs` are unaffected (prefetch path unchanged; demand
   round-trip still returns identical bytes).
 - Full gate: `cargo fmt`, `cargo clippy --workspace -- -D warnings`,
   `cargo test -p micromegas-object-cache -p micromegas-object-cache-srv`.
-
-## Open Questions
-- Gauge cadence: the sampler runs every 5s. Confirm that resolution is adequate
-  for catching RAM-tier creep, or whether the `used_memory` vs.
-  `object_cache_ram_tier_usage_bytes` comparison warrants a dedicated alert
-  (out of scope for this plan — it only exports the signal).
