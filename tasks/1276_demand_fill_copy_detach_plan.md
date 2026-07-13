@@ -277,10 +277,10 @@ out of scope — this plan only exports the signal.
   `FoyerBackend`-backed `RangeCache`, and assert `object_cache_ram_tier_usage_bytes`
   fires; after a demand `put` of one block, assert the sampled value is ≥ that
   block's size (residency is now visible). `saturation_tests.rs` currently only
-  has a float-metric extraction helper (`float_metric_values`); add an
-  integer-metric extraction helper following the pattern in
-  `telemetry_tests.rs` (`rust/object-cache/tests/telemetry_tests.rs:42-60`,
-  `rust/object-cache-srv/tests/telemetry_tests.rs:62`).
+  has a float-metric extraction helper (`float_metric_values`); add a local
+  integer-metric variant that mirrors it — reading `IntegerMetricEvent`/
+  `TaggedIntegerMetricEvent` and pushing `.value` — rather than a fire-count
+  helper.
 - **Existing suites** — the round-trip and prefetch tests in
   `foyer_backend_tests.rs` are unaffected (prefetch path unchanged; demand
   round-trip still returns identical bytes).
