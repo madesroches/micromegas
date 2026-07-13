@@ -1,7 +1,39 @@
 # Release Plan Template for Micromegas
 
 This template is updated after each release with lessons learned.
-Last updated: v0.26.0 (2026-06-23)
+Last updated: v0.27.0 (2026-07-13)
+
+---
+
+## Lessons Learned from v0.27.0
+
+### New lib crate depended on by published crates → add to release.py before its dependents
+
+`micromegas-object-cache` was new this cycle and is depended on by `micromegas-ingestion` and `micromegas-analytics`, but was missing from `build/release.py`. `cargo publish` requires every path-dependency with a version to already exist on crates.io, so the run would have failed at `ingestion`. **Pre-release, diff new `rust/*/Cargo.toml` members against the `release.py` layer list** and insert any new publishable crate before its dependents (object-cache went in as Layer 5.5, after telemetry, before ingestion).
+
+### Keep the Phase 3.5 Docker service list in sync with SERVICES
+
+This cycle: `admin` → `maintenance` rename (#1268) and a new `object-cache` service, for 7 publishable services total. Prefer deriving the list from `SERVICES.keys()` rather than hardcoding.
+
+### `git tag A B C` does NOT create three tags
+
+`git tag v0.27.0 grafana-v0.27.0 capi-v0.27.0 blender-v0.27.0` fails — git reads the 2nd arg as the commit-ish. Create each meta tag in a loop: `for t in ...; do git tag "$t"; done`.
+
+### origin/release may be a STALE local tracking ref
+
+The release branch is re-cut from `main` each cycle and the remote branch is often deleted between releases. A leftover `origin/release` tracking ref made the local branch look "58 ahead / 5 behind" a branch that no longer existed on origin. `git ls-remote --heads origin` showed only `main`/`gh-pages`. Fix: `git remote prune origin`, then a plain `git push origin release` **creates** the branch (no force needed). Verify with `git ls-remote` before assuming divergence or reaching for `--force`.
+
+### Docker phase is long and WSL sleep interrupts it
+
+Building 7 services × 2 arches takes ~1h of real compute. Closing the laptop lid suspends the WSL VM and freezes the build (buildx step timers show huge wall-clock jumps — e.g. a single compile step reading ~30,000 s is the sleep gap, not real work). Builds are idempotent: buildx layer cache means re-running finishes only the remaining services. Use log mtime/advancing timestamps for liveness — `pgrep` gives false negatives between buildx invocations.
+
+### build_docker_images.py publishes ARCH-SUFFIXED tags, not a fused manifest
+
+amd64 → `:X.Y.Z`, arm64 → `:X.Y.Z-arm64`. There is no `manifest create` step, so `:X.Y.Z` is amd64-only by design. Verify completion per service with BOTH `imagetools inspect …:X.Y.Z` and `…:X.Y.Z-arm64`, not by checking platforms inside one manifest.
+
+### The version bump must grep ALL Cargo.toml, not just the workspace root
+
+`rust/monolith/Cargo.toml` pins `analytics-web-srv = { version = "0.27.0" }` directly (binary crates aren't in `[workspace.dependencies]`). Bumping only `rust/Cargo.toml` left a stale `^0.27.0` requirement that broke `cargo update`. Run `grep -rnE '0\.27' --include=Cargo.toml rust/` to catch inter-crate pins. Use `cargo update --workspace` to sync only the micromegas crate versions in Cargo.lock (no third-party churn in the bump commit).
 
 ---
 

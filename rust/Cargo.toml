@@ -5,7 +5,7 @@ resolver = "2"
 
 
 [workspace.package]
-version = "0.27.0"
+version = "0.28.0"
 edition = "2024"
 license = "Apache-2.0"
 homepage = "https://micromegas.info/"
@@ -16,20 +16,20 @@ keywords = ["observability", "telemetry", "analytics"]
 
 
 [workspace.dependencies]
-micromegas-analytics = { path = "analytics", version = "0.27.0" }
-micromegas-auth = { path = "auth", version = "0.27.0" }
-micromegas-datafusion-extensions = { path = "datafusion-extensions", version = "0.27.0" }
-micromegas-ingestion = { path = "ingestion", version = "0.27.0" }
-micromegas-object-cache = { path = "object-cache", version = "0.27.0" }
-micromegas-object-cache-srv = { path = "object-cache-srv", version = "0.27.0" }
-micromegas-otel-ingestion = { path = "otel-ingestion", version = "0.27.0" }
-micromegas-perfetto = { path = "perfetto", version = "0.27.0" }
-micromegas-proc-macros = { path = "micromegas-proc-macros", version = "0.27.0" }
-micromegas-telemetry = { path = "telemetry", version = "0.27.0" }
-micromegas-telemetry-sink = { path = "telemetry-sink", version = "0.27.0" }
-micromegas-tracing = { path = "tracing", version = "0.27.0", default-features = false }
-micromegas-transit = { path = "transit", version = "0.27.0" }
-micromegas = { path = "public", version = "0.27.0" }
+micromegas-analytics = { path = "analytics", version = "0.28.0" }
+micromegas-auth = { path = "auth", version = "0.28.0" }
+micromegas-datafusion-extensions = { path = "datafusion-extensions", version = "0.28.0" }
+micromegas-ingestion = { path = "ingestion", version = "0.28.0" }
+micromegas-object-cache = { path = "object-cache", version = "0.28.0" }
+micromegas-object-cache-srv = { path = "object-cache-srv", version = "0.28.0" }
+micromegas-otel-ingestion = { path = "otel-ingestion", version = "0.28.0" }
+micromegas-perfetto = { path = "perfetto", version = "0.28.0" }
+micromegas-proc-macros = { path = "micromegas-proc-macros", version = "0.28.0" }
+micromegas-telemetry = { path = "telemetry", version = "0.28.0" }
+micromegas-telemetry-sink = { path = "telemetry-sink", version = "0.28.0" }
+micromegas-tracing = { path = "tracing", version = "0.28.0", default-features = false }
+micromegas-transit = { path = "transit", version = "0.28.0" }
+micromegas = { path = "public", version = "0.28.0" }
 
 anyhow = "1.0"
 arrow-flight = { version = "58.0", features = ["flight-sql-experimental"] }

@@ -75,6 +75,15 @@ To get started with Micromegas, please refer to the [Getting Started](https://mi
 
 ## Recent Releases
 
+### v0.27.0 (July 2026)
+* Tiered object read cache: new `micromegas-object-cache` engine powering a standalone range-aware S3 read cache service (`micromegas-object-cache-srv`, Foyer RAM+disk) and an in-process L1 cache; single-flight coalescing, priority budgeting, memory-bounded prefetch, NDJSON-streamed `/prefetch`, streamed range responses, write-time cache warming, and extensive performance telemetry
+* Removed the Postgres `partition_metadata` table (schema v6): partition Parquet metadata is now read solely from the Parquet footer via the object-cache-backed reader, eliminating TOAST and write-path overhead
+* Blender observability add-on: new `micromegas-capi` C-ABI crate (`cdylib`/`staticlib`) and a Blender 4.2+ Python extension (action capture, performance metrics, crash harvester, exception capture), with `capi-release` and `blender-extension` CI workflows
+* Hardening: resilient Rust telemetry sink transport (priority queues, retry tuning, in-flight gating) and transit block parsing hardened against malformed payloads
+* Supply-chain CI gates: `cargo audit` and `cargo deny` run on every Rust CI build
+* `telemetry-admin` maintenance daemon renamed to `telemetry-maintenance-srv`
+* DataFusion 54.0; internal proc-macros migrated `syn` 1→2; `opentelemetry-proto` 0.32 (GHSA-w9wp-h8wv-79jx); Dependabot fixes
+
 ### v0.26.0 (June 2026)
 * `micromegas-monolith`: single-process deployment running all roles (`ingestion`, `analytics`, `web`, `admin`) in one binary — simplifies self-hosted and single-machine deployments
 * Image streams: instrumented apps can send screenshots as telemetry via `send_image()`; queryable via the `images` SQL table; Unreal `telemetry.screenshot` console command with `telemetry.images.enable` CVar
