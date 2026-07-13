@@ -480,8 +480,8 @@ pub async fn is_jit_partition_up_to_date(
         "[{}, {}] {} {}",
         min_insert_time.to_rfc3339(),
         max_insert_time.to_rfc3339(),
-        &*view_meta.view_set_name,
-        &*view_meta.view_instance_id,
+        *view_meta.view_set_name,
+        *view_meta.view_instance_id,
     );
 
     // CRITICAL: Use inclusive inequalities (<=, >=) to prevent race conditions.

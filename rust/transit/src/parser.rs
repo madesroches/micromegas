@@ -144,7 +144,7 @@ fn parse_custom_instance<'a>(
     if let Some(reader) = custom_readers.get(&*udt.name) {
         (*reader)(bump, udt, udts, dependencies, object_window)
     } else {
-        log::warn!("unknown custom object {}", &udt.name);
+        log::warn!("unknown custom object {}", udt.name);
         Ok(Value::Object(bump.alloc(Object {
             type_name: udt.name.as_str(),
             members: &[],
