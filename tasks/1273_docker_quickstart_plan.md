@@ -44,8 +44,9 @@ Resolves [#1273](https://github.com/madesroches/micromegas/issues/1273).
   `development/build.md` and `contributing.md` already live under
   Operations → Development.
 - **Entry-point links** to fix:
-  - `README.md` line 74 (Getting Started section) + button links.
-  - `mkdocs/docs/index.md` lines 11 (`→ Get Started` button) and 50 (Quick Start
+  - `README.md` line 74 (Getting Started section, plain markdown link — no
+    button styling).
+  - `mkdocs/docs/index.md` lines 12 (`→ Get Started` button) and 50 (Quick Start
     list) — both point to `getting-started.md` (fine to keep, content changes).
   - `mkdocs/docs/contributing.md` line 38 → should point to `development/build.md`.
   - Root `/CONTRIBUTING.md` line 38 → same fix, same target URL.
@@ -264,7 +265,11 @@ quick-start sections — they are not unaffected by this edit.
   collapsible block (copy-paste, air-gapped, reviewable). Provide both.
 - **Duplicating dev instructions vs. moving them.** Move, not copy: a single dev
   source (`build.md`) avoids drift. `getting-started.md` and `contributing.md`
-  link to it.
+  link to it. **Out of scope:** `doc/GETTING_STARTED.md` (~144 lines, a separate
+  dev-setup guide outside the mkdocs site) is left as-is — it's not linked from
+  the published docs or README, only from completed task plans under
+  `tasks/completed/`, so it poses no broken-link risk here; a future cleanup
+  could fold or remove it.
 
 ## Documentation
 
