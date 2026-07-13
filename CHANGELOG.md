@@ -4,6 +4,8 @@ This file documents the historical progress of the Micromegas project. For curre
 
 ## Unreleased
 
+* **Build:**
+  * Bump the pinned Rust toolchain to 1.97.0; fix new `clippy::useless_borrows_in_formatting` lints the version tightened, and regenerate the datafusion-wasm bindings whose internal closure-glue symbol names changed under the new compiler
 * **Caching:**
   * Fix a demand-fill leak where a cached block stored as a slice of its coalesced origin-GET buffer pinned the whole parent allocation, letting RAM-tier RSS run up to `max_coalesced_get_bytes / block_size`x its accounted weight; copy on demand admission in both `FoyerBackend` and the L1 `BoundedMemoryBackend` to detach the cached block, and export accounted RAM-tier usage as a new `object_cache_ram_tier_usage_bytes` saturation gauge (#1276)
 * **Docs:**
