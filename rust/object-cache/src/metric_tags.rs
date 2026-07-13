@@ -106,8 +106,6 @@ pub const REASON_CLEAR: &str = "clear";
 /// dimensioned by `reason` instead of `class`.
 #[derive(Debug, Clone, Copy)]
 pub struct EvictionTags {
-    /// The `prefix` label these tags carry.
-    pub label: &'static str,
     /// `{prefix}` -- used by both the RAM eviction age metric and the disk
     /// read-age metric.
     pub prefix: &'static PropertySet,
@@ -120,7 +118,6 @@ pub struct EvictionTags {
 impl EvictionTags {
     pub fn new(label: &'static str) -> Self {
         Self {
-            label,
             prefix: PropertySet::find_or_create(vec![Property::new("prefix", label)]),
             count_evict: PropertySet::find_or_create(vec![
                 Property::new("prefix", label),
