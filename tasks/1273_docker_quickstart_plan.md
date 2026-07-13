@@ -86,6 +86,10 @@ New `getting-started.md` outline:
      `grpc://localhost:50051`, which matches the compose FlightSQL port;
      optionally mention `MICROMEGAS_ANALYTICS_URI` as the CLI-only
      query-endpoint override)
+   - The sample query returns Micromegas's own self-telemetry — the compose
+     file's monolith ingests its own traces/logs by default — so newcomers
+     should expect to see real rows, not an empty table; empty right after
+     startup (before the first flush) is fine
 
 ## What you just ran  (evaluation-only callout)
    - --disable-auth, file object store, single process, ephemeral volumes
@@ -99,7 +103,9 @@ New `getting-started.md` outline:
    - "Building from source / contributing?" → development/build.md
 
 ## Troubleshooting
-   - port conflicts (3000/9000/5432), image pull, empty results are normal
+   - port conflicts (3000/9000/5432), image pull, expect to see Micromegas's
+     own self-telemetry in the sample query (empty only right after startup,
+     before the first flush)
 ```
 
 ### 2. Make the compose file genuinely clone-free (single source of truth)
@@ -294,7 +300,9 @@ for every invocation of the shared file.
 - **Compose smoke test:** from a clean checkout, `docker compose -f
   docker/docker-compose.monolith.yaml up`; verify Postgres creates both
   `micromegas` and `micromegas_app`, the web app loads at `http://localhost:3000`,
-  and `pip install micromegas` + the sample query connects (empty result is OK).
+  and `pip install micromegas` + the sample query connects and returns the
+  monolith's own self-telemetry (empty only if run immediately before the
+  first flush).
 - **Clone-free test:** in an empty temp dir, `curl` the compose file from the
   branch raw URL and run it; verify identical behavior with no other files
   present.
