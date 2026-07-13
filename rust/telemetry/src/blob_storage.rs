@@ -9,10 +9,14 @@ use std::sync::Arc;
 /// `object_store` the process env vars lowercased (its expected option keys).
 /// The single home for the `parse_url_opts(url, env-vars-lowercased)` idiom.
 pub fn parse_object_store_url(uri: &str) -> Result<(Arc<dyn ObjectStore>, Path)> {
-    let (store, prefix) = object_store::parse_url_opts(
-        &url::Url::parse(uri)?,
-        std::env::vars().map(|(k, v)| (k.to_lowercase(), v)),
-    )?;
+    parse_object_store_url_parsed(&url::Url::parse(uri)?)
+}
+
+/// Like `parse_object_store_url` but takes an already-parsed URL, for callers
+/// that also need the `url::Url` themselves and would otherwise parse it twice.
+pub fn parse_object_store_url_parsed(url: &url::Url) -> Result<(Arc<dyn ObjectStore>, Path)> {
+    let (store, prefix) =
+        object_store::parse_url_opts(url, std::env::vars().map(|(k, v)| (k.to_lowercase(), v)))?;
     Ok((Arc::new(store), prefix))
 }
 

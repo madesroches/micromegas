@@ -3,7 +3,7 @@ use datafusion::catalog::TableProvider;
 use datafusion::execution::context::{SessionConfig, SessionContext};
 use datafusion::execution::runtime_env::RuntimeEnv;
 use futures::StreamExt;
-use micromegas_telemetry::blob_storage::parse_object_store_url;
+use micromegas_telemetry::blob_storage::parse_object_store_url_parsed;
 use micromegas_tracing::prelude::*;
 use std::sync::Arc;
 
@@ -70,7 +70,7 @@ impl StaticTablesConfigurator {
     /// Errors loading individual files are logged but do not prevent other files from loading.
     pub async fn new(ctx: &SessionContext, url: &str) -> Result<Self> {
         let parsed_url = url::Url::parse(url)?;
-        let (object_store, prefix) = parse_object_store_url(url)?;
+        let (object_store, prefix) = parse_object_store_url_parsed(&parsed_url)?;
         // Wrap with the in-process L1 cache: static tables are read
         // repeatedly (see the L1 cache plan), just like lakehouse partitions.
         let object_store = micromegas_object_cache::l1_wrap(object_store, "static");
