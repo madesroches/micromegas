@@ -71,7 +71,9 @@ Learn more about Micromegas through our technical presentations:
 
 ## Getting Started
 
-To get started with Micromegas, please refer to the [Getting Started](https://micromegas.info/docs/getting-started/) guide.
+Run Micromegas locally with Docker in a couple of commands — see the [Getting Started](https://micromegas.info/docs/getting-started/) guide.
+
+Building from source or contributing code? See the [Build Guide](https://micromegas.info/docs/development/build/).
 
 ## Recent Releases
 

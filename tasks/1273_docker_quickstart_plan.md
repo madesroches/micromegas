@@ -343,6 +343,23 @@ Files to Modify).
 - **Phase 1 (clone-free compose) — done.** `docker/docker-compose.monolith.yaml`
   now uses an inline `configs:` block instead of the `./init-databases.sh`
   bind-mount; `docker/init-databases.sh` removed; `docker compose config -q`
-  validates. Remaining: end-to-end `up` smoke test (Phase 5).
-- Phases 2–5 (doc rewrite, dev-content relocation, entry-point links,
-  verification) — pending.
+  validates.
+- **Phase 2 (rewrite newcomer page) — done.** `getting-started.md` rewritten as
+  the Docker quickstart per the outline: clone-free `curl` + in-repo options,
+  collapsible inline compose YAML, web app, optional Python sample query,
+  evaluation-only callout, stop/cleanup, next steps, troubleshooting.
+- **Phase 3 (relocate dev instructions) — done.** Added "Running a Development
+  Instance" to `development/build.md` (env vars, monolith/split/manual startup,
+  service roles); repointed `contributing.md` and root `CONTRIBUTING.md`
+  "Development Setup" links to the Build Guide; reworded `build.md`'s
+  "Next Steps" to drop the stale `getting-started.md` link.
+- **Phase 4 (entry-point links) — done.** `README.md` Getting Started section
+  reframed with a contributor pointer to the Build Guide; `index.md` Quick
+  Start label tweaked; `docker/README.md` and `admin/monolith.md` gained a
+  Compose v2.23.1+ prerequisite note.
+- **Phase 5 (verify) — done.** `mkdocs build --strict` passes with no
+  broken-link warnings (fixed one anchor slug mismatch). End-to-end smoke test:
+  `docker compose -f docker/docker-compose.monolith.yaml up` created both
+  `micromegas` and `micromegas_app` DBs, web app returned HTTP 200, and the
+  Python sample query returned the monolith's own self-telemetry rows.
+  Torn down with `down -v` after the test.

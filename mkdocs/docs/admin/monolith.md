@@ -6,6 +6,9 @@ This deployment mode targets workstations, laptops, CI, and any single-machine s
 
 ## Quick start with Docker Compose
 
+!!! note "Compose version"
+    Requires Docker Compose v2.23.1+ (for the compose file's inline `configs.content` DB-init block).
+
 ```bash
 # from the docker/ directory
 docker compose -f docker-compose.monolith.yaml up

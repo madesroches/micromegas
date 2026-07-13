@@ -35,7 +35,7 @@ We welcome code contributions! If you'd like to contribute code, please follow t
 
 ## Development Setup
 
-For information on setting up your local development environment, please refer to the [Getting Started](https://micromegas.info/docs/getting-started/) guide.
+For information on setting up your local development environment — including building from source and running a development instance of the services — please refer to the [Build Guide](https://micromegas.info/docs/development/build/).
 
 ### Build Prerequisites
 
