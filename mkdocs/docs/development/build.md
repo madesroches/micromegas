@@ -155,6 +155,97 @@ pytest
 black .
 ```
 
+## Running a Development Instance
+
+Once you've built the components above, you can run a full local stack backed
+by your own build instead of the published Docker image (see
+[Getting Started](../getting-started.md) for the Docker quickstart).
+
+### Environment Variables
+
+```bash
+# Database credentials (used by setup scripts)
+export MICROMEGAS_DB_USERNAME=your_username
+export MICROMEGAS_DB_PASSWD=your_password
+
+# Service endpoints
+export MICROMEGAS_TELEMETRY_URL=http://localhost:9000
+export MICROMEGAS_SQL_CONNECTION_STRING=postgres://your_username:your_password@localhost:5432
+
+# Object storage (replace with your local path)
+export MICROMEGAS_OBJECT_STORE_URI=file:///path/to/local/storage
+```
+
+!!! tip "Object Storage Path"
+    Choose a local directory for object storage, e.g., `/tmp/micromegas-storage` or `C:\temp\micromegas-storage` on Windows.
+
+!!! note "Advanced: transport tuning"
+    The Rust telemetry sink exposes environment variables for queue size limits,
+    concurrency, and timeouts if the ingestion service falls behind or becomes
+    unreachable. See [Telemetry Sink Transport Tuning](../admin/telemetry-sink-tuning.md).
+
+### Option A: Monolith (recommended)
+
+The simplest way to start everything is the monolith script, which builds and launches a single `micromegas-monolith` process running all roles (ingestion, analytics, web, maintenance):
+
+```bash
+python3 local_test_env/ai_scripts/start_services.py --monolith
+```
+
+This will automatically:
+
+- Build the monolith binary and the analytics web app (including DataFusion WASM)
+- Start PostgreSQL if not already running
+- Launch `micromegas-monolith --roles all` on port 9000 (HTTP/ingestion), port 50051 (FlightSQL), and port 3000 (web app)
+- Write all PIDs to `/tmp/micromegas_pids.txt`
+
+```bash
+# Stop all services
+python3 local_test_env/ai_scripts/stop_services.py
+```
+
+### Option B: Split Services
+
+To run the four services separately (closer to a production topology):
+
+```bash
+python3 local_test_env/ai_scripts/start_services.py
+```
+
+### Option C: Manual Startup
+
+If you prefer full control, start each service in a separate terminal:
+
+**Terminal 1: PostgreSQL Database**
+```bash
+cd local_test_env/db
+python run.py
+```
+
+**Terminal 2: Ingestion Server**
+```bash
+cd rust
+cargo run -p telemetry-ingestion-srv -- --listen-endpoint-http 127.0.0.1:9000
+```
+
+**Terminal 3: FlightSQL Server**
+```bash
+cd rust
+cargo run -p flight-sql-srv -- --disable-auth
+```
+
+**Terminal 4: Maintenance Service**
+```bash
+cd rust
+cargo run -p telemetry-maintenance-srv
+```
+
+!!! info "Service Roles"
+    - **PostgreSQL**: Stores metadata and service configuration
+    - **Ingestion Server**: Receives telemetry data from applications (port 9000)
+    - **FlightSQL Server**: Provides SQL query interface for analytics (port 50051)
+    - **Maintenance Service**: Handles background processing and global view materialization
+
 ## Documentation
 
 ```bash
@@ -237,5 +328,4 @@ See `tasks/container_based_dev_worker_plan.md` for the full design.
 ## Next Steps
 
 - **[Contributing Guide](../contributing.md)** - How to contribute to the project
-- **[Getting Started](../getting-started.md)** - Set up a development instance
 - **[Architecture Overview](../architecture/index.md)** - Understand the system design

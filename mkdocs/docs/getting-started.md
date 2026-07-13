@@ -1,163 +1,112 @@
 # Getting Started
 
-This guide will walk you through setting up Micromegas on your local workstation for testing and development purposes.
+Try Micromegas locally with Docker — no build, no dev environment.
 
 ## Prerequisites
 
-Before you begin, ensure you have the following installed:
+- **[Docker](https://www.docker.com/get-started/)** with Compose v2 (v2.23.1+; bundled with current Docker Desktop and recent Docker Engine)
 
-- **[Docker](https://www.docker.com/get-started/)** - For running PostgreSQL
-- **[Python 3.8+](https://www.python.org/downloads/)** - For the client API and setup scripts
-- **[Rust](https://www.rust-lang.org/tools/install)** - For building Micromegas services
-- **Build tools** - C/C++ compiler and linker (required for Rust compilation)
+## 1. Start Micromegas
 
-Optional:
-- **[tmux](https://github.com/tmux/tmux/wiki)** - For managing multiple services in a single terminal (Linux/macOS)
+### Option A: clone-free
 
-## Environment Setup
-
-Set the following environment variables for local development:
+Fetch the compose file and start it, without cloning the repo:
 
 ```bash
-# Database credentials (used by setup scripts)
-export MICROMEGAS_DB_USERNAME=your_username
-export MICROMEGAS_DB_PASSWD=your_password
-
-# Service endpoints
-export MICROMEGAS_TELEMETRY_URL=http://localhost:9000
-export MICROMEGAS_SQL_CONNECTION_STRING=postgres://your_username:your_password@localhost:5432
-
-# Object storage (replace with your local path)
-export MICROMEGAS_OBJECT_STORE_URI=file:///path/to/local/storage
+curl -O https://raw.githubusercontent.com/madesroches/micromegas/main/docker/docker-compose.monolith.yaml
+docker compose -f docker-compose.monolith.yaml up
 ```
 
-!!! tip "Object Storage Path"
-    Choose a local directory for object storage, e.g., `/tmp/micromegas-storage` or `C:\temp\micromegas-storage` on Windows.
-
-!!! note "Advanced: transport tuning"
-    The Rust telemetry sink exposes environment variables for queue size limits,
-    concurrency, and timeouts if the ingestion service falls behind or becomes
-    unreachable. See [Telemetry Sink Transport Tuning](admin/telemetry-sink-tuning.md).
-
-## Installation Steps
-
-### 1. Clone the Repository
+### Option B: from a clone
 
 ```bash
 git clone https://github.com/madesroches/micromegas.git
 cd micromegas
+docker compose -f docker/docker-compose.monolith.yaml up
 ```
 
-### 2. Install Build Tools
+Either way, Docker pulls `marcantoinedesroches/micromegas-monolith:latest` and starts PostgreSQL plus a single monolith process running all roles (ingestion, analytics, web, maintenance). Data is stored in Docker volumes (Postgres data + a file-backed object store), so it persists across restarts but is easy to wipe (see [Stopping / cleaning up](#stopping-cleaning-up)).
 
-Before building the Rust components, install C/C++ build tools:
+??? note "Compose file contents"
+    ```yaml
+    services:
+      postgres:
+        image: postgres:16
+        environment:
+          POSTGRES_USER: micromegas
+          POSTGRES_PASSWORD: micromegas
+          POSTGRES_DB: micromegas
+        configs:
+          - source: pg_init
+            target: /docker-entrypoint-initdb.d/init-databases.sql
+        volumes:
+          - pgdata:/var/lib/postgresql/data
+        healthcheck:
+          test: ["CMD-SHELL", "pg_isready -U micromegas"]
+          interval: 5s
+          timeout: 5s
+          retries: 5
 
-**Linux:**
-```bash
-sudo apt-get update
-sudo apt-get install build-essential clang mold
-```
+      micromegas:
+        image: marcantoinedesroches/micromegas-monolith:latest
+        depends_on:
+          postgres:
+            condition: service_healthy
+        command:
+          - "--roles"
+          - "all"
+          - "--listen-endpoint-http"
+          - "0.0.0.0:9000"
+          - "--frontend-dir"
+          - "/app/frontend"
+          - "--disable-auth"
+        ports:
+          - "9000:9000"
+          - "50051:50051"
+          - "3000:3000"
+        environment:
+          MICROMEGAS_SQL_CONNECTION_STRING: "postgres://micromegas:micromegas@postgres:5432/micromegas"
+          MICROMEGAS_APP_SQL_CONNECTION_STRING: "postgres://micromegas:micromegas@postgres:5432/micromegas_app"
+          MICROMEGAS_TELEMETRY_URL: "http://micromegas:9000"
+          MICROMEGAS_FLUSH_PERIOD: "5"
+          MICROMEGAS_OBJECT_STORE_URI: "file:///data"
+          MICROMEGAS_WEB_CORS_ORIGIN: "http://localhost:3000"
+          MICROMEGAS_BASE_PATH: "/"
+        volumes:
+          - lake:/data
 
-!!! note "mold linker requirement"
-    On Linux, the project requires the [mold linker](https://github.com/rui314/mold) as configured in `.cargo/config.toml`. This provides faster linking for large projects.
+    configs:
+      pg_init:
+        content: |
+          CREATE DATABASE micromegas_app;
 
-**macOS:**
-```bash
-xcode-select --install
-```
+    volumes:
+      pgdata:
+      lake:
+    ```
 
-**Windows:**
-Install [Visual Studio Build Tools](https://visualstudio.microsoft.com/downloads/)
+## 2. Open the web app
 
-### 3. Start All Services
+Once the containers are up, open [http://localhost:3000](http://localhost:3000). This is the analytics web app — a notebook-style UI for querying and visualizing the data in your Micromegas instance. Since the monolith ingests its own telemetry (see below), you can immediately open a notebook and query its self-telemetry.
 
-#### Option A: Monolith (recommended)
-
-The simplest way to start everything is the monolith script, which builds and launches a single `micromegas-monolith` process running all roles (ingestion, analytics, web, maintenance):
-
-```bash
-python3 local_test_env/ai_scripts/start_services.py --monolith
-```
-
-This will automatically:
-
-- Build the monolith binary and the analytics web app (including DataFusion WASM)
-- Start PostgreSQL if not already running
-- Launch `micromegas-monolith --roles all` on port 9000 (HTTP/ingestion), port 50051 (FlightSQL), and port 3000 (web app)
-- Write all PIDs to `/tmp/micromegas_pids.txt`
-
-```bash
-# Stop all services
-python3 local_test_env/ai_scripts/stop_services.py
-```
-
-#### Option B: Split Services
-
-To run the four services separately (closer to a production topology):
-
-```bash
-python3 local_test_env/ai_scripts/start_services.py
-```
-
-#### Option C: Manual Startup
-
-If you prefer full control, start each service in a separate terminal:
-
-**Terminal 1: PostgreSQL Database**
-```bash
-cd local_test_env/db
-python run.py
-```
-
-**Terminal 2: Ingestion Server**
-```bash
-cd rust
-cargo run -p telemetry-ingestion-srv -- --listen-endpoint-http 127.0.0.1:9000
-```
-
-**Terminal 3: FlightSQL Server**
-```bash
-cd rust
-cargo run -p flight-sql-srv -- --disable-auth
-```
-
-**Terminal 4: Maintenance Service**
-```bash
-cd rust
-cargo run -p telemetry-maintenance-srv
-```
-
-!!! info "Service Roles"
-    - **PostgreSQL**: Stores metadata and service configuration
-    - **Ingestion Server**: Receives telemetry data from applications (port 9000)
-    - **FlightSQL Server**: Provides SQL query interface for analytics (port 50051)
-    - **Maintenance Service**: Handles background processing and global view materialization
-
-## Verify Installation
-
-### Install Python Client
+## 3. (Optional) Run a query from Python
 
 ```bash
 pip install micromegas
 ```
 
-### Test with Sample Query
-
-Create a test script to verify everything is working:
-
 ```python
 import datetime
 import micromegas
 
-# Connect to local Micromegas instance
+# Connects to grpc://localhost:50051 by default — matches the compose
+# file's FlightSQL port, so no configuration is needed locally.
 client = micromegas.connect()
 
-# Set up time range for query
 now = datetime.datetime.now(datetime.timezone.utc)
-begin = now - datetime.timedelta(days=1)
+begin = now - datetime.timedelta(minutes=5)
 end = now
 
-# Query recent log entries
 sql = """
     SELECT time, process_id, level, target, msg
     FROM log_entries
@@ -165,44 +114,65 @@ sql = """
     LIMIT 10;
 """
 
-# Execute query and display results
 df = client.query(sql, begin, end)
-print(f"Found {len(df)} log entries")
-print(df.head())
+print(df)
 ```
 
-If you see a DataFrame with log entries (or an empty DataFrame if no data has been ingested yet), your installation is working correctly!
+The monolith ingests its own traces and logs by default, so this query returns Micromegas's own self-telemetry rather than an empty table. Rows only appear after the first sink flush (`MICROMEGAS_FLUSH_PERIOD`, 5s in the compose file) **and** the maintenance role's continuous materialization of the global view (a ~1s cron) — so give it a couple of seconds after startup before you expect to see results.
+
+!!! tip "Querying from outside Docker"
+    The Python client's `MICROMEGAS_ANALYTICS_URI` environment variable can override the FlightSQL endpoint the CLI/client connects to — useful if you're running the query from a different host or container.
+
+## What you just ran
+
+This setup is for **evaluation, not production**:
+
+- `--disable-auth` — no authentication on ingestion, FlightSQL, or the web app
+- A file-backed object store (`file:///data`) instead of S3/GCS
+- A single process running every role, with no isolation or horizontal scaling
+- Data lives in Docker volumes that are easy to delete (see below)
+
+!!! warning "Not for production"
+    For a real deployment, see [Authentication](admin/authentication.md) to secure your instance and [Monolith Deployment](admin/monolith.md) for configuration options, or split into per-role services for horizontal scale-out.
+
+## Stopping / cleaning up
+
+```bash
+# Stop the containers (keeps data)
+docker compose -f docker-compose.monolith.yaml down
+
+# Stop and delete all data (Postgres + object store volumes)
+docker compose -f docker-compose.monolith.yaml down -v
+```
 
 ## Next Steps
 
-Now that you have Micromegas running locally, you can:
+1. **[Query Guide](query-guide/index.md)** - Learn how to query your observability data
+2. **[Architecture Overview](architecture/index.md)** - Understand the system design
+3. **[Unreal Engine Integration](unreal/index.md)** - Add observability to your Unreal Engine games
+4. **[Instrument Your Application](query-guide/python-api.md)** - Start collecting telemetry from your own applications
 
-1. **[Unreal Engine Integration](unreal/index.md)** - Add observability to your Unreal Engine games
-2. **[Optimism](https://github.com/madesroches/optimism)** - Example Bevy project using Micromegas
-3. **[Learn to Query Data](query-guide/index.md)** - Explore the SQL interface and available data
-4. **[Understand the Architecture](architecture/index.md)** - Learn how Micromegas components work together
-5. **[Instrument Your Application](query-guide/python-api.md)** - Start collecting telemetry from your own applications
+Building from source or contributing code? See the [Build Guide](development/build.md).
 
 ## Troubleshooting
 
 ### Common Issues
 
-**Connection refused when querying**
-: Make sure all three services are running and the FlightSQL server is listening on the default port.
+**Port already in use**
+: The compose file binds `3000` (web app), `9000` (ingestion), and `50051` (FlightSQL) on the host. Stop whatever else is using those ports, or edit the `ports:` mappings in the compose file.
 
-**Database connection errors**
-: Verify your PostgreSQL container is running and the connection string environment variable is correct.
+**Image pull fails or hangs**
+: Make sure Docker can reach Docker Hub, and that you're signed in if your organization requires it (`docker login`).
+
+**`docker compose` rejects the `configs.content` block**
+: You need Docker Compose v2.23.1+ for inline config content. Check your version with `docker compose version` and upgrade Docker Desktop / the `docker-compose-plugin` package.
 
 **Empty query results**
-: This is normal for a fresh installation. You'll need to instrument an application to start collecting telemetry data.
-
-**Build errors**
-: Ensure you have the latest Rust toolchain installed.
+: Expected for the first few seconds after startup — the sample query returns Micromegas's own self-telemetry, but rows only appear after the first sink flush (~5s) and the next maintenance materialization cycle (~1s cron). Wait a couple of seconds and re-run the query.
 
 ### Getting Help
 
 If you encounter issues:
 
-1. Check the service logs in each terminal for error messages
-2. Verify all environment variables are set correctly
-3. Create an issue on [GitHub](https://github.com/madesroches/micromegas/issues) with details about your setup
+1. Check the container logs: `docker compose -f docker-compose.monolith.yaml logs`
+2. Create an issue on [GitHub](https://github.com/madesroches/micromegas/issues) with details about your setup

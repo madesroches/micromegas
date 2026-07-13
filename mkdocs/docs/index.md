@@ -47,7 +47,7 @@ Micromegas is a comprehensive observability solution that provides:
 
 Get started with Micromegas in just a few steps:
 
-1. **[Getting Started Guide](getting-started.md)** - Set up your first Micromegas installation
+1. **[Getting Started Guide](getting-started.md)** - Run Micromegas locally with Docker
 2. **[Unreal Engine Integration](unreal/index.md)** - Add observability to your Unreal Engine games
 3. **[Optimism](https://github.com/madesroches/optimism)** - Example Bevy project using Micromegas
 4. **[Query Guide](query-guide/index.md)** - Learn how to query your observability data

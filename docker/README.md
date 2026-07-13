@@ -85,6 +85,8 @@ docker buildx imagetools inspect marcantoinedesroches/micromegas-monolith:X.Y.0
 
 ### Monolith (recommended single-image deployment)
 
+> Requires Docker Compose v2.23.1+ (for the compose file's inline `configs.content` DB-init block).
+
 ```bash
 docker compose -f docker/docker-compose.monolith.yaml up
 ```
