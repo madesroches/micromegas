@@ -30,11 +30,13 @@ Resolves [#1273](https://github.com/madesroches/micromegas/issues/1273).
 - **`docker/docker-compose.monolith.yaml`** already does exactly what the
   quickstart needs: Postgres + `marcantoinedesroches/micromegas-monolith:latest`,
   file-backed object store (`file:///data`), `--disable-auth`, web app on `:3000`,
-  ingestion on `:9000`, FlightSQL on `:50051`. **Caveat:** it bind-mounts
+  ingestion on `:9000`, FlightSQL on `:50051`. **Originally** it bind-mounted
   `./init-databases.sh` (which creates the `micromegas_app` DB required by
-  `MICROMEGAS_APP_SQL_CONNECTION_STRING`). That relative-path mount means the
-  file is **not** clone-free as written — a `curl`-ed copy would break without
-  the second file.
+  `MICROMEGAS_APP_SQL_CONNECTION_STRING`); that relative-path mount meant the
+  file was **not** clone-free as written — a `curl`-ed copy would break without
+  the second file. **Phase 1 has already converted this** to an inline
+  `configs.pg_init` block (see Progress), so the file is now clone-free as
+  committed.
 - **`docker/README.md`** documents the monolith compose + `docker run` forms and
   a full env-var reference (used by maintainers, not newcomers).
 - **`mkdocs/docs/admin/monolith.md`** has a "Quick start with Docker Compose"
@@ -113,8 +115,8 @@ New `getting-started.md` outline:
 
 ### 2. Make the compose file genuinely clone-free (single source of truth)
 
-Convert `docker/docker-compose.monolith.yaml` to use an **inline Compose
-`configs`** block for the DB-init SQL instead of bind-mounting
+**Done (Phase 1).** `docker/docker-compose.monolith.yaml` now uses an **inline
+Compose `configs`** block for the DB-init SQL instead of bind-mounting
 `./init-databases.sh`. This removes the external-file dependency, so the exact
 same file works whether it's cloned, `curl`-ed, or copy-pasted — one source of
 truth for both in-repo use and the doc.
@@ -160,11 +162,17 @@ Notes:
   been removed; the init SQL now lives inline in the compose `configs.pg_init`
   block (see Resolved Decisions #2).
 
-The compose file remains referenced by `docker/README.md` and
-`admin/monolith.md`. The inline `configs.content` floor (Compose v2.23.1+)
-applies to every invocation of the shared file, so both docs must gain a
-one-line "requires Docker Compose v2.23.1+" prerequisite note in their
-quick-start sections — they are not unaffected by this edit.
+The compose file is invoked from more than the two docs this plan updates:
+`docker/README.md` and `admin/monolith.md` are the maintained references, but
+`git grep docker-compose.monolith` also turns up
+`mkdocs/docs/blog/posts/2026-06-13-one-binary-whole-stack.md:26`, a dated blog
+post running the same `docker compose -f docker-compose.monolith.yaml up`
+against the shared file. The inline `configs.content` floor (Compose
+v2.23.1+) applies to every invocation of the shared file, so `docker/README.md`
+and `admin/monolith.md` must gain a one-line "requires Docker Compose
+v2.23.1+" prerequisite note in their quick-start sections. The blog post is
+point-in-time content and is intentionally left as-is (not added to Files to
+Modify) — it isn't retroactively edited for later infra changes.
 
 ### 3. Move dev/build-from-source content into Development docs
 
@@ -296,7 +304,10 @@ This task *is* documentation. Pages touched:
 maintainer references — they keep referencing the same compose file — but each
 picks up a one-line "requires Docker Compose v2.23.1+" prerequisite note in its
 quick-start section, since the inline `configs` edit raises the version floor
-for every invocation of the shared file.
+for every invocation of the shared file. A third invoker,
+`mkdocs/docs/blog/posts/2026-06-13-one-binary-whole-stack.md`, also runs the
+compose file but is dated point-in-time content and is left unedited (not in
+Files to Modify).
 
 ## Testing Strategy
 
