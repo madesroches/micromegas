@@ -76,6 +76,12 @@ The three call sites above do not use it.
 All six binary crates depend on `micromegas` (the `public` facade) with the
 `server` feature.
 
+Scope note (resolved): the issue names `telemetry-admin-cli` as re-declaring the
+grace-period arg. No such crate exists in the workspace — this is a stale name for
+the maintenance daemon `telemetry-maintenance-srv`
+(`telemetry-maintenance-srv/src/main.rs:24-30`), which is already in the
+six-binary set above. No extra target.
+
 ### Object-cache-srv inline validation
 
 `object-cache-srv/src/object_cache_srv.rs:38-100` holds ~60 lines of numeric-knob
@@ -90,7 +96,7 @@ validation is not grouped with the type.
 **inside the `handle_query` request handler** — re-read and re-parsed on every
 gateway request. This is the only `std::env::var("MICROMEGAS_*")` found on a
 request/hot path. The `http-gateway` binary
-(`rust/http-gateway/src/http_gateway.rs`) already builds `HeaderForwardingConfig`
+(`rust/http-gateway/src/http_gateway_srv.rs`) already builds `HeaderForwardingConfig`
 at startup and layers it as an `Extension`; `flight_url` should be resolved the
 same way.
 
@@ -391,8 +397,9 @@ impl GatewayConfig {
 11. Move object-cache-srv numeric validation into `Cli::validate`; call it from main.
 
 ### Phase 6 — hot-path fix
-12. Add `GatewayConfig` to `http_gateway.rs`; build it in the `http-gateway` main;
-    thread it through `handle_query`; remove the per-request env read at line 279.
+12. Add `GatewayConfig` to `http_gateway.rs`; build it in `http_gateway_srv.rs` (the
+    `http-gateway` binary's main); thread it through `handle_query`; remove the
+    per-request env read at line 279.
 
 ### Phase 7 — verify
 13. `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `cargo test`,
@@ -410,7 +417,7 @@ Modify:
 - `rust/ingestion/src/lib.rs`, `rust/ingestion/src/web_ingestion_service.rs`
 - `rust/analytics/src/lakehouse/lakehouse_context.rs`, `.../static_tables_configurator.rs`
 - `rust/public/src/lib.rs`, `rust/public/Cargo.toml`, `rust/public/src/servers/http_gateway.rs`
-- `rust/http-gateway/src/http_gateway.rs`
+- `rust/http-gateway/src/http_gateway_srv.rs`
 - `rust/analytics-web-srv/src/web_server.rs`, `.../main.rs`, `.../maps.rs`
 - `rust/monolith/src/main.rs`
 - `rust/telemetry-ingestion-srv/src/main.rs`
@@ -481,8 +488,3 @@ Modify:
    (`--flightsql-url`, env-backed) for consistency with other binaries, or stay
    env-only? Plan assumes env-only (behavior-preserving); a flag is a small add if
    desired.
-2. Scope note (resolved): the issue names `telemetry-admin-cli` as re-declaring the
-   grace-period arg. No such crate exists in the workspace — this is a stale name for
-   the maintenance daemon `telemetry-maintenance-srv`
-   (`telemetry-maintenance-srv/src/main.rs:25-30`), which is already in the six-binary
-   set above. No extra target.
