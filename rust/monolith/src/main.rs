@@ -18,12 +18,13 @@
 static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 use analytics_web_srv::app_db;
-use analytics_web_srv::web_server::{WebServerConfig, run_web_server};
+use analytics_web_srv::web_server::{WebCliArgs, WebServerConfig, run_web_server};
 use anyhow::{Context, Result};
 use clap::Parser;
 use micromegas::analytics::lakehouse::lakehouse_context::LakehouseContext;
 use micromegas::analytics::lakehouse::view_factory::default_view_factory;
 use micromegas::auth::default_provider::provider_with_prefix;
+use micromegas::ingestion::data_lake_config::DataLakeConfig;
 use micromegas::ingestion::remote_data_lake::connect_to_remote_data_lake;
 use micromegas::micromegas_main;
 use micromegas::servers::flight_sql_server::FlightSqlServer;
@@ -35,7 +36,6 @@ use std::collections::HashSet;
 use std::fmt;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::Duration;
 use tokio::task::JoinSet;
 
 // ---------------------------------------------------------------------------
@@ -149,14 +149,6 @@ struct Cli {
     #[clap(long)]
     disable_ingestion_auth: bool,
 
-    /// Seconds to wait for in-flight requests to complete after shutdown signal
-    #[clap(
-        long,
-        default_value = "25",
-        env = "MICROMEGAS_SHUTDOWN_GRACE_PERIOD_SECONDS"
-    )]
-    shutdown_grace_period_seconds: u64,
-
     /// Opt out of auto-seeding the local FlightSQL data source in the web app DB
     #[clap(long)]
     no_seed_data_source: bool,
@@ -164,6 +156,9 @@ struct Cli {
     /// Delete lake data older than this many days (retention horizon, maintenance role)
     #[clap(long, default_value = "90", env = "MICROMEGAS_RETENTION_DAYS")]
     retention_days: i32,
+
+    #[command(flatten)]
+    common: micromegas::config::CommonServerArgs,
 }
 
 // ---------------------------------------------------------------------------
@@ -174,18 +169,15 @@ struct Cli {
 async fn main() -> Result<()> {
     let args = Cli::parse();
     let roles = Roles::parse(&args.roles)?;
-    let grace = Duration::from_secs(args.shutdown_grace_period_seconds);
+    let grace = args.common.grace();
 
     info!("Starting micromegas-monolith with roles: {roles}");
 
     // Build shared data lake for lake-backed roles
     let lakehouse: Option<Arc<LakehouseContext>> = if roles.needs_lakehouse() {
-        let connection_string = std::env::var("MICROMEGAS_SQL_CONNECTION_STRING")
-            .with_context(|| "reading MICROMEGAS_SQL_CONNECTION_STRING")?;
-        let object_store_uri = std::env::var("MICROMEGAS_OBJECT_STORE_URI")
-            .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
+        let cfg = DataLakeConfig::from_env()?;
         info!("Connecting to data lake (migrate_db + migrate_lakehouse)");
-        let lake = connect_to_remote_data_lake(&connection_string, &object_store_uri)
+        let lake = connect_to_remote_data_lake(&cfg.sql_connection_string, &cfg.object_store_uri)
             .await
             .with_context(|| "connecting to data lake")?;
         let lh = LakehouseContext::from_connection(Arc::new(lake))
@@ -295,48 +287,23 @@ async fn main() -> Result<()> {
 
     // ── Web ────────────────────────────────────────────────────────────────
     if roles.web {
-        let cors_origin = std::env::var("MICROMEGAS_WEB_CORS_ORIGIN")
-            .context("MICROMEGAS_WEB_CORS_ORIGIN environment variable not set")?;
-        let base_path_raw = std::env::var("MICROMEGAS_BASE_PATH")
-            .context("MICROMEGAS_BASE_PATH environment variable not set")?;
-        let base_path = {
-            let p = base_path_raw.trim_end_matches('/').to_string();
-            if !p.is_empty() && !p.starts_with('/') {
-                anyhow::bail!(
-                    "MICROMEGAS_BASE_PATH must start with '/' (e.g., '/', '/micromegas')"
-                );
-            }
-            p
-        };
-        let app_db_string = std::env::var("MICROMEGAS_APP_SQL_CONNECTION_STRING")
-            .context("MICROMEGAS_APP_SQL_CONNECTION_STRING environment variable not set")?;
-        let maps_uri = std::env::var("MICROMEGAS_MAPS_OBJECT_STORE_URI").ok();
-        let max_upload_bytes = std::env::var("MICROMEGAS_MAPS_MAX_UPLOAD_BYTES")
-            .ok()
-            .and_then(|v| v.parse::<usize>().ok());
+        let web_config = WebServerConfig::from_cli_and_env(WebCliArgs {
+            port: args.port,
+            frontend_dir: args.frontend_dir.clone(),
+            disable_auth: args.disable_auth,
+            admin_var_name: analytics_admin_var,
+        })?;
 
         // Auto-seed the local FlightSQL data source when web + flightsql are both enabled
         if roles.flightsql
             && !args.no_seed_data_source
-            && let Err(e) = seed_local_data_source(&app_db_string).await
+            && let Err(e) = seed_local_data_source(&web_config.app_db_string).await
         {
             warn!("Failed to seed local FlightSQL data source: {e}");
         }
 
         let shutdown = fanout.subscribe();
         let grace_c = grace;
-        let admin_var = analytics_admin_var;
-        let web_config = WebServerConfig {
-            port: args.port,
-            frontend_dir: args.frontend_dir.clone(),
-            base_path,
-            cors_origin,
-            app_db_string,
-            maps_uri,
-            max_upload_bytes,
-            disable_auth: args.disable_auth,
-            admin_var_name: admin_var,
-        };
 
         join_set.spawn(async move { run_web_server(web_config, shutdown, grace_c).await });
     }

@@ -79,6 +79,7 @@ dependencies = [
  "rsa",
  "serde",
  "serde_json",
+ "serial_test",
  "sqlx",
  "tempfile",
  "tikv-jemallocator",
@@ -86,7 +87,6 @@ dependencies = [
  "tokio",
  "tower",
  "tower-http",
- "url",
 ]
 
 [[package]]
@@ -2924,6 +2924,7 @@ version = "0.28.0"
 dependencies = [
  "anyhow",
  "clap",
+ "http 1.4.2",
  "micromegas",
  "tikv-jemallocator",
  "tokio",
@@ -3638,6 +3639,7 @@ dependencies = [
  "axum 0.8.9",
  "bytes",
  "chrono",
+ "clap",
  "datafusion",
  "futures",
  "http 1.4.2",
@@ -3781,6 +3783,7 @@ dependencies = [
  "micromegas-telemetry",
  "micromegas-tracing",
  "object_store",
+ "serial_test",
  "sqlx",
  "thiserror 2.0.18",
  "tokio",
@@ -3851,7 +3854,6 @@ dependencies = [
  "tikv-jemallocator",
  "tokio",
  "tokio-stream",
- "url",
 ]
 
 [[package]]

@@ -6,7 +6,6 @@ use clap::Parser;
 use micromegas::micromegas_main;
 use micromegas::servers::flight_sql_server::FlightSqlServer;
 use std::net::SocketAddr;
-use std::time::Duration;
 
 #[derive(Parser, Debug)]
 #[clap(name = "Micromegas FlightSQL server")]
@@ -15,25 +14,19 @@ struct Cli {
     #[clap(long)]
     disable_auth: bool,
 
-    /// Seconds to wait for in-flight RPCs to complete after SIGTERM
-    #[clap(
-        long,
-        default_value = "25",
-        env = "MICROMEGAS_SHUTDOWN_GRACE_PERIOD_SECONDS"
-    )]
-    shutdown_grace_period_seconds: u64,
-
     /// Optional address for the HTTP health/readiness sidecar (e.g. 127.0.0.1:8082)
     #[clap(long)]
     health_listen_addr: Option<SocketAddr>,
+
+    #[command(flatten)]
+    common: micromegas::config::CommonServerArgs,
 }
 
 #[micromegas_main(interop_max_level = "info", max_level_override = "debug")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Cli::parse();
 
-    let mut builder = FlightSqlServer::builder()
-        .with_shutdown_grace(Duration::from_secs(args.shutdown_grace_period_seconds));
+    let mut builder = FlightSqlServer::builder().with_shutdown_grace(args.common.grace());
 
     if !args.disable_auth {
         builder = builder.with_default_auth();

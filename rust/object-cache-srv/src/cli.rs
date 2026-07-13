@@ -1,3 +1,4 @@
+use crate::handlers::{permits_for_bytes, stream_window_bytes};
 use anyhow::{Result, anyhow};
 use clap::Parser;
 use micromegas_object_cache::range_cache::{
@@ -62,12 +63,8 @@ pub struct Cli {
     #[clap(long)]
     pub disable_auth: bool,
 
-    #[clap(
-        long,
-        default_value = "25",
-        env = "MICROMEGAS_SHUTDOWN_GRACE_PERIOD_SECONDS"
-    )]
-    pub shutdown_grace_period_seconds: u64,
+    #[command(flatten)]
+    pub common: micromegas::config::CommonServerArgs,
 
     /// Total number of origin GETs allowed to run concurrently.
     #[clap(
@@ -172,4 +169,72 @@ pub fn validate_write_tuning(flushers: usize, write_buffer_mb: usize) -> Result<
         ));
     }
     Ok(())
+}
+
+impl Cli {
+    /// Validate all numeric knobs. Fatal-at-startup config errors, kept next to
+    /// the type and unit-testable from the integration-test crate (like
+    /// `validate_write_tuning`).
+    pub fn validate(&self) -> Result<()> {
+        // `block_size` is the divisor for block-index math (`start / block_size`);
+        // a value of 0 would panic on the first range read. Reject it at the startup
+        // boundary as a fatal config error rather than letting it reach the cache.
+        if self.block_size == 0 {
+            return Err(anyhow!(
+                "MICROMEGAS_OBJECT_CACHE_BLOCK_SIZE must be greater than 0"
+            ));
+        }
+
+        if self.max_concurrent_fetches == 0 {
+            return Err(anyhow!(
+                "MICROMEGAS_OBJECT_CACHE_MAX_CONCURRENT_FETCHES must be greater than 0"
+            ));
+        }
+        // `FetchScheduler` computes `total - demand_reserved` as a plain
+        // subtraction; a misconfigured pair would panic deep inside the cache
+        // instead of at startup.
+        if self.demand_reserved_fetches >= self.max_concurrent_fetches {
+            return Err(anyhow!(
+                "MICROMEGAS_OBJECT_CACHE_DEMAND_RESERVED_FETCHES ({}) must be less than \
+                 MICROMEGAS_OBJECT_CACHE_MAX_CONCURRENT_FETCHES ({})",
+                self.demand_reserved_fetches,
+                self.max_concurrent_fetches
+            ));
+        }
+        // A zero budget would make every non-empty data request hang forever
+        // acquiring its mem_permits charge while /health and /ready still pass;
+        // fail at startup instead.
+        if self.memory_budget_mb == 0 {
+            return Err(anyhow!(
+                "MICROMEGAS_OBJECT_CACHE_MEMORY_BUDGET_MB must be greater than 0"
+            ));
+        }
+        // A large streaming read still charges a full window's worth of permits
+        // (`stream_window_bytes`, capped rather than rejected outright — see
+        // `handlers::stream_window_bytes`), and `Semaphore::acquire_many_owned`
+        // never completes (and never errors) if the requested count exceeds the
+        // semaphore's total permits. Without this floor, a deployment configured
+        // with a smaller `--memory-budget-mb` would hang every large read
+        // instead of failing fast here at startup.
+        let window_mb = permits_for_bytes(stream_window_bytes(self.block_size));
+        if self.memory_budget_mb < window_mb {
+            return Err(anyhow!(
+                "MICROMEGAS_OBJECT_CACHE_MEMORY_BUDGET_MB ({}) must be at least {window_mb} MiB \
+                 (2 * DEMAND_WINDOW_BLOCKS * block_size, the largest charge a single streaming \
+                 request can make), or every large read would hang acquiring mem_permits",
+                self.memory_budget_mb
+            ));
+        }
+        if self.prefetch_queue_capacity == 0 {
+            return Err(anyhow!(
+                "MICROMEGAS_OBJECT_CACHE_PREFETCH_QUEUE_CAPACITY must be greater than 0"
+            ));
+        }
+        if self.prefetch_worker_concurrency == 0 {
+            return Err(anyhow!(
+                "MICROMEGAS_OBJECT_CACHE_PREFETCH_WORKER_CONCURRENCY must be greater than 0"
+            ));
+        }
+        validate_write_tuning(self.flushers, self.write_buffer_mb)
+    }
 }

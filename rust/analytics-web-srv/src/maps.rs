@@ -20,6 +20,7 @@ use axum::{
 use chrono::{DateTime, Utc};
 use flate2::{Compression, write::GzEncoder};
 use futures::StreamExt;
+use micromegas::telemetry::blob_storage::parse_object_store_url;
 use micromegas::tracing::prelude::*;
 use object_store::{ObjectStore, ObjectStoreExt, path::Path as ObjectPath, prefix::PrefixStore};
 use serde::Serialize;
@@ -91,10 +92,8 @@ pub fn connect_maps_store(uri: Option<&str>) -> Result<Option<Arc<dyn ObjectStor
     let Some(uri) = uri else {
         return Ok(None);
     };
-    let url = url::Url::parse(uri).context("parsing MICROMEGAS_MAPS_OBJECT_STORE_URI")?;
     let (store, prefix) =
-        object_store::parse_url_opts(&url, std::env::vars().map(|(k, v)| (k.to_lowercase(), v)))
-            .context("connecting to MICROMEGAS_MAPS_OBJECT_STORE_URI")?;
+        parse_object_store_url(uri).context("connecting to MICROMEGAS_MAPS_OBJECT_STORE_URI")?;
     Ok(Some(Arc::new(PrefixStore::new(store, prefix))))
 }
 
