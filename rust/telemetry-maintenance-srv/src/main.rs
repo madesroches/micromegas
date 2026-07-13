@@ -11,7 +11,6 @@ use micromegas::analytics::lakehouse::view_factory::default_view_factory;
 use micromegas::micromegas_main;
 use micromegas::servers::maintenance::{daemon, get_global_views_with_update_group};
 use micromegas::servers::shutdown::wait_for_sigterm;
-use std::time::Duration;
 
 #[derive(Parser, Debug)]
 #[clap(name = "Micromegas Telemetry Maintenance")]
@@ -21,17 +20,12 @@ use std::time::Duration;
     author
 )]
 struct Cli {
-    /// Seconds to wait for in-flight tasks to complete after SIGTERM
-    #[clap(
-        long,
-        default_value = "25",
-        env = "MICROMEGAS_SHUTDOWN_GRACE_PERIOD_SECONDS"
-    )]
-    shutdown_grace_period_seconds: u64,
-
     /// Delete lake data older than this many days (retention horizon)
     #[clap(long, default_value = "90", env = "MICROMEGAS_RETENTION_DAYS")]
     retention_days: i32,
+
+    #[command(flatten)]
+    common: micromegas::config::CommonServerArgs,
 }
 
 #[micromegas_main(interop_max_level = "info")]
@@ -42,7 +36,7 @@ async fn main() -> Result<()> {
     let data_lake = lakehouse.lake().clone();
     let view_factory = default_view_factory(lakehouse.runtime().clone(), data_lake.clone()).await?;
     let views_to_update = get_global_views_with_update_group(&view_factory);
-    let grace = Duration::from_secs(args.shutdown_grace_period_seconds);
+    let grace = args.common.grace();
     daemon(
         lakehouse,
         views_to_update,

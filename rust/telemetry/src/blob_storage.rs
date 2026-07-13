@@ -5,6 +5,17 @@ use object_store::prefix::PrefixStore;
 use object_store::{ObjectStore, ObjectStoreExt, path::Path};
 use std::sync::Arc;
 
+/// Parses an object-store URI into the raw store + root prefix, feeding
+/// `object_store` the process env vars lowercased (its expected option keys).
+/// The single home for the `parse_url_opts(url, env-vars-lowercased)` idiom.
+pub fn parse_object_store_url(uri: &str) -> Result<(Arc<dyn ObjectStore>, Path)> {
+    let (store, prefix) = object_store::parse_url_opts(
+        &url::Url::parse(uri)?,
+        std::env::vars().map(|(k, v)| (k.to_lowercase(), v)),
+    )?;
+    Ok((Arc::new(store), prefix))
+}
+
 /// A client for interacting with blob storage.
 ///
 /// This struct wraps an `ObjectStore` and prefixes all paths with a root path,
@@ -34,11 +45,7 @@ impl BlobStorage {
     /// write-time cache warm the same way `PrefixStore` keys a demand read) don't
     /// have to re-parse the URL or duplicate the env-var lowercasing.
     pub fn parse_url_opts(object_store_url: &str) -> Result<(Arc<dyn ObjectStore>, Path)> {
-        let (blob_store, blob_store_root) = object_store::parse_url_opts(
-            &url::Url::parse(object_store_url)?,
-            std::env::vars().map(|(k, v)| (k.to_lowercase(), v)),
-        )?;
-        Ok((Arc::new(blob_store), blob_store_root))
+        parse_object_store_url(object_store_url)
     }
 
     /// Connects to a blob storage service and applies a layer to the raw store before

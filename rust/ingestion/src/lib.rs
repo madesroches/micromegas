@@ -3,6 +3,7 @@
 // crate-specific lint exceptions:
 #![allow(missing_docs, clippy::missing_errors_doc)]
 
+pub mod data_lake_config;
 pub mod data_lake_connection;
 pub mod remote_data_lake;
 pub mod sql_migration;

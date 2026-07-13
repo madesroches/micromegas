@@ -52,6 +52,53 @@ pub struct WebServerConfig {
     pub admin_var_name: String,
 }
 
+/// CLI-derived inputs the web server needs; the env-derived fields are read
+/// by `from_cli_and_env`. A named struct (not positional args) so the two
+/// String fields can't be transposed.
+pub struct WebCliArgs {
+    pub port: u16,
+    pub frontend_dir: String,
+    pub disable_auth: bool,
+    pub admin_var_name: String,
+}
+
+impl WebServerConfig {
+    /// Read + validate the five web env vars and combine with CLI-derived
+    /// inputs. Single source of the base-path `must start with '/'` rule.
+    pub fn from_cli_and_env(cli: WebCliArgs) -> Result<Self> {
+        let cors_origin = std::env::var("MICROMEGAS_WEB_CORS_ORIGIN")
+            .context("MICROMEGAS_WEB_CORS_ORIGIN environment variable not set")?;
+        let base_path = read_base_path()?;
+        let app_db_string = std::env::var("MICROMEGAS_APP_SQL_CONNECTION_STRING")
+            .context("MICROMEGAS_APP_SQL_CONNECTION_STRING environment variable not set")?;
+        let maps_uri = std::env::var("MICROMEGAS_MAPS_OBJECT_STORE_URI").ok();
+        let max_upload_bytes = std::env::var("MICROMEGAS_MAPS_MAX_UPLOAD_BYTES")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok());
+        Ok(Self {
+            port: cli.port,
+            frontend_dir: cli.frontend_dir,
+            base_path,
+            cors_origin,
+            app_db_string,
+            maps_uri,
+            max_upload_bytes,
+            disable_auth: cli.disable_auth,
+            admin_var_name: cli.admin_var_name,
+        })
+    }
+}
+
+fn read_base_path() -> Result<String> {
+    let raw = std::env::var("MICROMEGAS_BASE_PATH")
+        .context("MICROMEGAS_BASE_PATH environment variable not set")?;
+    let base_path = raw.trim_end_matches('/').to_string();
+    if !base_path.is_empty() && !base_path.starts_with('/') {
+        anyhow::bail!("MICROMEGAS_BASE_PATH must start with '/' (e.g., '/', '/micromegas')");
+    }
+    Ok(base_path)
+}
+
 // ---------------------------------------------------------------------------
 // Auth setup
 // ---------------------------------------------------------------------------

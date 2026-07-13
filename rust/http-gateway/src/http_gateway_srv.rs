@@ -18,17 +18,22 @@ use micromegas::{axum, tracing::info};
 struct Cli {
     #[clap(long, default_value = "0.0.0.0:3000")]
     listen_endpoint_http: SocketAddr,
+
+    /// Upstream FlightSQL endpoint the gateway proxies to.
+    #[clap(long, env = "MICROMEGAS_FLIGHTSQL_URL")]
+    flightsql_url: http::Uri,
 }
 
 #[micromegas_main]
 async fn main() -> Result<()> {
     let args = Cli::parse();
 
-    // Load header forwarding configuration
-    let header_config = Arc::new(servers::http_gateway::HeaderForwardingConfig::from_env()?);
+    let gateway_config = Arc::new(servers::http_gateway::GatewayConfig::new(
+        args.flightsql_url,
+    )?);
 
     let app = servers::http_gateway::register_routes(Router::new())
-        .layer(Extension(header_config))
+        .layer(Extension(gateway_config))
         .into_make_service_with_connect_info::<SocketAddr>();
 
     let listener = tokio::net::TcpListener::bind(args.listen_endpoint_http).await?;

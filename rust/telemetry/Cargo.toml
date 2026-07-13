@@ -29,3 +29,8 @@ futures = { workspace = true, optional = true }
 object_store = { workspace = true, optional = true }
 sqlx = { workspace = true, optional = true }
 url = { workspace = true, optional = true }
+
+[[test]]
+name = "blob_storage_tests"
+path = "tests/blob_storage_tests.rs"
+required-features = ["server"]

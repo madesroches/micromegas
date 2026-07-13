@@ -1,3 +1,4 @@
+use crate::data_lake_config::DataLakeConfig;
 use crate::data_lake_connection::{DataLakeConnection, connect_to_data_lake};
 use crate::remote_data_lake::migrate_db;
 use anyhow::Context;
@@ -116,11 +117,8 @@ impl WebIngestionService {
     /// connects to the data lake, runs ingestion migrations, and returns
     /// a ready-to-use service.
     pub async fn from_env() -> anyhow::Result<Arc<Self>> {
-        let connection_string = std::env::var("MICROMEGAS_SQL_CONNECTION_STRING")
-            .with_context(|| "reading MICROMEGAS_SQL_CONNECTION_STRING")?;
-        let object_store_uri = std::env::var("MICROMEGAS_OBJECT_STORE_URI")
-            .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
-        let lake = connect_to_data_lake(&connection_string, &object_store_uri).await?;
+        let cfg = DataLakeConfig::from_env()?;
+        let lake = connect_to_data_lake(&cfg.sql_connection_string, &cfg.object_store_uri).await?;
         migrate_db(lake.db_pool.clone())
             .await
             .with_context(|| "migrate_db")?;

@@ -13,14 +13,14 @@
 #[global_allocator]
 static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::Parser;
+use micromegas::ingestion::data_lake_config::DataLakeConfig;
 use micromegas::ingestion::remote_data_lake::connect_to_remote_data_lake;
 use micromegas::micromegas_main;
 use micromegas::servers::ingestion::serve_ingestion;
 use micromegas::tracing::prelude::*;
 use std::net::SocketAddr;
-use std::time::Duration;
 
 #[derive(Parser, Debug)]
 #[clap(name = "Telemetry Ingestion Server")]
@@ -33,23 +33,16 @@ struct Cli {
     #[clap(long)]
     disable_auth: bool,
 
-    /// Seconds to wait for in-flight requests to complete after SIGTERM
-    #[clap(
-        long,
-        default_value = "25",
-        env = "MICROMEGAS_SHUTDOWN_GRACE_PERIOD_SECONDS"
-    )]
-    shutdown_grace_period_seconds: u64,
+    #[command(flatten)]
+    common: micromegas::config::CommonServerArgs,
 }
 
 #[micromegas_main(interop_max_level = "info")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Cli::parse();
-    let connection_string = std::env::var("MICROMEGAS_SQL_CONNECTION_STRING")
-        .with_context(|| "reading MICROMEGAS_SQL_CONNECTION_STRING")?;
-    let object_store_uri = std::env::var("MICROMEGAS_OBJECT_STORE_URI")
-        .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
-    let data_lake = connect_to_remote_data_lake(&connection_string, &object_store_uri).await?;
+    let cfg = DataLakeConfig::from_env()?;
+    let data_lake =
+        connect_to_remote_data_lake(&cfg.sql_connection_string, &cfg.object_store_uri).await?;
 
     let auth_provider = if args.disable_auth {
         info!("Authentication disabled (--disable-auth)");
@@ -66,7 +59,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
-    let grace = Duration::from_secs(args.shutdown_grace_period_seconds);
+    let grace = args.common.grace();
     serve_ingestion(
         args.listen_endpoint_http,
         data_lake,

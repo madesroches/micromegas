@@ -29,7 +29,6 @@ serde_json.workspace = true
 sysinfo.workspace = true
 tokio.workspace = true
 tokio-stream.workspace = true
-url.workspace = true
 
 [target.'cfg(not(target_os = "windows"))'.dependencies]
 tikv-jemallocator.workspace = true

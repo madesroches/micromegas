@@ -101,6 +101,25 @@ impl HeaderForwardingConfig {
     }
 }
 
+/// Combines the CLI-derived FlightSQL URL with the env-derived header config.
+/// Built once at startup and layered as an `Extension`, so `handle_query`
+/// never reads the environment on the request path.
+#[derive(Debug, Clone)]
+pub struct GatewayConfig {
+    pub flight_url: Uri,
+    pub headers: HeaderForwardingConfig,
+}
+
+impl GatewayConfig {
+    /// Combine the CLI-derived FlightSQL URL with the env-derived header config.
+    pub fn new(flight_url: Uri) -> Result<Self> {
+        Ok(Self {
+            flight_url,
+            headers: HeaderForwardingConfig::from_env()?,
+        })
+    }
+}
+
 #[derive(Error, Debug)]
 pub enum GatewayError {
     #[error("Bad request: {0}")]
@@ -195,7 +214,7 @@ pub fn build_origin_metadata(
 }
 
 pub async fn handle_query(
-    Extension(config): Extension<Arc<HeaderForwardingConfig>>,
+    Extension(config): Extension<Arc<GatewayConfig>>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     Json(request): Json<QueryRequest>,
@@ -275,14 +294,8 @@ pub async fn handle_query(
         request_id_header, client_type_header, time_range, sql
     );
 
-    // Connect to FlightSQL backend
-    let flight_url = std::env::var("MICROMEGAS_FLIGHTSQL_URL")
-        .map_err(|_| GatewayError::Internal("MICROMEGAS_FLIGHTSQL_URL not configured".to_string()))?
-        .parse::<Uri>()
-        .map_err(|e| GatewayError::Internal(format!("Invalid FlightSQL URL: {e}")))?;
-
     let tls_config = ClientTlsConfig::new().with_native_roots();
-    let channel = Channel::builder(flight_url)
+    let channel = Channel::builder(config.flight_url.clone())
         .tls_config(tls_config)
         .map_err(|e| GatewayError::Internal(format!("TLS config error: {e}")))?
         .connect()
@@ -319,7 +332,7 @@ pub async fn handle_query(
             continue; // Origin metadata takes precedence
         }
 
-        if config.should_forward(header_name)
+        if config.headers.should_forward(header_name)
             && let Ok(value_str) = value.to_str()
         {
             client.inner_mut().set_header(header_name, value_str);

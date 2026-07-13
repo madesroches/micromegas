@@ -12,92 +12,27 @@ use axum::{
 use clap::Parser;
 use micromegas::micromegas_main;
 use micromegas::servers::shutdown::{serve_axum_with_graceful_shutdown, wait_for_sigterm};
+use micromegas::telemetry::blob_storage::parse_object_store_url;
 use micromegas_auth::api_key::{ApiKeyAuthProvider, parse_key_ring};
 use micromegas_auth::axum::auth_middleware;
 use micromegas_auth::types::AuthProvider;
 use micromegas_object_cache::foyer_backend::{FoyerBackend, WriteTuning};
 use micromegas_object_cache::range_cache::RangeCache;
 use micromegas_object_cache_srv::app_state::AppState;
-use micromegas_object_cache_srv::cli::{self, Cli};
+use micromegas_object_cache_srv::cli::Cli;
 use micromegas_object_cache_srv::handlers::{
-    get_range_handler, head_handler, permits_for_bytes, post_ranges_handler, prefetch_handler,
-    stream_window_bytes,
+    get_range_handler, head_handler, post_ranges_handler, prefetch_handler,
 };
 use micromegas_object_cache_srv::prefetch_queue::spawn_prefetch_worker;
 use micromegas_tracing::prelude::*;
-use object_store::parse_url_opts;
 use object_store::prefix::PrefixStore;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::Duration;
 
 #[micromegas_main(interop_max_level = "info")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Cli::parse();
-
-    // `block_size` is the divisor for block-index math (`start / block_size`);
-    // a value of 0 would panic on the first range read. Reject it at the startup
-    // boundary as a fatal config error rather than letting it reach the cache.
-    if args.block_size == 0 {
-        return Err(anyhow!("MICROMEGAS_OBJECT_CACHE_BLOCK_SIZE must be greater than 0").into());
-    }
-
-    if args.max_concurrent_fetches == 0 {
-        return Err(anyhow!(
-            "MICROMEGAS_OBJECT_CACHE_MAX_CONCURRENT_FETCHES must be greater than 0"
-        )
-        .into());
-    }
-    // `FetchScheduler` computes `total - demand_reserved` as a plain
-    // subtraction; a misconfigured pair would panic deep inside the cache
-    // instead of at startup.
-    if args.demand_reserved_fetches >= args.max_concurrent_fetches {
-        return Err(anyhow!(
-            "MICROMEGAS_OBJECT_CACHE_DEMAND_RESERVED_FETCHES ({}) must be less than \
-             MICROMEGAS_OBJECT_CACHE_MAX_CONCURRENT_FETCHES ({})",
-            args.demand_reserved_fetches,
-            args.max_concurrent_fetches
-        )
-        .into());
-    }
-    // A zero budget would make every non-empty data request hang forever
-    // acquiring its mem_permits charge while /health and /ready still pass;
-    // fail at startup instead.
-    if args.memory_budget_mb == 0 {
-        return Err(
-            anyhow!("MICROMEGAS_OBJECT_CACHE_MEMORY_BUDGET_MB must be greater than 0").into(),
-        );
-    }
-    // A large streaming read still charges a full window's worth of permits
-    // (`stream_window_bytes`, capped rather than rejected outright — see
-    // `handlers::stream_window_bytes`), and `Semaphore::acquire_many_owned`
-    // never completes (and never errors) if the requested count exceeds the
-    // semaphore's total permits. Without this floor, a deployment configured
-    // with a smaller `--memory-budget-mb` would hang every large read
-    // instead of failing fast here at startup.
-    let window_mb = permits_for_bytes(stream_window_bytes(args.block_size));
-    if args.memory_budget_mb < window_mb {
-        return Err(anyhow!(
-            "MICROMEGAS_OBJECT_CACHE_MEMORY_BUDGET_MB ({}) must be at least {window_mb} MiB \
-             (2 * DEMAND_WINDOW_BLOCKS * block_size, the largest charge a single streaming \
-             request can make), or every large read would hang acquiring mem_permits",
-            args.memory_budget_mb
-        )
-        .into());
-    }
-    if args.prefetch_queue_capacity == 0 {
-        return Err(anyhow!(
-            "MICROMEGAS_OBJECT_CACHE_PREFETCH_QUEUE_CAPACITY must be greater than 0"
-        )
-        .into());
-    }
-    if args.prefetch_worker_concurrency == 0 {
-        return Err(anyhow!(
-            "MICROMEGAS_OBJECT_CACHE_PREFETCH_WORKER_CONCURRENCY must be greater than 0"
-        )
-        .into());
-    }
-    cli::validate_write_tuning(args.flushers, args.write_buffer_mb)?;
+    args.validate()?;
 
     let ns = if args.namespace.is_empty() {
         // Strip any `scheme://` prefix so the namespace is stable regardless of
@@ -110,11 +45,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         args.namespace.clone()
     };
 
-    let (origin_store, prefix) = parse_url_opts(
-        &url::Url::parse(&args.origin_uri).with_context(|| "parsing origin URI")?,
-        std::env::vars().map(|(k, v)| (k.to_lowercase(), v)),
-    )
-    .with_context(|| "building origin object store")?;
+    let (origin_store, prefix) =
+        parse_object_store_url(&args.origin_uri).with_context(|| "building origin object store")?;
     // ORIGIN_URI must be bucket-only (no path component): the client wraps the
     // cache layer INSIDE its PrefixStore, so every request key already carries the
     // lake-root prefix (e.g. lakeroot/blocks/xyz). If ORIGIN_URI also carried that
@@ -262,7 +194,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!("object-cache-srv listening on {}", args.listen);
 
-    let grace = Duration::from_secs(args.shutdown_grace_period_seconds);
+    let grace = args.common.grace();
     serve_axum_with_graceful_shutdown(
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),
