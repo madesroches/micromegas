@@ -249,9 +249,13 @@ impl foyer::EventListener for EvictionListener {
 ```
 
 **Hot-path constraint**: `on_leave` runs synchronously inside foyer's insert path, possibly under a
-shard lock. It must be allocation-free and non-blocking — satisfied by precomputed
-`&'static PropertySet`s (array lookup, no intern-lock), `Instant::elapsed`, and the thread-local
-`imetric!`/`fmetric!` queues. No async/IO.
+shard lock. `imetric!`/`fmetric!` record into a process-global `Mutex<MetricsStream>`
+(`dispatch.rs`), not a thread-local queue — but that global lock is thread-safe from *any* thread,
+including foyer-internal evict/flush threads that never call `init_thread_stream`, which is exactly
+what makes emitting from `on_leave` correct here. Precomputed `&'static PropertySet`s (array lookup,
+no intern-lock) and `Instant::elapsed` keep the call allocation-free, but it still takes the global
+metrics mutex — brief contention shared with the existing per-block hot path in `fetch.rs` — and can
+occasionally trigger a buffer flush (sink write) when the metrics buffer fills. No async/IO.
 
 ### 4. Disk read-age in `get` (`foyer_backend.rs`)
 
