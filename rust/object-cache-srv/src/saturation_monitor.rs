@@ -1,9 +1,9 @@
 //! Periodic saturation gauges for the object cache: fetch-budget occupancy,
-//! in-flight entries, memory-budget occupancy, prefetch queue depth,
-//! host-level NIC throughput, and the foyer disk engine's own write-path
-//! throughput -- the signals #1206 calls out as missing for locating a
-//! bottleneck (a solid *counter* layer already exists, but no
-//! saturation/queue-depth signal). Modeled on
+//! in-flight entries, accounted RAM-tier usage, memory-budget occupancy,
+//! prefetch queue depth, host-level NIC throughput, and the foyer disk
+//! engine's own write-path throughput -- the signals #1206 calls out as
+//! missing for locating a bottleneck (a solid *counter* layer already
+//! exists, but no saturation/queue-depth signal). Modeled on
 //! `telemetry-sink::system_monitor::send_system_metrics_forever`: a
 //! background task that wakes on an interval and emits `imetric!`/`fmetric!`.
 //!
@@ -74,6 +74,14 @@ pub fn sample_once(
         "count",
         cache.inflight_len() as u64
     );
+
+    if let Some(ram_bytes) = cache.backend_ram_usage() {
+        imetric!(
+            "object_cache_ram_tier_usage_bytes",
+            "bytes",
+            ram_bytes as u64
+        );
+    }
 
     let mem_available = mem_permits.available_permits() as u32;
     let mem_occupancy = memory_budget_mb.saturating_sub(mem_available);

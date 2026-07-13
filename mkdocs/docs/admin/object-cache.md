@@ -242,6 +242,7 @@ A background sampler emits these gauges on a fixed interval (5s by default), ind
 | `object_cache_fetch_shared_occupancy` / `object_cache_fetch_shared_available` | Occupied/available slots in the total origin-GET concurrency budget (`--max-concurrent-fetches`). |
 | `object_cache_fetch_prefetch_occupancy` / `object_cache_fetch_prefetch_available` | Occupied/available slots in the prefetch-only sub-budget (`--max-concurrent-fetches` minus `--demand-reserved-fetches`). |
 | `object_cache_inflight_entries` | Number of block/`size()` keys currently in flight to origin. A key scheduler signal alongside the permit-wait latency above. |
+| `object_cache_ram_tier_usage_bytes` | Accounted RAM-tier byte usage (foyer's own weigher total). Compare against the host's `used_memory` system metric: this gauge staying at/below the configured `--ram-mb` size *while* `used_memory` climbs is the signature of a cached block over-retaining a larger allocation than its accounted weight. |
 | `object_cache_mem_budget_occupancy_mb` / `object_cache_mem_budget_available_mb` | Occupied/available MiB of the cross-request streaming memory budget (`--memory-budget-mb`). |
 | `object_cache_prefetch_queue_depth` | Items currently queued in the bounded `/prefetch` queue, waiting for a worker slot. |
 | `object_cache_nic_rx_bytes_per_sec` / `object_cache_nic_tx_bytes_per_sec` | Host-level network throughput — the expected ceiling on the deployment's instance type. |

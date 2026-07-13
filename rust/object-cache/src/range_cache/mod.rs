@@ -173,6 +173,12 @@ impl RangeCache {
         self.backend.disk_stats()
     }
 
+    /// Accounted RAM-tier usage (`None` for a backend with no RAM tier), for
+    /// the saturation sampler's residency gauge.
+    pub fn backend_ram_usage(&self) -> Option<usize> {
+        self.backend.ram_usage_bytes()
+    }
+
     /// Size in bytes of one cache block. Every distinct block a request
     /// touches is fetched and held whole, so callers gating memory (e.g. the
     /// server's cross-request budget) need this to account for amplification
