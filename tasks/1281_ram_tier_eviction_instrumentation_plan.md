@@ -353,8 +353,8 @@ passes an empty slice → everything classifies as `"other"` (matching `RangeCac
   still on disk, the max/high-quantile of the disk read-age distribution is a lower bound on the
   disk residency horizon (the reclaim age). Emitting per-read samples of
   `object_cache_disk_tier_read_age_ms` thus answers the thrashing question for the disk tier without
-  a foyer change. Chosen: per-read disk read-age; exact per-entry reclaim-age deferred as unnecessary
-  unless the estimate proves insufficient (Open Questions).
+  a foyer change. **Decided: no foyer fork** — ship the per-read disk read-age estimate; an exact
+  per-entry reclaim-age (which would require patching foyer) is out of scope and will be done without.
 - **Wrapper `CachedBlock` vs. side map of insertion times**: a side `HashMap` needs its own eviction
   lifecycle and hot-path locking — a race-prone shadow of foyer's own structure. The wrapper
   co-locates timing with the value so foyer manages its lifetime for free. Chosen: wrapper.
@@ -411,10 +411,6 @@ passes an empty slice → everything classifies as `"other"` (matching `RangeCac
 
 ## Open Questions
 
-1. **Exact disk reclaim-age**: the reclaim age is estimated here from the max/high-quantile of the
-   per-read disk read-age distribution (see "Disk-tier limitation"), which needs no foyer change.
-   An *exact* per-entry reclaim-age would still require a foyer-side hook — a reclaimer/storage
-   event listener, or decoding entries during reclaim — and is worth an upstream issue/PR only if
-   the estimate proves insufficient (e.g. a workload that rarely re-reads disk entries, starving the
-   read-age tail). **Recommendation**: ship the read-age estimate + aggregate reclaim stats; revisit
-   only if the estimate is demonstrably blind.
+None. (Exact disk reclaim-age was resolved: no foyer fork — the design ships the per-read disk
+read-age estimate as a lower bound on the disk residency horizon; see "Disk read-age vs. true disk
+reclaim-age" in Trade-offs.)
