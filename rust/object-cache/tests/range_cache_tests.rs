@@ -849,6 +849,58 @@ async fn oversized_prefetch_size_fails_fill_without_storing() {
     assert_eq!(&got[..], &data[..]);
 }
 
+// A corrupt/misdecoded 8-byte cached size (e.g. from an old-format disk entry
+// misframed by a new decoder, #1287) must degrade to a miss and re-resolve
+// from origin instead of being trusted, since a garbage size can otherwise
+// drive a catastrophic allocation downstream.
+#[tokio::test]
+async fn implausible_cached_size_degrades_to_a_miss() {
+    use micromegas_object_cache::backend::{FillHint, RangeCacheBackend};
+    use micromegas_object_cache::range_cache::MAX_PLAUSIBLE_OBJECT_SIZE;
+
+    let block_size = 1024u64;
+    let true_size = 4096u64;
+    let store = Arc::new(InMemory::new());
+    let data: Vec<u8> = (0u8..=255).cycle().take(true_size as usize).collect();
+    put_bytes(&store, "obj", &data).await;
+
+    let backend = Arc::new(MemoryBackend::new());
+    let counting = CountingStore::new(store.clone() as Arc<dyn ObjectStore>);
+    let ns = "ns".to_string();
+    let cache = RangeCache::new(
+        counting.clone() as Arc<dyn ObjectStore>,
+        backend.clone(),
+        block_size,
+        ns.clone(),
+        DEFAULT_TOTAL_FETCH_PERMITS,
+        DEFAULT_DEMAND_RESERVED_FETCH_PERMITS,
+        DEFAULT_MAX_COALESCED_GET_BYTES,
+        DEFAULT_PROMOTE_WHOLE_BATCH,
+    );
+
+    // Poison the meta entry with an implausible size (well above the
+    // ceiling), simulating a misdecoded/corrupt cached value.
+    let garbage_size = MAX_PLAUSIBLE_OBJECT_SIZE + 1;
+    backend
+        .put(
+            format!("meta:{ns}:obj"),
+            Bytes::from(garbage_size.to_le_bytes().to_vec()),
+            FillHint::Demand,
+        )
+        .await;
+
+    let size = cache.size("obj").await.expect("size must not panic/error");
+    assert_eq!(
+        size, true_size,
+        "an implausible cached size must be rejected and re-resolved from origin"
+    );
+    assert_eq!(
+        counting.head_count(),
+        1,
+        "rejecting the poisoned meta entry must issue an origin HEAD"
+    );
+}
+
 #[tokio::test]
 async fn total_concurrency_never_exceeds_total() {
     with_timeout(async move {

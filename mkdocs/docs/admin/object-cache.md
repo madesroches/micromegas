@@ -37,7 +37,7 @@ docker run -d -p 8080:8080 \
 | Variable | Required | Description |
 |---|---|---|
 | `MICROMEGAS_OBJECT_CACHE_ORIGIN_URI` | Yes | Bucket-only origin (`s3://bucket`, `gs://bucket`) |
-| `MICROMEGAS_OBJECT_CACHE_DISK_PATH` | Yes | Local disk path for the on-disk cache tier |
+| `MICROMEGAS_OBJECT_CACHE_DISK_PATH` | Yes | Local disk path for the on-disk cache tier. The disk store carries an internal format version; on startup, a build whose format differs from the persisted store wipes the store directory once and rewarms from origin (no data loss). Same-format restarts reuse the store warm. |
 | `MICROMEGAS_API_KEYS` | Yes, unless `--disable-auth` | JSON array of `{"name":"...","key":"..."}` |
 | `MICROMEGAS_OBJECT_CACHE_LISTEN` | No | Bind address (default `0.0.0.0:8080`) |
 | `MICROMEGAS_OBJECT_CACHE_RAM_MB` | No | In-memory cache tier size (default `512`) |
@@ -203,8 +203,10 @@ The cache emits metrics through the standard micromegas tracing sink (queryable 
 | `range_cache_origin_block_bytes` (`+ prefix, class`) | cache server | Bytes pulled from the origin — the per-request S3 cost the cache exists to avoid. |
 | `range_cache_block_backend_hit` (`+ prefix`) | cache server | Block lookups served from the backend (foyer). The `tier="backend"` side of the hit-rate split. |
 | `range_cache_size_backend_hit` (`+ prefix`) | cache server | `size()` lookups served from the backend. Fires exactly once per ranged GET (a prior double-counting bug on the handler's own pre-resolved size has been fixed). |
+| `range_cache_size_implausible` (`+ prefix`) | cache server | A cached `size()` value decoded above the plausibility ceiling (256 TiB) — a corrupt/misdecoded cache entry, rejected and re-resolved from origin rather than trusted. Should be ~0. |
 | `range_cache_origin_head` (`+ prefix`) | cache server | `head` calls to the origin to resolve object sizes (once per object, then cached). |
 | `range_cache_backend_error` | cache server | SSD/IO faults in the disk backend. Should be ~0; a sustained non-zero rate means a degraded volume silently inflating origin traffic. |
+| `object_cache_disk_format_wiped` | cache server | The on-disk format-version marker didn't match this build's format, so the disk store directory was wiped and rewarms from origin. Fires once on a format-changing startup; should otherwise be ~0. |
 | `object_cache_get_requests` (`status, prefix`) | cache server | Every `GET /obj/{key}` outcome — success and failure alike (a prior success-only bias has been fixed). Slice by `status` for the error-rate breakdown. |
 | `object_cache_ranges_requests` (`status, prefix`) | cache server | Every `POST /ranges/{key}` outcome, same fix/semantics as `object_cache_get_requests`. |
 | `object_cache_head_requests` (`status, prefix`) | cache server | Every `HEAD /obj/{key}` outcome — success and failure alike. Slice by `status` for the error-rate breakdown. |

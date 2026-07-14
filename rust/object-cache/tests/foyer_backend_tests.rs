@@ -5,7 +5,9 @@ use std::sync::Arc;
 use bytes::Bytes;
 
 use micromegas_object_cache::backend::{FillHint, RangeCacheBackend};
-use micromegas_object_cache::foyer_backend::{FoyerBackend, WriteTuning};
+use micromegas_object_cache::foyer_backend::{
+    DISK_FORMAT_MARKER, DISK_FORMAT_VERSION, FoyerBackend, WriteTuning,
+};
 use micromegas_tracing::event::in_memory_sink::InMemorySink;
 use micromegas_tracing::metrics::MetricsMsgQueueAny;
 use micromegas_tracing::property_set::{PropertySet, property_get};
@@ -55,13 +57,13 @@ fn tagged_integer_metric_values(
     out
 }
 
-// Deliberately does not close/reopen the backend to force a disk read: foyer's
-// default hash builder (ahash `RandomState::default()`) picks a fresh random
-// seed per `HybridCacheBuilder` call, so a second `FoyerBackend::new` in the
-// same process hashes the same key differently and can never find entries the
-// first instance wrote to disk. Forcing eviction from the RAM tier within a
-// single instance exercises the same disk serialize/deserialize path without
-// that pitfall.
+// foyer 0.22.3's default hash builder is `BuildHasherDefault<XxHash64>`
+// (`DefaultHasher`), which foyer documents as guaranteeing the same key hashes
+// identically across different runs/instances -- unlike foyer 0.14's
+// per-instance random ahash seed, which this test used to work around by
+// staying within a single `FoyerBackend` instance. Forcing eviction from the
+// RAM tier still exercises the disk serialize/deserialize path directly,
+// without needing a second instance or a process restart.
 //
 // TODO: if this test ever needs to wait on background disk activity, prefer a
 // deterministic wait (like `FoyerBackend::close`, which awaits the flusher)
@@ -382,5 +384,215 @@ async fn disk_read_age_metric_fires_on_disk_read() {
         blobs_ages[0] >= 0.0,
         "disk read-age must not be negative: {}",
         blobs_ages[0]
+    );
+}
+
+// -- Disk format-version guard (#1287) ---------------------------------------
+
+/// Force a RAM->disk eviction the same way `round_trip_through_disk_tier`
+/// does, then `close()` so the write is durable. Leaves at least one
+/// `foyer-storage-direct-fs-*` region file on disk for the caller to inspect.
+async fn write_one_disk_entry(dir_path: &str) {
+    let backend = FoyerBackend::new_with_shards(
+        dir_path,
+        4096,
+        16 * 1024 * 1024,
+        1,
+        WriteTuning::default(),
+        Arc::from(Vec::new()),
+    )
+    .await
+    .expect("create backend");
+    backend
+        .put(
+            "key".to_string(),
+            Bytes::from(vec![9u8; 4096]),
+            FillHint::Demand,
+        )
+        .await;
+    backend
+        .put(
+            "evict-1".to_string(),
+            Bytes::from(vec![1u8; 16]),
+            FillHint::Demand,
+        )
+        .await;
+    backend
+        .put(
+            "evict-2".to_string(),
+            Bytes::from(vec![2u8; 16]),
+            FillHint::Demand,
+        )
+        .await;
+    backend.close().await.expect("close backend");
+}
+
+fn foyer_region_files(dir_path: &std::path::Path) -> Vec<std::path::PathBuf> {
+    std::fs::read_dir(dir_path)
+        .expect("read disk dir")
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("foyer-storage-direct-fs-"))
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn first_boot_writes_format_marker() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir_path = dir.path().to_str().expect("utf8 path");
+
+    let _backend = FoyerBackend::new_with_shards(
+        dir_path,
+        4096,
+        16 * 1024 * 1024,
+        1,
+        WriteTuning::default(),
+        Arc::from(Vec::new()),
+    )
+    .await
+    .expect("create backend");
+
+    let marker_contents =
+        std::fs::read_to_string(dir.path().join(DISK_FORMAT_MARKER)).expect("marker written");
+    assert_eq!(marker_contents.trim(), DISK_FORMAT_VERSION.to_string());
+}
+
+#[tokio::test]
+async fn same_version_reuse_does_not_wipe() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir_path = dir.path().to_str().expect("utf8 path");
+
+    write_one_disk_entry(dir_path).await;
+    let region_files_before = foyer_region_files(dir.path());
+    assert!(
+        !region_files_before.is_empty(),
+        "expected at least one foyer region file after the first backend's disk write"
+    );
+    let marker_before =
+        std::fs::read_to_string(dir.path().join(DISK_FORMAT_MARKER)).expect("marker present");
+
+    // Same directory, same format version: must reuse warm, not wipe.
+    let _backend2 = FoyerBackend::new_with_shards(
+        dir_path,
+        4096,
+        16 * 1024 * 1024,
+        1,
+        WriteTuning::default(),
+        Arc::from(Vec::new()),
+    )
+    .await
+    .expect("create second backend");
+
+    let region_files_after = foyer_region_files(dir.path());
+    assert_eq!(
+        region_files_before, region_files_after,
+        "a matching format marker must not wipe the existing region files"
+    );
+    let marker_after =
+        std::fs::read_to_string(dir.path().join(DISK_FORMAT_MARKER)).expect("marker still present");
+    assert_eq!(marker_before, marker_after);
+}
+
+#[tokio::test]
+async fn mismatched_version_wipes_and_reclaims() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir_path = dir.path().to_str().expect("utf8 path");
+
+    std::fs::write(dir.path().join(DISK_FORMAT_MARKER), "0").expect("write stale marker");
+    let dummy_region = dir.path().join("foyer-storage-direct-fs-00000000");
+    std::fs::write(&dummy_region, b"stale region data").expect("write dummy region file");
+
+    let backend = FoyerBackend::new_with_shards(
+        dir_path,
+        4096,
+        16 * 1024 * 1024,
+        1,
+        WriteTuning::default(),
+        Arc::from(Vec::new()),
+    )
+    .await
+    .expect("create backend on mismatched-version dir");
+
+    // foyer's device reuses the same region filename convention, so it may
+    // recreate a file at this exact path -- check the stale *content* is
+    // gone rather than mere file existence.
+    let contents_after = std::fs::read(&dummy_region).unwrap_or_default();
+    assert_ne!(
+        contents_after, b"stale region data",
+        "the stale-format dummy region file's content must be wiped on a version mismatch"
+    );
+    let marker_contents =
+        std::fs::read_to_string(dir.path().join(DISK_FORMAT_MARKER)).expect("marker rewritten");
+    assert_eq!(marker_contents.trim(), DISK_FORMAT_VERSION.to_string());
+
+    // The backend must still be fully usable after the wipe.
+    backend
+        .put(
+            "key".to_string(),
+            Bytes::from(vec![1u8; 16]),
+            FillHint::Demand,
+        )
+        .await;
+    let got = backend.get("key").await.expect("get after wipe");
+    assert_eq!(got, Bytes::from(vec![1u8; 16]));
+}
+
+#[tokio::test]
+async fn missing_marker_wipes() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir_path = dir.path().to_str().expect("utf8 path");
+
+    // No marker at all (pre-versioning store): only a stale region file.
+    let dummy_region = dir.path().join("foyer-storage-direct-fs-00000000");
+    std::fs::write(&dummy_region, b"stale region data").expect("write dummy region file");
+
+    let _backend = FoyerBackend::new_with_shards(
+        dir_path,
+        4096,
+        16 * 1024 * 1024,
+        1,
+        WriteTuning::default(),
+        Arc::from(Vec::new()),
+    )
+    .await
+    .expect("create backend on unmarked dir");
+
+    // See the content-check note in `mismatched_version_wipes_and_reclaims`:
+    // foyer may recreate a file at this exact path.
+    let contents_after = std::fs::read(&dummy_region).unwrap_or_default();
+    assert_ne!(
+        contents_after, b"stale region data",
+        "a missing marker (pre-versioning store) must be treated as a mismatch and wiped"
+    );
+    let marker_contents =
+        std::fs::read_to_string(dir.path().join(DISK_FORMAT_MARKER)).expect("marker written");
+    assert_eq!(marker_contents.trim(), DISK_FORMAT_VERSION.to_string());
+}
+
+#[tokio::test]
+async fn wipe_preserves_directory() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir_path = dir.path().to_str().expect("utf8 path");
+
+    std::fs::write(dir.path().join(DISK_FORMAT_MARKER), "0").expect("write stale marker");
+
+    let _backend = FoyerBackend::new_with_shards(
+        dir_path,
+        4096,
+        16 * 1024 * 1024,
+        1,
+        WriteTuning::default(),
+        Arc::from(Vec::new()),
+    )
+    .await
+    .expect("create backend");
+
+    assert!(
+        dir.path().exists(),
+        "the disk directory itself (e.g. a mount point) must survive a wipe -- only contents are removed"
     );
 }

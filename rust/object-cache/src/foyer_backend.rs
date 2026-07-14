@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
 use async_trait::async_trait;
 use bytes::Bytes;
 use foyer::{
@@ -87,6 +87,67 @@ impl Code for CachedBlock {
     fn estimated_size(&self) -> usize {
         std::mem::size_of::<i64>() + self.bytes.estimated_size()
     }
+}
+
+/// On-disk format version for the foyer disk tier. The serialized value layout
+/// (`CachedBlock`'s `Code` impl) carries no self-describing version, so a layout
+/// change would otherwise misdecode entries recovered from a persisted store on
+/// restart (see #1287, #1283). On startup the store directory is wiped iff the
+/// persisted marker does not match this constant.
+///
+/// BUMP THIS whenever `CachedBlock`'s `Code` encode/decode (or any on-disk
+/// layout foyer persists for us) changes.
+///
+/// History:
+/// - v1: `CachedBlock` = `[i64 LE disk_write_ms][length-prefixed Bytes]` (#1283).
+///   (The pre-#1283 `Bytes`-only layout was unversioned; upgrading onto a store
+///   it wrote is the crash this guard prevents.)
+pub const DISK_FORMAT_VERSION: u32 = 1;
+
+/// Marker filename holding the decimal `DISK_FORMAT_VERSION`, stored alongside
+/// foyer's own `foyer-storage-direct-fs-*` region files inside `--disk-path`.
+/// The name does not collide with foyer's prefix, so foyer's recovery ignores it.
+pub const DISK_FORMAT_MARKER: &str = "micromegas-object-cache-format-version";
+
+/// Reuses a single fixed directory across restarts, wiping its contents in
+/// place only when the persisted format marker does not match `version`. See
+/// `DISK_FORMAT_VERSION` for why this exists.
+fn prepare_disk_dir(dir: &str, version: u32) -> Result<()> {
+    let dir_path = std::path::Path::new(dir);
+    let marker = dir_path.join(DISK_FORMAT_MARKER);
+    let current = std::fs::read_to_string(&marker)
+        .ok()
+        .and_then(|s| s.trim().parse::<u32>().ok());
+    if current == Some(version) {
+        return Ok(()); // match: let foyer recover the store untouched (warm reuse)
+    }
+    // Missing marker (first boot, or a pre-versioning old-format store) or a
+    // mismatch: reclaim the space and start clean on the SAME directory.
+    if dir_path.exists() {
+        warn!(
+            "object-cache disk format {current:?} != {version}; wiping {dir} to avoid \
+             misdecoding old-format entries (#1287)"
+        );
+        imetric!("object_cache_disk_format_wiped", "count", 1_u64);
+        // Remove directory CONTENTS, not the directory itself, so a mounted
+        // volume root is preserved.
+        for entry in
+            std::fs::read_dir(dir_path).with_context(|| format!("reading disk dir {dir}"))?
+        {
+            let path = entry?.path();
+            if path.is_dir() {
+                std::fs::remove_dir_all(&path)
+            } else {
+                std::fs::remove_file(&path)
+            }
+            .with_context(|| format!("removing {}", path.display()))?;
+        }
+    } else {
+        std::fs::create_dir_all(dir_path).with_context(|| format!("creating disk dir {dir}"))?;
+    }
+    std::fs::write(&marker, version.to_string())
+        .with_context(|| format!("writing disk format marker {}", marker.display()))?;
+    Ok(())
 }
 
 /// `reason` label for a RAM-tier `on_leave` event.
@@ -199,6 +260,8 @@ impl FoyerBackend {
         prefix_labels: Arc<[&'static str]>,
     ) -> Result<Self> {
         ensure!(shards > 0, "shards must be > 0");
+
+        prepare_disk_dir(dir, DISK_FORMAT_VERSION)?;
 
         // Direct I/O (bypassing the page cache) matches the old `DirectFs`
         // engine's behavior; the flag only exists on Linux.

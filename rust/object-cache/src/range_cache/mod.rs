@@ -44,6 +44,12 @@ pub const DEFAULT_MAX_COALESCED_GET_BYTES: u64 = 8 * 1024 * 1024;
 /// block, not the whole prefetch batch.
 pub const DEFAULT_PROMOTE_WHOLE_BATCH: bool = false;
 
+/// Upper bound on a plausible cached object size. No micromegas lake object
+/// (parquet partition or blob) approaches this; a decoded size above it means a
+/// corrupt/misdecoded cache entry, which is treated as a miss and re-resolved
+/// from origin rather than driving a catastrophic allocation (#1287).
+pub const MAX_PLAUSIBLE_OBJECT_SIZE: u64 = 1 << 48; // 256 TiB
+
 /// Range-aware read cache over an origin object store.
 ///
 /// # Cache invalidation
@@ -198,8 +204,14 @@ impl RangeCache {
         if let Some(data) = self.backend.get(&meta_key).await
             && data.len() == 8
         {
-            imetric!("range_cache_size_backend_hit", "count", prefix_tag, 1_u64);
-            return decode_size(&data);
+            let size = decode_size(&data)?;
+            if size <= MAX_PLAUSIBLE_OBJECT_SIZE {
+                imetric!("range_cache_size_backend_hit", "count", prefix_tag, 1_u64);
+                return Ok(size);
+            }
+            imetric!("range_cache_size_implausible", "count", prefix_tag, 1_u64);
+            warn!("range_cache implausible cached size {size} for key={key}; treating as miss");
+            // fall through to origin HEAD, which repopulates meta:{ns}:{key}
         }
 
         match self
