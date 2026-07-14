@@ -44,10 +44,13 @@ TIMESTAMPTZ` (added in v2, `sql_migration.rs:34`). Indexes: `blocks_block_id_uni
 ### Migration mechanism (`rust/ingestion/src/sql_migration.rs`, `remote_data_lake.rs:22-42`)
 `execute_migration` steps versions forward one at a time inside transactions;
 `migrate_db` wraps it in advisory lock key `0` (`acquire_lock`, `remote_data_lake.rs:29`) so only
-one instance migrates. `CREATE UNIQUE INDEX CONCURRENTLY` runs outside any transaction (it cannot
-run inside one). Callers: `remote_data_lake.rs:34` (ingestion/flight-sql via
-`connect_to_remote_data_lake`), `monolith/src/main.rs:343`, and a separate app-db migration in
-`analytics-web-srv` (unrelated table set).
+one instance migrates; `migrate_db` is itself invoked by `connect_to_remote_data_lake`
+(`remote_data_lake.rs:60`), the actual data-lake migration entry point. `CREATE UNIQUE INDEX
+CONCURRENTLY` runs outside any transaction (it cannot run inside one). Callers: ingestion/flight-sql
+and the monolith (`monolith/src/main.rs:~180`, gated by `roles.needs_lakehouse()`) both go through
+`connect_to_remote_data_lake`; a separate, unrelated app-db migration runs in `analytics-web-srv`'s
+`seed_local_data_source` (`monolith/src/main.rs:343` calls `app_db::execute_migration`, a
+different function of the same name, web role only).
 
 ### Insert path (`rust/ingestion/src/web_ingestion_service.rs:142-214`)
 `insert_block_typed` puts the payload blob at `blobs/{process_id}/{stream_id}/{block_id}`
@@ -378,10 +381,14 @@ already depends on it) so the two call sites cannot diverge:
 - **Recovery arm** (`AlreadyExists`): transaction { same lock; **staged** probe — recent window
   first, then `HEAD`-bounded lower-bound probe (Decision 1, "Bounding the recovery probe"); insert
   if missing, else skip-as-duplicate }.
-- Advisory lock: `pg_advisory_xact_lock(int4, int4)` two-key form — a fixed
-  `BLOCKS_LOCK_CLASS` constant namespaces it away from the migration lock (key `0`) and the
-  partition-write locks (`write_partition.rs:232`); the second key is a 32-bit hash of `block_id`.
-  A 32-bit collision merely serializes two unrelated block inserts briefly — harmless.
+- Advisory lock: `pg_advisory_xact_lock(int4, int4)` — the two-int4 overload. Postgres keeps this
+  overload's lock space separate from the single-`bigint` `pg_advisory_xact_lock(int4)` form used by
+  the migration lock (key `0`, `remote_data_lake.rs:13-18,29`) and by the partition-write locks
+  (`generate_partition_lock_key`'s full-range `i64` hash, `write_partition.rs:233-245,273-277`), so
+  collision with either is structurally impossible regardless of which constants are chosen — no
+  need to coordinate key values across the three call sites. First key is a fixed `BLOCKS_LOCK_CLASS`
+  constant; second key is a 32-bit hash of `block_id`. A 32-bit hash collision merely serializes two
+  unrelated block inserts briefly — harmless.
 - `replication.rs` additionally stamps `insert_time = Utc::now()` on arrival (Decision 2) instead
   of binding the source value.
 - Neither path ever deletes a blob (Decision 1 hard rule).
@@ -409,8 +416,11 @@ shutdown signal).
 
 - Loop on an interval (e.g. every few minutes). Maintain an in-process high-water mark "partitions
   through hour H exist"; if the buffer edge is still far away, it is a **zero-DB no-op**.
-- Near the buffer edge, take `pg_try_advisory_xact_lock(<fixed app key>)` (a new fixed key distinct
-  from the migration key `0`; reuse the `acquire_lock` pattern but the *try* variant). If another
+- Near the buffer edge, take `pg_try_advisory_xact_lock(int4, int4)` — the same two-int4 overload
+  as the gated-insert lock (not the single-`bigint` `acquire_lock` pattern used by the migration
+  lock), with its own fixed `PARTITION_PROVISION_LOCK_CLASS` constant (distinct from
+  `BLOCKS_LOCK_CLASS`) and a fixed second key. Being the two-int4 overload, it is automatically in a
+  lock space collision-free against the migration key `0` and the write-partition hashes. If another
   instance holds it, skip this cycle — the forward buffer covers the gap, so no instance ever
   blocks. Transaction-scoped, so a crashed holder can't leak it.
 - Inside the lock, for each not-yet-present hour in the buffer window run
@@ -489,8 +499,8 @@ property of the deterministic key, not of the arbiter. Rare² — accept and doc
 
 **Phase 2 — Ingestion forward-provisioning (#1241)** — deploys with Phase 1; `DEFAULT` backstops.
 7. Add the provisioning background task (module in `ingestion/`), using the shared helper and
-   `pg_try_advisory_xact_lock(<new fixed key>)`; in-process high-water-mark cache; buffer size/cadence
-   config.
+   `pg_try_advisory_xact_lock(int4, int4)` with the `PARTITION_PROVISION_LOCK_CLASS` constant;
+   in-process high-water-mark cache; buffer size/cadence config.
 8. Spawn it from `telemetry-ingestion-srv/src/main.rs` (and the monolith) tied to the shutdown signal.
 
 **Phase 3 — Daemon roll-off (#1242)** — parallel with Phase 2 after Phase 1.
@@ -610,9 +620,6 @@ property of the deterministic key, not of the arbiter. Rare² — accept and doc
 5. **pg_partman** — worth adopting for partition *creation* to cut hand-rolled provisioning? Note its
    built-in retention **drop** is incompatible with our blob-before-drop interlock, so roll-off stays
    app-controlled regardless. Confirm it's on the target Aurora extension allowlist first.
-6. **Advisory-lock keys** — pick the provisioning key and the `BLOCKS_LOCK_CLASS` namespace constant
-   so they are distinct from the migration key `0` and the partition-write keys generated in
-   `write_partition.rs:232`.
 
 **Resolved during research:** the only direct Postgres readers/writers of the `blocks` table are
 `BlocksView` materialization (`blocks_view.rs`), `delete.rs`, `replication.rs`,
