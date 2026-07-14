@@ -71,7 +71,7 @@ The metadata schema is fixed by `ingestion/src/sql_telemetry_db.rs` + `sql_migra
 tables `processes`, `streams`, `blocks` — payload data is the `payload_size` column on `blocks`, not
 a separate `payloads` table; that name only refers to a replication stream/view,
 `analytics/src/replication.rs`) plus the lakehouse tables from `analytics/src/lakehouse/migration.rs`
-(`lakehouse_partitions`, `temporary_files`, `partition_metadata`). Indexes total ~18: ingestion has
+(`lakehouse_partitions`, `temporary_files`). Indexes total ~18: ingestion has
 ~12 (`parent_process_id`, `process_start_time`, `block_begin_time`, `block_end_time`,
 `processes_process_id_unique`/`streams_stream_id_unique`/`blocks_block_id_unique`, …) and lakehouse
 has ~6 (`lh_part_begin_insert`, `lh_part_min_time`, `temporary_files_expiration`,
