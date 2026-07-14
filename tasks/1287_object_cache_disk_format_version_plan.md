@@ -247,10 +247,15 @@ miss rather than error). No other allocation site needs changing: the origin HEA
 2. **`rust/object-cache/src/range_cache/mod.rs`** — apply the size-fast-path plausibility check;
    import `MAX_PLAUSIBLE_OBJECT_SIZE`; add the `range_cache_size_implausible` metric.
 3. **`rust/object-cache/tests/foyer_backend_tests.rs`** — correct the stale hash-builder comment
-   (`:59-70`) to describe foyer 0.22's stable `XxHash64` default; add the tests below.
-4. **Docs** — `mkdocs/docs/admin/object-cache.md`: note the format-version wipe-on-mismatch behavior
+   (`:59-70`) to describe foyer 0.22's stable `XxHash64` default; add the format-guard tests below
+   (first-boot marker write, same-version reuse, mismatch wipes, missing marker wipes, directory
+   preserved).
+4. **`rust/object-cache/tests/range_cache_tests.rs`** — add the implausible-size test below, alongside
+   the existing `size()` tests (e.g. `size_returns_file_size`). No `foyer` feature needed; uses
+   `MemoryBackend`.
+5. **Docs** — `mkdocs/docs/admin/object-cache.md`: note the format-version wipe-on-mismatch behavior
    under the disk-path/`MICROMEGAS_OBJECT_CACHE_DISK_PATH` description, and list the two new metrics.
-5. **Full gate** — `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `cargo test` from `rust/`
+6. **Full gate** — `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `cargo test` from `rust/`
    (with the `foyer` feature for the srv + foyer tests), then `python3 build/rust_ci.py`.
 
 ## Files to Modify
@@ -258,6 +263,7 @@ miss rather than error). No other allocation site needs changing: the origin HEA
 - `rust/object-cache/src/foyer_backend.rs`
 - `rust/object-cache/src/range_cache/mod.rs`
 - `rust/object-cache/tests/foyer_backend_tests.rs`
+- `rust/object-cache/tests/range_cache_tests.rs`
 - `mkdocs/docs/admin/object-cache.md`
 
 (No CLI/env changes: `--disk-path` semantics are unchanged; the version is a compile-time constant.)
@@ -301,8 +307,10 @@ miss rather than error). No other allocation site needs changing: the origin HEA
 
 ## Testing Strategy
 
-All in `object-cache/tests/foyer_backend_tests.rs` (gated on the `foyer` feature), following the
-existing eviction-based disk round-trip pattern and its no-fixed-`sleep` guidance:
+The format-guard tests below live in `object-cache/tests/foyer_backend_tests.rs` (gated on the
+`foyer` feature), following the existing eviction-based disk round-trip pattern and its
+no-fixed-`sleep` guidance. The size-plausibility test needs no `foyer` feature and goes in
+`object-cache/tests/range_cache_tests.rs` instead, alongside the existing `size()` tests:
 
 - **First-boot marker write.** `new_with_shards` on a fresh tempdir → assert the marker file exists
   and contains `DISK_FORMAT_VERSION`.
@@ -317,11 +325,12 @@ existing eviction-based disk round-trip pattern and its no-fixed-`sleep` guidanc
 - **Missing marker (pre-versioning store) wipes.** Same as above but with no marker file present.
 - **Directory (mount) preserved.** After a wipe, assert the disk dir itself still exists (contents
   removed, not the directory).
-- **Implausible size degrades to a miss (`range_cache/mod.rs`).** Unit-drive `RangeCache::size()` with
-  a `MemoryBackend` (no foyer feature needed) pre-seeded so `meta:{ns}:{key}` holds 8 bytes decoding
-  above `MAX_PLAUSIBLE_OBJECT_SIZE`, and an origin returning a real size → assert `size()` returns the
-  origin size (not the poisoned value) and does not panic. Add to the existing `range_cache` tests
-  module.
+- **Implausible size degrades to a miss (`range_cache/mod.rs`).** In
+  `object-cache/tests/range_cache_tests.rs` (no `foyer` feature needed — same module as
+  `size_returns_file_size`), unit-drive `RangeCache::size()` built via `make_cache` over an `InMemory`
+  backend and a `CountingStore` origin, with `meta:{ns}:{key}` pre-seeded so it holds 8 bytes decoding
+  above `MAX_PLAUSIBLE_OBJECT_SIZE` → assert `size()` returns the origin's real size (not the poisoned
+  value) and does not panic.
 - **Full gate** as in Implementation Step 5.
 
 ## Open Questions
