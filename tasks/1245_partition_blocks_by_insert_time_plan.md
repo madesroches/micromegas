@@ -189,15 +189,16 @@ put_opts(key, payload, PutMode::Create)
 ├─ Ok(created) ────────────► tx {
 │                              pg_advisory_xact_lock(BLOCKS_LOCK_CLASS, hash32(block_id));
 │                              probe: SELECT EXISTS(SELECT 1 FROM blocks
-│                                     WHERE block_id=$1 AND insert_time > now()-'1 hour');
+│                                     WHERE block_id=$1 AND insert_time > '<now-1h>'::ts);
 │                              if missing: INSERT (ON CONFLICT DO NOTHING);
-│                            }   -- hot path; bounded probe prunes to ≤2 partitions
+│                            }   -- hot path; literal bound → plan-time prune to ≤2 partitions
 └─ Err(AlreadyExists) ─────► tx {
                                pg_advisory_xact_lock(BLOCKS_LOCK_CLASS, hash32(block_id));
-                               staged probe (see "Bounding the recovery probe"):
-                                 1. block_id=$1 AND insert_time > now()-'25 hours'
+                               staged probe (bounds are inlined literals, not now()/params —
+                                 see "Bounding the recovery probe"):
+                                 1. block_id=$1 AND insert_time > '<now-25h>'::ts
                                  2. miss → HEAD blob → block_id=$1
-                                           AND insert_time >= last_modified - slack
+                                           AND insert_time >= '<last_modified-slack>'::ts
                                if found: skip (true duplicate — previous ingest COMPLETED);
                                if missing: INSERT (recovers a prior attempt that died
                                            between PUT and INSERT);
@@ -222,8 +223,12 @@ gets `AlreadyExists`, probes before A commits, sees nothing, and inserts. If A t
 blindly, the two rows could land in adjacent hourly partitions (the boundary-straddle case) where
 per-partition `ON CONFLICT` cannot catch them. The shared advisory xact lock serializes the two
 probe+insert pairs, so the loser always sees the winner's committed row. The hot-path probe is
-cheap: any competitor's row was inserted seconds ago, so `insert_time > now() - '1 hour'` prunes it
-to at most two partitions.
+cheap: any competitor's row was inserted seconds ago, so a `insert_time > '<now - 1h>'::timestamptz`
+lower bound prunes it to at most two partitions. As in the recovery arm, this bound is **inlined as a
+literal `timestamptz` constant** (server-computed `now() - 1h`), not `now()` or a bind parameter, so
+the pruning — and therefore the partition locking — happens at *plan time*; a bare `now() - '1 hour'`
+is a stable expression that only prunes at executor-startup runtime, which would leave the hot path
+holding an `AccessShareLock` on all ~2,160 partitions on every ingest.
 
 **Bounding the recovery probe — the create-once blob yields a correct time bound.** A naive
 unpredicated probe (`WHERE block_id = $1` alone) cannot prune and is the worst query in the design:
@@ -237,21 +242,37 @@ window — so `last_modified` *is* the original creation time, and **no `blocks`
 can have `insert_time` earlier than the blob's creation time** (minus object-store↔Postgres clock
 skew). The recovery probe is therefore staged:
 
-1. Probe `block_id = $1 AND insert_time > now() - interval '25 hours'` (~25 partitions, sub-ms).
-   Found → duplicate, done. Covers the common duplicate class (same-day retries, laptop wakes)
+1. Probe `block_id = $1 AND insert_time > '<now - 25h>'::timestamptz` (~25 partitions, sub-ms) —
+   again a plan-time literal constant, not `now()`, so the ~25 surviving partitions are the only ones
+   locked. Found → duplicate, done. Covers the common duplicate class (same-day retries, laptop wakes)
    with no object-store round trip.
 2. Miss → `HEAD` the blob (~10–20ms, rare arm only; **must bypass any configured object cache and
    read the origin store directly** — see "Conditional blob PUT" below) → probe
-   `block_id = $1 AND insert_time >= $blob_last_modified - slack` (slack ≈ 1h, generous for
-   AWS-to-AWS skew). The parameterized lower bound gets runtime partition pruning, so lock count
-   and probe count scale with the *surviving* partitions, not all 2,160.
+   `block_id = $1 AND insert_time >= '<blob_last_modified - slack>'::timestamptz` (slack ≈ 1h,
+   generous for AWS-to-AWS skew). **The lower bound is inlined into the SQL as a literal
+   `timestamptz` constant — not a bind parameter — so Postgres prunes partitions at *plan time*.**
+   Plan-time pruning drops the below-bound partitions from the plan entirely, so they are neither
+   scanned nor **locked**; lock count and probe count scale with the *surviving* partitions, not all
+   2,160. This is what makes hourly partitions safe here without falling back to a coarser scheme:
+   plan-time pruning is deterministic Postgres behavior for a literal constant and does **not** depend
+   on executor-startup runtime pruning (which reduces scans but leaves the plan-time locks on every
+   surviving partition — the murky, version-dependent behavior we deliberately avoid relying on). The
+   inlined value is a server-computed timestamp derived from object-store metadata, never
+   client-supplied text, so there is no injection surface; format it with a fixed `timestamptz`
+   rendering.
 3. Miss → the block was never fully ingested → INSERT (still under the advisory lock).
 
-Per-case cost: **crash recovery** (blob minutes old, needs a fast "not found") prunes to 1–2
+Per-case cost (all figures are both the scan *and* the plan-time lock count, since the literal bound
+prunes them together): **crash recovery** (blob minutes old, needs a fast "not found") prunes to 1–2
 partitions — near-free; **recent duplicate** resolves in stage 1; **old duplicate** (proxy
-re-forwarding a weeks-old block) prunes to [blob age → now] and `EXISTS` exits early at the row,
-which sits near the start of that range. The full-range not-found scan requires a blob at the
-retention edge whose row vanished — essentially never.
+re-forwarding a weeks-old block) prunes to the [blob age → now] partitions and `EXISTS` exits early at
+the row, which sits near the start of that range. A weeks-old old-duplicate therefore locks a few
+hundred partitions for the duration of one probe — acceptable because the recovery arm is rare
+(stage 1 already absorbed every same-day retry) and each such lock is a cheap `AccessShareLock`. The
+only case that touches all ~2,160 partitions is a full-range *not-found* scan, which requires a blob
+at the 90-day retention edge whose row vanished — essentially never, and still correct (just slower)
+when it happens. That pathological one-off is not worth permanently coarsening the scheme to daily
+partitions; hourly partitions stay the design's choice.
 
 Correctness caveat: the bound must be a **lower bound only** (`insert_time >= blob_time - slack`),
 never a window *around* blob time — a row inserted by the recovery arm can carry an `insert_time`
@@ -441,11 +462,15 @@ lakehouse reads, etc.).
 
 Both call sites switch to the ensure-blob-then-ensure-row flow from Decision 1. Factor the shared
 gated-insert logic (lock → probe → insert) into one helper (in the `ingestion` crate; `analytics`
-already depends on it) so the two call sites cannot diverge:
+already depends on it) so the two call sites cannot diverge. The helper must **render each time bound
+as an inlined `timestamptz` literal in the SQL text** (the value is a server-computed timestamp, so
+format it with a fixed rendering — never bind it as a parameter), because only a plan-time literal
+gives plan-time partition pruning of both scans and locks (Decision 1); `block_id` stays a bind
+parameter as usual:
 
 - **Hot arm** (`Created`): transaction { advisory xact lock on the block; bounded probe
-  (`insert_time > now() - interval '1 hour'`); insert if missing (`ON CONFLICT DO NOTHING`, no
-  target) }.
+  (`insert_time > '<now-1h>'::timestamptz`, an inlined literal bound so pruning/locking happen at
+  plan time — see Decision 1); insert if missing (`ON CONFLICT DO NOTHING`, no target) }.
 - **Recovery arm** (`AlreadyExists`): transaction { same lock; **staged** probe — recent window
   first, then `HEAD`-bounded lower-bound probe (Decision 1, "Bounding the recovery probe"); insert
   if missing, else skip-as-duplicate }.
@@ -763,14 +788,20 @@ every ingestion/replication instance before the v5 migration cutover (steps 3–
    measurement is the go/no-go. If the measured exclusive window exceeds an acceptable maintenance
    window budget, fall back to the already-documented drain-old-table alternative (temporary
    `UNION` in `BlocksView`).
-3. **Recovery-arm probe validation on Aurora** — Pre-rollout validation gate: on the target Aurora PG
-   version, confirm the parameterized lower-bound probe gets executor-startup runtime partition
-   pruning *before* locking (lock count scales with surviving partitions), and observe stage-1 hit
-   rate and `HEAD` latency at real retry rates. Decision: proceed with **hourly** partitions and a
-   **1h** skew slack as the default. If the validation surprises, fall back to **daily** partitions
-   (already documented: ~90 partitions at 90-day retention; `BlocksView`'s 1-hour windows still
-   prune to one partition and use the cascaded `insert_time` index within it, at the cost of coarser
-   retention granularity).
+3. **Recovery-arm probe on Aurora** — Decision: **hourly partitions, no daily fallback**, with a
+   **1h** skew slack. Hourly is made robust by construction rather than by validated luck: every
+   time-bounded probe (both hot-path and recovery stages 1–2) inlines its bound as a **literal
+   `timestamptz` constant**, so Postgres prunes at *plan time* and locks only the surviving
+   partitions (see Decision 1, "Bounding the recovery probe"). This does **not** depend on
+   executor-startup runtime pruning happening before lock acquisition — the version-dependent Aurora
+   behavior the earlier draft hedged with a daily-partition fallback. Because plan-time pruning on a
+   literal constant is deterministic Postgres behavior, the fallback is removed. Remaining pre-rollout
+   check is a confirmation, not a go/no-go on the partitioning scheme: `EXPLAIN` a representative
+   stage-1 and stage-2 probe on the target Aurora version and confirm the plan lists only the
+   expected partitions (no `Append` over all ~2,160), and observe stage-1 hit rate and `HEAD` latency
+   at real retry rates to tune the slack. The only unbounded case — a full-range not-found scan for a
+   ~90-day-old blob whose row vanished — is essentially never and remains correct if it occurs (see
+   Decision 1's per-case cost note).
 4. **pg_partman** — Decision: **do not adopt**. Partition creation stays app-controlled (the forward
    provisioner from item 1), consistent with roll-off, which must stay app-controlled anyway because
    pg_partman's built-in retention drop is incompatible with the blob-before-drop interlock. This
