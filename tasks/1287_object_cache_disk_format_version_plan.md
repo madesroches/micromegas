@@ -251,8 +251,10 @@ miss rather than error). No other allocation site needs changing: the origin HEA
    (first-boot marker write, same-version reuse, mismatch wipes, missing marker wipes, directory
    preserved).
 4. **`rust/object-cache/tests/range_cache_tests.rs`** — add the implausible-size test below, alongside
-   the existing `size()` tests (e.g. `size_returns_file_size`). No `foyer` feature needed; uses
-   `MemoryBackend`.
+   the existing `size()` tests (e.g. `size_returns_file_size`). No `foyer` feature needed. Build the
+   cache via `RangeCache::new(...)` directly (not `make_cache`, which constructs its `MemoryBackend`
+   internally and doesn't return it) so the test retains an `Arc<MemoryBackend>` handle to pre-seed
+   `meta:{ns}:{key}`, with a `CountingStore`-wrapped `InMemory` as the origin.
 5. **Docs** — `mkdocs/docs/admin/object-cache.md`: note the format-version wipe-on-mismatch behavior
    under the disk-path/`MICROMEGAS_OBJECT_CACHE_DISK_PATH` description, and list the two new metrics.
 6. **Full gate** — `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `cargo test` from `rust/`
@@ -327,10 +329,12 @@ no-fixed-`sleep` guidance. The size-plausibility test needs no `foyer` feature a
   removed, not the directory).
 - **Implausible size degrades to a miss (`range_cache/mod.rs`).** In
   `object-cache/tests/range_cache_tests.rs` (no `foyer` feature needed — same module as
-  `size_returns_file_size`), unit-drive `RangeCache::size()` built via `make_cache` over an `InMemory`
-  backend and a `CountingStore` origin, with `meta:{ns}:{key}` pre-seeded so it holds 8 bytes decoding
-  above `MAX_PLAUSIBLE_OBJECT_SIZE` → assert `size()` returns the origin's real size (not the poisoned
-  value) and does not panic.
+  `size_returns_file_size`), build the cache via `RangeCache::new(...)` directly (as in
+  `cold_read_populates_backend`) over a retained `Arc<MemoryBackend>` and a `CountingStore`-wrapped
+  `InMemory` origin, so the test can `backend.put("meta:ns:{key}", <8 garbage bytes decoding above
+  MAX_PLAUSIBLE_OBJECT_SIZE>, FillHint::Demand)` to poison the fast path before calling
+  `RangeCache::size()` → assert `size()` returns the origin's real size (not the poisoned value), does
+  not panic, and issues a HEAD to origin to re-resolve it.
 - **Full gate** as in Implementation Step 5.
 
 ## Open Questions
