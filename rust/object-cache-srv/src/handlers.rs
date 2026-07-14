@@ -159,11 +159,35 @@ fn status_label(status: StatusCode) -> &'static str {
     }
 }
 
-#[span_fn]
+/// Thin wrapper around `head_handler_inner`, mirroring
+/// `get_range_handler`/`post_ranges_handler`: counts every outcome (not just
+/// the success path) with a `status`/`prefix`-tagged `object_cache_head_requests`.
+/// Before this, HEAD traffic had no direct counter and could only be inferred
+/// as a residual of the size/HEAD-tier metrics (#1280).
 pub async fn head_handler(
     Path(key): Path<String>,
     State(state): State<AppState>,
 ) -> Result<Response, StatusCode> {
+    let prefix = state.cache.classify(&key);
+    let result = head_handler_inner(key, state).await;
+    let status = match &result {
+        Ok(resp) => resp.status(),
+        Err(code) => *code,
+    };
+    imetric!(
+        "object_cache_head_requests",
+        "count",
+        PropertySet::find_or_create(vec![
+            Property::new("status", status_label(status)),
+            Property::new("prefix", prefix),
+        ]),
+        1_u64
+    );
+    result
+}
+
+#[span_fn]
+async fn head_handler_inner(key: String, state: AppState) -> Result<Response, StatusCode> {
     if let Err(e) = validate_key(&key, &state.allowed_prefixes) {
         warn!("rejected key {key}: {e}");
         return Err(StatusCode::BAD_REQUEST);
