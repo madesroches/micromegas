@@ -742,23 +742,32 @@ every ingestion/replication instance before the v5 migration cutover (steps 3–
   age past retention → confirm partition dropped and query still correct.
 - Run `python3 build/rust_ci.py` (fmt + clippy + tests).
 
-## Open Questions
-1. **Buffer size `N` and provisioning cadence** — proposed 4–6 hours ahead, checked every few
-   minutes. Confirm against ingestion instance count and restart cadence.
-2. **Cutover lock duration** — needs a staging measurement of `ADD CONSTRAINT ... CHECK` scan +
-   `ATTACH` on a production-sized `blocks`. If the exclusive window is unacceptable, fall back to the
-   drain-old-table alternative (temporary `UNION` in `BlocksView`).
-3. **Recovery-arm probe validation on Aurora** — the staged probe (Decision 1) should make every
-   real case cheap; validate on Aurora's PG version that the parameterized lower bound gets
-   executor-startup runtime pruning *before* locking (lock count scales with surviving partitions),
-   measure stage-1 hit rate and `HEAD` latency at observed retry rates, and pick the skew slack
-   (proposed 1h). Blunt fallback if measurements surprise: **daily** partitions cut the partition
-   count 24× (~90 at 90-day retention) — `BlocksView`'s 1-hour windows still prune to one partition
-   and use the cascaded `insert_time` index within it, at the cost of coarser retention
-   granularity.
-4. **pg_partman** — worth adopting for partition *creation* to cut hand-rolled provisioning? Note its
-   built-in retention **drop** is incompatible with our blob-before-drop interlock, so roll-off stays
-   app-controlled regardless. Confirm it's on the target Aurora extension allowlist first.
+## Decisions & Rollout Validation
+1. **Buffer size `N` and provisioning cadence** — Decision: maintain partitions **6 hours ahead**
+   of now, with the provisioner running **every 5 minutes**; both values configurable via
+   env/config. Rationale: a 6h horizon comfortably exceeds any plausible ingestion-instance restart
+   gap while keeping the pre-created partition count small, and a 5-minute cadence is far tighter
+   than the 6h horizon so a missed run is harmless. If deployed instance count or restart cadence
+   ever demand more headroom, the horizon can simply be raised.
+2. **Cutover lock duration** — Pre-rollout validation gate, not an open question: the exclusive-lock
+   window from `ADD CONSTRAINT ... CHECK` scan + `ATTACH` must be measured on a production-sized
+   `blocks` in staging before the cutover. Decision: proceed with the attach approach; the staging
+   measurement is the go/no-go. If the measured exclusive window exceeds an acceptable maintenance
+   window budget, fall back to the already-documented drain-old-table alternative (temporary
+   `UNION` in `BlocksView`).
+3. **Recovery-arm probe validation on Aurora** — Pre-rollout validation gate: on the target Aurora PG
+   version, confirm the parameterized lower-bound probe gets executor-startup runtime partition
+   pruning *before* locking (lock count scales with surviving partitions), and observe stage-1 hit
+   rate and `HEAD` latency at real retry rates. Decision: proceed with **hourly** partitions and a
+   **1h** skew slack as the default. If the validation surprises, fall back to **daily** partitions
+   (already documented: ~90 partitions at 90-day retention; `BlocksView`'s 1-hour windows still
+   prune to one partition and use the cascaded `insert_time` index within it, at the cost of coarser
+   retention granularity).
+4. **pg_partman** — Decision: **do not adopt**. Partition creation stays app-controlled (the forward
+   provisioner from item 1), consistent with roll-off, which must stay app-controlled anyway because
+   pg_partman's built-in retention drop is incompatible with the blob-before-drop interlock. This
+   avoids a dependency on the Aurora extension allowlist and keeps creation and drop under one
+   mechanism.
 
 **Resolved during research:** the only direct Postgres readers/writers of the `blocks` table are
 `BlocksView` materialization (`blocks_view.rs`), `delete.rs`, `replication.rs`,
