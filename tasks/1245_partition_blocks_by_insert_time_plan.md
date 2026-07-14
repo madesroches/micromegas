@@ -189,14 +189,17 @@ put_opts(key, payload, PutMode::Create)
 ├─ Ok(created) ────────────► tx {
 │                              pg_advisory_xact_lock(BLOCKS_LOCK_CLASS, hash32(block_id));
 │                              probe: SELECT EXISTS(SELECT 1 FROM blocks
-│                                     WHERE block_id=$1 AND insert_time > '<now-1h>'::ts);
+│                                     WHERE block_id=$1 AND insert_time > '<now-1h>'::ts
+│                                                       AND insert_time <= '<now+1h>'::ts);
 │                              if missing: INSERT (ON CONFLICT DO NOTHING);
-│                            }   -- hot path; literal bound → plan-time prune to ≤2 partitions
+│                            }   -- hot path; two-sided literal bound → plan-time prune to
+│                                   ~2-3 hourly partitions + the DEFAULT
 └─ Err(AlreadyExists) ─────► tx {
                                pg_advisory_xact_lock(BLOCKS_LOCK_CLASS, hash32(block_id));
                                staged probe (bounds are inlined literals, not now()/params —
                                  see "Bounding the recovery probe"):
                                  1. block_id=$1 AND insert_time > '<now-25h>'::ts
+                                                  AND insert_time <= '<now+1h>'::ts
                                  2. miss → HEAD blob → block_id=$1
                                            AND insert_time >= '<last_modified-slack>'::ts
                                if found: skip (true duplicate — previous ingest COMPLETED);
@@ -223,12 +226,16 @@ gets `AlreadyExists`, probes before A commits, sees nothing, and inserts. If A t
 blindly, the two rows could land in adjacent hourly partitions (the boundary-straddle case) where
 per-partition `ON CONFLICT` cannot catch them. The shared advisory xact lock serializes the two
 probe+insert pairs, so the loser always sees the winner's committed row. The hot-path probe is
-cheap: any competitor's row was inserted seconds ago, so a `insert_time > '<now - 1h>'::timestamptz`
-lower bound prunes it to at most two partitions. As in the recovery arm, this bound is **inlined as a
-literal `timestamptz` constant** (server-computed `now() - 1h`), not `now()` or a bind parameter, so
-the pruning — and therefore the partition locking — happens at *plan time*; a bare `now() - '1 hour'`
-is a stable expression that only prunes at executor-startup runtime, which would leave the hot path
-holding an `AccessShareLock` on all ~2,160 partitions on every ingest.
+cheap: any competitor's row was inserted seconds ago, so `insert_time > '<now-1h>'::timestamptz AND
+insert_time <= '<now+1h>'::timestamptz` — a **two-sided** bound, the upper slack covering
+cross-instance clock skew (a competitor's row was stamped seconds ago, but possibly by a
+faster/slower clock) — prunes to ~2–3 hourly partitions **plus the `DEFAULT`**, which no lower- or
+upper-bound literal can prune away (it can hold rows of any value). As in the recovery arm, both
+bounds are **inlined as literal `timestamptz` constants** (server-computed `now() ± 1h`), not `now()`
+or bind parameters, so the pruning — and therefore the partition locking — happens at *plan time*; a
+bare `now() - '1 hour'` is a stable expression that only prunes at executor-startup runtime, which
+would leave the hot path holding an `AccessShareLock` on all ~2,160 partitions (plus every
+forward-provisioned future partition and the `DEFAULT`) on every ingest.
 
 **Bounding the recovery probe — the create-once blob yields a correct time bound.** A naive
 unpredicated probe (`WHERE block_id = $1` alone) cannot prune and is the worst query in the design:
@@ -242,10 +249,11 @@ window — so `last_modified` *is* the original creation time, and **no `blocks`
 can have `insert_time` earlier than the blob's creation time** (minus object-store↔Postgres clock
 skew). The recovery probe is therefore staged:
 
-1. Probe `block_id = $1 AND insert_time > '<now - 25h>'::timestamptz` (~25 partitions, sub-ms) —
-   again a plan-time literal constant, not `now()`, so the ~25 surviving partitions are the only ones
-   locked. Found → duplicate, done. Covers the common duplicate class (same-day retries, laptop wakes)
-   with no object-store round trip.
+1. Probe `block_id = $1 AND insert_time > '<now-25h>'::timestamptz AND insert_time <=
+   '<now+1h>'::timestamptz` (~26 partitions + the `DEFAULT`, sub-ms) — again plan-time literal
+   constants, not `now()`, so only the surviving partitions are locked. Found → duplicate, done.
+   Covers the common duplicate class (same-day retries, laptop wakes) with no object-store round
+   trip.
 2. Miss → `HEAD` the blob (~10–20ms, rare arm only; **must bypass any configured object cache and
    read the origin store directly** — see "Conditional blob PUT" below) → probe
    `block_id = $1 AND insert_time >= '<blob_last_modified - slack>'::timestamptz` (slack ≈ 1h,
@@ -259,14 +267,17 @@ skew). The recovery probe is therefore staged:
    surviving partition — the murky, version-dependent behavior we deliberately avoid relying on). The
    inlined value is a server-computed timestamp derived from object-store metadata, never
    client-supplied text, so there is no injection surface; format it with a fixed `timestamptz`
-   rendering.
+   rendering. (This lower-bound-only surviving set also includes every forward-provisioned future
+   partition and the `DEFAULT` — immaterial next to the few-hundred-partition scale this stage
+   already tolerates.)
 3. Miss → the block was never fully ingested → INSERT (still under the advisory lock).
 
 Per-case cost (all figures are both the scan *and* the plan-time lock count, since the literal bound
-prunes them together): **crash recovery** (blob minutes old, needs a fast "not found") prunes to 1–2
-partitions — near-free; **recent duplicate** resolves in stage 1; **old duplicate** (proxy
-re-forwarding a weeks-old block) prunes to the [blob age → now] partitions and `EXISTS` exits early at
-the row, which sits near the start of that range. A weeks-old old-duplicate therefore locks a few
+prunes them together): **crash recovery** (blob minutes old, needs a fast "not found") prunes to a
+handful of partitions plus the `DEFAULT` — near-free; **recent duplicate** resolves in stage 1;
+**old duplicate** (proxy re-forwarding a weeks-old block) prunes to the [blob age → now] partitions
+(plus the forward-buffer partitions and the `DEFAULT`) and `EXISTS` exits early at the row, which
+sits near the start of that range. A weeks-old old-duplicate therefore locks a few
 hundred partitions for the duration of one probe — acceptable because the recovery arm is rare
 (stage 1 already absorbed every same-day retry) and each such lock is a cheap `AccessShareLock`. The
 only case that touches all ~2,160 partitions is a full-range *not-found* scan, which requires a blob
@@ -281,14 +292,16 @@ days after blob creation (the recovering retry stamps its own arrival time).
 **Correctness caveat 2: the HEAD must read the origin's real `last_modified`, never the object
 cache's synthesized one.** When `MICROMEGAS_OBJECT_CACHE_URL`/`MICROMEGAS_OBJECT_CACHE_API_KEY` are
 set, the ingestion path's `BlobStorage` wraps `CacheClientStore` (`make_cache` in
-`data_lake_connection.rs`), and a HEAD served by `CacheClientStore` returns a synthesized
-`ObjectMeta { last_modified: Utc::now(), .. }` (the `options.head` branch of `get_opts` in
-`object-cache/src/client.rs`) rather than the origin's true creation time. Bounding the probe on
-that synthesized time collapses the lower bound to `now() - slack` (~1h): an old duplicate (e.g. a
-proxy re-forwarding a weeks-old block) has its real row weeks in the past, below the collapsed
-bound, so stage 2 misses it and stage 3 fires a spurious INSERT — a duplicate `blocks` row that
-`BlocksView` double-counts. The recovery-arm HEAD must therefore always resolve against the origin
-store, cache or no cache (see "Conditional blob PUT").
+`data_lake_connection.rs`), and a HEAD served by `CacheClientStore` on a **cache hit** returns a
+synthesized `ObjectMeta { last_modified: Utc::now(), .. }` (the `options.head` branch of `get_opts`
+in `object-cache/src/client.rs`) rather than the origin's true creation time; on a **miss** (or cache
+unreachable), `get_opts` falls back to the origin and returns the real `ObjectMeta`, so the hazard is
+specific to the hit path. Bounding the probe on that synthesized time collapses the lower bound to
+`now() - slack` (~1h): an old duplicate (e.g. a proxy re-forwarding a weeks-old block) has its real
+row weeks in the past, below the collapsed bound, so stage 2 misses it and stage 3 fires a spurious
+INSERT — a duplicate `blocks` row that `BlocksView` double-counts. A hit is the common case, though,
+and silently yields the wrong time, so the recovery-arm HEAD must still always bypass the cache and
+resolve against the origin store unconditionally (see "Conditional blob PUT").
 
 **Hard rule: the insert path never deletes blobs; only the retention daemon deletes blobs.**
 Deleting a blob on PG-insert failure would race a concurrent retry's recovery arm (probe says
@@ -352,27 +365,41 @@ Postgres cannot convert a populated table to partitioned in place. Recommended a
 droppable partition, so there is **zero row-DELETE churn** even for the pre-existing data:
 
 1. `CREATE TABLE blocks_partitioned (LIKE blocks INCLUDING DEFAULTS) PARTITION BY RANGE (insert_time);`
-   with `insert_time` `NOT NULL` declared explicitly in the parent's definition (partition key must be
-   non-null; `insert_time` is nullable in the source table — added as plain `TIMESTAMPTZ` in
-   `upgrade_data_lake_schema_v2`, with no later migration constraining it — so `LIKE ... INCLUDING
-   DEFAULTS` alone does not carry a `NOT NULL` into the new parent; values are already non-null in
-   practice, but the constraint must be added here).
+   then `ALTER TABLE blocks_partitioned ALTER COLUMN insert_time SET NOT NULL;` (instant on the empty
+   parent). The partition key must be non-null, and `insert_time` is nullable in the source table
+   (added as plain `TIMESTAMPTZ` in `upgrade_data_lake_schema_v2`, with no later migration
+   constraining it), so `LIKE ... INCLUDING DEFAULTS` alone does not carry a `NOT NULL` into the new
+   parent — and it cannot be declared inline in the `CREATE TABLE` either, since Postgres rejects a
+   same-named explicit column alongside `LIKE` ("column ... specified more than once"); values are
+   already non-null in practice, but the constraint must be added as this separate statement.
 2. Cascade the non-unique indexes onto the parent (`CREATE INDEX ON blocks_partitioned (stream_id)`,
    `(begin_time)`, `(end_time)`, `(insert_time)`) — these auto-propagate to all current and future
    partitions.
-3. On the existing `blocks`: add `ALTER TABLE blocks ALTER COLUMN insert_time SET NOT NULL` (one-time
-   validation scan) and `ALTER TABLE blocks ADD CONSTRAINT blocks_legacy_bound
-   CHECK (insert_time < <cutover_hour>)`, so the subsequent ATTACH can skip its own validation scan —
-   a range-partition bound implies `insert_time IS NOT NULL`, which the CHECK alone does not
-   establish, so both constraints are needed for ATTACH to trust the data without re-scanning; and
-   ensure it has a local `UNIQUE (block_id)` index (the existing `blocks_block_id_unique` already
-   satisfies this).
+3. On the existing `blocks`, avoid an `ACCESS EXCLUSIVE` scan by staging each constraint `NOT VALID`
+   then validating it under a lighter lock:
+   a. `ALTER TABLE blocks ADD CONSTRAINT blocks_insert_time_not_null
+      CHECK (insert_time IS NOT NULL) NOT VALID;` — brief `ACCESS EXCLUSIVE`, no scan (`NOT VALID`
+      skips checking existing rows).
+   b. `ALTER TABLE blocks VALIDATE CONSTRAINT blocks_insert_time_not_null;` — the scan runs under
+      `SHARE UPDATE EXCLUSIVE`, so ingestion writes continue.
+   c. `ALTER TABLE blocks ALTER COLUMN insert_time SET NOT NULL;` — on Postgres ≥ 12 this sees the
+      validated CHECK already proves no NULLs and skips its own scan, leaving only a brief
+      `ACCESS EXCLUSIVE` catalog change; the helper CHECK can be dropped afterwards.
+   d. `ALTER TABLE blocks ADD CONSTRAINT blocks_legacy_bound
+      CHECK (insert_time < <cutover_hour>) NOT VALID;` then
+   e. `ALTER TABLE blocks VALIDATE CONSTRAINT blocks_legacy_bound;` — again `SHARE UPDATE EXCLUSIVE`.
+   A range-partition bound implies `insert_time IS NOT NULL`, which the CHECK alone does not
+   establish, so both constraints together are needed for the subsequent ATTACH to trust the data
+   without re-scanning; and ensure it has a local `UNIQUE (block_id)` index (the existing
+   `blocks_block_id_unique` already satisfies this).
 4. In a transaction: `ALTER TABLE blocks RENAME TO blocks_legacy;`
    `ALTER TABLE blocks_partitioned RENAME TO blocks;`
    `ALTER TABLE blocks ATTACH PARTITION blocks_legacy FOR VALUES FROM (MINVALUE) TO (<cutover_hour>);`
    `CREATE TABLE blocks_default PARTITION OF blocks DEFAULT;` (+ its local unique-block_id index).
-5. Provision the current hour + forward buffer of hourly partitions so inserts immediately after
-   cutover have a home (the `DEFAULT` backstops any gap).
+5. Provision `<cutover_hour>` + forward buffer of hourly partitions so inserts immediately after
+   cutover have a home (the `DEFAULT` backstops any gap) — starting from the current hour instead
+   would overlap `blocks_legacy`'s range (`MINVALUE` to `<cutover_hour>`) and fail with a
+   partition-overlap error.
 
 **No dedup backfill is needed.** Pre-cutover blocks already have their blobs at the deterministic
 key, so a post-cutover resend of an old block hits `AlreadyExists` immediately; the recovery arm's
@@ -380,14 +407,23 @@ global probe queries the partitioned parent, which includes `blocks_legacy`, fin
 skips. Dedup for pre-existing data works on day one with zero migration work — this removes what
 would otherwise be a bulk insert sized to the live `blocks` row count.
 
-`<cutover_hour>` = the hour boundary at/after migration time (from the shared boundary function). The
-`blocks_legacy` partition ages out as one unit: once `<cutover_hour> <= now - retention`, the daemon
-drops it wholesale (after blob cleanup) — no per-row deletes for legacy data.
+`<cutover_hour>` = the hour boundary at/after migration time (from the shared boundary function),
+chosen with explicit headroom. A CHECK constraint is enforced on *new* inserts the instant
+`ADD CONSTRAINT` completes (`NOT VALID` only skips validating existing rows), and inserts keep
+landing in the old table until the step-4 swap; if the swap has not completed by the time wall-clock
+reaches `<cutover_hour>`, every insert stamping `insert_time >= <cutover_hour>` fails with a check
+violation — an ingestion outage. Pick `<cutover_hour>` as the hour ceiling of (migration start + the
+`VALIDATE` duration measured in the staging rehearsal + a safety margin of 1–2h); rows ingested
+between the swap and `<cutover_hour>` correctly route to `blocks_legacy` (whose range extends to
+`<cutover_hour>`) and age out with it. The `blocks_legacy` partition ages out as one unit: once
+`<cutover_hour> <= now - retention`, the daemon drops it wholesale (after blob cleanup) — no per-row
+deletes for legacy data.
 
-Cost/risk: step 3's `SET NOT NULL` and `ADD CONSTRAINT ... CHECK` each do one table scan (`SHARE
-UPDATE EXCLUSIVE` / validation passes, back-to-back); the rename+attach in step 4 takes a brief
-`ACCESS EXCLUSIVE` on `blocks`. All are one-time. This is called out in #1240 as the riskiest part;
-validate timing against a production-sized `blocks` in staging before rollout.
+Cost/risk: step 3's validation scans run under `SHARE UPDATE EXCLUSIVE` via the `NOT VALID` →
+`VALIDATE` sequence, so ingestion writes continue throughout; only brief `ACCESS EXCLUSIVE` catalog
+operations remain (the `NOT VALID` constraint adds, the `SET NOT NULL`, and the rename+attach in
+step 4). All are one-time. This is called out in #1240 as the riskiest part; validate timing against
+a production-sized `blocks` in staging before rollout.
 
 Alternative considered — **new partitioned table + drain old via existing retention**: point writes
 at the new table, keep the old one readable until it drains. Rejected because `BlocksView`'s
@@ -440,10 +476,10 @@ pub async fn put_if_absent(&self, obj_path: &str, buffer: bytes::Bytes)
 
 Also add a `head_origin(obj_path) -> Result<ObjectMeta>` method — the recovery arm's stage-2 probe
 needs the blob's *true* `last_modified`, and that must come from the origin store, never from a
-configured object cache (a cache-served HEAD synthesizes `last_modified = Utc::now()`; see Decision
-1's "Bounding the recovery probe", correctness caveat 2). `BlobStorage::inner()` cannot be reused
-for this: it returns the same (possibly cache-layered) store the lakehouse read paths already rely
-on (`write_partition.rs`, `query.rs`, `jit_partitions.rs`, `lakehouse_context.rs`'s `l1_wrap`), so
+configured object cache (a cache HEAD synthesizes `last_modified = Utc::now()` on a hit — see
+Decision 1's "Bounding the recovery probe", correctness caveat 2). `BlobStorage::inner()` cannot be
+reused for this: it returns the same (possibly cache-layered) store the lakehouse read paths already
+rely on (`write_partition.rs`, `query.rs`, `jit_partitions.rs`, `lakehouse_context.rs`'s `l1_wrap`), so
 when the object cache is configured, `inner()` is a `PrefixStore` over `CacheClientStore`. Instead,
 `BlobStorage` must retain a handle to the pre-cache-layer origin store alongside the layered one:
 `make_cache` clones `direct` (a free `Arc` clone) before moving the original into
@@ -466,14 +502,23 @@ already depends on it) so the two call sites cannot diverge. The helper must **r
 as an inlined `timestamptz` literal in the SQL text** (the value is a server-computed timestamp, so
 format it with a fixed rendering — never bind it as a parameter), because only a plan-time literal
 gives plan-time partition pruning of both scans and locks (Decision 1); `block_id` stays a bind
-parameter as usual:
+parameter as usual. A fresh literal computed from `now()` on every call would also make every SQL
+text unique, defeating sqlx's per-connection prepared-statement cache (a re-parse + re-plan on every
+block insert); the helper must instead **quantize each bound to the hour boundary** — lower =
+`floor(now, 1h) - 1h` (or `- 25h` for stage 1), upper = `floor(now, 1h) + 2h` (the extra hour of
+quantization slack keeps the rendered bound covering the conceptual `now+1h` skew window from any
+point within the current hour, reconciling this concrete rendering with Decision 1's `<now+1h>`
+placeholder) — so statement texts repeat within each hour and cached plans are reused. Correctness is
+unaffected (the bounds only widen by under an hour), and Postgres's relcache invalidation replans
+cached statements automatically when new partitions are attached:
 
-- **Hot arm** (`Created`): transaction { advisory xact lock on the block; bounded probe
-  (`insert_time > '<now-1h>'::timestamptz`, an inlined literal bound so pruning/locking happen at
-  plan time — see Decision 1); insert if missing (`ON CONFLICT DO NOTHING`, no target) }.
-- **Recovery arm** (`AlreadyExists`): transaction { same lock; **staged** probe — recent window
-  first, then `HEAD`-bounded lower-bound probe (Decision 1, "Bounding the recovery probe"); insert
-  if missing, else skip-as-duplicate }.
+- **Hot arm** (`Created`): transaction { advisory xact lock on the block; bounded two-sided probe —
+  quantized `insert_time > '<hour-1h>'::timestamptz AND insert_time <= '<hour+2h>'::timestamptz`,
+  inlined literals so pruning/locking happen at plan time, prunes to ~2–3 hourly partitions plus the
+  `DEFAULT` (Decision 1); insert if missing (`ON CONFLICT DO NOTHING`, no target) }.
+- **Recovery arm** (`AlreadyExists`): transaction { same lock; **staged** probe — quantized two-sided
+  recent window first, then `HEAD`-bounded lower-bound-only probe (Decision 1, "Bounding the recovery
+  probe"); insert if missing, else skip-as-duplicate }.
 - `web_ingestion_service.rs`'s `insert_block_typed` calls `put_if_absent` and the helper inline, per
   block — the hot/recovery split above applies directly, unchanged in shape.
 - `replication.rs` cannot apply the split directly: `ingest_payloads` (blob PUT) and `ingest_blocks`
@@ -537,20 +582,43 @@ if a binary declaring `LATEST_DATA_LAKE_SCHEMA_VERSION == 5` starts against a st
 in a **later**, separate deploy, made only after an operator has run the standalone cutover and
 confirmed `current_version` is already 5 in the database — see Implementation Steps step 4.
 
+There is a second hazard in the gap between those two deploys: once the operator's cutover has
+stamped `current_version` to 5, any **already-deployed instance still declaring
+`LATEST_DATA_LAKE_SCHEMA_VERSION == 4`** that *restarts* (rolling restart, crash, redeploy of an
+unrelated fix) re-enters `migrate_db` and finds `current_version(5) != LATEST(4)`; `execute_migration`
+has no `if 5 == current_version` branch to match, so it falls through to its own
+`assert_eq!(current_version, LATEST_DATA_LAKE_SCHEMA_VERSION)` (`sql_migration.rs:150-200`) and
+panics — and even if that assert were bypassed, `migrate_db`'s own post-migration
+`assert_eq!(current_version, LATEST_DATA_LAKE_SCHEMA_VERSION)` (`remote_data_lake.rs:40`) would still
+fire. The mandated rollout order (cutover before the LATEST bump) therefore cannot ship safely on its
+own: deploy 1 must also relax both asserts — in `execute_migration` and in `migrate_db` — from exact
+equality to **`current_version >= LATEST_DATA_LAKE_SCHEMA_VERSION`** (logging a warning when the
+database is newer than the running binary), so a still-LATEST=4 instance restarting after the
+cutover treats a version-5 database as already up to date instead of crashing. Without this, the
+cutover step itself would take down every old-LATEST instance that happens to restart before deploy
+2 lands.
+
 New `create_blocks_table` (fresh v1 installs go straight to partitioned) creates
 `PARTITION BY RANGE (insert_time)`, the parent non-unique indexes, and a `DEFAULT` partition with
 its local unique-block_id index. For fresh installs to skip the v2/v3/v4 upgrade steps — which are
 not idempotent against the new partitioned schema (e.g. `upgrade_data_lake_schema_v2`'s `ALTER
 TABLE blocks ADD insert_time` has no `IF NOT EXISTS` and would fail against a table that already
 has the column) — `create_migration_table` must stamp the `migration` row directly to
-`LATEST_DATA_LAKE_SCHEMA_VERSION` (5), not `1`, when invoked from the fresh-install path in
-`create_tables`. Because `execute_migration` gates each upgrade step on an exact `if N ==
-current_version` check (not `>=`), stamping straight to 5 causes the `if 1/2/3 ==
-current_version` branches to be skipped naturally — no other change to `execute_migration`'s
-control flow is needed for fresh installs. Existing v4 databases are untouched by this stamping
-path: `execute_migration` gets no new `if 4 == current_version` branch at all, so a v4 database only
-reaches v5 through the standalone, operator-invoked cutover described in "Rolling-deploy hazard"
-below — never automatically.
+`LATEST_DATA_LAKE_SCHEMA_VERSION`, not `1`, when invoked from the fresh-install path in
+`create_tables`. Note this stamps to whatever the running binary's LATEST is: `4` during deploy 1
+(before the later bump deploy) or `5` after it — so a fresh install during the interim window
+(deploy 1 live, LATEST still 4) creates a partitioned `blocks` but stamps `migration` to `4`, not
+`5`. Because `execute_migration` gates each upgrade step on an exact `if N == current_version` check
+(not `>=`), stamping straight to LATEST causes the `if 1/2/3 == current_version` branches to be
+skipped naturally — no other change to `execute_migration`'s control flow is needed for fresh
+installs. Consequently, the standalone cutover subcommand must begin with a guard: if `blocks` is
+already a partitioned table (`relkind = 'p'` in `pg_class`) — e.g. exactly this interim-window fresh
+install — it performs no DDL and only stamps the migration version to 5; the same guard is what
+makes a re-run of the cutover a no-op. Existing v4 databases with an **unpartitioned** `blocks` are
+untouched by either the fresh-install stamping path or the cutover's no-op guard: `execute_migration`
+gets no new `if 4 == current_version` branch at all, so such a database only reaches v5 through the
+standalone, operator-invoked cutover actually performing its DDL, as described in "Rolling-deploy
+hazard" above.
 
 ### Ingestion forward-provisioning (#1241 — new background task)
 
@@ -558,6 +626,10 @@ A task in the ingestion service ensures the current hour + next `N` hours of par
 Spawn it alongside `serve_ingestion` (from `telemetry-ingestion-srv/src/main.rs`, tied to the same
 shutdown signal).
 
+- Phases 1–2 deploy before the operator runs the cutover (see "Schema (#1240) — migration v5" above),
+  so on every cycle the provisioner first checks that `blocks` is a partitioned table (`relkind = 'p'`
+  in `pg_class`) and quietly no-ops otherwise — it becomes live only once the standalone cutover has
+  run.
 - Loop on an interval (e.g. every few minutes). Maintain an in-process high-water mark "partitions
   through hour H exist"; if the buffer edge is still far away, it is a **zero-DB no-op**.
 - Near the buffer edge, take `pg_try_advisory_xact_lock(int4, int4)` — the same two-int4 overload
@@ -572,7 +644,11 @@ shutdown signal).
   `create_partition_sql(...)` (`CREATE TABLE IF NOT EXISTS <name> PARTITION OF blocks FOR VALUES
   FROM (lower) TO (upper)` + `CREATE UNIQUE INDEX IF NOT EXISTS ... ON <name>(block_id)`). Treat
   "already exists" as success. `IF NOT EXISTS` alone has a TOCTOU race under concurrency; the
-  advisory lock closes it. On success advance the high-water mark.
+  advisory lock closes it. On success advance the high-water mark. Missing-hour detection must derive
+  existing coverage from `pg_inherits`/`pg_get_expr(relpartbound)` (which hours' ranges are already
+  attached), not from assuming hourly-named partitions cover exactly one hour each — otherwise, right
+  after cutover, the provisioner would attempt to create an hour that falls inside `blocks_legacy`'s
+  wide `[MINVALUE, <cutover_hour>)` bound and fail with a partition-overlap error.
 
 Note: `CREATE ... PARTITION OF` takes a brief `ACCESS EXCLUSIVE` on the parent (catalog change +
 scan of the empty `DEFAULT`); at most once/hour, ahead of need, on an empty default → sub-ms.
@@ -642,7 +718,11 @@ every ingestion/replication instance before the v5 migration cutover (steps 3–
    above). Bump `LATEST_DATA_LAKE_SCHEMA_VERSION` to 5 only in a later, separate deploy, made after
    an operator has run the standalone cutover and confirmed `current_version` is already 5 —
    bumping it any earlier would make every instance's automatic `migrate_db` assert fail at startup,
-   since `execute_migration`'s chain no longer has a step that advances a database past 4.
+   since `execute_migration`'s chain no longer has a step that advances a database past 4. Also
+   relax `execute_migration`'s and `migrate_db`'s post-migration asserts from exact equality to
+   `current_version >= LATEST_DATA_LAKE_SCHEMA_VERSION` (log a warning when the database is ahead of
+   the binary), so an old-LATEST=4 instance that restarts after the operator's cutover does not crash
+   (see "Rolling-deploy hazard" above).
 5. Implement the shared gated-insert helper (lock → probe → insert, hot + recovery arms) in the
    `ingestion` crate; switch `web_ingestion_service.rs`'s `insert_block_typed` to `put_if_absent` +
    the helper (hot/recovery split per block, unchanged shape). Switch `replication.rs`'s
@@ -664,7 +744,9 @@ every ingestion/replication instance before the v5 migration cutover (steps 3–
    unconditionally: the monolith only builds a lakehouse/db pool at all under
    `roles.needs_lakehouse()` (`monolith/src/main.rs:92-94,177`), and the provisioner needs a pool, so
    it must be gated at least as tightly as ingestion itself. Tie it to the same shutdown signal as
-   `serve_ingestion`.
+   `serve_ingestion` (the `lake` handle in scope in that block is moved into the `serve_ingestion`
+   future, so the provisioner must clone its own handle before that move — or re-derive one from the
+   in-scope `lakehouse` Option).
 
 **Phase 3 — Daemon roll-off (#1242)** — parallel with Phase 2 after Phase 1.
 9. Add a `drop_expired_block_partitions` function (new, in `analytics/src/delete.rs` or a sibling
@@ -681,8 +763,16 @@ every ingestion/replication instance before the v5 migration cutover (steps 3–
 - `rust/telemetry/src/blob_storage.rs` — `put_if_absent` (conditional PUT) + `head_origin`
   (cache-bypassing origin HEAD).
 - `rust/ingestion/src/sql_telemetry_db.rs` — partitioned `create_blocks_table`.
-- `rust/ingestion/src/sql_migration.rs` — `upgrade_data_lake_schema_v5` (cutover), version bump,
-  wiring.
+- `rust/ingestion/src/sql_migration.rs` — `upgrade_data_lake_schema_v5` (cutover) exposed via a
+  standalone entry point — never wired into `execute_migration`; relax the version assert to `>=`
+  for forward-compat; the bump to 5 ships in a later deploy.
+- `rust/ingestion/src/remote_data_lake.rs` — relax `migrate_db`'s post-migration assert to
+  `current_version >= LATEST_DATA_LAKE_SCHEMA_VERSION` (log a warning when the database is newer
+  than the binary), so an old-LATEST instance restarting after the operator cutover doesn't crash;
+  thread the pre-cache origin store into `BlobStorage` in `connect_to_remote_data_lake` (per the
+  `head_origin` design in "Conditional blob PUT").
+- `rust/ingestion/src/data_lake_connection.rs` — thread the pre-cache origin store into
+  `BlobStorage` (per the `head_origin` design in "Conditional blob PUT").
 - `rust/ingestion/src/<gated_insert>.rs` — **new** shared lock→probe→insert helper.
 - `rust/ingestion/src/web_ingestion_service.rs` — conditional PUT + gated insert.
 - `rust/analytics/src/replication.rs` — same; stamp `insert_time` on arrival.
@@ -690,6 +780,9 @@ every ingestion/replication instance before the v5 migration cutover (steps 3–
 - `rust/telemetry-ingestion-srv/src/main.rs`, `rust/monolith/src/main.rs` — spawn provisioner
   (gated on `roles.ingestion` in the monolith, alongside `serve_ingestion`).
 - `rust/analytics/src/delete.rs` — replace block deletion with partition drop; drop dead fns.
+- `rust/ingestion/tests/readiness.rs`, `rust/ingestion/tests/warm_object_tests.rs` — mechanical
+  update if `BlobStorage::new` gains the origin-store parameter (both pass a raw `InMemory` store,
+  so origin = same store is trivially correct there).
 - Monitoring surfacing (#1243) — location TBD in Phase 4.
 - Tests under `rust/ingestion/tests/`, `rust/telemetry/tests/`, and `rust/analytics/tests/`.
 
@@ -703,11 +796,11 @@ every ingestion/replication instance before the v5 migration cutover (steps 3–
   transactional domain, so idempotency requires the probe-based recovery arm instead of a single
   transaction; blobs become create-once. The side table remains the documented fallback if a
   deployment target lacks conditional PUT.
-- **Lock+probe on the hot path** — one advisory-lock call and a 1–2-partition index probe per block
-  insert buys full correctness against in-flight-retry races (including the boundary-straddle
-  case). Block rate ≪ event rate, so this is noise; the recovery arm's probe is bounded by the
-  blob's creation time (create-once ⇒ no row predates its blob), so even the rare arm never pays
-  an unpruned scan over all partitions.
+- **Lock+probe on the hot path** — one advisory-lock call and a ~2–3-partition-plus-`DEFAULT` index
+  probe per block insert buys full correctness against in-flight-retry races (including the
+  boundary-straddle case). Block rate ≪ event rate, so this is noise; the recovery arm's probe is
+  bounded by the blob's creation time (create-once ⇒ no row predates its blob), so even the rare arm
+  never pays an unpruned scan over all partitions.
 - **Attach-legacy cutover vs. drain-old-table** — chose attach to keep read SQL untouched and avoid
   any row-DELETE churn for legacy data, at the cost of a one-time validation scan + brief exclusive
   lock during migration.
@@ -736,10 +829,14 @@ every ingestion/replication instance before the v5 migration cutover (steps 3–
 ## Testing Strategy
 - **Unit**: shared boundary function (floor/name/bounds round-trips across DST-free UTC hours,
   boundary instants); `create_partition_sql` output; `put_if_absent` Created/AlreadyExists mapping.
-- **Migration**: on a seeded v4 database with populated `blocks`, run `execute_migration`; assert
-  `blocks` is partitioned, `blocks_legacy` attached with the right bound, `DEFAULT` present, all
-  indexes (incl. per-partition unique-block_id) present, and existing rows still queryable via
-  `BlocksView`. Assert idempotency (re-run is a no-op) and retry-safety.
+- **Migration**: on a seeded v4 database with populated `blocks`, invoke the standalone cutover entry
+  point directly (the CLI subcommand's underlying function — `execute_migration` is never wired to
+  run it); assert `blocks` is partitioned, `blocks_legacy` attached with the right bound, `DEFAULT`
+  present, all indexes (incl. per-partition unique-block_id) present, and existing rows still
+  queryable via `BlocksView`. Assert idempotency (re-run is a no-op) and retry-safety. Also assert the
+  already-partitioned no-op path: on a fresh-install database (already partitioned, `migration`
+  stamped to LATEST), the cutover entry point performs no DDL and only stamps the migration version
+  to 5.
 - **Insert/dedup**:
   - A resend of the same `block_id` is deduped even when the two attempts fall in **different**
     hourly partitions (simulate the laptop-sleep / proxy-delay case) — the recovery arm's probe
@@ -783,8 +880,10 @@ every ingestion/replication instance before the v5 migration cutover (steps 3–
    wide random spread makes concurrent attempts rare and each one cheap. If deployed instance count
    or restart cadence ever demand more headroom, the horizon can simply be raised.
 2. **Cutover lock duration** — Pre-rollout validation gate, not an open question: the exclusive-lock
-   window from `ADD CONSTRAINT ... CHECK` scan + `ATTACH` must be measured on a production-sized
-   `blocks` in staging before the cutover. Decision: proceed with the attach approach; the staging
+   windows from the `NOT VALID` constraint adds, `SET NOT NULL`, and `ATTACH` must be measured on a
+   production-sized `blocks` in staging before the cutover — and so must the `VALIDATE CONSTRAINT`
+   scan durations (run under `SHARE UPDATE EXCLUSIVE`, not exclusive, but their duration sizes the
+   `<cutover_hour>` headroom, above). Decision: proceed with the attach approach; the staging
    measurement is the go/no-go. If the measured exclusive window exceeds an acceptable maintenance
    window budget, fall back to the already-documented drain-old-table alternative (temporary
    `UNION` in `BlocksView`).
