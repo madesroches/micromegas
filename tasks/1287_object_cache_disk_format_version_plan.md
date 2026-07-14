@@ -24,7 +24,7 @@ corrupt cache entry can degrade to a miss but never panic the server.
 
 `rust/object-cache/src/foyer_backend.rs` builds the disk tier with `FsDeviceBuilder::new(dir)` pointed
 directly at the operator-supplied `--disk-path` (`object-cache-srv/src/cli.rs:27`,
-`MICROMEGAS_OBJECT_CACHE_DISK_PATH`, required, persistent). `new_with_shards` (`foyer_backend.rs:192`)
+`MICROMEGAS_OBJECT_CACHE_DISK_PATH`, required, persistent). `new_with_shards` (`foyer_backend.rs:193`)
 builds:
 
 ```rust
@@ -69,6 +69,7 @@ a cached size:
 if let Some(data) = self.backend.get(&meta_key).await
     && data.len() == 8
 {
+    imetric!("range_cache_size_backend_hit", "count", prefix_tag, 1_u64);
     return decode_size(&data);   // trusts any 8-byte value as a u64 size
 }
 ```
@@ -99,7 +100,7 @@ the same key are the same across different runs."* So after `#1228` the disk tie
 already survive restarts — and that stability is precisely what makes the misdecode reachable
 (old-format entries are *found* by key and fed to the new decoder, rather than harmlessly missing).
 A `with_hash_builder(...)` override is therefore **not** part of this fix; see Non-Goals. The stale
-comment in `object-cache/tests/foyer_backend_tests.rs:59-70` (still describing the 0.14 random-seed
+comment in `object-cache/tests/foyer_backend_tests.rs:58-69` (still describing the 0.14 random-seed
 behavior) should be corrected as part of this work.
 
 ## Design
@@ -182,7 +183,7 @@ re-wipes an already-empty dir, and rewrites the marker (idempotent). On the firs
 change the existing top-level old-format `foyer-storage-direct-fs-*` files have no marker → treated as
 mismatch → wiped and reclaimed.
 
-`imetric!("object_cache_disk_format_wiped", "count", 1)` on the wipe branch makes a format-changing
+`imetric!("object_cache_disk_format_wiped", "count", 1_u64)` on the wipe branch makes a format-changing
 deploy observable.
 
 ### Part 2 — Defensive size sanity-check (defense-in-depth)
@@ -201,8 +202,10 @@ In `range_cache/mod.rs` (near `size()`, its sole consumer), define a generous ce
 pub const MAX_PLAUSIBLE_OBJECT_SIZE: u64 = 1 << 48; // 256 TiB
 ```
 
-Restructure the `size()` fast path (`mod.rs:198-204`) so an implausible decode falls through to the
-origin HEAD (which re-HEADs and overwrites the poisoned meta entry) instead of returning it:
+Restructure the `size()` fast path (`mod.rs:198-203`) so an implausible decode falls through to the
+origin HEAD (which re-HEADs and overwrites the poisoned meta entry) instead of returning it. This
+relocates the already-unconditional `range_cache_size_backend_hit` metric into the plausible branch
+(it is not a new counter):
 
 ```rust
 if let Some(data) = self.backend.get(&meta_key).await
@@ -215,7 +218,7 @@ if let Some(data) = self.backend.get(&meta_key).await
     }
     imetric!("range_cache_size_implausible", "count", prefix_tag, 1_u64);
     warn!("range_cache implausible cached size {size} for key={key}; treating as miss");
-    // fall through to origin HEAD, which repopulates meta:{key}
+    // fall through to origin HEAD, which repopulates meta:{ns}:{key}
 }
 ```
 
@@ -242,12 +245,14 @@ miss rather than error). No other allocation site needs changing: the origin HEA
      `range_cache/mod.rs` — see Step 2).
    - Add `prepare_disk_dir(dir, version) -> Result<()>` and call it at the top of `new_with_shards`
      before `FsDeviceBuilder::new`.
-   - Add `use anyhow::Context;` (already imports `Result, ensure`) and `use std::path::Path;`.
+   - Add `use anyhow::Context;` (already imports `Result, ensure`). `prepare_disk_dir` refers to
+     `std::path::Path` fully-qualified, so no `use std::path::Path;` is needed (an unused import would
+     fail `clippy -D warnings`).
    - Emit `object_cache_disk_format_wiped` on the wipe branch.
 2. **`rust/object-cache/src/range_cache/mod.rs`** — apply the size-fast-path plausibility check;
    import `MAX_PLAUSIBLE_OBJECT_SIZE`; add the `range_cache_size_implausible` metric.
 3. **`rust/object-cache/tests/foyer_backend_tests.rs`** — correct the stale hash-builder comment
-   (`:59-70`) to describe foyer 0.22's stable `XxHash64` default; add the format-guard tests below
+   (`:58-69`) to describe foyer 0.22's stable `XxHash64` default; add the format-guard tests below
    (first-boot marker write, same-version reuse, mismatch wipes, missing marker wipes, directory
    preserved).
 4. **`rust/object-cache/tests/range_cache_tests.rs`** — add the implausible-size test below, alongside
@@ -331,8 +336,9 @@ no-fixed-`sleep` guidance. The size-plausibility test needs no `foyer` feature a
   `object-cache/tests/range_cache_tests.rs` (no `foyer` feature needed — same module as
   `size_returns_file_size`), build the cache via `RangeCache::new(...)` directly (as in
   `cold_read_populates_backend`) over a retained `Arc<MemoryBackend>` and a `CountingStore`-wrapped
-  `InMemory` origin, so the test can `backend.put("meta:ns:{key}", <8 garbage bytes decoding above
-  MAX_PLAUSIBLE_OBJECT_SIZE>, FillHint::Demand)` to poison the fast path before calling
+  `InMemory` origin, so the test can `backend.put(format!("meta:{ns}:{key}"), <Bytes of 8 garbage bytes
+  decoding above MAX_PLAUSIBLE_OBJECT_SIZE>, FillHint::Demand)` (owned `String` key, `Bytes` value) to
+  poison the fast path — using the exact `ns` it constructed the `RangeCache` with — before calling
   `RangeCache::size()` → assert `size()` returns the origin's real size (not the poisoned value), does
   not panic, and issues a HEAD to origin to re-resolve it.
 - **Full gate** as in Implementation Step 5.
