@@ -1,8 +1,11 @@
 use std::sync::Arc;
 
+use axum::Router;
 use axum::extract::{Path as AxumPath, State};
 use axum::http::{HeaderMap, StatusCode};
+use axum::routing::{get, post};
 use bytes::Bytes;
+use micromegas_object_cache::CacheClientStore;
 use micromegas_object_cache::memory_backend::MemoryBackend;
 use micromegas_object_cache::range_cache::{
     DEFAULT_DEMAND_RESERVED_FETCH_PERMITS, DEFAULT_MAX_COALESCED_GET_BYTES,
@@ -74,6 +77,26 @@ fn tagged_status_prefix_pairs(sink: &InMemorySink, name: &str) -> Vec<(String, S
                     .map(|p| p.value.as_str().to_string())
                     .unwrap_or_default();
                 out.push((status, prefix));
+            }
+        }
+    }
+    out
+}
+
+/// Collect every value recorded for the untagged integer metric `name` (e.g.
+/// `object_cache_get_bytes_served`, which carries no `status`/`prefix` tags,
+/// unlike the metrics `tagged_status_prefix_pairs` collects). Requires
+/// `dispatch::flush_metrics_buffer` to have been called first so buffered
+/// events are visible as blocks.
+fn integer_metric_values(sink: &InMemorySink, name: &str) -> Vec<u64> {
+    let state = sink.state.lock().expect("sink lock");
+    let mut out = Vec::new();
+    for block in &state.metrics_blocks {
+        for evt in block.events.iter() {
+            if let MetricsMsgQueueAny::IntegerMetricEvent(e) = evt
+                && e.desc.name == name
+            {
+                out.push(e.value);
             }
         }
     }
@@ -288,4 +311,115 @@ async fn empty_ranges_request_is_not_double_counted() {
         1,
         "the wrapper must be the sole emitter of object_cache_ranges_requests: {pairs:?}"
     );
+}
+
+/// Reproduction for #1279: `object_cache_get_bytes_served` is emitted from
+/// `count_bytes_served`'s `on_complete` callback, which historically only
+/// fired once the wrapped stream was polled to a terminal `None`. A `GET`
+/// response is framed with an explicit `Content-Length` header, so the
+/// transport (hyper) stops polling the body once the declared byte count has
+/// been written and never performs that terminal poll -- the metric was a
+/// structural zero under real HTTP serving despite every direct-call test in
+/// this file passing. Driving the handler through actual HTTP (`axum::serve`
+/// plus a real client reading the full body), rather than calling the
+/// handler directly or draining its body in-process, is what surfaces the
+/// bug and proves the fix.
+#[tokio::test]
+#[serial]
+async fn get_range_bytes_served_fires_over_real_http() {
+    let data = vec![7u8; 10 * BLOCK_SIZE as usize];
+    let store = Arc::new(InMemory::new());
+    put_bytes(&store, "obj/h", &data).await;
+    let state = make_state(store as Arc<dyn ObjectStore>);
+
+    let guard = init_in_memory_tracing();
+
+    let app = Router::new()
+        .route("/obj/{*key}", get(get_range_handler))
+        .with_state(state);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind ephemeral port");
+    let addr = listener.local_addr().expect("local_addr");
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("serve");
+    });
+
+    // The client's direct fallback store is left empty: a passing assertion
+    // on the returned bytes can only be explained by a genuine round trip
+    // through the real HTTP server, not a silent fallback.
+    let direct = Arc::new(InMemory::new());
+    let client = CacheClientStore::new(format!("http://{addr}"), None, direct);
+    let path = Path::from("obj/h");
+    let range = 0u64..(data.len() as u64);
+    let got = client
+        .get_range(&path, range.clone())
+        .await
+        .expect("real HTTP GET must succeed");
+    assert_eq!(&got[..], &data[..]);
+
+    micromegas_tracing::dispatch::flush_metrics_buffer();
+    let values = integer_metric_values(&guard.sink, "object_cache_get_bytes_served");
+    assert_eq!(
+        values,
+        vec![range.end - range.start],
+        "GET bytes-served must be recorded exactly once with the full requested byte count"
+    );
+
+    server.abort();
+    let _ = server.await;
+}
+
+/// Regression guard mirroring the reproduction above for `POST /ranges`:
+/// this path already works today (chunked transfer-encoding polls the body
+/// to a terminal `None`), but exercising it over real HTTP with the same
+/// shape of assertion keeps both call sites symmetric and guards against a
+/// future regression in either one.
+#[tokio::test]
+#[serial]
+async fn post_ranges_bytes_served_fires_over_real_http() {
+    let data = vec![9u8; 10 * BLOCK_SIZE as usize];
+    let store = Arc::new(InMemory::new());
+    put_bytes(&store, "obj/i", &data).await;
+    let state = make_state(store as Arc<dyn ObjectStore>);
+
+    let guard = init_in_memory_tracing();
+
+    let app = Router::new()
+        .route("/ranges/{*key}", post(post_ranges_handler))
+        .with_state(state);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind ephemeral port");
+    let addr = listener.local_addr().expect("local_addr");
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("serve");
+    });
+
+    let direct = Arc::new(InMemory::new());
+    let client = CacheClientStore::new(format!("http://{addr}"), None, direct);
+    let path = Path::from("obj/i");
+    let ranges = [0u64..1000, 2000u64..(data.len() as u64)];
+    let got = client
+        .get_ranges(&path, &ranges)
+        .await
+        .expect("real HTTP POST /ranges must succeed");
+    assert_eq!(got.len(), ranges.len());
+    for (chunk, range) in got.iter().zip(ranges.iter()) {
+        assert_eq!(&chunk[..], &data[range.start as usize..range.end as usize]);
+    }
+
+    let framed_total: u64 =
+        ranges.iter().map(|r| r.end - r.start).sum::<u64>() + 8 * ranges.len() as u64;
+
+    micromegas_tracing::dispatch::flush_metrics_buffer();
+    let values = integer_metric_values(&guard.sink, "object_cache_ranges_bytes_served");
+    assert_eq!(
+        values,
+        vec![framed_total],
+        "ranges bytes-served must be recorded exactly once with the full framed byte count"
+    );
+
+    server.abort();
+    let _ = server.await;
 }

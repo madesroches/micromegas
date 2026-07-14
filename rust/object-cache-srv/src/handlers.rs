@@ -81,13 +81,21 @@ fn permit_body(
     })
 }
 
-/// Wrap `inner` so that, once it drains to completion (yields `None`)
-/// without ever yielding an `Err`, `on_complete` is called with the total
-/// bytes yielded. A mid-stream error or the consumer dropping the stream
-/// before it drains both skip the callback — matching the accepted
-/// bytes-served under-reporting described where this is used.
+/// Wrap `inner` so that `on_complete` is called exactly once with the total
+/// bytes yielded, as soon as the payload is fully produced. When
+/// `expected_total` is known, the callback fires immediately BEFORE yielding
+/// the chunk that completes it — a `Content-Length`-framed HTTP body is
+/// considered complete by the transport once the declared byte count is
+/// written and is never polled again for a terminal `None`, so firing after
+/// the final `yield` (or on the terminal `None`) would never run in practice.
+/// A mid-stream `Err`, or a stream that ends before reaching `expected_total`,
+/// skips the callback — preserving the accepted under-reporting on truncation.
+/// When `expected_total` is `None` (length genuinely unknown up front), there
+/// is no "before completion" point to detect, so the callback instead fires
+/// on the terminal `None`, with whichever total was accumulated by then.
 fn count_bytes_served<F>(
     mut inner: BoxStream<'static, Result<Bytes, anyhow::Error>>,
+    expected_total: Option<u64>,
     on_complete: F,
 ) -> BoxStream<'static, Result<Bytes, anyhow::Error>>
 where
@@ -97,16 +105,33 @@ where
         let mut total = 0u64;
         let mut on_complete = Some(on_complete);
         while let Some(item) = inner.next().await {
-            let is_err = item.is_err();
-            if let Ok(chunk) = &item {
-                total += chunk.len() as u64;
-            }
-            yield item;
-            if is_err {
-                return;
+            match &item {
+                Ok(chunk) => {
+                    total += chunk.len() as u64;
+                    // Fire BEFORE the final yield: the transport may never
+                    // poll us again once Content-Length is satisfied.
+                    if let Some(expected) = expected_total
+                        && total >= expected
+                        && let Some(f) = on_complete.take()
+                    {
+                        f(total);
+                    }
+                    yield item;
+                }
+                Err(_) => {
+                    yield item;
+                    return; // mid-stream error: skip the callback
+                }
             }
         }
-        if let Some(f) = on_complete.take() {
+        // Fallback for streams with no known expected length: fire on the
+        // terminal `None` with whatever total was accumulated. When
+        // `expected_total` is `Some`, a stream that ends early (without an
+        // error) must NOT fire here — that's the accepted under-reporting
+        // case documented above, not a second chance to fire.
+        if expected_total.is_none()
+            && let Some(f) = on_complete.take()
+        {
             f(total);
         }
     }
@@ -387,7 +412,7 @@ async fn get_range_handler_inner(
     let full = stream::once(async move { Ok::<Bytes, anyhow::Error>(first) })
         .chain(inner)
         .boxed();
-    let counted = count_bytes_served(full, move |bytes| {
+    let counted = count_bytes_served(full, Some(requested_bytes), move |bytes| {
         imetric!("object_cache_get_bytes_served", "bytes", bytes);
         debug!(
             "GET {key_for_log} {}-{} served {bytes} bytes",
@@ -597,7 +622,7 @@ async fn post_ranges_handler_inner(
     let full = stream::once(async move { Ok::<Bytes, anyhow::Error>(first) })
         .chain(framed)
         .boxed();
-    let counted = count_bytes_served(full, move |bytes| {
+    let counted = count_bytes_served(full, Some(framed_response_bytes), move |bytes| {
         imetric!("object_cache_ranges_bytes_served", "bytes", bytes);
         debug!("POST ranges {key_for_log}: {range_count} ranges served {bytes} bytes");
     });
