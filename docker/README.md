@@ -202,7 +202,7 @@ docker run -d --name analytics-web \
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `MICROMEGAS_OBJECT_CACHE_ORIGIN_URI` | Yes | Bucket-only origin URI (e.g. `s3://my-bucket`, no path — the lake-root prefix arrives inside each request key) |
-| `MICROMEGAS_OBJECT_CACHE_DISK_PATH` | Yes | Local disk path for the cache backend |
+| `MICROMEGAS_OBJECT_CACHE_DISK_PATH` | Yes | Local disk path for the cache backend. Used exclusively by the cache: on a format-changing upgrade its **contents are wiped** on startup and rewarmed from origin (safe for cache data — see the [admin guide](../mkdocs/docs/admin/object-cache.md)). Point it at a dedicated volume, never a shared directory. |
 | `MICROMEGAS_API_KEYS` | Yes* | JSON array of `{"name":"...","key":"..."}` |
 | `MICROMEGAS_OBJECT_CACHE_RAM_MB` | No | In-memory cache size (default `512`) |
 | `MICROMEGAS_OBJECT_CACHE_DISK_GB` | No | On-disk cache size (default `50`) |
