@@ -109,7 +109,10 @@ conditional PUTs work through the full ingestion stack. Conditional PUT is there
 every in-repo deployment target; the only residual caveat is an externally-operated, older
 S3-compatible store (e.g. old MinIO, which `local_test_env/ai_scripts/start_minio.py` uses only as
 a local-test S3 origin, never a production target) lacking `If-None-Match: *` — a deployment-time
-check, not a code gap (see "Cost — honest accounting" below).
+check, not a code gap (see "Cost — honest accounting" below). This also depends on the S3 store
+keeping `object_store`'s default conditional-put mode (`S3ConditionalPut::ETagMatch`): an
+`aws_conditional_put=disabled` override in `MICROMEGAS_OBJECT_STORE_URI`'s options would make
+`put_if_absent` return `Error::NotImplemented` on S3.
 
 ## Critical Design Decisions
 
@@ -296,7 +299,10 @@ insert uses `ON CONFLICT DO NOTHING` (no target).
 - Conditional-PUT support becomes a hard deployment requirement. Every backend this workspace can
   target (S3 via the compiled `aws` feature, and local FS) supports it; the only caveat is an
   externally-operated, older S3-compatible store (e.g. old MinIO) lacking `If-None-Match: *` — a
-  deployment-time check against that specific target, not a code gap.
+  deployment-time check against that specific target, not a code gap. On S3 this also requires
+  keeping the store's default conditional-put mode (`S3ConditionalPut::ETagMatch`, the
+  `object_store` 0.13.2 default) — an `aws_conditional_put=disabled` override would silently make
+  `put_if_absent` return `Error::NotImplemented`.
 
 ### 2. Late-arriving data (proxies, replication) — `insert_time` is stamped at the final hop
 
@@ -364,8 +370,9 @@ validate timing against a production-sized `blocks` in staging before rollout.
 
 Alternative considered — **new partitioned table + drain old via existing retention**: point writes
 at the new table, keep the old one readable until it drains. Rejected because `BlocksView`'s
-`data_sql`/`source_count_query` hardcode `FROM blocks` and would need a temporary `UNION` across two
-relations for the whole retention window; the attach approach avoids touching read SQL entirely.
+`data_sql`/`source_count_query` use `FROM blocks, streams, processes` (join) (filter is on
+`blocks.insert_time`) and would need a temporary `UNION` across two relations for the whole
+retention window; the attach approach avoids touching read SQL entirely.
 
 ## Design
 
