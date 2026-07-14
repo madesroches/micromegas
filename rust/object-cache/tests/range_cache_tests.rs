@@ -901,6 +901,54 @@ async fn implausible_cached_size_degrades_to_a_miss() {
     );
 }
 
+// The origin-HEAD path applies the same plausibility ceiling as the cached
+// read: an implausibly large size reported by the origin (a stronger signal of
+// corruption than a bad cache entry) surfaces as an error and is never cached,
+// so it can't drive a catastrophic allocation or wedge every future read into a
+// re-HEAD.
+#[tokio::test]
+async fn implausible_origin_size_surfaces_as_error() {
+    use micromegas_object_cache::backend::RangeCacheBackend;
+    use micromegas_object_cache::range_cache::MAX_PLAUSIBLE_OBJECT_SIZE;
+
+    let store = Arc::new(InMemory::new());
+    put_bytes(&store, "obj", b"small payload").await;
+
+    let origin = Arc::new(HeadSizeStore {
+        inner: store.clone() as Arc<dyn ObjectStore>,
+        reported_size: MAX_PLAUSIBLE_OBJECT_SIZE + 1,
+    });
+
+    let backend = Arc::new(MemoryBackend::new());
+    let ns = "ns".to_string();
+    let cache = RangeCache::new(
+        origin as Arc<dyn ObjectStore>,
+        backend.clone(),
+        1024,
+        ns.clone(),
+        DEFAULT_TOTAL_FETCH_PERMITS,
+        DEFAULT_DEMAND_RESERVED_FETCH_PERMITS,
+        DEFAULT_MAX_COALESCED_GET_BYTES,
+        DEFAULT_PROMOTE_WHOLE_BATCH,
+    );
+
+    let err = cache
+        .size("obj")
+        .await
+        .expect_err("an implausible origin size must surface as an error");
+    assert!(
+        err.to_string().contains("implausible origin size"),
+        "unexpected error: {err}"
+    );
+
+    // The poisoned size must never be written to the backend, so a subsequent
+    // read re-resolves from origin instead of serving a stored bad value.
+    assert!(
+        backend.get(&format!("meta:{ns}:obj")).await.is_none(),
+        "an implausible origin size must not be cached"
+    );
+}
+
 #[tokio::test]
 async fn total_concurrency_never_exceeds_total() {
     with_timeout(async move {
@@ -1006,6 +1054,80 @@ impl ObjectStore for FailAtOffsetStore {
             });
         }
         self.inner.get_opts(location, options).await
+    }
+
+    fn delete_stream(
+        &self,
+        locations: BoxStream<'static, object_store::Result<Path>>,
+    ) -> BoxStream<'static, object_store::Result<Path>> {
+        self.inner.delete_stream(locations)
+    }
+
+    fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
+        self.inner.list(prefix)
+    }
+
+    async fn list_with_delimiter(&self, prefix: Option<&Path>) -> object_store::Result<ListResult> {
+        self.inner.list_with_delimiter(prefix).await
+    }
+
+    async fn copy_opts(
+        &self,
+        from: &Path,
+        to: &Path,
+        options: CopyOptions,
+    ) -> object_store::Result<()> {
+        self.inner.copy_opts(from, to, options).await
+    }
+}
+
+/// Wraps an `ObjectStore`, overriding `head()` to report a fixed object size
+/// regardless of the real payload — used to simulate an origin that reports an
+/// implausibly large size (e.g. origin-side corruption).
+#[derive(Debug)]
+struct HeadSizeStore {
+    inner: Arc<dyn ObjectStore>,
+    reported_size: u64,
+}
+
+impl std::fmt::Display for HeadSizeStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "HeadSizeStore({})", self.inner)
+    }
+}
+
+#[async_trait]
+impl ObjectStore for HeadSizeStore {
+    async fn put_opts(
+        &self,
+        location: &Path,
+        payload: PutPayload,
+        opts: PutOptions,
+    ) -> object_store::Result<PutResult> {
+        self.inner.put_opts(location, payload, opts).await
+    }
+
+    async fn put_multipart_opts(
+        &self,
+        location: &Path,
+        opts: PutMultipartOptions,
+    ) -> object_store::Result<Box<dyn MultipartUpload>> {
+        self.inner.put_multipart_opts(location, opts).await
+    }
+
+    // `head()` (an `ObjectStoreExt` default) desugars to a `get_opts` call with
+    // `head: true`; override the size it reports there.
+    async fn get_opts(
+        &self,
+        location: &Path,
+        options: GetOptions,
+    ) -> object_store::Result<GetResult> {
+        let is_head = options.head;
+        let mut result = self.inner.get_opts(location, options).await?;
+        if is_head {
+            result.meta.size = self.reported_size;
+        }
+        Ok(result)
     }
 
     fn delete_stream(

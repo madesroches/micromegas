@@ -241,11 +241,33 @@ impl RangeCache {
                         Ok(object_meta) => {
                             let size = object_meta.size;
                             debug!("range_cache origin head key={key_owned} size={size}");
-                            let size_bytes = Bytes::from(size.to_le_bytes().to_vec());
-                            backend
-                                .put(meta_key_owned.clone(), size_bytes.clone(), FillHint::Demand)
-                                .await;
-                            task_entry.fulfill(Ok(size_bytes));
+                            if size > MAX_PLAUSIBLE_OBJECT_SIZE {
+                                // The origin is the source of truth: an implausible
+                                // size here signals corruption, not a bad cache
+                                // entry. Surface it instead of caching a value the
+                                // cached-read path would reject on every future
+                                // read, and keep both paths agreeing that a size
+                                // above the ceiling is never cached (#1287).
+                                imetric!(
+                                    "range_cache_size_implausible",
+                                    "count",
+                                    prefix_tag,
+                                    1_u64
+                                );
+                                task_entry.fulfill(Err(Arc::new(anyhow::anyhow!(
+                                    "range_cache implausible origin size {size} for key={key_owned}"
+                                ))));
+                            } else {
+                                let size_bytes = Bytes::from(size.to_le_bytes().to_vec());
+                                backend
+                                    .put(
+                                        meta_key_owned.clone(),
+                                        size_bytes.clone(),
+                                        FillHint::Demand,
+                                    )
+                                    .await;
+                                task_entry.fulfill(Ok(size_bytes));
+                            }
                         }
                         Err(e) => {
                             task_entry.fulfill(Err(Arc::new(anyhow::Error::from(e))));
