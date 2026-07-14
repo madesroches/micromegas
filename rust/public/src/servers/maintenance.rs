@@ -18,6 +18,7 @@ use std::time::Duration;
 use tokio::task::{JoinError, JoinSet};
 
 use super::cron_task::{CronTask, TaskCallback};
+use super::pg_stats::PgStatsTask;
 
 type Views = Arc<Vec<Arc<dyn View>>>;
 
@@ -279,9 +280,11 @@ pub fn get_global_views_with_update_group(view_factory: &ViewFactory) -> Vec<Arc
 /// Starts the maintenance daemon, which runs various scheduled tasks.
 ///
 /// This function initializes and spawns several `CronTask`s for daily, hourly, minute,
-/// and second-based maintenance operations, such as data materialization and cleanup.
-/// All four runner loops react to `shutdown`: they stop scheduling and drain in-flight
-/// tasks. A deadline arm forces return after `grace` even if tasks haven't drained.
+/// and second-based maintenance operations, such as data materialization and cleanup,
+/// plus a once-a-minute collector that samples the metadata Postgres's `pg_stat_*`
+/// views for self-observability. All runner loops react to `shutdown`: they stop
+/// scheduling and drain in-flight tasks. A deadline arm forces return after `grace`
+/// even if tasks haven't drained.
 ///
 /// # Arguments
 ///
@@ -333,6 +336,14 @@ where
             views: views.clone(),
         }),
     )?;
+    let pg_stats = CronTask::new(
+        String::from("pg_stats"),
+        TimeDelta::minutes(1),
+        TimeDelta::seconds(15), // staggered from the materialization tasks' 30s offset
+        Arc::new(PgStatsTask {
+            lakehouse: lakehouse.clone(),
+        }),
+    )?;
     let every_second = CronTask::new(
         String::from("every second"),
         TimeDelta::seconds(1),
@@ -348,6 +359,7 @@ where
     runners.spawn(run_tasks_forever(vec![every_hour], 1, fanout.subscribe()));
     runners.spawn(run_tasks_forever(vec![every_minute], 5, fanout.subscribe()));
     runners.spawn(run_tasks_forever(vec![every_second], 5, fanout.subscribe()));
+    runners.spawn(run_tasks_forever(vec![pg_stats], 1, fanout.subscribe()));
 
     let deadline = {
         let d = fanout.subscribe();

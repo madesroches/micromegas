@@ -101,3 +101,8 @@ required-features = ["server"]
 name = "large_message_tests"
 path = "tests/large_message_tests.rs"
 required-features = ["server"]
+
+[[test]]
+name = "pg_stats_test"
+path = "tests/pg_stats_test.rs"
+required-features = ["server"]
