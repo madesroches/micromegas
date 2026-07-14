@@ -469,8 +469,9 @@ already depends on it) so the two call sites cannot diverge:
 
 ### Schema (#1240) — migration v5
 
-Bump `LATEST_DATA_LAKE_SCHEMA_VERSION` to `5`; add `upgrade_data_lake_schema_v5` implementing the
-cutover from *Critical Design Decision 3*. Because `ATTACH PARTITION`/`CREATE INDEX` on
+Add `upgrade_data_lake_schema_v5` implementing the cutover from *Critical Design Decision 3*; the
+`LATEST_DATA_LAKE_SCHEMA_VERSION` bump to `5` ships separately, in a later deploy (see
+"Rolling-deploy hazard" below for why the two cannot ship together). Because `ATTACH PARTITION`/`CREATE INDEX` on
 a partitioned parent take heavier locks and some steps (per-partition index creation) may be better
 run outside a transaction, model this like the existing v2→v3 migration: run the non-transactional
 DDL (index creation) first with `IF NOT EXISTS`, then the transactional swap. Keep it idempotent and
@@ -487,11 +488,22 @@ unique or exclusion constraint matching the ON CONFLICT specification." The new 
 `ON CONFLICT DO NOTHING` insert code (Implementation Steps, step 5) is schema-agnostic and works
 against both the plain and the partitioned table, so a safe order exists: **the new insert code
 must be live on every ingestion/replication instance before the v5 cutover runs — never the
-reverse, and never interleaved.** Concretely, decouple the v5 migration from the automatic startup
-path (gate it behind an explicit operational trigger run once the fleet is confirmed on the new
-binary, rather than letting whichever instance starts first run it unconditionally); if that
-decoupling isn't feasible, the fallback is a brief ingestion stop-the-world during cutover (drain
-ingestion, let the last old instance exit, then let migration run).
+reverse, and never interleaved.** Concretely: `upgrade_data_lake_schema_v5` is **never** wired into
+`execute_migration`'s automatic `if N == current_version` chain — that chain runs unconditionally
+inside `migrate_db` on every process startup (`connect_to_remote_data_lake`,
+`remote_data_lake.rs:60,29`), so any step placed there runs the instant the first new binary
+starts, which is exactly the ordering this section forbids. Instead, expose
+`upgrade_data_lake_schema_v5` through a standalone, explicitly-invoked entry point (a dedicated CLI
+subcommand) that an operator runs once, out-of-band, after confirming every
+ingestion/replication instance is already running the new insert code (Implementation Steps, step
+5) — never as a side effect of a service starting up. This also means
+`LATEST_DATA_LAKE_SCHEMA_VERSION` cannot be bumped to 5 in the same deploy as the standalone
+subcommand: `execute_migration`'s own chain has no step that advances a database past version 4, so
+if a binary declaring `LATEST_DATA_LAKE_SCHEMA_VERSION == 5` starts against a still-v4 database,
+`migrate_db`'s post-migration `assert_eq!(current_version, LATEST_DATA_LAKE_SCHEMA_VERSION)` (and
+`execute_migration`'s own internal one) would fail and crash the process. The bump therefore ships
+in a **later**, separate deploy, made only after an operator has run the standalone cutover and
+confirmed `current_version` is already 5 in the database — see Implementation Steps step 4.
 
 New `create_blocks_table` (fresh v1 installs go straight to partitioned) creates
 `PARTITION BY RANGE (insert_time)`, the parent non-unique indexes, and a `DEFAULT` partition with
@@ -503,8 +515,10 @@ has the column) — `create_migration_table` must stamp the `migration` row dire
 `create_tables`. Because `execute_migration` gates each upgrade step on an exact `if N ==
 current_version` check (not `>=`), stamping straight to 5 causes the `if 1/2/3 ==
 current_version` branches to be skipped naturally — no other change to `execute_migration`'s
-control flow is needed. Existing v4 databases still read `current_version == 4` and take the new
-`if 4 == current_version` branch running `upgrade_data_lake_schema_v5`, unaffected.
+control flow is needed for fresh installs. Existing v4 databases are untouched by this stamping
+path: `execute_migration` gets no new `if 4 == current_version` branch at all, so a v4 database only
+reaches v5 through the standalone, operator-invoked cutover described in "Rolling-deploy hazard"
+below — never automatically.
 
 ### Ingestion forward-provisioning (#1241 — new background task)
 
@@ -588,9 +602,15 @@ every ingestion/replication instance before the v5 migration cutover (steps 3–
    `PutMode::Create`; unit-test the `AlreadyExists` mapping against the in-memory/local backend.
 3. Rewrite `create_blocks_table` (`sql_telemetry_db.rs`) to create the partitioned parent + parent
    indexes + `DEFAULT` partition (with local unique-block_id index) for fresh installs.
-4. Add `upgrade_data_lake_schema_v5` (`sql_migration.rs`) implementing the attach-legacy cutover;
-   bump `LATEST_DATA_LAKE_SCHEMA_VERSION` to 5 and wire the `if 4 == current_version` step in
-   `execute_migration` (mirror the v3 non-transactional-DDL-then-transaction structure).
+4. Add `upgrade_data_lake_schema_v5` (`sql_migration.rs`) implementing the attach-legacy cutover
+   (mirror the v3 non-transactional-DDL-then-transaction structure). Expose it through a standalone,
+   explicitly-invoked entry point (e.g. a dedicated CLI subcommand) — **not** an `if 4 ==
+   current_version` step inside `execute_migration` — so it never runs as a side effect of
+   `migrate_db`/`connect_to_remote_data_lake`'s automatic startup path (see "Rolling-deploy hazard"
+   above). Bump `LATEST_DATA_LAKE_SCHEMA_VERSION` to 5 only in a later, separate deploy, made after
+   an operator has run the standalone cutover and confirmed `current_version` is already 5 —
+   bumping it any earlier would make every instance's automatic `migrate_db` assert fail at startup,
+   since `execute_migration`'s chain no longer has a step that advances a database past 4.
 5. Implement the shared gated-insert helper (lock → probe → insert, hot + recovery arms) in the
    `ingestion` crate; switch `web_ingestion_service.rs`'s `insert_block_typed` to `put_if_absent` +
    the helper (hot/recovery split per block, unchanged shape). Switch `replication.rs`'s
@@ -606,7 +626,13 @@ every ingestion/replication instance before the v5 migration cutover (steps 3–
 7. Add the provisioning background task (module in `ingestion/`), using the shared helper and
    `pg_try_advisory_xact_lock(int4, int4)` with the `PARTITION_PROVISION_LOCK_CLASS` constant;
    in-process high-water-mark cache; buffer size/cadence config.
-8. Spawn it from `telemetry-ingestion-srv/src/main.rs` (and the monolith) tied to the shutdown signal.
+8. Spawn it from `telemetry-ingestion-srv/src/main.rs` (that binary only ever runs the ingestion
+   role, so this is unconditional) and, in the monolith, from inside the existing
+   `if roles.ingestion` block (`monolith/src/main.rs:234`) alongside `serve_ingestion` — **never**
+   unconditionally: the monolith only builds a lakehouse/db pool at all under
+   `roles.needs_lakehouse()` (`monolith/src/main.rs:92-94,177`), and the provisioner needs a pool, so
+   it must be gated at least as tightly as ingestion itself. Tie it to the same shutdown signal as
+   `serve_ingestion`.
 
 **Phase 3 — Daemon roll-off (#1242)** — parallel with Phase 2 after Phase 1.
 9. Add a `drop_expired_block_partitions` function (new, in `analytics/src/delete.rs` or a sibling
@@ -629,7 +655,8 @@ every ingestion/replication instance before the v5 migration cutover (steps 3–
 - `rust/ingestion/src/web_ingestion_service.rs` — conditional PUT + gated insert.
 - `rust/analytics/src/replication.rs` — same; stamp `insert_time` on arrival.
 - `rust/ingestion/src/<provisioner>.rs` — **new** forward-provisioning task.
-- `rust/telemetry-ingestion-srv/src/main.rs`, `rust/monolith/src/main.rs` — spawn provisioner.
+- `rust/telemetry-ingestion-srv/src/main.rs`, `rust/monolith/src/main.rs` — spawn provisioner
+  (gated on `roles.ingestion` in the monolith, alongside `serve_ingestion`).
 - `rust/analytics/src/delete.rs` — replace block deletion with partition drop; drop dead fns.
 - Monitoring surfacing (#1243) — location TBD in Phase 4.
 - Tests under `rust/ingestion/tests/`, `rust/telemetry/tests/`, and `rust/analytics/tests/`.
@@ -654,9 +681,11 @@ every ingestion/replication instance before the v5 migration cutover (steps 3–
   lock during migration.
 - **Provisioning on the write path vs. in the daemon** — chose write path so write availability does
   not depend on the daemon being up; the trade is a new background task in the ingestion service.
-- **Hourly width** — matches `BlocksView`'s incremental hourly windows (`get_max_partition_time_delta`
-  = 1h) so partitions prune 1:1; finer widths multiply catalog objects, coarser widths coarsen
-  retention granularity.
+- **Hourly width** — matches `BlocksView`'s incremental windows: `get_max_partition_time_delta`
+  returns 1h for the `Abort`/`CreateFromSource` strategies and 1 day for `MergeExisting`
+  (`blocks_view.rs:140-147`), so create-from-source partitions prune 1:1 and merge windows still
+  prune to a bounded (≤24-partition) set; finer widths multiply catalog objects, coarser widths
+  coarsen retention granularity.
 
 ## Documentation
 - `mkdocs/docs/admin/` — document the partitioned-`blocks` retention model (drop-based, hourly), the
