@@ -58,6 +58,9 @@ docker run -d -p 8080:8080 \
 
 Authenticating *against the origin* (e.g. AWS credentials) uses the same environment variables as every other Micromegas service's `MICROMEGAS_OBJECT_STORE_URI` — standard `object_store` crate variables such as `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_ENDPOINT`, `AWS_REGION`, `AWS_ALLOW_HTTP`.
 
+!!! warning "Give the cache its own directory — its contents can be wiped on startup"
+    The cache manages `MICROMEGAS_OBJECT_CACHE_DISK_PATH` exclusively. The on-disk store carries an internal format version, and when a build's format differs from the persisted store (a format-changing upgrade, or a first boot onto a pre-versioning store), the cache **deletes all contents** of this path on startup, then rewarms from origin. The directory/mount point itself is preserved; only its contents are removed. This is safe for cache data — the cache is a read-through layer over a write-once origin, so nothing but reconstructible cache blocks is lost (this is what "no data loss" means above) — but it means the path must be used **exclusively** by the cache. Never point it at a shared volume or a directory holding anything else, or that data will be erased on the next format bump. The wipe emits the `object_cache_disk_format_wiped` metric (see [Monitoring](#monitoring)).
+
 ## CLI flags
 
 | Flag | Default | Description |

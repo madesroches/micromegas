@@ -67,7 +67,7 @@ All flags can be set via the listed environment variables.
 | `--listen`                      | `MICROMEGAS_OBJECT_CACHE_LISTEN`     | `0.0.0.0:8080` | Listen address.                                                    |
 | `--origin-uri`                  | `MICROMEGAS_OBJECT_CACHE_ORIGIN_URI` | _(required)_   | Origin object store URI. Must be bucket-only with no path component. |
 | `--ram-mb`                      | `MICROMEGAS_OBJECT_CACHE_RAM_MB`     | `512`          | RAM cache size, in MB.                                             |
-| `--disk-path`                   | `MICROMEGAS_OBJECT_CACHE_DISK_PATH`  | _(required)_   | Directory for the on-disk cache.                                  |
+| `--disk-path`                   | `MICROMEGAS_OBJECT_CACHE_DISK_PATH`  | _(required)_   | Directory for the on-disk cache, used exclusively by the cache. Its contents are wiped on startup after a format-changing upgrade and rewarmed from origin (safe for cache data); point it at a dedicated volume, never a shared directory. |
 | `--disk-gb`                     | `MICROMEGAS_OBJECT_CACHE_DISK_GB`    | `50`           | Disk cache size, in GB.                                           |
 | `--block-size`                  | `MICROMEGAS_OBJECT_CACHE_BLOCK_SIZE` | `1048576`      | Cache block size, in bytes (must be > 0).                         |
 | `--namespace`                   | `MICROMEGAS_OBJECT_CACHE_NAMESPACE`  | _(derived)_    | Cache namespace. Defaults to the origin URI with the scheme stripped. |
