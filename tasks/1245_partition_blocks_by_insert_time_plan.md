@@ -50,7 +50,9 @@ CONCURRENTLY` runs outside any transaction (it cannot run inside one). Callers: 
 and the monolith (`monolith/src/main.rs:~180`, gated by `roles.needs_lakehouse()`) both go through
 `connect_to_remote_data_lake`; a separate, unrelated app-db migration runs in `analytics-web-srv`'s
 `seed_local_data_source` (`monolith/src/main.rs:343` calls `app_db::execute_migration`, a
-different function of the same name, web role only).
+different function of the same name, run only when the web and flightsql roles are both enabled
+and seeding is enabled — i.e. `--no-seed-data-source` is not set (`monolith/src/main.rs:289,
+298-303`)).
 
 ### Insert path (`rust/ingestion/src/web_ingestion_service.rs:142-214`)
 `insert_block_typed` puts the payload blob at `blobs/{process_id}/{stream_id}/{block_id}`
@@ -414,13 +416,19 @@ configured object cache (a cache-served HEAD synthesizes `last_modified = Utc::n
 1's "Bounding the recovery probe", correctness caveat 2). `BlobStorage::inner()` cannot be reused
 for this: it returns the same (possibly cache-layered) store the lakehouse read paths already rely
 on (`write_partition.rs`, `query.rs`, `jit_partitions.rs`, `lakehouse_context.rs`'s `l1_wrap`), so
-when the object cache is configured, `inner()` *is* `CacheClientStore`. Instead, `BlobStorage` must
-retain a handle to the pre-cache-layer origin store alongside the layered one: `make_cache` clones
-`direct` (a free `Arc` clone) before moving the original into `CacheClientStore::new` and returns
-the clone too; `connect_to_remote_data_lake` and `connect_to_data_lake` thread it into `BlobStorage`
-as a second field, and `head_origin` reads from that field exclusively, unconditionally bypassing
-the cache. The existing unconditional `put` and `inner()` remain unchanged for all other callers
-(parquet partitions, lakehouse reads, etc.).
+when the object cache is configured, `inner()` is a `PrefixStore` over `CacheClientStore`. Instead,
+`BlobStorage` must retain a handle to the pre-cache-layer origin store alongside the layered one:
+`make_cache` clones `direct` (a free `Arc` clone) before moving the original into
+`CacheClientStore::new` and returns the clone too; `connect_to_remote_data_lake` and
+`connect_to_data_lake` wrap that clone in its own `PrefixStore` with the same lake root (`blob_store_root`)
+that `BlobStorage::new` applies to the layered store — matching the prefixing `put`/`read_blob` go
+through (`blob_storage.rs:34-38`) — and thread the wrapped result into `BlobStorage` as a second
+field; `head_origin` reads from that field exclusively, unconditionally bypassing the cache. Without
+this prefix, `head_origin` would look up an un-prefixed key against the raw origin store and miss
+every object the lake actually wrote under its root, turning every recovery-arm probe into a false
+"not found" and silently breaking the old-duplicate correctness argument above. The existing
+unconditional `put` and `inner()` remain unchanged for all other callers (parquet partitions,
+lakehouse reads, etc.).
 
 ### Insert paths (`web_ingestion_service.rs`, `replication.rs`)
 
@@ -612,7 +620,8 @@ every ingestion/replication instance before the v5 migration cutover (steps 3–
 ## Files to Modify
 - `rust/ingestion/src/blocks_partition.rs` — **new** shared helper.
 - `rust/ingestion/src/lib.rs` — export new modules.
-- `rust/telemetry/src/blob_storage.rs` — `put_if_absent` (conditional PUT) + `head` passthrough.
+- `rust/telemetry/src/blob_storage.rs` — `put_if_absent` (conditional PUT) + `head_origin`
+  (cache-bypassing origin HEAD).
 - `rust/ingestion/src/sql_telemetry_db.rs` — partitioned `create_blocks_table`.
 - `rust/ingestion/src/sql_migration.rs` — `upgrade_data_lake_schema_v5` (cutover), version bump,
   wiring.
