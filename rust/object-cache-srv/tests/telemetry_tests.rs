@@ -9,7 +9,7 @@ use micromegas_object_cache::range_cache::{
     DEFAULT_PROMOTE_WHOLE_BATCH, DEFAULT_TOTAL_FETCH_PERMITS, RangeCache,
 };
 use micromegas_object_cache_srv::app_state::AppState;
-use micromegas_object_cache_srv::handlers::{get_range_handler, post_ranges_handler};
+use micromegas_object_cache_srv::handlers::{get_range_handler, head_handler, post_ranges_handler};
 use micromegas_tracing::event::in_memory_sink::InMemorySink;
 use micromegas_tracing::metrics::MetricsMsgQueueAny;
 use micromegas_tracing::test_utils::init_in_memory_tracing;
@@ -145,6 +145,51 @@ async fn get_range_handler_counts_every_outcome() {
     assert!(statuses.contains(&"400"));
     assert!(statuses.contains(&"404"));
     assert!(statuses.contains(&"416"));
+    // No `with_prefix_labels` was applied to this test's cache, so every key
+    // classifies as "other" -- the classifier itself is covered separately
+    // in `object-cache/tests/metric_tags_tests.rs`.
+    assert!(pairs.iter().all(|(_, p)| p == "other"));
+}
+
+/// Same regression guard for `HEAD /obj/{key}`.
+#[tokio::test]
+#[serial]
+async fn head_handler_counts_every_outcome() {
+    let store = Arc::new(InMemory::new());
+    put_bytes(&store, "obj/a", &[1u8; 100]).await;
+    let state = make_state(store as Arc<dyn ObjectStore>);
+
+    let guard = init_in_memory_tracing();
+
+    // 200: existing key.
+    let resp = head_handler(AxumPath("obj/a".to_string()), State(state.clone()))
+        .await
+        .expect("200 response");
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // 400: key outside the allowed `obj` prefix.
+    let err = head_handler(AxumPath("bad/x".to_string()), State(state.clone()))
+        .await
+        .expect_err("disallowed prefix must 400");
+    assert_eq!(err, StatusCode::BAD_REQUEST);
+
+    // 404: missing key.
+    let err = head_handler(AxumPath("obj/missing".to_string()), State(state.clone()))
+        .await
+        .expect_err("missing key must 404");
+    assert_eq!(err, StatusCode::NOT_FOUND);
+
+    micromegas_tracing::dispatch::flush_metrics_buffer();
+    let pairs = tagged_status_prefix_pairs(&guard.sink, "object_cache_head_requests");
+    let statuses: Vec<&str> = pairs.iter().map(|(s, _)| s.as_str()).collect();
+    assert_eq!(
+        statuses.len(),
+        3,
+        "every outcome (success and failure alike) must be counted exactly once: {pairs:?}"
+    );
+    assert!(statuses.contains(&"200"));
+    assert!(statuses.contains(&"400"));
+    assert!(statuses.contains(&"404"));
     // No `with_prefix_labels` was applied to this test's cache, so every key
     // classifies as "other" -- the classifier itself is covered separately
     // in `object-cache/tests/metric_tags_tests.rs`.
