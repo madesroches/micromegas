@@ -161,12 +161,14 @@ transport not polling again. This is the crux of the fix.
 - **GET** (`handlers.rs:390`): pass `Some(requested_bytes)`. This equals the `Content-Length` header
   and the exact byte count the stream yields, so the callback fires precisely when the last chunk is
   produced.
-- **POST ranges** (`handlers.rs:600`): pass `Some(expected_framed_total)` where
-  `expected_framed_total = range_lens.iter().sum::<u64>() + 8 * range_count` (each range is preceded
-  by an 8-byte little-endian length prefix — see `frame_ranges_stream`, `handlers.rs:116`). The
-  ranges path works today via the terminal-`None` fallback (chunked encoding polls to `None`), but
-  passing the known total makes both paths robust to the same failure mode and keeps the two call
-  sites symmetric — the framed size is known before streaming, so this is strictly correct.
+- **POST ranges** (`handlers.rs:600`): pass `Some(framed_response_bytes)`, reusing the value already
+  computed at `handlers.rs:525` as `total_requested.saturating_add(8 * req.ranges.len() as u64)`
+  (each range is preceded by an 8-byte little-endian length prefix — see `frame_ranges_stream`,
+  `handlers.rs:116`). This is numerically the framed total (`total_requested` is the sum of the
+  requested range lengths), is still in scope and unmoved at the `count_bytes_served` call site, and
+  its `saturating_add` guards overflow. The ranges path works today via the terminal-`None` fallback
+  (chunked encoding polls to `None`), but passing the known total makes both paths robust to the same
+  failure mode and keeps the two call sites symmetric.
 
 ### Edge cases (unchanged semantics)
 
@@ -220,10 +222,8 @@ transport not polling again. This is the crux of the fix.
    Update the doc comment (`handlers.rs:84`) to describe the new "fires when the payload is fully
    produced" semantics and why firing must precede the final `yield`.
 5. Update the GET call site (`handlers.rs:390`) to pass `Some(requested_bytes)`.
-6. Update the ranges call site (`handlers.rs:600`) to pass `Some(expected_framed_total)` computed
-   from `range_lens` + prefix bytes. `range_lens` is consumed by `frame_ranges_stream` at
-   `handlers.rs:572`; compute the sum before that move (or from `range_count` and the summed lens
-   already available there).
+6. Update the ranges call site (`handlers.rs:600`) to pass `Some(framed_response_bytes)`, the value
+   already computed at `handlers.rs:525` — no recomputation or move-ordering change needed.
 7. Confirm the reproduction test from Phase 1 now **passes**.
 
 ### Phase 3 — Guard the ranges path and finalize
@@ -286,7 +286,7 @@ and documents why the metric can slightly under-count relative to raw egress.
 ## Open Questions
 
 None — both prior questions are resolved:
-- **Ranges call site**: pass the explicit `Some(expected_framed_total)` (robust and symmetric with
-  the GET path).
+- **Ranges call site**: pass `Some(framed_response_bytes)`, reusing the existing value (robust and
+  symmetric with the GET path).
 - **Doc note**: add the "fires once per fully-produced response; excludes mid-stream errors and
   early disconnects" clarification to `object-cache.md:212`.
