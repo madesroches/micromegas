@@ -67,11 +67,25 @@ the in-repo precedent for building interned `PropertySet`s for tagged metrics.
 
 ### Cardinality is bounded
 
-The metadata schema is fixed by `ingestion/src/sql_telemetry_db.rs` + `sql_migration.rs`: tables
-`processes`, `streams`, `blocks`, `payloads`, `lakehouse_partitions`, the `screens_*` tables, etc.,
-with ~20–30 named indexes total (`process_id`, `parent_process_id`, `block_begin_time`,
-`block_end_time`, `screens_screen_type`, `screens_created_at`, …). `pg_stat_user_indexes` /
-`pg_stat_user_tables` enumerate exactly this bounded set, so tagging per relation is safe.
+The metadata schema is fixed by `ingestion/src/sql_telemetry_db.rs` + `sql_migration.rs` (ingestion
+tables `processes`, `streams`, `blocks` — payload data is the `payload_size` column on `blocks`, not
+a separate `payloads` table; that name only refers to a replication stream/view,
+`analytics/src/replication.rs`) plus the lakehouse tables from `analytics/src/lakehouse/migration.rs`
+(`lakehouse_partitions`, `temporary_files`, `partition_metadata`). Indexes total ~18: ingestion has
+~12 (`parent_process_id`, `process_start_time`, `block_begin_time`, `block_end_time`,
+`processes_process_id_unique`/`streams_stream_id_unique`/`blocks_block_id_unique`, …) and lakehouse
+has ~6 (`lh_part_begin_insert`, `lh_part_min_time`, `temporary_files_expiration`,
+`lakehouse_partitions_file_path`, …). Note the old non-unique `process_id`/`stream_id`/`block_id`
+indexes were dropped in the v3 migration in favor of the unique ones above
+(`sql_migration.rs:63-71,171`). `pg_stat_user_indexes` / `pg_stat_user_tables` enumerate exactly this
+bounded set, so tagging per relation is safe.
+
+The `analytics-web-srv` app tables (`screens`, `data_sources`, with indexes `screens_screen_type` /
+`screens_created_at`) live in a *separate* database reached through its own
+`MICROMEGAS_APP_SQL_CONNECTION_STRING` pool (`web_server.rs:72-73`, monolith `main.rs:7,9`), distinct
+from the metadata DB's `MICROMEGAS_SQL_CONNECTION_STRING` that this collector queries. So they never
+appear in this collector's `pg_stat_user_*` scan unless an operator manually co-locates the two
+databases — no allowlist is needed.
 
 ### How emitted metrics reach the lakehouse
 
@@ -162,6 +176,12 @@ conventions (`"count"`, `"bytes"`, `"seconds"`). Naming uses a `pg_` prefix, mir
 `last_autovacuum` is nullable (never autovacuumed) — emit the age metric only when non-NULL rather
 than a sentinel, so `WHERE name = 'pg_table_seconds_since_autovacuum'` naturally excludes untouched
 tables.
+
+Kept as age rather than raw epoch: every existing time-valued metric in the repo emits an elapsed
+duration, never a raw wall-clock epoch (e.g. `object_cache_*_age_ms` via `elapsed()`,
+`foyer_backend.rs:196-198,334`; `task_tick_delay`/`task_tick_latency` as `now - task_time` deltas,
+`cron_task.rs:60-81`). `pg_db_stats_reset_timestamp` is the deliberate exception, kept as an epoch
+because it's a boundary marker to segment on, not a lag signal.
 
 **Database** — `pg_stat_database WHERE datname = current_database()`, untagged (single row):
 
@@ -329,10 +349,3 @@ runners.spawn(run_tasks_forever(vec![pg_stats], 1, fanout.subscribe()));
 
 1. **Offset/cadence**: plan uses period `1min` / offset `15s` (staggered from materialization's 30s).
    Acceptable, or prefer a different cadence?
-2. **`last_autovacuum` representation**: plan emits *seconds since* autovacuum (directly usable as
-   lag). Prefer raw epoch timestamp instead for consistency with `pg_db_stats_reset_timestamp`?
-   (The stats_reset one is emitted as epoch because it's a boundary marker; autovacuum age is emitted
-   as age because lag is the signal — but this could be unified either way.)
-3. **Scope of relations**: `pg_stat_user_*` covers *all* user tables in the metadata DB. That
-   includes the `analytics-web-srv` app_db tables if they share the database. Confirm we want all
-   user relations (recommended — bounded and useful) rather than an allowlist.
