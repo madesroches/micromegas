@@ -94,12 +94,20 @@ ingestion service — the forward-provisioner is new. The `ingestion` crate is a
 helper placed in `ingestion` is callable from both the ingestion service and the analytics daemon.
 
 ### Object store capabilities
-The workspace uses `object_store = "0.13"` (`rust/Cargo.toml:66`), which supports
-`put_opts(..., PutMode::Create)` — an atomic create-if-absent that maps to `If-None-Match: *` on
-S3 (supported by AWS since Nov 2024), generation-0 preconditions on GCS, `If-None-Match` on Azure,
-and native support on the local filesystem backend. The object-cache layers forward `put_opts`
-straight through to the origin store (`object-cache/src/client.rs:447`,
-`object-cache/src/l1_store.rs:167`), so conditional PUTs work through the full ingestion stack.
+The workspace's `object_store` dependency is compiled with only the `aws` feature
+(`object_store = { version = "0.13", features = ["aws"] }`, `rust/Cargo.toml:66`) — GCS and Azure
+support are not built into this workspace. Storage is constructed via
+`parse_object_store_url`/`parse_url_opts` from `MICROMEGAS_OBJECT_STORE_URI`, so the only
+backends this codebase can target are S3 (the compiled `aws` feature) and the local filesystem
+backend (always available, no feature flag). Both support `put_opts(..., PutMode::Create)` — an
+atomic create-if-absent that maps to `If-None-Match: *` on S3 (supported by AWS since Nov 2024) and
+is natively supported on local FS. The object-cache layers forward `put_opts` straight through to
+the origin store (`object-cache/src/client.rs:447`, `object-cache/src/l1_store.rs:167`), so
+conditional PUTs work through the full ingestion stack. Conditional PUT is therefore safe for
+every in-repo deployment target; the only residual caveat is an externally-operated, older
+S3-compatible store (e.g. old MinIO, which `local_test_env/ai_scripts/start_minio.py` uses only as
+a local-test S3 origin, never a production target) lacking `If-None-Match: *` — a deployment-time
+check, not a code gap (see "Cost — honest accounting" below).
 
 ## Critical Design Decisions
 
@@ -270,8 +278,10 @@ insert uses `ON CONFLICT DO NOTHING` (no target).
   lifetime is the retention window. A resend whose original is already past retention (blob deleted)
   is treated as a fresh ingest — acceptable, since the original data was already dropped. Document
   this bound (relevant to proxies with multi-day delay).
-- Conditional-PUT support becomes a hard deployment requirement (S3/GCS/Azure/local-FS covered;
-  older MinIO lacks `If-None-Match` — see Open Question #3).
+- Conditional-PUT support becomes a hard deployment requirement. Every backend this workspace can
+  target (S3 via the compiled `aws` feature, and local FS) supports it; the only caveat is an
+  externally-operated, older S3-compatible store (e.g. old MinIO) lacking `If-None-Match: *` — a
+  deployment-time check against that specific target, not a code gap.
 
 ### 2. Late-arriving data (proxies, replication) — `insert_time` is stamped at the final hop
 
@@ -429,9 +439,16 @@ retry-safe (guard on `to_regclass('blocks_legacy')` etc.). No dedup table, no ba
 
 New `create_blocks_table` (fresh v1 installs go straight to partitioned) creates
 `PARTITION BY RANGE (insert_time)`, the parent non-unique indexes, and a `DEFAULT` partition with
-its local unique-block_id index. The v1 path in `execute_migration` then no longer needs the v2/v3
-block-index steps for fresh installs, but the stepwise upgrade for existing v4 databases must
-remain.
+its local unique-block_id index. For fresh installs to skip the v2/v3/v4 upgrade steps — which are
+not idempotent against the new partitioned schema (e.g. `upgrade_data_lake_schema_v2`'s `ALTER
+TABLE blocks ADD insert_time` has no `IF NOT EXISTS` and would fail against a table that already
+has the column) — `create_migration_table` must stamp the `migration` row directly to
+`LATEST_DATA_LAKE_SCHEMA_VERSION` (5), not `1`, when invoked from the fresh-install path in
+`create_tables`. Because `execute_migration` gates each upgrade step on an exact `if N ==
+current_version` check (not `>=`), stamping straight to 5 causes the `if 1/2/3 ==
+current_version` branches to be skipped naturally — no other change to `execute_migration`'s
+control flow is needed. Existing v4 databases still read `current_version == 4` and take the new
+`if 4 == current_version` branch running `upgrade_data_lake_schema_v5`, unaffected.
 
 ### Ingestion forward-provisioning (#1241 — new background task)
 
@@ -583,9 +600,10 @@ property of the deterministic key, not of the arbiter. Rare² — accept and doc
 ## Documentation
 - `mkdocs/docs/admin/` — document the partitioned-`blocks` retention model (drop-based, hourly), the
   blob-as-dedup-arbiter design (conditional PUT, recovery arm, "insert path never deletes blobs"),
-  the conditional-PUT requirement on the object store (S3 ≥ Nov 2024 / GCS / Azure / local FS;
-  older MinIO unsupported), the forward-buffer/`DEFAULT` invariants and their alarms, and the
-  operational runbook for a filled default.
+  the conditional-PUT requirement on the object store (S3 ≥ Nov 2024 and local FS — the only
+  backends this workspace compiles in; GCS/Azure are not enabled features; older MinIO
+  unsupported), the forward-buffer/`DEFAULT` invariants and their alarms, and the operational
+  runbook for a filled default.
 - Replication/proxy docs — `insert_time` is stamped at final ingestion, so late data (proxies
   buffering for days) lands in current partitions; dedup is guaranteed within the retention window
   (the blob's lifetime) and a resend whose original has already aged out is re-ingested. Note the
@@ -633,11 +651,7 @@ property of the deterministic key, not of the arbiter. Rare² — accept and doc
 2. **Cutover lock duration** — needs a staging measurement of `ADD CONSTRAINT ... CHECK` scan +
    `ATTACH` on a production-sized `blocks`. If the exclusive window is unacceptable, fall back to the
    drain-old-table alternative (temporary `UNION` in `BlocksView`).
-3. **Conditional-PUT support matrix** — S3 (AWS, since Nov 2024), GCS, Azure, and local FS are
-   covered by `object_store` 0.13 `PutMode::Create`; verify any S3-compatible targets users run
-   (older MinIO lacks `If-None-Match: *`). If an unsupported target must be kept, fall back to the
-   side-table design from Decision 1 (gate + insert in one transaction).
-4. **Recovery-arm probe validation on Aurora** — the staged probe (Decision 1) should make every
+3. **Recovery-arm probe validation on Aurora** — the staged probe (Decision 1) should make every
    real case cheap; validate on Aurora's PG version that the parameterized lower bound gets
    executor-startup runtime pruning *before* locking (lock count scales with surviving partitions),
    measure stage-1 hit rate and `HEAD` latency at observed retry rates, and pick the skew slack
@@ -645,7 +659,7 @@ property of the deterministic key, not of the arbiter. Rare² — accept and doc
    count 24× (~90 at 90-day retention) — `BlocksView`'s 1-hour windows still prune to one partition
    and use the cascaded `insert_time` index within it, at the cost of coarser retention
    granularity.
-5. **pg_partman** — worth adopting for partition *creation* to cut hand-rolled provisioning? Note its
+4. **pg_partman** — worth adopting for partition *creation* to cut hand-rolled provisioning? Note its
    built-in retention **drop** is incompatible with our blob-before-drop interlock, so roll-off stays
    app-controlled regardless. Confirm it's on the target Aurora extension allowlist first.
 
@@ -658,10 +672,14 @@ materialized DataFusion `blocks` **view** (they reference joined columns like `"
 run via `client.query`/DataFusion contexts), not the Postgres table — so they are transparent to
 this change.
 
-**Resolved during design discussion:** `object_store` 0.13 supports `PutMode::Create` on all
-relevant backends, and the object-cache layers (`object-cache/src/client.rs:447`,
-`l1_store.rs:167`) forward `put_opts` to the origin, so the conditional PUT works through the full
-ingestion stack. The ingestion call site (`insert_block_typed`) already writes the blob before the
+**Resolved during design discussion:** `object_store` 0.13 supports `PutMode::Create`, and this
+workspace compiles it with only the `aws` feature (`rust/Cargo.toml:66`) — GCS/Azure support is not
+built in — so the only in-repo deployment targets are S3 and local FS, both of which support
+conditional PUT; the former conditional-PUT support matrix (Open Question) is resolved by this,
+leaving only an externally-operated older S3-compatible store (e.g. old MinIO) as a residual
+deployment caveat, not an open design question. The object-cache layers
+(`object-cache/src/client.rs:447`, `l1_store.rs:167`) forward `put_opts` to the origin, so the
+conditional PUT works through the full ingestion stack. The ingestion call site (`insert_block_typed`) already writes the blob before the
 metadata row within a single call, so the ensure-blob-then-ensure-row flow requires no reordering
 there. The replication call site does not have this property: `ingest_payloads` (blob PUT) and
 `ingest_blocks` (metadata insert) are separate `bulk_ingest` calls with no shared transaction, and
