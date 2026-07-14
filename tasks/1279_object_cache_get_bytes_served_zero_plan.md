@@ -97,6 +97,9 @@ as a fallback for streams with no known length.
 /// the final `yield` (or on the terminal `None`) would never run in practice.
 /// A mid-stream `Err`, or a stream that ends before reaching `expected_total`,
 /// skips the callback — preserving the accepted under-reporting on truncation.
+/// When `expected_total` is `None` (length genuinely unknown up front), there
+/// is no "before completion" point to detect, so the callback instead fires
+/// on the terminal `None`, with whichever total was accumulated by then.
 fn count_bytes_served<F>(
     mut inner: BoxStream<'static, Result<Bytes, anyhow::Error>>,
     expected_total: Option<u64>,
@@ -127,9 +130,16 @@ where F: FnOnce(u64) + Send + 'static,
                 }
             }
         }
-        // Fallback for streams with no known length (or that ended early but
-        // without an error) — e.g. the chunked-encoded ranges path.
-        if let Some(f) = on_complete.take() { f(total); }
+        // Fallback for streams with no known expected length: fire on the
+        // terminal `None` with whatever total was accumulated. When
+        // `expected_total` is `Some`, a stream that ends early (without an
+        // error) must NOT fire here — that's the accepted under-reporting
+        // case documented above, not a second chance to fire.
+        if expected_total.is_none()
+            && let Some(f) = on_complete.take()
+        {
+            f(total);
+        }
     }.boxed()
 }
 ```
@@ -181,10 +191,16 @@ transport not polling again. This is the crux of the fix.
    `memory_budget_tests.rs:527-554` / `:578-587`:
    - `init_in_memory_tracing()` for the in-memory sink; mark the test `#[serial]` (the sink is
      process-global, like the other telemetry tests).
-   - Keep the default `#[tokio::test]` current-thread runtime so the spawned `axum::serve` task and
-     the handler execute on the *same* thread as the test — `flush_metrics_buffer()` flushes only
-     the calling thread's buffer, so a multi-thread runtime would leave the served handler's metric
-     on a worker thread's buffer and make the assertion flaky. Do **not** add `flavor = "multi_thread"`.
+   - Keep the default `#[tokio::test]` current-thread runtime, matching the existing tests in this
+     file — this is not required for correctness, since the metrics stream is a single
+     process-global `Mutex<MetricsStream>` on the global `Dispatch` (`rust/tracing/src/dispatch.rs`):
+     `int_metric` and `flush_metrics_buffer` both lock that same global stream regardless of which
+     thread the handler runs on, so thread affinity doesn't affect whether the sample is captured.
+     Determinism instead comes from the fix itself: `on_complete` (and the metric record) fires
+     before the final chunk is handed to the transport, so by the time the client has fully read the
+     response body the sample is guaranteed to already be recorded. Do **not** add
+     `flavor = "multi_thread"` — there's no need to, and it would only add noise relative to the
+     existing single-threaded tests.
    - Bind an ephemeral `TcpListener`, `tokio::spawn(axum::serve(...))` with a router mounting
      `get_range_handler`, and drive a real ranged `GET` through `CacheClientStore` (as in the
      existing tests) or a raw `reqwest` client, fully reading the response body.
@@ -255,8 +271,11 @@ and documents why the metric can slightly under-count relative to raw egress.
 
 - **Reproduction (must fail before, pass after)**: real-HTTP `GET` served via `axum::serve` on an
   ephemeral port, driven by a real client, asserting `object_cache_get_bytes_served` records the
-  requested byte count. Current-thread runtime + `#[serial]` so the served handler's metric lands on
-  the flushable thread and the global sink isn't shared across parallel tests.
+  requested byte count. Default current-thread runtime (matching existing tests; the metrics sink is
+  a single process-global stream, so thread affinity doesn't affect capture) + `#[serial]`, since
+  that global sink is shared across all tests and concurrent tests would otherwise observe each
+  other's samples. Determinism comes from the fix firing `on_complete` before the final chunk is
+  handed off, not from thread affinity.
 - **Regression guard for ranges**: analogous real-HTTP `POST /ranges` test asserting
   `object_cache_ranges_bytes_served` still fires with the correct framed total.
 - **Existing suites**: `memory_budget_tests.rs` (which drains bodies in-process) must still pass —
