@@ -74,7 +74,7 @@ row — unlike `insert_block_typed`'s per-block autocommit, this is one batch-wi
 binds `insert_time` **from the source data** (`:208-210`), not `Utc::now()`.
 
 ### Retention path (`rust/analytics/src/delete.rs`)
-`delete_old_data` (called hourly by `EveryHourTask::run`, `maintenance.rs:102`) computes
+`delete_old_data` (called hourly by `EveryHourTask::run`, `rust/public/src/servers/maintenance.rs:102`) computes
 `expiration = now - retention_days` and calls, in order:
 `delete_expired_blocks` → `delete_empty_streams` → `delete_empty_processes` →
 `retire_expired_partitions`. `delete_expired_blocks_batch` (`delete.rs:13-48`) loops:
@@ -87,7 +87,7 @@ then deletes the returned blobs via `lake.blob_storage.delete_batch`. This is th
 churn we are eliminating. `delete_empty_streams`/`delete_empty_processes` are low-volume
 conditional deletes with `NOT EXISTS` guards — **unchanged** by this plan.
 
-### Ingestion server lifecycle (`rust/telemetry-ingestion-srv/src/main.rs`, `servers/ingestion.rs:108`)
+### Ingestion server lifecycle (`rust/telemetry-ingestion-srv/src/main.rs`, `rust/public/src/servers/ingestion.rs:108`)
 `serve_ingestion` runs the HTTP server until SIGTERM. There is no existing background task in the
 ingestion service — the forward-provisioner is new. The `ingestion` crate is a dependency of
 `analytics` (e.g. `delete.rs` imports `micromegas_ingestion::data_lake_connection`), so a shared
@@ -387,8 +387,9 @@ Add to `BlobStorage`:
 ```rust
 pub enum PutIfAbsentResult { Created, AlreadyExists }
 
-/// Atomic create-if-absent via PutMode::Create (If-None-Match on S3/Azure,
-/// generation-0 precondition on GCS). Maps object_store::Error::AlreadyExists
+/// Atomic create-if-absent via PutMode::Create (If-None-Match on S3; natively
+/// supported on local FS — the only backends this workspace compiles in, see
+/// "Object store capabilities" above). Maps object_store::Error::AlreadyExists
 /// to PutIfAbsentResult::AlreadyExists; all other errors propagate.
 pub async fn put_if_absent(&self, obj_path: &str, buffer: bytes::Bytes)
     -> Result<PutIfAbsentResult>;
@@ -424,7 +425,7 @@ already depends on it) so the two call sites cannot diverge:
   switches to `put_if_absent` for the create-once blob semantics; its `Created`/`AlreadyExists`
   result is otherwise unused since `ingest_blocks` always takes the safe arm.
 - Advisory lock: `pg_advisory_xact_lock(int4, int4)` — the two-int4 overload. Postgres keeps this
-  overload's lock space separate from the single-`bigint` `pg_advisory_xact_lock(int4)` form used by
+  overload's lock space separate from the single-argument `pg_advisory_xact_lock(bigint)` form used by
   the migration lock (key `0`, `remote_data_lake.rs:13-18,29`) and by the partition-write locks
   (`generate_partition_lock_key`'s full-range `i64` hash, `write_partition.rs:233-245,273-277`), so
   collision with either is structurally impossible regardless of which constants are chosen — no
@@ -443,6 +444,23 @@ a partitioned parent take heavier locks and some steps (per-partition index crea
 run outside a transaction, model this like the existing v2→v3 migration: run the non-transactional
 DDL (index creation) first with `IF NOT EXISTS`, then the transactional swap. Keep it idempotent and
 retry-safe (guard on `to_regclass('blocks_legacy')` etc.). No dedup table, no backfill.
+
+**Rolling-deploy hazard: the cutover must not run until the new insert code is live everywhere.**
+`migrate_db` runs automatically at binary startup (`connect_to_remote_data_lake`,
+`remote_data_lake.rs:60,29`), so during a rolling deploy the *first* new-binary instance to start
+triggers the v5 cutover while old instances — still running today's targeted
+`INSERT INTO blocks ... ON CONFLICT (block_id) DO NOTHING` (`web_ingestion_service.rs:178-179`,
+`replication.rs:197`) — are still live. A partitioned parent cannot carry a unique index on
+`block_id` alone (Decision 1), so those old instances' inserts start failing immediately with "no
+unique or exclusion constraint matching the ON CONFLICT specification." The new no-target
+`ON CONFLICT DO NOTHING` insert code (Implementation Steps, step 5) is schema-agnostic and works
+against both the plain and the partitioned table, so a safe order exists: **the new insert code
+must be live on every ingestion/replication instance before the v5 cutover runs — never the
+reverse, and never interleaved.** Concretely, decouple the v5 migration from the automatic startup
+path (gate it behind an explicit operational trigger run once the fleet is confirmed on the new
+binary, rather than letting whichever instance starts first run it unconditionally); if that
+decoupling isn't feasible, the fallback is a brief ingestion stop-the-world during cutover (drain
+ingestion, let the last old instance exit, then let migration run).
 
 New `create_blocks_table` (fresh v1 installs go straight to partitioned) creates
 `PARTITION BY RANGE (insert_time)`, the parent non-unique indexes, and a `DEFAULT` partition with
@@ -466,10 +484,11 @@ shutdown signal).
 - Loop on an interval (e.g. every few minutes). Maintain an in-process high-water mark "partitions
   through hour H exist"; if the buffer edge is still far away, it is a **zero-DB no-op**.
 - Near the buffer edge, take `pg_try_advisory_xact_lock(int4, int4)` — the same two-int4 overload
-  as the gated-insert lock (not the single-`bigint` `acquire_lock` pattern used by the migration
-  lock), with its own fixed `PARTITION_PROVISION_LOCK_CLASS` constant (distinct from
-  `BLOCKS_LOCK_CLASS`) and a fixed second key. Being the two-int4 overload, it is automatically in a
-  lock space collision-free against the migration key `0` and the write-partition hashes. If another
+  as the gated-insert lock (not the single-argument `pg_advisory_xact_lock(bigint)` `acquire_lock`
+  pattern used by the migration lock), with its own fixed `PARTITION_PROVISION_LOCK_CLASS` constant
+  (distinct from `BLOCKS_LOCK_CLASS`) and a fixed second key. Being the two-int4 overload, it is
+  automatically in a lock space collision-free against the migration key `0` and the write-partition
+  hashes. If another
   instance holds it, skip this cycle — the forward buffer covers the gap, so no instance ever
   blocks. Transaction-scoped, so a crashed holder can't leak it.
 - Inside the lock, for each not-yet-present hour in the buffer window run
@@ -528,7 +547,10 @@ property of the deterministic key, not of the arbiter. Rare² — accept and doc
 
 ## Implementation Steps
 
-**Phase 1 — Foundation (#1240)** — must deploy together with Phase 2.
+**Phase 1 — Foundation (#1240)** — must deploy together with Phase 2. Within Phase 1, deploy order
+matters and differs from the step-list order below: the insert-code change (step 5) must reach
+every ingestion/replication instance before the v5 migration cutover (steps 3–4) is allowed to run
+— see "Rolling-deploy hazard" under Schema (#1240) above.
 1. Add `rust/ingestion/src/blocks_partition.rs` (shared boundary/naming/SQL helpers); export from
    `ingestion/src/lib.rs`. Unit tests under `ingestion/tests/`.
 2. Add `BlobStorage::put_if_absent` (`rust/telemetry/src/blob_storage.rs`) with
