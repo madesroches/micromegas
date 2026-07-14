@@ -310,12 +310,19 @@ Postgres cannot convert a populated table to partitioned in place. Recommended a
 droppable partition, so there is **zero row-DELETE churn** even for the pre-existing data:
 
 1. `CREATE TABLE blocks_partitioned (LIKE blocks INCLUDING DEFAULTS) PARTITION BY RANGE (insert_time);`
-   with `insert_time` `NOT NULL` (partition key must be non-null; it already is in practice).
+   with `insert_time` `NOT NULL` declared explicitly in the parent's definition (partition key must be
+   non-null; `insert_time` is nullable in the source table — added as plain `TIMESTAMPTZ` in
+   `upgrade_data_lake_schema_v2`, with no later migration constraining it — so `LIKE ... INCLUDING
+   DEFAULTS` alone does not carry a `NOT NULL` into the new parent; values are already non-null in
+   practice, but the constraint must be added here).
 2. Cascade the non-unique indexes onto the parent (`CREATE INDEX ON blocks_partitioned (stream_id)`,
    `(begin_time)`, `(end_time)`, `(insert_time)`) — these auto-propagate to all current and future
    partitions.
-3. On the existing `blocks`: add `ALTER TABLE blocks ADD CONSTRAINT blocks_legacy_bound
-   CHECK (insert_time < <cutover_hour>)` so the subsequent ATTACH can skip its validation scan; and
+3. On the existing `blocks`: add `ALTER TABLE blocks ALTER COLUMN insert_time SET NOT NULL` (one-time
+   validation scan) and `ALTER TABLE blocks ADD CONSTRAINT blocks_legacy_bound
+   CHECK (insert_time < <cutover_hour>)`, so the subsequent ATTACH can skip its own validation scan —
+   a range-partition bound implies `insert_time IS NOT NULL`, which the CHECK alone does not
+   establish, so both constraints are needed for ATTACH to trust the data without re-scanning; and
    ensure it has a local `UNIQUE (block_id)` index (the existing `blocks_block_id_unique` already
    satisfies this).
 4. In a transaction: `ALTER TABLE blocks RENAME TO blocks_legacy;`
@@ -335,10 +342,10 @@ would otherwise be a bulk insert sized to the live `blocks` row count.
 `blocks_legacy` partition ages out as one unit: once `<cutover_hour> <= now - retention`, the daemon
 drops it wholesale (after blob cleanup) — no per-row deletes for legacy data.
 
-Cost/risk: the `ADD CONSTRAINT ... CHECK` in step 3 does one table scan (a `SHARE UPDATE EXCLUSIVE`
-/ validation pass); the rename+attach in step 4 takes a brief `ACCESS EXCLUSIVE` on `blocks`. Both
-are one-time. This is called out in #1240 as the riskiest part; validate timing against a
-production-sized `blocks` in staging before rollout.
+Cost/risk: step 3's `SET NOT NULL` and `ADD CONSTRAINT ... CHECK` each do one table scan (`SHARE
+UPDATE EXCLUSIVE` / validation passes, back-to-back); the rename+attach in step 4 takes a brief
+`ACCESS EXCLUSIVE` on `blocks`. All are one-time. This is called out in #1240 as the riskiest part;
+validate timing against a production-sized `blocks` in staging before rollout.
 
 Alternative considered — **new partitioned table + drain old via existing retention**: point writes
 at the new table, keep the old one readable until it drains. Rejected because `BlocksView`'s
