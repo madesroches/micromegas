@@ -743,12 +743,15 @@ every ingestion/replication instance before the v5 migration cutover (steps 3–
 - Run `python3 build/rust_ci.py` (fmt + clippy + tests).
 
 ## Decisions & Rollout Validation
-1. **Buffer size `N` and provisioning cadence** — Decision: maintain partitions **6 hours ahead**
-   of now, with the provisioner running **every 5 minutes**; both values configurable via
-   env/config. Rationale: a 6h horizon comfortably exceeds any plausible ingestion-instance restart
-   gap while keeping the pre-created partition count small, and a 5-minute cadence is far tighter
-   than the 6h horizon so a missed run is harmless. If deployed instance count or restart cadence
-   ever demand more headroom, the horizon can simply be raised.
+1. **Buffer size `N` and provisioning cadence** — Decision: maintain partitions **12 hours ahead**
+   of now, with the provisioner running **every hour** plus a small random jitter; both values
+   configurable via env/config. Rationale: a 12h horizon comfortably exceeds any plausible
+   ingestion-instance restart gap while keeping the pre-created partition count small, and it is 12×
+   the hourly cadence so several consecutive missed runs are still harmless. The jitter staggers the
+   provisioning attempts of multiple ingestion instances so they don't all fire the create-partition
+   path in lockstep (the `CREATE TABLE ... PARTITION OF IF NOT EXISTS` is idempotent, but jitter
+   avoids a synchronized thundering herd against the catalog). If deployed instance count or restart
+   cadence ever demand more headroom, the horizon can simply be raised.
 2. **Cutover lock duration** — Pre-rollout validation gate, not an open question: the exclusive-lock
    window from `ADD CONSTRAINT ... CHECK` scan + `ATTACH` must be measured on a production-sized
    `blocks` in staging before the cutover. Decision: proceed with the attach approach; the staging
