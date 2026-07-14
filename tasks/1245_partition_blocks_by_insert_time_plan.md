@@ -235,7 +235,8 @@ skew). The recovery probe is therefore staged:
 1. Probe `block_id = $1 AND insert_time > now() - interval '25 hours'` (~25 partitions, sub-ms).
    Found → duplicate, done. Covers the common duplicate class (same-day retries, laptop wakes)
    with no object-store round trip.
-2. Miss → `HEAD` the blob (~10–20ms, rare arm only) → probe
+2. Miss → `HEAD` the blob (~10–20ms, rare arm only; **must bypass any configured object cache and
+   read the origin store directly** — see "Conditional blob PUT" below) → probe
    `block_id = $1 AND insert_time >= $blob_last_modified - slack` (slack ≈ 1h, generous for
    AWS-to-AWS skew). The parameterized lower bound gets runtime partition pruning, so lock count
    and probe count scale with the *surviving* partitions, not all 2,160.
@@ -250,6 +251,18 @@ retention edge whose row vanished — essentially never.
 Correctness caveat: the bound must be a **lower bound only** (`insert_time >= blob_time - slack`),
 never a window *around* blob time — a row inserted by the recovery arm can carry an `insert_time`
 days after blob creation (the recovering retry stamps its own arrival time).
+
+**Correctness caveat 2: the HEAD must read the origin's real `last_modified`, never the object
+cache's synthesized one.** When `MICROMEGAS_OBJECT_CACHE_URL`/`MICROMEGAS_OBJECT_CACHE_API_KEY` are
+set, the ingestion path's `BlobStorage` wraps `CacheClientStore` (`make_cache` in
+`data_lake_connection.rs`), and a HEAD served by `CacheClientStore` returns a synthesized
+`ObjectMeta { last_modified: Utc::now(), .. }` (the `options.head` branch of `get_opts` in
+`object-cache/src/client.rs`) rather than the origin's true creation time. Bounding the probe on
+that synthesized time collapses the lower bound to `now() - slack` (~1h): an old duplicate (e.g. a
+proxy re-forwarding a weeks-old block) has its real row weeks in the past, below the collapsed
+bound, so stage 2 misses it and stage 3 fires a spurious INSERT — a duplicate `blocks` row that
+`BlocksView` double-counts. The recovery-arm HEAD must therefore always resolve against the origin
+store, cache or no cache (see "Conditional blob PUT").
 
 **Hard rule: the insert path never deletes blobs; only the retention daemon deletes blobs.**
 Deleting a blob on PG-insert failure would race a concurrent retry's recovery arm (probe says
@@ -395,9 +408,19 @@ pub async fn put_if_absent(&self, obj_path: &str, buffer: bytes::Bytes)
     -> Result<PutIfAbsentResult>;
 ```
 
-Also add a `head(obj_path) -> Result<ObjectMeta>` passthrough (`ObjectStore::head`) — the
-recovery arm's stage-2 probe needs the blob's `last_modified`. The existing unconditional `put`
-remains for all other callers (parquet partitions, etc.).
+Also add a `head_origin(obj_path) -> Result<ObjectMeta>` method — the recovery arm's stage-2 probe
+needs the blob's *true* `last_modified`, and that must come from the origin store, never from a
+configured object cache (a cache-served HEAD synthesizes `last_modified = Utc::now()`; see Decision
+1's "Bounding the recovery probe", correctness caveat 2). `BlobStorage::inner()` cannot be reused
+for this: it returns the same (possibly cache-layered) store the lakehouse read paths already rely
+on (`write_partition.rs`, `query.rs`, `jit_partitions.rs`, `lakehouse_context.rs`'s `l1_wrap`), so
+when the object cache is configured, `inner()` *is* `CacheClientStore`. Instead, `BlobStorage` must
+retain a handle to the pre-cache-layer origin store alongside the layered one: `make_cache` clones
+`direct` (a free `Arc` clone) before moving the original into `CacheClientStore::new` and returns
+the clone too; `connect_to_remote_data_lake` and `connect_to_data_lake` thread it into `BlobStorage`
+as a second field, and `head_origin` reads from that field exclusively, unconditionally bypassing
+the cache. The existing unconditional `put` and `inner()` remain unchanged for all other callers
+(parquet partitions, lakehouse reads, etc.).
 
 ### Insert paths (`web_ingestion_service.rs`, `replication.rs`)
 
