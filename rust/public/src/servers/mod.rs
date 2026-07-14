@@ -18,6 +18,9 @@ pub mod otlp;
 /// implementation of maintenance daemon keeping the lakehouse updated
 pub mod maintenance;
 
+/// periodic self-observability collector for the metadata Postgres's pg_stat_* views
+pub mod pg_stats;
+
 /// minimal FlightSQL protocol implementation
 pub mod flight_sql_service_impl;
 
