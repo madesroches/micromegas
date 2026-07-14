@@ -98,9 +98,12 @@ process's own telemetry to ingestion. Metrics emitted by the collector therefore
 ### Query surface
 
 The `measures` view schema (`analytics/src/metrics_table.rs:19`) has columns `time`, `target`,
-`name`, `unit`, `value` (Float64), and a JSONB `properties` column. Tagged properties are read in SQL
-via the `property_get("properties", 'table')` UDF (`analytics/src/lakehouse/mod.rs:87`,
-usage e.g. `process_streams.rs:12`). So per-relation series are recovered with
+`name`, `unit`, `value` (Float64), and a dictionary-encoded `properties` column (Arrow
+`Dictionary(Int32, Binary)` holding JSONB-encoded payloads, `metrics_table.rs:77-81`). Tagged
+properties are read in SQL via the `property_get` UDF (defined in
+`datafusion-extensions/src/properties/property_get.rs`, re-exported through
+`analytics/src/properties/mod.rs`; usage e.g. `process_streams.rs:12`,
+`property_get("streams.properties", 'thread-name')`). So per-relation series are recovered with
 `property_get("properties", 'index')` / `'table'` / `'state'`.
 
 ## Design
@@ -221,7 +224,8 @@ transaction is in progress (`min(xact_start)` non-NULL).
 
 `imetric!` takes `u64`. Postgres counters are `bigint` (`i64`); read as `i64` via `try_get` and cast
 with `as u64` (all these counters are non-negative). Sizes from `pg_relation_size` are `bigint`
-bytes. Epoch/age values are fractional seconds → `fmetric!` (`f64`). Pool sizes are `usize` → `u64`.
+bytes. Epoch/age values are fractional seconds → `fmetric!` (`f64`). Pool gauges: `pool.size()` is
+`u32` and `pool.num_idle()` is `usize` (sqlx 0.8), both cast `as u64`.
 
 ### Queries
 
