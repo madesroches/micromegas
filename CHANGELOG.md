@@ -16,6 +16,8 @@ This file documents the historical progress of the Micromegas project. For curre
   * Rewrite the "Getting Started" page as a Docker-based quickstart (clone-free `curl` + in-repo compose options, self-contained monolith compose file with inline DB init, web app, optional Python sample query, stop/cleanup, troubleshooting); relocate the developer/build setup to the Build Guide and repoint entry-point links; note the Compose v2.23.1+ prerequisite where the shared compose file is invoked (#1273)
 * **Config:**
   * Consolidate ad-hoc `MICROMEGAS_*` env-var reads into typed config structs (`DataLakeConfig`, `WebServerConfig`, `CommonServerArgs`, `GatewayConfig`) and shared helpers (`parse_object_store_url`), replacing ~15 scattered `std::env::var` call sites; flatten `CommonServerArgs` into the service binaries and add an env-backed `--flightsql-url` flag to `http-gateway` to fail fast instead of reading the env per request (#1248)
+* **Observability:**
+  * Add a `pg_stat_*` self-observability collector to the maintenance daemon: a `PgStatsTask` samples PostgreSQL's standard `pg_stat_*` views (plus index/table sizes) once a minute and emits the readings as per-relation-tagged `pg_*` micromegas metrics, turning static questions like "which indexes are dead weight" into queryable runtime signals; includes an admin-docs section with sample unused-index and cache-hit-ratio queries (#1292)
 
 ## v0.27.0 - 2026-07-12
 
