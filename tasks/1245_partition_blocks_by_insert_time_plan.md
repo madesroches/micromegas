@@ -62,9 +62,15 @@ INSERT INTO blocks VALUES($1..$11) ON CONFLICT (block_id) DO NOTHING;
 (`:178-179`). The `ON CONFLICT (block_id)` dedups client retries of the same block. Note the
 ordering: **blob first, then metadata** — the blob is written before the row exists.
 
-### Replication path (`rust/analytics/src/replication.rs:172-219`)
-`ingest_blocks` (expert feature) puts the payload blob at the same deterministic key (`:160-165`),
-then runs the same `INSERT INTO blocks VALUES(...) ON CONFLICT (block_id) DO NOTHING` (`:197`), but
+### Replication path (`rust/analytics/src/replication.rs:144-219`)
+Replication (expert feature) is driven by `bulk_ingest`, which dispatches per Arrow Flight
+`table_name` to a table-specific function (`:222-234`) — `"payloads"` and `"blocks"` are **separate
+calls**, with no shared transaction or per-block interleaving between them. `ingest_payloads`
+(`:144-170`) puts each payload blob at the same deterministic key (`:160-165`) via an unconditional
+`put`, in its own function. Separately, `ingest_blocks` (`:172-219`) opens **one transaction for the
+whole batch** (`begin()` at `:176`, `commit()` at `:216`) and, inside it, loops over every block in
+the stream running `INSERT INTO blocks VALUES(...) ON CONFLICT (block_id) DO NOTHING` (`:197`) per
+row — unlike `insert_block_typed`'s per-block autocommit, this is one batch-wide transaction — and
 binds `insert_time` **from the source data** (`:208-210`), not `Utc::now()`.
 
 ### Retention path (`rust/analytics/src/delete.rs`)
@@ -149,12 +155,18 @@ Options that were ruled out:
 
 **Chosen: the payload blob is the global dedup record; a conditional PUT is the arbiter.**
 
-The key insight: both insert paths *already* write a blob at `blobs/{process_id}/{stream_id}/{block_id}`
-— a key that is deterministic across retries and contains no timestamp — *before* inserting the
-metadata row. And the retention daemon *already* deletes blobs when their metadata expires, so the
-blob's lifetime is exactly the documented dedup window ("dedup holds within the retention window").
-The blob is a global, deterministic, retention-scoped record of every ingested block. The only
-missing ingredient is atomicity, and `PutMode::Create` supplies it.
+The key insight: the blob at `blobs/{process_id}/{stream_id}/{block_id}` — a key that is
+deterministic across retries and contains no timestamp — is already written before its metadata row
+lands in `blocks`. On the ingestion path (`insert_block_typed`) this happens inside one call, blob
+then row, per block. On the replication path it happens across **two separate `bulk_ingest` calls**
+(`ingest_payloads` writes blobs; a later `"blocks"` call's `ingest_blocks` inserts metadata for a
+whole batch in one transaction, `replication.rs:144-219`) — the ordering still holds because
+callers send the payloads stream before the corresponding blocks stream, but the two writes are not
+tied together the way they are in `insert_block_typed` (see "Insert paths" below for how the
+gated-insert flow accounts for this). And the retention daemon *already* deletes blobs when their
+metadata expires, so the blob's lifetime is exactly the documented dedup window ("dedup holds within
+the retention window"). The blob is a global, deterministic, retention-scoped record of every
+ingested block. The only missing ingredient is atomicity, and `PutMode::Create` supplies it.
 
 The insert operation becomes "**ensure blob, then ensure metadata row**" — every arm converges to
 the same end state regardless of where a previous attempt died:
@@ -381,6 +393,19 @@ already depends on it) so the two call sites cannot diverge:
 - **Recovery arm** (`AlreadyExists`): transaction { same lock; **staged** probe — recent window
   first, then `HEAD`-bounded lower-bound probe (Decision 1, "Bounding the recovery probe"); insert
   if missing, else skip-as-duplicate }.
+- `web_ingestion_service.rs`'s `insert_block_typed` calls `put_if_absent` and the helper inline, per
+  block — the hot/recovery split above applies directly, unchanged in shape.
+- `replication.rs` cannot apply the split directly: `ingest_payloads` (blob PUT) and `ingest_blocks`
+  (metadata insert) are separate `bulk_ingest` calls, so `ingest_blocks` never sees the
+  `PutIfAbsentResult` that `ingest_payloads` produced for a given block. Restructure `ingest_blocks`
+  to drop its single whole-batch transaction (today's `begin`/loop/`commit`, `:176-216`) and instead
+  invoke the shared helper **once per block**, always taking the **recovery arm** (staged probe):
+  this is correct regardless of whether the blob PUT was actually `Created` or `AlreadyExists` (a
+  genuinely fresh block still passes the staged probe, just via the recent-window stage rather than
+  the tightest 1-hour hot-path bound), at the cost of forgoing the hot path's cheapest probe for
+  replicated rows — acceptable given replication is a low-volume expert feature. `ingest_payloads`
+  switches to `put_if_absent` for the create-once blob semantics; its `Created`/`AlreadyExists`
+  result is otherwise unused since `ingest_blocks` always takes the safe arm.
 - Advisory lock: `pg_advisory_xact_lock(int4, int4)` — the two-int4 overload. Postgres keeps this
   overload's lock space separate from the single-`bigint` `pg_advisory_xact_lock(int4)` form used by
   the migration lock (key `0`, `remote_data_lake.rs:13-18,29`) and by the partition-write locks
@@ -490,10 +515,13 @@ property of the deterministic key, not of the arbiter. Rare² — accept and doc
    bump `LATEST_DATA_LAKE_SCHEMA_VERSION` to 5 and wire the `if 4 == current_version` step in
    `execute_migration` (mirror the v3 non-transactional-DDL-then-transaction structure).
 5. Implement the shared gated-insert helper (lock → probe → insert, hot + recovery arms) in the
-   `ingestion` crate; switch `web_ingestion_service.rs` and `replication.rs` to
-   `put_if_absent` + the helper; change the `blocks` insert to `ON CONFLICT DO NOTHING` (no
-   target); stamp `insert_time = now()` on arrival in `replication.rs` (Decision 2). Enforce the
-   "insert path never deletes blobs" rule.
+   `ingestion` crate; switch `web_ingestion_service.rs`'s `insert_block_typed` to `put_if_absent` +
+   the helper (hot/recovery split per block, unchanged shape). Switch `replication.rs`'s
+   `ingest_payloads` to `put_if_absent`, and restructure `ingest_blocks` to drop its single
+   whole-batch transaction in favor of calling the helper once per block, always via the recovery
+   arm ("Insert paths", above); change the `blocks` insert to `ON CONFLICT DO NOTHING` (no target);
+   stamp `insert_time = now()` on arrival in `replication.rs` (Decision 2). Enforce the "insert path
+   never deletes blobs" rule.
 6. Document that late data (proxies/replication) lands in current partitions and that dedup holds
    within the retention window (blob lifetime).
 
@@ -633,5 +661,11 @@ this change.
 **Resolved during design discussion:** `object_store` 0.13 supports `PutMode::Create` on all
 relevant backends, and the object-cache layers (`object-cache/src/client.rs:447`,
 `l1_store.rs:167`) forward `put_opts` to the origin, so the conditional PUT works through the full
-ingestion stack. Both insert call sites already write the blob before the metadata row, so the
-ensure-blob-then-ensure-row flow requires no reordering.
+ingestion stack. The ingestion call site (`insert_block_typed`) already writes the blob before the
+metadata row within a single call, so the ensure-blob-then-ensure-row flow requires no reordering
+there. The replication call site does not have this property: `ingest_payloads` (blob PUT) and
+`ingest_blocks` (metadata insert) are separate `bulk_ingest` calls with no shared transaction, and
+`ingest_blocks` inserts a whole batch in one transaction today rather than per block. Reordering
+isn't needed — callers already send the payloads stream before the blocks stream — but
+`ingest_blocks` must still be restructured to a per-block, always-recovery-arm gated insert ("Insert
+paths", above) so correctness does not depend on that call-ordering assumption holding.
