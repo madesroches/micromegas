@@ -744,14 +744,19 @@ every ingestion/replication instance before the v5 migration cutover (steps 3–
 
 ## Decisions & Rollout Validation
 1. **Buffer size `N` and provisioning cadence** — Decision: maintain partitions **12 hours ahead**
-   of now, with the provisioner running **every hour** plus a small random jitter; both values
-   configurable via env/config. Rationale: a 12h horizon comfortably exceeds any plausible
-   ingestion-instance restart gap while keeping the pre-created partition count small, and it is 12×
-   the hourly cadence so several consecutive missed runs are still harmless. The jitter staggers the
-   provisioning attempts of multiple ingestion instances so they don't all fire the create-partition
-   path in lockstep (the `CREATE TABLE ... PARTITION OF IF NOT EXISTS` is idempotent, but jitter
-   avoids a synchronized thundering herd against the catalog). If deployed instance count or restart
-   cadence ever demand more headroom, the horizon can simply be raised.
+   of now, with the provisioner running **every hour** plus a **large random jitter — on the order of
+   the full check interval** (each instance sleeps a random duration up to ~1h, so its attempts land
+   at an independent random offset within the hour); all values configurable via env/config.
+   Rationale: a 12h horizon comfortably exceeds any plausible ingestion-instance restart gap while
+   keeping the pre-created partition count small, and it is 12× the hourly cadence so several
+   consecutive missed runs — including the ~1h extra spread the jitter can add — are still harmless.
+   The large jitter spreads each instance's attempt uniformly across the interval so multiple
+   ingestion servers almost never run the create-partition path at the same moment. This matters
+   because `CREATE TABLE ... PARTITION OF IF NOT EXISTS`, while idempotent, still takes a short
+   `ACCESS EXCLUSIVE` lock on the parent `blocks` table; synchronized attempts across N instances
+   would serialize on that lock and briefly contend with the ingestion write path, whereas a
+   wide random spread makes concurrent attempts rare and each one cheap. If deployed instance count
+   or restart cadence ever demand more headroom, the horizon can simply be raised.
 2. **Cutover lock duration** — Pre-rollout validation gate, not an open question: the exclusive-lock
    window from `ADD CONSTRAINT ... CHECK` scan + `ATTACH` must be measured on a production-sized
    `blocks` in staging before the cutover. Decision: proceed with the attach approach; the staging
