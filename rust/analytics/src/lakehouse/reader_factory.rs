@@ -2,12 +2,15 @@ use super::metadata_cache::MetadataCache;
 use super::partition_metadata::load_partition_metadata;
 use bytes::Bytes;
 use datafusion::{
-    datasource::{listing::PartitionedFile, physical_plan::ParquetFileReaderFactory},
+    datasource::{
+        listing::PartitionedFile,
+        physical_plan::{ParquetFileMetrics, ParquetFileReaderFactory},
+    },
     parquet::{
         arrow::{arrow_reader::ArrowReaderOptions, async_reader::AsyncFileReader},
         file::metadata::ParquetMetaData,
     },
-    physical_plan::metrics::ExecutionPlanMetricsSet,
+    physical_plan::metrics::{Count, ExecutionPlanMetricsSet},
 };
 use futures::future::BoxFuture;
 use micromegas_tracing::prelude::*;
@@ -53,15 +56,15 @@ impl ReaderFactory {
 impl ParquetFileReaderFactory for ReaderFactory {
     fn create_reader(
         &self,
-        _partition_index: usize,
+        partition_index: usize,
         partitioned_file: PartitionedFile,
         _metadata_size_hint: Option<usize>,
-        _metrics: &ExecutionPlanMetricsSet,
+        metrics: &ExecutionPlanMetricsSet,
     ) -> datafusion::error::Result<Box<dyn AsyncFileReader + Send>> {
-        // todo: don't ignore metrics, report performance of the reader
         let path = partitioned_file.path().clone();
         let filename = path.to_string();
         let file_size = partitioned_file.object_meta.size;
+        let file_metrics = ParquetFileMetrics::new(partition_index, path.as_ref(), metrics);
 
         Ok(Box::new(ParquetReader {
             filename,
@@ -69,6 +72,7 @@ impl ParquetFileReaderFactory for ReaderFactory {
             metadata_cache: Arc::clone(&self.metadata_cache),
             object_store: Arc::clone(&self.object_store),
             path,
+            bytes_scanned: file_metrics.bytes_scanned,
         }))
     }
 }
@@ -82,6 +86,7 @@ pub struct ParquetReader {
     pub metadata_cache: Arc<MetadataCache>,
     pub object_store: Arc<dyn ObjectStore>,
     pub path: Path,
+    pub bytes_scanned: Count,
 }
 
 impl AsyncFileReader for ParquetReader {
@@ -94,6 +99,7 @@ impl AsyncFileReader for ParquetReader {
         let bytes_requested = range.end - range.start;
         let object_store = Arc::clone(&self.object_store);
         let path = self.path.clone();
+        let bytes_scanned = self.bytes_scanned.clone();
 
         Box::pin(async move {
             let start = std::time::Instant::now();
@@ -106,6 +112,7 @@ impl AsyncFileReader for ParquetReader {
             debug!(
                 "parquet_read file={filename} file_size={file_size} bytes={bytes_requested} duration_ms={duration_ms}"
             );
+            bytes_scanned.add(bytes_requested as usize);
 
             result
         })
@@ -121,6 +128,7 @@ impl AsyncFileReader for ParquetReader {
         let total_bytes: u64 = ranges.iter().map(|r| r.end - r.start).sum();
         let object_store = Arc::clone(&self.object_store);
         let path = self.path.clone();
+        let bytes_scanned = self.bytes_scanned.clone();
 
         Box::pin(async move {
             let start = std::time::Instant::now();
@@ -133,6 +141,7 @@ impl AsyncFileReader for ParquetReader {
             debug!(
                 "parquet_read file={filename} file_size={file_size} ranges={num_ranges} bytes={total_bytes} duration_ms={duration_ms}"
             );
+            bytes_scanned.add(total_bytes as usize);
 
             result
         })
