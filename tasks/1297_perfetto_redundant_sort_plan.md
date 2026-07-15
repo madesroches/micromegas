@@ -253,8 +253,9 @@ per-thread query plan
 - `rust/analytics/src/lakehouse/materialized_view.rs` — pass the view's ordering.
 - `rust/analytics/src/lakehouse/partitioned_table_provider.rs` — pass empty ordering.
 - A new DB-backed test file under `rust/analytics/tests/` (e.g. `thread_spans_ordering_tests.rs`) —
-  regression test via the `MaterializedView`/`view_instance` path; `span_tests.rs` is a pure in-memory
-  parse test and has no DB harness to reuse.
+  regression test via the `MaterializedView`/`view_instance` path, modeled on the existing
+  `histo_view_test.rs` / `sql_view_test.rs` harness pattern (`connect_to_data_lake` +
+  `LakehouseContext::new` + `get_view_instance_id`, gated on `MICROMEGAS_SQL_CONNECTION_STRING`).
 
 ## Trade-offs
 
@@ -287,16 +288,19 @@ Optionally add a short note to any internal lakehouse/perfetto architecture note
   hardcodes `JitPartitionConfig::default()`, so forcing a second partition means either >20M objects in
   one hour or, more cheaply, block insert-times that deliberately span more than one 1-hour JIT
   segment. This needs a DB-backed harness that ingests through the `MaterializedView`/`view_instance`
-  path — no such harness exists in-crate today: `analytics/tests/span_tests.rs` is a pure in-memory
-  parse test (builds a `ThreadStream`, encodes one `ThreadBlock`, asserts parse counts — no
-  `LakehouseContext`, no DB, no `view_instance` query), and `tests/test_helpers.rs` only exposes
-  `make_process_metadata`. With that harness, query `view_instance('thread_spans', <stream_id>)`
-  **with the `ORDER BY` removed** and assert `begin` is non-decreasing across the full result — and
-  that it spans a partition boundary. Note `PartitionedTableProvider::scan` always passes `&[]` (no
-  declared ordering), so that path does *not* exercise the new ordering and is not a valid substitute.
-  If the DB-backed harness proves too costly to stand up, scope this test down instead to a unit test
-  of the file-group sort in `make_partitioned_execution_plan` (assert `min_event_time` ordering with
-  `file_path` tiebreak) plus the plan-shape assertion below.
+  path. `rust/analytics/tests/histo_view_test.rs` and `rust/analytics/tests/sql_view_test.rs` already
+  provide this pattern in-crate — `#[tokio::test]`s gated on `MICROMEGAS_SQL_CONNECTION_STRING` that
+  call `connect_to_data_lake`, construct `LakehouseContext::new(...)`, and query via
+  `get_view_instance_id`/the view-instance path — and the new regression test should be modeled on
+  them (`analytics/tests/span_tests.rs`, by contrast, is a pure in-memory parse test with no
+  `LakehouseContext`, no DB, no `view_instance` query, and is not a fit). With the harness, query
+  `view_instance('thread_spans', <stream_id>)` **with the `ORDER BY` removed** and assert `begin` is
+  non-decreasing across the full result — and that it spans a partition boundary. Note
+  `PartitionedTableProvider::scan` always passes `&[]` (no declared ordering), so that path does *not*
+  exercise the new ordering and is not a valid substitute. This DB-backed test requires a live SQL
+  connection to run; the file-group sort unit test in `make_partitioned_execution_plan` (assert
+  `min_event_time` ordering with `file_path` tiebreak) and the plan-shape assertion below provide
+  additional coverage that doesn't depend on a live DB.
 - **Plan-shape assertion.** For a `SELECT ... FROM view_instance('thread_spans', ...) ORDER BY begin`
   query, capture the physical plan (`df.create_physical_plan()` + `displayable(...).indent()`) and
   assert **no `SortExec`** node appears. Add a negative control on a view that does *not* opt in to
