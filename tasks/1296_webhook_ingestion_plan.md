@@ -116,9 +116,13 @@ POST /ingestion/webhook
 | `X-Micromegas-Target` | instrumentation scope name | `log_entries.target` filter |
 
 - Missing headers → empty attribute (same as an OTLP resource that omits them). If
-  `service.name` is absent, `exe` is empty and identity collapses toward a degenerate
-  resource; the endpoint should still accept but the server logs a `debug!` (reuse the
-  existing `is_degenerate_resource` debug-log path in `build_prepared_block`).
+  `service.name` is absent, `exe` is empty; the endpoint still accepts.
+- Note: `is_degenerate_resource` (`identity.rs:158`) checks only `host.id` / `host.name` /
+  `process.pid` / `service.instance.id` — none of which a webhook header can set — so
+  **every** webhook request takes the existing `debug!` path in `build_prepared_block`
+  (`block.rs:203`), regardless of `service.name`. That's acceptable: the log is
+  debug-level by design (anti-flood), and collapsing all deliveries with the same headers
+  onto one `process_id` is exactly the intended identity model here. No code change.
 - Header values are ASCII per HTTP; decode with `.to_str()`, skip non-decodable headers.
 
 ### New handler entry point (otel-ingestion crate)
@@ -179,13 +183,23 @@ pub fn webhook_router() -> Router {
 2. Read `X-Micromegas-Target` → `String` (empty if absent → empty `target`).
 3. Reject empty body with 400.
 4. Call `handler::ingest_webhook`, map `OtelError` → HTTP directly in `webhook.rs` using
-   the public `OtelError::http_status()` / `public_message()` accessors (`error.rs:76,93`):
+   the public `OtelError::http_status()` / `is_retryable()` / `public_message()` accessors
+   (`error.rs:76,84,93`):
    `StatusCode::from_u16(err.http_status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)`
-   plus a plain-text/JSON body built from `err.public_message()`. The OTLP handler's
+   plus a plain-text body built from `err.public_message()`. Before responding, log the
+   **full** error server-side — `error!("webhook error: {err}")`, mirroring `otlp.rs:109` —
+   because `public_message()` strips the sqlx/object-store detail from Database/Storage
+   variants; without this log the backend detail is recorded nowhere. When
+   `err.is_retryable()`, set a `Retry-After` header (same 30 s value as the OTLP path's
+   `RETRY_AFTER_SECONDS`, `otlp.rs:49` — share the constant when factoring the common
+   layers in the DRY step). The OTLP handler's
    `OtlpHttpError` / `build_error_response` (`otlp.rs:80-143`) are private to that module and
    also emit the OTLP-specific `google.rpc.Status` proto shape, which this endpoint
    deliberately does not want — so build the response directly from the accessors rather
    than "reusing" the OTLP mapping.
+5. Success → `200 OK` with an empty body (repo convention: sibling ingestion handlers
+   return `Result<(), _>` which axum renders as 200 empty — see `insert_block_request`,
+   `ingestion.rs:74-82`).
 
 **Body-limit DRY:** the 20 MiB / 300 MiB constants and the three layers are identical to
 `otlp_router`. Extract a shared helper (e.g. `fn ingestion_body_limit_layers(router) ->
@@ -232,8 +246,8 @@ payload — would break retry idempotency).
 3. **public webhook route** — add `rust/public/src/servers/webhook.rs` with
    `webhook_router()` + `webhook_handler`, header parsing, empty-body 400, `OtelError`
    mapping. Add `pub mod webhook;` to `servers/mod.rs`.
-4. **Body-limit DRY** — factor the shared body-limit/decompression layers (and 20/300 MiB
-   constants) out of `otlp.rs` and reuse in both routers.
+4. **Body-limit DRY** — factor the shared body-limit/decompression layers (the 20/300 MiB
+   constants and `RETRY_AFTER_SECONDS`) out of `otlp.rs` and reuse in both routers.
 5. **Wire into server** — `.merge(super::webhook::webhook_router())` in
    `serve_ingestion` (`ingestion.rs:132`).
 6. **Integration test** — extend `python/micromegas/tests/test_otlp_e2e.py` (using the
@@ -293,7 +307,8 @@ recipes / EventBridge material) covering:
 - **Unit (otel-ingestion):** `build_webhook_request` shape, verbatim body, scope→target,
   severity; `split_logs` single-block + identity; `block_id` dedup determinism.
 - **Route/handler:** empty-body → 400; missing headers tolerated (empty attrs/target);
-  `OtelError` mapping.
+  `OtelError` mapping (full error logged server-side via `error!`, `Retry-After` on
+  retryable 503); success → 200 empty body.
 - **Integration (Python e2e):** in `python/micromegas/tests/test_otlp_e2e.py`, POST a sample
   webhook JSON with the three headers to a running ingestion server, `assert_eventually` a
   `log_entries` row with expected `target`, `exe`, and `msg == body`; then run a JSONB query
