@@ -178,6 +178,31 @@ Changes inside:
   negligible (a single pass over already-sorted partition metadata). It catches the realistic
   failure mode — an out-of-order / late-arriving block making a stream's partition event-time ranges
   overlap — at plan-build time, before any row is scanned.
+- **Populate per-file min/max statistics — required for DataFusion to accept the ordering.**
+  `FileScanConfig::eq_properties()` does not take a declared `with_output_ordering` on faith: it runs
+  every candidate ordering through `validated_output_ordering()` (`file_scan_config/mod.rs:1082`) →
+  `sort_pushdown::validate_orderings` → `is_ordering_valid_for_file_groups`
+  (`file_scan_config/sort_pushdown.rs:464-482`). For any file group with `len() > 1` — which is exactly
+  the multi-JIT-partition, wide-time-range case this plan targets — that function calls
+  `MinMaxStatistics::new_from_files(...)`, which returns `plan_err!("Parquet file missing
+  statistics")` (`statistics.rs:84`) as soon as any file's `PartitionedFile.statistics` is `None`.
+  `PartitionedFile::new(file_path, file_size)` leaves `statistics: None`, so without this step the
+  declared ordering would silently fail validation, `eq_properties` would report no ordering, and
+  `EnforceSorting` would keep the `SortExec` — the fix would do nothing for any thread with more than
+  one partition in its file group.
+
+  So, when `output_ordering` is non-empty, attach statistics to each `PartitionedFile` before it goes
+  into the file group: build `Statistics::new_unknown(&schema)` (full table schema, so
+  `column_statistics` is indexed the same as `schema`), then for the `begin` column — index 4 in
+  `get_spans_schema()` (`id, parent, depth, hash, begin, end, ...`, `span_table.rs:50-66`) — set
+  `column_statistics[4] = ColumnStatistics::new_unknown()
+    .with_min_value(Precision::Exact(ScalarValue::TimestampNanosecond(min_ns, Some("+00:00".into()))))
+    .with_max_value(Precision::Exact(ScalarValue::TimestampNanosecond(max_ns, Some("+00:00".into()))))`,
+  where `min_ns`/`max_ns` come from the same partition's `min_event_time()`/`max_event_time()` already
+  used to sort and non-overlap-check the partitions. Attach it via
+  `PartitionedFile::new(file_path, size).with_statistics(Arc::new(stats))`. This only needs to run for
+  the columns named in `output_ordering` (today, just `begin`); the empty-`output_ordering` path is
+  unchanged and still calls `PartitionedFile::new` with no statistics.
 - Build a `LexOrdering` from `output_ordering` against `schema` and pass
   `vec![lex]` to `FileScanConfigBuilder::with_output_ordering`:
 
@@ -210,24 +235,30 @@ let file_scan_config = builder.build();
 
 `SortOptions { descending: false, nulls_first: false }` matches DataFusion's default `ORDER BY begin`
 (ASC NULLS LAST); `begin` is non-nullable so nulls placement is moot, but we match it so
-`EnforceSorting` recognizes the orderings as equivalent.
+`EnforceSorting` recognizes the orderings as equivalent. This declared ordering is only honored if the
+per-file statistics above were attached — without them `is_ordering_valid_for_file_groups` strips it
+back out for any group with more than one file.
 
 **`preserve_order` side effect.** Setting `with_output_ordering` flips `preserve_order = true` in
-`FileScanConfigBuilder::build()`. In our case — a single file group containing multiple files — this
-is a definitive no-op: `repartition_preserving_order` (`file_groups.rs:270-308`) returns `None` when
-`target_partitions == 1`, and when `target_partitions > 1` the multi-file group is filtered out of the
-heap (only `group.len() == 1` groups are split), leaving the heap empty → `None`. `DataSourceExec::
-repartitioned` therefore returns `Ok(None)`, the plan stays at `UnknownPartitioning(1)`, and no
-`SortPreservingMergeExec`/`RepartitionExec` is introduced.
+`FileScanConfigBuilder::build()`. (This flag is set unconditionally by `with_output_ordering`,
+independent of the statistics-gated validation above — the validation only decides whether
+`eq_properties()` later reports the ordering, not whether `preserve_order` is set.) In our case — a
+single file group containing multiple files — this is a definitive no-op: `repartition_preserving_order`
+(`file_groups.rs:270-308`) returns `None` when `target_partitions == 1`, and when `target_partitions >
+1` the multi-file group is filtered out of the heap (only `group.len() == 1` groups are split), leaving
+the heap empty → `None`. `DataSourceExec::repartitioned` therefore returns `Ok(None)`, the plan stays at
+`UnknownPartitioning(1)`, and no `SortPreservingMergeExec`/`RepartitionExec` is introduced.
 
 ### Resulting plan transformation
 
 Before: `SortExec(begin) ← FilterExec ← DataSourceExec` → `SortExec` materializes an `ExternalSorter`.
 
-After: `DataSourceExec` advertises output ordering `[begin ASC]`; `FilterExec` and the projection
-preserve it; `EnforceSorting` sees the required `ORDER BY begin` is already satisfied and drops the
-`SortExec`. The scan streams with bounded per-query memory, so N concurrent thread queries no longer
-allocate N sort buffers.
+After: `DataSourceExec` advertises output ordering `[begin ASC]` — this requires the per-file `begin`
+min/max statistics from §3 to be attached, since DataFusion validates the declared ordering against
+file-group statistics whenever a group holds more than one file and drops it otherwise; `FilterExec`
+and the projection preserve the advertised ordering; `EnforceSorting` sees the required `ORDER BY
+begin` is already satisfied and drops the `SortExec`. The scan streams with bounded per-query memory,
+so N concurrent thread queries no longer allocate N sort buffers.
 
 ```
 per-thread query plan
@@ -273,7 +304,10 @@ failure is loud in production, not just in debug builds.
 3. **`partitioned_execution_plan.rs`** — add the `output_ordering: &[ScanSortColumn]` parameter; when
    non-empty, sort partitions by `min_event_time()` (tiebreak `file_path`) before building the file
    group, verify adjacent partitions are non-overlapping (error on overlap — the §3 loud-failure
-   guard), and attach the `LexOrdering` via `with_output_ordering`.
+   guard), attach `begin` min/max `Statistics` to each `PartitionedFile` via `.with_statistics(...)`
+   so DataFusion's multi-file-group ordering validation accepts the declared ordering (the §3
+   statistics step — required for any file group with more than one file, otherwise the ordering is
+   silently dropped), and attach the `LexOrdering` via `with_output_ordering`.
 4. **`materialized_view.rs`** — pass `self.view.get_scan_output_ordering()` into the call.
 5. **`partitioned_table_provider.rs`** — pass `&[]` into the call.
 6. **`perfetto_trace_execution_plan.rs`** — in `generate_thread_spans_with_writer`, declare the
@@ -289,7 +323,7 @@ failure is loud in production, not just in debug builds.
 - `rust/analytics/src/lakehouse/view.rs` — new `ScanSortColumn` type + trait method.
 - `rust/analytics/src/lakehouse/thread_spans_view.rs` — override the method.
 - `rust/analytics/src/lakehouse/partitioned_execution_plan.rs` — new param, file-group sort,
-  non-overlap loud-failure guard, ordering declaration.
+  non-overlap loud-failure guard, per-file `begin` min/max statistics, ordering declaration.
 - `rust/analytics/src/lakehouse/materialized_view.rs` — pass the view's ordering.
 - `rust/analytics/src/lakehouse/partitioned_table_provider.rs` — pass empty ordering.
 - `rust/analytics/src/lakehouse/perfetto_trace_execution_plan.rs` — runtime `begin`-monotonicity
@@ -357,8 +391,13 @@ Optionally add a short note to any internal lakehouse/perfetto architecture note
   additional coverage that doesn't depend on a live DB.
 - **Plan-shape assertion.** For a `SELECT ... FROM view_instance('thread_spans', ...) ORDER BY begin`
   query, capture the physical plan (`df.create_physical_plan()` + `displayable(...).indent()`) and
-  assert **no `SortExec`** node appears. Add a negative control on a view that does *not* opt in to
-  confirm its `SortExec` is still present.
+  assert **no `SortExec`** node appears. This must be exercised against a stream with **more than one
+  partition in the file group** (reuse the multi-partition setup from the regression test above) —
+  a single-file group validates trivially regardless of whether statistics are attached
+  (`is_ordering_valid_for_file_groups` returns early for `group.len() <= 1`), so a single-partition
+  version of this assertion would pass even if the §3 statistics step were missing or broken, and
+  would not catch the exact multi-partition failure mode this plan targets. Add a negative control on
+  a view that does *not* opt in to confirm its `SortExec` is still present.
 - **Loud-failure guard tests.** Unit-test the §3 non-overlap check in `make_partitioned_execution_plan`
   directly: pass a hand-built `Vec<Partition>` whose event-time ranges overlap and assert the call
   returns an `Err` (not a silently-unsorted plan); a non-overlapping set returns `Ok`. Separately,
