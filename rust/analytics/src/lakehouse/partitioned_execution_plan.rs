@@ -92,7 +92,11 @@ fn make_lex_ordering(
                 Arc::new(col),
                 SortOptions {
                     descending: c.descending,
-                    nulls_first: false,
+                    // Match DataFusion's default ORDER BY semantics: ASC NULLS LAST, DESC NULLS
+                    // FIRST. Hardcoding `false` here would declare `DESC NULLS LAST`, which fails
+                    // to satisfy a descending query's `DESC NULLS FIRST` requirement and silently
+                    // keeps a redundant Sort.
+                    nulls_first: c.descending,
                 },
             ))
         })
