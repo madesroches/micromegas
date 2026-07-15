@@ -63,6 +63,16 @@ external sort; together they blow the shared memory pool (the error trace shows 
    (individually sorted, non-overlapping) partition files in ascending event-time order produces a
    globally `begin`-sorted stream.
 
+   This cross-partition non-overlap is conditional, not structurally enforced: JIT partitions are
+   sliced and ordered by `insert_time`
+   (`generate_stream_jit_partitions`/`generate_stream_jit_partitions_segment` in `jit_partitions.rs`),
+   so their event-time non-overlap holds only under the documented assumption that a stream's blocks
+   are registered in event-time order (`thread_spans_view.rs:131-132`: "we assume that the blocks were
+   registered in order since they are built based on begin_ticks, not insert_time"). That assumption
+   is not enforced in code. If a stream ever received an out-of-order or late-arriving block, a later
+   partition could contain an earlier `begin`, and — once the explicit `ORDER BY` is gone — the export
+   would silently mis-order rows instead of being re-sorted.
+
 The `Partition` struct (`partition.rs:8`) exposes `min_event_time()` / `max_event_time()` — the
 min/max of the `begin` column — which we use as the robust cross-partition sort key (rather than
 relying on the insert-time order the partition cache happens to return).
@@ -102,6 +112,13 @@ pub struct ScanSortColumn {
 /// - rows within each partition file are already sorted by these columns, AND
 /// - the leading column is the view's min-event-time column, and partition event-time
 ///   ranges are non-overlapping (so files concatenate in globally-sorted order).
+///
+/// For `ThreadSpansView`, the non-overlapping-ranges half of this contract rests on JIT
+/// partitions being sliced in event-time order, which in turn assumes a stream's blocks are
+/// registered in event-time order — an assumption documented but not enforced (see
+/// `thread_spans_view.rs:131-132`). If that assumption is ever violated, output would be
+/// silently mis-ordered rather than re-sorted, since no `Sort` node remains once this ordering
+/// is declared.
 ///
 /// Default: empty (no declared ordering — DataFusion sorts as usual).
 fn get_scan_output_ordering(&self) -> Vec<ScanSortColumn> {
