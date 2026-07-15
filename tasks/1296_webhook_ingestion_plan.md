@@ -230,10 +230,10 @@ payload — would break retry idempotency).
    constants) out of `otlp.rs` and reuse in both routers.
 5. **Wire into server** — `.merge(super::webhook::webhook_router())` in
    `serve_ingestion` (`ingestion.rs:132`).
-6. **Integration test** — extend the existing ingestion server test harness (same one that
-   exercises the OTLP routes) to POST a sample GitLab-shaped JSON body with the three
-   headers and assert a `log_entries` row appears with the expected `target`, `exe`, and
-   `msg == body`.
+6. **Integration test** — extend `python/micromegas/tests/test_otlp_e2e.py` (using the
+   `otlp_helpers.py` helpers), following the `test_otlp_logs_e2e` POST → `assert_eventually`
+   → query pattern, to POST a sample GitLab-shaped JSON body with the three headers and
+   assert a `log_entries` row appears with the expected `target`, `exe`, and `msg == body`.
 7. **Docs** — add a "Webhook ingestion" section to `mkdocs/docs/otlp/index.md` (see below).
 8. **CI** — `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `cargo test`, then
    `python3 build/rust_ci.py`.
@@ -247,7 +247,7 @@ payload — would break retry idempotency).
 - `rust/public/src/servers/otlp.rs` — extract shared body-limit layers (DRY).
 - `rust/public/src/servers/ingestion.rs` — merge `webhook_router()`.
 - `mkdocs/docs/otlp/index.md` — new "Webhook ingestion" section.
-- Integration test file under the existing ingestion server test suite.
+- `python/micromegas/tests/test_otlp_e2e.py` — extend with a webhook end-to-end test.
 
 ## Trade-offs
 
@@ -288,9 +288,10 @@ recipes / EventBridge material) covering:
   severity; `split_logs` single-block + identity; `block_id` dedup determinism.
 - **Route/handler:** empty-body → 400; missing headers tolerated (empty attrs/target);
   `OtelError` mapping.
-- **Integration:** POST a sample webhook JSON with the three headers to a running ingestion
-  server, materialize, and assert a `log_entries` row with expected `target`, `exe`, and
-  `msg == body`; then run a JSONB query against `msg` to prove nested/array access works.
+- **Integration (Python e2e):** in `python/micromegas/tests/test_otlp_e2e.py`, POST a sample
+  webhook JSON with the three headers to a running ingestion server, `assert_eventually` a
+  `log_entries` row with expected `target`, `exe`, and `msg == body`; then run a JSONB query
+  against `msg` to prove nested/array access works.
 - **CI:** `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `cargo test`,
   `python3 build/rust_ci.py`.
 
@@ -301,7 +302,5 @@ recipes / EventBridge material) covering:
    the bearer key is sufficient, and a per-producer secret adds per-source config the design
    deliberately avoids. Revisit if a deployment needs to expose the endpoint without the
    bearer key.
-2. **Endpoint shape** — confirm single `/ingestion/webhook` with target-in-header (this
-   plan's choice) over `/ingestion/webhook/{source}`.
-3. **Default severity** — Info assumed for every webhook record. Acceptable, or should a
+2. **Default severity** — Info assumed for every webhook record. Acceptable, or should a
    future `X-Micromegas-Severity` header be reserved (not implemented now)?
