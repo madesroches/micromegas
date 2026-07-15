@@ -229,8 +229,10 @@ fn make_thread_span_stream(begin_values: Vec<i64>) -> SendableRecordBatchStream 
 }
 
 fn make_discarding_writer() -> PerfettoWriter {
-    // Channel is large enough that the single flush a small test emits never blocks; the
-    // receiver is kept alive by the caller (held in the same scope) and its contents unused.
+    // The receiver is dropped when this function returns, but nothing is ever sent on it at these
+    // test volumes: ChunkSender only sends once its 8 KB buffer fills and write_thread_spans only
+    // flushes every 10 spans, while these tests emit just a few tiny spans. So the closed channel
+    // is never touched and the sender never errors.
     let (tx, _rx) = tokio::sync::mpsc::channel(64);
     let chunk_sender = ChunkSender::new(tx, 8 * 1024);
     PerfettoWriter::new(Box::new(chunk_sender), "test-process")
