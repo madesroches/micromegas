@@ -87,7 +87,10 @@ Option<String>`. `service_account.is_some()` is the service-account flag.
 
 Add `rust/public/src/servers/query_audit.rs` (registered in `rust/public/src/servers/mod.rs`)
 holding the record type, its JSON serialization, and the plan-metric aggregation helper — keeping
-the service file lean and the logic unit-testable from `rust/public/tests/`.
+the service file lean and the logic unit-testable from `rust/public/tests/`. Registered as
+`pub mod query_audit;` (matching the sibling `servers/` modules), since the planned unit tests live
+in `rust/public/tests/` as external integration tests and can only reach `pub` items such as
+`micromegas::servers::query_audit::{QueryAuditRecord, aggregate_scan_metrics}`.
 
 ```rust
 use datafusion::physical_plan::ExecutionPlan;
@@ -217,9 +220,13 @@ in the SQL/JSON are not misparsed by `format_args!`. The `target:` literal route
 dedicated `flightsql_query_audit` target (`log!` macro `rust/tracing/src/macros.rs:252`), keeping it
 filterable independently of the chattier per-request logs.
 
-The redundant intermediate `.map()` error wrapper (`:310`–`:322`) can be dropped: it only emitted
-`query_duration_with_error`, which `CompletionTrackedStream`'s error arm already emits. The stream
-built at `:277` (mapped to `FlightError`) feeds directly into `CompletionTrackedStream`.
+The block at `:310`–`:322` does two things: a `.map_err(|e| status!("error building data stream",
+e))` that converts `FlightError` → `Status` (required, since `CompletionTrackedStream<S>` is bounded
+by `S: Stream<Item = Result<FlightData, Status>>` while `builder.build(stream)` yields
+`Result<FlightData, FlightError>`), and a `.map(...)` closure that only emits
+`query_duration_with_error`. Only the latter is redundant — `CompletionTrackedStream`'s error arm
+already emits that metric. Keep the `.map_err(FlightError -> Status)` conversion and drop only the
+metric-emitting `.map(...)` closure.
 
 The existing free-text attribution `info!` (`:225`–`:239`) is **retained** — it fires at query start
 (useful for in-flight visibility, while the audit record only appears at completion). The audit
@@ -265,15 +272,19 @@ signal.
    `create_reader` (un-prefix `partition_index`/`metrics`), and `.add(...)` in both read methods.
    Remove the `// todo: don't ignore metrics` comment.
 2. **Audit module** — add `rust/public/src/servers/query_audit.rs` with `ScanMetrics`,
-   `aggregate_scan_metrics`, and `QueryAuditRecord`; register `mod query_audit;` in
+   `aggregate_scan_metrics`, and `QueryAuditRecord`; register `pub mod query_audit;` in
    `rust/public/src/servers/mod.rs`.
 3. **Retain plan + thread state** — in `execute_query`: capture `request_start: Instant`, add
    `Instant`-based ms timing per stage, switch to `create_physical_plan` + free-function
    `execute_stream` keeping `plan`, and build `QueryAuditState`.
 4. **Emit at completion** — extend `CompletionTrackedStream` with `audit: Option<QueryAuditState>`;
-   assemble and `info!(target: "flightsql_query_audit", "{}", json)` in both completion arms; drop
-   the redundant intermediate `.map()` error wrapper.
-5. **Tests** — see Testing Strategy.
+   assemble and `info!(target: "flightsql_query_audit", "{}", json)` in both completion arms; keep
+   the `.map_err(FlightError -> Status)` conversion and drop only the redundant metric-emitting
+   `.map(...)` closure.
+5. **Tests** — add `rust/public/tests/query_audit_tests.rs` (see Testing Strategy) and register it
+   in `rust/public/Cargo.toml` with a `[[test]]` block (`name = "query_audit_tests"`,
+   `path = "tests/query_audit_tests.rs"`, `required-features = ["server"]`), matching the sibling
+   entries for `http_gateway_tests`/`graceful_shutdown_tests`/etc.
 6. **Docs** — see Documentation.
 
 ## Files to Modify
@@ -284,7 +295,9 @@ signal.
 - `rust/public/src/servers/mod.rs` — register the new module.
 - `rust/public/src/servers/flight_sql_service_impl.rs` — retain plan, thread state, emit audit line.
 - `rust/public/tests/query_audit_tests.rs` — **new**: unit tests (see below).
-- `mkdocs/docs/query-guide/` (+ `mkdocs.yml` nav if a new page) — document the audit target.
+- `rust/public/Cargo.toml` — register the new test file with a `[[test]]` block
+  (`required-features = ["server"]`).
+- `mkdocs/docs/query-guide/query-audit-log.md` (+ `mkdocs.yml` nav entry) — document the audit target.
 
 ## Trade-offs
 
@@ -306,15 +319,24 @@ signal.
 
 ## Documentation
 
-- Add a "Query audit log" section under `mkdocs/docs/query-guide/` (extend an existing page or add a
-  new one wired into `mkdocs/mkdocs.yml`) describing the `flightsql_query_audit` target, the JSON
-  field set, and the always-use-a-bounded-time-range-plus-`target`-filter guidance. Include the
+- Add a new dedicated page, `mkdocs/docs/query-guide/query-audit-log.md`, wired into the
+  `mkdocs.yml` nav directly after "Functions Reference". The existing candidate pages
+  (`functions-reference.md`, ~1482 lines; `schema-reference.md`, ~717 lines) are large single-purpose
+  catalogs, not natural homes for a new feature/data-source topic, whereas the nav already gives
+  narrow features their own pages (`async-performance-analysis.md`, `advanced-features.md`) — a
+  dedicated page matches that pattern. Describe the `flightsql_query_audit` target, the JSON field
+  set, and the always-use-a-bounded-time-range-plus-`target`-filter guidance. Include the
   attribution/cost `GROUP BY` example from the issue (uses `jsonb_parse`, `jsonb_get`,
-  `jsonb_as_string`, `jsonb_as_f64`, `jsonb_as_i64` — all confirmed registered).
+  `jsonb_as_string`, `jsonb_as_f64`, `jsonb_as_i64` — all confirmed registered), cross-linking to
+  those jsonb functions in `functions-reference.md`.
 
 ## Testing Strategy
 
-- **Unit (`rust/public/tests/query_audit_tests.rs`)**:
+- **Unit (`rust/public/tests/query_audit_tests.rs`)**: register the file in `rust/public/Cargo.toml`
+  with a `[[test]]` block (`name = "query_audit_tests"`, `path = "tests/query_audit_tests.rs"`,
+  `required-features = ["server"]`), matching every other integration test under
+  `rust/public/tests/` — without it the test won't compile/run under the default featureless build,
+  since `servers` is gated behind `#[cfg(feature = "server")]` and `default = []`.
   - `QueryAuditRecord` serialization: required fields present; `skip_serializing_if` omits
     `None`/absent optionals; `service_account` bool set correctly; a SQL string containing `{`/`}`
     and quotes round-trips through `serde_json` and re-parses.
@@ -331,9 +353,6 @@ signal.
 
 ## Open Questions
 
-- **Page vs. section for docs** — new dedicated page under `query-guide/` or a section appended to an
-  existing page (e.g. the schema-reference/functions page). Default: extend an existing query-guide
-  page unless it grows too large. Resolvable at implementation time.
 - **Fingerprint field** — the issue suggests an optional normalized fingerprint (literals stripped)
   alongside `sql`. Deferred: raw `sql` satisfies drill-down; a fingerprint can be added later as an
   additive field without breaking consumers.
