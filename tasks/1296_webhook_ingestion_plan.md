@@ -172,10 +172,14 @@ pub fn webhook_router() -> Router {
    (only push a `KeyValue` for headers actually present and decodable).
 2. Read `X-Micromegas-Target` → `String` (empty if absent → empty `target`).
 3. Reject empty body with 400.
-4. Call `handler::ingest_webhook`, map `OtelError` → HTTP. Reuse the existing
-   `OtelError` → status mapping already used by the OTLP handlers rather than inventing a
-   new error surface; a plain JSON/text body is fine here (the OTLP `google.rpc.Status`
-   proto response shape is spec-mandated for OTLP only, not for this endpoint).
+4. Call `handler::ingest_webhook`, map `OtelError` → HTTP directly in `webhook.rs` using
+   the public `OtelError::http_status()` / `public_message()` accessors (`error.rs:76,93`):
+   `StatusCode::from_u16(err.http_status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)`
+   plus a plain-text/JSON body built from `err.public_message()`. The OTLP handler's
+   `OtlpHttpError` / `build_error_response` (`otlp.rs:80-143`) are private to that module and
+   also emit the OTLP-specific `google.rpc.Status` proto shape, which this endpoint
+   deliberately does not want — so build the response directly from the accessors rather
+   than "reusing" the OTLP mapping.
 
 **Body-limit DRY:** the 20 MiB / 300 MiB constants and the three layers are identical to
 `otlp_router`. Extract a shared helper (e.g. `fn ingestion_body_limit_layers(router) ->
