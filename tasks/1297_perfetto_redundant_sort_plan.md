@@ -168,6 +168,16 @@ Changes inside:
   partitions and **sort them by `min_event_time()` ascending** (with `file_path` as a deterministic
   tiebreak). This makes the globally-sorted concatenation self-contained — independent of whatever
   order the partition cache returned. When empty, preserve today's behavior exactly (no sort).
+- **Loud-failure guard (non-overlap check).** After sorting, walk the partitions and verify each
+  one's `max_event_time()` is `<=` the next one's `min_event_time()`. If any adjacent pair overlaps,
+  the declared ordering cannot be honored (a later file could contain an earlier `begin`), so
+  **return an error** (`DataFusionError::Execution` with the offending `stream_id`/partition
+  `file_path`s and event-time ranges) rather than declaring an ordering the data does not satisfy.
+  This is preferred over silently degrading to an unsorted scan: a violated invariant surfaces
+  immediately as a diagnosable query failure instead of a mis-ordered Perfetto trace. The cost is
+  negligible (a single pass over already-sorted partition metadata). It catches the realistic
+  failure mode — an out-of-order / late-arriving block making a stream's partition event-time ranges
+  overlap — at plan-build time, before any row is scanned.
 - Build a `LexOrdering` from `output_ordering` against `schema` and pass
   `vec![lex]` to `FileScanConfigBuilder::with_output_ordering`:
 
@@ -231,6 +241,25 @@ per-thread query plan
                                                 streaming, bounded memory
 ```
 
+### 4. Runtime monotonicity guard in the export consumer
+
+The non-overlap check in §3 covers the **cross-partition** invariant (the realistic failure mode:
+an out-of-order block making a stream's partition ranges overlap). It cannot see the
+**within-partition** invariant — that each partition file's rows really are preorder/`begin`-sorted
+— because that requires inspecting the rows, not the metadata. Since we prefer a loud failure over a
+silently mis-ordered trace, add a complete backstop where the rows are actually consumed:
+`generate_thread_spans_with_writer` (`perfetto_trace_execution_plan.rs:331`) already iterates every
+span row of each per-thread query. Track the previous `begin` and, if a row's `begin` is ever less
+than its predecessor, **return an error** (surfacing the `stream_id` and the offending pair of
+timestamps) instead of writing the row.
+
+This validates the *actual* emitted order, so it catches every ordering violation regardless of
+cause — within-partition, cross-partition, or a future regression in the traversal/partitioning
+code — and converts what is otherwise silent output corruption into an immediate, diagnosable export
+failure. The cost is one timestamp comparison per row, negligible against the Perfetto protobuf
+serialization already done per row. The check is unconditional (not `debug_assert!`) precisely so the
+failure is loud in production, not just in debug builds.
+
 ## Implementation Steps
 
 1. **`view.rs`** — add `ScanSortColumn` struct and the defaulted `get_scan_output_ordering()` method
@@ -239,21 +268,27 @@ per-thread query plan
    (reuse `MIN_TIME_COLUMN`).
 3. **`partitioned_execution_plan.rs`** — add the `output_ordering: &[ScanSortColumn]` parameter; when
    non-empty, sort partitions by `min_event_time()` (tiebreak `file_path`) before building the file
-   group, and attach the `LexOrdering` via `with_output_ordering`.
+   group, verify adjacent partitions are non-overlapping (error on overlap — the §3 loud-failure
+   guard), and attach the `LexOrdering` via `with_output_ordering`.
 4. **`materialized_view.rs`** — pass `self.view.get_scan_output_ordering()` into the call.
 5. **`partitioned_table_provider.rs`** — pass `&[]` into the call.
-6. Update any other `make_partitioned_execution_plan` callers if present (grep confirms only the two
+6. **`perfetto_trace_execution_plan.rs`** — in `generate_thread_spans_with_writer`, track the previous
+   `begin` and error if a row's `begin` is less than its predecessor (the §4 runtime monotonicity
+   guard).
+7. Update any other `make_partitioned_execution_plan` callers if present (grep confirms only the two
    above) and run `cargo fmt` + `cargo clippy --workspace -- -D warnings`.
-7. Add the regression test (see Testing Strategy).
+8. Add the regression tests (see Testing Strategy).
 
 ## Files to Modify
 
 - `rust/analytics/src/lakehouse/view.rs` — new `ScanSortColumn` type + trait method.
 - `rust/analytics/src/lakehouse/thread_spans_view.rs` — override the method.
-- `rust/analytics/src/lakehouse/partitioned_execution_plan.rs` — new param, file-group sort, ordering
-  declaration.
+- `rust/analytics/src/lakehouse/partitioned_execution_plan.rs` — new param, file-group sort,
+  non-overlap loud-failure guard, ordering declaration.
 - `rust/analytics/src/lakehouse/materialized_view.rs` — pass the view's ordering.
 - `rust/analytics/src/lakehouse/partitioned_table_provider.rs` — pass empty ordering.
+- `rust/analytics/src/lakehouse/perfetto_trace_execution_plan.rs` — runtime `begin`-monotonicity
+  guard in `generate_thread_spans_with_writer`.
 - A new DB-backed test file under `rust/analytics/tests/` (e.g. `thread_spans_ordering_tests.rs`) —
   regression test via the `MaterializedView`/`view_instance` path, modeled on the existing
   `histo_view_test.rs` / `sql_view_test.rs` harness pattern (`connect_to_data_lake` +
@@ -276,6 +311,14 @@ per-thread query plan
   that can honor it.
 - **Generic ordering type vs. hardcoding `begin`.** `ScanSortColumn` (with a `descending` flag)
   keeps the mechanism reusable for future single-stream, preorder-built views without re-plumbing.
+- **Loud failure vs. silent degradation.** Once the `Sort` node is elided, DataFusion *trusts* the
+  declared ordering — it never re-validates that emitted rows are actually sorted, so a violated
+  invariant would otherwise produce a silently mis-ordered Perfetto trace with no error. We reject
+  the alternative of degrading gracefully (skip the ordering declaration and let DataFusion sort when
+  an anomaly is detected): that would mask a real data-integrity problem behind a quiet perf
+  regression. Instead both guards (§3 non-overlap at plan-build, §4 `begin`-monotonicity at row
+  consumption) **error out**, so any breach of the invariant surfaces immediately as a diagnosable
+  failure. Cost is negligible (a metadata pass plus one comparison per row).
 
 ## Documentation
 
@@ -311,6 +354,12 @@ Optionally add a short note to any internal lakehouse/perfetto architecture note
   query, capture the physical plan (`df.create_physical_plan()` + `displayable(...).indent()`) and
   assert **no `SortExec`** node appears. Add a negative control on a view that does *not* opt in to
   confirm its `SortExec` is still present.
+- **Loud-failure guard tests.** Unit-test the §3 non-overlap check in `make_partitioned_execution_plan`
+  directly: pass a hand-built `Vec<Partition>` whose event-time ranges overlap and assert the call
+  returns an `Err` (not a silently-unsorted plan); a non-overlapping set returns `Ok`. Separately,
+  cover the §4 runtime guard by feeding `generate_thread_spans_with_writer` a row stream whose `begin`
+  decreases and asserting it errors rather than emitting the out-of-order row. Both run without a live
+  DB.
 - **Manual verification.** Re-run the failing export (moderate thread count, wide time range, thread
   spans only) against a running flight-sql server and confirm it completes without exhausting
   `datafusion.runtime.memory_limit`.
