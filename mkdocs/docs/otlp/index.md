@@ -297,9 +297,13 @@ AWS EventBridge API Destinations send `Content-Type: application/json; charset=u
 `POST /ingestion/webhook` accepts a raw webhook delivery from any header-capable
 producer (GitLab, GitHub, a generic SaaS) with **no per-source configuration on the
 server**. It synthesizes an OTLP `Resource` from three request headers and stores the
-**verbatim request body** as a single log record's body, reusing the OTLP logs
-identity/block/write path end-to-end — the same auth, body-limit, and idempotency
-rules described above apply unchanged.
+request body as a single log record's body, reusing the OTLP logs identity/block/write
+path end-to-end — the same auth, body-limit, and idempotency rules described above
+apply unchanged. Since `log_entries.msg` is `Utf8`-typed, a valid-UTF8 body (the common
+case: JSON payloads from GitLab/GitHub/etc.) is stored verbatim. There is no header to
+describe an alternate codec, so a non-UTF8 body is stored via lossy UTF-8 conversion
+(invalid byte sequences become `U+FFFD`) rather than rejected or stored as opaque
+binary.
 
 | Header | Maps to | Result |
 |---|---|---|

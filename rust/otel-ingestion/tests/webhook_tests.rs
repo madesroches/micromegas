@@ -38,6 +38,20 @@ fn build_webhook_request_shape() {
 }
 
 #[test]
+fn build_webhook_request_lossy_converts_non_utf8_body() {
+    let attrs = vec![s_kv("service.name", "gitlab")];
+    // 0xFF is never valid UTF-8 on its own; from_utf8_lossy replaces it with U+FFFD.
+    let non_utf8_body: &[u8] = b"\xff\xfe\x00binary";
+    let req = build_webhook_request(attrs, "push-events".to_string(), non_utf8_body);
+
+    let record = &req.resource_logs[0].scope_logs[0].log_records[0];
+    match record.body.as_ref().and_then(|b| b.value.as_ref()) {
+        Some(any_value::Value::StringValue(s)) => assert!(s.contains('\u{FFFD}')),
+        other => panic!("expected StringValue body, got {other:?}"),
+    }
+}
+
+#[test]
 fn split_logs_on_webhook_request_yields_one_backfilled_block_with_matching_identity() {
     let attrs = vec![
         s_kv("service.name", "gitlab"),

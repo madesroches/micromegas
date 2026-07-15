@@ -2,13 +2,17 @@
 //!
 //! Exposes `POST /ingestion/webhook`. Any header-capable webhook producer (GitLab,
 //! GitHub, generic SaaS) can report directly to micromegas: three `X-Micromegas-*`
-//! request headers synthesize an OTLP `Resource` + scope name, and the verbatim
-//! request body becomes a single log record's body. The synthetic request is fed
-//! into the existing OTLP logs split/write path (`handler::ingest_webhook`) — no
-//! new identity, block, or write logic.
+//! request headers synthesize an OTLP `Resource` + scope name, and the request body
+//! becomes a single log record's body, stored verbatim when it is valid UTF-8 (the
+//! common case: JSON payloads from GitLab/GitHub/etc.). There is no header to describe
+//! an alternate codec, so a non-UTF8 body is stored via lossy UTF-8 conversion (invalid
+//! byte sequences become U+FFFD) rather than rejected or stored as opaque binary. The
+//! synthetic request is fed into the existing OTLP logs split/write path
+//! (`handler::ingest_webhook`) — no new identity, block, or write logic.
 //!
-//! The body is opaque: this endpoint does not negotiate `Content-Type` or parse the
-//! body at all (contrast with `otlp_router`, which must switch proto/JSON decoding).
+//! The body is opaque JSON/text: this endpoint does not negotiate `Content-Type` or
+//! parse the body at all (contrast with `otlp_router`, which must switch proto/JSON
+//! decoding).
 
 use super::ingestion_limits::{RETRY_AFTER_SECONDS, apply_ingestion_body_limits};
 use axum::Extension;

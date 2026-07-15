@@ -172,9 +172,13 @@ pub async fn ingest_traces(
 }
 
 /// Builds a synthetic `ExportLogsServiceRequest` carrying a single resource, single
-/// scope, single log record whose body is the verbatim webhook request body.
-/// `time_unix_nano` / `observed_time_unix_nano` are left at 0 so `split_logs`'s
-/// existing backfill stamps ingestion time.
+/// scope, single log record whose body is the webhook request body, stored as
+/// `StringValue`. Valid-UTF8 bodies (the common case: JSON payloads from
+/// GitLab/GitHub/etc.) are stored verbatim; a non-UTF8 body is stored via lossy
+/// UTF-8 conversion (invalid byte sequences become U+FFFD) rather than rejected or
+/// stored as opaque binary — there is no header to describe an alternate codec, so
+/// there is no way to decode it losslessly. `time_unix_nano` / `observed_time_unix_nano`
+/// are left at 0 so `split_logs`'s existing backfill stamps ingestion time.
 ///
 /// Public (rather than private) so `tests/webhook_tests.rs` can assert its shape directly.
 pub fn build_webhook_request(
@@ -182,14 +186,14 @@ pub fn build_webhook_request(
     target: String,
     body: &[u8],
 ) -> ExportLogsServiceRequest {
-    let body_string = String::from_utf8_lossy(body).into_owned();
+    let body_str = String::from_utf8_lossy(body).into_owned();
     let record = LogRecord {
         time_unix_nano: 0,
         observed_time_unix_nano: 0,
         severity_number: SeverityNumber::Info as i32,
         severity_text: String::new(),
         body: Some(AnyValue {
-            value: Some(any_value::Value::StringValue(body_string)),
+            value: Some(any_value::Value::StringValue(body_str)),
         }),
         attributes: vec![],
         dropped_attributes_count: 0,
@@ -224,7 +228,8 @@ pub fn build_webhook_request(
 
 /// Generic webhook → single-log-record ingestion.
 /// Builds a synthetic `ExportLogsServiceRequest` (one resource, one scope, one record whose
-/// body is the verbatim request body) and reuses the OTLP logs split/write path.
+/// body is the request body, stored verbatim for valid UTF-8 or via lossy conversion
+/// otherwise) and reuses the OTLP logs split/write path.
 pub async fn ingest_webhook(
     service: Arc<WebIngestionService>,
     resource_attrs: Vec<KeyValue>,
