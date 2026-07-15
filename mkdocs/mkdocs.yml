@@ -92,6 +92,7 @@ nav:
     - Python API Advanced: query-guide/python-api-advanced.md
     - Schema Reference: query-guide/schema-reference.md
     - Functions Reference: query-guide/functions-reference.md
+    - Query Audit Log: query-guide/query-audit-log.md
     - Query Patterns: query-guide/query-patterns.md
     - Async Performance Analysis: query-guide/async-performance-analysis.md
     - Performance: query-guide/performance.md

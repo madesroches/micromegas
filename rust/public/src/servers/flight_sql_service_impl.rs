@@ -1,3 +1,4 @@
+use super::query_audit::{QueryAuditRecord, ScanMetrics, aggregate_scan_metrics};
 use super::sqlinfo::{
     SQL_INFO_DATE_TIME_FUNCTIONS, SQL_INFO_NUMERIC_FUNCTIONS, SQL_INFO_SQL_KEYWORDS,
     SQL_INFO_STRING_FUNCTIONS, SQL_INFO_SYSTEM_FUNCTIONS,
@@ -29,6 +30,7 @@ use arrow_flight::{
 use core::str;
 use datafusion::arrow::datatypes::Schema;
 use datafusion::arrow::ipc::writer::StreamWriter;
+use datafusion::physical_plan::{ExecutionPlan, execute_stream};
 use futures::StreamExt;
 use futures::{Stream, TryStreamExt};
 use micromegas_analytics::lakehouse::lakehouse_context::LakehouseContext;
@@ -46,6 +48,7 @@ use std::pin::Pin;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::task::{Context, Poll};
+use std::time::Instant;
 use tonic::metadata::MetadataMap;
 use tonic::{Request, Response, Status, Streaming};
 
@@ -70,19 +73,111 @@ macro_rules! api_entry_not_implemented {
     }};
 }
 
+/// Attribution, per-stage timing, and (once created) the physical plan for
+/// one query. Built as soon as attribution is resolved, updated as each
+/// setup stage completes, and emitted exactly once as a [`QueryAuditRecord`]
+/// under the `flightsql_query_audit` log target — either on an early setup
+/// failure, at stream completion/error, or (if the stream is dropped mid-drain)
+/// from `CompletionTrackedStream`'s `Drop` impl.
+struct QueryAuditState {
+    client: String,
+    user: String,
+    email: String,
+    name: Option<String>,
+    service_account: bool,
+    service_account_name: Option<String>,
+    sql: String,
+    range_begin: Option<String>,
+    range_end: Option<String>,
+    limit: Option<u64>,
+    context_init_ms: f64,
+    planning_ms: f64,
+    execution_ms: f64,
+    setup_ms: f64,
+    request_start: Instant,
+    /// `None` until the physical plan is created; set as soon as it is, and
+    /// still `None` for a record emitted on a setup failure that happens
+    /// before that point.
+    plan: Option<Arc<dyn ExecutionPlan>>,
+}
+
+impl QueryAuditState {
+    /// Aggregate the plan's DataFusion metrics (if a physical plan was
+    /// created before the failure/completion), assemble the audit record,
+    /// and emit it as a single JSON log line.
+    ///
+    /// Takes `&self` (rather than consuming) so it can be called from a
+    /// setup-error `map_err` closure while leaving the state available for
+    /// further updates/completion on the success path, and so `Drop` can
+    /// call it on an abandoned/cancelled stream without needing to
+    /// reconstruct anything.
+    fn emit(&self, status: &'static str, error: Option<String>) {
+        let scan = match &self.plan {
+            Some(plan) => aggregate_scan_metrics(plan.as_ref()),
+            None => ScanMetrics {
+                output_rows: None,
+                bytes_scanned: 0,
+            },
+        };
+        let total_ms = self.request_start.elapsed().as_secs_f64() * 1000.0;
+        let record = QueryAuditRecord {
+            client: self.client.clone(),
+            user: self.user.clone(),
+            email: self.email.clone(),
+            name: self.name.clone(),
+            service_account: self.service_account,
+            service_account_name: self.service_account_name.clone(),
+            sql: self.sql.clone(),
+            range_begin: self.range_begin.clone(),
+            range_end: self.range_end.clone(),
+            limit: self.limit,
+            context_init_ms: self.context_init_ms,
+            planning_ms: self.planning_ms,
+            execution_ms: self.execution_ms,
+            setup_ms: self.setup_ms,
+            total_ms,
+            status,
+            error,
+            output_rows: scan.output_rows,
+            bytes_scanned: scan.bytes_scanned,
+        };
+        match serde_json::to_string(&record) {
+            Ok(json) => info!(target: "flightsql_query_audit", "{json}"),
+            Err(e) => warn!("failed to serialize query audit record: {e}"),
+        }
+    }
+}
+
 /// Stream wrapper that tracks when the stream is fully consumed
 struct CompletionTrackedStream<S> {
     inner: S,
     start_time: i64,
     completed: bool,
+    audit: Option<QueryAuditState>,
 }
 
 impl<S> CompletionTrackedStream<S> {
-    fn new(inner: S, start_time: i64) -> Self {
+    fn new(inner: S, start_time: i64, audit: QueryAuditState) -> Self {
         Self {
             inner,
             start_time,
             completed: false,
+            audit: Some(audit),
+        }
+    }
+}
+
+impl<S> Drop for CompletionTrackedStream<S> {
+    /// If the stream is dropped before yielding `None` or an `Err` (client
+    /// disconnect/cancel mid-drain), `poll_next` never ran its completion
+    /// arms, so `self.audit` is still `Some(...)`. Emit it here with a
+    /// terminal "incomplete" status so cancelled/abandoned queries are still
+    /// audited instead of silently vanishing. A no-op for streams that
+    /// completed or errored normally, since those arms already `take()` the
+    /// audit state.
+    fn drop(&mut self) {
+        if let Some(state) = self.audit.take() {
+            state.emit("incomplete", None);
         }
     }
 }
@@ -104,6 +199,9 @@ where
                         imetric!("query_duration_with_error", "ticks", total_duration as u64);
                         imetric!("query_failed", "count", 1);
                         self.completed = true;
+                        if let Some(state) = self.audit.take() {
+                            state.emit("error", Some(err.to_string()));
+                        }
                     }
                 }
                 Poll::Ready(Some(result))
@@ -115,6 +213,9 @@ where
                     imetric!("query_duration_total", "ticks", total_duration as u64);
                     imetric!("query_completed_successfully", "count", 1);
                     self.completed = true;
+                    if let Some(state) = self.audit.take() {
+                        state.emit("ok", None);
+                    }
                 }
                 Poll::Ready(None)
             }
@@ -177,6 +278,7 @@ impl FlightSqlServiceImpl {
         metadata: &MetadataMap,
     ) -> Result<Response<FlightDataStream>, Status> {
         let begin_request = now();
+        let request_start = Instant::now();
         let sql = std::str::from_utf8(&ticket_stmt.statement_handle)
             .map_err(|e| status!("Unable to parse query", e))?;
 
@@ -238,8 +340,34 @@ impl FlightSqlServiceImpl {
             );
         }
 
+        // Attribution is resolved from here on, so build the audit state now
+        // (durations/limit/plan filled in as they become known) instead of
+        // only after the physical plan exists. This lets every subsequent
+        // setup failure (session context, planning, limit, physical plan,
+        // stream construction) still emit an "error" audit record instead of
+        // silently disappearing on an early `?` return.
+        let mut audit_state = QueryAuditState {
+            client: client_type.to_string(),
+            user: attr.user_id.clone(),
+            email: attr.user_email.clone(),
+            name: attr.user_name.clone(),
+            service_account: attr.service_account.is_some(),
+            service_account_name: attr.service_account.clone(),
+            sql: sql.to_string(),
+            range_begin: query_range.as_ref().map(|r| r.begin.to_rfc3339()),
+            range_end: query_range.as_ref().map(|r| r.end.to_rfc3339()),
+            limit: None,
+            context_init_ms: 0.0,
+            planning_ms: 0.0,
+            execution_ms: 0.0,
+            setup_ms: 0.0,
+            request_start,
+            plan: None,
+        };
+
         // Session context creation phase
         let session_begin = now();
+        let session_begin_instant = Instant::now();
         let ctx = make_session_context(
             self.lakehouse.clone(),
             self.part_provider.clone(),
@@ -248,36 +376,59 @@ impl FlightSqlServiceImpl {
             self.session_configurator.clone(),
         )
         .await
-        .map_err(|e| status!("error in make_session_context", e))?;
+        .map_err(|e| {
+            audit_state.emit("error", Some(format!("error in make_session_context: {e}")));
+            status!("error in make_session_context", e)
+        })?;
         let context_init_duration = now() - session_begin;
+        audit_state.context_init_ms = session_begin_instant.elapsed().as_secs_f64() * 1000.0;
 
         // Query planning phase
         let planning_begin = now();
-        let mut df = ctx
-            .sql(sql)
-            .await
-            .map_err(|e| status!("error building dataframe", e))?;
+        let planning_begin_instant = Instant::now();
+        let mut df = ctx.sql(sql).await.map_err(|e| {
+            audit_state.emit("error", Some(format!("error building dataframe: {e}")));
+            status!("error building dataframe", e)
+        })?;
         let planning_duration = now() - planning_begin;
+        audit_state.planning_ms = planning_begin_instant.elapsed().as_secs_f64() * 1000.0;
 
         if let Some(limit_str) = metadata.get("limit") {
-            let limit: usize = usize::from_str(
-                limit_str
-                    .to_str()
-                    .map_err(|e| status!("error converting limit to str", e))?,
-            )
-            .map_err(|e| status!("error parsing limit", e))?;
-            df = df
-                .limit(0, Some(limit))
-                .map_err(|e| status!("error building dataframe with limit", e))?;
+            let parsed_limit: usize = usize::from_str(limit_str.to_str().map_err(|e| {
+                audit_state.emit("error", Some(format!("error converting limit to str: {e}")));
+                status!("error converting limit to str", e)
+            })?)
+            .map_err(|e| {
+                audit_state.emit("error", Some(format!("error parsing limit: {e}")));
+                status!("error parsing limit", e)
+            })?;
+            audit_state.limit = Some(parsed_limit as u64);
+            df = df.limit(0, Some(parsed_limit)).map_err(|e| {
+                audit_state.emit(
+                    "error",
+                    Some(format!("error building dataframe with limit: {e}")),
+                );
+                status!("error building dataframe with limit", e)
+            })?;
         }
 
-        // Query execution phase
+        // Query execution phase: build the physical plan (kept for post-drain metrics)
+        // and run it via the free-function `execute_stream`, which is what
+        // `DataFrame::execute_stream` does internally, minus dropping the plan.
         let execution_begin = now();
+        let execution_begin_instant = Instant::now();
         let schema = Arc::new(df.schema().as_arrow().clone());
-        let stream = df
-            .execute_stream()
-            .await
-            .map_err(|e| Status::internal(format!("Error executing plan: {e:?}")))?
+        let task_ctx = Arc::new(df.task_ctx());
+        let plan = df.create_physical_plan().await.map_err(|e| {
+            audit_state.emit("error", Some(format!("error creating physical plan: {e}")));
+            status!("error creating physical plan", e)
+        })?;
+        audit_state.plan = Some(plan.clone());
+        let stream = execute_stream(plan, task_ctx)
+            .map_err(|e| {
+                audit_state.emit("error", Some(format!("Error executing plan: {e:?}")));
+                Status::internal(format!("Error executing plan: {e:?}"))
+            })?
             .map_err(|e| FlightError::ExternalError(Box::new(e)));
         let builder = if Self::should_preserve_dictionary(metadata) {
             FlightDataEncoderBuilder::new()
@@ -288,9 +439,11 @@ impl FlightSqlServiceImpl {
         };
         let flight_data_stream = builder.build(stream);
         let execution_duration = now() - execution_begin;
+        audit_state.execution_ms = execution_begin_instant.elapsed().as_secs_f64() * 1000.0;
 
         // Calculate total setup time and record detailed metrics
         let total_setup_duration = now() - begin_request;
+        audit_state.setup_ms = request_start.elapsed().as_secs_f64() * 1000.0;
 
         // Record detailed timing metrics
         imetric!(
@@ -307,21 +460,10 @@ impl FlightSqlServiceImpl {
         imetric!("query_setup_duration", "ticks", total_setup_duration as u64);
 
         // Create instrumented stream that tracks completion
-        let instrumented_stream = flight_data_stream
-            .map_err(|e| status!("error building data stream", e))
-            .map({
-                let start_time = begin_request;
-                move |result| {
-                    // On stream completion or error, record total duration
-                    if result.is_err() {
-                        let total_duration = now() - start_time;
-                        imetric!("query_duration_with_error", "ticks", total_duration as u64);
-                    }
-                    result
-                }
-            });
+        let instrumented_stream =
+            flight_data_stream.map_err(|e| status!("error building data stream", e));
         let completion_tracked_stream =
-            CompletionTrackedStream::new(instrumented_stream.boxed(), begin_request);
+            CompletionTrackedStream::new(instrumented_stream.boxed(), begin_request, audit_state);
         Ok(Response::new(
             Box::pin(completion_tracked_stream) as FlightDataStream
         ))
