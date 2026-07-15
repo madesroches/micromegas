@@ -249,9 +249,13 @@ an out-of-order block making a stream's partition ranges overlap). It cannot see
 — because that requires inspecting the rows, not the metadata. Since we prefer a loud failure over a
 silently mis-ordered trace, add a complete backstop where the rows are actually consumed:
 `generate_thread_spans_with_writer` (`perfetto_trace_execution_plan.rs:331`) already iterates every
-span row of each per-thread query. Track the previous `begin` and, if a row's `begin` is ever less
-than its predecessor, **return an error** (surfacing the `stream_id` and the offending pair of
-timestamps) instead of writing the row.
+span row of each per-thread query, via an outer `for (stream_id, mut data_stream) in streams` loop
+that consumes each thread's stream in turn. `begin` is only guaranteed sorted *within* a thread —
+different threads are independent timelines, so thread B's first `begin` can legitimately precede
+thread A's last `begin`. Declare (and reset) the previous-`begin` tracker inside that per-stream
+loop, so monotonicity is checked within each thread and never across threads. If a row's `begin` is
+ever less than its predecessor within the same stream, **return an error** (surfacing the
+`stream_id` and the offending pair of timestamps) instead of writing the row.
 
 This validates the *actual* emitted order, so it catches every ordering violation regardless of
 cause — within-partition, cross-partition, or a future regression in the traversal/partitioning
@@ -272,9 +276,10 @@ failure is loud in production, not just in debug builds.
    guard), and attach the `LexOrdering` via `with_output_ordering`.
 4. **`materialized_view.rs`** — pass `self.view.get_scan_output_ordering()` into the call.
 5. **`partitioned_table_provider.rs`** — pass `&[]` into the call.
-6. **`perfetto_trace_execution_plan.rs`** — in `generate_thread_spans_with_writer`, track the previous
-   `begin` and error if a row's `begin` is less than its predecessor (the §4 runtime monotonicity
-   guard).
+6. **`perfetto_trace_execution_plan.rs`** — in `generate_thread_spans_with_writer`, declare the
+   previous-`begin` tracker inside the per-stream `for (stream_id, ...)` loop (so it resets for each
+   thread) and error if a row's `begin` is less than its predecessor within that same stream (the §4
+   runtime monotonicity guard).
 7. Update any other `make_partitioned_execution_plan` callers if present (grep confirms only the two
    above) and run `cargo fmt` + `cargo clippy --workspace -- -D warnings`.
 8. Add the regression tests (see Testing Strategy).
