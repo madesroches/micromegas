@@ -11,6 +11,7 @@ Assumes services are already running:
 """
 
 import datetime
+import json
 import os
 import time
 import uuid
@@ -26,6 +27,7 @@ from opentelemetry.proto.trace.v1 import trace_pb2
 from .otlp_helpers import (
     assert_eventually,
     discover_process_id,
+    discover_process_id_by_property,
     make_resource,
     string_kv,
 )
@@ -36,6 +38,7 @@ INGESTION_URL = os.environ.get("MICROMEGAS_INGESTION_URL", "http://127.0.0.1:900
 LOGS_ENDPOINT = f"{INGESTION_URL}/ingestion/otlp/v1/logs"
 METRICS_ENDPOINT = f"{INGESTION_URL}/ingestion/otlp/v1/metrics"
 TRACES_ENDPOINT = f"{INGESTION_URL}/ingestion/otlp/v1/traces"
+WEBHOOK_ENDPOINT = f"{INGESTION_URL}/ingestion/webhook"
 
 PROTOBUF_HEADERS = {"Content-Type": "application/x-protobuf"}
 
@@ -475,3 +478,98 @@ def test_otlp_content_type_rejection():
     ), f"expected tag 8 (field 1, varint) at start of Status, got {raw[0]:#x}"
     code = raw[1]  # small enough to fit in a single byte
     assert code == 3, f"expected INVALID_ARGUMENT(3), got {code}"
+
+
+# ---------------------------------------------------------------------------
+# Generic webhook ingestion
+# ---------------------------------------------------------------------------
+
+
+def test_webhook_ingestion_e2e():
+    """POST a GitLab-shaped JSON body through the generic webhook endpoint and
+    verify it lands as a single log_entries row with target/exe derived from
+    headers and msg == the verbatim body, then query the body via JSONB."""
+    # discover_process_id keys on service.instance.id, which webhook headers
+    # can't set — tag the run on service.name instead and look it up via the
+    # otel.resource.* process property (see discover_process_id_by_property).
+    service_name = f"webhook-e2e-{uuid.uuid4()}"
+    target = "gitlab.push"
+    body = json.dumps(
+        {
+            "object_kind": "push",
+            "project": {"name": "demo"},
+            "object_attributes": {"iid": 42},
+            "commits": [{"id": "abc123"}, {"id": "def456"}],
+        }
+    )
+
+    resp = requests.post(
+        WEBHOOK_ENDPOINT,
+        data=body,
+        headers={
+            "X-Micromegas-Service-Name": service_name,
+            "X-Micromegas-Service-Namespace": "ci",
+            "X-Micromegas-Target": target,
+            "Content-Type": "application/json",
+        },
+        timeout=10,
+    )
+    assert resp.status_code == 200, resp.text
+
+    begin, end = _query_window()
+    pid_str = discover_process_id_by_property(
+        client,
+        "otel.resource.service.name",
+        service_name,
+        begin,
+        end,
+        timeout_s=POLL_TIMEOUT_S,
+    )
+
+    def query_row():
+        sql = f"SELECT target, exe, msg FROM log_entries WHERE process_id = '{pid_str}'"
+        return client.query(sql, begin, end)
+
+    df = assert_eventually(
+        query_row,
+        lambda r: not r.empty,
+        timeout_s=POLL_TIMEOUT_S,
+        msg=f"waiting for webhook log_entries row with process_id={pid_str}",
+    )
+    assert len(df) == 1, df
+    row = df.iloc[0]
+    assert row["target"] == target
+    assert row["exe"] == f"ci/{service_name}"
+    assert row["msg"] == body
+
+    # Prove nested/array access against the stored body works via the JSONB UDFs.
+    sql = (
+        "SELECT jsonb_as_i64(jsonb_path_query_first(jsonb_parse(msg), "
+        "'$.object_attributes.iid')) AS iid, "
+        "  jsonb_array_length(jsonb_get(jsonb_parse(msg), 'commits')) AS nb_commits "
+        f"FROM log_entries WHERE process_id = '{pid_str}'"
+    )
+    jsonb_rows = client.query(sql, begin, end)
+    assert int(jsonb_rows.iloc[0]["iid"]) == 42
+    assert int(jsonb_rows.iloc[0]["nb_commits"]) == 2
+
+
+def test_webhook_ingestion_empty_body_rejected():
+    resp = requests.post(
+        WEBHOOK_ENDPOINT,
+        data=b"",
+        headers={"X-Micromegas-Service-Name": "webhook-e2e-empty"},
+        timeout=10,
+    )
+    assert resp.status_code == 400, resp.text
+
+
+def test_webhook_ingestion_missing_headers_tolerated():
+    """No X-Micromegas-* headers at all — the endpoint must still accept."""
+    resp = requests.post(
+        WEBHOOK_ENDPOINT,
+        data=json.dumps({"ping": True}),
+        headers={"Content-Type": "application/json"},
+        timeout=10,
+    )
+    assert resp.status_code == 200, resp.text

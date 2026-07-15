@@ -7,8 +7,10 @@
 use crate::block::{ProcessFromResource, split_logs, split_metrics, split_traces};
 use crate::error::{OtelError, Signal};
 use crate::proto::{
-    ExportLogsServiceRequest, ExportLogsServiceResponse, ExportMetricsServiceRequest,
+    AnyValue, ExportLogsServiceRequest, ExportLogsServiceResponse, ExportMetricsServiceRequest,
     ExportMetricsServiceResponse, ExportTraceServiceRequest, ExportTraceServiceResponse,
+    InstrumentationScope, KeyValue, LogRecord, Resource, ResourceLogs, ScopeLogs, SeverityNumber,
+    any_value,
 };
 use crate::{
     FORMAT_OTLP_LOGS, FORMAT_OTLP_METRICS, FORMAT_OTLP_TRACES, OTLP_TICKS_PER_SECOND, TAG_LOGS,
@@ -167,4 +169,73 @@ pub async fn ingest_traces(
     })?;
     write_blocks(&service, Signal::Traces, blocks).await?;
     Ok(ExportTraceServiceResponse::default())
+}
+
+/// Builds a synthetic `ExportLogsServiceRequest` carrying a single resource, single
+/// scope, single log record whose body is the verbatim webhook request body.
+/// `time_unix_nano` / `observed_time_unix_nano` are left at 0 so `split_logs`'s
+/// existing backfill stamps ingestion time.
+///
+/// Public (rather than private) so `tests/webhook_tests.rs` can assert its shape directly.
+pub fn build_webhook_request(
+    resource_attrs: Vec<KeyValue>,
+    target: String,
+    body: &[u8],
+) -> ExportLogsServiceRequest {
+    let body_string = String::from_utf8_lossy(body).into_owned();
+    let record = LogRecord {
+        time_unix_nano: 0,
+        observed_time_unix_nano: 0,
+        severity_number: SeverityNumber::Info as i32,
+        severity_text: String::new(),
+        body: Some(AnyValue {
+            value: Some(any_value::Value::StringValue(body_string)),
+        }),
+        attributes: vec![],
+        dropped_attributes_count: 0,
+        flags: 0,
+        trace_id: vec![],
+        span_id: vec![],
+        event_name: String::new(),
+    };
+    let scope_logs = ScopeLogs {
+        scope: Some(InstrumentationScope {
+            name: target,
+            version: String::new(),
+            attributes: vec![],
+            dropped_attributes_count: 0,
+        }),
+        log_records: vec![record],
+        schema_url: String::new(),
+    };
+    let resource_logs = ResourceLogs {
+        resource: Some(Resource {
+            attributes: resource_attrs,
+            dropped_attributes_count: 0,
+            entity_refs: vec![],
+        }),
+        scope_logs: vec![scope_logs],
+        schema_url: String::new(),
+    };
+    ExportLogsServiceRequest {
+        resource_logs: vec![resource_logs],
+    }
+}
+
+/// Generic webhook → single-log-record ingestion.
+/// Builds a synthetic `ExportLogsServiceRequest` (one resource, one scope, one record whose
+/// body is the verbatim request body) and reuses the OTLP logs split/write path.
+pub async fn ingest_webhook(
+    service: Arc<WebIngestionService>,
+    resource_attrs: Vec<KeyValue>,
+    target: String,
+    body: bytes::Bytes,
+) -> Result<(), OtelError> {
+    let req = build_webhook_request(resource_attrs, target, &body);
+    let blocks = split_logs(req).map_err(|e| OtelError::Parse {
+        signal: Signal::Logs,
+        message: format!("split_logs (webhook): {e}"),
+    })?;
+    write_blocks(&service, Signal::Logs, blocks).await?;
+    Ok(())
 }

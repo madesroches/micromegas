@@ -292,6 +292,73 @@ AWS EventBridge API Destinations send `Content-Type: application/json; charset=u
 
 `timeUnixNano` must be a **quoted string** in the template (e.g. `"<$.time_ns>"`). EventBridge input transformers substitute variables as strings inside quotes, satisfying the OTLP/JSON spec requirement. No Lambda translation layer is needed.
 
+## Webhook ingestion
+
+`POST /ingestion/webhook` accepts a raw webhook delivery from any header-capable
+producer (GitLab, GitHub, a generic SaaS) with **no per-source configuration on the
+server**. It synthesizes an OTLP `Resource` from three request headers and stores the
+**verbatim request body** as a single log record's body, reusing the OTLP logs
+identity/block/write path end-to-end — the same auth, body-limit, and idempotency
+rules described above apply unchanged.
+
+| Header | Maps to | Result |
+|---|---|---|
+| `X-Micromegas-Service-Name` | resource `service.name` | `processes.exe` / `log_entries.exe` |
+| `X-Micromegas-Service-Namespace` | resource `service.namespace` | folded into `exe` as `namespace/name`, and into `process_id` |
+| `X-Micromegas-Target` | instrumentation scope name | `log_entries.target` |
+
+All three headers are optional — a missing header behaves like an OTLP resource
+that omits the attribute. The body is never parsed or validated server-side; an
+empty body returns `400 Bad Request` (nothing to store). `Content-Type` is not
+negotiated — send whatever the producer sends (typically `application/json`).
+
+Because no per-record timestamp is known, `time` is the server's ingestion wall-clock
+time. Retried deliveries with the same headers **and** the same body dedup via the same
+content-addressed `block_id` scheme described in [Idempotency](#idempotency).
+
+### GitLab example
+
+Configure a GitLab group or project webhook to point at the endpoint, with the three
+custom headers set once in the webhook configuration:
+
+```
+URL:     https://micromegas.example.com/ingestion/webhook
+Headers: X-Micromegas-Service-Name: gitlab
+         X-Micromegas-Service-Namespace: my-group
+         X-Micromegas-Target: gitlab.push
+         Authorization: Bearer mm_abc123def...
+```
+
+Every push/merge-request/pipeline event GitLab sends lands as one `log_entries` row
+with `target = 'gitlab.push'`, `exe = 'my-group/gitlab'`, and `msg` equal to the raw
+JSON payload GitLab sent.
+
+### Querying the stored body
+
+The body is opaque JSON text in `msg`; parse it at query time with the `jsonb_*` UDFs
+(`jsonb_parse`, `jsonb_get`, `jsonb_as_i64`, `jsonb_array_length`,
+`jsonb_path_query_first` for nested/dotted access — there is no dotted-path variant of
+`jsonb_get`):
+
+```sql
+SELECT
+  jsonb_as_string(jsonb_get(jsonb_parse(msg), 'object_kind')) AS kind,
+  jsonb_as_i64(jsonb_path_query_first(jsonb_parse(msg), '$.object_attributes.iid')) AS iid,
+  jsonb_array_length(jsonb_get(jsonb_parse(msg), 'commits')) AS nb_commits
+FROM log_entries
+WHERE target = 'gitlab.push'
+ORDER BY time DESC
+LIMIT 10;
+```
+
+### Replacing the #1167 transformer recipe
+
+This endpoint obviates the runtime component of the earlier "external transformer
+service" recipe (issue #1167): instead of running a small service that reshapes each
+webhook payload before forwarding, point the webhook directly at `/ingestion/webhook`
+with the three `X-Micromegas-*` headers set once in the producer's webhook
+configuration. No transformer to deploy or keep running.
+
 ## Limitations
 
 - **OTLP/HTTP only.** gRPC OTLP is not implemented; SDKs that default to gRPC need `OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf`.
