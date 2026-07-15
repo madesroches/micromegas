@@ -150,15 +150,15 @@ fn aggregate_scan_metrics_ignores_output_rows_on_non_root_nodes() {
     assert_eq!(scan.output_rows, None);
 }
 
-fn full_record(sql: &str) -> QueryAuditRecord<'_> {
+fn full_record(sql: &str) -> QueryAuditRecord {
     QueryAuditRecord {
-        client: "python",
-        user: "alice",
-        email: "alice@example.com",
-        name: Some("Alice"),
+        client: "python".to_string(),
+        user: "alice".to_string(),
+        email: "alice@example.com".to_string(),
+        name: Some("Alice".to_string()),
         service_account: false,
         service_account_name: None,
-        sql,
+        sql: sql.to_string(),
         range_begin: Some("2024-01-01T00:00:00+00:00".to_string()),
         range_end: Some("2024-01-02T00:00:00+00:00".to_string()),
         limit: Some(100),
@@ -202,13 +202,13 @@ fn query_audit_record_serializes_required_fields() {
 #[test]
 fn query_audit_record_omits_absent_optionals() {
     let record = QueryAuditRecord {
-        client: "grpc",
-        user: "unknown",
-        email: "unknown",
+        client: "grpc".to_string(),
+        user: "unknown".to_string(),
+        email: "unknown".to_string(),
         name: None,
         service_account: true,
-        service_account_name: Some("svc-ci"),
-        sql: "SELECT 2",
+        service_account_name: Some("svc-ci".to_string()),
+        sql: "SELECT 2".to_string(),
         range_begin: None,
         range_end: None,
         limit: None,

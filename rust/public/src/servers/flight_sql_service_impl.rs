@@ -121,13 +121,13 @@ impl QueryAuditState {
         };
         let total_ms = self.request_start.elapsed().as_secs_f64() * 1000.0;
         let record = QueryAuditRecord {
-            client: &self.client,
-            user: &self.user,
-            email: &self.email,
-            name: self.name.as_deref(),
+            client: self.client.clone(),
+            user: self.user.clone(),
+            email: self.email.clone(),
+            name: self.name.clone(),
             service_account: self.service_account,
-            service_account_name: self.service_account_name.as_deref(),
-            sql: &self.sql,
+            service_account_name: self.service_account_name.clone(),
+            sql: self.sql.clone(),
             range_begin: self.range_begin.clone(),
             range_end: self.range_end.clone(),
             limit: self.limit,

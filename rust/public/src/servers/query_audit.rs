@@ -43,16 +43,16 @@ pub fn aggregate_scan_metrics(plan: &dyn ExecutionPlan) -> ScanMetrics {
 /// the `flightsql_query_audit` target when the query completes, fails, or is
 /// abandoned mid-drain (client disconnect/cancel).
 #[derive(serde::Serialize)]
-pub struct QueryAuditRecord<'a> {
-    pub client: &'a str,
-    pub user: &'a str,
-    pub email: &'a str,
+pub struct QueryAuditRecord {
+    pub client: String,
+    pub user: String,
+    pub email: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<&'a str>,
+    pub name: Option<String>,
     pub service_account: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub service_account_name: Option<&'a str>,
-    pub sql: &'a str,
+    pub service_account_name: Option<String>,
+    pub sql: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub range_begin: Option<String>, // RFC3339
     #[serde(skip_serializing_if = "Option::is_none")]
