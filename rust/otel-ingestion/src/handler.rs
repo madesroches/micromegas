@@ -180,6 +180,19 @@ pub async fn ingest_traces(
 /// there is no way to decode it losslessly. `time_unix_nano` / `observed_time_unix_nano`
 /// are left at 0 so `split_logs`'s existing backfill stamps ingestion time.
 ///
+/// Leaving both timestamps at 0 means `split_logs` backfills on every single webhook
+/// delivery (never just the rare real-OTLP case), so its "only re-encode when mutated"
+/// optimization never applies here: every webhook request pays for two full
+/// `ResourceLogs::encode_to_vec()` calls (pre- and post-backfill) instead of one. This is
+/// an accepted, bounded tradeoff — bounded by the ~300 MiB decompressed body cap in
+/// `rust/public/src/servers/ingestion_limits.rs` — required to keep `block_id` both
+/// content-addressed (hashed from the pre-backfill bytes, so retried deliveries dedup) and
+/// independent of wall-clock ingestion time (see `split_logs`'s doc comment and
+/// `tasks/1296_webhook_ingestion_plan.md`'s "Idempotency / dedup" section). Stamping a real
+/// timestamp here instead of 0 would avoid the double encode but would break dedup: the
+/// pre-backfill bytes hashed into `block_id` would then include a live, ever-changing
+/// timestamp, so identical retried bodies would hash to different `block_id`s.
+///
 /// Public (rather than private) so `tests/webhook_tests.rs` can assert its shape directly.
 pub fn build_webhook_request(
     resource_attrs: Vec<KeyValue>,

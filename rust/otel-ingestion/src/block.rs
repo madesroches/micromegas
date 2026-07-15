@@ -251,6 +251,14 @@ fn build_prepared_block(
 ///
 /// The `block_id` is derived from the pre-backfill bytes so retries with the same
 /// original payload always produce the same ID, preserving deduplication semantics.
+///
+/// The re-encode below is skipped when nothing was backfilled, which is the common case
+/// for real OTLP producers (they normally supply at least one of the two timestamps). The
+/// webhook path (`handler::build_webhook_request`) intentionally leaves both timestamps at
+/// 0 on every record, so for webhook-sourced requests `nb_backfilled > 0` unconditionally
+/// and this function always pays for two full `encode_to_vec()` calls. That's an accepted,
+/// bounded tradeoff (see the doc comment on `build_webhook_request`) — not a bug in this
+/// function — so it's left as shared, unconditional behavior rather than special-cased here.
 pub fn split_logs(req: crate::proto::ExportLogsServiceRequest) -> Result<Vec<PreparedBlock>> {
     let mut out = Vec::with_capacity(req.resource_logs.len());
     for mut rl in req.resource_logs {
