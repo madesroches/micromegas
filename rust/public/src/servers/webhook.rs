@@ -38,10 +38,10 @@ const HEADER_TARGET: &str = "X-Micromegas-Target";
 fn push_attr_from_header(
     attrs: &mut Vec<KeyValue>,
     headers: &HeaderMap,
-    header: &str,
+    header_name: &str,
     otel_key: &str,
 ) {
-    let Some(value) = headers.get(header) else {
+    let Some(value) = headers.get(header_name) else {
         return;
     };
     let Ok(value) = value.to_str() else {
