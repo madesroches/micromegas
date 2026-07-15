@@ -292,6 +292,82 @@ AWS EventBridge API Destinations send `Content-Type: application/json; charset=u
 
 `timeUnixNano` must be a **quoted string** in the template (e.g. `"<$.time_ns>"`). EventBridge input transformers substitute variables as strings inside quotes, satisfying the OTLP/JSON spec requirement. No Lambda translation layer is needed.
 
+## Webhook ingestion
+
+`POST /ingestion/webhook` accepts a raw webhook delivery from any header-capable
+producer (GitLab, GitHub, a generic SaaS) with **no per-source configuration on the
+server**. It synthesizes an OTLP `Resource` from three request headers and stores the
+request body as a single log record's body, reusing the OTLP logs identity/block/write
+path end-to-end — the same auth, body-limit, and idempotency rules described above
+apply unchanged. Since `log_entries.msg` is `Utf8`-typed, a valid-UTF8 body (the common
+case: JSON payloads from GitLab/GitHub/etc.) is stored verbatim. There is no header to
+describe an alternate codec, so a non-UTF8 body is stored via lossy UTF-8 conversion
+(invalid byte sequences become `U+FFFD`) rather than rejected or stored as opaque
+binary.
+
+| Header | Maps to | Result |
+|---|---|---|
+| `X-Micromegas-Service-Name` | resource `service.name` | `processes.exe` / `log_entries.exe` |
+| `X-Micromegas-Service-Namespace` | resource `service.namespace` | folded into `exe` as `namespace/name`, and into `process_id` |
+| `X-Micromegas-Target` | instrumentation scope name | `log_entries.target` |
+
+All three headers are optional — a missing header behaves like an OTLP resource
+that omits the attribute. The body is never parsed or validated server-side; an
+empty body returns `400 Bad Request` (nothing to store). `Content-Type` is not
+negotiated — send whatever the producer sends (typically `application/json`).
+
+Because no per-record timestamp is known, `time` is the server's ingestion wall-clock
+time. Retried deliveries dedup via the same content-addressed `block_id` scheme
+described in [Idempotency](#idempotency), with two webhook-specific wrinkles:
+
+- **`block_id` is hashed from the *full* incoming header set, not just the 3 recognized
+  ones.** Only `X-Micromegas-Service-Name`/`-Service-Namespace`/`-Target` become resource
+  attrs, but a producer-specific header this endpoint doesn't otherwise interpret (a
+  GitLab delivery UUID, a GitHub event-type header, a signature) still changes `block_id`
+  if it differs — otherwise two unrelated deliveries with byte-identical bodies but
+  different unrecognized headers would collide and dedup as if they were retries of each
+  other. The flip side: a genuine retry that picks up a new value for some header along
+  the way (e.g. a proxy stamping a fresh `Date` or request-id on each hop) is no longer
+  deduped, since that header now participates in the hash too.
+- **The hash is computed before the server backfills the record's timestamp**, so the
+  wall-clock `time` written on a retry doesn't affect `block_id` — otherwise identical
+  deliveries would never dedup, since the backfilled timestamp is different every time.
+
+### GitLab example
+
+Configure a GitLab group or project webhook to point at the endpoint, with the three
+custom headers set once in the webhook configuration:
+
+```
+URL:     https://micromegas.example.com/ingestion/webhook
+Headers: X-Micromegas-Service-Name: gitlab
+         X-Micromegas-Service-Namespace: my-group
+         X-Micromegas-Target: gitlab.push
+         Authorization: Bearer mm_abc123def...
+```
+
+Every push/merge-request/pipeline event GitLab sends lands as one `log_entries` row
+with `target = 'gitlab.push'`, `exe = 'my-group/gitlab'`, and `msg` equal to the raw
+JSON payload GitLab sent.
+
+### Querying the stored body
+
+The body is opaque JSON text in `msg`; parse it at query time with the `jsonb_*` UDFs
+(`jsonb_parse`, `jsonb_get`, `jsonb_as_i64`, `jsonb_array_length`,
+`jsonb_path_query_first` for nested/dotted access — there is no dotted-path variant of
+`jsonb_get`):
+
+```sql
+SELECT
+  jsonb_as_string(jsonb_get(jsonb_parse(msg), 'object_kind')) AS kind,
+  jsonb_as_i64(jsonb_path_query_first(jsonb_parse(msg), '$.object_attributes.iid')) AS iid,
+  jsonb_array_length(jsonb_get(jsonb_parse(msg), 'commits')) AS nb_commits
+FROM log_entries
+WHERE target = 'gitlab.push'
+ORDER BY time DESC
+LIMIT 10;
+```
+
 ## Limitations
 
 - **OTLP/HTTP only.** gRPC OTLP is not implemented; SDKs that default to gRPC need `OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf`.

@@ -15,6 +15,12 @@ pub mod ingestion;
 /// OTLP/HTTP routes (logs, metrics, traces) for the ingestion server
 pub mod otlp;
 
+/// generic header-described webhook ingestion route
+pub mod webhook;
+
+/// shared body-limit / decompression layers for ingestion routers (OTLP, webhook)
+pub(crate) mod ingestion_limits;
+
 /// implementation of maintenance daemon keeping the lakehouse updated
 pub mod maintenance;
 

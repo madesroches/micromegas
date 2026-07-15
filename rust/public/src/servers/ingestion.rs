@@ -130,6 +130,7 @@ pub async fn serve_ingestion(
 
     let mut protected_app = register_routes(Router::new())
         .merge(super::otlp::otlp_router())
+        .merge(super::webhook::webhook_router())
         .layer(DefaultBodyLimit::disable())
         .layer(RequestBodyLimitLayer::new(100 * 1024 * 1024))
         .layer(Extension(service));

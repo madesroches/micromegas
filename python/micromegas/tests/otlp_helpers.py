@@ -18,12 +18,31 @@ def discover_process_id(client, instance_id, begin, end, timeout_s=60):
     as `otel.resource.service.instance.id`. Polls until the process row is
     materialized (it lands within a second or two of ingestion).
     """
+    return discover_process_id_by_property(
+        client,
+        "otel.resource.service.instance.id",
+        instance_id,
+        begin,
+        end,
+        timeout_s=timeout_s,
+    )
+
+
+def discover_process_id_by_property(
+    client, prop_key, prop_value, begin, end, timeout_s=60
+):
+    """Return the server-assigned process_id for a given process property.
+
+    Every resource attribute lands in `processes.properties` under
+    `otel.resource.*` (`ProcessFromResource::build`). Useful when the request
+    can't set `service.instance.id` (e.g. webhook headers) — tag the run with
+    a unique value on some other attribute instead and look it up here.
+    """
 
     def query():
         sql = (
             "SELECT process_id FROM processes "
-            "WHERE property_get(properties, 'otel.resource.service.instance.id') "
-            f"= '{instance_id}'"
+            f"WHERE property_get(properties, '{prop_key}') = '{prop_value}'"
         )
         return client.query(sql, begin, end)
 
@@ -31,7 +50,7 @@ def discover_process_id(client, instance_id, begin, end, timeout_s=60):
         query,
         lambda r: not r.empty,
         timeout_s=timeout_s,
-        msg=f"waiting for process with service.instance.id={instance_id}",
+        msg=f"waiting for process with {prop_key}={prop_value}",
     )
     return str(df.iloc[0]["process_id"])
 

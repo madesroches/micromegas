@@ -251,7 +251,30 @@ fn build_prepared_block(
 ///
 /// The `block_id` is derived from the pre-backfill bytes so retries with the same
 /// original payload always produce the same ID, preserving deduplication semantics.
+///
+/// The re-encode below is skipped when nothing was backfilled, which is the common case
+/// for real OTLP producers (they normally supply at least one of the two timestamps). The
+/// webhook path (`handler::build_webhook_request`) intentionally leaves both timestamps at
+/// 0 on every record, so for webhook-sourced requests `nb_backfilled > 0` unconditionally
+/// and this function always pays for two full `encode_to_vec()` calls. That's an accepted,
+/// bounded tradeoff (see the doc comment on `build_webhook_request`) — not a bug in this
+/// function — so it's left as shared, unconditional behavior rather than special-cased here.
 pub fn split_logs(req: crate::proto::ExportLogsServiceRequest) -> Result<Vec<PreparedBlock>> {
+    split_logs_with_extra_hash_input(req, &[])
+}
+
+/// Same as [`split_logs`], but folds `extra_hash_input` into the `block_id` hash alongside
+/// the pre-backfill `ResourceLogs` bytes. Used by the webhook path (`handler::ingest_webhook`)
+/// to fold in the full incoming HTTP header set: the synthetic `ResourceLogs` only carries the
+/// 3 recognized `X-Micromegas-*` headers as resource attrs, so without this, any other header
+/// (a delivery-id, a signature, an event-type header) would have zero influence on `block_id`
+/// — two deliveries with the same body but different unrecognized headers would collide and
+/// dedup as if they were retries of each other. Passing `&[]` (what `split_logs` does)
+/// reproduces the OTLP-only behavior exactly.
+pub fn split_logs_with_extra_hash_input(
+    req: crate::proto::ExportLogsServiceRequest,
+    extra_hash_input: &[u8],
+) -> Result<Vec<PreparedBlock>> {
     let mut out = Vec::with_capacity(req.resource_logs.len());
     for mut rl in req.resource_logs {
         // Fast-path: skip ResourceLogs with no records before incurring encode overhead.
@@ -263,7 +286,15 @@ pub fn split_logs(req: crate::proto::ExportLogsServiceRequest) -> Result<Vec<Pre
         // Encode before any mutation so the block_id is stable across retries with the same
         // original payload, regardless of whether backfill fires.
         let pre_mutation_bytes = rl.encode_to_vec();
-        let block_id = block_id_from_payload(&pre_mutation_bytes);
+        let block_id = if extra_hash_input.is_empty() {
+            block_id_from_payload(&pre_mutation_bytes)
+        } else {
+            let mut hash_input =
+                Vec::with_capacity(extra_hash_input.len() + pre_mutation_bytes.len());
+            hash_input.extend_from_slice(extra_hash_input);
+            hash_input.extend_from_slice(&pre_mutation_bytes);
+            block_id_from_payload(&hash_input)
+        };
 
         // Backfill observed_time_unix_nano for records missing both timestamps.
         // now_nanos is captured once per ResourceLogs so all records in the batch share the same value.

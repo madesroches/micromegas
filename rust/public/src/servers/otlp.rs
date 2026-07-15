@@ -14,10 +14,10 @@
 //! encoded in the same way, except 415 responses which always use protobuf because the
 //! request encoding is unknown at that point.
 
+use super::ingestion_limits::{RETRY_AFTER_SECONDS, apply_ingestion_body_limits};
 use axum::Extension;
 use axum::Router;
 use axum::body::Body;
-use axum::extract::DefaultBodyLimit;
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::Response;
 use axum::routing::post;
@@ -28,25 +28,6 @@ use micromegas_otel_ingestion::handler;
 use micromegas_tracing::prelude::*;
 use prost::Message;
 use std::sync::Arc;
-use tower_http::decompression::RequestDecompressionLayer;
-use tower_http::limit::RequestBodyLimitLayer;
-
-/// 20 MiB matches the OTel Collector `confighttp.max_request_body_size` default —
-/// anything an SDK is willing to send under the conventional Collector cap fits here too.
-/// Applies to compressed wire bytes (the `RequestBodyLimitLayer` runs outside the
-/// decompression layer).
-const OTLP_BODY_LIMIT_BYTES: usize = 20 * 1024 * 1024;
-
-/// Cap on the decompressed body size the handler will materialize. Without this,
-/// a malicious gzip payload up to `OTLP_BODY_LIMIT_BYTES` could expand at gzip's
-/// worst-case ratio (~1000×) and OOM the server. Sized at 15× the wire cap to
-/// cover legitimate protobuf compression (commonly observed up to 10×) with
-/// headroom, while still bounding the worst case to a survivable allocation.
-const OTLP_DECOMPRESSED_BODY_LIMIT_BYTES: usize = 300 * 1024 * 1024;
-
-/// `Retry-After` value (in seconds) on retryable 503 responses. Conservative default —
-/// tune based on observed recovery times.
-const RETRY_AFTER_SECONDS: u32 = 30;
 
 const CONTENT_TYPE_PROTOBUF: &str = "application/x-protobuf";
 const CONTENT_TYPE_JSON: &str = "application/json";
@@ -202,23 +183,13 @@ async fn traces_handler(
     }
 }
 
-/// Builds a sub-Router carrying the three OTLP routes plus the body-limit and
-/// gzip-decompression layers scoped to those routes.
-///
-/// Layer order, outermost → innermost (request travels through them top to bottom):
-///  1. `DefaultBodyLimit::max(300 MiB)` — caps the post-decompression bytes the
-///     handler's `Bytes` extractor will materialize, defending against gzip-bomb
-///     expansion that the wire-byte limit can't see.
-///  2. `RequestBodyLimitLayer(20 MiB)` — caps the *compressed* wire bytes;
-///     enforced before decompression, returning 413 on oversize.
-///  3. `RequestDecompressionLayer` — gzip-decodes the body before the handler.
-///  4. handler.
+/// Builds a sub-Router carrying the three OTLP routes plus the shared body-limit and
+/// gzip-decompression layers scoped to those routes (see `ingestion_limits`).
 pub fn otlp_router() -> Router {
-    Router::new()
-        .route("/ingestion/otlp/v1/logs", post(logs_handler))
-        .route("/ingestion/otlp/v1/metrics", post(metrics_handler))
-        .route("/ingestion/otlp/v1/traces", post(traces_handler))
-        .layer(RequestDecompressionLayer::new().gzip(true))
-        .layer(RequestBodyLimitLayer::new(OTLP_BODY_LIMIT_BYTES))
-        .layer(DefaultBodyLimit::max(OTLP_DECOMPRESSED_BODY_LIMIT_BYTES))
+    apply_ingestion_body_limits(
+        Router::new()
+            .route("/ingestion/otlp/v1/logs", post(logs_handler))
+            .route("/ingestion/otlp/v1/metrics", post(metrics_handler))
+            .route("/ingestion/otlp/v1/traces", post(traces_handler)),
+    )
 }
