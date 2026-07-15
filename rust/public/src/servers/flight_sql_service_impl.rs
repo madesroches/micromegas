@@ -142,7 +142,7 @@ impl QueryAuditState {
             bytes_scanned: scan.bytes_scanned,
         };
         match serde_json::to_string(&record) {
-            Ok(json) => info!(target: "flightsql_query_audit", "{}", json),
+            Ok(json) => info!(target: "flightsql_query_audit", "{json}"),
             Err(e) => warn!("failed to serialize query audit record: {e}"),
         }
     }

@@ -95,7 +95,7 @@ LIMIT 20;
 | `execution_ms` | float | always | Time spent constructing the physical plan and the response stream (not the full drain) |
 | `setup_ms` | float | always | Total setup time: parsing, attribution, context creation, planning, and stream construction |
 | `total_ms` | float | always | End-to-end duration, including draining the response stream to the client |
-| `status` | string | always | `"ok"` or `"error"` |
+| `status` | string | always | `"ok"`, `"error"`, or `"incomplete"` (stream abandoned mid-drain, e.g. client disconnect or cancellation) |
 | `error` | string | on error | Error message, when `status` is `"error"` |
 | `output_rows` | integer | if available | Rows produced by the query's physical plan root |
 | `bytes_scanned` | integer | always | Bytes read from the lakehouse's parquet reader (object-store bytes requested, which may be served from the in-process L1 cache rather than fetched from origin) |
@@ -109,8 +109,9 @@ on their own.
 
 - **One row per query, at completion.** The record can only be assembled once the response stream
   has been fully drained (or has errored), since `total_ms`, `status`, `output_rows`, and
-  `bytes_scanned` only settle at that point. If a client never drains the stream, no record is
-  emitted for that query.
+  `bytes_scanned` only settle at that point. If a client abandons the stream mid-drain (disconnect
+  or cancellation), a record is still emitted with `status = "incomplete"`; its cost fields reflect
+  the work done up to that point.
 - **`bytes_scanned` is a per-query, cache-aware signal.** It counts bytes the lakehouse parquet
   reader requested from its (possibly L1-cache-backed) object store, i.e. the bytes the query
   logically needed — not necessarily bytes fetched from origin storage. The `range_cache_origin_block_bytes`

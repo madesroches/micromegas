@@ -39,8 +39,9 @@ pub fn aggregate_scan_metrics(plan: &dyn ExecutionPlan) -> ScanMetrics {
     }
 }
 
-/// One structured record per FlightSQL query, emitted at completion (success or
-/// error) as a JSON log line under the `flightsql_query_audit` target.
+/// One structured record per FlightSQL query, emitted as a JSON log line under
+/// the `flightsql_query_audit` target when the query completes, fails, or is
+/// abandoned mid-drain (client disconnect/cancel).
 #[derive(serde::Serialize)]
 pub struct QueryAuditRecord<'a> {
     pub client: &'a str,
@@ -63,7 +64,7 @@ pub struct QueryAuditRecord<'a> {
     pub execution_ms: f64, // stream construction (matches query_execution_duration semantics)
     pub setup_ms: f64,     // parse+attribution+context+planning+stream-build (query_setup_duration)
     pub total_ms: f64,     // end-to-end incl. drain
-    pub status: &'static str, // "ok" | "error"
+    pub status: &'static str, // "ok" | "error" | "incomplete"
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
