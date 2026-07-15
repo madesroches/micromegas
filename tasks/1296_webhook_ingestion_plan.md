@@ -42,7 +42,7 @@ idempotent writes are decoupled from HTTP framing:
   `register_otel_stream` (`:273`), `insert_block_typed` (`:142`) — all idempotent.
 - **Identity** — `rust/otel-ingestion/src/identity.rs`: `process_id_from_resource` (`:184`)
   hashes the resource attribute tuple under `NS_OTEL_PROCESS_V1`;
-  `stream_id_from_process_signal` (`:230`); `ProcessFromResource::build` (`block.rs:396`)
+  `stream_id_from_process_signal` (`:230`); `ProcessFromResource::build` (`block.rs:397`)
   maps `service.namespace`/`service.name` → `exe`, `host.name` → `computer`, etc.
 
 ### How a stored `ResourceLogs` becomes `log_entries` rows
@@ -112,7 +112,7 @@ POST /ingestion/webhook
 - Missing headers → empty attribute (same as an OTLP resource that omits them). If
   `service.name` is absent, `exe` is empty and identity collapses toward a degenerate
   resource; the endpoint should still accept but the server logs a `debug!` (reuse the
-  existing `is_degenerate_resource` warning path in `build_prepared_block`).
+  existing `is_degenerate_resource` debug-log path in `build_prepared_block`).
 - Header values are ASCII per HTTP; decode with `.to_str()`, skip non-decodable headers.
 
 ### New handler entry point (otel-ingestion crate)
