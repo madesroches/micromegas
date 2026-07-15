@@ -203,6 +203,12 @@ Changes inside:
   `PartitionedFile::new(file_path, size).with_statistics(Arc::new(stats))`. This only needs to run for
   the columns named in `output_ordering` (today, just `begin`); the empty-`output_ordering` path is
   unchanged and still calls `PartitionedFile::new` with no statistics.
+
+  > **Scope note:** populating time-column statistics for *every* partitioned scan (driven by each
+  > partition's `event_time_range` metadata) would also enable time-predicate partition pruning
+  > across the whole lakehouse — a generally useful win. That generalization is deliberately **out
+  > of scope** here and tracked in #1302; this plan attaches statistics only for the opt-in
+  > `output_ordering` path.
 - Build a `LexOrdering` from `output_ordering` against `schema` and pass
   `vec![lex]` to `FileScanConfigBuilder::with_output_ordering`:
 
