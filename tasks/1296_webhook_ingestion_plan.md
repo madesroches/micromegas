@@ -68,6 +68,12 @@ lands exactly where the header table in the issue says it should — **with no n
 disables the default body limit and sets a 100 MiB cap; each sub-router (like `otlp_router`)
 applies its own tighter limit.
 
+The bearer ingestion key is the sole authentication for the webhook endpoint — no
+per-producer shared-secret / signature verification (e.g. GitLab `X-Gitlab-Token`). The
+bearer key already authenticates the request, and a per-producer secret would add exactly
+the per-source config this design avoids. (Revisit only if a deployment needs to expose the
+endpoint without the bearer key.)
+
 ### Query-time JSONB (correction vs. the issue examples)
 
 Registered JSONB UDFs (`rust/datafusion-extensions/src/jsonb/`): `jsonb_parse`,
@@ -297,10 +303,9 @@ recipes / EventBridge material) covering:
 
 ## Open Questions
 
-1. **Producer shared-secret verification** (e.g. GitLab `X-Gitlab-Token`) — out of scope for
-   v1? The bearer ingestion key already authenticates the request. Recommendation: defer;
-   the bearer key is sufficient, and a per-producer secret adds per-source config the design
-   deliberately avoids. Revisit if a deployment needs to expose the endpoint without the
-   bearer key.
-2. **Default severity** — Info assumed for every webhook record. Acceptable, or should a
-   future `X-Micromegas-Severity` header be reserved (not implemented now)?
+None — all resolved:
+
+- **Producer shared-secret verification:** the bearer ingestion key is sufficient; no
+  per-producer secret (see *Auth & body limits*).
+- **Default severity:** every webhook record is `SeverityNumber::Info`; no
+  `X-Micromegas-Severity` header is reserved for v1.
