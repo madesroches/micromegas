@@ -317,8 +317,21 @@ empty body returns `400 Bad Request` (nothing to store). `Content-Type` is not
 negotiated — send whatever the producer sends (typically `application/json`).
 
 Because no per-record timestamp is known, `time` is the server's ingestion wall-clock
-time. Retried deliveries with the same headers **and** the same body dedup via the same
-content-addressed `block_id` scheme described in [Idempotency](#idempotency).
+time. Retried deliveries dedup via the same content-addressed `block_id` scheme
+described in [Idempotency](#idempotency), with two webhook-specific wrinkles:
+
+- **`block_id` is hashed from the *full* incoming header set, not just the 3 recognized
+  ones.** Only `X-Micromegas-Service-Name`/`-Service-Namespace`/`-Target` become resource
+  attrs, but a producer-specific header this endpoint doesn't otherwise interpret (a
+  GitLab delivery UUID, a GitHub event-type header, a signature) still changes `block_id`
+  if it differs — otherwise two unrelated deliveries with byte-identical bodies but
+  different unrecognized headers would collide and dedup as if they were retries of each
+  other. The flip side: a genuine retry that picks up a new value for some header along
+  the way (e.g. a proxy stamping a fresh `Date` or request-id on each hop) is no longer
+  deduped, since that header now participates in the hash too.
+- **The hash is computed before the server backfills the record's timestamp**, so the
+  wall-clock `time` written on a retry doesn't affect `block_id` — otherwise identical
+  deliveries would never dedup, since the backfilled timestamp is different every time.
 
 ### GitLab example
 

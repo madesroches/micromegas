@@ -6,7 +6,7 @@
 mod fixtures;
 
 use fixtures::s_kv;
-use micromegas_otel_ingestion::block::split_logs;
+use micromegas_otel_ingestion::block::{split_logs, split_logs_with_extra_hash_input};
 use micromegas_otel_ingestion::handler::build_webhook_request;
 use micromegas_otel_ingestion::identity::process_id_from_resource;
 use micromegas_otel_ingestion::proto::{Resource, SeverityNumber, any_value};
@@ -89,4 +89,34 @@ fn identical_webhook_deliveries_dedup_distinct_bodies_dont() {
 
     assert_eq!(a[0].block.block_id, b[0].block.block_id);
     assert_ne!(a[0].block.block_id, c[0].block.block_id);
+}
+
+#[test]
+fn extra_hash_input_changes_block_id_but_empty_matches_plain_split_logs() {
+    let attrs = vec![s_kv("service.name", "gitlab")];
+    let req_plain = build_webhook_request(attrs.clone(), "push-events".to_string(), b"same body");
+    let req_empty_extra =
+        build_webhook_request(attrs.clone(), "push-events".to_string(), b"same body");
+    let req_with_extra =
+        build_webhook_request(attrs.clone(), "push-events".to_string(), b"same body");
+    let req_with_other_extra =
+        build_webhook_request(attrs, "push-events".to_string(), b"same body");
+
+    let plain = split_logs(req_plain).unwrap();
+    let empty_extra = split_logs_with_extra_hash_input(req_empty_extra, &[]).unwrap();
+    let with_extra =
+        split_logs_with_extra_hash_input(req_with_extra, b"x-gitlab-event-uuid:abc").unwrap();
+    let with_other_extra =
+        split_logs_with_extra_hash_input(req_with_other_extra, b"x-gitlab-event-uuid:def").unwrap();
+
+    // &[] reproduces split_logs's OTLP-only behavior exactly.
+    assert_eq!(plain[0].block.block_id, empty_extra[0].block.block_id);
+    // A non-empty extra_hash_input changes block_id even though the request is identical...
+    assert_ne!(plain[0].block.block_id, with_extra[0].block.block_id);
+    // ...and different extra_hash_input values (e.g. distinct unrecognized headers) produce
+    // distinct block_ids for an otherwise byte-identical webhook body.
+    assert_ne!(
+        with_extra[0].block.block_id,
+        with_other_extra[0].block.block_id
+    );
 }

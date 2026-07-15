@@ -554,6 +554,62 @@ def test_webhook_ingestion_e2e():
     assert int(jsonb_rows.iloc[0]["nb_commits"]) == 2
 
 
+def test_webhook_ingestion_block_id_folds_in_full_header_set():
+    """Same X-Micromegas-* headers + same body, POSTed twice, dedups to one row
+    (block_id is content-addressed). Adding one more, unrecognized header
+    (never mapped to a resource attr) must still change block_id and produce a
+    second row — proving block_id folds in the full header set, not just the
+    3 recognized ones."""
+    service_name = f"webhook-e2e-{uuid.uuid4()}"
+    target = "gitlab.push"
+    body = json.dumps({"object_kind": "push"})
+    base_headers = {
+        "X-Micromegas-Service-Name": service_name,
+        "X-Micromegas-Service-Namespace": "ci",
+        "X-Micromegas-Target": target,
+        "Content-Type": "application/json",
+    }
+
+    # Two byte-identical requests dedup to a single row.
+    for i in range(2):
+        resp = requests.post(
+            WEBHOOK_ENDPOINT, data=body, headers=base_headers, timeout=10
+        )
+        assert resp.status_code == 200, f"attempt {i}: {resp.text}"
+
+    # Same recognized headers + same body, but a distinct unrecognized header
+    # (never turned into a resource attr) must still produce a new row.
+    distinguishing_headers = dict(base_headers, **{"X-Gitlab-Event-Uuid": "abc-123"})
+    resp = requests.post(
+        WEBHOOK_ENDPOINT, data=body, headers=distinguishing_headers, timeout=10
+    )
+    assert resp.status_code == 200, resp.text
+
+    begin, end = _query_window()
+    pid_str = discover_process_id_by_property(
+        client,
+        "otel.resource.service.name",
+        service_name,
+        begin,
+        end,
+        timeout_s=POLL_TIMEOUT_S,
+    )
+
+    def query_count():
+        sql = f"SELECT count(*) AS c FROM log_entries WHERE process_id = '{pid_str}'"
+        return client.query(sql, begin, end)
+
+    df = assert_eventually(
+        query_count,
+        lambda r: not r.empty and int(r.iloc[0]["c"]) >= 2,
+        timeout_s=POLL_TIMEOUT_S,
+        msg=f"waiting for 2 log_entries rows with process_id={pid_str}",
+    )
+    # Exactly 2: the two identical requests dedup to 1, the header-distinguished
+    # request adds a second.
+    assert int(df.iloc[0]["c"]) == 2, df.iloc[0]["c"]
+
+
 def test_webhook_ingestion_empty_body_rejected():
     resp = requests.post(
         WEBHOOK_ENDPOINT,

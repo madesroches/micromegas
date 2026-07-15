@@ -4,7 +4,9 @@
 //! tests, or anything else that hands us a buffer of bytes. Errors map onto the OTLP/HTTP
 //! response surface in the server crate.
 
-use crate::block::{ProcessFromResource, split_logs, split_metrics, split_traces};
+use crate::block::{
+    ProcessFromResource, split_logs, split_logs_with_extra_hash_input, split_metrics, split_traces,
+};
 use crate::error::{OtelError, Signal};
 use crate::proto::{
     AnyValue, ExportLogsServiceRequest, ExportLogsServiceResponse, ExportMetricsServiceRequest,
@@ -243,17 +245,25 @@ pub fn build_webhook_request(
 /// Builds a synthetic `ExportLogsServiceRequest` (one resource, one scope, one record whose
 /// body is the request body, stored verbatim for valid UTF-8 or via lossy conversion
 /// otherwise) and reuses the OTLP logs split/write path.
+///
+/// `header_hash_input` is the caller's canonicalized encoding of the *full* incoming HTTP
+/// header set (see `webhook::canonical_header_bytes`), folded into `block_id` alongside the
+/// synthetic request bytes — see `split_logs_with_extra_hash_input` for why this matters:
+/// only 3 headers become resource attrs, so without this, unrecognized headers would be
+/// invisible to the dedup hash.
 pub async fn ingest_webhook(
     service: Arc<WebIngestionService>,
     resource_attrs: Vec<KeyValue>,
     target: String,
     body: bytes::Bytes,
+    header_hash_input: &[u8],
 ) -> Result<(), OtelError> {
     let req = build_webhook_request(resource_attrs, target, &body);
-    let blocks = split_logs(req).map_err(|e| OtelError::Parse {
-        signal: Signal::Logs,
-        message: format!("split_logs (webhook): {e}"),
-    })?;
+    let blocks =
+        split_logs_with_extra_hash_input(req, header_hash_input).map_err(|e| OtelError::Parse {
+            signal: Signal::Logs,
+            message: format!("split_logs (webhook): {e}"),
+        })?;
     write_blocks(&service, Signal::Logs, blocks).await?;
     Ok(())
 }
