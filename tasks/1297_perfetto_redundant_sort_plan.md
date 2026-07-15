@@ -38,7 +38,7 @@ WHERE begin <= TIMESTAMP '...' AND end >= TIMESTAMP '...'
 ORDER BY begin
 ```
 
-Queries run through `spawn_with_context` + `.buffered(max_concurrent)` where `max_concurrent =
+Queries run through `spawn_with_context` + `.buffered(max_concurrent)` (line 365) where `max_concurrent =
 available_parallelism()` (line 337). Each concurrent query's `ORDER BY begin` builds an independent
 external sort; together they blow the shared memory pool (the error trace shows multiple simultaneous
 `ExternalSorterMerge` reservations).
@@ -73,9 +73,11 @@ external sort; together they blow the shared memory pool (the error trace shows 
    partition could contain an earlier `begin`, and — once the explicit `ORDER BY` is gone — the export
    would silently mis-order rows instead of being re-sorted.
 
-The `Partition` struct (`partition.rs:8`) exposes `min_event_time()` / `max_event_time()` — the
-min/max of the `begin` column — which we use as the robust cross-partition sort key (rather than
-relying on the insert-time order the partition cache happens to return).
+The `Partition` struct (`partition.rs:8`) exposes `min_event_time()` / `max_event_time()`
+(`partition.rs:34,39`) — the begin/end bounds of the partition's event-time range. We use
+`min_event_time()` (the partition's minimum `begin`) as the robust cross-partition sort key (rather
+than relying on the insert-time order the partition cache happens to return). Both return
+`Option<DateTime<Utc>>`, so the sort considers only non-empty partitions.
 
 ### Plumbing
 
@@ -255,7 +257,7 @@ per-thread query plan
 - A new DB-backed test file under `rust/analytics/tests/` (e.g. `thread_spans_ordering_tests.rs`) —
   regression test via the `MaterializedView`/`view_instance` path, modeled on the existing
   `histo_view_test.rs` / `sql_view_test.rs` harness pattern (`connect_to_data_lake` +
-  `LakehouseContext::new` + `get_view_instance_id`, gated on `MICROMEGAS_SQL_CONNECTION_STRING`).
+  `LakehouseContext::new`, `#[ignore]`-gated and requiring a live `MICROMEGAS_SQL_CONNECTION_STRING`).
 
 ## Trade-offs
 
@@ -289,10 +291,14 @@ Optionally add a short note to any internal lakehouse/perfetto architecture note
   one hour or, more cheaply, block insert-times that deliberately span more than one 1-hour JIT
   segment. This needs a DB-backed harness that ingests through the `MaterializedView`/`view_instance`
   path. `rust/analytics/tests/histo_view_test.rs` and `rust/analytics/tests/sql_view_test.rs` already
-  provide this pattern in-crate — `#[tokio::test]`s gated on `MICROMEGAS_SQL_CONNECTION_STRING` that
-  call `connect_to_data_lake`, construct `LakehouseContext::new(...)`, and query via
-  `get_view_instance_id`/the view-instance path — and the new regression test should be modeled on
-  them (`analytics/tests/span_tests.rs`, by contrast, is a pure in-memory parse test with no
+  provide this pattern in-crate — `#[tokio::test]` + `#[ignore]` tests that require a live DB (they
+  read `MICROMEGAS_SQL_CONNECTION_STRING` via `env::var(...).with_context(...)`, erroring rather than
+  skip-gating when it is unset, and don't run under a plain `cargo test`), calling
+  `connect_to_data_lake` and constructing `LakehouseContext::new(...)`. Note `get_view_instance_id`
+  appears in their materialize/retire helpers, not the data query, and they query a global
+  `SqlBatchView` registered via `add_global_view`; the new test instead queries
+  `view_instance('thread_spans', <stream_id>)` by SQL string. The new regression test should be
+  modeled on their DB-backed setup (`analytics/tests/span_tests.rs`, by contrast, is a pure in-memory parse test with no
   `LakehouseContext`, no DB, no `view_instance` query, and is not a fit). With the harness, query
   `view_instance('thread_spans', <stream_id>)` **with the `ORDER BY` removed** and assert `begin` is
   non-decreasing across the full result — and that it spans a partition boundary. Note
