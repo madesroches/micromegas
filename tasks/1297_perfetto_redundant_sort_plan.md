@@ -196,13 +196,27 @@ Changes inside:
   `column_statistics` is indexed the same as `schema`), then for the `begin` column — index 4 in
   `get_spans_schema()` (`id, parent, depth, hash, begin, end, ...`, `span_table.rs:50-66`) — set
   `column_statistics[4] = ColumnStatistics::new_unknown()
-    .with_min_value(Precision::Exact(ScalarValue::TimestampNanosecond(min_ns, Some("+00:00".into()))))
-    .with_max_value(Precision::Exact(ScalarValue::TimestampNanosecond(max_ns, Some("+00:00".into()))))`,
+    .with_min_value(Precision::Inexact(ScalarValue::TimestampNanosecond(min_ns, Some("+00:00".into()))))
+    .with_max_value(Precision::Inexact(ScalarValue::TimestampNanosecond(max_ns, Some("+00:00".into()))))`,
   where `min_ns`/`max_ns` come from the same partition's `min_event_time()`/`max_event_time()` already
   used to sort and non-overlap-check the partitions. Attach it via
   `PartitionedFile::new(file_path, size).with_statistics(Arc::new(stats))`. This only needs to run for
   the columns named in `output_ordering` (today, just `begin`); the empty-`output_ordering` path is
   unchanged and still calls `PartitionedFile::new` with no statistics.
+
+  **`Precision::Inexact`, not `Exact` — these values are bounds on `begin`, not its exact min/max.**
+  `max_event_time()` is the partition's maximum **end** timestamp (an upper bound on `begin`, never
+  its exact maximum), and `min_event_time()` is the first block's begin (a lower bound). Labeling
+  them `Exact` would be a latent wrong-results bug: DataFusion's `AggregateStatistics` physical
+  optimizer answers `MIN(col)`/`MAX(col)` directly from column statistics when they are
+  `Precision::Exact` (`Max::value_from_column_statistics`,
+  `datafusion-functions-aggregate-54.0.0/src/min_max.rs:190-202`), so `SELECT MAX(begin)` could
+  return an *end* timestamp. That rewrite also requires `Precision::Exact` `num_rows`, which
+  `Statistics::new_unknown` leaves `Absent` — so it cannot fire today — but the #1302 statistics
+  generalization could arm it later. `Inexact` costs nothing: the ordering validation reads stats via
+  `Precision::get_value()` (`MinMaxStatistics::new_from_files`, `statistics.rs:94-100`), which
+  accepts `Inexact` and `Exact` alike, while the MIN/MAX rewrite requires `Exact` — so the sort
+  elimination still works and the stats can never be misread as exact aggregates.
 
   > **Scope note:** populating time-column statistics for *every* partitioned scan (driven by each
   > partition's `event_time_range` metadata) would also enable time-predicate partition pruning
@@ -345,6 +359,23 @@ failure is loud in production, not just in debug builds.
   ordering fix: it removes the large allocations entirely rather than serializing them, so throughput
   is preserved and the fix is hardware-independent. Concurrency (`max_concurrent`) is intentionally
   untouched.
+- **Declare ordering vs. drop the `ORDER BY` entirely.** Perfetto's `trace_processor` sorts packets
+  by timestamp on import, and the writer already emits packets out of timestamp order (each span's
+  `SliceEnd` is written before the next span's `SliceBegin` — `streaming_writer.rs::emit_span`), so
+  removing the `ORDER BY` from `format_thread_spans_query` looks like a one-line fix. Rejected:
+  without a declared ordering DataFusion is free to repartition the scan and interleave batches
+  arbitrarily, so parent/child spans that begin in the same nanosecond lose their preorder tie-break
+  — after `trace_processor`'s timestamp sort, equal-timestamp `SliceBegin` packets can nest in the
+  wrong order or mismatch begin/end pairing. It also makes export output nondeterministic and moves
+  the correctness burden onto an external tool's sorting-mode heuristics (full-sort vs. windowed)
+  instead of our own guarantees.
+- **Single multi-file group (+ statistics) vs. one file per group (no statistics needed).** Putting
+  each partition in its own file group would sidestep the §3 statistics step entirely —
+  `is_ordering_valid_for_file_groups` accepts single-file groups trivially — and `EnforceSorting`
+  would replace the `SortExec` with a streaming `SortPreservingMergeExec`. Rejected: it opens every
+  partition file concurrently per query (a wide time range means hundreds of parquet readers per
+  thread, multiplied by concurrent threads), adds a merge operator per query, and gives up today's
+  single sequential scan — a strictly worse runtime shape to save ~10 lines of statistics code.
 - **Sort the file group by `min_event_time` vs. trust cache order.** The partition cache returns
   `ORDER BY begin_insert_time, file_path`, which *usually* matches `begin` order for a single stream
   but is not guaranteed to. Sorting explicitly by `min_event_time` makes the declared ordering
