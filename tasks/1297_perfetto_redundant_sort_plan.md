@@ -183,6 +183,14 @@ let file_scan_config = builder.build();
 (ASC NULLS LAST); `begin` is non-nullable so nulls placement is moot, but we match it so
 `EnforceSorting` recognizes the orderings as equivalent.
 
+**`preserve_order` side effect.** Setting `with_output_ordering` flips `preserve_order = true` in
+`FileScanConfigBuilder::build()`. In our case — a single file group containing multiple files — this
+is a definitive no-op: `repartition_preserving_order` (`file_groups.rs:270-308`) returns `None` when
+`target_partitions == 1`, and when `target_partitions > 1` the multi-file group is filtered out of the
+heap (only `group.len() == 1` groups are split), leaving the heap empty → `None`. `DataSourceExec::
+repartitioned` therefore returns `Ok(None)`, the plan stays at `UnknownPartitioning(1)`, and no
+`SortPreservingMergeExec`/`RepartitionExec` is introduced.
+
 ### Resulting plan transformation
 
 Before: `SortExec(begin) ← FilterExec ← DataSourceExec` → `SortExec` materializes an `ExternalSorter`.
@@ -227,7 +235,9 @@ per-thread query plan
   declaration.
 - `rust/analytics/src/lakehouse/materialized_view.rs` — pass the view's ordering.
 - `rust/analytics/src/lakehouse/partitioned_table_provider.rs` — pass empty ordering.
-- `rust/analytics/tests/span_tests.rs` (or a new `analytics/tests/` file) — regression test.
+- A new DB-backed test file under `rust/analytics/tests/` (e.g. `thread_spans_ordering_tests.rs`) —
+  regression test via the `MaterializedView`/`view_instance` path; `span_tests.rs` is a pure in-memory
+  parse test and has no DB harness to reuse.
 
 ## Trade-offs
 
@@ -256,12 +266,20 @@ Optionally add a short note to any internal lakehouse/perfetto architecture note
 ## Testing Strategy
 
 - **Regression test — monotonic `begin` across multiple partitions.** Build a synthetic
-  `thread_spans` scenario for one stream that produces **more than one partition**, query it via
-  `view_instance('thread_spans', <stream_id>)` **with the `ORDER BY` removed** (or through the same
-  `TableProvider` path so it exercises the declared scan ordering), and assert `begin` is
-  non-decreasing across the full result — and that it spans a partition boundary. This locks in the
-  invariant that correctness now depends on. Existing `analytics/tests/span_tests.rs` shows the
-  block/stream construction helpers to reuse.
+  `thread_spans` scenario for one stream that produces **more than one partition**. `ThreadSpansView`
+  hardcodes `JitPartitionConfig::default()`, so forcing a second partition means either >20M objects in
+  one hour or, more cheaply, block insert-times that deliberately span more than one 1-hour JIT
+  segment. This needs a DB-backed harness that ingests through the `MaterializedView`/`view_instance`
+  path — no such harness exists in-crate today: `analytics/tests/span_tests.rs` is a pure in-memory
+  parse test (builds a `ThreadStream`, encodes one `ThreadBlock`, asserts parse counts — no
+  `LakehouseContext`, no DB, no `view_instance` query), and `tests/test_helpers.rs` only exposes
+  `make_process_metadata`. With that harness, query `view_instance('thread_spans', <stream_id>)`
+  **with the `ORDER BY` removed** and assert `begin` is non-decreasing across the full result — and
+  that it spans a partition boundary. Note `PartitionedTableProvider::scan` always passes `&[]` (no
+  declared ordering), so that path does *not* exercise the new ordering and is not a valid substitute.
+  If the DB-backed harness proves too costly to stand up, scope this test down instead to a unit test
+  of the file-group sort in `make_partitioned_execution_plan` (assert `min_event_time` ordering with
+  `file_path` tiebreak) plus the plan-shape assertion below.
 - **Plan-shape assertion.** For a `SELECT ... FROM view_instance('thread_spans', ...) ORDER BY begin`
   query, capture the physical plan (`df.create_physical_plan()` + `displayable(...).indent()`) and
   assert **no `SortExec`** node appears. Add a negative control on a view that does *not* opt in to
@@ -270,10 +288,3 @@ Optionally add a short note to any internal lakehouse/perfetto architecture note
   spans only) against a running flight-sql server and confirm it completes without exhausting
   `datafusion.runtime.memory_limit`.
 - `cargo test`, `cargo fmt`, `cargo clippy --workspace -- -D warnings`.
-
-## Open Questions
-
-1. **`preserve_order = true` side effect.** Setting `with_output_ordering` flips `preserve_order` in
-   `FileScanConfigBuilder::build()`. With a single file group this is a no-op for repartitioning, but
-   worth a quick check that no `SortPreservingMergeExec` is introduced for the single-group case
-   (the plan-shape test above will catch it).
