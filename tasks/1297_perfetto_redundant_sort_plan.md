@@ -2,6 +2,66 @@
 
 **GitHub Issue**: https://github.com/madesroches/micromegas/issues/1297
 
+## Implementation Status (2026-07-15)
+
+Implemented as designed, with a few divergences discovered while building the regression tests
+(all against a live local data lake, not just read from the code):
+
+- **Steps 1–6 landed as specified**, with one naming difference: step 6's runtime monotonicity
+  guard was implemented by extracting a new `pub async fn write_thread_spans(writer, stream_id,
+  data_stream)` out of `generate_thread_spans_with_writer`'s per-stream loop body, rather than
+  inlining the tracker directly in the loop. This was necessary to unit-test the guard at all
+  (`tests/` files only see the crate's public API), and it's a clean seam anyway (one thread's
+  worth of span-writing, testable in isolation). `make_partitioned_execution_plan` grew an 8th
+  parameter, so it also needed `#[expect(clippy::too_many_arguments)]`.
+- **Test files**: `rust/analytics/tests/thread_spans_ordering_tests.rs` (offline — file-group
+  sort/non-overlap guard, plan-shape assertion via `EnforceSorting` + a negative control, and the
+  §4 monotonicity guard) and `rust/analytics/tests/thread_spans_ordering_db_test.rs` (`#[ignore]`,
+  DB-backed, end-to-end through real ingestion → JIT materialization → scan).
+- **The "drop `ORDER BY` and check inherent sortedness" methodology in the original Testing
+  Strategy is unsound and was not used as specified.** Removing `ORDER BY` doesn't just remove a
+  redundant `Sort` — it also removes the *only* thing that would make DataFusion preserve a single
+  global order downstream. Without it, the planner is free to insert a plain `RepartitionExec`
+  (`RoundRobinBatch`, for parallelism) ahead of the scan with no order-preserving merge behind it;
+  `maintains_sort_order=true` on that node only means each output partition's *own* contents stay
+  sorted, not that concatenating partitions in index order reproduces the global order. This was
+  caught empirically: the DB-backed test occasionally returned the two partitions' rows swapped
+  when `ORDER BY` was omitted, purely as a function of which file's async read happened to
+  complete first — nondeterministic, not a bug in the ordering declaration. The production query
+  (`format_thread_spans_query`) never drops `ORDER BY` (per the plan's own "Trade-offs" section),
+  so the DB-backed test now keeps `ORDER BY "begin"` — matching production — and asserts two
+  things instead: no `SortExec` appears in the plan, and rows still come back non-decreasing. The
+  offline plan-shape test already wrapped the scan in an explicit `SortExec` rather than relying on
+  SQL parsing, so it was never affected by this and needed no change.
+- **A previously-undocumented near-boundary quirk in block timestamps**, found while forcing a
+  stream into two JIT partitions for the DB-backed test: `EventStream::replace_block` captures the
+  *new* block's begin timestamp *before* the *old* block's `.close()` records its end (same order
+  as `dispatch.rs::flush_thread_buffer`), so two consecutive blocks from the same live thread
+  always have a razor-thin (microseconds, under estimated `tsc_frequency == 0` conversion in this
+  environment) *reverse* overlap at their shared boundary. This is real and is exactly the
+  boundary-skew scenario the §3 guard's error message already calls out — it is not a flaw in the
+  guard, but it means a synthetic test must put a real gap (here: an inserted throwaway "spacer"
+  block plus a sleep) between two blocks meant to land in different partitions, or the guard
+  correctly rejects them. No production code changed for this; it's a testing-harness concern only,
+  noted here in case it recurs when constructing other multi-partition test scenarios.
+- **The DB-backed test also had to materialize the `processes` and `streams` global views**, not
+  just `blocks` — `ThreadSpansView::jit_update` resolves the stream and process via
+  `find_stream_from_view` / `find_process_with_latest_timing`, both of which read those views, and
+  (like `blocks`) they're otherwise only kept current by the maintenance daemon. Not called out in
+  the original Testing Strategy, which only mentioned `blocks`.
+- **Forcing a second JIT partition via `insert_time` alone doesn't work** as the plan's Testing
+  Strategy suggested ("block insert-times that deliberately span more than one 1-hour JIT
+  segment"): `BlocksView`'s own event-time bounds are `[min(begin_time), max(insert_time)]` (a
+  pre-existing, documented rough edge in `blocks_view.rs`), so rewinding a block's `insert_time`
+  alone inverts that computed range and the block stops matching any reasonable event-time query
+  filter. The working version rewinds `insert_time`, `begin_time`, and `end_time` together (keeping
+  `BlocksView`'s bounds internally consistent) while leaving `begin_ticks`/`end_ticks` untouched,
+  since those (not `begin_time`/`end_time`) are what `ThreadSpansView` actually converts into the
+  exported span `begin`/`end` values.
+- All offline tests pass under `cargo test`; the DB-backed test passes under `cargo test -- --ignored`
+  against a live local data lake. `cargo fmt` and `cargo clippy --workspace --all-targets -- -D
+  warnings` are clean.
+
 ## Overview
 
 Exporting a Perfetto trace for a process with many threads over a wide time range can OOM the
@@ -448,8 +508,11 @@ Optionally add a short note to any internal lakehouse/perfetto architecture note
   `view_instance('thread_spans', <stream_id>)` by SQL string. The new regression test should be
   modeled on their DB-backed setup (`analytics/tests/span_tests.rs`, by contrast, is a pure in-memory parse test with no
   `LakehouseContext`, no DB, no `view_instance` query, and is not a fit). With the harness, query
-  `view_instance('thread_spans', <stream_id>)` **with the `ORDER BY` removed** and assert `begin` is
-  non-decreasing across the full result — and that it spans a partition boundary. Note
+  `view_instance('thread_spans', <stream_id>)` **keeping `ORDER BY begin`, as production does** —
+  see "Implementation Status" above for why dropping it, as an earlier draft of this plan suggested,
+  is unsound (it removes the only signal that makes DataFusion preserve a single global order across
+  a repartitioned scan, independent of whether the declared ordering is correct) — and assert
+  `begin` is non-decreasing across the full result, and that it spans a partition boundary. Note
   `PartitionedTableProvider::scan` always passes `&[]` (no declared ordering), so that path does *not*
   exercise the new ordering and is not a valid substitute. This DB-backed test requires a live SQL
   connection to run; the file-group sort unit test in `make_partitioned_execution_plan` (assert

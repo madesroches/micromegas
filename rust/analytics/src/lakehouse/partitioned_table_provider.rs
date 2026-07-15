@@ -68,6 +68,7 @@ impl TableProvider for PartitionedTableProvider {
             filters,
             limit,
             self.partitions.clone(),
+            &[],
         )
     }
 
