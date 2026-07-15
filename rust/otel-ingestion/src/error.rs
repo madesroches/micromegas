@@ -90,11 +90,16 @@ impl OtelError {
     /// form would otherwise leak — those still get logged server-side via
     /// `error!`. `Parse` keeps its detail so clients can debug malformed
     /// payloads, since prost / decoder messages don't reference server state.
+    ///
+    /// Deliberately source-neutral (no "OTLP" prefix): this surface is also
+    /// reused by the webhook route, whose clients never spoke OTLP and would be
+    /// confused by OTLP-branded wording. The `Display` form keeps "OTLP" for
+    /// server-side logs.
     pub fn public_message(&self) -> String {
         match self {
-            Self::Parse { signal, message } => format!("OTLP parse error ({signal}): {message}"),
-            Self::Database { signal, .. } => format!("OTLP database error ({signal})"),
-            Self::Storage { signal, .. } => format!("OTLP storage error ({signal})"),
+            Self::Parse { signal, message } => format!("parse error ({signal}): {message}"),
+            Self::Database { signal, .. } => format!("database error ({signal})"),
+            Self::Storage { signal, .. } => format!("storage error ({signal})"),
         }
     }
 }
