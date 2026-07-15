@@ -103,7 +103,8 @@ LIMIT 20;
 `context_init_ms` / `planning_ms` / `execution_ms` / `setup_ms` / `total_ms` are measured with
 `std::time::Instant`, independently of the raw-TSC-tick `imetric!` timings emitted elsewhere in
 `execute_query` — so they don't depend on the process's TSC-frequency calibration and are reliable
-on their own.
+on their own. On a record with `status = "error"` emitted during setup, stage fields for stages
+that were never reached read `0.0`; `total_ms` still covers the full request.
 
 ## Notes
 
