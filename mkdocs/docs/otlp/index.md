@@ -355,14 +355,6 @@ ORDER BY time DESC
 LIMIT 10;
 ```
 
-### Replacing the #1167 transformer recipe
-
-This endpoint obviates the runtime component of the earlier "external transformer
-service" recipe (issue #1167): instead of running a small service that reshapes each
-webhook payload before forwarding, point the webhook directly at `/ingestion/webhook`
-with the three `X-Micromegas-*` headers set once in the producer's webhook
-configuration. No transformer to deploy or keep running.
-
 ## Limitations
 
 - **OTLP/HTTP only.** gRPC OTLP is not implemented; SDKs that default to gRPC need `OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf`.
