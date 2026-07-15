@@ -73,6 +73,31 @@ external sort; together they blow the shared memory pool (the error trace shows 
    partition could contain an earlier `begin`, and — once the explicit `ORDER BY` is gone — the export
    would silently mis-order rows instead of being re-sorted.
 
+### TSC frequency error and the ordering invariant
+
+Span timestamps are tick counts converted via `ConvertTicks` (`analytics/src/time.rs`), and the TSC
+frequency behind that conversion is not always reliable. Its two sources age differently:
+
+- **Stated frequency (`process.tsc_frequency > 0`)** — reported by the instrumented process (CPUID
+  leaf 0x15 / `cntfrq_el0`), which can be off by crystal tolerance (~±50–100 ppm) or worse under
+  hypervisors. **Benign for this plan**: every partition of the process is converted with the same
+  fixed linear map, which is strictly monotonic no matter how wrong the slope is — tick order
+  implies time order within and across partitions. The damage is confined to absolute accuracy
+  (time axis uniformly stretched, error linear in uptime: 100 ppm ≈ 360 µs/hour), which the
+  `ORDER BY` never corrected either.
+- **Estimated frequency (`tsc_frequency == 0`)** — `make_time_converter_from_latest_timing`
+  re-estimates at each materialization from `last_block_end_ticks / (last_block_end_time −
+  start_time)`. Cached partitions keep rows *and* `event_time_range` metadata computed with older
+  estimates (`is_jit_partition_up_to_date` hashes source blocks only), so one stream can mix linear
+  maps from different epochs. Boundary skew is `elapsed_ticks × |1/f₁ − 1/f₂|`; NTP slew (up to
+  ±500 ppm) or clock steps during the estimation baseline can push this to hundreds of ms a few
+  hours into a process — larger than typical inter-block gaps, producing metadata overlap. The §3
+  guard catches exactly this (the metadata is computed with the same converters as the rows), so
+  the failure is a loud export error, never a mis-ordered trace — but it persists until the
+  affected partitions are retired or rebuilt, where today's explicit sort silently absorbs the
+  inconsistency. This is an accepted availability trade-off, scoped to `tsc_frequency == 0`
+  processes with materialization epochs spanning clock adjustments.
+
 The `Partition` struct (`partition.rs:8`) exposes `min_event_time()` / `max_event_time()`
 (`partition.rs:34,39`) — the begin/end bounds of the partition's event-time range. We use
 `min_event_time()` (the partition's minimum `begin`) as the robust cross-partition sort key (rather
@@ -173,6 +198,10 @@ Changes inside:
   the declared ordering cannot be honored (a later file could contain an earlier `begin`), so
   **return an error** (`DataFusionError::Execution` with the offending `stream_id`/partition
   `file_path`s and event-time ranges) rather than declaring an ordering the data does not satisfy.
+  The message should also name the known benign trigger — TSC-frequency estimation drift across
+  materialization epochs for `tsc_frequency == 0` processes (see "TSC frequency error and the
+  ordering invariant" above) — and its remediation (retire the stream's partitions so they rebuild
+  with a single converter), so the first person to hit it doesn't misdiagnose it as data corruption.
   This is preferred over silently degrading to an unsorted scan: a violated invariant surfaces
   immediately as a diagnosable query failure instead of a mis-ordered Perfetto trace. The cost is
   negligible (a single pass over already-sorted partition metadata). It catches the realistic
