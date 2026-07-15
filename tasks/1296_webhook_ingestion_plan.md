@@ -79,7 +79,9 @@ endpoint without the bearer key.)
 Registered JSONB UDFs (`rust/datafusion-extensions/src/jsonb/`): `jsonb_parse`,
 `jsonb_get` (single key, **not** dotted-path), `jsonb_as_string`, `jsonb_as_i64`,
 `jsonb_as_f64`, `jsonb_array_length`, `jsonb_object_keys`, `jsonb_path_query`,
-`jsonb_path_query_first`, `jsonb_format_json`. The issue's `jsonb_as_i` and
+`jsonb_path_query_first`, `jsonb_format_json`; plus the table functions `jsonb_each` and
+`jsonb_array_elements` (all registered in `register_extension_udfs`,
+`datafusion-extensions/src/lib.rs:62-76`). The issue's `jsonb_as_i` and
 `jsonb_extract_path` do **not** exist — the docs example must use `jsonb_as_i64` and either
 nested `jsonb_get` or `jsonb_path_query_first('$.object_attributes.iid')` for nested access.
 
@@ -171,9 +173,11 @@ Add `rust/public/src/servers/webhook.rs`:
 pub fn webhook_router() -> Router {
     Router::new()
         .route("/ingestion/webhook", post(webhook_handler))
+        // identical layer stack to otlp_router — shared constants/helper extracted
+        // in the Body-limit DRY step (no webhook-specific constants)
         .layer(RequestDecompressionLayer::new().gzip(true))
-        .layer(RequestBodyLimitLayer::new(WEBHOOK_BODY_LIMIT_BYTES))
-        .layer(DefaultBodyLimit::max(WEBHOOK_DECOMPRESSED_BODY_LIMIT_BYTES))
+        .layer(RequestBodyLimitLayer::new(INGESTION_BODY_LIMIT_BYTES))
+        .layer(DefaultBodyLimit::max(INGESTION_DECOMPRESSED_BODY_LIMIT_BYTES))
 }
 ```
 
@@ -186,7 +190,9 @@ pub fn webhook_router() -> Router {
    the public `OtelError::http_status()` / `is_retryable()` / `public_message()` accessors
    (`error.rs:76,84,93`):
    `StatusCode::from_u16(err.http_status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)`
-   plus a plain-text body built from `err.public_message()`. Before responding, log the
+   plus a plain-text body built from `err.public_message()`. (That message keeps the
+   `OTLP …` prefix baked into `OtelError` — cosmetically odd on a webhook endpoint but
+   accepted for v1; not worth a webhook-specific rewording.) Before responding, log the
    **full** error server-side — `error!("webhook error: {err}")`, mirroring `otlp.rs:109` —
    because `public_message()` strips the sqlx/object-store detail from Database/Storage
    variants; without this log the backend detail is recorded nowhere. When
@@ -243,17 +249,24 @@ payload — would break retry idempotency).
      backfilled timestamp and a `process_id` matching `process_id_from_resource` for the
      same attrs.
    - Identical (attrs, target, body) → identical `block_id`; differing body → different id.
-3. **public webhook route** — add `rust/public/src/servers/webhook.rs` with
-   `webhook_router()` + `webhook_handler`, header parsing, empty-body 400, `OtelError`
-   mapping. Add `pub mod webhook;` to `servers/mod.rs`.
-4. **Body-limit DRY** — factor the shared body-limit/decompression layers (the 20/300 MiB
-   constants and `RETRY_AFTER_SECONDS`) out of `otlp.rs` and reuse in both routers.
+3. **Body-limit DRY** — factor the shared body-limit/decompression layers (the 20/300 MiB
+   constants and `RETRY_AFTER_SECONDS`) out of `otlp.rs` first, so the webhook router can
+   use them from the start instead of duplicating constants and refactoring after.
+4. **public webhook route** — add `rust/public/src/servers/webhook.rs` with
+   `webhook_router()` + `webhook_handler` (reusing the shared layers from step 3), header
+   parsing, empty-body 400, `OtelError` mapping. Add `pub mod webhook;` to `servers/mod.rs`.
 5. **Wire into server** — `.merge(super::webhook::webhook_router())` in
    `serve_ingestion` (`ingestion.rs:132`).
 6. **Integration test** — extend `python/micromegas/tests/test_otlp_e2e.py` (using the
    `otlp_helpers.py` helpers), following the `test_otlp_logs_e2e` POST → `assert_eventually`
    → query pattern, to POST a sample GitLab-shaped JSON body with the three headers and
    assert a `log_entries` row appears with the expected `target`, `exe`, and `msg == body`.
+   Process discovery: `discover_process_id` keys on `service.instance.id`
+   (`otlp_helpers.py:13`), which webhook headers cannot set — instead send a per-run-unique
+   `X-Micromegas-Service-Name` (e.g. `webhook-e2e-<uuid4>`) and look the process up via
+   `property_get(properties, 'otel.resource.service.name')` on `processes` (every resource
+   attr lands in properties under `otel.resource.*` — `ProcessFromResource::build`,
+   `block.rs:437-443`).
 7. **Docs** — add a "Webhook ingestion" section to `mkdocs/docs/otlp/index.md` (see below).
 8. **CI** — `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `cargo test`, then
    `python3 build/rust_ci.py`.
@@ -312,7 +325,9 @@ recipes / EventBridge material) covering:
 - **Integration (Python e2e):** in `python/micromegas/tests/test_otlp_e2e.py`, POST a sample
   webhook JSON with the three headers to a running ingestion server, `assert_eventually` a
   `log_entries` row with expected `target`, `exe`, and `msg == body`; then run a JSONB query
-  against `msg` to prove nested/array access works.
+  against `msg` to prove nested/array access works. Process discovered via a per-run-unique
+  service name and `otel.resource.service.name` (see implementation step 6 — the
+  `service.instance.id`-based helper doesn't apply to webhook requests).
 - **CI:** `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `cargo test`,
   `python3 build/rust_ci.py`.
 
