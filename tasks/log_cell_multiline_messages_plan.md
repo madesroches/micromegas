@@ -92,7 +92,7 @@ Add a "Wrap text" button to the bottom bar in `LogCell.tsx` (`analytics-web-app/
 ## Testing Strategy
 
 - `yarn type-check` and `yarn lint` — no new errors.
-- `yarn test` — existing `log-utils.test.ts` and any `LogCell` tests still pass; add a test asserting `renderLogColumn` emits `whitespace-pre-wrap break-words` when `wrap: true` and `truncate` when `wrap` is absent/`false`.
+- `yarn test` — existing `log-utils.test.ts` (pure string/classification helpers, no rendering) still passes. `renderLogColumn` returns JSX, so add a new `.tsx` test file (e.g. `log-utils.render.test.tsx`) that renders it with React Testing Library and asserts it emits `whitespace-pre-wrap break-words` when `wrap: true` and `truncate` when `wrap` is absent/`false`. There is no existing `LogCell` test file today.
 - Manual, in the running app (`./start_analytics_web.py`):
   - Add a Log cell against data containing a long or multi-line `msg` (e.g. a stack trace) — confirm it renders wrapped by default, with the full message visible and other columns top-aligned to the first line.
   - Click "Wrap text" to turn it off — confirm rows collapse to single-line truncated text.
