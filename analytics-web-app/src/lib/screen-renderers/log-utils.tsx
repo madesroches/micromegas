@@ -131,9 +131,12 @@ export function renderLogColumn(
   const w = opts?.width
   const isLast = opts?.isLast
   const trailingMargin = opts?.isLast !== false ? 'mr-3' : ''
-  // The last column has no divider/column after it, so let it grow to fill
-  // any remaining row width instead of stopping at its measured/pinned width.
-  const growStyle = { flexGrow: 1, flexShrink: 1, flexBasis: 0, minWidth: w ?? MIN_FLEX_WIDTH_PX }
+  // The last column has no divider/column after it, so let it fill the row width
+  // that's actually available rather than stopping at (or reserving) its measured
+  // width: it grows into any free space and shrinks down to MIN_FLEX_WIDTH_PX when
+  // space is tight. Only when that minimum plus the other columns can't fit does
+  // the row scroll horizontally — no hardcoded width ceiling is involved.
+  const growStyle = { flexGrow: 1, flexShrink: 1, flexBasis: 0, minWidth: MIN_FLEX_WIDTH_PX }
   const widthStyle = isLast ? growStyle : w != null ? { width: w, minWidth: w, maxWidth: w } : undefined
   const wrapClasses = textCellClasses(opts?.wrap)
   switch (col.kind) {
