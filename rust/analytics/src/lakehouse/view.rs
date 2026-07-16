@@ -40,6 +40,13 @@ pub struct ViewMetadata {
     pub file_schema_hash: Vec<u8>,
 }
 
+/// A column an ordering is expressed over (ascending unless `descending`).
+#[derive(Clone, Debug)]
+pub struct ScanSortColumn {
+    pub column: Arc<String>,
+    pub descending: bool,
+}
+
 /// A trait for defining a view.
 #[async_trait]
 pub trait View: std::fmt::Debug + Send + Sync {
@@ -122,6 +129,26 @@ pub trait View: std::fmt::Debug + Send + Sync {
     /// allow the view to subdivide the requested partition
     fn get_max_partition_time_delta(&self, _strategy: &PartitionCreationStrategy) -> TimeDelta {
         TimeDelta::days(1)
+    }
+
+    /// Declares an ordering the view's partition scan *already* emits, letting DataFusion
+    /// elide redundant `Sort` nodes for queries that `ORDER BY` these columns.
+    ///
+    /// Returning a non-empty ordering is a correctness contract the view must guarantee:
+    /// - rows within each partition file are already sorted by these columns, AND
+    /// - the leading column is the view's min-event-time column, and partition event-time
+    ///   ranges are non-overlapping (so files concatenate in globally-sorted order).
+    ///
+    /// For `ThreadSpansView`, the non-overlapping-ranges half of this contract rests on JIT
+    /// partitions being sliced in event-time order, which in turn assumes a stream's blocks are
+    /// registered in event-time order — an assumption documented but not enforced (see
+    /// `thread_spans_view.rs`). If that assumption is ever violated, output would be silently
+    /// mis-ordered rather than re-sorted, since no `Sort` node remains once this ordering is
+    /// declared.
+    ///
+    /// Default: empty (no declared ordering — DataFusion sorts as usual).
+    fn get_scan_output_ordering(&self) -> Vec<ScanSortColumn> {
+        vec![]
     }
 }
 

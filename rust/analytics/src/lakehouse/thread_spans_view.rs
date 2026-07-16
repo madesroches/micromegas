@@ -7,7 +7,7 @@ use super::{
     lakehouse_context::LakehouseContext,
     partition_cache::PartitionCache,
     partition_source_data::{SourceDataBlocksInMemory, hash_to_object_count},
-    view::{PartitionSpec, View, ViewMetadata},
+    view::{PartitionSpec, ScanSortColumn, View, ViewMetadata},
     view_factory::{ViewFactory, ViewMaker},
 };
 use crate::{
@@ -352,5 +352,12 @@ impl View for ThreadSpansView {
 
     fn get_update_group(&self) -> Option<i32> {
         None
+    }
+
+    fn get_scan_output_ordering(&self) -> Vec<ScanSortColumn> {
+        vec![ScanSortColumn {
+            column: MIN_TIME_COLUMN.clone(),
+            descending: false,
+        }]
     }
 }

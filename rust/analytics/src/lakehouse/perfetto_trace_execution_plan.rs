@@ -367,35 +367,63 @@ async fn generate_thread_spans_with_writer(
         .await?;
 
     // Consume streams sequentially - each thread's spans written together
-    for (stream_id, mut data_stream) in streams {
-        writer.set_current_thread(&stream_id);
+    for (stream_id, data_stream) in streams {
+        write_thread_spans(writer, &stream_id, data_stream).await?;
+    }
+    Ok(())
+}
 
-        let mut span_count = 0;
-        while let Some(batch_result) = data_stream.next().await {
-            let batch = batch_result?;
-            let begin_times: &TimestampNanosecondArray = typed_column_by_name(&batch, "begin")?;
-            let end_times: &TimestampNanosecondArray = typed_column_by_name(&batch, "end")?;
-            let names = string_column_by_name(&batch, "name")?;
-            let filenames = string_column_by_name(&batch, "filename")?;
-            let targets = string_column_by_name(&batch, "target")?;
-            let lines: &UInt32Array = typed_column_by_name(&batch, "line")?;
+/// Writes one thread's spans, in row order, from its query result stream to the Perfetto writer.
+///
+/// `begin` is only guaranteed sorted *within* a single thread's stream (different threads are
+/// independent timelines), so the monotonicity tracker below is local to this call. It is the
+/// runtime backstop for the ordering `ThreadSpansView::get_scan_output_ordering` declares to
+/// DataFusion: once the redundant `Sort` node is elided, DataFusion trusts that declared ordering
+/// and never re-validates it against the actual rows, so a violated invariant would otherwise
+/// silently mis-order the exported trace. Errors instead of writing a row whose `begin` regresses.
+pub async fn write_thread_spans(
+    writer: &mut PerfettoWriter,
+    stream_id: &str,
+    mut data_stream: SendableRecordBatchStream,
+) -> anyhow::Result<()> {
+    writer.set_current_thread(stream_id);
 
-            for i in 0..batch.num_rows() {
-                let begin_ns = begin_times.value(i) as u64;
-                let end_ns = end_times.value(i) as u64;
-                let name = names.value(i)?;
-                let filename = filenames.value(i)?;
-                let target = targets.value(i)?;
-                let line = lines.value(i);
+    let mut previous_begin_ns: Option<i64> = None;
+    let mut span_count = 0;
+    while let Some(batch_result) = data_stream.next().await {
+        let batch = batch_result?;
+        let begin_times: &TimestampNanosecondArray = typed_column_by_name(&batch, "begin")?;
+        let end_times: &TimestampNanosecondArray = typed_column_by_name(&batch, "end")?;
+        let names = string_column_by_name(&batch, "name")?;
+        let filenames = string_column_by_name(&batch, "filename")?;
+        let targets = string_column_by_name(&batch, "target")?;
+        let lines: &UInt32Array = typed_column_by_name(&batch, "line")?;
 
-                writer
-                    .emit_span(begin_ns, end_ns, name, target, filename, line)
-                    .await?;
+        for i in 0..batch.num_rows() {
+            let begin_time = begin_times.value(i);
+            if let Some(previous) = previous_begin_ns
+                && begin_time < previous
+            {
+                anyhow::bail!(
+                    "thread spans out of order for stream {stream_id}: begin {begin_time} follows {previous}"
+                );
+            }
+            previous_begin_ns = Some(begin_time);
 
-                span_count += 1;
-                if span_count % 10 == 0 {
-                    writer.flush().await?;
-                }
+            let begin_ns = begin_time as u64;
+            let end_ns = end_times.value(i) as u64;
+            let name = names.value(i)?;
+            let filename = filenames.value(i)?;
+            let target = targets.value(i)?;
+            let line = lines.value(i);
+
+            writer
+                .emit_span(begin_ns, end_ns, name, target, filename, line)
+                .await?;
+
+            span_count += 1;
+            if span_count % 10 == 0 {
+                writer.flush().await?;
             }
         }
     }

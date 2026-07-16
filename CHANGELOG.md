@@ -4,6 +4,8 @@ This file documents the historical progress of the Micromegas project. For curre
 
 ## Unreleased
 
+* **Analytics:**
+  * Fix Perfetto trace export OOMing on wide-time-range, many-thread processes: declare `thread_spans`' existing scan ordering to DataFusion so `EnforceSorting` drops the per-thread `ORDER BY begin` sort instead of materializing a concurrent `ExternalSorter` per thread against the shared memory pool; `ORDER BY` stays in the query and is still honored, just free (#1297)
 * **Build:**
   * Bump the pinned Rust toolchain to 1.97.0; fix new `clippy::useless_borrows_in_formatting` lints the version tightened, and regenerate the datafusion-wasm bindings whose internal closure-glue symbol names changed under the new compiler
 * **Caching:**

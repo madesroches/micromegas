@@ -1,0 +1,539 @@
+# Perfetto Trace Export — Eliminate Redundant Per-Thread Sort Plan
+
+**GitHub Issue**: https://github.com/madesroches/micromegas/issues/1297
+
+## Implementation Status (2026-07-15)
+
+Implemented as designed, with a few divergences discovered while building the regression tests
+(all against a live local data lake, not just read from the code):
+
+- **Steps 1–6 landed as specified**, with one naming difference: step 6's runtime monotonicity
+  guard was implemented by extracting a new `pub async fn write_thread_spans(writer, stream_id,
+  data_stream)` out of `generate_thread_spans_with_writer`'s per-stream loop body, rather than
+  inlining the tracker directly in the loop. This was necessary to unit-test the guard at all
+  (`tests/` files only see the crate's public API), and it's a clean seam anyway (one thread's
+  worth of span-writing, testable in isolation). `make_partitioned_execution_plan` grew an 8th
+  parameter, so it also needed `#[expect(clippy::too_many_arguments)]`.
+- **Test files**: `rust/analytics/tests/thread_spans_ordering_tests.rs` (offline — file-group
+  sort/non-overlap guard, plan-shape assertion via `EnforceSorting` + a negative control, and the
+  §4 monotonicity guard) and `rust/analytics/tests/thread_spans_ordering_db_test.rs` (`#[ignore]`,
+  DB-backed, end-to-end through real ingestion → JIT materialization → scan).
+- **The "drop `ORDER BY` and check inherent sortedness" methodology in the original Testing
+  Strategy is unsound and was not used as specified.** Removing `ORDER BY` doesn't just remove a
+  redundant `Sort` — it also removes the *only* thing that would make DataFusion preserve a single
+  global order downstream. Without it, the planner is free to insert a plain `RepartitionExec`
+  (`RoundRobinBatch`, for parallelism) ahead of the scan with no order-preserving merge behind it;
+  `maintains_sort_order=true` on that node only means each output partition's *own* contents stay
+  sorted, not that concatenating partitions in index order reproduces the global order. This was
+  caught empirically: the DB-backed test occasionally returned the two partitions' rows swapped
+  when `ORDER BY` was omitted, purely as a function of which file's async read happened to
+  complete first — nondeterministic, not a bug in the ordering declaration. The production query
+  (`format_thread_spans_query`) never drops `ORDER BY` (per the plan's own "Trade-offs" section),
+  so the DB-backed test now keeps `ORDER BY "begin"` — matching production — and asserts two
+  things instead: no `SortExec` appears in the plan, and rows still come back non-decreasing. The
+  offline plan-shape test already wrapped the scan in an explicit `SortExec` rather than relying on
+  SQL parsing, so it was never affected by this and needed no change.
+- **A previously-undocumented near-boundary quirk in block timestamps**, found while forcing a
+  stream into two JIT partitions for the DB-backed test: `EventStream::replace_block` captures the
+  *new* block's begin timestamp *before* the *old* block's `.close()` records its end (same order
+  as `dispatch.rs::flush_thread_buffer`), so two consecutive blocks from the same live thread
+  always have a razor-thin (microseconds, under estimated `tsc_frequency == 0` conversion in this
+  environment) *reverse* overlap at their shared boundary. This is real and is exactly the
+  boundary-skew scenario the §3 guard's error message already calls out — it is not a flaw in the
+  guard, but it means a synthetic test must put a real gap (here: an inserted throwaway "spacer"
+  block plus a sleep) between two blocks meant to land in different partitions, or the guard
+  correctly rejects them. No production code changed for this; it's a testing-harness concern only,
+  noted here in case it recurs when constructing other multi-partition test scenarios.
+- **The DB-backed test also had to materialize the `processes` and `streams` global views**, not
+  just `blocks` — `ThreadSpansView::jit_update` resolves the stream and process via
+  `find_stream_from_view` / `find_process_with_latest_timing`, both of which read those views, and
+  (like `blocks`) they're otherwise only kept current by the maintenance daemon. Not called out in
+  the original Testing Strategy, which only mentioned `blocks`.
+- **Forcing a second JIT partition via `insert_time` alone doesn't work** as the plan's Testing
+  Strategy suggested ("block insert-times that deliberately span more than one 1-hour JIT
+  segment"): `BlocksView`'s own event-time bounds are `[min(begin_time), max(insert_time)]` (a
+  pre-existing, documented rough edge in `blocks_view.rs`), so rewinding a block's `insert_time`
+  alone inverts that computed range and the block stops matching any reasonable event-time query
+  filter. The working version rewinds `insert_time`, `begin_time`, and `end_time` together (keeping
+  `BlocksView`'s bounds internally consistent) while leaving `begin_ticks`/`end_ticks` untouched,
+  since those (not `begin_time`/`end_time`) are what `ThreadSpansView` actually converts into the
+  exported span `begin`/`end` values.
+- All offline tests pass under `cargo test`; the DB-backed test passes under `cargo test -- --ignored`
+  against a live local data lake. `cargo fmt` and `cargo clippy --workspace --all-targets -- -D
+  warnings` are clean.
+
+## Overview
+
+Exporting a Perfetto trace for a process with many threads over a wide time range can OOM the
+flight-sql server. `generate_thread_spans_with_writer` runs one `SELECT ... ORDER BY begin` query
+**per thread, concurrently**, and each `ORDER BY` forces DataFusion to build a full external sort.
+Several concurrent `ExternalSorterMerge` instances share the single bounded
+`datafusion.runtime.memory_limit` pool (default 1 GB) and exhaust it.
+
+The `ORDER BY begin` is redundant: the physical scan behind `view_instance('thread_spans', ...)`
+already emits rows in ascending `begin` order. The fix declares this existing input ordering to
+DataFusion (per-view opt-in) so the `EnforceSorting` optimizer pass drops the `Sort` node instead of
+materializing an `ExternalSorter`. The `ORDER BY` stays in the SQL and is still honored — it just
+becomes free. This removes the memory pressure **at its source**: no per-thread sort buffer is ever
+allocated, so concurrency no longer multiplies large sort allocations.
+
+Per explicit direction, **concurrency is left unchanged** — we fix memory by optimizing the sort
+away, not by capping `max_concurrent`. Async spans are **out of scope**: their query
+(`generate_async_spans_with_writer`) ends in `ORDER BY b.begin_time` over a JOIN whose output
+ordering is not guaranteed by a partition scan, so the sort-elimination technique does not apply.
+
+## Current State
+
+### The export path
+
+`PerfettoTraceExecutionPlan::execute` → `generate_streaming_perfetto_trace` →
+`generate_thread_spans_with_writer` (`rust/analytics/src/lakehouse/perfetto_trace_execution_plan.rs:331`).
+
+For each thread it issues (`format_thread_spans_query`, line 305):
+
+```sql
+SELECT "begin", "end", name, filename, target, line
+FROM view_instance('thread_spans', '<stream_id>')
+WHERE begin <= TIMESTAMP '...' AND end >= TIMESTAMP '...'
+ORDER BY begin
+```
+
+Queries run through `spawn_with_context` + `.buffered(max_concurrent)` (line 365) where `max_concurrent =
+available_parallelism()` (line 337). Each concurrent query's `ORDER BY begin` builds an independent
+external sort; together they blow the shared memory pool (the error trace shows multiple simultaneous
+`ExternalSorterMerge` reservations).
+
+### Why the scan is already sorted by `begin`
+
+1. **Within a partition** — `thread_spans` partitions are built by a depth-first **preorder** walk of
+   the call tree: `span_table.rs::for_each_node_in_tree` (line 172) visits a node, then recurses into
+   its children. The call tree is constructed stack-based from the chronological event stream
+   (`call_tree.rs` — `add_child_to_top`/`finish` push children in arrival = `begin` order), so
+   siblings are already in ascending `begin` and are non-overlapping (a thread executes
+   sequentially). Preorder over a properly-nested, time-ordered tree yields rows in ascending
+   `begin`.
+
+2. **Across partitions** — a `thread_spans` view instance is keyed by a single `stream_id` (one
+   thread). Its JIT partitions (`thread_spans_view.rs::jit_update` →
+   `generate_stream_jit_partitions`) cover contiguous, **non-overlapping** event-time windows of that
+   one stream. `make_partitioned_execution_plan`
+   (`rust/analytics/src/lakehouse/partitioned_execution_plan.rs:19`) bundles all partitions into a
+   **single DataFusion file group** (`with_file_groups(vec![file_group.into()])`, line 64), which is
+   scanned sequentially — files are never interleaved across parallel readers. So concatenating the
+   (individually sorted, non-overlapping) partition files in ascending event-time order produces a
+   globally `begin`-sorted stream.
+
+   This cross-partition non-overlap is conditional, not structurally enforced: JIT partitions are
+   sliced and ordered by `insert_time`
+   (`generate_stream_jit_partitions`/`generate_stream_jit_partitions_segment` in `jit_partitions.rs`),
+   so their event-time non-overlap holds only under the documented assumption that a stream's blocks
+   are registered in event-time order (`thread_spans_view.rs:131-132`: "we assume that the blocks were
+   registered in order since they are built based on begin_ticks, not insert_time"). That assumption
+   is not enforced in code. If a stream ever received an out-of-order or late-arriving block, a later
+   partition could contain an earlier `begin`, and — once the explicit `ORDER BY` is gone — the export
+   would silently mis-order rows instead of being re-sorted.
+
+### TSC frequency error and the ordering invariant
+
+Span timestamps are tick counts converted via `ConvertTicks` (`analytics/src/time.rs`), and the TSC
+frequency behind that conversion is not always reliable. Its two sources age differently:
+
+- **Stated frequency (`process.tsc_frequency > 0`)** — reported by the instrumented process (CPUID
+  leaf 0x15 / `cntfrq_el0`), which can be off by crystal tolerance (~±50–100 ppm) or worse under
+  hypervisors. **Benign for this plan**: every partition of the process is converted with the same
+  fixed linear map, which is strictly monotonic no matter how wrong the slope is — tick order
+  implies time order within and across partitions. The damage is confined to absolute accuracy
+  (time axis uniformly stretched, error linear in uptime: 100 ppm ≈ 360 µs/hour), which the
+  `ORDER BY` never corrected either.
+- **Estimated frequency (`tsc_frequency == 0`)** — `make_time_converter_from_latest_timing`
+  re-estimates at each materialization from `last_block_end_ticks / (last_block_end_time −
+  start_time)`. Cached partitions keep rows *and* `event_time_range` metadata computed with older
+  estimates (`is_jit_partition_up_to_date` hashes source blocks only), so one stream can mix linear
+  maps from different epochs. Boundary skew is `elapsed_ticks × |1/f₁ − 1/f₂|`; NTP slew (up to
+  ±500 ppm) or clock steps during the estimation baseline can push this to hundreds of ms a few
+  hours into a process — larger than typical inter-block gaps, producing metadata overlap. The §3
+  guard catches exactly this (the metadata is computed with the same converters as the rows), so
+  the failure is a loud export error, never a mis-ordered trace — but it persists until the
+  affected partitions are retired or rebuilt, where today's explicit sort silently absorbs the
+  inconsistency. This is an accepted availability trade-off, scoped to `tsc_frequency == 0`
+  processes with materialization epochs spanning clock adjustments.
+
+The `Partition` struct (`partition.rs:8`) exposes `min_event_time()` / `max_event_time()`
+(`partition.rs:34,39`) — the begin/end bounds of the partition's event-time range. We use
+`min_event_time()` (the partition's minimum `begin`) as the robust cross-partition sort key (rather
+than relying on the insert-time order the partition cache happens to return). Both return
+`Option<DateTime<Utc>>`, so the sort considers only non-empty partitions.
+
+### Plumbing
+
+`view_instance(...)` → `ViewInstanceTableFunction::call_with_args` builds a `MaterializedView`
+(`view_instance_table_function.rs:76`). `MaterializedView::scan`
+(`materialized_view.rs:62`) fetches partitions and calls `make_partitioned_execution_plan`, which
+builds a `FileScanConfig` via `FileScanConfigBuilder`. DataFusion 54's builder has
+`with_output_ordering(Vec<LexOrdering>)` (`datafusion-datasource-54.0.0/.../file_scan_config/mod.rs:459`);
+setting it also flips `preserve_order = true` in `build()` (line 536). No code currently sets it.
+
+## Design
+
+Add a **per-view opt-in** that declares the scan's already-satisfied output ordering, plumb it into
+`make_partitioned_execution_plan`, and there sort the file group by the leading column's min value
+and attach a `LexOrdering` to the `FileScanConfig`.
+
+### 1. `View` trait opt-in (default: none)
+
+Add a small value type and a defaulted trait method in `rust/analytics/src/lakehouse/view.rs`:
+
+```rust
+/// A column an ordering is expressed over (ascending unless `descending`).
+#[derive(Clone, Debug)]
+pub struct ScanSortColumn {
+    pub column: Arc<String>,
+    pub descending: bool,
+}
+
+// on trait View:
+/// Declares an ordering the view's partition scan *already* emits, letting DataFusion
+/// elide redundant `Sort` nodes for queries that `ORDER BY` these columns.
+///
+/// Returning a non-empty ordering is a correctness contract the view must guarantee:
+/// - rows within each partition file are already sorted by these columns, AND
+/// - the leading column is the view's min-event-time column, and partition event-time
+///   ranges are non-overlapping (so files concatenate in globally-sorted order).
+///
+/// For `ThreadSpansView`, the non-overlapping-ranges half of this contract rests on JIT
+/// partitions being sliced in event-time order, which in turn assumes a stream's blocks are
+/// registered in event-time order — an assumption documented but not enforced (see
+/// `thread_spans_view.rs:131-132`). If that assumption is ever violated, output would be
+/// silently mis-ordered rather than re-sorted, since no `Sort` node remains once this ordering
+/// is declared.
+///
+/// Default: empty (no declared ordering — DataFusion sorts as usual).
+fn get_scan_output_ordering(&self) -> Vec<ScanSortColumn> {
+    vec![]
+}
+```
+
+`ThreadSpansView` (`thread_spans_view.rs`) overrides it to declare `begin` ascending:
+
+```rust
+fn get_scan_output_ordering(&self) -> Vec<ScanSortColumn> {
+    vec![ScanSortColumn { column: MIN_TIME_COLUMN.clone(), descending: false }]
+}
+```
+
+All other views keep the default empty vec, so their scans are unaffected (open/closed).
+
+### 2. Plumb through `MaterializedView::scan`
+
+`materialized_view.rs` passes `self.view.get_scan_output_ordering()` as a new argument to
+`make_partitioned_execution_plan`. `PartitionedTableProvider::scan`
+(`partitioned_table_provider.rs:63`) — the other caller — passes an empty slice (it has no such
+guarantee).
+
+### 3. `make_partitioned_execution_plan`
+
+New signature:
+
+```rust
+pub fn make_partitioned_execution_plan(
+    schema: SchemaRef,
+    reader_factory: Arc<ReaderFactory>,
+    state: &dyn Session,
+    projection: Option<&Vec<usize>>,
+    filters: &[Expr],
+    limit: Option<usize>,
+    partitions: Arc<Vec<Partition>>,
+    output_ordering: &[ScanSortColumn], // NEW
+) -> datafusion::error::Result<Arc<dyn ExecutionPlan>>
+```
+
+Changes inside:
+
+- When `output_ordering` is non-empty, before building `PartitionedFile`s, collect the non-empty
+  partitions and **sort them by `min_event_time()` ascending** (with `file_path` as a deterministic
+  tiebreak). This makes the globally-sorted concatenation self-contained — independent of whatever
+  order the partition cache returned. When empty, preserve today's behavior exactly (no sort).
+- **Loud-failure guard (non-overlap check).** After sorting, walk the partitions and verify each
+  one's `max_event_time()` is `<=` the next one's `min_event_time()`. If any adjacent pair overlaps,
+  the declared ordering cannot be honored (a later file could contain an earlier `begin`), so
+  **return an error** (`DataFusionError::Execution` with the offending `stream_id`/partition
+  `file_path`s and event-time ranges) rather than declaring an ordering the data does not satisfy.
+  The message should also name the known benign trigger — TSC-frequency estimation drift across
+  materialization epochs for `tsc_frequency == 0` processes (see "TSC frequency error and the
+  ordering invariant" above) — and its remediation (retire the stream's partitions so they rebuild
+  with a single converter), so the first person to hit it doesn't misdiagnose it as data corruption.
+  This is preferred over silently degrading to an unsorted scan: a violated invariant surfaces
+  immediately as a diagnosable query failure instead of a mis-ordered Perfetto trace. The cost is
+  negligible (a single pass over already-sorted partition metadata). It catches the realistic
+  failure mode — an out-of-order / late-arriving block making a stream's partition event-time ranges
+  overlap — at plan-build time, before any row is scanned.
+- **Populate per-file min/max statistics — required for DataFusion to accept the ordering.**
+  `FileScanConfig::eq_properties()` does not take a declared `with_output_ordering` on faith: it runs
+  every candidate ordering through `validated_output_ordering()` (`file_scan_config/mod.rs:1082`) →
+  `sort_pushdown::validate_orderings` → `is_ordering_valid_for_file_groups`
+  (`file_scan_config/sort_pushdown.rs:464-482`). For any file group with `len() > 1` — which is exactly
+  the multi-JIT-partition, wide-time-range case this plan targets — that function calls
+  `MinMaxStatistics::new_from_files(...)`, which returns `plan_err!("Parquet file missing
+  statistics")` (`statistics.rs:84`) as soon as any file's `PartitionedFile.statistics` is `None`.
+  `PartitionedFile::new(file_path, file_size)` leaves `statistics: None`, so without this step the
+  declared ordering would silently fail validation, `eq_properties` would report no ordering, and
+  `EnforceSorting` would keep the `SortExec` — the fix would do nothing for any thread with more than
+  one partition in its file group.
+
+  So, when `output_ordering` is non-empty, attach statistics to each `PartitionedFile` before it goes
+  into the file group: build `Statistics::new_unknown(&schema)` (full table schema, so
+  `column_statistics` is indexed the same as `schema`), then for the `begin` column — index 4 in
+  `get_spans_schema()` (`id, parent, depth, hash, begin, end, ...`, `span_table.rs:50-66`) — set
+  `column_statistics[4] = ColumnStatistics::new_unknown()
+    .with_min_value(Precision::Inexact(ScalarValue::TimestampNanosecond(min_ns, Some("+00:00".into()))))
+    .with_max_value(Precision::Inexact(ScalarValue::TimestampNanosecond(max_ns, Some("+00:00".into()))))`,
+  where `min_ns`/`max_ns` come from the same partition's `min_event_time()`/`max_event_time()` already
+  used to sort and non-overlap-check the partitions. Attach it via
+  `PartitionedFile::new(file_path, size).with_statistics(Arc::new(stats))`. This only needs to run for
+  the columns named in `output_ordering` (today, just `begin`); the empty-`output_ordering` path is
+  unchanged and still calls `PartitionedFile::new` with no statistics.
+
+  **`Precision::Inexact`, not `Exact` — these values are bounds on `begin`, not its exact min/max.**
+  `max_event_time()` is the partition's maximum **end** timestamp (an upper bound on `begin`, never
+  its exact maximum), and `min_event_time()` is the first block's begin (a lower bound). Labeling
+  them `Exact` would be a latent wrong-results bug: DataFusion's `AggregateStatistics` physical
+  optimizer answers `MIN(col)`/`MAX(col)` directly from column statistics when they are
+  `Precision::Exact` (`Max::value_from_column_statistics`,
+  `datafusion-functions-aggregate-54.0.0/src/min_max.rs:190-202`), so `SELECT MAX(begin)` could
+  return an *end* timestamp. That rewrite also requires `Precision::Exact` `num_rows`, which
+  `Statistics::new_unknown` leaves `Absent` — so it cannot fire today — but the #1302 statistics
+  generalization could arm it later. `Inexact` costs nothing: the ordering validation reads stats via
+  `Precision::get_value()` (`MinMaxStatistics::new_from_files`, `statistics.rs:94-100`), which
+  accepts `Inexact` and `Exact` alike, while the MIN/MAX rewrite requires `Exact` — so the sort
+  elimination still works and the stats can never be misread as exact aggregates.
+
+  > **Scope note:** populating time-column statistics for *every* partitioned scan (driven by each
+  > partition's `event_time_range` metadata) would also enable time-predicate partition pruning
+  > across the whole lakehouse — a generally useful win. That generalization is deliberately **out
+  > of scope** here and tracked in #1302; this plan attaches statistics only for the opt-in
+  > `output_ordering` path.
+- Build a `LexOrdering` from `output_ordering` against `schema` and pass
+  `vec![lex]` to `FileScanConfigBuilder::with_output_ordering`:
+
+```rust
+use datafusion::physical_expr::{LexOrdering, PhysicalSortExpr, expressions::Column};
+use datafusion::arrow::compute::SortOptions;
+
+let mut builder = FileScanConfigBuilder::new(object_store_url, source)
+    .with_limit(limit)
+    .with_projection_indices(projection.cloned())?
+    .with_file_groups(vec![file_group.into()]);
+
+if !output_ordering.is_empty() {
+    let sort_exprs = output_ordering
+        .iter()
+        .map(|c| {
+            let col = Column::new_with_schema(&c.column, &schema)?;
+            Ok(PhysicalSortExpr::new(
+                Arc::new(col),
+                SortOptions { descending: c.descending, nulls_first: false },
+            ))
+        })
+        .collect::<datafusion::error::Result<Vec<_>>>()?;
+    if let Some(lex) = LexOrdering::new(sort_exprs) {
+        builder = builder.with_output_ordering(vec![lex]);
+    }
+}
+let file_scan_config = builder.build();
+```
+
+`SortOptions { descending: false, nulls_first: false }` matches DataFusion's default `ORDER BY begin`
+(ASC NULLS LAST); `begin` is non-nullable so nulls placement is moot, but we match it so
+`EnforceSorting` recognizes the orderings as equivalent. This declared ordering is only honored if the
+per-file statistics above were attached — without them `is_ordering_valid_for_file_groups` strips it
+back out for any group with more than one file.
+
+**`preserve_order` side effect.** Setting `with_output_ordering` flips `preserve_order = true` in
+`FileScanConfigBuilder::build()`. (This flag is set unconditionally by `with_output_ordering`,
+independent of the statistics-gated validation above — the validation only decides whether
+`eq_properties()` later reports the ordering, not whether `preserve_order` is set.) In our case — a
+single file group containing multiple files — this is a definitive no-op: `repartition_preserving_order`
+(`file_groups.rs:270-308`) returns `None` when `target_partitions == 1`, and when `target_partitions >
+1` the multi-file group is filtered out of the heap (only `group.len() == 1` groups are split), leaving
+the heap empty → `None`. `DataSourceExec::repartitioned` therefore returns `Ok(None)`, the plan stays at
+`UnknownPartitioning(1)`, and no `SortPreservingMergeExec`/`RepartitionExec` is introduced.
+
+### Resulting plan transformation
+
+Before: `SortExec(begin) ← FilterExec ← DataSourceExec` → `SortExec` materializes an `ExternalSorter`.
+
+After: `DataSourceExec` advertises output ordering `[begin ASC]` — this requires the per-file `begin`
+min/max statistics from §3 to be attached, since DataFusion validates the declared ordering against
+file-group statistics whenever a group holds more than one file and drops it otherwise; `FilterExec`
+and the projection preserve the advertised ordering; `EnforceSorting` sees the required `ORDER BY
+begin` is already satisfied and drops the `SortExec`. The scan streams with bounded per-query memory,
+so N concurrent thread queries no longer allocate N sort buffers.
+
+```
+per-thread query plan
+  ┌───────────────────────────────┐        ┌───────────────────────────────┐
+  │ SortExec [begin ASC]          │        │ (SortExec removed by           │
+  │   FilterExec (begin<=..)      │  ──►    │  EnforceSorting)               │
+  │     DataSourceExec            │        │   FilterExec (begin<=..)       │
+  │       (no declared ordering)  │        │     DataSourceExec             │
+  └───────────────────────────────┘        │       output_ordering=[begin]  │
+     builds ExternalSorter                  └───────────────────────────────┘
+                                                streaming, bounded memory
+```
+
+### 4. Runtime monotonicity guard in the export consumer
+
+The non-overlap check in §3 covers the **cross-partition** invariant (the realistic failure mode:
+an out-of-order block making a stream's partition ranges overlap). It cannot see the
+**within-partition** invariant — that each partition file's rows really are preorder/`begin`-sorted
+— because that requires inspecting the rows, not the metadata. Since we prefer a loud failure over a
+silently mis-ordered trace, add a complete backstop where the rows are actually consumed:
+`generate_thread_spans_with_writer` (`perfetto_trace_execution_plan.rs:331`) already iterates every
+span row of each per-thread query, via an outer `for (stream_id, mut data_stream) in streams` loop
+that consumes each thread's stream in turn. `begin` is only guaranteed sorted *within* a thread —
+different threads are independent timelines, so thread B's first `begin` can legitimately precede
+thread A's last `begin`. Declare (and reset) the previous-`begin` tracker inside that per-stream
+loop, so monotonicity is checked within each thread and never across threads. If a row's `begin` is
+ever less than its predecessor within the same stream, **return an error** (surfacing the
+`stream_id` and the offending pair of timestamps) instead of writing the row.
+
+This validates the *actual* emitted order, so it catches every ordering violation regardless of
+cause — within-partition, cross-partition, or a future regression in the traversal/partitioning
+code — and converts what is otherwise silent output corruption into an immediate, diagnosable export
+failure. The cost is one timestamp comparison per row, negligible against the Perfetto protobuf
+serialization already done per row. The check is unconditional (not `debug_assert!`) precisely so the
+failure is loud in production, not just in debug builds.
+
+## Implementation Steps
+
+1. **`view.rs`** — add `ScanSortColumn` struct and the defaulted `get_scan_output_ordering()` method
+   on the `View` trait.
+2. **`thread_spans_view.rs`** — override `get_scan_output_ordering()` to return `begin` ascending
+   (reuse `MIN_TIME_COLUMN`).
+3. **`partitioned_execution_plan.rs`** — add the `output_ordering: &[ScanSortColumn]` parameter; when
+   non-empty, sort partitions by `min_event_time()` (tiebreak `file_path`) before building the file
+   group, verify adjacent partitions are non-overlapping (error on overlap — the §3 loud-failure
+   guard), attach `begin` min/max `Statistics` to each `PartitionedFile` via `.with_statistics(...)`
+   so DataFusion's multi-file-group ordering validation accepts the declared ordering (the §3
+   statistics step — required for any file group with more than one file, otherwise the ordering is
+   silently dropped), and attach the `LexOrdering` via `with_output_ordering`.
+4. **`materialized_view.rs`** — pass `self.view.get_scan_output_ordering()` into the call.
+5. **`partitioned_table_provider.rs`** — pass `&[]` into the call.
+6. **`perfetto_trace_execution_plan.rs`** — in `generate_thread_spans_with_writer`, declare the
+   previous-`begin` tracker inside the per-stream `for (stream_id, ...)` loop (so it resets for each
+   thread) and error if a row's `begin` is less than its predecessor within that same stream (the §4
+   runtime monotonicity guard).
+7. Update any other `make_partitioned_execution_plan` callers if present (grep confirms only the two
+   above) and run `cargo fmt` + `cargo clippy --workspace -- -D warnings`.
+8. Add the regression tests (see Testing Strategy).
+
+## Files to Modify
+
+- `rust/analytics/src/lakehouse/view.rs` — new `ScanSortColumn` type + trait method.
+- `rust/analytics/src/lakehouse/thread_spans_view.rs` — override the method.
+- `rust/analytics/src/lakehouse/partitioned_execution_plan.rs` — new param, file-group sort,
+  non-overlap loud-failure guard, per-file `begin` min/max statistics, ordering declaration.
+- `rust/analytics/src/lakehouse/materialized_view.rs` — pass the view's ordering.
+- `rust/analytics/src/lakehouse/partitioned_table_provider.rs` — pass empty ordering.
+- `rust/analytics/src/lakehouse/perfetto_trace_execution_plan.rs` — runtime `begin`-monotonicity
+  guard in `generate_thread_spans_with_writer`.
+- A new DB-backed test file under `rust/analytics/tests/` (e.g. `thread_spans_ordering_tests.rs`) —
+  regression test via the `MaterializedView`/`view_instance` path, modeled on the existing
+  `histo_view_test.rs` / `sql_view_test.rs` harness pattern (`connect_to_data_lake` +
+  `LakehouseContext::new`, `#[ignore]`-gated and requiring a live `MICROMEGAS_SQL_CONNECTION_STRING`).
+
+## Trade-offs
+
+- **Declare ordering vs. cap concurrency.** The issue suggested both. Per direction we take only the
+  ordering fix: it removes the large allocations entirely rather than serializing them, so throughput
+  is preserved and the fix is hardware-independent. Concurrency (`max_concurrent`) is intentionally
+  untouched.
+- **Declare ordering vs. drop the `ORDER BY` entirely.** Perfetto's `trace_processor` sorts packets
+  by timestamp on import, and the writer already emits packets out of timestamp order (each span's
+  `SliceEnd` is written before the next span's `SliceBegin` — `streaming_writer.rs::emit_span`), so
+  removing the `ORDER BY` from `format_thread_spans_query` looks like a one-line fix. Rejected:
+  without a declared ordering DataFusion is free to repartition the scan and interleave batches
+  arbitrarily, so parent/child spans that begin in the same nanosecond lose their preorder tie-break
+  — after `trace_processor`'s timestamp sort, equal-timestamp `SliceBegin` packets can nest in the
+  wrong order or mismatch begin/end pairing. It also makes export output nondeterministic and moves
+  the correctness burden onto an external tool's sorting-mode heuristics (full-sort vs. windowed)
+  instead of our own guarantees.
+- **Single multi-file group (+ statistics) vs. one file per group (no statistics needed).** Putting
+  each partition in its own file group would sidestep the §3 statistics step entirely —
+  `is_ordering_valid_for_file_groups` accepts single-file groups trivially — and `EnforceSorting`
+  would replace the `SortExec` with a streaming `SortPreservingMergeExec`. Rejected: it opens every
+  partition file concurrently per query (a wide time range means hundreds of parquet readers per
+  thread, multiplied by concurrent threads), adds a merge operator per query, and gives up today's
+  single sequential scan — a strictly worse runtime shape to save ~10 lines of statistics code.
+- **Sort the file group by `min_event_time` vs. trust cache order.** The partition cache returns
+  `ORDER BY begin_insert_time, file_path`, which *usually* matches `begin` order for a single stream
+  but is not guaranteed to. Sorting explicitly by `min_event_time` makes the declared ordering
+  self-contained and cheap (an in-memory sort of partition metadata), removing the reliance on an
+  insert-time≈event-time coincidence.
+- **Per-view opt-in vs. global.** A blanket ordering declaration would be wrong for views whose scans
+  aren't `begin`-sorted (e.g. multi-stream/global views with overlapping partitions). The defaulted
+  empty method keeps every other view untouched and puts the correctness contract next to the view
+  that can honor it.
+- **Generic ordering type vs. hardcoding `begin`.** `ScanSortColumn` (with a `descending` flag)
+  keeps the mechanism reusable for future single-stream, preorder-built views without re-plumbing.
+- **Loud failure vs. silent degradation.** Once the `Sort` node is elided, DataFusion *trusts* the
+  declared ordering — it never re-validates that emitted rows are actually sorted, so a violated
+  invariant would otherwise produce a silently mis-ordered Perfetto trace with no error. We reject
+  the alternative of degrading gracefully (skip the ordering declaration and let DataFusion sort when
+  an anomaly is detected): that would mask a real data-integrity problem behind a quiet perf
+  regression. Instead both guards (§3 non-overlap at plan-build, §4 `begin`-monotonicity at row
+  consumption) **error out**, so any breach of the invariant surfaces immediately as a diagnosable
+  failure. Cost is negligible (a metadata pass plus one comparison per row).
+
+## Documentation
+
+No user-facing behavior changes (same rows, same order, same SQL), so no doc pages require updates.
+Optionally add a short note to any internal lakehouse/perfetto architecture notes explaining the
+`get_scan_output_ordering` contract; not required for merge.
+
+## Testing Strategy
+
+- **Regression test — monotonic `begin` across multiple partitions.** Build a synthetic
+  `thread_spans` scenario for one stream that produces **more than one partition**. `ThreadSpansView`
+  hardcodes `JitPartitionConfig::default()`, so forcing a second partition means either >20M objects in
+  one hour or, more cheaply, block insert-times that deliberately span more than one 1-hour JIT
+  segment. This needs a DB-backed harness that ingests through the `MaterializedView`/`view_instance`
+  path. `rust/analytics/tests/histo_view_test.rs` and `rust/analytics/tests/sql_view_test.rs` already
+  provide this pattern in-crate — `#[tokio::test]` + `#[ignore]` tests that require a live DB (they
+  read `MICROMEGAS_SQL_CONNECTION_STRING` via `env::var(...).with_context(...)`, erroring rather than
+  skip-gating when it is unset, and don't run under a plain `cargo test`), calling
+  `connect_to_data_lake` and constructing `LakehouseContext::new(...)`. Note `get_view_instance_id`
+  appears in their materialize/retire helpers, not the data query, and they query a global
+  `SqlBatchView` registered via `add_global_view`; the new test instead queries
+  `view_instance('thread_spans', <stream_id>)` by SQL string. The new regression test should be
+  modeled on their DB-backed setup (`analytics/tests/span_tests.rs`, by contrast, is a pure in-memory parse test with no
+  `LakehouseContext`, no DB, no `view_instance` query, and is not a fit). With the harness, query
+  `view_instance('thread_spans', <stream_id>)` **keeping `ORDER BY begin`, as production does** —
+  see "Implementation Status" above for why dropping it, as an earlier draft of this plan suggested,
+  is unsound (it removes the only signal that makes DataFusion preserve a single global order across
+  a repartitioned scan, independent of whether the declared ordering is correct) — and assert
+  `begin` is non-decreasing across the full result, and that it spans a partition boundary. Note
+  `PartitionedTableProvider::scan` always passes `&[]` (no declared ordering), so that path does *not*
+  exercise the new ordering and is not a valid substitute. This DB-backed test requires a live SQL
+  connection to run; the file-group sort unit test in `make_partitioned_execution_plan` (assert
+  `min_event_time` ordering with `file_path` tiebreak) and the plan-shape assertion below provide
+  additional coverage that doesn't depend on a live DB.
+- **Plan-shape assertion.** For a `SELECT ... FROM view_instance('thread_spans', ...) ORDER BY begin`
+  query, capture the physical plan (`df.create_physical_plan()` + `displayable(...).indent()`) and
+  assert **no `SortExec`** node appears. This must be exercised against a stream with **more than one
+  partition in the file group** (reuse the multi-partition setup from the regression test above) —
+  a single-file group validates trivially regardless of whether statistics are attached
+  (`is_ordering_valid_for_file_groups` returns early for `group.len() <= 1`), so a single-partition
+  version of this assertion would pass even if the §3 statistics step were missing or broken, and
+  would not catch the exact multi-partition failure mode this plan targets. Add a negative control on
+  a view that does *not* opt in to confirm its `SortExec` is still present.
+- **Loud-failure guard tests.** Unit-test the §3 non-overlap check in `make_partitioned_execution_plan`
+  directly: pass a hand-built `Vec<Partition>` whose event-time ranges overlap and assert the call
+  returns an `Err` (not a silently-unsorted plan); a non-overlapping set returns `Ok`. Separately,
+  cover the §4 runtime guard by feeding `generate_thread_spans_with_writer` a row stream whose `begin`
+  decreases and asserting it errors rather than emitting the out-of-order row. Both run without a live
+  DB.
+- **Manual verification.** Re-run the failing export (moderate thread count, wide time range, thread
+  spans only) against a running flight-sql server and confirm it completes without exhausting
+  `datafusion.runtime.memory_limit`.
+- `cargo test`, `cargo fmt`, `cargo clippy --workspace -- -D warnings`.

@@ -91,6 +91,7 @@ impl TableProvider for MaterializedView {
             filters,
             limit,
             Arc::new(partitions),
+            &self.view.get_scan_output_ordering(),
         )
     }
 
