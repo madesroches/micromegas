@@ -80,6 +80,9 @@ tower-http = { workspace = true, optional = true }
 
 [dev-dependencies]
 async-trait.workspace = true
+base64.workspace = true
+flate2.workspace = true
+opentelemetry-proto.workspace = true
 reqwest.workspace = true
 tokio = { workspace = true }
 wiremock = "0.6"
@@ -110,4 +113,9 @@ required-features = ["server"]
 [[test]]
 name = "query_audit_tests"
 path = "tests/query_audit_tests.rs"
+required-features = ["server"]
+
+[[test]]
+name = "firehose_tests"
+path = "tests/firehose_tests.rs"
 required-features = ["server"]

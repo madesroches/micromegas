@@ -18,6 +18,10 @@ pub mod otlp;
 /// generic header-described webhook ingestion route
 pub mod webhook;
 
+/// Kinesis Data Firehose HTTP Endpoint Delivery route for OTLP metrics (CloudWatch Metric
+/// Streams)
+pub mod firehose;
+
 /// shared body-limit / decompression layers for ingestion routers (OTLP, webhook)
 pub(crate) mod ingestion_limits;
 
