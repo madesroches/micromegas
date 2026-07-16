@@ -10,6 +10,7 @@ This file documents the historical progress of the Micromegas project. For curre
   * Fix Perfetto trace export OOMing on wide-time-range, many-thread processes: declare `thread_spans`' existing scan ordering to DataFusion so `EnforceSorting` drops the per-thread `ORDER BY begin` sort instead of materializing a concurrent `ExternalSorter` per thread against the shared memory pool; `ORDER BY` stays in the query and is still honored, just free (#1297)
 * **Build:**
   * Bump the pinned Rust toolchain to 1.97.0; fix new `clippy::useless_borrows_in_formatting` lints the version tightened, and regenerate the datafusion-wasm bindings whose internal closure-glue symbol names changed under the new compiler
+  * Pin the transitive `websocket-driver` dev dependency to `^0.7.5` via yarn `resolutions` to resolve Dependabot alerts #339/#340
 * **Caching:**
   * Fix `object_cache_get_bytes_served` recording a structural zero on the live `GET /obj/{key}` path: a `Content-Length`-framed HTTP body is never polled to a terminal `None`, so the byte-count callback fired from the drained stream never ran; `count_bytes_served` now fires as soon as the known expected payload is fully produced, before the final chunk is yielded, and both GET and `/ranges` call sites pass their known total (#1279)
   * Instrument object-cache eviction: emit RAM-tier eviction count/age metrics (tagged by `prefix` and `reason`) via a foyer `EventListener`, and a disk read-age estimate on disk-tier read hits, so it's observable what gets evicted and how long it lived before leaving a tier (#1281)
