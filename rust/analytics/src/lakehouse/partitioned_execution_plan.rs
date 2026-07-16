@@ -43,7 +43,7 @@ fn sort_and_check_non_overlapping(
             return Err(datafusion::error::DataFusionError::Execution(format!(
                 "declared scan ordering violated: partition {:?} (event-time range ending {prev_max}) overlaps partition {:?} (event-time range starting {next_min}). \
                  This can happen when a stream's blocks were registered out of event-time order, or -- for tsc_frequency == 0 processes -- when TSC-frequency \
-                 re-estimation drifted across materialization epochs spanning a clock adjustment (see the ordering-invariant notes on ThreadSpansView::get_scan_output_ordering). \
+                 re-estimation drifted across materialization epochs spanning a clock adjustment (see the ordering-invariant notes on View::get_scan_output_ordering in view.rs). \
                  Retire the affected stream's partitions so they rebuild with a single, consistent time converter.",
                 prev.file_path, next.file_path
             )));
