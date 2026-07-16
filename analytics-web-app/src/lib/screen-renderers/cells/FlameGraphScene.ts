@@ -11,7 +11,9 @@
 import * as THREE from 'three'
 import {
   axisValue,
+  fitLabelText,
   formatAxisTick,
+  labelClipRect,
   laneYOffset,
   spanColor,
   LABEL_MIN_WIDTH_PX,
@@ -183,6 +185,7 @@ export function createFlameScene(
     // Draw span labels
     ctx.font = '11px monospace'
     ctx.textBaseline = 'middle'
+    const charWidth = ctx.measureText('0').width // monospace ⇒ constant per-glyph advance
 
     for (let li = 0; li < index.lanes.length; li++) {
       const lane = index.lanes[li]
@@ -213,11 +216,21 @@ export function createFlameScene(
         const [, textLight] = spanColor(name)
         ctx.fillStyle = textLight ? '#ffffff' : '#000000'
 
+        const { left, width: clipW } = labelClipRect(x1, x2, view.width)
+        if (clipW <= 0) continue // span's visible box is too narrow to hold any label
+
+        // Pin the label to the visible left edge so it stays readable when the span
+        // starts off-screen-left; clip still constrains it to the span's box.
+        const textX = Math.max(x1 + 4, left + 2)
+        const availWidth = left + clipW - textX
+        const label = fitLabelText(name, availWidth, charWidth)
+        if (!label) continue
+
         ctx.save()
         ctx.beginPath()
-        ctx.rect(Math.max(x1 + 2, 0), y, Math.min(w - 4, view.width), SPAN_HEIGHT)
+        ctx.rect(left, y, clipW, SPAN_HEIGHT)
         ctx.clip()
-        ctx.fillText(name, x1 + 4, y + SPAN_HEIGHT / 2 + 1)
+        ctx.fillText(label, textX, y + SPAN_HEIGHT / 2 + 1)
         ctx.restore()
       }
     }

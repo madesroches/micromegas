@@ -15,10 +15,12 @@ import { Flame, ChevronDown, ChevronRight } from 'lucide-react'
 import {
   axisValue,
   buildFlameIndex,
+  clampTooltipPosition,
   formatBits,
   formatDuration,
   hitTest,
   totalHeight,
+  truncateSpanName,
   TIME_AXIS_HEIGHT,
   type FlameIndex,
 } from './flame-model'
@@ -266,7 +268,7 @@ function FlameGraphView({ index, onTimeRangeSelect, initialTimeRange }: FlameGra
         // Resolve parent name via pre-built map (O(1) instead of O(n) scan)
         const parentName = (parentId != null && index.idToName.get(parentId)) || ''
 
-        let info = `<b>${escapeHtml(name)}</b>`
+        let info = `<b>${escapeHtml(truncateSpanName(name))}</b>`
         if (index.xAxisMode === 'bits') {
           info += `<br>Size: ${formatBits(end - begin)}`
           if (bitSizeCol) {
@@ -302,11 +304,11 @@ function FlameGraphView({ index, onTimeRangeSelect, initialTimeRange }: FlameGra
 
         tooltip.innerHTML = info
         tooltip.style.display = 'block'
-        // Position tooltip near cursor but keep in bounds
-        const tooltipX = Math.min(x + 12, s.width - 200)
-        const tooltipY = Math.min(y + 12, s.height - 80)
-        tooltip.style.left = `${tooltipX}px`
-        tooltip.style.top = `${tooltipY}px`
+        const { left, top } = clampTooltipPosition(
+          x, y, tooltip.offsetWidth, tooltip.offsetHeight, s.width, s.height,
+        )
+        tooltip.style.left = `${left}px`
+        tooltip.style.top = `${top}px`
       } else {
         tooltip.style.display = 'none'
       }
@@ -459,7 +461,11 @@ function FlameGraphView({ index, onTimeRangeSelect, initialTimeRange }: FlameGra
           backgroundColor: 'rgba(15, 15, 30, 0.95)',
           color: '#e5e7eb',
           border: '1px solid rgba(75, 85, 99, 0.5)',
-          whiteSpace: 'nowrap',
+          whiteSpace: 'pre-wrap',
+          overflowWrap: 'anywhere',
+          maxWidth: '360px',
+          maxHeight: '40vh',
+          overflow: 'hidden',
         }}
       />
     </div>
