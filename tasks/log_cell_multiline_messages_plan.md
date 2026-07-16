@@ -10,7 +10,7 @@ The notebook Log cell (`LogCell.tsx`) currently renders every column — includi
 - `LogCell.tsx` (`analytics-web-app/src/lib/screen-renderers/cells/LogCell.tsx:248-296`) renders each visible row as a `flex px-2 py-0.5` `<div>`, with one `<span>` per column plus a `<LogDivider>` between adjacent columns. There is **no virtualization** (no react-window/react-virtual) — every row in the current page is a real DOM node inside a scrollable `overflow-auto` container, and pagination (not virtualization) bounds the row count. This means row height is not fixed anywhere; letting a cell wrap to multiple lines works with zero virtualizer changes.
 - Column widths come from `computeFlexWidths()` (`log-utils.tsx:202-251`), which measures the longest *formatted string* per column over the visible page and clamps to `[MIN_FLEX_WIDTH_PX, MAX_FLEX_WIDTH_PX]` (60–700px), or `[MIN_FLEX_WIDTH_PX, 200]` for `target`. Users can also pin an explicit width per column by dragging a `LogDivider` (`1130_log_cell_resizable_columns_plan.md`); pinned widths are stored in `options.columnWidths`.
 - `options` is the existing per-cell persistence bag (`options.pageSize`, `options.columnWidths`) — round-tripped through `onOptionsChange` and saved with the notebook.
-- `whitespace-pre-wrap` is already used elsewhere in this codebase for similar "show the whole thing" text blocks (`FlameGraphCell.tsx:464`, `MapCell.tsx:401`), so this isn't a new pattern for the app.
+- `whitespace-pre-wrap` is already used as a Tailwind utility class elsewhere in this codebase for similar "show the whole thing" text blocks (`MapCell.tsx:401`); `FlameGraphCell.tsx:464` uses the same behavior via the inline style `whiteSpace: 'pre-wrap'`. So preserving embedded newlines isn't a new pattern for the app.
 - `formatRowForCopy()` (`log-utils.tsx:181-200`) already strips embedded `\t\r\n` when building the clipboard string for the row-copy button, precisely because `msg` commonly contains embedded newlines (e.g. stack traces) — confirming multiline `msg` values are a real, expected case today, just not visible.
 - The standalone `LogRenderer.tsx` screen is `@deprecated` in favor of `LogCell` and is out of scope for this change (per explicit direction) — it keeps its current truncate-only behavior unchanged.
 
@@ -46,7 +46,7 @@ function textCellClasses(wrap: boolean | undefined): string {
 
 ### Toggle UI
 
-Add a "Wrap text" button to the bottom bar in `LogCell.tsx` (`analytics-web-app/src/lib/screen-renderers/cells/LogCell.tsx:298-308`), alongside the existing conditional "Reset widths" button — same visual language (small text button), using the `WrapText` icon from `lucide-react` (already a dependency) to make the toggle recognizable at a glance. Unlike "Reset widths", this button is always visible (not conditional), and reflects its on/off state visually (e.g. highlighted/accent color when active).
+Add a "Wrap text" button to the bottom bar in `LogCell.tsx` (`analytics-web-app/src/lib/screen-renderers/cells/LogCell.tsx:298-308`), alongside the existing conditional "Reset widths" button — same visual language (small text button), using the `WrapText` icon from `lucide-react` (already a dependency) to make the toggle recognizable at a glance. Unlike "Reset widths", this button is always visible (not conditional), and reflects its on/off state visually (e.g. highlighted/accent color when active). A visual mockup of this toggle (wrapped vs. compact states) is at `tasks/log_cell_wrap_mockups/log-cell-wrap-toggle.html`.
 
 ```tsx
 <button
@@ -69,6 +69,7 @@ Add a "Wrap text" button to the bottom bar in `LogCell.tsx` (`analytics-web-app/
    - Update all four cases in `renderLogColumn` to use `textCellClasses(opts?.wrap)` in place of their current hardcoded `truncate`/no-wrap class fragments.
 
 2. **`LogCell.tsx`**
+   - Add `WrapText` to the existing `lucide-react` import (currently `import { ScrollText, Copy, Check } from 'lucide-react'` at `LogCell.tsx:16`).
    - Read `wrapText` from `options` (`const wrapText = (options?.wrapText as boolean | undefined) ?? true`), same pattern as `pageSize`.
    - Pass `wrap: wrapText` into every `renderLogColumn(col, row, { width, isLast, wrap: wrapText })` call.
    - Add `items-start` to the row container's class string.
