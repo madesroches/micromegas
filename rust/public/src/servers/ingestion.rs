@@ -128,12 +128,14 @@ pub async fn serve_ingestion(
         .route("/ready", get(ready_handler))
         .layer(Extension(service.clone()));
 
+    let firehose_auth = auth_provider.clone();
+
     let mut protected_app = register_routes(Router::new())
         .merge(super::otlp::otlp_router())
         .merge(super::webhook::webhook_router())
         .layer(DefaultBodyLimit::disable())
         .layer(RequestBodyLimitLayer::new(100 * 1024 * 1024))
-        .layer(Extension(service));
+        .layer(Extension(service.clone()));
 
     let auth_enabled = auth_provider.is_some();
     if let Some(provider) = auth_provider {
@@ -145,8 +147,14 @@ pub async fn serve_ingestion(
         warn!("Ingestion: authentication disabled — development mode only");
     }
 
+    // The Firehose route carries its own auth (Firehose can only send its credential via
+    // X-Amz-Firehose-Access-Key, not Authorization: Bearer), so it is merged outside
+    // protected_app and never hits the global Bearer auth_middleware.
+    let firehose_app = super::firehose::firehose_router(service, firehose_auth);
+
     let app = health_router
         .merge(protected_app)
+        .merge(firehose_app)
         .layer(middleware::from_fn(observability_middleware));
 
     let listener = tokio::net::TcpListener::bind(listen_addr)

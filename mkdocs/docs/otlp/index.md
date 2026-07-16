@@ -11,6 +11,7 @@ The ingestion service exposes three OTLP/HTTP routes that mirror the OpenTelemet
 | `POST /ingestion/otlp/v1/logs` | `ExportLogsServiceRequest` | `log_entries` |
 | `POST /ingestion/otlp/v1/metrics` | `ExportMetricsServiceRequest` | `measures` |
 | `POST /ingestion/otlp/v1/traces` | `ExportTraceServiceRequest` | `otel_spans` (per-process JIT view) |
+| `POST /ingestion/otlp/v1/metrics/firehose` | `ExportMetricsServiceRequest` per Firehose record | `measures` (see [CloudWatch Metric Streams](#cloudwatch-metric-streams-kinesis-firehose)) |
 
 Routes share the existing listener (default `127.0.0.1:9000`) and authentication chain. OTLP payloads are stored as-is in object storage; decoding into parquet rows happens lazily at the analytics layer.
 
@@ -367,6 +368,77 @@ WHERE target = 'gitlab.push'
 ORDER BY time DESC
 LIMIT 10;
 ```
+
+## CloudWatch Metric Streams (Kinesis Firehose)
+
+`POST /ingestion/otlp/v1/metrics/firehose` speaks the **Amazon Kinesis Data Firehose HTTP
+Endpoint Delivery** protocol, so a CloudWatch Metric Stream can push metrics straight into
+micromegas: **Metric Stream → Firehose → micromegas**, with no Lambda, no Kinesis Data
+Stream, and no collector process in between. Firehose is just a dumb managed pipe: it
+wraps each record in a small JSON envelope and expects a fixed ack shape back.
+
+This works because a Metric Stream configured with **OpenTelemetry 1.0.0** output format
+delivers each record as an OTLP `ExportMetricsServiceRequest` protobuf — the exact message
+the native `/ingestion/otlp/v1/metrics` route already decodes. The Firehose route only
+unwraps the envelope (gzip-aware, base64 records) and hands each record's bytes to the
+same decode/split/write path; records land in `measures`, same as native OTLP metrics.
+
+### Requirement: OpenTelemetry 1.0.0 output format
+
+The Metric Stream **must** be configured with `OutputFormat: opentelemetry1.0` (or the
+equivalent console option). Other output formats (JSON, Parquet) are not OTLP and are not
+supported by this endpoint.
+
+### AWS delivery-stream setup
+
+Configure a Kinesis Firehose delivery stream with an **HTTP endpoint destination**:
+
+- **HTTP endpoint URL**: `https://micromegas.example.com/ingestion/otlp/v1/metrics/firehose`
+- **Access key**: a micromegas API key — the value from `MICROMEGAS_API_KEYS` — sent by
+  Firehose as `X-Amz-Firehose-Access-Key` on every request (Firehose cannot send
+  `Authorization: Bearer`, so this route authenticates via that header instead, reusing
+  the same keyring check as every other ingestion route).
+- **Content encoding**: gzip (recommended — reduces wire bytes; the route decompresses
+  transparently, same as the other OTLP routes).
+- **Buffering hints**: tune buffer size/interval for your metric volume; every buffered
+  batch arrives as one HTTP POST carrying one JSON record per underlying Metric Stream
+  record.
+- **S3 backup**: configure "backup all records" or "backup failed data only" — Firehose
+  retries non-200 responses and eventually spills to the configured S3 bucket, so no data
+  is silently lost even during an extended micromegas outage.
+
+Then point a CloudWatch Metric Stream at the delivery stream, with output format set to
+OpenTelemetry 1.0.0.
+
+### Ack contract
+
+Success is `200 OK` with `Content-Type: application/json` and body:
+
+```json
+{"requestId": "<echoed from X-Amz-Firehose-Request-Id>", "timestamp": 1700000000000}
+```
+
+Any non-200 status triggers a Firehose retry, and body:
+
+```json
+{"requestId": "<echoed>", "timestamp": 1700000000000, "errorMessage": "..."}
+```
+
+`requestId` always echoes the `X-Amz-Firehose-Request-Id` header — this is required by the
+Firehose HTTP Endpoint Delivery contract.
+
+!!! warning "TLS in production"
+    Same as the Bearer OTLP routes: `X-Amz-Firehose-Access-Key` over plaintext leaks in
+    transit. Terminate TLS in front of the listener for any production delivery stream.
+
+### Idempotency
+
+Same content-addressed `block_id` scheme as the rest of OTLP ingestion (see
+[Idempotency](#idempotency)): a Firehose retry of a previously-succeeded batch
+re-computes identical `block_id`s and dedups on write. On a partial batch failure,
+Firehose retries the whole batch — already-written records dedup, the failed one is
+retried. CloudWatch Metric Streams stamp distinct timestamps per scrape, so genuinely
+distinct data never collides.
 
 ## Limitations
 

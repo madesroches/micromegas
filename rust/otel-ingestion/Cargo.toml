@@ -15,6 +15,7 @@ micromegas-telemetry = { workspace = true, features = ["server"] }
 micromegas-tracing.workspace = true
 
 anyhow.workspace = true
+base64.workspace = true
 bytes.workspace = true
 chrono.workspace = true
 opentelemetry-proto.workspace = true

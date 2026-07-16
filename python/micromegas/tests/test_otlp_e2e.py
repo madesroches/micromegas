@@ -10,6 +10,7 @@ Assumes services are already running:
     python3 local_test_env/ai_scripts/start_services.py
 """
 
+import base64
 import datetime
 import json
 import os
@@ -39,6 +40,7 @@ LOGS_ENDPOINT = f"{INGESTION_URL}/ingestion/otlp/v1/logs"
 METRICS_ENDPOINT = f"{INGESTION_URL}/ingestion/otlp/v1/metrics"
 TRACES_ENDPOINT = f"{INGESTION_URL}/ingestion/otlp/v1/traces"
 WEBHOOK_ENDPOINT = f"{INGESTION_URL}/ingestion/webhook"
+FIREHOSE_ENDPOINT = f"{INGESTION_URL}/ingestion/otlp/v1/metrics/firehose"
 
 PROTOBUF_HEADERS = {"Content-Type": "application/x-protobuf"}
 
@@ -629,3 +631,150 @@ def test_webhook_ingestion_missing_headers_tolerated():
         timeout=10,
     )
     assert resp.status_code == 200, resp.text
+
+
+# ---------------------------------------------------------------------------
+# Kinesis Data Firehose HTTP Endpoint Delivery (CloudWatch Metric Streams)
+# ---------------------------------------------------------------------------
+
+
+def _firehose_envelope(request_id, records):
+    """Wrap a list of raw protobuf record bytes in a Firehose JSON envelope."""
+    return json.dumps(
+        {
+            "requestId": request_id,
+            "timestamp": int(time.time() * 1000),
+            "records": [{"data": base64.b64encode(r).decode("ascii")} for r in records],
+        }
+    )
+
+
+def test_firehose_metrics_e2e():
+    """POST a single OTLP metrics record wrapped in a Firehose envelope; assert
+    the ack echoes X-Amz-Firehose-Request-Id and the metric lands in `measures`,
+    same as a native OTLP /v1/metrics POST."""
+    attrs, instance_id = _fresh_resource_attrs()
+    base_ns = _now_ns()
+    req = _build_metrics_request(attrs, base_ns)
+    request_id = f"firehose-{uuid.uuid4()}"
+    body = _firehose_envelope(request_id, [req.SerializeToString()])
+
+    resp = requests.post(
+        FIREHOSE_ENDPOINT,
+        data=body,
+        headers={
+            "Content-Type": "application/json",
+            "X-Amz-Firehose-Request-Id": request_id,
+        },
+        timeout=10,
+    )
+    assert resp.status_code == 200, resp.text
+    ack = resp.json()
+    assert ack["requestId"] == request_id
+    assert "errorMessage" not in ack
+
+    begin, end = _query_window()
+    pid_str = discover_process_id(
+        client, instance_id, begin, end, timeout_s=POLL_TIMEOUT_S
+    )
+
+    def query_count():
+        sql = f"SELECT count(*) AS c FROM measures WHERE process_id = '{pid_str}'"
+        return client.query(sql, begin, end)
+
+    df = assert_eventually(
+        query_count,
+        lambda r: not r.empty and int(r.iloc[0]["c"]) >= 2,
+        timeout_s=POLL_TIMEOUT_S,
+        msg=f"waiting for 2 measures with process_id={pid_str}",
+    )
+    assert int(df.iloc[0]["c"]) >= 2
+
+
+def test_firehose_multi_record_e2e():
+    """A single Firehose batch can carry multiple records; each is fed through
+    the metrics decode/split/write path independently, so both land."""
+    attrs1, instance_id1 = _fresh_resource_attrs()
+    attrs2, instance_id2 = _fresh_resource_attrs()
+    base_ns = _now_ns()
+    req1 = _build_metrics_request(attrs1, base_ns)
+    req2 = _build_metrics_request(attrs2, base_ns + 1)
+    request_id = f"firehose-multi-{uuid.uuid4()}"
+    body = _firehose_envelope(
+        request_id, [req1.SerializeToString(), req2.SerializeToString()]
+    )
+
+    resp = requests.post(
+        FIREHOSE_ENDPOINT,
+        data=body,
+        headers={
+            "Content-Type": "application/json",
+            "X-Amz-Firehose-Request-Id": request_id,
+        },
+        timeout=10,
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["requestId"] == request_id
+
+    begin, end = _query_window()
+    for instance_id in (instance_id1, instance_id2):
+        pid_str = discover_process_id(
+            client, instance_id, begin, end, timeout_s=POLL_TIMEOUT_S
+        )
+
+        def query_count(pid=pid_str):
+            sql = f"SELECT count(*) AS c FROM measures WHERE process_id = '{pid}'"
+            return client.query(sql, begin, end)
+
+        df = assert_eventually(
+            query_count,
+            lambda r: not r.empty and int(r.iloc[0]["c"]) >= 2,
+            timeout_s=POLL_TIMEOUT_S,
+            msg=f"waiting for 2 measures with process_id={pid_str}",
+        )
+        assert int(df.iloc[0]["c"]) >= 2
+
+
+def test_firehose_empty_records_ack_without_ingest():
+    """An envelope with an empty `records` array is a legal Firehose no-op:
+    the ack shape still requires echoing requestId, and no measures row is
+    expected (there is nothing to check for — this only asserts the ack)."""
+    request_id = f"firehose-empty-{uuid.uuid4()}"
+    body = _firehose_envelope(request_id, [])
+
+    resp = requests.post(
+        FIREHOSE_ENDPOINT,
+        data=body,
+        headers={
+            "Content-Type": "application/json",
+            "X-Amz-Firehose-Request-Id": request_id,
+        },
+        timeout=10,
+    )
+    assert resp.status_code == 200, resp.text
+    ack = resp.json()
+    assert ack["requestId"] == request_id
+    assert "errorMessage" not in ack
+
+
+def test_firehose_dev_mode_open_without_access_key():
+    """The local test stack runs ingestion with --disable-auth, so (like every
+    other ingestion route) the Firehose route accepts requests with no
+    X-Amz-Firehose-Access-Key header at all. This documents that dev-mode-open
+    behavior; a deployment with MICROMEGAS_API_KEYS configured would instead
+    reject this same request with a non-200 {requestId, timestamp,
+    errorMessage} body."""
+    request_id = f"firehose-dev-mode-{uuid.uuid4()}"
+    body = _firehose_envelope(request_id, [])
+
+    resp = requests.post(
+        FIREHOSE_ENDPOINT,
+        data=body,
+        headers={
+            "Content-Type": "application/json",
+            "X-Amz-Firehose-Request-Id": request_id,
+        },
+        timeout=10,
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["requestId"] == request_id

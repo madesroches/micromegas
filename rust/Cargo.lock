@@ -3637,10 +3637,12 @@ dependencies = [
  "async-stream",
  "async-trait",
  "axum 0.8.9",
+ "base64 0.22.1",
  "bytes",
  "chrono",
  "clap",
  "datafusion",
+ "flate2",
  "futures",
  "http 1.4.2",
  "micromegas-analytics",
@@ -3654,6 +3656,7 @@ dependencies = [
  "micromegas-tracing",
  "object_store",
  "once_cell",
+ "opentelemetry-proto",
  "prost 0.14.4",
  "reqwest",
  "serde",
@@ -3861,6 +3864,7 @@ name = "micromegas-otel-ingestion"
 version = "0.28.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "bytes",
  "chrono",
  "micromegas-ingestion",

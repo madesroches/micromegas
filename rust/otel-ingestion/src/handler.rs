@@ -18,6 +18,7 @@ use crate::{
     FORMAT_OTLP_LOGS, FORMAT_OTLP_METRICS, FORMAT_OTLP_TRACES, OTLP_TICKS_PER_SECOND, TAG_LOGS,
     TAG_METRICS, TAG_TRACES,
 };
+use base64::Engine as _;
 use micromegas_ingestion::web_ingestion_service::WebIngestionService;
 use micromegas_tracing::prelude::*;
 use prost::Message;
@@ -265,5 +266,63 @@ pub async fn ingest_webhook(
             message: format!("split_logs (webhook): {e}"),
         })?;
     write_blocks(&service, Signal::Logs, blocks).await?;
+    Ok(())
+}
+
+#[derive(serde::Deserialize)]
+struct FirehoseRecordJson {
+    data: String,
+}
+
+#[derive(serde::Deserialize)]
+struct FirehoseEnvelopeJson {
+    #[serde(rename = "requestId")]
+    request_id: Option<String>,
+    #[serde(default)]
+    records: Vec<FirehoseRecordJson>,
+}
+
+/// Decoded Firehose envelope: the echoed request id plus each record's base64-decoded bytes.
+#[derive(Debug)]
+pub struct FirehoseEnvelope {
+    pub request_id: String,
+    pub records: Vec<Vec<u8>>,
+}
+
+/// Parse the Firehose JSON envelope and base64-decode every record's `data`.
+/// (gzip, if any, is already removed by the shared decompression layer.)
+/// Malformed JSON or base64 → `OtelError::Parse` (→ 400 → non-200 → Firehose retry).
+pub fn decode_firehose_envelope(body: &[u8]) -> Result<FirehoseEnvelope, OtelError> {
+    let parsed: FirehoseEnvelopeJson =
+        serde_json::from_slice(body).map_err(|e| OtelError::Parse {
+            signal: Signal::Metrics,
+            message: format!("firehose envelope json: {e}"),
+        })?;
+    let mut records = Vec::with_capacity(parsed.records.len());
+    for (i, rec) in parsed.records.iter().enumerate() {
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(rec.data.as_bytes())
+            .map_err(|e| OtelError::Parse {
+                signal: Signal::Metrics,
+                message: format!("firehose record[{i}] base64: {e}"),
+            })?;
+        records.push(bytes);
+    }
+    Ok(FirehoseEnvelope {
+        request_id: parsed.request_id.unwrap_or_default(),
+        records,
+    })
+}
+
+/// Feed each Firehose record (an OTLP `ExportMetricsServiceRequest` protobuf) into the
+/// existing metrics decode/split/write path. Reuses `ingest_metrics` per record so identity,
+/// content-addressed `block_id`, and idempotent writes are inherited unchanged.
+pub async fn ingest_firehose_metrics(
+    service: Arc<WebIngestionService>,
+    records: Vec<Vec<u8>>,
+) -> Result<(), OtelError> {
+    for rec in records {
+        ingest_metrics(service.clone(), bytes::Bytes::from(rec), Encoding::Protobuf).await?;
+    }
     Ok(())
 }
