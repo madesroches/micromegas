@@ -7,7 +7,7 @@ on:
 jobs:
   auto-approve:
     runs-on: ubuntu-latest
-    if: github.event.pull_request.user.login == 'madesroches'
+    if: contains(fromJSON('["madesroches", "madesroches-ubi"]'), github.event.pull_request.user.login)
     permissions:
       pull-requests: write
     steps:
