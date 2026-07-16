@@ -204,7 +204,7 @@ export function truncateSpanName(name: string, max = 300): string {
 
 At line 269: `let info = \`<b>${escapeHtml(truncateSpanName(name))}</b>\``. The on-canvas label is
 governed by its clip box, so this cap applies only to the tooltip. (The `300` default is a starting
-value — see Open Questions.)
+value — see Resolved Decisions.)
 
 **(c) Position from the tooltip's measured size, not hardcoded guesses.** After setting
 `tooltip.innerHTML` and `display = 'block'`, read `tooltip.offsetWidth`/`offsetHeight` (now bounded by
@@ -228,9 +228,10 @@ export function clampTooltipPosition(
 }
 ```
 
-This helper can live in `FlameGraphCell.tsx` (module-scope, exported for its test) or in
-`flame-model.ts`; put it in `FlameGraphCell.tsx` since it is tooltip-specific and has no other caller.
-Replace lines 306-309:
+Put this helper in `flame-model.ts` alongside the other pure helpers and their tests. Placing it in
+`FlameGraphCell.tsx` and exporting it would trip `react-refresh/only-export-components` (the file
+keeps itself warning-free with an explicit `// eslint-disable-next-line` on its existing
+`flamegraphMetadata` export); `flame-model.ts` has no such constraint. Replace lines 306-309:
 
 ```ts
 tooltip.innerHTML = info
@@ -249,12 +250,13 @@ animation frame), so the cost is immaterial.
 ## Implementation Steps
 
 1. **`flame-model.ts`** — add and export the pure helpers `labelClipRect(x1, x2, viewWidth)`,
-   `fitLabelText(name, availWidth, charWidth)`, and `truncateSpanName(name, max?)`.
+   `fitLabelText(name, availWidth, charWidth)`, `truncateSpanName(name, max?)`, and
+   `clampTooltipPosition(...)`.
 2. **`FlameGraphScene.ts`** — import `labelClipRect` and `fitLabelText`; measure `charWidth` once
    after the label font is set; replace the inline clip-rect computation (lines 216-221) with the
    helper, the `clipW <= 0` skip, the left-edge-pinned text x, and `fitLabelText` ellipsis truncation.
 3. **`FlameGraphCell.tsx`** —
-   - add/export `clampTooltipPosition(...)`;
+   - import `clampTooltipPosition` and `truncateSpanName` from `flame-model.ts`;
    - wrap the tooltip name with `truncateSpanName(...)` at the `info` initializer (line 269);
    - swap the tooltip div style from `whiteSpace: 'nowrap'` to the bounded/wrapping style in 2(a)
      (lines 454-464);
@@ -266,12 +268,13 @@ animation frame), so the cost is immaterial.
 ## Files to Modify
 
 - `analytics-web-app/src/lib/screen-renderers/cells/flame-model.ts` — new `labelClipRect`,
-  `fitLabelText`, and `truncateSpanName` helpers.
+  `fitLabelText`, `truncateSpanName`, and `clampTooltipPosition` helpers.
 - `analytics-web-app/src/lib/screen-renderers/cells/FlameGraphScene.ts` — use `labelClipRect`, skip
   empty clip, pin label to visible left edge, ellipsis-truncate via `fitLabelText` (one `charWidth`
   measurement per frame).
 - `analytics-web-app/src/lib/screen-renderers/cells/FlameGraphCell.tsx` — bounded/wrapping tooltip
-  style, name truncation, measured-size positioning, `clampTooltipPosition` helper.
+  style, name truncation, measured-size positioning (imports `clampTooltipPosition` from
+  `flame-model.ts`).
 - `analytics-web-app/src/lib/screen-renderers/cells/__tests__/flame-model.test.ts` (or a new test
   file) — unit tests for the new helpers.
 
