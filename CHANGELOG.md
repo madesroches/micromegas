@@ -5,6 +5,7 @@ This file documents the historical progress of the Micromegas project. For curre
 ## Unreleased
 
 * **Web App:**
+  * Add a per-cell "Wrap text" toggle to the notebook Log cell so long or multi-line `msg` values (e.g. stack traces) render wrapped instead of single-line-truncated, defaulting on and persisted in `options.wrapText`; the last column now bounds to the row's available width instead of a hardcoded 700px cap
   * Fix flamechart on-canvas labels bleeding into sibling spans and add ellipsis truncation for long span names (#1305); bound the hover tooltip's width/height, wrap embedded newlines, and position it from its measured size instead of hardcoded offsets (#1306)
 * **Analytics:**
   * Fix Perfetto trace export OOMing on wide-time-range, many-thread processes: declare `thread_spans`' existing scan ordering to DataFusion so `EnforceSorting` drops the per-thread `ORDER BY begin` sort instead of materializing a concurrent `ExternalSorter` per thread against the shared memory pool; `ORDER BY` stays in the query and is still honored, just free (#1297)
