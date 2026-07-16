@@ -315,3 +315,56 @@ const TIME_AXIS_FORMAT = new Intl.DateTimeFormat(undefined, {
 export function formatAxisTick(value: number, mode: XAxisMode): string {
   return mode === 'bits' ? formatBits(value) : TIME_AXIS_FORMAT.format(value)
 }
+
+// =============================================================================
+// Label / tooltip rendering helpers
+// =============================================================================
+
+/**
+ * Clip rectangle (x-axis only) for a span's on-canvas label, in CSS pixels.
+ * Derives left/right from the span's true edges, each clamped independently to
+ * the canvas — so the clip never extends past the span's real box even when the
+ * span starts off-screen-left (x1 < 0) or is wider than the viewport (x2 > width).
+ * Returns width 0 when the span's visible portion is empty.
+ */
+export function labelClipRect(x1: number, x2: number, viewWidth: number): { left: number; width: number } {
+  const left = Math.max(x1 + 2, 0)
+  const right = Math.min(x2 - 2, viewWidth)
+  return { left, width: Math.max(right - left, 0) }
+}
+
+/**
+ * Truncate `name` to fit `availWidth` px given a fixed per-character advance
+ * (`charWidth`, valid for the monospace label font), appending '…' when cut.
+ * Returns '' when not even one glyph fits.
+ */
+export function fitLabelText(name: string, availWidth: number, charWidth: number): string {
+  if (charWidth <= 0) return name
+  const maxChars = Math.floor(availWidth / charWidth)
+  if (name.length <= maxChars) return name
+  if (maxChars < 1) return ''
+  return name.slice(0, maxChars - 1) + '…' // '…' occupies the last cell
+}
+
+/** Cap a name for compact display, preserving embedded newlines up to the cap. */
+export function truncateSpanName(name: string, max = 300): string {
+  return name.length > max ? name.slice(0, max) + '…' : name
+}
+
+/** Clamp a tooltip's top-left so the box stays within [0, container] on both axes. */
+export function clampTooltipPosition(
+  cursorX: number,
+  cursorY: number,
+  tipW: number,
+  tipH: number,
+  containerW: number,
+  containerH: number,
+  margin = 12,
+): { left: number; top: number } {
+  // Prefer below-right of the cursor; flip to the other side if it would overflow.
+  let left = cursorX + margin
+  if (left + tipW > containerW) left = Math.max(0, cursorX - margin - tipW)
+  let top = cursorY + margin
+  if (top + tipH > containerH) top = Math.max(0, cursorY - margin - tipH)
+  return { left: Math.min(left, Math.max(0, containerW - tipW)), top: Math.min(top, Math.max(0, containerH - tipH)) }
+}
