@@ -1,0 +1,579 @@
+<title>Log Cell — Wrap Text Mockup</title>
+<meta name="description" content="Interactive mockup of the proposed Wrap text toggle for the Micromegas notebook Log cell" />
+<style>
+  :root {
+    --bg: #0a0a0f;
+    --panel: #121218;
+    --panel-2: #17171f;
+    --row-alt: #15151d;
+    --border: #26262f;
+    --border-soft: #1d1d26;
+    --text-primary: #e7e7ec;
+    --text-secondary: #9a9aab;
+    --text-muted: #63636f;
+    --rust: #d9481f;
+    --rust-dim: #8a3416;
+    --blue: #4d8fe0;
+    --gold: #ffb300;
+    --err: #ef5350;
+    --err-bright: #ff8a80;
+    --focus: #6fa8ff;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text-primary);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    font-size: 14px;
+  }
+
+  body {
+    padding: 40px 24px 64px;
+    display: flex;
+    justify-content: center;
+  }
+
+  a { color: var(--blue); }
+
+  .page {
+    width: 100%;
+    max-width: 940px;
+    display: flex;
+    flex-direction: column;
+    gap: 28px;
+  }
+
+  /* ---------- Header ---------- */
+
+  header {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding-bottom: 20px;
+    border-bottom: 1px solid var(--border-soft);
+  }
+
+  .eyebrow {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--rust);
+  }
+
+  h1 {
+    margin: 0;
+    font-size: 24px;
+    font-weight: 650;
+    letter-spacing: -0.01em;
+    text-wrap: balance;
+  }
+
+  .dek {
+    margin: 0;
+    max-width: 62ch;
+    color: var(--text-secondary);
+    line-height: 1.55;
+    font-size: 13.5px;
+  }
+
+  code.inline {
+    font-family: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 1px 5px;
+    font-size: 12px;
+    color: var(--text-primary);
+  }
+
+  /* ---------- Comparison strip ---------- */
+
+  .states {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+  }
+
+  .state-card {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 14px;
+    background: var(--panel);
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+  }
+
+  .state-card .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    margin-top: 5px;
+    flex-shrink: 0;
+  }
+
+  .state-card.off .dot { background: var(--text-muted); }
+  .state-card.on .dot { background: var(--rust); }
+
+  .state-card h3 {
+    margin: 0 0 3px;
+    font-size: 12.5px;
+    font-weight: 600;
+  }
+
+  .state-card p {
+    margin: 0;
+    font-size: 12px;
+    color: var(--text-secondary);
+    line-height: 1.5;
+  }
+
+  /* ---------- Notebook cell chrome ---------- */
+
+  .cell {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--panel);
+    overflow: hidden;
+    box-shadow: 0 1px 0 rgba(0,0,0,0.4), 0 8px 24px -12px rgba(0,0,0,0.6);
+  }
+
+  .cell-titlebar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 9px 12px;
+    background: var(--panel-2);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .cell-titlebar .icon {
+    color: var(--rust);
+    display: flex;
+  }
+
+  .cell-titlebar .title {
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+
+  .cell-titlebar .badge {
+    font-size: 10px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 1px 6px;
+    margin-left: 2px;
+  }
+
+  .cell-titlebar .spacer { flex: 1; }
+
+  .row-count {
+    font-size: 11px;
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* ---------- Log grid ---------- */
+
+  .log-body {
+    max-height: 420px;
+    overflow: auto;
+    font-family: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+    font-size: 12px;
+    padding: 4px 0;
+  }
+
+  .log-row {
+    display: flex;
+    align-items: stretch;
+    padding: 3px 10px;
+    position: relative;
+    transition: background-color 0.12s ease;
+  }
+
+  .log-body.wrap-on .log-row { align-items: flex-start; }
+
+  .log-row:hover { background: rgba(255,255,255,0.035); }
+  .log-row.alt { background: var(--row-alt); }
+  .log-row.alt:hover { background: rgba(255,255,255,0.05); }
+
+  .col-time {
+    color: var(--text-muted);
+    white-space: nowrap;
+    width: 205px;
+    flex: 0 0 auto;
+    margin-right: 10px;
+    padding-top: 1px;
+  }
+
+  .col-level {
+    width: 44px;
+    flex: 0 0 auto;
+    font-weight: 700;
+    margin-right: 10px;
+    padding-top: 1px;
+  }
+
+  .lvl-FATAL { color: var(--err-bright); }
+  .lvl-ERROR { color: var(--err); }
+  .lvl-WARN  { color: var(--gold); }
+  .lvl-INFO  { color: var(--blue); }
+  .lvl-DEBUG { color: var(--text-secondary); }
+  .lvl-TRACE { color: var(--text-muted); }
+
+  .col-target {
+    color: #7fb2ef;
+    width: 190px;
+    flex: 0 0 auto;
+    margin-right: 10px;
+    padding-top: 1px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .log-body.wrap-on .col-target {
+    white-space: pre-wrap;
+    overflow-wrap: break-word;
+    text-overflow: clip;
+  }
+
+  .divider {
+    width: 5px;
+    flex: 0 0 auto;
+    align-self: stretch;
+    margin-right: 5px;
+    position: relative;
+  }
+
+  .divider::after {
+    content: "";
+    position: absolute;
+    left: 2px;
+    top: 0;
+    bottom: 0;
+    width: 1px;
+    background: var(--border);
+  }
+
+  .divider:hover::after { background: var(--focus); }
+
+  .col-msg {
+    color: var(--text-primary);
+    flex: 1 1 auto;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    padding-top: 1px;
+  }
+
+  .log-body.wrap-on .col-msg {
+    white-space: pre-wrap;
+    overflow-wrap: break-word;
+    text-overflow: clip;
+  }
+
+  .copy-btn {
+    position: absolute;
+    left: 0;
+    top: 4px;
+    width: 14px;
+    height: 14px;
+    opacity: 0;
+    border: none;
+    background: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .log-row:hover .copy-btn { opacity: 1; }
+  .copy-btn:hover { color: var(--text-primary); }
+  .copy-btn svg { width: 10px; height: 10px; }
+
+  /* ---------- Bottom bar ---------- */
+
+  .cell-bottombar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 10px;
+    border-top: 1px solid var(--border);
+    background: var(--panel-2);
+  }
+
+  .pagination {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 10.5px;
+    color: var(--text-muted);
+  }
+
+  .pagination button {
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--text-secondary);
+    border-radius: 4px;
+    font-size: 11px;
+    padding: 1px 6px;
+    cursor: not-allowed;
+    opacity: 0.5;
+  }
+
+  .bottombar-actions {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .wrap-toggle {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 10.5px;
+    padding: 3px 8px;
+    border-radius: 5px;
+    border: 1px solid transparent;
+    background: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: color 0.12s ease, background-color 0.12s ease, border-color 0.12s ease;
+  }
+
+  .wrap-toggle:hover { color: var(--text-secondary); }
+
+  .wrap-toggle svg {
+    width: 12px;
+    height: 12px;
+  }
+
+  .wrap-toggle[aria-pressed="true"] {
+    color: var(--rust);
+    background: rgba(217, 72, 31, 0.12);
+    border-color: rgba(217, 72, 31, 0.35);
+  }
+
+  .wrap-toggle:focus-visible {
+    outline: 2px solid var(--focus);
+    outline-offset: 2px;
+  }
+
+  /* ---------- Persistence note ---------- */
+
+  .footnote {
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+    padding: 12px 14px;
+    border: 1px dashed var(--border);
+    border-radius: 8px;
+    color: var(--text-muted);
+    font-size: 12px;
+    line-height: 1.55;
+  }
+
+  .footnote svg {
+    flex-shrink: 0;
+    margin-top: 2px;
+    width: 14px;
+    height: 14px;
+    color: var(--gold);
+  }
+
+  .footnote strong { color: var(--text-secondary); font-weight: 600; }
+
+  @media (max-width: 640px) {
+    .states { grid-template-columns: 1fr; }
+    .col-target { display: none; }
+  }
+</style>
+
+<div class="page">
+  <header>
+    <div class="eyebrow">Design mockup · analytics-web-app · Log cell</div>
+    <h1>Wrap text toggle for the notebook Log cell</h1>
+    <p class="dek">
+      Interactive prototype of <code class="inline">tasks/log_cell_multiline_messages_plan.md</code>.
+      Toggling <strong>Wrap text</strong> below switches every column from single-line
+      <code class="inline">truncate</code> to <code class="inline">whitespace-pre-wrap</code>, so rows grow to
+      show the full <code class="inline">msg</code> value — stack traces, chained errors, long payloads —
+      instead of clipping it. Data and chrome are illustrative; behavior mirrors the plan.
+    </p>
+  </header>
+
+  <div class="states">
+    <div class="state-card on">
+      <span class="dot"></span>
+      <div>
+        <h3>On — default</h3>
+        <p>Rows grow to fit their content immediately, no click needed. No virtualizer to fight — the cell already renders plain, paginated DOM rows. Persisted per-cell as <code class="inline">options.wrapText</code> (defaults to <code class="inline">true</code> when unset).</p>
+      </div>
+    </div>
+    <div class="state-card off">
+      <span class="dot"></span>
+      <div>
+        <h3>Off — one click</h3>
+        <p>Every column single-lines and clips with an ellipsis. Full value only reachable via hover tooltip. Available for anyone who prefers the old compact view.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="cell">
+    <div class="cell-titlebar">
+      <span class="icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2Z"/><path d="M9 7h8M9 11h8"/></svg>
+      </span>
+      <span class="title">Log</span>
+      <span class="badge">query</span>
+      <span class="spacer"></span>
+      <span class="row-count" id="rowCount"></span>
+    </div>
+
+    <div class="log-body wrap-on" id="logBody"></div>
+
+    <div class="cell-bottombar">
+      <div class="pagination">
+        <button disabled aria-label="Previous page">‹</button>
+        <span>Page 1 of 1</span>
+        <button disabled aria-label="Next page">›</button>
+      </div>
+      <div class="bottombar-actions">
+        <button class="wrap-toggle" id="wrapToggle" type="button" aria-pressed="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M3 12h15a3 3 0 1 1 0 6h-4"/><path d="m16 15-3 3 3 3M3 18h7"/></svg>
+          <span id="wrapToggleLabel">Wrap text (on)</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div class="footnote">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
+    <span>
+      <strong>Not shown:</strong> per-column resizing (the thin dividers between columns are draggable in the
+      real cell) and the conditional "Reset widths" button — both unchanged by this plan. The toggle here is
+      whole-cell, matching the plan's default: one switch for every column, not per-column or per-row.
+    </span>
+  </div>
+</div>
+
+<script>
+  const ROWS = [
+    {
+      time: "2026-07-16 09:41:07.183422019", level: "INFO", target: "telemetry_ingestion::http",
+      msg: "listening on 127.0.0.1:9000",
+    },
+    {
+      time: "2026-07-16 09:41:09.902113558", level: "DEBUG", target: "flight_sql_srv::query::planner",
+      msg: "planned scan: table=log_entries partitions=14 pruned=9",
+    },
+    {
+      time: "2026-07-16 09:41:12.447290871", level: "WARN", target: "object_cache::range_cache",
+      msg: "cache miss ratio 0.62 over last 5m window, exceeds soft threshold 0.5 — consider raising foyer memory budget",
+    },
+    {
+      time: "2026-07-16 09:41:14.001887302", level: "ERROR", target: "otel_ingestion::firehose",
+      msg: "failed to write parquet file part-00042.parquet: caused by: object store request failed: caused by: connection reset by peer (os error 104): caused by: upstream S3 endpoint returned 503 after 3 retries",
+    },
+    {
+      time: "2026-07-16 09:41:14.118530044", level: "FATAL", target: "lakehouse::materialize",
+      msg:
+        "thread 'tokio-runtime-worker' panicked at 'called `Option::unwrap()` on a `None` value', analytics/src/lakehouse/materialize.rs:212:34\n" +
+        "stack backtrace:\n" +
+        "   0: rust_begin_unwind\n" +
+        "   1: core::panicking::panic_fmt\n" +
+        "   2: core::panicking::panic\n" +
+        "   3: micromegas_analytics::lakehouse::materialize::run_partition\n" +
+        "   4: tokio::runtime::task::core::Core<T,S>::poll",
+    },
+    {
+      time: "2026-07-16 09:41:15.220098117", level: "INFO", target: "flight_sql_srv::audit",
+      msg: "query cost audit: query_id=8f2c1a user=svc-grafana bytes_scanned=482113302 rows=1204833 elapsed_ms=642",
+    },
+    {
+      time: "2026-07-16 09:41:16.559201933", level: "TRACE", target: "ingestion::block_writer",
+      msg: "flushed block seq=99183 bytes=65536",
+    },
+    {
+      time: "2026-07-16 09:41:18.774456201", level: "WARN", target: "flight_sql_srv::retry",
+      msg: "retrying query after transient DataFusion error: Arrow error: Compute error: overflow computing SUM aggregate — attempt 2 of 3, backoff=250ms",
+    },
+    {
+      time: "2026-07-16 09:41:20.335667490", level: "INFO", target: "telemetry_maintenance::retention",
+      msg: "retired 3 partitions older than 2026-06-16T00:00:00Z, freed 2.14 GiB from object store",
+    },
+    {
+      time: "2026-07-16 09:41:21.009812774", level: "DEBUG", target: "public::client",
+      msg: "flushed 128 log entries, 42 metrics, 6 spans",
+    },
+  ];
+
+  const LEVELS = new Set(["FATAL", "ERROR", "WARN", "INFO", "DEBUG", "TRACE"]);
+
+  function copyIconSvg() {
+    return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
+  }
+
+  function escapeHtml(s) {
+    return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  }
+
+  const logBody = document.getElementById("logBody");
+  const rowCount = document.getElementById("rowCount");
+  rowCount.textContent = `Showing ${ROWS.length} entries`;
+
+  logBody.innerHTML = ROWS.map((row, i) => {
+    const alt = i % 2 === 1 ? " alt" : "";
+    const copyText = escapeHtml(`${row.time}\t${row.level}\t${row.target}\t${row.msg.replace(/[\t\r\n]+/g, " ")}`);
+    return `
+      <div class="log-row${alt}">
+        <button class="copy-btn" type="button" aria-label="Copy row" data-copy="${copyText}">
+          ${copyIconSvg()}
+        </button>
+        <span class="col-time">${row.time}</span>
+        <span class="col-level lvl-${row.level}">${row.level}</span>
+        <span class="col-target" title="${escapeHtml(row.target)}">${escapeHtml(row.target)}</span>
+        <span class="divider"></span>
+        <span class="col-msg" title="${escapeHtml(row.msg)}">${escapeHtml(row.msg)}</span>
+      </div>
+    `;
+  }).join("");
+
+  logBody.querySelectorAll(".copy-btn").forEach((btn) => {
+    btn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const text = btn.getAttribute("data-copy");
+      try {
+        await navigator.clipboard.writeText(text);
+      } catch {
+        /* clipboard unavailable in sandboxed preview — icon swap below is best-effort feedback */
+      }
+      const original = btn.innerHTML;
+      btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="#69db7c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
+      setTimeout(() => { btn.innerHTML = original; }, 1200);
+    });
+  });
+
+  const wrapToggle = document.getElementById("wrapToggle");
+  const wrapToggleLabel = document.getElementById("wrapToggleLabel");
+
+  wrapToggle.addEventListener("click", () => {
+    const isOn = wrapToggle.getAttribute("aria-pressed") === "true";
+    const next = !isOn;
+    wrapToggle.setAttribute("aria-pressed", String(next));
+    logBody.classList.toggle("wrap-on", next);
+    wrapToggleLabel.textContent = next ? "Wrap text (on)" : "Wrap text";
+  });
+</script>

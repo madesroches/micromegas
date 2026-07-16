@@ -115,6 +115,11 @@ const MIN_LEVEL_WIDTH_PX = 40
 export interface RenderLogColumnOptions {
   width?: number
   isLast?: boolean
+  wrap?: boolean
+}
+
+function textCellClasses(wrap: boolean | undefined): string {
+  return wrap ? 'whitespace-pre-wrap break-words' : 'truncate'
 }
 
 export function renderLogColumn(
@@ -124,13 +129,21 @@ export function renderLogColumn(
 ): React.ReactNode {
   const value = row[col.name]
   const w = opts?.width
+  const isLast = opts?.isLast
   const trailingMargin = opts?.isLast !== false ? 'mr-3' : ''
-  const widthStyle = w != null ? { width: w, minWidth: w, maxWidth: w } : undefined
+  // The last column has no divider/column after it, so let it fill the row width
+  // that's actually available rather than stopping at (or reserving) its measured
+  // width: it grows into any free space and shrinks down to MIN_FLEX_WIDTH_PX when
+  // space is tight. Only when that minimum plus the other columns can't fit does
+  // the row scroll horizontally — no hardcoded width ceiling is involved.
+  const growStyle = { flexGrow: 1, flexShrink: 1, flexBasis: 0, minWidth: MIN_FLEX_WIDTH_PX }
+  const widthStyle = isLast ? growStyle : w != null ? { width: w, minWidth: w, maxWidth: w } : undefined
+  const wrapClasses = textCellClasses(opts?.wrap)
   switch (col.kind) {
     case 'time':
       return (
         <span
-          className={`text-theme-text-muted ${trailingMargin} whitespace-nowrap`}
+          className={`text-theme-text-muted ${trailingMargin} ${wrapClasses}`}
           style={widthStyle}
         >
           {formatLocalTime(value)}
@@ -140,7 +153,7 @@ export function renderLogColumn(
       const levelStr = formatLevelValue(value)
       return (
         <span
-          className={`${trailingMargin} font-semibold ${getLevelColor(levelStr)}`}
+          className={`${trailingMargin} font-semibold ${getLevelColor(levelStr)} ${wrapClasses}`}
           style={widthStyle}
         >
           {levelStr}
@@ -151,7 +164,7 @@ export function renderLogColumn(
       const targetStr = String(value ?? '')
       return (
         <span
-          className={`text-accent-highlight ${trailingMargin} truncate`}
+          className={`text-accent-highlight ${trailingMargin} ${wrapClasses}`}
           style={widthStyle}
           title={targetStr}
         >
@@ -163,12 +176,8 @@ export function renderLogColumn(
       const formatted = formatCell(value, col.type)
       return (
         <span
-          className={`text-theme-text-primary ${trailingMargin} truncate`}
-          style={
-            w != null
-              ? { width: w, minWidth: w, maxWidth: w }
-              : { minWidth: MIN_FLEX_WIDTH_PX, maxWidth: MAX_FLEX_WIDTH_PX }
-          }
+          className={`text-theme-text-primary ${trailingMargin} ${wrapClasses}`}
+          style={widthStyle ?? { minWidth: MIN_FLEX_WIDTH_PX, maxWidth: MAX_FLEX_WIDTH_PX }}
           title={formatted}
         >
           {formatted}

@@ -13,7 +13,7 @@ import { substituteMacros, DEFAULT_SQL } from '../notebook-utils'
 import { usePagination, PaginationBar, DEFAULT_PAGE_SIZE } from '../pagination'
 import { classifyLogColumns, renderLogColumn, computeFlexWidths, formatRowForCopy } from '../log-utils'
 import { LogDivider } from '../LogDivider'
-import { ScrollText, Copy, Check } from 'lucide-react'
+import { ScrollText, Copy, Check, WrapText } from 'lucide-react'
 
 const MIN_COL_WIDTH_PX = 40
 const MAX_COL_WIDTH_PX = 1200
@@ -45,6 +45,12 @@ export function LogCell({ data, status, options, onOptionsChange }: CellRenderer
     [options, onOptionsChange],
   )
   const pagination = usePagination(numRows, pageSize, handlePageSizeChange)
+
+  const wrapText = (options?.wrapText as boolean | undefined) ?? true
+  const handleWrapTextToggle = useCallback(
+    () => onOptionsChange({ ...options, wrapText: !wrapText }),
+    [options, onOptionsChange, wrapText],
+  )
 
   const autoWidths = useMemo(
     () => computeFlexWidths(table, columns, pagination.startRow, pagination.endRow),
@@ -255,7 +261,7 @@ export function LogCell({ data, status, options, onOptionsChange }: CellRenderer
           return (
             <div
               key={rowIdx}
-              className={`relative group flex px-2 py-0.5 hover:bg-app-card/50 transition-colors${i % 2 === 0 ? '' : ' bg-app-card/30'}`}
+              className={`relative group flex items-start px-2 py-0.5 hover:bg-app-card/50 transition-colors${i % 2 === 0 ? '' : ' bg-app-card/30'}`}
             >
               <button
                 className="absolute left-0 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity text-theme-text-muted hover:text-theme-text-primary"
@@ -274,6 +280,7 @@ export function LogCell({ data, status, options, onOptionsChange }: CellRenderer
                     {renderLogColumn(col, row, {
                       width: effectiveWidths[col.name],
                       isLast,
+                      wrap: wrapText,
                     })}
                     {!isLast && (
                       <LogDivider
@@ -297,14 +304,26 @@ export function LogCell({ data, status, options, onOptionsChange }: CellRenderer
       </div>
       <div className="flex justify-between items-center flex-shrink-0">
         <PaginationBar pagination={pagination} />
-        {hasPinnedWidths && (
+        <div className="flex items-center">
+          {hasPinnedWidths && (
+            <button
+              onClick={handleResetAll}
+              className="text-[10px] px-2 py-0.5 text-theme-text-muted hover:text-theme-text-secondary transition-colors"
+            >
+              Reset widths
+            </button>
+          )}
           <button
-            onClick={handleResetAll}
-            className="text-[10px] px-2 py-0.5 text-theme-text-muted hover:text-theme-text-secondary transition-colors"
+            onClick={handleWrapTextToggle}
+            className={`text-[10px] px-2 py-0.5 transition-colors flex items-center gap-1 ${
+              wrapText ? 'text-accent-link' : 'text-theme-text-muted hover:text-theme-text-secondary'
+            }`}
+            aria-pressed={wrapText}
           >
-            Reset widths
+            <WrapText size={11} />
+            Wrap text
           </button>
-        )}
+        </div>
       </div>
     </div>
   )
