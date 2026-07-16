@@ -85,7 +85,7 @@ fn request_id_from(headers: &HeaderMap) -> String {
 /// rather than dropping data.
 async fn firehose_auth_middleware(
     provider: Arc<dyn AuthProvider>,
-    req: Request,
+    mut req: Request,
     next: Next,
 ) -> Response {
     let request_id = request_id_from(req.headers());
@@ -110,7 +110,16 @@ async fn firehose_auth_middleware(
         uri: req.uri().clone(),
     };
     match provider.validate_request(&parts as &dyn RequestParts).await {
-        Ok(_ctx) => next.run(req).await,
+        Ok(_ctx) => {
+            // SECURITY: strip any client-provided auth headers to prevent spoofing, matching
+            // the shared `auth_middleware` (auth/src/axum.rs). These headers must only ever be
+            // trusted when set by the authentication layer, never by the incoming request.
+            req.headers_mut().remove("x-auth-subject");
+            req.headers_mut().remove("x-auth-email");
+            req.headers_mut().remove("x-auth-issuer");
+            req.headers_mut().remove("x-allow-delegation");
+            next.run(req).await
+        }
         Err(e) => {
             warn!("[firehose auth_failure] {e}");
             firehose_response(
