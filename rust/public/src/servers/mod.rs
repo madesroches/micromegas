@@ -30,6 +30,9 @@ pub mod pg_stats;
 /// minimal FlightSQL protocol implementation
 pub mod flight_sql_service_impl;
 
+/// structured per-query audit record emitted by the FlightSQL service
+pub mod query_audit;
+
 /// FlightSQL server builder
 pub mod flight_sql_server;
 
