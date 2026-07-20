@@ -10,6 +10,19 @@
 > foyer's buggy inflight path **unreachable** and makes every remaining write race
 > **provably byte-identical**, at no performance cost.
 
+## Framing: a read-path improvement, not a workaround
+
+The test that justifies this change: **it stays even after upstream fixes the bug**
+(checklist 9). A workaround you'd delete the moment a fixed foyer ships would be pure
+overhead against a benign, self-healing race — that cost/benefit was the case for the
+earlier accept-as-benign resolution. This design passes a stronger test: judged on its
+own merits — validation-based safety instead of cancellation timing, strictly less
+machinery than foyer's inflight route, and the tiered-hit telemetry — it is a net
+improvement to the read path whose *urgency* happens to come from the bug. The one
+ongoing cost either way is the pinned-composition coupling: on each foyer upgrade,
+check whether hybrid promotion semantics changed (the `Age` handling in the verified
+facts below being the known example).
+
 ## The bug (root cause)
 
 `foyer-memory` 0.22.3 has a bug in `InflightManager::enqueue`'s `Entry::Vacant` arm
