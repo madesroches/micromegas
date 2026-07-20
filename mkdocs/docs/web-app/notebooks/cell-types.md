@@ -4,6 +4,8 @@ Notebooks support 14 cell types. Each cell has a `name` (unique within the noteb
 
 Data cells (table, chart, log, etc.) execute SQL queries and register their results in the [local WASM query engine](execution.md#local-wasm-query-engine), making them available for downstream cells to query.
 
+Every query-backed cell type below also accepts an optional `timeRange: { from, to }` field — a per-cell override of the notebook's global time range. See [Per-Cell Query Time Range](variables.md#per-cell-query-time-range) for details; it isn't repeated in each cell type's field table below.
+
 ---
 
 ## ![Chart](../../assets/images/cell-icons/bar-chart-3.svg){ .cell-icon } Chart
@@ -108,6 +110,8 @@ Interactive span visualization rendered with WebGL. Spans are grouped into lanes
 |-------|------|-------------|
 | `initialFrom` | string | Initial zoomed-in start time (accepts `$variable`, relative like `now-1h`, or absolute) |
 | `initialTo` | string | Initial zoomed-in end time |
+
+`initialFrom`/`initialTo` only set the initial *view* window inside the flame graph (further zoom/pan is interactive) — they don't affect the *query*. To change what data the cell's SQL fetches, use the cell-level `timeRange` field instead (see [Per-Cell Query Time Range](variables.md#per-cell-query-time-range)).
 
 **Required columns:**
 

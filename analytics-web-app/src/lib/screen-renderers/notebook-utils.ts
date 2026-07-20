@@ -46,10 +46,13 @@ export type { MacroValidationResult } from './macro-substitution'
 export { evaluateTemplate } from './template-evaluator'
 export type { EvaluateTemplateCtx, EvaluateTemplateResult } from './template-evaluator'
 
-import type { CellConfig, CellType, HorizontalGroupCellConfig, VariableValue } from './notebook-types'
+import type { Table } from 'apache-arrow'
+import type { CellConfig, CellType, HorizontalGroupCellConfig, QueryBackedCellConfig, VariableValue } from './notebook-types'
+import { substituteMacrosRaw } from './macro-substitution'
 
 import type { ScreenConfig } from '@/lib/screens-api'
 import { RESERVED_URL_PARAMS } from '@/lib/url-cleanup-utils'
+import { parseRelativeTime } from '@/lib/time-range'
 
 /**
  * Checks if a variable name conflicts with reserved URL parameter names.
@@ -292,4 +295,59 @@ export function resolveCellDataSource(
     ds = (typeof varValue === 'string' && varValue) ? varValue : notebookDataSource
   }
   return ds
+}
+
+// ============================================================================
+// Per-cell query time range
+// ============================================================================
+
+interface MacroCtx {
+  variables: Record<string, VariableValue>
+  timeRange: { begin: string; end: string }
+  cellResults: Record<string, Table>
+  cellSelections: Record<string, Record<string, unknown>>
+}
+
+/**
+ * Resolve a cell's optional timeRange override to a runtime { begin, end }.
+ * Each empty/unset bound falls back to the global range. Throws on an
+ * unparseable bound (caller decides whether to error the cell or fall back).
+ */
+export function resolveQueryTimeRange(
+  config: CellConfig,
+  ctx: MacroCtx,
+): { begin: string; end: string } {
+  const raw = 'timeRange' in config ? (config as QueryBackedCellConfig).timeRange : undefined
+  const fromStr = raw?.from?.trim() || ''
+  const toStr = raw?.to?.trim() || ''
+  if (!fromStr && !toStr) return ctx.timeRange
+
+  const resolveBound = (s: string, fallback: string): string => {
+    if (!s) return fallback
+    const substituted = substituteMacrosRaw(s, ctx.variables, ctx.timeRange, ctx.cellResults, ctx.cellSelections)
+    return parseRelativeTime(substituted).toISOString()
+  }
+
+  return {
+    begin: resolveBound(fromStr, ctx.timeRange.begin),
+    end: resolveBound(toStr, ctx.timeRange.end),
+  }
+}
+
+/**
+ * Returns true if a cell type should show the per-cell query time range field.
+ * Distinct from `shouldShowDataSource`, which excludes `chart` for per-query
+ * data-source reasons that don't apply to the cell-level time window.
+ */
+export function shouldShowTimeRange(cell: CellConfig): boolean {
+  switch (cell.type) {
+    case 'markdown':
+    case 'referencetable':
+    case 'hg':
+      return false
+    case 'variable':
+      return cell.variableType === 'combobox' || cell.variableType === 'datasource'
+    default:
+      return true // table, chart, log, propertytimeline, swimlane, transposed, flamegraph, map, perfettoexport, image
+  }
 }

@@ -633,6 +633,138 @@ describe('useCellExecution', () => {
       // Summary should also be blocked because execution halted at Details
       expect(result.current.cellStates['Summary'].status).toBe('blocked')
     })
+
+    describe('per-cell timeRange override', () => {
+      it('overrides the server query window and $from/$to substitution', async () => {
+        mockStreamQuery.mockReturnValue(createSuccessResults())
+
+        const cells: CellConfig[] = [
+          {
+            type: 'table',
+            name: 'Results',
+            sql: "SELECT * FROM logs WHERE time >= '$from' AND time <= '$to'",
+            timeRange: { from: '2023-06-01T00:00:00.000Z', to: '2023-06-02T00:00:00.000Z' },
+            layout: { height: 'auto' },
+          },
+        ]
+        const variableValuesRef = createVariableValuesRef()
+
+        const { result } = renderHook(() =>
+          useCellExecution({
+            cells,
+            rawTimeRange: defaultRawTimeRange,
+            variableValuesRef,
+            setVariableValue: jest.fn(),
+            refreshTrigger: 0,
+          })
+        )
+
+        await act(async () => {
+          await result.current.executeCell(0)
+        })
+
+        expect(mockStreamQuery).toHaveBeenCalled()
+        const callArgs = mockStreamQuery.mock.calls[0][0]
+        expect(callArgs.begin).toBe('2023-06-01T00:00:00.000Z')
+        expect(callArgs.end).toBe('2023-06-02T00:00:00.000Z')
+        expect(callArgs.params).toEqual({
+          begin: '2023-06-01T00:00:00.000Z',
+          end: '2023-06-02T00:00:00.000Z',
+        })
+        expect(callArgs.sql).toContain("'2023-06-01T00:00:00.000Z'")
+        expect(callArgs.sql).toContain("'2023-06-02T00:00:00.000Z'")
+      })
+
+      it('falls back to the global range when timeRange is unset', async () => {
+        mockStreamQuery.mockReturnValue(createSuccessResults())
+
+        const cells: CellConfig[] = [
+          { type: 'table', name: 'Results', sql: 'SELECT 1', layout: { height: 'auto' } },
+        ]
+        const variableValuesRef = createVariableValuesRef()
+
+        const { result } = renderHook(() =>
+          useCellExecution({
+            cells,
+            rawTimeRange: defaultRawTimeRange,
+            variableValuesRef,
+            setVariableValue: jest.fn(),
+            refreshTrigger: 0,
+          })
+        )
+
+        await act(async () => {
+          await result.current.executeCell(0)
+        })
+
+        const callArgs = mockStreamQuery.mock.calls[0][0]
+        expect(callArgs.begin).toBe('2024-01-01T00:00:00.000Z')
+        expect(callArgs.end).toBe('2024-01-02T00:00:00.000Z')
+      })
+
+      it('sets the cell to error status when the override is unparseable', async () => {
+        const cells: CellConfig[] = [
+          {
+            type: 'table',
+            name: 'Results',
+            sql: 'SELECT 1',
+            timeRange: { from: 'not-a-time', to: '' },
+            layout: { height: 'auto' },
+          },
+        ]
+        const variableValuesRef = createVariableValuesRef()
+
+        const { result } = renderHook(() =>
+          useCellExecution({
+            cells,
+            rawTimeRange: defaultRawTimeRange,
+            variableValuesRef,
+            setVariableValue: jest.fn(),
+            refreshTrigger: 0,
+          })
+        )
+
+        await act(async () => {
+          await result.current.executeCell(0)
+        })
+
+        expect(result.current.cellStates['Results'].status).toBe('error')
+        expect(mockStreamQuery).not.toHaveBeenCalled()
+      })
+
+      it('blocks when the timeRange override references an unresolved row selection', async () => {
+        mockStreamQuery.mockReturnValue(createSuccessResults())
+
+        const cells: CellConfig[] = [
+          { type: 'table', name: 'Processes', sql: 'SELECT process_id FROM processes', layout: { height: 'auto' } },
+          {
+            type: 'table',
+            name: 'Details',
+            sql: 'SELECT * FROM logs',
+            timeRange: { from: '$Processes.selected.start_time', to: 'now' },
+            layout: { height: 'auto' },
+          },
+        ]
+        const variableValuesRef = createVariableValuesRef()
+
+        const { result } = renderHook(() =>
+          useCellExecution({
+            cells,
+            rawTimeRange: defaultRawTimeRange,
+            variableValuesRef,
+            setVariableValue: jest.fn(),
+            refreshTrigger: 0,
+          })
+        )
+
+        await waitFor(() => {
+          expect(result.current.cellStates['Processes']?.status).toBe('success')
+        })
+
+        expect(result.current.cellStates['Details'].status).toBe('blocked')
+        expect(result.current.cellStates['Details'].error).toContain('Processes')
+      })
+    })
   })
 
   describe('migrateCellState', () => {

@@ -1,4 +1,5 @@
 import { Table } from 'apache-arrow'
+import type { TimeRange } from '@/lib/time-range'
 
 // ============================================================================
 // Variable Value Types
@@ -106,11 +107,17 @@ export interface CellConfigBase {
   autoRunFromHere?: boolean
 }
 
-export interface QueryCellConfig extends CellConfigBase {
+/** Fields shared by cells that run a query. */
+export interface QueryBackedCellConfig {
+  dataSource?: string
+  /** Optional per-cell query time range override (raw strings; macro-resolved). Defaults to the screen's global range when unset. */
+  timeRange?: TimeRange
+}
+
+export interface QueryCellConfig extends CellConfigBase, QueryBackedCellConfig {
   type: 'table' | 'chart' | 'log' | 'propertytimeline' | 'swimlane' | 'transposed' | 'flamegraph' | 'map'
   sql: string
   options?: Record<string, unknown>
-  dataSource?: string
 }
 
 export interface MarkdownCellConfig extends CellConfigBase {
@@ -118,21 +125,19 @@ export interface MarkdownCellConfig extends CellConfigBase {
   content: string
 }
 
-export interface VariableCellConfig extends CellConfigBase {
+export interface VariableCellConfig extends CellConfigBase, QueryBackedCellConfig {
   type: 'variable'
   variableType: 'combobox' | 'text' | 'expression' | 'datasource'
   sql?: string
   defaultValue?: VariableValue
   /** JavaScript expression for expression-type variables */
   expression?: string
-  dataSource?: string
 }
 
-export interface PerfettoExportCellConfig extends CellConfigBase {
+export interface PerfettoExportCellConfig extends CellConfigBase, QueryBackedCellConfig {
   type: 'perfettoexport'
   processIdVar?: string    // Variable name holding process_id (default: "$process_id")
   spanType?: 'thread' | 'async' | 'both'  // Default: 'both'
-  dataSource?: string
 }
 
 export interface ReferenceTableCellConfig extends CellConfigBase {
@@ -146,10 +151,9 @@ export interface HorizontalGroupCellConfig extends CellConfigBase {
   children: CellConfig[]
 }
 
-export interface ImageCellConfig extends CellConfigBase {
+export interface ImageCellConfig extends CellConfigBase, QueryBackedCellConfig {
   type: 'image'
   sql: string
-  dataSource?: string
 }
 
 export type CellConfig = QueryCellConfig | MarkdownCellConfig | VariableCellConfig | PerfettoExportCellConfig | ReferenceTableCellConfig | HorizontalGroupCellConfig | ImageCellConfig

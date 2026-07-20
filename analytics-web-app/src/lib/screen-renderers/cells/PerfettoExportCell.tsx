@@ -6,6 +6,7 @@ import { openInPerfetto, PerfettoError } from '@/lib/perfetto'
 import type { CellTypeMetadata, CellRendererProps, CellEditorProps } from '../cell-registry'
 import type { PerfettoExportCellConfig, CellConfig, CellState } from '../notebook-types'
 import { getVariableString } from '../notebook-types'
+import { resolveQueryTimeRange } from '../notebook-utils'
 
 // =============================================================================
 // Renderer Component
@@ -362,16 +363,30 @@ export const perfettoExportMetadata: CellTypeMetadata = {
     spanType: 'both',
   }),
 
-  // No execute method - action is user-triggered via button
+  // Minimal validating execute: resolves + validates the timeRange override
+  // (no trace fetch — that stays a button action in the renderer). This
+  // brings a bad override under the standard error-state lifecycle instead
+  // of failing silently at render.
+  execute: async (config, context) => {
+    const effective = resolveQueryTimeRange(config, {
+      variables: context.variables,
+      timeRange: context.timeRange,
+      cellResults: context.cellResults,
+      cellSelections: context.cellSelections,
+    })
+    return { status: 'success', meta: { effectiveTimeRange: effective } }
+  },
 
   getRendererProps: (config: CellConfig, state: CellState) => {
     const perfConfig = config as PerfettoExportCellConfig
+    const effectiveTimeRange = state.meta?.effectiveTimeRange as { begin: string; end: string } | undefined
     return {
       status: state.status,
       options: {
         processIdVar: perfConfig.processIdVar ?? '$process_id',
         spanType: perfConfig.spanType ?? 'both',
       },
+      ...(effectiveTimeRange ? { timeRange: effectiveTimeRange } : {}),
     }
   },
 }

@@ -18,8 +18,9 @@ Object.defineProperty(window, 'matchMedia', {
 jest.mock('../cell-registry', () => require('../__test-utils__/cell-registry-mock').createCellRegistryMock())
 
 import { tableFromArrays, vectorFromArray, Table, Timestamp, TimeUnit } from 'apache-arrow'
-import { substituteMacros, DEFAULT_SQL, sanitizeCellName, validateCellName, validateMacros, evaluateTemplate } from '../notebook-utils'
+import { substituteMacros, DEFAULT_SQL, sanitizeCellName, validateCellName, validateMacros, evaluateTemplate, resolveQueryTimeRange, shouldShowTimeRange } from '../notebook-utils'
 import { serializeVariableValue, deserializeVariableValue, getVariableString, isMultiColumnValue } from '../notebook-types'
+import type { CellConfig } from '../notebook-types'
 import { createDefaultCell } from '../cell-registry'
 import { resolveMacro } from '../macro-resolve'
 import type { ResolveCtx } from '../macro-resolve'
@@ -1225,5 +1226,101 @@ describe('resolveMacro', () => {
     it('is unresolved for an unknown name', () => {
       expect(resolveMacro({ kind: 'var', name: 'nope' }, emptyCtx()).resolved).toBe(false)
     })
+  })
+})
+
+describe('resolveQueryTimeRange', () => {
+  const globalRange = { begin: '2024-01-01T00:00:00.000Z', end: '2024-01-02T00:00:00.000Z' }
+  const baseCtx = { variables: {}, timeRange: globalRange, cellResults: {}, cellSelections: {} }
+
+  const baseCell: CellConfig = {
+    name: 'cell1',
+    type: 'table',
+    layout: { height: 200 },
+    sql: 'SELECT 1',
+  }
+
+  it('returns the global range when timeRange is unset', () => {
+    expect(resolveQueryTimeRange(baseCell, baseCtx)).toEqual(globalRange)
+  })
+
+  it('returns the global range when both timeRange bounds are empty strings', () => {
+    const cell = { ...baseCell, timeRange: { from: '', to: '' } }
+    expect(resolveQueryTimeRange(cell, baseCtx)).toEqual(globalRange)
+  })
+
+  it('overrides only the "from" bound, falling back to the global "to"', () => {
+    const cell = { ...baseCell, timeRange: { from: 'now-1h', to: '' } }
+    const result = resolveQueryTimeRange(cell, baseCtx)
+    expect(result.end).toBe(globalRange.end)
+    expect(result.begin).not.toBe(globalRange.begin)
+  })
+
+  it('overrides only the "to" bound, falling back to the global "from"', () => {
+    const cell = { ...baseCell, timeRange: { from: '', to: 'now' } }
+    const result = resolveQueryTimeRange(cell, baseCtx)
+    expect(result.begin).toBe(globalRange.begin)
+    expect(result.end).not.toBe(globalRange.end)
+  })
+
+  it('resolves a relative override (now-1h / now)', () => {
+    const cell = { ...baseCell, timeRange: { from: 'now-1h', to: 'now' } }
+    const result = resolveQueryTimeRange(cell, baseCtx)
+    expect(new Date(result.begin).getTime()).toBeLessThan(new Date(result.end).getTime())
+  })
+
+  it('resolves an absolute ISO override', () => {
+    const cell = {
+      ...baseCell,
+      timeRange: { from: '2023-06-01T00:00:00.000Z', to: '2023-06-02T00:00:00.000Z' },
+    }
+    const result = resolveQueryTimeRange(cell, baseCtx)
+    expect(result).toEqual({ begin: '2023-06-01T00:00:00.000Z', end: '2023-06-02T00:00:00.000Z' })
+  })
+
+  it('resolves a $variable macro in the override', () => {
+    const cell = { ...baseCell, timeRange: { from: '$startVar', to: 'now' } }
+    const ctx = { ...baseCtx, variables: { startVar: '2023-06-01T00:00:00.000Z' } }
+    const result = resolveQueryTimeRange(cell, ctx)
+    expect(result.begin).toBe('2023-06-01T00:00:00.000Z')
+  })
+
+  it('resolves a $cell.selected.col macro in the override', () => {
+    const cell = { ...baseCell, timeRange: { from: '$upstream.selected.ts', to: 'now' } }
+    const ctx = { ...baseCtx, cellSelections: { upstream: { ts: '2023-06-01T00:00:00.000Z' } } }
+    const result = resolveQueryTimeRange(cell, ctx)
+    expect(result.begin).toBe('2023-06-01T00:00:00.000Z')
+  })
+
+  it('throws on an unparseable bound', () => {
+    const cell = { ...baseCell, timeRange: { from: 'not-a-time', to: '' } }
+    expect(() => resolveQueryTimeRange(cell, baseCtx)).toThrow()
+  })
+})
+
+describe('shouldShowTimeRange', () => {
+  const base = { name: 'c', layout: { height: 200 } }
+
+  it('returns false for markdown, referencetable, and hg cells', () => {
+    expect(shouldShowTimeRange({ ...base, type: 'markdown', content: '' } as CellConfig)).toBe(false)
+    expect(shouldShowTimeRange({ ...base, type: 'referencetable', csv: '' } as CellConfig)).toBe(false)
+    expect(shouldShowTimeRange({ ...base, type: 'hg', children: [] } as CellConfig)).toBe(false)
+  })
+
+  it('returns true only for combobox/datasource variable cells', () => {
+    expect(shouldShowTimeRange({ ...base, type: 'variable', variableType: 'combobox' } as CellConfig)).toBe(true)
+    expect(shouldShowTimeRange({ ...base, type: 'variable', variableType: 'datasource' } as CellConfig)).toBe(true)
+    expect(shouldShowTimeRange({ ...base, type: 'variable', variableType: 'text' } as CellConfig)).toBe(false)
+    expect(shouldShowTimeRange({ ...base, type: 'variable', variableType: 'expression' } as CellConfig)).toBe(false)
+  })
+
+  it('returns true for all query-backed cell types', () => {
+    const types = [
+      'table', 'chart', 'log', 'propertytimeline', 'swimlane',
+      'transposed', 'flamegraph', 'map', 'perfettoexport', 'image',
+    ]
+    for (const type of types) {
+      expect(shouldShowTimeRange({ ...base, type, sql: '' } as CellConfig)).toBe(true)
+    }
   })
 })

@@ -2,6 +2,7 @@ import type { Table } from 'apache-arrow'
 import type { CellRendererProps } from './cell-registry'
 import { getCellTypeMetadata } from './cell-registry'
 import type { CellConfig, CellState, CellStatus, VariableCellConfig, VariableValue } from './notebook-types'
+import { resolveQueryTimeRange } from './notebook-utils'
 
 // =============================================================================
 // Interfaces
@@ -203,12 +204,29 @@ export function buildCellRendererProps(
   const meta = getCellTypeMetadata(cell.type)
   const rendererProps = meta.getRendererProps(cell, state)
 
+  // Resolve the cell's per-cell timeRange override for display-axis cells
+  // (Swimlane/PropertyTimeline axis, Map playback). Perfetto owns its own
+  // resolution via `execute` + `state.meta.effectiveTimeRange`, so it isn't
+  // touched here. Render must not throw — fall back to the global range; the
+  // cell's execute path already surfaces the parse error as cell state.
+  let effectiveTimeRange = context.timeRange
+  try {
+    effectiveTimeRange = resolveQueryTimeRange(cell, {
+      variables: context.availableVariables,
+      timeRange: context.timeRange,
+      cellResults: context.cellResults,
+      cellSelections: context.cellSelections,
+    })
+  } catch {
+    // fall back to the global range
+  }
+
   return {
     name: cell.name,
     data: state.data,
     status: state.status,
     error: state.error,
-    timeRange: context.timeRange,
+    timeRange: effectiveTimeRange,
     variables: context.availableVariables,
     isEditing: context.isEditing,
     onRun: callbacks.onRun,
