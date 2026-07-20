@@ -25,7 +25,7 @@ Non-query configs (out of scope): `MarkdownCellConfig`, `ReferenceTableCellConfi
 1. **Execution engine** — `useCellExecution.ts:177` resolves the global raw range once per run: `const timeRange = getTimeRangeForApi(rawTimeRange.from, rawTimeRange.to)`. It builds a per-cell `CellExecutionContext` (`useCellExecution.ts:187`) carrying `variables`, `cellResults`, `cellSelections`, `timeRange`, `runQuery`, `runQueryAs`, then calls `meta.execute(cell, context)`. `runQuery`/`runQueryAs` pass `timeRange.begin/end` both as macro context **and** as the actual server query window (`params: { begin, end }`, top-level `begin`/`end`).
 2. **Each cell's `execute`** does `substituteMacros(sql, variables, timeRange, cellResults, cellSelections)` then `runQuery(sql)` — e.g. `TableCell.tsx:308`, `LogCell.tsx:382`, `SwimlaneCell.tsx:549`, `PropertyTimelineCell.tsx:207`, `TransposedTableCell.tsx:223`, `MapCell.tsx:1031`, `ImageCell.tsx:277`, `VariableCell.tsx:406`, `ChartCell.tsx` (per-series). In SQL, `$from`/`$to` resolve from the `timeRange` argument (`macro-substitution.ts:104-105`).
 3. **Renderer props** — `notebook-cell-view.ts:buildCellRendererProps` sets `timeRange: context.timeRange` on every `CellRendererProps`. Some cells read this prop directly (not via `execute`):
-   - **`PerfettoExportCell`** has **no `execute`** (`PerfettoExportCell.tsx:367` comment). The trace is fetched on button click in the renderer using the `timeRange` prop (`fetchPerfettoTrace({ timeRange })`).
+   - **`PerfettoExportCell`** has **no `execute`** (`PerfettoExportCell.tsx:365` comment). The trace is fetched on button click in the renderer using the `timeRange` prop (`fetchPerfettoTrace({ timeRange })`).
    - **`SwimlaneCell` / `PropertyTimelineCell`** use the `timeRange` prop to draw the visible-window time axis.
    - **`MapCell`** uses the `timeRange` prop for playback bounds.
 
@@ -37,7 +37,7 @@ Renders a shared `DataSourceField` centrally (`CellEditor.tsx:131`), gated by `s
 
 ## Design
 
-Two central integration points cover both consumption paths, plus one shared resolver, one shared config mixin, and one shared editor field. No per-cell `execute` edits.
+Two central integration points cover both consumption paths, plus one shared resolver, one shared config mixin, and one shared editor field. No edits to any *existing* cell `execute` method; the only new `execute` is a minimal validating one added to the Perfetto cell (which has none today) so its range errors surface uniformly rather than falling back silently at render.
 
 ### 1. Config: shared query-backed mixin
 In `notebook-types.ts`, introduce a mixin and have the four query-backed configs extend it (dropping their standalone `dataSource`):
@@ -162,8 +162,8 @@ try {
 
 Because `runQuery`/`runQueryAs`/`executeSql` and `context.timeRange` all resolve `timeRange` from the same shadowed binding, this applies the per-cell range to every query-backed cell uniformly — table, chart, log, property timeline, swimlane, transposed, flamegraph, map, image, and SQL-backed variable cells — with **zero changes to any cell's `execute`**. A thrown parse error becomes the cell's `error` state (same treatment as a bad query), consistent with how Flame Graph surfaces `initialTimeRange` errors.
 
-### 4. Renderer-side integration (covers Perfetto and display-axis cells)
-In `notebook-cell-view.ts:buildCellRendererProps`, replace `timeRange: context.timeRange` with the resolved effective range so renderers that read the prop directly (Perfetto trace fetch, Swimlane/PropertyTimeline axis, Map playback) honor the override:
+### 4. Renderer-side integration (display-axis cells)
+Swimlane/PropertyTimeline axis and Map playback have an `execute` but read the `timeRange` **prop** for *display* (not via their `execute`). In `notebook-cell-view.ts:buildCellRendererProps`, replace `timeRange: context.timeRange` with the resolved effective range so those display concerns honor the override:
 
 ```ts
 let effectiveTimeRange = context.timeRange
@@ -176,12 +176,29 @@ try {
   })
 } catch {
   // render must not throw; fall back to the global range (the cell's execute
-  // path, if any, already surfaces the parse error as cell state)
+  // path already surfaces the parse error as cell state)
 }
 // ...timeRange: effectiveTimeRange
 ```
 
-This is the path that actually powers `PerfettoExportCell` (it has no `execute`). Re-resolution happens naturally on re-render when an upstream variable/selection changes.
+Re-resolution happens naturally on re-render when an upstream variable/selection changes.
+
+### 4a. Perfetto: a minimal validating `execute`
+`PerfettoExportCell` is the one query-backed cell with **no `execute`** (`PerfettoExportCell.tsx:365`), so a bad override would otherwise fail only at render. Rather than special-case it in the render path, give it a minimal `execute` that resolves the override and validates it — **without** fetching the trace (the trace stays a button action in the renderer):
+
+```ts
+execute: async (config, context) => {
+  const effective = resolveQueryTimeRange(config, {
+    variables: context.variables,
+    timeRange: context.timeRange,   // global range (base + fallback)
+    cellResults: context.cellResults,
+    cellSelections: context.cellSelections,
+  }) // throws on an unparseable bound → becomes the cell's error state
+  return { status: 'success', meta: { effectiveTimeRange: effective } }
+}
+```
+
+`getRendererProps` reads `state.meta.effectiveTimeRange` and passes it to the renderer (replacing the `timeRange` prop the renderer reads today); the button-triggered `fetchPerfettoTrace` uses that resolved range. This brings Perfetto under the standard run lifecycle: it re-resolves on dependency change and honors the §3 unresolved-selection blocked state, and — like every other cell — a bad range surfaces as the cell's `error` state instead of a silent fallback. Because Perfetto now owns its range via `execute`, `buildCellRendererProps` (§4) no longer needs to touch it.
 
 ### 5. Editor UI: shared time range field
 Add `shouldShowTimeRange(cell)` to `notebook-utils.ts` (distinct from `shouldShowDataSource`, which excludes `chart` for per-query reasons that don't apply to the cell-level time window):
@@ -228,11 +245,15 @@ global raw range (URL) ──> getTimeRangeForApi ──> global {begin,end}
                                    │
                     ┌──────────────┴───────────────┐
           execute path                       renderer path
-   (useCellExecution: override         (buildCellRendererProps:
-    context.timeRange)                  override timeRange prop)
+   (useCellExecution: shadow           (buildCellRendererProps:
+    local timeRange binding;            override timeRange prop for
+    Perfetto execute validates          display-axis cells)
+    + stores range)                            │
           │                                     │
-   substituteMacros($from/$to)          Perfetto fetch / axis / playback
-   + server query window
+   substituteMacros($from/$to)          Swimlane/PropertyTimeline axis,
+   + server query window;               Map playback
+   Perfetto fetch (button) uses
+   the execute-resolved range
 ```
 
 ## Implementation Steps
@@ -240,26 +261,29 @@ global raw range (URL) ──> getTimeRangeForApi ──> global {begin,end}
 1. **Config types** (`notebook-types.ts`): add `QueryBackedCellConfig` mixin; extend it from `QueryCellConfig`, `VariableCellConfig`, `PerfettoExportCellConfig`, `ImageCellConfig`; remove their standalone `dataSource`. Import `TimeRange` from `@/lib/time-range`.
 2. **Resolver** (`notebook-utils.ts` or new `cell-time-range.ts`): add and export `resolveQueryTimeRange`; add and export `shouldShowTimeRange`.
 3. **Execute-side** (`useCellExecution.ts`): rename the global range binding at `:177` from `timeRange` to `globalTimeRange`; inside the existing `try` that guards `meta.execute`, redeclare `const timeRange = resolveQueryTimeRange(cell, { variables: availableVariables, timeRange: globalTimeRange, cellResults: availableCellResults, cellSelections: availableCellSelections })`, shadowing the outer binding so `runQuery`/`runQueryAs`/`executeSql` (`params.begin/end`) and `context.timeRange` both pick up the resolved effective range; parse errors thrown inside the `try` become cell errors.
-4. **Renderer-side** (`notebook-cell-view.ts`): resolve effective range in `buildCellRendererProps` with try/catch fallback; set the `timeRange` prop from it.
-5. **Editor field** (new `CellTimeRangeField.tsx` + `CellEditor.tsx`): shared From/To component rendered below the data source field, gated by `shouldShowTimeRange`; emit full `{from,to}` or `undefined`.
-6. **Tests**: unit-test `resolveQueryTimeRange`; extend cell/execution tests (see Testing Strategy).
-7. **Docs**: update `mkdocs/docs/web-app/notebooks/variables.md` and `cell-types.md`; retire or generalize `tasks/1314_per_cell_time_range_mockup.html`.
+4. **Renderer-side** (`notebook-cell-view.ts`): resolve effective range in `buildCellRendererProps` with try/catch fallback; set the `timeRange` prop from it (display-axis cells only — not Perfetto).
+5. **Perfetto execute** (`PerfettoExportCell.tsx`): add a minimal `execute` that resolves+validates the override via `resolveQueryTimeRange` (no trace fetch), stores the resolved range in `state.meta`, and surfaces parse errors as the cell's `error` state; have `getRendererProps` pass the resolved range to the renderer and the button-triggered `fetchPerfettoTrace` use it.
+6. **Editor field** (new `CellTimeRangeField.tsx` + `CellEditor.tsx`): shared From/To component rendered below the data source field, gated by `shouldShowTimeRange`; emit full `{from,to}` or `undefined`.
+7. **Tests**: unit-test `resolveQueryTimeRange`; extend cell/execution tests (see Testing Strategy).
+8. **Docs**: update `mkdocs/docs/web-app/notebooks/variables.md` and `cell-types.md`; retire or generalize `tasks/1314_per_cell_time_range_mockup.html`.
 
 ## Files to Modify
 - `analytics-web-app/src/lib/screen-renderers/notebook-types.ts` — mixin + config extends.
 - `analytics-web-app/src/lib/screen-renderers/notebook-utils.ts` — `resolveQueryTimeRange`, `shouldShowTimeRange` (or a new `cell-time-range.ts` re-exported here).
-- `analytics-web-app/src/lib/screen-renderers/useCellExecution.ts` — override `context.timeRange`.
-- `analytics-web-app/src/lib/screen-renderers/notebook-cell-view.ts` — override `timeRange` prop in `buildCellRendererProps`.
+- `analytics-web-app/src/lib/screen-renderers/useCellExecution.ts` — rename `:177` to `globalTimeRange`, shadow the local `timeRange` binding with the resolved effective range.
+- `analytics-web-app/src/lib/screen-renderers/notebook-cell-view.ts` — override `timeRange` prop in `buildCellRendererProps` (display-axis cells).
+- `analytics-web-app/src/lib/screen-renderers/cells/PerfettoExportCell.tsx` — add a minimal validating `execute`; pass the resolved range through `getRendererProps` to the button fetch.
 - `analytics-web-app/src/components/CellEditor.tsx` — render shared field.
 - `analytics-web-app/src/components/CellTimeRangeField.tsx` — **new** shared editor component.
 - Tests under `analytics-web-app/src/lib/screen-renderers/__tests__/` and `cells/__tests__/` (see below).
 - Docs in `mkdocs/docs/` (query/notebook guide).
 
 ## Trade-offs
-- **Central resolution vs. per-cell edits.** Resolving in `useCellExecution` (execute) + `buildCellRendererProps` (render) touches two files instead of editing ~9 `execute` methods. It is DRY and guarantees uniform behavior — but only because the execute-side fix shadows the local `timeRange` binding that `runQuery`/`runQueryAs`/`executeSql` close over (see §3), so the *server query window* (`params.begin/end`) is overridden along with `$from`/`$to` macros; overriding `context.timeRange` alone would miss the server window. Cost: two integration points must stay in sync; the shared resolver keeps them consistent.
+- **Central resolution vs. per-cell edits.** Resolving centrally in `useCellExecution` (execute) + `buildCellRendererProps` (render), plus one minimal `execute` added to Perfetto, avoids editing ~9 existing `execute` methods. It is DRY and guarantees uniform behavior — but only because the execute-side fix shadows the local `timeRange` binding that `runQuery`/`runQueryAs`/`executeSql` close over (see §3), so the *server query window* (`params.begin/end`) is overridden along with `$from`/`$to` macros; overriding `context.timeRange` alone would miss the server window. Cost: the two central integration points must stay in sync; the shared resolver keeps them consistent.
+- **Perfetto `execute` vs. render-only path.** Perfetto had no `execute`, so a bad override would have failed silently at render. Adding a minimal validating `execute` (resolve only — no trace fetch) is a small, deliberate exception to "no existing `execute` edits" that makes range-error handling uniform across all cells and removes the silent-fallback asymmetry. Cost: Perfetto now participates in the run lifecycle (cheap — it resolves a range, not a query).
 - **Reuse `TimeRange`/`from`/`to` vs. a new type.** Per the issue, `TimeRange { from, to }` already models raw range strings and avoids the reserved SQL words `begin`/`end`; the resolved `{begin,end}` stays the runtime form. No new type invented.
 - **Mixin vs. folding fields into `CellConfigBase`.** A mixin keeps non-query cells (markdown/reference/hg) free of query-only fields, respecting their contracts.
-- **Relative-time "now" drift.** Execute resolves at run time; the renderer resolves at render time, so `now-*` bounds can differ by seconds between the two. For Perfetto (no `execute`) only the render path matters; for SQL cells the query uses the execute-time value. Acceptable and matches existing global-range behavior.
+- **Relative-time "now" drift.** Execute resolves at run time; the renderer resolves at render time, so `now-*` bounds can differ by seconds between the two. For SQL cells and Perfetto the query/fetch uses the execute-time value; only the display-axis render path (§4) resolves independently. Acceptable and matches existing global-range behavior.
 
 ## Documentation
 - Update `mkdocs/docs/web-app/notebooks/variables.md` (the "SQL Macro Substitution" section that already documents `$from`/`$to`) and `mkdocs/docs/web-app/notebooks/cell-types.md` to document the per-cell time range field: precedence (empty = screen range), that `from`/`to` accept relative strings, absolute timestamps, and macros (`$from`, `$to`, `$variable`, `$cell[N].col`, `$cell.selected.col`), and the contrast with Flame Graph's Initial From/To (view range). (`QUERY_GUIDE_URL` / `mkdocs/docs/query-guide/` is a SQL/DataFusion/Python/Grafana overview and does not cover notebook cells or macros — not the right target.)
@@ -269,9 +293,9 @@ global raw range (URL) ──> getTimeRangeForApi ──> global {begin,end}
 - **Unit — `resolveQueryTimeRange`**: unset → returns global; one bound set, other empty → mixes override + global fallback; relative (`now-1h`); absolute ISO; macro (`$variable`, `$cell.selected.col`) resolution; invalid string throws.
 - **Execution — `useCellExecution.test.ts`**: a cell with `timeRange` runs its query with the overridden `begin/end` (assert the query params) and its `$from`/`$to` substitute the override; a bad override sets the cell to `error`.
 - **Renderer — `notebook-cell-view.test.ts`**: `buildCellRendererProps` returns the overridden `timeRange`; invalid override falls back to the global range without throwing.
-- **Perfetto — `PerfettoExportCell.test.tsx`**: renderer receives and fetches with the overridden range; editor shows the From/To field.
+- **Perfetto — `PerfettoExportCell.test.tsx`**: `execute` resolves and stores the overridden range (assert `state.meta.effectiveTimeRange`); a bad override sets the cell to `error`; the renderer receives and fetches with the resolved range; editor shows the From/To field.
 - **Editor**: `shouldShowTimeRange` matrix (incl. variable combobox/datasource vs. text/expression); `CellTimeRangeField` emits full `{from,to}` and `undefined` when cleared.
 - Run `yarn lint`, `yarn type-check`, `yarn test`, `yarn build` from `analytics-web-app/`.
 
 ## Open Questions
-1. **Error surfacing for `PerfettoExportCell`** (no `execute`): an invalid override currently only manifests at render, where we fall back to the global range silently. Acceptable, or should the Perfetto renderer show an inline warning (small follow-up) when its configured range fails to resolve? Recommended: ship silent fallback now, add a renderer warning as a follow-up if needed.
+None. (Perfetto error surfacing is resolved by giving it a minimal validating `execute` — see §4a — so a bad range errors the cell uniformly instead of falling back silently.)
