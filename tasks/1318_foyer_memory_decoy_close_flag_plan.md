@@ -101,21 +101,24 @@ get(key, expected_len):
        hit -> return bytes                 // caller re-validates length as today
   2. RAM miss -> per-key single-flight (see 3) whose task does:
        storage().load(key)                 // direct disk read, no inflight (store.rs:160)
-         Load::Entry { key: _, value, populated: Populated { age } } ->
-             value.bytes.len() == expected_len ?
-               yes -> emit disk-age metric (value.disk_write_ms != DISK_WRITE_NONE);
+         Load::Entry { key: _, value, populated } ->   // bind `populated`, read its pub `age`
+             value.bytes.len() == expected_len ?       // field (`Populated` itself is not
+               yes -> emit disk-age metric (value.disk_write_ms != DISK_WRITE_NONE);  // importable, see checklist 2)
                       promote: memory().insert_with_properties(key,
                           CachedBlock { bytes, ram_inserted_at: now,
                                         disk_write_ms: value.disk_write_ms,
                                         is_prefetch: false },
-                          HybridCacheProperties::default().with_age(age));  // parity with hybrid promotion
+                          HybridCacheProperties::default().with_age(populated.age));  // parity with hybrid promotion
                       return bytes
                no  -> imetric range_cache_promotion_len_mismatch; return None (miss)
-         Load::Piece { piece, .. } ->      // keeper/write-buffer hit, incl. prefetch phantoms
+         Load::Piece { piece, populated } ->  // keeper/write-buffer hit, incl. prefetch phantoms
              read the value via piece.value() (a Piece<K,V,P>, not a CachedBlock);
              same validation; promote a *fresh normalized* CachedBlock (is_prefetch=false,
-             ram_inserted_at=now, keep piece value's disk_write_ms); no disk-age metric
-             when disk_write_ms == DISK_WRITE_NONE (it wasn't a disk read)
+             ram_inserted_at=now, keep piece value's disk_write_ms), likewise with
+             .with_age(populated.age) — keeper hits are Age::Young (store.rs:172), and Young
+             is what makes a later RAM eviction skip the redundant disk re-write (see the
+             Age::Young fact below); no disk-age metric when disk_write_ms ==
+             DISK_WRITE_NONE (it wasn't a disk read)
          Load::Miss | Load::Throttled -> return None   // hybrid parity: throttled -> None to caller
          Err(e) -> existing error path (metric + warn + None)
 ```
@@ -238,8 +241,16 @@ two-step proposal.
 2. `src/foyer_backend.rs` — two-step `get` + single-flight map + promotion helper;
    move the disk-age metric; add `range_cache_promotion_len_mismatch` metric; keep the
    error-path metric/log. Remove the now-unused `Source` import (its only use, the
-   `Source::Disk` check, is gone) and add the imports the new code needs in scope
-   (`foyer::Populated` for the `Load::Entry` pattern, `foyer::Properties` for `with_age`).
+   `Source::Disk` check, is gone). Import notes (verified against 0.22.3): `Populated` is
+   **not** re-exported by the `foyer` facade (only by `foyer-storage`'s own prelude, which
+   is not a direct dep) — bind the `populated` field without naming the type and read its
+   pub `age` field, so no import is needed. `.with_age` is **not** an inherent
+   `HybridCacheProperties` method; it comes from the `Properties` trait
+   (`foyer_common::properties::Properties`), which neither `foyer` nor `foyer-memory`
+   re-exports — add `foyer-common = "0.22"` to the workspace deps (`rust/Cargo.toml`,
+   alphabetical) and `foyer-common = { workspace = true, optional = true }` to
+   `object-cache/Cargo.toml` with the `foyer` feature becoming
+   `foyer = ["dep:foyer", "dep:foyer-common"]`, then `use foyer_common::properties::Properties;`.
    Also emit the §5 telemetry: `object_cache_ram_tier_hit` /
    `object_cache_disk_tier_hit`, for block-key (`blk:`-prefixed) gets only — excluding
    `size()`'s `meta:`-prefixed gets so the miss-rate derivation stays valid —
@@ -268,9 +279,13 @@ two-step proposal.
      short block on disk, run concurrent `get` loops while `put(Demand)` heals, assert
      the final `get` returns the healed bytes (deterministic now: no writer exists that
      can produce non-canonical RAM contents).
-7. `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `cargo test -p
+7. `mkdocs/docs/admin/object-cache.md` (Monitoring section) — document the new
+   operator-facing signals: `object_cache_ram_tier_hit` / `object_cache_disk_tier_hit`
+   (block-key gets only) and the miss-rate derivation from §5,
+   `range_cache_load_coalesced`, and `range_cache_promotion_len_mismatch`.
+8. `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `cargo test -p
    micromegas-object-cache`, then full CI script.
-8. Update the micromegas issue; file the upstream foyer bug (fix diff above) so the
+9. Update the micromegas issue; file the upstream foyer bug (fix diff above) so the
    ecosystem gets a real fix eventually. When a fixed foyer releases, we may keep this
    path (it is simpler and strictly less machinery than the inflight route) or revert to
    `HybridCache::get` — either works; no urgency.
@@ -284,6 +299,17 @@ two-step proposal.
 - `Store::load(&key) -> Result<Load<K,V,P>>` hashes internally, checks the keeper
   (write buffer) then the engine, and self-verifies key equivalence
   (`foyer-storage/src/store.rs:160`); variants `Entry`/`Piece`/`Miss`/`Throttled`.
+- `.with_age` exists only on the `Properties` trait
+  (`foyer-common/src/properties.rs:103`, implemented for `HybridCacheProperties` at
+  `foyer/src/hybrid/cache.rs:166`); the trait is re-exported by neither `foyer` nor
+  `foyer-memory`, hence the `foyer-common` dep in checklist 2. `Populated` is likewise
+  absent from the `foyer` facade's prelude; its `age` field is pub, so binding the
+  struct suffices.
+- Age parity is load-bearing, not cosmetic: the block engine's `enqueue` **skips the
+  disk write** for `Age::Young` pieces (`foyer-storage/src/engine/block/engine.rs:582-588`).
+  Promoting with default properties (`Age::Fresh`) would re-write every promoted block
+  to disk on its next RAM eviction — write amplification the "no performance penalty"
+  section rules out.
 - `HybridCache::get` is exactly memory-get-or-fetch over a `store.load` closure mapping
   `Entry→promote (with age)`, `Piece→promote`, `Throttled|Miss→None`
   (`foyer/src/hybrid/cache.rs:661-719`) — the two-step read replicates it 1:1 minus the
