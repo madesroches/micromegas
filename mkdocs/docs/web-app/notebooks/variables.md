@@ -109,6 +109,17 @@ Table and transposed table cells support column format overrides using markdown 
 
 Row macros use `$row.columnName` or `$row["column-name"]` syntax to reference values from the current row. Standard variable macros (`$from`, `$to`, `$variableName`) are also available in format strings.
 
+## Per-Cell Query Time Range
+
+Every query-backed cell (table, chart, log, property timeline, swimlane, transposed table, flame graph, map, Perfetto export, image, and combobox/expression variable cells) accepts an optional `timeRange: { from, to }` field that overrides the notebook's global (URL-synced) time range for that cell's query.
+
+- **Empty = screen range.** Leaving `from` or `to` blank falls back to the screen's global range for that bound — you can override just one side (e.g. a fixed `from` with a `to` that still tracks the global range).
+- **Accepted values**: relative strings (`now-1h`, `now`), absolute ISO timestamps, or macros — `$from`, `$to` (the *global* range, useful as a base for a computed override), `$variableName`, `$cellName[N].column`, `$cellName.selected.column`.
+- **Resolution**: the raw `from`/`to` strings are macro-substituted (against the global range and current variables/cell results/selections) and then parsed as a time expression, exactly like the Flame Graph cell's `initialFrom`/`initialTo` (see [Flame Graph](cell-types.md#flame-graph)) — but this field changes what the cell's *query* fetches, not just its initial view.
+- **Errors**: an unparseable override surfaces as the cell's error state, the same as a bad SQL query.
+- **Waiting for selection**: if the override references `$cell.selected.column` and no row is selected yet, the cell shows the same "waiting for selection" placeholder described under [Row Selection](#row-selection) above.
+- Set it in the cell editor via the **Query Time Range** field, shown below the data source selector for every cell type that supports it.
+
 ### Template Functions
 
 Markdown templates (Map detail panel, Markdown cells, and table column overrides) support a small set of function-call expressions that operate on resolved macro values. Function calls are **template-only** — they are not applied inside SQL queries.

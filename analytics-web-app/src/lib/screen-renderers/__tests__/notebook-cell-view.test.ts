@@ -391,4 +391,33 @@ describe('buildCellRendererProps', () => {
     expect(result.isEditing).toBe(true)
     expect(result.dataSource).toBe('ds1')
   })
+
+  describe('per-cell timeRange override', () => {
+    it('resolves the overridden timeRange for display-axis cells', () => {
+      const cell = makeCell({
+        timeRange: { from: '2023-06-01T00:00:00.000Z', to: '2023-06-02T00:00:00.000Z' },
+      })
+      const context = makeContext({
+        timeRange: { begin: '2024-01-01T00:00:00Z', end: '2024-01-02T00:00:00Z' },
+      })
+
+      const result = buildCellRendererProps(cell, makeState(), context, makeCallbacks())
+
+      expect(result.timeRange).toEqual({
+        begin: '2023-06-01T00:00:00.000Z',
+        end: '2023-06-02T00:00:00.000Z',
+      })
+    })
+
+    it('falls back to the global range without throwing when the override is unparseable', () => {
+      const cell = makeCell({ timeRange: { from: 'not-a-time', to: '' } })
+      const context = makeContext({
+        timeRange: { begin: '2024-01-01T00:00:00Z', end: '2024-01-02T00:00:00Z' },
+      })
+
+      expect(() => buildCellRendererProps(cell, makeState(), context, makeCallbacks())).not.toThrow()
+      const result = buildCellRendererProps(cell, makeState(), context, makeCallbacks())
+      expect(result.timeRange).toBe(context.timeRange)
+    })
+  })
 })

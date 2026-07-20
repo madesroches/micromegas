@@ -4,8 +4,8 @@ import type { CellConfig, CellState, VariableValue } from './notebook-types'
 import { getCellTypeMetadata, CellExecutionContext } from './cell-registry'
 import { streamQuery, fetchQueryIPC } from '@/lib/arrow-stream'
 import { getTimeRangeForApi } from '@/lib/time-range'
-import { resolveCellDataSource, findUnresolvedSelectionMacro } from './notebook-utils'
-import type { QueryCellConfig } from './notebook-types'
+import { resolveCellDataSource, findUnresolvedSelectionMacro, resolveQueryTimeRange } from './notebook-utils'
+import type { QueryCellConfig, QueryBackedCellConfig } from './notebook-types'
 
 /** Minimal interface for the WASM query engine (decoupled from WASM module type) */
 export interface NotebookQueryEngine {
@@ -147,19 +147,22 @@ export function useCellExecution({
         if (selection) availableCellSelections[prevCell.name] = selection
       }
 
-      // Check for unresolved $cell.selected.column macros — if the SQL contains
-      // a selection reference but no row is selected, show a waiting placeholder
+      // Check for unresolved $cell.selected.column macros — if the SQL or the
+      // cell's timeRange override contains a selection reference but no row is
+      // selected, show a waiting placeholder
       const cellSql = (cell as QueryCellConfig).sql
-      if (cellSql) {
-        const unresolvedCell = findUnresolvedSelectionMacro(cellSql, availableCellSelections)
-        if (unresolvedCell) {
-          completeCellExecution(cell.name, {
-            status: 'blocked',
-            data: [],
-            error: `Select a row in "${unresolvedCell}" to view results`,
-          })
-          return false // halt execution — downstream cells should wait for selection
-        }
+      const cellTimeRange = 'timeRange' in cell ? (cell as QueryBackedCellConfig).timeRange : undefined
+      const unresolvedCell =
+        (cellSql && findUnresolvedSelectionMacro(cellSql, availableCellSelections)) ||
+        (cellTimeRange?.from && findUnresolvedSelectionMacro(cellTimeRange.from, availableCellSelections)) ||
+        (cellTimeRange?.to && findUnresolvedSelectionMacro(cellTimeRange.to, availableCellSelections))
+      if (unresolvedCell) {
+        completeCellExecution(cell.name, {
+          status: 'blocked',
+          data: [],
+          error: `Select a row in "${unresolvedCell}" to view results`,
+        })
+        return false // halt execution — downstream cells should wait for selection
       }
 
       // Mark cell as loading (preserve previous data for re-renders during loading)
@@ -174,13 +177,24 @@ export function useCellExecution({
       const startTime = performance.now()
 
       // Resolve relative time range to absolute times fresh at execution time
-      const timeRange = getTimeRangeForApi(rawTimeRange.from, rawTimeRange.to)
+      const globalTimeRange = getTimeRangeForApi(rawTimeRange.from, rawTimeRange.to)
 
       // Create new abort controller for this execution
       abortControllerRef.current?.abort()
       abortControllerRef.current = new AbortController()
 
       try {
+        // Resolve the cell's effective time range (per-cell override, falling back to
+        // the global range). Shadows `globalTimeRange` under the original `timeRange`
+        // name so `runQuery`/`runQueryAs`/`executeSql` (params.begin/end) and
+        // `context.timeRange` ($from/$to macro substitution) both pick it up.
+        const timeRange = resolveQueryTimeRange(cell, {
+          variables: availableVariables,
+          timeRange: globalTimeRange,
+          cellResults: availableCellResults,
+          cellSelections: availableCellSelections,
+        })
+
         // Create execution context - use per-cell data source with fallback to global
         const cellDataSource = resolveCellDataSource(cell, availableVariables, dataSource)
         const isNotebookSource = cellDataSource === 'notebook'
@@ -326,18 +340,25 @@ export function useCellExecution({
       for (let i = startIndex; i < cells.length; i++) {
         const success = await executeCell(i)
         if (!success) {
-          // Mark remaining cells as blocked (except those that don't block)
-          for (let j = i + 1; j < cells.length; j++) {
-            const blockedCell = cells[j]
-            const blockedMeta = getCellTypeMetadata(blockedCell.type)
-            if (blockedMeta.canBlockDownstream) {
-              setCellStates((prev) => ({
-                ...prev,
-                [blockedCell.name]: { status: 'blocked', data: [] },
-              }))
+          const failedMeta = getCellTypeMetadata(cells[i].type)
+          // Only mark downstream cells as blocked and halt execution if this
+          // cell's failure actually blocks downstream cells (e.g. Perfetto's
+          // validation-only execute has no data dependency and shouldn't stop
+          // or falsely flag the rest of the notebook as blocked).
+          if (failedMeta.canBlockDownstream) {
+            // Mark remaining cells as blocked (except those that don't block)
+            for (let j = i + 1; j < cells.length; j++) {
+              const blockedCell = cells[j]
+              const blockedMeta = getCellTypeMetadata(blockedCell.type)
+              if (blockedMeta.canBlockDownstream) {
+                setCellStates((prev) => ({
+                  ...prev,
+                  [blockedCell.name]: { status: 'blocked', data: [] },
+                }))
+              }
             }
+            break
           }
-          break
         }
       }
     },

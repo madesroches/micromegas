@@ -358,8 +358,46 @@ describe('perfettoExportMetadata', () => {
       expect(perfettoExportMetadata.canBlockDownstream).toBe(false)
     })
 
-    it('should not have an execute method (user-triggered action)', () => {
-      expect(perfettoExportMetadata.execute).toBeUndefined()
+    it('should have a minimal validating execute method', () => {
+      expect(perfettoExportMetadata.execute).toBeDefined()
+    })
+  })
+
+  describe('execute (minimal validating — no trace fetch)', () => {
+    const baseConfig = {
+      name: 'test',
+      type: 'perfettoexport' as const,
+      layout: { height: 80 },
+      processIdVar: '$process_id',
+      spanType: 'both' as const,
+    }
+    const baseContext = {
+      variables: {},
+      cellResults: {},
+      cellSelections: {},
+      timeRange: { begin: '2024-01-01T00:00:00.000Z', end: '2024-01-02T00:00:00.000Z' },
+      runQuery: jest.fn(),
+    }
+
+    it('resolves to the global range when no timeRange override is set', async () => {
+      const result = await perfettoExportMetadata.execute!(baseConfig, baseContext)
+      expect(result?.meta?.effectiveTimeRange).toEqual(baseContext.timeRange)
+    })
+
+    it('resolves an overridden range and stores it in state.meta', async () => {
+      const config = { ...baseConfig, timeRange: { from: 'now-1h', to: 'now' } }
+      const result = await perfettoExportMetadata.execute!(config, baseContext)
+      expect(result?.status).toBe('success')
+      expect(result?.meta?.effectiveTimeRange).toEqual({
+        begin: expect.any(String),
+        end: expect.any(String),
+      })
+      expect(result?.meta?.effectiveTimeRange).not.toEqual(baseContext.timeRange)
+    })
+
+    it('throws on an unparseable override (surfaces as the cell error state)', async () => {
+      const config = { ...baseConfig, timeRange: { from: 'not-a-time', to: '' } }
+      await expect(perfettoExportMetadata.execute!(config, baseContext)).rejects.toThrow()
     })
   })
 
@@ -413,6 +451,37 @@ describe('perfettoExportMetadata', () => {
           spanType: 'both',
         },
       })
+    })
+
+    it('should pass through the resolved effectiveTimeRange from state.meta', () => {
+      const config = {
+        name: 'test',
+        type: 'perfettoexport' as const,
+        layout: { height: 80 },
+      }
+      const effectiveTimeRange = { begin: '2024-01-01T00:00:00.000Z', end: '2024-01-01T01:00:00.000Z' }
+      const state = {
+        status: 'success' as const,
+        data: [] as import('apache-arrow').Table[],
+        meta: { effectiveTimeRange },
+      }
+
+      const props = perfettoExportMetadata.getRendererProps(config, state)
+
+      expect(props.timeRange).toEqual(effectiveTimeRange)
+    })
+
+    it('should omit timeRange when state.meta has no effectiveTimeRange yet', () => {
+      const config = {
+        name: 'test',
+        type: 'perfettoexport' as const,
+        layout: { height: 80 },
+      }
+      const state = { status: 'idle' as const, data: [] as import('apache-arrow').Table[] }
+
+      const props = perfettoExportMetadata.getRendererProps(config, state)
+
+      expect(props.timeRange).toBeUndefined()
     })
   })
 })

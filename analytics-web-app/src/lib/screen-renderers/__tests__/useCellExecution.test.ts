@@ -601,6 +601,93 @@ describe('useCellExecution', () => {
       expect(result.current.cellStates['Notes']).toBeUndefined()
     })
 
+    it('should not halt execution when a canBlockDownstream: false cell fails (e.g. Perfetto export)', async () => {
+      mockStreamQuery.mockReturnValue(createSuccessResults())
+
+      const cells: CellConfig[] = [
+        { type: 'table', name: 'First', sql: 'SELECT 1', layout: { height: 'auto' } },
+        { type: 'perfettoexport', name: 'Trace', shouldFail: true, layout: { height: 'auto' } } as unknown as CellConfig,
+        { type: 'table', name: 'Third', sql: 'SELECT 3', layout: { height: 'auto' } },
+      ]
+      const variableValuesRef = createVariableValuesRef()
+
+      const { result } = renderHook(() =>
+        useCellExecution({
+          cells,
+          rawTimeRange: defaultRawTimeRange,
+          variableValuesRef,
+          setVariableValue: jest.fn(),
+          refreshTrigger: 0,
+        })
+      )
+
+      await waitFor(() => {
+        expect(result.current.cellStates['Third']?.status).toBe('success')
+      })
+
+      expect(result.current.cellStates['First'].status).toBe('success')
+      // Perfetto's execute throws on the bad override -> error state
+      expect(result.current.cellStates['Trace'].status).toBe('error')
+      // canBlockDownstream: false -> execution continues past it
+      expect(result.current.cellStates['Third'].status).toBe('success')
+    })
+
+    it('should never transiently render cells two-or-more positions below a canBlockDownstream: false failure as blocked', async () => {
+      // Use a fresh generator per streamQuery call (instead of a single shared
+      // one via mockReturnValue) with a real macrotask delay, so each
+      // downstream cell's query genuinely crosses an await boundary - this is
+      // what lets React commit an intermediate render between iterations of
+      // the outer executeFromCell loop, which is exactly the window the bug
+      // this test guards against only shows up in.
+      mockStreamQuery.mockImplementation(async function* () {
+        await new Promise((resolve) => setTimeout(resolve, 5))
+        yield { type: 'batch', batch: { numRows: 5 } }
+        yield { type: 'done' }
+      })
+
+      const cells: CellConfig[] = [
+        { type: 'table', name: 'First', sql: 'SELECT 1', layout: { height: 'auto' } },
+        { type: 'perfettoexport', name: 'Trace', shouldFail: true, layout: { height: 'auto' } } as unknown as CellConfig,
+        { type: 'table', name: 'Second', sql: 'SELECT 2', layout: { height: 'auto' } },
+        { type: 'table', name: 'Third', sql: 'SELECT 3', layout: { height: 'auto' } },
+      ]
+      const variableValuesRef = createVariableValuesRef()
+
+      // Record cellStates on every render so we can inspect transient states
+      // that a plain waitFor() on the final state would miss - the bug this
+      // guards against only ever shows up as an intermediate render.
+      const statusHistory: Record<string, string>[] = []
+
+      const { result } = renderHook(() => {
+        const hook = useCellExecution({
+          cells,
+          rawTimeRange: defaultRawTimeRange,
+          variableValuesRef,
+          setVariableValue: jest.fn(),
+          refreshTrigger: 0,
+        })
+        statusHistory.push(Object.fromEntries(Object.entries(hook.cellStates).map(([name, state]) => [name, state.status])))
+        return hook
+      })
+
+      await waitFor(() => {
+        expect(result.current.cellStates['Third']?.status).toBe('success')
+      })
+
+      expect(result.current.cellStates['First'].status).toBe('success')
+      expect(result.current.cellStates['Trace'].status).toBe('error')
+      expect(result.current.cellStates['Second'].status).toBe('success')
+      expect(result.current.cellStates['Third'].status).toBe('success')
+
+      // Second and Third are 2+ positions below the failing cell, so they only
+      // get their setCellStates overwrite after crossing an await boundary in
+      // the outer loop - if the blocked-marking loop isn't gated on
+      // canBlockDownstream, React commits an intermediate 'blocked' render for
+      // them even though execution never actually halts.
+      expect(statusHistory.some((snapshot) => snapshot['Second'] === 'blocked')).toBe(false)
+      expect(statusHistory.some((snapshot) => snapshot['Third'] === 'blocked')).toBe(false)
+    })
+
     it('should halt execution and block downstream cells when a cell has an unresolved selection', async () => {
       mockStreamQuery.mockReturnValue(createSuccessResults())
 
@@ -632,6 +719,138 @@ describe('useCellExecution', () => {
 
       // Summary should also be blocked because execution halted at Details
       expect(result.current.cellStates['Summary'].status).toBe('blocked')
+    })
+
+    describe('per-cell timeRange override', () => {
+      it('overrides the server query window and $from/$to substitution', async () => {
+        mockStreamQuery.mockReturnValue(createSuccessResults())
+
+        const cells: CellConfig[] = [
+          {
+            type: 'table',
+            name: 'Results',
+            sql: "SELECT * FROM logs WHERE time >= '$from' AND time <= '$to'",
+            timeRange: { from: '2023-06-01T00:00:00.000Z', to: '2023-06-02T00:00:00.000Z' },
+            layout: { height: 'auto' },
+          },
+        ]
+        const variableValuesRef = createVariableValuesRef()
+
+        const { result } = renderHook(() =>
+          useCellExecution({
+            cells,
+            rawTimeRange: defaultRawTimeRange,
+            variableValuesRef,
+            setVariableValue: jest.fn(),
+            refreshTrigger: 0,
+          })
+        )
+
+        await act(async () => {
+          await result.current.executeCell(0)
+        })
+
+        expect(mockStreamQuery).toHaveBeenCalled()
+        const callArgs = mockStreamQuery.mock.calls[0][0]
+        expect(callArgs.begin).toBe('2023-06-01T00:00:00.000Z')
+        expect(callArgs.end).toBe('2023-06-02T00:00:00.000Z')
+        expect(callArgs.params).toEqual({
+          begin: '2023-06-01T00:00:00.000Z',
+          end: '2023-06-02T00:00:00.000Z',
+        })
+        expect(callArgs.sql).toContain("'2023-06-01T00:00:00.000Z'")
+        expect(callArgs.sql).toContain("'2023-06-02T00:00:00.000Z'")
+      })
+
+      it('falls back to the global range when timeRange is unset', async () => {
+        mockStreamQuery.mockReturnValue(createSuccessResults())
+
+        const cells: CellConfig[] = [
+          { type: 'table', name: 'Results', sql: 'SELECT 1', layout: { height: 'auto' } },
+        ]
+        const variableValuesRef = createVariableValuesRef()
+
+        const { result } = renderHook(() =>
+          useCellExecution({
+            cells,
+            rawTimeRange: defaultRawTimeRange,
+            variableValuesRef,
+            setVariableValue: jest.fn(),
+            refreshTrigger: 0,
+          })
+        )
+
+        await act(async () => {
+          await result.current.executeCell(0)
+        })
+
+        const callArgs = mockStreamQuery.mock.calls[0][0]
+        expect(callArgs.begin).toBe('2024-01-01T00:00:00.000Z')
+        expect(callArgs.end).toBe('2024-01-02T00:00:00.000Z')
+      })
+
+      it('sets the cell to error status when the override is unparseable', async () => {
+        const cells: CellConfig[] = [
+          {
+            type: 'table',
+            name: 'Results',
+            sql: 'SELECT 1',
+            timeRange: { from: 'not-a-time', to: '' },
+            layout: { height: 'auto' },
+          },
+        ]
+        const variableValuesRef = createVariableValuesRef()
+
+        const { result } = renderHook(() =>
+          useCellExecution({
+            cells,
+            rawTimeRange: defaultRawTimeRange,
+            variableValuesRef,
+            setVariableValue: jest.fn(),
+            refreshTrigger: 0,
+          })
+        )
+
+        await act(async () => {
+          await result.current.executeCell(0)
+        })
+
+        expect(result.current.cellStates['Results'].status).toBe('error')
+        expect(mockStreamQuery).not.toHaveBeenCalled()
+      })
+
+      it('blocks when the timeRange override references an unresolved row selection', async () => {
+        mockStreamQuery.mockReturnValue(createSuccessResults())
+
+        const cells: CellConfig[] = [
+          { type: 'table', name: 'Processes', sql: 'SELECT process_id FROM processes', layout: { height: 'auto' } },
+          {
+            type: 'table',
+            name: 'Details',
+            sql: 'SELECT * FROM logs',
+            timeRange: { from: '$Processes.selected.start_time', to: 'now' },
+            layout: { height: 'auto' },
+          },
+        ]
+        const variableValuesRef = createVariableValuesRef()
+
+        const { result } = renderHook(() =>
+          useCellExecution({
+            cells,
+            rawTimeRange: defaultRawTimeRange,
+            variableValuesRef,
+            setVariableValue: jest.fn(),
+            refreshTrigger: 0,
+          })
+        )
+
+        await waitFor(() => {
+          expect(result.current.cellStates['Processes']?.status).toBe('success')
+        })
+
+        expect(result.current.cellStates['Details'].status).toBe('blocked')
+        expect(result.current.cellStates['Details'].error).toContain('Processes')
+      })
     })
   })
 

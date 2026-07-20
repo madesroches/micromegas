@@ -2,10 +2,11 @@ import { useState, useCallback, useEffect } from 'react'
 import type { Table } from 'apache-arrow'
 import { X, Play, Trash2 } from 'lucide-react'
 import { getCellTypeMetadata } from '@/lib/screen-renderers/cell-registry'
-import type { CellConfig, VariableValue } from '@/lib/screen-renderers/notebook-types'
-import { validateCellName, sanitizeCellName, shouldShowDataSource } from '@/lib/screen-renderers/notebook-utils'
+import type { CellConfig, QueryBackedCellConfig, VariableValue } from '@/lib/screen-renderers/notebook-types'
+import { validateCellName, sanitizeCellName, shouldShowDataSource, shouldShowTimeRange } from '@/lib/screen-renderers/notebook-utils'
 import { Button } from '@/components/ui/button'
 import { DataSourceField } from '@/components/DataSourceSelector'
+import { CellTimeRangeField } from '@/components/CellTimeRangeField'
 
 interface CellEditorProps {
   cell: CellConfig
@@ -82,6 +83,7 @@ export function CellEditor({
   )
 
   const showDataSource = shouldShowDataSource(cell.type)
+  const showTimeRange = shouldShowTimeRange(cell)
 
   // Determine if this cell can run
   const canRun = !!meta.execute
@@ -135,6 +137,14 @@ export function CellEditor({
             datasourceVariables={datasourceVariables}
             showNotebookOption={showNotebookOption}
             className=""
+          />
+        )}
+
+        {/* Per-cell query time range override (defaults to the screen's global range) */}
+        {showTimeRange && (
+          <CellTimeRangeField
+            value={'timeRange' in cell ? (cell as QueryBackedCellConfig).timeRange : undefined}
+            onChange={(tr) => onUpdate({ timeRange: tr } as Partial<CellConfig>)}
           />
         )}
 
