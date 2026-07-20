@@ -2,7 +2,7 @@
 
 **GitHub Issue**: https://github.com/madesroches/micromegas/issues/1318
 
-> **Status (2026-07-20): solution designed, ready to implement. No code changed yet.**
+> **Status (2026-07-20): implemented (checklist items 1-8). Item 9 (update issue, file upstream bug) is a follow-up outside this PR.**
 > The fix is entirely in object-cache (no vendoring, no fork, no `[patch]`): replace
 > `HybridCache::get` with a two-step read (RAM lookup, then direct disk load) whose
 > disk→RAM **promotion is gated on a caller-supplied expected length**, plus our own
