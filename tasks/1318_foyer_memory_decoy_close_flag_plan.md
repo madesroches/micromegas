@@ -77,8 +77,11 @@ copy a value whose length differs into any faster tier (promotion gate), and tre
 a value as a miss. Both existing callers already know it:
 
 - `probe_blocks` (`range_cache/fetch.rs`) computes `expected_len` from
-  `block_byte_range` today (it currently validates *after* the get; it keeps that check
-  and additionally passes the value down).
+  `block_byte_range` today, *after* awaiting the get (lines 176-178). To pass it into
+  `get`, that `block_byte_range`/`expected_len` computation moves earlier, into the
+  eagerly-collected probe closure ahead of the `backend.get` call (`idx`, `file_size`,
+  and the `Copy` `block_size` are all capturable there); the post-get length check is
+  retained as defense in depth.
 - `size()` (`range_cache/mod.rs:204`) passes `8`.
 
 `MemoryBackend` / `BoundedMemoryBackend` (single-tier, no promotion) accept and ignore
@@ -98,7 +101,7 @@ get(key, expected_len):
        hit -> return bytes                 // caller re-validates length as today
   2. RAM miss -> per-key single-flight (see 3) whose task does:
        storage().load(key)                 // direct disk read, no inflight (store.rs:160)
-         Load::Entry { value, populated: { age } } ->
+         Load::Entry { key: _, value, populated: Populated { age } } ->
              value.bytes.len() == expected_len ?
                yes -> emit disk-age metric (value.disk_write_ms != DISK_WRITE_NONE);
                       promote: memory().insert_with_properties(key,
@@ -109,6 +112,7 @@ get(key, expected_len):
                       return bytes
                no  -> imetric range_cache_promotion_len_mismatch; return None (miss)
          Load::Piece { piece, .. } ->      // keeper/write-buffer hit, incl. prefetch phantoms
+             read the value via piece.value() (a Piece<K,V,P>, not a CachedBlock);
              same validation; promote a *fresh normalized* CachedBlock (is_prefetch=false,
              ram_inserted_at=now, keep piece value's disk_write_ms); no disk-age metric
              when disk_write_ms == DISK_WRITE_NONE (it wasn't a disk read)
@@ -233,7 +237,10 @@ two-step proposal.
    promotion-gate contract.
 2. `src/foyer_backend.rs` — two-step `get` + single-flight map + promotion helper;
    move the disk-age metric; add `range_cache_promotion_len_mismatch` metric; keep the
-   error-path metric/log. Also emit the §5 telemetry: `object_cache_ram_tier_hit` /
+   error-path metric/log. Remove the now-unused `Source` import (its only use, the
+   `Source::Disk` check, is gone) and add the imports the new code needs in scope
+   (`foyer::Populated` for the `Load::Entry` pattern, `foyer::Properties` for `with_age`).
+   Also emit the §5 telemetry: `object_cache_ram_tier_hit` /
    `object_cache_disk_tier_hit`, for block-key (`blk:`-prefixed) gets only — excluding
    `size()`'s `meta:`-prefixed gets so the miss-rate derivation stays valid —
    `{prefix}`-tagged via the `EvictionTagTable` for consistency (though, per §5, this
@@ -241,10 +248,14 @@ two-step proposal.
    (single-flight follower count).
 3. `src/memory_backend.rs`, `src/bounded_memory_backend.rs` — accept/ignore the new
    parameter.
-4. `src/range_cache/fetch.rs` — pass `expected_len` (already computed) into
-   `backend.get`; keep the caller-side length check as defense in depth.
+4. `src/range_cache/fetch.rs` — lift the `block_byte_range`/`expected_len` computation
+   into the probe closure ahead of the `backend.get` call and pass it in; keep the
+   caller-side length check (currently after the get) as defense in depth.
 5. `src/range_cache/mod.rs` — `size()` passes `8`.
-6. Tests (`tests/foyer_backend_tests.rs`, plus trait-signature updates elsewhere):
+6. Tests — the `RangeCacheBackend::get` signature change breaks 14 single-arg call sites
+   across `tests/foyer_backend_tests.rs` (6), `tests/range_cache_tests.rs` (3, lines
+   267/840/947), and `tests/l1_store_tests.rs` (5, lines 25/31/43/60/88); update all
+   three. New/updated tests in `tests/foyer_backend_tests.rs`:
    - **Short block never promoted**: `put(Prefetch)` undersized bytes → flush →
      `get(key, full_len)` returns `None` and `ram_usage()` unchanged; then `put(Demand)`
      full bytes → `get` returns them.
