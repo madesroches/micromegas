@@ -1,19 +1,19 @@
-# foyer-memory Decoy Close-Flag — Analysis & Decision
+# foyer-memory Decoy Close-Flag — Fix Design (validated-promotion two-step read)
 
 **GitHub Issue**: https://github.com/madesroches/micromegas/issues/1318
 
-> **Status (2026-07-20): decision made — no code change (option 3).**
-> The race is real in `foyer-memory` 0.22.3 but has **zero correctness impact** on
-> object-cache (every consumer validates what it reads; all cached values are immutable
-> per key). Every complete fix requires patching foyer itself (fork or vendor), which is
-> disproportionate for what is at worst a rare, self-healing extra origin refetch.
-> Remaining action: file the upstream bug (fix diff below), then bump foyer when a
-> release containing the fix ships.
+> **Status (2026-07-20): solution designed, ready to implement. No code changed yet.**
+> The fix is entirely in object-cache (no vendoring, no fork, no `[patch]`): replace
+> `HybridCache::get` with a two-step read (RAM lookup, then direct disk load) whose
+> disk→RAM **promotion is gated on a caller-supplied expected length**, plus our own
+> per-key single-flight around the disk load to keep read-coalescing parity. This makes
+> foyer's buggy inflight path **unreachable** and makes every remaining write race
+> **provably byte-identical**, at no performance cost.
 
 ## The bug (root cause)
 
 `foyer-memory` 0.22.3 has a bug in `InflightManager::enqueue`'s `Entry::Vacant` arm
-(`src/inflight.rs`, ~lines 206-228): the fetch leader is handed a *different*
+(`src/inflight.rs`, ~L206-228): the fetch leader is handed a *different*
 `Arc<AtomicBool>` "close" flag from the one stored in the inflight table.
 
 ```rust
@@ -32,144 +32,221 @@ Entry::Vacant(v) => {
 }
 ```
 
-Callers that cancel an inflight fetch (`take`, `fetch_or_take`) set the **table's** copy
-(Arc A) via `inflight.close.store(true, ...)`; the leader's `RawFetch::poll` checks its
-**own** copy (Arc B), which nothing ever writes. Cancellation is therefore inert.
-
-The one-line upstream fix is to share a single `Arc`:
-
-```rust
-Entry::Vacant(v) => {
-    let close = Arc::new(AtomicBool::new(false));
-    let entry = InflightEntry { inflight: Inflight { close: close.clone(), .. }, .. };
-    v.insert(entry);
-    Enqueue::Lead { id, close, .. }
-}
-```
+Callers that cancel an inflight fetch (`take`, called by every `insert` via
+`raw.rs::emplace`) set the **table's** copy (Arc A); the leader's `RawFetch::poll`
+checks its **own** copy (Arc B, raw.rs ~L1299/L1316), which nothing ever writes.
+Cancellation is inert. Consequence in object-cache: a demand `insert()` (fresh bytes)
+racing an in-flight disk read of the same key cannot cancel it; the leader finishes and
+**re-inserts the disk value over the fresh insert**. The leader is a *detached spawned
+task* (`spawner.spawn(fetch)`, raw.rs:1034), so it outlives any caller scope.
 
 **Upstream status (verified 2026-07-20):** 0.22.3 (2026-01-23) is the newest release on
-crates.io, and `foyer-rs/foyer` `main` still contains the identical two-Arc bug
-(`foyer-memory/src/inflight.rs`: table Arc at ~L215, leader Arc at ~L221). No upstream
-fix exists yet anywhere.
+crates.io and `foyer-rs/foyer` `main` still has the identical two-Arc bug. No upstream
+fix exists. The one-line fix (share a single Arc) should still be reported upstream.
 
-## How it reaches object-cache
+## Why the clobber can hurt at all
 
-`FoyerBackend` (`rust/object-cache/src/foyer_backend.rs`) drives a `HybridCache`:
+All object-cache keys are write-once/content-addressed, so cached bytes are immutable
+per key — a clobber is normally byte-identical (wasted work, not corruption). The single
+differing-bytes case is the **poisoned short prefetch**: a prefetch stored a block under
+an undersized caller-supplied `size`, leaving short bytes on disk. `probe_blocks`
+(`range_cache/fetch.rs:176`) detects the length mismatch, refetches from origin, and
+heals via `put(Demand)` — and a concurrent zombie disk read of the short block can
+re-insert it over the healed bytes. (Self-healing: the next probe re-heals. Also
+verified: `size()` (`range_cache/mod.rs:204`) validates 8-byte length + plausibility, so
+no consumer ever *serves* clobbered bytes — today's impact is a rare extra origin
+refetch, not corruption.)
 
-- **Reads** — `get()` (line 318) calls `self.cache.get(key).await`. `HybridCache::get`
-  routes through `memory.get_or_fetch_inner` → `InflightManager::enqueue`, i.e. **the
-  inflight-coalescing path**. On a RAM miss this starts a disk-tier fetch (the "leader")
-  and, on a disk hit, **promotes** the value into the RAM tier. This is the *only* call in
-  object-cache that creates an inflight leader.
-- **Demand writes** — `put(Demand)` (line 390) calls `self.cache.insert(...)`, which goes
-  `raw.rs::emplace` → `InflightManager::take(hash, key, None)`. `emplace` (foyer-memory
-  `src/raw.rs:141-150`) *always* calls `take`, which sets the table's close flag (Arc A)
-  to cancel any in-flight fetch of that key.
-- **Prefetch writes** — `put(Prefetch)` (line 372) uses `storage_writer().force().insert(...)`,
-  which writes **disk-only** and does not touch the inflight path.
+**Key insight the fix is built on:** the only bytes that must never be (re-)written into
+the cache are *short* bytes — and the callers always know the exact expected length. If
+every disk→RAM promotion is validated against that expected length before writing, then
+every RAM write in the system carries the key's one canonical full-length byte string,
+so **any** write-write race is byte-identical and therefore harmless — no cancellation
+needed at all.
 
-### The clobber
+## The fix
 
-When a demand `insert()` (fresh bytes) races an in-flight disk read of the same key, the
-`insert` sets Arc A to cancel the read; the leader checks Arc B, never sees it, finishes the
-disk read, and **re-inserts the disk value over the fresh insert**.
+### 1. `RangeCacheBackend::get` takes the expected length
 
-### Verified severity: no correctness impact, ever
+```rust
+async fn get(&self, key: &str, expected_len: u64) -> Option<Bytes>;
+```
 
-All values object-cache stores are immutable per key, and **both** consumers of
-`backend.get` validate what they read before using it:
+Contract: `expected_len` is the exact length the caller will accept. A backend MUST NOT
+copy a value whose length differs into any faster tier (promotion gate), and treats such
+a value as a miss. Both existing callers already know it:
 
-- **Blocks** (`blk:{ns}:{key}:{idx}`) — chunks of write-once, content-addressed object-store
-  objects. For a given key the bytes never change, so in almost every case a clobbered
-  value is **byte-identical** to what it replaced: wasted work, not corruption.
-  The one differing-bytes case is the **poisoned-short-prefetch heal**: a prefetch stored a
-  block under an undersized caller-supplied `size`; `probe_blocks`
-  (`range_cache/fetch.rs:176`) detects the length mismatch, treats it as a miss, and
-  refetches. A concurrent disk read racing the heal `put(Demand)` can re-poison the entry —
-  but the length check runs on **every** hit, so a short block is *never served to a
-  reader*; the next probe just heals it again. Worst case: one extra origin refetch.
-- **Size metadata** (`meta:{ns}:{key}`) — `size()` (`range_cache/mod.rs:204`) only accepts
-  a hit that is exactly 8 bytes and decodes to a plausible size; anything else falls
-  through to an origin HEAD that repopulates the entry. Sizes are immutable per key
-  (write-once keys), so clobbers here are always byte-identical anyway.
+- `probe_blocks` (`range_cache/fetch.rs`) computes `expected_len` from
+  `block_byte_range` today (it currently validates *after* the get; it keeps that check
+  and additionally passes the value down).
+- `size()` (`range_cache/mod.rs:204`) passes `8`.
 
-Net effect of the bug in this codebase: **a rare, transient, self-healing perf blip**
-(extra origin refetch under a race that itself requires an already-rare short-poisoned
-block). The `range_cache_block_len_mismatch` metric is the watchdog — sustained counts
-would mean the short-block source needs investigating, independent of this race.
+`MemoryBackend` / `BoundedMemoryBackend` (single-tier, no promotion) accept and ignore
+the parameter.
 
-## Why no complete call-site fix exists
+### 2. `FoyerBackend::get` becomes a two-step read — no foyer inflight path
 
-Two classes of workaround were evaluated; both are structurally incomplete:
+Replace `self.cache.get(key).await` (which routes through `memory.get_or_fetch_inner` →
+`InflightManager::enqueue`, creating the buggy leader) with the public non-inflight
+APIs. Verified against foyer 0.22.3 sources — `HybridCache::get` is *exactly* this
+composition internally (`foyer/src/hybrid/cache.rs:661-719`), so we replicate its
+semantics minus the broken inflight layer:
 
-1. **Two-step read** (`memory().get()` then `storage().load()`, bypassing the inflight
-   path). Complete only if the read path never writes the RAM tier — but disk→RAM
-   promotion on demand reads is an architectural requirement (prefetches are disk-only;
-   demand access must promote them so repeat reads are fast). Adding promotion back
-   (`memory().insert()` on disk hit) merely relocates the identical clobber into our code.
-2. **Per-key serialization** (keyed async lock in `FoyerBackend` making `get` and
-   `put(Demand)` mutually exclusive per key). **Ruled out by foyer's execution model**:
-   the fetch leader is a *detached spawned task* (`spawner.spawn(fetch)`, foyer-memory
-   `src/raw.rs:1034`), not polled inline by the `get()` future. If a query is cancelled
-   and drops its `get` future, the lock guard drops but the zombie leader keeps running
-   and can reinsert stale bytes *after* any lock scope we control. The close flag is
-   precisely the mechanism for cancelling that detached task — and it is the thing that
-   is broken. No lock we hold can bound the leader's lifetime.
+```text
+get(key, expected_len):
+  1. memory().get(key)                     // plain RAM lookup, no inflight (cache.rs:763)
+       hit -> return bytes                 // caller re-validates length as today
+  2. RAM miss -> per-key single-flight (see 3) whose task does:
+       storage().load(key)                 // direct disk read, no inflight (store.rs:160)
+         Load::Entry { value, populated: { age } } ->
+             value.bytes.len() == expected_len ?
+               yes -> emit disk-age metric (value.disk_write_ms != DISK_WRITE_NONE);
+                      promote: memory().insert_with_properties(key,
+                          CachedBlock { bytes, ram_inserted_at: now,
+                                        disk_write_ms: value.disk_write_ms,
+                                        is_prefetch: false },
+                          HybridCacheProperties::default().with_age(age));  // parity with hybrid promotion
+                      return bytes
+               no  -> imetric range_cache_promotion_len_mismatch; return None (miss)
+         Load::Piece { piece, .. } ->      // keeper/write-buffer hit, incl. prefetch phantoms
+             same validation; promote a *fresh normalized* CachedBlock (is_prefetch=false,
+             ram_inserted_at=now, keep piece value's disk_write_ms); no disk-age metric
+             when disk_write_ms == DISK_WRITE_NONE (it wasn't a disk read)
+         Load::Miss | Load::Throttled -> return None   // hybrid parity: throttled -> None to caller
+         Err(e) -> existing error path (metric + warn + None)
+```
 
-Likewise, `remove`-on-length-mismatch hardening (via `HybridCache::remove`, which exists
-at `foyer/src/hybrid/cache.rs:575`) shrinks but cannot close the window: a zombie leader
-that already holds the bytes reinserts them after the remove. The only complete fixes are
-patching foyer (share the Arc) — via fork+`[patch.crates-io]` git or an in-repo vendored
-tree.
+Notes:
+- The `Source::Disk` check in today's `get` disappears; with two-step we know the source
+  by construction (step 2 hit == disk/keeper read), so the
+  `object_cache_disk_tier_read_age_ms` metric moves into the load task.
+- Fresh-normalized promotion also fixes a pre-existing telemetry artifact: hybrid's
+  Piece promotion reused the phantom record (`is_prefetch=true`,
+  stale `ram_inserted_at`), silently excluding promoted prefetch blocks from RAM
+  eviction telemetry.
+- The short disk entry is left in place on mismatch (same as today): the heal's
+  `put(Demand)` supersedes it, and until then other probes coalesce on the origin
+  single-flight. Behavior converges identically to the current code.
 
-## Decision (option 3): accept the residual race; no code change
+### 3. Per-key single-flight for the disk load (coalescing parity)
 
-Rationale:
+Foyer's inflight table coalesced concurrent same-key disk reads; we keep that:
 
-- **No correctness exposure** — verified above; no path can serve clobbered bytes.
-- **Fork (+git patch)** would break the repo's deliberate supply-chain posture:
-  `rust/deny.toml` `[sources]` denies git deps ("Verified: the tree has no git deps"),
-  and the fork would need maintenance until upstream releases.
-- **Vendor (+path patch)** carries a third-party tree plus fmt/clippy/machete/CI
-  carve-outs — the cost this branch was opened to avoid.
-- **`remove` hardening is skipped**: it adds trait surface (`RangeCacheBackend::remove`)
-  on every backend to narrow a window that stays open regardless, in a race whose impact
-  is already a self-healing perf blip. Not worth the complexity; reconsider only if
-  `range_cache_block_len_mismatch` shows sustained counts in production.
+```rust
+// FoyerBackend field
+loads: Arc<Mutex<HashMap<String, Shared<BoxFuture<'static, Option<Bytes>>>>>>
+```
 
-Follow-ups:
+- First caller for a key `tokio::spawn`s the load-validate-promote task (step 2) and
+  stores a `Shared` future awaiting its `JoinHandle`; followers clone the `Shared`.
+- The spawned task removes its own map entry when done (always runs to completion, so
+  no stale entries even when every awaiting query is cancelled).
+- A detached task is *safe* here precisely because of the promotion gate: its only write
+  is validated, so it never needs cancelling — the exact property foyer's design needs
+  the (broken) close flag for.
+- `Bytes` is cheaply clonable, satisfying `Shared`'s `Output: Clone`. `futures` and
+  `tokio` are already object-cache dependencies.
 
-1. **File the upstream bug** against `foyer-rs/foyer` — the issue body in #1318 already
-   contains the fix diff, ready to paste. (Verified still unfixed on `main` as of
-   2026-07-20.)
-2. **Bump foyer** when a release containing the fix ships; that deletes the problem with
-   a `cargo update`. Note the fix on the micromegas issue so the bump closes it.
+### 4. Write paths unchanged
 
-## Key references
+- `put(Demand)` — `cache.insert(...)` as today. Its `emplace → take` cancellation
+  becomes a permanent no-op because nothing creates inflight entries anymore.
+- `put(Prefetch)` — `storage_writer().force().insert(...)` as today (disk-only, no
+  inflight interaction).
 
-- Bug: `~/.cargo/registry/src/*/foyer-memory-0.22.3/src/inflight.rs`, `InflightManager::enqueue`,
-  `Entry::Vacant` arm (~L206-228). `take`/`fetch_or_take` set the table's Arc; `RawFetch::poll`
-  checks the leader's Arc (raw.rs ~L1299, L1316).
-- Detached leader spawn: `foyer-memory .../src/raw.rs:1034` (`spawner.spawn(fetch)`).
-- Always-called cancellation: `foyer-memory .../src/raw.rs:141-150` (`emplace` → `take`).
-- object-cache read/write paths: `rust/object-cache/src/foyer_backend.rs` — `get()` L318,
-  `put(Demand)` L390, `put(Prefetch)` L362-382.
-- Length check / heal: `rust/object-cache/src/range_cache/fetch.rs:167-201` (`probe_blocks`).
-- Size metadata guard: `rust/object-cache/src/range_cache/mod.rs:197-215` (`size()`).
-- object-cache's own origin single-flight (coalesces origin GETs, **not** disk reads):
-  `rust/object-cache/src/range_cache/scheduler.rs` (`FetchScheduler::own_or_join`).
-- Dependency wiring: `rust/Cargo.toml` has `foyer = "0.22"` / `foyer-memory = "0.22"`, no
-  `[patch]`; `Cargo.lock` resolves the foyer family at 0.22.3 from crates.io.
-  `rust/deny.toml` `[sources]` allows only crates.io (git deps denied).
+## Why this is complete (proof sketch)
+
+Enumerate every RAM-tier write after the change:
+
+1. `put(Demand)` — canonical full bytes from an exact-range origin GET.
+2. Validated promotion — bytes whose length equals the caller's `expected_len`.
+
+Keys are write-once, so per key there is exactly one canonical full-length byte string;
+(1) and (2) both carry it, hence **every possible overwrite ordering yields identical
+bytes**. Short bytes can exist only on disk (undersized prefetch) and can never cross
+into RAM. And since nothing calls `HybridCache::get`/`get_or_fetch` anymore, no inflight
+leader is ever created: the buggy cancellation path is unreachable, zombie leaders
+cannot exist, and our own detached load task is harmless by the same validation
+argument. (The byte-identity claim leans on the documented write-once key invariant —
+the same assumption the whole cache design already rests on, e.g. `size()`'s
+"never invalidated" comment.)
+
+## Why there is no performance penalty
+
+| Path | Before (hybrid get) | After |
+|---|---|---|
+| RAM hit | inflight-table check + RAM lookup | plain RAM lookup (`memory().get`) |
+| Disk hit | `store.load` + memory insert (promotion) + inflight bookkeeping/notify | `store.load` + length compare + memory insert |
+| Full miss | RAM lookup + `store.load` + inflight bookkeeping | RAM lookup + `store.load` + one map lock |
+| Concurrent same-key reads | coalesced by inflight table | coalesced by our single-flight |
+
+Same I/O, same promotion, same coalescing; the added work is one `usize` comparison and
+one small mutex-guarded map op per RAM miss, and the removed work is foyer's inflight
+bookkeeping and oneshot signaling. Promotion (disk hit → RAM residency for demand
+accesses) is fully preserved — the architectural requirement that blocked the earlier
+two-step proposal.
+
+## Implementation checklist
+
+1. `src/backend.rs` — add `expected_len: u64` to `RangeCacheBackend::get`; document the
+   promotion-gate contract.
+2. `src/foyer_backend.rs` — two-step `get` + single-flight map + promotion helper;
+   move the disk-age metric; add `range_cache_promotion_len_mismatch` metric; keep the
+   error-path metric/log.
+3. `src/memory_backend.rs`, `src/bounded_memory_backend.rs` — accept/ignore the new
+   parameter.
+4. `src/range_cache/fetch.rs` — pass `expected_len` (already computed) into
+   `backend.get`; keep the caller-side length check as defense in depth.
+5. `src/range_cache/mod.rs` — `size()` passes `8`.
+6. Tests (`tests/foyer_backend_tests.rs`, plus trait-signature updates elsewhere):
+   - **Short block never promoted**: `put(Prefetch)` undersized bytes → flush →
+     `get(key, full_len)` returns `None` and `ram_usage()` unchanged; then `put(Demand)`
+     full bytes → `get` returns them.
+   - **Promotion works**: `put(Prefetch)` full block → `get` returns it and RAM usage
+     grows (promotion observable); second `get` is a RAM hit.
+   - **Coalescing**: N concurrent `get`s on a cold disk-resident key → `disk_stats()`
+     read-IO delta is 1.
+   - **Heal survives concurrent readers** (regression for the original clobber): seed a
+     short block on disk, run concurrent `get` loops while `put(Demand)` heals, assert
+     the final `get` returns the healed bytes (deterministic now: no writer exists that
+     can produce non-canonical RAM contents).
+7. `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `cargo test -p
+   micromegas-object-cache`, then full CI script.
+8. Update the micromegas issue; file the upstream foyer bug (fix diff above) so the
+   ecosystem gets a real fix eventually. When a fixed foyer releases, we may keep this
+   path (it is simpler and strictly less machinery than the inflight route) or revert to
+   `HybridCache::get` — either works; no urgency.
+
+## Verified API facts this design rests on (foyer 0.22.3 sources)
+
+- `HybridCache::memory()` / `storage()` are public (`foyer/src/hybrid/cache.rs:491,496`).
+- Memory `Cache::get` is a plain sync lookup, no inflight (`foyer-memory/src/cache.rs:763`);
+  `insert_with_properties` (`:724`) allows `HybridCacheProperties::default().with_age(age)`
+  parity with hybrid's own promotion; `remove` exists (`:748`) if ever needed.
+- `Store::load(&key) -> Result<Load<K,V,P>>` hashes internally, checks the keeper
+  (write buffer) then the engine, and self-verifies key equivalence
+  (`foyer-storage/src/store.rs:160`); variants `Entry`/`Piece`/`Miss`/`Throttled`.
+- `HybridCache::get` is exactly memory-get-or-fetch over a `store.load` closure mapping
+  `Entry→promote (with age)`, `Piece→promote`, `Throttled|Miss→None`
+  (`foyer/src/hybrid/cache.rs:661-719`) — the two-step read replicates it 1:1 minus the
+  inflight layer.
+- The fetch leader is a detached spawned task (`foyer-memory/src/raw.rs:1034`), which is
+  why *no* lock/ordering scheme at our layer can bound it — validation, not
+  cancellation, is the workable invariant.
+- `object-cache/Cargo.toml` already depends on `futures` and `tokio`.
 
 ## Rejected alternatives (kept for the record)
 
-1. **Git fork + `[patch.crates-io]`** — complete fix, no vendored tree, but requires an
-   external fork to create and maintain, a `deny.toml` `[sources]` policy change to allow
-   git deps, and a git rev pinned in `Cargo.lock` until upstream releases.
-2. **Vendor + local patch** — complete and self-contained (`rust/vendor/foyer-memory-0.22.3/`
-   + `[patch.crates-io]` path override + workspace exclusion + machete ignore + dedicated
-   CI step, mirroring the `datafusion-wasm` precedent), but carries a vendored third-party
-   tree.
-3. **Two-step read / keyed per-key lock** — structurally incomplete; see "Why no complete
-   call-site fix exists".
+1. **Git fork + `[patch.crates-io]`** — complete, but requires an external fork to
+   maintain and a `deny.toml` `[sources]` policy change (git deps are deliberately
+   denied).
+2. **Vendor + local patch** — complete and self-contained, but carries a vendored
+   third-party tree plus fmt/clippy/machete/CI carve-outs.
+3. **Accept-as-benign (no code change)** — defensible on severity (no consumer can serve
+   clobbered bytes) but leaves a known race and wasted refetches in place; superseded by
+   this design, which removes the race outright for comparable effort.
+4. **Two-step read *without* length-gated promotion** — relocates the identical clobber
+   into our promotion insert; the validation gate is what turns it from "same severity"
+   into "provably harmless".
+5. **Per-key lock serializing `get`/`put(Demand)`** — unsound: cancelled `get` futures
+   leave foyer's detached zombie leader running past any lock scope we control.
