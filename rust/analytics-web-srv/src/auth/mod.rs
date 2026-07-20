@@ -19,7 +19,7 @@
 //! - [`handlers`] — the Axum handlers, middleware, and extractors.
 //!
 //! Login-flow OIDC client construction (provider discovery + client
-//! building) lives in the `micromegas_auth::oidc_client` crate module, not
+//! building) lives in the `micromegas::auth::oidc_client` crate module, not
 //! here — this crate only consumes it.
 
 mod claims;

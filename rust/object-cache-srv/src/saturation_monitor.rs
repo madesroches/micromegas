@@ -16,10 +16,10 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use micromegas_object_cache::backend::BackendDiskStats;
-use micromegas_object_cache::prefetch::PrefetchItem;
-use micromegas_object_cache::range_cache::RangeCache;
-use micromegas_tracing::prelude::*;
+use micromegas::object_cache::backend::BackendDiskStats;
+use micromegas::object_cache::prefetch::PrefetchItem;
+use micromegas::object_cache::range_cache::RangeCache;
+use micromegas::tracing::prelude::*;
 use sysinfo::Networks;
 use tokio::sync::{Semaphore, mpsc};
 use tokio::task::JoinHandle;

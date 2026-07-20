@@ -15,9 +15,9 @@ use object_store::{
 };
 use tokio::sync::Semaphore;
 
-use micromegas_object_cache::CacheClientStore;
-use micromegas_object_cache::memory_backend::MemoryBackend;
-use micromegas_object_cache::range_cache::{
+use micromegas::object_cache::CacheClientStore;
+use micromegas::object_cache::memory_backend::MemoryBackend;
+use micromegas::object_cache::range_cache::{
     DEFAULT_DEMAND_RESERVED_FETCH_PERMITS, DEFAULT_MAX_COALESCED_GET_BYTES,
     DEFAULT_PROMOTE_WHOLE_BATCH, DEFAULT_TOTAL_FETCH_PERMITS, RangeCache,
 };

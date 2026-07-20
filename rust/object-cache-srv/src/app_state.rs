@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use micromegas_object_cache::prefetch::PrefetchItem;
-use micromegas_object_cache::range_cache::RangeCache;
+use micromegas::object_cache::prefetch::PrefetchItem;
+use micromegas::object_cache::range_cache::RangeCache;
 use tokio::sync::{Semaphore, mpsc};
 
 #[derive(Clone)]

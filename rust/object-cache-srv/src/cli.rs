@@ -1,7 +1,7 @@
 use crate::handlers::{permits_for_bytes, stream_window_bytes};
 use anyhow::{Result, anyhow};
 use clap::Parser;
-use micromegas_object_cache::range_cache::{
+use micromegas::object_cache::range_cache::{
     DEFAULT_DEMAND_RESERVED_FETCH_PERMITS, DEFAULT_MAX_COALESCED_GET_BYTES,
     DEFAULT_PROMOTE_WHOLE_BATCH, DEFAULT_TOTAL_FETCH_PERMITS,
 };

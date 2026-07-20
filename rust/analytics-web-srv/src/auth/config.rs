@@ -37,7 +37,7 @@ impl OidcClientConfig {
     /// validation via OidcAuthProvider will accept tokens from any configured issuer.
     pub fn from_env() -> Result<Self> {
         // Use the shared OidcConfig from micromegas-auth
-        let config = micromegas_auth::oidc::OidcConfig::from_env()?;
+        let config = micromegas::auth::oidc::OidcConfig::from_env()?;
 
         // Need at least one issuer
         if config.issuers.is_empty() {

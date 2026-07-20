@@ -2,8 +2,8 @@
 
 use super::config::OidcClientConfig;
 use anyhow::Result;
-use micromegas_auth::oidc::{OidcAuthProvider, OidcConfig};
-use micromegas_auth::oidc_client::DiscoveredProvider;
+use micromegas::auth::oidc::{OidcAuthProvider, OidcConfig};
+use micromegas::auth::oidc_client::DiscoveredProvider;
 use std::sync::Arc;
 
 /// State for auth endpoints

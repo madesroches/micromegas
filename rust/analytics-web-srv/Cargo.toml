@@ -25,7 +25,6 @@ datafusion.workspace = true
 flate2.workspace = true
 futures.workspace = true
 http.workspace = true
-micromegas-auth.workspace = true
 moka.workspace = true
 object_store.workspace = true
 openidconnect.workspace = true
