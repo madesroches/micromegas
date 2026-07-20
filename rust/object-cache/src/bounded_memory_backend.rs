@@ -40,7 +40,7 @@ impl BoundedMemoryBackend {
 
 #[async_trait]
 impl RangeCacheBackend for BoundedMemoryBackend {
-    async fn get(&self, key: &str) -> Option<Bytes> {
+    async fn get(&self, key: &str, _expected_len: u64) -> Option<Bytes> {
         self.cache.get(key).map(|entry| entry.value().clone())
     }
 

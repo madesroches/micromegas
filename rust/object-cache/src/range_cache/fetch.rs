@@ -154,17 +154,25 @@ impl RangeCache {
                 .map(|&idx| {
                     let block_key = format!("blk:{}:{key}:{idx}", self.ns);
                     let backend = self.backend.clone();
+                    // Computed eagerly (ahead of the `backend.get` call) so it
+                    // can be passed in as the promotion-gate contract: a
+                    // backend must not copy a length-mismatched value into a
+                    // faster tier. See `RangeCacheBackend::get`'s doc.
+                    let expected_range = block_byte_range(idx, self.block_size, file_size);
+                    let expected_len = expected_range.end - expected_range.start;
                     async move {
                         imetric!("range_cache_block_request", "count", block_tag, 1_u64);
-                        let probe =
-                            instrument_named!(backend.get(&block_key), "range_cache_backend_read")
-                                .await;
-                        (idx, probe)
+                        let probe = instrument_named!(
+                            backend.get(&block_key, expected_len),
+                            "range_cache_backend_read"
+                        )
+                        .await;
+                        (idx, probe, expected_len)
                     }
                 })
                 .collect();
             let mut probes = stream::iter(probe_futs).buffer_unordered(BACKEND_PROBE_CONCURRENCY);
-            while let Some((idx, probe)) = probes.next().await {
+            while let Some((idx, probe, expected_len)) = probes.next().await {
                 match probe {
                     Some(data) => {
                         // A hit's length must match the block's true byte span.
@@ -172,9 +180,10 @@ impl RangeCache {
                         // under an undersized caller-supplied `size` (or the
                         // origin object changed size): treat it as a miss so
                         // it gets refetched and overwritten with the correct
-                        // bytes, healing the poisoned entry.
-                        let expected_range = block_byte_range(idx, self.block_size, file_size);
-                        let expected_len = expected_range.end - expected_range.start;
+                        // bytes, healing the poisoned entry. Defense in depth:
+                        // the backend itself must already refuse to promote a
+                        // mismatched value (the `expected_len` passed above),
+                        // so this should never trigger in practice.
                         if data.len() as u64 != expected_len {
                             imetric!("range_cache_block_len_mismatch", "count", 1_u64);
                             warn!(

@@ -201,7 +201,7 @@ impl RangeCache {
         let meta_key = format!("meta:{}:{key}", self.ns);
         let prefix_tag = self.classify_tags(key).prefix;
 
-        if let Some(data) = self.backend.get(&meta_key).await
+        if let Some(data) = self.backend.get(&meta_key, 8).await
             && data.len() == 8
         {
             let size = decode_size(&data)?;

@@ -264,7 +264,7 @@ async fn cold_read_populates_backend() {
 
     let blk_key = "blk:test:obj:0".to_string();
     assert!(
-        backend.get(&blk_key).await.is_some(),
+        backend.get(&blk_key, DEFAULT_BLOCK_SIZE).await.is_some(),
         "block should be in backend"
     );
 }
@@ -837,7 +837,7 @@ async fn oversized_prefetch_size_fails_fill_without_storing() {
         .await
         .expect_err("origin GET past EOF must fail the fill");
     assert!(
-        backend.get("blk:ns:obj2:2").await.is_none(),
+        backend.get("blk:ns:obj2:2", block_size).await.is_none(),
         "a failed prefetch fill must not store anything"
     );
 
@@ -944,7 +944,7 @@ async fn implausible_origin_size_surfaces_as_error() {
     // The poisoned size must never be written to the backend, so a subsequent
     // read re-resolves from origin instead of serving a stored bad value.
     assert!(
-        backend.get(&format!("meta:{ns}:obj")).await.is_none(),
+        backend.get(&format!("meta:{ns}:obj"), 8).await.is_none(),
         "an implausible origin size must not be cached"
     );
 }
