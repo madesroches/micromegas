@@ -166,12 +166,21 @@ they ride along with this change rather than a separate pass. Both fit the exist
   only tier signal is the *indirect* presence of `object_cache_disk_tier_read_age_ms`
   on disk reads. The two-step `get` knows the tier **by construction** — a step-1 hit
   (`memory().get`) is a RAM hit, a step-2 hit (`store.load`) is a disk hit — with no
-  `Source::Disk` sniff needed. Emit, from inside `FoyerBackend::get` (which already
-  holds the `EvictionTagTable` for prefix classification): `object_cache_ram_tier_hit`
-  on the step-1 hit and `object_cache_disk_tier_hit` on the step-2 promote, each a
-  `{prefix}`-tagged count. Miss rate is then derivable at the fetch layer as
-  `range_cache_block_request − (ram_hit + disk_hit)`. This yields a proper tiered
-  hit-rate — the primary input to RAM-sizing decisions — that is unavailable today.
+  `Source::Disk` sniff needed. Emit, from inside `FoyerBackend::get`: `object_cache_ram_tier_hit`
+  on the step-1 hit and `object_cache_disk_tier_hit` on the step-2 promote — but **only
+  for block-key gets** (the `blk:`-prefixed keys `probe_blocks` passes in). `size()`'s
+  `meta:`-prefixed 8-byte lookups (`range_cache/mod.rs:204`) also flow through
+  `FoyerBackend::get` and must be excluded from these counters; otherwise they'd mix
+  into the miss-rate derivation below, which counts only block requests. With meta
+  gets excluded, miss rate is derivable at the fetch layer as
+  `range_cache_block_request − (ram_hit + disk_hit)`, giving a proper *aggregate*
+  tiered hit-rate — the primary input to RAM-sizing decisions — that is unavailable
+  today. These counters reuse the `EvictionTagTable`/`{prefix}` tagging for consistency
+  with the other tier metrics, but — as already true of
+  `object_cache_disk_tier_read_age_ms` today — `classify` is fed the storage-prefixed
+  key (`blk:...`), which never starts with a content label, so `{prefix}` always
+  resolves to `"other"`; no per-content-prefix hit-rate breakdown exists yet, only the
+  aggregate. Fixing that classification gap is out of scope here.
 - **Coalescing fan-in counter.** The new per-key single-flight (§3) replaces foyer's
   inflight coalescing; a `range_cache_load_coalesced` count, incremented each time a
   follower clones an in-flight `Shared` instead of spawning its own load, makes the
@@ -225,8 +234,11 @@ two-step proposal.
 2. `src/foyer_backend.rs` — two-step `get` + single-flight map + promotion helper;
    move the disk-age metric; add `range_cache_promotion_len_mismatch` metric; keep the
    error-path metric/log. Also emit the §5 telemetry: `object_cache_ram_tier_hit` /
-   `object_cache_disk_tier_hit` (`{prefix}`-tagged, reusing the `EvictionTagTable`) and
-   `range_cache_load_coalesced` (single-flight follower count).
+   `object_cache_disk_tier_hit`, for block-key (`blk:`-prefixed) gets only — excluding
+   `size()`'s `meta:`-prefixed gets so the miss-rate derivation stays valid —
+   `{prefix}`-tagged via the `EvictionTagTable` for consistency (though, per §5, this
+   currently always resolves to `"other"`), and `range_cache_load_coalesced`
+   (single-flight follower count).
 3. `src/memory_backend.rs`, `src/bounded_memory_backend.rs` — accept/ignore the new
    parameter.
 4. `src/range_cache/fetch.rs` — pass `expected_len` (already computed) into
