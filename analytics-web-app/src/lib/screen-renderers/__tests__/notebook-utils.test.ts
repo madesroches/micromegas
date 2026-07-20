@@ -1307,11 +1307,11 @@ describe('shouldShowTimeRange', () => {
     expect(shouldShowTimeRange({ ...base, type: 'hg', children: [] } as CellConfig)).toBe(false)
   })
 
-  it('returns true only for combobox/datasource variable cells', () => {
+  it('returns true for combobox/datasource/expression variable cells, false for text', () => {
     expect(shouldShowTimeRange({ ...base, type: 'variable', variableType: 'combobox' } as CellConfig)).toBe(true)
     expect(shouldShowTimeRange({ ...base, type: 'variable', variableType: 'datasource' } as CellConfig)).toBe(true)
+    expect(shouldShowTimeRange({ ...base, type: 'variable', variableType: 'expression' } as CellConfig)).toBe(true)
     expect(shouldShowTimeRange({ ...base, type: 'variable', variableType: 'text' } as CellConfig)).toBe(false)
-    expect(shouldShowTimeRange({ ...base, type: 'variable', variableType: 'expression' } as CellConfig)).toBe(false)
   })
 
   it('returns true for all query-backed cell types', () => {

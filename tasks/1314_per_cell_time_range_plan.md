@@ -78,7 +78,7 @@ export interface ImageCellConfig extends CellConfigBase, QueryBackedCellConfig {
 }
 ```
 
-`timeRange` is simply unused by text/expression variable cells. The field is optional and nested, so existing saved screen configs load unchanged (backward compatible).
+`timeRange` is simply unused by text variable cells (expression variable cells do use it — their `execute` reads `timeRange.begin`/`timeRange.end` to derive `durationMs` before evaluating the expression). The field is optional and nested, so existing saved screen configs load unchanged (backward compatible).
 
 ### 2. Shared resolver
 Add `resolveQueryTimeRange` to `notebook-utils.ts` (or a small sibling `cell-time-range.ts` re-exported from `notebook-utils.ts`). It mirrors `resolveInitialTimeRange` but returns a resolved runtime range and falls back to the global range per-bound:
