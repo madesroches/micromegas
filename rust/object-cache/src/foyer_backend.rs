@@ -360,11 +360,16 @@ impl RangeCacheBackend for FoyerBackend {
             // that is dropped immediately (no eviction-structure residency),
             // so a prefetch fill never retains RAM residency.
             FillHint::Prefetch => {
+                // Copy so the phantom prefetch record does not retain its whole
+                // coalesced-GET parent buffer for the duration it lives in foyer's
+                // write pipeline (submit queue, io buffer encode, pending piece_refs) --
+                // see the demand arm's identical rationale below.
+                let owned = Bytes::copy_from_slice(&value);
                 let entry = self
                     .cache
                     .storage_writer(key)
                     .force()
-                    .insert(CachedBlock::new_prefetch(value));
+                    .insert(CachedBlock::new_prefetch(owned));
                 if entry.is_none() {
                     // Should not occur under `.force()`, which always admits.
                     imetric!(

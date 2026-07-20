@@ -1,6 +1,7 @@
 #![cfg(feature = "foyer")]
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use bytes::Bytes;
 
@@ -189,6 +190,70 @@ async fn demand_fill_detaches_from_parent_buffer() {
         block_ptr,
         "demand admission must copy, detaching the cached block from its parent GET buffer"
     );
+}
+
+struct DropFlag {
+    data: Vec<u8>,
+    dropped: Arc<AtomicBool>,
+}
+
+impl AsRef<[u8]> for DropFlag {
+    fn as_ref(&self) -> &[u8] {
+        &self.data
+    }
+}
+
+impl Drop for DropFlag {
+    fn drop(&mut self) {
+        self.dropped.store(true, Ordering::SeqCst);
+    }
+}
+
+// A prefetch fill must be detached (copied) from its coalesced-GET parent
+// buffer, or the async disk-write pipeline (submit queue, io buffer encode,
+// pending piece_refs) keeps the whole parent allocation alive for as long as
+// the entry is in flight -- see #1317.
+#[tokio::test]
+async fn prefetch_fill_detaches_from_parent_buffer() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir_path = dir.path().to_str().expect("utf8 path");
+
+    let backend = FoyerBackend::new_with_shards(
+        dir_path,
+        16 * 1024 * 1024,
+        16 * 1024 * 1024,
+        1,
+        WriteTuning::default(),
+        Arc::from(Vec::new()),
+    )
+    .await
+    .expect("create backend");
+
+    let dropped = Arc::new(AtomicBool::new(false));
+    let parent = Bytes::from_owner(DropFlag {
+        data: vec![7u8; 8192],
+        dropped: dropped.clone(),
+    });
+    let block = parent.slice(0..4096);
+    drop(parent);
+    assert!(
+        !dropped.load(Ordering::SeqCst),
+        "sanity: the slice must still keep the owner alive"
+    );
+
+    backend
+        .put("k".to_string(), block.clone(), FillHint::Prefetch)
+        .await;
+    drop(block);
+
+    assert!(
+        dropped.load(Ordering::SeqCst),
+        "prefetch admission must copy, detaching the cached block from its \
+         parent GET buffer instead of retaining a slice into it across the \
+         async disk-write pipeline"
+    );
+
+    backend.close().await.expect("close backend");
 }
 
 // A non-default `WriteTuning` (more flushers, a bigger buffer pool and
