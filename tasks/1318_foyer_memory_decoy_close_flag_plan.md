@@ -154,6 +154,38 @@ loads: Arc<Mutex<HashMap<String, Shared<BoxFuture<'static, Option<Bytes>>>>>>
 - `put(Prefetch)` — `storage_writer().force().insert(...)` as today (disk-only, no
   inflight interaction).
 
+### 5. Telemetry improvements folded in (near-free byproducts of the restructure)
+
+The two-step read makes two useful signals available at essentially no cost, so
+they ride along with this change rather than a separate pass. Both fit the existing
+`object_cache_{ram,disk}_tier_*` / `range_cache_*` naming and the bounded-cardinality
+`PropertySet` taxonomy in `metric_tags.rs`.
+
+- **Tiered hit counters.** Today the tier of a hit is not cleanly captured:
+  `range_cache_block_backend_hit` (`fetch.rs:188`) carries no tier dimension, and the
+  only tier signal is the *indirect* presence of `object_cache_disk_tier_read_age_ms`
+  on disk reads. The two-step `get` knows the tier **by construction** — a step-1 hit
+  (`memory().get`) is a RAM hit, a step-2 hit (`store.load`) is a disk hit — with no
+  `Source::Disk` sniff needed. Emit, from inside `FoyerBackend::get` (which already
+  holds the `EvictionTagTable` for prefix classification): `object_cache_ram_tier_hit`
+  on the step-1 hit and `object_cache_disk_tier_hit` on the step-2 promote, each a
+  `{prefix}`-tagged count. Miss rate is then derivable at the fetch layer as
+  `range_cache_block_request − (ram_hit + disk_hit)`. This yields a proper tiered
+  hit-rate — the primary input to RAM-sizing decisions — that is unavailable today.
+- **Coalescing fan-in counter.** The new per-key single-flight (§3) replaces foyer's
+  inflight coalescing; a `range_cache_load_coalesced` count, incremented each time a
+  follower clones an in-flight `Shared` instead of spawning its own load, makes the
+  coalescing observable (and would have made the original clobber race visible). Cheap
+  and directly validates machinery this plan introduces.
+
+These are strictly additive; they do not affect the correctness argument below.
+
+Consciously deferred to their own issues (not this PR): disk→RAM promotion volume
+(count/bytes) — [#1321](https://github.com/madesroches/micromegas/issues/1321); and
+steady-state tier-occupancy gauges — [#1322](https://github.com/madesroches/micromegas/issues/1322).
+Latency distributions and the eviction-reason breakdown already exist, so nothing was
+filed for those.
+
 ## Why this is complete (proof sketch)
 
 Enumerate every RAM-tier write after the change:
@@ -192,7 +224,9 @@ two-step proposal.
    promotion-gate contract.
 2. `src/foyer_backend.rs` — two-step `get` + single-flight map + promotion helper;
    move the disk-age metric; add `range_cache_promotion_len_mismatch` metric; keep the
-   error-path metric/log.
+   error-path metric/log. Also emit the §5 telemetry: `object_cache_ram_tier_hit` /
+   `object_cache_disk_tier_hit` (`{prefix}`-tagged, reusing the `EvictionTagTable`) and
+   `range_cache_load_coalesced` (single-flight follower count).
 3. `src/memory_backend.rs`, `src/bounded_memory_backend.rs` — accept/ignore the new
    parameter.
 4. `src/range_cache/fetch.rs` — pass `expected_len` (already computed) into
@@ -205,7 +239,8 @@ two-step proposal.
    - **Promotion works**: `put(Prefetch)` full block → `get` returns it and RAM usage
      grows (promotion observable); second `get` is a RAM hit.
    - **Coalescing**: N concurrent `get`s on a cold disk-resident key → `disk_stats()`
-     read-IO delta is 1.
+     read-IO delta is 1 (and, if metric readback is available in the harness,
+     `range_cache_load_coalesced` == N-1).
    - **Heal survives concurrent readers** (regression for the original clobber): seed a
      short block on disk, run concurrent `get` loops while `put(Demand)` heals, assert
      the final `get` returns the healed bytes (deterministic now: no writer exists that
