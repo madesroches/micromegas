@@ -341,21 +341,22 @@ export function useCellExecution({
         const success = await executeCell(i)
         if (!success) {
           const failedMeta = getCellTypeMetadata(cells[i].type)
-          // Mark remaining cells as blocked (except those that don't block)
-          for (let j = i + 1; j < cells.length; j++) {
-            const blockedCell = cells[j]
-            const blockedMeta = getCellTypeMetadata(blockedCell.type)
-            if (blockedMeta.canBlockDownstream) {
-              setCellStates((prev) => ({
-                ...prev,
-                [blockedCell.name]: { status: 'blocked', data: [] },
-              }))
-            }
-          }
-          // Only halt execution if this cell's failure actually blocks
-          // downstream cells (e.g. Perfetto's validation-only execute has
-          // no data dependency and shouldn't stop the rest of the notebook).
+          // Only mark downstream cells as blocked and halt execution if this
+          // cell's failure actually blocks downstream cells (e.g. Perfetto's
+          // validation-only execute has no data dependency and shouldn't stop
+          // or falsely flag the rest of the notebook as blocked).
           if (failedMeta.canBlockDownstream) {
+            // Mark remaining cells as blocked (except those that don't block)
+            for (let j = i + 1; j < cells.length; j++) {
+              const blockedCell = cells[j]
+              const blockedMeta = getCellTypeMetadata(blockedCell.type)
+              if (blockedMeta.canBlockDownstream) {
+                setCellStates((prev) => ({
+                  ...prev,
+                  [blockedCell.name]: { status: 'blocked', data: [] },
+                }))
+              }
+            }
             break
           }
         }

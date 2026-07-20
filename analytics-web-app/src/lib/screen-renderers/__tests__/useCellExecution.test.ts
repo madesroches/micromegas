@@ -632,6 +632,62 @@ describe('useCellExecution', () => {
       expect(result.current.cellStates['Third'].status).toBe('success')
     })
 
+    it('should never transiently render cells two-or-more positions below a canBlockDownstream: false failure as blocked', async () => {
+      // Use a fresh generator per streamQuery call (instead of a single shared
+      // one via mockReturnValue) with a real macrotask delay, so each
+      // downstream cell's query genuinely crosses an await boundary - this is
+      // what lets React commit an intermediate render between iterations of
+      // the outer executeFromCell loop, which is exactly the window the bug
+      // this test guards against only shows up in.
+      mockStreamQuery.mockImplementation(async function* () {
+        await new Promise((resolve) => setTimeout(resolve, 5))
+        yield { type: 'batch', batch: { numRows: 5 } }
+        yield { type: 'done' }
+      })
+
+      const cells: CellConfig[] = [
+        { type: 'table', name: 'First', sql: 'SELECT 1', layout: { height: 'auto' } },
+        { type: 'perfettoexport', name: 'Trace', shouldFail: true, layout: { height: 'auto' } } as unknown as CellConfig,
+        { type: 'table', name: 'Second', sql: 'SELECT 2', layout: { height: 'auto' } },
+        { type: 'table', name: 'Third', sql: 'SELECT 3', layout: { height: 'auto' } },
+      ]
+      const variableValuesRef = createVariableValuesRef()
+
+      // Record cellStates on every render so we can inspect transient states
+      // that a plain waitFor() on the final state would miss - the bug this
+      // guards against only ever shows up as an intermediate render.
+      const statusHistory: Record<string, string>[] = []
+
+      const { result } = renderHook(() => {
+        const hook = useCellExecution({
+          cells,
+          rawTimeRange: defaultRawTimeRange,
+          variableValuesRef,
+          setVariableValue: jest.fn(),
+          refreshTrigger: 0,
+        })
+        statusHistory.push(Object.fromEntries(Object.entries(hook.cellStates).map(([name, state]) => [name, state.status])))
+        return hook
+      })
+
+      await waitFor(() => {
+        expect(result.current.cellStates['Third']?.status).toBe('success')
+      })
+
+      expect(result.current.cellStates['First'].status).toBe('success')
+      expect(result.current.cellStates['Trace'].status).toBe('error')
+      expect(result.current.cellStates['Second'].status).toBe('success')
+      expect(result.current.cellStates['Third'].status).toBe('success')
+
+      // Second and Third are 2+ positions below the failing cell, so they only
+      // get their setCellStates overwrite after crossing an await boundary in
+      // the outer loop - if the blocked-marking loop isn't gated on
+      // canBlockDownstream, React commits an intermediate 'blocked' render for
+      // them even though execution never actually halts.
+      expect(statusHistory.some((snapshot) => snapshot['Second'] === 'blocked')).toBe(false)
+      expect(statusHistory.some((snapshot) => snapshot['Third'] === 'blocked')).toBe(false)
+    })
+
     it('should halt execution and block downstream cells when a cell has an unresolved selection', async () => {
       mockStreamQuery.mockReturnValue(createSuccessResults())
 
