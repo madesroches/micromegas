@@ -85,7 +85,10 @@ fix inside `FoyerBackend::put`.
    `CachedBlock::new_prefetch`, with an explanatory comment mirroring the
    demand arm's.
 2. **Test** — `rust/object-cache/tests/foyer_backend_tests.rs`: add the
-   detachment regression test described below.
+   detachment regression test described below, and add
+   `use std::sync::atomic::{AtomicBool, Ordering};` to the file's imports
+   (it currently imports `std::sync::Arc` and `bytes::Bytes` but not the
+   atomics the test uses).
 3. Run `cargo fmt`, `cargo clippy --workspace -- -D warnings`, and
    `cargo test -p micromegas-object-cache` (from `rust/`).
 
@@ -197,7 +200,7 @@ own references) and passes after (the backend holds only `owned`, an
 independent allocation, so the original owner drops as soon as `block`'s last
 external reference — the test's own — goes away).
 
-`Bytes::from_owner` requires `bytes >= 1.4`; the workspace pins `bytes
+`Bytes::from_owner` requires `bytes >= 1.9`; the workspace pins `bytes
 1.11.1` (`rust/Cargo.toml:42`), so no dependency change is needed.
 
 Also verify the existing `prefetch_fill_lands_on_disk_not_ram` and
