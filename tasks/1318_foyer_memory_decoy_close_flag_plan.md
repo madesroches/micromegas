@@ -105,8 +105,9 @@ the parameter.
 Replace `self.cache.get(key).await` (which routes through `memory.get_or_fetch_inner` →
 `InflightManager::enqueue`, creating the buggy leader) with the public non-inflight
 APIs. Verified against foyer 0.22.3 sources — `HybridCache::get` is *exactly* this
-composition internally (`foyer/src/hybrid/cache.rs:661-719`), so we replicate its
-semantics minus the broken inflight layer:
+composition internally (`foyer/src/hybrid/cache.rs:660-718`), so we replicate its
+semantics minus the broken inflight layer (with one deliberate divergence on the
+`Load::Piece` arm, noted below):
 
 ```text
 get(key, expected_len):
@@ -127,10 +128,14 @@ get(key, expected_len):
          Load::Piece { piece, populated } ->  // keeper/write-buffer hit, incl. prefetch phantoms
              read the value via piece.value() (a Piece<K,V,P>, not a CachedBlock);
              same validation; promote a *fresh normalized* CachedBlock (is_prefetch=false,
-             ram_inserted_at=now, keep piece value's disk_write_ms), likewise with
-             .with_age(populated.age) — keeper hits are Age::Young (store.rs:172), and Young
-             is what makes a later RAM eviction skip the redundant disk re-write (see the
-             Age::Young fact below); no disk-age metric when disk_write_ms ==
+             ram_inserted_at=now, keep piece value's disk_write_ms), also with
+             .with_age(populated.age). NOTE this is a deliberate divergence, not parity:
+             hybrid's own Piece arm IGNORES populated (destructures `populated: _`, with an
+             upstream `// TODO(MrCroxx): Remove populated with piece?`) and re-inserts the
+             piece with its original properties. Applying the age here is justified on its
+             own merits: keeper hits are Age::Young (store.rs:172), and Young is what makes
+             a later RAM eviction skip a disk re-write the keeper flush already performs
+             (see the Age::Young fact below). No disk-age metric when disk_write_ms ==
              DISK_WRITE_NONE (it wasn't a disk read)
          Load::Miss | Load::Throttled -> return None   // hybrid parity: throttled -> None to caller
          Err(e) -> existing error path (metric + warn + None)
@@ -324,15 +329,19 @@ two-step proposal.
   `foyer-memory`, hence the `foyer-common` dep in checklist 2. `Populated` is likewise
   absent from the `foyer` facade's prelude; its `age` field is pub, so binding the
   struct suffices.
-- Age parity is load-bearing, not cosmetic: the block engine's `enqueue` **skips the
-  disk write** for `Age::Young` pieces (`foyer-storage/src/engine/block/engine.rs:582-588`).
+- Age handling is load-bearing, not cosmetic: the block engine's `enqueue` **skips the
+  disk write** for `Age::Young` pieces (`foyer-storage/src/engine/block/engine.rs:582-590`).
   Promoting with default properties (`Age::Fresh`) would re-write every promoted block
   to disk on its next RAM eviction — write amplification the "no performance penalty"
-  section rules out.
+  section rules out. (Disk-engine `Entry` hits carry `Age::Old` or `Age::Young`
+  depending on probation state, `engine.rs:704-707`; keeper hits are always
+  `Age::Young`, `store.rs:172`. Passing `populated.age` through covers both.)
 - `HybridCache::get` is exactly memory-get-or-fetch over a `store.load` closure mapping
-  `Entry→promote (with age)`, `Piece→promote`, `Throttled|Miss→None`
-  (`foyer/src/hybrid/cache.rs:661-719`) — the two-step read replicates it 1:1 minus the
-  inflight layer.
+  `Entry→promote with .with_age(populated.age)`, `Piece→re-insert the piece itself
+  (populated ignored — upstream TODO)`, `Throttled|Miss→None`
+  (`foyer/src/hybrid/cache.rs:660-718`) — the two-step read replicates the Entry arm
+  1:1 minus the inflight layer, and deliberately diverges on the Piece arm
+  (fresh-normalized value + `.with_age(populated.age)`, see the §2 notes).
 - The fetch leader is a detached spawned task (`foyer-memory/src/raw.rs:1034`), which is
   why *no* lock/ordering scheme at our layer can bound it — validation, not
   cancellation, is the workable invariant.
