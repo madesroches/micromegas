@@ -5,17 +5,17 @@ use axum::extract::{Path as AxumPath, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::routing::{get, post};
 use bytes::Bytes;
-use micromegas_object_cache::CacheClientStore;
-use micromegas_object_cache::memory_backend::MemoryBackend;
-use micromegas_object_cache::range_cache::{
+use micromegas::object_cache::CacheClientStore;
+use micromegas::object_cache::memory_backend::MemoryBackend;
+use micromegas::object_cache::range_cache::{
     DEFAULT_DEMAND_RESERVED_FETCH_PERMITS, DEFAULT_MAX_COALESCED_GET_BYTES,
     DEFAULT_PROMOTE_WHOLE_BATCH, DEFAULT_TOTAL_FETCH_PERMITS, RangeCache,
 };
+use micromegas::tracing::event::in_memory_sink::InMemorySink;
+use micromegas::tracing::metrics::MetricsMsgQueueAny;
+use micromegas::tracing::test_utils::init_in_memory_tracing;
 use micromegas_object_cache_srv::app_state::AppState;
 use micromegas_object_cache_srv::handlers::{get_range_handler, head_handler, post_ranges_handler};
-use micromegas_tracing::event::in_memory_sink::InMemorySink;
-use micromegas_tracing::metrics::MetricsMsgQueueAny;
-use micromegas_tracing::test_utils::init_in_memory_tracing;
 use micromegas_transit::HeterogeneousQueue;
 use object_store::memory::InMemory;
 use object_store::path::Path;
@@ -156,7 +156,7 @@ async fn get_range_handler_counts_every_outcome() {
     .expect_err("out-of-bounds range must 416");
     assert_eq!(err, StatusCode::RANGE_NOT_SATISFIABLE);
 
-    micromegas_tracing::dispatch::flush_metrics_buffer();
+    micromegas::tracing::dispatch::flush_metrics_buffer();
     let pairs = tagged_status_prefix_pairs(&guard.sink, "object_cache_get_requests");
     let statuses: Vec<&str> = pairs.iter().map(|(s, _)| s.as_str()).collect();
     assert_eq!(
@@ -202,7 +202,7 @@ async fn head_handler_counts_every_outcome() {
         .expect_err("missing key must 404");
     assert_eq!(err, StatusCode::NOT_FOUND);
 
-    micromegas_tracing::dispatch::flush_metrics_buffer();
+    micromegas::tracing::dispatch::flush_metrics_buffer();
     let pairs = tagged_status_prefix_pairs(&guard.sink, "object_cache_head_requests");
     let statuses: Vec<&str> = pairs.iter().map(|(s, _)| s.as_str()).collect();
     assert_eq!(
@@ -269,7 +269,7 @@ async fn post_ranges_handler_counts_every_outcome() {
     .expect_err("out-of-bounds range must 416");
     assert_eq!(err, StatusCode::RANGE_NOT_SATISFIABLE);
 
-    micromegas_tracing::dispatch::flush_metrics_buffer();
+    micromegas::tracing::dispatch::flush_metrics_buffer();
     let pairs = tagged_status_prefix_pairs(&guard.sink, "object_cache_ranges_requests");
     let statuses: Vec<&str> = pairs.iter().map(|(s, _)| s.as_str()).collect();
     assert_eq!(
@@ -304,7 +304,7 @@ async fn empty_ranges_request_is_not_double_counted() {
     .expect("empty ranges is a valid 200");
     assert_eq!(resp.status(), StatusCode::OK);
 
-    micromegas_tracing::dispatch::flush_metrics_buffer();
+    micromegas::tracing::dispatch::flush_metrics_buffer();
     let pairs = tagged_status_prefix_pairs(&guard.sink, "object_cache_ranges_requests");
     assert_eq!(
         pairs.len(),
@@ -358,7 +358,7 @@ async fn get_range_bytes_served_fires_over_real_http() {
         .expect("real HTTP GET must succeed");
     assert_eq!(&got[..], &data[..]);
 
-    micromegas_tracing::dispatch::flush_metrics_buffer();
+    micromegas::tracing::dispatch::flush_metrics_buffer();
     let values = integer_metric_values(&guard.sink, "object_cache_get_bytes_served");
     assert_eq!(
         values,
@@ -412,7 +412,7 @@ async fn post_ranges_bytes_served_fires_over_real_http() {
     let framed_total: u64 =
         ranges.iter().map(|r| r.end - r.start).sum::<u64>() + 8 * ranges.len() as u64;
 
-    micromegas_tracing::dispatch::flush_metrics_buffer();
+    micromegas::tracing::dispatch::flush_metrics_buffer();
     let values = integer_metric_values(&guard.sink, "object_cache_ranges_bytes_served");
     assert_eq!(
         values,

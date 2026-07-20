@@ -7,7 +7,7 @@ use axum::response::IntoResponse;
 use axum_extra::extract::cookie::SameSite;
 use base64::Engine;
 use http::StatusCode;
-use micromegas_auth::oauth_state::generate_nonce;
+use micromegas::auth::oauth_state::generate_nonce;
 use std::sync::Arc;
 
 fn create_test_auth_state() -> AuthState {

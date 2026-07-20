@@ -26,6 +26,7 @@ server = [
     "dep:micromegas-analytics",
     "dep:micromegas-auth",
     "dep:micromegas-ingestion",
+    "dep:micromegas-object-cache",
     "dep:micromegas-otel-ingestion",
     "dep:micromegas-perfetto",
     "dep:object_store",
@@ -38,6 +39,7 @@ server = [
     "dep:tonic",
     "dep:tower",
     "dep:tower-http",
+    "micromegas-object-cache/foyer",
     "micromegas-telemetry/server",
 ]
 
@@ -65,6 +67,7 @@ http = { workspace = true, optional = true }
 micromegas-analytics = { workspace = true, optional = true }
 micromegas-auth = { workspace = true, optional = true }
 micromegas-ingestion = { workspace = true, optional = true }
+micromegas-object-cache = { workspace = true, optional = true }
 micromegas-otel-ingestion = { workspace = true, optional = true }
 micromegas-perfetto = { workspace = true, optional = true }
 object_store = { workspace = true, optional = true }

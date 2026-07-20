@@ -8,16 +8,16 @@
 use std::sync::Arc;
 
 use bytes::Bytes;
-use micromegas_object_cache::backend::{BackendDiskStats, FillHint, RangeCacheBackend};
-use micromegas_object_cache::foyer_backend::{FoyerBackend, WriteTuning};
-use micromegas_object_cache::range_cache::{
+use micromegas::object_cache::backend::{BackendDiskStats, FillHint, RangeCacheBackend};
+use micromegas::object_cache::foyer_backend::{FoyerBackend, WriteTuning};
+use micromegas::object_cache::range_cache::{
     DEFAULT_BLOCK_SIZE, DEFAULT_DEMAND_RESERVED_FETCH_PERMITS, DEFAULT_MAX_COALESCED_GET_BYTES,
     DEFAULT_PROMOTE_WHOLE_BATCH, DEFAULT_TOTAL_FETCH_PERMITS, RangeCache,
 };
+use micromegas::tracing::event::in_memory_sink::InMemorySink;
+use micromegas::tracing::metrics::MetricsMsgQueueAny;
+use micromegas::tracing::test_utils::init_in_memory_tracing;
 use micromegas_object_cache_srv::saturation_monitor::sample_once;
-use micromegas_tracing::event::in_memory_sink::InMemorySink;
-use micromegas_tracing::metrics::MetricsMsgQueueAny;
-use micromegas_tracing::test_utils::init_in_memory_tracing;
 use micromegas_transit::HeterogeneousQueue;
 use object_store::ObjectStore;
 use object_store::memory::InMemory;
@@ -112,7 +112,7 @@ async fn foyer_disk_gauges_emit_only_after_a_second_tick() {
         &mut prev_disk_stats,
         5.0,
     );
-    micromegas_tracing::dispatch::flush_metrics_buffer();
+    micromegas::tracing::dispatch::flush_metrics_buffer();
     assert!(
         float_metric_values(&guard.sink, "object_cache_foyer_disk_write_bytes_per_sec").is_empty(),
         "the first tick must not emit a rate: there is no prior sample to diff against"
@@ -143,7 +143,7 @@ async fn foyer_disk_gauges_emit_only_after_a_second_tick() {
         &mut prev_disk_stats,
         5.0,
     );
-    micromegas_tracing::dispatch::flush_metrics_buffer();
+    micromegas::tracing::dispatch::flush_metrics_buffer();
     let write_rates =
         float_metric_values(&guard.sink, "object_cache_foyer_disk_write_bytes_per_sec");
     assert_eq!(
@@ -208,7 +208,7 @@ async fn ram_tier_usage_gauge_reflects_demand_put() {
         &mut prev_disk_stats,
         5.0,
     );
-    micromegas_tracing::dispatch::flush_metrics_buffer();
+    micromegas::tracing::dispatch::flush_metrics_buffer();
     let before = integer_metric_values(&guard.sink, "object_cache_ram_tier_usage_bytes");
     assert_eq!(
         before.len(),
@@ -230,7 +230,7 @@ async fn ram_tier_usage_gauge_reflects_demand_put() {
         &mut prev_disk_stats,
         5.0,
     );
-    micromegas_tracing::dispatch::flush_metrics_buffer();
+    micromegas::tracing::dispatch::flush_metrics_buffer();
     let after = integer_metric_values(&guard.sink, "object_cache_ram_tier_usage_bytes");
     assert_eq!(after.len(), 2, "the gauge must fire on the second tick too");
     assert!(

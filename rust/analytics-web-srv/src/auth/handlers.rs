@@ -16,11 +16,11 @@ use axum::{
     response::{IntoResponse, Redirect, Response},
 };
 use axum_extra::extract::cookie::CookieJar;
+use micromegas::auth::oauth_state::{OAuthState, generate_nonce, sign_state, verify_state};
+use micromegas::auth::oidc::create_http_client;
+use micromegas::auth::types::AuthProvider;
+use micromegas::auth::url_validation::validate_return_url;
 use micromegas::tracing::prelude::*;
-use micromegas_auth::oauth_state::{OAuthState, generate_nonce, sign_state, verify_state};
-use micromegas_auth::oidc::create_http_client;
-use micromegas_auth::types::AuthProvider;
-use micromegas_auth::url_validation::validate_return_url;
 use openidconnect::{
     AuthenticationFlow, CsrfToken, Nonce, PkceCodeChallenge, Scope, core::CoreResponseType,
 };

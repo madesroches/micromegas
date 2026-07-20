@@ -10,12 +10,12 @@ use axum::{
 use bytes::{BufMut, Bytes, BytesMut};
 use futures::stream::BoxStream;
 use futures::{Stream, StreamExt, stream};
-use micromegas_object_cache::blocks::blocks_for_range;
-use micromegas_object_cache::prefetch::{PrefetchItem, PrefetchResponse};
-use micromegas_object_cache::range_cache::{DEMAND_WINDOW_BLOCKS, RangeError, StreamRangesCaller};
-use micromegas_object_cache::validation::validate_key;
-use micromegas_tracing::prelude::*;
-use micromegas_tracing::property_set::{Property, PropertySet};
+use micromegas::object_cache::blocks::blocks_for_range;
+use micromegas::object_cache::prefetch::{PrefetchItem, PrefetchResponse};
+use micromegas::object_cache::range_cache::{DEMAND_WINDOW_BLOCKS, RangeError, StreamRangesCaller};
+use micromegas::object_cache::validation::validate_key;
+use micromegas::tracing::prelude::*;
+use micromegas::tracing::property_set::{Property, PropertySet};
 use serde::Deserialize;
 use std::collections::HashSet;
 use std::pin::Pin;

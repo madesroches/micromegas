@@ -159,6 +159,12 @@ pub mod perfetto {
     pub use micromegas_perfetto::*;
 }
 
+/// shared object range cache
+#[cfg(feature = "server")]
+pub mod object_cache {
+    pub use micromegas_object_cache::*;
+}
+
 #[cfg(feature = "server")]
 pub mod config;
 

@@ -1,10 +1,10 @@
 use std::ops::Range;
 
 use futures::stream::{self, StreamExt};
-use micromegas_object_cache::blocks::blocks_for_range;
-use micromegas_object_cache::prefetch::PrefetchItem;
-use micromegas_object_cache::range_cache::RangeCache;
-use micromegas_tracing::prelude::*;
+use micromegas::object_cache::blocks::blocks_for_range;
+use micromegas::object_cache::prefetch::PrefetchItem;
+use micromegas::object_cache::range_cache::RangeCache;
+use micromegas::tracing::prelude::*;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio_stream::wrappers::ReceiverStream;

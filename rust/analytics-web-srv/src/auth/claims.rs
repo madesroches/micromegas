@@ -1,7 +1,7 @@
 //! Validated-user / claims types shared between the middleware and handlers.
 
 use base64::Engine;
-use micromegas_auth::types::AuthContext;
+use micromegas::auth::types::AuthContext;
 use serde::{Deserialize, Serialize};
 
 /// User info response
@@ -56,7 +56,7 @@ pub(crate) struct CookieTokenRequestParts {
     pub(crate) token: String,
 }
 
-impl micromegas_auth::types::RequestParts for CookieTokenRequestParts {
+impl micromegas::auth::types::RequestParts for CookieTokenRequestParts {
     fn authorization_header(&self) -> Option<&str> {
         None
     }

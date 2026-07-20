@@ -17,10 +17,10 @@ use object_store::{
     ObjectStoreExt, PutMultipartOptions, PutOptions, PutPayload, PutResult,
 };
 
-use micromegas_object_cache::foyer_backend::{FoyerBackend, WriteTuning};
-use micromegas_object_cache::memory_backend::MemoryBackend;
-use micromegas_object_cache::prefetch::{PrefetchItem, PrefetchResponse};
-use micromegas_object_cache::range_cache::{
+use micromegas::object_cache::foyer_backend::{FoyerBackend, WriteTuning};
+use micromegas::object_cache::memory_backend::MemoryBackend;
+use micromegas::object_cache::prefetch::{PrefetchItem, PrefetchResponse};
+use micromegas::object_cache::range_cache::{
     DEFAULT_DEMAND_RESERVED_FETCH_PERMITS, DEFAULT_MAX_COALESCED_GET_BYTES,
     DEFAULT_PROMOTE_WHOLE_BATCH, DEFAULT_TOTAL_FETCH_PERMITS, RangeCache,
 };
@@ -608,7 +608,7 @@ async fn client_prefetch_round_trip_over_http() {
         axum::serve(listener, app).await.expect("serve");
     });
 
-    let client = micromegas_object_cache::CacheClientStore::new(
+    let client = micromegas::object_cache::CacheClientStore::new(
         format!("http://{addr}"),
         None,
         Arc::new(InMemory::new()),
@@ -641,7 +641,7 @@ async fn client_prefetch_round_trip_over_http() {
 #[tokio::test]
 async fn client_prefetch_returns_err_when_unreachable() {
     // Port 1 is reserved and never listens; the connect attempt fails fast.
-    let client = micromegas_object_cache::CacheClientStore::new(
+    let client = micromegas::object_cache::CacheClientStore::new(
         "http://127.0.0.1:1".to_string(),
         None,
         Arc::new(InMemory::new()),
@@ -896,7 +896,7 @@ async fn body_larger_than_2mib_total_accepted_via_router() {
         "test body must exceed the old 2 MiB body limit"
     );
 
-    let client = micromegas_object_cache::CacheClientStore::new(
+    let client = micromegas::object_cache::CacheClientStore::new(
         format!("http://{addr}"),
         None,
         Arc::new(InMemory::new()),
