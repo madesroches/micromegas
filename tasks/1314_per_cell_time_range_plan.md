@@ -201,7 +201,7 @@ export function shouldShowTimeRange(cell: CellConfig): boolean {
 }
 ```
 
-Add a shared presentational component `CellTimeRangeField` (`analytics-web-app/src/components/CellTimeRangeField.tsx`) with two labeled text inputs (From / To), styled like Flame Graph's Initial From/To inputs, with placeholders such as `$from, now-1h, or macro (empty = screen range)` / `$to, now, or macro`. Render it in `CellEditor.tsx` directly below the `DataSourceField`, gated by `shouldShowTimeRange(cell)`:
+Add a shared presentational component `CellTimeRangeField` (`analytics-web-app/src/components/CellTimeRangeField.tsx`) with two labeled text inputs (From / To), styled like Flame Graph's Initial From/To inputs, with placeholders such as `$from, now-1h, or macro (empty = screen range)` / `$to, now, or macro`. Validation matches that same Flame Graph precedent: no live inline validation in the field itself — a bad value surfaces as a cell error at run/render time (§3/§4), consistent with `resolveInitialTimeRange`. Live validation is possible future work, not part of this change. Render it in `CellEditor.tsx` directly below the `DataSourceField`, gated by `shouldShowTimeRange(cell)`:
 
 ```tsx
 {shouldShowTimeRange(cell) && (
@@ -239,7 +239,7 @@ global raw range (URL) ──> getTimeRangeForApi ──> global {begin,end}
 
 1. **Config types** (`notebook-types.ts`): add `QueryBackedCellConfig` mixin; extend it from `QueryCellConfig`, `VariableCellConfig`, `PerfettoExportCellConfig`, `ImageCellConfig`; remove their standalone `dataSource`. Import `TimeRange` from `@/lib/time-range`.
 2. **Resolver** (`notebook-utils.ts` or new `cell-time-range.ts`): add and export `resolveQueryTimeRange`; add and export `shouldShowTimeRange`.
-3. **Execute-side** (`useCellExecution.ts`): compute `effectiveTimeRange` after gathering `available*` maps; use it as `context.timeRange`; ensure resolution is inside the `try` so parse errors become cell errors.
+3. **Execute-side** (`useCellExecution.ts`): rename the global range binding at `:177` from `timeRange` to `globalTimeRange`; inside the existing `try` that guards `meta.execute`, redeclare `const timeRange = resolveQueryTimeRange(cell, { variables: availableVariables, timeRange: globalTimeRange, cellResults: availableCellResults, cellSelections: availableCellSelections })`, shadowing the outer binding so `runQuery`/`runQueryAs`/`executeSql` (`params.begin/end`) and `context.timeRange` both pick up the resolved effective range; parse errors thrown inside the `try` become cell errors.
 4. **Renderer-side** (`notebook-cell-view.ts`): resolve effective range in `buildCellRendererProps` with try/catch fallback; set the `timeRange` prop from it.
 5. **Editor field** (new `CellTimeRangeField.tsx` + `CellEditor.tsx`): shared From/To component rendered below the data source field, gated by `shouldShowTimeRange`; emit full `{from,to}` or `undefined`.
 6. **Tests**: unit-test `resolveQueryTimeRange`; extend cell/execution tests (see Testing Strategy).
@@ -275,4 +275,3 @@ global raw range (URL) ──> getTimeRangeForApi ──> global {begin,end}
 
 ## Open Questions
 1. **Error surfacing for `PerfettoExportCell`** (no `execute`): an invalid override currently only manifests at render, where we fall back to the global range silently. Acceptable, or should the Perfetto renderer show an inline warning (small follow-up) when its configured range fails to resolve? Recommended: ship silent fallback now, add a renderer warning as a follow-up if needed.
-2. **Editor validation UX**: validate/parse the From/To inputs live in `CellTimeRangeField` (inline error, like SQL macro validation) or only surface errors at run/render time (Flame Graph's current behavior)? Recommended: match Flame Graph (resolve-time errors) to keep the field lightweight, optionally add live validation later.
