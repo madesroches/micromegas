@@ -286,9 +286,15 @@ two-step proposal.
 8. `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `cargo test -p
    micromegas-object-cache`, then full CI script.
 9. Update the micromegas issue; file the upstream foyer bug (fix diff above) so the
-   ecosystem gets a real fix eventually. When a fixed foyer releases, we may keep this
-   path (it is simpler and strictly less machinery than the inflight route) or revert to
-   `HybridCache::get` — either works; no urgency.
+   ecosystem gets a real fix eventually. When a fixed foyer releases, **keep this path —
+   do not revert to `HybridCache::get`**. Reverting would re-inherit foyer's inflight
+   behavior while discarding the length-gated promotion invariant, which is
+   defense-in-depth worth having independent of foyer's correctness (the benignity of
+   any future race would again rest on the emergent write-once/validation invariants
+   instead of a local, explicit gate). The two-step path is also simpler and strictly
+   less machinery than the inflight route; the pinned-composition coupling to foyer's
+   promotion semantics (see the Age::Young fact above) is the one ongoing cost, and it
+   is already paid.
 
 ## Verified API facts this design rests on (foyer 0.22.3 sources)
 
