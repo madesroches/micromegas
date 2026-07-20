@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use bytes::Bytes;
+use futures::future::join_all;
 
 use micromegas_object_cache::backend::{FillHint, RangeCacheBackend};
 use micromegas_object_cache::foyer_backend::{
@@ -52,6 +53,24 @@ fn tagged_integer_metric_values(
                 && e.desc.name == name
             {
                 out.push((e.value, e.properties));
+            }
+        }
+    }
+    out
+}
+
+/// Values for every firing of the untagged integer metric `name` since the
+/// guard was created (e.g. `range_cache_load_coalesced`, which carries no
+/// `PropertySet`).
+fn integer_metric_values(sink: &InMemorySink, name: &str) -> Vec<u64> {
+    let state = sink.state.lock().expect("sink lock");
+    let mut out = Vec::new();
+    for block in &state.metrics_blocks {
+        for evt in block.events.iter() {
+            if let MetricsMsgQueueAny::IntegerMetricEvent(e) = evt
+                && e.desc.name == name
+            {
+                out.push(e.value);
             }
         }
     }
@@ -112,7 +131,10 @@ async fn round_trip_through_disk_tier() {
     // "key" on disk rather than racing the background write.
     backend.close().await.expect("close backend");
 
-    let got = backend.get("key").await.expect("get from disk tier");
+    let got = backend
+        .get("key", data.len() as u64)
+        .await
+        .expect("get from disk tier");
     assert_eq!(got, data);
 }
 
@@ -149,7 +171,10 @@ async fn prefetch_fill_lands_on_disk_not_ram() {
 
     // Flush the SSD tier so the async disk write is durable before reading.
     backend.close().await.expect("close backend");
-    let got = backend.get("prefetched").await.expect("get from disk tier");
+    let got = backend
+        .get("prefetched", data.len() as u64)
+        .await
+        .expect("get from disk tier");
     assert_eq!(got, data);
 }
 
@@ -183,7 +208,7 @@ async fn demand_fill_detaches_from_parent_buffer() {
         .put("k".to_string(), block.clone(), FillHint::Demand)
         .await;
 
-    let got = backend.get("k").await.expect("hit");
+    let got = backend.get("k", 4096).await.expect("hit");
     assert_eq!(got, vec![7u8; 4096]);
     assert_ne!(
         got.as_ptr(),
@@ -291,7 +316,10 @@ async fn round_trip_with_custom_write_tuning() {
     // durable and `disk_stats()` reflects it deterministically.
     backend.close().await.expect("close backend");
 
-    let got = backend.get("key").await.expect("get from disk tier");
+    let got = backend
+        .get("key", data.len() as u64)
+        .await
+        .expect("get from disk tier");
     assert_eq!(got, data);
 
     let stats = backend
@@ -430,7 +458,10 @@ async fn disk_read_age_metric_fires_on_disk_read() {
 
     let guard = init_in_memory_tracing();
 
-    let got = backend.get("blobs/key").await.expect("get from disk tier");
+    let got = backend
+        .get("blobs/key", data.len() as u64)
+        .await
+        .expect("get from disk tier");
     assert_eq!(got, data);
 
     micromegas_tracing::dispatch::flush_metrics_buffer();
@@ -450,6 +481,258 @@ async fn disk_read_age_metric_fires_on_disk_read() {
         "disk read-age must not be negative: {}",
         blobs_ages[0]
     );
+}
+
+// -- Validated-promotion two-step read (#1318) -------------------------------
+
+// A disk entry whose stored length does not match the caller's
+// `expected_len` (the poisoned-short-prefetch scenario the design doc's
+// promotion gate exists for) must never be promoted into RAM: `get` reports
+// it as a miss and RAM usage stays flat. A subsequent `put(Demand)` with the
+// full-length bytes then heals the key normally.
+#[tokio::test]
+async fn short_block_never_promoted() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir_path = dir.path().to_str().expect("utf8 path");
+    let full_len = 4096u64;
+    let short_data = Bytes::from(vec![1u8; 100]);
+
+    let backend = FoyerBackend::new_with_shards(
+        dir_path,
+        16 * 1024 * 1024,
+        16 * 1024 * 1024,
+        1,
+        WriteTuning::default(),
+        Arc::from(Vec::new()),
+    )
+    .await
+    .expect("create backend");
+
+    // `.force()` (the prefetch admission path) writes disk-only, so `close`
+    // is enough to make the short entry durable without any RAM-eviction
+    // dance.
+    backend
+        .put("key".to_string(), short_data.clone(), FillHint::Prefetch)
+        .await;
+    backend.close().await.expect("close backend");
+
+    let ram_before = backend.ram_usage();
+    assert!(
+        backend.get("key", full_len).await.is_none(),
+        "a length-mismatched disk entry must be reported as a miss, not promoted"
+    );
+    assert_eq!(
+        backend.ram_usage(),
+        ram_before,
+        "a rejected disk entry must not grow RAM usage"
+    );
+
+    let full_data = Bytes::from(vec![2u8; full_len as usize]);
+    backend
+        .put("key".to_string(), full_data.clone(), FillHint::Demand)
+        .await;
+    let got = backend
+        .get("key", full_len)
+        .await
+        .expect("hit after healing put(Demand)");
+    assert_eq!(got, full_data);
+}
+
+// A disk hit whose length matches `expected_len` must be promoted into the
+// RAM tier (observable as RAM usage growth), and a repeat `get` must be
+// served from RAM without touching disk again.
+#[tokio::test]
+async fn matching_disk_hit_is_promoted_into_ram() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir_path = dir.path().to_str().expect("utf8 path");
+    let data = Bytes::from(vec![9u8; 4096]);
+
+    let backend = FoyerBackend::new_with_shards(
+        dir_path,
+        16 * 1024 * 1024,
+        16 * 1024 * 1024,
+        1,
+        WriteTuning::default(),
+        Arc::from(Vec::new()),
+    )
+    .await
+    .expect("create backend");
+
+    backend
+        .put("key".to_string(), data.clone(), FillHint::Prefetch)
+        .await;
+    backend.close().await.expect("close backend");
+
+    let ram_before = backend.ram_usage();
+    let got = backend
+        .get("key", data.len() as u64)
+        .await
+        .expect("promote from disk");
+    assert_eq!(got, data);
+    let ram_after_promotion = backend.ram_usage();
+    assert!(
+        ram_after_promotion > ram_before,
+        "a validated disk hit must be promoted into RAM: before={ram_before} \
+         after={ram_after_promotion}"
+    );
+
+    let disk_stats_before = backend.disk_stats().expect("disk stats");
+    let got2 = backend
+        .get("key", data.len() as u64)
+        .await
+        .expect("second hit");
+    assert_eq!(got2, data);
+    assert_eq!(
+        backend.ram_usage(),
+        ram_after_promotion,
+        "a repeat get must be a RAM hit, not a second promotion"
+    );
+    let disk_stats_after = backend.disk_stats().expect("disk stats");
+    assert_eq!(
+        disk_stats_after.read_ios, disk_stats_before.read_ios,
+        "a RAM hit must not touch disk again"
+    );
+}
+
+// N concurrent `get`s on the same cold (disk-resident, evicted-from-RAM) key
+// must coalesce to exactly one disk read via the per-key single-flight
+// (`FoyerBackend::load_from_disk`), and the follower count must be
+// observable through `range_cache_load_coalesced`. `#[serial]`:
+// `init_in_memory_tracing` touches global dispatch state shared by every
+// test in this file that uses it.
+#[tokio::test]
+#[serial]
+async fn concurrent_gets_on_cold_key_coalesce_to_one_disk_read() {
+    const N: usize = 8;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir_path = dir.path().to_str().expect("utf8 path");
+    let data = Bytes::from(vec![9u8; 4096]);
+
+    // Same capacity-pressure pattern as `round_trip_through_disk_tier`: the
+    // first 4096-byte put exactly fills the budget, so the following puts
+    // evict it to the disk tier.
+    let backend = FoyerBackend::new_with_shards(
+        dir_path,
+        4096,
+        16 * 1024 * 1024,
+        1,
+        WriteTuning::default(),
+        Arc::from(Vec::new()),
+    )
+    .await
+    .expect("create backend");
+    backend
+        .put("key".to_string(), data.clone(), FillHint::Demand)
+        .await;
+    backend
+        .put(
+            "evict-1".to_string(),
+            Bytes::from(vec![1u8; 16]),
+            FillHint::Demand,
+        )
+        .await;
+    backend
+        .put(
+            "evict-2".to_string(),
+            Bytes::from(vec![2u8; 16]),
+            FillHint::Demand,
+        )
+        .await;
+    backend.close().await.expect("close backend");
+
+    let guard = init_in_memory_tracing();
+    let backend = Arc::new(backend);
+    let disk_stats_before = backend.disk_stats().expect("disk stats");
+
+    let gets: Vec<_> = (0..N)
+        .map(|_| {
+            let backend = backend.clone();
+            let data = data.clone();
+            async move {
+                let got = backend
+                    .get("key", data.len() as u64)
+                    .await
+                    .expect("concurrent hit");
+                assert_eq!(got, data);
+            }
+        })
+        .collect();
+    join_all(gets).await;
+
+    let disk_stats_after = backend.disk_stats().expect("disk stats");
+    assert_eq!(
+        disk_stats_after.read_ios - disk_stats_before.read_ios,
+        1,
+        "N concurrent gets on the same cold key must coalesce to one disk read"
+    );
+
+    micromegas_tracing::dispatch::flush_metrics_buffer();
+    let coalesced: u64 = integer_metric_values(&guard.sink, "range_cache_load_coalesced")
+        .iter()
+        .sum();
+    assert_eq!(
+        coalesced,
+        (N - 1) as u64,
+        "exactly N-1 of the N concurrent gets should join the single owner's load"
+    );
+}
+
+// Regression for the original foyer #1318 clobber: a short (poisoned) disk
+// entry seeded under a key, healed by a `put(Demand)` racing many concurrent
+// reader loops. With every RAM write now promotion-gated or canonical, no
+// writer in the system can ever produce non-canonical RAM contents, so the
+// final read deterministically observes the healed bytes regardless of how
+// the readers and the heal interleave.
+#[tokio::test]
+async fn heal_survives_concurrent_readers() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir_path = dir.path().to_str().expect("utf8 path");
+    let full_len = 4096u64;
+    let short_data = Bytes::from(vec![1u8; 100]);
+    let healed_data = Bytes::from(vec![2u8; full_len as usize]);
+
+    let backend = Arc::new(
+        FoyerBackend::new_with_shards(
+            dir_path,
+            16 * 1024 * 1024,
+            16 * 1024 * 1024,
+            1,
+            WriteTuning::default(),
+            Arc::from(Vec::new()),
+        )
+        .await
+        .expect("create backend"),
+    );
+
+    backend
+        .put("key".to_string(), short_data.clone(), FillHint::Prefetch)
+        .await;
+    backend.close().await.expect("close backend");
+
+    let stop = Arc::new(AtomicBool::new(false));
+    let mut reader_handles = Vec::new();
+    for _ in 0..8 {
+        let backend = backend.clone();
+        let stop = stop.clone();
+        reader_handles.push(tokio::spawn(async move {
+            while !stop.load(Ordering::SeqCst) {
+                let _ = backend.get("key", full_len).await;
+                tokio::task::yield_now().await;
+            }
+        }));
+    }
+
+    backend
+        .put("key".to_string(), healed_data.clone(), FillHint::Demand)
+        .await;
+    stop.store(true, Ordering::SeqCst);
+    for h in reader_handles {
+        h.await.expect("reader task join");
+    }
+
+    let got = backend.get("key", full_len).await.expect("get after heal");
+    assert_eq!(got, healed_data);
 }
 
 // -- Disk format-version guard (#1287) ---------------------------------------
@@ -602,7 +885,7 @@ async fn mismatched_version_wipes_and_reclaims() {
             FillHint::Demand,
         )
         .await;
-    let got = backend.get("key").await.expect("get after wipe");
+    let got = backend.get("key", 16).await.expect("get after wipe");
     assert_eq!(got, Bytes::from(vec![1u8; 16]));
 }
 

@@ -22,7 +22,11 @@ pub struct BackendDiskStats {
 
 #[async_trait]
 pub trait RangeCacheBackend: Send + Sync {
-    async fn get(&self, key: &str) -> Option<Bytes>;
+    /// `expected_len` is the exact length the caller will accept for `key`.
+    /// A backend MUST NOT copy a value whose length differs into any faster
+    /// tier it maintains (the promotion gate) and MUST treat such a value as
+    /// a miss. Single-tier backends accept and ignore the parameter.
+    async fn get(&self, key: &str, expected_len: u64) -> Option<Bytes>;
     async fn put(&self, key: String, value: Bytes, hint: FillHint);
 
     /// Disk write-path counters, for the saturation monitor's per-second

@@ -1,19 +1,31 @@
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use anyhow::{Context, Result, ensure};
 use async_trait::async_trait;
 use bytes::Bytes;
 use foyer::{
-    BlockEngineConfig, Code, DeviceBuilder, Event, EventListener, FsDeviceBuilder, HybridCache,
-    HybridCacheBuilder, LruConfig, Source,
+    Age, BlockEngineConfig, Code, DeviceBuilder, Event, EventListener, FsDeviceBuilder,
+    HybridCache, HybridCacheBuilder, HybridCacheProperties, Load, LruConfig,
 };
+use foyer_common::properties::Properties;
+use futures::future::{BoxFuture, FutureExt, Shared};
 use micromegas_tracing::prelude::*;
 
 use super::backend::{BackendDiskStats, FillHint, RangeCacheBackend};
 use super::metric_tags::{
     EvictionTagTable, REASON_CLEAR, REASON_EVICT, REASON_REMOVE, REASON_REPLACE,
 };
+
+/// `blk:`-prefixed keys are the block-cache entries `probe_blocks` passes to
+/// `RangeCacheBackend::get`; `meta:`-prefixed 8-byte size lookups
+/// (`range_cache/mod.rs::size`) also flow through here but must be excluded
+/// from the tiered hit counters below, or they would pollute the block-only
+/// miss-rate derivation (`range_cache_block_request − (ram_hit + disk_hit)`).
+fn is_block_key(key: &str) -> bool {
+    key.starts_with("blk:")
+}
 
 /// RAM-tier cache value carrying the timing needed for eviction/age
 /// telemetry.
@@ -59,6 +71,20 @@ impl CachedBlock {
         Self {
             is_prefetch: true,
             ..Self::new(bytes)
+        }
+    }
+
+    /// A fresh-normalized disk->RAM promotion record: always a real (never
+    /// phantom) RAM residency starting now, carrying over only the disk
+    /// entry's `disk_write_ms` stamp. Used for both `Load::Entry` and
+    /// `Load::Piece` promotions -- see the two-step `get`'s deliberate
+    /// divergence from hybrid's own Piece-arm handling (field doc above).
+    fn new_promoted(bytes: Bytes, disk_write_ms: i64) -> Self {
+        Self {
+            bytes,
+            ram_inserted_at: Instant::now(),
+            disk_write_ms,
+            is_prefetch: false,
         }
     }
 }
@@ -232,9 +258,18 @@ impl Default for WriteTuning {
     }
 }
 
+/// One key's disk-load-and-promote task, shared between the caller that
+/// spawned it and every concurrent follower that joins it instead of
+/// spawning its own -- see `FoyerBackend::load_from_disk`.
+type SharedLoad = Shared<BoxFuture<'static, Option<Bytes>>>;
+
 pub struct FoyerBackend {
     cache: HybridCache<String, CachedBlock>,
     tags: Arc<EvictionTagTable>,
+    /// Per-key single-flight for step-2 disk loads, replacing foyer's own
+    /// (buggy, see #1318) inflight coalescing now that `get` no longer
+    /// routes through `HybridCache::get`/`get_or_fetch`.
+    loads: Arc<Mutex<HashMap<String, SharedLoad>>>,
 }
 
 impl FoyerBackend {
@@ -297,7 +332,11 @@ impl FoyerBackend {
             )
             .build()
             .await?;
-        Ok(Self { cache, tags })
+        Ok(Self {
+            cache,
+            tags,
+            loads: Arc::new(Mutex::new(HashMap::new())),
+        })
     }
 
     pub async fn close(&self) -> Result<()> {
@@ -313,43 +352,149 @@ impl FoyerBackend {
     }
 }
 
+/// Validate `value` against `expected_len` and, if it matches, promote it
+/// into the RAM tier with a fresh-normalized `CachedBlock` (see
+/// `CachedBlock::new_promoted`) carrying `age`'s hybrid promotion semantics
+/// forward -- shared by both the `Load::Entry` and `Load::Piece` arms of
+/// `FoyerBackend::load_and_promote`. Emits the disk-tier hit/age telemetry
+/// and the length-mismatch miss metric; returns the validated bytes on
+/// success.
+fn promote_if_valid(
+    cache: &HybridCache<String, CachedBlock>,
+    tags: &EvictionTagTable,
+    key: &str,
+    value: CachedBlock,
+    age: Age,
+    expected_len: u64,
+) -> Option<Bytes> {
+    if value.bytes.len() as u64 != expected_len {
+        // The short entry is left in place: the heal's put(Demand) will
+        // supersede it, and until then other probes coalesce on the origin
+        // single-flight (see the design doc's poisoned-short-prefetch note).
+        imetric!("range_cache_promotion_len_mismatch", "count", 1_u64);
+        return None;
+    }
+    if is_block_key(key) {
+        let t = tags.classify(key);
+        imetric!("object_cache_disk_tier_hit", "count", t.prefix, 1_u64);
+    }
+    if value.disk_write_ms != DISK_WRITE_NONE {
+        // See the disk-tier limitation note in the design doc: this per-read
+        // age is the observable disk-exit signal foyer 0.22 exposes, and its
+        // max/high-quantiles estimate the (unobservable) reclaim age.
+        let age_ms = (chrono::Utc::now().timestamp_millis() - value.disk_write_ms) as f64;
+        let t = tags.classify(key);
+        fmetric!(
+            "object_cache_disk_tier_read_age_ms",
+            "ms",
+            t.prefix,
+            age_ms.max(0.0)
+        );
+    }
+    let bytes = value.bytes.clone();
+    cache.memory().insert_with_properties(
+        key.to_string(),
+        CachedBlock::new_promoted(bytes.clone(), value.disk_write_ms),
+        HybridCacheProperties::default().with_age(age),
+    );
+    Some(bytes)
+}
+
+/// Step 2 of the two-step read: a direct (non-inflight) disk load, validated
+/// and promoted on a length match. Replicates `HybridCache::get`'s own
+/// `Entry`/`Piece` handling (`foyer/src/hybrid/cache.rs:660-718`) minus the
+/// broken inflight layer, with the Piece arm's deliberate divergence
+/// documented on `promote_if_valid`/`CachedBlock::new_promoted`.
+async fn load_and_promote(
+    cache: &HybridCache<String, CachedBlock>,
+    tags: &EvictionTagTable,
+    key: &str,
+    expected_len: u64,
+) -> Option<Bytes> {
+    match cache.storage().load(key).await {
+        Ok(Load::Entry {
+            value, populated, ..
+        }) => promote_if_valid(cache, tags, key, value, populated.age, expected_len),
+        Ok(Load::Piece { piece, populated }) => {
+            let value = piece.value().clone();
+            promote_if_valid(cache, tags, key, value, populated.age, expected_len)
+        }
+        // Hybrid parity: a throttled disk read is reported to the caller the
+        // same as a miss.
+        Ok(Load::Miss) | Ok(Load::Throttled) => None,
+        // A backend (disk/IO) error must not fail the read: treat it as a
+        // miss so the caller falls back to origin, but surface it as a
+        // metric + log so a degraded SSD volume is observable rather than
+        // silently inflating origin traffic.
+        Err(e) => {
+            imetric!("range_cache_backend_error", "count", 1_u64);
+            warn!("range_cache backend get error key={key}: {e}");
+            None
+        }
+    }
+}
+
+impl FoyerBackend {
+    /// Step 2 dispatch: join an already in-flight disk load for `key`, or
+    /// become its owner. The owned load is a detached `tokio::spawn`ed task
+    /// (safe here precisely because `load_and_promote`'s only write is
+    /// promotion-gated, so it never needs cancelling), so a caller dropping
+    /// this future never strands a follower still awaiting the `Shared`.
+    async fn load_from_disk(&self, key: &str, expected_len: u64) -> Option<Bytes> {
+        let fut: SharedLoad = {
+            let mut loads = self.loads.lock().expect("foyer backend loads lock");
+            if let Some(existing) = loads.get(key) {
+                imetric!("range_cache_load_coalesced", "count", 1_u64);
+                existing.clone()
+            } else {
+                let cache = self.cache.clone();
+                let tags = self.tags.clone();
+                let key_for_task = key.to_string();
+                let loads_map = self.loads.clone();
+                let handle = tokio::spawn(async move {
+                    let result = load_and_promote(&cache, &tags, &key_for_task, expected_len).await;
+                    // Always runs to completion (a detached task), so no
+                    // stale map entry survives even if every awaiting query
+                    // above is cancelled.
+                    loads_map
+                        .lock()
+                        .expect("foyer backend loads lock")
+                        .remove(&key_for_task);
+                    result
+                });
+                let shared: SharedLoad = async move {
+                    match handle.await {
+                        Ok(result) => result,
+                        Err(e) => {
+                            warn!("foyer backend disk load task failed: {e}");
+                            None
+                        }
+                    }
+                }
+                .boxed()
+                .shared();
+                loads.insert(key.to_string(), shared.clone());
+                shared
+            }
+        };
+        fut.await
+    }
+}
+
 #[async_trait]
 impl RangeCacheBackend for FoyerBackend {
-    async fn get(&self, key: &str) -> Option<Bytes> {
-        match self.cache.get(key).await {
-            Ok(Some(entry)) => {
-                if entry.source() == Source::Disk && entry.value().disk_write_ms != DISK_WRITE_NONE
-                {
-                    // Source::Disk fires exactly once per disk read (the
-                    // now-promoted entry reports Source::Memory on a
-                    // subsequent hit), so this never double-counts. See the
-                    // disk-tier limitation note in the design doc: this
-                    // per-read age is the observable disk-exit signal foyer
-                    // 0.22 exposes, and its max/high-quantiles estimate the
-                    // (unobservable) reclaim age.
-                    let age_ms = (chrono::Utc::now().timestamp_millis()
-                        - entry.value().disk_write_ms) as f64;
-                    let t = self.tags.classify(key);
-                    fmetric!(
-                        "object_cache_disk_tier_read_age_ms",
-                        "ms",
-                        t.prefix,
-                        age_ms.max(0.0)
-                    );
-                }
-                Some(entry.value().bytes.clone())
+    async fn get(&self, key: &str, expected_len: u64) -> Option<Bytes> {
+        // Step 1: plain RAM lookup, no inflight (`Cache::get`,
+        // foyer-memory/src/cache.rs:763).
+        if let Some(entry) = self.cache.memory().get(key) {
+            if is_block_key(key) {
+                let t = self.tags.classify(key);
+                imetric!("object_cache_ram_tier_hit", "count", t.prefix, 1_u64);
             }
-            Ok(None) => None,
-            // A backend (disk/IO) error must not fail the read: treat it as a
-            // miss so the caller falls back to origin, but surface it as a
-            // metric + log so a degraded SSD volume is observable rather than
-            // silently inflating origin traffic.
-            Err(e) => {
-                imetric!("range_cache_backend_error", "count", 1_u64);
-                warn!("range_cache backend get error key={key}: {e}");
-                None
-            }
+            return Some(entry.value().bytes.clone());
         }
+        // Step 2: RAM miss -> single-flight direct disk load.
+        self.load_from_disk(key, expected_len).await
     }
 
     async fn put(&self, key: String, value: Bytes, hint: FillHint) {

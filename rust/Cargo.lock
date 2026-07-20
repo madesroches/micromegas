@@ -3817,6 +3817,7 @@ dependencies = [
  "bytes",
  "chrono",
  "foyer",
+ "foyer-common",
  "foyer-memory",
  "futures",
  "micromegas-tracing",

@@ -22,13 +22,13 @@ use micromegas_object_cache::l1_store::L1CacheStore;
 #[tokio::test]
 async fn bounded_memory_backend_get_put_round_trip() {
     let backend = BoundedMemoryBackend::new(1024 * 1024);
-    assert!(backend.get("missing").await.is_none());
+    assert!(backend.get("missing", 0).await.is_none());
 
     let data = Bytes::from_static(b"hello world");
     backend
         .put("key".to_string(), data.clone(), FillHint::Demand)
         .await;
-    assert_eq!(backend.get("key").await, Some(data));
+    assert_eq!(backend.get("key", data.len() as u64).await, Some(data));
 }
 
 #[tokio::test]
@@ -40,7 +40,7 @@ async fn bounded_memory_backend_ignores_fill_hint() {
         .await;
     // No disk tier: a prefetch fill lands in the same in-memory cache as a
     // demand fill (unlike `FoyerBackend`, which routes it SSD-only).
-    assert_eq!(backend.get("key").await, Some(data));
+    assert_eq!(backend.get("key", data.len() as u64).await, Some(data));
 }
 
 // A `put` must detach (copy) the stored block from its parent buffer, or the
@@ -57,7 +57,7 @@ async fn bounded_memory_backend_detaches_from_parent_buffer() {
         .put("k".to_string(), block.clone(), FillHint::Demand)
         .await;
 
-    let got = backend.get("k").await.expect("hit");
+    let got = backend.get("k", 4096).await.expect("hit");
     assert_eq!(got, vec![7u8; 4096]);
     assert_ne!(
         got.as_ptr(),
@@ -85,7 +85,11 @@ async fn bounded_memory_backend_evicts_at_budget() {
 
     let mut hits = 0;
     for i in 0..40 {
-        if backend.get(&format!("key-{i}")).await.is_some() {
+        if backend
+            .get(&format!("key-{i}"), entry.len() as u64)
+            .await
+            .is_some()
+        {
             hits += 1;
         }
     }

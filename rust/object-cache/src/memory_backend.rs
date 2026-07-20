@@ -25,7 +25,7 @@ impl Default for MemoryBackend {
 
 #[async_trait]
 impl RangeCacheBackend for MemoryBackend {
-    async fn get(&self, key: &str) -> Option<Bytes> {
+    async fn get(&self, key: &str, _expected_len: u64) -> Option<Bytes> {
         self.data
             .lock()
             .expect("memory backend lock")

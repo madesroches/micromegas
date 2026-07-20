@@ -11,7 +11,7 @@ authors.workspace = true
 
 [features]
 default = []
-foyer = ["dep:foyer"]
+foyer = ["dep:foyer", "dep:foyer-common"]
 
 [dependencies]
 micromegas-tracing.workspace = true
@@ -31,6 +31,7 @@ thiserror.workspace = true
 tokio.workspace = true
 
 foyer = { workspace = true, optional = true }
+foyer-common = { workspace = true, optional = true }
 
 [dev-dependencies]
 micromegas-transit.workspace = true
