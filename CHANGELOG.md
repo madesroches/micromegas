@@ -13,6 +13,7 @@ This file documents the historical progress of the Micromegas project. For curre
 * **Build:**
   * Bump the pinned Rust toolchain to 1.97.0; fix new `clippy::useless_borrows_in_formatting` lints the version tightened, and regenerate the datafusion-wasm bindings whose internal closure-glue symbol names changed under the new compiler
   * Pin the transitive `websocket-driver` dev dependency to `^0.7.5` via yarn `resolutions` to resolve Dependabot alerts #339/#340
+  * Delete the unused `uri-handler` crate, and route `analytics-web-srv` and `object-cache-srv` through the public `micromegas` facade (`micromegas::auth`/`micromegas::object_cache`/`micromegas::tracing`) instead of depending on internal crates directly (#1256)
 * **Caching:**
   * Fix `object_cache_get_bytes_served` recording a structural zero on the live `GET /obj/{key}` path: a `Content-Length`-framed HTTP body is never polled to a terminal `None`, so the byte-count callback fired from the drained stream never ran; `count_bytes_served` now fires as soon as the known expected payload is fully produced, before the final chunk is yielded, and both GET and `/ranges` call sites pass their known total (#1279)
   * Instrument object-cache eviction: emit RAM-tier eviction count/age metrics (tagged by `prefix` and `reason`) via a foyer `EventListener`, and a disk read-age estimate on disk-tier read hits, so it's observable what gets evicted and how long it lived before leaving a tier (#1281)
