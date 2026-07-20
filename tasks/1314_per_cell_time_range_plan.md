@@ -125,21 +125,42 @@ Notes:
 - `parseRelativeTime` already accepts relative (`now-1h`), ISO absolute, and — after substitution — macro-derived timestamps.
 
 ### 3. Execute-side integration (covers all cells with an `execute`)
-In `useCellExecution.ts`, immediately after the global `timeRange` is computed (`:177`) and the `available*` maps are gathered, resolve the effective range and use it for the context:
+
+**Blocked-state guard extension.** The existing unresolved-selection guard (`useCellExecution.ts:150-163`, `findUnresolvedSelectionMacro(cellSql, availableCellSelections)`) only scans `cell.sql`. A cell whose SQL has no selection macro but whose `timeRange.from`/`to` uses `$cell.selected.col` with no row selected would otherwise reach `resolveQueryTimeRange` and hit `parseRelativeTime('')`, throwing a raw parse error instead of the friendly blocked placeholder. Extend the guard to also scan the cell's `timeRange.from`/`to` strings with the same `findUnresolvedSelectionMacro` (it matches `$cell.selected.col` in any string, not just SQL) before computing the effective range:
 
 ```ts
-const effectiveTimeRange = resolveQueryTimeRange(cell, {
-  variables: availableVariables,
-  timeRange,
-  cellResults: availableCellResults,
-  cellSelections: availableCellSelections,
-})
-// ...build context with `timeRange: effectiveTimeRange` instead of `timeRange`
+const cellTimeRange = ('timeRange' in cell ? (cell as QueryBackedCellConfig).timeRange : undefined)
+const unresolvedCell =
+  (cellSql && findUnresolvedSelectionMacro(cellSql, availableCellSelections)) ||
+  (cellTimeRange?.from && findUnresolvedSelectionMacro(cellTimeRange.from, availableCellSelections)) ||
+  (cellTimeRange?.to && findUnresolvedSelectionMacro(cellTimeRange.to, availableCellSelections))
+if (unresolvedCell) {
+  completeCellExecution(cell.name, { status: 'blocked', data: [], error: `Select a row in "${unresolvedCell}" to view results` })
+  return false // halt execution — downstream cells should wait for selection
+}
 ```
 
-Because `context.timeRange` feeds **both** `substituteMacros` (`$from`/`$to`) **and** the server query window (`params: { begin, end }` in `runQuery`/`runQueryAs`/`executeSql`), overriding it here applies the per-cell range to every query-backed cell uniformly — table, chart, log, property timeline, swimlane, transposed, flamegraph, map, image, and SQL-backed variable cells — with **zero changes to any cell's `execute`**.
+**Resolving the effective range.** `runQuery`/`runQueryAs`/`executeSql` close over the local `timeRange` const computed at `useCellExecution.ts:177` for their `params: { begin, end }` server query window — they do not read `context.timeRange`. So the effective range must replace that local `timeRange` binding itself, not just `context.timeRange`, or the override would only affect `$from`/`$to` macro substitution while the server still queried the global window. Rename the global range at `:177` to `globalTimeRange`, then — inside the existing `try` that guards `meta.execute`, before the `runQuery`/`runQueryAs` closures are defined — shadow it with the resolved effective range under the original name `timeRange`:
 
-Wrap the `resolveQueryTimeRange` call inside the existing `try` that guards `meta.execute`; a thrown parse error becomes the cell's `error` state (same treatment as a bad query), consistent with how Flame Graph surfaces `initialTimeRange` errors.
+```ts
+const globalTimeRange = getTimeRangeForApi(rawTimeRange.from, rawTimeRange.to) // was `timeRange` at :177
+
+try {
+  const timeRange = resolveQueryTimeRange(cell, {
+    variables: availableVariables,
+    timeRange: globalTimeRange,
+    cellResults: availableCellResults,
+    cellSelections: availableCellSelections,
+  })
+  // `timeRange` now shadows `globalTimeRange` for the rest of the `try` block, so
+  // `runQuery`/`runQueryAs`/`executeSql` (params.begin/end) and `context.timeRange`
+  // (substituteMacros $from/$to) both pick up the resolved effective range automatically —
+  // no separate reassignment needed.
+  ...
+}
+```
+
+Because `runQuery`/`runQueryAs`/`executeSql` and `context.timeRange` all resolve `timeRange` from the same shadowed binding, this applies the per-cell range to every query-backed cell uniformly — table, chart, log, property timeline, swimlane, transposed, flamegraph, map, image, and SQL-backed variable cells — with **zero changes to any cell's `execute`**. A thrown parse error becomes the cell's `error` state (same treatment as a bad query), consistent with how Flame Graph surfaces `initialTimeRange` errors.
 
 ### 4. Renderer-side integration (covers Perfetto and display-axis cells)
 In `notebook-cell-view.ts:buildCellRendererProps`, replace `timeRange: context.timeRange` with the resolved effective range so renderers that read the prop directly (Perfetto trace fetch, Swimlane/PropertyTimeline axis, Map playback) honor the override:
@@ -222,7 +243,7 @@ global raw range (URL) ──> getTimeRangeForApi ──> global {begin,end}
 4. **Renderer-side** (`notebook-cell-view.ts`): resolve effective range in `buildCellRendererProps` with try/catch fallback; set the `timeRange` prop from it.
 5. **Editor field** (new `CellTimeRangeField.tsx` + `CellEditor.tsx`): shared From/To component rendered below the data source field, gated by `shouldShowTimeRange`; emit full `{from,to}` or `undefined`.
 6. **Tests**: unit-test `resolveQueryTimeRange`; extend cell/execution tests (see Testing Strategy).
-7. **Docs**: update the notebook/query guide; retire or generalize the Perfetto-only mockup.
+7. **Docs**: update `mkdocs/docs/web-app/notebooks/variables.md` and `cell-types.md`; retire or generalize `tasks/1314_per_cell_time_range_mockup.html`.
 
 ## Files to Modify
 - `analytics-web-app/src/lib/screen-renderers/notebook-types.ts` — mixin + config extends.
@@ -235,14 +256,14 @@ global raw range (URL) ──> getTimeRangeForApi ──> global {begin,end}
 - Docs in `mkdocs/docs/` (query/notebook guide).
 
 ## Trade-offs
-- **Central resolution vs. per-cell edits.** Resolving in `useCellExecution` (execute) + `buildCellRendererProps` (render) touches two files instead of editing ~9 `execute` methods. It is DRY and guarantees uniform behavior, and it correctly overrides the *server query window* (`params.begin/end`), not just `$from`/`$to` macros — an edit-each-cell approach that only changed the `substituteMacros` argument would miss the server window. Cost: two integration points must stay in sync; the shared resolver keeps them consistent.
+- **Central resolution vs. per-cell edits.** Resolving in `useCellExecution` (execute) + `buildCellRendererProps` (render) touches two files instead of editing ~9 `execute` methods. It is DRY and guarantees uniform behavior — but only because the execute-side fix shadows the local `timeRange` binding that `runQuery`/`runQueryAs`/`executeSql` close over (see §3), so the *server query window* (`params.begin/end`) is overridden along with `$from`/`$to` macros; overriding `context.timeRange` alone would miss the server window. Cost: two integration points must stay in sync; the shared resolver keeps them consistent.
 - **Reuse `TimeRange`/`from`/`to` vs. a new type.** Per the issue, `TimeRange { from, to }` already models raw range strings and avoids the reserved SQL words `begin`/`end`; the resolved `{begin,end}` stays the runtime form. No new type invented.
 - **Mixin vs. folding fields into `CellConfigBase`.** A mixin keeps non-query cells (markdown/reference/hg) free of query-only fields, respecting their contracts.
 - **Relative-time "now" drift.** Execute resolves at run time; the renderer resolves at render time, so `now-*` bounds can differ by seconds between the two. For Perfetto (no `execute`) only the render path matters; for SQL cells the query uses the execute-time value. Acceptable and matches existing global-range behavior.
 
 ## Documentation
-- Update the notebook/query guide (the page behind `QUERY_GUIDE_URL` in `mkdocs/docs/`) to document the per-cell time range field: precedence (empty = screen range), that `from`/`to` accept relative strings, absolute timestamps, and macros (`$from`, `$to`, `$variable`, `$cell[N].col`, `$cell.selected.col`), and the contrast with Flame Graph's Initial From/To (view range).
-- Retire `tasks/perfetto_cell_time_range_mockup.html` (Perfetto-only, from #1310) or note that the feature is now generalized to all query-backed cells.
+- Update `mkdocs/docs/web-app/notebooks/variables.md` (the "SQL Macro Substitution" section that already documents `$from`/`$to`) and `mkdocs/docs/web-app/notebooks/cell-types.md` to document the per-cell time range field: precedence (empty = screen range), that `from`/`to` accept relative strings, absolute timestamps, and macros (`$from`, `$to`, `$variable`, `$cell[N].col`, `$cell.selected.col`), and the contrast with Flame Graph's Initial From/To (view range). (`QUERY_GUIDE_URL` / `mkdocs/docs/query-guide/` is a SQL/DataFusion/Python/Grafana overview and does not cover notebook cells or macros — not the right target.)
+- Retire `tasks/1314_per_cell_time_range_mockup.html` or note that the feature is now generalized to all query-backed cells.
 
 ## Testing Strategy
 - **Unit — `resolveQueryTimeRange`**: unset → returns global; one bound set, other empty → mixes override + global fallback; relative (`now-1h`); absolute ISO; macro (`$variable`, `$cell.selected.col`) resolution; invalid string throws.
