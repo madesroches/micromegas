@@ -79,9 +79,11 @@ without racing it).
 
 - `rust/Cargo.toml` (workspace root): `foyer = "0.22"` and `foyer-memory = "0.22"` as plain
   crates-io dependencies, no `[patch]` section.
-- `rust/object-cache/Cargo.toml:24`: `foyer-memory.workspace = true` (direct use, currently unused
-  beyond re-exported types — the crate's own bug lives one layer down from anything `object-cache`
-  can reach).
+- `rust/object-cache/Cargo.toml:24`: `foyer-memory.workspace = true` (direct use: `BoundedMemoryBackend`
+  (`rust/object-cache/src/bounded_memory_backend.rs`) builds and drives a standalone
+  `foyer_memory::Cache` via `Cache`/`CacheBuilder`/`LfuConfig`, calling only plain `insert`/`get` — it
+  never goes through a fetch/inflight-coalescing API, so this path is unaffected by the bug even
+  though it depends directly on `foyer-memory`'s internals).
 - `Cargo.lock` resolves `foyer`, `foyer-memory`, `foyer-common`, `foyer-storage`, `foyer-tokio` all
   at `0.22.3` from crates.io.
 - `rust/Cargo.toml`'s workspace `members = ["*", "examples/write-perfetto"]` with
@@ -157,7 +159,15 @@ Add `"vendor"` to `rust/Cargo.toml`'s workspace `exclude` list (alongside the ex
 `datafusion-wasm` precedent), so:
 - `cargo fmt --check` and `cargo clippy --workspace -- -D warnings` do not sweep over third-party
   code we did not write and want to stay diff-minimal against upstream.
-- `cargo machete` / `cargo test` (workspace-default) do not pick it up as a member.
+- `cargo test` (workspace-default) does not pick it up as a member.
+
+Workspace `exclude` only affects Cargo-workspace-membership-based tooling (fmt/clippy/test); it does
+*not* affect `cargo machete`, which walks the filesystem directly, respecting `.gitignore`/`.ignore`
+files rather than `Cargo.toml` workspace membership. `build/rust_ci.py`'s existing "Unused
+Dependencies Check" step invokes bare `cargo machete` with no path restriction, so without a separate
+opt-out it would still walk into `rust/vendor/foyer-memory-0.22.3/Cargo.toml` and lint its (large,
+untouched) third-party dependency list. Add `rust/vendor/.ignore` containing `*` (or a `rust/.ignore`
+listing `vendor/`) so ignore-aware tools like `cargo machete` skip the vendored tree too.
 
 This means the vendored crate's own test suite (upstream's existing tests, plus the new regression
 test below) needs its own CI step, mirroring the existing `datafusion-wasm` pattern in
@@ -236,6 +246,8 @@ after it, with no timing dependence.
    - Add `"vendor"` to the workspace `exclude` list.
    - Add the `[patch.crates-io]` section pointing `foyer-memory` at
      `vendor/foyer-memory-0.22.3`.
+   - Add `rust/vendor/.ignore` (containing `*`) so ignore-aware tools such as `cargo machete` also
+     skip the vendored tree (workspace `exclude` alone does not affect `cargo machete`).
 5. **Add a CI step** in `build/rust_ci.py`'s `run_native()` (or a new small `run_vendor()` following
    the `run_wasm()` precedent) that runs `cargo test` with `cwd` set to
    `rust/vendor/foyer-memory-0.22.3`, so the vendored crate's test suite (including the new
@@ -245,6 +257,8 @@ after it, with no timing dependence.
 7. **Verify no CI regressions locally** before committing:
    - `cargo fmt --check` and `cargo clippy --workspace -- -D warnings` (should not touch `vendor/`).
    - `cargo test` (workspace) — unaffected, still excludes `vendor/`.
+   - `cargo machete` — confirm `rust/vendor/.ignore` keeps it from scanning
+     `rust/vendor/foyer-memory-0.22.3/Cargo.toml`.
    - `cargo test` inside `rust/vendor/foyer-memory-0.22.3` — the new regression test passes; on a
      scratch copy without the fix it fails, confirming the test actually exercises the bug.
    - `cargo deny check licenses bans sources` and `cargo audit` — confirm the patched path source
@@ -258,6 +272,8 @@ after it, with no timing dependence.
 
 - `rust/Cargo.toml` — add `"vendor"` to workspace `exclude`; add `[patch.crates-io]` section.
 - `rust/Cargo.lock` — regenerated (patched `foyer-memory` source).
+- `rust/vendor/.ignore` — new (`*`, so `cargo machete` and other ignore-aware tools skip the
+  vendored tree).
 - `rust/vendor/foyer-memory-0.22.3/Cargo.toml` — new (trimmed, published metadata).
 - `rust/vendor/foyer-memory-0.22.3/src/**` — new (vendored source; `inflight.rs` patched + tested).
 - `rust/vendor/foyer-memory-0.22.3/LICENSE-APACHE` — new.
