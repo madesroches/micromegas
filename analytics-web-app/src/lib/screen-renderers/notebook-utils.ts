@@ -346,7 +346,7 @@ export function shouldShowTimeRange(cell: CellConfig): boolean {
     case 'hg':
       return false
     case 'variable':
-      return cell.variableType === 'combobox' || cell.variableType === 'datasource' || cell.variableType === 'expression'
+      return cell.variableType === 'combobox' || cell.variableType === 'expression'
     default:
       return true // table, chart, log, propertytimeline, swimlane, transposed, flamegraph, map, perfettoexport, image
   }

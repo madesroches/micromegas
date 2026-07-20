@@ -340,6 +340,7 @@ export function useCellExecution({
       for (let i = startIndex; i < cells.length; i++) {
         const success = await executeCell(i)
         if (!success) {
+          const failedMeta = getCellTypeMetadata(cells[i].type)
           // Mark remaining cells as blocked (except those that don't block)
           for (let j = i + 1; j < cells.length; j++) {
             const blockedCell = cells[j]
@@ -351,7 +352,12 @@ export function useCellExecution({
               }))
             }
           }
-          break
+          // Only halt execution if this cell's failure actually blocks
+          // downstream cells (e.g. Perfetto's validation-only execute has
+          // no data dependency and shouldn't stop the rest of the notebook).
+          if (failedMeta.canBlockDownstream) {
+            break
+          }
         }
       }
     },

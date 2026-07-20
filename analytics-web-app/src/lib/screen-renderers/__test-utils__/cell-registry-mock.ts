@@ -101,6 +101,16 @@ const BASE_METADATA = {
     defaultHeight: 500,
     canBlockDownstream: true,
   },
+  perfettoexport: {
+    label: 'Perfetto Export',
+    icon: 'P',
+    description: 'Export spans to Perfetto trace viewer',
+    showTypeBadge: true,
+    defaultHeight: 80,
+    // No data output for other cells - mirrors the real PerfettoExportCell
+    // metadata so tests can exercise the canBlockDownstream: false path.
+    canBlockDownstream: false,
+  },
 } as const
 
 type CellType = keyof typeof BASE_METADATA & string
@@ -233,11 +243,24 @@ export function createCellRegistryMock(options: MockOptions = {}) {
       case 'map':
         meta.createDefaultConfig = () => ({ type: 'map', sql: DEFAULT_SQL.map })
         break
+      case 'perfettoexport':
+        meta.createDefaultConfig = () => ({ type: 'perfettoexport' })
+        break
     }
 
     // Add execute method (except markdown and hg which don't execute)
     if (type !== 'markdown' && type !== 'hg') {
-      if (withSqlExecution) {
+      if (type === 'perfettoexport') {
+        // Minimal validating execute (mirrors the real PerfettoExportCell):
+        // throws when the config asks it to, to simulate a bad timeRange
+        // override, without a data output for other cells.
+        meta.execute = (config: { shouldFail?: boolean }) => {
+          if (config.shouldFail) {
+            throw new Error('Invalid time range override')
+          }
+          return Promise.resolve({ data: [] })
+        }
+      } else if (withSqlExecution) {
         if (type === 'variable') {
           meta.execute = createVariableExecute()
           meta.onExecutionComplete = variableOnExecutionComplete
@@ -261,6 +284,7 @@ export function createCellRegistryMock(options: MockOptions = {}) {
     hg: buildMetadata('hg'),
     transposed: buildMetadata('transposed'),
     map: buildMetadata('map'),
+    perfettoexport: buildMetadata('perfettoexport'),
   }
 
   const mock: Record<string, unknown> = {

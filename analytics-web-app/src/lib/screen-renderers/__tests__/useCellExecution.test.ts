@@ -601,6 +601,37 @@ describe('useCellExecution', () => {
       expect(result.current.cellStates['Notes']).toBeUndefined()
     })
 
+    it('should not halt execution when a canBlockDownstream: false cell fails (e.g. Perfetto export)', async () => {
+      mockStreamQuery.mockReturnValue(createSuccessResults())
+
+      const cells: CellConfig[] = [
+        { type: 'table', name: 'First', sql: 'SELECT 1', layout: { height: 'auto' } },
+        { type: 'perfettoexport', name: 'Trace', shouldFail: true, layout: { height: 'auto' } } as unknown as CellConfig,
+        { type: 'table', name: 'Third', sql: 'SELECT 3', layout: { height: 'auto' } },
+      ]
+      const variableValuesRef = createVariableValuesRef()
+
+      const { result } = renderHook(() =>
+        useCellExecution({
+          cells,
+          rawTimeRange: defaultRawTimeRange,
+          variableValuesRef,
+          setVariableValue: jest.fn(),
+          refreshTrigger: 0,
+        })
+      )
+
+      await waitFor(() => {
+        expect(result.current.cellStates['Third']?.status).toBe('success')
+      })
+
+      expect(result.current.cellStates['First'].status).toBe('success')
+      // Perfetto's execute throws on the bad override -> error state
+      expect(result.current.cellStates['Trace'].status).toBe('error')
+      // canBlockDownstream: false -> execution continues past it
+      expect(result.current.cellStates['Third'].status).toBe('success')
+    })
+
     it('should halt execution and block downstream cells when a cell has an unresolved selection', async () => {
       mockStreamQuery.mockReturnValue(createSuccessResults())
 
