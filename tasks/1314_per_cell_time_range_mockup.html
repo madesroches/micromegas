@@ -1,0 +1,500 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Per-Cell Query Time Range — Mockup (#1314)</title>
+<style>
+  :root {
+    --app-bg: #0a0a0f;
+    --header-bg: #12121a;
+    --panel-bg: #12121a;
+    --card-bg: #1a1a2e;
+    --border-color: #2a2a3e;
+    --border-hover: #3a3a4e;
+    --text-primary: #e7e9ea;
+    --text-secondary: #9ca3af;
+    --text-muted: #6b7280;
+    --accent-link: #1565c0;
+    --accent-link-hover: #1976d2;
+    --accent-success: #22c55e;
+    --accent-error: #f87171;
+    --brand-rust: #bf360c;
+    --brand-gold: #ffb300;
+    --selection-bg: rgba(21, 101, 192, 0.15);
+    --selection-border: #1565c0;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    background: var(--app-bg);
+    color: var(--text-primary);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
+  }
+  a { color: var(--accent-link); }
+  code, .mono {
+    font-family: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
+  }
+  .page {
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 28px 24px 80px;
+  }
+  header.doc {
+    border-bottom: 1px solid var(--border-color);
+    padding-bottom: 18px;
+    margin-bottom: 28px;
+  }
+  header.doc h1 { font-size: 22px; margin: 0 0 6px; font-weight: 600; }
+  header.doc .sub { color: var(--text-secondary); font-size: 13px; }
+  .tag {
+    display: inline-block;
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    background: var(--card-bg);
+    color: var(--text-secondary);
+    border: 1px solid var(--border-color);
+    margin-right: 6px;
+  }
+  h2.section {
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-secondary);
+    font-weight: 600;
+    margin: 40px 0 14px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--border-color);
+  }
+  .note { color: var(--text-secondary); font-size: 13px; margin: 0 0 16px; }
+
+  /* ---- Layout: notebook + editor panel ---- */
+  .split {
+    display: grid;
+    grid-template-columns: 1fr 340px;
+    gap: 24px;
+    align-items: start;
+  }
+  @media (max-width: 900px) { .split { grid-template-columns: 1fr; } }
+
+  /* ---- Notebook column ---- */
+  .notebook { display: flex; flex-direction: column; gap: 14px; }
+  .cell {
+    background: var(--panel-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  .cell.selected { border-color: var(--selection-border); box-shadow: 0 0 0 1px var(--selection-border); }
+  .cell-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 9px 12px;
+    border-bottom: 1px solid var(--border-color);
+    background: var(--header-bg);
+  }
+  .cell-badge {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: var(--card-bg);
+    color: var(--text-secondary);
+    font-weight: 600;
+  }
+  .cell-name { font-weight: 600; font-size: 13px; }
+  .cell-body { padding: 14px 12px; color: var(--text-secondary); font-size: 13px; }
+
+  /* time-range chip shown on a cell header when an override is active */
+  .tr-chip {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: rgba(255, 179, 0, 0.12);
+    color: var(--brand-gold);
+    border: 1px solid rgba(255, 179, 0, 0.35);
+  }
+  .tr-chip.global { background: transparent; color: var(--text-muted); border-color: transparent; }
+  .tr-chip .mono { font-size: 10.5px; }
+  .clock { width: 12px; height: 12px; display: inline-block; }
+
+  /* fake chart / content */
+  .fake-chart {
+    height: 74px;
+    border-radius: 6px;
+    background:
+      linear-gradient(180deg, rgba(191,54,12,0.18), rgba(191,54,12,0) 70%),
+      repeating-linear-gradient(90deg, transparent 0 22px, rgba(255,255,255,0.03) 22px 23px);
+    border: 1px solid var(--border-color);
+    position: relative;
+  }
+  .fake-chart::after {
+    content: "";
+    position: absolute; left: 0; right: 0; bottom: 0; height: 60%;
+    clip-path: polygon(0 80%,8% 60%,18% 72%,28% 40%,38% 55%,50% 25%,62% 48%,72% 30%,82% 52%,92% 35%,100% 60%,100% 100%,0 100%);
+    background: rgba(191,54,12,0.35);
+  }
+  .fake-rows { display: flex; flex-direction: column; gap: 6px; }
+  .fake-rows div { height: 10px; border-radius: 3px; background: var(--card-bg); }
+  .fake-rows div:nth-child(2) { width: 82%; }
+  .fake-rows div:nth-child(3) { width: 66%; }
+
+  /* ---- Editor panel (mirrors CellEditor.tsx) ---- */
+  .editor {
+    background: var(--panel-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    display: flex;
+    flex-direction: column;
+    position: sticky;
+    top: 20px;
+    max-height: calc(100vh - 40px);
+  }
+  .editor-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border-color);
+  }
+  .editor-head .left { display: flex; align-items: center; gap: 8px; }
+  .editor-head .close { color: var(--text-muted); cursor: default; font-size: 18px; line-height: 1; }
+  .editor-body { padding: 16px; display: flex; flex-direction: column; gap: 16px; overflow-y: auto; }
+  .field label.cap {
+    display: block;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    font-weight: 600;
+    color: var(--text-secondary);
+    margin-bottom: 6px;
+  }
+  .input {
+    width: 100%;
+    padding: 8px 10px;
+    background: var(--card-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    color: var(--text-primary);
+    font-size: 13px;
+    outline: none;
+  }
+  .input::placeholder { color: var(--text-muted); }
+  .input.focus { border-color: var(--accent-link); }
+  .input.mono { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12.5px; }
+
+  /* the NEW field, highlighted */
+  .new-field {
+    border: 1px dashed rgba(255,179,0,0.5);
+    border-radius: 8px;
+    padding: 12px;
+    background: rgba(255,179,0,0.04);
+    position: relative;
+  }
+  .new-badge {
+    position: absolute;
+    top: -9px; left: 12px;
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: #0a0a0f;
+    background: var(--brand-gold);
+    padding: 1px 7px;
+    border-radius: 4px;
+  }
+  .row-inline { display: flex; align-items: center; gap: 8px; }
+  .row-inline label { font-size: 12px; color: var(--text-secondary); width: 42px; flex-shrink: 0; }
+  .hint { font-size: 11.5px; color: var(--text-muted); margin-top: 8px; }
+  .hint code { color: var(--text-secondary); background: var(--card-bg); padding: 1px 4px; border-radius: 3px; }
+
+  .editor-foot { padding: 12px; border-top: 1px solid var(--border-color); display: flex; flex-direction: column; gap: 8px; }
+  .btn {
+    width: 100%;
+    padding: 8px;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 500;
+    text-align: center;
+    border: 1px solid transparent;
+  }
+  .btn-primary { background: var(--accent-link); color: #fff; }
+  .btn-danger { background: transparent; color: var(--accent-error); border-color: var(--accent-error); }
+
+  /* ---- Example gallery ---- */
+  .examples { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
+  .ex {
+    background: var(--panel-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 14px;
+  }
+  .ex h4 { margin: 0 0 4px; font-size: 13px; }
+  .ex p { margin: 0 0 10px; font-size: 12px; color: var(--text-secondary); min-height: 32px; }
+  .kv { display: flex; gap: 8px; font-size: 12px; margin-bottom: 4px; }
+  .kv .k { color: var(--text-muted); width: 34px; flex-shrink: 0; }
+  .kv .v { color: var(--brand-gold); }
+  .kv .v.global { color: var(--text-muted); font-style: italic; }
+  .resolves {
+    margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border-color);
+    font-size: 11.5px; color: var(--text-secondary);
+  }
+  .resolves .arrow { color: var(--accent-success); }
+
+  .legend { display: flex; gap: 18px; flex-wrap: wrap; font-size: 12px; color: var(--text-secondary); margin-top: 10px; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .sw { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <header class="doc">
+    <h1>Per-Cell Query Time Range</h1>
+    <div class="sub">
+      <span class="tag">Mockup</span>
+      <span class="tag">Issue #1314</span>
+      <span class="tag">analytics-web-app · notebook</span>
+      Optional per-cell override of the screen's global time range. Empty = inherit the screen range.
+    </div>
+  </header>
+
+  <!-- ============ MAIN: notebook + editor ============ -->
+  <h2 class="section">Notebook with the editor panel open</h2>
+  <p class="note">
+    The new <strong>Query Time Range</strong> field sits in the cell editor directly below the Data Source field.
+    Cells whose range is overridden show a gold clock chip in their header; cells inheriting the screen range show a muted one.
+  </p>
+
+  <div class="split">
+    <!-- notebook column -->
+    <div class="notebook">
+      <!-- global range bar -->
+      <div class="cell" style="border-style:dashed;">
+        <div class="cell-body" style="display:flex;align-items:center;gap:10px;padding:10px 12px;">
+          <svg class="clock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px;color:var(--text-secondary)"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+          <span style="color:var(--text-primary);font-weight:600;">Screen range</span>
+          <span class="mono" style="color:var(--text-secondary);">now-6h</span>
+          <span style="color:var(--text-muted);">→</span>
+          <span class="mono" style="color:var(--text-secondary);">now</span>
+          <span style="margin-left:auto;color:var(--text-muted);font-size:12px;">URL-synced · inherited by default</span>
+        </div>
+      </div>
+
+      <!-- cell: overview chart, inherits global -->
+      <div class="cell">
+        <div class="cell-head">
+          <span class="cell-badge">Chart</span>
+          <span class="cell-name">requests_overview</span>
+          <span class="tr-chip global" title="Inherits the screen range">
+            <svg class="clock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+            screen range
+          </span>
+        </div>
+        <div class="cell-body"><div class="fake-chart"></div></div>
+      </div>
+
+      <!-- cell: selected, editing — pinned range -->
+      <div class="cell selected">
+        <div class="cell-head">
+          <span class="cell-badge">Table</span>
+          <span class="cell-name">last_hour_errors</span>
+          <span class="tr-chip" title="Override now-1h → now resolved to 15:20:00 → 16:20:00">
+            <svg class="clock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+            <span class="mono">15:20:00 → 16:20:00</span>
+          </span>
+        </div>
+        <div class="cell-body">
+          <div class="fake-rows"><div></div><div></div><div></div><div></div></div>
+        </div>
+      </div>
+
+      <!-- cell: derives from a selection -->
+      <div class="cell">
+        <div class="cell-head">
+          <span class="cell-badge">Flame Graph</span>
+          <span class="cell-name">selected_span_trace</span>
+          <span class="tr-chip" title="Override $cell.selected resolved to 16:04:12 → 16:04:47">
+            <svg class="clock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+            <span class="mono">16:04:12 → 16:04:47</span>
+          </span>
+        </div>
+        <div class="cell-body"><div class="fake-chart"></div></div>
+      </div>
+
+      <!-- cell: perfetto export -->
+      <div class="cell">
+        <div class="cell-head">
+          <span class="cell-badge">Perfetto Export</span>
+          <span class="cell-name">trace_download</span>
+          <span class="tr-chip" title="Override $from → $cell.selected.end resolved to 10:20:00 → 16:04:47">
+            <svg class="clock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+            <span class="mono">10:20:00 → 16:04:47</span>
+          </span>
+        </div>
+        <div class="cell-body">Fetches the trace over the overridden window on download.</div>
+      </div>
+    </div>
+
+    <!-- editor panel column -->
+    <div class="editor">
+      <div class="editor-head">
+        <div class="left">
+          <span class="cell-badge">Table</span>
+          <span class="cell-name">last_hour_errors</span>
+        </div>
+        <span class="close">✕</span>
+      </div>
+
+      <div class="editor-body">
+        <!-- Cell name -->
+        <div class="field">
+          <label class="cap">Cell Name</label>
+          <input class="input" value="last_hour_errors" />
+        </div>
+
+        <!-- Data source (existing) -->
+        <div class="field">
+          <label class="cap">Data Source</label>
+          <input class="input" value="default" />
+        </div>
+
+        <!-- NEW: Query time range -->
+        <div class="new-field">
+          <span class="new-badge">New</span>
+          <label class="cap" style="margin-bottom:10px;">Query Time Range</label>
+          <div style="display:flex;flex-direction:column;gap:8px;">
+            <div class="row-inline">
+              <label>From</label>
+              <input class="input mono focus" value="now-1h" placeholder="$from, now-1h, or macro (empty = screen range)" />
+            </div>
+            <div class="row-inline">
+              <label>To</label>
+              <input class="input mono" value="" placeholder="$to, now, or macro" />
+            </div>
+          </div>
+          <div class="hint">
+            Empty bound falls back to the screen range. Accepts relative
+            (<code>now-1h</code>), absolute ISO, or macros
+            (<code>$from</code>, <code>$to</code>, <code>$var</code>,
+            <code>$cell.selected.col</code>).
+          </div>
+        </div>
+
+        <!-- SQL (type-specific, abbreviated) -->
+        <div class="field">
+          <label class="cap">SQL</label>
+          <textarea class="input mono" rows="3" style="resize:vertical;">SELECT time, level, msg
+FROM log_entries
+WHERE level &lt;= 3</textarea>
+        </div>
+      </div>
+
+      <div class="editor-foot">
+        <div class="btn btn-primary">▶ Run</div>
+        <div class="btn btn-danger">🗑 Delete Cell</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ Field states / examples ============ -->
+  <h2 class="section">What you can put in From / To</h2>
+  <p class="note">Each bound is resolved independently. An empty bound inherits that side of the screen range.</p>
+
+  <div class="examples">
+    <div class="ex">
+      <h4>Inherit (default)</h4>
+      <p>Both empty — the cell uses the screen range, exactly as today.</p>
+      <div class="kv"><span class="k">From</span><span class="v global">(screen range)</span></div>
+      <div class="kv"><span class="k">To</span><span class="v global">(screen range)</span></div>
+      <div class="resolves"><span class="arrow">→</span> now-6h … now</div>
+    </div>
+
+    <div class="ex">
+      <h4>Pinned relative range</h4>
+      <p>Always the last hour, regardless of the screen range.</p>
+      <div class="kv"><span class="k">From</span><span class="v mono">now-1h</span></div>
+      <div class="kv"><span class="k">To</span><span class="v mono">now</span></div>
+      <div class="resolves"><span class="arrow">→</span> 15:20 … 16:20</div>
+    </div>
+
+    <div class="ex">
+      <h4>Absolute window</h4>
+      <p>A fixed incident window pinned to timestamps.</p>
+      <div class="kv"><span class="k">From</span><span class="v mono">2026-07-20T09:00Z</span></div>
+      <div class="kv"><span class="k">To</span><span class="v mono">2026-07-20T10:30Z</span></div>
+      <div class="resolves"><span class="arrow">→</span> fixed 90-min window</div>
+    </div>
+
+    <div class="ex">
+      <h4>One-sided override</h4>
+      <p>Start from the screen's <code>$from</code>, end one hour earlier than usual.</p>
+      <div class="kv"><span class="k">From</span><span class="v global">(screen range)</span></div>
+      <div class="kv"><span class="k">To</span><span class="v mono">now-1h</span></div>
+      <div class="resolves"><span class="arrow">→</span> now-6h … now-1h</div>
+    </div>
+
+    <div class="ex">
+      <h4>Derived from a variable</h4>
+      <p>Range driven by a combobox / expression variable.</p>
+      <div class="kv"><span class="k">From</span><span class="v mono">$window_start</span></div>
+      <div class="kv"><span class="k">To</span><span class="v mono">$window_end</span></div>
+      <div class="resolves"><span class="arrow">→</span> resolved from variable values</div>
+    </div>
+
+    <div class="ex">
+      <h4>Derived from a selection</h4>
+      <p>Zoom a downstream cell into a row/drag selection made upstream.</p>
+      <div class="kv"><span class="k">From</span><span class="v mono">$cell.selected.start</span></div>
+      <div class="kv"><span class="k">To</span><span class="v mono">$cell.selected.end</span></div>
+      <div class="resolves"><span class="arrow">→</span> follows the selection live</div>
+    </div>
+  </div>
+
+  <!-- ============ Header chip legend ============ -->
+  <h2 class="section">Cell header indicator</h2>
+  <p class="note">
+    A small clock chip on each query-backed cell header tells you at a glance whether it's on the screen range or an override.
+    The chip always shows the <strong>resolved</strong> timestamps — never the raw macro — so you can debug exactly what window the cell queried.
+    Hover to see the raw config (<code>$cell.selected</code>) it resolved from.
+  </p>
+  <div style="display:flex;gap:16px;flex-wrap:wrap;">
+    <span class="tr-chip global">
+      <svg class="clock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+      screen range
+    </span>
+    <span class="tr-chip" title="Resolved from now-1h → now">
+      <svg class="clock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+      <span class="mono">15:20:00 → 16:20:00</span>
+    </span>
+    <span class="tr-chip" title="Resolved from $cell.selected">
+      <svg class="clock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+      <span class="mono">16:04:12 → 16:04:47</span>
+    </span>
+  </div>
+  <div class="legend">
+    <span><span class="sw" style="background:var(--text-muted)"></span> Muted = inherits screen range (no override)</span>
+    <span><span class="sw" style="background:var(--brand-gold)"></span> Gold = per-cell override active</span>
+  </div>
+
+  <!-- ============ scope note ============ -->
+  <h2 class="section">Scope</h2>
+  <p class="note">
+    Shown on query-backed cells: <code>table</code>, <code>chart</code>, <code>log</code>,
+    <code>propertytimeline</code>, <code>swimlane</code>, <code>transposed</code>,
+    <code>flamegraph</code>, <code>map</code>, <code>perfettoexport</code>, <code>image</code>,
+    and <code>variable</code> (combobox / datasource).
+    Hidden on <code>markdown</code>, <code>referencetable</code>, and horizontal-group cells.
+    Distinct from Flame Graph's <em>Initial From / To</em>, which sets the interactive view range, not the query window.
+  </p>
+
+</div>
+</body>
+</html>
