@@ -246,6 +246,11 @@ zero behavior change for anything that exists today.
      `tikv-jemallocator.workspace = true` — needed by the jemalloc test file added in
      step 6, which declares `#[global_allocator] static ALLOC: tikv_jemallocator::Jemalloc`
      to make jemalloc the active allocator for that test binary.
+   - Add `serial_test = "3.2"` to a plain (non-target-gated) `[dev-dependencies]` table,
+     matching the existing pin in `rust/object-cache-srv/Cargo.toml:45` — needed because
+     the new tests in step 6 use the global `InMemorySink`/`flush_metrics_buffer()`
+     dispatch, which is process-wide state and would race under cargo's default
+     parallel-test execution without `#[serial]`.
 3. **`rust/telemetry-sink/src/system_monitor.rs`** — add `emit_process_memory_stats`,
    `emit_jemalloc_stats` (+ stub), the `SLOW_SAMPLE_TICKS` tick-gating, and the two new
    call sites in `send_system_metrics_forever`, as shown above.
@@ -261,7 +266,11 @@ zero behavior change for anything that exists today.
    `required-features = ["jemalloc"]` for the jemalloc-specific test(s), matching the
    `required-features = ["server"]` pattern already used by `public/Cargo.toml`'s
    `[[test]]` entries. This test file's `#[global_allocator]` declaration is what the
-   `tikv-jemallocator` dev-dependency added in step 2 is for.
+   `tikv-jemallocator` dev-dependency added in step 2 is for. Mark every test in this
+   file that uses `InMemorySink`/`flush_metrics_buffer()` with `#[serial_test::serial]`,
+   matching `object-cache-srv/tests/saturation_tests.rs`'s use of the `serial_test`
+   dev-dependency added in step 2 — the global tracing dispatch these tests observe is
+   process-wide state and would otherwise race under cargo's default parallel execution.
 7. **`mkdocs/docs/admin/object-cache.md`** — add the six new gauges to the Saturation
    table (see Documentation).
 8. **`CHANGELOG.md`** — add an entry under **Observability:** (or **Caching:**, matching
@@ -358,14 +367,18 @@ Add a new file, e.g. `rust/telemetry-sink/tests/system_monitor_tests.rs`, follow
 `InMemorySink`-observing pattern already used in `object-cache-srv/tests/saturation_tests.rs`.
 Both `emit_process_memory_stats` and `emit_jemalloc_stats` are plain, directly-callable
 functions (no loop/thread/sleep needed to exercise them — consistent with this
-project's preference for deterministic test synchronization over timing-based waits):
+project's preference for deterministic test synchronization over timing-based waits).
+As in `saturation_tests.rs`, every test below that uses the global `InMemorySink`
+dispatch is marked `#[serial_test::serial]` (via the `serial_test` dev-dependency added
+in step 2), since that dispatch is process-wide state that would otherwise race under
+cargo's default parallel test execution:
 
-- **Process memory** (no feature requirement): call `emit_process_memory_stats()`,
-  `flush_metrics_buffer()`, and assert `process_resident_bytes` and
-  `process_virtual_bytes` each fire exactly once with a value `> 0` — any running
-  process has nonzero RSS/virtual size, so this is a real assertion, and it needs no
-  allocator-specific setup since `sysinfo` reads it from the OS regardless of which
-  allocator is active.
+- **Process memory** (no feature requirement): `#[serial_test::serial]` test that calls
+  `emit_process_memory_stats()`, `flush_metrics_buffer()`, and asserts
+  `process_resident_bytes` and `process_virtual_bytes` each fire exactly once with a
+  value `> 0` — any running process has nonzero RSS/virtual size, so this is a real
+  assertion, and it needs no allocator-specific setup since `sysinfo` reads it from the
+  OS regardless of which allocator is active.
 - **jemalloc stats** (`required-features = ["jemalloc"]` in a `[[test]]` entry in
   `telemetry-sink/Cargo.toml`, matching `public/Cargo.toml`'s existing
   `required-features = ["server"]` pattern): the test *binary* does not carry any
@@ -376,12 +389,13 @@ project's preference for deterministic test synchronization over timing-based wa
   `#[global_allocator] static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;`
   at the top of this test file (requires adding `tikv-jemallocator` as a
   `dev-dependencies` entry in `telemetry-sink/Cargo.toml`, target-gated the same way),
-  making jemalloc genuinely active for *this* test binary. Then: call
-  `emit_jemalloc_stats()` once and flush, record the first `jemalloc_allocated_bytes`
-  reading; allocate and `std::hint::black_box` (or otherwise keep live) a large
-  `Vec<u8>` (e.g. 8 MiB); call `emit_jemalloc_stats()` again and flush; assert the
-  second reading is larger than the first by a plausible margin. Also assert all four
-  jemalloc metrics fire exactly once per call as a basic regression guard.
+  making jemalloc genuinely active for *this* test binary. Then, in a
+  `#[serial_test::serial]` test: call `emit_jemalloc_stats()` once and flush, record the
+  first `jemalloc_allocated_bytes` reading; allocate and `std::hint::black_box` (or
+  otherwise keep live) a large `Vec<u8>` (e.g. 8 MiB); call `emit_jemalloc_stats()` again
+  and flush; assert the second reading is larger than the first by a plausible margin.
+  Also assert all four jemalloc metrics fire exactly once per call as a basic regression
+  guard.
 - **Tick-gating**: a focused test under `rust/telemetry-sink/tests/` (matching this
   project's convention of keeping unit tests under `tests/`, not inline with the lib
   implementation) that calls the production `should_sample_slow(tick: u32) -> bool`
