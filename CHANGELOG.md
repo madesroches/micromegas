@@ -5,6 +5,7 @@ This file documents the historical progress of the Micromegas project. For curre
 ## Unreleased
 
 * **Web App:**
+  * Fix categorical bar charts clipping the first/last bars and off-centering their x-axis labels: pad the categorical x-scale by half a slot via a new `buildXScale` helper so every bar sits fully inside the plot area
   * Add currency-aware value formatting: a metric `unit` recognized as an ISO 4217 currency code (e.g. `USD`, `CAD`, `EUR`) now renders as proper money (`"$1,234.56"`) in tooltips, the stats panel, and Y-axis ticks, instead of falling through to a bare number with the raw unit string appended (#1326)
   * Add an optional per-cell query time range override to every query-backed notebook cell (table, chart, log, property timeline, swimlane, transposed, flame graph, map, expression variables, image, and Perfetto export), so a cell can pin a fixed range or derive it from a variable, an upstream cell result, or a row/drag selection instead of always inheriting the screen's global range; a bad override now surfaces as a cell error uniformly, including on Perfetto export which previously fell back silently (#1314)
   * Add a per-cell "Wrap text" toggle to the notebook Log cell so long or multi-line `msg` values (e.g. stack traces) render wrapped instead of single-line-truncated, defaulting on and persisted in `options.wrapText`; the last column now bounds to the row's available width instead of a hardcoded 700px cap
