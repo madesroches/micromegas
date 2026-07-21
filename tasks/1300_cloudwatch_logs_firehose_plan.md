@@ -401,14 +401,38 @@ subscription-filter delivery has exactly one proprietary format — there's no O
 the wire, only in how micromegas happens to store the result. Naming the route `otlp/...`
 would misleadingly imply the client sends OTLP.
 
+**Per-delivery-stream format selection**: the issue notes "selectable per delivery stream (a
+stream carries a single record format)" — this plan satisfies that by giving CloudWatch Logs
+its own route path (`/ingestion/cloudwatch/v1/logs/firehose`), distinct from the metrics route;
+an operator points a given Firehose delivery stream's HTTP endpoint at whichever route matches
+what it carries. No dynamic content-sniffing needed.
+
+**`subscriptionFilters`**: not surfaced as an attribute in v1 — it's an array (usually
+single-element) naming the CloudWatch subscription filter, not the log content itself.
+Revisit if a use case needs per-filter routing/tagging; trivial to add as another resource
+attribute (`aws.log.subscription_filter`) later.
+
+**Auth providers**: same constraint as the metrics Firehose route — effectively API-key only
+(`MICROMEGAS_API_KEYS`), since Firehose cannot produce an OIDC JWT.
+
 ### Wiring into `serve_ingestion` (`ingestion.rs`)
 
 Same pattern as the metrics Firehose route — a third sub-router merged into `app` outside
-`protected_app`:
+`protected_app`. `auth_provider` must be cloned a second time *before* it is moved into the
+existing `if let Some(provider) = auth_provider` block (alongside the existing `firehose_auth`
+clone), and the existing `firehose::firehose_router(service, firehose_auth)` call must switch to
+`service.clone()` since `service` also needs to survive for the new router:
 
 ```rust
-let cw_logs_firehose_auth = auth_provider.clone();
+let firehose_auth = auth_provider.clone();
+let cw_logs_firehose_auth = auth_provider.clone(); // new: cloned before `auth_provider` is moved below
 // ...
+if let Some(provider) = auth_provider {
+    // ...unchanged...
+}
+
+// existing call changes `service` -> `service.clone()` so `service` remains available below
+let firehose_app = super::firehose::firehose_router(service.clone(), firehose_auth);
 let cw_logs_firehose_app = super::firehose_cloudwatch_logs::firehose_router(
     service.clone(),
     cw_logs_firehose_auth,
@@ -443,8 +467,9 @@ changes** — the same reasoning #1299 used to justify reusing `ingest_metrics` 
    write_blocks` in `rust/otel-ingestion/src/handler.rs:71` (no logic change).
 2. **`decode_firehose_envelope` signal parameter** — add `signal: Signal` param
    (`handler.rs:295`), replace the two hardcoded `Signal::Metrics` literals (298, 306); update
-   its one production call site (`ingest_firehose_metrics`, passes `Signal::Metrics`) and all
-   six call sites in `rust/otel-ingestion/tests/firehose_tests.rs`.
+   its one production call site (`firehose_handler` in `rust/public/src/servers/firehose.rs`,
+   passes `Signal::Metrics`) and all six call sites in
+   `rust/otel-ingestion/tests/firehose_tests.rs`.
 3. **CloudWatch Logs decoder module** — add `rust/otel-ingestion/src/cloudwatch_logs.rs`
    (`decode_cloudwatch_logs_record`, `build_export_logs_request`,
    `ingest_cloudwatch_logs_firehose`); add `pub mod cloudwatch_logs;` to
@@ -515,6 +540,15 @@ changes** — the same reasoning #1299 used to justify reusing `ingest_metrics` 
   logStream name (unlikely in practice — AWS log stream names are stable per task/instance
   lifetime) would spawn a new "process" each time the stream name changes; accepted as the
   same class of trade-off `is_degenerate_resource` already flags for other producers.
+  Separately, `cloud.account.id` (= `owner`) is set as a resource attribute but is **not**
+  part of the `process_id_from_resource` hash formula, so two different AWS accounts with the
+  same `logGroup`+`logStream` names collapse onto the same `process_id`. This is plausible for
+  RDS Postgres logs specifically, since RDS log stream names are user-chosen DB-instance
+  identifiers (e.g. `my-prod-db`) rather than random — a shared naming convention across
+  accounts/environments can collide. Accepted for v1: `owner` is still queryable per-row via
+  `process_properties.otel.resource.cloud.account.id`, so rows aren't ambiguous, only the
+  `process_id` grouping is coarser than ideal across accounts; revisit by folding
+  `cloud.account.id` into the identity hash if this proves to matter in practice.
 - **`aws.log.event.id` as a record attribute vs. dropping it.** CloudWatch's per-event `id` is
   small, stable, and lets an operator correlate a `log_entries` row back to the exact
   CloudWatch event if needed (e.g. cross-referencing against the CloudWatch console). Kept at
@@ -589,18 +623,3 @@ changes** — the same reasoning #1299 used to justify reusing `ingest_metrics` 
   `CONTROL_MESSAGE`-is-ignored assertion (no new row) and a rejected-key assertion.
 - **CI:** `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `cargo test`,
   `python3 build/rust_ci.py`.
-
-## Open Questions
-
-None blocking:
-- **Per-delivery-stream format selection.** The issue notes "selectable per delivery stream (a
-  stream carries a single record format)" — this plan satisfies that by giving CloudWatch Logs
-  its own route path (`/ingestion/cloudwatch/v1/logs/firehose`), distinct from the metrics
-  route; an operator points a given Firehose delivery stream's HTTP endpoint at whichever route
-  matches what it carries. No dynamic content-sniffing needed.
-- **`subscriptionFilters`.** Not surfaced as an attribute in v1 — it's an array (usually
-  single-element) naming the CloudWatch subscription filter, not the log content itself.
-  Revisit if a use case needs per-filter routing/tagging; trivial to add as another resource
-  attribute (`aws.log.subscription_filter`) later.
-- **Auth providers.** Same constraint as the metrics Firehose route: effectively API-key only
-  (`MICROMEGAS_API_KEYS`), since Firehose cannot produce an OIDC JWT.
