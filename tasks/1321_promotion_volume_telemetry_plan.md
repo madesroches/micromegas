@@ -162,21 +162,32 @@ counters applies here (reference the existing sentence rather than restating it)
 Add `promotion_volume_metrics_fire_on_disk_read` to `foyer_backend_tests.rs`, modeled on
 `disk_read_age_metric_fires_on_disk_read` (`:419-484`), which already sets up exactly this scenario
 (put a block, force it to disk via RAM eviction, `close()` to flush, then `get` it back to trigger a
-disk→RAM promotion):
+disk→RAM promotion) — with one required change: the promoted key must be `blk:`-prefixed (e.g.
+`"blk:ns:blobs/key:0"`, matching the `blk:{ns}:{key}:{idx}` shape `range_cache/fetch.rs` builds),
+since both new metrics are emitted inside `promote_if_valid`'s `is_block_key` branch and never fire
+for a bare key like `"blobs/key"`. The warming/eviction-pressure puts (`"blobs/evict-1"`,
+`"blobs/evict-2"`) don't need the `blk:` prefix — they only exist to push the measured key to disk:
 
 - Reuse `tagged_integer_metric_values` (`:44`) for both metrics (both are integer `imetric`s —
   count and bytes).
-- After the promoting `get`, `flush_metrics_buffer()`, then assert:
-  - `object_cache_promotion_count` fired exactly once (value `1`) for `prefix="blobs"`.
+- `get` must be called with the same `blk:`-prefixed key and its correct `expected_len` (the data
+  length) to trigger the promotion.
+- After the promoting `get`, `flush_metrics_buffer()`, then assert, for **`prefix="other"`** (not
+  `"blobs"` — per the documented caveat, a `blk:`-prefixed key always classifies to `PREFIX_OTHER`
+  since it never matches a content-label prefix):
+  - `object_cache_promotion_count` fired exactly once (value `1`) for `prefix="other"`.
   - `object_cache_promotion_bytes` fired exactly once with value == the block length (4096 in that
-    test's setup) for `prefix="blobs"`.
+    test's setup) for `prefix="other"`.
 - Follow the existing test's `#[serial]` + `init_in_memory_tracing` guard usage (the guard is
   created *after* the warming puts and *before* the promoting `get`, so only the promotion is
   observed).
 
 Optionally, extend `short_block_never_promoted` (`:493`) with a negative assertion that neither
 promotion metric fired (a mismatch must not count as a promotion), reinforcing the length-gate
-behavior.
+behavior. The short key used there must also be `blk:`-prefixed (e.g. `"blk:key"` in place of
+`"key"`) — otherwise the assertion passes vacuously, since a non-`blk:` key never enters the
+`is_block_key` branch regardless of whether the length gate fired, and the test would not actually
+exercise the length-gate early-return.
 
 Regression: existing `foyer_backend_tests` must pass unchanged — this adds emissions only, touching
 no control flow. Run `cargo test -p micromegas-object-cache --features foyer` and
