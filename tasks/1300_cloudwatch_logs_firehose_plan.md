@@ -623,10 +623,15 @@ changes** — the same reasoning #1299 used to justify reusing `ingest_metrics` 
 - **Integration (Python e2e, `test_cloudwatch_logs_firehose_e2e.py`):** build a gzip+base64
   CloudWatch Logs `DATA_MESSAGE` with a per-run-unique `logStream` (so `discover_process_id`
   or an equivalent lookup finds it), wrap in a Firehose envelope, POST to
-  `/ingestion/cloudwatch/v1/logs/firehose` with `X-Amz-Firehose-Request-Id` +
-  `X-Amz-Firehose-Access-Key`, assert the 200 ack, then `assert_eventually` a `log_entries` row
-  appears with the expected `msg`/`time` and `process_properties` containing
+  `/ingestion/cloudwatch/v1/logs/firehose` with only `X-Amz-Firehose-Request-Id` (no
+  `X-Amz-Firehose-Access-Key`, matching the #1299 metrics e2e pattern against the
+  `--disable-auth` dev-mode stack), assert the 200 ack, then `assert_eventually` a
+  `log_entries` row appears with the expected `msg`/`time` and `process_properties` containing
   `otel.resource.aws.log.group.name`/`otel.resource.aws.log.stream.name`. Add a
-  `CONTROL_MESSAGE`-is-ignored assertion (no new row) and a rejected-key assertion.
+  `CONTROL_MESSAGE`-is-ignored assertion (no new row). Key rejection (missing/wrong
+  `X-Amz-Firehose-Access-Key`) is covered by the Rust HTTP tests
+  (`firehose_cloudwatch_logs_tests.rs`), not the e2e — the e2e stack runs with
+  `--disable-auth`, so the access key is ignored and a rejected-key assertion would not be
+  able to fail.
 - **CI:** `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `cargo test`,
   `python3 build/rust_ci.py`.
