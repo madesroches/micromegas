@@ -40,8 +40,11 @@ leak; `resident` climbing while `allocated` is flat → allocator fragmentation/
   must never link jemalloc — see Design).
 - `rust/object-cache-srv/src/object_cache_srv.rs:1-3` and six other production
   binaries (`telemetry-ingestion-srv`, `flight-sql-srv`, `analytics-web-srv`,
-  `http-gateway`, `telemetry-maintenance-srv`, `monolith` — see
-  `tasks/completed/1129_global_allocator_plan.md`) each declare
+  `http-gateway`, `telemetry-maintenance-srv`, `monolith` — this set of 7 was confirmed
+  by direct inspection of each crate's source, not solely from
+  `tasks/completed/1129_global_allocator_plan.md`, whose own Implementation Steps cover
+  only 5 of these and also lists `telemetry-admin-cli`, which no longer declares
+  `#[global_allocator]`) each declare
   `#[global_allocator] static ALLOC: tikv_jemallocator::Jemalloc`, gated
   `#[cfg(not(target_os = "windows"))]`, and each has an identical
   `[target.'cfg(not(target_os = "windows"))'.dependencies] tikv-jemallocator.workspace = true`
@@ -243,7 +246,7 @@ zero behavior change for anything that exists today.
      feature of the crate.)
    - Add a `[target.'cfg(all(not(target_arch = "wasm32"), not(target_os =
      "windows")))'.dev-dependencies]` table (same cfg as above) with
-     `tikv-jemallocator.workspace = true` — needed by the jemalloc test file added in
+     `tikv-jemallocator.workspace = true` — needed by `jemalloc_stats_tests.rs` added in
      step 6, which declares `#[global_allocator] static ALLOC: tikv_jemallocator::Jemalloc`
      to make jemalloc the active allocator for that test binary.
    - Add `serial_test = "3.2"` to a plain (non-target-gated) `[dev-dependencies]` table,
@@ -261,21 +264,31 @@ zero behavior change for anything that exists today.
    `features = ["server", "jemalloc-metrics"]` in: `object-cache-srv`, `monolith`,
    `flight-sql-srv`, `telemetry-ingestion-srv`, `telemetry-maintenance-srv`,
    `analytics-web-srv`, `http-gateway`.
-6. **`rust/telemetry-sink/tests/`** — add a new test file per Testing Strategy below,
-   plus a `[[test]]` entry in `telemetry-sink/Cargo.toml` with
-   `required-features = ["jemalloc"]` for the jemalloc-specific test(s), matching the
-   `required-features = ["server"]` pattern already used by `public/Cargo.toml`'s
-   `[[test]]` entries. Since all 7 services request `jemalloc-metrics` unconditionally,
-   workspace feature unification enables telemetry-sink's `jemalloc` feature — and thus
-   this file's `required-features` gate — even on Windows, where `tikv-jemallocator` is
-   absent from the dependency graph; start the file with
-   `#![cfg(not(target_os = "windows"))]` so it compiles to an empty harness there instead
-   of failing to find the crate. This test file's `#[global_allocator]` declaration is
-   what the `tikv-jemallocator` dev-dependency added in step 2 is for. Mark every test in this
-   file that uses `InMemorySink`/`flush_metrics_buffer()` with `#[serial_test::serial]`,
-   matching `object-cache-srv/tests/saturation_tests.rs`'s use of the `serial_test`
-   dev-dependency added in step 2 — the global tracing dispatch these tests observe is
-   process-wide state and would otherwise race under cargo's default parallel execution.
+6. **`rust/telemetry-sink/tests/`** — add two new test files per Testing Strategy below,
+   split by feature gate so `required-features`/file-level `#![cfg(...)]` (which apply to
+   an entire `[[test]]` target, not individual `#[test]` functions) never silently gate
+   tests the plan says need no feature:
+   - `system_monitor_tests.rs` — process-memory and tick-gating tests. No feature
+     requirement and no platform gate, so no `[[test]]` entry is needed; Cargo
+     auto-discovers it as a test target.
+   - `jemalloc_stats_tests.rs` — jemalloc-stats tests only. Add a `[[test]]` entry in
+     `telemetry-sink/Cargo.toml` with `required-features = ["jemalloc"]`, matching the
+     `required-features = ["server"]` pattern already used by `public/Cargo.toml`'s
+     `[[test]]` entries (each single-purpose, never mixing gated and ungated tests — the
+     same precedent this split preserves). Since all 7 services request
+     `jemalloc-metrics` unconditionally, workspace feature unification enables
+     telemetry-sink's `jemalloc` feature — and thus this file's `required-features`
+     gate — even on Windows, where `tikv-jemallocator` is absent from the dependency
+     graph; start the file with `#![cfg(not(target_os = "windows"))]` so it compiles to
+     an empty harness there instead of failing to find the crate. This file's
+     `#[global_allocator]` declaration is what the `tikv-jemallocator` dev-dependency
+     added in step 2 is for.
+
+   Mark every test in either file that uses `InMemorySink`/`flush_metrics_buffer()` with
+   `#[serial_test::serial]`, matching `object-cache-srv/tests/saturation_tests.rs`'s use
+   of the `serial_test` dev-dependency added in step 2 — the global tracing dispatch
+   these tests observe is process-wide state and would otherwise race under cargo's
+   default parallel execution.
 7. **`mkdocs/docs/admin/object-cache.md`** — add the six new gauges to the Saturation
    table (see Documentation).
 8. **`CHANGELOG.md`** — add an entry under **Observability:** (or **Caching:**, matching
@@ -299,7 +312,8 @@ zero behavior change for anything that exists today.
   target-gated `tikv-jemallocator` dev-dependency + new `[[test]]` entry.
 - `rust/telemetry-sink/src/system_monitor.rs` — two new emitter functions, tick-gating,
   two new call sites.
-- `rust/telemetry-sink/tests/` — new test file.
+- `rust/telemetry-sink/tests/` — two new test files (`system_monitor_tests.rs`,
+  `jemalloc_stats_tests.rs`).
 - `rust/public/Cargo.toml` — new `jemalloc-metrics` feature.
 - `rust/object-cache-srv/Cargo.toml`, `rust/monolith/Cargo.toml`,
   `rust/flight-sql-srv/Cargo.toml`, `rust/telemetry-ingestion-srv/Cargo.toml`,
@@ -368,8 +382,17 @@ so explicitly:
 
 ## Testing Strategy
 
-Add a new file, e.g. `rust/telemetry-sink/tests/system_monitor_tests.rs`, following the
-`InMemorySink`-observing pattern already used in `object-cache-srv/tests/saturation_tests.rs`.
+Add two new files under `rust/telemetry-sink/tests/`, following the
+`InMemorySink`-observing pattern already used in `object-cache-srv/tests/saturation_tests.rs`:
+`system_monitor_tests.rs` (process-memory + tick-gating, no feature requirement, no
+platform gate) and `jemalloc_stats_tests.rs` (jemalloc stats,
+`required-features = ["jemalloc"]` plus the `#![cfg(not(target_os = "windows"))]` stub
+and `#[global_allocator]` declaration). They're kept separate because Cargo's
+`required-features` and a file-level `#![cfg(...)]` apply to the whole `[[test]]`
+target, not to individual `#[test]` functions — bundling the ungated tests into the
+gated file would silently make them require the `jemalloc` feature too and skip them on
+Windows. This also matches `public/Cargo.toml`'s six `[[test]]` entries, each a
+single-purpose file that never mixes gated and ungated tests.
 Both `emit_process_memory_stats` and `emit_jemalloc_stats` are plain, directly-callable
 functions (no loop/thread/sleep needed to exercise them — consistent with this
 project's preference for deterministic test synchronization over timing-based waits).
@@ -378,15 +401,16 @@ dispatch is marked `#[serial_test::serial]` (via the `serial_test` dev-dependenc
 in step 2), since that dispatch is process-wide state that would otherwise race under
 cargo's default parallel test execution:
 
-- **Process memory** (no feature requirement): `#[serial_test::serial]` test that calls
+- **Process memory** (in `system_monitor_tests.rs`, no feature requirement):
+  `#[serial_test::serial]` test that calls
   `emit_process_memory_stats()`, `flush_metrics_buffer()`, and asserts
   `process_resident_bytes` and `process_virtual_bytes` each fire exactly once with a
   value `> 0` — any running process has nonzero RSS/virtual size, so this is a real
   assertion, and it needs no allocator-specific setup since `sysinfo` reads it from the
   OS regardless of which allocator is active.
-- **jemalloc stats** (`required-features = ["jemalloc"]` in a `[[test]]` entry in
-  `telemetry-sink/Cargo.toml`, matching `public/Cargo.toml`'s existing
-  `required-features = ["server"]` pattern): the test *binary* does not carry any
+- **jemalloc stats** (in `jemalloc_stats_tests.rs`, `required-features = ["jemalloc"]`
+  in a `[[test]]` entry in `telemetry-sink/Cargo.toml`, matching `public/Cargo.toml`'s
+  existing `required-features = ["server"]` pattern): the test *binary* does not carry any
   service's `#[global_allocator]` declaration (that lives in each service's own bin
   entry point, not in this library), so by default jemalloc would not be this test
   binary's active allocator and `stats.allocated` would reflect only jemalloc's own
@@ -405,7 +429,7 @@ cargo's default parallel test execution:
   and flush; assert the second reading is larger than the first by a plausible margin.
   Also assert all four jemalloc metrics fire exactly once per call as a basic regression
   guard.
-- **Tick-gating**: a focused test under `rust/telemetry-sink/tests/` (matching this
+- **Tick-gating**: a focused test in `system_monitor_tests.rs` (matching this
   project's convention of keeping unit tests under `tests/`, not inline with the lib
   implementation) that calls the production `should_sample_slow(tick: u32) -> bool`
   function directly and asserts it's `true` on tick 25, 50, ... and `false` on the
@@ -420,7 +444,7 @@ cargo's default parallel test execution:
   metric names) is worth doing once before considering this done, since this is the
   first time `system_monitor.rs` gets any direct test coverage at all.
 - Run `cargo test -p micromegas-telemetry-sink --features jemalloc` directly during
-  development for a fast, isolated check of the new test file. For the real coverage
+  development for a fast, isolated check of the new test files. For the real coverage
   that matters for CI, a workspace-wide `cargo test` / `cargo clippy --workspace -- -D
   warnings` (what `python3 ../build/rust_ci.py` already runs, per `build/rust_ci.py:13,27`)
   is sufficient and requires no changes: it already unifies features across all
