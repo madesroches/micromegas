@@ -97,6 +97,17 @@ fn valid_gzip_malformed_json_is_parse_error() {
 }
 
 #[test]
+fn negative_log_event_timestamp_is_parse_error() {
+    // Real CloudWatch never sends a negative timestamp, but nothing upstream validates it;
+    // casting a negative i64 to u64 would wrap around into a corrupt far-future nanosecond
+    // timestamp instead of failing, so this must be rejected as malformed input.
+    let events = r#"{"id":"evt-1","timestamp":1510109208016,"message":"first line"},{"id":"evt-2","timestamp":-1,"message":"second line"}"#;
+    let raw = data_message("/ecs/my-service", "task/abc", "123456789012", events);
+    let err = decode_cloudwatch_logs_record(&raw, 0).expect_err("expected parse error");
+    assert!(matches!(err, OtelError::Parse { .. }));
+}
+
+#[test]
 fn build_export_logs_request_maps_fields_and_preserves_body_verbatim() {
     // A JSON-shaped message string proves no structured parsing happens — it must be
     // stored as one opaque string, not decoded.

@@ -55,9 +55,11 @@ const MAX_DECOMPRESSED_RECORD_BYTES: u64 = 64 * 1024 * 1024;
 
 /// Gunzips one Firehose record's bytes and parses the CloudWatch Logs subscription-filter
 /// JSON. Returns `Ok(None)` for `CONTROL_MESSAGE` records (drop, not an error) or a
-/// `DATA_MESSAGE` with no events. Malformed gzip/JSON, or a decompressed size over
-/// `MAX_DECOMPRESSED_RECORD_BYTES` → `OtelError::Parse` (→ 400 → Firehose retry, matching
-/// `decode_firehose_envelope`'s contract).
+/// `DATA_MESSAGE` with no events. Malformed gzip/JSON, a decompressed size over
+/// `MAX_DECOMPRESSED_RECORD_BYTES`, or a `logEvent.timestamp` that is negative (real
+/// CloudWatch never sends one; casting it to `u64` downstream would wrap around into a
+/// corrupt far-future nanosecond timestamp) → `OtelError::Parse` (→ 400 → Firehose retry,
+/// matching `decode_firehose_envelope`'s contract).
 ///
 /// Public (rather than private) so `tests/cloudwatch_logs_tests.rs` can assert its shape
 /// directly, matching the `build_webhook_request` precedent in `handler.rs`.
@@ -90,6 +92,15 @@ pub fn decode_cloudwatch_logs_record(
             signal: Signal::Logs,
             message: format!("cloudwatch logs record[{index}] json: {e}"),
         })?;
+    if let Some(ev) = msg.log_events.iter().find(|ev| ev.timestamp < 0) {
+        return Err(OtelError::Parse {
+            signal: Signal::Logs,
+            message: format!(
+                "cloudwatch logs record[{index}] logEvent id={} has negative timestamp {}",
+                ev.id, ev.timestamp
+            ),
+        });
+    }
     if msg.message_type == "CONTROL_MESSAGE" || msg.log_events.is_empty() {
         return Ok(None);
     }
