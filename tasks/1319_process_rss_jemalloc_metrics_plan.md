@@ -241,6 +241,11 @@ zero behavior change for anything that exists today.
      (`stats` gates `tikv-jemalloc-ctl`'s `stats` module — required for the
      `stats::allocated`/`resident`/`mapped`/`retained` reads below; it isn't a default
      feature of the crate.)
+   - Add a `[target.'cfg(all(not(target_arch = "wasm32"), not(target_os =
+     "windows")))'.dev-dependencies]` table (same cfg as above) with
+     `tikv-jemallocator.workspace = true` — needed by the jemalloc test file added in
+     step 6, which declares `#[global_allocator] static ALLOC: tikv_jemallocator::Jemalloc`
+     to make jemalloc the active allocator for that test binary.
 3. **`rust/telemetry-sink/src/system_monitor.rs`** — add `emit_process_memory_stats`,
    `emit_jemalloc_stats` (+ stub), the `SLOW_SAMPLE_TICKS` tick-gating, and the two new
    call sites in `send_system_metrics_forever`, as shown above.
@@ -255,7 +260,8 @@ zero behavior change for anything that exists today.
    plus a `[[test]]` entry in `telemetry-sink/Cargo.toml` with
    `required-features = ["jemalloc"]` for the jemalloc-specific test(s), matching the
    `required-features = ["server"]` pattern already used by `public/Cargo.toml`'s
-   `[[test]]` entries.
+   `[[test]]` entries. This test file's `#[global_allocator]` declaration is what the
+   `tikv-jemallocator` dev-dependency added in step 2 is for.
 7. **`mkdocs/docs/admin/object-cache.md`** — add the six new gauges to the Saturation
    table (see Documentation).
 8. **`CHANGELOG.md`** — add an entry under **Observability:** (or **Caching:**, matching
@@ -276,7 +282,7 @@ zero behavior change for anything that exists today.
 
 - `rust/Cargo.toml` — new workspace dependency.
 - `rust/telemetry-sink/Cargo.toml` — new feature + target-gated optional dependency +
-  new `[[test]]` entry.
+  target-gated `tikv-jemallocator` dev-dependency + new `[[test]]` entry.
 - `rust/telemetry-sink/src/system_monitor.rs` — two new emitter functions, tick-gating,
   two new call sites.
 - `rust/telemetry-sink/tests/` — new test file.
