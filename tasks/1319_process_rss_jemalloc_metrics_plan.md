@@ -265,8 +265,13 @@ zero behavior change for anything that exists today.
    plus a `[[test]]` entry in `telemetry-sink/Cargo.toml` with
    `required-features = ["jemalloc"]` for the jemalloc-specific test(s), matching the
    `required-features = ["server"]` pattern already used by `public/Cargo.toml`'s
-   `[[test]]` entries. This test file's `#[global_allocator]` declaration is what the
-   `tikv-jemallocator` dev-dependency added in step 2 is for. Mark every test in this
+   `[[test]]` entries. Since all 7 services request `jemalloc-metrics` unconditionally,
+   workspace feature unification enables telemetry-sink's `jemalloc` feature — and thus
+   this file's `required-features` gate — even on Windows, where `tikv-jemallocator` is
+   absent from the dependency graph; start the file with
+   `#![cfg(not(target_os = "windows"))]` so it compiles to an empty harness there instead
+   of failing to find the crate. This test file's `#[global_allocator]` declaration is
+   what the `tikv-jemallocator` dev-dependency added in step 2 is for. Mark every test in this
    file that uses `InMemorySink`/`flush_metrics_buffer()` with `#[serial_test::serial]`,
    matching `object-cache-srv/tests/saturation_tests.rs`'s use of the `serial_test`
    dev-dependency added in step 2 — the global tracing dispatch these tests observe is
@@ -385,7 +390,11 @@ cargo's default parallel test execution:
   service's `#[global_allocator]` declaration (that lives in each service's own bin
   entry point, not in this library), so by default jemalloc would not be this test
   binary's active allocator and `stats.allocated` would reflect only jemalloc's own
-  incidental bookkeeping. Declare
+  incidental bookkeeping. Start the file with `#![cfg(not(target_os = "windows"))]` —
+  `tikv-jemallocator` is only a dev-dependency on non-Windows targets (see step 2), so
+  the file must compile to an empty test harness on Windows rather than fail to find the
+  crate; this mirrors the `not(target_os = "windows")` gating used everywhere else in
+  this feature. Then declare
   `#[global_allocator] static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;`
   at the top of this test file (requires adding `tikv-jemallocator` as a
   `dev-dependencies` entry in `telemetry-sink/Cargo.toml`, target-gated the same way),
