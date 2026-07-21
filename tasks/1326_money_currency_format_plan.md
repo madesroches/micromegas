@@ -22,6 +22,7 @@ The web app has one generic value-formatting pipeline that money should plug int
   - Tooltips (XYChart.tsx:404, 474-476, 568) and stats panel (XYChart.tsx:1178-1187) all call `formatValueWithUnit(value, unit)` directly — no changes needed there once the shared formatter handles currency.
 - `rust/analytics/src/lakehouse/otel/metrics_block_processor.rs` and `rust/analytics/src/metrics_table.rs` — the OTel `unit` field is parsed from the OTLP proto and stored verbatim in the `measures.unit` column (`Dictionary(Int16, Utf8)`), with no normalization or currency awareness. It flows end-to-end unmodified from ingestion to the web app's SQL query results. **No backend change is required** — the string `"USD"` (or whatever the OTel SDK sends) already reaches the frontend as-is.
 - Precedent: `tasks/completed/issue_746_chart_unit_configuration_plan.md` documents the original design of this unit pipeline (bytes/bits/percent/degrees/boolean) and its stated design decision — *"No special-casing of non-units... unknown units display as `value unit`"* — money is the first case where that fallback needs an actual exception.
+- Confirmed via live query against `game_metrics_per_process_per_minute` (`claude_code.cost.usage`, last 15 minutes): `unit = "USD"` — bare code, no `{}` annotation. No stripping logic is needed; the unit arrives bare.
 
 ## Design
 
@@ -110,9 +111,9 @@ No other XYChart changes needed: tooltips (404, 474-476, 568) and the stats pane
 2. **`analytics-web-app/src/lib/format-value.ts`**: import the new helpers, add the currency branch in `formatNonTime()` before the fallback.
 3. **`analytics-web-app/src/components/XYChart.tsx`**: import `isCurrencyUnit`, `getCurrencySymbol`; update the two Y-axis label expressions (lines ~735 and ~914) to fall back to the currency symbol instead of the raw unit string.
 4. **Tests**:
-   - `analytics-web-app/src/lib/__tests__/units.test.ts`: `isCurrencyUnit` (true for `USD`/`CAD`/`EUR`/lowercase `usd`, false for `count`/`percent`/arbitrary strings), `formatCurrencyValue` (assert exact output for `USD`/`CAD`/`EUR` — pin to the current Node/ICU output, e.g. `formatCurrencyValue(1234.5, 'USD') === '$1,234.50'`), `getCurrencySymbol` (`USD` → `$`, `CAD` → `CA$`, `EUR` → `€`).
+   - `analytics-web-app/src/lib/__tests__/units.test.ts`: `isCurrencyUnit` (true for `USD`/`CAD`/`EUR`/lowercase `usd`, false for `count`/`percent`/arbitrary strings), `formatCurrencyValue` and `getCurrencySymbol` for `USD`/`CAD`/`EUR` — assert against a dynamically-constructed `Intl.NumberFormat(undefined, { style: 'currency', currency: code })` (mirroring the existing `toLocaleString()`-based pattern in `format-value.test.ts:112,116`) rather than a pinned literal string, so the test doesn't break under a non-en-US default locale/ICU build.
    - `analytics-web-app/src/lib/__tests__/format-value.test.ts`: `formatValueWithUnit(1234.5, 'USD')` renders as currency, unknown non-currency unit still falls through to the old `value unit` behavior.
-5. **Documentation**: update `mkdocs/docs/query-guide/schema-reference.md`'s `unit` column description to mention that ISO 4217 currency codes (e.g. `USD`, `CAD`, `EUR`) are recognized and rendered as money.
+5. **Documentation**: update `mkdocs/docs/query-guide/schema-reference.md`'s `unit` column description to mention that ISO 4217 currency codes (e.g. `USD`, `CAD`, `EUR`) are recognized and rendered as money. Also update `mkdocs/docs/web-app/notebooks/variables.md:144`, which independently enumerates the `format_value()` unit vocabulary ("bytes, KB, MB, seconds, ms, µs, bits/s, percent, degrees, boolean, …") — add currency codes to that list so it doesn't go stale.
 
 ## Files to Modify
 
@@ -122,6 +123,7 @@ No other XYChart changes needed: tooltips (404, 474-476, 568) and the stats pane
 - `analytics-web-app/src/lib/__tests__/units.test.ts`
 - `analytics-web-app/src/lib/__tests__/format-value.test.ts`
 - `mkdocs/docs/query-guide/schema-reference.md`
+- `mkdocs/docs/web-app/notebooks/variables.md`
 
 No Rust changes — the `unit` string already passes through `metrics_block_processor.rs` / `metrics_table.rs` unmodified.
 
@@ -134,13 +136,9 @@ No Rust changes — the `unit` string already passes through `metrics_block_proc
 ## Documentation
 
 - `mkdocs/docs/query-guide/schema-reference.md` — note that the `measures.unit` column may carry ISO 4217 currency codes and that the web app renders them as currency.
+- `mkdocs/docs/web-app/notebooks/variables.md` — update the `format_value()` unit-vocabulary sentence (line 144) and, optionally, its examples table to mention currency codes alongside bytes/seconds/percent/etc.
 
 ## Testing Strategy
 
 - Unit tests on the new `units.ts` helpers and the `format-value.ts` dispatch, covering `USD`, `CAD`, `EUR`, lowercase input, and a non-currency unit to confirm the fallback path is untouched.
 - Manual check in the running web app: create/query a metric with `unit = "USD"` (or `"CAD"`/`"EUR"`) and confirm the chart tooltip, stats panel, and Y-axis label all render currency-formatted values instead of `"1,234.56 USD"`.
-
-## Open Questions
-
-- ~~Does the OTel SDK actually send the bare code `"USD"` on the `unit` field, or a UCUM-annotated form like `"{USD}"`?~~ **Confirmed via live query** against `game_metrics_per_process_per_minute` (`claude_code.cost.usage`, last 15 minutes): `unit = "USD"` — bare code, no `{}` annotation. No stripping logic needed.
-- Should currency detection be case-sensitive to match ISO 4217 (`USD` only) or lenient (`usd`, `Usd`)? This plan treats it leniently (uppercases before validating), matching the leniency already shown for other units in `UNIT_ALIASES` (e.g. `Bytes`/`bytes`/`B`).
