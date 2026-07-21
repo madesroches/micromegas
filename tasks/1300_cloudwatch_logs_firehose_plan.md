@@ -166,21 +166,45 @@ struct CloudWatchLogsMessageJson {
     log_events: Vec<CloudWatchLogEventJson>,
 }
 
+/// Bound on a single Firehose record's *decompressed* size. The outer Firehose HTTP body
+/// limits (`apply_ingestion_body_limits`: 20 MiB wire / 300 MiB decompressed) bound the
+/// envelope as a whole, not this per-record gzip nested inside it — CloudWatch gzips each
+/// record's `data` field independently, so a single record within the outer cap could
+/// otherwise decompress via plain DEFLATE at ratios high enough to expand to tens of GB in
+/// memory before any check occurs (a decompression-bomb DoS). Real CloudWatch Logs
+/// subscription-filter Firehose records are small (AWS caps the compressed payload per
+/// delivered record well under 1 MB in practice); 64 MiB is generous relative to that
+/// traffic while still bounding worst-case per-record memory use.
+const MAX_DECOMPRESSED_RECORD_BYTES: u64 = 64 * 1024 * 1024;
+
 /// Gunzips one Firehose record's bytes and parses the CloudWatch Logs subscription-filter
 /// JSON. Returns `Ok(None)` for `CONTROL_MESSAGE` records (drop, not an error) or a
-/// `DATA_MESSAGE` with no events. Malformed gzip/JSON → `OtelError::Parse` (→ 400 →
-/// Firehose retry, matching `decode_firehose_envelope`'s contract).
+/// `DATA_MESSAGE` with no events. Malformed gzip/JSON, or a decompressed size over
+/// `MAX_DECOMPRESSED_RECORD_BYTES`, → `OtelError::Parse` (→ 400 → Firehose retry, matching
+/// `decode_firehose_envelope`'s contract).
 fn decode_cloudwatch_logs_record(
     raw: &[u8],
     index: usize,
 ) -> Result<Option<CloudWatchLogsMessageJson>, OtelError> {
     let mut decompressed = Vec::new();
     GzDecoder::new(raw)
+        // Read one byte past the cap so an over-cap stream is detected (below) instead of
+        // silently truncated.
+        .take(MAX_DECOMPRESSED_RECORD_BYTES + 1)
         .read_to_end(&mut decompressed)
         .map_err(|e| OtelError::Parse {
             signal: Signal::Logs,
             message: format!("cloudwatch logs record[{index}] gunzip: {e}"),
         })?;
+    if decompressed.len() as u64 > MAX_DECOMPRESSED_RECORD_BYTES {
+        return Err(OtelError::Parse {
+            signal: Signal::Logs,
+            message: format!(
+                "cloudwatch logs record[{index}] gunzip: decompressed size exceeds \
+                 {MAX_DECOMPRESSED_RECORD_BYTES}-byte cap"
+            ),
+        });
+    }
     let msg: CloudWatchLogsMessageJson = serde_json::from_slice(&decompressed)
         .map_err(|e| OtelError::Parse {
             signal: Signal::Logs,
@@ -300,6 +324,12 @@ Notes:
   avoids the twos-complement wraparound a raw negative-looking cast could hit, and
   `saturating_mul` caps at `u64::MAX` instead of silently wrapping for any pathological input
   rather than panicking or producing a bogus small timestamp.
+- `MAX_DECOMPRESSED_RECORD_BYTES` (64 MiB) bounds the memory a single record's gunzip can
+  consume, independent of the outer Firehose body-size limits: the outer 20 MiB wire / 300 MiB
+  decompressed caps in `apply_ingestion_body_limits` bound the envelope, but CloudWatch gzips
+  each record's `data` field independently, so a single record could otherwise decompress to
+  tens of GB before any check ran. Hitting the cap fails that record with `OtelError::Parse`
+  (→ 400 → Firehose retry), same as any other malformed record.
 
 ### `decode_firehose_envelope` gets a `Signal` parameter
 
@@ -608,6 +638,8 @@ changes** — the same reasoning #1299 used to justify reusing `ingest_metrics` 
   - `DATA_MESSAGE` with empty `logEvents` → `None` — exercises the empty-events branch.
   - Malformed gzip → `OtelError::Parse`.
   - Valid gzip, malformed JSON → `OtelError::Parse`.
+  - Gzip stream crafted to decompress past `MAX_DECOMPRESSED_RECORD_BYTES` → `OtelError::Parse`
+    (decompression-bomb guard).
   - `build_export_logs_request` → resource attrs contain `service.name`=logGroup,
     `service.instance.id`=logStream, `cloud.account.id`=owner,
     `aws.log.group.name`/`aws.log.stream.name`; one `LogRecord` per `logEvent`;
@@ -638,7 +670,15 @@ changes** — the same reasoning #1299 used to justify reusing `ingest_metrics` 
   `--disable-auth` dev-mode stack), assert the 200 ack, then `assert_eventually` a
   `log_entries` row appears with the expected `msg`/`time` and `process_properties` containing
   `otel.resource.aws.log.group.name`/`otel.resource.aws.log.stream.name`. Add a
-  `CONTROL_MESSAGE`-is-ignored assertion (no new row). Key rejection (missing/wrong
+  `CONTROL_MESSAGE`-is-ignored assertion: since `CONTROL_MESSAGE` payloads carry empty
+  `logGroup`/`logStream` (see "Payload format" above), the negative check can't key off those
+  fields — instead give the synthetic health-check `logEvent`'s `id` a unique per-run value
+  (the one field a `CONTROL_MESSAGE` payload carries that isn't blanked out), assert the ack
+  has no `errorMessage`, then assert zero `log_entries` rows carry that specific
+  `aws.log.event.id` in `properties` (rather than querying by a value that was never part of
+  the payload). If `CONTROL_MESSAGE` handling ever regressed and the message were processed
+  like a `DATA_MESSAGE`, the resulting row would carry exactly this attribute, so the check is
+  tied to what this run actually sent. Key rejection (missing/wrong
   `X-Amz-Firehose-Access-Key`) is covered by the Rust HTTP tests
   (`firehose_cloudwatch_logs_tests.rs`), not the e2e — the e2e stack runs with
   `--disable-auth`, so the access key is ignored and a rejected-key assertion would not be
