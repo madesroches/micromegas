@@ -160,13 +160,17 @@ disk-bytes gauge is added (see Current State / Trade-offs).
   file's size is constant (== configured capacity) from first boot regardless of live
   utilization — a directory walk would report the same number whether the tier is empty or
   full.
-- **RAM entries per-prefix, not attempted.** The issue allows falling back to a global
-  gauge "if per-prefix accounting is feasible, else global" — matching the existing global
-  `ram_tier_usage_bytes`. `foyer_memory::Cache` has no per-prefix accounting API; producing
-  one would mean iterating all cache entries under lock on every 5s tick, which is exactly
-  the class of hot-path/lock-contention cost the existing per-event `imetric!` tagging
-  approach (classify at insert/evict time, not scan at sample time) was designed to avoid.
-  Kept global, consistent with `ram_tier_usage_bytes`.
+- **RAM entries per-prefix, out of scope for this change.** The issue allows falling back
+  to a global gauge "if per-prefix accounting is feasible, else global" — matching the
+  existing global `ram_tier_usage_bytes`. Per-prefix accounting is technically feasible: the
+  same insert sites (`FoyerBackend::put`'s Demand arm, `promote_if_valid`) and the same
+  `on_leave` exit hook already used by `object_cache_promotion_count` and
+  `object_cache_ram_tier_eviction_count` could drive an atomic per-prefix
+  increment-on-insert/decrement-on-leave counter via the existing `EvictionTagTable::classify`
+  lookup, with no cache scan required. It's left out of this change anyway: this design keeps
+  the new gauge a minimal, one-line addition mirroring the existing global
+  `ram_tier_usage_bytes`, rather than introducing a new stateful counter with its own
+  insert/evict/replace bookkeeping. Kept global, consistent with `ram_tier_usage_bytes`.
 
 ## Documentation
 
