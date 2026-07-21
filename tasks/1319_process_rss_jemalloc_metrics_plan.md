@@ -361,28 +361,38 @@ zero behavior change for anything that exists today.
 
 Add to the Saturation table in `mkdocs/docs/admin/object-cache.md` (near
 `object_cache_ram_tier_usage_bytes`, `:256`). This isn't the only metrics catalogue in
-the repo — the same file's Monitoring table (~40 rows) and
+the repo — the same file's Monitoring table (~28 rows) and
 `mkdocs/docs/admin/maintenance.md`'s pg_stat table are both bigger — but the Saturation
 table is the right fit by *kind*: it's specifically the gauges a background sampler
 emits on a fixed interval, independent of request volume, and that's exactly what these
 six process/jemalloc gauges are (see `system_monitor.rs`), unlike the request-driven
-counters in the Monitoring table above it. Phrase the entries to say explicitly that
-these six gauges are process-wide, not object-cache-specific:
+counters in the Monitoring table above it.
+
+The Saturation table is 2-column (`| Metric | Meaning |`) and its existing rows are
+one-liners, so each new `Meaning` cell must stay a concise single line — the entries
+below are the row text; the multi-signal diagnostic guidance goes in prose *after* the
+table, not inside a cell. State in each cell that these gauges are process-wide, not
+object-cache-specific:
 
 - `process_resident_bytes` / `process_virtual_bytes` — this process's own RSS/virtual
   size (`sysinfo`, allocator-agnostic; emitted by any service built with the
-  `jemalloc-metrics` feature, not object-cache-specific). Compare against the host-level
-  `used_memory` system metric: RSS climbing while the delta between `used_memory` and
-  this process's RSS stays flat means the growth *is* this process; RSS flat while
-  `used_memory` climbs means it's some other process on the host.
+  `jemalloc-metrics` feature).
 - `jemalloc_allocated_bytes` / `jemalloc_resident_bytes` / `jemalloc_mapped_bytes` /
-  `jemalloc_retained_bytes` — jemalloc's own runtime accounting (`tikv-jemalloc-ctl`,
-  `stats.allocated`/`stats.resident`/`stats.mapped`/`stats.retained`), only emitted by
-  binaries built with the `jemalloc-metrics` feature (all 7 production services).
-  `allocated` climbing points to a logical leak inside the process (reach for a jemalloc
-  heap profile next); `resident` climbing while `allocated` is flat points to allocator
-  fragmentation/retention (tune `MALLOC_CONF`); process RSS climbing while both jemalloc
-  gauges are flat points to non-heap growth (mmap, thread stacks, kernel).
+  `jemalloc_retained_bytes` — jemalloc's own runtime accounting (`tikv-jemalloc-ctl`
+  `stats.allocated`/`resident`/`mapped`/`retained`; only binaries built with the
+  `jemalloc-metrics` feature, all 7 production services).
+
+Then, in prose below the table, add the diagnostic decision tree that doesn't fit a
+one-line cell:
+
+- Compare `process_resident_bytes` against the host-level `used_memory` system metric:
+  RSS climbing while the delta between `used_memory` and this process's RSS stays flat
+  means the growth *is* this process; RSS flat while `used_memory` climbs means it's
+  some other process on the host.
+- `jemalloc_allocated_bytes` climbing points to a logical leak inside the process (reach
+  for a jemalloc heap profile next); `resident` climbing while `allocated` is flat points
+  to allocator fragmentation/retention (tune `MALLOC_CONF`); process RSS climbing while
+  both jemalloc gauges are flat points to non-heap growth (mmap, thread stacks, kernel).
 
 ## Testing Strategy
 
