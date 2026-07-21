@@ -44,6 +44,16 @@ export function buildXAxisConfig(xAxisMode: XAxisMode, xLabels?: string[]): uPlo
   return xAxisConfig
 }
 
+export function buildXScale(xAxisMode: XAxisMode): uPlot.Scale {
+  const scale: uPlot.Scale = { time: xAxisMode === 'time' }
+  if (xAxisMode === 'categorical') {
+    // Pad by half a slot so end bars aren't clipped and end labels stay
+    // centered under their bars. A slot is 1 index wide; bars span 0.8 of it.
+    scale.range = (_u, dataMin, dataMax) => [dataMin - 0.5, dataMax + 0.5]
+  }
+  return scale
+}
+
 /**
  * Pure Y-axis tick formatter shared by XYChart's multi-series (per-unit-scale)
  * and single-series numeric axes. Extracted alongside `buildXAxisConfig` so

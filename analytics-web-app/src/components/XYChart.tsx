@@ -11,7 +11,7 @@ import { formatValueWithUnit } from '@/lib/format-value'
 import type { ChartSeriesData, ChartPoint } from '@/lib/arrow-utils'
 
 import { SERIES_COLORS, DEFAULT_SERIES_COLOR, DEFAULT_REFERENCE_LINE_COLOR } from './chart-constants'
-import { buildXAxisConfig, formatYAxisTick } from './xychart-axis'
+import { buildXAxisConfig, buildXScale, formatYAxisTick } from './xychart-axis'
 
 export interface ChartAxisBounds {
   left: number // Left padding (Y-axis width)
@@ -695,7 +695,7 @@ export function XYChart({
 
       // Build scales, axes, and series configs
       const scales: uPlot.Scales = {
-        x: { time: xAxisMode === 'time' },
+        x: buildXScale(xAxisMode),
       }
       const axes: uPlot.Axis[] = [xAxisConfig]
       const uPlotSeries: uPlot.Series[] = [{}]
@@ -979,7 +979,7 @@ export function XYChart({
         plugins: [createTooltipPlugin(primaryUnit, conversionFactor, xAxisMode, xLabels), refLinePlugin],
         tzDate: xAxisMode === 'time' ? (ts: number) => new Date(ts * 1000) : undefined,
         scales: {
-          x: { time: xAxisMode === 'time' },
+          x: buildXScale(xAxisMode),
           y: {
             range: (_u: uPlot, dataMin: number, _dataMax: number) => {
               const minVal = Math.min(0, dataMin)
