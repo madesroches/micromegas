@@ -17,7 +17,7 @@ number.
 
 ## Current State
 
-`object_cache_ram_tier_usage_bytes` already exists (added for #1206) and is emitted every
+`object_cache_ram_tier_usage_bytes` already exists (added for #1276/#1277) and is emitted every
 5s by the saturation sampler:
 
 - `RangeCacheBackend::ram_usage_bytes(&self) -> Option<usize>` (`rust/object-cache/src/backend.rs:43`)
@@ -63,7 +63,10 @@ anywhere in the codebase — a one-line addition next to the existing `usage()` 
 
 Conclusion: a genuine live disk-tier-bytes gauge would require either an upstream `foyer`
 change (exposing per-partition live occupancy) or this crate maintaining its own running
-counter. The latter was considered and rejected — see Trade-offs.
+counter. The latter was considered and rejected — see Trade-offs. The same applies to a
+disk-tier entry count: `blocks()`, the count-like sibling to `size()`, lives on the same
+unreachable `BlockManager`, so entry count is exactly as infeasible as bytes, for the
+identical reason.
 
 ## Design
 
@@ -160,8 +163,9 @@ disk-bytes gauge is added (see Current State / Trade-offs).
 
 - `mkdocs/docs/admin/object-cache.md` Saturation table (`:247-261`): add
   `object_cache_ram_tier_entries` next to `object_cache_ram_tier_usage_bytes`, and a short
-  explanatory line that disk-tier occupancy gauges are not emitted, with the reason
-  (foyer 0.22.3 exposes no live disk-residency API), so this doesn't read as an oversight.
+  explanatory line that neither disk-tier bytes nor disk-tier entry count is emitted, with
+  the reason (foyer 0.22.3 exposes no live disk-residency API for either, since both would
+  require the same unreachable `BlockManager`), so this doesn't read as an oversight.
 - `CHANGELOG.md`: one entry for the new gauge.
 
 ## Testing Strategy
