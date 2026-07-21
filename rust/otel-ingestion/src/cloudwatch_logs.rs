@@ -53,19 +53,39 @@ pub struct CloudWatchLogsMessageJson {
 /// relative to real CloudWatch traffic, but bounds worst-case memory.
 const MAX_DECOMPRESSED_RECORD_BYTES: u64 = 64 * 1024 * 1024;
 
+/// Aggregate cap on the sum of decompressed bytes across every record in one Firehose
+/// batch. `MAX_DECOMPRESSED_RECORD_BYTES` bounds a single record's peak memory, but a
+/// batch can carry thousands of records; without a batch-wide cap, an attacker could pack
+/// many small gzip streams that each individually decompress to (just under) the
+/// per-record cap — e.g. a ~63 KiB stream expanding ~1032:1 to 64 MiB — and force hundreds
+/// of GiB of cumulative decompression work from one HTTP request, all while peak memory
+/// stays bounded (records are decoded one at a time). Set to the same 300 MiB used as the
+/// decompressed-body ceiling for the outer Firehose envelope
+/// (`INGESTION_DECOMPRESSED_BODY_LIMIT_BYTES` in `public/src/servers/ingestion_limits.rs`,
+/// not reusable here directly since it's `pub(crate)` to that crate) so the two layers
+/// enforce comparable worst-case decompression work.
+const MAX_DECOMPRESSED_BATCH_BYTES: u64 = 300 * 1024 * 1024;
+
 /// Gunzips one Firehose record's bytes and parses the CloudWatch Logs subscription-filter
 /// JSON. Returns `Ok(None)` for `CONTROL_MESSAGE` records (drop, not an error) or a
 /// `DATA_MESSAGE` with no events. Malformed gzip/JSON, a decompressed size over
-/// `MAX_DECOMPRESSED_RECORD_BYTES`, or a `logEvent.timestamp` that is negative (real
-/// CloudWatch never sends one; casting it to `u64` downstream would wrap around into a
-/// corrupt far-future nanosecond timestamp) → `OtelError::Parse` (→ 400 → Firehose retry,
-/// matching `decode_firehose_envelope`'s contract).
+/// `MAX_DECOMPRESSED_RECORD_BYTES`, the running `total_decompressed_bytes` across the
+/// batch exceeding `MAX_DECOMPRESSED_BATCH_BYTES`, or a `logEvent.timestamp` that is
+/// negative (real CloudWatch never sends one; casting it to `u64` downstream would wrap
+/// around into a corrupt far-future nanosecond timestamp) → `OtelError::Parse` (→ 400 →
+/// Firehose retry, matching `decode_firehose_envelope`'s contract).
+///
+/// `total_decompressed_bytes` is the caller's running total of decompressed bytes across
+/// all records processed so far in the current batch; this call adds this record's
+/// decompressed size to it before checking the aggregate cap, so the caller can simply
+/// thread the same accumulator through every record in a loop.
 ///
 /// Public (rather than private) so `tests/cloudwatch_logs_tests.rs` can assert its shape
 /// directly, matching the `build_webhook_request` precedent in `handler.rs`.
 pub fn decode_cloudwatch_logs_record(
     raw: &[u8],
     index: usize,
+    total_decompressed_bytes: &mut u64,
 ) -> Result<Option<CloudWatchLogsMessageJson>, OtelError> {
     let mut decompressed = Vec::new();
     // Read one byte past the cap so exceeding it is distinguishable from landing exactly
@@ -84,6 +104,16 @@ pub fn decode_cloudwatch_logs_record(
             message: format!(
                 "cloudwatch logs record[{index}] gunzip: decompressed size exceeds \
                  {MAX_DECOMPRESSED_RECORD_BYTES} byte cap"
+            ),
+        });
+    }
+    *total_decompressed_bytes = total_decompressed_bytes.saturating_add(decompressed.len() as u64);
+    if *total_decompressed_bytes > MAX_DECOMPRESSED_BATCH_BYTES {
+        return Err(OtelError::Parse {
+            signal: Signal::Logs,
+            message: format!(
+                "cloudwatch logs record[{index}] gunzip: aggregate decompressed size across \
+                 batch exceeds {MAX_DECOMPRESSED_BATCH_BYTES} byte cap"
             ),
         });
     }
@@ -175,12 +205,20 @@ pub fn build_export_logs_request(msg: &CloudWatchLogsMessageJson) -> ExportLogsS
 /// Feeds each Firehose record (a gzip-compressed CloudWatch Logs subscription-filter JSON
 /// payload) through decode → synthesize → the existing logs split/write path.
 /// `CONTROL_MESSAGE`s and empty `DATA_MESSAGE`s are silently skipped, not errors.
+///
+/// Tracks a running total of decompressed bytes across every record in `records`
+/// (see `MAX_DECOMPRESSED_BATCH_BYTES`) so a batch of many small decompression-bomb
+/// records can't rack up unbounded cumulative decompression work even though each one
+/// individually stays under the per-record cap; the first record that pushes the running
+/// total over the aggregate cap aborts the batch with `OtelError::Parse`.
 pub async fn ingest_cloudwatch_logs_firehose(
     service: Arc<WebIngestionService>,
     records: Vec<Vec<u8>>,
 ) -> Result<(), OtelError> {
+    let mut total_decompressed_bytes: u64 = 0;
     for (i, rec) in records.iter().enumerate() {
-        let Some(msg) = decode_cloudwatch_logs_record(rec, i)? else {
+        let Some(msg) = decode_cloudwatch_logs_record(rec, i, &mut total_decompressed_bytes)?
+        else {
             continue;
         };
         let req = build_export_logs_request(&msg);

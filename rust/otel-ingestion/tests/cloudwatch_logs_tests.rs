@@ -42,7 +42,7 @@ fn data_message_with_multiple_events_decodes() {
         events,
     );
 
-    let msg = decode_cloudwatch_logs_record(&raw, 0)
+    let msg = decode_cloudwatch_logs_record(&raw, 0, &mut 0)
         .expect("decode ok")
         .expect("Some for DATA_MESSAGE");
     assert_eq!(msg.log_group, "/ecs/my-service");
@@ -56,7 +56,7 @@ fn data_message_with_multiple_events_decodes() {
 #[test]
 fn control_message_is_dropped_not_an_error() {
     let raw = control_message();
-    let result = decode_cloudwatch_logs_record(&raw, 0).expect("decode ok");
+    let result = decode_cloudwatch_logs_record(&raw, 0, &mut 0).expect("decode ok");
     assert!(result.is_none(), "CONTROL_MESSAGE must be silently skipped");
 }
 
@@ -64,7 +64,7 @@ fn control_message_is_dropped_not_an_error() {
 fn data_message_with_empty_events_is_dropped() {
     let json = r#"{"messageType":"DATA_MESSAGE","owner":"123456789012","logGroup":"/ecs/my-service","logStream":"stream-1","subscriptionFilters":["f"],"logEvents":[]}"#;
     let raw = gzip(json.as_bytes());
-    let result = decode_cloudwatch_logs_record(&raw, 0).expect("decode ok");
+    let result = decode_cloudwatch_logs_record(&raw, 0, &mut 0).expect("decode ok");
     assert!(result.is_none(), "empty logEvents must be dropped");
 }
 
@@ -78,21 +78,21 @@ fn decompressed_size_over_cap_is_parse_error() {
         r#"{{"messageType":"DATA_MESSAGE","owner":"1","logGroup":"/g","logStream":"s","subscriptionFilters":["f"],"logEvents":[{{"id":"1","timestamp":1,"message":"{huge_message}"}}]}}"#
     );
     let raw = gzip(json.as_bytes());
-    let err = decode_cloudwatch_logs_record(&raw, 0).expect_err("expected parse error");
+    let err = decode_cloudwatch_logs_record(&raw, 0, &mut 0).expect_err("expected parse error");
     assert!(matches!(err, OtelError::Parse { .. }));
 }
 
 #[test]
 fn malformed_gzip_is_parse_error() {
-    let err =
-        decode_cloudwatch_logs_record(b"not gzip at all", 0).expect_err("expected parse error");
+    let err = decode_cloudwatch_logs_record(b"not gzip at all", 0, &mut 0)
+        .expect_err("expected parse error");
     assert!(matches!(err, OtelError::Parse { .. }));
 }
 
 #[test]
 fn valid_gzip_malformed_json_is_parse_error() {
     let raw = gzip(b"not json at all");
-    let err = decode_cloudwatch_logs_record(&raw, 0).expect_err("expected parse error");
+    let err = decode_cloudwatch_logs_record(&raw, 0, &mut 0).expect_err("expected parse error");
     assert!(matches!(err, OtelError::Parse { .. }));
 }
 
@@ -103,7 +103,7 @@ fn negative_log_event_timestamp_is_parse_error() {
     // timestamp instead of failing, so this must be rejected as malformed input.
     let events = r#"{"id":"evt-1","timestamp":1510109208016,"message":"first line"},{"id":"evt-2","timestamp":-1,"message":"second line"}"#;
     let raw = data_message("/ecs/my-service", "task/abc", "123456789012", events);
-    let err = decode_cloudwatch_logs_record(&raw, 0).expect_err("expected parse error");
+    let err = decode_cloudwatch_logs_record(&raw, 0, &mut 0).expect_err("expected parse error");
     assert!(matches!(err, OtelError::Parse { .. }));
 }
 
@@ -118,7 +118,7 @@ fn build_export_logs_request_maps_fields_and_preserves_body_verbatim() {
         "999988887777",
         events,
     );
-    let msg = decode_cloudwatch_logs_record(&raw, 0)
+    let msg = decode_cloudwatch_logs_record(&raw, 0, &mut 0)
         .expect("decode ok")
         .expect("Some");
 
@@ -167,7 +167,7 @@ fn build_export_logs_request_maps_fields_and_preserves_body_verbatim() {
 fn full_pipeline_decode_build_split_produces_one_block_with_matching_record_count() {
     let events = r#"{"id":"evt-1","timestamp":1510109208016,"message":"line one"},{"id":"evt-2","timestamp":1510109208100,"message":"line two"},{"id":"evt-3","timestamp":1510109208200,"message":"line three"}"#;
     let raw = data_message("/ecs/svc", "task/abc", "111122223333", events);
-    let msg = decode_cloudwatch_logs_record(&raw, 0)
+    let msg = decode_cloudwatch_logs_record(&raw, 0, &mut 0)
         .expect("decode ok")
         .expect("Some");
     let req = build_export_logs_request(&msg);
@@ -183,10 +183,10 @@ fn multi_record_batch_with_distinct_log_streams_yields_distinct_process_ids() {
     let raw1 = data_message("/ecs/svc", "task/one", "111122223333", events1);
     let raw2 = data_message("/ecs/svc", "task/two", "111122223333", events2);
 
-    let msg1 = decode_cloudwatch_logs_record(&raw1, 0)
+    let msg1 = decode_cloudwatch_logs_record(&raw1, 0, &mut 0)
         .expect("decode ok")
         .expect("Some");
-    let msg2 = decode_cloudwatch_logs_record(&raw2, 1)
+    let msg2 = decode_cloudwatch_logs_record(&raw2, 1, &mut 0)
         .expect("decode ok")
         .expect("Some");
 
@@ -209,4 +209,43 @@ fn multi_record_batch_with_distinct_log_streams_yields_distinct_process_ids() {
     }));
     assert_eq!(blocks1[0].process_id, pid1);
     assert_eq!(blocks2[0].process_id, pid2);
+}
+
+#[test]
+fn aggregate_batch_cap_rejects_batch_once_running_total_exceeds_it_even_though_each_record_is_under_the_per_record_cap()
+ {
+    // Six records, each ~55 MiB decompressed (under the 64 MiB per-record cap on its own),
+    // but the running total crosses the 300 MiB aggregate cap partway through the sixth
+    // one. This proves the aggregate check is a genuinely separate guard from the
+    // per-record cap: no single record here would ever trip
+    // `MAX_DECOMPRESSED_RECORD_BYTES`, yet the batch as a whole must still be rejected.
+    const RECORD_SIZE: usize = 55 * 1024 * 1024;
+    let message = "a".repeat(RECORD_SIZE);
+    let raw = data_message(
+        "/ecs/my-service",
+        "task/abc",
+        "123456789012",
+        &format!(r#"{{"id":"evt-1","timestamp":1,"message":"{message}"}}"#),
+    );
+
+    let mut total_decompressed_bytes: u64 = 0;
+    let mut last_result = None;
+    for i in 0..6 {
+        last_result = Some(decode_cloudwatch_logs_record(
+            &raw,
+            i,
+            &mut total_decompressed_bytes,
+        ));
+        if i < 5 {
+            assert!(
+                last_result.as_ref().expect("present").is_ok(),
+                "record[{i}] alone is well under the per-record cap and the running total \
+                 is still under the aggregate cap, so it must decode successfully"
+            );
+        }
+    }
+    let err = last_result
+        .expect("loop ran")
+        .expect_err("6th record must push the running total over the aggregate cap");
+    assert!(matches!(err, OtelError::Parse { .. }));
 }
