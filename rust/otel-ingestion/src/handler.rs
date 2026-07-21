@@ -68,7 +68,7 @@ fn signal_format(signal: Signal) -> &'static str {
 /// Generic per-resource block writer. Registers the process + stream (idempotent)
 /// then writes one block per resource. All errors carry the signal label so the
 /// HTTP response includes useful context.
-async fn write_blocks(
+pub(crate) async fn write_blocks(
     service: &WebIngestionService,
     signal: Signal,
     blocks: Vec<crate::block::PreparedBlock>,
@@ -292,10 +292,13 @@ pub struct FirehoseEnvelope {
 /// Parse the Firehose JSON envelope and base64-decode every record's `data`.
 /// (gzip, if any, is already removed by the shared decompression layer.)
 /// Malformed JSON or base64 → `OtelError::Parse` (→ 400 → non-200 → Firehose retry).
-pub fn decode_firehose_envelope(body: &[u8]) -> Result<FirehoseEnvelope, OtelError> {
+pub fn decode_firehose_envelope(
+    body: &[u8],
+    signal: Signal,
+) -> Result<FirehoseEnvelope, OtelError> {
     let parsed: FirehoseEnvelopeJson =
         serde_json::from_slice(body).map_err(|e| OtelError::Parse {
-            signal: Signal::Metrics,
+            signal,
             message: format!("firehose envelope json: {e}"),
         })?;
     let mut records = Vec::with_capacity(parsed.records.len());
@@ -303,7 +306,7 @@ pub fn decode_firehose_envelope(body: &[u8]) -> Result<FirehoseEnvelope, OtelErr
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(rec.data.as_bytes())
             .map_err(|e| OtelError::Parse {
-                signal: Signal::Metrics,
+                signal,
                 message: format!("firehose record[{i}] base64: {e}"),
             })?;
         records.push(bytes);
