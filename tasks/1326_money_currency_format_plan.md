@@ -43,6 +43,8 @@ export function isCurrencyUnit(unit: string): boolean {
 
 `KNOWN_CURRENCY_CODES` is built once at module load, so no per-call caching is needed — `Set.has()` is already O(1), cheap on hot paths like tooltip re-formatting on mouse move. On a runtime that lacks `Intl.supportedValuesOf` (pre-2022 engines), the set is empty and `isCurrencyUnit` always returns `false`, so currency formatting silently degrades to the existing `value unit` fallback instead of throwing.
 
+Note: `analytics-web-app/tsconfig.json` currently sets `"lib": ["dom", "dom.iterable", "ES2020"]`, which does not include the `ES2022.Intl` lib file that declares `Intl.supportedValuesOf`. That lib entry must be added (see Implementation Steps) or this code will not typecheck.
+
 ### Formatting
 
 ```ts
@@ -53,20 +55,9 @@ export function formatCurrencyValue(value: number, unit: string): string {
     currency: unit.toUpperCase(),
   }).format(value)
 }
-
-export function getCurrencySymbol(unit: string): string {
-  const parts = new Intl.NumberFormat(undefined, {
-    style: 'currency',
-    currency: unit.toUpperCase(),
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 0,
-  }).formatToParts(0)
-  return parts.find((p) => p.type === 'currency')?.value ?? unit.toUpperCase()
-}
 ```
 
 - `formatCurrencyValue` is used for tooltips, the stats panel, and (see Wiring into `XYChart.tsx` below) the Y-axis ticks — full Intl-formatted amount, e.g. `"$1,234.56"`.
-- `getCurrencySymbol` is not wired into the Y-axis in this plan (the Y-axis ticks use `formatCurrencyValue` directly, not a symbol + raw-number concatenation); it's kept as a helper reserved for a future compact single-symbol context if one is added (e.g. a chart-header abbreviation).
 - No adaptive scaling (no "$1.2M" abbreviation) — matches the existing simple-unit precedent (`percent`, `degrees`) rather than the adaptive-scaling precedent (`bytes`, time). Large-number abbreviation for money can be a follow-up if requested; keeping v1 simple avoids inventing rounding/rollover rules (is $999,999 → "$1.0M" acceptable? threshold choice, etc.) that nobody has asked for yet.
 - No explicit locale is passed (`undefined` locale = the browser's runtime locale), matching the existing convention already used by the `value.toLocaleString()` fallback in `format-value.ts:39`.
 
@@ -94,23 +85,22 @@ The Y-axis `values` callbacks (XYChart.tsx:746-756 for multi-series, XYChart.tsx
 - Multi-series (XYChart.tsx:734-756): alongside the existing `yAxisUnit` computation, compute `const isCurrencyScale = isCurrencyUnit(normalizeUnit(scaleInfo.unitName))`. In the `values` callback, when `isCurrencyScale` is true, return `formatCurrencyValue(dv, scaleInfo.unitName)` for every tick (including the `v === 0` case) instead of the `Math.round`/`toFixed`/`toPrecision` + `yAxisUnit` chain.
 - Single-series (XYChart.tsx:914 and :1004-1013): same pattern — `const isCurrencyScale = isCurrencyUnit(normalizeUnit(primaryUnit))`, branching inside the `values` callback at :1004-1013.
 
-`getCurrencySymbol()` is not used by this wiring — the tick formatter calls `formatCurrencyValue()` directly, so no symbol-suffix logic is needed for the Y-axis.
-
 No other XYChart changes needed: tooltips (404, 474-476, 568) and the stats panel (1178-1187) already call `formatValueWithUnit`, which now handles currency via `format-value.ts`.
 
 ## Implementation Steps
 
-1. **`analytics-web-app/src/lib/units.ts`**: add `isCurrencyUnit()`, `formatCurrencyValue()`, `getCurrencySymbol()` (with the module-level `KNOWN_CURRENCY_CODES` set) as described above.
+1. **`analytics-web-app/src/lib/units.ts`**: add `isCurrencyUnit()`, `formatCurrencyValue()` (with the module-level `KNOWN_CURRENCY_CODES` set) as described above. Also update **`analytics-web-app/tsconfig.json`**'s `lib` array to add `"ES2022.Intl"` (required for `Intl.supportedValuesOf` to typecheck under the project's current `lib: ["dom", "dom.iterable", "ES2020"]`).
 2. **`analytics-web-app/src/lib/format-value.ts`**: import the new helpers, add the currency branch in `formatNonTime()` before the fallback.
 3. **`analytics-web-app/src/components/XYChart.tsx`**: import `isCurrencyUnit`, `formatCurrencyValue`; update the two Y-axis `values` tick-formatter callbacks (multi-series ~746-756, single-series ~1004-1013) to branch on `isCurrencyUnit(normalizeUnit(...))` and format currency ticks via `formatCurrencyValue()` directly, bypassing the manual `toFixed`/`toPrecision`/`Math.round` + unit-suffix chain used for other units.
 4. **Tests**:
-   - `analytics-web-app/src/lib/__tests__/units.test.ts`: `isCurrencyUnit` (true for `USD`/`CAD`/`EUR`/lowercase `usd`, false for `count`/`percent`/arbitrary strings, and false for plausible non-currency 3-letter unit codes that `Intl.NumberFormat` construction alone would wrongly accept — `MPH`, `RPM`, `Cel`), `formatCurrencyValue` and `getCurrencySymbol` for `USD`/`CAD`/`EUR` — assert against a dynamically-constructed `Intl.NumberFormat(undefined, { style: 'currency', currency: code })` (mirroring the existing `toLocaleString()`-based pattern in `format-value.test.ts:112,116`) rather than a pinned literal string, so the test doesn't break under a non-en-US default locale/ICU build.
+   - `analytics-web-app/src/lib/__tests__/units.test.ts`: `isCurrencyUnit` (true for `USD`/`CAD`/`EUR`/lowercase `usd`, false for `count`/`percent`/arbitrary strings, and false for plausible non-currency 3-letter unit codes that `Intl.NumberFormat` construction alone would wrongly accept — `MPH`, `RPM`, `Cel`), `formatCurrencyValue` for `USD`/`CAD`/`EUR` — assert against a dynamically-constructed `Intl.NumberFormat(undefined, { style: 'currency', currency: code })` (mirroring the existing `toLocaleString()`-based pattern in `format-value.test.ts:112,116`) rather than a pinned literal string, so the test doesn't break under a non-en-US default locale/ICU build.
    - `analytics-web-app/src/lib/__tests__/format-value.test.ts`: `formatValueWithUnit(1234.5, 'USD')` renders as currency, unknown non-currency unit still falls through to the old `value unit` behavior.
 5. **Documentation**: update `mkdocs/docs/query-guide/schema-reference.md`'s `unit` column description to mention that ISO 4217 currency codes (e.g. `USD`, `CAD`, `EUR`) are recognized and rendered as money. Also update `mkdocs/docs/web-app/notebooks/variables.md:144`, which independently enumerates the `format_value()` unit vocabulary ("bytes, KB, MB, seconds, ms, µs, bits/s, percent, degrees, boolean, …") — add currency codes to that list so it doesn't go stale.
 
 ## Files to Modify
 
 - `analytics-web-app/src/lib/units.ts`
+- `analytics-web-app/tsconfig.json`
 - `analytics-web-app/src/lib/format-value.ts`
 - `analytics-web-app/src/components/XYChart.tsx`
 - `analytics-web-app/src/lib/__tests__/units.test.ts`
