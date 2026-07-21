@@ -3,7 +3,8 @@
     "lib": [
       "dom",
       "dom.iterable",
-      "ES2020"
+      "ES2020",
+      "ES2022.Intl"
     ],
     "allowJs": true,
     "skipLibCheck": true,

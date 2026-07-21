@@ -277,7 +277,7 @@ Numerical measurements and counters.
 | `time` | `Timestamp(Nanosecond)` | Measurement timestamp |
 | `target` | `Dictionary(Int16, Utf8)` | Module/target |
 | `name` | `Dictionary(Int16, Utf8)` | Metric name |
-| `unit` | `Dictionary(Int16, Utf8)` | Measurement unit |
+| `unit` | `Dictionary(Int16, Utf8)` | Measurement unit. May be an ISO 4217 currency code (e.g. `USD`, `CAD`, `EUR`); the web app renders these as currency |
 | `value` | `Float64` | Metric value |
 | `properties` | `Dictionary(Int32, Binary)` | Metric-specific properties (JSONB format) |
 | `process_properties` | `Dictionary(Int32, Binary)` | Process-specific properties (JSONB format) |

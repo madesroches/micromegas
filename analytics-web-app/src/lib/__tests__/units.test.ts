@@ -1,4 +1,15 @@
-import { normalizeUnit, UNIT_ALIASES, TIME_UNIT_NAMES, SIZE_UNIT_NAMES, isSizeUnit, getAdaptiveSizeUnit, isBitUnit, getAdaptiveBitUnit } from '../units'
+import {
+  normalizeUnit,
+  UNIT_ALIASES,
+  TIME_UNIT_NAMES,
+  SIZE_UNIT_NAMES,
+  isSizeUnit,
+  getAdaptiveSizeUnit,
+  isBitUnit,
+  getAdaptiveBitUnit,
+  isCurrencyUnit,
+  formatCurrencyValue,
+} from '../units'
 
 describe('normalizeUnit', () => {
   describe('time units', () => {
@@ -346,5 +357,51 @@ describe('getAdaptiveBitUnit', () => {
       expect(result.abbrev).toBe('kbit/s')
       expect(result.conversionFactor).toBe(1 / KBIT)
     })
+  })
+})
+
+describe('isCurrencyUnit', () => {
+  it('recognizes known currency codes', () => {
+    expect(isCurrencyUnit('USD')).toBe(true)
+    expect(isCurrencyUnit('CAD')).toBe(true)
+    expect(isCurrencyUnit('EUR')).toBe(true)
+  })
+
+  it('is case-insensitive', () => {
+    expect(isCurrencyUnit('usd')).toBe(true)
+  })
+
+  it('rejects non-currency units', () => {
+    expect(isCurrencyUnit('count')).toBe(false)
+    expect(isCurrencyUnit('percent')).toBe(false)
+    expect(isCurrencyUnit('widgets')).toBe(false)
+  })
+
+  it('rejects plausible non-currency 3-letter unit codes', () => {
+    expect(isCurrencyUnit('MPH')).toBe(false)
+    expect(isCurrencyUnit('RPM')).toBe(false)
+    expect(isCurrencyUnit('Cel')).toBe(false)
+  })
+})
+
+describe('formatCurrencyValue', () => {
+  it('formats USD to match Intl.NumberFormat currency style', () => {
+    const expected = new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD' }).format(1234.5)
+    expect(formatCurrencyValue(1234.5, 'USD')).toBe(expected)
+  })
+
+  it('formats CAD to match Intl.NumberFormat currency style', () => {
+    const expected = new Intl.NumberFormat(undefined, { style: 'currency', currency: 'CAD' }).format(1234.5)
+    expect(formatCurrencyValue(1234.5, 'CAD')).toBe(expected)
+  })
+
+  it('formats EUR to match Intl.NumberFormat currency style', () => {
+    const expected = new Intl.NumberFormat(undefined, { style: 'currency', currency: 'EUR' }).format(1234.5)
+    expect(formatCurrencyValue(1234.5, 'EUR')).toBe(expected)
+  })
+
+  it('accepts lowercase currency codes', () => {
+    const expected = new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD' }).format(1234.5)
+    expect(formatCurrencyValue(1234.5, 'usd')).toBe(expected)
   })
 })

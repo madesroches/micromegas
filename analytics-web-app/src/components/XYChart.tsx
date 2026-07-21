@@ -6,7 +6,7 @@ import {
   getAdaptiveTimeUnit,
   formatTimeValue,
 } from '@/lib/time-units'
-import { normalizeUnit, isSizeUnit, getAdaptiveSizeUnit, isBitUnit, getAdaptiveBitUnit } from '@/lib/units'
+import { normalizeUnit, isSizeUnit, getAdaptiveSizeUnit, isBitUnit, getAdaptiveBitUnit, isCurrencyUnit, formatCurrencyValue } from '@/lib/units'
 import { formatValueWithUnit } from '@/lib/format-value'
 import type { ChartSeriesData, ChartPoint } from '@/lib/arrow-utils'
 
@@ -734,6 +734,7 @@ export function XYChart({
         const adaptiveInfo = unitAdaptiveMap.get(scaleInfo.unitName)
         const yAxisUnit = adaptiveInfo?.abbrev ?? (scaleInfo.unitName === 'percent' ? '%' : scaleInfo.unitName)
         const axisCf = adaptiveInfo?.conversionFactor ?? 1
+        const isCurrencyScale = isCurrencyUnit(normalizeUnit(scaleInfo.unitName))
         axes.push({
           show: scaleInfo.hasVisible,
           scale: scaleName,
@@ -746,6 +747,7 @@ export function XYChart({
           values: (_u: uPlot, vals: number[]) => {
             return vals.map((v) => {
               const dv = v * axisCf
+              if (isCurrencyScale) return formatCurrencyValue(dv, scaleInfo.unitName)
               if (v === 0) return '0 ' + yAxisUnit
               const absV = Math.abs(dv)
               if (absV >= 100) return Math.round(dv) + ' ' + yAxisUnit
@@ -912,6 +914,7 @@ export function XYChart({
       const displayMax = stats.max * conversionFactor
 
       const yAxisUnit = adaptiveTimeUnit?.abbrev ?? adaptiveSizeUnit?.abbrev ?? adaptiveBitUnit?.abbrev ?? (primaryUnit === 'percent' ? '%' : primaryUnit)
+      const isCurrencyScale = isCurrencyUnit(normalizeUnit(primaryUnit))
 
       // Per-row color support for single-series
       const hasPerRowColors = singleData.some(p => p.color != null)
@@ -1003,6 +1006,7 @@ export function XYChart({
             size: 90,
             values: (_u: uPlot, vals: number[]) => {
               return vals.map((v) => {
+                if (isCurrencyScale) return formatCurrencyValue(v, primaryUnit)
                 if (v === 0) return '0 ' + yAxisUnit
                 const absV = Math.abs(v)
                 if (absV >= 100) return Math.round(v) + ' ' + yAxisUnit
