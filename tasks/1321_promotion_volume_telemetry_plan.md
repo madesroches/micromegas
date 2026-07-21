@@ -187,7 +187,16 @@ promotion metric fired (a mismatch must not count as a promotion), reinforcing t
 behavior. The short key used there must also be `blk:`-prefixed (e.g. `"blk:key"` in place of
 `"key"`) — otherwise the assertion passes vacuously, since a non-`blk:` key never enters the
 `is_block_key` branch regardless of whether the length gate fired, and the test would not actually
-exercise the length-gate early-return.
+exercise the length-gate early-return. `short_block_never_promoted` currently has none of the
+metrics-observation infra the positive test relies on, so extending it also requires adding: a
+`#[serial]` attribute on the test fn, an `init_in_memory_tracing()` guard created after the durable
+`put`/`close()` and before the mismatching `get("blk:key", full_len)` (mirroring
+`disk_read_age_metric_fires_on_disk_read`'s guard placement), and a
+`micromegas_tracing::dispatch::flush_metrics_buffer()` call right after that `get` and before
+asserting on `guard.sink`. Without this infra the negative assertion would not actually observe
+whether a metric fired. If that feels like too much surgery on an existing test, add a fresh
+dedicated test instead, modeled on the same infra pattern, rather than extending
+`short_block_never_promoted` in place.
 
 Regression: existing `foyer_backend_tests` must pass unchanged — this adds emissions only, touching
 no control flow. Run `cargo test -p micromegas-object-cache --features foyer` and
