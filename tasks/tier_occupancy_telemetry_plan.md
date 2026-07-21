@@ -185,12 +185,17 @@ disk-bytes gauge is added (see Current State / Trade-offs).
 
 Add `ram_tier_entries_gauge_reflects_cached_block_count` to
 `rust/object-cache-srv/tests/saturation_tests.rs`, modeled on the existing
-`foyer_disk_gauges_emit_only_after_a_second_tick` test's setup (a `FoyerBackend`-backed
-`RangeCache`, `init_in_memory_tracing` guard, `flush_metrics_buffer`,
-`integer_metric_values` helper already in that file):
+`ram_tier_usage_gauge_reflects_demand_put` test (lines 167-230) — the harness/helper
+boilerplate (a `FoyerBackend`-backed `RangeCache`, `init_in_memory_tracing` guard,
+`flush_metrics_buffer`, `integer_metric_values` helper) is shared with
+`foyer_disk_gauges_emit_only_after_a_second_tick`, but the fill path is not: this new test
+must insert via `FillHint::Demand`, not `Prefetch`. Per `foyer_backend.rs:512-539`,
+`Prefetch` fills use an ephemeral phantom record that's dropped immediately and never lands
+in `cache.memory()`, so it would never increment `entries()` — `Demand` is what actually
+guarantees RAM residency.
 
-- Put N distinct keys into the cache (small enough to stay resident in the RAM tier given
-  the test's configured `ram_bytes`).
+- Put N distinct keys into the cache via `FillHint::Demand` (small enough to stay resident
+  in the RAM tier given the test's configured `ram_bytes`).
 - Call `sample_once`.
 - `flush_metrics_buffer()`, then assert `integer_metric_values(&sink,
   "object_cache_ram_tier_entries")` contains exactly one value equal to N.
