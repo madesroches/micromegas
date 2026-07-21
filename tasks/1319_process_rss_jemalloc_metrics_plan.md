@@ -190,6 +190,14 @@ fire roughly every 5s instead of every ~200ms, without adding a second thread/ti
 /// 200ms resolution to catch an hour-plus OOM climb.
 const SLOW_SAMPLE_TICKS: u32 = 25;
 
+/// True on every `SLOW_SAMPLE_TICKS`-th tick. Extracted as a pure function (mirroring
+/// `saturation_monitor.rs`'s `sample_once` extraction) so the gating decision itself is
+/// directly callable from a test, rather than only reachable from inside the infinite
+/// loop below.
+pub fn should_sample_slow(tick: u32) -> bool {
+    tick % SLOW_SAMPLE_TICKS == 0
+}
+
 pub fn send_system_metrics_forever() {
     let what_to_refresh = RefreshKind::nothing()
         .with_cpu(CpuRefreshKind::nothing().with_cpu_usage())
@@ -205,7 +213,7 @@ pub fn send_system_metrics_forever() {
         fmetric!("cpu_usage", "percent", system.global_cpu_usage() as f64);
 
         tick = tick.wrapping_add(1);
-        if tick % SLOW_SAMPLE_TICKS == 0 {
+        if should_sample_slow(tick) {
             emit_process_memory_stats();
             emit_jemalloc_stats();
         }
@@ -228,8 +236,11 @@ zero behavior change for anything that exists today.
      `tikv-jemallocator`'s own gating):
      ```toml
      [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "windows")))'.dependencies]
-     tikv-jemalloc-ctl = { workspace = true, optional = true }
+     tikv-jemalloc-ctl = { workspace = true, optional = true, features = ["stats"] }
      ```
+     (`stats` gates `tikv-jemalloc-ctl`'s `stats` module — required for the
+     `stats::allocated`/`resident`/`mapped`/`retained` reads below; it isn't a default
+     feature of the crate.)
 3. **`rust/telemetry-sink/src/system_monitor.rs`** — add `emit_process_memory_stats`,
    `emit_jemalloc_stats` (+ stub), the `SLOW_SAMPLE_TICKS` tick-gating, and the two new
    call sites in `send_system_metrics_forever`, as shown above.
@@ -365,14 +376,14 @@ project's preference for deterministic test synchronization over timing-based wa
   `Vec<u8>` (e.g. 8 MiB); call `emit_jemalloc_stats()` again and flush; assert the
   second reading is larger than the first by a plausible margin. Also assert all four
   jemalloc metrics fire exactly once per call as a basic regression guard.
-- **Tick-gating**: a focused unit test (or a short inline test in
-  `system_monitor.rs`'s own module, if the project's convention allows — otherwise
-  under `tests/`) asserting the modulo logic: `emit_process_memory_stats`/
-  `emit_jemalloc_stats` fire on tick 25, 50, ... and not on the ticks in between.
-  Since `send_system_metrics_forever` itself is an infinite loop, don't test it end to
-  end — test the tick-modulo condition and the two emit functions independently, the
-  same way `saturation_monitor.rs` tests `sample_once` directly rather than
-  `spawn_saturation_monitor`'s loop.
+- **Tick-gating**: a focused test under `rust/telemetry-sink/tests/` (matching this
+  project's convention of keeping unit tests under `tests/`, not inline with the lib
+  implementation) that calls the production `should_sample_slow(tick: u32) -> bool`
+  function directly and asserts it's `true` on tick 25, 50, ... and `false` on the
+  ticks in between. Since `send_system_metrics_forever` itself is an infinite loop,
+  don't test it end to end — test `should_sample_slow` and the two emit functions
+  independently, the same way `saturation_monitor.rs` tests `sample_once` directly
+  rather than `spawn_saturation_monitor`'s loop.
 - Existing `used_memory`/`free_memory`/`cpu_usage`/`total_memory` behavior is unchanged
   — no existing test coverage to update (there is none today for this file), but a
   full `cargo build`/`cargo run` smoke check of one service (e.g.
