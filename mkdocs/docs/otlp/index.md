@@ -4,7 +4,7 @@ Micromegas accepts native OpenTelemetry Protocol (OTLP) traffic over HTTP alongs
 
 ## Overview
 
-The ingestion service exposes three OTLP/HTTP routes that mirror the OpenTelemetry specification:
+The ingestion service exposes the following HTTP ingestion routes. The first three mirror the OpenTelemetry specification directly; the rest accept non-OTLP payloads (Kinesis Firehose deliveries) and translate them internally:
 
 | Route | Payload | Lands in |
 |---|---|---|
