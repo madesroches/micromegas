@@ -238,3 +238,69 @@ async fn ram_tier_usage_gauge_reflects_demand_put() {
         "the sampled RAM-tier usage after a demand put must reflect that block's size: {after:?}"
     );
 }
+
+/// `object_cache_ram_tier_entries` must reflect the number of blocks actually
+/// resident in the RAM tier. Uses `FillHint::Demand`: a `Prefetch` fill stores
+/// an ephemeral phantom record that's dropped immediately and never lands in
+/// `cache.memory()` (`foyer_backend.rs:512-539`), so it would never increment
+/// `entries()`.
+#[tokio::test]
+#[serial]
+async fn ram_tier_entries_gauge_reflects_cached_block_count() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir_path = dir.path().to_str().expect("utf8 path");
+
+    let foyer = Arc::new(
+        FoyerBackend::new_with_shards(
+            dir_path,
+            1024 * 1024,
+            16 * 1024 * 1024,
+            1,
+            WriteTuning::default(),
+            Arc::from(Vec::new()),
+        )
+        .await
+        .expect("create FoyerBackend"),
+    );
+    let store = Arc::new(InMemory::new());
+    let cache = RangeCache::new(
+        store as Arc<dyn ObjectStore>,
+        foyer.clone(),
+        DEFAULT_BLOCK_SIZE,
+        "test".to_string(),
+        DEFAULT_TOTAL_FETCH_PERMITS,
+        DEFAULT_DEMAND_RESERVED_FETCH_PERMITS,
+        DEFAULT_MAX_COALESCED_GET_BYTES,
+        DEFAULT_PROMOTE_WHOLE_BATCH,
+    );
+
+    let mem_permits = Arc::new(Semaphore::new(4));
+    let (prefetch_tx, _prefetch_rx) = mpsc::channel(1);
+    let mut networks = Networks::new_with_refreshed_list();
+    let mut prev_disk_stats: Option<BackendDiskStats> = None;
+
+    let guard = init_in_memory_tracing();
+
+    const N: usize = 3;
+    for i in 0..N {
+        let block = Bytes::from(vec![9u8; 4096]);
+        foyer.put(format!("key{i}"), block, FillHint::Demand).await;
+    }
+
+    sample_once(
+        &cache,
+        &mem_permits,
+        64,
+        &prefetch_tx,
+        &mut networks,
+        &mut prev_disk_stats,
+        5.0,
+    );
+    micromegas::tracing::dispatch::flush_metrics_buffer();
+    let entries = integer_metric_values(&guard.sink, "object_cache_ram_tier_entries");
+    assert_eq!(
+        entries,
+        vec![N as u64],
+        "the gauge must fire exactly once with the number of demand-filled blocks resident in the RAM tier"
+    );
+}

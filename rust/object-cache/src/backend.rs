@@ -43,4 +43,11 @@ pub trait RangeCacheBackend: Send + Sync {
     fn ram_usage_bytes(&self) -> Option<usize> {
         None
     }
+
+    /// Accounted RAM-tier entry count, the entry-count sibling to
+    /// `ram_usage_bytes`. `None` for backends with no RAM tier accounting
+    /// (e.g. `MemoryBackend`).
+    fn ram_entries(&self) -> Option<usize> {
+        None
+    }
 }

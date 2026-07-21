@@ -350,6 +350,13 @@ impl FoyerBackend {
     pub fn ram_usage(&self) -> usize {
         self.cache.memory().usage()
     }
+
+    /// Current RAM-tier entry count. Exposed so integration tests (which
+    /// compile as a separate crate and cannot reach the private `cache`
+    /// field) can assert prefetch fills do not grow RAM-tier residency.
+    pub fn ram_entries(&self) -> usize {
+        self.cache.memory().entries()
+    }
 }
 
 /// Validate `value` against `expected_len` and, if it matches, promote it
@@ -561,5 +568,9 @@ impl RangeCacheBackend for FoyerBackend {
 
     fn ram_usage_bytes(&self) -> Option<usize> {
         Some(self.ram_usage())
+    }
+
+    fn ram_entries(&self) -> Option<usize> {
+        Some(self.ram_entries())
     }
 }
