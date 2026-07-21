@@ -1,5 +1,5 @@
 import type uPlot from 'uplot'
-import { buildXAxisConfig, formatYAxisTick } from '../xychart-axis'
+import { buildXAxisConfig, buildXScale, formatYAxisTick } from '../xychart-axis'
 
 // The `values` formatter ignores its uPlot argument; pass a stub.
 const u = undefined as unknown as uPlot
@@ -33,6 +33,20 @@ describe('buildXAxisConfig', () => {
     expect(fn(u, [12345])).toEqual([(12345).toLocaleString()])
     expect(fn(u, [3.14159])).toEqual(['3.1'])
     expect(fn(u, [0.0123])).toEqual([(0.0123).toPrecision(2)])
+  })
+})
+
+describe('buildXScale', () => {
+  it('categorical mode pads the range by half a slot on each side', () => {
+    const scale = buildXScale('categorical')
+    expect(scale.range).toBeDefined()
+    const fn = scale.range as (u: uPlot, dataMin: number, dataMax: number) => [number, number]
+    expect(fn(u, 0, 3)).toEqual([-0.5, 3.5])
+  })
+
+  it('time and numeric modes leave range unset', () => {
+    expect(buildXScale('time').range).toBeUndefined()
+    expect(buildXScale('numeric').range).toBeUndefined()
   })
 })
 
