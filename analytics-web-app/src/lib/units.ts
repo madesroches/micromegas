@@ -225,6 +225,30 @@ export function getAdaptiveSizeUnit(
   }
 }
 
+const KNOWN_CURRENCY_CODES = new Set<string>(
+  typeof Intl.supportedValuesOf === 'function' ? Intl.supportedValuesOf('currency') : []
+)
+
+/**
+ * Check if a unit is a recognized ISO 4217 currency code (e.g. USD, CAD, EUR).
+ * Validated against the runtime's actual currency registry rather than just
+ * checking "is this 3 alphabetic characters", since that would also accept
+ * non-currency unit abbreviations like `MPH` or `Cel`.
+ */
+export function isCurrencyUnit(unit: string): boolean {
+  return KNOWN_CURRENCY_CODES.has(unit.toUpperCase())
+}
+
+/**
+ * Format a value as currency using the viewer's runtime locale.
+ */
+export function formatCurrencyValue(value: number, unit: string): string {
+  return new Intl.NumberFormat(undefined, {
+    style: 'currency',
+    currency: unit.toUpperCase(),
+  }).format(value)
+}
+
 export type BitUnit = 'bits' | 'kilobits' | 'megabits' | 'gigabits' | 'terabits'
 
 interface BitUnitInfo {

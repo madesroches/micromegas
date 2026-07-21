@@ -6,12 +6,12 @@ import {
   getAdaptiveTimeUnit,
   formatTimeValue,
 } from '@/lib/time-units'
-import { normalizeUnit, isSizeUnit, getAdaptiveSizeUnit, isBitUnit, getAdaptiveBitUnit } from '@/lib/units'
+import { normalizeUnit, isSizeUnit, getAdaptiveSizeUnit, isBitUnit, getAdaptiveBitUnit, isCurrencyUnit } from '@/lib/units'
 import { formatValueWithUnit } from '@/lib/format-value'
 import type { ChartSeriesData, ChartPoint } from '@/lib/arrow-utils'
 
 import { SERIES_COLORS, DEFAULT_SERIES_COLOR, DEFAULT_REFERENCE_LINE_COLOR } from './chart-constants'
-import { buildXAxisConfig } from './xychart-axis'
+import { buildXAxisConfig, formatYAxisTick } from './xychart-axis'
 
 export interface ChartAxisBounds {
   left: number // Left padding (Y-axis width)
@@ -734,6 +734,7 @@ export function XYChart({
         const adaptiveInfo = unitAdaptiveMap.get(scaleInfo.unitName)
         const yAxisUnit = adaptiveInfo?.abbrev ?? (scaleInfo.unitName === 'percent' ? '%' : scaleInfo.unitName)
         const axisCf = adaptiveInfo?.conversionFactor ?? 1
+        const isCurrencyScale = isCurrencyUnit(normalizeUnit(scaleInfo.unitName))
         axes.push({
           show: scaleInfo.hasVisible,
           scale: scaleName,
@@ -744,15 +745,9 @@ export function XYChart({
           font: '11px -apple-system, BlinkMacSystemFont, sans-serif',
           size: 90,
           values: (_u: uPlot, vals: number[]) => {
-            return vals.map((v) => {
-              const dv = v * axisCf
-              if (v === 0) return '0 ' + yAxisUnit
-              const absV = Math.abs(dv)
-              if (absV >= 100) return Math.round(dv) + ' ' + yAxisUnit
-              if (absV >= 10) return dv.toFixed(1) + ' ' + yAxisUnit
-              if (absV >= 1) return dv.toFixed(2) + ' ' + yAxisUnit
-              return dv.toPrecision(2) + ' ' + yAxisUnit
-            })
+            return vals.map((v) =>
+              formatYAxisTick(v, axisCf, yAxisUnit, isCurrencyScale ? scaleInfo.unitName : null)
+            )
           },
         })
       }
@@ -912,6 +907,7 @@ export function XYChart({
       const displayMax = stats.max * conversionFactor
 
       const yAxisUnit = adaptiveTimeUnit?.abbrev ?? adaptiveSizeUnit?.abbrev ?? adaptiveBitUnit?.abbrev ?? (primaryUnit === 'percent' ? '%' : primaryUnit)
+      const isCurrencyScale = isCurrencyUnit(normalizeUnit(primaryUnit))
 
       // Per-row color support for single-series
       const hasPerRowColors = singleData.some(p => p.color != null)
@@ -1002,14 +998,9 @@ export function XYChart({
             font: '11px -apple-system, BlinkMacSystemFont, sans-serif',
             size: 90,
             values: (_u: uPlot, vals: number[]) => {
-              return vals.map((v) => {
-                if (v === 0) return '0 ' + yAxisUnit
-                const absV = Math.abs(v)
-                if (absV >= 100) return Math.round(v) + ' ' + yAxisUnit
-                if (absV >= 10) return v.toFixed(1) + ' ' + yAxisUnit
-                if (absV >= 1) return v.toFixed(2) + ' ' + yAxisUnit
-                return v.toPrecision(2) + ' ' + yAxisUnit
-              })
+              return vals.map((v) =>
+                formatYAxisTick(v, 1, yAxisUnit, isCurrencyScale ? primaryUnit : null)
+              )
             },
           },
         ],

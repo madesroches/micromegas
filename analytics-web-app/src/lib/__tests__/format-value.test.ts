@@ -107,6 +107,22 @@ describe('formatValueWithUnit', () => {
     })
   })
 
+  describe('currency', () => {
+    it('formats USD as currency', () => {
+      const expected = new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD' }).format(1234.5)
+      expect(formatValueWithUnit(1234.5, 'USD')).toBe(expected)
+    })
+
+    it('formats lowercase currency codes', () => {
+      const expected = new Intl.NumberFormat(undefined, { style: 'currency', currency: 'CAD' }).format(1234.5)
+      expect(formatValueWithUnit(1234.5, 'cad')).toBe(expected)
+    })
+
+    it('does not treat plausible non-currency 3-letter units as currency', () => {
+      expect(formatValueWithUnit(42, 'MPH')).toBe(`${(42).toLocaleString()} MPH`)
+    })
+  })
+
   describe('unitless / unknown unit', () => {
     it('returns locale-formatted number when no unit is provided', () => {
       expect(formatValueWithUnit(1234567, '')).toBe((1234567).toLocaleString())

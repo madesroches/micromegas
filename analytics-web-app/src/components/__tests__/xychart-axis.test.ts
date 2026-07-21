@@ -1,5 +1,5 @@
 import type uPlot from 'uplot'
-import { buildXAxisConfig } from '../xychart-axis'
+import { buildXAxisConfig, formatYAxisTick } from '../xychart-axis'
 
 // The `values` formatter ignores its uPlot argument; pass a stub.
 const u = undefined as unknown as uPlot
@@ -33,5 +33,29 @@ describe('buildXAxisConfig', () => {
     expect(fn(u, [12345])).toEqual([(12345).toLocaleString()])
     expect(fn(u, [3.14159])).toEqual(['3.1'])
     expect(fn(u, [0.0123])).toEqual([(0.0123).toPrecision(2)])
+  })
+})
+
+describe('formatYAxisTick', () => {
+  it('formats plain values with magnitude-dependent precision and a unit suffix', () => {
+    expect(formatYAxisTick(0, 1, 'ms', null)).toBe('0 ms')
+    expect(formatYAxisTick(123.456, 1, 'ms', null)).toBe('123 ms')
+    expect(formatYAxisTick(12.345, 1, 'ms', null)).toBe('12.3 ms')
+    expect(formatYAxisTick(1.2345, 1, 'ms', null)).toBe('1.23 ms')
+    expect(formatYAxisTick(0.012345, 1, 'ms', null)).toBe((0.012345).toPrecision(2) + ' ms')
+  })
+
+  it('applies the axis conversion factor before formatting', () => {
+    expect(formatYAxisTick(1_500_000, 0.001, 'ms', null)).toBe('1500 ms')
+  })
+
+  it('formats currency scales via Intl and ignores the unit suffix/conversion factor', () => {
+    const expected = new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD' }).format(1234.5)
+    expect(formatYAxisTick(1234.5, 1, 'USD', 'USD')).toBe(expected)
+  })
+
+  it('formats a second currency correctly', () => {
+    const expected = new Intl.NumberFormat(undefined, { style: 'currency', currency: 'CAD' }).format(50)
+    expect(formatYAxisTick(50, 1, 'CAD', 'CAD')).toBe(expected)
   })
 })

@@ -7,6 +7,7 @@
  */
 import type uPlot from 'uplot'
 import type { XAxisMode } from './XYChart'
+import { formatCurrencyValue } from '@/lib/units'
 
 export function buildXAxisConfig(xAxisMode: XAxisMode, xLabels?: string[]): uPlot.Axis {
   const xAxisConfig: uPlot.Axis = {
@@ -41,4 +42,31 @@ export function buildXAxisConfig(xAxisMode: XAxisMode, xLabels?: string[]): uPlo
   }
 
   return xAxisConfig
+}
+
+/**
+ * Pure Y-axis tick formatter shared by XYChart's multi-series (per-unit-scale)
+ * and single-series numeric axes. Extracted alongside `buildXAxisConfig` so
+ * the branching (currency vs. plain-number + unit-suffix) is unit-testable.
+ *
+ * `rawValue` is the value as passed into the axis `values` callback;
+ * `axisConversionFactor` is applied on top of it (pass `1` when the caller
+ * has already pre-scaled the data, as the single-series path does).
+ * `currencyCode` is the raw (un-normalized) currency unit string when the
+ * axis is a currency scale, or `null` otherwise.
+ */
+export function formatYAxisTick(
+  rawValue: number,
+  axisConversionFactor: number,
+  displayUnit: string,
+  currencyCode: string | null,
+): string {
+  const dv = rawValue * axisConversionFactor
+  if (currencyCode) return formatCurrencyValue(dv, currencyCode)
+  if (dv === 0) return '0 ' + displayUnit
+  const absV = Math.abs(dv)
+  if (absV >= 100) return Math.round(dv) + ' ' + displayUnit
+  if (absV >= 10) return dv.toFixed(1) + ' ' + displayUnit
+  if (absV >= 1) return dv.toFixed(2) + ' ' + displayUnit
+  return dv.toPrecision(2) + ' ' + displayUnit
 }
