@@ -145,25 +145,29 @@ use micromegas_ingestion::web_ingestion_service::WebIngestionService;
 use std::io::Read;
 use std::sync::Arc;
 
+/// Public (rather than private) so `tests/cloudwatch_logs_tests.rs` can assert decoded
+/// shapes directly, matching the `build_webhook_request` precedent in `handler.rs`.
 #[derive(serde::Deserialize)]
-struct CloudWatchLogEventJson {
-    id: String,
-    timestamp: i64, // epoch millis
-    message: String,
+pub struct CloudWatchLogEventJson {
+    pub id: String,
+    pub timestamp: i64, // epoch millis
+    pub message: String,
 }
 
+/// Public (rather than private) so `tests/cloudwatch_logs_tests.rs` can assert decoded
+/// shapes directly, matching the `build_webhook_request` precedent in `handler.rs`.
 #[derive(serde::Deserialize)]
-struct CloudWatchLogsMessageJson {
+pub struct CloudWatchLogsMessageJson {
     #[serde(rename = "messageType")]
-    message_type: String,
-    owner: String,
+    pub message_type: String,
+    pub owner: String,
     #[serde(rename = "logGroup")]
-    log_group: String,
+    pub log_group: String,
     #[serde(rename = "logStream")]
-    log_stream: String,
+    pub log_stream: String,
     #[serde(default)]
     #[serde(rename = "logEvents")]
-    log_events: Vec<CloudWatchLogEventJson>,
+    pub log_events: Vec<CloudWatchLogEventJson>,
 }
 
 /// Bound on a single Firehose record's *decompressed* size. The outer Firehose HTTP body
@@ -182,7 +186,10 @@ const MAX_DECOMPRESSED_RECORD_BYTES: u64 = 64 * 1024 * 1024;
 /// `DATA_MESSAGE` with no events. Malformed gzip/JSON, or a decompressed size over
 /// `MAX_DECOMPRESSED_RECORD_BYTES`, → `OtelError::Parse` (→ 400 → Firehose retry, matching
 /// `decode_firehose_envelope`'s contract).
-fn decode_cloudwatch_logs_record(
+///
+/// Public (rather than private) so `tests/cloudwatch_logs_tests.rs` can assert its shape
+/// directly, matching the `build_webhook_request` precedent in `handler.rs`.
+pub fn decode_cloudwatch_logs_record(
     raw: &[u8],
     index: usize,
 ) -> Result<Option<CloudWatchLogsMessageJson>, OtelError> {
@@ -225,7 +232,10 @@ fn decode_cloudwatch_logs_record(
 /// (distinct ECS tasks, Lambda instances, RDS instances) resolve to distinct `process_id`s
 /// via the existing `process_id_from_resource` formula — no CloudWatch-specific identity
 /// logic needed.
-fn build_export_logs_request(msg: &CloudWatchLogsMessageJson) -> ExportLogsServiceRequest {
+///
+/// Public (rather than private) so `tests/cloudwatch_logs_tests.rs` can assert its shape
+/// directly, matching the `build_webhook_request` precedent in `handler.rs`.
+pub fn build_export_logs_request(msg: &CloudWatchLogsMessageJson) -> ExportLogsServiceRequest {
     fn kv(key: &str, value: &str) -> KeyValue {
         KeyValue {
             key: key.to_string(),
@@ -303,6 +313,11 @@ pub async fn ingest_cloudwatch_logs_firehose(
 Notes:
 - `write_blocks` moves from private to `pub(crate)` in `handler.rs:71` — the only change
   needed to that function; no logic change.
+- `CloudWatchLogEventJson`, `CloudWatchLogsMessageJson` (and their fields),
+  `decode_cloudwatch_logs_record`, and `build_export_logs_request` are all `pub` — not for
+  external consumers, but because `tests/cloudwatch_logs_tests.rs` is an external integration-
+  test crate and can only see a crate's public API, the same `build_webhook_request`
+  precedent already used in `handler.rs`.
 - No explicit "skip empty `logEvents`" branch is strictly required in `ingest_...` itself
   (`split_logs`'s own fast-path already turns a zero-record `ResourceLogs` into a no-op), but
   checking in `decode_cloudwatch_logs_record` avoids building a `Resource`/proto for nothing
