@@ -183,22 +183,27 @@ cheap at any cadence. Adding 6 more gauges *per binary* at 200ms (vs. today's 3)
 climb over an hour-plus timescale — no value is lost sampling them much less often.
 `object-cache-srv`'s own `saturation_monitor.rs` already made this same call explicitly
 (its doc comment: "5s is a telemetry-volume tradeoff instead" of the CPU-update floor).
-Reuse that reasoning here: gate the two new emit calls behind a tick counter so they
-fire roughly every 5s instead of every ~200ms, without adding a second thread/timer:
+Reuse that reasoning here: gate the two new emit calls on wall-clock elapsed time against
+a directly-stated `Duration` frequency, so they fire roughly every 5s instead of every
+~200ms, without adding a second thread/timer. A tick counter with a modulo check would
+work too, but it states the frequency only indirectly (as a tick count relative to the
+loop's own sleep interval); tracking elapsed time against a `Duration` constant states
+the actual 5s frequency directly:
 
 ```rust
-/// ~5s at the sysinfo CPU-update floor (~200ms) -- matches the cadence
-/// object-cache-srv's saturation_monitor.rs already chose for the same
-/// telemetry-volume reason; process/jemalloc memory gauges don't need
-/// 200ms resolution to catch an hour-plus OOM climb.
-const SLOW_SAMPLE_TICKS: u32 = 25;
+/// The sampling frequency for the process/jemalloc memory gauges -- much coarser than
+/// the loop's own ~200ms `sysinfo` CPU-update floor (that floor is only needed for a
+/// valid CPU-usage delta). Matches the cadence object-cache-srv's saturation_monitor.rs
+/// already chose for the same telemetry-volume reason; these gauges don't need 200ms
+/// resolution to catch an hour-plus OOM climb.
+const SLOW_SAMPLE_INTERVAL: Duration = Duration::from_secs(5);
 
-/// True on every `SLOW_SAMPLE_TICKS`-th tick. Extracted as a pure function (mirroring
-/// `saturation_monitor.rs`'s `sample_once` extraction) so the gating decision itself is
-/// directly callable from a test, rather than only reachable from inside the infinite
-/// loop below.
-pub fn should_sample_slow(tick: u32) -> bool {
-    tick % SLOW_SAMPLE_TICKS == 0
+/// True once at least `SLOW_SAMPLE_INTERVAL` has elapsed since the last slow sample.
+/// Extracted as a pure function (mirroring `saturation_monitor.rs`'s `sample_once`
+/// extraction) so the gating decision itself is directly testable with plain `Duration`
+/// values, rather than only reachable from inside the infinite loop below.
+pub fn should_sample_slow(elapsed_since_last_sample: Duration) -> bool {
+    elapsed_since_last_sample >= SLOW_SAMPLE_INTERVAL
 }
 
 pub fn send_system_metrics_forever() {
@@ -207,7 +212,7 @@ pub fn send_system_metrics_forever() {
         .with_memory(MemoryRefreshKind::nothing().with_ram());
     let mut system = System::new_with_specifics(what_to_refresh);
     imetric!("total_memory", "bytes", system.total_memory());
-    let mut tick: u32 = 0;
+    let mut last_slow_sample = Instant::now();
     loop {
         std::thread::sleep(sysinfo::MINIMUM_CPU_UPDATE_INTERVAL);
         system.refresh_specifics(what_to_refresh);
@@ -215,10 +220,10 @@ pub fn send_system_metrics_forever() {
         imetric!("free_memory", "bytes", system.free_memory());
         fmetric!("cpu_usage", "percent", system.global_cpu_usage() as f64);
 
-        tick = tick.wrapping_add(1);
-        if should_sample_slow(tick) {
+        if should_sample_slow(last_slow_sample.elapsed()) {
             emit_process_memory_stats();
             emit_jemalloc_stats();
+            last_slow_sample = Instant::now();
         }
     }
 }
@@ -255,8 +260,8 @@ zero behavior change for anything that exists today.
      dispatch, which is process-wide state and would race under cargo's default
      parallel-test execution without `#[serial]`.
 3. **`rust/telemetry-sink/src/system_monitor.rs`** — add `emit_process_memory_stats`,
-   `emit_jemalloc_stats` (+ stub), the `SLOW_SAMPLE_TICKS` tick-gating, and the two new
-   call sites in `send_system_metrics_forever`, as shown above.
+   `emit_jemalloc_stats` (+ stub), the `SLOW_SAMPLE_INTERVAL` elapsed-time gating, and
+   the two new call sites in `send_system_metrics_forever`, as shown above.
 4. **`rust/public/Cargo.toml`** — add `jemalloc-metrics = ["micromegas-telemetry-sink/jemalloc"]`
    to `[features]`, alongside (not inside) `server`.
 5. **Seven service `Cargo.toml`s** — change
@@ -268,7 +273,7 @@ zero behavior change for anything that exists today.
    split by feature gate so `required-features`/file-level `#![cfg(...)]` (which apply to
    an entire `[[test]]` target, not individual `#[test]` functions) never silently gate
    tests the plan says need no feature:
-   - `system_monitor_tests.rs` — process-memory and tick-gating tests. No feature
+   - `system_monitor_tests.rs` — process-memory and slow-sample-gating tests. No feature
      requirement and no platform gate, so no `[[test]]` entry is needed; Cargo
      auto-discovers it as a test target.
    - `jemalloc_stats_tests.rs` — jemalloc-stats tests only. Add a `[[test]]` entry in
@@ -310,8 +315,8 @@ zero behavior change for anything that exists today.
 - `rust/Cargo.toml` — new workspace dependency.
 - `rust/telemetry-sink/Cargo.toml` — new feature + target-gated optional dependency +
   target-gated `tikv-jemallocator` dev-dependency + new `[[test]]` entry.
-- `rust/telemetry-sink/src/system_monitor.rs` — two new emitter functions, tick-gating,
-  two new call sites.
+- `rust/telemetry-sink/src/system_monitor.rs` — two new emitter functions,
+  elapsed-time gating, two new call sites.
 - `rust/telemetry-sink/tests/` — two new test files (`system_monitor_tests.rs`,
   `jemalloc_stats_tests.rs`).
 - `rust/public/Cargo.toml` — new `jemalloc-metrics` feature.
@@ -343,12 +348,17 @@ zero behavior change for anything that exists today.
   enabled by `write-perfetto`, which does not declare `#[global_allocator]`. Folding
   jemalloc stats into `server` would silently turn on meaningless/inert jemalloc gauges
   there. A separate feature keeps the gate exact.
-- **Tick-gating the two new emitters to ~5s instead of the loop's native ~200ms.**
-  Chosen to avoid a 3x per-tick metric volume increase for a signal whose whole purpose
-  is catching an hour-plus climb; mirrors the identical trade-off `saturation_monitor.rs`
-  already documents for its own 5s cadence. Rejected: a second background thread/timer
-  just for these two gauges — unnecessary complexity when a tick-modulo check inline in
-  the existing loop does the same job.
+- **Elapsed-time gating the two new emitters to ~5s instead of the loop's native
+  ~200ms.** Chosen to avoid a 3x per-tick metric volume increase for a signal whose
+  whole purpose is catching an hour-plus climb; mirrors the identical trade-off
+  `saturation_monitor.rs` already documents for its own 5s cadence. Tracking elapsed
+  wall-clock time against a directly-stated `Duration` constant (`SLOW_SAMPLE_INTERVAL`)
+  was chosen over a tick counter with a modulo check: the latter only encodes the 5s
+  frequency indirectly, through a tick count relative to the loop's own ~200ms sleep
+  interval, and would silently drift from the stated frequency if that sleep interval
+  ever changed. Rejected: a second background thread/timer just for these two gauges —
+  unnecessary complexity when a plain elapsed-time check inline in the existing loop
+  does the same job.
 - **Fresh `sysinfo::System` per call vs. a threaded/reused instance.** No delta is
   needed between process-memory samples (unlike the CPU-usage computation this same
   loop already does), so there's nothing to carry across calls and no correctness
@@ -398,7 +408,7 @@ one-line cell:
 
 Add two new files under `rust/telemetry-sink/tests/`, following the
 `InMemorySink`-observing pattern already used in `object-cache-srv/tests/saturation_tests.rs`:
-`system_monitor_tests.rs` (process-memory + tick-gating, no feature requirement, no
+`system_monitor_tests.rs` (process-memory + slow-sample gating, no feature requirement, no
 platform gate) and `jemalloc_stats_tests.rs` (jemalloc stats,
 `required-features = ["jemalloc"]` plus the `#![cfg(not(target_os = "windows"))]` stub
 and `#[global_allocator]` declaration). They're kept separate because Cargo's
@@ -443,14 +453,16 @@ cargo's default parallel test execution:
   and flush; assert the second reading is larger than the first by a plausible margin.
   Also assert all four jemalloc metrics fire exactly once per call as a basic regression
   guard.
-- **Tick-gating**: a focused test in `system_monitor_tests.rs` (matching this
+- **Slow-sample gating**: a focused test in `system_monitor_tests.rs` (matching this
   project's convention of keeping unit tests under `tests/`, not inline with the lib
-  implementation) that calls the production `should_sample_slow(tick: u32) -> bool`
-  function directly and asserts it's `true` on tick 25, 50, ... and `false` on the
-  ticks in between. Since `send_system_metrics_forever` itself is an infinite loop,
-  don't test it end to end — test `should_sample_slow` and the two emit functions
-  independently, the same way `saturation_monitor.rs` tests `sample_once` directly
-  rather than `spawn_saturation_monitor`'s loop.
+  implementation) that calls the production
+  `should_sample_slow(elapsed_since_last_sample: Duration) -> bool` function directly
+  and asserts it's `true` at/past `SLOW_SAMPLE_INTERVAL` (e.g. `Duration::from_secs(5)`
+  and `6`) and `false` below it (e.g. `Duration::from_millis(200)`, `from_secs(4)`, and
+  `ZERO`). Since `send_system_metrics_forever` itself is an infinite loop, don't test it
+  end to end — test `should_sample_slow` and the two emit functions independently, the
+  same way `saturation_monitor.rs` tests `sample_once` directly rather than
+  `spawn_saturation_monitor`'s loop.
 - Existing `used_memory`/`free_memory`/`cpu_usage`/`total_memory` behavior is unchanged
   — no existing test coverage to update (there is none today for this file), but a
   full `cargo build`/`cargo run` smoke check of one service (e.g.

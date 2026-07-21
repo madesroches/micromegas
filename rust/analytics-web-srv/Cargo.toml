@@ -10,7 +10,7 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
-micromegas = { workspace = true, features = ["server"] }
+micromegas = { workspace = true, features = ["server", "jemalloc-metrics"] }
 
 anyhow.workspace = true
 arrow-ipc.workspace = true
