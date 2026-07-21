@@ -14,7 +14,7 @@ name = "http-gateway-srv"
 path = "src/http_gateway_srv.rs"
 
 [dependencies]
-micromegas = { workspace = true, features = ["server"] }
+micromegas = { workspace = true, features = ["server", "jemalloc-metrics"] }
 
 anyhow.workspace = true
 clap.workspace = true

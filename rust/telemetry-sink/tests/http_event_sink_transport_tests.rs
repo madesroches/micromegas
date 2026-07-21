@@ -410,14 +410,25 @@ async fn soft_cap_sheds_traces_first() {
     );
 
     // The thread stream's metadata is still sent (Metadata is never
-    // dropped), but its block never arrives.
+    // dropped), but its block never arrives. With the default
+    // max_in_flight_requests > 1, dequeue order doesn't guarantee arrival
+    // order at the mock server, so wait for it rather than asserting
+    // immediately.
     let thread_id = thread_stream.stream_id().to_string();
-    let requests = server.requests.lock().unwrap();
     assert!(
-        requests
-            .iter()
-            .any(|r| r.path == "/ingestion/insert_stream" && body_contains(&r.body, &thread_id))
+        wait_until(
+            || {
+                server.requests.lock().unwrap().iter().any(|r| {
+                    r.path == "/ingestion/insert_stream" && body_contains(&r.body, &thread_id)
+                })
+            },
+            Duration::from_secs(2)
+        )
+        .await,
+        "expected thread stream metadata to still be sent"
     );
+
+    let requests = server.requests.lock().unwrap();
     assert!(
         !requests
             .iter()

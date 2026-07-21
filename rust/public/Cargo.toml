@@ -12,6 +12,7 @@ authors.workspace = true
 
 [features]
 default = []
+jemalloc-metrics = ["micromegas-telemetry-sink/jemalloc"]
 server = [
     "dep:anyhow",
     "dep:arrow-flight",

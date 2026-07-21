@@ -87,6 +87,7 @@ sysinfo = "0.37"
 thiserror = "2"
 thread-id = "4.0"
 thrift = "0.17"
+tikv-jemalloc-ctl = "0.7"
 tikv-jemallocator = "0.7"
 tokio = { version = "1.47", features = ["io-util","macros","net","rt-multi-thread","signal","sync","time","tracing"]}
 tokio-retry2 = "0.6"

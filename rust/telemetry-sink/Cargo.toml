@@ -9,6 +9,10 @@ repository.workspace = true
 license.workspace = true
 authors.workspace = true
 
+[features]
+default = []
+jemalloc = ["dep:tikv-jemalloc-ctl"]
+
 [dependencies]
 # Shared (transit-free)
 anyhow.workspace = true
@@ -41,3 +45,17 @@ raw-cpuid.workspace = true
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 web-sys = { version = "0.3", features = ["console"] }
+
+[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "windows")))'.dependencies]
+tikv-jemalloc-ctl = { workspace = true, optional = true, features = ["stats"] }
+
+[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "windows")))'.dev-dependencies]
+tikv-jemallocator.workspace = true
+
+[dev-dependencies]
+serial_test = "3.2"
+
+[[test]]
+name = "jemalloc_stats_tests"
+path = "tests/jemalloc_stats_tests.rs"
+required-features = ["jemalloc"]

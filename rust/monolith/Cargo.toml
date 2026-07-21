@@ -11,7 +11,7 @@ authors.workspace = true
 
 [dependencies]
 analytics-web-srv = { path = "../analytics-web-srv", version = "0.28.0" }
-micromegas = { workspace = true, features = ["server"] }
+micromegas = { workspace = true, features = ["server", "jemalloc-metrics"] }
 
 anyhow.workspace = true
 clap.workspace = true
