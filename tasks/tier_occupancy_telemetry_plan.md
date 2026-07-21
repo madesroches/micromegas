@@ -50,11 +50,13 @@ anywhere in the codebase — a one-line addition next to the existing `usage()` 
   by subtraction.
 - `Store::device() -> &Arc<dyn Device>` (`foyer-storage-0.22.3/src/store.rs:268`) exposes
   `Device::capacity()`, `allocated()`, and `free()` (`foyer-storage-0.22.3/src/io/device/mod.rs:65-72`).
-  These look promising but aren't: the block engine calls
-  `device.create_partition(pages * PAGE)` exactly once at `build()` time
-  (`foyer-storage-0.22.3/src/engine/block/engine.rs:349`), sized from the configured
-  `disk_bytes` capacity — so `allocated()`/`free()` reflect the engine's one-time partition
-  carve-out, not live cached-block occupancy. They read a constant (== configured capacity)
+  These look promising but aren't: at `build()` time, `BlockManager::open` loops
+  `while device.free() >= block_size { device.create_partition(block_size) }`
+  (`foyer-storage-0.22.3/src/engine/block/manager.rs:186-196`, invoked from
+  `foyer-storage-0.22.3/src/engine/block/engine.rs:376`), carving the entire device into
+  block-sized partitions up front until no free space remains — so `allocated()`/`free()`
+  reflect this one-time, startup-only partitioning of the configured `disk_bytes` capacity,
+  not live cached-block occupancy. They read a constant (== configured capacity)
   for the life of the process regardless of how full the disk tier actually is.
 - `engine/block/manager.rs` has internal `size()`/`blocks()` methods that likely track real
   block occupancy, but `BlockManager` is not reachable from `Store`'s public surface (no
@@ -146,8 +148,9 @@ disk-bytes gauge is added (see Current State / Trade-offs).
   document the gap than ship a number that looks authoritative but isn't.
 - **Directory-size-on-disk approximation, rejected.** Periodically `stat`-ing
   `--disk-path` was considered as a filesystem-level proxy for occupancy. Rejected on the
-  same evidence as the `Device::allocated()` finding above: the block engine allocates its
-  full configured-capacity partition file at startup (`engine.rs:349`), so the region
+  same evidence as the `Device::allocated()` finding above: `BlockManager::open` carves the
+  full configured-capacity partition file up front at startup
+  (`manager.rs:186-196`, invoked from `engine.rs:376`), so the region
   file's size is constant (== configured capacity) from first boot regardless of live
   utilization — a directory walk would report the same number whether the tier is empty or
   full.
