@@ -4,14 +4,15 @@ Micromegas accepts native OpenTelemetry Protocol (OTLP) traffic over HTTP alongs
 
 ## Overview
 
-The ingestion service exposes three OTLP/HTTP routes that mirror the OpenTelemetry specification:
+The ingestion service exposes the following HTTP ingestion routes. The first three mirror the OpenTelemetry specification directly; the rest accept non-OTLP payloads (Kinesis Firehose deliveries) and translate them internally:
 
-| Route | OTLP message | Lands in |
+| Route | Payload | Lands in |
 |---|---|---|
 | `POST /ingestion/otlp/v1/logs` | `ExportLogsServiceRequest` | `log_entries` |
 | `POST /ingestion/otlp/v1/metrics` | `ExportMetricsServiceRequest` | `measures` |
 | `POST /ingestion/otlp/v1/traces` | `ExportTraceServiceRequest` | `otel_spans` (per-process JIT view) |
 | `POST /ingestion/otlp/v1/metrics/firehose` | `ExportMetricsServiceRequest` per Firehose record | `measures` (see [CloudWatch Metric Streams](#cloudwatch-metric-streams-kinesis-firehose)) |
+| `POST /ingestion/cloudwatch/v1/logs/firehose` | CloudWatch Logs subscription-filter record per Firehose record (**not OTLP-framed** — see [CloudWatch Logs](#cloudwatch-logs-kinesis-firehose)) | `log_entries` |
 
 Routes share the existing listener (default `127.0.0.1:9000`) and authentication chain. OTLP payloads are stored as-is in object storage; decoding into parquet rows happens lazily at the analytics layer.
 
@@ -439,6 +440,97 @@ re-computes identical `block_id`s and dedups on write. On a partial batch failur
 Firehose retries the whole batch — already-written records dedup, the failed one is
 retried. CloudWatch Metric Streams stamp distinct timestamps per scrape, so genuinely
 distinct data never collides.
+
+## CloudWatch Logs (Kinesis Firehose)
+
+`POST /ingestion/cloudwatch/v1/logs/firehose` speaks the same **Amazon Kinesis Data
+Firehose HTTP Endpoint Delivery** protocol as the metrics route above, but for
+**CloudWatch Logs subscription filters**: **CloudWatch Logs → subscription filter →
+Firehose → micromegas**, with no Lambda, no Kinesis Data Stream, and no collector process
+in between.
+
+Unlike the metrics route, this one is **not OTLP-framed on the wire** — CloudWatch Logs
+subscription-filter delivery has exactly one proprietary record format, gzip-compressed
+regardless of the delivery stream's own `Content-Encoding` setting. Once decoded,
+micromegas synthesizes an OTLP `ExportLogsServiceRequest` internally (one `Resource`, one
+`LogRecord` per `logEvent`) and feeds it through the same logs split/write path as native
+OTLP logs — so `log_entries` sees these rows exactly like any other log producer.
+
+### Payload format
+
+Each Firehose record's `data`, after base64-decode, is gzip-compressed. Decompressed, it
+is CloudWatch's subscription-filter JSON:
+
+```json
+{
+  "messageType": "DATA_MESSAGE",
+  "owner": "123456789012",
+  "logGroup": "/ecs/my-service",
+  "logStream": "ecs/my-service/abcd1234",
+  "subscriptionFilters": ["my-filter"],
+  "logEvents": [
+    { "id": "...", "timestamp": 1510109208016, "message": "raw log line" }
+  ]
+}
+```
+
+`CONTROL_MESSAGE` records — which CloudWatch sends periodically to verify
+reachability — are recognized and dropped silently (not an error, no row written, no
+process registered).
+
+### AWS delivery-stream setup
+
+Configure a Kinesis Firehose delivery stream with an **HTTP endpoint destination**,
+subscribed from a CloudWatch Logs log group via a subscription filter:
+
+- **HTTP endpoint URL**: `https://micromegas.example.com/ingestion/cloudwatch/v1/logs/firehose`
+- **Access key**: a micromegas API key — the value from `MICROMEGAS_API_KEYS` — sent by
+  Firehose as `X-Amz-Firehose-Access-Key` on every request, same as the metrics route.
+- **Content encoding**: CloudWatch always gzips each record's payload at the source; this
+  is independent of (and unaffected by) any additional `Content-Encoding: gzip` Firehose
+  itself may apply to the whole HTTP body — both layers are handled transparently.
+- **S3 backup**: same recommendation as the metrics route — Firehose retries non-200
+  responses and eventually spills to S3, so no data is silently lost during an extended
+  micromegas outage.
+
+### How `logGroup`/`logStream`/`owner` surface
+
+- `service.name` = `logGroup`, `service.instance.id` = `logStream` — feeds the same
+  `process_id_from_resource` identity formula every other OTLP/OTel producer uses, so
+  distinct log streams (distinct ECS tasks, Lambda instances, RDS instances) resolve to
+  distinct `process_id`s with no CloudWatch-specific identity logic.
+- `logGroup`, `logStream`, and `owner` (AWS account id) are all set as resource
+  attributes (`aws.log.group.name`, `aws.log.stream.name`, `cloud.account.id`), so they
+  surface per-row via `process_properties.otel.resource.*` — the same discovery path as
+  any other OTel resource attribute (see [Process identity](#process-identity) above).
+- The per-event CloudWatch `id` is attached as a record-level attribute
+  (`aws.log.event.id`), queryable via `properties`, letting you correlate a `log_entries`
+  row back to the exact CloudWatch event.
+
+!!! note "Cross-account collisions"
+    `cloud.account.id` (`owner`) is **not** part of the `process_id` identity hash, so two
+    different AWS accounts with the same `logGroup`+`logStream` names collapse onto the
+    same `process_id`. Rows remain unambiguous (`owner` is still queryable per-row), only
+    the process grouping is coarser than ideal across accounts — most relevant for RDS
+    Postgres logs, where stream names are user-chosen DB-instance identifiers that can
+    repeat across environments.
+
+### Ack contract
+
+Same as [CloudWatch Metric Streams](#ack-contract): `200 OK` with
+`{"requestId": "<echoed>", "timestamp": ...}` on success; any non-200 status (with
+`errorMessage`) triggers a Firehose retry.
+
+### Idempotency
+
+Same content-addressed `block_id` scheme as the rest of OTLP ingestion (see
+[Idempotency](#idempotency)): a Firehose retry of a previously-succeeded batch dedups on
+write. CloudWatch Logs events carry real per-event timestamps (no backfill), so genuinely
+distinct log lines never collide.
+
+!!! warning "TLS in production"
+    Same as the metrics Firehose route: `X-Amz-Firehose-Access-Key` over plaintext leaks
+    in transit. Terminate TLS in front of the listener for any production delivery stream.
 
 ## Limitations
 

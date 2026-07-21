@@ -22,6 +22,13 @@ pub mod webhook;
 /// Streams)
 pub mod firehose;
 
+/// shared auth/response/request-id plumbing for every Firehose-backed ingestion route
+pub mod firehose_common;
+
+/// Kinesis Data Firehose HTTP Endpoint Delivery route for CloudWatch Logs subscription
+/// filters
+pub mod firehose_cloudwatch_logs;
+
 /// shared body-limit / decompression layers for ingestion routers (OTLP, webhook)
 pub(crate) mod ingestion_limits;
 

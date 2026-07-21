@@ -9,7 +9,7 @@ mod fixtures;
 use base64::Engine as _;
 use fixtures::{gauge_metric, make_metrics_request};
 use micromegas_otel_ingestion::block::split_metrics;
-use micromegas_otel_ingestion::error::OtelError;
+use micromegas_otel_ingestion::error::{OtelError, Signal};
 use micromegas_otel_ingestion::handler::decode_firehose_envelope;
 use micromegas_otel_ingestion::proto::ExportMetricsServiceRequest;
 use prost::Message;
@@ -44,7 +44,8 @@ fn single_record_round_trips_a_real_otlp_metrics_protobuf() {
     let payload = req.encode_to_vec();
     let body = envelope_json(Some("req-1"), &[&payload]);
 
-    let envelope = decode_firehose_envelope(body.as_bytes()).expect("decode envelope");
+    let envelope =
+        decode_firehose_envelope(body.as_bytes(), Signal::Metrics).expect("decode envelope");
     assert_eq!(envelope.request_id, "req-1");
     assert_eq!(envelope.records.len(), 1);
 
@@ -74,7 +75,8 @@ fn multi_record_batch_preserves_order() {
     let p2 = req2.encode_to_vec();
     let body = envelope_json(Some("req-multi"), &[&p1, &p2]);
 
-    let envelope = decode_firehose_envelope(body.as_bytes()).expect("decode envelope");
+    let envelope =
+        decode_firehose_envelope(body.as_bytes(), Signal::Metrics).expect("decode envelope");
     assert_eq!(envelope.records.len(), 2);
     assert_eq!(envelope.records[0], p1);
     assert_eq!(envelope.records[1], p2);
@@ -82,7 +84,8 @@ fn multi_record_batch_preserves_order() {
 
 #[test]
 fn malformed_json_is_parse_error() {
-    let err = decode_firehose_envelope(b"not json at all").expect_err("expected parse error");
+    let err = decode_firehose_envelope(b"not json at all", Signal::Metrics)
+        .expect_err("expected parse error");
     assert!(matches!(err, OtelError::Parse { .. }));
 }
 
@@ -90,14 +93,16 @@ fn malformed_json_is_parse_error() {
 fn malformed_base64_in_a_record_is_parse_error() {
     let body =
         r#"{"requestId":"req-bad","timestamp":1,"records":[{"data":"not-valid-base64!!!"}]}"#;
-    let err = decode_firehose_envelope(body.as_bytes()).expect_err("expected parse error");
+    let err = decode_firehose_envelope(body.as_bytes(), Signal::Metrics)
+        .expect_err("expected parse error");
     assert!(matches!(err, OtelError::Parse { .. }));
 }
 
 #[test]
 fn empty_records_yields_ok_with_zero_records() {
     let body = envelope_json(Some("req-empty"), &[]);
-    let envelope = decode_firehose_envelope(body.as_bytes()).expect("decode envelope");
+    let envelope =
+        decode_firehose_envelope(body.as_bytes(), Signal::Metrics).expect("decode envelope");
     assert_eq!(envelope.request_id, "req-empty");
     assert!(envelope.records.is_empty());
 }
@@ -105,7 +110,8 @@ fn empty_records_yields_ok_with_zero_records() {
 #[test]
 fn absent_records_field_yields_ok_with_zero_records() {
     let body = r#"{"requestId":"req-absent","timestamp":1}"#;
-    let envelope = decode_firehose_envelope(body.as_bytes()).expect("decode envelope");
+    let envelope =
+        decode_firehose_envelope(body.as_bytes(), Signal::Metrics).expect("decode envelope");
     assert_eq!(envelope.request_id, "req-absent");
     assert!(envelope.records.is_empty());
 }
@@ -113,6 +119,7 @@ fn absent_records_field_yields_ok_with_zero_records() {
 #[test]
 fn missing_request_id_defaults_to_empty_string() {
     let body = envelope_json(None, &[]);
-    let envelope = decode_firehose_envelope(body.as_bytes()).expect("decode envelope");
+    let envelope =
+        decode_firehose_envelope(body.as_bytes(), Signal::Metrics).expect("decode envelope");
     assert_eq!(envelope.request_id, "");
 }

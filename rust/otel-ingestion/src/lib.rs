@@ -8,6 +8,7 @@
 #![allow(missing_docs, clippy::missing_errors_doc)]
 
 pub mod block;
+pub mod cloudwatch_logs;
 pub mod error;
 pub mod handler;
 pub mod identity;
