@@ -74,9 +74,11 @@ exactly like any other OTLP logs producer.
 - `rust/otel-ingestion/src/identity.rs:184` `process_id_from_resource()` hashes an ordered
   tuple of resource attributes (`host.id`, `host.name`, `process.pid`,
   `service.instance.id`/`service.name`/`service.namespace`, etc.) into a `process_id` via
-  UUIDv5. `is_degenerate_resource()` (158) warns (at `debug!`) when none of the four primary
-  identifying fields are set — CloudWatch Logs records must populate at least one of these to
-  avoid collapsing every log stream onto one process.
+  UUIDv5. `is_degenerate_resource()` (158) warns (at `debug!`) when all four primary
+  identifying fields — `host.id`, `host.name`, `process.pid`, and specifically
+  `service.instance.id` (not any `service.*`) — are empty; CloudWatch Logs records must
+  populate at least one of these to avoid collapsing every log stream onto one process. The
+  plan sets `service.instance.id` (= logStream), so degeneracy never trips.
 - `rust/analytics/src/lakehouse/otel/logs_block_processor.rs` `OtelLogsBlockProcessor` decodes
   the stored `ResourceLogs` proto into `log_entries` rows: `target` ← scope name, `msg` ← body
   (`any_value_to_string`), `level` ← `severity_number_to_level()` (`attrs.rs:158`, unspecified/
@@ -120,8 +122,13 @@ optional layer already handled by `apply_ingestion_body_limits`). Decompressed, 
 }
 ```
 
-`CONTROL_MESSAGE` records carry no `logEvents` and must be recognized and dropped silently
-(not an error) — CloudWatch sends these periodically to verify reachability.
+`CONTROL_MESSAGE` records must be recognized and dropped silently (not an error) — CloudWatch
+sends these periodically to verify reachability. Note they are **not** empty: a control
+message carries one synthetic health-check `logEvent` (message `"CWL CONTROL MESSAGE: Checking
+health of destination Firehose."`) with `owner: "CloudwatchLogs"` and empty
+`logGroup`/`logStream`. `decode_cloudwatch_logs_record` therefore checks
+`message_type == "CONTROL_MESSAGE"` **before** the empty-`logEvents` check, so it drops on the
+`messageType` branch regardless of the event it carries.
 
 ### New module: `rust/otel-ingestion/src/cloudwatch_logs.rs`
 
@@ -476,8 +483,9 @@ changes** — the same reasoning #1299 used to justify reusing `ingest_metrics` 
    `rust/otel-ingestion/src/lib.rs`.
 4. **`flate2` dependency** — add `flate2.workspace = true` to
    `rust/otel-ingestion/Cargo.toml` `[dependencies]` (alphabetically between `chrono` and
-   `opentelemetry-proto`); also add to `[dev-dependencies]` if not already covered for building
-   gzip test fixtures (it currently has none — add a `[dev-dependencies]` section).
+   `opentelemetry-proto`). No `[dev-dependencies]` entry is needed — a regular `[dependencies]`
+   entry is already available to the integration tests under `tests/` (as `firehose_tests.rs`
+   already relies on for `base64`), so the gzip test fixtures can use it directly.
 5. **Unit tests (otel-ingestion)** — add `rust/otel-ingestion/tests/cloudwatch_logs_tests.rs`
    (see Testing).
 6. **Extract shared Firehose plumbing** — move `firehose_auth_middleware`,
@@ -511,7 +519,7 @@ changes** — the same reasoning #1299 used to justify reusing `ingest_metrics` 
 - `rust/otel-ingestion/src/cloudwatch_logs.rs` — **new**: decode/build/ingest for CloudWatch
   Logs Firehose records.
 - `rust/otel-ingestion/src/lib.rs` — `pub mod cloudwatch_logs;`.
-- `rust/otel-ingestion/Cargo.toml` — add `flate2` to `[dependencies]` (+ `[dev-dependencies]`).
+- `rust/otel-ingestion/Cargo.toml` — add `flate2` to `[dependencies]`.
 - `rust/otel-ingestion/tests/firehose_tests.rs` — update 7 call sites for the new
   `decode_firehose_envelope` signature.
 - `rust/otel-ingestion/tests/cloudwatch_logs_tests.rs` — **new** unit tests.
@@ -594,8 +602,10 @@ changes** — the same reasoning #1299 used to justify reusing `ingest_metrics` 
 - **Unit (otel-ingestion, `tests/cloudwatch_logs_tests.rs`, no DB):**
   - `decode_cloudwatch_logs_record` on a gzip+JSON `DATA_MESSAGE` with multiple `logEvents` →
     `Some`, correct `logGroup`/`logStream`/`owner`, event count.
-  - `CONTROL_MESSAGE` (gzip+JSON, no `logEvents`) → `None`, not an error.
-  - `DATA_MESSAGE` with empty `logEvents` → `None`.
+  - `CONTROL_MESSAGE` (gzip+JSON, with its synthetic health-check `logEvent` present, as real
+    CloudWatch sends) → `None`, not an error — exercises the `messageType` drop branch, not the
+    empty-events branch.
+  - `DATA_MESSAGE` with empty `logEvents` → `None` — exercises the empty-events branch.
   - Malformed gzip → `OtelError::Parse`.
   - Valid gzip, malformed JSON → `OtelError::Parse`.
   - `build_export_logs_request` → resource attrs contain `service.name`=logGroup,
