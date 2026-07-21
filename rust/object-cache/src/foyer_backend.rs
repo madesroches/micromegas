@@ -377,6 +377,18 @@ fn promote_if_valid(
     if is_block_key(key) {
         let t = tags.classify(key);
         imetric!("object_cache_disk_tier_hit", "count", t.prefix, 1_u64);
+        // Promotion volume (#1321). This length-validated insert below is the
+        // single disk->RAM crossing, so promotion_count == disk_tier_hit by
+        // construction; it exists as the named companion and denominator to
+        // promotion_bytes (mean promoted block size = bytes / count) -- the
+        // churn signal weighed against object_cache_ram_tier_eviction_*.
+        imetric!("object_cache_promotion_count", "count", t.prefix, 1_u64);
+        imetric!(
+            "object_cache_promotion_bytes",
+            "bytes",
+            t.prefix,
+            value.bytes.len() as u64
+        );
     }
     if value.disk_write_ms != DISK_WRITE_NONE {
         // See the disk-tier limitation note in the design doc: this per-read

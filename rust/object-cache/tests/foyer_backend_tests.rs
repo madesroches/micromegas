@@ -483,14 +483,109 @@ async fn disk_read_age_metric_fires_on_disk_read() {
     );
 }
 
+// A disk->RAM promotion of a `blk:`-prefixed key must fire exactly one
+// `object_cache_promotion_count{prefix=other}` (value 1) and exactly one
+// `object_cache_promotion_bytes{prefix=other}` (value == the block length),
+// verifying the promotion-volume telemetry added alongside `disk_tier_hit`
+// in `promote_if_valid` (#1321). The key is `blk:`-prefixed (rather than the
+// bare `"blobs/key"` used elsewhere in this file) because both new metrics
+// only fire inside `promote_if_valid`'s `is_block_key` branch; `prefix=other`
+// is expected (not `"blobs"`) because a `blk:`-prefixed key never matches a
+// content-label prefix (see `is_block_key`'s doc comment and the caveat in
+// `mkdocs/docs/admin/object-cache.md`).
+#[tokio::test]
+#[serial]
+async fn promotion_volume_metrics_fire_on_disk_read() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir_path = dir.path().to_str().expect("utf8 path");
+    let data = Bytes::from(vec![9u8; 4096]);
+    let prefix_labels: Arc<[&'static str]> = Arc::from(vec!["blobs"]);
+
+    let backend = FoyerBackend::new_with_shards(
+        dir_path,
+        4096,
+        16 * 1024 * 1024,
+        1,
+        WriteTuning::default(),
+        prefix_labels,
+    )
+    .await
+    .expect("create backend");
+
+    backend
+        .put(
+            "blk:ns:blobs/key:0".to_string(),
+            data.clone(),
+            FillHint::Demand,
+        )
+        .await;
+    backend
+        .put(
+            "blobs/evict-1".to_string(),
+            Bytes::from(vec![1u8; 16]),
+            FillHint::Demand,
+        )
+        .await;
+    backend
+        .put(
+            "blobs/evict-2".to_string(),
+            Bytes::from(vec![2u8; 16]),
+            FillHint::Demand,
+        )
+        .await;
+    // close() awaits the flusher, so the read below is guaranteed to see
+    // "blk:ns:blobs/key:0" on disk rather than racing the background write.
+    backend.close().await.expect("close backend");
+
+    let guard = init_in_memory_tracing();
+
+    let got = backend
+        .get("blk:ns:blobs/key:0", data.len() as u64)
+        .await
+        .expect("promote from disk tier");
+    assert_eq!(got, data);
+
+    micromegas_tracing::dispatch::flush_metrics_buffer();
+
+    let counts = tagged_integer_metric_values(&guard.sink, "object_cache_promotion_count");
+    let other_counts: Vec<u64> = counts
+        .iter()
+        .filter(|(_, props)| property_get(props.get_properties(), "prefix") == Some("other"))
+        .map(|(v, _)| *v)
+        .collect();
+    assert_eq!(
+        other_counts,
+        vec![1],
+        "expected exactly one promotion_count sample of 1 for prefix=other, got {counts:?}"
+    );
+
+    let bytes = tagged_integer_metric_values(&guard.sink, "object_cache_promotion_bytes");
+    let other_bytes: Vec<u64> = bytes
+        .iter()
+        .filter(|(_, props)| property_get(props.get_properties(), "prefix") == Some("other"))
+        .map(|(v, _)| *v)
+        .collect();
+    assert_eq!(
+        other_bytes,
+        vec![data.len() as u64],
+        "expected exactly one promotion_bytes sample equal to the block length for prefix=other, \
+         got {bytes:?}"
+    );
+}
+
 // -- Validated-promotion two-step read (#1318) -------------------------------
 
 // A disk entry whose stored length does not match the caller's
 // `expected_len` (the poisoned-short-prefetch scenario the design doc's
 // promotion gate exists for) must never be promoted into RAM: `get` reports
-// it as a miss and RAM usage stays flat. A subsequent `put(Demand)` with the
-// full-length bytes then heals the key normally.
+// it as a miss and RAM usage stays flat, and neither promotion metric fires
+// (#1321 -- a mismatch must not count as a promotion; only
+// `range_cache_promotion_len_mismatch` covers that case). A subsequent
+// `put(Demand)` with the full-length bytes then heals the key normally.
+// `#[serial]`: `init_in_memory_tracing` touches global dispatch state shared
+// by every test in this file that uses it.
 #[tokio::test]
+#[serial]
 async fn short_block_never_promoted() {
     let dir = tempfile::tempdir().expect("tempdir");
     let dir_path = dir.path().to_str().expect("utf8 path");
@@ -510,15 +605,23 @@ async fn short_block_never_promoted() {
 
     // `.force()` (the prefetch admission path) writes disk-only, so `close`
     // is enough to make the short entry durable without any RAM-eviction
-    // dance.
+    // dance. The key is `blk:`-prefixed so the mismatching `get` below
+    // actually reaches `promote_if_valid`'s `is_block_key` branch -- a bare
+    // key would make the negative metric assertion pass vacuously.
     backend
-        .put("key".to_string(), short_data.clone(), FillHint::Prefetch)
+        .put(
+            "blk:key".to_string(),
+            short_data.clone(),
+            FillHint::Prefetch,
+        )
         .await;
     backend.close().await.expect("close backend");
 
     let ram_before = backend.ram_usage();
+    let guard = init_in_memory_tracing();
+
     assert!(
-        backend.get("key", full_len).await.is_none(),
+        backend.get("blk:key", full_len).await.is_none(),
         "a length-mismatched disk entry must be reported as a miss, not promoted"
     );
     assert_eq!(
@@ -527,12 +630,22 @@ async fn short_block_never_promoted() {
         "a rejected disk entry must not grow RAM usage"
     );
 
+    micromegas_tracing::dispatch::flush_metrics_buffer();
+    assert!(
+        tagged_integer_metric_values(&guard.sink, "object_cache_promotion_count").is_empty(),
+        "a length mismatch must not fire object_cache_promotion_count"
+    );
+    assert!(
+        tagged_integer_metric_values(&guard.sink, "object_cache_promotion_bytes").is_empty(),
+        "a length mismatch must not fire object_cache_promotion_bytes"
+    );
+
     let full_data = Bytes::from(vec![2u8; full_len as usize]);
     backend
-        .put("key".to_string(), full_data.clone(), FillHint::Demand)
+        .put("blk:key".to_string(), full_data.clone(), FillHint::Demand)
         .await;
     let got = backend
-        .get("key", full_len)
+        .get("blk:key", full_len)
         .await
         .expect("hit after healing put(Demand)");
     assert_eq!(got, full_data);
