@@ -58,10 +58,16 @@ anywhere in the codebase — a one-line addition next to the existing `usage()` 
   reflect this one-time, startup-only partitioning of the configured `disk_bytes` capacity,
   not live cached-block occupancy. They read a constant (== configured capacity)
   for the life of the process regardless of how full the disk tier actually is.
-- `engine/block/manager.rs` has internal `size()`/`blocks()` methods that likely track real
-  block occupancy, but `BlockManager` is not reachable from `Store`'s public surface (no
-  `engine()`/`manager()` accessor) — it is a private implementation detail of the block
-  engine.
+- `engine/block/manager.rs` has `size()`/`blocks()` methods, but neither tracks live
+  occupancy: `Block::size()` (`manager.rs:100`) returns `self.inner.partition.size()`, a
+  fixed constant equal to the configured `block_size`; `BlockManager::blocks()`
+  (`manager.rs:285`) returns `self.inner.blocks.len()`, the total count of partitions
+  carved out once by the startup loop above — a fixed `capacity/block_size` figure, not a
+  live count. The actual live-occupancy state (`clean_blocks`/`evictable_blocks`/
+  `writing_blocks`/`reclaiming_blocks`) lives in a private `State`/`Inner` struct with no
+  public accessor at all, and `BlockManager` itself is not reachable from `Store`'s public
+  surface (no `engine()`/`manager()` accessor) — it is a private implementation detail of
+  the block engine.
 
 Conclusion: a genuine live disk-tier-bytes gauge would require either an upstream `foyer`
 change (exposing per-partition live occupancy) or this crate maintaining its own running
