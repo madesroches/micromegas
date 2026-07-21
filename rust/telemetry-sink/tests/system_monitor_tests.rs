@@ -10,6 +10,7 @@ use micromegas_tracing::metrics::MetricsMsgQueueAny;
 use micromegas_tracing::test_utils::init_in_memory_tracing;
 use micromegas_transit::HeterogeneousQueue;
 use serial_test::serial;
+use sysinfo::System;
 
 /// Values fired for the untagged integer metric `name` since the guard was
 /// created. Requires `flush_metrics_buffer` first.
@@ -33,7 +34,8 @@ fn integer_metric_values(sink: &InMemorySink, name: &str) -> Vec<u64> {
 fn process_memory_gauges_fire_with_nonzero_values() {
     let guard = init_in_memory_tracing();
 
-    emit_process_memory_stats();
+    let mut system = System::new();
+    emit_process_memory_stats(&mut system);
     flush_metrics_buffer();
 
     let resident = integer_metric_values(&guard.sink, "process_resident_bytes");

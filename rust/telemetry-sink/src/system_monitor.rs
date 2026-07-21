@@ -22,12 +22,14 @@ pub fn should_sample_slow(elapsed_since_last_sample: Duration) -> bool {
 /// Emits this process's own RSS/virtual memory size. Allocator-agnostic
 /// (reads from the OS via `sysinfo`), so this runs for every consumer of
 /// `spawn_system_monitor`, including non-jemalloc binaries.
-pub fn emit_process_memory_stats() {
+///
+/// Takes a caller-owned `System` so repeated calls reuse it instead of each
+/// constructing a fresh instance (which re-reads `/proc/stat` etc.).
+pub fn emit_process_memory_stats(system: &mut System) {
     use sysinfo::{ProcessRefreshKind, ProcessesToUpdate};
     let Ok(pid) = sysinfo::get_current_pid() else {
         return;
     };
-    let mut system = System::new();
     system.refresh_processes_specifics(
         ProcessesToUpdate::Some(&[pid]),
         false,
@@ -80,6 +82,7 @@ pub fn send_system_metrics_forever() {
         .with_memory(MemoryRefreshKind::nothing().with_ram());
     let mut system = System::new_with_specifics(what_to_refresh);
     imetric!("total_memory", "bytes", system.total_memory());
+    let mut process_system = System::new();
     let mut last_slow_sample = Instant::now();
     loop {
         std::thread::sleep(sysinfo::MINIMUM_CPU_UPDATE_INTERVAL);
@@ -89,7 +92,7 @@ pub fn send_system_metrics_forever() {
         fmetric!("cpu_usage", "percent", system.global_cpu_usage() as f64);
 
         if should_sample_slow(last_slow_sample.elapsed()) {
-            emit_process_memory_stats();
+            emit_process_memory_stats(&mut process_system);
             emit_jemalloc_stats();
             last_slow_sample = Instant::now();
         }
