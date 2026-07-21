@@ -308,7 +308,7 @@ pub fn decode_firehose_envelope(body: &[u8], signal: Signal) -> Result<FirehoseE
 ```
 
 Both call sites (`firehose.rs`'s metrics handler passes `Signal::Metrics`; the new CloudWatch
-Logs handler passes `Signal::Logs`) and all six existing unit tests in
+Logs handler passes `Signal::Logs`) and all seven existing unit tests in
 `otel-ingestion/tests/firehose_tests.rs` (which call it positionally) need the new argument —
 a one-line change per call site.
 
@@ -468,7 +468,7 @@ changes** — the same reasoning #1299 used to justify reusing `ingest_metrics` 
 2. **`decode_firehose_envelope` signal parameter** — add `signal: Signal` param
    (`handler.rs:295`), replace the two hardcoded `Signal::Metrics` literals (298, 306); update
    its one production call site (`firehose_handler` in `rust/public/src/servers/firehose.rs`,
-   passes `Signal::Metrics`) and all six call sites in
+   passes `Signal::Metrics`) and all seven call sites in
    `rust/otel-ingestion/tests/firehose_tests.rs`.
 3. **CloudWatch Logs decoder module** — add `rust/otel-ingestion/src/cloudwatch_logs.rs`
    (`decode_cloudwatch_logs_record`, `build_export_logs_request`,
@@ -495,7 +495,10 @@ changes** — the same reasoning #1299 used to justify reusing `ingest_metrics` 
    `rust/public/Cargo.toml`.
 10. **Python e2e** — add a CloudWatch-Logs-Firehose case (see Testing), likely a new
     `python/micromegas/tests/test_cloudwatch_logs_firehose_e2e.py` alongside the existing OTLP
-    e2e tests.
+    e2e tests. #1299 instead extended the shared `test_otlp_e2e.py`; a separate file is
+    preferred here because this route is not OTLP-shaped (no `Signal`/OTLP envelope reuse in
+    the test helpers) and keeping it isolated avoids growing an already-multi-signal file with
+    an unrelated payload format.
 11. **Docs** — extend `mkdocs/docs/otlp/index.md` with a "CloudWatch Logs (Kinesis Firehose)"
     section and a new row in the routes table.
 12. **CI** — `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `cargo test`, then
@@ -509,7 +512,7 @@ changes** — the same reasoning #1299 used to justify reusing `ingest_metrics` 
   Logs Firehose records.
 - `rust/otel-ingestion/src/lib.rs` — `pub mod cloudwatch_logs;`.
 - `rust/otel-ingestion/Cargo.toml` — add `flate2` to `[dependencies]` (+ `[dev-dependencies]`).
-- `rust/otel-ingestion/tests/firehose_tests.rs` — update 6 call sites for the new
+- `rust/otel-ingestion/tests/firehose_tests.rs` — update 7 call sites for the new
   `decode_firehose_envelope` signature.
 - `rust/otel-ingestion/tests/cloudwatch_logs_tests.rs` — **new** unit tests.
 - `rust/public/src/servers/firehose_common.rs` — **new**: shared auth/response/request-id
@@ -522,7 +525,8 @@ changes** — the same reasoning #1299 used to justify reusing `ingest_metrics` 
 - `rust/public/src/servers/ingestion.rs` — clone `auth_provider` again, merge the new router.
 - `rust/public/Cargo.toml` — `[[test]]` entry for `firehose_cloudwatch_logs_tests`.
 - `rust/public/tests/firehose_cloudwatch_logs_tests.rs` — **new** HTTP-level tests.
-- `python/micromegas/tests/test_cloudwatch_logs_firehose_e2e.py` — **new** end-to-end test.
+- `python/micromegas/tests/test_cloudwatch_logs_firehose_e2e.py` — **new** end-to-end test
+  (kept separate from `test_otlp_e2e.py` since this route carries no OTLP payload).
 - `mkdocs/docs/otlp/index.md` — new section + routes-table row.
 
 ## Trade-offs
@@ -572,7 +576,10 @@ changes** — the same reasoning #1299 used to justify reusing `ingest_metrics` 
 `mkdocs/docs/otlp/index.md`:
 - Add a row to the routes table: `POST /ingestion/cloudwatch/v1/logs/firehose` |
   CloudWatch Logs subscription-filter record per Firehose record | `log_entries` (see
-  CloudWatch Logs (Kinesis Firehose)).
+  CloudWatch Logs (Kinesis Firehose)). The existing table's middle column is headed "OTLP
+  message", which doesn't literally describe this row's payload (there is no OTLP framing on
+  the wire — see Route naming above); reword the header to something signal-agnostic (e.g.
+  "Payload") or add a note by the new row clarifying it isn't OTLP-framed.
 - New `## CloudWatch Logs (Kinesis Firehose)` section (sibling to the existing `## CloudWatch
   Metric Streams (Kinesis Firehose)` section), covering: the pipeline (CloudWatch Logs →
   subscription filter → Firehose → micromegas, no Lambda/collector), the payload format and
