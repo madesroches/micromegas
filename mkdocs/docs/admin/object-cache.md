@@ -254,11 +254,14 @@ A background sampler emits these gauges on a fixed interval (5s by default), ind
 | `object_cache_fetch_prefetch_occupancy` / `object_cache_fetch_prefetch_available` | Occupied/available slots in the prefetch-only sub-budget (`--max-concurrent-fetches` minus `--demand-reserved-fetches`). |
 | `object_cache_inflight_entries` | Number of block/`size()` keys currently in flight to origin. A key scheduler signal alongside the permit-wait latency above. |
 | `object_cache_ram_tier_usage_bytes` | Accounted RAM-tier byte usage (foyer's own weigher total). Compare against the host's `used_memory` system metric: this gauge staying at/below the configured `--ram-mb` size *while* `used_memory` climbs is the signature of a cached block over-retaining a larger allocation than its accounted weight. |
+| `object_cache_ram_tier_entries` | Accounted RAM-tier entry count (foyer's own entry total), the entry-count sibling to `object_cache_ram_tier_usage_bytes`. |
 | `object_cache_mem_budget_occupancy_mb` / `object_cache_mem_budget_available_mb` | Occupied/available MiB of the cross-request streaming memory budget (`--memory-budget-mb`). |
 | `object_cache_prefetch_queue_depth` | Items currently queued in the bounded `/prefetch` queue, waiting for a worker slot. |
 | `object_cache_nic_rx_bytes_per_sec` / `object_cache_nic_tx_bytes_per_sec` | Host-level network throughput — the expected ceiling on the deployment's instance type. |
 | `object_cache_foyer_disk_write_bytes_per_sec` / `object_cache_foyer_disk_read_bytes_per_sec` | The foyer disk engine's own write/read throughput, sourced from the cache engine rather than host disk enumeration. The drain-throughput signal for whether the flushers are keeping up with write-in pressure (see "Tuning the write path" below). |
 | `object_cache_foyer_disk_write_ios_per_sec` / `object_cache_foyer_disk_read_ios_per_sec` | The foyer disk engine's own write/read IO rate. |
+
+Neither disk-tier bytes nor disk-tier entry count is emitted yet — not because foyer doesn't expose the data, but as a deliberate scope decision: foyer's `HybridCacheBuilder::with_metrics_registry()` does track live disk-tier block occupancy (including reclaim), but surfacing it would require adding `mixtrics` as a new direct dependency and writing a custom metrics-registry adapter. This is deferred to a follow-up issue (tracked separately from #1322), not folded into the RAM-tier gauges above.
 
 Routine fallback-to-direct is by-design graceful degradation and is logged at `debug` (not `warn`). Genuinely unexpected conditions — a truncated cache response, a backend IO fault, an internal server error — log at `warn`/`error`.
 

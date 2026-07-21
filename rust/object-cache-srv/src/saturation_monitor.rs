@@ -83,6 +83,10 @@ pub fn sample_once(
         );
     }
 
+    if let Some(ram_entries) = cache.backend_ram_entries() {
+        imetric!("object_cache_ram_tier_entries", "count", ram_entries as u64);
+    }
+
     let mem_available = mem_permits.available_permits() as u32;
     let mem_occupancy = memory_budget_mb.saturating_sub(mem_available);
     imetric!(

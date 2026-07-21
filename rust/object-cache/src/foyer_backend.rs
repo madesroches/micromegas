@@ -350,6 +350,12 @@ impl FoyerBackend {
     pub fn ram_usage(&self) -> usize {
         self.cache.memory().usage()
     }
+
+    /// Current RAM-tier entry count. Backs the trait's `ram_entries()`
+    /// method, which feeds the saturation gauge.
+    pub fn ram_entry_count(&self) -> usize {
+        self.cache.memory().entries()
+    }
 }
 
 /// Validate `value` against `expected_len` and, if it matches, promote it
@@ -561,5 +567,9 @@ impl RangeCacheBackend for FoyerBackend {
 
     fn ram_usage_bytes(&self) -> Option<usize> {
         Some(self.ram_usage())
+    }
+
+    fn ram_entries(&self) -> Option<usize> {
+        Some(self.ram_entry_count())
     }
 }
