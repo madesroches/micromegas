@@ -242,7 +242,7 @@ async fn ram_tier_usage_gauge_reflects_demand_put() {
 /// `object_cache_ram_tier_entries` must reflect the number of blocks actually
 /// resident in the RAM tier. Uses `FillHint::Demand`: a `Prefetch` fill stores
 /// an ephemeral phantom record that's dropped immediately and never lands in
-/// `cache.memory()` (`foyer_backend.rs:512-539`), so it would never increment
+/// `cache.memory()` (`foyer_backend.rs:526-546`), so it would never increment
 /// `entries()`.
 #[tokio::test]
 #[serial]
