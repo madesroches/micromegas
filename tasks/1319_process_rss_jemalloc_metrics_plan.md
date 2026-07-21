@@ -360,10 +360,14 @@ zero behavior change for anything that exists today.
 ## Documentation
 
 Add to the Saturation table in `mkdocs/docs/admin/object-cache.md` (near
-`object_cache_ram_tier_usage_bytes`, `:256`) — this remains the only page in the repo
-with a metrics catalogue of this depth, so it's the pragmatic home for now even though
-these six gauges are process-wide, not object-cache-specific. Phrase the entries to say
-so explicitly:
+`object_cache_ram_tier_usage_bytes`, `:256`). This isn't the only metrics catalogue in
+the repo — the same file's Monitoring table (~40 rows) and
+`mkdocs/docs/admin/maintenance.md`'s pg_stat table are both bigger — but the Saturation
+table is the right fit by *kind*: it's specifically the gauges a background sampler
+emits on a fixed interval, independent of request volume, and that's exactly what these
+six process/jemalloc gauges are (see `system_monitor.rs`), unlike the request-driven
+counters in the Monitoring table above it. Phrase the entries to say explicitly that
+these six gauges are process-wide, not object-cache-specific:
 
 - `process_resident_bytes` / `process_virtual_bytes` — this process's own RSS/virtual
   size (`sysinfo`, allocator-agnostic; emitted by any service built with the
