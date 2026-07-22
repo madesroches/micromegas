@@ -167,9 +167,20 @@ pub enum OrderingBounds {
 - `BlocksView` overrides `merge_partitions` (mirroring the pattern already used by
   `SqlBatchView::merge_partitions`, `sql_batch_view.rs:249-266`, which just delegates to a
   pre-built merger) to build and reuse a `QueryMerger` configured with:
-  - query: `"SELECT * FROM source ORDER BY insert_time, block_id;"`
-  - ordering: `[ScanSortColumn { column: "insert_time", descending: false }, ScanSortColumn {
-    column: "block_id", descending: false }]`
+  - query: `"SELECT * FROM source ORDER BY insert_time;"`
+  - ordering: `[ScanSortColumn { column: "insert_time", descending: false }]`
+
+  Only `insert_time` is declared (not `block_id`), and the query's `ORDER BY` matches it exactly:
+  `attach_ordering_statistics` can only attach min/max stats for the leading declared column, and
+  `Partition` metadata has no `block_id` bounds to attach — a two-column declared ordering would
+  never validate (DataFusion 54 requires present min/max stats for *every* declared sort column)
+  and DataFusion would fall back to a full buffering `SortExec`. A single-column `insert_time`
+  ordering is still sufficient for full `(insert_time, block_id)` correctness: source partitions
+  are non-overlapping in insert_time by construction and each is already sorted by
+  `(insert_time, block_id)` (`blocks_view.rs:44`), so once the source scan's single sequential
+  file group (see below) has a validated `insert_time` ordering, its file-by-file concatenation is
+  already exactly the order the merge needs — no second declared column is required to reach that
+  result.
 
   `create_merged_partition` already calls `filtered_partitions.sort_by_key(|p|
   p.begin_insert_time())` before invoking `view.merge_partitions` (`merge.rs:158`), and
@@ -178,10 +189,32 @@ pub enum OrderingBounds {
   well-formed input — a failure here would indicate a genuine partitioning bug, matching the
   existing "fail loudly" philosophy for the event-time case.
 
-  With the source scan's ordering declared, DataFusion's `EnforceSorting` rule can satisfy the
-  query's explicit `ORDER BY` with a `SortPreservingMergeExec` (bounded k-way merge across
-  already-sorted, non-overlapping file streams) instead of a buffering `SortExec` — the merge
-  stays streaming, and its output is now guaranteed sorted by `(insert_time, block_id)`.
+  Why the merged output ends up fully `(insert_time, block_id)`-sorted, not just
+  `insert_time`-sorted:
+  1. Each input file is already internally `(insert_time, block_id)`-sorted — it was written from
+     `data_sql`'s `ORDER BY blocks.insert_time, blocks.block_id` (`blocks_view.rs:44`).
+  2. Input partitions have disjoint, half-open `[begin, end)` insert-time ranges by construction,
+     so no two files can contain equal-`insert_time` rows — ties never need to be broken *across*
+     files, only within one (already-sorted) file.
+  3. `make_partitioned_execution_plan` puts every source file into one sequential file group, and
+     DataFusion validates the declared `[insert_time]` ordering against each file's min/max
+     insert-time stats; validation only passes if the files are non-overlapping and already in
+     ascending order. Once validated, `EnforceSorting` proves the `ORDER BY insert_time` is
+     already satisfied and elides the sort node entirely — the plan becomes the plain in-order
+     concatenation of the files, with no `SortExec` and no `SortPreservingMergeExec` (there is only
+     one file group, hence one stream; nothing to k-way merge).
+
+  Point 3's elision is what turns points 1 and 2 into a guarantee on the actual output: an elided
+  sort is a no-op concatenation, so the already-`(insert_time, block_id)`-sorted files stay in that
+  order end to end. **This is a correctness dependency, not just a memory optimization.** If
+  elision failed instead (e.g. missing/absent min-max stats on some file), the fallback is a real
+  `SortExec` ordering by `insert_time` alone — and a plain (non-stable-guaranteed) sort on one
+  column does not preserve the `block_id` tie-break order from point 1, so the merged output could
+  come out **not** sorted by `block_id` within an `insert_time` value, silently breaking the
+  ordering guarantee this design exists to provide — while also reintroducing the full buffering
+  `SortExec` this plan is meant to avoid. The offline test below asserting sort elision is
+  therefore load-bearing for both the ordering guarantee's correctness and its memory bound, not a
+  performance-only check.
 
 ### 2. Bounded-memory Postgres-source writes
 
@@ -365,6 +398,12 @@ whole-day `CreateFromSource` write stays memory-bounded even without subdivision
 retire-then-insert atomic swap in `insert_partition` (part of the "Current State" analysis
 above), so regeneration is online (no downtime) and memory-bounded from day one.
 
+`regenerate_partitions` reads from the Postgres ingestion tables, which retain rows for a shorter
+window than merged lakehouse partitions. If a forced regeneration runs on a partition whose source
+rows have already aged out, it will deliberately produce a smaller partition than the one it
+replaces — accepted, since that older data is already past ingestion retention and headed for
+deletion by lakehouse retention regardless.
+
 `materialize_partitions_table_function.rs`'s existing call (`:56`) needs no change at all —
 `materialize_partition_range`'s signature is untouched, so the existing `materialize_partitions`
 UDF's behavior is unchanged automatically.
@@ -423,7 +462,10 @@ delta that doesn't will now fail loudly instead of creating a duplicate partitio
    existing partitions and returns a loud `Err` on a misaligned `insert_range`/delta instead of
    silently leaving a duplicate partition behind.
 9. New `rust/analytics/src/lakehouse/regenerate_partitions_table_function.rs`: copy
-   `MaterializePartitionsTableFunction`'s shape, call `regenerate_partition_range(...)`.
+   `MaterializePartitionsTableFunction`'s shape, call `regenerate_partition_range(...)`. Declare
+   the new module in `rust/analytics/src/lakehouse/mod.rs` (`pub mod
+   regenerate_partitions_table_function;`, alongside the existing `pub mod
+   materialize_partitions_table_function;`) — required for it to compile into the crate.
 10. `rust/analytics/src/lakehouse/query.rs`: register `regenerate_partitions` UDTF next to
     `materialize_partitions`.
 11. `python/micromegas/micromegas/flightsql/client.py`: add a `regenerate_partitions(...)` method
@@ -454,6 +496,8 @@ delta that doesn't will now fail loudly instead of creating a duplicate partitio
   `materialize_partition_range` signature unchanged), new
   `verify_force_regeneration_alignment` guard for the `force` path.
 - `rust/analytics/src/lakehouse/regenerate_partitions_table_function.rs` — new.
+- `rust/analytics/src/lakehouse/mod.rs` — declare the new module (`pub mod
+  regenerate_partitions_table_function;`).
 - `rust/analytics/src/lakehouse/query.rs` — register new UDTF.
 - `python/micromegas/micromegas/flightsql/client.py` — add `regenerate_partitions(...)` method.
 - `mkdocs/docs/query-guide/functions-reference.md` — document `regenerate_partitions`.
@@ -465,9 +509,11 @@ delta that doesn't will now fail loudly instead of creating a duplicate partitio
 - **`ORDER BY` + declared scan ordering vs. `ORDER BY` alone.** An `ORDER BY` with no declared
   source ordering would still produce correct output but pay a full buffering `SortExec` on
   every merge — the exact problem `tasks/jit_single_query_plan.md` was written to avoid on the
-  query side. Declaring the ordering lets DataFusion downgrade to a bounded
-  `SortPreservingMergeExec`, so the merge itself gains the same memory bound this plan is adding
-  to the source write path.
+  query side. Declaring the `insert_time` ordering lets DataFusion elide the sort node entirely
+  instead (the merge source scan is a single sequential file group, so there is no second stream
+  requiring a `SortPreservingMergeExec`), so the merge itself gains the same memory bound this
+  plan is adding to the source write path — see Design §1 for why this elision is also what makes
+  the `(insert_time, block_id)` ordering guarantee correct, not just cheap.
 - **Generalizing `OrderingBounds` vs. a separate insert-time-only code path.** A parallel
   `sort_and_check_non_overlapping_by_insert_time` function would duplicate ~40 lines with one
   field access changed. An enum parameter keeps one implementation and makes the event-time
@@ -499,9 +545,15 @@ delta that doesn't will now fail loudly instead of creating a duplicate partitio
 - **Offline ordering tests** (new `rust/analytics/tests/blocks_view_merge_ordering_tests.rs`,
   following the existing no-DB pattern in `thread_spans_ordering_tests.rs`): build synthetic
   insert-time-disjoint `Partition`s, confirm `make_partitioned_execution_plan` under
-  `OrderingBounds::InsertTime` elides the `Sort`/downgrades to `SortPreservingMergeExec` when
-  ordering is declared, and confirm an insert-time overlap is rejected loudly (negative control,
-  mirroring `overlapping_partitions_are_rejected`).
+  `OrderingBounds::InsertTime` with a single-column `insert_time` declared ordering elides the
+  `Sort` node entirely (no `SortExec`, no `SortPreservingMergeExec` — one sequential file group
+  already satisfies the ordering), and confirm an insert-time overlap is rejected loudly (negative
+  control, mirroring `overlapping_partitions_are_rejected`). This elision assertion is a
+  correctness check, not a performance one: per Design §1, the merged output is only guaranteed
+  fully `(insert_time, block_id)`-sorted when the sort is elided (a no-op concatenation of
+  already-sorted, disjoint files); if elision ever regressed to a real `insert_time`-only
+  `SortExec`, the `block_id` tie-break order would silently stop being guaranteed, alongside the
+  loss of the memory bound.
 - **`MetadataPartitionSpec` streaming unit tests**: exercise `write()` (or the extracted
   `flush_chunk` helper) against a small `Vec<PgRow>`-free scenario if feasible, or an integration
   test against a live Postgres fixture, asserting: chunk boundaries don't drop/duplicate rows,
@@ -527,8 +579,14 @@ delta that doesn't will now fail loudly instead of creating a duplicate partitio
   during regeneration of a busy day instead of spiking with the range width — the core check for
   the OOM concern this plan addresses.
 - **Sortedness verification query** (documented, not new code) — run against a regenerated
-  partition to confirm ordering, e.g.:
+  partition to confirm ordering. `lag(...) OVER ()` has no `ORDER BY`, so its result depends on
+  physical row arrival order; this must be pinned to a single, non-repartitioned scan (session
+  defaults otherwise split the parquet scan into byte-range partitions and interleave them via
+  `CoalescePartitionsExec`, producing false failures against a perfectly sorted partition):
   ```sql
+  SET datafusion.execution.target_partitions = 1;
+  SET datafusion.optimizer.repartition_file_scans = false;
+
   SELECT count(*) FROM (
     SELECT insert_time, block_id,
            lag(insert_time) OVER () AS prev_insert_time,
