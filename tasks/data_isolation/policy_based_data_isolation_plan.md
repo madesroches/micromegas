@@ -72,8 +72,9 @@ in v1 (see Deferred / Trade-offs for when that changes).
 ### Ingestion path — key gate, identity discarded
 - API keys come from the static `MICROMEGAS_API_KEYS` env var
   (`rust/auth/src/api_key.rs`), parsed into an in-memory `HashMap<Key, name>`; constant-time compare;
-  no runtime add/revoke. On match: `AuthContext { subject: name, email: None, audience: None,
-  auth_type: ApiKey, is_admin: false, allow_delegation: true }` (`api_key.rs:116-127`).
+  no runtime add/revoke. On match: `AuthContext { subject: name, email: None, issuer: "api_key",
+  audience: None, expires_at: None, auth_type: ApiKey, is_admin: false, allow_delegation: true }`
+  (`api_key.rs:116-127`).
 - Providers compose via `MultiAuthProvider` in `default_provider::provider_with_prefix`
   (`rust/auth/src/default_provider.rs:51-119`).
 - No ingestion handler reads `AuthContext`; identity gates the request and is dropped.
@@ -171,8 +172,10 @@ follows the existing dotted-namespace precedent (`otel.resource.*`).
 
 Storage of the stamped audience (v1 vs later) mirrors the superseded plan's open decision:
 - **v1: reserved property** `micromegas.audience` on the process — zero schema migration, flows
-  through existing property plumbing, `property_get(...) IN (...)` filter works immediately
-  (confirmed: `property_get.rs`, used in WHERE predicates across the codebase).
+  through existing property plumbing. In-tree usage of `property_get` in WHERE predicates is equality
+  only (`rust/public/src/client/query_processes.rs:73`); the `IN (...)` form relies on DataFusion's
+  dictionary-type coercion (`property_get` returns `Dictionary(Int32, Utf8)`,
+  `rust/datafusion-extensions/src/properties/property_get.rs:48,87-92`).
 - **later: first-class `audience` column** on `processes` + propagate through views — enables
   partition pruning and a physical boundary.
 
@@ -182,7 +185,7 @@ Enforcement **cannot** be a single analyzer rule. UDTF table functions surface a
 `LogicalPlan::TableScan`, but the span/metadata functions (`process_spans`, `perfetto_trace_chunks`,
 `list_partitions`, `parse_block`) **do not carry their owner id in the output schema**, bake the
 `process_id`/`stream_id` opaquely into the provider at plan time, and some ignore pushed-down filters
-(`process_spans_table_function.rs:386`). A predicate-injecting rule has no column to filter on for
+(`process_spans_table_function.rs:384`). A predicate-injecting rule has no column to filter on for
 them. So enforcement is two-pronged, both fed the same per-request `ReadScope`:
 
 **Prong A — `OwnershipRewrite` analyzer rule** (for `MaterializedView`-backed scans). A new mandatory
@@ -202,7 +205,7 @@ text). Constructed with the resolved `ReadScope`.
 
 **Prong B — construction-time guard inside each UDTF `call_with_args`** (for the span/metadata
 functions Prong A can't reach). The owner id literal is available there via `exp_to_string` before
-the provider is built (`process_spans_table_function.rs:110`, `perfetto_trace_table_function.rs:72`).
+the provider is built (`process_spans_table_function.rs:110`, `perfetto_trace_table_function.rs:71`).
 Thread `ReadScope` into `register_lakehouse_functions` (`query.rs:95-163`) and into each function
 struct, then:
 - **Arg-addressed functions** (`process_spans`, `perfetto_trace_chunks`, `parse_block`): the guard
@@ -234,7 +237,7 @@ struct, then:
   `process_id` for process-scoped view sets — the same opaque, unchecked argument as `process_spans`,
   but destructive rather than read-only: naming another principal's id destroys their partitions (an
   integrity/availability hole, not a confidentiality one). `materialize_partitions`
-  (`query.rs:131-134`) takes no per-process id — it materializes a *global* view
+  (`query.rs:131-137`) takes no per-process id — it materializes a *global* view
   (`view_factory.get_global_view`) over an insert-time range, so it can't target another principal's
   data, but it is an unbounded write/compute operation with no legitimate use from a read session.
   Neither is a read, so neither gets an audience filter; instead `register_lakehouse_functions` skips
@@ -247,7 +250,7 @@ per-user filter, same DataFusion plan — and Prong B checks membership in a one
 **Prong B performance.** The scan-time check is fast because **`process_id → audience` is immutable**
 (stamped once at ingestion, never mutated). Add an in-memory `process_id → audience` cache — a
 `moka::future::Cache` mirroring `metadata_cache.rs` (moka is already a workspace dep), backed on miss
-by `find_process` (`metadata.rs:241`, a primary-key point query). Because the mapping is immutable the
+by `find_process` (`rust/analytics/src/metadata.rs:241`, a primary-key point query). Because the mapping is immutable the
 cache **needs no invalidation** — bound it by size (LRU) only. Warm hit = O(1) in-memory lookup;
 cold miss = one indexed PG query, at most once per process ever. An entry is ~60 B, so caching far
 more than the "thousands of users" population costs a few MB. The membership test itself is an O(1)
@@ -452,7 +455,7 @@ asymmetric modes (e.g. RBAC reads, self-only mint) with no code change.
 - Update any auth/deployment docs to mention the mint endpoint, the setup script, and (Phase 4) the
   groups-claim / policy-store configuration.
 
-## Open Questions
+## Resolved Decisions
 
 Resolved by research (kept here for the record; details in Appendix A):
 - ~~**Table-function coverage.**~~ **Resolved:** two-pronged — analyzer rule for `MaterializedView`
@@ -462,9 +465,10 @@ Resolved by research (kept here for the record; details in Appendix A):
 - ~~**Audience identifier shape.**~~ **Resolved:** value-prefix `user:<email>` / `group:<id>` in a
   single dotted-namespace property `micromegas.audience` (matches `otel.resource.*` convention; no
   collision possible).
-- ~~**Audience storage for v1.**~~ **Resolved:** reserved property `micromegas.audience`;
-  `property_get(...) IN (...)` is confirmed to work in WHERE predicates. Promote to a column in
-  Phase 5.
+- ~~**Audience storage for v1.**~~ **Resolved:** reserved property `micromegas.audience`; in-tree
+  usage of `property_get` in WHERE predicates is equality only; the `IN (...)` form relies on
+  DataFusion's dictionary-type coercion (`property_get` returns `Dictionary(Int32, Utf8)`). Promote to
+  a column in Phase 5.
 - ~~**Groups-claim feasibility.**~~ **Resolved:** one-line additive `Claims`/`AuthContext` change,
   backward-compatible; Auth0/Azure AD/Google flat arrays; `MICROMEGAS_ADMINS` is the config precedent.
 - ~~**RBAC policy source.**~~ **Decided: IdP `groups` claim only** (no local grants table in v1).
@@ -504,12 +508,12 @@ see them. But:
 - `process_spans` (`ProcessSpansTableProvider`, `process_spans_table_function.rs:366`),
   `perfetto_trace_chunks`, `parse_block`, `list_partitions`, `list_view_sets` do **not** expose their
   owner id in the output schema, and bake `process_id`/`stream_id` opaquely into the provider at plan
-  time via `exp_to_string` (`process_spans_table_function.rs:110`, `perfetto:72`). `scan()` even
-  ignores `_filters` (`process_spans_table_function.rs:386`). ⇒ predicate injection is impossible for
+  time via `exp_to_string` (`process_spans_table_function.rs:110`, `perfetto:71`). `scan()` even
+  ignores `_filters` (`process_spans_table_function.rs:384`). ⇒ predicate injection is impossible for
   these; **guard-at-construction (Prong B)** is the only uniform enforcement point. `call_with_args`
   is synchronous → pass a pre-resolved `ReadScope`, defer the metadata-dependent check to async scan.
 - `process_thread_spans_table_function.rs~` is a dead backup (not compiled/registered) — ignore.
-- `retire_partitions` (`query.rs:119-122`) and `materialize_partitions` (`query.rs:131-134`) are the
+- `retire_partitions` (`query.rs:119-122`) and `materialize_partitions` (`query.rs:131-137`) are the
   remaining two of the eight registered UDTFs and were absent from the original audit above. Neither
   is a read. `retire_partitions` deletes `lakehouse_partitions` rows for a
   `(view_set_name, view_instance_id)` pair (`write_partition.rs:116`) — destructive — and
@@ -524,7 +528,7 @@ see them. But:
   it is not passed to `make_session_context`/`register_lakehouse_functions`.
 
 **OIDC claims (`oidc.rs`).** `Claims` struct at `:193-227`; `get_email()` priority chain at
-`:229-241`; no `#[serde(deny_unknown_fields)]` ⇒ adding `groups`/`roles` is additive and
+`:232-240`; no `#[serde(deny_unknown_fields)]` ⇒ adding `groups`/`roles` is additive and
 absent-safe. `is_admin` = allowlist match on `sub`/email from `MICROMEGAS_ADMINS`
 (`load_admin_users` `:264-269`, check `:390-394`) — the precedent for group→capability config.
 Targets: Auth0, Azure AD, Google (Keycloak nested claims not currently targeted). `AuthContext`
@@ -533,7 +537,8 @@ Targets: Auth0, Azure AD, Google (Keycloak nested claims not currently targeted)
 **Properties.** `micromegas_property = (key TEXT, value TEXT)` (`sql_telemetry_db.rs:17`),
 `processes.properties micromegas_property[]` (`:39`) — arbitrary strings, no per-key typing.
 `property_get` returns `Dictionary(Int32, Utf8)`, case-insensitive key match, `NULL` when absent
-(`property_get.rs:48,87-92`); used in WHERE across the codebase (e.g. `query_processes.rs:73`). No
+(`rust/datafusion-extensions/src/properties/property_get.rs:48,87-92`); used in WHERE across the
+codebase (e.g. `rust/public/src/client/query_processes.rs:73`). No
 `micromegas.` reserved-key convention exists yet, but `otel.resource.*` is the established dotted
 namespace (`otel-ingestion/src/block.rs:467-475`); OTel `process.owner`/`host.name` already land as
 `otel.resource.*` properties (demote to display-only). No user/group value discriminator exists ⇒
