@@ -210,11 +210,10 @@ struct, then:
   process→audience mapping needs metadata, perform the actual check at **scan time** (async) inside
   the execution plan: resolve the process's `audience` and fail closed if `∉ ReadScope`. Fails at
   plan time only if the check can be satisfied from already-resolved data.
-- **Listing functions** (`list_partitions`, `list_view_sets`): no owner arg — filter **emitted rows**
-  to readable audiences. `list_partitions` exposes `view_instance_id` (often a `process_id`), which
-  leaks the existence/size/timing of other principals' processes; it must be row-filtered.
-  `list_view_sets` returns view-set schema (not per-principal data) — likely safe to leave unfiltered
-  (confirm in Open Questions).
+- **Listing functions:** `list_partitions` has no owner arg but exposes `view_instance_id` (often a
+  `process_id`), leaking the existence/size/timing of other principals' processes — it **must be
+  row-filtered** to readable audiences. `list_view_sets` **stays unfiltered (decided):** it returns
+  view-set schema/definitions only, which contain no PII or per-principal data.
 
 With `SelfReadPolicy`, `ps` is a singleton, so Prong A reduces to `… IN ('user:alice@…')` — the exact
 per-user filter, same DataFusion plan — and Prong B checks membership in a one-element set.
@@ -426,11 +425,11 @@ Resolved by research (kept here for the record; details in Appendix A):
   reads use direct object-store/parquet access, which they already have — a query bypass would add
   attack surface and audit burden for no confidentiality gain. Only the maintenance daemon is
   unfiltered. See §5.
+- ~~**`list_view_sets` exposure.**~~ **Decided: stays unfiltered** — view-set schema/definitions only,
+  no PII or per-principal data. Only `list_partitions` is row-filtered. See §4 Prong B.
 
-Still open (decisions, not research):
-1. **`list_view_sets` exposure.** Confirm it may stay unfiltered (view-set schema, not per-principal
-   data) rather than being row-filtered like `list_partitions`.
-2. **Scan-time check cost.** Prong B resolves a process's audience at scan time for arg-addressed
+Still open (implementation detail):
+1. **Scan-time check cost.** Prong B resolves a process's audience at scan time for arg-addressed
    UDTFs — confirm this metadata lookup is cheap enough / cacheable per query (it is one lookup per
    named process, and `self` mode is a singleton-set membership test).
 
