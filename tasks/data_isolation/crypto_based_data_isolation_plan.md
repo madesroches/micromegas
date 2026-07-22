@@ -34,14 +34,17 @@ row 1 (the storage leak) and a start on row 3.
 Two structural moves, then encryption:
 
 1. **Split the lakehouse into two planes.**
-   - **Metadata plane** — `processes`, `streams`, `blocks` and derivatives. Cleartext, globally
-     materialized, queried freely by DataFusion. This is the index. It carries **no bodies**: block
-     metadata is `(process_id, stream_id, insert_time, nb_objects, object_offset, payload_size)`
+   - **Metadata plane** — `processes`, `streams`, `blocks`, `log_stats` and derivatives. Cleartext,
+     globally materialized, queried freely by DataFusion. This is the index. It carries **no bodies**:
+     block metadata is `(process_id, stream_id, insert_time, nb_objects, object_offset, payload_size)`
      (`rust/ingestion/src/sql_telemetry_db.rs:73`, `blocks_view.rs:153-175`), and the payload is located
-     in object storage by `block_id`/`object_offset`, which point at *encrypted* payloads.
-   - **Body plane** — `log_entries`, `measures` (the only two view sets with a global instance;
-     confirmed spans have none), plus the **raw block payloads** they derive from. Encrypted,
-     single-audience, only ever reached audience- or process-addressed.
+     in object storage by `block_id`/`object_offset`, which point at *encrypted* payloads. `log_stats` is
+     derived from `log_entries` but only ever emits `count(*)` grouped by `process_id`/`level`/`target`/
+     `time_bin` (§1) — counts, not message bodies — so it belongs here, not in the body plane.
+   - **Body plane** — `log_entries`, `measures` (the only two **body** view sets with a global instance;
+     confirmed spans have none — see §1 for the metadata-side views that also have one), plus the **raw
+     block payloads** they derive from. Encrypted, single-audience, only ever reached audience- or
+     process-addressed.
 2. **Make every body artifact single-audience** by replacing the all-audience `'global'` body instance
    with **global-per-audience** instances (§2). Once no artifact mixes audiences, each file is
    encryptable under exactly one audience key.
@@ -54,12 +57,24 @@ not make it redundant, it narrows what it has to protect (§6).
 
 ## §1 — Two-plane split, grounded
 
-- The body view sets are exactly `log_entries` and `measures`: they are the only entries pushed into
-  `global_views` with a real `get_update_group()` (`log_view.rs:221-227`, `metrics_view.rs:225-231`).
-  Every span view set returns `get_update_group() -> None` and has no global instance
-  (`thread_spans_view.rs:353`, `net_spans_view.rs:368`, `async_events_view.rs:215`,
-  `otel/spans_view.rs:200`); `process_spans` is a UDTF, never materialized. **So the body-plane change
-  is contained to two view sets** plus the raw-block write/read seams.
+- The body view sets are exactly `log_entries` and `measures`: they are the only **body** view sets
+  pushed into `global_views` with a real `get_update_group()` (`log_view.rs:221-227`,
+  `metrics_view.rs:225-231`). They are not the only *entries* in `global_views` with one — the
+  metadata/stats views also return a real update group: `processes` (`Some(2000)`), `streams`
+  (`Some(2000)`), `blocks` (`Some(1000)`), and `log_stats` (`Some(3000)`, `log_stats_view.rs:69`,
+  `view_factory.rs:295-301,316`). What distinguishes the body pair is that they carry message/measure
+  content, not that they're uniquely materialized. Every span view set returns
+  `get_update_group() -> None` and has no global instance (`thread_spans_view.rs:353`,
+  `net_spans_view.rs:368`, `async_events_view.rs:215`, `otel/spans_view.rs:200`); `process_spans` is a
+  UDTF, never materialized. **So the body-plane change is contained to two view sets** plus the
+  raw-block write/read seams.
+- `log_stats` is a global, all-audience aggregate derived from `log_entries`, so it needs an explicit
+  classification rather than riding along unclassified. Its transform query
+  (`log_stats_view.rs:30-38`) groups by `process_id, level, target, time_bin` and emits only
+  `count(*)` — no `msg`/log-body column is read or aggregated. It carries counts/rates, not content, so
+  it classifies as **metadata-plane**: cleartext, globally materialized like `processes`/`streams`/
+  `blocks`, no per-audience instance, no encryption. (If a future version of this view ever folds in
+  message content rather than just counts, it would have to move to the body plane like `log_entries`.)
 - The raw block payloads are the *source* the body views materialize from (both the `'global'` and
   per-process paths derive from the `blocks` view — `partition_source_data.rs:266-267`,
   `jit_partitions.rs:393-401`). They contain the actual events, so **they are body-plane and must be
