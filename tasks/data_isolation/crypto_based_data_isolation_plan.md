@@ -36,8 +36,9 @@ Two structural moves, then encryption:
 1. **Split the lakehouse into two planes.**
    - **Metadata plane** — `processes`, `streams`, `blocks` and derivatives. Cleartext, globally
      materialized, queried freely by DataFusion. This is the index. It carries **no bodies**: block
-     metadata is `(process_id, stream_id, insert_time, event counts, object path, size)`
-     (`migration.rs`), and the object paths point at *encrypted* payloads.
+     metadata is `(process_id, stream_id, insert_time, nb_objects, object_offset, payload_size)`
+     (`rust/ingestion/src/sql_telemetry_db.rs:73`, `blocks_view.rs:153-175`), and the payload is located
+     in object storage by `block_id`/`object_offset`, which point at *encrypted* payloads.
    - **Body plane** — `log_entries`, `measures` (the only two view sets with a global instance;
      confirmed spans have none), plus the **raw block payloads** they derive from. Encrypted,
      single-audience, only ever reached audience- or process-addressed.
