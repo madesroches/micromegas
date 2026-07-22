@@ -202,6 +202,8 @@ text). Constructed with the resolved `ReadScope`.
   - **`view_instance('<set>', <id>)`** already surfaces as a `TableScan<MaterializedView>` and is
     caught by this rule exactly like a named view — the same predicate applies. (This is why the
     existing `TableScanRewrite` can already rewrite `view_instance`.)
+  - **Public view sets (opt-in):** if the scanned view set is on the public allowlist, inject **no**
+    predicate — see §5b. Default allowlist is empty, so this branch is inert unless configured.
 
 **Prong B — construction-time guard inside each UDTF `call_with_args`** (for the span/metadata
 functions Prong A can't reach). The owner id literal is available there via `exp_to_string` before
@@ -226,8 +228,9 @@ struct, then:
   - **`'global'` rows** (the unscoped aggregate partitions — `processes`, `streams`, `blocks`, and the
     global `log_entries`/`measures` instances): carry no single audience to check. Per the fail-closed
     posture (§5), these rows are **hidden** from any `ReadScope::Principals` session — visible only
-    under `ReadScope::All` (maintenance daemon). `list_partitions` never shows a row it cannot resolve
-    to a readable audience.
+    under `ReadScope::All` (maintenance daemon), **or** when the row's view set is on the public
+    allowlist (§5b), in which case its `'global'` rows are shown to every authenticated caller.
+    Otherwise `list_partitions` never shows a row it cannot resolve to a readable audience.
 
   `list_view_sets` **stays unfiltered (decided):** it returns view-set schema/definitions only, which
   contain no PII or per-principal data.
@@ -272,6 +275,42 @@ existing `process_id → audience` cache to reach the audience for the membershi
   burden for no confidentiality gain. Admins needing cross-principal reads use direct storage access,
   not the query path. (`is_admin` therefore needs no wiring into `ReadScope` in v1.)
 
+### 5b. Public (audience-agnostic) views — optional, opt-in
+
+Some aggregate views carry no per-principal PII (e.g. a metrics rollup or a fleet-wide health
+summary derived across all audiences). It is useful to expose such views to **every** authenticated
+caller regardless of their `ReadScope`, without granting `ReadScope::All`. This is a deliberate,
+per-view-set confidentiality relaxation — **off by default, fail-closed**: a view set is private
+unless an operator explicitly lists it.
+
+Mechanism (reuses the existing per-view-set branch point, no new enforcement seam):
+- A configured allowlist of **public view-set names** is resolved once per request alongside
+  `ReadScope` and threaded to both prongs.
+- **Prong A** already branches per view set — `OwnershipRewrite` can read the view set via
+  `MaterializedView::get_view_set_name()` (`materialized_view.rs:77`). For a view set on the public
+  allowlist it injects **no** predicate (neither the `processes` audience filter nor the
+  `process_id` semi-join); for every other set it filters exactly as before.
+- **Prong B** — `list_partitions` shows the view set's `'global'` aggregate rows (otherwise hidden
+  from a `ReadScope::Principals` session, §4) when that set is public. The arg-addressed UDTFs
+  (`process_spans`, `perfetto_trace_chunks`, `parse_block`) are inherently **process-scoped**, not
+  aggregate, so the public exemption never applies to them — they always audience-check.
+- `ReadScope::All` (maintenance daemon) is unaffected; it already sees everything.
+
+Constraints (operator responsibility — the allowlist is a confidentiality decision):
+- **Only genuinely aggregated / non-PII view sets** may be listed. The unscoped **global
+  `log_entries` / `measures`** instances carry raw per-principal bodies across all audiences —
+  listing those would expose every principal's raw telemetry and **must not** be done. The
+  allowlist is meant for derived rollups, not raw global views.
+- **Public means "any authenticated caller," not unauthenticated.** The query path always
+  authenticates via OIDC; truly anonymous access is out of scope.
+- **Fail-closed:** the default allowlist is empty, so with no configuration the plan is
+  byte-for-byte the design above (every view set private).
+
+Config: `MICROMEGAS_PUBLIC_VIEW_SETS` (comma-separated view-set names, default empty), resolved by
+the same factory as `MICROMEGAS_ISOLATION_POLICY`. This can be deferred past v1 with no rework — an
+empty allowlist is the current behavior, and the branch point (`get_view_set_name`) is already
+required by Prong A.
+
 ### 6. Threading identity into the session context
 
 `make_session_context` currently takes no identity. Add the resolved `ReadScope` as a parameter
@@ -306,6 +345,13 @@ Wiring lives next to `default_provider::provider_with_prefix` (a `mint_policy()`
 factory reading the env var). The seam permits splitting into `MINT_POLICY` / `READ_POLICY` later for
 asymmetric modes (e.g. RBAC reads, self-only mint) with no code change.
 
+A second, independent knob controls public views (§5b), defaulting to none:
+
+```
+MICROMEGAS_PUBLIC_VIEW_SETS =        # empty (default) → every view set private
+                            = <name>[,<name>…]   # named view sets readable by any authenticated caller
+```
+
 ## Implementation Steps
 
 ### Phase 1 — General mechanics, per-user behavior (ship this)
@@ -316,7 +362,9 @@ asymmetric modes (e.g. RBAC reads, self-only mint) with no code change.
 3. **Enforcement — Prong A (analyzer rule).** Add `OwnershipRewrite` in
    `rust/analytics/src/lakehouse/ownership_rewrite.rs`, constructed from `ReadScope`. Inject
    `property_get(properties,'micromegas.audience') IN (ps)` on the `processes` view, the semi-join on
-   `process_id`-keyed views, and `view_instance` (caught as a `TableScan<MaterializedView>`).
+   `process_id`-keyed views, and `view_instance` (caught as a `TableScan<MaterializedView>`). Branch
+   per view set via `MaterializedView::get_view_set_name()` so public view sets (§5b) can be skipped;
+   with the default-empty allowlist this branch is a no-op.
 3b. **Enforcement — Prong B (UDTF guards).** Thread `ReadScope` into `register_lakehouse_functions`
    (`query.rs:95-163`) and each affected `TableFunctionImpl`. Arg-addressed functions
    (`process_spans`, `perfetto_trace_chunks`, `parse_block`) verify the named process's audience at
@@ -328,7 +376,9 @@ asymmetric modes (e.g. RBAC reads, self-only mint) with no code change.
    (Prong B). Resolve scope via `ReadPolicy` in `flight_sql_service_impl` and pass through both call
    sites (`:371`, `:841`). Only the maintenance daemon uses `ReadScope::All`; user sessions
    (admin or not) are always filtered.
-5. **Config factory.** `MICROMEGAS_ISOLATION_POLICY` → default `self`; wire `Self*` impls.
+5. **Config factory.** `MICROMEGAS_ISOLATION_POLICY` → default `self`; wire `Self*` impls. Also parse
+   `MICROMEGAS_PUBLIC_VIEW_SETS` (default empty) and thread the resolved allowlist alongside
+   `ReadScope` into `OwnershipRewrite` (Prong A) and `register_lakehouse_functions` (Prong B).
 6. **Test with audience stamped manually** (before ingestion stamping exists): seed processes with a
    `micromegas.audience` property and assert cross-audience queries return nothing; same-audience
    returns its own rows; the daemon (`ReadScope::All`) returns everything.
@@ -409,6 +459,10 @@ asymmetric modes (e.g. RBAC reads, self-only mint) with no code change.
   join the TCB) is a deferred pure addition, not part of v1.
 - **Reserved property vs. first-class column** for the audience (v1 vs Phase 5): row-level filter now
   with zero migration, physical pruning later.
+- **Public views opt-in (§5b)** vs. keeping every aggregate private. Chosen: opt-in allowlist,
+  default empty. Reuses Prong A's existing per-view-set branch (`get_view_set_name`), so it adds a
+  config knob rather than a new enforcement seam, and stays fail-closed until an operator names a
+  view set. Deferrable past v1 with no rework.
 
 ## Security
 
@@ -428,6 +482,10 @@ asymmetric modes (e.g. RBAC reads, self-only mint) with no code change.
   intentionally outside the query path. API keys can never be admin.
 - RBAC mode (v1) adds a single trust dependency: the IdP's `groups` claim. No local policy store, so
   the TCB is unchanged from `self` mode.
+- Public views (§5b) are an explicit, opt-in confidentiality relaxation: a listed view set is
+  readable by every authenticated caller, so only genuinely aggregated / non-PII view sets may be
+  listed. The default allowlist is empty (fail-closed); the raw global `log_entries` / `measures`
+  instances must never be listed, and the arg-addressed process-scoped UDTFs are never exempted.
 
 ## Testing Strategy
 
@@ -436,7 +494,9 @@ asymmetric modes (e.g. RBAC reads, self-only mint) with no code change.
   logical plan), including `view_instance`. Prong B: each guarded UDTF rejects an unowned
   `process_id`/`block_id` and `list_partitions` row-filters — assert both fail closed; assert
   `retire_partitions` and `materialize_partitions` are absent ("function not found") from a
-  registration built with any non-`All` `ReadScope`, admin or not.
+  registration built with any non-`All` `ReadScope`, admin or not. Public views (§5b): with a view
+  set on the allowlist, `OwnershipRewrite` injects no predicate for it and `list_partitions` shows
+  its `'global'` rows; with an empty allowlist behavior is unchanged (every set filtered).
 - **Integration (default/self mode):** two audiences seeded; assert each sees only its own rows
   across `processes`, `log_entries`, `measures`, spans, `view_instance`, `list_partitions`; assert
   the `process_id` semi-join blocks naming another audience's process directly; assert the daemon
@@ -451,7 +511,8 @@ asymmetric modes (e.g. RBAC reads, self-only mint) with no code change.
 ## Documentation
 
 - New page under `mkdocs/docs/` for the isolation model: the three-relation model, the `self` default,
-  the `MICROMEGAS_ISOLATION_POLICY` knob, and the confidentiality/integrity properties.
+  the `MICROMEGAS_ISOLATION_POLICY` knob, the `MICROMEGAS_PUBLIC_VIEW_SETS` allowlist (§5b, with its
+  non-PII caveat), and the confidentiality/integrity properties.
 - Update any auth/deployment docs to mention the mint endpoint, the setup script, and (Phase 4) the
   groups-claim / policy-store configuration.
 
