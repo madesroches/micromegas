@@ -36,9 +36,11 @@ Two structural moves, then encryption:
 1. **Split the lakehouse into two planes.**
    - **Metadata plane** — `processes`, `streams`, `blocks`, `log_stats` and derivatives. Cleartext,
      globally materialized, queried freely by DataFusion. This is the index. It carries **no bodies**:
-     block metadata is `(process_id, stream_id, insert_time, nb_objects, object_offset, payload_size)`
-     (`rust/ingestion/src/sql_telemetry_db.rs:73`, `blocks_view.rs:153-175`), and the payload is located
-     in object storage by `block_id`/`object_offset`, which point at *encrypted* payloads. `log_stats` is
+     the Postgres `blocks` table columns are `block_id, stream_id, process_id, begin_time, begin_ticks,
+     end_time, end_ticks, nb_objects, object_offset, payload_size` (`rust/ingestion/src/
+     sql_telemetry_db.rs:73-86`; the Arrow `blocks_view` schema additionally derives `insert_time`,
+     `blocks_view.rs:153-175`), and the payload is located in object storage by `block_id`/
+     `object_offset`, which point at *encrypted* payloads. `log_stats` is
      derived from `log_entries` but only ever emits `count(*)` grouped by `process_id`/`level`/`target`/
      `time_bin` (§1) — counts, not message bodies — so it belongs here, not in the body plane.
    - **Body plane** — `log_entries`, `measures` (the only two **body** view sets with a global instance;
@@ -60,9 +62,11 @@ not make it redundant, it narrows what it has to protect (§6).
 - The body view sets are exactly `log_entries` and `measures`: they are the only **body** view sets
   pushed into `global_views` with a real `get_update_group()` (`log_view.rs:221-227`,
   `metrics_view.rs:225-231`). They are not the only *entries* in `global_views` with one — the
-  metadata/stats views also return a real update group: `processes` (`Some(2000)`), `streams`
-  (`Some(2000)`), `blocks` (`Some(1000)`), and `log_stats` (`Some(3000)`, `log_stats_view.rs:69`,
-  `view_factory.rs:295-301,316`). What distinguishes the body pair is that they carry message/measure
+  metadata/stats views also return a real update group: `processes` (`Some(2000)`,
+  `processes_view.rs:82`), `streams` (`Some(2000)`, `streams_view.rs:68`), `blocks` (`Some(1000)`,
+  `blocks_view.rs:136-138`) — all three pushed into `global_views` at `view_factory.rs:295-301` — and
+  `log_stats` (`Some(3000)`, `log_stats_view.rs:69`), pushed in at `view_factory.rs:316`. What
+  distinguishes the body pair is that they carry message/measure
   content, not that they're uniquely materialized. Every span view set returns
   `get_update_group() -> None` and has no global instance (`thread_spans_view.rs:353`,
   `net_spans_view.rs:368`, `async_events_view.rs:215`, `otel/spans_view.rs:200`); `process_spans` is a
@@ -154,11 +158,12 @@ that doesn't exist today; that's a future optimization, not v1.
   `jit_update` implementation, keyed off `self.get_view_instance_id()`'s `InstanceKind`, not by changing
   the trait signature. This is the pay-per-use path that keeps the "thousands of self-mode audiences"
   case cheap (nothing pinned by default).
-- **The two tiers coexist safely on one instance:** the per-instance advisory lock
-  (`write_partition.rs:232-245` hashes the instance id) serializes scheduled and query-time writes, and
-  the JIT up-to-date check (`jit_partitions.rs:472-558`) makes a query-time `jit_update` on an
-  already-warm pinned instance a cheap no-op — so JIT doubles as a **catch-up safety net** if the
-  scheduler falls behind.
+- **The two tiers coexist safely on one instance:** the per-partition advisory lock, keyed on
+  `(view_set, instance_id, begin_insert_time, end_insert_time)` (`write_partition.rs:232-245`),
+  serializes competing writes to the *same partition* — scheduled and query-time writes to the same
+  audience instance and insert range can't race — and the JIT up-to-date check
+  (`jit_partitions.rs:472-558`) makes a query-time `jit_update` on an already-warm pinned instance a
+  cheap no-op — so JIT doubles as a **catch-up safety net** if the scheduler falls behind.
 
 **The structural change this forces (the part "no scheduler change" glossed over):** today
 `get_global_views()` serves *two* roles — the daemon's scheduled set
