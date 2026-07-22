@@ -65,11 +65,14 @@ impl RetirePartitionByFile {
         file_path: &str,
     ) -> Result<()> {
         // First, check if the partition exists and get its details
-        let partition_query = sqlx::query(
-            "SELECT file_path, file_size FROM lakehouse_partitions WHERE file_path = $1",
+        let partition_query = instrument_named!(
+            sqlx::query(
+                "SELECT file_path, file_size FROM lakehouse_partitions WHERE file_path = $1",
+            )
+            .bind(file_path)
+            .fetch_optional(&mut **transaction),
+            "sql_select_partition_by_file"
         )
-        .bind(file_path)
-        .fetch_optional(&mut **transaction)
         .await
         .with_context(|| format!("querying partition {file_path}"))?;
 
@@ -83,11 +86,14 @@ impl RetirePartitionByFile {
         add_file_for_cleanup(transaction, file_path, file_size).await?;
 
         // Remove from active partitions
-        let delete_result = sqlx::query("DELETE FROM lakehouse_partitions WHERE file_path = $1")
-            .bind(file_path)
-            .execute(&mut **transaction)
-            .await
-            .with_context(|| format!("deleting partition {file_path}"))?;
+        let delete_result = instrument_named!(
+            sqlx::query("DELETE FROM lakehouse_partitions WHERE file_path = $1")
+                .bind(file_path)
+                .execute(&mut **transaction),
+            "sql_delete_partition_by_file"
+        )
+        .await
+        .with_context(|| format!("deleting partition {file_path}"))?;
 
         if delete_result.rows_affected() == 0 {
             // This shouldn't happen since we checked existence above, but handle it gracefully

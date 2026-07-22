@@ -242,8 +242,9 @@ pub async fn find_process(
     pool: &sqlx::Pool<sqlx::Postgres>,
     process_id: &sqlx::types::Uuid,
 ) -> Result<ProcessMetadata> {
-    let row = sqlx::query(
-        "SELECT process_id,
+    let row = instrument_named!(
+        sqlx::query(
+            "SELECT process_id,
                 exe,
                 username,
                 realname,
@@ -257,9 +258,11 @@ pub async fn find_process(
                 properties as process_properties
          FROM processes
          WHERE process_id = $1;",
+        )
+        .bind(process_id)
+        .fetch_one(pool),
+        "sql_select_process"
     )
-    .bind(process_id)
-    .fetch_one(pool)
     .await
     .with_context(|| "select from processes")?;
     process_metadata_from_row(&row)

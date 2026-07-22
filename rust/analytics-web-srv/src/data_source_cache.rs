@@ -1,5 +1,6 @@
 use crate::app_db::DataSourceConfig;
 use anyhow::Result;
+use micromegas::tracing::prelude::*;
 use moka::future::Cache;
 use sqlx::PgPool;
 use std::sync::Arc;
@@ -39,11 +40,14 @@ impl DataSourceCache {
         let result = self
             .cache
             .try_get_with::<_, anyhow::Error>(name_owned.clone(), async {
-                let row = sqlx::query_scalar::<_, serde_json::Value>(
-                    "SELECT config FROM data_sources WHERE name = $1",
+                let row = instrument_named!(
+                    sqlx::query_scalar::<_, serde_json::Value>(
+                        "SELECT config FROM data_sources WHERE name = $1",
+                    )
+                    .bind(&name_owned)
+                    .fetch_optional(&pool),
+                    "sql_select_data_source_config"
                 )
-                .bind(&name_owned)
-                .fetch_optional(&pool)
                 .await
                 .map_err(|e| anyhow::anyhow!("database error: {e}"))?;
 

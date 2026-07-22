@@ -83,10 +83,13 @@ fn require_admin(user: &ValidatedUser) -> Result<(), DataSourceError> {
 pub async fn list_data_sources(
     Extension(pool): Extension<PgPool>,
 ) -> DataSourceResult<Json<Vec<DataSourceSummary>>> {
-    let rows = sqlx::query_as::<_, (String, bool)>(
-        "SELECT name, is_default FROM data_sources ORDER BY name",
+    let rows = instrument_named!(
+        sqlx::query_as::<_, (String, bool)>(
+            "SELECT name, is_default FROM data_sources ORDER BY name",
+        )
+        .fetch_all(&pool),
+        "sql_select_data_sources"
     )
-    .fetch_all(&pool)
     .await?;
 
     let summaries: Vec<DataSourceSummary> = rows
@@ -106,13 +109,16 @@ pub async fn get_data_source(
 ) -> DataSourceResult<Json<DataSource>> {
     require_admin(&user)?;
 
-    let ds = sqlx::query_as::<_, DataSource>(
-        "SELECT name, config, is_default, created_by, updated_by, created_at, updated_at
+    let ds = instrument_named!(
+        sqlx::query_as::<_, DataSource>(
+            "SELECT name, config, is_default, created_by, updated_by, created_at, updated_at
          FROM data_sources
          WHERE name = $1",
+        )
+        .bind(&name)
+        .fetch_optional(&pool),
+        "sql_select_data_source"
     )
-    .bind(&name)
-    .fetch_optional(&pool)
     .await?
     .ok_or_else(|| DataSourceError::NotFound(name))?;
 
@@ -140,28 +146,36 @@ pub async fn create_data_source(
     let mut tx = pool.begin().await?;
 
     // If this is the first data source, auto-set is_default
-    let count = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM data_sources")
-        .fetch_one(&mut *tx)
-        .await?;
+    let count = instrument_named!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM data_sources").fetch_one(&mut *tx),
+        "sql_select_data_source_count"
+    )
+    .await?;
     let is_default = if count == 0 { true } else { request.is_default };
 
     // If is_default, clear default on other rows
     if is_default {
-        sqlx::query("UPDATE data_sources SET is_default = FALSE WHERE is_default = TRUE")
-            .execute(&mut *tx)
-            .await?;
+        instrument_named!(
+            sqlx::query("UPDATE data_sources SET is_default = FALSE WHERE is_default = TRUE")
+                .execute(&mut *tx),
+            "sql_clear_default_data_source"
+        )
+        .await?;
     }
 
-    let ds = sqlx::query_as::<_, DataSource>(
-        "INSERT INTO data_sources (name, config, is_default, created_by, updated_by)
+    let ds = instrument_named!(
+        sqlx::query_as::<_, DataSource>(
+            "INSERT INTO data_sources (name, config, is_default, created_by, updated_by)
          VALUES ($1, $2, $3, $4, $4)
          RETURNING name, config, is_default, created_by, updated_by, created_at, updated_at",
+        )
+        .bind(name)
+        .bind(&request.config)
+        .bind(is_default)
+        .bind(user_id)
+        .fetch_one(&mut *tx),
+        "sql_insert_data_source"
     )
-    .bind(name)
-    .bind(&request.config)
-    .bind(is_default)
-    .bind(user_id)
-    .fetch_one(&mut *tx)
     .await?;
 
     tx.commit().await?;
@@ -191,12 +205,15 @@ pub async fn update_data_source(
     let mut tx = pool.begin().await?;
 
     // Fetch current row
-    let current = sqlx::query_as::<_, DataSource>(
-        "SELECT name, config, is_default, created_by, updated_by, created_at, updated_at
+    let current = instrument_named!(
+        sqlx::query_as::<_, DataSource>(
+            "SELECT name, config, is_default, created_by, updated_by, created_at, updated_at
          FROM data_sources WHERE name = $1 FOR UPDATE",
+        )
+        .bind(&name)
+        .fetch_optional(&mut *tx),
+        "sql_select_data_source_for_update"
     )
-    .bind(&name)
-    .fetch_optional(&mut *tx)
     .await?
     .ok_or_else(|| DataSourceError::NotFound(name.clone()))?;
 
@@ -215,22 +232,28 @@ pub async fn update_data_source(
 
     // If setting as default, clear default on other rows
     if new_is_default && !current.is_default {
-        sqlx::query("UPDATE data_sources SET is_default = FALSE WHERE is_default = TRUE")
-            .execute(&mut *tx)
-            .await?;
+        instrument_named!(
+            sqlx::query("UPDATE data_sources SET is_default = FALSE WHERE is_default = TRUE")
+                .execute(&mut *tx),
+            "sql_clear_default_data_source"
+        )
+        .await?;
     }
 
-    let ds = sqlx::query_as::<_, DataSource>(
-        "UPDATE data_sources
+    let ds = instrument_named!(
+        sqlx::query_as::<_, DataSource>(
+            "UPDATE data_sources
          SET config = $1, is_default = $2, updated_by = $3, updated_at = NOW()
          WHERE name = $4
          RETURNING name, config, is_default, created_by, updated_by, created_at, updated_at",
+        )
+        .bind(new_config)
+        .bind(new_is_default)
+        .bind(user_id)
+        .bind(&name)
+        .fetch_one(&mut *tx),
+        "sql_update_data_source"
     )
-    .bind(new_config)
-    .bind(new_is_default)
-    .bind(user_id)
-    .bind(&name)
-    .fetch_one(&mut *tx)
     .await?;
 
     tx.commit().await?;
@@ -253,12 +276,15 @@ pub async fn delete_data_source(
     let mut tx = pool.begin().await?;
 
     // Check + delete in a transaction to prevent TOCTOU race
-    let current = sqlx::query_as::<_, DataSource>(
-        "SELECT name, config, is_default, created_by, updated_by, created_at, updated_at
+    let current = instrument_named!(
+        sqlx::query_as::<_, DataSource>(
+            "SELECT name, config, is_default, created_by, updated_by, created_at, updated_at
          FROM data_sources WHERE name = $1 FOR UPDATE",
+        )
+        .bind(&name)
+        .fetch_optional(&mut *tx),
+        "sql_select_data_source_for_update"
     )
-    .bind(&name)
-    .fetch_optional(&mut *tx)
     .await?
     .ok_or_else(|| DataSourceError::NotFound(name.clone()))?;
 
@@ -269,10 +295,13 @@ pub async fn delete_data_source(
         )));
     }
 
-    sqlx::query("DELETE FROM data_sources WHERE name = $1")
-        .bind(&name)
-        .execute(&mut *tx)
-        .await?;
+    instrument_named!(
+        sqlx::query("DELETE FROM data_sources WHERE name = $1")
+            .bind(&name)
+            .execute(&mut *tx),
+        "sql_delete_data_source"
+    )
+    .await?;
 
     tx.commit().await?;
     cache.invalidate(&name).await;

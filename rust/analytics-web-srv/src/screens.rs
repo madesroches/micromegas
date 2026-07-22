@@ -119,7 +119,11 @@ const SCREEN_COLUMNS: &str =
 #[span_fn]
 pub async fn list_screens(Extension(pool): Extension<PgPool>) -> ScreenResult<Json<Vec<Screen>>> {
     let query = format!("SELECT {SCREEN_COLUMNS} FROM screens ORDER BY name");
-    let screens = sqlx::query_as::<_, Screen>(&query).fetch_all(&pool).await?;
+    let screens = instrument_named!(
+        sqlx::query_as::<_, Screen>(&query).fetch_all(&pool),
+        "sql_select_screens"
+    )
+    .await?;
 
     Ok(Json(screens))
 }
@@ -131,11 +135,14 @@ pub async fn get_screen(
     Path(name): Path<String>,
 ) -> ScreenResult<Json<Screen>> {
     let query = format!("SELECT {SCREEN_COLUMNS} FROM screens WHERE name = $1");
-    let screen = sqlx::query_as::<_, Screen>(&query)
-        .bind(&name)
-        .fetch_optional(&pool)
-        .await?
-        .ok_or_else(|| ScreenError::NotFound(name))?;
+    let screen = instrument_named!(
+        sqlx::query_as::<_, Screen>(&query)
+            .bind(&name)
+            .fetch_optional(&pool),
+        "sql_select_screen"
+    )
+    .await?
+    .ok_or_else(|| ScreenError::NotFound(name))?;
 
     Ok(Json(screen))
 }
@@ -160,11 +167,13 @@ pub async fn create_screen(
     })?;
 
     // Check for duplicate name
-    let exists =
+    let exists = instrument_named!(
         sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM screens WHERE name = $1)")
             .bind(&name)
-            .fetch_one(&pool)
-            .await?;
+            .fetch_one(&pool),
+        "sql_select_screen_exists"
+    )
+    .await?;
 
     if exists {
         return Err(ScreenError::BadRequest(ErrorResponse::new(
@@ -182,14 +191,17 @@ pub async fn create_screen(
          VALUES ($1, $2, $3, $4, $4, $5)
          RETURNING {SCREEN_COLUMNS}"
     );
-    let screen = sqlx::query_as::<_, Screen>(&query)
-        .bind(&name)
-        .bind(&request.screen_type)
-        .bind(&request.config)
-        .bind(user_id)
-        .bind(&request.managed_by)
-        .fetch_one(&pool)
-        .await?;
+    let screen = instrument_named!(
+        sqlx::query_as::<_, Screen>(&query)
+            .bind(&name)
+            .bind(&request.screen_type)
+            .bind(&request.config)
+            .bind(user_id)
+            .bind(&request.managed_by)
+            .fetch_one(&pool),
+        "sql_insert_screen"
+    )
+    .await?;
 
     info!("Created screen: {} by {}", name, user_id);
     Ok((StatusCode::CREATED, Json(screen)))
@@ -212,14 +224,17 @@ pub async fn update_screen(
          WHERE name = $3
          RETURNING {SCREEN_COLUMNS}"
     );
-    let screen = sqlx::query_as::<_, Screen>(&query)
-        .bind(&request.config)
-        .bind(user_id)
-        .bind(&name)
-        .bind(&request.managed_by)
-        .fetch_optional(&pool)
-        .await?
-        .ok_or_else(|| ScreenError::NotFound(name.clone()))?;
+    let screen = instrument_named!(
+        sqlx::query_as::<_, Screen>(&query)
+            .bind(&request.config)
+            .bind(user_id)
+            .bind(&name)
+            .bind(&request.managed_by)
+            .fetch_optional(&pool),
+        "sql_update_screen"
+    )
+    .await?
+    .ok_or_else(|| ScreenError::NotFound(name.clone()))?;
 
     info!("Updated screen: {} by {}", name, user_id);
     Ok(Json(screen))
@@ -231,10 +246,13 @@ pub async fn delete_screen(
     Extension(pool): Extension<PgPool>,
     Path(name): Path<String>,
 ) -> ScreenResult<StatusCode> {
-    let result = sqlx::query("DELETE FROM screens WHERE name = $1")
-        .bind(&name)
-        .execute(&pool)
-        .await?;
+    let result = instrument_named!(
+        sqlx::query("DELETE FROM screens WHERE name = $1")
+            .bind(&name)
+            .execute(&pool),
+        "sql_delete_screen"
+    )
+    .await?;
 
     if result.rows_affected() == 0 {
         return Err(ScreenError::NotFound(name));

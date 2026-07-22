@@ -103,18 +103,14 @@ pub async fn generate_stream_jit_partitions_segment(
     config: &JitPartitionConfig,
     lakehouse: Arc<LakehouseContext>,
     blocks_view: &BlocksView,
+    partitions: &PartitionCache,
     insert_time_range: &TimeRange,
     stream: Arc<StreamMetadata>,
     process: Arc<ProcessMetadata>,
 ) -> Result<Vec<SourceDataBlocksInMemory>> {
-    let cache = PartitionCache::fetch_overlapping_insert_range_for_view(
-        &lakehouse.lake().db_pool,
-        blocks_view.get_view_set_name(),
-        blocks_view.get_view_instance_id(),
-        *insert_time_range,
-    )
-    .await?;
-    let partitions = cache.partitions;
+    let partitions = partitions
+        .filter_insert_range(*insert_time_range)
+        .partitions;
 
     let stream_id = &stream.stream_id;
     let begin_range_iso = insert_time_range.begin.to_rfc3339();
@@ -221,6 +217,17 @@ pub async fn generate_stream_jit_partitions(
             .duration_trunc(config.max_insert_time_slice)?
             + config.max_insert_time_slice,
     );
+    let segment_source_partitions = instrument_named!(
+        PartitionCache::fetch_overlapping_insert_range_for_view(
+            &lakehouse.lake().db_pool,
+            blocks_view.get_view_set_name(),
+            blocks_view.get_view_instance_id(),
+            insert_time_range,
+        ),
+        "fetch_overlapping_insert_range_for_view"
+    )
+    .await?;
+
     let mut begin_segment = insert_time_range.begin;
     let mut end_segment = begin_segment + config.max_insert_time_slice;
     let mut partitions = vec![];
@@ -230,6 +237,7 @@ pub async fn generate_stream_jit_partitions(
             config,
             lakehouse.clone(),
             blocks_view,
+            &segment_source_partitions,
             &insert_time_range,
             stream.clone(),
             process.clone(),
@@ -243,22 +251,19 @@ pub async fn generate_stream_jit_partitions(
 }
 
 /// Generates a segment of JIT partitions filtered by process.
+#[span_fn]
 pub async fn generate_process_jit_partitions_segment(
     config: &JitPartitionConfig,
     lakehouse: Arc<LakehouseContext>,
     blocks_view: &BlocksView,
+    partitions: &PartitionCache,
     insert_time_range: &TimeRange,
     process: Arc<ProcessMetadata>,
     stream_tag: &str,
 ) -> Result<Vec<SourceDataBlocksInMemory>> {
-    let cache = PartitionCache::fetch_overlapping_insert_range_for_view(
-        &lakehouse.lake().db_pool,
-        blocks_view.get_view_set_name(),
-        blocks_view.get_view_instance_id(),
-        *insert_time_range,
-    )
-    .await?;
-    let partitions = cache.partitions;
+    let partitions = partitions
+        .filter_insert_range(*insert_time_range)
+        .partitions;
 
     let process_id = &process.process_id;
     let begin_range_iso = insert_time_range.begin.to_rfc3339();
@@ -275,17 +280,19 @@ pub async fn generate_process_jit_partitions_segment(
     );
 
     let reader_factory = lakehouse.reader_factory().clone();
-    let rbs = query_partitions(
-        lakehouse.runtime().clone(),
-        reader_factory,
-        lakehouse.lake().blob_storage.inner(),
-        blocks_view.get_file_schema(),
-        Arc::new(partitions),
-        &sql,
+    let df = instrument_named!(
+        query_partitions(
+            lakehouse.runtime().clone(),
+            reader_factory,
+            lakehouse.lake().blob_storage.inner(),
+            blocks_view.get_file_schema(),
+            Arc::new(partitions),
+            &sql,
+        ),
+        "query_partitions"
     )
-    .await?
-    .collect()
     .await?;
+    let rbs = instrument_named!(df.collect(), "collect_partition_blocks").await?;
 
     let mut partitions = vec![];
     let mut partition_blocks = vec![];
@@ -381,6 +388,7 @@ pub async fn generate_process_jit_partitions_segment(
 /// generate_process_jit_partitions lists the partitions that are needed to cover a time span for a specific process
 /// these partitions may not exist or they could be out of date
 /// Generates JIT partitions for a given time range filtered by process.
+#[span_fn]
 pub async fn generate_process_jit_partitions(
     config: &JitPartitionConfig,
     lakehouse: Arc<LakehouseContext>,
@@ -391,14 +399,18 @@ pub async fn generate_process_jit_partitions(
 ) -> Result<Vec<SourceDataBlocksInMemory>> {
     // Get insert time range for all blocks in this process
     let part_provider = LivePartitionProvider::new(lakehouse.lake().db_pool.clone());
-    let partitions = part_provider
-        .fetch(
-            &blocks_view.get_view_set_name(),
-            &blocks_view.get_view_instance_id(),
+    let view_set_name = blocks_view.get_view_set_name();
+    let view_instance_id = blocks_view.get_view_instance_id();
+    let partitions = instrument_named!(
+        part_provider.fetch(
+            &view_set_name,
+            &view_instance_id,
             Some(*query_time_range),
             blocks_view.get_file_schema_hash(),
-        )
-        .await?;
+        ),
+        "live_partition_provider_fetch"
+    )
+    .await?;
 
     let process_id = &process.process_id;
     let begin_range_iso = query_time_range.begin.to_rfc3339();
@@ -413,17 +425,19 @@ pub async fn generate_process_jit_partitions(
     );
 
     let reader_factory = lakehouse.reader_factory().clone();
-    let rbs = query_partitions(
-        lakehouse.runtime().clone(),
-        reader_factory,
-        lakehouse.lake().blob_storage.inner(),
-        blocks_view.get_file_schema(),
-        Arc::new(partitions),
-        &sql,
+    let df = instrument_named!(
+        query_partitions(
+            lakehouse.runtime().clone(),
+            reader_factory,
+            lakehouse.lake().blob_storage.inner(),
+            blocks_view.get_file_schema(),
+            Arc::new(partitions),
+            &sql,
+        ),
+        "query_partitions"
     )
-    .await?
-    .collect()
     .await?;
+    let rbs = instrument_named!(df.collect(), "collect_insert_time_range").await?;
 
     if rbs.is_empty() || rbs[0].num_rows() == 0 {
         return Ok(vec![]);
@@ -444,6 +458,17 @@ pub async fn generate_process_jit_partitions(
             + config.max_insert_time_slice,
     );
 
+    let segment_source_partitions = instrument_named!(
+        PartitionCache::fetch_overlapping_insert_range_for_view(
+            &lakehouse.lake().db_pool,
+            blocks_view.get_view_set_name(),
+            blocks_view.get_view_instance_id(),
+            insert_time_range,
+        ),
+        "fetch_overlapping_insert_range_for_view"
+    )
+    .await?;
+
     let mut begin_segment = insert_time_range.begin;
     let mut end_segment = begin_segment + config.max_insert_time_slice;
     let mut partitions = vec![];
@@ -454,6 +479,7 @@ pub async fn generate_process_jit_partitions(
             config,
             lakehouse.clone(),
             blocks_view,
+            &segment_source_partitions,
             &insert_time_range,
             process.clone(),
             stream_tag,
@@ -491,37 +517,40 @@ pub async fn is_jit_partition_up_to_date(
     //
     // ADDITIONAL FIX: For identical timestamps (min_insert_time == max_insert_time),
     // we need exact equality matching to handle single-timestamp partitions correctly.
-    let rows = if min_insert_time == max_insert_time {
-        // For identical timestamps, look for exact matches
-        sqlx::query(
-            "SELECT file_schema_hash, source_data_hash
+    let rows = instrument_named!(
+        if min_insert_time == max_insert_time {
+            // For identical timestamps, look for exact matches
+            sqlx::query(
+                "SELECT file_schema_hash, source_data_hash
              FROM lakehouse_partitions
              WHERE view_set_name = $1
              AND view_instance_id = $2
              AND begin_insert_time = $3
              AND end_insert_time = $3
              ;",
-        )
-        .bind(&*view_meta.view_set_name)
-        .bind(&*view_meta.view_instance_id)
-        .bind(min_insert_time)
-    } else {
-        // For time ranges, use inclusive inequalities
-        sqlx::query(
-            "SELECT file_schema_hash, source_data_hash
+            )
+            .bind(&*view_meta.view_set_name)
+            .bind(&*view_meta.view_instance_id)
+            .bind(min_insert_time)
+        } else {
+            // For time ranges, use inclusive inequalities
+            sqlx::query(
+                "SELECT file_schema_hash, source_data_hash
              FROM lakehouse_partitions
              WHERE view_set_name = $1
              AND view_instance_id = $2
              AND begin_insert_time <= $3
              AND end_insert_time >= $4
              ;",
-        )
-        .bind(&*view_meta.view_set_name)
-        .bind(&*view_meta.view_instance_id)
-        .bind(max_insert_time)
-        .bind(min_insert_time)
-    }
-    .fetch_all(pool)
+            )
+            .bind(&*view_meta.view_set_name)
+            .bind(&*view_meta.view_instance_id)
+            .bind(max_insert_time)
+            .bind(min_insert_time)
+        }
+        .fetch_all(pool),
+        "sql_select_matching_partitions"
+    )
     .await
     .with_context(|| "fetching matching partitions")?;
     if rows.len() != 1 {

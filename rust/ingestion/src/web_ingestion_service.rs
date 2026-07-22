@@ -84,7 +84,10 @@ impl WebIngestionService {
             }
         }
 
-        let probe_db = sqlx::query("SELECT 1").execute(&self.lake.db_pool);
+        let probe_db = instrument_named!(
+            sqlx::query("SELECT 1").execute(&self.lake.db_pool),
+            "sql_readiness_probe"
+        );
         let probe_blob = self.lake.blob_storage.probe();
 
         let result = tokio::time::timeout(std::time::Duration::from_secs(2), async {
@@ -175,21 +178,24 @@ impl WebIngestionService {
         debug!("recording block_id={block_id} stream_id={stream_id} process_id={process_id}");
         let begin_insert = now();
         let insert_time = sqlx::types::chrono::Utc::now();
-        let result = sqlx::query(
-            "INSERT INTO blocks VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT (block_id) DO NOTHING;",
+        let result = instrument_named!(
+            sqlx::query(
+                "INSERT INTO blocks VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT (block_id) DO NOTHING;",
+            )
+            .bind(block_id)
+            .bind(stream_id)
+            .bind(process_id)
+            .bind(begin_time)
+            .bind(block.begin_ticks)
+            .bind(end_time)
+            .bind(block.end_ticks)
+            .bind(block.nb_objects)
+            .bind(block.object_offset)
+            .bind(payload_size as i64)
+            .bind(insert_time)
+            .execute(&self.lake.db_pool),
+            "sql_insert_block"
         )
-        .bind(block_id)
-        .bind(stream_id)
-        .bind(process_id)
-        .bind(begin_time)
-        .bind(block.begin_ticks)
-        .bind(end_time)
-        .bind(block.end_ticks)
-        .bind(block.nb_objects)
-        .bind(block.object_offset)
-        .bind(payload_size as i64)
-        .bind(insert_time)
-        .execute(&self.lake.db_pool)
         .await
         .map_err(|e| IngestionServiceError::DatabaseError(format!("inserting into blocks: {e}")))?;
         imetric!("insert_duration", "ticks", (now() - begin_insert) as u64);
@@ -229,20 +235,23 @@ impl WebIngestionService {
         let objects_metadata = encode_cbor(&stream_info.objects_metadata).map_err(|e| {
             IngestionServiceError::ParseError(format!("encoding objects_metadata: {e}"))
         })?;
-        let result = sqlx::query(
-            "INSERT INTO streams (stream_id, process_id, dependencies_metadata, objects_metadata, tags, properties, insert_time, format)
+        let result = instrument_named!(
+            sqlx::query(
+                "INSERT INTO streams (stream_id, process_id, dependencies_metadata, objects_metadata, tags, properties, insert_time, format)
              VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
              ON CONFLICT (stream_id) DO NOTHING;",
+            )
+            .bind(stream_info.stream_id)
+            .bind(stream_info.process_id)
+            .bind(dependencies_metadata)
+            .bind(objects_metadata)
+            .bind(&stream_info.tags)
+            .bind(make_properties(&stream_info.properties))
+            .bind(sqlx::types::chrono::Utc::now())
+            .bind(FORMAT_TRANSIT)
+            .execute(&self.lake.db_pool),
+            "sql_insert_stream"
         )
-        .bind(stream_info.stream_id)
-        .bind(stream_info.process_id)
-        .bind(dependencies_metadata)
-        .bind(objects_metadata)
-        .bind(&stream_info.tags)
-        .bind(make_properties(&stream_info.properties))
-        .bind(sqlx::types::chrono::Utc::now())
-        .bind(FORMAT_TRANSIT)
-        .execute(&self.lake.db_pool)
         .await
         .map_err(|e| {
             IngestionServiceError::DatabaseError(format!("inserting into streams: {e}"))
@@ -277,20 +286,23 @@ impl WebIngestionService {
         tags: Vec<String>,
         format: &str,
     ) -> Result<(), IngestionServiceError> {
-        let result = sqlx::query(
-            "INSERT INTO streams (stream_id, process_id, dependencies_metadata, objects_metadata, tags, properties, insert_time, format)
+        let result = instrument_named!(
+            sqlx::query(
+                "INSERT INTO streams (stream_id, process_id, dependencies_metadata, objects_metadata, tags, properties, insert_time, format)
              VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
              ON CONFLICT (stream_id) DO NOTHING;",
+            )
+            .bind(stream_id)
+            .bind(process_id)
+            .bind(empty_transit_metadata_cbor())
+            .bind(empty_transit_metadata_cbor())
+            .bind(tags)
+            .bind(Vec::<Property>::new())
+            .bind(sqlx::types::chrono::Utc::now())
+            .bind(format)
+            .execute(&self.lake.db_pool),
+            "sql_insert_stream"
         )
-        .bind(stream_id)
-        .bind(process_id)
-        .bind(empty_transit_metadata_cbor())
-        .bind(empty_transit_metadata_cbor())
-        .bind(tags)
-        .bind(Vec::<Property>::new())
-        .bind(sqlx::types::chrono::Utc::now())
-        .bind(format)
-        .execute(&self.lake.db_pool)
         .await
         .map_err(|e| {
             IngestionServiceError::DatabaseError(format!("inserting otel stream: {e}"))
@@ -308,23 +320,26 @@ impl WebIngestionService {
             .map_err(|e| IngestionServiceError::ParseError(format!("parsing ProcessInfo: {e}")))?;
 
         let insert_time = sqlx::types::chrono::Utc::now();
-        let result = sqlx::query(
-            "INSERT INTO processes VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) ON CONFLICT (process_id) DO NOTHING;",
+        let result = instrument_named!(
+            sqlx::query(
+                "INSERT INTO processes VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) ON CONFLICT (process_id) DO NOTHING;",
+            )
+            .bind(process_info.process_id)
+            .bind(process_info.exe)
+            .bind(process_info.username)
+            .bind(process_info.realname)
+            .bind(process_info.computer)
+            .bind(process_info.distro)
+            .bind(process_info.cpu_brand)
+            .bind(process_info.tsc_frequency)
+            .bind(process_info.start_time)
+            .bind(process_info.start_ticks)
+            .bind(insert_time)
+            .bind(process_info.parent_process_id)
+            .bind(make_properties(&process_info.properties))
+            .execute(&self.lake.db_pool),
+            "sql_insert_process"
         )
-        .bind(process_info.process_id)
-        .bind(process_info.exe)
-        .bind(process_info.username)
-        .bind(process_info.realname)
-        .bind(process_info.computer)
-        .bind(process_info.distro)
-        .bind(process_info.cpu_brand)
-        .bind(process_info.tsc_frequency)
-        .bind(process_info.start_time)
-        .bind(process_info.start_ticks)
-        .bind(insert_time)
-        .bind(process_info.parent_process_id)
-        .bind(make_properties(&process_info.properties))
-        .execute(&self.lake.db_pool)
         .await
         .map_err(|e| {
             IngestionServiceError::DatabaseError(format!("inserting into processes: {e}"))
@@ -360,26 +375,29 @@ impl WebIngestionService {
         properties: Vec<Property>,
     ) -> Result<(), IngestionServiceError> {
         let insert_time = sqlx::types::chrono::Utc::now();
-        let result = sqlx::query(
-            "INSERT INTO processes
+        let result = instrument_named!(
+            sqlx::query(
+                "INSERT INTO processes
              (process_id, exe, username, realname, computer, distro, cpu_brand,
               tsc_frequency, start_time, start_ticks, insert_time, parent_process_id, properties)
              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,NULL,$12)
              ON CONFLICT (process_id) DO NOTHING;",
+            )
+            .bind(process_id)
+            .bind(exe)
+            .bind(&username)
+            .bind(&username)
+            .bind(computer)
+            .bind(distro)
+            .bind(cpu_brand)
+            .bind(tsc_frequency)
+            .bind(start_time)
+            .bind(start_ticks)
+            .bind(insert_time)
+            .bind(properties)
+            .execute(&self.lake.db_pool),
+            "sql_insert_process"
         )
-        .bind(process_id)
-        .bind(exe)
-        .bind(&username)
-        .bind(&username)
-        .bind(computer)
-        .bind(distro)
-        .bind(cpu_brand)
-        .bind(tsc_frequency)
-        .bind(start_time)
-        .bind(start_ticks)
-        .bind(insert_time)
-        .bind(properties)
-        .execute(&self.lake.db_pool)
         .await
         .map_err(|e| {
             IngestionServiceError::DatabaseError(format!("inserting otel process: {e}"))

@@ -36,13 +36,16 @@ pub async fn add_file_for_cleanup(
         + TimeDelta::try_hours(1)
             .with_context(|| "calculating expiration time for temporary file")?;
 
-    sqlx::query("INSERT INTO temporary_files VALUES ($1, $2, $3)")
-        .bind(file_path)
-        .bind(file_size)
-        .bind(expiration)
-        .execute(&mut **transaction)
-        .await
-        .with_context(|| format!("adding file {file_path} to temporary files for cleanup"))?;
+    instrument_named!(
+        sqlx::query("INSERT INTO temporary_files VALUES ($1, $2, $3)")
+            .bind(file_path)
+            .bind(file_size)
+            .bind(expiration)
+            .execute(&mut **transaction),
+        "sql_insert_temporary_file"
+    )
+    .await
+    .with_context(|| format!("adding file {file_path} to temporary files for cleanup"))?;
 
     Ok(())
 }
@@ -69,8 +72,9 @@ async fn retire_expired_partitions_batch(
 ) -> Result<bool> {
     let batch_size: i32 = 1000;
     let mut transaction = lake.db_pool.begin().await?;
-    let rows = sqlx::query(
-        "DELETE FROM lakehouse_partitions
+    let rows = instrument_named!(
+        sqlx::query(
+            "DELETE FROM lakehouse_partitions
          WHERE (view_set_name, view_instance_id, begin_insert_time, end_insert_time) IN (
              SELECT view_set_name, view_instance_id, begin_insert_time, end_insert_time
              FROM lakehouse_partitions
@@ -78,10 +82,12 @@ async fn retire_expired_partitions_batch(
              LIMIT $2
          )
          RETURNING file_path, file_size;",
+        )
+        .bind(expiration)
+        .bind(batch_size)
+        .fetch_all(&mut *transaction),
+        "sql_delete_expired_partitions_batch"
     )
-    .bind(expiration)
-    .bind(batch_size)
-    .fetch_all(&mut *transaction)
     .await
     .with_context(|| "deleting expired partitions batch")?;
 
@@ -128,37 +134,43 @@ pub async fn retire_partitions(
     //todo: use DELETE+RETURNING
     let old_partitions = if begin_insert_time == end_insert_time {
         // For identical timestamps, look for exact matches to handle single-block partitions
-        sqlx::query(
-            "SELECT file_path, file_size
+        instrument_named!(
+            sqlx::query(
+                "SELECT file_path, file_size
              FROM lakehouse_partitions
              WHERE view_set_name = $1
              AND view_instance_id = $2
              AND begin_insert_time = $3
              AND end_insert_time = $3
              ;",
+            )
+            .bind(view_set_name)
+            .bind(view_instance_id)
+            .bind(begin_insert_time)
+            .fetch_all(&mut **transaction),
+            "sql_select_old_partitions"
         )
-        .bind(view_set_name)
-        .bind(view_instance_id)
-        .bind(begin_insert_time)
-        .fetch_all(&mut **transaction)
         .await
         .with_context(|| "listing old partitions (exact match)")?
     } else {
         // For time ranges, use inclusive inequalities
-        sqlx::query(
-            "SELECT file_path, file_size
+        instrument_named!(
+            sqlx::query(
+                "SELECT file_path, file_size
              FROM lakehouse_partitions
              WHERE view_set_name = $1
              AND view_instance_id = $2
              AND begin_insert_time >= $3
              AND end_insert_time <= $4
              ;",
+            )
+            .bind(view_set_name)
+            .bind(view_instance_id)
+            .bind(begin_insert_time)
+            .bind(end_insert_time)
+            .fetch_all(&mut **transaction),
+            "sql_select_old_partitions"
         )
-        .bind(view_set_name)
-        .bind(view_instance_id)
-        .bind(begin_insert_time)
-        .bind(end_insert_time)
-        .fetch_all(&mut **transaction)
         .await
         .with_context(|| "listing old partitions (range)")?
     };
@@ -194,35 +206,41 @@ pub async fn retire_partitions(
 
     if begin_insert_time == end_insert_time {
         // For identical timestamps, delete exact matches to handle single-block partitions
-        sqlx::query(
-            "DELETE from lakehouse_partitions
+        instrument_named!(
+            sqlx::query(
+                "DELETE from lakehouse_partitions
              WHERE view_set_name = $1
              AND view_instance_id = $2
              AND begin_insert_time = $3
              AND end_insert_time = $3
              ;",
+            )
+            .bind(view_set_name)
+            .bind(view_instance_id)
+            .bind(begin_insert_time)
+            .execute(&mut **transaction),
+            "sql_delete_old_partitions"
         )
-        .bind(view_set_name)
-        .bind(view_instance_id)
-        .bind(begin_insert_time)
-        .execute(&mut **transaction)
         .await
         .with_context(|| "deleting out of date partitions (exact match)")?
     } else {
         // For time ranges, use inclusive inequalities
-        sqlx::query(
-            "DELETE from lakehouse_partitions
+        instrument_named!(
+            sqlx::query(
+                "DELETE from lakehouse_partitions
              WHERE view_set_name = $1
              AND view_instance_id = $2
              AND begin_insert_time >= $3
              AND end_insert_time <= $4
              ;",
+            )
+            .bind(view_set_name)
+            .bind(view_instance_id)
+            .bind(begin_insert_time)
+            .bind(end_insert_time)
+            .execute(&mut **transaction),
+            "sql_delete_old_partitions"
         )
-        .bind(view_set_name)
-        .bind(view_instance_id)
-        .bind(begin_insert_time)
-        .bind(end_insert_time)
-        .execute(&mut **transaction)
         .await
         .with_context(|| "deleting out of date partitions (range)")?
     };
@@ -270,11 +288,14 @@ async fn insert_partition(
 
     // Acquire advisory lock - this will block until we can proceed
     // pg_advisory_xact_lock automatically releases when transaction ends
-    sqlx::query("SELECT pg_advisory_xact_lock($1);")
-        .bind(lock_key)
-        .execute(&mut *transaction)
-        .await
-        .with_context(|| "acquiring advisory lock")?;
+    instrument_named!(
+        sqlx::query("SELECT pg_advisory_xact_lock($1);")
+            .bind(lock_key)
+            .execute(&mut *transaction),
+        "sql_advisory_lock"
+    )
+    .await
+    .with_context(|| "acquiring advisory lock")?;
 
     // Decode source_data_hash back to the row count (it's stored as i64 little-endian bytes)
     let source_row_count = partition_source_data::hash_to_object_count(&partition.source_data_hash)
@@ -316,22 +337,25 @@ async fn insert_partition(
     );
 
     // Insert the new partition with format version 2 (Arrow 57.0)
-    let insert_result = sqlx::query(
-        "INSERT INTO lakehouse_partitions VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 2);",
+    let insert_result = instrument_named!(
+        sqlx::query(
+            "INSERT INTO lakehouse_partitions VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 2);",
+        )
+        .bind(&*partition.view_metadata.view_set_name)
+        .bind(&*partition.view_metadata.view_instance_id)
+        .bind(partition.begin_insert_time())
+        .bind(partition.end_insert_time())
+        .bind(partition.min_event_time())
+        .bind(partition.max_event_time())
+        .bind(partition.updated)
+        .bind(&partition.file_path)
+        .bind(partition.file_size)
+        .bind(&partition.view_metadata.file_schema_hash)
+        .bind(&partition.source_data_hash)
+        .bind(partition.num_rows)
+        .execute(&mut *transaction),
+        "sql_insert_partition"
     )
-    .bind(&*partition.view_metadata.view_set_name)
-    .bind(&*partition.view_metadata.view_instance_id)
-    .bind(partition.begin_insert_time())
-    .bind(partition.end_insert_time())
-    .bind(partition.min_event_time())
-    .bind(partition.max_event_time())
-    .bind(partition.updated)
-    .bind(&partition.file_path)
-    .bind(partition.file_size)
-    .bind(&partition.view_metadata.file_schema_hash)
-    .bind(&partition.source_data_hash)
-    .bind(partition.num_rows)
-    .execute(&mut *transaction)
     .await;
 
     match insert_result {

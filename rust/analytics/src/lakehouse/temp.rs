@@ -12,18 +12,21 @@ async fn delete_expired_temporary_files_batch(
 ) -> Result<bool> {
     let batch_size: i32 = 1000;
     let mut tr = lake.db_pool.begin().await?;
-    let rows = sqlx::query(
-        "DELETE FROM temporary_files
+    let rows = instrument_named!(
+        sqlx::query(
+            "DELETE FROM temporary_files
          WHERE file_path IN (
              SELECT file_path FROM temporary_files
              WHERE expiration < $1
              LIMIT $2
          )
          RETURNING file_path;",
+        )
+        .bind(now)
+        .bind(batch_size)
+        .fetch_all(&mut *tr),
+        "sql_delete_expired_temporary_files_batch"
     )
-    .bind(now)
-    .bind(batch_size)
-    .fetch_all(&mut *tr)
     .await
     .with_context(|| "deleting expired temporary files batch")?;
 

@@ -1,4 +1,5 @@
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
+use micromegas_tracing::prelude::*;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -30,7 +31,10 @@ impl ReadinessProbe {
             }
         }
 
-        let probe_db = sqlx::query("SELECT 1").execute(&self.lake.db_pool);
+        let probe_db = instrument_named!(
+            sqlx::query("SELECT 1").execute(&self.lake.db_pool),
+            "sql_readiness_probe"
+        );
         let probe_blob = self.lake.blob_storage.probe();
 
         let result = tokio::time::timeout(Duration::from_secs(2), async {

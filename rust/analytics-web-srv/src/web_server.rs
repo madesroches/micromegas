@@ -189,7 +189,10 @@ impl ReadinessState {
 
         let result = tokio::time::timeout(
             std::time::Duration::from_secs(2),
-            sqlx::query("SELECT 1").execute(&self.pool),
+            instrument_named!(
+                sqlx::query("SELECT 1").execute(&self.pool),
+                "sql_readiness_probe"
+            ),
         )
         .await;
 
