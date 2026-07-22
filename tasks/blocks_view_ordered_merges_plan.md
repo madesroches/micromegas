@@ -11,7 +11,7 @@ one `Vec<PgRow>` and one `RecordBatch` before writing anything — for a busy da
 unbounded amount of memory. Regeneration must never buffer more than one bounded chunk of blocks
 at a time.
 
-Three coupled changes:
+Four coupled changes:
 1. Make blocks-view merges order-preserving (declared scan ordering + explicit `ORDER BY`), so
    merged partitions stay internally sorted by `(insert_time, block_id)` going forward.
 2. Make the Postgres-source partition write path (`MetadataPartitionSpec::write`, used by
@@ -20,6 +20,12 @@ Three coupled changes:
 3. Add an admin table function to force-regenerate existing (already-merged, potentially
    unsorted) partitions online from the Postgres source tables, reusing the now-streaming write
    path — no downtime, no schema change.
+4. Record each partition's actual sort guarantee as a first-class, SQL-queryable
+   `lakehouse_partitions.sort_order` column (schema v6→v7), since Parquet footers — and any sort
+   order recoverable from them — are no longer stored in Postgres (`partition_metadata` was
+   dropped in v5→v6, `migration.rs:418-426`). This makes "is this partition safely ordered"
+   queryable during the §3 regeneration rollout and cheaply available at planning time via the
+   partition cache, without a footer fetch.
 
 Declaring `(insert_time, block_id)` as a *trusted* scan ordering for blocks-view consumers (the
 JIT partition generators, per `tasks/jit_single_query_plan.md`) is explicitly **out of scope**
@@ -433,6 +439,98 @@ Usage for this issue: `SELECT * FROM regenerate_partitions('blocks', <day_begin>
 exactly match that partition's existing boundaries (see the alignment invariant above); a range or
 delta that doesn't will now fail loudly instead of creating a duplicate partition.
 
+### 4. Recording per-partition sort guarantees in Postgres metadata
+
+Pre-fix merged blocks partitions are not guaranteed sorted; new writes (part 2) and order-merged
+partitions (part 1) are. Parquet footers are no longer stored in Postgres to recover this from —
+`upgrade_v5_to_v6` (`migration.rs:418-426`) dropped the `partition_metadata` table entirely — so
+the guarantee needs to be a first-class column on `lakehouse_partitions`, queryable in SQL for the
+§3 rollout and readable from the partition cache at planning time with no footer fetch.
+
+**Schema (v6→v7)**: bump `LATEST_LAKEHOUSE_SCHEMA_VERSION` from 6 to 7 (`migration.rs:8`) and add
+an `upgrade_v6_to_v7` function, wired into `execute_lakehouse_migration`'s chain the same way
+`upgrade_v5_to_v6` is (`migration.rs:90-96`), that runs
+`ALTER TABLE lakehouse_partitions ADD COLUMN sort_order TEXT[];` (nullable, no backfill needed)
+and bumps `lakehouse_migration.version` to 7. `NULL` — the value every existing row reads back as
+— means "no ordering guarantee", which is automatically correct for every partition written
+before this change. A non-null value lists the guaranteed sort columns in order, ascending
+implied, e.g. `{insert_time, block_id}`.
+
+**Value semantics** — the recorded guarantee is what the written file actually satisfies, not what
+was declared to DataFusion for sort elision:
+- Blocks partitions written fresh via `MetadataPartitionSpec::write` (part 2): `data_sql` ends
+  `ORDER BY blocks.insert_time, blocks.block_id` (`blocks_view.rs:46`), so record
+  `['insert_time', 'block_id']`.
+- Blocks partitions written by the part-1 ordered merge: also `['insert_time', 'block_id']` —
+  even though the merge only *declares* `[insert_time]` to DataFusion for validation (Design §1),
+  the elision argument in §1 establishes the output is fully `(insert_time, block_id)`-sorted.
+- Forced regeneration (part 3) goes through the same fresh-write path via `partition_spec.write()`,
+  so it records `['insert_time', 'block_id']` automatically — no extra code needed at the
+  regeneration call site.
+- Every other view, and any unordered merge (every `View::merge_partitions` caller besides
+  `BlocksView`): `NULL`, unchanged.
+
+The value must be threaded from the writer that already knows its own ordering — `MetadataPartitionSpec`
+for fresh writes, `BlocksView` for merges — not hardcoded inside the shared `insert_partition`/
+`write_partition_from_rows` plumbing, so a future view can opt in without those shared functions
+knowing about blocks-view specifics.
+
+**Plumbing**:
+- `Partition` (`partition.rs:8-25`) gains `pub sort_order: Option<Vec<String>>`.
+- `write_partition_from_rows` (`write_partition.rs:560-568`) gains a `sort_order:
+  Option<Vec<String>>` parameter, threaded into the `Partition` literal it builds
+  (`write_partition.rs:647-656`). `insert_partition`'s `INSERT` (`write_partition.rs:340-356`)
+  gains a 14th value bound to it: `sort_order` is physically the last column (columns are
+  appended in `ALTER TABLE` order, and `partition_format_version` was the v5 addition,
+  `migration.rs:394-416`), so the statement becomes
+  `INSERT INTO lakehouse_partitions VALUES($1, ..., $12, 2, $13);` with `$13` bound to
+  `&partition.sort_order` — the pre-existing literal `2` (`partition_format_version`) stays
+  ahead of it in the VALUES list, matching physical column order.
+  - The 6 existing call sites of `write_partition_from_rows` all gain the new argument:
+    `net_spans_view.rs:135-143`, `thread_spans_view.rs:138-146`, `sql_partition_spec.rs:92-100`,
+    and `block_partition_spec.rs:86-94` pass `None` (no behavior change for these views).
+    `metadata_partition_spec.rs:91-99` and `merge.rs:184-192` pass a real value, sourced as below.
+  - `MetadataPartitionSpec` (`metadata_partition_spec.rs:19-27`) gains a `pub sort_order:
+    Option<Vec<String>>` field, set via a new parameter on `fetch_metadata_partition_spec`
+    (`metadata_partition_spec.rs:29-56`). `BlocksView::make_batch_partition_spec`
+    (`blocks_view.rs:67-99`) passes `Some(vec!["insert_time".to_string(), "block_id".to_string()])`
+    — exactly the ordering `data_sql`'s `ORDER BY` already guarantees (`blocks_view.rs:46`).
+  - `View` (`view.rs:52-153`) gains a new method `fn get_merged_partition_sort_order(&self) ->
+    Option<Vec<String>> { None }` (default `None`). This is a distinct concept from the existing
+    `get_scan_output_ordering()` (`view.rs:150-152`): that one is a *trusted scan-ordering
+    declaration for consumers*, deliberately left empty for blocks-view in this plan (see Design
+    §1 and the Open Questions/Trade-offs on JIT trust); `get_merged_partition_sort_order()` is a
+    *record of what the merge actually produced*, independent of what's declared to DataFusion for
+    elision. `create_merged_partition` (`merge.rs:132-232`) calls
+    `view.get_merged_partition_sort_order()` and passes the result into its
+    `write_partition_from_rows` call (`merge.rs:184-192`). `BlocksView` overrides the method to
+    return `Some(vec!["insert_time".to_string(), "block_id".to_string()])`, matching §1's
+    guarantee; every other view keeps the default `None`.
+- `PartitionCache`'s 3 read paths in `partition_cache.rs` add `sort_order` to their `SELECT`
+  column lists and `Partition` literals: `fetch_overlapping_insert_range` (query
+  `partition_cache.rs:56-73`, construction `:105-114`),
+  `fetch_overlapping_insert_range_for_view` (query `:136-152`, construction `:187-196`), and
+  `LivePartitionProvider::fetch` (two query branches, `:344-364` and `:378-396`, one shared
+  construction at `:430-439`). `sqlx` maps Postgres `TEXT[]` to `Option<Vec<String>>` directly
+  (`r.try_get("sort_order")?`) — the same mapping already relied on for the `streams`/`processes`
+  `tags` columns (`sql_arrow_bridge.rs:208-210`).
+- `ListPartitionsTableProvider` (`list_partitions_table_function.rs`) adds `sort_order` to both
+  `SELECT` query strings (`:107-124`, `:126-141`) and a matching field to `schema()`
+  (`:52-88`): `Field::new("sort_order", DataType::List(Arc::new(Field::new("tag", DataType::Utf8,
+  false))), true)`. The inner field name `"tag"` looks unrelated to sort columns but must match
+  exactly what the generic `TEXT[]` column reader always produces regardless of the source
+  column's name (`make_column_reader`'s `"TEXT[]"` arm, `sql_arrow_bridge.rs:350-357` — the same
+  reader already used for the unrelated `tags` column, `blocks_view.rs:178-182`): `scan()` builds
+  its `RecordBatch` via `rows_to_record_batch` (`sql_arrow_bridge.rs:371-396`), which derives field
+  shapes from that reader rather than from `schema()`, and `MemorySourceConfig::try_new`
+  (`list_partitions_table_function.rs:151-155`) requires the two to match field-for-field.
+
+With this in place, the Open Question about which merged blocks partitions still need
+regeneration becomes a SQL query rather than tribal knowledge (see Open Questions), and the
+deferred JIT-consumer-trust follow-up (`tasks/jit_single_query_plan.md`) has a concrete,
+footer-free way to check per-partition sort status before it declares
+`(insert_time, block_id)` trusted (see Trade-offs).
+
 ## Implementation Steps
 
 1. `rust/analytics/src/lakehouse/partitioned_execution_plan.rs`:
@@ -487,9 +585,44 @@ delta that doesn't will now fail loudly instead of creating a duplicate partitio
     `mkdocs/docs/query-guide/functions-reference.md`, `mkdocs/docs/admin/maintenance.md`, and
     `mkdocs/docs/query-guide/python-api.md` (documenting the `client.regenerate_partitions(...)`
     method added in step 11).
-13. Tests (see Testing Strategy).
-14. From `rust/`: `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `cargo test`.
-15. Manual verification (see Testing Strategy) against a running environment with an existing
+13. `rust/analytics/src/lakehouse/migration.rs`: bump `LATEST_LAKEHOUSE_SCHEMA_VERSION` to 7; add
+    `upgrade_v6_to_v7` (`ALTER TABLE lakehouse_partitions ADD COLUMN sort_order TEXT[];` + bump
+    `lakehouse_migration.version`), wired into `execute_lakehouse_migration`'s chain next to
+    `upgrade_v5_to_v6`.
+14. `rust/analytics/src/lakehouse/partition.rs`: add `pub sort_order: Option<Vec<String>>` to
+    `Partition`.
+15. `rust/analytics/src/lakehouse/write_partition.rs`: add a `sort_order: Option<Vec<String>>`
+    parameter to `write_partition_from_rows`; thread it into the `Partition` literal and into
+    `insert_partition`'s `INSERT` (new `$13` bind, physically after the existing literal `2`).
+16. Update all 6 existing `write_partition_from_rows` call sites for the new parameter:
+    `net_spans_view.rs`, `thread_spans_view.rs`, `sql_partition_spec.rs`, and
+    `block_partition_spec.rs` pass `None`; `metadata_partition_spec.rs` and `merge.rs` pass a real
+    value per steps 17-18.
+17. `rust/analytics/src/lakehouse/metadata_partition_spec.rs`: add `pub sort_order:
+    Option<Vec<String>>` to `MetadataPartitionSpec` and a matching parameter to
+    `fetch_metadata_partition_spec`; pass it through to `write_partition_from_rows` in `write()`.
+    `rust/analytics/src/lakehouse/blocks_view.rs`: pass
+    `Some(vec!["insert_time".to_string(), "block_id".to_string()])` at its
+    `fetch_metadata_partition_spec` call site.
+18. `rust/analytics/src/lakehouse/view.rs`: add `get_merged_partition_sort_order(&self) ->
+    Option<Vec<String>> { None }` to the `View` trait. `rust/analytics/src/lakehouse/merge.rs`:
+    call it in `create_merged_partition` and pass the result to `write_partition_from_rows`.
+    `rust/analytics/src/lakehouse/blocks_view.rs`: override it to return
+    `Some(vec!["insert_time".to_string(), "block_id".to_string()])`.
+19. `rust/analytics/src/lakehouse/partition_cache.rs`: add `sort_order` to the `SELECT` column
+    lists and `Partition` literals in `fetch_overlapping_insert_range`,
+    `fetch_overlapping_insert_range_for_view`, and `LivePartitionProvider::fetch` (both query
+    branches).
+20. `rust/analytics/src/lakehouse/list_partitions_table_function.rs`: add `sort_order` to both
+    `SELECT` query strings and add the matching `List(Utf8)` field to `schema()`.
+21. `rust/analytics/tests/thread_spans_ordering_tests.rs`: add `sort_order: None` to the
+    `make_partition()` test helper (`:34-47`) — required for the crate to compile against the new
+    `Partition` field.
+22. Documentation: add the `sort_order` column to `list_partitions()`'s column table in
+    `mkdocs/docs/admin/functions-reference.md`.
+23. Tests (see Testing Strategy).
+24. From `rust/`: `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `cargo test`.
+25. Manual verification (see Testing Strategy) against a running environment with an existing
     unsorted merged blocks partition.
 
 ## Files to Modify
@@ -497,12 +630,17 @@ delta that doesn't will now fail loudly instead of creating a duplicate partitio
 - `rust/analytics/src/lakehouse/partitioned_execution_plan.rs` — `OrderingBounds`, generalized
   bounds helper.
 - `rust/analytics/tests/thread_spans_ordering_tests.rs` — update its 3
-  `make_partitioned_execution_plan` call sites to pass `OrderingBounds::EventTime`.
+  `make_partitioned_execution_plan` call sites to pass `OrderingBounds::EventTime`; add
+  `sort_order: None` to the `make_partition()` helper.
 - `rust/analytics/src/lakehouse/materialized_view.rs` — pass `OrderingBounds::EventTime`.
 - `rust/analytics/src/lakehouse/partitioned_table_provider.rs` — ordering-aware constructor.
-- `rust/analytics/src/lakehouse/merge.rs` — `QueryMerger` ordering builder method.
-- `rust/analytics/src/lakehouse/blocks_view.rs` — ordered merge override.
-- `rust/analytics/src/lakehouse/metadata_partition_spec.rs` — streaming `write()`.
+- `rust/analytics/src/lakehouse/merge.rs` — `QueryMerger` ordering builder method; call
+  `view.get_merged_partition_sort_order()` in `create_merged_partition` and pass it to
+  `write_partition_from_rows`.
+- `rust/analytics/src/lakehouse/blocks_view.rs` — ordered merge override; pass a declared
+  `sort_order` to `fetch_metadata_partition_spec`; override `get_merged_partition_sort_order`.
+- `rust/analytics/src/lakehouse/metadata_partition_spec.rs` — streaming `write()`; add
+  `sort_order` field/parameter and thread it to `write_partition_from_rows`.
 - `rust/analytics/src/lakehouse/batch_update.rs` — `force` parameter, new
   `materialize_partition_range_impl` + `regenerate_partition_range` (existing
   `materialize_partition_range` signature unchanged), new
@@ -515,6 +653,22 @@ delta that doesn't will now fail loudly instead of creating a duplicate partitio
 - `mkdocs/docs/query-guide/functions-reference.md` — document `regenerate_partitions`.
 - `mkdocs/docs/admin/maintenance.md` — document `regenerate_partitions`.
 - `mkdocs/docs/query-guide/python-api.md` — document `regenerate_partitions`.
+- `rust/analytics/src/lakehouse/migration.rs` — v6→v7 migration adding
+  `lakehouse_partitions.sort_order`.
+- `rust/analytics/src/lakehouse/partition.rs` — `Partition::sort_order` field.
+- `rust/analytics/src/lakehouse/write_partition.rs` — `sort_order` parameter on
+  `write_partition_from_rows`; new `insert_partition` bind.
+- `rust/analytics/src/lakehouse/view.rs` — new `get_merged_partition_sort_order()` method.
+- `rust/analytics/src/lakehouse/partition_cache.rs` — read `sort_order` in all 3
+  partition-fetching query paths.
+- `rust/analytics/src/lakehouse/list_partitions_table_function.rs` — expose `sort_order` column.
+- `rust/analytics/src/lakehouse/net_spans_view.rs`,
+  `rust/analytics/src/lakehouse/thread_spans_view.rs`,
+  `rust/analytics/src/lakehouse/sql_partition_spec.rs`,
+  `rust/analytics/src/lakehouse/block_partition_spec.rs` — pass `None` at their
+  `write_partition_from_rows` call sites (new parameter, no behavior change).
+- `mkdocs/docs/admin/functions-reference.md` — document the `sort_order` column in
+  `list_partitions()`'s column table.
 
 ## Trade-offs
 
@@ -550,7 +704,36 @@ delta that doesn't will now fail loudly instead of creating a duplicate partitio
   `sort_and_check_non_overlapping` is designed to catch loudly for *new* overlaps, but it cannot
   detect "sorted-looking file that just happens to be wrong inside its own bounds." Declaring
   trust is a rollout step gated on regenerating and verifying every affected partition, not a
-  code change bundled with this plan.
+  code change bundled with this plan. Design §4's `sort_order` column turns that gate from a
+  flag-day, all-or-nothing trust decision into a per-partition, footer-free check: the follow-up
+  plan can require `sort_order = ['insert_time', 'block_id']` on every partition in a query's
+  scope (already loaded in the partition cache at planning time) before trusting the declared
+  ordering for that scope, instead of trusting it globally once every partition happens to have
+  been regenerated.
+- **A `sort_order TEXT[]` column vs. re-deriving the guarantee from data.** Re-checking whether a
+  partition happens to be sorted (e.g. re-running the Testing Strategy's `lag()`-based query
+  against every partition on every planning decision) would be correct but is exactly the kind of
+  full-file-scan cost this plan is trying to avoid; footers that used to make an inexpensive check
+  possible are gone (`upgrade_v5_to_v6`, `migration.rs:418-426`). Recording the guarantee once, at
+  write time, in the same row that already carries `min_event_time`/`max_event_time`/`num_rows`,
+  makes it as cheap to consult as any other planning-time partition statistic.
+- **Threading `sort_order` from the writer (`MetadataPartitionSpec`, `View::get_merged_partition_sort_order`)
+  vs. hardcoding it in `insert_partition`/`write_partition_from_rows`.** The shared write path has
+  no way to know, from a `RecordBatch` stream alone, whether its rows are actually sorted or by
+  what columns — that knowledge only exists where the query/`ORDER BY` that produced the stream is
+  defined. A hardcoded `if view_set_name == "blocks"` check in the shared path would work today but
+  would need updating for every future view that wants the same guarantee; a per-view/per-spec
+  value keeps `write_partition_from_rows` and `insert_partition` generic, matching how
+  `source_data_hash` and `get_scan_output_ordering()` are already supplied by the caller rather
+  than inferred centrally.
+- **A separate `get_merged_partition_sort_order()` vs. reusing `QueryMerger`'s declared
+  `with_merge_scan_ordering`.** The two are not the same value for blocks-view: the declared
+  ordering passed to DataFusion for elision is only `[insert_time]` (§1 explains why a two-column
+  declaration would never validate), but the *actual* guarantee the elided, disjoint, pre-sorted
+  merge produces is the fuller `[insert_time, block_id]`. Reusing the elision-declaration field
+  would either under-record the guarantee (just `[insert_time]`, losing the `block_id` tie-break
+  fact §1 establishes) or conflate two different contracts (a DataFusion validation input vs. a
+  Postgres-recorded fact about the output). A separate method keeps them independently correct.
 
 ## Testing Strategy
 
@@ -620,15 +803,37 @@ delta that doesn't will now fail loudly instead of creating a duplicate partitio
   fix has a bug). This is the "verifiable per partition" check referenced in the GitHub issue —
   run it per merged partition before any future plan declares
   `(insert_time, block_id)` a trusted consumer-side scan ordering.
+- **Migration test**: a DB-backed test (alongside existing migration coverage) that runs
+  `migrate_lakehouse` from v6 and confirms `lakehouse_migration.version` reaches 7, the
+  `sort_order` column exists, and pre-existing rows read back as `NULL` (no ordering guarantee) —
+  the "automatically correct for every existing partition" claim in Design §4.
+- **`sort_order` recording tests**: extend the offline blocks-view merge ordering tests (above) and
+  a `MetadataPartitionSpec`/DB-backed test to assert: (a) a freshly materialized `BlocksView`
+  partition (via `MetadataPartitionSpec::write`) is inserted with
+  `sort_order = Some(['insert_time', 'block_id'])`; (b) an order-merged blocks partition (via
+  `create_merged_partition` under §1) is inserted with the same value; (c) a partition from another
+  view (e.g. `ThreadSpansView`, or any view exercised by the existing `histo_view_test.rs`/
+  `sql_view_test.rs` suites) is inserted with `sort_order = None`.
+- **`list_partitions()` exposure test**: a query-level test asserting `SELECT sort_order FROM
+  list_partitions()` returns the column with the expected type and values for a mix of blocks-view
+  and other-view partitions — confirming the `ListPartitionsTableProvider` schema/query change
+  and the generic `TEXT[]` reader agree (no `DataFusionError` from a schema mismatch).
 
 ## Open Questions
 
 - Which merged blocks partitions are "active" today and need `regenerate_partitions` run against
-  them? This plan adds the tool; running it over the existing fleet is an operational rollout
-  step, tracked separately (not blocking landing the code).
+  them? Design §4's `sort_order` column makes this SQL-answerable —
+  `SELECT * FROM list_partitions() WHERE view_set_name = 'blocks' AND sort_order IS NULL` lists
+  exactly the partitions still needing regeneration — but running `regenerate_partitions` over
+  whatever that query returns in production is still an operational rollout step, tracked
+  separately (not blocking landing the code).
 - Is `SOURCE_ROWS_PER_BATCH = 20_000` the right default? No load testing yet against blocks-view's
   widest real-world `streams.properties`/`processes.properties` payloads — worth revisiting once
   this lands.
 - Declaring `(insert_time, block_id)` as a trusted `get_scan_output_ordering()` for
   blocks-view/JIT consumers is intentionally deferred to a follow-up plan (per
-  `tasks/jit_single_query_plan.md`'s Open Questions), gated on the regeneration rollout above.
+  `tasks/jit_single_query_plan.md`'s Open Questions), gated on the regeneration rollout above. That
+  follow-up can use Design §4's `sort_order` column as its gate — checking
+  `sort_order = ['insert_time', 'block_id']` on the partitions in a query's scope, already loaded
+  in the partition cache at planning time — instead of a global flag-day trust decision (see
+  Trade-offs).
