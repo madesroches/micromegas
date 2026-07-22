@@ -1,0 +1,410 @@
+# Blocks-View Ordered Merges + Bounded-Memory Regeneration Plan
+
+## Overview
+
+[#1336](https://github.com/madesroches/micromegas/issues/1336): make blocks-view partition
+merges order-preserving so consumers (starting with JIT partition generation) can eventually
+trust a declared `(insert_time, block_id)` scan ordering and drop a redundant `SortExec`. This
+plan also closes a related OOM hazard: the same Postgres-backed materialization path that would
+regenerate a merged partition currently loads the *entire* insert-time range's block rows into
+one `Vec<PgRow>` and one `RecordBatch` before writing anything — for a busy day that is an
+unbounded amount of memory. Regeneration must never buffer more than one bounded chunk of blocks
+at a time.
+
+Three coupled changes:
+1. Make blocks-view merges order-preserving (declared scan ordering + explicit `ORDER BY`), so
+   merged partitions stay internally sorted by `(insert_time, block_id)` going forward.
+2. Make the Postgres-source partition write path (`MetadataPartitionSpec::write`, used by
+   `BlocksView::make_batch_partition_spec`) stream in bounded chunks instead of
+   `fetch_all`-ing a whole insert range into memory.
+3. Add an admin table function to force-regenerate existing (already-merged, potentially
+   unsorted) partitions online from the Postgres source tables, reusing the now-streaming write
+   path — no downtime, no schema change.
+
+Declaring `(insert_time, block_id)` as a *trusted* scan ordering for blocks-view consumers (the
+JIT partition generators, per `tasks/jit_single_query_plan.md`) is explicitly **out of scope**
+here — it only becomes safe after every active merged partition has been regenerated under (1),
+which is an operational rollout step, not a code change. See Open Questions.
+
+## Current State
+
+### Merges are not order-preserving today
+
+`BlocksView` (`rust/analytics/src/lakehouse/blocks_view.rs`) writes fresh partitions sorted —
+`data_sql` ends with `ORDER BY blocks.insert_time, blocks.block_id` (`blocks_view.rs:44`). But
+`BlocksView` does not override `merge_partitions`, so it gets `View::merge_partitions`'s default
+(`view.rs:101-117`): a `QueryMerger` running `SELECT * FROM source;` — no `ORDER BY` — over a
+`PartitionedTableProvider` source table built with **no declared scan ordering**
+(`merge.rs:81-86` always constructs `PartitionedTableProvider::new(...)`, whose `scan()` always
+passes `&[]` for `output_ordering`, `partitioned_table_provider.rs:63-70`). DataFusion is free to
+interleave file reads from the source partitions in any order, so a merged daily blocks
+partition is not guaranteed sorted, even though its inputs are.
+
+This matters because `partitioned_execution_plan.rs`'s declared-ordering machinery — used today
+by `MaterializedView` (`materialized_view.rs:94`, via `View::get_scan_output_ordering`) for
+per-view consumer queries (e.g. `ThreadSpansView`, `thread_spans_view.rs:357`) — is entirely
+event-time-based: `sort_and_check_non_overlapping` and `attach_ordering_statistics`
+(`partitioned_execution_plan.rs:27,58`) read `Partition::min_event_time()`/`max_event_time()`.
+Blocks-view ordering is insert-time-based (`Partition::begin_insert_time()`/`end_insert_time()`,
+`partition.rs:44-51` — always `Some`, unlike the `Option` event-time bounds), and
+`PartitionedTableProvider` never plumbs any ordering into its source scan at all. Neither piece
+of existing infrastructure covers the merge source table today.
+
+### The Postgres-source write path buffers a full insert range
+
+`BlocksView::make_batch_partition_spec` (`blocks_view.rs:67-93`) delegates to
+`fetch_metadata_partition_spec` (`metadata_partition_spec.rs:29-53`), which runs a `COUNT(*)`
+query up front (cheap, one row) and returns a `MetadataPartitionSpec` holding that count and the
+sorted `data_sql`. The actual data fetch happens later, in
+`MetadataPartitionSpec::write` (`metadata_partition_spec.rs:66-108`):
+
+```rust
+let rows = sqlx::query(&self.data_sql)
+    .bind(self.insert_range.begin)
+    .bind(self.insert_range.end)
+    .fetch_all(&lake.db_pool)          // <- entire range's rows, in one Vec<PgRow>
+    .await?;
+...
+let record_batch = rows_to_record_batch(&rows)?;   // <- entire range, in one RecordBatch
+```
+
+`fetch_all` materializes every matching `blocks ⋈ streams ⋈ processes` row for the whole
+`insert_range` — which defaults to a full day (`View::get_max_partition_time_delta`'s default is
+`TimeDelta::days(1)`, `view.rs:127-129`) — as one `Vec<PgRow>`, then `rows_to_record_batch`
+converts all of it into one `RecordBatch` before a single row reaches
+`write_partition_from_rows`. Each row carries the joined `streams`/`processes` columns
+(`tags`, `properties`, `dependencies_metadata`, `objects_metadata` — all JSONB/array columns), so
+a busy day's block count times per-row payload size can be large enough to OOM the process doing
+the materialization. This is the only `PartitionSpec::write` implementation in the codebase that
+still works this way — every sibling implementation already streams:
+
+- `BlockPartitionSpec::write` (`block_partition_spec.rs:60-162`) consumes
+  `PartitionBlocksSource::get_blocks_stream()` and sends one `PartitionRowSet` per processed
+  block.
+- `SqlPartitionSpec::write` (`sql_partition_spec.rs:77-114`) runs its extract query via
+  `df.execute_stream()` and sends one `PartitionRowSet` per `RecordBatch`.
+- `create_merged_partition` (`merge.rs:127-220`) consumes the merge's `SendableRecordBatchStream`
+  the same way.
+
+All three write to `write_partition_from_rows` (`write_partition.rs:560-670`) through a
+`tokio::sync::mpsc::channel(1)` — a one-item buffer that backpressures the producer until the
+Parquet writer (which itself flushes every 100MB, `write_partition.rs:437-442`) drains the
+previous batch. `MetadataPartitionSpec` is the only one that defeats this backpressure by
+building its one giant `RecordBatch` before the channel exists in any meaningful sense.
+
+`MetadataPartitionSpec` is only used by `BlocksView` (verified by grep) — this is a self-contained
+fix, not a widely shared abstraction.
+
+### Regeneration has no forcing path today
+
+The existing `materialize_partitions` admin UDF (`materialize_partitions_table_function.rs`,
+registered in `query.rs:120-131`) calls `batch_update::materialize_partition_range`
+(`batch_update.rs:195-215`), which for each `partition_time_delta`-sized bucket calls
+`materialize_partition` (`batch_update.rs:98-176`). That function always runs
+`verify_overlapping_partitions` (`batch_update.rs:20-91`) first, which compares the *source data
+hash* (an object count) against existing partitions' stored hashes and returns
+`PartitionCreationStrategy::Abort` when they already match (`batch_update.rs:88-90`, "already up
+to date"). An existing merged blocks partition whose row order is wrong but whose content
+(hence hash) is unchanged is exactly the "already up to date" case — `materialize_partitions`
+cannot force it to rebuild.
+
+`insert_partition` (`write_partition.rs:265-400`) already performs the atomic swap this plan
+needs for regeneration: inside one Postgres transaction, guarded by a per-partition advisory
+lock, it calls `retire_partitions` (delete old row + queue its file for cleanup) then `INSERT`s
+the new partition row (`write_partition.rs:318-359`), commit-releasing the lock
+(`write_partition.rs:389`). `create_merged_partition` and every `PartitionSpec::write` already
+go through this same path — regeneration reuses it for free once it reaches
+`write_partition_from_rows`.
+
+## Design
+
+### 1. Order-preserving merges
+
+Generalize the event-time-only ordering machinery in `partitioned_execution_plan.rs` to also
+support insert-time bounds, then wire that into the merge source table and give `BlocksView` an
+`ORDER BY`-based merge.
+
+```rust
+/// Which pair of bounds on `Partition` a declared ordering's leading column is checked against.
+#[derive(Clone, Copy, Debug)]
+pub enum OrderingBounds {
+    /// `min_event_time()` / `max_event_time()` — `Option`, absent for empty partitions.
+    EventTime,
+    /// `begin_insert_time()` / `end_insert_time()` — always present.
+    InsertTime,
+}
+```
+
+- `sort_and_check_non_overlapping` and `attach_ordering_statistics` take an `OrderingBounds` and
+  read bounds through one small helper (`fn partition_bounds(p: &Partition, bounds:
+  OrderingBounds) -> Option<(DateTime<Utc>, DateTime<Utc>)>`) instead of calling
+  `min_event_time()`/`max_event_time()` directly. Behavior for `OrderingBounds::EventTime` is
+  byte-for-byte unchanged.
+- `make_partitioned_execution_plan` gains an `ordering_bounds: OrderingBounds` parameter. Its one
+  existing caller through `MaterializedView` (`materialized_view.rs:86-96`) passes
+  `OrderingBounds::EventTime` — no behavior change for any existing consumer-side view.
+- `PartitionedTableProvider` gains an `output_ordering: Vec<ScanSortColumn>` +
+  `ordering_bounds: OrderingBounds` pair of fields, defaulted to `vec![]` /
+  `OrderingBounds::EventTime` by the existing `PartitionedTableProvider::new(...)` constructor
+  (used unchanged by `query.rs` and `batch_partition_merger.rs`), plus a new
+  `PartitionedTableProvider::with_ordering(schema, reader_factory, partitions, output_ordering,
+  ordering_bounds)` constructor that `scan()` threads through to
+  `make_partitioned_execution_plan`.
+- `QueryMerger` (`merge.rs`) gains a builder method (e.g. `with_merge_scan_ordering(self,
+  ordering: Vec<ScanSortColumn>) -> Self`, default empty) and uses
+  `PartitionedTableProvider::with_ordering(..., ordering, OrderingBounds::InsertTime)` to build
+  its `"source"` table instead of the unconditional `PartitionedTableProvider::new(...)`. With an
+  empty ordering (every existing `View::merge_partitions` caller, and `sql_batch_view.rs`'s
+  merger), this is a no-op — identical plan to today.
+- `BlocksView` overrides `merge_partitions` (mirroring the pattern already used by
+  `SqlBatchView::merge_partitions`, `sql_batch_view.rs:249-266`, which just delegates to a
+  pre-built merger) to build and reuse a `QueryMerger` configured with:
+  - query: `"SELECT * FROM source ORDER BY insert_time, block_id;"`
+  - ordering: `[ScanSortColumn { column: "insert_time", descending: false }, ScanSortColumn {
+    column: "block_id", descending: false }]`
+
+  `create_merged_partition` already calls `filtered_partitions.sort_by_key(|p|
+  p.begin_insert_time())` before invoking `view.merge_partitions` (`merge.rs:158`), and
+  time-sliced partitions are non-overlapping in insert_time by construction, so
+  `sort_and_check_non_overlapping` under `OrderingBounds::InsertTime` should always pass for
+  well-formed input — a failure here would indicate a genuine partitioning bug, matching the
+  existing "fail loudly" philosophy for the event-time case.
+
+  With the source scan's ordering declared, DataFusion's `EnforceSorting` rule can satisfy the
+  query's explicit `ORDER BY` with a `SortPreservingMergeExec` (bounded k-way merge across
+  already-sorted, non-overlapping file streams) instead of a buffering `SortExec` — the merge
+  stays streaming, and its output is now guaranteed sorted by `(insert_time, block_id)`.
+
+### 2. Bounded-memory Postgres-source writes
+
+Rewrite `MetadataPartitionSpec::write` to stream rows from Postgres in bounded chunks instead of
+`fetch_all`-ing the whole range, following the same "spawn the writer, stream `PartitionRowSet`s
+into its channel" shape already used by `create_merged_partition`, `SqlPartitionSpec::write`, and
+`BlockPartitionSpec::write`:
+
+```rust
+const SOURCE_ROWS_PER_BATCH: usize = 20_000; // bounds peak memory to one chunk, not one day
+
+async fn write(&self, lake: Arc<DataLakeConnection>, logger: Arc<dyn Logger>) -> Result<()> {
+    ...
+    let (tx, rx) = tokio::sync::mpsc::channel(1);
+    let join_handle = spawn_with_context(write_partition_from_rows(
+        lake.clone(), self.view_metadata.clone(), self.schema.clone(),
+        self.insert_range, self.get_source_data_hash(), rx, logger.clone(),
+    ));
+
+    let stream_result: Result<()> = async {
+        if self.record_count > 0 {
+            let mut rows = sqlx::query(&self.data_sql)
+                .bind(self.insert_range.begin)
+                .bind(self.insert_range.end)
+                .fetch(&lake.db_pool);           // streaming cursor, not fetch_all
+            let ctx = SessionContext::new();
+            let mut chunk = Vec::with_capacity(SOURCE_ROWS_PER_BATCH);
+            while let Some(row) = rows.try_next().await? {
+                chunk.push(row);
+                if chunk.len() >= SOURCE_ROWS_PER_BATCH {
+                    flush_chunk(&mut chunk, &ctx, &self.compute_time_bounds, &tx).await?;
+                }
+            }
+            if !chunk.is_empty() {
+                flush_chunk(&mut chunk, &ctx, &self.compute_time_bounds, &tx).await?;
+            }
+        }
+        Ok(())
+    }.await;
+
+    drop(tx);
+    match stream_result {
+        Ok(()) => { join_handle.await??; Ok(()) }
+        Err(e) => { /* abort the writer task, mirroring create_merged_partition's error path */ }
+    }
+}
+```
+
+`flush_chunk` converts the accumulated `Vec<PgRow>` via the existing `rows_to_record_batch`
+(unchanged — it already operates on a row slice, so it works identically on a partial chunk),
+computes the chunk's event-time bounds via `compute_time_bounds.get_time_bounds(...)` (same call
+already made once for the whole range today), sends a `PartitionRowSet`, and clears the `Vec` via
+`mem::take`/`clear()` for reuse.
+
+`source_data_hash` switches from `rows.len()` (recomputed from the fully-fetched `Vec<PgRow>`) to
+`self.get_source_data_hash()` — the `record_count` already fetched by the earlier `COUNT(*)`
+query in `fetch_metadata_partition_spec`. This is required because
+`write_partition_from_rows` needs the hash *before* streaming starts (it's a spawn-time
+parameter, not something derivable after the fact), and it's a simplification: `write()` no
+longer computes a second, independently-arrived-at row count that could disagree with
+`get_source_data_hash()`'s.
+
+Peak memory becomes one `SOURCE_ROWS_PER_BATCH`-sized `Vec<PgRow>` plus one `RecordBatch` plus the
+one in-flight channel item — bounded regardless of how many blocks exist in the requested
+insert range.
+
+### 3. Forced online regeneration
+
+Add a `force: bool` parameter to `batch_update::materialize_partition` and
+`materialize_partition_range` (`batch_update.rs:98,195`, both already crate-internal/pub, one
+external caller in `materialize_partitions_table_function.rs`). When `force` is true,
+`materialize_partition` skips `verify_overlapping_partitions` entirely and takes
+`PartitionCreationStrategy::CreateFromSource` unconditionally:
+
+```rust
+let strategy = if force {
+    PartitionCreationStrategy::CreateFromSource
+} else {
+    verify_overlapping_partitions(...).await?
+};
+```
+
+This reuses the existing subdivision logic (splitting a wide range into
+`get_max_partition_time_delta`-sized buckets, `batch_update.rs:138-155`) and — via
+`partition_spec.write()` — the now-streaming Postgres fetch from part 2 and the
+retire-then-insert atomic swap in `insert_partition` (part of the "Current State" analysis
+above), so regeneration is online (no downtime) and memory-bounded from day one.
+
+Existing call site (`materialize_partitions_table_function.rs:56`) passes `force: false` —
+unchanged behavior for the existing `materialize_partitions` UDF.
+
+Add a new `regenerate_partitions` table function (new file
+`regenerate_partitions_table_function.rs`, registered in `query.rs` next to
+`materialize_partitions`), copying `MaterializePartitionsTableFunction`'s shape
+(`materialize_partitions_table_function.rs`) exactly, down to argument parsing
+(`view_set_name`, `begin`, `end`, `delta_seconds`) and the `LogStreamTableProvider` /
+`TaskLogExecPlan` spawn pattern — the only difference is its `_impl` function calls
+`materialize_partition_range(..., force: true, ...)`.
+
+Usage for this issue: `SELECT * FROM regenerate_partitions('blocks', <day_begin>, <day_end>,
+86400);` for each active merged daily blocks partition.
+
+## Implementation Steps
+
+1. `rust/analytics/src/lakehouse/partitioned_execution_plan.rs`:
+   - Add `OrderingBounds` enum and `partition_bounds` helper.
+   - Thread `bounds: OrderingBounds` through `sort_and_check_non_overlapping`,
+     `attach_ordering_statistics`, and `make_partitioned_execution_plan`.
+2. `rust/analytics/src/lakehouse/materialized_view.rs`: pass `OrderingBounds::EventTime` at its
+   `make_partitioned_execution_plan` call site.
+3. `rust/analytics/src/lakehouse/partitioned_table_provider.rs`: add `output_ordering` +
+   `ordering_bounds` fields, keep `new(...)` defaulting both to empty/`EventTime`, add
+   `with_ordering(...)` constructor, thread both through `scan()`.
+4. `rust/analytics/src/lakehouse/merge.rs`: add `with_merge_scan_ordering` builder method to
+   `QueryMerger`; use `PartitionedTableProvider::with_ordering` in `execute_merge_query`.
+5. `rust/analytics/src/lakehouse/blocks_view.rs`: store a pre-built `QueryMerger` (ordering =
+   `[insert_time, block_id]`, query = `"SELECT * FROM source ORDER BY insert_time, block_id;"`);
+   override `merge_partitions` to delegate to it (mirror
+   `SqlBatchView::merge_partitions`).
+6. `rust/analytics/src/lakehouse/metadata_partition_spec.rs`: rewrite `write()` to stream via
+   `sqlx::query(...).fetch(...)` in `SOURCE_ROWS_PER_BATCH`-sized chunks; add the `flush_chunk`
+   helper; switch `source_data_hash` to `self.get_source_data_hash()`.
+7. `rust/analytics/src/lakehouse/batch_update.rs`: add `force: bool` to `materialize_partition`
+   and `materialize_partition_range`; skip `verify_overlapping_partitions` when `force`.
+8. `rust/analytics/src/lakehouse/materialize_partitions_table_function.rs`: pass `force: false`
+   at its `materialize_partition_range` call.
+9. New `rust/analytics/src/lakehouse/regenerate_partitions_table_function.rs`: copy
+   `MaterializePartitionsTableFunction`'s shape, call `materialize_partition_range(...,
+   force: true, ...)`.
+10. `rust/analytics/src/lakehouse/query.rs`: register `regenerate_partitions` UDTF next to
+    `materialize_partitions`.
+11. Tests (see Testing Strategy).
+12. From `rust/`: `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `cargo test`.
+13. Manual verification (see Testing Strategy) against a running environment with an existing
+    unsorted merged blocks partition.
+
+## Files to Modify
+
+- `rust/analytics/src/lakehouse/partitioned_execution_plan.rs` — `OrderingBounds`, generalized
+  bounds helper.
+- `rust/analytics/src/lakehouse/materialized_view.rs` — pass `OrderingBounds::EventTime`.
+- `rust/analytics/src/lakehouse/partitioned_table_provider.rs` — ordering-aware constructor.
+- `rust/analytics/src/lakehouse/merge.rs` — `QueryMerger` ordering builder method.
+- `rust/analytics/src/lakehouse/blocks_view.rs` — ordered merge override.
+- `rust/analytics/src/lakehouse/metadata_partition_spec.rs` — streaming `write()`.
+- `rust/analytics/src/lakehouse/batch_update.rs` — `force` parameter.
+- `rust/analytics/src/lakehouse/materialize_partitions_table_function.rs` — pass `force: false`.
+- `rust/analytics/src/lakehouse/regenerate_partitions_table_function.rs` — new.
+- `rust/analytics/src/lakehouse/query.rs` — register new UDTF.
+
+## Trade-offs
+
+- **`ORDER BY` + declared scan ordering vs. `ORDER BY` alone.** An `ORDER BY` with no declared
+  source ordering would still produce correct output but pay a full buffering `SortExec` on
+  every merge — the exact problem `tasks/jit_single_query_plan.md` was written to avoid on the
+  query side. Declaring the ordering lets DataFusion downgrade to a bounded
+  `SortPreservingMergeExec`, so the merge itself gains the same memory bound this plan is adding
+  to the source write path.
+- **Generalizing `OrderingBounds` vs. a separate insert-time-only code path.** A parallel
+  `sort_and_check_non_overlapping_by_insert_time` function would duplicate ~40 lines with one
+  field access changed. An enum parameter keeps one implementation and makes the event-time
+  behavior's non-regression explicit (`OrderingBounds::EventTime` at every existing call site).
+- **`force: bool` on `materialize_partition_range` vs. a standalone regeneration code path.**
+  Reimplementing partition subdivision and the write/swap plumbing outside `batch_update.rs`
+  would duplicate `materialize_partition`'s bucket-splitting logic. A boolean that skips one
+  decision (the up-to-date check) is a one-line behavioral change reusing everything else,
+  including the streaming fix from part 2.
+- **Chunked `sqlx` row streaming vs. a Postgres `DECLARE CURSOR` / `COPY`-based approach.**
+  `sqlx::query(...).fetch(...)` already streams rows off the wire without server-side cursor
+  management; a fixed row-count chunk (not byte-size-based, unlike the Parquet writer's 100MB
+  flush threshold) is simpler and consistent with existing per-count batching elsewhere (e.g.
+  `JitPartitionConfig::max_nb_objects`). `SOURCE_ROWS_PER_BATCH = 20_000` is a first cut, not
+  load-tested against blocks-view's wide joined columns (JSONB tags/properties) — worth a sanity
+  check under a real workload before tuning, same caveat the JIT plan raised for its own batch
+  width.
+- **Not declaring the JIT-consumer-side `(insert_time, block_id)` ordering in this plan.** Doing
+  so before every active merged partition is regenerated would silently mis-group blocks for any
+  partition still written under the old, unordered merge — exactly the failure mode
+  `sort_and_check_non_overlapping` is designed to catch loudly for *new* overlaps, but it cannot
+  detect "sorted-looking file that just happens to be wrong inside its own bounds." Declaring
+  trust is a rollout step gated on regenerating and verifying every affected partition, not a
+  code change bundled with this plan.
+
+## Testing Strategy
+
+- **Offline ordering tests** (new `rust/analytics/tests/blocks_view_merge_ordering_tests.rs`,
+  following the existing no-DB pattern in `thread_spans_ordering_tests.rs`): build synthetic
+  insert-time-disjoint `Partition`s, confirm `make_partitioned_execution_plan` under
+  `OrderingBounds::InsertTime` elides the `Sort`/downgrades to `SortPreservingMergeExec` when
+  ordering is declared, and confirm an insert-time overlap is rejected loudly (negative control,
+  mirroring `overlapping_partitions_are_rejected`).
+- **`MetadataPartitionSpec` streaming unit tests**: exercise `write()` (or the extracted
+  `flush_chunk` helper) against a small `Vec<PgRow>`-free scenario if feasible, or an integration
+  test against a live Postgres fixture, asserting: chunk boundaries don't drop/duplicate rows,
+  the produced partition's row count matches `record_count`, and the emitted `RecordBatch`(es)
+  concatenate to the same content as today's single-batch `fetch_all` path (a semantic
+  equivalence test, not a performance one).
+- **`cargo test`**: full suite must pass unchanged (regression on `write_partition_tests.rs`,
+  `partition_metadata_tests.rs`, `thread_spans_ordering_tests.rs`, etc.).
+- **Manual regeneration + memory check**: start services
+  (`python3 local_test_env/ai_scripts/start_services.py` or monolith), find a real merged blocks
+  partition, run `SELECT * FROM regenerate_partitions('blocks', <begin>, <end>, <delta>);`, and
+  confirm: the partition's `updated`/`file_path` change, its row content is unchanged (same
+  source-hash-derived count), and process RSS (system_monitor gauges from #1330) stays flat
+  during regeneration of a busy day instead of spiking with the range width — the core check for
+  the OOM concern this plan addresses.
+- **Sortedness verification query** (documented, not new code) — run against a regenerated
+  partition to confirm ordering, e.g.:
+  ```sql
+  SELECT count(*) FROM (
+    SELECT insert_time, block_id,
+           lag(insert_time) OVER () AS prev_insert_time,
+           lag(block_id) OVER () AS prev_block_id
+    FROM view_instance('blocks', 'global')
+    WHERE insert_time >= $1 AND insert_time < $2
+  ) t
+  WHERE (prev_insert_time, prev_block_id) > (insert_time, block_id);
+  ```
+  A non-zero count means the partition is still out of order (was not regenerated, or the merge
+  fix has a bug). This is the "verifiable per partition" check referenced in the GitHub issue —
+  run it per merged partition before any future plan declares
+  `(insert_time, block_id)` a trusted consumer-side scan ordering.
+
+## Open Questions
+
+- Which merged blocks partitions are "active" today and need `regenerate_partitions` run against
+  them? This plan adds the tool; running it over the existing fleet is an operational rollout
+  step, tracked separately (not blocking landing the code).
+- Is `SOURCE_ROWS_PER_BATCH = 20_000` the right default? No load testing yet against blocks-view's
+  widest real-world `streams.properties`/`processes.properties` payloads — worth revisiting once
+  this lands.
+- Declaring `(insert_time, block_id)` as a trusted `get_scan_output_ordering()` for
+  blocks-view/JIT consumers is intentionally deferred to a follow-up plan (per
+  `tasks/jit_single_query_plan.md`'s Open Questions), gated on the regeneration rollout above.
