@@ -218,6 +218,17 @@ struct, then:
 With `SelfReadPolicy`, `ps` is a singleton, so Prong A reduces to `… IN ('user:alice@…')` — the exact
 per-user filter, same DataFusion plan — and Prong B checks membership in a one-element set.
 
+**Prong B performance.** The scan-time check is fast because **`process_id → audience` is immutable**
+(stamped once at ingestion, never mutated). Add an in-memory `process_id → audience` cache — a
+`moka::future::Cache` mirroring `metadata_cache.rs` (moka is already a workspace dep), backed on miss
+by `find_process` (`metadata.rs:241`, a primary-key point query). Because the mapping is immutable the
+cache **needs no invalidation** — bound it by size (LRU) only. Warm hit = O(1) in-memory lookup;
+cold miss = one indexed PG query, at most once per process ever. An entry is ~60 B, so caching far
+more than the "thousands of users" population costs a few MB. The membership test itself is an O(1)
+hash lookup against `ReadScope`, which is resolved once per query from the JWT `groups` claim (no
+server-side lookup, independent of user count). `parse_block` adds one more immutable
+`block_id → process_id` resolution, cached the same way.
+
 ### 5. Bypass paths
 
 - **Maintenance daemon** materializing global views must run with `ReadScope::All` (internal
@@ -427,11 +438,13 @@ Resolved by research (kept here for the record; details in Appendix A):
   unfiltered. See §5.
 - ~~**`list_view_sets` exposure.**~~ **Decided: stays unfiltered** — view-set schema/definitions only,
   no PII or per-principal data. Only `list_partitions` is row-filtered. See §4 Prong B.
+- ~~**Scan-time check cost.**~~ **Resolved:** `process_id → audience` is immutable, so an
+  invalidation-free size-bounded `moka` cache (backed by `find_process`) makes the check an O(1)
+  in-memory lookup on warm hits, one indexed PG query per process ever on cold miss. `ReadScope` is
+  free (from the JWT `groups` claim). See §4 "Prong B performance".
 
-Still open (implementation detail):
-1. **Scan-time check cost.** Prong B resolves a process's audience at scan time for arg-addressed
-   UDTFs — confirm this metadata lookup is cheap enough / cacheable per query (it is one lookup per
-   named process, and `self` mode is a singleton-set membership test).
+All design decisions are closed. Remaining work is implementation (start with Phase 1: general
+mechanics, `self` default).
 
 ## Appendix A — Research findings (2026-07-21)
 
