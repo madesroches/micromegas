@@ -14,8 +14,9 @@ The policy plan states plainly (its §5): *"an operator with lakehouse/object-st
 raw parquet directly."* That is the assumption this plan removes. **Assume the parquet files and raw
 blocks comprising the lakehouse leak** (public-bucket misconfig, a copied backup, an RMA'd disk, a
 stolen snapshot). Can we make that leak useless? For **bodies** (log message text, metric values):
-yes. For **metadata** and against a **compromised server**: only partially, and this plan is explicit
-about which.
+yes. For **metadata**: only partially, and this plan is explicit about which. A **compromised server**
+is out of scope by design — this is not end-to-end encryption; the feature exists to prevent unintended
+leaks of data at rest, not to withstand an attacker who controls the server.
 
 ### Threat model — three rows, defended differently
 
@@ -23,11 +24,13 @@ about which.
 |---|---|---|
 | Storage/backup/bucket leak — attacker holds ciphertext only | **not defended** (plaintext at rest) | **defended** for bodies (encrypted); metadata still readable |
 | Authenticated user reading another audience via SQL | defended (ReadPolicy per query) | defended (same ReadPolicy; for bodies, key-gating adds defense in depth) |
-| Compromised ingestion / query / maintenance server (holds keys transiently) | not defended | not defended by default; **partially** defended if KMS enforces caller→audience unwrap |
+| Compromised ingestion / query / maintenance server (holds keys transiently) | not defended | **out of scope by design** — the server is trusted with plaintext and keys; this is not end-to-end encryption |
 
 The central, non-negotiable fact: **a server-side SQL engine must hold plaintext to run aggregations**,
 so crypto cannot *replace* the query-path access control — it composes with it. What crypto buys is
-row 1 (the storage leak) and a start on row 3.
+row 1 (the storage leak). **Row 3 is an explicit non-goal:** defending a compromised server would
+require end-to-end encryption, which this plan does not attempt — the server is trusted with the
+plaintext and keys it handles.
 
 ## Design overview
 
@@ -251,10 +254,11 @@ cope with the mixed artifact.
   decryption key-retriever here; raw-block reads (during JIT materialization) decrypt via the same
   KEK. **ReadScope-gated unwrap:** only request the DEK for a partition whose audience `∈ ReadScope`.
   A caller naming another audience's process/instance → the key is never fetched → the ciphertext is
-  useless *even to the query server, for that request*. This is the row-3 upgrade: it starts to
-  constrain a **compromised** query server — but only to the extent the **KMS itself** enforces
-  caller→audience (Vault identity-scoped transit keys / per-request grants). With a blanket
-  server unwrap role you get row-1 protection only.
+  useless for that request. This is **row-2 defense in depth**: even a query-path enforcement bug can't
+  leak a body whose key was never unwrapped. It does **not** defend a compromised server (that server
+  holds the unwrap credential and the transient plaintext regardless). The KMS therefore uses a
+  **blanket server unwrap role** (decided — see Open forks), *not* identity-scoped per-caller grants,
+  because defending a compromised server is an explicit non-goal (this is not end-to-end encryption).
 
 ## §5 — Where the TCB actually sits
 
@@ -273,11 +277,12 @@ Encryption concentrates trust rather than eliminating it — state this plainly:
   `write_partition.rs` — so the query server also needs **encrypt** (write-KEK) access, not just
   decrypt, for every audience a request touches. It is therefore itself a materialization trust root for
   those audiences, on top of decrypting what it serves. Both encrypt and decrypt access are gated by
-  ReadScope (and, for real row-3 strength, by the KMS). Only in the fully-pinned-set limit does the
+  ReadScope. Only in the fully-pinned-set limit does the
   query server become purely decrypt-only and the daemon the sole encrypt-side trust root.
-- **Ceiling (out of scope for v1):** run the query/maintenance engine in a **TEE / confidential VM**
-  (Nitro Enclaves, SEV-SNP) so keys live only inside an attested enclave and the *operator* can't peek
-  at the transient plaintext. This closes row 3 fully; heavy (attestation, ops). North star, not v1.
+- **Ceiling (deliberate non-goal):** defending a compromised server (row 3) would mean running the
+  query/maintenance engine in a **TEE / confidential VM** (Nitro Enclaves, SEV-SNP) so keys live only
+  inside an attested enclave and the *operator* can't peek at the transient plaintext. This plan does
+  **not** pursue that — it is not end-to-end encryption. Recorded only so the trust boundary is explicit.
 
 ## §6 — Composition with the policy plan (not a replacement)
 
@@ -359,10 +364,16 @@ through the standard scan/write paths.
 
 ## Open forks (undecided)
 
-1. **KMS policy enforcement** (blanket server unwrap role vs. identity-scoped per-caller unwrap) —
-   decides whether row 3 of the threat table is defended at all.
+None — all forks resolved for v1.
 
-(Decided for v1, not open: metadata column-encryption is deferred — v1 leaves process metadata
+(Decided for v1, not open: **KMS policy enforcement is a blanket server unwrap role**, not
+identity-scoped per-caller grants. This feature exists to prevent **unintended leaks** (row 1 — bucket
+misconfig, stray backups, RMA'd disks, stolen snapshots), not to withstand a **compromised server**
+(row 3), which is an explicit non-goal — this is not end-to-end encryption. ReadScope-gated unwrap is
+kept only as row-2 defense in depth. Given that purpose, the body plane is **encrypted strong by
+default**: encryption is always on for `log_entries`/`measures` and their raw blocks with no cleartext
+opt-out, so a leak can't happen because someone forgot to enable it. Metadata column-encryption is
+deferred — v1 leaves process metadata
 cleartext at rest; see "Honest limits" for the closing-the-side-channel option. Audience-global source
 is re-scan-`blocks`, not merge — future optimization: merge per-process partitions once
 view-from-partitions machinery exists, §2b. Audience-id path encoding is charset-constraining at the
@@ -378,6 +389,6 @@ granularity + hot-reload.)
 | Parquet/block leak | readable | bodies ciphertext; metadata readable |
 | Body query-path enforcement | semi-join over mixed global | O(1) `A ∈ ReadScope` on single-audience instance |
 | Metadata query-path enforcement | Prong A + Prong B | **same** (still required) |
-| Compromised server | not defended | partially, iff KMS enforces caller→audience |
+| Compromised server | not defended | out of scope (not end-to-end encryption) |
 | Erasure | retire partitions | + crypto-shred (destroy KEK) |
 | Cost | none at runtime | KMS unwraps (cached), pinned + JIT materialization, PME read integration |
