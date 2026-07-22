@@ -158,36 +158,66 @@ extraction** and adds no attack surface.
   write it onto the process. **No policy lookup at write time** — the audience is already vetted and
   frozen into the key.
 - Client-supplied `process.owner` / `host.*` stay **display metadata only**, never the audience.
+  (Note: OTel already lands these as `otel.resource.process.owner` / `otel.resource.host.name`
+  properties — `otel-ingestion/src/block.rs:467-475`. Those remain display-only; the trusted
+  `micromegas.audience` is written server-side from `bound_audience`.)
+
+**Audience value shape (resolved, Q4).** Property values are arbitrary `TEXT`; `property_get` returns
+dict-encoded Utf8 usable directly in `IN` predicates (case-insensitive key match). No user/group
+discriminator exists in the codebase today, so **namespace the value**: `user:<email>` for personal
+audiences, `group:<id>` for groups. This prevents a group id from ever colliding with a user email in
+the one `audience` field and makes intent explicit to consumers. The key name `micromegas.audience`
+follows the existing dotted-namespace precedent (`otel.resource.*`).
 
 Storage of the stamped audience (v1 vs later) mirrors the superseded plan's open decision:
 - **v1: reserved property** `micromegas.audience` on the process — zero schema migration, flows
-  through existing property plumbing, row-level filter works immediately.
+  through existing property plumbing, `property_get(...) IN (...)` filter works immediately
+  (confirmed: `property_get.rs`, used in WHERE predicates across the codebase).
 - **later: first-class `audience` column** on `processes` + propagate through views — enables
   partition pruning and a physical boundary.
 
-### 4. Query enforcement — `OwnershipRewrite` analyzer rule (set-valued, mandatory)
+### 4. Query enforcement — two prongs (resolved by research; see Appendix A)
 
-A new mandatory `AnalyzerRule` beside `TableScanRewrite`, non-bypassable because it operates on the
-logical plan below the SQL text. It is constructed with the resolved `ReadScope` for the request.
+Enforcement **cannot** be a single analyzer rule. UDTF table functions surface as
+`LogicalPlan::TableScan`, but the span/metadata functions (`process_spans`, `perfetto_trace_chunks`,
+`list_partitions`, `parse_block`) **do not carry their owner id in the output schema**, bake the
+`process_id`/`stream_id` opaquely into the provider at plan time, and some ignore pushed-down filters
+(`process_spans_table_function.rs:386`). A predicate-injecting rule has no column to filter on for
+them. So enforcement is two-pronged, both fed the same per-request `ReadScope`:
 
-- If `ReadScope::All` → the rule is a no-op (bypass; see §5).
-- If `ReadScope::Principals(ps)` → inject, per table:
-  - **Tables carrying `audience` directly** (`processes`; `list_partitions`-style system tables):
-    `audience IN (ps)` — as a property predicate in v1, a column predicate later.
-  - **Tables keyed by `process_id`** (`streams`, `blocks`, `log_entries`, `measures`, spans, …):
-    semi-join subquery, **not** a materialized id list:
-    `process_id IN (SELECT process_id FROM processes WHERE audience IN (ps))`.
-    No fixed ceiling on owned processes (streaming-friendly; consistent with the project's
-    no-hard-limits preference).
-  - **Table functions** (`view_instance('<set>', <id>)`, `list_partitions`, span table functions):
-    `TableScanRewrite` **skips these today** (`table_scan_rewrite.rs:37-43`). The ownership rule
-    **must not** skip them — they are the leak path. Cover via: (a) an ownership guard on
-    `view_instance` so a caller cannot name another principal's `process_id`/`stream_id`, and
-    (b) predicate injection / wrapping for the metadata table functions. This is the most
-    delicate part of implementation and is called out in Open Questions.
+**Prong A — `OwnershipRewrite` analyzer rule** (for `MaterializedView`-backed scans). A new mandatory
+`AnalyzerRule` beside `TableScanRewrite`, non-bypassable (operates on the logical plan below the SQL
+text). Constructed with the resolved `ReadScope`.
+- `ReadScope::All` → no-op (bypass; see §5).
+- `ReadScope::Principals(ps)`:
+  - **`processes` view** (carries `audience` as a property in v1): `audience IN (ps)` via
+    `property_get(properties, 'micromegas.audience') IN (ps)`.
+  - **`process_id`-keyed views** (`streams`, `blocks`, `log_entries`, `measures`, span views):
+    semi-join, **not** a materialized id list —
+    `process_id IN (SELECT process_id FROM processes WHERE property_get(properties,'micromegas.audience') IN (ps))`.
+    No ceiling on owned processes (streaming-friendly; matches the project's no-hard-limits stance).
+  - **`view_instance('<set>', <id>)`** already surfaces as a `TableScan<MaterializedView>` and is
+    caught by this rule exactly like a named view — the same predicate applies. (This is why the
+    existing `TableScanRewrite` can already rewrite `view_instance`.)
 
-With `SelfReadPolicy`, `ps` is a singleton, so every predicate reduces to `audience IN ('alice@…')`
-— the exact per-user filter, same DataFusion plan.
+**Prong B — construction-time guard inside each UDTF `call_with_args`** (for the span/metadata
+functions Prong A can't reach). The owner id literal is available there via `exp_to_string` before
+the provider is built (`process_spans_table_function.rs:110`, `perfetto_trace_table_function.rs:72`).
+Thread `ReadScope` into `register_lakehouse_functions` (`query.rs:95-163`) and into each function
+struct, then:
+- **Arg-addressed functions** (`process_spans`, `perfetto_trace_chunks`, `parse_block`): the guard
+  captures `(named_process_id, ReadScope)`. Since `call_with_args` is **synchronous** and the
+  process→audience mapping needs metadata, perform the actual check at **scan time** (async) inside
+  the execution plan: resolve the process's `audience` and fail closed if `∉ ReadScope`. Fails at
+  plan time only if the check can be satisfied from already-resolved data.
+- **Listing functions** (`list_partitions`, `list_view_sets`): no owner arg — filter **emitted rows**
+  to readable audiences. `list_partitions` exposes `view_instance_id` (often a `process_id`), which
+  leaks the existence/size/timing of other principals' processes; it must be row-filtered.
+  `list_view_sets` returns view-set schema (not per-principal data) — likely safe to leave unfiltered
+  (confirm in Open Questions).
+
+With `SelfReadPolicy`, `ps` is a singleton, so Prong A reduces to `… IN ('user:alice@…')` — the exact
+per-user filter, same DataFusion plan — and Prong B checks membership in a one-element set.
 
 ### 5. Bypass paths (unchanged in spirit)
 
@@ -209,6 +239,11 @@ make_session_context(lakehouse, part_provider, query_range, view_factory, config
 - `flight_sql_service_impl` already resolves `attr.user_email` per request
   (`flight_sql_service_impl.rs:317`); call `ReadPolicy::readable_principals` there and pass the
   result into both `make_session_context` call sites (`:371`, `:841`).
+- **The scope must reach Prong B too.** `make_session_context` calls `register_functions` →
+  `register_lakehouse_functions` (`query.rs:95-163`), which is where UDTFs are registered. Thread the
+  `ReadScope` down that path so each `TableFunctionImpl` is constructed with it. `call_with_args` is
+  **synchronous**, so pass the already-resolved `ReadScope` value (not a policy object needing async
+  I/O) — the arg-addressed functions defer the actual audience check to async scan time.
 - The `ReadPolicy` object itself is a per-**service** dependency (like `session_configurator`),
   stored on `FlightSqlServiceImpl`; the **resolved scope** is per-request.
 - Do **not** try to smuggle identity through `SessionConfigurator` — it is shared across requests.
@@ -233,13 +268,19 @@ asymmetric modes (e.g. RBAC reads, self-only mint) with no code change.
    `policy.rs`). Add `SelfMintPolicy`, `SelfReadPolicy`.
 2. **AuthContext field.** Add `bound_audience: Option<String>` to `AuthContext`
    (`rust/auth/src/types.rs`); populate `None` everywhere except the key path.
-3. **Enforcement rule.** Add `OwnershipRewrite` in
-   `rust/analytics/src/lakehouse/ownership_rewrite.rs`, constructed from `ReadScope`. Filter on the
-   `micromegas.audience` property. Cover materialized views, `process_id`-keyed tables (semi-join),
-   **and** the table functions.
-4. **Thread identity.** Add `read_scope` param to `make_session_context` (`query.rs`) and register
-   `OwnershipRewrite` when scope ≠ `All`. Resolve scope via `ReadPolicy` in
-   `flight_sql_service_impl` and pass through both call sites. Daemon/admin → `ReadScope::All`.
+3. **Enforcement — Prong A (analyzer rule).** Add `OwnershipRewrite` in
+   `rust/analytics/src/lakehouse/ownership_rewrite.rs`, constructed from `ReadScope`. Inject
+   `property_get(properties,'micromegas.audience') IN (ps)` on the `processes` view, the semi-join on
+   `process_id`-keyed views, and `view_instance` (caught as a `TableScan<MaterializedView>`).
+3b. **Enforcement — Prong B (UDTF guards).** Thread `ReadScope` into `register_lakehouse_functions`
+   (`query.rs:95-163`) and each affected `TableFunctionImpl`. Arg-addressed functions
+   (`process_spans`, `perfetto_trace_chunks`, `parse_block`) verify the named process's audience at
+   async scan time, failing closed; listing functions (`list_partitions`) row-filter output by
+   readable audience. See §4 Prong B and Appendix A.
+4. **Thread identity.** Add `read_scope` param to `make_session_context` (`query.rs`) — used both to
+   register `OwnershipRewrite` (Prong A) when scope ≠ `All` and to feed `register_lakehouse_functions`
+   (Prong B). Resolve scope via `ReadPolicy` in `flight_sql_service_impl` and pass through both call
+   sites (`:371`, `:841`). Daemon/admin → `ReadScope::All`.
 5. **Config factory.** `MICROMEGAS_ISOLATION_POLICY` → default `self`; wire `Self*` impls.
 6. **Test with audience stamped manually** (before ingestion stamping exists): seed processes with a
    `micromegas.audience` property and assert cross-audience queries return nothing; same-audience and
@@ -259,17 +300,24 @@ asymmetric modes (e.g. RBAC reads, self-only mint) with no code change.
     (`OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_HEADERS=authorization=Bearer <key>`).
 
 ### Phase 4 — RBAC mode (pure additions, no rewrites)
-11. `RbacReadPolicy`: `{caller.email} ∪ {G : read(caller → G)}` from a groups claim and/or policy
-    store. Requires groups-claim extraction in `rust/auth/src/oidc.rs` (add next to `get_email`).
-12. `RbacMintPolicy`: permit `requested` iff `write(caller → requested)`.
-13. Policy source: IdP role claims (preferred — keeps "confidentiality rides on OIDC" literally true)
-    and/or a Postgres RBAC/grants table (admin-managed; those admins then join the TCB — see
-    Trade-offs).
-14. Flip `MICROMEGAS_ISOLATION_POLICY=rbac`. **No change** to the data model, `OwnershipRewrite`,
-    ingestion stamping, or the mint endpoint API.
+11. **Groups claim (low effort, confirmed).** Add `groups: Option<Vec<String>>` to the `Claims`
+    struct (`oidc.rs:193-227`) — no `#[serde(deny_unknown_fields)]`, so it is backward-compatible and
+    absent-claim-safe. Add a `groups: Vec<String>` field to `AuthContext` (`types.rs`) and populate it
+    at the OIDC construction site (`oidc.rs:536-545`); default `[]` in the API-key and other
+    construction sites. Flat top-level array covers Auth0/Azure AD/Google (the confirmed targets);
+    Keycloak's nested `realm_access.roles` is not a current target and would need a nested helper.
+12. `RbacReadPolicy`: `{user:caller.email} ∪ {group:G : G ∈ caller.groups (or grants)}`.
+13. `RbacMintPolicy`: permit `requested` iff `write(caller → requested)` (from `caller.groups` and/or
+    a grants table).
+14. Policy source: IdP claims (preferred — keeps "confidentiality rides on OIDC" literally true; the
+    `MICROMEGAS_ADMINS` allowlist at `oidc.rs:264-394` is the precedent for an env-driven
+    group→capability map) and/or a Postgres grants table (admin-managed; those admins then join the
+    TCB — see Trade-offs).
+15. Flip `MICROMEGAS_ISOLATION_POLICY=rbac`. **No change** to the data model, `OwnershipRewrite`,
+    the UDTF guards, ingestion stamping, or the mint endpoint API.
 
 ### Phase 5 — (optional) physical boundary
-15. Promote `micromegas.audience` to a first-class `audience` column; propagate through views; enable
+16. Promote `micromegas.audience` to a first-class `audience` column; propagate through views; enable
     partition pruning and per-audience object-storage prefixing.
 
 ## Files to Modify
@@ -278,9 +326,12 @@ asymmetric modes (e.g. RBAC reads, self-only mint) with no code change.
   `Self*`), `rust/auth/src/default_provider.rs` (policy factory / config knob),
   `rust/auth/src/api_key.rs` + new `db_api_key.rs` (Phase 3), `rust/auth/src/oidc.rs` (groups claim,
   Phase 4).
-- Analytics: `rust/analytics/src/lakehouse/ownership_rewrite.rs` (new),
-  `rust/analytics/src/lakehouse/query.rs` (`make_session_context` signature),
-  `rust/analytics/src/lakehouse/processes_view.rs` (audience exposure if promoted to column).
+- Analytics (Prong A): `rust/analytics/src/lakehouse/ownership_rewrite.rs` (new),
+  `rust/analytics/src/lakehouse/query.rs` (`make_session_context` + `register_lakehouse_functions`
+  signatures), `rust/analytics/src/lakehouse/processes_view.rs` (audience exposure if promoted).
+- Analytics (Prong B — UDTF guards): `rust/analytics/src/lakehouse/process_spans_table_function.rs`,
+  `perfetto_trace_table_function.rs`, `parse_block_table_function.rs`,
+  `list_partitions_table_function.rs`, and their execution plans (scan-time audience check).
 - Query service: `rust/public/src/servers/flight_sql_service_impl.rs` (resolve scope, pass through).
 - Ingestion: `rust/public/src/servers/ingestion.rs`, `rust/public/src/servers/otlp.rs`,
   `rust/ingestion/src/sql_telemetry_db.rs` (audience storage).
@@ -308,8 +359,9 @@ asymmetric modes (e.g. RBAC reads, self-only mint) with no code change.
 
 - Confidentiality = OIDC + `ReadPolicy` per query; write-key theft is integrity-only.
 - No write→read escalation (audience label ≠ read grant).
-- Metadata tables/functions **must** be covered by `OwnershipRewrite` or they leak process names,
-  machine names, and `otel.resource.*` properties even while log bodies are hidden — this is the
+- Metadata tables/functions **must** be covered by **both** prongs or they leak process names,
+  machine names, and `otel.resource.*` properties even while log bodies are hidden. Prong A covers the
+  views; Prong B covers the span/metadata UDTFs the analyzer physically cannot filter. This is the
   primary correctness risk and the focus of testing.
 - Admin bypass is audited; API keys can never be admin.
 - RBAC mode adds a trust dependency on the IdP's group/role claims (and, if used, the local grants
@@ -318,8 +370,9 @@ asymmetric modes (e.g. RBAC reads, self-only mint) with no code change.
 ## Testing Strategy
 
 - **Unit:** `SelfMintPolicy` rejects non-self `requested`; `SelfReadPolicy` returns the singleton.
-  `OwnershipRewrite` injects the expected predicate per table kind (snapshot the rewritten logical
-  plan), including table functions and `view_instance` guard.
+  Prong A: `OwnershipRewrite` injects the expected predicate per table kind (snapshot the rewritten
+  logical plan), including `view_instance`. Prong B: each guarded UDTF rejects an unowned
+  `process_id`/`block_id` and `list_partitions` row-filters — assert both fail closed.
 - **Integration (default/self mode):** two audiences seeded; assert each sees only its own rows
   across `processes`, `log_entries`, `measures`, spans, `view_instance`, `list_partitions`; assert
   the `process_id` semi-join blocks naming another audience's process directly; assert
@@ -340,15 +393,65 @@ asymmetric modes (e.g. RBAC reads, self-only mint) with no code change.
 
 ## Open Questions
 
-1. **Table-function coverage.** Exact mechanism to enforce ownership on `view_instance`,
-   `list_partitions`, and span table functions, given `TableScanRewrite` currently skips non-
-   `MaterializedView` providers. Guard-at-construction vs. predicate injection vs. wrapping — needs a
-   spike against DataFusion's table-function plumbing. Highest-risk item.
-2. **RBAC policy source.** IdP claims only, local grants table only, or both — and who administers the
-   table. Determines whether the confidentiality statement stays "OIDC only."
-3. **Admin read bypass.** Confirm audited `is_admin → ReadScope::All` vs. no bypass at all.
-4. **Audience identifier shape.** Emails for users; what namespace/format for group audiences (to
-   avoid collision between a user email and a group id in the same `audience` field). E.g. prefix
-   group audiences (`group:eng`) vs. rely on email format.
-5. **Audience storage for v1.** Confirm reserved property `micromegas.audience` (vs. going straight to
-   a column) — property is the zero-migration choice recommended here.
+Resolved by research (kept here for the record; details in Appendix A):
+- ~~**Table-function coverage.**~~ **Resolved:** two-pronged — analyzer rule for `MaterializedView`
+  scans incl. `view_instance` (Prong A); construction-time guard threaded with `ReadScope` for the
+  span/metadata UDTFs (Prong B), with the audience check at async scan time. A single analyzer rule is
+  provably insufficient (owner id absent from schema, opaque in provider, filters ignored).
+- ~~**Audience identifier shape.**~~ **Resolved:** value-prefix `user:<email>` / `group:<id>` in a
+  single dotted-namespace property `micromegas.audience` (matches `otel.resource.*` convention; no
+  collision possible).
+- ~~**Audience storage for v1.**~~ **Resolved:** reserved property `micromegas.audience`;
+  `property_get(...) IN (...)` is confirmed to work in WHERE predicates. Promote to a column in
+  Phase 5.
+- ~~**Groups-claim feasibility.**~~ **Resolved:** one-line additive `Claims`/`AuthContext` change,
+  backward-compatible; Auth0/Azure AD/Google flat arrays; `MICROMEGAS_ADMINS` is the config precedent.
+
+Still open (decisions, not research):
+1. **RBAC policy source.** IdP claims only, local grants table only, or both — and who administers the
+   table. Determines whether the confidentiality statement stays "OIDC only." *Recommendation: start
+   with IdP `groups` claim only.*
+2. **Admin read bypass.** Confirm audited `is_admin → ReadScope::All` vs. no bypass at all.
+   *Recommendation: audited bypass, reusing the existing audit path.*
+3. **`list_view_sets` exposure.** Confirm it may stay unfiltered (view-set schema, not per-principal
+   data) rather than being row-filtered like `list_partitions`.
+4. **Scan-time check cost.** Prong B resolves a process's audience at scan time for arg-addressed
+   UDTFs — confirm this metadata lookup is cheap enough / cacheable per query (it is one lookup per
+   named process, and `self` mode is a singleton-set membership test).
+
+## Appendix A — Research findings (2026-07-21)
+
+Grounded against the current tree; file:line refs verified.
+
+**Table functions (DataFusion 54.0).** UDTFs are registered via `ctx.register_udtf` in
+`register_lakehouse_functions` (`query.rs:102-155`) and resolve at SQL-planning time into
+`LogicalPlan::TableScan` nodes wrapping a `DefaultTableSource(provider)` — so an `AnalyzerRule` *can*
+see them. But:
+- `view_instance` returns a `MaterializedView` (`view_instance_table_function.rs:76`) → already
+  rewritten by `TableScanRewrite`; Prong A handles it.
+- `process_spans` (`ProcessSpansTableProvider`, `process_spans_table_function.rs:366`),
+  `perfetto_trace_chunks`, `parse_block`, `list_partitions`, `list_view_sets` do **not** expose their
+  owner id in the output schema, and bake `process_id`/`stream_id` opaquely into the provider at plan
+  time via `exp_to_string` (`process_spans_table_function.rs:110`, `perfetto:72`). `scan()` even
+  ignores `_filters` (`process_spans_table_function.rs:386`). ⇒ predicate injection is impossible for
+  these; **guard-at-construction (Prong B)** is the only uniform enforcement point. `call_with_args`
+  is synchronous → pass a pre-resolved `ReadScope`, defer the metadata-dependent check to async scan.
+- `process_thread_spans_table_function.rs~` is a dead backup (not compiled/registered) — ignore.
+- Identity is already resolved at `flight_sql_service_impl.rs:317` but currently used only for audit;
+  it is not passed to `make_session_context`/`register_lakehouse_functions`.
+
+**OIDC claims (`oidc.rs`).** `Claims` struct at `:193-227`; `get_email()` priority chain at
+`:229-241`; no `#[serde(deny_unknown_fields)]` ⇒ adding `groups`/`roles` is additive and
+absent-safe. `is_admin` = allowlist match on `sub`/email from `MICROMEGAS_ADMINS`
+(`load_admin_users` `:264-269`, check `:390-394`) — the precedent for group→capability config.
+Targets: Auth0, Azure AD, Google (Keycloak nested claims not currently targeted). `AuthContext`
+(`types.rs:14-37`) has no groups field yet — must be added for RBAC.
+
+**Properties.** `micromegas_property = (key TEXT, value TEXT)` (`sql_telemetry_db.rs:17`),
+`processes.properties micromegas_property[]` (`:39`) — arbitrary strings, no per-key typing.
+`property_get` returns `Dictionary(Int32, Utf8)`, case-insensitive key match, `NULL` when absent
+(`property_get.rs:48,87-92`); used in WHERE across the codebase (e.g. `query_processes.rs:73`). No
+`micromegas.` reserved-key convention exists yet, but `otel.resource.*` is the established dotted
+namespace (`otel-ingestion/src/block.rs:467-475`); OTel `process.owner`/`host.name` already land as
+`otel.resource.*` properties (demote to display-only). No user/group value discriminator exists ⇒
+adopt `user:`/`group:` prefixes.
