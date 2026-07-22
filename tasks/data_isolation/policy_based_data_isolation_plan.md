@@ -214,6 +214,18 @@ struct, then:
   `process_id`), leaking the existence/size/timing of other principals' processes — it **must be
   row-filtered** to readable audiences. `list_view_sets` **stays unfiltered (decided):** it returns
   view-set schema/definitions only, which contain no PII or per-principal data.
+- **Mutating functions (decided): maintenance-only, excluded from user sessions.**
+  `retire_partitions` (`query.rs:119-122`) destructively deletes `lakehouse_partitions` rows for a
+  `(view_set_name, view_instance_id)` pair (`write_partition.rs:116`), and `view_instance_id` is a
+  `process_id` for process-scoped view sets — the same opaque, unchecked argument as `process_spans`,
+  but destructive rather than read-only: naming another principal's id destroys their partitions (an
+  integrity/availability hole, not a confidentiality one). `materialize_partitions`
+  (`query.rs:131-134`) takes no per-process id — it materializes a *global* view
+  (`view_factory.get_global_view`) over an insert-time range, so it can't target another principal's
+  data, but it is an unbounded write/compute operation with no legitimate use from a read session.
+  Neither is a read, so neither gets an audience filter; instead `register_lakehouse_functions` skips
+  registering both unless `ReadScope::All` (i.e. only for internal/maintenance session contexts, never
+  a user FlightSQL session, admin or not) — a user calling either gets "function not found".
 
 With `SelfReadPolicy`, `ps` is a singleton, so Prong A reduces to `… IN ('user:alice@…')` — the exact
 per-user filter, same DataFusion plan — and Prong B checks membership in a one-element set.
@@ -288,7 +300,8 @@ asymmetric modes (e.g. RBAC reads, self-only mint) with no code change.
    (`query.rs:95-163`) and each affected `TableFunctionImpl`. Arg-addressed functions
    (`process_spans`, `perfetto_trace_chunks`, `parse_block`) verify the named process's audience at
    async scan time, failing closed; listing functions (`list_partitions`) row-filter output by
-   readable audience. See §4 Prong B and Appendix A.
+   readable audience; mutating functions (`retire_partitions`, `materialize_partitions`) are simply
+   not registered unless `ReadScope::All` (maintenance-only). See §4 Prong B and Appendix A.
 4. **Thread identity.** Add `read_scope` param to `make_session_context` (`query.rs`) — used both to
    register `OwnershipRewrite` (Prong A) when scope ≠ `All` and to feed `register_lakehouse_functions`
    (Prong B). Resolve scope via `ReadPolicy` in `flight_sql_service_impl` and pass through both call
@@ -350,7 +363,9 @@ asymmetric modes (e.g. RBAC reads, self-only mint) with no code change.
   signatures), `rust/analytics/src/lakehouse/processes_view.rs` (audience exposure if promoted).
 - Analytics (Prong B — UDTF guards): `rust/analytics/src/lakehouse/process_spans_table_function.rs`,
   `perfetto_trace_table_function.rs`, `parse_block_table_function.rs`,
-  `list_partitions_table_function.rs`, and their execution plans (scan-time audience check).
+  `list_partitions_table_function.rs`, and their execution plans (scan-time audience check);
+  `retire_partitions_table_function.rs` and `materialize_partitions_table_function.rs` (gate
+  registration on `ReadScope::All` instead of an audience check).
 - Query service: `rust/public/src/servers/flight_sql_service_impl.rs` (resolve scope, pass through).
 - Ingestion: `rust/public/src/servers/ingestion.rs`, `rust/public/src/servers/otlp.rs`,
   `rust/ingestion/src/sql_telemetry_db.rs` (audience storage).
@@ -382,6 +397,11 @@ asymmetric modes (e.g. RBAC reads, self-only mint) with no code change.
   machine names, and `otel.resource.*` properties even while log bodies are hidden. Prong A covers the
   views; Prong B covers the span/metadata UDTFs the analyzer physically cannot filter. This is the
   primary correctness risk and the focus of testing.
+- `retire_partitions` and `materialize_partitions` are not read paths; they are excluded from user
+  sessions entirely (maintenance-only, `ReadScope::All`-gated) rather than audience-filtered — an
+  integrity/availability control, not a confidentiality one. Without it, a non-admin could name
+  another principal's `process_id` via `retire_partitions`' `view_instance_id` argument to destroy
+  their partitions.
 - No admin query-path read bypass — admin FlightSQL sessions are filtered like any other. Cross-
   principal reads for operators are an out-of-band capability (direct object-store/parquet access),
   intentionally outside the query path. API keys can never be admin.
@@ -393,7 +413,9 @@ asymmetric modes (e.g. RBAC reads, self-only mint) with no code change.
 - **Unit:** `SelfMintPolicy` rejects non-self `requested`; `SelfReadPolicy` returns the singleton.
   Prong A: `OwnershipRewrite` injects the expected predicate per table kind (snapshot the rewritten
   logical plan), including `view_instance`. Prong B: each guarded UDTF rejects an unowned
-  `process_id`/`block_id` and `list_partitions` row-filters — assert both fail closed.
+  `process_id`/`block_id` and `list_partitions` row-filters — assert both fail closed; assert
+  `retire_partitions` and `materialize_partitions` are absent ("function not found") from a
+  registration built with any non-`All` `ReadScope`, admin or not.
 - **Integration (default/self mode):** two audiences seeded; assert each sees only its own rows
   across `processes`, `log_entries`, `measures`, spans, `view_instance`, `list_partitions`; assert
   the `process_id` semi-join blocks naming another audience's process directly; assert the daemon
@@ -438,6 +460,11 @@ Resolved by research (kept here for the record; details in Appendix A):
   unfiltered. See §5.
 - ~~**`list_view_sets` exposure.**~~ **Decided: stays unfiltered** — view-set schema/definitions only,
   no PII or per-principal data. Only `list_partitions` is row-filtered. See §4 Prong B.
+- ~~**`retire_partitions` / `materialize_partitions` exposure.**~~ **Decided: maintenance-only,
+  gated on `ReadScope::All`.** Both were missing from the original Prong B audit despite being
+  registered unconditionally alongside the other UDTFs; both mutate lakehouse state, so neither gets
+  an audience read-filter — instead `register_lakehouse_functions` skips registering them for any
+  user session. See §4 Prong B and Appendix A.
 - ~~**Scan-time check cost.**~~ **Resolved:** `process_id → audience` is immutable, so an
   invalidation-free size-bounded `moka` cache (backed by `find_process`) makes the check an O(1)
   in-memory lookup on warm hits, one indexed PG query per process ever on cold miss. `ReadScope` is
@@ -464,6 +491,17 @@ see them. But:
   these; **guard-at-construction (Prong B)** is the only uniform enforcement point. `call_with_args`
   is synchronous → pass a pre-resolved `ReadScope`, defer the metadata-dependent check to async scan.
 - `process_thread_spans_table_function.rs~` is a dead backup (not compiled/registered) — ignore.
+- `retire_partitions` (`query.rs:119-122`) and `materialize_partitions` (`query.rs:131-134`) are the
+  remaining two of the eight registered UDTFs and were absent from the original audit above. Neither
+  is a read. `retire_partitions` deletes `lakehouse_partitions` rows for a
+  `(view_set_name, view_instance_id)` pair (`write_partition.rs:116`) — destructive — and
+  `view_instance_id` is a `process_id` for process-scoped view sets, so it has the same opaque,
+  unchecked argument shape as `process_spans`. `materialize_partitions` takes no per-process id — it
+  materializes a *global* view (`view_factory.get_global_view`) over an insert-time range — so it
+  can't target another principal's data but is still an unbounded write with no read-session use
+  case. **Decided:** gate registration of both on `ReadScope::All` (maintenance-only) rather than
+  extending the audience check to them — they're integrity/availability concerns, not confidentiality
+  ones.
 - Identity is already resolved at `flight_sql_service_impl.rs:317` but currently used only for audit;
   it is not passed to `make_session_context`/`register_lakehouse_functions`.
 
