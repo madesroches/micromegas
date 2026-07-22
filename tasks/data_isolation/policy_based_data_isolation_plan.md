@@ -306,13 +306,19 @@ asymmetric modes (e.g. RBAC reads, self-only mint) with no code change.
     at the OIDC construction site (`oidc.rs:536-545`); default `[]` in the API-key and other
     construction sites. Flat top-level array covers Auth0/Azure AD/Google (the confirmed targets);
     Keycloak's nested `realm_access.roles` is not a current target and would need a nested helper.
-12. `RbacReadPolicy`: `{user:caller.email} ∪ {group:G : G ∈ caller.groups (or grants)}`.
-13. `RbacMintPolicy`: permit `requested` iff `write(caller → requested)` (from `caller.groups` and/or
-    a grants table).
-14. Policy source: IdP claims (preferred — keeps "confidentiality rides on OIDC" literally true; the
-    `MICROMEGAS_ADMINS` allowlist at `oidc.rs:264-394` is the precedent for an env-driven
-    group→capability map) and/or a Postgres grants table (admin-managed; those admins then join the
-    TCB — see Trade-offs).
+12. `RbacReadPolicy`: `{user:caller.email} ∪ {group:G : G ∈ caller.groups}` — the readable set is the
+    token's `groups` claim (prefixed) plus the caller's own `user:` audience.
+13. `RbacMintPolicy`: permit `requested` iff `requested` is `user:caller.email` or `group:G` with
+    `G ∈ caller.groups`.
+14. **Policy source (decided): IdP `groups` claim only.** No local grants table in v1 — this keeps
+    confidentiality resting solely on OIDC (the confidentiality statement stays literally true) and
+    adds no TCB members. Precedent: the `MICROMEGAS_ADMINS` allowlist (`oidc.rs:264-394`).
+    **Consequence — write/read collapse to membership:** with a single `groups` claim, membership in
+    `G` grants *both* `read:G` and `write:G`. The three-relation model's extra expressiveness
+    (write-only producer, read-only consumer — separately grantable `write`/`read`) is **deferred**;
+    it needs a richer source (a second role claim, or a Postgres grants table putting its editors in
+    the TCB). Both remain **pure additions** behind the same `MintPolicy`/`ReadPolicy` seams — no
+    rewrite of the data model, enforcement, or endpoints.
 15. Flip `MICROMEGAS_ISOLATION_POLICY=rbac`. **No change** to the data model, `OwnershipRewrite`,
     the UDTF guards, ingestion stamping, or the mint endpoint API.
 
@@ -348,10 +354,10 @@ asymmetric modes (e.g. RBAC reads, self-only mint) with no code change.
   not retroactively invalidate keys already minted for G — the key *is* the frozen grant; to undo it
   you revoke the key. This matches the stated use case. If retroactive write-revocation is ever
   needed, add `minted_by` to `api_keys` and revoke by `(minted_by, audience)` — an additive change.
-- **Policy source in RBAC mode.** IdP claims keep confidentiality resting solely on OIDC. A local
-  grants table is more flexible but puts its editors in the TCB and weakens the confidentiality
-  statement to "OIDC identity + integrity of the local read-policy." Deferred decision (Open
-  Questions).
+- **Policy source in RBAC mode (decided): IdP `groups` claim only.** Keeps confidentiality resting
+  solely on OIDC; no TCB additions. Trade-off accepted: membership grants both read and write for a
+  group (no independent write-only/read-only). A local grants table (more expressive, but its editors
+  join the TCB) is a deferred pure addition, not part of v1.
 - **Reserved property vs. first-class column** for the audience (v1 vs Phase 5): row-level filter now
   with zero migration, physical pruning later.
 
@@ -364,8 +370,8 @@ asymmetric modes (e.g. RBAC reads, self-only mint) with no code change.
   views; Prong B covers the span/metadata UDTFs the analyzer physically cannot filter. This is the
   primary correctness risk and the focus of testing.
 - Admin bypass is audited; API keys can never be admin.
-- RBAC mode adds a trust dependency on the IdP's group/role claims (and, if used, the local grants
-  table).
+- RBAC mode (v1) adds a single trust dependency: the IdP's `groups` claim. No local policy store, so
+  the TCB is unchanged from `self` mode.
 
 ## Testing Strategy
 
@@ -406,16 +412,17 @@ Resolved by research (kept here for the record; details in Appendix A):
   Phase 5.
 - ~~**Groups-claim feasibility.**~~ **Resolved:** one-line additive `Claims`/`AuthContext` change,
   backward-compatible; Auth0/Azure AD/Google flat arrays; `MICROMEGAS_ADMINS` is the config precedent.
+- ~~**RBAC policy source.**~~ **Decided: IdP `groups` claim only** (no local grants table in v1).
+  Keeps confidentiality on OIDC and the TCB unchanged; accepted trade-off is that membership grants
+  both read and write for a group. A grants table (or a second write-role claim) is a deferred pure
+  addition. See Phase 4 step 14.
 
 Still open (decisions, not research):
-1. **RBAC policy source.** IdP claims only, local grants table only, or both — and who administers the
-   table. Determines whether the confidentiality statement stays "OIDC only." *Recommendation: start
-   with IdP `groups` claim only.*
-2. **Admin read bypass.** Confirm audited `is_admin → ReadScope::All` vs. no bypass at all.
+1. **Admin read bypass.** Confirm audited `is_admin → ReadScope::All` vs. no bypass at all.
    *Recommendation: audited bypass, reusing the existing audit path.*
-3. **`list_view_sets` exposure.** Confirm it may stay unfiltered (view-set schema, not per-principal
+2. **`list_view_sets` exposure.** Confirm it may stay unfiltered (view-set schema, not per-principal
    data) rather than being row-filtered like `list_partitions`.
-4. **Scan-time check cost.** Prong B resolves a process's audience at scan time for arg-addressed
+3. **Scan-time check cost.** Prong B resolves a process's audience at scan time for arg-addressed
    UDTFs — confirm this metadata lookup is cheap enough / cacheable per query (it is one lookup per
    named process, and `self` mode is a singleton-set membership test).
 
