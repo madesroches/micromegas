@@ -128,10 +128,10 @@ pub trait ReadPolicy: Send + Sync + std::fmt::Debug {
     async fn readable_principals(&self, caller: &AuthContext) -> anyhow::Result<ReadScope>;
 }
 
-/// Result of a ReadPolicy. Explicit `All` variant models the admin/daemon bypass
+/// Result of a ReadPolicy. Explicit `All` variant models the daemon bypass
 /// without a magic sentinel string.
 pub enum ReadScope {
-    /// Unfiltered (maintenance daemon; audited admin bypass).
+    /// Unfiltered. Produced ONLY for the internal maintenance daemon — never for a user session.
     All,
     /// Filter to `audience IN (principals)`. May be a singleton (per-user default).
     Principals(Vec<String>),
@@ -219,18 +219,20 @@ struct, then:
 With `SelfReadPolicy`, `ps` is a singleton, so Prong A reduces to `… IN ('user:alice@…')` — the exact
 per-user filter, same DataFusion plan — and Prong B checks membership in a one-element set.
 
-### 5. Bypass paths (unchanged in spirit)
+### 5. Bypass paths
 
 - **Maintenance daemon** materializing global views must run with `ReadScope::All` (internal
-  materialization path, never a user session).
-- **Human admins**: `is_admin` (OIDC only; API keys can never be admin, `api_key.rs:123`) may map to
-  `ReadScope::All` **with an audit record** — the audit plumbing already exists and is the only
-  current consumer of user attribution.
+  materialization path, never a user session). This is the **only** producer of `ReadScope::All`.
+- **No human-admin query-path bypass (decided).** `is_admin` does **not** map to `ReadScope::All`; an
+  admin's FlightSQL session is filtered like any other. Rationale: an operator with lakehouse/object-
+  store access can read the raw parquet directly, so a query-path bypass adds attack surface and audit
+  burden for no confidentiality gain. Admins needing cross-principal reads use direct storage access,
+  not the query path. (`is_admin` therefore needs no wiring into `ReadScope` in v1.)
 
 ### 6. Threading identity into the session context
 
-`make_session_context` currently takes no identity. Add the resolved `ReadScope` (or a small
-`QueryAuthz { scope: ReadScope, is_admin: bool }`) as a parameter:
+`make_session_context` currently takes no identity. Add the resolved `ReadScope` as a parameter
+(no `is_admin` needed — there is no admin query bypass):
 
 ```
 make_session_context(lakehouse, part_provider, query_range, view_factory, configurator, read_scope)
@@ -280,11 +282,12 @@ asymmetric modes (e.g. RBAC reads, self-only mint) with no code change.
 4. **Thread identity.** Add `read_scope` param to `make_session_context` (`query.rs`) — used both to
    register `OwnershipRewrite` (Prong A) when scope ≠ `All` and to feed `register_lakehouse_functions`
    (Prong B). Resolve scope via `ReadPolicy` in `flight_sql_service_impl` and pass through both call
-   sites (`:371`, `:841`). Daemon/admin → `ReadScope::All`.
+   sites (`:371`, `:841`). Only the maintenance daemon uses `ReadScope::All`; user sessions
+   (admin or not) are always filtered.
 5. **Config factory.** `MICROMEGAS_ISOLATION_POLICY` → default `self`; wire `Self*` impls.
 6. **Test with audience stamped manually** (before ingestion stamping exists): seed processes with a
-   `micromegas.audience` property and assert cross-audience queries return nothing; same-audience and
-   admin/daemon return everything.
+   `micromegas.audience` property and assert cross-audience queries return nothing; same-audience
+   returns its own rows; the daemon (`ReadScope::All`) returns everything.
 
 ### Phase 2 — Ingestion stamping
 7. Read `AuthContext.bound_audience` in native + OTLP handlers; write `micromegas.audience` onto the
@@ -369,7 +372,9 @@ asymmetric modes (e.g. RBAC reads, self-only mint) with no code change.
   machine names, and `otel.resource.*` properties even while log bodies are hidden. Prong A covers the
   views; Prong B covers the span/metadata UDTFs the analyzer physically cannot filter. This is the
   primary correctness risk and the focus of testing.
-- Admin bypass is audited; API keys can never be admin.
+- No admin query-path read bypass — admin FlightSQL sessions are filtered like any other. Cross-
+  principal reads for operators are an out-of-band capability (direct object-store/parquet access),
+  intentionally outside the query path. API keys can never be admin.
 - RBAC mode (v1) adds a single trust dependency: the IdP's `groups` claim. No local policy store, so
   the TCB is unchanged from `self` mode.
 
@@ -381,8 +386,8 @@ asymmetric modes (e.g. RBAC reads, self-only mint) with no code change.
   `process_id`/`block_id` and `list_partitions` row-filters — assert both fail closed.
 - **Integration (default/self mode):** two audiences seeded; assert each sees only its own rows
   across `processes`, `log_entries`, `measures`, spans, `view_instance`, `list_partitions`; assert
-  the `process_id` semi-join blocks naming another audience's process directly; assert
-  daemon/admin(`ReadScope::All`) sees everything.
+  the `process_id` semi-join blocks naming another audience's process directly; assert the daemon
+  (`ReadScope::All`) sees everything and that an **admin user session is still filtered** (no bypass).
 - **Equivalence:** confirm the executed plan in `self` mode matches the intended per-user filter (a
   singleton `IN`), i.e. no behavioral difference from a hand-written per-user design.
 - **RBAC mode (Phase 4):** group member reads group data; write-only producer (`write(→G)`,
@@ -416,13 +421,16 @@ Resolved by research (kept here for the record; details in Appendix A):
   Keeps confidentiality on OIDC and the TCB unchanged; accepted trade-off is that membership grants
   both read and write for a group. A grants table (or a second write-role claim) is a deferred pure
   addition. See Phase 4 step 14.
+- ~~**Admin read bypass.**~~ **Decided: no query-path bypass.** `is_admin` does not map to
+  `ReadScope::All`; admin sessions are filtered like any other. Operators needing cross-principal
+  reads use direct object-store/parquet access, which they already have — a query bypass would add
+  attack surface and audit burden for no confidentiality gain. Only the maintenance daemon is
+  unfiltered. See §5.
 
 Still open (decisions, not research):
-1. **Admin read bypass.** Confirm audited `is_admin → ReadScope::All` vs. no bypass at all.
-   *Recommendation: audited bypass, reusing the existing audit path.*
-2. **`list_view_sets` exposure.** Confirm it may stay unfiltered (view-set schema, not per-principal
+1. **`list_view_sets` exposure.** Confirm it may stay unfiltered (view-set schema, not per-principal
    data) rather than being row-filtered like `list_partitions`.
-3. **Scan-time check cost.** Prong B resolves a process's audience at scan time for arg-addressed
+2. **Scan-time check cost.** Prong B resolves a process's audience at scan time for arg-addressed
    UDTFs — confirm this metadata lookup is cheap enough / cacheable per query (it is one lookup per
    named process, and `self` mode is a singleton-set membership test).
 
