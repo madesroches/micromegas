@@ -255,10 +255,22 @@ async fn write(&self, lake: Arc<DataLakeConnection>, logger: Arc<dyn Logger>) ->
         Ok(())
     }.await;
 
-    drop(tx);
     match stream_result {
-        Ok(()) => { join_handle.await??; Ok(()) }
-        Err(e) => { /* abort the writer task, mirroring create_merged_partition's error path */ }
+        Ok(()) => {
+            drop(tx);
+            join_handle.await??;
+            Ok(())
+        }
+        Err(e) => {
+            // mirror create_merged_partition's error path: send the abort through the
+            // channel before dropping it, so write_partition_from_rows sees an Err item
+            // instead of a plain closed-channel end-of-stream and does not commit a
+            // partial partition.
+            let _ = tx.send(Err(anyhow::anyhow!("metadata partition stream aborted"))).await;
+            drop(tx);
+            let _ = join_handle.await;
+            Err(e)
+        }
     }
 }
 ```
