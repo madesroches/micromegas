@@ -217,8 +217,13 @@ cope with the mixed artifact.
   of `rust/auth` but not of `rust/analytics`, so charset-constraining at the boundary avoids adding that
   dependency to the analytics crate and is the lower-surprise choice. The advisory-lock key hashes the
   instance id (`write_partition.rs:232-245`) and is fine for any string.
-- **Write / encrypt (raw blocks):** ingestion handlers know `bound_audience` (per the policy plan's
-  key model). Encrypt the block payload under that audience's KEK before object-store write.
+- **Write / encrypt (raw blocks):** the HTTP ingestion handlers (`rust/public/src/servers/ingestion.rs`,
+  `otlp.rs`) are thin shims — the actual object-store write is one choke point, deeper down:
+  `rust/ingestion/src/web_ingestion_service.rs::insert_block_typed` (~line 165), which CBOR-encodes
+  `block.payload` and `put`s it to `blobs/{process_id}/{stream_id}/{block_id}`. Both native and OTLP
+  ingestion funnel through `WebIngestionService`, so thread `bound_audience` (per the policy plan's
+  key model) down to `insert_block_typed` and encrypt the payload under that audience's KEK there,
+  rather than in the handler files.
 - **Read / decrypt:** `MaterializedView::scan` is where partitions are read and already carries the
   per-request `ReadScope` (the policy plan threads it there). Configure the parquet reader's
   decryption key-retriever here; raw-block reads (during JIT materialization) decrypt via the same
@@ -316,8 +321,11 @@ through the standard scan/write paths.
 - **Bare-name union rewrite:** `rust/analytics/src/lakehouse/query.rs` (bare-table registration) +
   an analyzer rule or custom provider.
 - **Encryption write seam:** `rust/analytics/src/lakehouse/write_partition.rs` (KEK selection, PME
-  wiring, path-segment encoding); ingestion (`rust/public/src/servers/ingestion.rs`,
-  `otlp.rs`) for raw-block encryption.
+  wiring, path-segment encoding); `rust/ingestion/src/web_ingestion_service.rs::insert_block_typed`
+  (the single object-store put covering both native and OTLP ingestion) for raw-block encryption —
+  thread `bound_audience` down from the HTTP handlers (`rust/public/src/servers/ingestion.rs`,
+  `otlp.rs`) to this choke point rather than encrypting in the handlers themselves. Note also the
+  separate `rust/otel-ingestion` crate.
 - **Decryption read seam:** `rust/analytics/src/lakehouse/materialized_view.rs` (key-retriever,
   ReadScope-gated unwrap).
 - **KMS/DEK cache:** new module mirroring `metadata_cache.rs` (moka).
