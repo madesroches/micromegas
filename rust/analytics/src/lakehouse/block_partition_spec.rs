@@ -65,14 +65,20 @@ impl PartitionSpec for BlockPartitionSpec {
             self.insert_range.begin.to_rfc3339(),
             self.insert_range.end.to_rfc3339()
         );
-        logger.write_log_entry(format!("writing {desc}")).await?;
+        instrument_named!(
+            logger.write_log_entry(format!("writing {desc}")),
+            "log_write_start"
+        )
+        .await?;
 
-        logger
-            .write_log_entry(format!(
+        instrument_named!(
+            logger.write_log_entry(format!(
                 "reading {} blocks",
                 self.source_data.get_nb_blocks()
-            ))
-            .await?;
+            )),
+            "log_reading_blocks"
+        )
+        .await?;
 
         // Allow empty source data - write_partition_from_rows will create
         // an empty partition record if no data is sent through the channel
@@ -90,7 +96,7 @@ impl PartitionSpec for BlockPartitionSpec {
         // If source data is empty, just close the channel to create an empty partition
         if self.source_data.is_empty() {
             drop(tx);
-            join_handle.await??;
+            instrument_named!(join_handle, "write_partition_from_rows_join").await??;
             return Ok(());
         }
 
@@ -98,49 +104,52 @@ impl PartitionSpec for BlockPartitionSpec {
         let mut nb_tasks = (100 * 1024 * 1024) / max_size; // try to download up to 100 MB of payloads
         nb_tasks = nb_tasks.clamp(1, 64);
 
-        let mut stream = self
-            .source_data
-            .get_blocks_stream()
-            .await
-            .map(|src_block_res| async {
-                let src_block = src_block_res.with_context(|| "get_blocks_stream")?;
-                // Per-block dispatch on `streams.format`. A view that doesn't register
-                // a processor for some format silently skips matching blocks instead of
-                // erroring — keeps the partition build moving when an unknown format
-                // shows up alongside known ones.
-                let Some(block_processor) = self
-                    .block_processors
-                    .get(src_block.format.as_str())
-                    .cloned()
-                else {
-                    warn!(
-                        "no block processor for format={} (view={}/{}); skipping block_id={}",
-                        src_block.format,
-                        self.view_metadata.view_set_name,
-                        self.view_metadata.view_instance_id,
-                        src_block.block.block_id
-                    );
-                    return Ok::<Option<PartitionRowSet>, anyhow::Error>(None);
-                };
-                let blob_storage = lake.blob_storage.clone();
-                let handle = spawn_with_context(async move {
-                    block_processor
-                        .process(blob_storage, src_block)
+        let mut stream =
+            instrument_named!(self.source_data.get_blocks_stream(), "get_blocks_stream")
+                .await
+                .map(|src_block_res| async {
+                    let src_block = src_block_res.with_context(|| "get_blocks_stream")?;
+                    // Per-block dispatch on `streams.format`. A view that doesn't register
+                    // a processor for some format silently skips matching blocks instead of
+                    // erroring — keeps the partition build moving when an unknown format
+                    // shows up alongside known ones.
+                    let Some(block_processor) = self
+                        .block_processors
+                        .get(src_block.format.as_str())
+                        .cloned()
+                    else {
+                        warn!(
+                            "no block processor for format={} (view={}/{}); skipping block_id={}",
+                            src_block.format,
+                            self.view_metadata.view_set_name,
+                            self.view_metadata.view_instance_id,
+                            src_block.block.block_id
+                        );
+                        return Ok::<Option<PartitionRowSet>, anyhow::Error>(None);
+                    };
+                    let blob_storage = lake.blob_storage.clone();
+                    let handle = spawn_with_context(async move {
+                        block_processor
+                            .process(blob_storage, src_block)
+                            .await
+                            .with_context(|| "processing source block")
+                    });
+                    instrument_named!(handle, "block_processor_task_join")
                         .await
-                        .with_context(|| "processing source block")
-                });
-                handle.await.with_context(|| "handle.await")?
-            })
-            .buffer_unordered(nb_tasks);
+                        .with_context(|| "handle.await")?
+                })
+                .buffer_unordered(nb_tasks);
 
-        while let Some(res_opt_rows) = stream.next().await {
+        while let Some(res_opt_rows) = instrument_named!(stream.next(), "blocks_stream_next").await
+        {
             match res_opt_rows {
                 Err(e) => {
                     error!("{e:?}");
-                    logger.write_log_entry(format!("{e:?}")).await?;
+                    instrument_named!(logger.write_log_entry(format!("{e:?}")), "log_block_error")
+                        .await?;
                 }
                 Ok(Some(row_set)) => {
-                    tx.send(Ok(row_set)).await?;
+                    instrument_named!(tx.send(Ok(row_set)), "row_set_channel_send").await?;
                 }
                 Ok(None) => {
                     debug!("empty block");
@@ -148,7 +157,7 @@ impl PartitionSpec for BlockPartitionSpec {
             }
         }
         drop(tx);
-        join_handle.await??;
+        instrument_named!(join_handle, "write_partition_from_rows_join").await??;
         Ok(())
     }
 }
