@@ -210,10 +210,24 @@ struct, then:
   process→audience mapping needs metadata, perform the actual check at **scan time** (async) inside
   the execution plan: resolve the process's `audience` and fail closed if `∉ ReadScope`. Fails at
   plan time only if the check can be satisfied from already-resolved data.
-- **Listing functions:** `list_partitions` has no owner arg but exposes `view_instance_id` (often a
-  `process_id`), leaking the existence/size/timing of other principals' processes — it **must be
-  row-filtered** to readable audiences. `list_view_sets` **stays unfiltered (decided):** it returns
-  view-set schema/definitions only, which contain no PII or per-principal data.
+- **Listing functions:** `list_partitions` has no owner arg but exposes a generic `view_instance_id`
+  Utf8 column whose contents depend on the view set — per `view.rs:56`, "`view_instance_id` can be a
+  process_id, a stream_id or 'global'" — leaking the existence/size/timing of other principals' data
+  if left unfiltered. It **must be row-filtered**, per row kind:
+  - **`process_id`-keyed rows** (`log_entries`, `measures`, `async_events`, `net_spans`, ... instance
+    partitions): resolve `view_instance_id` as a `process_id` through the `process_id → audience`
+    cache (§4 "Prong B performance"); keep the row iff its audience `∈ ReadScope`.
+  - **`stream_id`-keyed rows** (`thread_spans` — the one view set with no `process_id`-scoped
+    alternative, per `view_factory.rs`): resolve via a `stream_id → process_id` lookup (added to the
+    cache design below), then the same `process_id → audience` cache; same keep-iff-readable rule.
+  - **`'global'` rows** (the unscoped aggregate partitions — `processes`, `streams`, `blocks`, and the
+    global `log_entries`/`measures` instances): carry no single audience to check. Per the fail-closed
+    posture (§5), these rows are **hidden** from any `ReadScope::Principals` session — visible only
+    under `ReadScope::All` (maintenance daemon). `list_partitions` never shows a row it cannot resolve
+    to a readable audience.
+
+  `list_view_sets` **stays unfiltered (decided):** it returns view-set schema/definitions only, which
+  contain no PII or per-principal data.
 - **Mutating functions (decided): maintenance-only, excluded from user sessions.**
   `retire_partitions` (`query.rs:119-122`) destructively deletes `lakehouse_partitions` rows for a
   `(view_set_name, view_instance_id)` pair (`write_partition.rs:116`), and `view_instance_id` is a
@@ -239,7 +253,11 @@ cold miss = one indexed PG query, at most once per process ever. An entry is ~60
 more than the "thousands of users" population costs a few MB. The membership test itself is an O(1)
 hash lookup against `ReadScope`, which is resolved once per query from the JWT `groups` claim (no
 server-side lookup, independent of user count). `parse_block` adds one more immutable
-`block_id → process_id` resolution, cached the same way.
+`block_id → process_id` resolution, cached the same way. `list_partitions`' `thread_spans` rows need
+one further immutable resolution, **`stream_id → process_id`** — a stream's owning process is fixed
+at stream creation and never mutated — backed on miss by a primary-key point query against `streams`
+(mirroring `find_process`); cache it the same size-bounded, invalidation-free way, then chain into the
+existing `process_id → audience` cache to reach the audience for the membership test.
 
 ### 5. Bypass paths
 
