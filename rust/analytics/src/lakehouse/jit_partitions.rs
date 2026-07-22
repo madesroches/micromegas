@@ -248,21 +248,14 @@ pub async fn generate_process_jit_partitions_segment(
     config: &JitPartitionConfig,
     lakehouse: Arc<LakehouseContext>,
     blocks_view: &BlocksView,
+    partitions: &PartitionCache,
     insert_time_range: &TimeRange,
     process: Arc<ProcessMetadata>,
     stream_tag: &str,
 ) -> Result<Vec<SourceDataBlocksInMemory>> {
-    let cache = instrument_named!(
-        PartitionCache::fetch_overlapping_insert_range_for_view(
-            &lakehouse.lake().db_pool,
-            blocks_view.get_view_set_name(),
-            blocks_view.get_view_instance_id(),
-            *insert_time_range,
-        ),
-        "fetch_overlapping_insert_range_for_view"
-    )
-    .await?;
-    let partitions = cache.partitions;
+    let partitions = partitions
+        .filter_insert_range(*insert_time_range)
+        .partitions;
 
     let process_id = &process.process_id;
     let begin_range_iso = insert_time_range.begin.to_rfc3339();
@@ -457,6 +450,17 @@ pub async fn generate_process_jit_partitions(
             + config.max_insert_time_slice,
     );
 
+    let segment_source_partitions = instrument_named!(
+        PartitionCache::fetch_overlapping_insert_range_for_view(
+            &lakehouse.lake().db_pool,
+            blocks_view.get_view_set_name(),
+            blocks_view.get_view_instance_id(),
+            insert_time_range,
+        ),
+        "fetch_overlapping_insert_range_for_view"
+    )
+    .await?;
+
     let mut begin_segment = insert_time_range.begin;
     let mut end_segment = begin_segment + config.max_insert_time_slice;
     let mut partitions = vec![];
@@ -467,6 +471,7 @@ pub async fn generate_process_jit_partitions(
             config,
             lakehouse.clone(),
             blocks_view,
+            &segment_source_partitions,
             &insert_time_range,
             process.clone(),
             stream_tag,
