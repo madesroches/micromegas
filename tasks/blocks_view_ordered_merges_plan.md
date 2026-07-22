@@ -141,8 +141,12 @@ pub enum OrderingBounds {
   `min_event_time()`/`max_event_time()` directly. Behavior for `OrderingBounds::EventTime` is
   byte-for-byte unchanged.
 - `make_partitioned_execution_plan` gains an `ordering_bounds: OrderingBounds` parameter. Its one
-  existing caller through `MaterializedView` (`materialized_view.rs:86-96`) passes
-  `OrderingBounds::EventTime` — no behavior change for any existing consumer-side view.
+  production caller, through `MaterializedView` (`materialized_view.rs:86-96`), passes
+  `OrderingBounds::EventTime` — no behavior change for any existing consumer-side view. The
+  function is also called directly (bypassing `MaterializedView`) from 3 sites in
+  `rust/analytics/tests/thread_spans_ordering_tests.rs` (lines 77, 105, 147); those must be
+  updated to pass `OrderingBounds::EventTime` too, or the crate won't compile against the new
+  signature — see Files to Modify.
 - `PartitionedTableProvider` gains an `output_ordering: Vec<ScanSortColumn>` +
   `ordering_bounds: OrderingBounds` pair of fields, defaulted to `vec![]` /
   `OrderingBounds::EventTime` by the existing `PartitionedTableProvider::new(...)` constructor
@@ -242,10 +246,17 @@ insert range.
 
 ### 3. Forced online regeneration
 
-Add a `force: bool` parameter to `batch_update::materialize_partition` and
-`materialize_partition_range` (`batch_update.rs:98,195`, both already crate-internal/pub, one
-external caller in `materialize_partitions_table_function.rs`). When `force` is true,
-`materialize_partition` skips `verify_overlapping_partitions` entirely, takes
+Add a `force: bool` parameter to `batch_update::materialize_partition` (`batch_update.rs:103`,
+private, with only one caller: the loop inside `materialize_partition_range`).
+`materialize_partition_range` itself (`batch_update.rs:195`) is `pub` with 8 existing callers —
+the production maintenance daemon (`rust/public/src/servers/maintenance.rs:55`) plus 7 test call
+sites (`histo_view_test.rs` ×3, `sql_view_test.rs` ×3, `thread_spans_ordering_db_test.rs` ×1) —
+so its signature must not change. Instead, factor its loop body into a new private
+`materialize_partition_range_impl(..., force: bool)`: `materialize_partition_range` becomes a
+thin wrapper calling it with `force: false` (unchanged behavior, unchanged signature, zero call
+sites touched), and a new `regenerate_partition_range` (same signature otherwise) calls it with
+`force: true`. When `force` is true, `materialize_partition` skips `verify_overlapping_partitions`
+entirely, takes
 `PartitionCreationStrategy::CreateFromSource` unconditionally, *and* also skips the
 `get_max_partition_time_delta`-driven subdivision check (`batch_update.rs:138-155`) so the
 entire requested `insert_range` is written as a single partition instead of being split into
@@ -280,25 +291,29 @@ the whole range as one `CreateFromSource` partition makes the new partition's ra
 `[day_begin, day_end)`, so `retire_partitions` cleanly deletes the old daily partition in the
 same transaction as the insert.
 
-`force` is threaded unchanged through the `materialize_partition_range` → `materialize_partition`
-loop call (`batch_update.rs:209`); only the subdivision decision inside `materialize_partition`
-itself is affected.
+`force` is threaded unchanged through the `materialize_partition_range_impl` →
+`materialize_partition` loop call (`batch_update.rs:209`); only the subdivision decision inside
+`materialize_partition` itself is affected. The subdivision branch's recursive call
+(`batch_update.rs:156`) is only reachable when `force` is false — a forced call's `new_delta`
+always spans the whole range, so the `new_delta < range` check never recurses — and keeps calling
+the plain, forceless `materialize_partition_range`; no recursion needs to carry `force` through.
 
 Via `partition_spec.write()`, this still uses the now-streaming Postgres fetch from part 2 (so a
 whole-day `CreateFromSource` write stays memory-bounded even without subdivision) and the
 retire-then-insert atomic swap in `insert_partition` (part of the "Current State" analysis
 above), so regeneration is online (no downtime) and memory-bounded from day one.
 
-Existing call site (`materialize_partitions_table_function.rs:56`) passes `force: false` —
-unchanged behavior for the existing `materialize_partitions` UDF.
+`materialize_partitions_table_function.rs`'s existing call (`:56`) needs no change at all —
+`materialize_partition_range`'s signature is untouched, so the existing `materialize_partitions`
+UDF's behavior is unchanged automatically.
 
 Add a new `regenerate_partitions` table function (new file
 `regenerate_partitions_table_function.rs`, registered in `query.rs` next to
 `materialize_partitions`), copying `MaterializePartitionsTableFunction`'s shape
 (`materialize_partitions_table_function.rs`) exactly, down to argument parsing
 (`view_set_name`, `begin`, `end`, `delta_seconds`) and the `LogStreamTableProvider` /
-`TaskLogExecPlan` spawn pattern — the only difference is its `_impl` function calls
-`materialize_partition_range(..., force: true, ...)`.
+`TaskLogExecPlan` spawn pattern — the only difference is its `_impl` function calls the new
+`regenerate_partition_range(...)` (force: true baked in) instead of `materialize_partition_range`.
 
 Usage for this issue: `SELECT * FROM regenerate_partitions('blocks', <day_begin>, <day_end>,
 86400);` for each active merged daily blocks partition.
@@ -309,53 +324,68 @@ Usage for this issue: `SELECT * FROM regenerate_partitions('blocks', <day_begin>
    - Add `OrderingBounds` enum and `partition_bounds` helper.
    - Thread `bounds: OrderingBounds` through `sort_and_check_non_overlapping`,
      `attach_ordering_statistics`, and `make_partitioned_execution_plan`.
-2. `rust/analytics/src/lakehouse/materialized_view.rs`: pass `OrderingBounds::EventTime` at its
+2. `rust/analytics/tests/thread_spans_ordering_tests.rs`: update its 3 direct
+   `make_partitioned_execution_plan` call sites (lines 77, 105, 147) to pass
+   `OrderingBounds::EventTime` — required for the crate to compile against the new signature, not
+   optional test-only cleanup.
+3. `rust/analytics/src/lakehouse/materialized_view.rs`: pass `OrderingBounds::EventTime` at its
    `make_partitioned_execution_plan` call site.
-3. `rust/analytics/src/lakehouse/partitioned_table_provider.rs`: add `output_ordering` +
+4. `rust/analytics/src/lakehouse/partitioned_table_provider.rs`: add `output_ordering` +
    `ordering_bounds` fields, keep `new(...)` defaulting both to empty/`EventTime`, add
    `with_ordering(...)` constructor, thread both through `scan()`.
-4. `rust/analytics/src/lakehouse/merge.rs`: add `with_merge_scan_ordering` builder method to
+5. `rust/analytics/src/lakehouse/merge.rs`: add `with_merge_scan_ordering` builder method to
    `QueryMerger`; use `PartitionedTableProvider::with_ordering` in `execute_merge_query`.
-5. `rust/analytics/src/lakehouse/blocks_view.rs`: store a pre-built `QueryMerger` (ordering =
+6. `rust/analytics/src/lakehouse/blocks_view.rs`: store a pre-built `QueryMerger` (ordering =
    `[insert_time, block_id]`, query = `"SELECT * FROM source ORDER BY insert_time, block_id;"`);
    override `merge_partitions` to delegate to it (mirror
    `SqlBatchView::merge_partitions`).
-6. `rust/analytics/src/lakehouse/metadata_partition_spec.rs`: rewrite `write()` to stream via
+7. `rust/analytics/src/lakehouse/metadata_partition_spec.rs`: rewrite `write()` to stream via
    `sqlx::query(...).fetch(...)` in `SOURCE_ROWS_PER_BATCH`-sized chunks; add the `flush_chunk`
    helper; switch `source_data_hash` to `self.get_source_data_hash()`.
-7. `rust/analytics/src/lakehouse/batch_update.rs`: add `force: bool` to `materialize_partition`
-   and `materialize_partition_range`; when `force`, skip `verify_overlapping_partitions` and skip
-   the `get_max_partition_time_delta` subdivision check so the whole requested range is written
-   as one `CreateFromSource` partition (letting `retire_partitions` cleanly retire the existing
-   partition it replaces).
-8. `rust/analytics/src/lakehouse/materialize_partitions_table_function.rs`: pass `force: false`
-   at its `materialize_partition_range` call.
+8. `rust/analytics/src/lakehouse/batch_update.rs`: add `force: bool` to (private)
+   `materialize_partition`; factor `materialize_partition_range`'s loop body into a new private
+   `materialize_partition_range_impl(..., force: bool)`. `materialize_partition_range` keeps its
+   existing signature, delegating to `materialize_partition_range_impl(..., force: false)`, so its
+   8 existing callers (`rust/public/src/servers/maintenance.rs` plus 7 test call sites in
+   `histo_view_test.rs`, `sql_view_test.rs`, `thread_spans_ordering_db_test.rs`) need no changes.
+   Add a new `regenerate_partition_range(...)` (same signature) that calls
+   `materialize_partition_range_impl(..., force: true)`. When `force`, `materialize_partition`
+   skips `verify_overlapping_partitions` and skips the `get_max_partition_time_delta` subdivision
+   check so the whole requested range is written as one `CreateFromSource` partition (letting
+   `retire_partitions` cleanly retire the existing partition it replaces).
 9. New `rust/analytics/src/lakehouse/regenerate_partitions_table_function.rs`: copy
-   `MaterializePartitionsTableFunction`'s shape, call `materialize_partition_range(...,
-   force: true, ...)`.
+   `MaterializePartitionsTableFunction`'s shape, call `regenerate_partition_range(...)`.
 10. `rust/analytics/src/lakehouse/query.rs`: register `regenerate_partitions` UDTF next to
     `materialize_partitions`.
-11. Documentation: add `regenerate_partitions` alongside `materialize_partitions` in
+11. `python/micromegas/micromegas/flightsql/client.py`: add a `regenerate_partitions(...)` method
+    mirroring `materialize_partitions(...)` (same argument shape), issuing
+    `SELECT * FROM regenerate_partitions(...)` instead.
+12. Documentation: add `regenerate_partitions` alongside `materialize_partitions` in
     `mkdocs/docs/query-guide/functions-reference.md`, `mkdocs/docs/admin/maintenance.md`, and
-    `mkdocs/docs/query-guide/python-api.md`.
-12. Tests (see Testing Strategy).
-13. From `rust/`: `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `cargo test`.
-14. Manual verification (see Testing Strategy) against a running environment with an existing
+    `mkdocs/docs/query-guide/python-api.md` (documenting the `client.regenerate_partitions(...)`
+    method added in step 11).
+13. Tests (see Testing Strategy).
+14. From `rust/`: `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `cargo test`.
+15. Manual verification (see Testing Strategy) against a running environment with an existing
     unsorted merged blocks partition.
 
 ## Files to Modify
 
 - `rust/analytics/src/lakehouse/partitioned_execution_plan.rs` — `OrderingBounds`, generalized
   bounds helper.
+- `rust/analytics/tests/thread_spans_ordering_tests.rs` — update its 3
+  `make_partitioned_execution_plan` call sites to pass `OrderingBounds::EventTime`.
 - `rust/analytics/src/lakehouse/materialized_view.rs` — pass `OrderingBounds::EventTime`.
 - `rust/analytics/src/lakehouse/partitioned_table_provider.rs` — ordering-aware constructor.
 - `rust/analytics/src/lakehouse/merge.rs` — `QueryMerger` ordering builder method.
 - `rust/analytics/src/lakehouse/blocks_view.rs` — ordered merge override.
 - `rust/analytics/src/lakehouse/metadata_partition_spec.rs` — streaming `write()`.
-- `rust/analytics/src/lakehouse/batch_update.rs` — `force` parameter.
-- `rust/analytics/src/lakehouse/materialize_partitions_table_function.rs` — pass `force: false`.
+- `rust/analytics/src/lakehouse/batch_update.rs` — `force` parameter, new
+  `materialize_partition_range_impl` + `regenerate_partition_range` (existing
+  `materialize_partition_range` signature unchanged).
 - `rust/analytics/src/lakehouse/regenerate_partitions_table_function.rs` — new.
 - `rust/analytics/src/lakehouse/query.rs` — register new UDTF.
+- `python/micromegas/micromegas/flightsql/client.py` — add `regenerate_partitions(...)` method.
 - `mkdocs/docs/query-guide/functions-reference.md` — document `regenerate_partitions`.
 - `mkdocs/docs/admin/maintenance.md` — document `regenerate_partitions`.
 - `mkdocs/docs/query-guide/python-api.md` — document `regenerate_partitions`.
@@ -408,8 +438,10 @@ Usage for this issue: `SELECT * FROM regenerate_partitions('blocks', <day_begin>
   the produced partition's row count matches `record_count`, and the emitted `RecordBatch`(es)
   concatenate to the same content as today's single-batch `fetch_all` path (a semantic
   equivalence test, not a performance one).
-- **`cargo test`**: full suite must pass unchanged (regression on `write_partition_tests.rs`,
-  `partition_metadata_tests.rs`, `thread_spans_ordering_tests.rs`, etc.).
+- **`cargo test`**: full suite must pass (`thread_spans_ordering_tests.rs`'s 3
+  `make_partitioned_execution_plan` call sites are updated per Implementation Steps to pass
+  `OrderingBounds::EventTime`; its behavioral assertions are otherwise unchanged — regression on
+  `write_partition_tests.rs`, `partition_metadata_tests.rs`, etc.).
 - **Manual regeneration + memory check**: start services
   (`python3 local_test_env/ai_scripts/start_services.py` or monolith), find a real merged blocks
   partition, run `SELECT * FROM regenerate_partitions('blocks', <begin>, <end>, <delta>);`, and
