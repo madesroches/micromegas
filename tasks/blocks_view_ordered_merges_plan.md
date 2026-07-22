@@ -205,22 +205,39 @@ pub enum OrderingBounds {
   3. `make_partitioned_execution_plan` puts every source file into one sequential file group, and
      DataFusion validates the declared `[insert_time]` ordering against each file's min/max
      insert-time stats; validation only passes if the files are non-overlapping and already in
-     ascending order. Once validated, `EnforceSorting` proves the `ORDER BY insert_time` is
-     already satisfied and elides the sort node entirely — the plan becomes the plain in-order
-     concatenation of the files, with no `SortExec` and no `SortPreservingMergeExec` (there is only
-     one file group, hence one stream; nothing to k-way merge).
+     ascending order. The merge's session is configured with
+     `datafusion.optimizer.repartition_file_scans = false` (set once, in `merge.rs`'s session
+     construction, for every merge — a merge always executes as a single output stream regardless,
+     so no parallelism is lost by disabling scan-file repartitioning). This matters for one specific
+     shape: a merge source can end up with exactly one non-empty input file — empty partitions still
+     count toward `create_merged_partition`'s "≥2 partitions" merge trigger but are then dropped by
+     `make_partitioned_execution_plan` (e.g. one busy hour plus otherwise-empty hourlies) — and
+     without the setting, DataFusion 54's `FileGroupPartitioner` falls through to
+     `repartition_evenly_by_size` for a single-file group, byte-range-splitting it across
+     `target_partitions` streams and requiring a `SortPreservingMergeExec` to reassemble the
+     declared order, rather than eliding the sort as a no-op. With repartitioning off, one file
+     group is always exactly one stream — for any number of non-empty input files, including
+     exactly one — so once validated, `EnforceSorting` proves the `ORDER BY insert_time` is already
+     satisfied and elides the sort node entirely: the plan becomes the plain in-order concatenation
+     of the files, with no `SortExec` and no `SortPreservingMergeExec`.
 
   Point 3's elision is what turns points 1 and 2 into a guarantee on the actual output: an elided
   sort is a no-op concatenation, so the already-`(insert_time, block_id)`-sorted files stay in that
   order end to end. **This is a correctness dependency, not just a memory optimization.** If
-  elision failed instead (e.g. missing/absent min-max stats on some file), the fallback is a real
+  elision failed instead (e.g. missing/absent min-max stats on some file, or the
+  `repartition_file_scans` setting from point 3 not taking effect), the fallback is a real
   `SortExec` ordering by `insert_time` alone — and a plain (non-stable-guaranteed) sort on one
   column does not preserve the `block_id` tie-break order from point 1, so the merged output could
   come out **not** sorted by `block_id` within an `insert_time` value, silently breaking the
   ordering guarantee this design exists to provide — while also reintroducing the full buffering
   `SortExec` this plan is meant to avoid. The offline test below asserting sort elision is
   therefore load-bearing for both the ordering guarantee's correctness and its memory bound, not a
-  performance-only check.
+  performance-only check. Because DataFusion's `validate_orderings` silently drops an unprovable
+  declared ordering rather than erroring — so this elision failure mode produces no error on its
+  own — the merge path also performs a runtime physical-plan-shape check before execution (Design
+  §4): it inspects the optimized plan for the presence of a `SortExec` and fails the merge loudly
+  if elision did not happen, so a false `sort_order` guarantee can never be persisted in
+  production.
 
 ### 2. Bounded-memory Postgres-source writes
 
@@ -325,6 +342,17 @@ partition's own range (`begin_insert_time >= $3 AND end_insert_time <= $4`,
 `delta=3600`, or a sub-range that starts or ends mid-partition) means the new partition's range
 doesn't fully contain the old one, so the old partition is never retired — it survives untouched
 while the new one is inserted alongside it, producing silent duplicate rows.
+
+This invariant is enforced, not just documented: `regenerate_partition_range` validates, before
+entering `materialize_partition_range_impl`'s loop, that `delta` exactly tiles `(begin, end)` —
+`(end - begin)` must be an exact, non-zero multiple of `delta` (equivalently, `delta <= end - begin`
+and `(end - begin) % delta == 0`) — and returns a loud `Err` otherwise. This is a distinct failure
+mode from the one `verify_force_regeneration_alignment` (below) catches: the loop
+(`batch_update.rs:203-220`, reused by `_impl`) runs `while end_part <= insert_range.end`, so a
+`delta` that doesn't tile the range makes it execute a partial or zero number of iterations and
+return `Ok` without ever reaching `materialize_partition` (and hence
+`verify_force_regeneration_alignment`) for the untiled remainder — a silent partial or total no-op
+that the alignment guard, which only runs per-bucket inside the loop, would never see.
 
 Because `force` bypasses `verify_overlapping_partitions` entirely, it also loses that function's
 *only* other job: rejecting a partial overlap (`batch_update.rs:57-67`,
@@ -463,7 +491,17 @@ was declared to DataFusion for sort elision:
   `['insert_time', 'block_id']`.
 - Blocks partitions written by the part-1 ordered merge: also `['insert_time', 'block_id']` —
   even though the merge only *declares* `[insert_time]` to DataFusion for validation (Design §1),
-  the elision argument in §1 establishes the output is fully `(insert_time, block_id)`-sorted.
+  the elision argument in §1 establishes the output is fully `(insert_time, block_id)`-sorted. This
+  is not taken on faith at write time: because DataFusion's `validate_orderings` can silently drop
+  an unprovable declared ordering and fall back to a real `SortExec` with no error, `merge.rs`
+  inspects the optimized physical plan before executing it (e.g. via
+  `displayable(...).indent(true).to_string()`, mirroring the offline elision test) and fails the
+  merge loudly with a descriptive error if a `SortExec` node is present — i.e. if elision did not
+  happen, for whatever reason (config drift, a DataFusion upgrade, or a mismatch between the merge
+  query and `get_merged_partition_sort_order()`'s override). This runtime check is the production
+  enforcement of §1's correctness dependency; the offline test remains the fast regression signal.
+  Only once the check passes does `create_merged_partition` record `['insert_time', 'block_id']` —
+  a false guarantee can never be persisted.
 - Forced regeneration (part 3) goes through the same fresh-write path via `partition_spec.write()`,
   so it records `['insert_time', 'block_id']` automatically — no extra code needed at the
   regeneration call site.
@@ -742,8 +780,12 @@ footer-free way to check per-partition sort status before it declares
   insert-time-disjoint `Partition`s, confirm `make_partitioned_execution_plan` under
   `OrderingBounds::InsertTime` with a single-column `insert_time` declared ordering elides the
   `Sort` node entirely (no `SortExec`, no `SortPreservingMergeExec` — one sequential file group
-  already satisfies the ordering), and confirm an insert-time overlap is rejected loudly (negative
-  control, mirroring `overlapping_partitions_are_rejected`). This elision assertion is a
+  already satisfies the ordering) with `datafusion.optimizer.repartition_file_scans = false` set on
+  the session, and confirm an insert-time overlap is rejected loudly (negative control, mirroring
+  `overlapping_partitions_are_rejected`). Include the single-non-empty-file merge shape explicitly
+  — a source with exactly one non-empty partition (the others empty, dropped before scan
+  construction) — asserting it still elides to a plain concatenation rather than falling back to
+  `repartition_evenly_by_size` + `SortPreservingMergeExec`. This elision assertion is a
   correctness check, not a performance one: per Design §1, the merged output is only guaranteed
   fully `(insert_time, block_id)`-sorted when the sort is elided (a no-op concatenation of
   already-sorted, disjoint files); if elision ever regressed to a real `insert_time`-only
@@ -765,7 +807,10 @@ footer-free way to check per-partition sort status before it declares
   requested `(begin, end)` partially overlaps an existing partition instead of exactly containing
   it (e.g. a daily partition regenerated with `delta=3600`), and succeeds when the range exactly
   matches the partition's boundaries — confirming the guard fails loudly rather than silently
-  leaving a duplicate partition.
+  leaving a duplicate partition. Also assert `regenerate_partition_range` returns an `Err` upfront,
+  before any partition is written, when `delta` does not exactly tile `(begin, end)` (e.g. a `delta`
+  longer than the range, or one that leaves a remainder) — confirming the non-tiling case is
+  rejected loudly instead of silently regenerating a partial or empty span.
 - **Manual regeneration + memory check**: start services
   (`python3 local_test_env/ai_scripts/start_services.py` or monolith), find a real merged blocks
   partition, run `SELECT * FROM regenerate_partitions('blocks', <begin>, <end>, <delta>);`, and
@@ -803,10 +848,16 @@ footer-free way to check per-partition sort status before it declares
   fix has a bug). This is the "verifiable per partition" check referenced in the GitHub issue —
   run it per merged partition before any future plan declares
   `(insert_time, block_id)` a trusted consumer-side scan ordering.
-- **Migration test**: a DB-backed test (alongside existing migration coverage) that runs
-  `migrate_lakehouse` from v6 and confirms `lakehouse_migration.version` reaches 7, the
-  `sort_order` column exists, and pre-existing rows read back as `NULL` (no ordering guarantee) —
-  the "automatically correct for every existing partition" claim in Design §4.
+- **Migration test**: a DB-backed test — the first test exercising `migrate_lakehouse`/
+  `execute_lakehouse_migration` (no existing migration coverage exists to run alongside), using the
+  same live-Postgres env-var harness as `histo_view_test.rs`. It runs `migrate_lakehouse` to bring a
+  fresh database to the latest schema (v7), inserts a `lakehouse_partitions` row, then simulates a
+  pre-existing v6 database by dropping the `sort_order` column
+  (`ALTER TABLE lakehouse_partitions DROP COLUMN sort_order;`) and setting
+  `lakehouse_migration.version` back to 6. Re-running `migrate_lakehouse` from that simulated v6
+  state must bring `lakehouse_migration.version` back to 7, recreate the `sort_order` column, and
+  read the pre-inserted row back with `sort_order = NULL` (no ordering guarantee) — the
+  "automatically correct for every existing partition" claim in Design §4.
 - **`sort_order` recording tests**: extend the offline blocks-view merge ordering tests (above) and
   a `MetadataPartitionSpec`/DB-backed test to assert: (a) a freshly materialized `BlocksView`
   partition (via `MetadataPartitionSpec::write`) is inserted with
