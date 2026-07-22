@@ -12,7 +12,8 @@ list once for the whole insert-time range, then filter it in memory per segment
 with `PartitionCache::filter_insert_range`. It is a behavior-preserving refactor
 — identical output, no schema change, no new concurrency — and it leaves the
 segment helper taking a `&PartitionCache`, which is the shape later JIT work will
-build on.
+build on. The per-stream path (`generate_stream_jit_partitions`, used by
+`thread_spans_view`) has the identical shape and gets the same hoist (Design §3).
 
 This is deliberately the *simple and safe* first step. It removes the redundant
 Postgres round-trips only; it does **not** remove the Parquet scans (the
@@ -120,6 +121,28 @@ while end_segment <= insert_time_range.end {
 
 The loop stays **sequential** — no concurrency change.
 
+### 3. Same hoist on the per-stream path
+
+`generate_stream_jit_partitions_segment` /  `generate_stream_jit_partitions`
+(`jit_partitions.rs:102-243`, used by `thread_spans_view`) have the identical
+shape: the segment helper fetches per-segment (lines 110-116) and the caller
+loops over consecutive segments (lines 227-241). Apply the same transform:
+
+- Change `generate_stream_jit_partitions_segment` to take
+  `partitions: &PartitionCache` instead of calling
+  `fetch_overlapping_insert_range_for_view` internally; its body's first two
+  lines (`let cache = …fetch…; let partitions = cache.partitions;`) become
+  `let partitions = partitions.filter_insert_range(*insert_time_range).partitions;`.
+- In `generate_stream_jit_partitions`, hoist the single
+  `fetch_overlapping_insert_range_for_view(insert_time_range)` (wrapped in
+  `instrument_named!`) to just after `insert_time_range` is computed
+  (line 223), and pass `&segment_source_partitions` into each segment call.
+
+This path's caller — `generate_stream_jit_partitions` — is invoked only by
+`thread_spans_view`, whose signature is unchanged. The behavior-preservation
+argument below applies verbatim (same view scoping, same overlap predicate,
+`segment_range ⊆ insert_time_range`).
+
 ### Why this is behavior-preserving
 
 `segment_source_partitions` is fetched with
@@ -147,9 +170,16 @@ function of insert-time segment content, which is untouched.
      computed, and pass `&segment_source_partitions` into each segment call.
    - Keep the `instrument_named!` span on the hoisted fetch; the in-memory
      filter needs no instrumentation.
-2. (Follow-up commit, identical change) Apply the same hoist to the per-stream
-   path: `generate_stream_jit_partitions` /
-   `generate_stream_jit_partitions_segment`.
+2. Apply the same hoist to the per-stream path (Design §3):
+   - Change `generate_stream_jit_partitions_segment`'s signature to take
+     `partitions: &PartitionCache`; replace its two-line internal fetch with
+     `let partitions = partitions.filter_insert_range(*insert_time_range).partitions;`.
+   - In `generate_stream_jit_partitions`, add the single hoisted
+     `fetch_overlapping_insert_range_for_view` call (wrapped in
+     `instrument_named!`) after `insert_time_range` is computed, and pass
+     `&segment_source_partitions` into each segment call.
+   Keep this as its own commit so the process-path and stream-path changes are
+   independently reviewable/revertable, but land both in the same PR.
 3. From `rust/`: `cargo fmt`, then `cargo clippy --workspace -- -D warnings`.
 4. From `rust/`: `cargo test`.
 5. Manual check against a real process whose insert-time span covers many hours
@@ -160,12 +190,14 @@ function of insert-time segment content, which is untouched.
 ## Files to Modify
 
 - `rust/analytics/src/lakehouse/jit_partitions.rs` — only file changed.
-  `generate_process_jit_partitions` and
-  `generate_process_jit_partitions_segment` (and, in the follow-up commit, the
-  matching stream-path functions). No caller signatures change — `log_view.rs`,
+  Process path: `generate_process_jit_partitions` and
+  `generate_process_jit_partitions_segment`. Stream path:
+  `generate_stream_jit_partitions` and `generate_stream_jit_partitions_segment`.
+  No caller signatures change — the six process-path views (`log_view.rs`,
   `metrics_view.rs`, `async_events_view.rs`, `images_view.rs`,
-  `net_spans_view.rs`, `otel/spans_view.rs` all call
-  `generate_process_jit_partitions` with its unchanged signature.
+  `net_spans_view.rs`, `otel/spans_view.rs`) call
+  `generate_process_jit_partitions`, and `thread_spans_view` calls
+  `generate_stream_jit_partitions`, each with its unchanged signature.
 
 ## Trade-offs
 
@@ -193,11 +225,5 @@ function of insert-time segment content, which is untouched.
   fetched, not a change in query logic or results.
 - Manual verification per Implementation Step 5 that Postgres round-trips to
   `lakehouse_partitions` for a single `generate_process_jit_partitions` call
-  drop to one.
-
-## Open Questions
-
-- Include the per-stream path (`generate_stream_jit_partitions`) in the same PR
-  as a second commit, or land the process path alone first? Recommendation:
-  process path first (matches the reported symptom), stream path as an immediate
-  follow-up since the change is identical.
+  drop to one. The same drop is expected on the stream path
+  (`generate_stream_jit_partitions` via `thread_spans_view`).
