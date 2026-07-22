@@ -196,20 +196,40 @@ pub enum OrderingBounds {
   existing "fail loudly" philosophy for the event-time case.
 
   Why the merged output ends up fully `(insert_time, block_id)`-sorted, not just
-  `insert_time`-sorted:
-  1. Each input file is already internally `(insert_time, block_id)`-sorted — it was written from
-     `data_sql`'s `ORDER BY blocks.insert_time, blocks.block_id` (`blocks_view.rs:44`).
+  `insert_time`-sorted — **conditionally**, gated on the inputs actually being trustworthy:
+  1. Each input file is internally `(insert_time, block_id)`-sorted *if and only if* its own
+     recorded `sort_order` (Design §4) already equals `['insert_time', 'block_id']`. This is true
+     for partitions written fresh via `data_sql`'s `ORDER BY blocks.insert_time, blocks.block_id`
+     (`blocks_view.rs:44`) and for partitions produced by a prior run of this same ordered merge —
+     but it is **not** true for a partition merged before this change shipped: the maintenance
+     daemon (`rust/public/src/servers/maintenance.rs:296-345`) creates 1-minute `CreateFromSource`
+     blocks partitions, merges them hourly, then merges hourlies daily, and every pre-fix merge
+     (hourly or daily) ran `View::merge_partitions`'s unordered `SELECT * FROM source;` default
+     (`view.rs:101-124`) with no declared scan ordering — its output is not internally sorted, and
+     (before Design §4 exists) it has no `sort_order` to say so. `BlocksView::merge_partitions`
+     therefore only takes the ordered path below — declaring the `[insert_time]` scan ordering and
+     later recording `['insert_time', 'block_id']` — when *every* partition in `partitions_to_merge`
+     already has `sort_order == Some(['insert_time', 'block_id'])`; if even one input's `sort_order`
+     is `NULL` (every pre-fix partition, merged or not), the merge instead runs today's plain
+     unordered query and records `NULL` itself, rather than trusting a per-file order it cannot
+     verify (see Design §4 and Open Questions for the resulting rollout property). Points 2 and 3
+     below, and the elision they enable, are therefore only ever relied on once this gate has
+     already confirmed point 1 for the specific inputs at hand.
   2. Input partitions have disjoint, half-open `[begin, end)` insert-time ranges by construction,
      so no two files can contain equal-`insert_time` rows — ties never need to be broken *across*
      files, only within one (already-sorted) file.
   3. `make_partitioned_execution_plan` puts every source file into one sequential file group, and
      DataFusion validates the declared `[insert_time]` ordering against each file's min/max
      insert-time stats; validation only passes if the files are non-overlapping and already in
-     ascending order. The merge's session is configured with
-     `datafusion.optimizer.repartition_file_scans = false` (set once, in `merge.rs`'s session
-     construction, for every merge — a merge always executes as a single output stream regardless,
-     so no parallelism is lost by disabling scan-file repartitioning). This matters for one specific
-     shape: a merge source can end up with exactly one non-empty input file — empty partitions still
+     ascending order. `QueryMerger::execute_merge_query` (`merge.rs`) sets
+     `datafusion.optimizer.repartition_file_scans = false` on its session, but **only when the
+     merger's declared scan ordering is non-empty** — i.e. only for `BlocksView`'s ordered merger,
+     never for the plain unordered merger (empty ordering, every other `View::merge_partitions`
+     caller and `sql_batch_view.rs`'s aggregation merger; see Design §4/Trade-offs for why scoping
+     this matters). For an ordering-declared merge, preserving global order forces the source scan
+     into one sequential file group regardless — a merge under this path always executes as a
+     single output stream, so disabling scan-file repartitioning costs nothing there. This matters
+     for one specific shape: a merge source can end up with exactly one non-empty input file — empty partitions still
      count toward `create_merged_partition`'s "≥2 partitions" merge trigger but are then dropped by
      `make_partitioned_execution_plan` (e.g. one busy hour plus otherwise-empty hourlies) — and
      without the setting, DataFusion 54's `FileGroupPartitioner` falls through to
@@ -223,21 +243,41 @@ pub enum OrderingBounds {
 
   Point 3's elision is what turns points 1 and 2 into a guarantee on the actual output: an elided
   sort is a no-op concatenation, so the already-`(insert_time, block_id)`-sorted files stay in that
-  order end to end. **This is a correctness dependency, not just a memory optimization.** If
-  elision failed instead (e.g. missing/absent min-max stats on some file, or the
-  `repartition_file_scans` setting from point 3 not taking effect), the fallback is a real
-  `SortExec` ordering by `insert_time` alone — and a plain (non-stable-guaranteed) sort on one
-  column does not preserve the `block_id` tie-break order from point 1, so the merged output could
-  come out **not** sorted by `block_id` within an `insert_time` value, silently breaking the
-  ordering guarantee this design exists to provide — while also reintroducing the full buffering
-  `SortExec` this plan is meant to avoid. The offline test below asserting sort elision is
-  therefore load-bearing for both the ordering guarantee's correctness and its memory bound, not a
-  performance-only check. Because DataFusion's `validate_orderings` silently drops an unprovable
-  declared ordering rather than erroring — so this elision failure mode produces no error on its
-  own — the merge path also performs a runtime physical-plan-shape check before execution (Design
-  §4): it inspects the optimized plan for the presence of a `SortExec` and fails the merge loudly
-  if elision did not happen, so a false `sort_order` guarantee can never be persisted in
-  production.
+  order end to end. **This is a correctness dependency, not just a memory optimization, and it
+  rests on two independent guards, not one:**
+  - Point 1 is only true because the merge only takes this ordered path when every input's own
+    recorded `sort_order` already equals `['insert_time', 'block_id']` (see point 1 above and
+    Design §4). If that gate is wrong or skipped, elision would faithfully concatenate
+    internally-unsorted files in validated insert-time order and produce a merged file that is
+    *not* `block_id`-sorted within a shared `insert_time`, no matter how well the plan-shape check
+    below is doing its job — the check can only confirm that the sort was elided, not that eliding
+    it was safe for these particular inputs.
+  - Given that guard holds, elision must also actually happen at the plan level. If elision failed
+    instead (e.g. missing/absent min-max stats on some file, or the `repartition_file_scans`
+    setting from point 3 not taking effect), the fallback is a real `SortExec` ordering by
+    `insert_time` alone — and a plain (non-stable-guaranteed) sort on one column does not preserve
+    the `block_id` tie-break order from point 1, so the merged output could come out **not** sorted
+    by `block_id` within an `insert_time` value, silently breaking the ordering guarantee this
+    design exists to provide — while also reintroducing the full buffering `SortExec` this plan is
+    meant to avoid. The offline test below asserting sort elision is therefore load-bearing for
+    both the ordering guarantee's correctness and its memory bound, not a performance-only check.
+    Because DataFusion's `validate_orderings` silently drops an unprovable declared ordering rather
+    than erroring — so this elision failure mode produces no error on its own — the merge path also
+    performs a runtime physical-plan-shape check before execution, but only on the ordered path
+    (Design §4; scoping rationale in Trade-offs): it builds the optimized physical plan and fails
+    the merge loudly unless it is a single-partition plan containing **neither** a `SortExec`
+    **nor** a `SortPreservingMergeExec` node — matching the offline test's own assertion, since
+    either operator means elision did not fully happen (a bare `SortExec` means the declared
+    ordering never validated; a `SortPreservingMergeExec` with no `SortExec` means
+    `repartition_file_scans` didn't stop a single-file group from being byte-range-split, per point
+    3 — the exact failure mode a check that only looked for `SortExec` would miss, since the string
+    `"SortPreservingMergeExec"` does not contain the substring `"SortExec"`).
+
+  Together, the input-`sort_order` gate and the plan-shape check are what keep a false `sort_order`
+  guarantee from ever being persisted: the gate stops the merge from trusting inputs it can't
+  verify, and the check stops the merge from trusting a plan shape it can't verify. Neither one
+  alone is sufficient — see Design §4's value semantics for how the recorded `sort_order` reflects
+  both.
 
 ### 2. Bounded-memory Postgres-source writes
 
@@ -415,9 +455,11 @@ if new_delta < (insert_range.end - insert_range.begin) {
 }
 ```
 
-This guard fails the call loudly (an `Err` surfaced through `regenerate_partitions`'s
-`TaskLogExecPlan`) instead of the alternative of silently leaving both the stale and the new
-partition in place.
+This guard is meant to fail the call loudly instead of silently leaving both the stale and the new
+partition in place — but that requires `regenerate_partitions` to surface the `Err` as a
+query-level failure, not as a log row `TaskLogExecPlan` streams back as if the query succeeded (see
+below for why the existing `materialize_partitions`/`TaskLogExecPlan` pattern cannot do this, and
+the mechanism `regenerate_partitions` uses instead).
 
 Skipping the subdivision is required, not optional: `BlocksView::get_max_partition_time_delta`
 returns `TimeDelta::hours(1)` for `CreateFromSource` but `TimeDelta::days(1)` for
@@ -444,6 +486,43 @@ whole-day `CreateFromSource` write stays memory-bounded even without subdivision
 retire-then-insert atomic swap in `insert_partition` (part of the "Current State" analysis
 above), so regeneration is online (no downtime) and memory-bounded from day one.
 
+**Guarding against a concurrent daemon write into the same range.** `verify_force_regeneration_alignment`
+only checks the `PartitionCache` snapshot fetched at the start of the call — it cannot see a
+partition the maintenance daemon commits *after* that snapshot but *before* the forced write
+commits. This matters specifically when `regenerate_partitions` targets a range the daemon is
+still actively materializing at finer granularity (e.g. the current or a very recent day, whose
+hours/minutes the daemon has not yet rolled up into a merged daily; already-merged past dailies are
+not exposed to this race). `insert_partition`'s advisory lock (`write_partition.rs:251-263`) is
+keyed on the exact `(view_set_name, view_instance_id, begin_insert_time, end_insert_time)` tuple,
+so a regen daily `[d, d+1)` write and a concurrent daemon hourly `[h, h+1)` write take *different*
+locks and can commit in either order. If the daemon's hourly write commits after the regen daily,
+nothing retires it: `retire_partitions` only deletes rows fully contained within the *new*
+partition's own range, and every later daemon pass hits `verify_overlapping_partitions`'s
+partial-overlap `Abort` (`batch_update.rs:57-67`) on both rows — both persist forever, and queries
+double-count that hour's blocks.
+
+To close this without depending on daemon-scheduling internals (there is no clean, stable
+definition of "the daemon's active horizon" to check against from `batch_update.rs`), the forced
+path re-checks for a new overlap from *inside* `insert_partition`'s own transaction, immediately
+before it would otherwise commit — where it can see anything any other transaction has already
+committed, not a stale snapshot. `PartitionSpec::write` (`view.rs:32`) gains a `force: bool`
+parameter (`false` at every existing call site — `BlockPartitionSpec::write`,
+`SqlPartitionSpec::write`, and `MetadataPartitionSpec::write`'s normal, non-forced callers — so
+this is a no-op everywhere except forced regeneration), threaded through `write_partition_from_rows`
+into `insert_partition`. When `force` is `true`, `insert_partition`, inside its existing transaction
+and *after* `retire_partitions` has removed the partition being replaced, runs one more `SELECT`
+against `lakehouse_partitions` for the same `(view_set_name, view_instance_id)` applying the same
+partial-overlap predicate `verify_overlapping_partitions`/`verify_force_regeneration_alignment`
+already use (`begin_insert_time < insert_range.begin OR end_insert_time > insert_range.end`), and
+`bail!`s — rolling back both the retire and the not-yet-committed insert, so neither the old nor a
+duplicate new partition is left behind — if any row comes back. Because Postgres's default `READ
+COMMITTED` isolation lets this in-transaction `SELECT` see any row another transaction has already
+committed, this shrinks the race window from "the whole forced-regeneration call" down to "the gap
+between this `SELECT` and this transaction's `COMMIT`" — the same order of magnitude every other
+`insert_partition` caller already lives with, rather than a window wide enough for a daemon pass to
+land in. `regenerate_partition_range` sets `force: true` on the `PartitionSpec::write()` call it
+reaches; `materialize_partition_range`'s existing non-forced path always passes `false`.
+
 `regenerate_partitions` reads from the Postgres ingestion tables, which retain rows for a shorter
 window than merged lakehouse partitions. If a forced regeneration runs on a partition whose source
 rows have already aged out, it will deliberately produce a smaller partition than the one it
@@ -456,11 +535,36 @@ UDF's behavior is unchanged automatically.
 
 Add a new `regenerate_partitions` table function (new file
 `regenerate_partitions_table_function.rs`, registered in `query.rs` next to
-`materialize_partitions`), copying `MaterializePartitionsTableFunction`'s shape
-(`materialize_partitions_table_function.rs`) exactly, down to argument parsing
-(`view_set_name`, `begin`, `end`, `delta_seconds`) and the `LogStreamTableProvider` /
-`TaskLogExecPlan` spawn pattern — the only difference is its `_impl` function calls the new
-`regenerate_partition_range(...)` (force: true baked in) instead of `materialize_partition_range`.
+`materialize_partitions`), reusing `MaterializePartitionsTableFunction`'s argument parsing
+(`view_set_name`, `begin`, `end`, `delta_seconds`) but **not** its log-only spawn/execution-plan
+shape, because that shape cannot fail a query: `TaskLogExecPlan`/`AsyncLogStream`
+(`rust/analytics/src/dfext/task_log_exec_plan.rs`,
+`rust/analytics/src/dfext/async_log_stream.rs`) stream a plain `mpsc::Receiver<(DateTime<Utc>,
+String)>` into `(time, msg)` rows with no error channel at all, and
+`materialize_partitions_table_function.rs`'s spawner (`:91-110`) only does `if let Err(e) = ... {
+logger.write_log_entry(msg); error!(...) }` and returns — an `Err` becomes one more log row, and
+`SELECT * FROM materialize_partitions(...)` (and, if it copied this shape, `regenerate_partitions`)
+returns a *successful* result set that merely contains an error string. A misaligned or
+non-tiling `regenerate_partitions(...)` call must not have this property: a scripted rollout
+iterating the Open Questions' rollout query would otherwise see success for a partition that was
+never actually regenerated.
+
+`regenerate_partitions_table_function.rs` therefore uses a distinct, fallible variant of this
+plumbing: a new `FallibleTaskLogExecPlan`/`FallibleAsyncLogStream` pair (new file, e.g.
+`rust/analytics/src/dfext/fallible_task_log_exec_plan.rs`, mirroring `TaskLogExecPlan`/
+`AsyncLogStream` structurally) whose channel item type is `Result<(DateTime<Utc>, String),
+String>` instead of the plain tuple. Its stream's `poll_next` batches `Ok` items into `(time, msg)`
+rows exactly as today, but on receiving an `Err(msg)` item, yields
+`Poll::Ready(Some(Err(DataFusionError::Execution(msg))))` and ends the stream — a
+`RecordBatchStream` `Err` propagates through `execute_stream()`/`collect()` as a query execution
+error, which the FlightSQL layer surfaces to the client as a failed query, not a successful,
+possibly-empty result set. `regenerate_partitions_table_function.rs`'s spawner sends ordinary
+progress lines as `Ok((time, msg))` (matching `materialize_partitions`'s behavior) and, when
+`regenerate_partition_range(...)` (including `verify_force_regeneration_alignment` and the
+tiling check) returns `Err(e)`, sends a single `Err(format!("{e:?}"))` item before closing the
+channel, instead of only logging it. `materialize_partitions_table_function.rs`'s and
+`retire_partitions_table_function.rs`'s existing log-only shape is left as-is — this is additive,
+not a change to their behavior.
 
 Usage for this issue: `SELECT * FROM regenerate_partitions('blocks', <day_begin>, <day_end>,
 86400);` for each active merged daily blocks partition — `<day_begin>`/`<day_end>`/`86400` must
@@ -489,24 +593,32 @@ was declared to DataFusion for sort elision:
 - Blocks partitions written fresh via `MetadataPartitionSpec::write` (part 2): `data_sql` ends
   `ORDER BY blocks.insert_time, blocks.block_id` (`blocks_view.rs:46`), so record
   `['insert_time', 'block_id']`.
-- Blocks partitions written by the part-1 ordered merge: also `['insert_time', 'block_id']` —
-  even though the merge only *declares* `[insert_time]` to DataFusion for validation (Design §1),
-  the elision argument in §1 establishes the output is fully `(insert_time, block_id)`-sorted. This
-  is not taken on faith at write time: because DataFusion's `validate_orderings` can silently drop
-  an unprovable declared ordering and fall back to a real `SortExec` with no error, `merge.rs`
-  inspects the optimized physical plan before executing it (e.g. via
-  `displayable(...).indent(true).to_string()`, mirroring the offline elision test) and fails the
-  merge loudly with a descriptive error if a `SortExec` node is present — i.e. if elision did not
-  happen, for whatever reason (config drift, a DataFusion upgrade, or a mismatch between the merge
-  query and `get_merged_partition_sort_order()`'s override). This runtime check is the production
-  enforcement of §1's correctness dependency; the offline test remains the fast regression signal.
-  Only once the check passes does `create_merged_partition` record `['insert_time', 'block_id']` —
-  a false guarantee can never be persisted.
+- Blocks partitions written by the part-1 ordered merge: `['insert_time', 'block_id']` **only when
+  every partition being merged already carries that exact `sort_order`** — `BlocksView` (Design §1)
+  declares `[insert_time]` to DataFusion and takes the ordered path at all only when every entry in
+  `partitions_to_merge` already has `sort_order == Some(['insert_time', 'block_id'])`; if even one
+  input's `sort_order` is `NULL` (every pre-fix partition, including pre-fix *merged* partitions —
+  see Design §1), the merge instead runs the plain unordered query with no declared ordering and
+  records `NULL`, exactly like today. When every input does carry the guarantee, the elision
+  argument in §1 establishes the output is fully `(insert_time, block_id)`-sorted — but this is not
+  taken on faith at write time: because DataFusion's `validate_orderings` can silently drop an
+  unprovable declared ordering and fall back to a real `SortExec` with no error, `merge.rs`'s
+  ordered path (only — never the plain merger, see Design §1/Trade-offs on scoping) builds the
+  optimized physical plan before executing it (mirroring the offline elision test) and fails the
+  merge loudly with a descriptive error unless the plan is a single-partition plan containing
+  **neither** a `SortExec` **nor** a `SortPreservingMergeExec` node — i.e. if elision did not fully
+  happen, for whatever reason (config drift, a DataFusion upgrade, or `repartition_file_scans` not
+  taking effect). This runtime check is the production enforcement of §1's correctness dependency;
+  the offline test remains the fast regression signal. Only once both the input-`sort_order` gate
+  and the plan-shape check pass does `create_merged_partition` record `['insert_time', 'block_id']`
+  for that merge — otherwise it records `NULL` — so a false guarantee can never be persisted, and a
+  transition-era merge that can't yet prove its inputs self-reports as unguaranteed instead of
+  silently inheriting a guarantee it can't back up.
 - Forced regeneration (part 3) goes through the same fresh-write path via `partition_spec.write()`,
   so it records `['insert_time', 'block_id']` automatically — no extra code needed at the
   regeneration call site.
 - Every other view, and any unordered merge (every `View::merge_partitions` caller besides
-  `BlocksView`): `NULL`, unchanged.
+  `BlocksView`, plus a `BlocksView` merge whose inputs aren't all yet guaranteed): `NULL`, unchanged.
 
 The value must be threaded from the writer that already knows its own ordering — `MetadataPartitionSpec`
 for fresh writes, `BlocksView` for merges — not hardcoded inside the shared `insert_partition`/
@@ -533,17 +645,22 @@ knowing about blocks-view specifics.
     (`metadata_partition_spec.rs:29-56`). `BlocksView::make_batch_partition_spec`
     (`blocks_view.rs:67-99`) passes `Some(vec!["insert_time".to_string(), "block_id".to_string()])`
     — exactly the ordering `data_sql`'s `ORDER BY` already guarantees (`blocks_view.rs:46`).
-  - `View` (`view.rs:52-153`) gains a new method `fn get_merged_partition_sort_order(&self) ->
-    Option<Vec<String>> { None }` (default `None`). This is a distinct concept from the existing
-    `get_scan_output_ordering()` (`view.rs:150-152`): that one is a *trusted scan-ordering
-    declaration for consumers*, deliberately left empty for blocks-view in this plan (see Design
-    §1 and the Open Questions/Trade-offs on JIT trust); `get_merged_partition_sort_order()` is a
-    *record of what the merge actually produced*, independent of what's declared to DataFusion for
-    elision. `create_merged_partition` (`merge.rs:132-232`) calls
-    `view.get_merged_partition_sort_order()` and passes the result into its
+  - `View` (`view.rs:52-153`) gains a new method `fn get_merged_partition_sort_order(&self,
+    _partitions_to_merge: &[Partition]) -> Option<Vec<String>> { None }` (default `None`, ignoring
+    the argument). It takes the same partitions the merge is about to run over — the recorded value
+    is a function of those specific inputs (Design §1), not a static per-view constant. This is a
+    distinct concept from the existing `get_scan_output_ordering()` (`view.rs:150-152`): that one is
+    a *trusted scan-ordering declaration for consumers*, deliberately left empty for blocks-view in
+    this plan (see Design §1 and the Open Questions/Trade-offs on JIT trust); `get_merged_partition_sort_order()` is a
+    *record of what this specific merge actually produced*, independent of what's declared to
+    DataFusion for elision. `create_merged_partition` (`merge.rs:132-232`) calls
+    `view.get_merged_partition_sort_order(&filtered_partitions)` (before or after `merge_partitions`
+    — it's a pure function of the same input slice) and passes the result into its
     `write_partition_from_rows` call (`merge.rs:184-192`). `BlocksView` overrides the method to
-    return `Some(vec!["insert_time".to_string(), "block_id".to_string()])`, matching §1's
-    guarantee; every other view keeps the default `None`.
+    return `Some(vec!["insert_time".to_string(), "block_id".to_string()])` only when every partition
+    in the given slice already has that exact `sort_order`, `None` otherwise — sharing the same
+    predicate `BlocksView::merge_partitions` uses to pick its merger (see Design §1), so the two
+    decisions can't diverge; every other view keeps the default `None`.
 - `PartitionCache`'s 3 read paths in `partition_cache.rs` add `sort_order` to their `SELECT`
   column lists and `Partition` literals: `fetch_overlapping_insert_range` (query
   `partition_cache.rs:56-73`, construction `:105-114`),
@@ -586,10 +703,14 @@ footer-free way to check per-partition sort status before it declares
    `with_ordering(...)` constructor, thread both through `scan()`.
 5. `rust/analytics/src/lakehouse/merge.rs`: add `with_merge_scan_ordering` builder method to
    `QueryMerger`; use `PartitionedTableProvider::with_ordering` in `execute_merge_query`.
-6. `rust/analytics/src/lakehouse/blocks_view.rs`: store a pre-built `QueryMerger` (ordering =
-   `[insert_time]`, query = `"SELECT * FROM source ORDER BY insert_time;"`);
-   override `merge_partitions` to delegate to it (mirror
-   `SqlBatchView::merge_partitions`).
+6. `rust/analytics/src/lakehouse/blocks_view.rs`: store two pre-built `QueryMerger`s — an ordered
+   one (ordering = `[insert_time]`, query = `"SELECT * FROM source ORDER BY insert_time;"`) and the
+   plain unordered one (empty ordering, query = `"SELECT * FROM source;"`, matching
+   `View::merge_partitions`'s default); add a helper predicate over `partitions_to_merge` (every
+   input already has `sort_order == Some(['insert_time', 'block_id'])`); override `merge_partitions`
+   to delegate to the ordered merger when the predicate holds, otherwise to the plain merger
+   (mirror `SqlBatchView::merge_partitions`'s delegation pattern). Reuse the same predicate in step
+   18's `get_merged_partition_sort_order` override so the two decisions can't diverge.
 7. `rust/analytics/src/lakehouse/metadata_partition_spec.rs`: rewrite `write()` to stream via
    `sqlx::query(...).fetch(...)` in `SOURCE_ROWS_PER_BATCH`-sized chunks; add the `flush_chunk`
    helper; switch `source_data_hash` to `self.get_source_data_hash()`.
@@ -609,11 +730,16 @@ footer-free way to check per-partition sort status before it declares
    partial-overlap condition (`begin < insert_range.begin || end > insert_range.end`) against
    existing partitions and returns a loud `Err` on a misaligned `insert_range`/delta instead of
    silently leaving a duplicate partition behind.
-9. New `rust/analytics/src/lakehouse/regenerate_partitions_table_function.rs`: copy
-   `MaterializePartitionsTableFunction`'s shape, call `regenerate_partition_range(...)`. Declare
-   the new module in `rust/analytics/src/lakehouse/mod.rs` (`pub mod
-   regenerate_partitions_table_function;`, alongside the existing `pub mod
-   materialize_partitions_table_function;`) — required for it to compile into the crate.
+9. New `rust/analytics/src/dfext/fallible_task_log_exec_plan.rs`: add `FallibleTaskLogExecPlan` /
+   `FallibleAsyncLogStream`, mirroring `task_log_exec_plan.rs`/`async_log_stream.rs` but with a
+   `Result<(DateTime<Utc>, String), String>` channel item type, so an `Err` item ends the stream
+   with a `DataFusionError::Execution` instead of becoming a log row (Design §3). New
+   `rust/analytics/src/lakehouse/regenerate_partitions_table_function.rs`: reuse
+   `MaterializePartitionsTableFunction`'s argument parsing, but spawn against the new fallible
+   plan/stream and call `regenerate_partition_range(...)`, sending an `Err` item on failure instead
+   of only logging it. Declare both new modules in `rust/analytics/src/dfext/mod.rs` and
+   `rust/analytics/src/lakehouse/mod.rs` respectively (`pub mod fallible_task_log_exec_plan;`, `pub
+   mod regenerate_partitions_table_function;`) — required for them to compile into the crate.
 10. `rust/analytics/src/lakehouse/query.rs`: register `regenerate_partitions` UDTF next to
     `materialize_partitions`.
 11. `python/micromegas/micromegas/flightsql/client.py`: add a `regenerate_partitions(...)` method
@@ -642,11 +768,13 @@ footer-free way to check per-partition sort status before it declares
     `rust/analytics/src/lakehouse/blocks_view.rs`: pass
     `Some(vec!["insert_time".to_string(), "block_id".to_string()])` at its
     `fetch_metadata_partition_spec` call site.
-18. `rust/analytics/src/lakehouse/view.rs`: add `get_merged_partition_sort_order(&self) ->
-    Option<Vec<String>> { None }` to the `View` trait. `rust/analytics/src/lakehouse/merge.rs`:
-    call it in `create_merged_partition` and pass the result to `write_partition_from_rows`.
+18. `rust/analytics/src/lakehouse/view.rs`: add `get_merged_partition_sort_order(&self,
+    partitions_to_merge: &[Partition]) -> Option<Vec<String>> { None }` to the `View` trait.
+    `rust/analytics/src/lakehouse/merge.rs`: call `view.get_merged_partition_sort_order(&filtered_partitions)`
+    in `create_merged_partition` and pass the result to `write_partition_from_rows`.
     `rust/analytics/src/lakehouse/blocks_view.rs`: override it to return
-    `Some(vec!["insert_time".to_string(), "block_id".to_string()])`.
+    `Some(vec!["insert_time".to_string(), "block_id".to_string()])` only when every partition in the
+    slice already has that `sort_order`, `None` otherwise — the same predicate step 6 uses.
 19. `rust/analytics/src/lakehouse/partition_cache.rs`: add `sort_order` to the `SELECT` column
     lists and `Partition` literals in `fetch_overlapping_insert_range`,
     `fetch_overlapping_insert_range_for_view`, and `LivePartitionProvider::fetch` (both query
@@ -673,16 +801,21 @@ footer-free way to check per-partition sort status before it declares
 - `rust/analytics/src/lakehouse/materialized_view.rs` — pass `OrderingBounds::EventTime`.
 - `rust/analytics/src/lakehouse/partitioned_table_provider.rs` — ordering-aware constructor.
 - `rust/analytics/src/lakehouse/merge.rs` — `QueryMerger` ordering builder method; call
-  `view.get_merged_partition_sort_order()` in `create_merged_partition` and pass it to
-  `write_partition_from_rows`.
-- `rust/analytics/src/lakehouse/blocks_view.rs` — ordered merge override; pass a declared
-  `sort_order` to `fetch_metadata_partition_spec`; override `get_merged_partition_sort_order`.
+  `view.get_merged_partition_sort_order(&filtered_partitions)` in `create_merged_partition` and
+  pass it to `write_partition_from_rows`.
+- `rust/analytics/src/lakehouse/blocks_view.rs` — ordered vs. plain merger selection in
+  `merge_partitions`, keyed on `partitions_to_merge`'s recorded `sort_order`; pass a declared
+  `sort_order` to `fetch_metadata_partition_spec`; override `get_merged_partition_sort_order` with
+  the same input-dependent predicate.
 - `rust/analytics/src/lakehouse/metadata_partition_spec.rs` — streaming `write()`; add
   `sort_order` field/parameter and thread it to `write_partition_from_rows`.
 - `rust/analytics/src/lakehouse/batch_update.rs` — `force` parameter, new
   `materialize_partition_range_impl` + `regenerate_partition_range` (existing
   `materialize_partition_range` signature unchanged), new
   `verify_force_regeneration_alignment` guard for the `force` path.
+- `rust/analytics/src/dfext/fallible_task_log_exec_plan.rs` — new; `Result`-carrying log stream so
+  a guard failure ends the query with an error instead of a log row.
+- `rust/analytics/src/dfext/mod.rs` — declare the new module.
 - `rust/analytics/src/lakehouse/regenerate_partitions_table_function.rs` — new.
 - `rust/analytics/src/lakehouse/mod.rs` — declare the new module (`pub mod
   regenerate_partitions_table_function;`).
@@ -718,6 +851,17 @@ footer-free way to check per-partition sort status before it declares
   requiring a `SortPreservingMergeExec`), so the merge itself gains the same memory bound this
   plan is adding to the source write path — see Design §1 for why this elision is also what makes
   the `(insert_time, block_id)` ordering guarantee correct, not just cheap.
+- **Scoping `repartition_file_scans = false` and the plan-shape check to ordering-declared merges
+  only, vs. applying both to every merge.** `QueryMerger::execute_merge_query` (`merge.rs:65-98`)
+  is shared with `SqlBatchView`'s aggregation mergers (`GROUP BY` queries) and `View::merge_partitions`'s
+  own default plain merger — neither declares a scan ordering. Disabling `repartition_file_scans`
+  for the blocks-view ordered merge costs nothing, because preserving global order already forces
+  that scan into one sequential file group regardless — but for an aggregation merge, file groups
+  can otherwise be split/rebalanced across `target_partitions` to parallelize the scan and any
+  partial aggregation sitting upstream of the single merged output stream; disabling the setting
+  globally would give that up for no benefit. Likewise, an unconditional plan-shape check would
+  misfire on any legitimate `ORDER BY` merge query with a real `Sort` node. Both are therefore
+  gated on the merger's declared scan ordering being non-empty (Design §1 point 3, §4).
 - **Generalizing `OrderingBounds` vs. a separate insert-time-only code path.** A parallel
   `sort_and_check_non_overlapping_by_insert_time` function would duplicate ~40 lines with one
   field access changed. An enum parameter keeps one implementation and makes the event-time
@@ -811,6 +955,22 @@ footer-free way to check per-partition sort status before it declares
   before any partition is written, when `delta` does not exactly tile `(begin, end)` (e.g. a `delta`
   longer than the range, or one that leaves a remainder) — confirming the non-tiling case is
   rejected loudly instead of silently regenerating a partial or empty span.
+- **Forced-regeneration concurrent-write race test**: a DB-backed test that simulates the race in
+  Design §3's "Guarding against a concurrent daemon write" — insert a partition into the target
+  range (standing in for the daemon's overlapping hourly write) *after* `verify_force_regeneration_alignment`'s
+  snapshot would have been taken but *before* the forced `insert_partition` call commits, then
+  assert the forced write's in-transaction recheck returns an `Err` (rather than committing) and
+  that no duplicate/overlapping partition rows remain afterwards — both the pre-existing partition
+  being replaced and the injected concurrent one should still be exactly and only what they were
+  before the failed forced write, confirming the transaction rolled back cleanly rather than
+  partially applying.
+- **Query-level failure test for `regenerate_partitions`**: a query-level test (running the UDTF
+  through `ctx.sql(...)`/FlightSQL, not just calling `regenerate_partition_range` directly) asserting
+  that `SELECT * FROM regenerate_partitions(...)` with a misaligned range/delta returns a query
+  `Err` to the caller — not a successful, possibly-empty result set containing only a log row with
+  the error text. This is the behavior the log-only `materialize_partitions`/`TaskLogExecPlan`
+  shape cannot provide (Design §3); the test should fail if `regenerate_partitions` is ever
+  refactored back onto that shape.
 - **Manual regeneration + memory check**: start services
   (`python3 local_test_env/ai_scripts/start_services.py` or monolith), find a real merged blocks
   partition, run `SELECT * FROM regenerate_partitions('blocks', <begin>, <end>, <delta>);`, and
@@ -862,9 +1022,14 @@ footer-free way to check per-partition sort status before it declares
   a `MetadataPartitionSpec`/DB-backed test to assert: (a) a freshly materialized `BlocksView`
   partition (via `MetadataPartitionSpec::write`) is inserted with
   `sort_order = Some(['insert_time', 'block_id'])`; (b) an order-merged blocks partition (via
-  `create_merged_partition` under §1) is inserted with the same value; (c) a partition from another
-  view (e.g. `ThreadSpansView`, or any view exercised by the existing `histo_view_test.rs`/
-  `sql_view_test.rs` suites) is inserted with `sort_order = None`.
+  `create_merged_partition` under §1), where every input partition already has
+  `sort_order = Some(['insert_time', 'block_id'])`, is inserted with the same value; (c) a partition
+  from another view (e.g. `ThreadSpansView`, or any view exercised by the existing
+  `histo_view_test.rs`/`sql_view_test.rs` suites) is inserted with `sort_order = None`; (d) a
+  `BlocksView` merge where at least one input partition has `sort_order = None` (simulating a
+  pre-fix merged hourly) does not declare a scan ordering, runs the plain unordered merger, and is
+  inserted with `sort_order = None` — confirming the merge self-reports as unguaranteed instead of
+  inheriting a false guarantee from its sibling, guaranteed-sorted inputs.
 - **`list_partitions()` exposure test**: a query-level test asserting `SELECT sort_order FROM
   list_partitions()` returns the column with the expected type and values for a mix of blocks-view
   and other-view partitions — confirming the `ListPartitionsTableProvider` schema/query change
@@ -875,9 +1040,20 @@ footer-free way to check per-partition sort status before it declares
 - Which merged blocks partitions are "active" today and need `regenerate_partitions` run against
   them? Design §4's `sort_order` column makes this SQL-answerable —
   `SELECT * FROM list_partitions() WHERE view_set_name = 'blocks' AND sort_order IS NULL` lists
-  exactly the partitions still needing regeneration — but running `regenerate_partitions` over
-  whatever that query returns in production is still an operational rollout step, tracked
-  separately (not blocking landing the code).
+  exactly the partitions still lacking the guarantee. Because the merge only declares the ordering
+  and records it when every input already carries it (Design §1/§4), this correctly includes not
+  just pre-fix partitions written before this change, but also any *post-fix* daily merge whose
+  hourly inputs were still unguaranteed at merge time — those self-report `NULL` too rather than
+  being missed by this query. The rollout is therefore: run `regenerate_partitions` over the
+  hourlies the query returns first, then over the dailies (a daily built from hourlies that were
+  `NULL` at the time it was merged stays `NULL` itself until it is regenerated or re-merged, even
+  after its hourly inputs are later fixed — re-running the query after each pass shows the
+  remaining work). Once every existing partition reaches `sort_order = ['insert_time', 'block_id']`,
+  every subsequent ordinary (non-forced) daily merge sees all-guaranteed hourly inputs and
+  automatically takes the ordered path itself, propagating the guarantee forward with no further
+  manual regeneration. Running `regenerate_partitions` over whatever the query returns in
+  production is still an operational rollout step, tracked separately (not blocking landing the
+  code).
 - Is `SOURCE_ROWS_PER_BATCH = 20_000` the right default? No load testing yet against blocks-view's
   widest real-world `streams.properties`/`processes.properties` payloads — worth revisiting once
   this lands.
