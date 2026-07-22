@@ -51,8 +51,9 @@ impl PartitionCache {
         pool: &sqlx::PgPool,
         insert_range: TimeRange,
     ) -> Result<Self> {
-        let rows = sqlx::query(
-            "SELECT view_set_name,
+        let rows = instrument_named!(
+            sqlx::query(
+                "SELECT view_set_name,
                     view_instance_id,
                     begin_insert_time,
                     end_insert_time,
@@ -69,10 +70,12 @@ impl PartitionCache {
              AND end_insert_time > $2
              ORDER BY begin_insert_time, file_path
              ;",
+            )
+            .bind(insert_range.end)
+            .bind(insert_range.begin)
+            .fetch_all(pool),
+            "sql_select_overlapping_partitions"
         )
-        .bind(insert_range.end)
-        .bind(insert_range.begin)
-        .fetch_all(pool)
         .await
         .with_context(|| "fetching partitions")?;
         let mut partitions = vec![];
@@ -128,8 +131,9 @@ impl PartitionCache {
         view_instance_id: Arc<String>,
         insert_range: TimeRange,
     ) -> Result<Self> {
-        let rows = sqlx::query(
-            "SELECT begin_insert_time,
+        let rows = instrument_named!(
+            sqlx::query(
+                "SELECT begin_insert_time,
                     end_insert_time,
                     min_event_time,
                     max_event_time,
@@ -146,12 +150,14 @@ impl PartitionCache {
              AND view_instance_id = $4
              ORDER BY begin_insert_time, file_path
              ;",
+            )
+            .bind(insert_range.end)
+            .bind(insert_range.begin)
+            .bind(&*view_set_name)
+            .bind(&*view_instance_id)
+            .fetch_all(pool),
+            "sql_select_overlapping_partitions_for_view"
         )
-        .bind(insert_range.end)
-        .bind(insert_range.begin)
-        .bind(&*view_set_name)
-        .bind(&*view_instance_id)
-        .fetch_all(pool)
         .await
         .with_context(|| "fetching partitions")?;
         let mut partitions = vec![];
@@ -334,8 +340,9 @@ impl QueryPartitionProvider for LivePartitionProvider {
     ) -> Result<Vec<Partition>> {
         let mut partitions = vec![];
         let rows = if let Some(range) = query_range {
-            sqlx::query(
-                "SELECT view_set_name,
+            instrument_named!(
+                sqlx::query(
+                    "SELECT view_set_name,
                     view_instance_id,
                     begin_insert_time,
                     end_insert_time,
@@ -355,18 +362,21 @@ impl QueryPartitionProvider for LivePartitionProvider {
              AND file_schema_hash = $5
              ORDER BY begin_insert_time, file_path
              ;",
+                )
+                .bind(view_set_name)
+                .bind(view_instance_id)
+                .bind(range.end)
+                .bind(range.begin)
+                .bind(file_schema_hash)
+                .fetch_all(&self.db_pool),
+                "sql_select_live_partitions"
             )
-            .bind(view_set_name)
-            .bind(view_instance_id)
-            .bind(range.end)
-            .bind(range.begin)
-            .bind(file_schema_hash)
-            .fetch_all(&self.db_pool)
             .await
             .with_context(|| "listing lakehouse partitions")?
         } else {
-            sqlx::query(
-                "SELECT view_set_name,
+            instrument_named!(
+                sqlx::query(
+                    "SELECT view_set_name,
                     view_instance_id,
                     begin_insert_time,
                     end_insert_time,
@@ -384,11 +394,13 @@ impl QueryPartitionProvider for LivePartitionProvider {
              AND file_schema_hash = $3
              ORDER BY begin_insert_time, file_path
              ;",
+                )
+                .bind(view_set_name)
+                .bind(view_instance_id)
+                .bind(file_schema_hash)
+                .fetch_all(&self.db_pool),
+                "sql_select_live_partitions"
             )
-            .bind(view_set_name)
-            .bind(view_instance_id)
-            .bind(file_schema_hash)
-            .fetch_all(&self.db_pool)
             .await
             .with_context(|| "listing lakehouse partitions")?
         };

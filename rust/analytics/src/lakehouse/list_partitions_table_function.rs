@@ -15,6 +15,7 @@ use datafusion::error::DataFusionError;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::Expr;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
+use micromegas_tracing::prelude::*;
 use std::sync::Arc;
 
 /// A DataFusion `TableFunctionImpl` for listing lakehouse partitions.
@@ -139,10 +140,12 @@ impl TableProvider for ListPartitionsTableProvider {
                 .to_string()
         };
 
-        let rows = sqlx::query(&query)
-            .fetch_all(&self.lake.db_pool)
-            .await
-            .map_err(|e| DataFusionError::External(e.into()))?;
+        let rows = instrument_named!(
+            sqlx::query(&query).fetch_all(&self.lake.db_pool),
+            "sql_select_list_partitions"
+        )
+        .await
+        .map_err(|e| DataFusionError::External(e.into()))?;
         let rb = rows_to_record_batch(&rows).map_err(|e| DataFusionError::External(e.into()))?;
 
         let source = MemorySourceConfig::try_new(

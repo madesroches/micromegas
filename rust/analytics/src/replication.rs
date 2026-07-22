@@ -6,7 +6,7 @@ use datafusion::arrow::array::{
 };
 use futures::StreamExt;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
-use micromegas_tracing::info;
+use micromegas_tracing::prelude::*;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -54,11 +54,12 @@ async fn ingest_streams(
                 extract_properties_from_properties_column(properties_accessor.as_ref(), row)?;
             let properties = micromegas_telemetry::property::make_properties(&properties_map);
 
-            sqlx::query(
-                "INSERT INTO streams (stream_id, process_id, dependencies_metadata, objects_metadata, tags, properties, insert_time, format)
+            instrument_named!(
+                sqlx::query(
+                    "INSERT INTO streams (stream_id, process_id, dependencies_metadata, objects_metadata, tags, properties, insert_time, format)
                  VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
                  ON CONFLICT (stream_id) DO NOTHING;",
-            )
+                )
                 .bind(stream_id)
                 .bind(process_id)
                 .bind(dependencies_metadata_column.value(row))
@@ -69,9 +70,11 @@ async fn ingest_streams(
                     insert_time_column.value(row),
                 ))
                 .bind(format_column.value(row)?)
-                .execute(&mut *tr)
-                .await
-                .with_context(|| "inserting into streams")?;
+                .execute(&mut *tr),
+                "sql_insert_stream"
+            )
+            .await
+            .with_context(|| "inserting into streams")?;
         }
     }
     tr.commit().await?;
@@ -113,25 +116,28 @@ async fn ingest_processes(
             let properties_map =
                 extract_properties_from_properties_column(properties_accessor.as_ref(), row)?;
             let properties = micromegas_telemetry::property::make_properties(&properties_map);
-            sqlx::query(
-                "INSERT INTO processes VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) ON CONFLICT (process_id) DO NOTHING;",
+            instrument_named!(
+                sqlx::query(
+                    "INSERT INTO processes VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) ON CONFLICT (process_id) DO NOTHING;",
+                )
+                .bind(process_id)
+                .bind(exe_column.value(row)?)
+                .bind(username_column.value(row)?)
+                .bind(realname_column.value(row)?)
+                .bind(computer_column.value(row)?)
+                .bind(distro_column.value(row)?)
+                .bind(cpu_brand_column.value(row)?)
+                .bind(process_tsc_freq_column.value(row))
+                .bind(DateTime::from_timestamp_nanos(start_time_column.value(row)))
+                .bind(start_ticks_column.value(row))
+                .bind(DateTime::from_timestamp_nanos(
+                    insert_time_column.value(row),
+                ))
+                .bind(parent_process_id)
+                .bind(properties)
+                .execute(&mut *tr),
+                "sql_insert_process"
             )
-            .bind(process_id)
-            .bind(exe_column.value(row)?)
-            .bind(username_column.value(row)?)
-            .bind(realname_column.value(row)?)
-            .bind(computer_column.value(row)?)
-            .bind(distro_column.value(row)?)
-            .bind(cpu_brand_column.value(row)?)
-            .bind(process_tsc_freq_column.value(row))
-            .bind(DateTime::from_timestamp_nanos(start_time_column.value(row)))
-            .bind(start_ticks_column.value(row))
-            .bind(DateTime::from_timestamp_nanos(
-                insert_time_column.value(row),
-            ))
-            .bind(parent_process_id)
-            .bind(properties)
-            .execute(&mut *tr)
             .await
             .with_context(|| "executing sql insert into processes")?;
         }
@@ -194,23 +200,26 @@ async fn ingest_blocks(
             let block_id = Uuid::parse_str(block_id_column.value(row)?)?;
             let stream_id = Uuid::parse_str(stream_id_column.value(row)?)?;
             let process_id = Uuid::parse_str(process_id_column.value(row)?)?;
-            sqlx::query("INSERT INTO blocks VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT (block_id) DO NOTHING;")
-                .bind(block_id)
-                .bind(stream_id)
-                .bind(process_id)
-                .bind(DateTime::from_timestamp_nanos(begin_time_column.value(row)))
-                .bind(begin_ticks_column.value(row))
-                .bind(DateTime::from_timestamp_nanos(end_time_column.value(row)))
-                .bind(end_ticks_column.value(row))
-                .bind(nb_objects_column.value(row))
-                .bind(object_offset_column.value(row))
-                .bind(payload_size_column.value(row))
-                .bind(DateTime::from_timestamp_nanos(
-                    insert_time_column.value(row),
-                ))
-                .execute(&mut *tr)
-                .await
-                .with_context(|| "executing sql insert into blocks")?;
+            instrument_named!(
+                sqlx::query("INSERT INTO blocks VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT (block_id) DO NOTHING;")
+                    .bind(block_id)
+                    .bind(stream_id)
+                    .bind(process_id)
+                    .bind(DateTime::from_timestamp_nanos(begin_time_column.value(row)))
+                    .bind(begin_ticks_column.value(row))
+                    .bind(DateTime::from_timestamp_nanos(end_time_column.value(row)))
+                    .bind(end_ticks_column.value(row))
+                    .bind(nb_objects_column.value(row))
+                    .bind(object_offset_column.value(row))
+                    .bind(payload_size_column.value(row))
+                    .bind(DateTime::from_timestamp_nanos(
+                        insert_time_column.value(row),
+                    ))
+                    .execute(&mut *tr),
+                "sql_insert_block"
+            )
+            .await
+            .with_context(|| "executing sql insert into blocks")?;
         }
     }
     tr.commit().await?;

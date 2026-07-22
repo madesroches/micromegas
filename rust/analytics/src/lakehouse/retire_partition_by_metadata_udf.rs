@@ -85,18 +85,21 @@ impl RetirePartitionByMetadata {
         end_insert_time: DateTime<Utc>,
     ) -> Result<()> {
         // First, check if the partition exists and get its details
-        let partition_query = sqlx::query(
-            "SELECT file_path, file_size FROM lakehouse_partitions 
-             WHERE view_set_name = $1 
-               AND view_instance_id = $2 
-               AND begin_insert_time = $3 
+        let partition_query = instrument_named!(
+            sqlx::query(
+                "SELECT file_path, file_size FROM lakehouse_partitions
+             WHERE view_set_name = $1
+               AND view_instance_id = $2
+               AND begin_insert_time = $3
                AND end_insert_time = $4",
+            )
+            .bind(view_set_name)
+            .bind(view_instance_id)
+            .bind(begin_insert_time)
+            .bind(end_insert_time)
+            .fetch_optional(&mut **transaction),
+            "sql_select_partition_by_metadata"
         )
-        .bind(view_set_name)
-        .bind(view_instance_id)
-        .bind(begin_insert_time)
-        .bind(end_insert_time)
-        .fetch_optional(&mut **transaction)
         .await
         .with_context(|| {
             format!(
@@ -119,18 +122,21 @@ impl RetirePartitionByMetadata {
         }
 
         // Remove from active partitions
-        let delete_result = sqlx::query(
-            "DELETE FROM lakehouse_partitions 
-             WHERE view_set_name = $1 
-               AND view_instance_id = $2 
-               AND begin_insert_time = $3 
+        let delete_result = instrument_named!(
+            sqlx::query(
+                "DELETE FROM lakehouse_partitions
+             WHERE view_set_name = $1
+               AND view_instance_id = $2
+               AND begin_insert_time = $3
                AND end_insert_time = $4",
+            )
+            .bind(view_set_name)
+            .bind(view_instance_id)
+            .bind(begin_insert_time)
+            .bind(end_insert_time)
+            .execute(&mut **transaction),
+            "sql_delete_partition_by_metadata"
         )
-        .bind(view_set_name)
-        .bind(view_instance_id)
-        .bind(begin_insert_time)
-        .bind(end_insert_time)
-        .execute(&mut **transaction)
         .await
         .with_context(|| {
             format!(

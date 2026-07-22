@@ -243,6 +243,7 @@ pub async fn generate_stream_jit_partitions(
 }
 
 /// Generates a segment of JIT partitions filtered by process.
+#[span_fn]
 pub async fn generate_process_jit_partitions_segment(
     config: &JitPartitionConfig,
     lakehouse: Arc<LakehouseContext>,
@@ -381,6 +382,7 @@ pub async fn generate_process_jit_partitions_segment(
 /// generate_process_jit_partitions lists the partitions that are needed to cover a time span for a specific process
 /// these partitions may not exist or they could be out of date
 /// Generates JIT partitions for a given time range filtered by process.
+#[span_fn]
 pub async fn generate_process_jit_partitions(
     config: &JitPartitionConfig,
     lakehouse: Arc<LakehouseContext>,
@@ -491,37 +493,40 @@ pub async fn is_jit_partition_up_to_date(
     //
     // ADDITIONAL FIX: For identical timestamps (min_insert_time == max_insert_time),
     // we need exact equality matching to handle single-timestamp partitions correctly.
-    let rows = if min_insert_time == max_insert_time {
-        // For identical timestamps, look for exact matches
-        sqlx::query(
-            "SELECT file_schema_hash, source_data_hash
+    let rows = instrument_named!(
+        if min_insert_time == max_insert_time {
+            // For identical timestamps, look for exact matches
+            sqlx::query(
+                "SELECT file_schema_hash, source_data_hash
              FROM lakehouse_partitions
              WHERE view_set_name = $1
              AND view_instance_id = $2
              AND begin_insert_time = $3
              AND end_insert_time = $3
              ;",
-        )
-        .bind(&*view_meta.view_set_name)
-        .bind(&*view_meta.view_instance_id)
-        .bind(min_insert_time)
-    } else {
-        // For time ranges, use inclusive inequalities
-        sqlx::query(
-            "SELECT file_schema_hash, source_data_hash
+            )
+            .bind(&*view_meta.view_set_name)
+            .bind(&*view_meta.view_instance_id)
+            .bind(min_insert_time)
+        } else {
+            // For time ranges, use inclusive inequalities
+            sqlx::query(
+                "SELECT file_schema_hash, source_data_hash
              FROM lakehouse_partitions
              WHERE view_set_name = $1
              AND view_instance_id = $2
              AND begin_insert_time <= $3
              AND end_insert_time >= $4
              ;",
-        )
-        .bind(&*view_meta.view_set_name)
-        .bind(&*view_meta.view_instance_id)
-        .bind(max_insert_time)
-        .bind(min_insert_time)
-    }
-    .fetch_all(pool)
+            )
+            .bind(&*view_meta.view_set_name)
+            .bind(&*view_meta.view_instance_id)
+            .bind(max_insert_time)
+            .bind(min_insert_time)
+        }
+        .fetch_all(pool),
+        "sql_select_matching_partitions"
+    )
     .await
     .with_context(|| "fetching matching partitions")?;
     if rows.len() != 1 {

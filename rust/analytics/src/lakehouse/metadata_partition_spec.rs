@@ -36,12 +36,15 @@ pub async fn fetch_metadata_partition_spec(
     compute_time_bounds: Arc<dyn DataFrameTimeBounds>,
 ) -> Result<MetadataPartitionSpec> {
     //todo: extract this query to allow join (instead of source_table)
-    let row = sqlx::query(source_count_query)
-        .bind(insert_range.begin)
-        .bind(insert_range.end)
-        .fetch_one(pool)
-        .await
-        .with_context(|| "select count source metadata")?;
+    let row = instrument_named!(
+        sqlx::query(source_count_query)
+            .bind(insert_range.begin)
+            .bind(insert_range.end)
+            .fetch_one(pool),
+        "sql_select_source_count"
+    )
+    .await
+    .with_context(|| "select count source metadata")?;
     Ok(MetadataPartitionSpec {
         view_metadata,
         schema,
@@ -74,11 +77,14 @@ impl PartitionSpec for MetadataPartitionSpec {
         );
         logger.write_log_entry(format!("writing {desc}")).await?;
 
-        let rows = sqlx::query(&self.data_sql)
-            .bind(self.insert_range.begin)
-            .bind(self.insert_range.end)
-            .fetch_all(&lake.db_pool)
-            .await?;
+        let rows = instrument_named!(
+            sqlx::query(&self.data_sql)
+                .bind(self.insert_range.begin)
+                .bind(self.insert_range.end)
+                .fetch_all(&lake.db_pool),
+            "sql_select_partition_source_data"
+        )
+        .await?;
         let row_count = rows.len() as i64;
 
         let (tx, rx) = tokio::sync::mpsc::channel(1);

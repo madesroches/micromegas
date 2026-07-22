@@ -62,16 +62,19 @@ fn state_tags(state: &str) -> &'static PropertySet {
 /// Per-index metrics: `pg_stat_user_indexes` joined with
 /// `pg_relation_size(indexrelid)`, tagged `{table, index}`.
 async fn collect_index_stats(pool: &sqlx::PgPool) -> Result<()> {
-    let rows = sqlx::query(
-        "SELECT relname AS table_name,
+    let rows = instrument_named!(
+        sqlx::query(
+            "SELECT relname AS table_name,
                 indexrelname AS index_name,
                 idx_scan,
                 idx_tup_read,
                 idx_tup_fetch,
                 pg_relation_size(indexrelid) AS index_size_bytes
          FROM pg_stat_user_indexes",
+        )
+        .fetch_all(pool),
+        "sql_select_pg_stat_user_indexes"
     )
-    .fetch_all(pool)
     .await
     .with_context(|| "querying pg_stat_user_indexes")?;
 
@@ -110,8 +113,9 @@ async fn collect_index_stats(pool: &sqlx::PgPool) -> Result<()> {
 
 /// Per-table metrics: `pg_stat_user_tables`, tagged `{table}`.
 async fn collect_table_stats(pool: &sqlx::PgPool) -> Result<()> {
-    let rows = sqlx::query(
-        "SELECT relname AS table_name,
+    let rows = instrument_named!(
+        sqlx::query(
+            "SELECT relname AS table_name,
                 seq_scan,
                 idx_scan,
                 n_live_tup,
@@ -121,8 +125,10 @@ async fn collect_table_stats(pool: &sqlx::PgPool) -> Result<()> {
                 n_tup_del,
                 extract(epoch from now() - last_autovacuum)::float8 AS seconds_since_autovacuum
          FROM pg_stat_user_tables",
+        )
+        .fetch_all(pool),
+        "sql_select_pg_stat_user_tables"
     )
-    .fetch_all(pool)
     .await
     .with_context(|| "querying pg_stat_user_tables")?;
 
@@ -186,8 +192,9 @@ async fn collect_table_stats(pool: &sqlx::PgPool) -> Result<()> {
 /// Database-wide metrics: `pg_stat_database` filtered to `current_database()`
 /// (single row), untagged.
 async fn collect_database_stats(pool: &sqlx::PgPool) -> Result<()> {
-    let row = sqlx::query(
-        "SELECT blks_hit,
+    let row = instrument_named!(
+        sqlx::query(
+            "SELECT blks_hit,
                 blks_read,
                 xact_commit,
                 xact_rollback,
@@ -196,8 +203,10 @@ async fn collect_database_stats(pool: &sqlx::PgPool) -> Result<()> {
                 extract(epoch from stats_reset)::float8 AS stats_reset_epoch
          FROM pg_stat_database
          WHERE datname = current_database()",
+        )
+        .fetch_one(pool),
+        "sql_select_pg_stat_database"
     )
-    .fetch_one(pool)
     .await
     .with_context(|| "querying pg_stat_database")?;
 
@@ -237,13 +246,16 @@ async fn collect_database_stats(pool: &sqlx::PgPool) -> Result<()> {
 /// of the oldest in-progress transaction, both from `pg_stat_activity`
 /// filtered to `current_database()`.
 async fn collect_activity_stats(pool: &sqlx::PgPool) -> Result<()> {
-    let state_rows = sqlx::query(
-        "SELECT coalesce(state, 'unknown') AS state, count(*) AS connections
+    let state_rows = instrument_named!(
+        sqlx::query(
+            "SELECT coalesce(state, 'unknown') AS state, count(*) AS connections
          FROM pg_stat_activity
          WHERE datname = current_database()
          GROUP BY 1",
+        )
+        .fetch_all(pool),
+        "sql_select_pg_stat_activity_by_state"
     )
-    .fetch_all(pool)
     .await
     .with_context(|| "querying pg_stat_activity (by state)")?;
 
@@ -257,12 +269,15 @@ async fn collect_activity_stats(pool: &sqlx::PgPool) -> Result<()> {
         );
     }
 
-    let oldest_xact_row = sqlx::query(
-        "SELECT extract(epoch from now() - min(xact_start))::float8 AS oldest_xact_age_seconds
+    let oldest_xact_row = instrument_named!(
+        sqlx::query(
+            "SELECT extract(epoch from now() - min(xact_start))::float8 AS oldest_xact_age_seconds
          FROM pg_stat_activity
          WHERE datname = current_database()",
+        )
+        .fetch_one(pool),
+        "sql_select_pg_stat_activity_oldest_xact"
     )
-    .fetch_one(pool)
     .await
     .with_context(|| "querying pg_stat_activity (oldest xact)")?;
 
