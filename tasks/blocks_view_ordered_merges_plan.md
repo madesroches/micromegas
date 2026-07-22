@@ -245,8 +245,11 @@ insert range.
 Add a `force: bool` parameter to `batch_update::materialize_partition` and
 `materialize_partition_range` (`batch_update.rs:98,195`, both already crate-internal/pub, one
 external caller in `materialize_partitions_table_function.rs`). When `force` is true,
-`materialize_partition` skips `verify_overlapping_partitions` entirely and takes
-`PartitionCreationStrategy::CreateFromSource` unconditionally:
+`materialize_partition` skips `verify_overlapping_partitions` entirely, takes
+`PartitionCreationStrategy::CreateFromSource` unconditionally, *and* also skips the
+`get_max_partition_time_delta`-driven subdivision check (`batch_update.rs:138-155`) so the
+entire requested `insert_range` is written as a single partition instead of being split into
+buckets:
 
 ```rust
 let strategy = if force {
@@ -254,11 +257,35 @@ let strategy = if force {
 } else {
     verify_overlapping_partitions(...).await?
 };
+let new_delta = if force {
+    insert_range.end - insert_range.begin
+} else {
+    view.get_max_partition_time_delta(&strategy)
+};
+if new_delta < (insert_range.end - insert_range.begin) {
+    ... // subdivision branch, unreachable when force is true
+}
 ```
 
-This reuses the existing subdivision logic (splitting a wide range into
-`get_max_partition_time_delta`-sized buckets, `batch_update.rs:138-155`) and — via
-`partition_spec.write()` — the now-streaming Postgres fetch from part 2 and the
+Skipping the subdivision is required, not optional: `BlocksView::get_max_partition_time_delta`
+returns `TimeDelta::hours(1)` for `CreateFromSource` but `TimeDelta::days(1)` for
+`MergeExisting` (`blocks_view.rs:140-147`). A forced regeneration over a day range that honored
+the 1-hour delta would recurse into `materialize_partition_range` and write 24 hourly
+partitions instead of one daily partition. `retire_partitions`'s range-containment delete
+(`begin_insert_time >= $3 AND end_insert_time <= $4`, `write_partition.rs:226-246`) only retires
+partitions fully contained within *each new* partition's own range, so none of those 24 hourly
+`[h, h+1h)` ranges would contain the pre-existing daily `[day_begin, day_end)` partition — it
+would never be retired, leaving duplicate rows until a manual `retire_partitions` call. Writing
+the whole range as one `CreateFromSource` partition makes the new partition's range exactly
+`[day_begin, day_end)`, so `retire_partitions` cleanly deletes the old daily partition in the
+same transaction as the insert.
+
+`force` is threaded unchanged through the `materialize_partition_range` → `materialize_partition`
+loop call (`batch_update.rs:209`); only the subdivision decision inside `materialize_partition`
+itself is affected.
+
+Via `partition_spec.write()`, this still uses the now-streaming Postgres fetch from part 2 (so a
+whole-day `CreateFromSource` write stays memory-bounded even without subdivision) and the
 retire-then-insert atomic swap in `insert_partition` (part of the "Current State" analysis
 above), so regeneration is online (no downtime) and memory-bounded from day one.
 
@@ -297,7 +324,10 @@ Usage for this issue: `SELECT * FROM regenerate_partitions('blocks', <day_begin>
    `sqlx::query(...).fetch(...)` in `SOURCE_ROWS_PER_BATCH`-sized chunks; add the `flush_chunk`
    helper; switch `source_data_hash` to `self.get_source_data_hash()`.
 7. `rust/analytics/src/lakehouse/batch_update.rs`: add `force: bool` to `materialize_partition`
-   and `materialize_partition_range`; skip `verify_overlapping_partitions` when `force`.
+   and `materialize_partition_range`; when `force`, skip `verify_overlapping_partitions` and skip
+   the `get_max_partition_time_delta` subdivision check so the whole requested range is written
+   as one `CreateFromSource` partition (letting `retire_partitions` cleanly retire the existing
+   partition it replaces).
 8. `rust/analytics/src/lakehouse/materialize_partitions_table_function.rs`: pass `force: false`
    at its `materialize_partition_range` call.
 9. New `rust/analytics/src/lakehouse/regenerate_partitions_table_function.rs`: copy
@@ -305,9 +335,12 @@ Usage for this issue: `SELECT * FROM regenerate_partitions('blocks', <day_begin>
    force: true, ...)`.
 10. `rust/analytics/src/lakehouse/query.rs`: register `regenerate_partitions` UDTF next to
     `materialize_partitions`.
-11. Tests (see Testing Strategy).
-12. From `rust/`: `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `cargo test`.
-13. Manual verification (see Testing Strategy) against a running environment with an existing
+11. Documentation: add `regenerate_partitions` alongside `materialize_partitions` in
+    `mkdocs/docs/query-guide/functions-reference.md`, `mkdocs/docs/admin/maintenance.md`, and
+    `mkdocs/docs/query-guide/python-api.md`.
+12. Tests (see Testing Strategy).
+13. From `rust/`: `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `cargo test`.
+14. Manual verification (see Testing Strategy) against a running environment with an existing
     unsorted merged blocks partition.
 
 ## Files to Modify
@@ -323,6 +356,9 @@ Usage for this issue: `SELECT * FROM regenerate_partitions('blocks', <day_begin>
 - `rust/analytics/src/lakehouse/materialize_partitions_table_function.rs` — pass `force: false`.
 - `rust/analytics/src/lakehouse/regenerate_partitions_table_function.rs` — new.
 - `rust/analytics/src/lakehouse/query.rs` — register new UDTF.
+- `mkdocs/docs/query-guide/functions-reference.md` — document `regenerate_partitions`.
+- `mkdocs/docs/admin/maintenance.md` — document `regenerate_partitions`.
+- `mkdocs/docs/query-guide/python-api.md` — document `regenerate_partitions`.
 
 ## Trade-offs
 
@@ -337,10 +373,11 @@ Usage for this issue: `SELECT * FROM regenerate_partitions('blocks', <day_begin>
   field access changed. An enum parameter keeps one implementation and makes the event-time
   behavior's non-regression explicit (`OrderingBounds::EventTime` at every existing call site).
 - **`force: bool` on `materialize_partition_range` vs. a standalone regeneration code path.**
-  Reimplementing partition subdivision and the write/swap plumbing outside `batch_update.rs`
-  would duplicate `materialize_partition`'s bucket-splitting logic. A boolean that skips one
-  decision (the up-to-date check) is a one-line behavioral change reusing everything else,
-  including the streaming fix from part 2.
+  Reimplementing the write/swap plumbing outside `batch_update.rs` would duplicate
+  `materialize_partition`'s partition-spec/write/retire logic. A boolean that skips two
+  decisions — the up-to-date check and the `get_max_partition_time_delta` subdivision check — is
+  a small, localized behavioral change that reuses everything else, including the streaming fix
+  from part 2 and the atomic retire-then-insert swap in `insert_partition`.
 - **Chunked `sqlx` row streaming vs. a Postgres `DECLARE CURSOR` / `COPY`-based approach.**
   `sqlx::query(...).fetch(...)` already streams rows off the wire without server-side cursor
   management; a fixed row-count chunk (not byte-size-based, unlike the Parquet writer's 100MB
