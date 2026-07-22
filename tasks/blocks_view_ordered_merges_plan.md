@@ -140,9 +140,13 @@ pub enum OrderingBounds {
   OrderingBounds) -> Option<(DateTime<Utc>, DateTime<Utc>)>`) instead of calling
   `min_event_time()`/`max_event_time()` directly. Behavior for `OrderingBounds::EventTime` is
   byte-for-byte unchanged.
-- `make_partitioned_execution_plan` gains an `ordering_bounds: OrderingBounds` parameter. Its one
-  production caller, through `MaterializedView` (`materialized_view.rs:86-96`), passes
-  `OrderingBounds::EventTime` — no behavior change for any existing consumer-side view. The
+- `make_partitioned_execution_plan` gains an `ordering_bounds: OrderingBounds` parameter. It has
+  two production callers: through `MaterializedView` (`materialized_view.rs:86-96`), and through
+  `PartitionedTableProvider::scan` (`partitioned_table_provider.rs:63`, the live user-query path
+  registered by `query.rs:64` and also used by `batch_partition_merger.rs:136`). Both pass
+  `OrderingBounds::EventTime` — the `MaterializedView` site explicitly, the
+  `PartitionedTableProvider` site via its `new(...)` constructor's `EventTime` default (see below)
+  — so there is no behavior change for any existing consumer-side view. The
   function is also called directly (bypassing `MaterializedView`) from 3 sites in
   `rust/analytics/tests/thread_spans_ordering_tests.rs` (lines 77, 105, 147); those must be
   updated to pass `OrderingBounds::EventTime` too, or the crate won't compile against the new
