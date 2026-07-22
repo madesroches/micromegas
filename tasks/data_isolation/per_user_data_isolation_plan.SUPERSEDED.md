@@ -1,5 +1,11 @@
 # Per-user data isolation for privacy-sensitive users
 
+> ⚠️ **SUPERSEDED** by [`policy_based_data_isolation_plan.md`](policy_based_data_isolation_plan.md).
+> This is the earlier, simpler per-user-only design. It is retained for its confidentiality/integrity
+> analysis and current-state audit, which the successor builds on. **Do not implement from this
+> document** — the policy-based plan generalizes it (per-user is the default identity-policy instance)
+> and reflects the codebase research. Where they differ, the successor wins.
+
 ## Overview
 
 Goal: ensure that telemetry produced by a user can only be **seen** by that user. Target

@@ -1,6 +1,6 @@
 # Policy-based data isolation for telemetry
 
-> **Supersedes** `tasks/privacy_per_user_data_isolation_plan.md`. That document analyzed the
+> **Supersedes** [`per_user_data_isolation_plan.SUPERSEDED.md`](per_user_data_isolation_plan.SUPERSEDED.md). That document analyzed the
 > per-user case and remains the reference for the confidentiality/integrity analysis and the
 > current-state audit; this plan generalizes its mechanism. Where they disagree, this document wins.
 
