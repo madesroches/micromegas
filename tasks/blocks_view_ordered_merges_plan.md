@@ -255,15 +255,69 @@ so its signature must not change. Instead, factor its loop body into a new priva
 `materialize_partition_range_impl(..., force: bool)`: `materialize_partition_range` becomes a
 thin wrapper calling it with `force: false` (unchanged behavior, unchanged signature, zero call
 sites touched), and a new `regenerate_partition_range` (same signature otherwise) calls it with
-`force: true`. When `force` is true, `materialize_partition` skips `verify_overlapping_partitions`
-entirely, takes
-`PartitionCreationStrategy::CreateFromSource` unconditionally, *and* also skips the
-`get_max_partition_time_delta`-driven subdivision check (`batch_update.rs:138-155`) so the
-entire requested `insert_range` is written as a single partition instead of being split into
-buckets:
+`force: true`. When `force` is true, `materialize_partition` skips *only* the source-data-hash
+freshness comparison inside `verify_overlapping_partitions` — the "already up to date" check this
+plan needs to bypass — and takes `PartitionCreationStrategy::CreateFromSource` unconditionally,
+*and* also skips the `get_max_partition_time_delta`-driven subdivision check
+(`batch_update.rs:138-155`) so the entire requested `insert_range` is written as a single
+partition instead of being split into buckets.
+
+**Invariant `regenerate_partitions` callers must uphold:** the requested `(begin, end, delta)`
+must exactly cover the boundaries of the partition(s) being regenerated.
+`retire_partitions`'s cleanup only deletes partitions fully contained within the *new*
+partition's own range (`begin_insert_time >= $3 AND end_insert_time <= $4`,
+`write_partition.rs:226-246`); a misaligned range/delta (e.g. regenerating a daily partition with
+`delta=3600`, or a sub-range that starts or ends mid-partition) means the new partition's range
+doesn't fully contain the old one, so the old partition is never retired — it survives untouched
+while the new one is inserted alongside it, producing silent duplicate rows.
+
+Because `force` bypasses `verify_overlapping_partitions` entirely, it also loses that function's
+*only* other job: rejecting a partial overlap (`batch_update.rs:57-67`,
+`begin < insert_range.begin || end > insert_range.end` → `Abort`). To keep that protection
+without reintroducing the freshness check, add a small new function,
+`verify_force_regeneration_alignment`, called only on the `force` path, that runs the same
+partial-overlap test against the same filtered existing-partitions set but with no source-hash
+comparison — so it can never produce the "already up to date" `Abort` that forcing is meant to
+bypass, only a loud `Err` on a misaligned request:
 
 ```rust
+fn verify_force_regeneration_alignment(
+    existing_partitions_all_views: &PartitionCache,
+    insert_range: TimeRange,
+    view_set_name: &str,
+    view_instance_id: &str,
+    file_schema_hash: &[u8],
+) -> Result<()> {
+    let filtered = existing_partitions_all_views.filter(
+        view_set_name,
+        view_instance_id,
+        file_schema_hash,
+        insert_range,
+    );
+    for part in &filtered.partitions {
+        let begin = part.begin_insert_time();
+        let end = part.end_insert_time();
+        if begin < insert_range.begin || end > insert_range.end {
+            anyhow::bail!(
+                "regenerate_partitions: requested range [{}, {}] does not fully contain \
+                 existing partition [{}, {}] for {view_set_name}/{view_instance_id} — \
+                 range/delta must exactly cover the partition(s) being regenerated",
+                insert_range.begin.to_rfc3339(), insert_range.end.to_rfc3339(),
+                begin.to_rfc3339(), end.to_rfc3339(),
+            );
+        }
+    }
+    Ok(())
+}
+
 let strategy = if force {
+    verify_force_regeneration_alignment(
+        &existing_partitions_all_views,
+        insert_range,
+        &view_set_name,
+        &view_instance_id,
+        &view.get_file_schema_hash(),
+    )?;
     PartitionCreationStrategy::CreateFromSource
 } else {
     verify_overlapping_partitions(...).await?
@@ -277,6 +331,10 @@ if new_delta < (insert_range.end - insert_range.begin) {
     ... // subdivision branch, unreachable when force is true
 }
 ```
+
+This guard fails the call loudly (an `Err` surfaced through `regenerate_partitions`'s
+`TaskLogExecPlan`) instead of the alternative of silently leaving both the stale and the new
+partition in place.
 
 Skipping the subdivision is required, not optional: `BlocksView::get_max_partition_time_delta`
 returns `TimeDelta::hours(1)` for `CreateFromSource` but `TimeDelta::days(1)` for
@@ -316,7 +374,9 @@ Add a new `regenerate_partitions` table function (new file
 `regenerate_partition_range(...)` (force: true baked in) instead of `materialize_partition_range`.
 
 Usage for this issue: `SELECT * FROM regenerate_partitions('blocks', <day_begin>, <day_end>,
-86400);` for each active merged daily blocks partition.
+86400);` for each active merged daily blocks partition — `<day_begin>`/`<day_end>`/`86400` must
+exactly match that partition's existing boundaries (see the alignment invariant above); a range or
+delta that doesn't will now fail loudly instead of creating a duplicate partition.
 
 ## Implementation Steps
 
@@ -350,9 +410,14 @@ Usage for this issue: `SELECT * FROM regenerate_partitions('blocks', <day_begin>
    `histo_view_test.rs`, `sql_view_test.rs`, `thread_spans_ordering_db_test.rs`) need no changes.
    Add a new `regenerate_partition_range(...)` (same signature) that calls
    `materialize_partition_range_impl(..., force: true)`. When `force`, `materialize_partition`
-   skips `verify_overlapping_partitions` and skips the `get_max_partition_time_delta` subdivision
-   check so the whole requested range is written as one `CreateFromSource` partition (letting
-   `retire_partitions` cleanly retire the existing partition it replaces).
+   skips only `verify_overlapping_partitions`'s source-hash freshness check, and skips the
+   `get_max_partition_time_delta` subdivision check, so the whole requested range is written as
+   one `CreateFromSource` partition (letting `retire_partitions` cleanly retire the existing
+   partition it replaces). Add a new `verify_force_regeneration_alignment` function, called only
+   on the `force` path in place of `verify_overlapping_partitions`, that re-checks the same
+   partial-overlap condition (`begin < insert_range.begin || end > insert_range.end`) against
+   existing partitions and returns a loud `Err` on a misaligned `insert_range`/delta instead of
+   silently leaving a duplicate partition behind.
 9. New `rust/analytics/src/lakehouse/regenerate_partitions_table_function.rs`: copy
    `MaterializePartitionsTableFunction`'s shape, call `regenerate_partition_range(...)`.
 10. `rust/analytics/src/lakehouse/query.rs`: register `regenerate_partitions` UDTF next to
@@ -382,7 +447,8 @@ Usage for this issue: `SELECT * FROM regenerate_partitions('blocks', <day_begin>
 - `rust/analytics/src/lakehouse/metadata_partition_spec.rs` — streaming `write()`.
 - `rust/analytics/src/lakehouse/batch_update.rs` — `force` parameter, new
   `materialize_partition_range_impl` + `regenerate_partition_range` (existing
-  `materialize_partition_range` signature unchanged).
+  `materialize_partition_range` signature unchanged), new
+  `verify_force_regeneration_alignment` guard for the `force` path.
 - `rust/analytics/src/lakehouse/regenerate_partitions_table_function.rs` — new.
 - `rust/analytics/src/lakehouse/query.rs` — register new UDTF.
 - `python/micromegas/micromegas/flightsql/client.py` — add `regenerate_partitions(...)` method.
@@ -442,6 +508,13 @@ Usage for this issue: `SELECT * FROM regenerate_partitions('blocks', <day_begin>
   `make_partitioned_execution_plan` call sites are updated per Implementation Steps to pass
   `OrderingBounds::EventTime`; its behavioral assertions are otherwise unchanged — regression on
   `write_partition_tests.rs`, `partition_metadata_tests.rs`, etc.).
+- **Force-regeneration alignment guard test**: a DB-backed test (alongside the existing
+  `materialize_partition_range` tests, e.g. `thread_spans_ordering_db_test.rs`-style) asserting
+  `regenerate_partition_range`/`verify_force_regeneration_alignment` returns an `Err` when the
+  requested `(begin, end)` partially overlaps an existing partition instead of exactly containing
+  it (e.g. a daily partition regenerated with `delta=3600`), and succeeds when the range exactly
+  matches the partition's boundaries — confirming the guard fails loudly rather than silently
+  leaving a duplicate partition.
 - **Manual regeneration + memory check**: start services
   (`python3 local_test_env/ai_scripts/start_services.py` or monolith), find a real merged blocks
   partition, run `SELECT * FROM regenerate_partitions('blocks', <begin>, <end>, <delta>);`, and
