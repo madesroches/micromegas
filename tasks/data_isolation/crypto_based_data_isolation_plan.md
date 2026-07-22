@@ -53,9 +53,10 @@ Two structural moves, then encryption:
 3. **Envelope-encrypt the body plane** under a per-audience KEK held in a KMS (§3–4). A leaked body
    file is ciphertext whose DEK is wrapped by a key the attacker doesn't have.
 
-The metadata plane stays cleartext at rest, so **the policy plan's query-path filtering (Prong A on
-the `processes` view, Prong B on `list_partitions`) is still required for metadata** — this plan does
-not make it redundant, it narrows what it has to protect (§6).
+The metadata plane stays cleartext at rest, so **the policy plan's query-path filtering (Prong A — a
+direct property filter on `processes`, a `processes`-subquery semi-join on the other process-keyed
+views — plus Prong B on `list_partitions`) is still required for metadata** — this plan does not make
+it redundant, it narrows what it has to protect (§6).
 
 ## §1 — Two-plane split, grounded
 
@@ -74,7 +75,7 @@ not make it redundant, it narrows what it has to protect (§6).
   raw-block write/read seams.
 - `log_stats` is a global, all-audience aggregate derived from `log_entries`, so it needs an explicit
   classification rather than riding along unclassified. Its transform query
-  (`log_stats_view.rs:30-38`) groups by `process_id, level, target, time_bin` and emits only
+  (`log_stats_view.rs:29-41`) groups by `process_id, level, target, time_bin` and emits only
   `count(*)` — no `msg`/log-body column is read or aggregated. It carries counts/rates, not content, so
   it classifies as **metadata-plane**: cleartext, globally materialized like `processes`/`streams`/
   `blocks`, no per-audience instance, no encryption. (If a future version of this view ever folds in
@@ -177,7 +178,7 @@ from bare registration.
 
 **Config:** `MICROMEGAS_PINNED_AUDIENCES` (JSON array of strings, default empty), parsed the same way
 as its precedent — `MICROMEGAS_ADMINS` is `serde_json::from_str::<Vec<String>>` over the env var, not
-comma-separated (`oidc.rs:265-266`). Empty → pure JIT (the self-mode default; nothing eagerly
+comma-separated (`oidc.rs:266`). Empty → pure JIT (the self-mode default; nothing eagerly
 materialized, fail-cheap). v1 applies the list to both body view sets (`log_entries`, `measures`) as a
 flat list, read once at startup like `MICROMEGAS_ADMINS` (`load_admin_users`, `oidc.rs:264-269`, no
 reload path); per-`(view_set, audience)` granularity and hot-reload are a future improvement, not v1
@@ -239,7 +240,8 @@ cope with the mixed artifact.
   instance id (`write_partition.rs:232-245`) and is fine for any string.
 - **Write / encrypt (raw blocks):** the HTTP ingestion handlers (`rust/public/src/servers/ingestion.rs`,
   `otlp.rs`) are thin shims — the actual object-store write is one choke point, deeper down:
-  `rust/ingestion/src/web_ingestion_service.rs::insert_block_typed` (~line 165), which CBOR-encodes
+  `rust/ingestion/src/web_ingestion_service.rs::insert_block_typed` (lines 142-214, `put` at 163-166),
+  which CBOR-encodes
   `block.payload` and `put`s it to `blobs/{process_id}/{stream_id}/{block_id}`. Both native and OTLP
   ingestion funnel through `WebIngestionService`, so thread `bound_audience` (per the policy plan's
   key model) down to `insert_block_typed` and encrypt the payload under that audience's KEK there,
@@ -282,7 +284,8 @@ Encryption concentrates trust rather than eliminating it — state this plainly:
 - **Body plane:** protected by keys + the simplified `A ∈ ReadScope` instance check (§2f). Defense in
   depth: even a query-path enforcement bug can't leak bodies whose key was never unwrapped.
 - **Metadata plane:** cleartext at rest, so it **still needs the policy plan's query-path filtering** —
-  Prong A on the `processes` view and Prong B row-filtering `list_partitions` — or an authenticated
+  Prong A (a direct property filter on `processes`, a `processes`-subquery semi-join on the other
+  process-keyed views) and Prong B row-filtering `list_partitions` — or an authenticated
   user (and a storage leak) sees every audience's process names, host names, and volume/timing. This
   plan therefore *includes* the policy plan's enforcement for metadata; it only removes the need for
   the body-view semi-join.
@@ -306,7 +309,8 @@ plan can't offer.
   volume/activity **side channel** — and it is in tension with the effort the policy plan's §4 spends
   row-filtering `list_partitions` to hide exactly that from authenticated callers. The at-rest and
   query-time postures should be a conscious pair. If metadata sensitivity matters, column-encrypt the
-  process `properties` (and owner/host) — a further step, not v1.
+  process `properties` (and owner/host) — a further step, not v1 (deferred, not an open fork — see
+  "Open forks").
 - **PostgreSQL is a separate leak.** Metadata rows live in PG; "parquet leak useless" ≠ "storage leak
   useless" until PG is covered (TDE / column encryption) or declared trusted.
 - **Daemon full-trust** (§5) — unavoidable without a TEE.
@@ -316,8 +320,9 @@ plan can't offer.
 
 ## Parquet Modular Encryption + DataFusion read integration (confirmed supported)
 
-This is not an open feasibility gate: the workspace's pinned versions (`parquet = "58.0"`,
-`datafusion = "54.0"`, `rust/Cargo.toml`) already support encrypted parquet reads first-class.
+This is not an open feasibility gate: the workspace's pinned versions
+(`parquet = { version = "58.0", features = ["async"] }`, `datafusion = "54.0"`, `rust/Cargo.toml`)
+already support encrypted parquet reads first-class.
 `parquet` 58 has a stable (non-experimental) `encryption` feature (Parquet Modular Encryption, pulling
 in `ring`), and DataFusion 54 has a `parquet_encryption` feature plus an `EncryptionFactory` trait
 registered on `RuntimeEnv` via `register_parquet_encryption_factory`, along with
@@ -356,14 +361,14 @@ through the standard scan/write paths.
 
 1. **KMS policy enforcement** (blanket server unwrap role vs. identity-scoped per-caller unwrap) —
    decides whether row 3 of the threat table is defended at all.
-2. **Metadata column-encryption** — whether to also encrypt sensitive process properties, closing the
-   metadata side channel, or accept cleartext metadata at rest.
 
-(Decided for v1, not open: audience-global source is re-scan-`blocks`, not merge — future optimization:
-merge per-process partitions once view-from-partitions machinery exists, §2b. Audience-id path encoding
-is charset-constraining at the MintPolicy boundary, not percent-encoding, §4. Pinned-set granularity is
-a flat list applied to both body view sets, startup-only like `MICROMEGAS_ADMINS`, §2c — future: per-
-`(view_set, audience)` granularity + hot-reload.)
+(Decided for v1, not open: metadata column-encryption is deferred — v1 leaves process metadata
+cleartext at rest; see "Honest limits" for the closing-the-side-channel option. Audience-global source
+is re-scan-`blocks`, not merge — future optimization: merge per-process partitions once
+view-from-partitions machinery exists, §2b. Audience-id path encoding is charset-constraining at the
+MintPolicy boundary, not percent-encoding, §4. Pinned-set granularity is a flat list applied to both
+body view sets, startup-only like `MICROMEGAS_ADMINS`, §2c — future: per-`(view_set, audience)`
+granularity + hot-reload.)
 
 ## Relationship summary
 
