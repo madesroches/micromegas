@@ -99,6 +99,12 @@ There is no process→audience mapping table today, so v1 reuses the `micromegas
 (exactly as the policy plan's v1 does); Phase 5 promotes it to a column for pruning. This is the one
 place that needs a "set of processes" abstraction the single-`process_id` path lacks.
 
+**v1 re-scans `blocks` filtered by audience** (this is a decided point, not an open fork) — it matches
+how the `'global'` instance works today, at the cost of some duplicate scanning if per-process instances
+also exist for the same data (same duplication pattern as today). Merging existing single-audience
+per-process partitions instead would avoid the double scan but needs new view-from-partitions machinery
+that doesn't exist today; that's a future optimization, not v1.
+
 **c. Materialization is two-tier: pinned (scheduled) + JIT (lazy).**
 
 - **Pinned tier — a config-declared finite set of audience instances, materialized continuously.** An
@@ -108,13 +114,21 @@ place that needs a "set of processes" abstraction the single-`process_id` path l
   (`materialize_all_views` → `materialize_partition_range` over a rolling insert range,
   `maintenance.rs:30-66`) — it already iterates arbitrary `Arc<dyn View>` objects. What changes is the
   *set of views handed to it*: it must include the config-derived audience instances, constructed via
-  `make_view("group:teamA")` at startup and given the body view set's existing update group
-  (`log_view.rs:221-227`, `metrics_view.rs:225-231`).
+  `make_view("group:teamA")` at startup. `get_update_group()` is currently `if view_instance_id ==
+  "global" { Some(...) } else { None }` (`log_view.rs:221-227`, `metrics_view.rs:225-231`), and the
+  daemon's scheduled set is exactly the views for which this returns `Some`
+  (`get_global_views_with_update_group`, `maintenance.rs:271-278`) — so `get_update_group()` must be
+  extended to also return `Some(...)` for `Audience(A)` instances, not only `"global"`, or pinned
+  instances silently fall out of `is_some()` and never get scheduled.
 - **JIT tier — every other audience, lazy.** Instances not pinned spring into existence on first query
   via `MaterializedView::scan -> jit_update` (`materialized_view.rs:69-72`), the same path per-process
-  instances use today, kept fresh query-driven. `jit_update` currently requires a `process_id`; it
-  gains an `Audience` branch. This is the pay-per-use path that keeps the "thousands of self-mode
-  audiences" case cheap (nothing pinned by default).
+  instances use today, kept fresh query-driven. `jit_update`'s trait signature takes no process/audience
+  argument — it's `jit_update(&self, lakehouse, query_range: Option<TimeRange>)` (`view.rs:76-80`) and
+  each view resolves its own instance internally (as `thread_spans_view.rs:269-295` already does for
+  per-process instances). So the `Audience` handling is added **inside** `LogView`/`MetricsView`'s
+  `jit_update` implementation, keyed off `self.get_view_instance_id()`'s `InstanceKind`, not by changing
+  the trait signature. This is the pay-per-use path that keeps the "thousands of self-mode audiences"
+  case cheap (nothing pinned by default).
 - **The two tiers coexist safely on one instance:** the per-instance advisory lock
   (`write_partition.rs:232-245` hashes the instance id) serializes scheduled and query-time writes, and
   the JIT up-to-date check (`jit_partitions.rs:472-558`) makes a query-time `jit_update` on an
@@ -131,10 +145,13 @@ for the daemon, distinct from the bare-registered globals for the query path. Th
 itself is untouched; only the construction of the scheduled set becomes config-driven and decoupled
 from bare registration.
 
-**Config:** `MICROMEGAS_PINNED_AUDIENCES` (comma-separated, default empty). Empty → pure JIT (the
-self-mode default; nothing eagerly materialized, fail-cheap). Precedent: the `MICROMEGAS_ADMINS`
-allowlist. v1 applies the list to both body view sets (`log_entries`, `measures`) and inherits their
-update group; per-`(view_set, audience)` granularity and hot-reload are deferred (see Open forks).
+**Config:** `MICROMEGAS_PINNED_AUDIENCES` (JSON array of strings, default empty), parsed the same way
+as its precedent — `MICROMEGAS_ADMINS` is `serde_json::from_str::<Vec<String>>` over the env var, not
+comma-separated (`oidc.rs:265-266`). Empty → pure JIT (the self-mode default; nothing eagerly
+materialized, fail-cheap). v1 applies the list to both body view sets (`log_entries`, `measures`) as a
+flat list, read once at startup like `MICROMEGAS_ADMINS` (`load_admin_users`, `oidc.rs:264-269`, no
+reload path); per-`(view_set, audience)` granularity and hot-reload are a future improvement, not v1
+(see Open forks for the one-line note).
 
 **d. Bare-name resolution → union rewrite.** `SELECT * FROM log_entries` (bare) binds to the
 pre-built `'global'` instance today (`query.rs:214` iterates `get_global_views()`;
@@ -179,10 +196,17 @@ cope with the mixed artifact.
   `Audience` instance the audience is the instance id; for a `Process` instance derive it via
   `process → audience`. Select that audience's KEK and hand PME the wrapped DEK. Metadata-plane views
   (`Global` metadata) get no encryption. **Sharp edge:** the instance id becomes an object-store path
-  segment through `Path::parse` (`write_partition.rs:557`); `user:alice@x` contains `:`/`@`.
-  **Encode or constrain audience ids** (percent-encode reserved chars, or restrict the audience
-  charset) before they reach the path builder. The advisory-lock key hashes the instance id
-  (`write_partition.rs:232-245`) and is fine for any string.
+  segment through `Path::parse` (`write_partition.rs:557`). `:` and `@` are not actually a hazard here —
+  `object_store` 0.13.2's `Path::parse` (`path/parts.rs`) only rejects `/`, whole-segment `.`/`..`, and
+  ASCII control chars; the reserved-character set (`% { } # [ ] < > | \ " * ?` …) is enforced by the
+  encoding `From` impl, not by `parse`, so `user:alice@example.com` parses and round-trips fine. The
+  genuine hazards are embedded `/`, `.`/`..` segments, control chars, `%`/`{}`, and cross-backend/OS
+  portability (S3 tooling, Windows) — mainly for arbitrary `group:` ids. **v1 constrains the audience
+  charset to path-safe at the MintPolicy/ingestion boundary** (where audience ids are already prefixed
+  and validated) rather than percent-encoding at the path builder — `percent-encoding` is already a dep
+  of `rust/auth` but not of `rust/analytics`, so charset-constraining at the boundary avoids adding that
+  dependency to the analytics crate and is the lower-surprise choice. The advisory-lock key hashes the
+  instance id (`write_partition.rs:232-245`) and is fine for any string.
 - **Write / encrypt (raw blocks):** ingestion handlers know `bound_audience` (per the policy plan's
   key model). Encrypt the block payload under that audience's KEK before object-store write.
 - **Read / decrypt:** `MaterializedView::scan` is where partitions are read and already carries the
@@ -248,16 +272,18 @@ plan can't offer.
 - **Bare-table semantics change** — `SELECT * FROM log_entries` becomes "your audiences' union"; an
   API/UX change (the access-control behavior already matches the policy plan's semi-join).
 
-## Primary feasibility risk (confirm before committing)
+## Parquet Modular Encryption + DataFusion read integration (confirmed supported)
 
-**Parquet Modular Encryption + DataFusion read integration maturity.** For DataFusion to read
-encrypted parquet transparently, the workspace's `parquet` crate must have the encryption feature and
-DataFusion's parquet datasource must let us thread `FileDecryptionProperties` (with a KMS-backed
-key-retriever) through the scan. If the current versions don't expose this, the fallback is a **custom
-`TableProvider`** that decrypts before handing batches to DataFusion — more code, but it keeps the
-engine oblivious. **Verify:** the pinned `parquet`/`datafusion` versions in `rust/Cargo.toml`, the
-`encryption` feature availability, and whether the reader path surfaces decryption properties. This
-gate decides whether the read side is a feature-flag or a provider rewrite.
+This is not an open feasibility gate: the workspace's pinned versions (`parquet = "58.0"`,
+`datafusion = "54.0"`, `rust/Cargo.toml`) already support encrypted parquet reads first-class.
+`parquet` 58 has a stable (non-experimental) `encryption` feature (Parquet Modular Encryption, pulling
+in `ring`), and DataFusion 54 has a `parquet_encryption` feature plus an `EncryptionFactory` trait
+registered on `RuntimeEnv` via `register_parquet_encryption_factory`, along with
+`TableParquetOptions.crypto` — exactly the KMS-retriever seam this plan needs. **Action for v1:** enable
+`parquet/encryption` and `datafusion/parquet_encryption` (note the added `ring` build dependency) and
+implement a bring-your-own `EncryptionFactory` that resolves the audience KEK and unwraps the DEK. No
+custom `TableProvider` fallback is needed — the engine reads/writes encrypted parquet transparently
+through the standard scan/write paths.
 
 ## Code seams / files
 
@@ -283,23 +309,19 @@ gate decides whether the read side is a feature-flag or a provider rewrite.
 
 ## Open forks (undecided)
 
-1. **Audience-global source: re-scan blocks vs. merge per-process partitions.** v1 re-scans `blocks`
-   filtered by audience (matches how `'global'` works today; some duplicate scan if per-process
-   instances also exist — same duplication pattern as today). Merging existing single-audience
-   per-process partitions would avoid the double scan but needs new view-from-partitions machinery
-   (no such path exists today). Start with re-scan; optimize later.
-2. **Keep per-process body instances, or only audience-global?** Per-process drilldown
+1. **Keep per-process body instances, or only audience-global?** Per-process drilldown
    (`view_instance('log_entries', pid)`) is used by single-process views; keeping it means both it and
    audience-global scan the same blocks. Dropping it forces all body access through audience-global.
-3. **KMS policy enforcement** (blanket server unwrap role vs. identity-scoped per-caller unwrap) —
+2. **KMS policy enforcement** (blanket server unwrap role vs. identity-scoped per-caller unwrap) —
    decides whether row 3 of the threat table is defended at all.
-4. **Metadata column-encryption** — whether to also encrypt sensitive process properties, closing the
+3. **Metadata column-encryption** — whether to also encrypt sensitive process properties, closing the
    metadata side channel, or accept cleartext metadata at rest.
-5. **Audience-id path encoding** — percent-encode reserved chars vs. constrain the audience charset to
-   path-safe.
-6. **Pinned-set granularity and reload** — flat audience list (v1) vs. per-`(view_set, audience)`;
-   startup-only config (v1, like `MICROMEGAS_ADMINS`) vs. dynamically reloadable so a newly added warm
-   audience takes effect without restart.
+
+(Decided for v1, not open: audience-global source is re-scan-`blocks`, not merge — future optimization:
+merge per-process partitions once view-from-partitions machinery exists, §2b. Audience-id path encoding
+is charset-constraining at the MintPolicy boundary, not percent-encoding, §4. Pinned-set granularity is
+a flat list applied to both body view sets, startup-only like `MICROMEGAS_ADMINS`, §2c — future: per-
+`(view_set, audience)` granularity + hot-reload.)
 
 ## Relationship summary
 
