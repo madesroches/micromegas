@@ -72,6 +72,15 @@ literal `'global'` (`view.rs:56`). Add a **fourth kind: an audience** (`user:<em
 `view_instance('log_entries', 'group:teamA')` materializes only teamA's bodies into a single-audience,
 teamA-key-encrypted partition set.
 
+**Per-process body instances are kept (decided, not open).** `view_instance('log_entries', <pid>)` /
+`view_instance('measures', <pid>)` are load-bearing across the web app for process drilldown
+(`analytics-web-app/src/routes/ProcessLogPage.tsx`, `ProcessMetricsPage.tsx`,
+`routes/perf-analysis/queries.ts`, `hooks/useMetricsData.ts`,
+`lib/screen-renderers/notebook-utils.ts`, plus their tests) — dropping them would break process
+drilldown, so the codebase decides this, not a design preference. Keeping them costs nothing new here:
+each `Process` instance is already single-audience (a process belongs to exactly one audience) and
+encryptable exactly like an `Audience` instance, with its KEK derived via `process → audience` (§4).
+
 **a. Constructor seam (the main code change).** `LogView::new`/`MetricsView::new` currently do a binary
 `if id == "global" { None } else { Uuid::parse_str(id)? }` (`log_view.rs:80-93`,
 `metrics_view.rs:82-95`) — an audience string hard-errors on the UUID parse. Replace the
@@ -226,12 +235,19 @@ Encryption concentrates trust rather than eliminating it — state this plainly:
 
 - **Ingestion** receives plaintext over the wire and must encrypt → holds the audience KEK for what it
   stamps. Already trusted with the plaintext it receives.
-- **Maintenance daemon** materializes per-audience instances → over time unwraps *every* audience KEK
-  (one at a time; never mixes two audiences in one artifact). This is the residual full-trust root. A
-  leak of its KMS credentials = total compromise — but that is a far tighter, more defensible surface
-  than "the object store."
-- **Query server** decrypts what it serves → holds keys for the audiences a request touches. Gated by
-  ReadScope (and, for real row-3 strength, by the KMS).
+- **Maintenance daemon** materializes the *pinned* audience instances (§2c) → over time unwraps every
+  pinned audience's KEK to encrypt on write (one at a time; never mixes two audiences in one artifact).
+  Only under a non-empty `MICROMEGAS_PINNED_AUDIENCES` is this "the residual full-trust root" for those
+  audiences. A leak of its KMS credentials = total compromise of the pinned set — but that is a far
+  tighter, more defensible surface than "the object store."
+- **Query server** is not decrypt-only: under the JIT default (`MICROMEGAS_PINNED_AUDIENCES` empty, §2c)
+  it is the one that runs `MaterializedView::scan -> jit_update` for unpinned audience instances
+  (`materialized_view.rs:69-72`), and JIT materialization writes encrypted parquet via
+  `write_partition.rs` — so the query server also needs **encrypt** (write-KEK) access, not just
+  decrypt, for every audience a request touches. It is therefore itself a materialization trust root for
+  those audiences, on top of decrypting what it serves. Both encrypt and decrypt access are gated by
+  ReadScope (and, for real row-3 strength, by the KMS). Only in the fully-pinned-set limit does the
+  query server become purely decrypt-only and the daemon the sole encrypt-side trust root.
 - **Ceiling (out of scope for v1):** run the query/maintenance engine in a **TEE / confidential VM**
   (Nitro Enclaves, SEV-SNP) so keys live only inside an attested enclave and the *operator* can't peek
   at the transient plaintext. This closes row 3 fully; heavy (attestation, ops). North star, not v1.
@@ -310,12 +326,9 @@ through the standard scan/write paths.
 
 ## Open forks (undecided)
 
-1. **Keep per-process body instances, or only audience-global?** Per-process drilldown
-   (`view_instance('log_entries', pid)`) is used by single-process views; keeping it means both it and
-   audience-global scan the same blocks. Dropping it forces all body access through audience-global.
-2. **KMS policy enforcement** (blanket server unwrap role vs. identity-scoped per-caller unwrap) —
+1. **KMS policy enforcement** (blanket server unwrap role vs. identity-scoped per-caller unwrap) —
    decides whether row 3 of the threat table is defended at all.
-3. **Metadata column-encryption** — whether to also encrypt sensitive process properties, closing the
+2. **Metadata column-encryption** — whether to also encrypt sensitive process properties, closing the
    metadata side channel, or accept cleartext metadata at rest.
 
 (Decided for v1, not open: audience-global source is re-scan-`blocks`, not merge — future optimization:
