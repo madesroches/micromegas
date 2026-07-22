@@ -439,7 +439,7 @@ delta that doesn't will now fail loudly instead of creating a duplicate partitio
 5. `rust/analytics/src/lakehouse/merge.rs`: add `with_merge_scan_ordering` builder method to
    `QueryMerger`; use `PartitionedTableProvider::with_ordering` in `execute_merge_query`.
 6. `rust/analytics/src/lakehouse/blocks_view.rs`: store a pre-built `QueryMerger` (ordering =
-   `[insert_time, block_id]`, query = `"SELECT * FROM source ORDER BY insert_time, block_id;"`);
+   `[insert_time]`, query = `"SELECT * FROM source ORDER BY insert_time;"`);
    override `merge_partitions` to delegate to it (mirror
    `SqlBatchView::merge_partitions`).
 7. `rust/analytics/src/lakehouse/metadata_partition_spec.rs`: rewrite `write()` to stream via
@@ -578,15 +578,23 @@ delta that doesn't will now fail loudly instead of creating a duplicate partitio
   source-hash-derived count), and process RSS (system_monitor gauges from #1330) stays flat
   during regeneration of a busy day instead of spiking with the range width — the core check for
   the OOM concern this plan addresses.
-- **Sortedness verification query** (documented, not new code) — run against a regenerated
-  partition to confirm ordering. `lag(...) OVER ()` has no `ORDER BY`, so its result depends on
-  physical row arrival order; this must be pinned to a single, non-repartitioned scan (session
-  defaults otherwise split the parquet scan into byte-range partitions and interleave them via
-  `CoalescePartitionsExec`, producing false failures against a perfectly sorted partition):
+- **Sortedness verification query** — run against a regenerated partition to confirm ordering.
+  `lag(...) OVER ()` has no `ORDER BY`, so its result depends on physical row arrival order; this
+  must be pinned to a single, non-repartitioned scan (default settings otherwise split the parquet
+  scan into byte-range partitions and interleave them via `CoalescePartitionsExec`, producing false
+  failures against a perfectly sorted partition). `SET` statements don't persist across FlightSQL
+  statements (`execute_query` in `flight_sql_service_impl.rs` and `query()` in
+  `lakehouse/query.rs` both build a fresh `make_session_context` per statement), so this cannot be
+  run as a two-statement `SET; SELECT;` through the query service (CLI/python client/Grafana) —
+  the `SET`s would configure a context that is discarded before the `SELECT` runs, silently
+  falling back to default repartitioning. Instead, pin the settings within one session, either:
+  - a small Rust test/tool that calls `make_session_context` with a `SessionConfigurator` that
+    sets `datafusion.execution.target_partitions = 1` and
+    `datafusion.optimizer.repartition_file_scans = false` on the `SessionContext` before running
+    the query below, in the same session; or
+  - read the regenerated partition's parquet file directly (outside the query service) with
+    pyarrow or `datafusion-cli`, where the file is read as one sequential stream:
   ```sql
-  SET datafusion.execution.target_partitions = 1;
-  SET datafusion.optimizer.repartition_file_scans = false;
-
   SELECT count(*) FROM (
     SELECT insert_time, block_id,
            lag(insert_time) OVER () AS prev_insert_time,
