@@ -101,9 +101,9 @@ partitions are not: the default `View::merge_partitions` merge query is
 `SELECT * FROM source;` with no `ORDER BY` (`view.rs:108`) and an undeclared scan order,
 so daily merged blocks partitions cannot be trusted to be internally sorted. Declaring the
 ordering would silently mis-group rows for existing data. Fixing merge ordering +
-retiring/aging out existing merged partitions is a possible follow-up (see Open
-Questions), after which the batch width could grow arbitrarily; it is not part of this
-change.
+regenerating existing merged partitions online from the Postgres source tables is
+follow-up #1336 (see Open Questions), after which the batch width could grow arbitrarily;
+it is not part of this change.
 
 ### Existing streaming precedent
 
@@ -309,11 +309,13 @@ accumulator, the config field, and the rewritten functions suffices.
 - Open a GitHub issue for traceability before implementation (repo convention links plans
   to issues).
 - Follow-up filed as [#1336](https://github.com/madesroches/micromegas/issues/1336): make
-  blocks-view merges order-preserving (merge query `ORDER BY insert_time, block_id`, or
-  declare scan ordering on the merge source so the sort is elided) and, once existing
-  merged partitions have been retired or aged out, declare `(insert_time, block_id)` scan
-  ordering on the JIT blocks query — the per-batch sort disappears and the batch width can
-  grow or go away entirely.
+  blocks-view merges order-preserving (declare scan ordering on the merge source so the
+  sort is elided and the merge stays streaming), and regenerate existing merged partitions
+  online via an admin UDF that re-materializes their insert range from the Postgres source
+  tables (kept as ground truth; the materialization SQL already sorts) and swaps the new
+  partition in transactionally — no schema change, no downtime. Once done, declare
+  `(insert_time, block_id)` scan ordering on the JIT blocks query — the per-batch sort
+  disappears and the batch width can grow or go away entirely.
 - Is `TimeDelta::days(1)` the right default batch width? It bounds the sort buffer to one
   day of one process's block rows; no load testing yet. Worth a sanity check under a real
   workload before tuning.
