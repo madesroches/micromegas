@@ -181,7 +181,8 @@ function of insert-time segment content, which is untouched.
    Keep this as its own commit so the process-path and stream-path changes are
    independently reviewable/revertable, but land both in the same PR.
 3. From `rust/`: `cargo fmt`, then `cargo clippy --workspace -- -D warnings`.
-4. From `rust/`: `cargo test`.
+4. From `rust/`: `cargo test` (compile/unit sanity only — see Testing Strategy
+   for the actual regression net covering the JIT paths).
 5. Manual check against a real process whose insert-time span covers many hours
    (e.g. `log_view` over a multi-day window): identical rows before/after, and
    the count of `fetch_overlapping_insert_range_for_view` spans per
@@ -218,12 +219,22 @@ function of insert-time segment content, which is untouched.
 
 ## Testing Strategy
 
-- `cargo test` from `rust/` — existing integration tests exercising
-  process-scoped views (`log_view`, `metrics_view`, `async_events_view`) are the
-  regression net; output ordering and content are preserved by construction.
-- No new unit test file needed: this is a pure refactor of how partitions are
-  fetched, not a change in query logic or results.
+- `cargo test` from `rust/` — compile/unit sanity only. The rust tests that
+  touch the named views (`log_tests.rs`, `metrics_test.rs`,
+  `async_events_tests.rs`) are schema/parsing/builder unit tests; none call
+  `generate_process_jit_partitions`, so this does not exercise the refactor.
+- The real regression nets:
+  - `rust/analytics/tests/thread_spans_ordering_db_test.rs` — the only test
+    that exercises a JIT path (`ThreadSpansView::jit_update`, stream-path via
+    `generate_stream_jit_partitions`). It is `#[ignore]`d and requires a live
+    `MICROMEGAS_SQL_CONNECTION_STRING` / `MICROMEGAS_OBJECT_STORE_URI`; run it
+    explicitly with `cargo test -- --ignored` after starting local services.
+  - Python integration tests (`poetry run pytest` from
+    `python/micromegas/`, e.g. `test_log.py`) against locally started services
+    — exercises the process path end-to-end through `log_view`.
 - Manual verification per Implementation Step 5 that Postgres round-trips to
   `lakehouse_partitions` for a single `generate_process_jit_partitions` call
   drop to one. The same drop is expected on the stream path
-  (`generate_stream_jit_partitions` via `thread_spans_view`).
+  (`generate_stream_jit_partitions` via `thread_spans_view`). This is the
+  primary process-path verification, since no automated test covers it under
+  a plain `cargo test`.
