@@ -705,9 +705,7 @@ class FlightSQLClient:
             for index, row in rb.to_pandas().iterrows():
                 print(row["time"], row["msg"])
 
-    def regenerate_partitions(
-        self, view_set_name, begin, end, partition_delta_seconds
-    ):
+    def regenerate_partitions(self, view_set_name, begin, end, partition_delta_seconds):
         """Force-regenerate existing materialized view partition(s) directly from source data.
 
         Unlike `materialize_partitions`, this bypasses the "already up to date" freshness
