@@ -142,32 +142,32 @@ impl PartitionSpec for MetadataPartitionSpec {
             logger.clone(),
         ));
 
-        let stream_result: Result<()> = async {
-            if self.record_count > 0 {
-                let mut rows = sqlx::query(&self.data_sql)
-                    .bind(self.insert_range.begin)
-                    .bind(self.insert_range.end)
-                    .fetch(&lake.db_pool);
-                let ctx = SessionContext::new();
-                let mut chunk: Vec<PgRow> = Vec::new();
-                let mut chunk_bytes = 0usize;
-                while let Some(row) =
-                    instrument_named!(rows.try_next(), "sql_select_partition_source_data_row")
-                        .await?
-                {
-                    chunk_bytes += estimate_row_bytes(&row);
-                    chunk.push(row);
-                    if chunk_bytes >= SOURCE_BYTES_PER_BATCH {
+        let stream_result: Result<()> = instrument_named!(
+            async {
+                if self.record_count > 0 {
+                    let mut rows = sqlx::query(&self.data_sql)
+                        .bind(self.insert_range.begin)
+                        .bind(self.insert_range.end)
+                        .fetch(&lake.db_pool);
+                    let ctx = SessionContext::new();
+                    let mut chunk: Vec<PgRow> = Vec::new();
+                    let mut chunk_bytes = 0usize;
+                    while let Some(row) = rows.try_next().await? {
+                        chunk_bytes += estimate_row_bytes(&row);
+                        chunk.push(row);
+                        if chunk_bytes >= SOURCE_BYTES_PER_BATCH {
+                            flush_chunk(&mut chunk, &ctx, &self.compute_time_bounds, &tx).await?;
+                            chunk_bytes = 0;
+                        }
+                    }
+                    if !chunk.is_empty() {
                         flush_chunk(&mut chunk, &ctx, &self.compute_time_bounds, &tx).await?;
-                        chunk_bytes = 0;
                     }
                 }
-                if !chunk.is_empty() {
-                    flush_chunk(&mut chunk, &ctx, &self.compute_time_bounds, &tx).await?;
-                }
-            }
-            Ok(())
-        }
+                Ok(())
+            },
+            "sql_select_partition_source_data"
+        )
         .await;
 
         match stream_result {

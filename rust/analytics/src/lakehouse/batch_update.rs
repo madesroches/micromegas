@@ -125,9 +125,9 @@ fn verify_force_regeneration_alignment(
         let end = part.end_insert_time();
         if begin < insert_range.begin || end > insert_range.end {
             anyhow::bail!(
-                "regenerate_partitions: requested range [{}, {}] does not fully contain \
+                "regenerate_partitions: regeneration bucket [{}, {}] does not fully contain \
                  existing partition [{}, {}] for {view_set_name}/{view_instance_id} -- \
-                 range/delta must exactly cover the partition(s) being regenerated",
+                 the requested range/delta must exactly cover the partition(s) being regenerated",
                 insert_range.begin.to_rfc3339(),
                 insert_range.end.to_rfc3339(),
                 begin.to_rfc3339(),

@@ -155,8 +155,8 @@ impl PartitionMerger for QueryMerger {
         if partition_count != 1 {
             anyhow::bail!(
                 "merge query {:?} (insert_range=[{}, {}]) produced a {partition_count}-partition \
-                 physical plan; execute_stream requires a single-partition plan. This likely means \
-                 repartition_file_scans did not take effect.",
+                 physical plan; executing it would coalesce partitions and destroy the declared \
+                 ordering. This likely means repartition_file_scans did not take effect.",
                 self.query,
                 insert_range.begin.to_rfc3339(),
                 insert_range.end.to_rfc3339()
