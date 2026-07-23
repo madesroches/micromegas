@@ -290,6 +290,11 @@ pub async fn materialize_partition_range(
 /// does not fully contain the old one, so `retire_partitions` never retires it, leaving silent
 /// duplicate rows. This is enforced by validating that `delta` exactly tiles `(begin, end)` before
 /// any partition is written, and (per bucket) by `verify_force_regeneration_alignment`.
+///
+/// Both checks read a snapshot and are advisory UX: the authoritative guard is the
+/// `lakehouse_partitions_no_overlap` exclusion constraint, which makes the insert fail loudly if
+/// a conflicting partition was committed concurrently (e.g. by the maintenance daemon merging
+/// buckets after the snapshot was taken).
 #[span_fn]
 pub async fn regenerate_partition_range(
     existing_partitions_all_views: Arc<PartitionCache>,

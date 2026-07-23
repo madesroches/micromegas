@@ -333,7 +333,10 @@ async fn insert_partition_transaction(
     );
 
     // Acquire advisory lock - this will block until we can proceed
-    // pg_advisory_xact_lock automatically releases when transaction ends
+    // pg_advisory_xact_lock automatically releases when transaction ends.
+    // The lock only serializes writers of this exact (view, instance, range) key, avoiding
+    // duplicate work; correctness against overlapping writers of *different* ranges is enforced
+    // by the lakehouse_partitions_no_overlap exclusion constraint at insert time.
     instrument_named!(
         sqlx::query("SELECT pg_advisory_xact_lock($1);")
             .bind(lock_key)
@@ -428,6 +431,27 @@ async fn insert_partition_transaction(
                     e
                 ))
                 .await?;
+            // Translate an exclusion-constraint violation (raw SQLSTATE 23P01) into a legible
+            // domain error: it means an existing partition overlaps this one without being
+            // contained by it, so the containment-based retire in this transaction did not
+            // replace it -- e.g. a concurrent maintenance merge committed a wider partition.
+            let overlap_detail = e.as_database_error().and_then(|db_err| {
+                (db_err.constraint() == Some("lakehouse_partitions_no_overlap"))
+                    .then(|| db_err.to_string())
+            });
+            if let Some(detail) = overlap_detail {
+                anyhow::bail!(
+                    "new partition {}/{} [{}, {}] overlaps an existing partition it does not \
+                     fully contain, so this write cannot replace it (likely a concurrent \
+                     materialization or merge). Retire the conflicting partition (e.g. \
+                     retire_partition_by_metadata) or align the requested range/delta, then \
+                     retry. Postgres detail: {detail}",
+                    partition.view_metadata.view_set_name,
+                    partition.view_metadata.view_instance_id,
+                    partition.begin_insert_time().to_rfc3339(),
+                    partition.end_insert_time().to_rfc3339(),
+                );
+            }
             return Err(insert_result.unwrap_err().into());
         }
     };

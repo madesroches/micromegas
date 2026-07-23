@@ -129,7 +129,7 @@ SELECT * FROM regenerate_partitions('blocks', '2024-01-01T00:00:00Z', '2024-01-0
     `(begin, end, partition_delta_seconds)` must exactly cover the boundaries of the partition(s) being regenerated: `(end - begin)` must be an exact, non-zero multiple of `partition_delta_seconds`, and the range must exactly match existing partition boundaries. A misaligned range/delta fails the query loudly (an error, not a log row) instead of silently leaving a duplicate, overlapping partition behind.
 
 !!! note "Online, no downtime"
-    Regeneration retires the old partition and inserts the new one atomically, in the same transaction, and streams the source data in bounded chunks -- safe to run against a busy, in-production lakehouse. It is an admin/rollout tool, not a steady-state path: run calls serially, never with overlapping ranges in flight concurrently.
+    Regeneration retires the old partition and inserts the new one atomically, in the same transaction, and streams the source data in bounded chunks -- safe to run against a busy, in-production lakehouse. If another writer (e.g. the maintenance daemon merging partitions) commits a conflicting partition concurrently, the database's overlap exclusion constraint rejects the regeneration with an error instead of leaving duplicate rows -- retry after checking `list_partitions()`. It is an admin/rollout tool, not a steady-state path: run calls serially, never with overlapping ranges in flight concurrently.
 
 ---
 

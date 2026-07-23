@@ -439,6 +439,68 @@ async fn upgrade_v6_to_v7(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Res
     tr.execute("ALTER TABLE lakehouse_partitions ADD COLUMN sort_order TEXT[];")
         .await
         .with_context(|| "adding sort_order column to lakehouse_partitions")?;
+    tr.execute("CREATE EXTENSION IF NOT EXISTS btree_gist;")
+        .await
+        .with_context(|| "creating btree_gist extension (required by the partition overlap exclusion constraint)")?;
+    // Detect-then-fail: the exclusion constraint below cannot be added NOT VALID, so if legacy
+    // overlapping partitions exist, surface exactly which rows conflict instead of failing with a
+    // raw constraint error. Zero-width ranges are excluded to match tstzrange semantics (an empty
+    // range never overlaps anything).
+    let conflicts = sqlx::query(
+        "SELECT a.view_set_name, a.view_instance_id,
+                a.file_path AS file_path_a, b.file_path AS file_path_b,
+                a.begin_insert_time AS begin_a, a.end_insert_time AS end_a,
+                b.begin_insert_time AS begin_b, b.end_insert_time AS end_b
+         FROM lakehouse_partitions a
+         JOIN lakehouse_partitions b
+           ON a.view_set_name = b.view_set_name
+          AND a.view_instance_id = b.view_instance_id
+          AND a.ctid < b.ctid
+          AND a.begin_insert_time < b.end_insert_time
+          AND a.end_insert_time > b.begin_insert_time
+          AND a.begin_insert_time < a.end_insert_time
+          AND b.begin_insert_time < b.end_insert_time
+         LIMIT 20;",
+    )
+    .fetch_all(&mut **tr)
+    .await
+    .with_context(|| "detecting overlapping partitions before adding exclusion constraint")?;
+    if !conflicts.is_empty() {
+        let mut msg = String::from(
+            "lakehouse_partitions contains partitions with overlapping insert-time ranges; \
+             retire them (e.g. retire_partition_by_metadata) and restart to complete the \
+             migration. Conflicting pairs (first 20):",
+        );
+        for row in &conflicts {
+            let view_set_name: String = row.try_get("view_set_name")?;
+            let view_instance_id: String = row.try_get("view_instance_id")?;
+            let file_path_a: Option<String> = row.try_get("file_path_a")?;
+            let file_path_b: Option<String> = row.try_get("file_path_b")?;
+            let begin_a: chrono::DateTime<chrono::Utc> = row.try_get("begin_a")?;
+            let end_a: chrono::DateTime<chrono::Utc> = row.try_get("end_a")?;
+            let begin_b: chrono::DateTime<chrono::Utc> = row.try_get("begin_b")?;
+            let end_b: chrono::DateTime<chrono::Utc> = row.try_get("end_b")?;
+            msg.push_str(&format!(
+                "\n  {view_set_name}/{view_instance_id}: {file_path_a:?} [{begin_a}, {end_a}] overlaps {file_path_b:?} [{begin_b}, {end_b}]"
+            ));
+        }
+        anyhow::bail!(msg);
+    }
+    // Enforced by the index even across concurrent transactions (the second conflicting writer
+    // blocks, then errors) -- closes the race a SELECT-based check under READ COMMITTED cannot:
+    // two concurrent writers whose snapshots don't see each other's uncommitted partitions.
+    // tstzrange is '[)' so adjacent partitions sharing a boundary do not conflict, and the write
+    // path's retire+insert runs in one transaction so replacing a partition never self-conflicts.
+    tr.execute(
+        "ALTER TABLE lakehouse_partitions ADD CONSTRAINT lakehouse_partitions_no_overlap
+         EXCLUDE USING gist (
+             view_set_name WITH =,
+             view_instance_id WITH =,
+             tstzrange(begin_insert_time, end_insert_time) WITH &&
+         );",
+    )
+    .await
+    .with_context(|| "adding partition overlap exclusion constraint")?;
     tr.execute("UPDATE lakehouse_migration SET version=7;")
         .await
         .with_context(|| "Updating lakehouse schema version to 7")?;
