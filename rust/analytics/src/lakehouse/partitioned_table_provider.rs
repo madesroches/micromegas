@@ -1,6 +1,8 @@
 use super::{
-    partition::Partition, partitioned_execution_plan::make_partitioned_execution_plan,
+    partition::Partition,
+    partitioned_execution_plan::{OrderingBounds, make_partitioned_execution_plan},
     reader_factory::ReaderFactory,
+    view::ScanSortColumn,
 };
 use async_trait::async_trait;
 use datafusion::{
@@ -18,6 +20,8 @@ pub struct PartitionedTableProvider {
     schema: SchemaRef,
     reader_factory: Arc<ReaderFactory>,
     partitions: Arc<Vec<Partition>>,
+    output_ordering: Vec<ScanSortColumn>,
+    ordering_bounds: OrderingBounds,
 }
 
 impl std::fmt::Debug for PartitionedTableProvider {
@@ -39,6 +43,27 @@ impl PartitionedTableProvider {
             schema,
             reader_factory,
             partitions,
+            output_ordering: vec![],
+            ordering_bounds: OrderingBounds::EventTime,
+        }
+    }
+
+    /// Builds a `PartitionedTableProvider` that declares `output_ordering` as an ordering the
+    /// scan's rows already satisfy, checked against `ordering_bounds` (see
+    /// `make_partitioned_execution_plan`).
+    pub fn with_ordering(
+        schema: SchemaRef,
+        reader_factory: Arc<ReaderFactory>,
+        partitions: Arc<Vec<Partition>>,
+        output_ordering: Vec<ScanSortColumn>,
+        ordering_bounds: OrderingBounds,
+    ) -> Self {
+        Self {
+            schema,
+            reader_factory,
+            partitions,
+            output_ordering,
+            ordering_bounds,
         }
     }
 }
@@ -68,7 +93,8 @@ impl TableProvider for PartitionedTableProvider {
             filters,
             limit,
             self.partitions.clone(),
-            &[],
+            &self.output_ordering,
+            self.ordering_bounds,
         )
     }
 

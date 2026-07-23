@@ -5,14 +5,13 @@ use chrono::{TimeDelta, Utc};
 use datafusion::arrow::array::{DictionaryArray, StringArray};
 use datafusion::arrow::datatypes::{DataType, Field, Int16Type, Schema, TimeUnit};
 use datafusion::error::DataFusionError;
-use datafusion::execution::SendableRecordBatchStream;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::physical_plan::stream::RecordBatchReceiverStreamBuilder;
 use micromegas_analytics::dfext::typed_column::typed_column_by_name;
 use micromegas_analytics::lakehouse::batch_update::materialize_partition_range;
 use micromegas_analytics::lakehouse::blocks_view::BlocksView;
 use micromegas_analytics::lakehouse::lakehouse_context::LakehouseContext;
-use micromegas_analytics::lakehouse::merge::PartitionMerger;
+use micromegas_analytics::lakehouse::merge::{MergeQueryResult, PartitionMerger};
 use micromegas_analytics::lakehouse::partition::Partition;
 use micromegas_analytics::lakehouse::partition_cache::{LivePartitionProvider, PartitionCache};
 use micromegas_analytics::lakehouse::query::{query, query_partitions};
@@ -119,7 +118,7 @@ impl PartitionMerger for LogSummaryMerger {
         partitions: Arc<Vec<Partition>>,
         _partitions_all_views: Arc<PartitionCache>,
         _insert_range: TimeRange,
-    ) -> Result<SendableRecordBatchStream> {
+    ) -> Result<MergeQueryResult> {
         let reader_factory = lakehouse.reader_factory().clone();
         let processes_df = query_partitions(
             self.runtime.clone(),
@@ -180,7 +179,10 @@ impl PartitionMerger for LogSummaryMerger {
                 });
             }
         }
-        Ok(builder.build())
+        Ok(MergeQueryResult {
+            stream: builder.build(),
+            ordering_honored: true,
+        })
     }
 }
 

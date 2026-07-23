@@ -22,6 +22,11 @@ pub struct Partition {
     pub source_data_hash: Vec<u8>,
     /// The number of rows in this partition. 0 for empty partitions.
     pub num_rows: i64,
+    /// The sort guarantee this partition's rows carry, if any (e.g. `Some(["insert_time"])`).
+    /// `None` means no ordering guarantee is recorded -- true for every partition written before
+    /// this field existed, and for any view/merge that doesn't declare one. See
+    /// `View::get_merged_partition_sort_order` and the `blocks_view_ordered_merges_plan.md` plan.
+    pub sort_order: Option<Vec<String>>,
 }
 
 impl Partition {

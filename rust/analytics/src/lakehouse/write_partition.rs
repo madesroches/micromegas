@@ -262,7 +262,53 @@ fn generate_partition_lock_key(
     hasher.finish() as i64
 }
 
+/// Deletes `file_path` from object storage unless a partition row references it.
+///
+/// A failed commit may still have been applied server-side, so the returned error alone can't
+/// tell us whether the file is orphaned. Check the authoritative state instead: the path carries
+/// a per-write UUID, so if no `lakehouse_partitions` row references it, nothing ever will and it
+/// is safe to delete.
+async fn delete_if_orphan(lake: &DataLakeConnection, file_path: &str) -> Result<()> {
+    let referenced = instrument_named!(
+        sqlx::query("SELECT 1 FROM lakehouse_partitions WHERE file_path = $1 LIMIT 1;")
+            .bind(file_path)
+            .fetch_optional(&lake.db_pool),
+        "sql_select_partition_file_referenced"
+    )
+    .await
+    .with_context(|| "checking whether partition file is referenced")?
+    .is_some();
+    if !referenced {
+        let path = object_store::path::Path::from(file_path);
+        lake.blob_storage
+            .inner()
+            .delete(&path)
+            .await
+            .with_context(|| format!("deleting orphaned partition file {file_path}"))?;
+    }
+    Ok(())
+}
+
 async fn insert_partition(
+    lake: &DataLakeConnection,
+    partition: &Partition,
+    logger: Arc<dyn Logger>,
+) -> Result<()> {
+    let result = insert_partition_transaction(lake, partition, logger).await;
+    if result.is_err()
+        && let Some(file_path) = &partition.file_path
+    {
+        // The insert failed. A failed commit may still have been applied server-side, so we
+        // can't assume the file is unreferenced -- delete_if_orphan checks and deletes only if
+        // nothing references it. Best-effort: never mask the original error.
+        if let Err(cleanup_err) = delete_if_orphan(lake, file_path).await {
+            warn!("delete_if_orphan failed for {file_path}: {cleanup_err}");
+        }
+    }
+    result
+}
+
+async fn insert_partition_transaction(
     lake: &DataLakeConnection,
     partition: &Partition,
     logger: Arc<dyn Logger>,
@@ -287,7 +333,10 @@ async fn insert_partition(
     );
 
     // Acquire advisory lock - this will block until we can proceed
-    // pg_advisory_xact_lock automatically releases when transaction ends
+    // pg_advisory_xact_lock automatically releases when transaction ends.
+    // The lock only serializes writers of this exact (view, instance, range) key, avoiding
+    // duplicate work; correctness against overlapping writers of *different* ranges is enforced
+    // by the lakehouse_partitions_no_overlap exclusion constraint at insert time.
     instrument_named!(
         sqlx::query("SELECT pg_advisory_xact_lock($1);")
             .bind(lock_key)
@@ -339,7 +388,7 @@ async fn insert_partition(
     // Insert the new partition with format version 2 (Arrow 57.0)
     let insert_result = instrument_named!(
         sqlx::query(
-            "INSERT INTO lakehouse_partitions VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 2);",
+            "INSERT INTO lakehouse_partitions VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 2, $13);",
         )
         .bind(&*partition.view_metadata.view_set_name)
         .bind(&*partition.view_metadata.view_instance_id)
@@ -353,6 +402,7 @@ async fn insert_partition(
         .bind(&partition.view_metadata.file_schema_hash)
         .bind(&partition.source_data_hash)
         .bind(partition.num_rows)
+        .bind(&partition.sort_order)
         .execute(&mut *transaction),
         "sql_insert_partition"
     )
@@ -381,11 +431,33 @@ async fn insert_partition(
                     e
                 ))
                 .await?;
+            // Translate an exclusion-constraint violation (raw SQLSTATE 23P01) into a legible
+            // domain error: it means an existing partition overlaps this one without being
+            // contained by it, so the containment-based retire in this transaction did not
+            // replace it -- e.g. a concurrent maintenance merge committed a wider partition.
+            let overlap_detail = e.as_database_error().and_then(|db_err| {
+                (db_err.constraint() == Some("lakehouse_partitions_no_overlap"))
+                    .then(|| db_err.to_string())
+            });
+            if let Some(detail) = overlap_detail {
+                anyhow::bail!(
+                    "new partition {}/{} [{}, {}] overlaps an existing partition it does not \
+                     fully contain, so this write cannot replace it (likely a concurrent \
+                     materialization or merge). Retire the conflicting partition (e.g. \
+                     retire_partition_by_metadata) or align the requested range/delta, then \
+                     retry. Postgres detail: {detail}",
+                    partition.view_metadata.view_set_name,
+                    partition.view_metadata.view_instance_id,
+                    partition.begin_insert_time().to_rfc3339(),
+                    partition.end_insert_time().to_rfc3339(),
+                );
+            }
             return Err(insert_result.unwrap_err().into());
         }
     };
 
-    // Commit the transaction (this also releases the advisory lock)
+    // Commit the transaction (this also releases the advisory lock). On failure the transaction
+    // rolls back and the caller's delete_if_orphan reclaims the now-unreferenced parquet file.
     transaction.commit().await.with_context(|| "commit")?;
 
     info!(
@@ -557,12 +629,17 @@ async fn finalize_partition_write(
 }
 
 /// Writes a partition to a Parquet file from a stream of `PartitionRowSet`s.
+///
+/// `sort_order` is recorded on the resulting `Partition` as-is (see
+/// `View::get_merged_partition_sort_order` and `MetadataPartitionSpec::sort_order`).
+#[expect(clippy::too_many_arguments)]
 pub async fn write_partition_from_rows(
     lake: Arc<DataLakeConnection>,
     view_metadata: ViewMetadata,
     file_schema: Arc<Schema>,
     insert_range: TimeRange,
     source_data_hash: Vec<u8>,
+    sort_order: Option<Vec<String>>,
     mut rb_stream: Receiver<Result<PartitionRowSet, anyhow::Error>>,
     logger: Arc<dyn Logger>,
 ) -> Result<()> {
@@ -641,6 +718,7 @@ pub async fn write_partition_from_rows(
     )
     .await?;
 
+    // On failure insert_partition reclaims the now-unreferenced parquet file via delete_if_orphan.
     let warm_file_path = result.file_path.clone();
     insert_partition(
         &lake,
@@ -653,6 +731,7 @@ pub async fn write_partition_from_rows(
             file_size: result.file_size,
             source_data_hash,
             num_rows: result.num_rows,
+            sort_order,
         },
         logger,
     )

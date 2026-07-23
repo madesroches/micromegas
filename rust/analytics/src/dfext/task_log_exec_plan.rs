@@ -22,8 +22,14 @@ use tokio::sync::mpsc;
 use super::async_log_stream::AsyncLogStream;
 
 /// A type alias for a function that spawns a log message receiver.
-pub type TaskSpawner =
-    dyn FnOnce() -> mpsc::Receiver<(chrono::DateTime<chrono::Utc>, String)> + Sync + Send;
+///
+/// The channel item is `Result<(time, msg), String>` so a query-level failure can be surfaced as
+/// a genuine `RecordBatchStream` error (see `AsyncLogStream::poll_next`) instead of being
+/// swallowed as one more log row. Existing producers only ever send `Ok` items, via
+/// `LogSender::write_log_entry`.
+pub type TaskSpawner = dyn FnOnce() -> mpsc::Receiver<Result<(chrono::DateTime<chrono::Utc>, String), String>>
+    + Sync
+    + Send;
 
 /// An `ExecutionPlan` that provides a stream of log messages.
 pub struct TaskLogExecPlan {

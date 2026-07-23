@@ -89,6 +89,7 @@ impl PartitionSpec for BlockPartitionSpec {
             self.schema.clone(),
             self.insert_range,
             self.source_data.get_source_data_hash(),
+            None,
             rx,
             logger.clone(),
         ));

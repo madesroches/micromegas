@@ -3,7 +3,7 @@ use super::{
     dataframe_time_bounds::{DataFrameTimeBounds, NamedColumnsTimeBounds},
     lakehouse_context::LakehouseContext,
     materialized_view::MaterializedView,
-    merge::{PartitionMerger, QueryMerger},
+    merge::{MergeQueryResult, PartitionMerger, QueryMerger},
     partition::Partition,
     partition_cache::{NullPartitionProvider, PartitionCache},
     query::make_session_context,
@@ -20,10 +20,7 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, TimeDelta, Utc};
 use datafusion::{
-    arrow::datatypes::Schema,
-    execution::{SendableRecordBatchStream, runtime_env::RuntimeEnv},
-    prelude::*,
-    sql::TableReference,
+    arrow::datatypes::Schema, execution::runtime_env::RuntimeEnv, prelude::*, sql::TableReference,
 };
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_tracing::error;
@@ -253,7 +250,7 @@ impl View for SqlBatchView {
         partitions_to_merge: Arc<Vec<Partition>>,
         partitions_all_views: Arc<PartitionCache>,
         insert_range: TimeRange,
-    ) -> Result<SendableRecordBatchStream> {
+    ) -> Result<MergeQueryResult> {
         let res = self
             .merger
             .execute_merge_query(

@@ -15,15 +15,20 @@ use std::{
 use tokio::sync::mpsc;
 
 /// A stream of log messages that can be converted into a `RecordBatchStream`.
+///
+/// The channel carries `Result<(time, msg), String>`: an `Err` item ends the stream with a
+/// genuine `RecordBatchStream` error (propagating through `execute_stream`/`collect` as a query
+/// execution failure) instead of being folded into one more `(time, msg)` log row -- see
+/// `tasks/blocks_view_ordered_merges_plan.md`'s Design §3.
 pub struct AsyncLogStream {
     schema: SchemaRef,
-    rx: mpsc::Receiver<(chrono::DateTime<chrono::Utc>, String)>,
+    rx: mpsc::Receiver<Result<(chrono::DateTime<chrono::Utc>, String), String>>,
 }
 
 impl AsyncLogStream {
     pub fn new(
         schema: SchemaRef,
-        rx: mpsc::Receiver<(chrono::DateTime<chrono::Utc>, String)>,
+        rx: mpsc::Receiver<Result<(chrono::DateTime<chrono::Utc>, String), String>>,
     ) -> Self {
         Self { schema, rx }
     }
@@ -56,11 +61,21 @@ impl Stream for AsyncLogStream {
             return Poll::Pending;
         }
 
+        // An Err item ends the stream as a query error. Ok items received in the same poll batch
+        // ahead of the Err are dropped -- acceptable, they are transient progress lines on a
+        // query that is failing anyway.
         let mut times = PrimitiveBuilder::<TimestampNanosecondType>::with_capacity(messages.len());
         let mut msgs = StringBuilder::new();
         for msg in messages {
-            times.append_value(msg.0.timestamp_nanos_opt().unwrap_or_default());
-            msgs.append_value(msg.1);
+            match msg {
+                Ok((time, text)) => {
+                    times.append_value(time.timestamp_nanos_opt().unwrap_or_default());
+                    msgs.append_value(text);
+                }
+                Err(err_msg) => {
+                    return Poll::Ready(Some(Err(DataFusionError::Execution(err_msg))));
+                }
+            }
         }
 
         let rb_res = RecordBatch::try_new(

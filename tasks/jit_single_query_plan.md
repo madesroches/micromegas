@@ -79,9 +79,14 @@ cached partitions are query-independent. Any redesign must preserve that.
 `is_jit_partition_up_to_date` (`jit_partitions.rs:498`) matches each spec against
 `lakehouse_partitions` by its blocks' `[min_insert_time, max_insert_time]`. Cache reuse
 therefore depends on generated specs having **exactly the same bucketing** as previous
-runs: specs never span an hour boundary, buckets align via
-`duration_trunc(max_insert_time_slice)`, and blocks are ordered by `(insert_time,
-block_id)` (`get_part_insert_time_range`, `:591-601`, reads `blocks[0]`/`blocks[last]`).
+runs: specs never span an hour boundary, and buckets align via
+`duration_trunc(max_insert_time_slice)`. That bucketing must be reproducible without relying on a
+total row order: `get_part_insert_time_range` (`:591-601`) reads `blocks[0]`/`blocks[last]`, but for
+a *fixed* block set those are the min/max `insert_time` regardless of how equal-`insert_time` rows
+are ordered among themselves, so the recorded range is order-independent. What must be reproducible
+is the *set* of blocks in each spec — and this design makes that a pure function of `insert_time`
+alone (tie-atomic, soft-cap segmentation, below), so no `(insert_time, block_id)` total order is
+required.
 
 Segmentation is a **pure function of each row's `insert_time`** — it does not require one
 query per bucket. `row_bucket = insert_time.duration_trunc(slice)` reproduces today's
@@ -89,7 +94,7 @@ query per bucket. `row_bucket = insert_time.duration_trunc(slice)` reproduces to
 
 ### Why sort elision (and therefore one giant query) is off the table for now
 
-The client-side grouping needs rows sorted by `(insert_time, block_id)`. A single
+The client-side grouping needs rows sorted by `insert_time`. A single
 full-range query would put that `ORDER BY` over the whole range; DataFusion's `SortExec`
 buffers its entire input, i.e. every block row of the range — unacceptable.
 
@@ -125,7 +130,7 @@ pre-queries (unchanged, run before the stream is returned):
 returned stream (async_stream::try_stream!):
   for each batch window (max_query_insert_time_range wide, slice-aligned):
       filter cache to window, build SQL: insert_time in [batch_begin, batch_end)
-                                         ORDER BY insert_time, block_id
+                                         ORDER BY insert_time
       df.execute_stream()
       for each RecordBatch, for each row:
           accumulator.push(block)  -> may yield a completed SourceDataBlocksInMemory
@@ -173,7 +178,8 @@ struct in `jit_partitions.rs`, yielding specs incrementally instead of collectin
 pub struct JitPartitionAccumulator {
     max_nb_objects: i64,
     slice: TimeDelta,
-    current_bucket: Option<DateTime<Utc>>,   // insert_time.duration_trunc(slice)
+    current_bucket: Option<DateTime<Utc>>,       // insert_time.duration_trunc(slice)
+    current_insert_time: Option<DateTime<Utc>>,  // insert_time of the last pushed block
     blocks: Vec<Arc<PartitionSourceBlock>>,
     nb_objects: i64,
 }
@@ -190,20 +196,48 @@ impl JitPartitionAccumulator {
 `push` flushes the in-progress spec when **either**:
 - the block's bucket differs from `current_bucket` (replaces today's per-segment-call
   boundary — keeps specs from spanning hour boundaries), or
-- `nb_objects + block_nb_objects > max_nb_objects` and the current spec is non-empty
-  (identical to today's cap logic).
+- `nb_objects + block_nb_objects > max_nb_objects`, the current spec is non-empty, **and**
+  the block's `insert_time` differs from `current_insert_time` — i.e. the cap-driven cut
+  fires only at an `insert_time` transition, never mid-tie.
+
+This makes `max_nb_objects` a **soft** cap: a run of equal-`insert_time` blocks is never split
+across two specs, so a spec may overshoot the cap until the next distinct `insert_time`. That
+overshoot is cheap to tolerate — the segmenter accumulates small block *metadata*, and
+`max_nb_objects` bounds the output partition's object count only approximately — and it is what
+removes the need for a `block_id` tiebreak: because the cut can only land between distinct
+`insert_time` values, and the running `nb_objects` total at each `insert_time` boundary is
+order-independent (addition commutes), the resulting bucketing is a **pure function of the
+`(insert_time, nb_objects)` multiset**. Two runs produce identical specs regardless of how
+equal-`insert_time` rows are ordered among themselves — so cache reuse holds with no total order
+on the blocks query.
+
+Pathological case: a single `insert_time` value whose blocks alone exceed `max_nb_objects` yields
+one oversized spec (the tie-atomic rule forbids splitting it). This is rare — it needs
+`max_nb_objects` worth of objects in one microsecond — and accepted: an oversized partition is the
+one situation a `block_id` tiebreak could affect, and we take the oversized partition over
+reintroducing a total-order dependency.
 
 A flushed spec carries `block_ids_hash: nb_objects.to_le_bytes().to_vec()` — byte-for-byte
 today's value (`hash_to_object_count` reads it as a count). Inputs must arrive sorted by
-`insert_time`; the per-batch `ORDER BY` plus sequential batch order guarantees it.
+`insert_time`; the per-batch `ORDER BY` plus sequential batch order guarantees it (`block_id` is no
+longer needed in that `ORDER BY`, and may be dropped; keeping it is harmless).
 
 **Equivalence argument** (keep in the PR description): today a fresh accumulator per hour
 segment resets specs at aligned hour boundaries; the bucket-change flush reproduces the
 reset at exactly the same boundaries (`duration_trunc` alignment; a block exactly on a
 boundary starts the next bucket in both designs). Empty hours yield no rows, hence no
 specs. Per-batch sort concatenated in batch order equals today's per-hour sort
-concatenated in hour order. Output specs are identical, so `is_jit_partition_up_to_date`
-keeps hitting partitions cached by the old code.
+concatenated in hour order.
+
+The one intentional difference is the cap-driven cut: today's greedy per-block cut can fall between
+two equal-`insert_time` blocks, whereas the new tie-atomic cut only fires at an `insert_time`
+transition. Bucketing therefore matches the old code exactly **except** for specs whose old cut
+happened to land mid-tie, which the new code shifts to the next `insert_time` boundary. Those
+specific specs will miss the cache once and regenerate — a bounded, one-time cost that is a
+*correction*, not a regression: the old greedy cut was itself non-deterministic across runs (the
+very bug this removes), so no stable cached bucketing existed to preserve there. Every
+non-mid-tie spec still hits `is_jit_partition_up_to_date` against partitions cached by the old
+code.
 
 ### Row parsing
 
@@ -238,10 +272,11 @@ batch (e.g. `stream_partition_blocks`) so the before/after is visible in traces.
 5. From `rust/`: `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `cargo test`.
 6. Manual verification: start services
    (`python3 local_test_env/ai_scripts/start_services.py` or monolith), run a
-   multi-day JIT query (e.g. a process log view via `micromegas-query`) **twice** — the
-   second run must log `partition up to date` for every partition (proves bucketing
-   unchanged and caching still hits). Ideally run once with the old binary first, then the
-   new one, to prove compatibility with partitions bucketed by the old code. Confirm in
+   multi-day JIT query (e.g. a process log view via `micromegas-query`) **twice** with the
+   new binary — the second run must log `partition up to date` for every partition (proves the
+   new bucketing is deterministic and caching hits). A separate old-binary-then-new-binary run may
+   show a bounded one-time regeneration of specs whose old greedy cut fell mid-tie (see the
+   Equivalence argument); every other partition must still report up to date. Confirm in
    the trace that per-hour `collect_partition_blocks` chains are replaced by ~1 query per
    day and latency drops; watch process RSS (system_monitor gauges from #1330) on a
    long-range query to confirm memory stays flat.
@@ -292,8 +327,15 @@ accumulator, the config field, and the rewritten functions suffices.
   - blocks within one bucket under the cap → one spec on bucket change/finish;
   - bucket change → flush at the aligned boundary (block exactly on a boundary starts the
     new bucket);
-  - `max_nb_objects` overflow inside a bucket → split, matching today's "push without this
-    block" semantics;
+  - `max_nb_objects` overflow inside a bucket, at an `insert_time` transition → split (the
+    tie-atomic cut fires);
+  - `max_nb_objects` overflow inside a bucket *mid-tie* (the overflowing block shares its
+    `insert_time` with the current spec's last block) → **no** split; the spec overshoots the cap
+    until the next distinct `insert_time` — the soft-cap / tie-atomic behavior;
+  - a run of equal-`insert_time` blocks exceeding `max_nb_objects` with nothing after it → one
+    oversized spec (the accepted pathological case);
+  - determinism: the same block multiset fed in two different intra-`insert_time` orders yields
+    identical specs;
   - single oversized block → its own spec;
   - `block_ids_hash` = LE bytes of the spec's object count;
   - empty input → `finish()` yields `None`.
@@ -313,9 +355,11 @@ accumulator, the config field, and the rewritten functions suffices.
   sort is elided and the merge stays streaming), and regenerate existing merged partitions
   online via an admin UDF that re-materializes their insert range from the Postgres source
   tables (kept as ground truth; the materialization SQL already sorts) and swaps the new
-  partition in transactionally — no schema change, no downtime. Once done, declare
-  `(insert_time, block_id)` scan ordering on the JIT blocks query — the per-batch sort
-  disappears and the batch width can grow or go away entirely.
+  partition in transactionally — no schema change, no downtime. Once done, declare an
+  `insert_time` scan ordering on the JIT blocks query — the per-batch sort
+  disappears and the batch width can grow or go away entirely. (Single-column `insert_time` is
+  sufficient: segmentation is tie-atomic, so it needs no `block_id` tiebreak — see the accumulator
+  design.)
 - Is `TimeDelta::days(1)` the right default batch width? It bounds the sort buffer to one
   day of one process's block rows; no load testing yet. Worth a sanity check under a real
   workload before tuning.

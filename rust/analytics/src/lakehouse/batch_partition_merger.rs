@@ -1,6 +1,9 @@
 use super::{
-    lakehouse_context::LakehouseContext, merge::PartitionMerger, partition::Partition,
-    partition_cache::PartitionCache, session_configurator::SessionConfigurator,
+    lakehouse_context::LakehouseContext,
+    merge::{MergeQueryResult, PartitionMerger},
+    partition::Partition,
+    partition_cache::PartitionCache,
+    session_configurator::SessionConfigurator,
     view_factory::ViewFactory,
 };
 use crate::{
@@ -13,7 +16,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use chrono::{DateTime, TimeDelta, Utc};
 use datafusion::{
-    arrow::datatypes::Schema, error::DataFusionError, execution::SendableRecordBatchStream,
+    arrow::datatypes::Schema, error::DataFusionError,
     physical_plan::stream::RecordBatchReceiverStreamBuilder, sql::TableReference,
 };
 use futures::TryStreamExt;
@@ -107,14 +110,17 @@ impl PartitionMerger for BatchPartitionMerger {
         partitions_to_merge: Arc<Vec<Partition>>,
         partitions_all_views: Arc<PartitionCache>,
         insert_range: TimeRange,
-    ) -> Result<SendableRecordBatchStream> {
+    ) -> Result<MergeQueryResult> {
         info!("execute_merge_query");
 
         // If all partitions are empty, return empty stream immediately
         if partitions_to_merge.iter().all(|p| p.is_empty()) {
             debug!("all partitions are empty, returning empty stream");
             let builder = RecordBatchReceiverStreamBuilder::new(self.file_schema.clone(), 1);
-            return Ok(builder.build());
+            return Ok(MergeQueryResult {
+                stream: builder.build(),
+                ordering_honored: true,
+            });
         }
 
         let stats = compute_partition_stats(partitions_to_merge.as_ref())?;
@@ -178,6 +184,9 @@ impl PartitionMerger for BatchPartitionMerger {
             Ok(())
         });
         debug!("building merge stream");
-        Ok(builder.build())
+        Ok(MergeQueryResult {
+            stream: builder.build(),
+            ordering_honored: true,
+        })
     }
 }

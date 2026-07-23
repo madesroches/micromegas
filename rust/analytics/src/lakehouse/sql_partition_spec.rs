@@ -95,6 +95,7 @@ impl PartitionSpec for SqlPartitionSpec {
             self.schema.clone(),
             self.insert_range,
             self.get_source_data_hash(),
+            None,
             rx,
             logger.clone(),
         ));
